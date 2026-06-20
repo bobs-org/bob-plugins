@@ -1,0 +1,9 @@
+{
+  "id": "bob-project-tasks",
+  "name": "Bob Project Tasks",
+  "version": "1.0.0",
+  "minAppVersion": "1.8.7",
+  "description": "Keep project task counts materialized in frontmatter.",
+  "author": "Bryan",
+  "isDesktopOnly": false
+}

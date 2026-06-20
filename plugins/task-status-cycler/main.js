@@ -15,6 +15,12 @@ const COMPLETION_FIELD_RE = /[ \t]*\[completion::\s*[^\]\n]*\]/g;
 const TRAILING_BLOCK_ID_RE = /[ \t]+\^[A-Za-z0-9-]+[ \t]*$/;
 const EMBEDDED_WIKILINK_RE = /!\[\[([^\]\n]+)\]\]/g;
 const BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
+// Conservative guards for recursive Pomodoro source-task closure. The seen-set
+// keyed by `path#^block-id` already stops cycles (A -> B -> A) and re-processing
+// of shared targets; these caps just keep a pathologically deep chain or a huge
+// accidental graph from running unbounded.
+const MAX_TRANSCLUDED_RECURSION_DEPTH = 25;
+const MAX_TRANSCLUDED_RECURSION_TARGETS = 250;
 // Dependency-ID normalization: rewrite Tasks-generated `[id::]`/`[dependsOn::]`
 // values to the target task's existing Obsidian block ID. See the SDD tale
 // task_dependency_block_ids.md. The generated-ID heuristic matches Tasks
@@ -697,6 +703,29 @@ function getListItemBlockRange(lines, activeLine) {
   }
 
   return { startLine: activeLine, endLine };
+}
+
+// Collect embedded block transclusions (`![[note#^id]]`, `![[#^id]]`) found on
+// the descendant list-item lines of a resolved task's list-item block. The task
+// line itself (range.startLine) is excluded so this returns the task's children,
+// which is what recursive Pomodoro closure follows. Same-file `![[#^id]]` child
+// links carry an empty pathPart and are resolved by the caller against the
+// source file they were found in.
+function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLine) {
+  const lines = splitTextByLineEndings(sourceText).map((line) => line.text);
+  const range = getListItemBlockRange(lines, taskLine);
+  if (!range) {
+    return [];
+  }
+
+  const targets = [];
+  for (let line = range.startLine + 1; line <= range.endLine; line += 1) {
+    for (const target of parseEmbeddedBlockTransclusions(lines[line])) {
+      targets.push(target);
+    }
+  }
+
+  return targets;
 }
 
 function getLineArrayReplacement(oldLines, newLines) {
@@ -3029,26 +3058,28 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   }
 
   async toggleActiveTranscludedTaskOpenDone(editor, activeFile) {
-    const sourcePath = activeFile && activeFile.path;
-    const candidate = this.getActiveLineTranscludedTaskTarget(editor, sourcePath);
+    const activePath = activeFile && activeFile.path;
+    const candidate = this.getActiveLineTranscludedTaskTarget(editor, activePath);
     if (!candidate) {
       return false;
     }
 
+    // Direct single-line toggle: the active note is both the link-resolution
+    // origin and the active editor buffer, and this path stays non-recursive.
+    const context = {
+      editor,
+      activePath,
+      originPath: activePath,
+    };
     const resolvedTarget = await this.resolveTranscludedBlockTarget(
       candidate,
-      sourcePath,
-      editor,
+      context,
     );
     if (!resolvedTarget) {
       return false;
     }
 
-    return this.replaceResolvedTranscludedTaskLine(
-      resolvedTarget,
-      editor,
-      sourcePath,
-    );
+    return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context);
   }
 
   async completeActivePomodoroTask(
@@ -3080,8 +3111,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     const subBullets = classifyPomodoroSubBullets(lines, subBulletRange);
     await this.completePomodoroTranscludedTaskBullets(
       subBullets.transcludedTaskLinkBullets,
-      editor,
-      sourcePath,
+      {
+        editor,
+        activePath: sourcePath,
+        originPath: sourcePath,
+      },
     );
 
     lines = this.getEditorLineTexts(editor);
@@ -3099,11 +3133,14 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return true;
   }
 
-  async completePomodoroTranscludedTaskBullets(bullets, editor, sourcePath) {
+  async completePomodoroTranscludedTaskBullets(bullets, context) {
+    // One shared seen-set across every immediate embedded target so the whole
+    // Pomodoro operation dedupes targets and terminates on cycles.
+    const seen = new Set();
     for (const bullet of Array.isArray(bullets) ? bullets : []) {
       for (const target of Array.isArray(bullet.targets) ? bullet.targets : []) {
         try {
-          await this.completeTranscludedTaskTarget(target, editor, sourcePath);
+          await this.completeTranscludedTaskTargetTree(target, context, seen);
         } catch (error) {
           // Best effort: one broken embed should not block Pomodoro completion.
         }
@@ -3111,26 +3148,63 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
   }
 
-  async completeTranscludedTaskTarget(candidate, editor, sourcePath) {
-    const resolvedTarget = await this.resolveTranscludedBlockTarget(
-      candidate,
-      sourcePath,
-      editor,
-    );
-    if (
-      !resolvedTarget ||
-      !resolvedTarget.taskStatus ||
-      resolvedTarget.taskStatus.symbol !== " "
-    ) {
+  // Recursively forces an embedded transcluded task tree to done. The candidate
+  // is resolved relative to context.originPath; descendant embedded
+  // transclusions are followed with originPath rebased to the resolved file so
+  // same-file `![[#^child]]` links resolve correctly. Already-done targets are
+  // not rewritten but are still traversed for open descendants. The seen-set
+  // (keyed by resolved `path#^block-id`) plus the depth/target caps keep cycles
+  // and large accidental graphs bounded.
+  async completeTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
+    if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
       return false;
     }
 
-    return this.replaceResolvedTranscludedTaskLine(
-      resolvedTarget,
-      editor,
-      sourcePath,
-      "x",
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(candidate, context);
+    } catch (error) {
+      return false;
+    }
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return false;
+    }
+
+    const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
+    if (seen.has(seenKey) || seen.size >= MAX_TRANSCLUDED_RECURSION_TARGETS) {
+      return false;
+    }
+    seen.add(seenKey);
+
+    const childContext = {
+      editor: context.editor,
+      activePath: context.activePath,
+      originPath: resolvedTarget.file.path,
+    };
+    const childTargets = collectEmbeddedTranscludedTaskTargetsInListItemBlock(
+      resolvedTarget.sourceText,
+      resolvedTarget.line,
     );
+    for (const childTarget of childTargets) {
+      try {
+        await this.completeTranscludedTaskTargetTree(
+          childTarget,
+          childContext,
+          seen,
+          depth + 1,
+        );
+      } catch (error) {
+        // Best effort: one broken descendant should not block its siblings.
+      }
+    }
+
+    // Done parents stay done; only open tasks are forced to done. The
+    // replacement path revalidates the line and block ID before writing.
+    if (!resolvedTarget.taskStatus || resolvedTarget.taskStatus.symbol !== " ") {
+      return false;
+    }
+
+    return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context, "x");
   }
 
   toggleActiveCheckboxMarker(
@@ -3658,17 +3732,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       : null;
   }
 
-  async resolveTranscludedBlockTarget(candidate, sourcePath, editor) {
-    const file = this.resolveTranscludedTargetFile(candidate, sourcePath);
+  async resolveTranscludedBlockTarget(candidate, context) {
+    const file = this.resolveTranscludedTargetFile(candidate, context.originPath);
     if (!this.isMarkdownFile(file)) {
       return null;
     }
 
-    const sourceText = await this.readTranscludedTargetSourceText(
-      file,
-      sourcePath,
-      editor,
-    );
+    const sourceText = await this.readTranscludedTargetSourceText(file, context);
     if (sourceText === null) {
       return null;
     }
@@ -3690,6 +3760,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         ...resolvedCachedLine,
         file,
         blockId: candidate.blockId,
+        sourceText,
       };
     }
 
@@ -3705,6 +3776,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           ...resolvedScannedLine,
           file,
           blockId: candidate.blockId,
+          sourceText,
         }
       : null;
   }
@@ -3731,18 +3803,21 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     };
   }
 
-  resolveTranscludedTargetFile(candidate, sourcePath) {
-    if (!candidate || !sourcePath) {
+  resolveTranscludedTargetFile(candidate, originPath) {
+    if (!candidate || !originPath) {
       return null;
     }
 
+    // Empty pathPart means a same-file `![[#^id]]` link: resolve it against the
+    // origin note it was found in (the active note for first-level links, or a
+    // recursed-into source note for descendant links).
     if (!candidate.pathPart) {
-      const sourceFile =
+      const originFile =
         this.app.vault &&
         typeof this.app.vault.getAbstractFileByPath === "function"
-          ? this.app.vault.getAbstractFileByPath(sourcePath)
+          ? this.app.vault.getAbstractFileByPath(originPath)
           : null;
-      return this.isMarkdownFile(sourceFile) ? sourceFile : null;
+      return this.isMarkdownFile(originFile) ? originFile : null;
     }
 
     if (
@@ -3753,13 +3828,16 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     return (
-      this.app.metadataCache.getFirstLinkpathDest(candidate.pathPart, sourcePath) ||
+      this.app.metadataCache.getFirstLinkpathDest(candidate.pathPart, originPath) ||
       null
     );
   }
 
-  async readTranscludedTargetSourceText(file, sourcePath, editor) {
-    if (this.fileMatchesPath(file, sourcePath) && editor) {
+  async readTranscludedTargetSourceText(file, context) {
+    // Read the live editor buffer only for the active note; every other source
+    // note (including notes recursed into) is read from the vault.
+    const editor = context && context.editor;
+    if (this.fileMatchesPath(file, context && context.activePath) && editor) {
       if (typeof editor.getValue === "function") {
         return editor.getValue();
       }
@@ -3778,14 +3856,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
   async replaceResolvedTranscludedTaskLine(
     resolvedTarget,
-    editor,
-    sourcePath,
+    context,
     forcedNextSymbol = null,
   ) {
-    if (this.fileMatchesPath(resolvedTarget.file, sourcePath)) {
+    // Write through the editor only when the resolved task lives in the active
+    // note; all other source notes are written through the vault.
+    if (this.fileMatchesPath(resolvedTarget.file, context && context.activePath)) {
       const replacedInEditor = this.replaceResolvedTranscludedTaskLineInEditor(
         resolvedTarget,
-        editor,
+        context && context.editor,
         forcedNextSymbol,
       );
       if (replacedInEditor) {
@@ -4208,6 +4287,7 @@ module.exports.helpers = {
   centerEditorViewOnPosition,
   classifyPomodoroSubBullets,
   cleanObsidianTaskBody,
+  collectEmbeddedTranscludedTaskTargetsInListItemBlock,
   collectObsidianTaskTokenRanges,
   collapseWhitespaceOutsideBracketSpans,
   demoteObsidianTaskLine,

@@ -6,6 +6,8 @@ const SURROUND_OPERATOR_NAME = "bobVimSurroundAdd";
 const SURROUND_OPERATOR_KEYS = "<A-b>s";
 const TRAILING_WHITESPACE_RE = /\s+$/;
 const HORIZONTAL_WHITESPACE_RE = /[ \t]/;
+const ALPHANUMERIC_RE = /[\p{L}\p{N}]/u;
+const WHITESPACE_RE = /\s/u;
 const MAX_SURROUND_SCAN_CHARS = 200000;
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 
@@ -200,8 +202,25 @@ function collectSurroundSpans(cm, ranges, oldAnchor, newHead, operatorArgs) {
   return spans.sort((left, right) => comparePositions(left.start, right.start));
 }
 
+function isSymmetricSurroundChar(key) {
+  return (
+    typeof key === "string" &&
+    key.length === 1 &&
+    key.codePointAt(0) >= 0x21 &&
+    key.codePointAt(0) !== 0x7f &&
+    !ALPHANUMERIC_RE.test(key) &&
+    !WHITESPACE_RE.test(key)
+  );
+}
+
 function getSurroundPair(key) {
-  return SURROUND_PAIRS[key] || null;
+  if (SURROUND_PAIRS[key]) {
+    return SURROUND_PAIRS[key];
+  }
+
+  return isSymmetricSurroundChar(key)
+    ? { open: key, close: key, padded: false }
+    : null;
 }
 
 function isHorizontalWhitespaceChar(value) {
@@ -834,8 +853,7 @@ class BobVimSurroundPlugin extends Plugin {
       cm,
       spans,
     };
-    setCursor(cm, spans[0].start);
-    return true;
+    return spans[0].start;
   }
 
   handleSurroundKeydown(event) {

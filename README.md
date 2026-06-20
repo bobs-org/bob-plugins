@@ -15,11 +15,11 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.0.0 | Expand Bob daily-note snippets and ledger time ranges.                |
 | Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.0.0 | Open parent, next, previous, and alternate notes from keyboard shortcuts. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
-| Bob Vim Surround        | `bob-vim-surround`       |   1.2.0 | Add vim-surround `ys` motions, `cs` changes, and `ds` deletes to Obsidian Vim mode. |
+| Bob Vim Surround        | `bob-vim-surround`       |   1.3.0 | Add vim-surround `ys` motions, `cs` changes, and `ds` deletes to Obsidian Vim mode. |
 | Task Status Cycler      | `task-status-cycler`     |   1.0.0 | Cycle the active task line through configured Tasks statuses.         |
 
 Versions are tracked **per plugin** — there is no lockstep release. Each plugin's authoritative version lives in its own
-`plugins/<id>/manifest.json` (e.g. `bob-vim-surround` is ahead of the others at `1.2.0`).
+`plugins/<id>/manifest.json` (e.g. `bob-vim-surround` is ahead of the others at `1.3.0`).
 
 ## Layout
 

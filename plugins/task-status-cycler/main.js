@@ -2490,10 +2490,18 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return;
     }
 
-    void this.toggleActiveTranscludedTaskOpenDone(
-      view.editor,
-      activeFile,
-    ).catch(() => false);
+    // A transcluded task link that is a Pomodoro sub-bullet closes its whole
+    // embedded target tree recursively; any other transcluded line keeps the
+    // single-target open/done toggle.
+    void (async () => {
+      const handled = await this.completeActivePomodoroTranscludedTaskLine(
+        view.editor,
+        activeFile,
+      );
+      if (!handled) {
+        await this.toggleActiveTranscludedTaskOpenDone(view.editor, activeFile);
+      }
+    })().catch(() => false);
   }
 
   handleVimToggleCheckboxMarker() {
@@ -3082,6 +3090,62 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context);
   }
 
+  // Direct Pomodoro sub-bullet path: when the active line is an embedded
+  // transcluded task link under a Pomodoro task, recursively force that selected
+  // target tree to done, mirroring Pomodoro completion semantics (open -> done,
+  // already-done roots stay done but are still traversed for open descendants).
+  // Unlike full Pomodoro completion this does not touch the local Pomodoro line,
+  // create a placeholder, carry bullets forward, or move the cursor. Returns
+  // true once the root target resolved as such a sub-bullet transclusion, even
+  // if every task in the tree was already done, so the caller does not fall
+  // through to the non-recursive toggle (which would reopen a done target).
+  async completeActivePomodoroTranscludedTaskLine(editor, activeFile) {
+    const activePath = activeFile && activeFile.path;
+    if (!activePath) {
+      return false;
+    }
+
+    const target = this.getActivePomodoroTranscludedTaskLineTarget(
+      editor,
+      activePath,
+    );
+    if (!target) {
+      return false;
+    }
+
+    const context = {
+      editor,
+      activePath,
+      originPath: activePath,
+    };
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(
+        target.candidate,
+        context,
+      );
+    } catch (error) {
+      return false;
+    }
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return false;
+    }
+
+    // Fresh seen-set scopes cycle/dup detection to this single sub-bullet action.
+    const seen = new Set();
+    try {
+      await this.completeResolvedTranscludedTaskTargetTree(
+        resolvedTarget,
+        context,
+        seen,
+      );
+    } catch (error) {
+      // Best effort: a mid-traversal failure still counts as handled because the
+      // root target resolved as a Pomodoro sub-bullet transclusion.
+    }
+    return true;
+  }
+
   async completeActivePomodoroTask(
     editor,
     activeFile,
@@ -3154,25 +3218,50 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   // same-file `![[#^child]]` links resolve correctly. Already-done targets are
   // not rewritten but are still traversed for open descendants. The seen-set
   // (keyed by resolved `path#^block-id`) plus the depth/target caps keep cycles
-  // and large accidental graphs bounded.
+  // and large accidental graphs bounded. Returns { visited, changed }: visited
+  // is true once the candidate resolved to a fresh in-bounds target, changed is
+  // true when this node or any descendant was forced from open to done.
   async completeTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
     if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
-      return false;
+      return { visited: false, changed: false };
     }
 
     let resolvedTarget;
     try {
       resolvedTarget = await this.resolveTranscludedBlockTarget(candidate, context);
     } catch (error) {
-      return false;
+      return { visited: false, changed: false };
     }
     if (!resolvedTarget || !resolvedTarget.file) {
-      return false;
+      return { visited: false, changed: false };
+    }
+
+    return this.completeResolvedTranscludedTaskTargetTree(
+      resolvedTarget,
+      context,
+      seen,
+      depth,
+    );
+  }
+
+  // Resolved-target half of the recursive closure. Splitting it out lets a
+  // direct sub-bullet caller resolve once, know the command was handled, and
+  // avoid falling through to the non-recursive toggle when the root is already
+  // done. The seen-check and seen-add live here so both the candidate entry
+  // point and direct callers share identical cycle/dup and cap handling.
+  async completeResolvedTranscludedTaskTargetTree(
+    resolvedTarget,
+    context,
+    seen,
+    depth = 0,
+  ) {
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return { visited: false, changed: false };
     }
 
     const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
     if (seen.has(seenKey) || seen.size >= MAX_TRANSCLUDED_RECURSION_TARGETS) {
-      return false;
+      return { visited: false, changed: false };
     }
     seen.add(seenKey);
 
@@ -3185,14 +3274,18 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       resolvedTarget.sourceText,
       resolvedTarget.line,
     );
+    let changed = false;
     for (const childTarget of childTargets) {
       try {
-        await this.completeTranscludedTaskTargetTree(
+        const childResult = await this.completeTranscludedTaskTargetTree(
           childTarget,
           childContext,
           seen,
           depth + 1,
         );
+        if (childResult && childResult.changed) {
+          changed = true;
+        }
       } catch (error) {
         // Best effort: one broken descendant should not block its siblings.
       }
@@ -3200,11 +3293,18 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
     // Done parents stay done; only open tasks are forced to done. The
     // replacement path revalidates the line and block ID before writing.
-    if (!resolvedTarget.taskStatus || resolvedTarget.taskStatus.symbol !== " ") {
-      return false;
+    if (resolvedTarget.taskStatus && resolvedTarget.taskStatus.symbol === " ") {
+      const wrote = await this.replaceResolvedTranscludedTaskLine(
+        resolvedTarget,
+        context,
+        "x",
+      );
+      if (wrote) {
+        changed = true;
+      }
     }
 
-    return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context, "x");
+    return { visited: true, changed };
   }
 
   toggleActiveCheckboxMarker(
@@ -3730,6 +3830,49 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           activeLineText: lineText,
         }
       : null;
+  }
+
+  // Detect when the active line is an embedded transcluded task link that is a
+  // sub-bullet of a Pomodoro task. Returns { candidate, pomodoroLine } so the
+  // caller can run recursive forced-done over the selected tree; null otherwise,
+  // which keeps the generic non-recursive transcluded toggle as the fallback.
+  // The active line must sit in the `## Pomodoros` section, be an indented list
+  // line, carry an unambiguous embedded block transclusion, and fall inside the
+  // sub-bullet block of the nearest top-level Pomodoro task above it.
+  getActivePomodoroTranscludedTaskLineTarget(editor, activePath) {
+    const candidate = this.getActiveLineTranscludedTaskTarget(editor, activePath);
+    if (!candidate) {
+      return null;
+    }
+
+    const lines = this.getEditorLineTexts(editor);
+    const section = findPomodorosSectionInLines(lines);
+    const activeLine = candidate.activeLine;
+    if (!lineIsInPomodorosSection(section, activeLine)) {
+      return null;
+    }
+
+    if (!INDENTED_LIST_LINE_RE.test(String(lines[activeLine] || ""))) {
+      return null;
+    }
+
+    let pomodoroLine = null;
+    for (let line = activeLine - 1; line >= section.startLine; line -= 1) {
+      if (isTopLevelTaskLine(lines[line])) {
+        pomodoroLine = line;
+        break;
+      }
+    }
+    if (pomodoroLine === null) {
+      return null;
+    }
+
+    const range = getSubBulletBlockRange(lines, pomodoroLine, section);
+    if (!range || activeLine < range.startLine || activeLine >= range.endLine) {
+      return null;
+    }
+
+    return { candidate, pomodoroLine };
   }
 
   async resolveTranscludedBlockTarget(candidate, context) {

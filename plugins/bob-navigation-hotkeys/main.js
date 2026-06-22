@@ -4427,6 +4427,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     this.registerOpenTaskJumpInputListeners();
+    this.registerClearSearchHighlightInputListeners();
 
     this.register(() => {
       this.cancelPendingRestore();
@@ -4750,6 +4751,67 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
   }
 
+  registerClearSearchHighlightInputListeners() {
+    // Tracks events already dispatched so the window + document capture
+    // listeners cannot double-run nohlsearch for the same keydown.
+    this.handledClearSearchHighlightEvents = new WeakSet();
+
+    const keydownHandler = (event) =>
+      this.handleClearSearchHighlightKeydown(event);
+
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleClearSearchHighlightKeydown(event) {
+    if (!event || (event.key !== "Escape" && event.key !== "Esc")) {
+      return false;
+    }
+
+    if (
+      this.handledClearSearchHighlightEvents &&
+      this.handledClearSearchHighlightEvents.has(event)
+    ) {
+      return false;
+    }
+
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
+      return false;
+    }
+
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const vim =
+      typeof window !== "undefined" &&
+      window.CodeMirrorAdapter &&
+      window.CodeMirrorAdapter.Vim;
+    if (!cm || !vim || typeof vim.handleEx !== "function") {
+      return false;
+    }
+
+    if (this.handledClearSearchHighlightEvents) {
+      this.handledClearSearchHighlightEvents.add(event);
+    }
+
+    vim.handleEx(cm, "nohlsearch");
+    return false;
+  }
+
   handleOpenTaskJumpPhysicalKeydown(event) {
     const direction = this.getOpenTaskJumpKeydownDirection(event);
     if (!direction) {
@@ -4842,13 +4904,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   isVimNormalModeEditor(editor, view) {
-    const cm =
-      (editor && editor.cm && editor.cm.cm) ||
-      (view &&
-        view.editMode &&
-        view.editMode.editor &&
-        view.editMode.editor.cm &&
-        view.editMode.editor.cm.cm);
+    const cm = this.resolveVimCodeMirror(editor, view);
     if (!cm || typeof cm.getCursor !== "function") {
       return false;
     }
@@ -4857,6 +4913,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return !["insert", "visual", "visual-block", "visual-line", "replace"].includes(
       mode,
     );
+  }
+
+  resolveVimCodeMirror(editor, view) {
+    const cm =
+      (editor && editor.cm && editor.cm.cm) ||
+      (view &&
+        view.editMode &&
+        view.editMode.editor &&
+        view.editMode.editor.cm &&
+        view.editMode.editor.cm.cm);
+    return cm && typeof cm.getCursor === "function" ? cm : null;
   }
 
   getCurrentVimMode(cm) {

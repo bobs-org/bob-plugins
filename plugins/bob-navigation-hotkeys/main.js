@@ -4779,7 +4779,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   handleClearSearchHighlightKeydown(event) {
-    if (!event || (event.key !== "Escape" && event.key !== "Esc")) {
+    if (!this.isClearSearchHighlightEscapeKeydown(event)) {
       return false;
     }
 
@@ -4849,6 +4849,26 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.jumpToOpenObsidianTask(view.editor, direction);
     return true;
+  }
+
+  isClearSearchHighlightEscapeKeydown(event) {
+    if (!event) {
+      return false;
+    }
+
+    if (event.key === "Escape" || event.key === "Esc") {
+      return true;
+    }
+
+    // CodeMirror Vim treats Ctrl+[ as <Esc>, but Chromium reports the raw
+    // bracket chord to this capture-phase listener before Vim translates it.
+    return (
+      event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      (event.code === "BracketLeft" || event.key === "[")
+    );
   }
 
   getOpenTaskJumpKeydownDirection(event) {

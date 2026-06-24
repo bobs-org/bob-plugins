@@ -1,7 +1,7 @@
 {
   "id": "block-id-prompt",
   "name": "Block ID Prompt",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "minAppVersion": "1.8.7",
   "description": "Prompt for custom block IDs and complete wiki block links to open tasks.",
   "author": "Bryan",

@@ -24,6 +24,7 @@ const TRAILING_BLOCK_ID_RE = /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
 const TASKS_INLINE_FIELD_RE = /[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g;
 const TASKS_EMOJI_DATE_RE =
   /[ \t]*(?:[\u2600-\u27BF]|\uD83C[\uD000-\uDFFF]|\uD83D[\uD000-\uDFFF]|\uD83E[\uD000-\uDFFF])\s*\d{4}-\d{2}-\d{2}/g;
+const CANONICAL_BLOCK_LINK_PREFIX = "#^";
 const SCAN_DEBOUNCE_MS = 75;
 const EDIT_SUPPRESS_MS = 250;
 
@@ -1224,8 +1225,8 @@ function editorPositionToIndex(content, position) {
   return lineStart + position.ch;
 }
 
-function sourceReplacement(source, id) {
-  return `[[${source.targetText}${source.blockPrefix}${id}${source.aliasSuffix}]]`;
+function sourceReplacement(source, id, blockPrefix = source.blockPrefix) {
+  return `[[${source.targetText}${blockPrefix}${id}${source.aliasSuffix}]]`;
 }
 
 function taskPickerRevertReplacement(source) {
@@ -2800,7 +2801,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return false;
     }
 
-    const replacement = sourceReplacement(source, id);
+    const replacement = sourceReplacement(source, id, CANONICAL_BLOCK_LINK_PREFIX);
     this.suppressEditorScans();
     source.editor.replaceRange(
       replacement,

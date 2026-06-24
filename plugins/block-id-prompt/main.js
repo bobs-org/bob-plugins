@@ -4,6 +4,7 @@ const {
   Notice,
   Plugin,
   Setting,
+  setIcon,
   TFile,
 } = require("obsidian");
 const { EditorView } = require("@codemirror/view");
@@ -11,8 +12,18 @@ const { EditorView } = require("@codemirror/view");
 const BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const WIKI_LINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 const MARKDOWN_LINK_RE = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
+const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
+const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "B"]);
+const OBSIDIAN_TASK_LINE_RE =
+  /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
+const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
+const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
+const TRAILING_BLOCK_ID_RE = /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
+const TASKS_INLINE_FIELD_RE = /[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g;
+const TASKS_EMOJI_DATE_RE =
+  /[ \t]*(?:[\u2600-\u27BF]|\uD83C[\uD000-\uDFFF]|\uD83D[\uD000-\uDFFF]|\uD83E[\uD000-\uDFFF])\s*\d{4}-\d{2}-\d{2}/g;
 const SCAN_DEBOUNCE_MS = 75;
 const EDIT_SUPPRESS_MS = 250;
 
@@ -116,6 +127,41 @@ function splitWikiLinkBody(body) {
   return {
     destination: pipeIndex === -1 ? body : body.slice(0, pipeIndex),
     aliasSuffix: pipeIndex === -1 ? "" : body.slice(pipeIndex),
+  };
+}
+
+function parseTrailingTaskPickerMarker(match) {
+  const raw = match[0];
+  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
+  let markerIndex = destination.lastIndexOf("#^^");
+  let blockPrefix = "#^";
+
+  if (markerIndex === -1 || markerIndex + 3 !== destination.length) {
+    markerIndex = destination.lastIndexOf("^^");
+    blockPrefix = "^";
+    if (markerIndex === -1 || markerIndex + 2 !== destination.length) {
+      return null;
+    }
+  }
+
+  const targetText = destination.slice(0, markerIndex);
+  if (targetText.includes("^")) {
+    return null;
+  }
+
+  const markerStartCh = match.index + 2 + markerIndex;
+  const markerEndCh = match.index + 2 + destination.length;
+
+  return {
+    kind: "link-task-picker",
+    raw,
+    targetText,
+    aliasSuffix,
+    blockPrefix,
+    startCh: match.index,
+    endCh: match.index + raw.length,
+    markerStartCh,
+    markerEndCh,
   };
 }
 
@@ -357,6 +403,33 @@ function findMarkerLinkNearCursor(lineText, cursorCh) {
   return candidates[0] || null;
 }
 
+function findTaskPickerMarkerNearCursor(lineText, cursorCh) {
+  const candidates = [];
+  let match;
+
+  WIKI_LINK_RE.lastIndex = 0;
+  while ((match = WIKI_LINK_RE.exec(lineText)) !== null) {
+    const parsed = parseTrailingTaskPickerMarker(match);
+    if (!parsed) {
+      continue;
+    }
+
+    const cursorAtMarker =
+      cursorCh >= parsed.markerStartCh && cursorCh <= parsed.markerEndCh + 2;
+    if (!cursorAtMarker) {
+      continue;
+    }
+
+    candidates.push({
+      ...parsed,
+      distance: Math.abs(cursorCh - parsed.markerEndCh),
+    });
+  }
+
+  candidates.sort((left, right) => left.distance - right.distance);
+  return candidates[0] || null;
+}
+
 function cursorDistanceToRange(cursorCh, startCh, endCh) {
   if (cursorCh < startCh) {
     return startCh - cursorCh;
@@ -467,6 +540,153 @@ function lineIsInsideCodeFence(editor, lineNumber) {
   }
 
   return Boolean(activeFence);
+}
+
+function startsWithFrontmatter(lines) {
+  return lines.length > 0 && /^\s*---\s*$/.test(lines[0]);
+}
+
+function normalizeMarkdownLine(lineText) {
+  return String(lineText || "").replace(/\r$/, "");
+}
+
+function getObsidianTaskLineMatch(lineText) {
+  return OBSIDIAN_TASK_LINE_RE.exec(normalizeMarkdownLine(lineText));
+}
+
+function isOpenObsidianTaskLine(lineText) {
+  const match = getObsidianTaskLineMatch(lineText);
+  if (!match) {
+    return false;
+  }
+
+  const status = match[1];
+  const body = match[2] || "";
+  return (
+    OPEN_OBSIDIAN_TASK_STATUSES.has(status) && PROJECT_TASK_TAG_RE.test(body)
+  );
+}
+
+function getTrailingBlockId(lineText) {
+  const match = normalizeMarkdownLine(lineText).match(TRAILING_BLOCK_ID_RE);
+  return match ? match[1] : null;
+}
+
+function stripTaskTag(text) {
+  return String(text || "").replace(
+    PROJECT_TASK_TAG_GLOBAL_RE,
+    (match, prefix) => {
+      if (!prefix) {
+        return "";
+      }
+
+      return /\s/.test(prefix) ? " " : prefix;
+    },
+  );
+}
+
+function cleanTaskDisplayText(lineText) {
+  const match = getObsidianTaskLineMatch(lineText);
+  let text = match ? match[2] || "" : normalizeMarkdownLine(lineText);
+
+  text = text
+    .replace(TRAILING_BLOCK_ID_RE, "")
+    .replace(TASKS_INLINE_FIELD_RE, "")
+    .replace(TASKS_EMOJI_DATE_RE, "");
+  text = stripTaskTag(text)
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+  return text || "(untitled task)";
+}
+
+function taskItemFromLine(lineText, lineNumber) {
+  const match = getObsidianTaskLineMatch(lineText);
+  if (!match) {
+    return null;
+  }
+
+  const status = match[1];
+  const body = match[2] || "";
+  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || !PROJECT_TASK_TAG_RE.test(body)) {
+    return null;
+  }
+
+  return {
+    line: lineNumber,
+    rawLine: lineText,
+    status,
+    existingId: getTrailingBlockId(lineText),
+    displayText: cleanTaskDisplayText(lineText),
+  };
+}
+
+function getOpenTasksInContent(content) {
+  const sourceLines = String(content || "").split("\n");
+  const tasks = [];
+  let lineIndex = 0;
+  let inFrontmatter = false;
+  let inFence = null;
+
+  if (startsWithFrontmatter(sourceLines)) {
+    inFrontmatter = true;
+    lineIndex = 1;
+  }
+
+  for (; lineIndex < sourceLines.length; lineIndex += 1) {
+    const line = sourceLines[lineIndex] || "";
+
+    if (inFrontmatter) {
+      if (FRONTMATTER_DELIMITER_RE.test(line)) {
+        inFrontmatter = false;
+      }
+      continue;
+    }
+
+    if (inFence) {
+      if (isClosingFence(line, inFence)) {
+        inFence = null;
+      }
+      continue;
+    }
+
+    const openingFence = getFenceOpening(line);
+    if (openingFence) {
+      inFence = openingFence;
+      continue;
+    }
+
+    const task = taskItemFromLine(line, lineIndex);
+    if (task) {
+      tasks.push(task);
+    }
+  }
+
+  return tasks;
+}
+
+function fuzzyIncludes(text, query) {
+  const haystack = String(text || "").toLowerCase();
+  const needle = String(query || "").toLowerCase();
+  if (!needle) {
+    return true;
+  }
+
+  if (haystack.includes(needle)) {
+    return true;
+  }
+
+  let offset = 0;
+  for (const char of needle) {
+    offset = haystack.indexOf(char, offset);
+    if (offset === -1) {
+      return false;
+    }
+    offset += 1;
+  }
+
+  return true;
 }
 
 function blockTokenMatches(content, id) {
@@ -709,6 +929,37 @@ function lineStartIndexFromLines(lines, lineNumber) {
 
 function lineEndIndexFromLines(lines, lineNumber) {
   return lineStartIndexFromLines(lines, lineNumber) + lines[lineNumber].length;
+}
+
+function contentLineAt(content, lineNumber) {
+  const lines = String(content || "").split("\n");
+  if (lineNumber < 0 || lineNumber >= lines.length) {
+    return null;
+  }
+
+  return lines[lineNumber];
+}
+
+function taskLineAppendEdit(content, lineNumber, id) {
+  const lines = String(content || "").split("\n");
+  if (lineNumber < 0 || lineNumber >= lines.length) {
+    return null;
+  }
+
+  const lineText = lines[lineNumber];
+  const lineStart = lineStartIndexFromLines(lines, lineNumber);
+  const lineEnd = lineEndIndexFromLines(lines, lineNumber);
+  const contentLineEnd = lineText.endsWith("\r") ? lineEnd - 1 : lineEnd;
+  const lineWithoutCarriageReturn = lineText.endsWith("\r")
+    ? lineText.slice(0, -1)
+    : lineText;
+  const trimmedLength = lineWithoutCarriageReturn.replace(/[ \t]+$/g, "").length;
+
+  return {
+    start: lineStart + trimmedLength,
+    end: contentLineEnd,
+    replacement: ` ^${id}`,
+  };
 }
 
 function lineRangeText(lines, startLine, endLine) {
@@ -977,6 +1228,14 @@ function sourceReplacement(source, id) {
   return `[[${source.targetText}${source.blockPrefix}${id}${source.aliasSuffix}]]`;
 }
 
+function taskPickerRevertReplacement(source) {
+  return `[[${source.targetText}${source.blockPrefix}${source.aliasSuffix}]]`;
+}
+
+function taskPickerRevertCursorCh(source) {
+  return source.startCh + 2 + source.targetText.length + source.blockPrefix.length;
+}
+
 function forEachContentLine(content, callback) {
   let lineNumber = 0;
   let lineStart = 0;
@@ -1171,6 +1430,379 @@ function applyFileLinkBlockCompletionWithEditorApi(editor, line, marker) {
   return true;
 }
 
+const TASK_LINK_PICKER_HINTS = [
+  { keys: ["↑", "↓"], label: "Navigate" },
+  { keys: ["^N", "^P"], label: "Move" },
+  { keys: ["↵"], label: "Link" },
+  { keys: ["esc"], label: "Dismiss" },
+];
+
+function isCtrlKey(event, key) {
+  return (
+    event.ctrlKey === true &&
+    event.altKey !== true &&
+    event.metaKey !== true &&
+    typeof event.key === "string" &&
+    event.key.toLowerCase() === key
+  );
+}
+
+function applyIcon(el, iconName) {
+  if (!el || typeof setIcon !== "function") {
+    return;
+  }
+
+  try {
+    setIcon(el, iconName);
+  } catch (error) {
+    // Icons are decorative here; rendering should continue without them.
+  }
+}
+
+function appendHighlighted(el, text, query) {
+  const source = String(text === null || text === undefined ? "" : text);
+  if (!query) {
+    el.appendText(source);
+    return;
+  }
+
+  const lowerSource = source.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  let index = 0;
+  let matchIndex = lowerSource.indexOf(lowerQuery);
+
+  if (matchIndex === -1) {
+    el.appendText(source);
+    return;
+  }
+
+  while (matchIndex !== -1) {
+    if (matchIndex > index) {
+      el.appendText(source.slice(index, matchIndex));
+    }
+    el.createSpan({
+      cls: "bid-tlp-hl",
+      text: source.slice(matchIndex, matchIndex + lowerQuery.length),
+    });
+    index = matchIndex + lowerQuery.length;
+    matchIndex = lowerSource.indexOf(lowerQuery, index);
+  }
+
+  if (index < source.length) {
+    el.appendText(source.slice(index));
+  }
+}
+
+function taskStatusLabel(status) {
+  return `[${status || " "}]`;
+}
+
+function taskStatusClass(status) {
+  if (status === "/") {
+    return "active";
+  }
+
+  if (status === "B") {
+    return "blocked";
+  }
+
+  return "todo";
+}
+
+class TaskLinkPickerModal extends Modal {
+  constructor(app, plugin, source, tasks, targetFile) {
+    super(app);
+    this.plugin = plugin;
+    this.source = source;
+    this.tasks = tasks;
+    this.targetFile = targetFile;
+    this.visibleTasks = tasks;
+    this.selectedIndex = 0;
+    this.completed = false;
+    this.opening = false;
+    this.inputEl = null;
+    this.subtitleEl = null;
+    this.resultsEl = null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.addClass("bid-tlp-modal");
+    contentEl.addClass("bid-tlp");
+
+    const header = contentEl.createDiv({ cls: "bid-tlp-header" });
+    const headerIcon = header.createDiv({ cls: "bid-tlp-header-icon" });
+    applyIcon(headerIcon, "list-checks");
+    const headerText = header.createDiv({ cls: "bid-tlp-header-text" });
+    headerText.createDiv({ cls: "bid-tlp-title", text: "Link to task" });
+    this.subtitleEl = headerText.createDiv({ cls: "bid-tlp-subtitle" });
+
+    const searchEl = contentEl.createDiv({ cls: "bid-tlp-search" });
+    const searchIcon = searchEl.createDiv({ cls: "bid-tlp-search-icon" });
+    applyIcon(searchIcon, "search");
+    this.inputEl = searchEl.createEl("input", {
+      cls: "bid-tlp-input",
+      attr: {
+        "aria-label": "Filter tasks",
+        placeholder: "Filter tasks",
+        type: "text",
+      },
+    });
+    this.inputEl.addEventListener("input", () => {
+      this.selectedIndex = 0;
+      this.renderResults();
+    });
+    this.inputEl.addEventListener("keydown", (event) =>
+      this.handleKeydown(event),
+    );
+
+    this.resultsEl = contentEl.createDiv({
+      cls: "bid-tlp-results",
+      attr: {
+        role: "listbox",
+        "aria-label": "Open tasks",
+      },
+    });
+
+    this.renderFooter(contentEl);
+    this.renderResults();
+
+    window.setTimeout(() => {
+      if (this.inputEl) {
+        this.inputEl.focus();
+      }
+    }, 0);
+  }
+
+  renderFooter(contentEl) {
+    const footerEl = contentEl.createDiv({ cls: "bid-tlp-footer" });
+    TASK_LINK_PICKER_HINTS.forEach((hint) => {
+      const group = footerEl.createDiv({ cls: "bid-tlp-hint" });
+      hint.keys.forEach((key) =>
+        group.createEl("kbd", { cls: "bid-tlp-kbd", text: key }),
+      );
+      group.createEl("span", { cls: "bid-tlp-hint-label", text: hint.label });
+    });
+  }
+
+  onClose() {
+    this.modalEl.removeClass("bid-tlp-modal");
+    this.contentEl.empty();
+
+    if (!this.completed) {
+      this.plugin.cancelTaskLinkPicker(this.source);
+    }
+
+    this.plugin.lastPromptKey = null;
+    this.plugin.promptOpen = false;
+  }
+
+  handleKeydown(event) {
+    if (event.key === "ArrowDown" || isCtrlKey(event, "n")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveSelection(1);
+      return;
+    }
+
+    if (event.key === "ArrowUp" || isCtrlKey(event, "p")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveSelection(-1);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.openSelectedTask();
+    }
+  }
+
+  moveSelection(delta) {
+    if (this.visibleTasks.length === 0) {
+      return;
+    }
+
+    this.selectedIndex =
+      (this.selectedIndex + delta + this.visibleTasks.length) %
+      this.visibleTasks.length;
+    this.renderResults();
+  }
+
+  getQuery() {
+    return this.inputEl ? this.inputEl.value.trim().toLowerCase() : "";
+  }
+
+  getFilteredTasks() {
+    const query = this.getQuery();
+    if (!query) {
+      return this.tasks;
+    }
+
+    return this.tasks.filter((task) =>
+      fuzzyIncludes(task.displayText, query),
+    );
+  }
+
+  renderResults() {
+    if (!this.resultsEl) {
+      return;
+    }
+
+    this.visibleTasks = this.getFilteredTasks();
+    this.selectedIndex = this.clampSelectedIndex(
+      this.selectedIndex,
+      this.visibleTasks.length,
+    );
+    this.updateSubtitle();
+    this.resultsEl.empty();
+
+    if (this.visibleTasks.length === 0) {
+      this.renderEmptyState();
+      return;
+    }
+
+    const query = this.getQuery();
+    this.visibleTasks.forEach((task, index) => {
+      const isSelected = index === this.selectedIndex;
+      const rowEl = this.resultsEl.createDiv({
+        cls: `bid-tlp-row${isSelected ? " is-selected" : ""}`,
+        attr: {
+          role: "option",
+          "aria-selected": isSelected ? "true" : "false",
+        },
+      });
+
+      this.renderTaskRow(rowEl, task, query);
+
+      rowEl.addEventListener("mousedown", (event) => event.preventDefault());
+      rowEl.addEventListener("click", () => this.openTaskAtIndex(index));
+
+      if (isSelected) {
+        this.scrollRowIntoView(rowEl);
+      }
+    });
+  }
+
+  renderTaskRow(rowEl, task, query) {
+    rowEl.createDiv({
+      cls: `bid-tlp-status-pill is-${taskStatusClass(task.status)}`,
+      text: taskStatusLabel(task.status),
+    });
+
+    const textEl = rowEl.createDiv({ cls: "bid-tlp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bid-tlp-row-title" });
+    appendHighlighted(titleEl, task.displayText, query);
+
+    const metaEl = textEl.createDiv({ cls: "bid-tlp-row-meta" });
+    metaEl.createSpan({ text: `Line ${task.line + 1}` });
+
+    const badgeEl = rowEl.createDiv({
+      cls: `bid-tlp-badge ${task.existingId ? "is-existing" : "is-create"}`,
+    });
+    if (task.existingId) {
+      badgeEl.createSpan({ cls: "bid-tlp-badge-action", text: "↵ link" });
+      badgeEl.createSpan({ cls: "bid-tlp-badge-id", text: `^${task.existingId}` });
+    } else {
+      badgeEl.createSpan({ cls: "bid-tlp-badge-action", text: "+ id" });
+    }
+  }
+
+  renderEmptyState() {
+    const basename = this.targetFile && this.targetFile.basename;
+    const hasTasks = this.tasks.length > 0;
+    const emptyEl = this.resultsEl.createDiv({ cls: "bid-tlp-empty" });
+    const iconEl = emptyEl.createDiv({ cls: "bid-tlp-empty-icon" });
+    applyIcon(iconEl, hasTasks ? "search-x" : "list-x");
+    emptyEl.createDiv({
+      cls: "bid-tlp-empty-text",
+      text: hasTasks
+        ? "No matching tasks"
+        : `No open tasks in ${basename || "target note"}`,
+    });
+  }
+
+  updateSubtitle() {
+    if (!this.subtitleEl) {
+      return;
+    }
+
+    const total = this.tasks.length;
+    const shown = this.visibleTasks.length;
+    const basename = this.targetFile && this.targetFile.basename;
+    if (shown !== total) {
+      this.subtitleEl.textContent = `Showing ${shown} of ${total}`;
+      return;
+    }
+
+    this.subtitleEl.textContent = `${total} open ${pluralize(
+      total,
+      "task",
+      "tasks",
+    )}${basename ? ` in ${basename}` : ""}`;
+  }
+
+  clampSelectedIndex(index, length) {
+    if (length === 0) {
+      return 0;
+    }
+
+    return Math.min(Math.max(index, 0), length - 1);
+  }
+
+  scrollRowIntoView(rowEl) {
+    if (!rowEl || typeof rowEl.scrollIntoView !== "function") {
+      return;
+    }
+
+    try {
+      rowEl.scrollIntoView({ block: "nearest" });
+    } catch (error) {
+      try {
+        rowEl.scrollIntoView(false);
+      } catch (ignoredError) {
+        // Scrolling is optional; never let it break selection.
+      }
+    }
+  }
+
+  openSelectedTask() {
+    this.openTaskAtIndex(this.selectedIndex);
+  }
+
+  async openTaskAtIndex(index) {
+    if (this.opening) {
+      return;
+    }
+
+    const task = this.visibleTasks[index];
+    if (!task) {
+      return;
+    }
+
+    this.opening = true;
+    let promptSource = null;
+    try {
+      const result = await this.plugin.selectTaskLinkTask(this.source, task);
+      if (!result) {
+        return;
+      }
+
+      promptSource = result.promptSource || null;
+      this.completed = true;
+      this.close();
+    } finally {
+      this.opening = false;
+    }
+
+    if (promptSource) {
+      window.setTimeout(() => this.plugin.openBlockIdPrompt(promptSource), 0);
+    }
+  }
+}
+
 class BlockIdPromptModal extends Modal {
   constructor(app, plugin, source) {
     super(app);
@@ -1347,7 +1979,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return;
     }
 
-    if (this.promptOpen || Date.now() < this.suppressUntil) {
+    if (this.promptOpen) {
       return;
     }
 
@@ -1364,10 +1996,11 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
   }
 
   inspectActiveEditor(cmView) {
-    if (this.promptOpen || Date.now() < this.suppressUntil) {
+    if (this.promptOpen) {
       return;
     }
 
+    const scansSuppressed = Date.now() < this.suppressUntil;
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!(view instanceof MarkdownView) || !view.editor) {
       return;
@@ -1392,6 +2025,25 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     const lineText = view.editor.getLine(cursor.line) || "";
+    const taskMarker = findTaskPickerMarkerNearCursor(lineText, cursor.ch || 0);
+    if (taskMarker) {
+      if (lineIsInsideCodeFence(view.editor, cursor.line)) {
+        return;
+      }
+
+      void this.openTaskLinkPicker({
+        ...taskMarker,
+        editor: view.editor,
+        sourcePath: file.path,
+        line: cursor.line,
+      });
+      return;
+    }
+
+    if (scansSuppressed) {
+      return;
+    }
+
     const marker = findMarkerLinkNearCursor(lineText, cursor.ch || 0);
     if (!marker) {
       this.lastPromptKey = null;
@@ -1493,6 +2145,113 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     new BlockIdPromptModal(this.app, this, source).open();
   }
 
+  async openTaskLinkPicker(source) {
+    if (this.promptOpen) {
+      return;
+    }
+
+    const key = sourceKey(source);
+    if (key === this.lastPromptKey) {
+      return;
+    }
+
+    this.lastPromptKey = key;
+    this.promptOpen = true;
+
+    try {
+      const destination = await this.readDestinationForValidation(source);
+      if (!destination) {
+        new Notice("Task link blocked: target note could not be resolved");
+        this.lastPromptKey = null;
+        this.promptOpen = false;
+        return;
+      }
+
+      if (destination.content === null) {
+        new Notice(`Task link blocked: ${destination.file.path} could not be read`);
+        this.lastPromptKey = null;
+        this.promptOpen = false;
+        return;
+      }
+
+      if (!this.sourceMarkerStillPresent(source, { quiet: true })) {
+        this.lastPromptKey = null;
+        this.promptOpen = false;
+        return;
+      }
+
+      const tasks = getOpenTasksInContent(destination.content);
+      new TaskLinkPickerModal(
+        this.app,
+        this,
+        {
+          ...source,
+          destinationPath: destination.file.path,
+        },
+        tasks,
+        destination.file,
+      ).open();
+    } catch (error) {
+      console.error("Block ID Prompt failed to open task link picker", error);
+      new Notice("Task link blocked: target note could not be read");
+      this.lastPromptKey = null;
+      this.promptOpen = false;
+    }
+  }
+
+  cancelTaskLinkPicker(source) {
+    this.revertTaskPickerMarker(source, { quiet: true });
+  }
+
+  async selectTaskLinkTask(source, task) {
+    if (task.existingId) {
+      return this.completeTaskLinkWithExistingId(source, task);
+    }
+
+    if (!this.sourceMarkerStillPresent(source)) {
+      return null;
+    }
+
+    return {
+      promptSource: {
+        ...source,
+        kind: "link-task-complete",
+        task: { ...task },
+        previewText: task.displayText,
+        prefillId: false,
+      },
+    };
+  }
+
+  async completeTaskLinkWithExistingId(source, task) {
+    if (!this.sourceMarkerStillPresent(source)) {
+      return null;
+    }
+
+    const destination = await this.readDestinationForValidation(source);
+    if (!destination || destination.content === null) {
+      new Notice("Task link blocked: target note could not be resolved");
+      return null;
+    }
+
+    if (!this.taskLineStillPresent(destination.content, task, destination.file.path)) {
+      return null;
+    }
+
+    const currentId = getTrailingBlockId(task.rawLine);
+    if (currentId !== task.existingId) {
+      new Notice("Task link blocked: selected task block ID changed");
+      return null;
+    }
+
+    if (!this.completeTaskSourceLink(source, task.existingId)) {
+      return null;
+    }
+
+    new Notice("Linked task block");
+    return { completed: true };
+  }
+
   hasSingleCursor(editor) {
     if (
       !editor ||
@@ -1512,6 +2271,11 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
   }
 
   cancelBlockIdPrompt(source) {
+    if (source.kind === "link-task-complete") {
+      this.revertTaskPickerMarker(source, { quiet: true });
+      return;
+    }
+
     if (
       source.kind === "direct-add" ||
       source.kind === "direct-rename" ||
@@ -1548,6 +2312,10 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 
     if (source.kind === "direct-rename") {
       return this.submitDirectBlockRename(source, newId);
+    }
+
+    if (source.kind === "link-task-complete") {
+      return this.submitLinkTaskBlockId(source, newId);
     }
 
     return this.submitLinkedBlockId(source, newId);
@@ -1741,16 +2509,115 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
-  sourceMarkerStillPresent(source) {
+  async submitLinkTaskBlockId(source, newId) {
+    if (!this.sourceMarkerStillPresent(source)) {
+      return false;
+    }
+
+    const destination = await this.readDestinationForValidation(source);
+    if (!destination || destination.content === null) {
+      new Notice("Task link blocked: target note could not be resolved");
+      return false;
+    }
+
+    const duplicateMatches = blockTokenMatches(destination.content, newId);
+    if (duplicateMatches.length > 0) {
+      new Notice(`Block ID '${newId}' already exists in ${destination.file.path}`);
+      return false;
+    }
+
+    if (!this.taskLineStillPresent(destination.content, source.task, destination.file.path)) {
+      return false;
+    }
+
+    if (
+      !(await this.appendTaskBlockId(
+        destination.file,
+        source,
+        source.task,
+        newId,
+        destination.content,
+      ))
+    ) {
+      return false;
+    }
+
+    if (!this.completeTaskSourceLink(source, newId)) {
+      new Notice("Task block ID added, but the source link changed before completion");
+      return true;
+    }
+
+    new Notice("Added block ID and linked task");
+    return true;
+  }
+
+  sourceMarkerStillPresent(source, options = {}) {
     const lineText = source.editor.getLine(source.line) || "";
     const currentText = lineText.slice(source.startCh, source.endCh);
 
     if (currentText !== source.raw) {
-      new Notice("Block marker link changed before it could be rewritten");
+      if (!options.quiet) {
+        new Notice("Block marker link changed before it could be rewritten");
+      }
       return false;
     }
 
     return true;
+  }
+
+  taskLineStillPresent(content, task, filePath) {
+    const currentLine = contentLineAt(content, task && task.line);
+    if (currentLine === null || currentLine !== task.rawLine) {
+      new Notice(`Task link blocked: selected task changed in ${filePath}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  async appendTaskBlockId(file, source, task, newId, expectedContent) {
+    const content = await this.readFileSnapshot(file, source);
+    if (content === null) {
+      new Notice(`Task link stopped: ${file.path} could not be read`);
+      return false;
+    }
+
+    if (content !== expectedContent) {
+      new Notice(`Task link stopped: ${file.path} changed before update`);
+      return false;
+    }
+
+    const edit = taskLineAppendEdit(content, task.line, newId);
+    if (!edit) {
+      new Notice(`Task link stopped: selected task changed in ${file.path}`);
+      return false;
+    }
+
+    if (file.path === source.sourcePath) {
+      if (!source.editor || typeof source.editor.replaceRange !== "function") {
+        new Notice("Task link stopped: active note could not be modified");
+        return false;
+      }
+
+      this.suppressEditorScans();
+      source.editor.replaceRange(
+        edit.replacement,
+        indexToEditorPosition(content, edit.start),
+        indexToEditorPosition(content, edit.end),
+      );
+      return true;
+    }
+
+    const nextContent =
+      content.slice(0, edit.start) + edit.replacement + content.slice(edit.end);
+    try {
+      await this.app.vault.modify(file, nextContent);
+      return true;
+    } catch (error) {
+      console.error("Block ID Prompt failed to modify task note", error);
+      new Notice(`Task link stopped: ${file.path} could not be modified`);
+      return false;
+    }
   }
 
   directRenameSourceStillPresent(source) {
@@ -1920,6 +2787,55 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       { line: source.line, ch: source.startCh },
       { line: source.line, ch: source.endCh },
     );
+
+    return true;
+  }
+
+  completeTaskSourceLink(source, id) {
+    const lineText = source.editor.getLine(source.line) || "";
+    const currentText = lineText.slice(source.startCh, source.endCh);
+
+    if (currentText !== source.raw) {
+      new Notice("Block marker link changed before it could be rewritten");
+      return false;
+    }
+
+    const replacement = sourceReplacement(source, id);
+    this.suppressEditorScans();
+    source.editor.replaceRange(
+      replacement,
+      { line: source.line, ch: source.startCh },
+      { line: source.line, ch: source.endCh },
+    );
+    setEditorCursorIfPossible(source.editor, {
+      line: source.line,
+      ch: source.startCh + replacement.length,
+    });
+
+    return true;
+  }
+
+  revertTaskPickerMarker(source, options = {}) {
+    const lineText = source.editor.getLine(source.line) || "";
+    const currentText = lineText.slice(source.startCh, source.endCh);
+
+    if (currentText !== source.raw) {
+      if (!options.quiet) {
+        new Notice("Block marker link changed before it could be rewritten");
+      }
+      return false;
+    }
+
+    this.suppressEditorScans();
+    source.editor.replaceRange(
+      taskPickerRevertReplacement(source),
+      { line: source.line, ch: source.startCh },
+      { line: source.line, ch: source.endCh },
+    );
+    setEditorCursorIfPossible(source.editor, {
+      line: source.line,
+      ch: taskPickerRevertCursorCh(source),
+    });
 
     return true;
   }

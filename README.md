@@ -11,7 +11,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 
 | Plugin                  | id                       | Version | Description                                                            |
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
-| Block ID Prompt         | `block-id-prompt`        |   1.0.0 | Prompt for a custom block ID when a wiki block link uses the `^^` marker. |
+| Block ID Prompt         | `block-id-prompt`        |   1.1.0 | Prompt for custom block IDs and complete wiki block links to open tasks. |
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.0.0 | Expand Bob daily-note snippets and ledger time ranges.                |
 | Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.0.0 | Open parent, next, previous, and alternate notes from keyboard shortcuts. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
@@ -32,7 +32,7 @@ bob-plugins/
   scripts/
     validate-manifests.mjs      # manifest + main.js sanity checks
   plugins/
-    block-id-prompt/{manifest.json,main.js}
+    block-id-prompt/{manifest.json,main.js,styles.css}
     bob-ledger-tools/{manifest.json,main.js}
     bob-navigation-hotkeys/{manifest.json,main.js,styles.css}
     bob-project-tasks/{manifest.json,main.js}
@@ -65,7 +65,7 @@ Each plugin folder contains the files Obsidian reads when loading a plugin:
   ```
 
 - **`main.js`** — the plugin code (CommonJS: `require(...)` / `module.exports`).
-- **`styles.css`** — optional plugin CSS (only `bob-navigation-hotkeys` ships one).
+- **`styles.css`** — optional plugin CSS (currently `block-id-prompt` and `bob-navigation-hotkeys` ship one).
 
 ### Validation
 

@@ -41,6 +41,7 @@ const NOTE_TEMPLATE_MISSING_NOTICES = Object.freeze({
   yearly: "Yearly note template not found",
   default: "New note template not found",
 });
+const PROJECT_TYPE_WIKILINK = "[[project]]";
 const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
@@ -82,6 +83,32 @@ const DASH_FILE_PATH = "dash.md";
 const DASH_TASKS_HEADER = "## Tasks";
 const DASH_TASKS_JUMP_RETRIES = 8;
 const DASH_TASKS_SCROLL_ASSERT_FRAMES = 8;
+const PROJECT_STATUS_CANCELED_ALIASES = new Set(["canceled", "cancelled"]);
+const PROJECT_STATUS_PRESENTATIONS = Object.freeze({
+  wip: Object.freeze({
+    icon: "hammer",
+    emoji: "🚧",
+    label: "WIP",
+    variant: "wip",
+  }),
+  done: Object.freeze({
+    icon: "circle-check",
+    emoji: "✅",
+    label: "Done",
+    variant: "done",
+  }),
+  canceled: Object.freeze({
+    icon: "circle-slash",
+    emoji: "🚫",
+    label: "Canceled",
+    variant: "canceled",
+  }),
+});
+const PROJECT_STATUS_FALLBACK = Object.freeze({
+  icon: "square-kanban",
+  emoji: "",
+  variant: "muted",
+});
 
 const YANK_PATH_COMMANDS = [
   {
@@ -3116,6 +3143,171 @@ function appendHighlighted(el, text, query) {
   }
 }
 
+function isProjectType(value) {
+  if (typeof value === "string") {
+    return value.trim() === PROJECT_TYPE_WIKILINK;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => isProjectType(item));
+  }
+
+  return false;
+}
+
+function stripSurroundingQuotes(value) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  if (text.length < 2) {
+    return text;
+  }
+
+  const first = text.charAt(0);
+  const last = text.charAt(text.length - 1);
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    return text.slice(1, -1).trim();
+  }
+
+  return text;
+}
+
+function stripSurroundingWikiLink(value) {
+  const text = stripSurroundingQuotes(value);
+  const match = /^\[\[([^|\]#]+)(?:#[^|\]]*)?(?:\|[^\]]*)?\]\]$/.exec(text);
+  return match ? match[1].trim() : text;
+}
+
+function normalizeStatus(value) {
+  const scalar = Array.isArray(value) ? value[0] : value;
+  const text = stripSurroundingWikiLink(scalar);
+  return text.trim().toLowerCase();
+}
+
+function formatProjectStatusLabel(statusKey) {
+  const label = String(statusKey || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!label) {
+    return "No status";
+  }
+
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function getProjectNoteInfo(frontmatter) {
+  const isProject = Boolean(frontmatter) && isProjectType(frontmatter.type);
+  if (!isProject) {
+    return {
+      isProject: false,
+      statusKey: "",
+      label: "",
+      emoji: "",
+      icon: "file-text",
+      variant: "",
+    };
+  }
+
+  const normalizedStatus = normalizeStatus(frontmatter.status);
+  const statusKey = PROJECT_STATUS_CANCELED_ALIASES.has(normalizedStatus)
+    ? "canceled"
+    : normalizedStatus;
+  const presentation = PROJECT_STATUS_PRESENTATIONS[statusKey];
+  if (presentation) {
+    return {
+      isProject: true,
+      statusKey,
+      label: presentation.label,
+      emoji: presentation.emoji,
+      icon: presentation.icon,
+      variant: presentation.variant,
+    };
+  }
+
+  return {
+    isProject: true,
+    statusKey,
+    label: formatProjectStatusLabel(statusKey),
+    emoji: PROJECT_STATUS_FALLBACK.emoji,
+    icon: PROJECT_STATUS_FALLBACK.icon,
+    variant: PROJECT_STATUS_FALLBACK.variant,
+  };
+}
+
+function getFileProjectNoteInfo(app, file) {
+  const frontmatter =
+    app &&
+    app.metadataCache &&
+    typeof app.metadataCache.getFileCache === "function"
+      ? app.metadataCache.getFileCache(file)?.frontmatter
+      : null;
+  return getProjectNoteInfo(frontmatter);
+}
+
+function getChildProjectStatusSummary(childFiles, projectInfoByPath) {
+  let projectCount = 0;
+  const statusCounts = new Map();
+
+  childFiles.forEach((file) => {
+    const info = projectInfoByPath.get(file.path);
+    if (!info || !info.isProject) {
+      return;
+    }
+
+    projectCount += 1;
+    const label = info.statusKey
+      ? info.statusKey === "wip" ||
+        info.statusKey === "done" ||
+        info.statusKey === "canceled"
+        ? info.statusKey
+        : info.label.toLowerCase()
+      : "no status";
+    statusCounts.set(label, (statusCounts.get(label) || 0) + 1);
+  });
+
+  if (projectCount === 0) {
+    return [];
+  }
+
+  const parts = [
+    `${projectCount} project${projectCount === 1 ? "" : "s"}`,
+  ];
+  const orderedLabels = ["wip", "done", "canceled", "no status"];
+  orderedLabels.forEach((label) => {
+    const count = statusCounts.get(label);
+    if (count) {
+      parts.push(`${count} ${label}`);
+      statusCounts.delete(label);
+    }
+  });
+
+  Array.from(statusCounts.keys())
+    .sort()
+    .forEach((label) => {
+      parts.push(`${statusCounts.get(label)} ${label}`);
+    });
+
+  return parts;
+}
+
+function getChildNoteSearchText(file, projectInfo) {
+  const parts = [file.path, file.basename];
+  if (projectInfo && projectInfo.isProject) {
+    parts.push("project", projectInfo.statusKey, projectInfo.label);
+    if (projectInfo.statusKey === "canceled") {
+      parts.push("cancelled");
+    }
+  }
+
+  return parts
+    .filter((part) => part !== null && part !== undefined && part !== "")
+    .join(" ")
+    .toLowerCase();
+}
+
+function childNoteMatchesQuery(file, projectInfo, query) {
+  return getChildNoteSearchText(file, projectInfo).includes(query);
+}
+
 class FilteredPickerModal extends Modal {
   constructor(app, options) {
     super(app);
@@ -3419,6 +3611,14 @@ class FilteredPickerModal extends Modal {
 
 class ChildNotePickerModal extends FilteredPickerModal {
   constructor(app, plugin, childFiles, parentFile) {
+    const projectInfoByPath = new Map(
+      childFiles.map((file) => [file.path, getFileProjectNoteInfo(app, file)]),
+    );
+    const projectSummaryParts = getChildProjectStatusSummary(
+      childFiles,
+      projectInfoByPath,
+    );
+
     super(app, {
       items: childFiles,
       title: "Open child note",
@@ -3439,20 +3639,48 @@ class ChildNotePickerModal extends FilteredPickerModal {
         if (parentName) {
           text += ` under ${parentName}`;
         }
+        if (projectSummaryParts.length > 0) {
+          text += ` · ${projectSummaryParts.join(" · ")}`;
+        }
         return text;
       },
       filterItem: (file, query) =>
-        file.path.toLowerCase().includes(query) ||
-        file.basename.toLowerCase().includes(query),
+        childNoteMatchesQuery(file, projectInfoByPath.get(file.path), query),
       renderItem: (file, rowEl, query) => {
-        const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-        applyIcon(rowIcon, "file-text");
+        const projectInfo = projectInfoByPath.get(file.path);
+        const rowIcon = rowEl.createDiv({
+          cls:
+            projectInfo && projectInfo.isProject
+              ? `bob-cnp-row-icon is-status-${projectInfo.variant}`
+              : "bob-cnp-row-icon",
+        });
+        applyIcon(
+          rowIcon,
+          projectInfo && projectInfo.isProject
+            ? projectInfo.icon
+            : "file-text",
+        );
 
         const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
         const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
         appendHighlighted(titleEl, file.basename, query);
         const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
         appendHighlighted(pathEl, file.path, query);
+
+        if (projectInfo && projectInfo.isProject) {
+          const statusText = [projectInfo.emoji, projectInfo.label]
+            .filter(Boolean)
+            .join(" ");
+          const ariaLabel = `Project status: ${projectInfo.label}`;
+          const statusEl = rowEl.createDiv({
+            cls: `bob-cnp-row-status is-status-${projectInfo.variant}`,
+            attr: {
+              "aria-label": ariaLabel,
+              title: ariaLabel,
+            },
+          });
+          appendHighlighted(statusEl, statusText, query);
+        }
       },
       openItem: (file) => plugin.openChildNote(file),
     });

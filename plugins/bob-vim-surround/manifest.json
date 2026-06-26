@@ -1,9 +1,9 @@
 {
   "id": "bob-vim-surround",
   "name": "Bob Vim Surround",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "minAppVersion": "1.8.7",
-  "description": "Add vim-surround ys motions, cs changes, and ds deletes to Obsidian Vim mode.",
+  "description": "Add vim-surround ys motions, cs changes, ds deletes, and dot-repeat to Obsidian Vim mode.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

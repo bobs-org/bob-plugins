@@ -627,12 +627,23 @@ function setCursor(cm, position) {
   }
 }
 
+function getDocSignature(cm) {
+  const cm6Doc = cm && cm.cm6 && cm.cm6.state && cm.cm6.state.doc;
+  if (cm6Doc) {
+    return cm6Doc;
+  }
+
+  return cm && typeof cm.getValue === "function" ? cm.getValue() : null;
+}
+
 class BobVimSurroundPlugin extends Plugin {
   onload() {
     this.pendingSurround = null;
     this.pendingChangeSurround = null;
     this.pendingDeleteSurround = null;
     this.surroundTriggerCandidate = null;
+    this.lastSurroundAction = null;
+    this.surroundDocSig = null;
     this.vimMappingsRegistered = false;
     this.handledSurroundEvents = new WeakSet();
 
@@ -657,6 +668,7 @@ class BobVimSurroundPlugin extends Plugin {
     this.pendingChangeSurround = null;
     this.pendingDeleteSurround = null;
     this.surroundTriggerCandidate = null;
+    this.clearLastSurroundAction();
   }
 
   registerSurroundInputListeners() {
@@ -835,6 +847,23 @@ class BobVimSurroundPlugin extends Plugin {
     );
   }
 
+  recordLastSurroundAction(cm, action) {
+    this.lastSurroundAction = action;
+    this.surroundDocSig = getDocSignature(cm);
+  }
+
+  clearLastSurroundAction() {
+    this.lastSurroundAction = null;
+    this.surroundDocSig = null;
+  }
+
+  isSurroundStillLastChange(cm) {
+    return (
+      this.surroundDocSig !== null &&
+      getDocSignature(cm) === this.surroundDocSig
+    );
+  }
+
   handleSurroundOperator(cm, operatorArgs, ranges, oldAnchor, newHead) {
     const spans = collectSurroundSpans(
       cm,
@@ -879,7 +908,85 @@ class BobVimSurroundPlugin extends Plugin {
       return this.handlePendingSurroundKeydown(event);
     }
 
+    if (
+      this.lastSurroundAction &&
+      !this.surroundTriggerCandidate &&
+      getPlainLowercaseKeyFromEvent(event) === "." &&
+      this.handleSurroundDotRepeat(event)
+    ) {
+      return true;
+    }
+
     return this.handlePhysicalSurroundTriggerKeydown(event);
+  }
+
+  handleSurroundDotRepeat(event) {
+    const cm = this.resolveEventNormalModeVimCm(event);
+    const action = this.lastSurroundAction;
+    if (!cm || !action || action.cm !== cm) {
+      return false;
+    }
+
+    // Motions preserve the signature, but real edits should fall through to
+    // CodeMirror Vim's native dot-repeat.
+    if (!this.isSurroundStillLastChange(cm)) {
+      this.clearLastSurroundAction();
+      return false;
+    }
+
+    if (action.type === "ys") {
+      const vimState = cm.state && cm.state.vim;
+      const lastEdit = vimState && vimState.lastEditInputState;
+      // A no-text-change command such as yank can replace Vim's last edit
+      // record while leaving the document signature intact.
+      if (!lastEdit || lastEdit.operator !== SURROUND_OPERATOR_NAME) {
+        return false;
+      }
+
+      consumeEvent(event);
+      this.replayAddSurround(cm, action);
+      return true;
+    }
+
+    if (action.type === "cs") {
+      consumeEvent(event);
+      this.replayChangeSurround(cm, action);
+      return true;
+    }
+
+    if (action.type === "ds") {
+      consumeEvent(event);
+      this.replayDeleteSurround(cm, action);
+      return true;
+    }
+
+    return false;
+  }
+
+  replayAddSurround(cm, action) {
+    this.pendingSurround = null;
+    if (!this.injectVimKey(cm, ".")) {
+      return false;
+    }
+
+    const pendingSurround = this.pendingSurround;
+    this.pendingSurround = null;
+    return pendingSurround
+      ? this.applySurround(pendingSurround, action.pair)
+      : false;
+  }
+
+  replayChangeSurround(cm, action) {
+    this.injectVimKey(cm, "<Esc>");
+    return this.applyChangeSurround(
+      { cm, targetKey: action.targetKey },
+      action.pair,
+    );
+  }
+
+  replayDeleteSurround(cm, action) {
+    this.injectVimKey(cm, "<Esc>");
+    return this.applyDeleteSurround({ cm }, action.targetKey);
   }
 
   handlePhysicalSurroundTriggerKeydown(event) {
@@ -1079,6 +1186,7 @@ class BobVimSurroundPlugin extends Plugin {
       });
     });
 
+    this.recordLastSurroundAction(cm, { type: "ys", cm, pair });
     return true;
   }
 
@@ -1118,6 +1226,12 @@ class BobVimSurroundPlugin extends Plugin {
       setCursor(cm, edit.cursor);
     });
 
+    this.recordLastSurroundAction(cm, {
+      type: "cs",
+      cm,
+      targetKey: pendingChangeSurround.targetKey,
+      pair: replacementPair,
+    });
     return true;
   }
 
@@ -1149,6 +1263,7 @@ class BobVimSurroundPlugin extends Plugin {
       setCursor(cm, edit.cursor);
     });
 
+    this.recordLastSurroundAction(cm, { type: "ds", cm, targetKey });
     return true;
   }
 }

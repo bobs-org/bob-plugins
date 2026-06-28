@@ -172,12 +172,27 @@ const BULLET_PROPERTY_CONFIG_RELATIVE_PATH = "bob/config.yml";
 const BULLET_PROPERTY_CONFIG_MOBILE_NOTICE =
   "Bullet properties are only available on desktop";
 const BULLET_PROPERTY_LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
+// Visible label written into new managed dependency navigation child bullets.
+const DEPENDENCY_NAVIGATION_LABEL = "DEPENDS ON";
+// Legacy labels the picker still recognizes (and normalizes in place) so bullets
+// written before the rename keep working for dedupe, removal, and grouping.
+const LEGACY_DEPENDENCY_NAVIGATION_LABELS = Object.freeze(
+  new Set(["DEPENDENCIES"]),
+);
 // Managed "dependency navigation" child bullet shape, e.g.
-// `  - **DEPENDENCIES:** [[#^target-id]]`. Capturing group 1 is the leading
-// indentation; group 2 is the linked block ID. Matches the line produced by
-// formatDependencyNavigationBullet so the picker can dedupe its own writes.
-const DEPENDENCY_NAVIGATION_BULLET_RE =
-  /^(\s*)(?:[-*+]|\d+[.)])[ \t]+\*\*DEPENDENCIES:\*\*[ \t]+\[\[#\^([A-Za-z0-9-]+)\]\][ \t]*$/;
+// `  - **DEPENDS ON:** [[#^target-id]]`. Recognizes the current label and any
+// legacy labels. Named groups: `indent` (leading indentation), `marker` (the
+// list bullet), `label` (the visible label), and `blockId` (the linked block
+// ID). Matches the line produced by formatDependencyNavigationBullet so the
+// picker can dedupe, rewrite, and remove its own writes.
+const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
+  `^(?<indent>\\s*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*\\*(?<label>${[
+    DEPENDENCY_NAVIGATION_LABEL,
+    ...LEGACY_DEPENDENCY_NAVIGATION_LABELS,
+  ]
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")}):\\*\\*[ \\t]+\\[\\[#\\^(?<blockId>[A-Za-z0-9-]+)\\]\\][ \\t]*$`,
+);
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
   /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
@@ -766,16 +781,42 @@ function getBulletIndent(line) {
 // Render the managed human-navigation child bullet for a dependency block link.
 function formatDependencyNavigationBullet(blockId, indent) {
   const indentText = typeof indent === "string" ? indent : "";
-  return `${indentText}- **DEPENDENCIES:** [[#^${normalizeBulletPropertyValue(
+  return `${indentText}- **${DEPENDENCY_NAVIGATION_LABEL}:** [[#^${normalizeBulletPropertyValue(
     blockId,
   )}]]`;
 }
 
 // Return the linked block ID when a line is a managed dependency navigation
-// bullet, otherwise null.
+// bullet (current or legacy label), otherwise null.
 function parseDependencyNavigationBullet(line) {
+  const details = parseDependencyNavigationBulletDetails(line);
+  return details ? details.blockId : null;
+}
+
+// Parse a managed dependency navigation bullet into its parts, or null when the
+// line is not one. `isLegacy` is true when the visible label is a legacy label
+// (e.g. DEPENDENCIES) rather than DEPENDENCY_NAVIGATION_LABEL.
+function parseDependencyNavigationBulletDetails(line) {
   const match = DEPENDENCY_NAVIGATION_BULLET_RE.exec(String(line || ""));
-  return match ? match[2] : null;
+  if (!match) {
+    return null;
+  }
+
+  const { indent, marker, label, blockId } = match.groups;
+  return Object.freeze({
+    indent,
+    marker,
+    label,
+    blockId,
+    isLegacy: LEGACY_DEPENDENCY_NAVIGATION_LABELS.has(label),
+  });
+}
+
+// Rewrite a managed dependency navigation bullet to the current label while
+// preserving its existing indentation and list marker, so a legacy bullet can be
+// normalized in place without disturbing tab-indented or non-dash markers.
+function formatDependencyNavigationBulletFromDetails(details) {
+  return `${details.indent}${details.marker} **${DEPENDENCY_NAVIGATION_LABEL}:** [[#^${details.blockId}]]`;
 }
 
 // Capture the index range of the current bullet's child block: every later line
@@ -844,74 +885,96 @@ function getDependencyChildIndent(lines, parentLine) {
   return `${parentIndent}  `;
 }
 
-// Plan the insertion of a managed dependency navigation child bullet under the
+// Plan the upsert of a managed dependency navigation child bullet under the
 // current bullet. The search is scoped to the current bullet's child block so a
-// link under a different task never suppresses the link under this one. Returns
-// an immutable result with one of:
-//   alreadyPresent: true                  - a managed child bullet already links
-//                                            to this block ID (no-op)
-//   changed: true, insertLine, lineText   - insertion needed
-//   reason: <guard>                       - parent is not a bullet, block ID is
-//                                            empty, or the parent index is out of
-//                                            range
+// link under a different task never suppresses the link under this one. Legacy
+// and current labels count as the same managed bullet family. Returns an
+// immutable result whose `operation` is one of:
+//   "noop"    - a current-label bullet already links this block ID
+//               (alreadyPresent: true)
+//   "replace" - only a legacy-label bullet links this block ID; rewrite it in
+//               place (changed: true, replaceLine, lineText)
+//   "insert"  - no managed bullet links this block ID; insert a new current
+//               bullet after the last managed dependency bullet
+//               (changed: true, insertLine, lineText)
+//   "guard"   - parent is out of range, not a bullet, or the block ID is empty
 function planDependencyNavigationBulletInsertion(content, parentLine, blockId) {
   const lines = String(content || "").split(/\r?\n/);
   const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
   const normalizedBlockId = normalizeBulletPropertyValue(blockId);
+
+  const guard = (reason) =>
+    Object.freeze({
+      operation: "guard",
+      alreadyPresent: false,
+      changed: false,
+      insertLine: null,
+      replaceLine: null,
+      lineText: null,
+      reason,
+    });
 
   if (
     !Number.isFinite(parentIndex) ||
     parentIndex < 0 ||
     parentIndex >= lines.length
   ) {
-    return Object.freeze({
-      alreadyPresent: false,
-      changed: false,
-      insertLine: null,
-      lineText: null,
-      reason: "parent-out-of-range",
-    });
+    return guard("parent-out-of-range");
   }
 
   if (!isBulletLine(lines[parentIndex])) {
-    return Object.freeze({
-      alreadyPresent: false,
-      changed: false,
-      insertLine: null,
-      lineText: null,
-      reason: "not-bullet",
-    });
+    return guard("not-bullet");
   }
 
   if (!normalizedBlockId) {
-    return Object.freeze({
-      alreadyPresent: false,
-      changed: false,
-      insertLine: null,
-      lineText: null,
-      reason: "empty-block-id",
-    });
+    return guard("empty-block-id");
   }
 
   const block = findCurrentBulletChildBlock(lines, parentIndex);
   let lastDependencyBulletLine = -1;
+  let legacyMatch = null;
   for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
-    const dependencyBlockId = parseDependencyNavigationBullet(lines[index]);
-    if (dependencyBlockId === null) {
+    const details = parseDependencyNavigationBulletDetails(lines[index]);
+    if (details === null) {
       continue;
     }
 
-    if (dependencyBlockId === normalizedBlockId) {
+    lastDependencyBulletLine = index;
+
+    if (details.blockId !== normalizedBlockId) {
+      continue;
+    }
+
+    if (!details.isLegacy) {
+      // A current-label bullet already links this block: nothing to do.
       return Object.freeze({
+        operation: "noop",
         alreadyPresent: true,
         changed: false,
         insertLine: null,
+        replaceLine: null,
         lineText: null,
         reason: null,
       });
     }
 
-    lastDependencyBulletLine = index;
+    if (legacyMatch === null) {
+      legacyMatch = { line: index, details };
+    }
+  }
+
+  if (legacyMatch !== null) {
+    // Only a legacy bullet links this block: rewrite it in place instead of
+    // inserting a duplicate under the new label.
+    return Object.freeze({
+      operation: "replace",
+      alreadyPresent: false,
+      changed: true,
+      insertLine: null,
+      replaceLine: legacyMatch.line,
+      lineText: formatDependencyNavigationBulletFromDetails(legacyMatch.details),
+      reason: null,
+    });
   }
 
   const indent = getDependencyChildIndent(lines, parentIndex);
@@ -924,9 +987,11 @@ function planDependencyNavigationBulletInsertion(content, parentLine, blockId) {
       : lastDependencyBulletLine + 1;
 
   return Object.freeze({
+    operation: "insert",
     alreadyPresent: false,
     changed: true,
     insertLine,
+    replaceLine: null,
     lineText,
     reason: null,
   });
@@ -983,10 +1048,76 @@ function planDependencyNavigationBulletRemoval(content, parentLine, blockId) {
   });
 }
 
+// Scan the current bullet's child block and plan in-place rewrites of any legacy
+// managed dependency navigation bullets to the current label. Returns an array of
+// { line, oldLineText, lineText } replacements (empty when nothing needs
+// normalizing or the parent is out of range / not a bullet). Scoped to the
+// current child block so unrelated tasks elsewhere in the note are untouched.
+function planDependencyNavigationLabelNormalizations(content, parentLine) {
+  const lines = String(content || "").split(/\r?\n/);
+  const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  if (
+    !Number.isFinite(parentIndex) ||
+    parentIndex < 0 ||
+    parentIndex >= lines.length ||
+    !isBulletLine(lines[parentIndex])
+  ) {
+    return Object.freeze([]);
+  }
+
+  const block = findCurrentBulletChildBlock(lines, parentIndex);
+  const replacements = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const details = parseDependencyNavigationBulletDetails(lines[index]);
+    if (details && details.isLegacy) {
+      replacements.push(
+        Object.freeze({
+          line: index,
+          oldLineText: lines[index],
+          lineText: formatDependencyNavigationBulletFromDetails(details),
+        }),
+      );
+    }
+  }
+
+  return Object.freeze(replacements);
+}
+
+// Re-read editor content and rewrite any legacy managed dependency navigation
+// bullets in the current child block to the current label. Returns the number of
+// bullets normalized. Re-reads first so it is safe to call after inserts/removals
+// have shifted line numbers; each rewrite is a single-line in-place replace, so
+// later targets keep their indices.
+function normalizeDependencyNavigationLabels(cm, parentLine) {
+  const content =
+    cm && typeof cm.getValue === "function"
+      ? String(cm.getValue() || "")
+      : null;
+  if (content === null) {
+    return 0;
+  }
+
+  const replacements = planDependencyNavigationLabelNormalizations(
+    content,
+    parentLine,
+  );
+  let normalized = 0;
+  replacements.forEach((replacement) => {
+    const current = getEditorLine(cm, replacement.line);
+    if (
+      current === replacement.oldLineText &&
+      replaceEditorLine(cm, replacement.line, current, replacement.lineText)
+    ) {
+      normalized += 1;
+    }
+  });
+  return normalized;
+}
+
 // Build the notice for a local-task dependency write, distinguishing whether the
 // `[dependsOn:: ...]` field was newly added vs already present, and whether the
-// companion navigation child bullet was added, already present, or could not be
-// added.
+// companion navigation child bullet was added, had its legacy label updated,
+// was already present, or could not be added.
 function buildLocalTaskDependencyNotice(details = {}) {
   const id = normalizeBulletPropertyValue(details.id);
   const name = String(details.name || "");
@@ -997,6 +1128,8 @@ function buildLocalTaskDependencyNotice(details = {}) {
   switch (details.navigationResult) {
     case "added":
       return `${dependencyText}; added navigation link`;
+    case "updated":
+      return `${dependencyText}; updated navigation link label`;
     case "already-present":
       return `${dependencyText} (navigation link already present)`;
     case "failed":
@@ -1021,6 +1154,10 @@ function buildMultiDependencyNotice(details = {}) {
   const navigationRemoved = Math.max(
     0,
     Math.floor(numericOrDefault(details.navigationRemoved, 0)),
+  );
+  const navigationUpdated = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.navigationUpdated, 0)),
   );
   const skippedStale = Math.max(
     0,
@@ -1050,6 +1187,11 @@ function buildMultiDependencyNotice(details = {}) {
   if (navigationRemoved > 0) {
     navigationParts.push(
       `removed ${formatCountLabel(navigationRemoved, "link")}`,
+    );
+  }
+  if (navigationUpdated > 0) {
+    navigationParts.push(
+      `updated ${formatCountLabel(navigationUpdated, "link")}`,
     );
   }
   if (navigationParts.length > 0) {
@@ -5847,6 +5989,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     let navigationAdded = 0;
     let navigationRemoved = 0;
+    let navigationUpdated = 0;
 
     removals.forEach((removal) => {
       const content =
@@ -5881,13 +6024,33 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.cursor.line,
         addition.linkBlockId,
       );
-      if (
+      if (plan.operation === "replace") {
+        const oldLineText = getEditorLine(this.editor, plan.replaceLine);
+        if (
+          oldLineText !== null &&
+          replaceEditorLine(
+            this.editor,
+            plan.replaceLine,
+            oldLineText,
+            plan.lineText,
+          )
+        ) {
+          navigationUpdated += 1;
+        }
+      } else if (
         plan.changed &&
         insertEditorLine(this.editor, plan.insertLine, plan.lineText)
       ) {
         navigationAdded += 1;
       }
     });
+
+    // Normalize any remaining legacy-label dependency bullets in this task's
+    // child block (e.g. unrelated dependencies left untouched by this commit).
+    navigationUpdated += normalizeDependencyNavigationLabels(
+      this.editor,
+      this.cursor.line,
+    );
 
     const finalCursorLine =
       getEditorLine(this.editor, this.cursor.line) || dependencyResult.line;
@@ -5903,6 +6066,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         removed: dependencyResult.removed.length,
         navigationAdded,
         navigationRemoved,
+        navigationUpdated,
         skippedStale,
         skippedOther,
       }),
@@ -6449,6 +6613,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         );
         if (plan.alreadyPresent) {
           navigationResult = "already-present";
+        } else if (plan.operation === "replace") {
+          const oldLineText = getEditorLine(cm, plan.replaceLine);
+          navigationResult =
+            oldLineText !== null &&
+            replaceEditorLine(cm, plan.replaceLine, oldLineText, plan.lineText)
+              ? "updated"
+              : "failed";
         } else if (plan.changed) {
           navigationResult = insertEditorLine(
             cm,
@@ -6462,6 +6633,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         }
       }
     }
+
+    // Opportunistically normalize any other legacy-label dependency bullets in
+    // this task's child block now that the picker has edited it.
+    normalizeDependencyNavigationLabels(cm, cursor.line);
 
     setEditorCursorSafely(
       cm,
@@ -9463,12 +9638,18 @@ module.exports.helpers = {
   upsertBulletProperty,
   deleteBulletProperty,
   getBulletIndent,
+  DEPENDENCY_NAVIGATION_LABEL,
+  LEGACY_DEPENDENCY_NAVIGATION_LABELS,
   formatDependencyNavigationBullet,
+  formatDependencyNavigationBulletFromDetails,
   parseDependencyNavigationBullet,
+  parseDependencyNavigationBulletDetails,
   findCurrentBulletChildBlock,
   getDependencyChildIndent,
   planDependencyNavigationBulletInsertion,
   planDependencyNavigationBulletRemoval,
+  planDependencyNavigationLabelNormalizations,
+  normalizeDependencyNavigationLabels,
   buildLocalTaskDependencyNotice,
   buildMultiDependencyNotice,
   insertEditorLine,

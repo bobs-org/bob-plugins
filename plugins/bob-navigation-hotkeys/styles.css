@@ -326,6 +326,28 @@
   border-color: color-mix(in srgb, var(--text-error) 40%, transparent);
 }
 
+.bob-cnp-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 36%, transparent);
+  border-radius: 4px;
+  color: transparent;
+  background-color: color-mix(in srgb, var(--background-secondary) 82%, transparent);
+  font-size: 12px;
+  font-weight: var(--font-semibold);
+  line-height: 1;
+}
+
+.bob-cnp-mark.is-marked {
+  color: var(--text-on-accent, white);
+  border-color: var(--interactive-accent);
+  background-color: var(--interactive-accent);
+}
+
 .bob-cnp-task-badge {
   display: inline-flex;
   align-items: center;
@@ -363,6 +385,18 @@
   background-color: color-mix(in srgb, var(--color-green) 10%, transparent);
 }
 
+.bob-cnp-task-badge.is-marked-add {
+  color: var(--interactive-accent);
+  border-color: color-mix(in srgb, var(--interactive-accent) 50%, transparent);
+  background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
+.bob-cnp-task-badge.is-marked-remove {
+  color: var(--text-error);
+  border-color: color-mix(in srgb, var(--text-error) 48%, transparent);
+  background-color: color-mix(in srgb, var(--text-error) 10%, transparent);
+}
+
 .bob-cnp-task-badge-id {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -375,6 +409,29 @@
 .bob-cnp-task-value-row.is-linked.is-selected {
   background-color: color-mix(in srgb, var(--color-green) 13%, transparent);
   border-left-color: var(--color-green);
+}
+
+.bob-cnp-task-value-row.is-marked-add {
+  background-color: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
+}
+
+.bob-cnp-task-value-row.is-marked-add.is-selected {
+  background-color: color-mix(in srgb, var(--interactive-accent) 17%, transparent);
+  border-left-color: var(--interactive-accent);
+}
+
+.bob-cnp-task-value-row.is-marked-remove {
+  background-color: color-mix(in srgb, var(--text-error) 7%, transparent);
+}
+
+.bob-cnp-task-value-row.is-marked-remove.is-selected {
+  background-color: color-mix(in srgb, var(--text-error) 14%, transparent);
+  border-left-color: var(--text-error);
+}
+
+.bob-cnp-task-value-row.is-marked-remove .bob-cnp-mark {
+  border-color: var(--text-error);
+  background-color: var(--text-error);
 }
 
 .bob-cnp-blockid-preview-row.is-valid .bob-cnp-row-icon {
@@ -585,12 +642,12 @@
   }
 
   .bob-cnp-task-value-row .bob-cnp-row-text {
-    flex-basis: calc(100% - 52px);
+    flex-basis: calc(100% - 82px);
   }
 
   .bob-cnp-task-badge {
-    margin-left: 52px;
-    max-width: calc(100% - 52px);
+    margin-left: 82px;
+    max-width: calc(100% - 82px);
   }
 
   .bob-cnp-blockid-preview {

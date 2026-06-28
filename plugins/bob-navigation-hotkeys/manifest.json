@@ -1,7 +1,7 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "minAppVersion": "1.8.7",
   "description": "Open parent, next, previous, and alternate notes from keyboard shortcuts.",
   "author": "Bryan",

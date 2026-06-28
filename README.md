@@ -13,7 +13,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
 | Block ID Prompt         | `block-id-prompt`        |   1.1.1 | Prompt for custom block IDs and complete wiki block links to open tasks. |
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.0.0 | Expand Bob daily-note snippets and ledger time ranges.                |
-| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.4.0 | Open parent/alternate notes and set bullet properties, including local task dependencies with visible `[[#^block-id]]` navigation links. |
+| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.5.0 | Open parent/alternate notes and set bullet properties, including local task dependencies with visible `[[#^block-id]]` navigation links and `<Tab>` batch add/remove. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
 | Bob Vim Surround        | `bob-vim-surround`       |   1.4.0 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
 | Task Status Cycler      | `task-status-cycler`     |   1.0.0 | Cycle the active task line through configured Tasks statuses.         |

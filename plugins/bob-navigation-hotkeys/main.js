@@ -167,9 +167,14 @@ const BULLET_PROPERTY_CONFIG_MOBILE_NOTICE =
 const BULLET_PROPERTY_LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
-  /[ \t]+\^[A-Za-z0-9-]+[ \t]*$/;
+  /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
 const BULLET_PROPERTY_BLOCK_ID_ONLY_RE = /^\^[A-Za-z0-9-]+[ \t]*$/;
 const BULLET_PROPERTY_INVALID_NAME_CHARS_RE = /[\s[\]]|::/;
+const BULLET_PROPERTY_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
+const BULLET_PROPERTY_TASKS_INLINE_FIELD_RE =
+  /[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g;
+const BULLET_PROPERTY_TASKS_EMOJI_DATE_RE =
+  /[ \t]*(?:[\u2600-\u27BF]|\uD83C[\uD000-\uDFFF]|\uD83D[\uD000-\uDFFF]|\uD83E[\uD000-\uDFFF])\s*\d{4}-\d{2}-\d{2}/g;
 
 function numericOrDefault(value, fallback) {
   const number = typeof value === "number" ? value : Number(value);
@@ -275,12 +280,16 @@ function normalizeBulletPropertyValues(name, values, options) {
     return "date";
   }
 
+  if (values === "local_task_id") {
+    return "local_task_id";
+  }
+
   if (Array.isArray(values) && values.length > 0) {
     const normalizedValues = [];
     for (const value of values) {
       if (!isBulletPropertyScalar(value)) {
         showBulletPropertyNotice(
-          `Bullet property "${name}" values must be "date" or a non-empty scalar list`,
+          `Bullet property "${name}" values must be "date", "local_task_id", or a non-empty scalar list`,
           options,
         );
         return null;
@@ -293,7 +302,7 @@ function normalizeBulletPropertyValues(name, values, options) {
   }
 
   showBulletPropertyNotice(
-    `Bullet property "${name}" values must be "date" or a non-empty scalar list`,
+    `Bullet property "${name}" values must be "date", "local_task_id", or a non-empty scalar list`,
     options,
   );
   return null;
@@ -532,6 +541,286 @@ function upsertBulletProperty(line, name, value) {
     changed: nextLine !== text,
     action: "insert",
     reason: null,
+    field: null,
+  });
+}
+
+function insertMissingBulletProperty(line, name, value) {
+  const text = String(line || "");
+  const existingField = findBulletPropertyField(text, name);
+  if (existingField) {
+    return Object.freeze({
+      line: text,
+      changed: false,
+      action: "none",
+      reason: "already-present",
+      field: existingField,
+    });
+  }
+
+  const fieldText = formatBulletPropertyField(name, value);
+  const appendIndex = getBulletPropertyAppendIndex(text);
+  const before = text.slice(0, appendIndex).replace(/[ \t]+$/, "");
+  const after = text.slice(appendIndex).replace(/^[ \t]+/, " ");
+  const nextLine = `${before} ${fieldText}${after}`;
+
+  return Object.freeze({
+    line: nextLine,
+    changed: nextLine !== text,
+    action: "insert",
+    reason: null,
+    field: null,
+  });
+}
+
+function stripTaskTag(text) {
+  return String(text || "").replace(
+    PROJECT_TASK_TAG_GLOBAL_RE,
+    (match, prefix) => {
+      if (!prefix) {
+        return "";
+      }
+
+      return /\s/.test(prefix) ? " " : prefix;
+    },
+  );
+}
+
+function cleanTaskDisplayText(line) {
+  const text = String(line || "");
+  const match = OBSIDIAN_TASK_LINE_RE.exec(text);
+  let body = match ? match[2] || "" : text;
+
+  body = body
+    .replace(BULLET_PROPERTY_TRAILING_BLOCK_ID_RE, "")
+    .replace(BULLET_PROPERTY_TASKS_INLINE_FIELD_RE, "")
+    .replace(BULLET_PROPERTY_TASKS_EMOJI_DATE_RE, "");
+  body = stripTaskTag(body)
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+  return body || "(untitled task)";
+}
+
+function getTrailingBlockId(line) {
+  const span = getTrailingBlockIdSpan(line);
+  if (!span) {
+    return null;
+  }
+
+  const match = /\^([A-Za-z0-9-]+)/.exec(span.text);
+  return match ? match[1] : null;
+}
+
+function getOpenLocalTasks(content, options = {}) {
+  const lines = String(content || "").split(/\r?\n/);
+  const excludeLine = Number.isInteger(options.excludeLine)
+    ? options.excludeLine
+    : null;
+
+  return getOpenObsidianTaskLines(lines)
+    .filter((line) => line !== excludeLine)
+    .map((line) => {
+      const rawLine = String(lines[line] || "");
+      const match = OBSIDIAN_TASK_LINE_RE.exec(rawLine);
+      const idField = findBulletPropertyField(rawLine, "id");
+      const existingIdField = idField
+        ? normalizeBulletPropertyValue(idField.value)
+        : null;
+      const existingBlockId = getTrailingBlockId(rawLine);
+
+      return Object.freeze({
+        line,
+        status: match ? match[1] : " ",
+        existingBlockId,
+        existingIdField: existingIdField || null,
+        displayText: cleanTaskDisplayText(rawLine),
+        rawLine,
+      });
+    });
+}
+
+function blockIdExistsInContent(content, id) {
+  if (!BULLET_PROPERTY_BLOCK_ID_RE.test(String(id || ""))) {
+    return false;
+  }
+
+  const re = new RegExp(
+    `(^|[ \\t])\\^${escapeRegExp(id)}(?=$|[ \\t\\r\\n])`,
+    "gm",
+  );
+  return re.test(String(content || ""));
+}
+
+function truncateBlockIdSlug(slug, maxLength) {
+  return String(slug || "")
+    .slice(0, maxLength)
+    .replace(/-+$/g, "");
+}
+
+function suggestBlockIdFromTask(displayText, content) {
+  const maxLength = 32;
+  let slug = String(displayText || "")
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  slug = truncateBlockIdSlug(slug, maxLength) || "task";
+
+  let candidate = slug;
+  let suffix = 2;
+  while (blockIdExistsInContent(content, candidate)) {
+    const suffixText = `-${suffix}`;
+    const base =
+      truncateBlockIdSlug(slug, Math.max(1, maxLength - suffixText.length)) ||
+      "task";
+    candidate = `${base}${suffixText}`;
+    suffix += 1;
+  }
+
+  return candidate;
+}
+
+function appendBlockIdToLine(line, id) {
+  const text = String(line || "");
+  const trailingWhitespace = /[ \t]*$/.exec(text)[0] || "";
+  const body = text
+    .slice(0, text.length - trailingWhitespace.length)
+    .replace(/[ \t]+$/g, "");
+  return `${body} ^${normalizeBulletPropertyValue(id)}${trailingWhitespace}`;
+}
+
+function getTargetEdit(kind, oldLine, newLine) {
+  if (oldLine === newLine) {
+    return [];
+  }
+
+  return [Object.freeze({ kind, line: newLine })];
+}
+
+function resolveTargetTaskIdentity(line) {
+  const text = String(line || "");
+  const idField = findBulletPropertyField(text, "id");
+  const idFieldValue = idField
+    ? normalizeBulletPropertyValue(idField.value)
+    : "";
+  const blockId = getTrailingBlockId(text);
+
+  if (idField && idFieldValue) {
+    const nextLine = blockId ? text : appendBlockIdToLine(text, idFieldValue);
+    return Object.freeze({
+      value: idFieldValue,
+      needsBlockIdPrompt: false,
+      targetEdits: Object.freeze(
+        getTargetEdit("append-block-id", text, nextLine),
+      ),
+    });
+  }
+
+  if (blockId) {
+    const idResult = insertMissingBulletProperty(text, "id", blockId);
+    return Object.freeze({
+      value: blockId,
+      needsBlockIdPrompt: false,
+      targetEdits: Object.freeze(
+        getTargetEdit("add-id-field", text, idResult.line),
+      ),
+    });
+  }
+
+  return Object.freeze({
+    value: null,
+    needsBlockIdPrompt: true,
+    targetEdits: Object.freeze([]),
+  });
+}
+
+function parseLocalTaskIdList(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function upsertLocalTaskIdValue(line, name, id) {
+  const text = String(line || "");
+  const value = normalizeBulletPropertyValue(id);
+  if (!isBulletLine(text)) {
+    return Object.freeze({
+      line: text,
+      changed: false,
+      action: "none",
+      reason: "not-bullet",
+      alreadyPresent: false,
+      field: null,
+    });
+  }
+
+  if (!value) {
+    return Object.freeze({
+      line: text,
+      changed: false,
+      action: "none",
+      reason: "empty-id",
+      alreadyPresent: false,
+      field: null,
+    });
+  }
+
+  const existingField = findBulletPropertyField(text, name);
+  if (existingField) {
+    const values = parseLocalTaskIdList(existingField.value);
+    if (values.includes(value)) {
+      return Object.freeze({
+        line: text,
+        changed: false,
+        action: "none",
+        reason: null,
+        alreadyPresent: true,
+        field: existingField,
+      });
+    }
+
+    const uniqueValues = [];
+    const seenValues = new Set();
+    values.forEach((existingValue) => {
+      if (seenValues.has(existingValue)) {
+        return;
+      }
+
+      seenValues.add(existingValue);
+      uniqueValues.push(existingValue);
+    });
+
+    const nextFieldText = formatBulletPropertyField(
+      name,
+      [...uniqueValues, value].join(", "),
+    );
+    const nextLine =
+      text.slice(0, existingField.span.start) +
+      nextFieldText +
+      text.slice(existingField.span.end);
+
+    return Object.freeze({
+      line: nextLine,
+      changed: nextLine !== text,
+      action: "update",
+      reason: null,
+      alreadyPresent: false,
+      field: existingField,
+    });
+  }
+
+  const insertResult = insertMissingBulletProperty(text, name, value);
+  return Object.freeze({
+    line: insertResult.line,
+    changed: insertResult.changed,
+    action: "insert",
+    reason: insertResult.reason,
+    alreadyPresent: false,
     field: null,
   });
 }
@@ -3076,6 +3365,18 @@ const BULLET_PROPERTY_STAGE_TWO_HINTS = [
   { keys: ["esc"], label: "Dismiss" },
 ];
 
+const BULLET_PROPERTY_LOCAL_TASK_HINTS = [
+  { keys: ["↑", "↓"], label: "Navigate" },
+  { keys: ["^N", "^P"], label: "Move" },
+  { keys: ["↵"], label: "Link" },
+  { keys: ["esc"], label: "Dismiss" },
+];
+
+const BULLET_PROPERTY_BLOCK_ID_HINTS = [
+  { keys: ["↵"], label: "Create & link" },
+  { keys: ["esc"], label: "Cancel" },
+];
+
 const BULLET_PROPERTY_WEEKDAY_NAMES = [
   "Sun",
   "Mon",
@@ -4132,11 +4433,110 @@ function createBulletPropertyTypedDateItem(query, baseDate, currentValue) {
   });
 }
 
+function getLocalTaskDependencyIdentifier(task) {
+  if (!task) {
+    return "";
+  }
+
+  return task.existingIdField || task.existingBlockId || "";
+}
+
+function createBulletPropertyLocalTaskItems(content, options = {}) {
+  const dependencyValues =
+    options.dependencyValues instanceof Set
+      ? options.dependencyValues
+      : new Set(options.dependencyValues || []);
+
+  return getOpenLocalTasks(content, { excludeLine: options.excludeLine }).map(
+    (task) => {
+      const identifier = getLocalTaskDependencyIdentifier(task);
+      const alreadyLinked = identifier
+        ? dependencyValues.has(identifier)
+        : false;
+
+      return Object.freeze({
+        kind: "local-task",
+        ...task,
+        value: identifier,
+        alreadyLinked,
+        needsBlockId: !identifier,
+        searchText: [
+          task.displayText,
+          `line ${task.line + 1}`,
+          task.status,
+          identifier,
+          alreadyLinked ? "depends linked" : "",
+          identifier ? "block id" : "create id",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
+    },
+  );
+}
+
+function taskStatusLabel(status) {
+  return `[${status || " "}]`;
+}
+
+function taskStatusClass(status) {
+  if (status === "/") {
+    return "active";
+  }
+
+  if (status === "B") {
+    return "blocked";
+  }
+
+  return "todo";
+}
+
+function validateBlockIdCandidate(id, content) {
+  const value = normalizeBulletPropertyValue(id);
+  if (!value) {
+    return Object.freeze({
+      id: value,
+      valid: false,
+      state: "invalid",
+      message: "Enter a block ID",
+    });
+  }
+
+  if (!BULLET_PROPERTY_BLOCK_ID_RE.test(value)) {
+    return Object.freeze({
+      id: value,
+      valid: false,
+      state: "invalid",
+      message: "Use only letters, numbers, and hyphens",
+    });
+  }
+
+  if (blockIdExistsInContent(content, value)) {
+    return Object.freeze({
+      id: value,
+      valid: false,
+      state: "duplicate",
+      message: "Already exists in this file",
+    });
+  }
+
+  return Object.freeze({
+    id: value,
+    valid: true,
+    state: "valid",
+    message: "Ready to create",
+  });
+}
+
 function createBulletPropertyValueItems(propertyItem, baseDate) {
   const property = propertyItem.property;
   const currentValue = propertyItem.currentValue || "";
   if (property.values === "date") {
     return createBulletPropertyDateItems(baseDate, currentValue);
+  }
+
+  if (property.values === "local_task_id") {
+    return [];
   }
 
   return property.values.map((value) => ({
@@ -4175,6 +4575,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.bulletSubtitle = truncateBulletPropertySubtitle(lineText);
     this.stage = "properties";
     this.selectedPropertyItem = null;
+    this.pendingTask = null;
     this.valueBaseDate = getLocalDateStart(new Date());
     this.showPropertyStage({ clearQuery: false });
   }
@@ -4182,6 +4583,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   showPropertyStage(options = {}) {
     this.stage = "properties";
     this.selectedPropertyItem = null;
+    this.pendingTask = null;
     this.selectedIndex = 0;
     const items = createBulletPropertyItems(this.config, this.lineText);
     this.applyOptions({
@@ -4230,9 +4632,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   showValueStage(propertyItem) {
     this.stage = "value";
     this.selectedPropertyItem = propertyItem;
+    this.pendingTask = null;
     this.valueBaseDate = getLocalDateStart(new Date());
     this.selectedIndex = 0;
     const property = propertyItem.property;
+    if (property.values === "local_task_id") {
+      this.showLocalTaskValueStage(propertyItem);
+      return;
+    }
+
     const isDateProperty = property.values === "date";
     this.applyOptions({
       items: createBulletPropertyValueItems(propertyItem, this.valueBaseDate),
@@ -4258,7 +4666,115 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
   }
 
+  getEditorContent() {
+    if (this.editor && typeof this.editor.getValue === "function") {
+      return String(this.editor.getValue() || "");
+    }
+
+    return this.lineText || "";
+  }
+
+  getCurrentPropertyValue(name) {
+    const lineText = getEditorLine(this.editor, this.cursor.line);
+    const field = findBulletPropertyField(
+      lineText === null ? this.lineText : lineText,
+      name,
+    );
+    return field ? field.value : "";
+  }
+
+  showLocalTaskValueStage(propertyItem) {
+    this.stage = "value";
+    this.selectedPropertyItem = propertyItem;
+    this.pendingTask = null;
+    this.selectedIndex = 0;
+    const property = propertyItem.property;
+    const dependencyValues = new Set(
+      parseLocalTaskIdList(this.getCurrentPropertyValue(property.name)),
+    );
+    const items = createBulletPropertyLocalTaskItems(this.getEditorContent(), {
+      excludeLine: this.cursor.line,
+      dependencyValues,
+    });
+
+    this.applyOptions({
+      items,
+      title: property.name,
+      headerIcon: "link",
+      inputLabel: "Filter open tasks",
+      placeholder: "Filter open tasks",
+      resultsLabel: "Open tasks",
+      emptyText: "No open tasks in this file",
+      footerHints: BULLET_PROPERTY_LOCAL_TASK_HINTS,
+      getSubtitle: (visibleItems, allItems) => {
+        const countText =
+          visibleItems.length === allItems.length
+            ? ""
+            : `Showing ${visibleItems.length} of ${allItems.length} · `;
+        return `${countText}Choose a task dependency`;
+      },
+      filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
+      renderItem: (item, rowEl, query) =>
+        this.renderTaskValueItem(item, rowEl, query),
+      openItem: (item) => this.chooseTaskDependency(item),
+    });
+
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+  }
+
+  showBlockIdStage(task) {
+    this.stage = "blockid";
+    this.pendingTask = task;
+    this.selectedIndex = 0;
+    const suggestedId = suggestBlockIdFromTask(
+      task.displayText,
+      this.getEditorContent(),
+    );
+
+    this.applyOptions({
+      items: [],
+      title: "New block ID",
+      headerIcon: "hash",
+      inputLabel: "Block ID",
+      placeholder: "Block ID - letters, numbers, hyphens",
+      resultsLabel: "Block ID preview",
+      emptyText: "Type a block ID",
+      footerHints: BULLET_PROPERTY_BLOCK_ID_HINTS,
+      getSubtitle: () => `Create an ID for line ${task.line + 1}`,
+      filterItem: () => true,
+      renderItem: (item, rowEl, query) =>
+        this.renderBlockIdPreviewItem(item, rowEl, query),
+      openItem: (item) => this.confirmBlockId(item),
+    });
+
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+      if (this.inputEl) {
+        this.inputEl.value = suggestedId;
+        this.inputEl.select();
+      }
+      this.renderResults();
+    }
+  }
+
   getFilteredItems() {
+    if (this.stage === "blockid") {
+      const validation = validateBlockIdCandidate(
+        this.getRawQuery(),
+        this.getEditorContent(),
+      );
+      return [
+        Object.freeze({
+          kind: "blockid-preview",
+          ...validation,
+          task: this.pendingTask,
+          searchText: validation.id,
+        }),
+      ];
+    }
+
     const items = super.getFilteredItems();
     if (
       this.stage !== "value" ||
@@ -4344,6 +4860,165 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         text: "current",
       });
     }
+  }
+
+  renderTaskValueItem(item, rowEl, query) {
+    addElementClasses(
+      rowEl,
+      "bob-cnp-task-value-row",
+      item.alreadyLinked ? "is-linked" : "",
+      item.needsBlockId ? "is-create" : "is-existing",
+    );
+
+    rowEl.createDiv({
+      cls: `bob-cnp-status-pill is-${taskStatusClass(item.status)}`,
+      text: taskStatusLabel(item.status),
+    });
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    appendHighlighted(titleEl, item.displayText, query);
+
+    const metaEl = textEl.createDiv({ cls: "bob-cnp-row-meta" });
+    metaEl.createSpan({ text: `Line ${item.line + 1}` });
+
+    const badgeClasses = [
+      "bob-cnp-task-badge",
+      item.alreadyLinked
+        ? "is-linked"
+        : item.needsBlockId
+          ? "is-create"
+          : "is-existing",
+    ];
+    const badgeEl = rowEl.createDiv({ cls: badgeClasses.join(" ") });
+    if (item.alreadyLinked) {
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "✓ depends" });
+    } else if (item.value) {
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "↵" });
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-id", text: `^${item.value}` });
+    } else {
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "+ id" });
+    }
+  }
+
+  renderBlockIdPreviewItem(item, rowEl, query) {
+    addElementClasses(
+      rowEl,
+      "bob-cnp-blockid-preview-row",
+      `is-${item.state}`,
+    );
+
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(rowIcon, item.valid ? "check-circle-2" : "alert-triangle");
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    appendHighlighted(titleEl, item.id || "(type an id)", query);
+
+    textEl.createDiv({
+      cls: "bob-cnp-row-meta",
+      text: item.message,
+    });
+
+    const taskTitle =
+      item.task && item.task.displayText
+        ? item.task.displayText
+        : "(untitled task)";
+    textEl.createDiv({
+      cls: "bob-cnp-blockid-preview",
+      text: item.id
+        ? `Adds [id:: ${item.id}] ^${item.id} to: ${taskTitle}`
+        : `Adds [id:: id] ^id to: ${taskTitle}`,
+    });
+  }
+
+  chooseTaskDependency(item) {
+    if (!this.selectedPropertyItem || !item) {
+      return false;
+    }
+
+    if (item.alreadyLinked) {
+      new Notice("Already depends on this task");
+      return false;
+    }
+
+    const targetLine = getEditorLine(this.editor, item.line);
+    if (targetLine !== item.rawLine) {
+      new Notice("Task changed; dependency not added");
+      return false;
+    }
+
+    const resolved = resolveTargetTaskIdentity(targetLine);
+    if (resolved.needsBlockIdPrompt) {
+      this.showBlockIdStage(item);
+      return false;
+    }
+
+    if (!resolved.value) {
+      new Notice("Could not identify task");
+      return false;
+    }
+
+    if (resolved.targetEdits.length > 0) {
+      const finalLine =
+        resolved.targetEdits[resolved.targetEdits.length - 1].line;
+      if (!replaceEditorLine(this.editor, item.line, targetLine, finalLine)) {
+        new Notice("Could not update target task");
+        return false;
+      }
+    }
+
+    return this.plugin.setLocalTaskDependency(
+      this.editor,
+      this.cursor,
+      this.selectedPropertyItem.property.name,
+      resolved.value,
+    );
+  }
+
+  confirmBlockId(item) {
+    if (!this.selectedPropertyItem || !this.pendingTask || !item) {
+      return false;
+    }
+
+    if (!item.valid) {
+      return false;
+    }
+
+    const task = this.pendingTask;
+    const targetLine = getEditorLine(this.editor, task.line);
+    if (targetLine !== task.rawLine) {
+      new Notice("Task changed; dependency not added");
+      return false;
+    }
+
+    const lineWithBlockId = appendBlockIdToLine(targetLine, item.id);
+    const lineWithIdField = insertMissingBulletProperty(
+      lineWithBlockId,
+      "id",
+      item.id,
+    ).line;
+
+    if (
+      !replaceEditorLine(this.editor, task.line, targetLine, lineWithIdField)
+    ) {
+      new Notice("Could not update target task");
+      return false;
+    }
+
+    const linked = this.plugin.setLocalTaskDependency(
+      this.editor,
+      this.cursor,
+      this.selectedPropertyItem.property.name,
+      item.id,
+      { showNotice: false },
+    );
+    if (!linked) {
+      return false;
+    }
+
+    new Notice(`Added ^${item.id} + linked dependency`);
+    return true;
   }
 
   handleKeydown(event) {
@@ -4762,6 +5437,48 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       Math.min(Math.max(cursor.ch, 0), result.line.length),
     );
     new Notice(`${name} → ${normalizeBulletPropertyValue(value)}`);
+    return true;
+  }
+
+  setLocalTaskDependency(cm, cursor, name, id, options = {}) {
+    const lineText = getEditorLine(cm, cursor.line);
+    if (lineText === null) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+
+    const result = upsertLocalTaskIdValue(lineText, name, id);
+    if (result.reason === "not-bullet") {
+      new Notice("Cursor is not on a bullet");
+      return false;
+    }
+
+    if (result.reason === "empty-id") {
+      new Notice("Task has no dependency ID");
+      return false;
+    }
+
+    if (
+      result.changed &&
+      !replaceEditorLine(cm, cursor.line, lineText, result.line)
+    ) {
+      new Notice("Could not update bullet property");
+      return false;
+    }
+
+    setEditorCursorSafely(
+      cm,
+      cursor.line,
+      Math.min(Math.max(cursor.ch, 0), result.line.length),
+    );
+
+    if (options.showNotice !== false) {
+      new Notice(
+        result.alreadyPresent
+          ? `Already depends on ${normalizeBulletPropertyValue(id)}`
+          : `${name} → ${normalizeBulletPropertyValue(id)}`,
+      );
+    }
     return true;
   }
 
@@ -7726,10 +8443,21 @@ module.exports.helpers = {
   isBulletLine,
   formatBulletPropertyField,
   parseBulletPropertyFields,
+  findBulletPropertyField,
+  getTrailingBlockIdSpan,
+  getTrailingBlockId,
   createBulletPropertyItems,
   createBulletPropertyDateItems,
   parseBulletPropertyTypedDate,
   formatBulletPropertyDate,
+  cleanTaskDisplayText,
+  getOpenLocalTasks,
+  blockIdExistsInContent,
+  suggestBlockIdFromTask,
+  appendBlockIdToLine,
+  resolveTargetTaskIdentity,
+  parseLocalTaskIdList,
+  upsertLocalTaskIdValue,
   upsertBulletProperty,
   deleteBulletProperty,
 };

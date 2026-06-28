@@ -215,6 +215,14 @@
   white-space: nowrap;
 }
 
+.bob-cnp-row-meta {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .bob-cnp-row-status {
   flex: 0 0 auto;
   max-width: 124px;
@@ -278,6 +286,128 @@
 .bob-cnp-row-icon.is-status-muted,
 .bob-cnp-row.is-selected .bob-cnp-row-icon.is-status-muted {
   color: var(--text-muted);
+}
+
+.bob-cnp-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 38px;
+  min-height: 24px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  background-color: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.bob-cnp-status-pill.is-active {
+  color: var(--text-accent);
+  border-color: color-mix(in srgb, var(--text-accent) 45%, transparent);
+}
+
+.bob-cnp-status-pill.is-blocked {
+  color: var(--text-error);
+  border-color: color-mix(in srgb, var(--text-error) 40%, transparent);
+}
+
+.bob-cnp-task-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-2-2);
+  flex: 0 0 auto;
+  max-width: 190px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  background-color: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.3;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.bob-cnp-task-badge.is-existing {
+  color: var(--text-accent);
+  border-color: color-mix(in srgb, var(--text-accent) 42%, transparent);
+  background-color: color-mix(in srgb, var(--text-accent) 8%, transparent);
+}
+
+.bob-cnp-task-badge.is-create {
+  color: var(--interactive-accent);
+  border-color: color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+  background-color: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+}
+
+.bob-cnp-task-badge.is-linked {
+  color: var(--color-green);
+  border-color: color-mix(in srgb, var(--color-green) 42%, transparent);
+  background-color: color-mix(in srgb, var(--color-green) 10%, transparent);
+}
+
+.bob-cnp-task-badge-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bob-cnp-task-value-row.is-linked {
+  background-color: color-mix(in srgb, var(--color-green) 5%, transparent);
+}
+
+.bob-cnp-task-value-row.is-linked.is-selected {
+  background-color: color-mix(in srgb, var(--color-green) 13%, transparent);
+  border-left-color: var(--color-green);
+}
+
+.bob-cnp-blockid-preview-row.is-valid .bob-cnp-row-icon {
+  color: var(--color-green);
+}
+
+.bob-cnp-blockid-preview-row.is-invalid .bob-cnp-row-icon,
+.bob-cnp-blockid-preview-row.is-duplicate .bob-cnp-row-icon {
+  color: var(--text-error);
+}
+
+.bob-cnp-blockid-preview-row.is-valid.is-selected {
+  border-left-color: var(--color-green);
+  background-color: color-mix(in srgb, var(--color-green) 12%, transparent);
+}
+
+.bob-cnp-blockid-preview-row.is-invalid.is-selected,
+.bob-cnp-blockid-preview-row.is-duplicate.is-selected {
+  border-left-color: var(--text-error);
+  background-color: color-mix(in srgb, var(--text-error) 10%, transparent);
+}
+
+.bob-cnp-blockid-preview {
+  margin-top: var(--size-2-1);
+  padding: var(--size-2-2) var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  background-color: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-cnp-blockid-preview-row.is-valid .bob-cnp-blockid-preview {
+  border-color: color-mix(in srgb, var(--color-green) 35%, transparent);
+}
+
+.bob-cnp-blockid-preview-row.is-invalid .bob-cnp-blockid-preview,
+.bob-cnp-blockid-preview-row.is-duplicate .bob-cnp-blockid-preview {
+  border-color: color-mix(in srgb, var(--text-error) 35%, transparent);
 }
 
 .bob-cnp-property-row.is-defined {
@@ -437,6 +567,23 @@
     width: calc(100vw - 24px);
     max-width: calc(100vw - 24px);
     height: min(86vh, 700px);
+  }
+
+  .bob-cnp-task-value-row {
+    flex-wrap: wrap;
+  }
+
+  .bob-cnp-task-value-row .bob-cnp-row-text {
+    flex-basis: calc(100% - 52px);
+  }
+
+  .bob-cnp-task-badge {
+    margin-left: 52px;
+    max-width: calc(100% - 52px);
+  }
+
+  .bob-cnp-blockid-preview {
+    white-space: normal;
   }
 }
 

@@ -172,6 +172,12 @@ const BULLET_PROPERTY_CONFIG_RELATIVE_PATH = "bob/config.yml";
 const BULLET_PROPERTY_CONFIG_MOBILE_NOTICE =
   "Bullet properties are only available on desktop";
 const BULLET_PROPERTY_LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
+// Managed "dependency navigation" child bullet shape, e.g.
+// `  - **DEPENDENCIES:** [[#^target-id]]`. Capturing group 1 is the leading
+// indentation; group 2 is the linked block ID. Matches the line produced by
+// formatDependencyNavigationBullet so the picker can dedupe its own writes.
+const DEPENDENCY_NAVIGATION_BULLET_RE =
+  /^(\s*)(?:[-*+]|\d+[.)])[ \t]+\*\*DEPENDENCIES:\*\*[ \t]+\[\[#\^([A-Za-z0-9-]+)\]\][ \t]*$/;
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
   /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
@@ -717,9 +723,13 @@ function resolveTargetTaskIdentity(line) {
   const blockId = getTrailingBlockId(text);
 
   if (idField && idFieldValue) {
+    // `[dependsOn:: ...]` keeps the [id::] value for Tasks compatibility, but the
+    // visible link must point at the real block: an existing trailing block ID
+    // wins, otherwise we are about to append `^idFieldValue` so the link uses it.
     const nextLine = blockId ? text : appendBlockIdToLine(text, idFieldValue);
     return Object.freeze({
       value: idFieldValue,
+      linkBlockId: blockId || idFieldValue,
       needsBlockIdPrompt: false,
       targetEdits: Object.freeze(
         getTargetEdit("append-block-id", text, nextLine),
@@ -731,6 +741,7 @@ function resolveTargetTaskIdentity(line) {
     const idResult = insertMissingBulletProperty(text, "id", blockId);
     return Object.freeze({
       value: blockId,
+      linkBlockId: blockId,
       needsBlockIdPrompt: false,
       targetEdits: Object.freeze(
         getTargetEdit("add-id-field", text, idResult.line),
@@ -740,9 +751,209 @@ function resolveTargetTaskIdentity(line) {
 
   return Object.freeze({
     value: null,
+    linkBlockId: null,
     needsBlockIdPrompt: true,
     targetEdits: Object.freeze([]),
   });
+}
+
+// Leading whitespace of a line (the list-item indentation for bullets).
+function getBulletIndent(line) {
+  const match = /^(\s*)/.exec(String(line || ""));
+  return match ? match[1] : "";
+}
+
+// Render the managed human-navigation child bullet for a dependency block link.
+function formatDependencyNavigationBullet(blockId, indent) {
+  const indentText = typeof indent === "string" ? indent : "";
+  return `${indentText}- **DEPENDENCIES:** [[#^${normalizeBulletPropertyValue(
+    blockId,
+  )}]]`;
+}
+
+// Return the linked block ID when a line is a managed dependency navigation
+// bullet, otherwise null.
+function parseDependencyNavigationBullet(line) {
+  const match = DEPENDENCY_NAVIGATION_BULLET_RE.exec(String(line || ""));
+  return match ? match[2] : null;
+}
+
+// Capture the index range of the current bullet's child block: every later line
+// that is blank or indented deeper than the parent, stopping at the first
+// nonblank line indented at or shallower than the parent (or EOF). Trailing
+// blank lines past the last deeper-indented child are excluded. Mirrors
+// getProjectSourceTaskBlock but operates on a plain line array and returns only
+// the bounds. `parentLine` is a 0-based index into `lines`.
+function findCurrentBulletChildBlock(lines, parentLine) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  if (!Number.isFinite(parentIndex) || parentIndex < 0) {
+    return Object.freeze({ startLine: 0, endLineExclusive: 0 });
+  }
+
+  const startLine = parentIndex + 1;
+  const parentIndentLength = getBulletIndent(
+    String(sourceLines[parentIndex] || ""),
+  ).length;
+  let endLineExclusive = startLine;
+
+  for (let index = startLine; index < sourceLines.length; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+
+    if (getBulletIndent(lineText).length > parentIndentLength) {
+      endLineExclusive = index + 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return Object.freeze({ startLine, endLineExclusive });
+}
+
+// Pick the indentation for a new dependency child bullet: reuse the first
+// existing direct-child list item's indentation (so tab-indented blocks stay
+// consistent), otherwise indent the parent by two spaces to match the requested
+// `  - ...` shape for a top-level bullet.
+function getDependencyChildIndent(lines, parentLine) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  const parentIndent = Number.isFinite(parentIndex)
+    ? getBulletIndent(String(sourceLines[parentIndex] || ""))
+    : "";
+  const block = findCurrentBulletChildBlock(sourceLines, parentIndex);
+
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+
+    if (BULLET_PROPERTY_LIST_ITEM_RE.test(lineText)) {
+      return getBulletIndent(lineText);
+    }
+  }
+
+  return `${parentIndent}  `;
+}
+
+// Plan the insertion of a managed dependency navigation child bullet under the
+// current bullet. The search is scoped to the current bullet's child block so a
+// link under a different task never suppresses the link under this one. Returns
+// an immutable result with one of:
+//   alreadyPresent: true                  - a managed child bullet already links
+//                                            to this block ID (no-op)
+//   changed: true, insertLine, lineText   - insertion needed
+//   reason: <guard>                       - parent is not a bullet, block ID is
+//                                            empty, or the parent index is out of
+//                                            range
+function planDependencyNavigationBulletInsertion(content, parentLine, blockId) {
+  const lines = String(content || "").split(/\r?\n/);
+  const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  const normalizedBlockId = normalizeBulletPropertyValue(blockId);
+
+  if (
+    !Number.isFinite(parentIndex) ||
+    parentIndex < 0 ||
+    parentIndex >= lines.length
+  ) {
+    return Object.freeze({
+      alreadyPresent: false,
+      changed: false,
+      insertLine: null,
+      lineText: null,
+      reason: "parent-out-of-range",
+    });
+  }
+
+  if (!isBulletLine(lines[parentIndex])) {
+    return Object.freeze({
+      alreadyPresent: false,
+      changed: false,
+      insertLine: null,
+      lineText: null,
+      reason: "not-bullet",
+    });
+  }
+
+  if (!normalizedBlockId) {
+    return Object.freeze({
+      alreadyPresent: false,
+      changed: false,
+      insertLine: null,
+      lineText: null,
+      reason: "empty-block-id",
+    });
+  }
+
+  const block = findCurrentBulletChildBlock(lines, parentIndex);
+  let lastDependencyBulletLine = -1;
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const dependencyBlockId = parseDependencyNavigationBullet(lines[index]);
+    if (dependencyBlockId === null) {
+      continue;
+    }
+
+    if (dependencyBlockId === normalizedBlockId) {
+      return Object.freeze({
+        alreadyPresent: true,
+        changed: false,
+        insertLine: null,
+        lineText: null,
+        reason: null,
+      });
+    }
+
+    lastDependencyBulletLine = index;
+  }
+
+  const indent = getDependencyChildIndent(lines, parentIndex);
+  const lineText = formatDependencyNavigationBullet(normalizedBlockId, indent);
+  // Append after the last existing dependency bullet so the links stay grouped;
+  // otherwise insert immediately after the parent, before other child notes.
+  const insertLine =
+    lastDependencyBulletLine === -1
+      ? block.startLine
+      : lastDependencyBulletLine + 1;
+
+  return Object.freeze({
+    alreadyPresent: false,
+    changed: true,
+    insertLine,
+    lineText,
+    reason: null,
+  });
+}
+
+// Build the notice for a local-task dependency write, distinguishing whether the
+// `[dependsOn:: ...]` field was newly added vs already present, and whether the
+// companion navigation child bullet was added, already present, or could not be
+// added.
+function buildLocalTaskDependencyNotice(details = {}) {
+  const id = normalizeBulletPropertyValue(details.id);
+  const name = String(details.name || "");
+  const dependencyText = details.dependencyAlreadyPresent
+    ? `Already depends on ${id}`
+    : `${name} → ${id}`;
+
+  switch (details.navigationResult) {
+    case "added":
+      return `${dependencyText}; added navigation link`;
+    case "already-present":
+      return `${dependencyText} (navigation link already present)`;
+    case "failed":
+    case "guard-failed":
+      return `${dependencyText} (could not add navigation link)`;
+    default:
+      return dependencyText;
+  }
 }
 
 function parseLocalTaskIdList(value) {
@@ -2962,6 +3173,30 @@ function replaceEditorLine(cm, line, oldLineText, newLineText) {
   return true;
 }
 
+// Insert a full new line at the `line` boundary, pushing the existing line at
+// that index (and everything below) down by one. When `line` is past the final
+// line, the new line is appended after the last line instead. Kept separate from
+// replaceEditorLine so a single-line replace is never overloaded with a
+// multi-line insert.
+function insertEditorLine(cm, line, lineText) {
+  if (!cm || typeof cm.replaceRange !== "function") {
+    return false;
+  }
+
+  const text = String(lineText === null || lineText === undefined ? "" : lineText);
+  const lastLine = getEditorLastLine(cm);
+
+  if (lastLine !== null && line > lastLine) {
+    const lastLineText = getEditorLineText(cm, lastLine);
+    const lastLineLength = lastLineText === null ? 0 : lastLineText.length;
+    cm.replaceRange(`\n${text}`, { line: lastLine, ch: lastLineLength });
+    return true;
+  }
+
+  cm.replaceRange(`${text}\n`, { line, ch: 0 });
+  return true;
+}
+
 function setEditorCursorSafely(cm, line, ch) {
   if (!cm || typeof cm.setCursor !== "function") {
     return false;
@@ -5002,11 +5237,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    if (item.alreadyLinked) {
-      new Notice("Already depends on this task");
-      return false;
-    }
-
+    // Already-linked selections are an idempotent repair path: re-resolve the
+    // target and let setLocalTaskDependency decide whether the visible
+    // navigation link still needs to be added.
     const targetLine = getEditorLine(this.editor, item.line);
     if (targetLine !== item.rawLine) {
       new Notice("Task changed; dependency not added");
@@ -5038,6 +5271,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.cursor,
       this.selectedPropertyItem.property.name,
       resolved.value,
+      { linkBlockId: resolved.linkBlockId },
     );
   }
 
@@ -5076,13 +5310,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.cursor,
       this.selectedPropertyItem.property.name,
       item.id,
-      { showNotice: false },
+      { showNotice: false, linkBlockId: item.id },
     );
     if (!linked) {
       return false;
     }
 
-    new Notice(`Added ^${item.id} + linked dependency`);
+    new Notice(`Added ^${item.id} + linked dependency + navigation link`);
     return true;
   }
 
@@ -5531,6 +5765,40 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    // Add the human-navigation child bullet last: it shifts line numbers below
+    // the cursor, and by now the `[dependsOn:: ...]` merge (and any target-task
+    // edit done by the caller) is already complete.
+    let navigationResult = null;
+    const linkBlockId = normalizeBulletPropertyValue(options.linkBlockId);
+    if (linkBlockId) {
+      const content =
+        cm && typeof cm.getValue === "function"
+          ? String(cm.getValue() || "")
+          : null;
+      if (content === null) {
+        navigationResult = "guard-failed";
+      } else {
+        const plan = planDependencyNavigationBulletInsertion(
+          content,
+          cursor.line,
+          linkBlockId,
+        );
+        if (plan.alreadyPresent) {
+          navigationResult = "already-present";
+        } else if (plan.changed) {
+          navigationResult = insertEditorLine(
+            cm,
+            plan.insertLine,
+            plan.lineText,
+          )
+            ? "added"
+            : "failed";
+        } else {
+          navigationResult = "guard-failed";
+        }
+      }
+    }
+
     setEditorCursorSafely(
       cm,
       cursor.line,
@@ -5539,9 +5807,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     if (options.showNotice !== false) {
       new Notice(
-        result.alreadyPresent
-          ? `Already depends on ${normalizeBulletPropertyValue(id)}`
-          : `${name} → ${normalizeBulletPropertyValue(id)}`,
+        buildLocalTaskDependencyNotice({
+          name,
+          id,
+          dependencyAlreadyPresent: result.alreadyPresent,
+          navigationResult,
+        }),
       );
     }
     return true;
@@ -8525,4 +8796,12 @@ module.exports.helpers = {
   upsertLocalTaskIdValue,
   upsertBulletProperty,
   deleteBulletProperty,
+  getBulletIndent,
+  formatDependencyNavigationBullet,
+  parseDependencyNavigationBullet,
+  findCurrentBulletChildBlock,
+  getDependencyChildIndent,
+  planDependencyNavigationBulletInsertion,
+  buildLocalTaskDependencyNotice,
+  insertEditorLine,
 };

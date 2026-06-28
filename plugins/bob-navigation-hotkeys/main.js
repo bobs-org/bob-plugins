@@ -687,7 +687,13 @@ function truncateBlockIdSlug(slug, maxLength) {
     .replace(/-+$/g, "");
 }
 
-function suggestBlockIdFromTask(displayText, content) {
+function suggestBlockIdFromTask(displayText, content, options = {}) {
+  const reservedIds =
+    options.reservedIds instanceof Set
+      ? options.reservedIds
+      : new Set(options.reservedIds || []);
+  const isTaken = (candidate) =>
+    blockIdExistsInContent(content, candidate) || reservedIds.has(candidate);
   const maxLength = 32;
   let slug = String(displayText || "")
     .toLowerCase()
@@ -700,7 +706,7 @@ function suggestBlockIdFromTask(displayText, content) {
 
   let candidate = slug;
   let suffix = 2;
-  while (blockIdExistsInContent(content, candidate)) {
+  while (isTaken(candidate)) {
     const suffixText = `-${suffix}`;
     const base =
       truncateBlockIdSlug(slug, Math.max(1, maxLength - suffixText.length)) ||
@@ -729,13 +735,50 @@ function getTargetEdit(kind, oldLine, newLine) {
   return [Object.freeze({ kind, line: newLine })];
 }
 
-function resolveTargetTaskIdentity(line) {
+// True when an open task being added as a dependency has no trailing `^block-id`
+// and therefore needs the user to be prompted for one before the navigation
+// bullet can link to it. An existing `[id:: value]` does NOT remove this need:
+// it is a valid Tasks dependency value but not yet a navigation block target.
+function taskNeedsPromptedBlockId(task) {
+  if (!task) {
+    return false;
+  }
+
+  const blockId = Object.prototype.hasOwnProperty.call(task, "existingBlockId")
+    ? task.existingBlockId
+    : getTrailingBlockId(task.rawLine);
+  return !normalizeBulletPropertyValue(blockId);
+}
+
+// Apply a confirmed/prompted block ID to a task line: always append the trailing
+// `^id` navigation target, and add `[id:: id]` only when the task lacks an
+// existing `[id::]` value (an existing one stays the canonical dependency value).
+function applyPromptedBlockIdToTaskLine(line, id) {
+  const withBlockId = appendBlockIdToLine(line, id);
+  return insertMissingBulletProperty(withBlockId, "id", id).line;
+}
+
+function resolveTargetTaskIdentity(line, options = {}) {
+  const promptWhenBlockIdMissing = options.promptWhenBlockIdMissing === true;
   const text = String(line || "");
   const idField = findBulletPropertyField(text, "id");
   const idFieldValue = idField
     ? normalizeBulletPropertyValue(idField.value)
     : "";
   const blockId = getTrailingBlockId(text);
+
+  // Stricter rule for the prompted flows: a missing trailing block ID always
+  // means "ask the user", even when an `[id:: value]` is already present. The
+  // caller will run the prompt, then keep the existing `[id::]` as the
+  // dependency value while linking navigation to the confirmed block ID.
+  if (promptWhenBlockIdMissing && !blockId) {
+    return Object.freeze({
+      value: idFieldValue || null,
+      linkBlockId: null,
+      needsBlockIdPrompt: true,
+      targetEdits: Object.freeze([]),
+    });
+  }
 
   if (idField && idFieldValue) {
     // `[dependsOn:: ...]` keeps the [id::] value for Tasks compatibility, but the
@@ -4058,11 +4101,6 @@ const BULLET_PROPERTY_LOCAL_TASK_HINTS = [
   { keys: ["esc"], label: "Dismiss" },
 ];
 
-const BULLET_PROPERTY_BLOCK_ID_HINTS = [
-  { keys: ["↵"], label: "Create & link" },
-  { keys: ["esc"], label: "Cancel" },
-];
-
 const BULLET_PROPERTY_WEEKDAY_NAMES = [
   "Sun",
   "Mon",
@@ -4081,6 +4119,21 @@ function getBulletPropertyLocalTaskHints(hasMarks) {
 
     return { ...hint, label: hasMarks ? "Apply" : "Link" };
   });
+}
+
+// Footer hints for the block-ID prompt. In batch mode the Enter action advances
+// to the next pending prompt ("Next") until the final one, which applies the
+// whole batch ("Apply all"). The single-task prompt keeps "Create & link".
+function getBulletPropertyBlockIdHints(options = {}) {
+  let label = "Create & link";
+  if (options.batch) {
+    label = options.last ? "Apply all" : "Next";
+  }
+
+  return [
+    { keys: ["↵"], label },
+    { keys: ["esc"], label: "Cancel" },
+  ];
 }
 
 // Render a Lucide icon into `el` via Obsidian's setIcon, guarding against
@@ -5203,24 +5256,40 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
 
   return getOpenLocalTasks(content, { excludeLine: options.excludeLine }).map(
     (task) => {
-      const identifier = getLocalTaskDependencyIdentifier(task);
-      const alreadyLinked = identifier
-        ? dependencyValues.has(identifier)
+      // The dependency value stored in `[dependsOn:: ...]` (prefers an existing
+      // `[id::]`, then the trailing block ID). The link block ID is the trailing
+      // `^block-id` the navigation bullet points at, which may be absent even
+      // when a dependency value exists.
+      const dependencyValue = getLocalTaskDependencyIdentifier(task);
+      const linkBlockId = task.existingBlockId || "";
+      const alreadyLinked = dependencyValue
+        ? dependencyValues.has(dependencyValue)
         : false;
+      const needsBlockIdPrompt = !linkBlockId;
+      const needsDependencyValue = !dependencyValue;
+      const needsPromptForAdd = !alreadyLinked && needsBlockIdPrompt;
 
       return Object.freeze({
         kind: "local-task",
         ...task,
-        value: identifier,
+        value: dependencyValue,
+        dependencyValue,
+        linkBlockId,
         alreadyLinked,
-        needsBlockId: !identifier,
+        needsBlockIdPrompt,
+        needsDependencyValue,
+        needsPromptForAdd,
         searchText: [
           task.displayText,
           `line ${task.line + 1}`,
           task.status,
-          identifier,
+          dependencyValue,
           alreadyLinked ? "depends linked" : "",
-          identifier ? "block id" : "create id",
+          needsPromptForAdd
+            ? "needs id block create"
+            : dependencyValue
+              ? "block id"
+              : "create id",
         ]
           .filter(Boolean)
           .join(" "),
@@ -5245,7 +5314,11 @@ function taskStatusClass(status) {
   return "todo";
 }
 
-function validateBlockIdCandidate(id, content) {
+function validateBlockIdCandidate(id, content, options = {}) {
+  const reservedIds =
+    options.reservedIds instanceof Set
+      ? options.reservedIds
+      : new Set(options.reservedIds || []);
   const value = normalizeBulletPropertyValue(id);
   if (!value) {
     return Object.freeze({
@@ -5271,6 +5344,15 @@ function validateBlockIdCandidate(id, content) {
       valid: false,
       state: "duplicate",
       message: "Already exists in this file",
+    });
+  }
+
+  if (reservedIds.has(value)) {
+    return Object.freeze({
+      id: value,
+      valid: false,
+      state: "duplicate",
+      message: "Already chosen in this batch",
     });
   }
 
@@ -5332,6 +5414,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingTask = null;
     this.markedLines = new Set();
     this.taskItemsByLine = new Map();
+    // Batch block-ID prompting state; populated only while the modal is
+    // collecting block IDs for a pending multi-task apply (see commit flow).
+    this.pendingBatch = null;
+    this.blockIdMode = "single";
+    this.blockIdContext = null;
     this.valueBaseDate = getLocalDateStart(new Date());
     this.showPropertyStage({ clearQuery: false });
   }
@@ -5340,6 +5427,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.stage = "properties";
     this.selectedPropertyItem = null;
     this.pendingTask = null;
+    this.clearPendingBatch();
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
     const items = createBulletPropertyItems(this.config, this.lineText);
@@ -5465,6 +5553,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
   }
 
+  clearPendingBatch() {
+    this.pendingBatch = null;
+    this.blockIdMode = "single";
+    this.blockIdContext = null;
+  }
+
+  // Dismissing the modal mid-prompt is a clean cancel: no writes happen until
+  // the final block ID is confirmed, so just drop the pending batch state.
+  onClose() {
+    this.clearPendingBatch();
+    super.onClose();
+  }
+
   isLocalTaskStage() {
     return (
       this.stage === "value" &&
@@ -5493,12 +5594,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       (counts, item) => {
         if (item.alreadyLinked) {
           counts.remove += 1;
+        } else if (item.needsPromptForAdd) {
+          counts.needId += 1;
         } else {
           counts.add += 1;
         }
         return counts;
       },
-      { add: 0, remove: 0 },
+      { add: 0, needId: 0, remove: 0 },
     );
   }
 
@@ -5529,6 +5632,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (diff.add > 0) {
       parts.push(`${diff.add} to add`);
     }
+    if (diff.needId > 0) {
+      parts.push(`${diff.needId} ${diff.needId === 1 ? "needs ID" : "need IDs"}`);
+    }
     if (diff.remove > 0) {
       parts.push(`${diff.remove} to remove`);
     }
@@ -5542,12 +5648,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return;
     }
 
-    if (item.needsBlockId) {
-      new Notice("Press ↵ to create a block ID for this task");
-      this.moveSelection(1);
-      return;
-    }
-
+    // Block-ID-less tasks can now be marked; their block IDs are collected via
+    // sequential prompts when the batch is applied.
     if (this.markedLines.has(item.line)) {
       this.markedLines.delete(item.line);
     } else {
@@ -5562,6 +5664,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.stage = "value";
     this.selectedPropertyItem = propertyItem;
     this.pendingTask = null;
+    this.clearPendingBatch();
     this.selectedIndex = 0;
     const property = propertyItem.property;
     const dependencyValues = new Set(
@@ -5595,15 +5698,42 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
   }
 
-  showBlockIdStage(task) {
+  // Reserved block IDs chosen earlier in the current batch prompt sequence, so
+  // suggestions and validation avoid colliding with them before any write.
+  getBlockIdReservedIds() {
+    return this.blockIdMode === "batch" && this.pendingBatch
+      ? this.pendingBatch.reservedIds
+      : new Set();
+  }
+
+  // Render the block-ID prompt for one task. Serves both the single-task flow
+  // (mode "single") and each step of a batch (mode "batch"), which only differ
+  // in the subtitle/footer wording and the reserved-ID set.
+  showBlockIdStage(task, options = {}) {
     this.stage = "blockid";
     this.pendingTask = task;
+    this.blockIdMode = options.mode === "batch" ? "batch" : "single";
+    this.blockIdContext =
+      this.blockIdMode === "batch"
+        ? {
+            position: Math.max(1, Math.floor(options.position || 1)),
+            total: Math.max(1, Math.floor(options.total || 1)),
+          }
+        : null;
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
-    const suggestedId = suggestBlockIdFromTask(
-      task.displayText,
-      this.getEditorContent(),
-    );
+    const reservedIds = this.getBlockIdReservedIds();
+    // Prefill with the existing `[id::]` value when present (it stays the
+    // dependency value); otherwise suggest a slug that avoids existing and
+    // reserved block IDs.
+    const suggestedId = task.existingIdField
+      ? normalizeBulletPropertyValue(task.existingIdField)
+      : suggestBlockIdFromTask(task.displayText, this.getEditorContent(), {
+          reservedIds,
+        });
+    const isLast =
+      this.blockIdMode !== "batch" ||
+      this.blockIdContext.position >= this.blockIdContext.total;
 
     this.applyOptions({
       items: [],
@@ -5613,8 +5743,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       placeholder: "Block ID - letters, numbers, hyphens",
       resultsLabel: "Block ID preview",
       emptyText: "Type a block ID",
-      footerHints: BULLET_PROPERTY_BLOCK_ID_HINTS,
-      getSubtitle: () => `Create an ID for line ${task.line + 1}`,
+      footerHints: getBulletPropertyBlockIdHints({
+        batch: this.blockIdMode === "batch",
+        last: isLast,
+      }),
+      getSubtitle: () =>
+        this.blockIdMode === "batch"
+          ? `Block ID ${this.blockIdContext.position} of ${this.blockIdContext.total} · line ${task.line + 1}`
+          : `Create an ID for line ${task.line + 1}`,
       filterItem: () => true,
       renderItem: (item, rowEl, query) =>
         this.renderBlockIdPreviewItem(item, rowEl, query),
@@ -5636,6 +5772,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       const validation = validateBlockIdCandidate(
         this.getRawQuery(),
         this.getEditorContent(),
+        { reservedIds: this.getBlockIdReservedIds() },
       );
       return [
         Object.freeze({
@@ -5737,14 +5874,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   renderTaskValueItem(item, rowEl, query) {
     const marked =
       this.markedLines instanceof Set && this.markedLines.has(item.line);
+    const markedRemove = marked && item.alreadyLinked;
+    const markedNeedsId = marked && !item.alreadyLinked && item.needsPromptForAdd;
+    const markedAdd = marked && !item.alreadyLinked && !item.needsPromptForAdd;
     addElementClasses(
       rowEl,
       "bob-cnp-task-value-row",
       item.alreadyLinked ? "is-linked" : "",
-      item.needsBlockId ? "is-create" : "is-existing",
+      item.needsBlockIdPrompt ? "is-create" : "is-existing",
       marked ? "is-marked" : "",
-      marked && item.alreadyLinked ? "is-marked-remove" : "",
-      marked && !item.alreadyLinked ? "is-marked-add" : "",
+      markedRemove ? "is-marked-remove" : "",
+      markedAdd ? "is-marked-add" : "",
+      markedNeedsId ? "is-marked-id-needed" : "",
     );
 
     const markEl = rowEl.createDiv({
@@ -5771,37 +5912,43 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     const badgeClasses = [
       "bob-cnp-task-badge",
-      marked
-        ? item.alreadyLinked
-          ? "is-marked-remove"
-          : "is-marked-add"
-        : item.alreadyLinked
-          ? "is-linked"
-          : item.needsBlockId
-            ? "is-create"
-            : "is-existing",
+      markedRemove
+        ? "is-marked-remove"
+        : markedNeedsId
+          ? "is-marked-id-needed"
+          : markedAdd
+            ? "is-marked-add"
+            : item.alreadyLinked
+              ? "is-linked"
+              : item.needsBlockIdPrompt
+                ? "is-create"
+                : "is-existing",
     ];
     const badgeEl = rowEl.createDiv({ cls: badgeClasses.join(" ") });
-    if (marked && item.alreadyLinked) {
+    if (markedRemove) {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
         text: "− remove",
       });
-    } else if (marked) {
+    } else if (markedNeedsId) {
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
+    } else if (markedAdd) {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ add" });
     } else if (item.alreadyLinked) {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
         text: "✓ depends",
       });
-    } else if (item.value) {
+    } else if (item.needsBlockIdPrompt) {
+      // Unmarked, not yet linked, and missing a trailing block ID: pressing
+      // Enter prompts for one before linking.
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "+ id" });
+    } else {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "↵" });
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-id",
         text: `^${item.value}`,
       });
-    } else {
-      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "+ id" });
     }
   }
 
@@ -5828,11 +5975,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       item.task && item.task.displayText
         ? item.task.displayText
         : "(untitled task)";
+    const existingIdField =
+      item.task && item.task.existingIdField
+        ? normalizeBulletPropertyValue(item.task.existingIdField)
+        : "";
+    const idDisplay = item.id || "id";
+    // When the task already has an `[id:: value]`, confirmation only appends the
+    // trailing `^id` block target and keeps the existing dependency value;
+    // otherwise it creates both `[id:: id]` and `^id`.
+    const previewText = existingIdField
+      ? `Appends ^${idDisplay}; keeps [id:: ${existingIdField}] on: ${taskTitle}`
+      : `Adds [id:: ${idDisplay}] ^${idDisplay} to: ${taskTitle}`;
     textEl.createDiv({
       cls: "bob-cnp-blockid-preview",
-      text: item.id
-        ? `Adds [id:: ${item.id}] ^${item.id} to: ${taskTitle}`
-        : `Adds [id:: id] ^id to: ${taskTitle}`,
+      text: previewText,
     });
   }
 
@@ -5849,18 +6005,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    // Already-linked selections are an idempotent repair path: re-resolve the
-    // target and let setLocalTaskDependency decide whether the visible
-    // navigation link still needs to be added.
+    // Single-select path. Re-read the target so a stale row never writes.
     const targetLine = getEditorLine(this.editor, item.line);
     if (targetLine !== item.rawLine) {
       new Notice("Task changed; dependency not added");
       return false;
     }
 
-    const resolved = resolveTargetTaskIdentity(targetLine);
+    // Stricter rule: a missing trailing block ID always prompts, even when an
+    // `[id:: value]` is already present (it stays the dependency value while the
+    // prompted ID becomes the navigation block target).
+    const resolved = resolveTargetTaskIdentity(targetLine, {
+      promptWhenBlockIdMissing: true,
+    });
     if (resolved.needsBlockIdPrompt) {
-      this.showBlockIdStage(item);
+      this.showBlockIdStage(item, { mode: "single" });
       return false;
     }
 
@@ -5887,6 +6046,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
   }
 
+  // Preparation phase for a marked batch apply. Guards the cursor bullet, then
+  // partitions the marked rows into removals, ready additions (already have a
+  // trailing block ID), and additions that still need a prompted block ID. When
+  // prompts are needed it stashes a pending batch and opens the first prompt
+  // (returning false so the modal stays open); otherwise it executes the batch
+  // immediately. No editor writes happen in this phase.
   commitMarkedDependencies() {
     if (!this.selectedPropertyItem || this.getMarkedCount() === 0) {
       return false;
@@ -5909,18 +6074,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    const additions = [];
     const removals = [];
-    let skippedStale = 0;
-    let skippedOther = 0;
+    const readyAdditions = [];
+    const promptQueue = [];
 
     this.getMarkedTaskItems().forEach((item) => {
       if (item.alreadyLinked) {
-        if (!item.value) {
-          skippedOther += 1;
-          return;
-        }
-
+        // alreadyLinked implies a non-empty dependency value.
         removals.push({
           depValue: item.value,
           linkBlockId:
@@ -5929,18 +6089,176 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return;
       }
 
-      if (item.needsBlockId) {
-        skippedOther += 1;
-        return;
-      }
+      const snapshot = {
+        line: item.line,
+        rawLine: item.rawLine,
+        displayText: item.displayText,
+        existingIdField: item.existingIdField || null,
+      };
 
-      const targetLine = getEditorLine(this.editor, item.line);
-      if (targetLine !== item.rawLine) {
+      if (item.needsPromptForAdd) {
+        promptQueue.push(snapshot);
+      } else {
+        readyAdditions.push(snapshot);
+      }
+    });
+
+    const batch = {
+      propertyName,
+      cursorLineText,
+      removals,
+      readyAdditions,
+      promptQueue,
+      promptIndex: 0,
+      confirmedById: new Map(),
+      reservedIds: new Set(),
+    };
+
+    if (promptQueue.length === 0) {
+      this.clearPendingBatch();
+      return this.executeDependencyBatch(batch);
+    }
+
+    this.pendingBatch = batch;
+    return this.promptNextBatchBlockId();
+  }
+
+  // Open the block-ID prompt for the task at the current queue position. Returns
+  // false so the modal stays open while prompts are collected.
+  promptNextBatchBlockId() {
+    const batch = this.pendingBatch;
+    if (!batch) {
+      return false;
+    }
+
+    const snapshot = batch.promptQueue[batch.promptIndex];
+    if (!snapshot) {
+      return false;
+    }
+
+    this.showBlockIdStage(snapshot, {
+      mode: "batch",
+      position: batch.promptIndex + 1,
+      total: batch.promptQueue.length,
+    });
+    return false;
+  }
+
+  confirmBlockId(item) {
+    if (!this.selectedPropertyItem || !this.pendingTask || !item) {
+      return false;
+    }
+
+    if (!item.valid) {
+      return false;
+    }
+
+    if (this.blockIdMode === "batch" && this.pendingBatch) {
+      return this.confirmBatchBlockId(item);
+    }
+
+    return this.confirmSingleBlockId(item);
+  }
+
+  // Record one confirmed block ID and either advance to the next prompt (modal
+  // stays open) or, on the final prompt, run the batch executor and close only
+  // when it succeeds.
+  confirmBatchBlockId(item) {
+    const batch = this.pendingBatch;
+    const snapshot = batch.promptQueue[batch.promptIndex];
+    if (!snapshot) {
+      return false;
+    }
+
+    batch.confirmedById.set(snapshot.line, item.id);
+    batch.reservedIds.add(item.id);
+    batch.promptIndex += 1;
+
+    if (batch.promptIndex < batch.promptQueue.length) {
+      return this.promptNextBatchBlockId();
+    }
+
+    if (this.executeDependencyBatch(batch)) {
+      this.clearPendingBatch();
+      return true;
+    }
+
+    // Executor aborted (e.g. cursor bullet changed). Leave the modal open with
+    // the failure notice already shown; Esc cancels with nothing written.
+    return false;
+  }
+
+  confirmSingleBlockId(item) {
+    const task = this.pendingTask;
+    const targetLine = getEditorLine(this.editor, task.line);
+    if (targetLine !== task.rawLine) {
+      new Notice("Task changed; dependency not added");
+      return false;
+    }
+
+    const updatedLine = applyPromptedBlockIdToTaskLine(targetLine, item.id);
+    if (!replaceEditorLine(this.editor, task.line, targetLine, updatedLine)) {
+      new Notice("Could not update target task");
+      return false;
+    }
+
+    // Keep an existing `[id:: value]` as the dependency value; otherwise the
+    // confirmed block ID becomes both the id and the navigation target.
+    const existingId = findBulletPropertyField(targetLine, "id");
+    const depValue =
+      (existingId && normalizeBulletPropertyValue(existingId.value)) || item.id;
+
+    const linked = this.plugin.setLocalTaskDependency(
+      this.editor,
+      this.cursor,
+      this.selectedPropertyItem.property.name,
+      depValue,
+      { showNotice: false, linkBlockId: item.id },
+    );
+    if (!linked) {
+      return false;
+    }
+
+    new Notice(`Added ^${item.id} + linked dependency + navigation link`);
+    return true;
+  }
+
+  // Execution phase: re-guard the cursor bullet, apply each target's edits,
+  // rewrite the `[dependsOn:: ...]` list once, then reconcile navigation
+  // bullets. Target-line edits are single-line replaces, so target indices stay
+  // stable; only the nav reconciliation shifts lines and re-reads as it goes.
+  executeDependencyBatch(batch) {
+    const cursorLineText = getEditorLine(this.editor, this.cursor.line);
+    if (cursorLineText === null) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+
+    if (!isBulletLine(cursorLineText)) {
+      new Notice("Cursor is not on a bullet");
+      return false;
+    }
+
+    if (cursorLineText !== batch.cursorLineText) {
+      new Notice("Current task changed; dependencies not updated");
+      return false;
+    }
+
+    const additions = [];
+    const removals = batch.removals.slice();
+    let skippedStale = 0;
+    let skippedOther = 0;
+
+    batch.readyAdditions.forEach((snapshot) => {
+      const targetLine = getEditorLine(this.editor, snapshot.line);
+      if (targetLine !== snapshot.rawLine) {
         skippedStale += 1;
         return;
       }
 
-      const resolved = resolveTargetTaskIdentity(targetLine);
+      const resolved = resolveTargetTaskIdentity(targetLine, {
+        promptWhenBlockIdMissing: true,
+      });
       if (resolved.needsBlockIdPrompt || !resolved.value) {
         skippedOther += 1;
         return;
@@ -5949,7 +6267,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       if (resolved.targetEdits.length > 0) {
         const finalLine =
           resolved.targetEdits[resolved.targetEdits.length - 1].line;
-        if (!replaceEditorLine(this.editor, item.line, targetLine, finalLine)) {
+        if (
+          !replaceEditorLine(this.editor, snapshot.line, targetLine, finalLine)
+        ) {
           skippedOther += 1;
           return;
         }
@@ -5961,9 +6281,51 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       });
     });
 
+    batch.promptQueue.forEach((snapshot) => {
+      const confirmedId = batch.confirmedById.get(snapshot.line);
+      if (!confirmedId) {
+        skippedOther += 1;
+        return;
+      }
+
+      const targetLine = getEditorLine(this.editor, snapshot.line);
+      if (targetLine !== snapshot.rawLine) {
+        skippedStale += 1;
+        return;
+      }
+
+      // Re-validate against fresh content (which already includes block IDs
+      // applied earlier in this loop) in case the note changed while prompting.
+      const validation = validateBlockIdCandidate(
+        confirmedId,
+        this.getEditorContent(),
+      );
+      if (!validation.valid) {
+        skippedOther += 1;
+        return;
+      }
+
+      const updatedLine = applyPromptedBlockIdToTaskLine(
+        targetLine,
+        confirmedId,
+      );
+      if (
+        !replaceEditorLine(this.editor, snapshot.line, targetLine, updatedLine)
+      ) {
+        skippedOther += 1;
+        return;
+      }
+
+      const existingId = findBulletPropertyField(targetLine, "id");
+      const depValue =
+        (existingId && normalizeBulletPropertyValue(existingId.value)) ||
+        confirmedId;
+      additions.push({ depValue, linkBlockId: confirmedId });
+    });
+
     const dependencyResult = applyLocalTaskDependencyListEdits(
       cursorLineText,
-      propertyName,
+      batch.propertyName,
       {
         add: additions.map((addition) => addition.depValue),
         remove: removals.map((removal) => removal.depValue),
@@ -5987,9 +6349,41 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    let navigationAdded = 0;
-    let navigationRemoved = 0;
-    let navigationUpdated = 0;
+    const navigation = this.reconcileDependencyNavigationBullets(
+      removals,
+      additions,
+    );
+
+    const finalCursorLine =
+      getEditorLine(this.editor, this.cursor.line) || dependencyResult.line;
+    setEditorCursorSafely(
+      this.editor,
+      this.cursor.line,
+      Math.min(Math.max(this.cursor.ch, 0), finalCursorLine.length),
+    );
+
+    new Notice(
+      buildMultiDependencyNotice({
+        added: dependencyResult.added.length,
+        removed: dependencyResult.removed.length,
+        navigationAdded: navigation.added,
+        navigationRemoved: navigation.removed,
+        navigationUpdated: navigation.updated,
+        skippedStale,
+        skippedOther,
+      }),
+    );
+    return true;
+  }
+
+  // Reconcile managed navigation child bullets for a finished batch: remove
+  // bullets for unlinked dependencies, insert/replace bullets for new ones, and
+  // normalize any remaining legacy labels. Re-reads editor content before each
+  // line-changing operation so shifting line numbers stay correct.
+  reconcileDependencyNavigationBullets(removals, additions) {
+    let added = 0;
+    let removed = 0;
+    let updated = 0;
 
     removals.forEach((removal) => {
       const content =
@@ -6006,7 +6400,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         removal.linkBlockId,
       );
       if (plan.changed && deleteEditorLine(this.editor, plan.removeLine)) {
-        navigationRemoved += 1;
+        removed += 1;
       }
     });
 
@@ -6035,88 +6429,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             plan.lineText,
           )
         ) {
-          navigationUpdated += 1;
+          updated += 1;
         }
       } else if (
         plan.changed &&
         insertEditorLine(this.editor, plan.insertLine, plan.lineText)
       ) {
-        navigationAdded += 1;
+        added += 1;
       }
     });
 
     // Normalize any remaining legacy-label dependency bullets in this task's
     // child block (e.g. unrelated dependencies left untouched by this commit).
-    navigationUpdated += normalizeDependencyNavigationLabels(
-      this.editor,
-      this.cursor.line,
-    );
+    updated += normalizeDependencyNavigationLabels(this.editor, this.cursor.line);
 
-    const finalCursorLine =
-      getEditorLine(this.editor, this.cursor.line) || dependencyResult.line;
-    setEditorCursorSafely(
-      this.editor,
-      this.cursor.line,
-      Math.min(Math.max(this.cursor.ch, 0), finalCursorLine.length),
-    );
-
-    new Notice(
-      buildMultiDependencyNotice({
-        added: dependencyResult.added.length,
-        removed: dependencyResult.removed.length,
-        navigationAdded,
-        navigationRemoved,
-        navigationUpdated,
-        skippedStale,
-        skippedOther,
-      }),
-    );
-    return true;
-  }
-
-  confirmBlockId(item) {
-    if (!this.selectedPropertyItem || !this.pendingTask || !item) {
-      return false;
-    }
-
-    if (!item.valid) {
-      return false;
-    }
-
-    const task = this.pendingTask;
-    const targetLine = getEditorLine(this.editor, task.line);
-    if (targetLine !== task.rawLine) {
-      new Notice("Task changed; dependency not added");
-      return false;
-    }
-
-    const lineWithBlockId = appendBlockIdToLine(targetLine, item.id);
-    const lineWithIdField = insertMissingBulletProperty(
-      lineWithBlockId,
-      "id",
-      item.id,
-    ).line;
-
-    if (
-      !replaceEditorLine(this.editor, task.line, targetLine, lineWithIdField)
-    ) {
-      new Notice("Could not update target task");
-      return false;
-    }
-
-    const linked = this.plugin.setLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.selectedPropertyItem.property.name,
-      item.id,
-      { showNotice: false, linkBlockId: item.id },
-    );
-    if (!linked) {
-      return false;
-    }
-
-    new Notice(`Added ^${item.id} + linked dependency + navigation link`);
-    return true;
+    return { added, removed, updated };
   }
 
   handleKeydown(event) {
@@ -9627,9 +9954,14 @@ module.exports.helpers = {
   formatBulletPropertyDate,
   cleanTaskDisplayText,
   getOpenLocalTasks,
+  getLocalTaskDependencyIdentifier,
+  createBulletPropertyLocalTaskItems,
   blockIdExistsInContent,
   suggestBlockIdFromTask,
+  validateBlockIdCandidate,
   appendBlockIdToLine,
+  taskNeedsPromptedBlockId,
+  applyPromptedBlockIdToTaskLine,
   resolveTargetTaskIdentity,
   parseLocalTaskIdList,
   getUniqueLocalTaskIdValues,

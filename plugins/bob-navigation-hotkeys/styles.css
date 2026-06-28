@@ -397,6 +397,12 @@
   background-color: color-mix(in srgb, var(--text-error) 10%, transparent);
 }
 
+.bob-cnp-task-badge.is-marked-id-needed {
+  color: var(--color-orange);
+  border-color: color-mix(in srgb, var(--color-orange) 50%, transparent);
+  background-color: color-mix(in srgb, var(--color-orange) 12%, transparent);
+}
+
 .bob-cnp-task-badge-id {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -432,6 +438,20 @@
 .bob-cnp-task-value-row.is-marked-remove .bob-cnp-mark {
   border-color: var(--text-error);
   background-color: var(--text-error);
+}
+
+.bob-cnp-task-value-row.is-marked-id-needed {
+  background-color: color-mix(in srgb, var(--color-orange) 7%, transparent);
+}
+
+.bob-cnp-task-value-row.is-marked-id-needed.is-selected {
+  background-color: color-mix(in srgb, var(--color-orange) 17%, transparent);
+  border-left-color: var(--color-orange);
+}
+
+.bob-cnp-task-value-row.is-marked-id-needed .bob-cnp-mark {
+  border-color: var(--color-orange);
+  background-color: var(--color-orange);
 }
 
 .bob-cnp-blockid-preview-row.is-valid .bob-cnp-row-icon {

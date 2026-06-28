@@ -42,6 +42,7 @@ const NOTE_TEMPLATE_MISSING_NOTICES = Object.freeze({
   default: "New note template not found",
 });
 const PROJECT_TYPE_WIKILINK = "[[project]]";
+const AREA_TYPE_WIKILINK = "[[area]]";
 const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
@@ -108,6 +109,12 @@ const PROJECT_STATUS_FALLBACK = Object.freeze({
   icon: "square-kanban",
   emoji: "",
   variant: "muted",
+});
+const AREA_PRESENTATION = Object.freeze({
+  icon: "compass",
+  emoji: "🧭",
+  label: "Area",
+  variant: "area",
 });
 
 const YANK_PATH_COMMANDS = [
@@ -3456,6 +3463,18 @@ function isProjectType(value) {
   return false;
 }
 
+function isAreaType(value) {
+  if (typeof value === "string") {
+    return value.trim() === AREA_TYPE_WIKILINK;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => isAreaType(item));
+  }
+
+  return false;
+}
+
 function stripSurroundingQuotes(value) {
   const text = String(value === null || value === undefined ? "" : value).trim();
   if (text.length < 2) {
@@ -3534,23 +3553,70 @@ function getProjectNoteInfo(frontmatter) {
   };
 }
 
-function getFileProjectNoteInfo(app, file) {
+function getChildNoteInfo(frontmatter) {
+  const projectInfo = getProjectNoteInfo(frontmatter);
+  if (projectInfo.isProject) {
+    return {
+      kind: "project",
+      decorated: true,
+      statusKey: projectInfo.statusKey,
+      label: projectInfo.label,
+      emoji: projectInfo.emoji,
+      icon: projectInfo.icon,
+      variant: projectInfo.variant,
+    };
+  }
+
+  if (Boolean(frontmatter) && isAreaType(frontmatter.type)) {
+    return {
+      kind: "area",
+      decorated: true,
+      statusKey: "",
+      label: AREA_PRESENTATION.label,
+      emoji: AREA_PRESENTATION.emoji,
+      icon: AREA_PRESENTATION.icon,
+      variant: AREA_PRESENTATION.variant,
+    };
+  }
+
+  return {
+    kind: "plain",
+    decorated: false,
+    statusKey: "",
+    label: "",
+    emoji: "",
+    icon: "file-text",
+    variant: "",
+  };
+}
+
+function getFileChildNoteInfo(app, file) {
   const frontmatter =
     app &&
     app.metadataCache &&
     typeof app.metadataCache.getFileCache === "function"
       ? app.metadataCache.getFileCache(file)?.frontmatter
       : null;
-  return getProjectNoteInfo(frontmatter);
+  return getChildNoteInfo(frontmatter);
 }
 
-function getChildProjectStatusSummary(childFiles, projectInfoByPath) {
+function getChildNoteSummary(childFiles, noteInfoByPath) {
   let projectCount = 0;
+  let areaCount = 0;
   const statusCounts = new Map();
 
   childFiles.forEach((file) => {
-    const info = projectInfoByPath.get(file.path);
-    if (!info || !info.isProject) {
+    const info = noteInfoByPath.get(file.path);
+    if (!info) {
+      return;
+    }
+
+    if (info.kind === "area") {
+      areaCount += 1;
+      return;
+    }
+
+    if (info.kind !== "project") {
       return;
     }
 
@@ -3565,38 +3631,42 @@ function getChildProjectStatusSummary(childFiles, projectInfoByPath) {
     statusCounts.set(label, (statusCounts.get(label) || 0) + 1);
   });
 
-  if (projectCount === 0) {
-    return [];
+  const parts = [];
+  if (projectCount > 0) {
+    parts.push(`${projectCount} project${projectCount === 1 ? "" : "s"}`);
+
+    const orderedLabels = ["wip", "done", "canceled", "no status"];
+    orderedLabels.forEach((label) => {
+      const count = statusCounts.get(label);
+      if (count) {
+        parts.push(`${count} ${label}`);
+        statusCounts.delete(label);
+      }
+    });
+
+    Array.from(statusCounts.keys())
+      .sort()
+      .forEach((label) => {
+        parts.push(`${statusCounts.get(label)} ${label}`);
+      });
   }
 
-  const parts = [
-    `${projectCount} project${projectCount === 1 ? "" : "s"}`,
-  ];
-  const orderedLabels = ["wip", "done", "canceled", "no status"];
-  orderedLabels.forEach((label) => {
-    const count = statusCounts.get(label);
-    if (count) {
-      parts.push(`${count} ${label}`);
-      statusCounts.delete(label);
-    }
-  });
-
-  Array.from(statusCounts.keys())
-    .sort()
-    .forEach((label) => {
-      parts.push(`${statusCounts.get(label)} ${label}`);
-    });
+  if (areaCount > 0) {
+    parts.push(`${areaCount} area${areaCount === 1 ? "" : "s"}`);
+  }
 
   return parts;
 }
 
-function getChildNoteSearchText(file, projectInfo) {
+function getChildNoteSearchText(file, noteInfo) {
   const parts = [file.path, file.basename];
-  if (projectInfo && projectInfo.isProject) {
-    parts.push("project", projectInfo.statusKey, projectInfo.label);
-    if (projectInfo.statusKey === "canceled") {
+  if (noteInfo && noteInfo.kind === "project") {
+    parts.push("project", noteInfo.statusKey, noteInfo.label);
+    if (noteInfo.statusKey === "canceled") {
       parts.push("cancelled");
     }
+  } else if (noteInfo && noteInfo.kind === "area") {
+    parts.push("area", noteInfo.label);
   }
 
   return parts
@@ -3605,8 +3675,8 @@ function getChildNoteSearchText(file, projectInfo) {
     .toLowerCase();
 }
 
-function childNoteMatchesQuery(file, projectInfo, query) {
-  return getChildNoteSearchText(file, projectInfo).includes(query);
+function childNoteMatchesQuery(file, noteInfo, query) {
+  return getChildNoteSearchText(file, noteInfo).includes(query);
 }
 
 class FilteredPickerModal extends Modal {
@@ -3912,13 +3982,10 @@ class FilteredPickerModal extends Modal {
 
 class ChildNotePickerModal extends FilteredPickerModal {
   constructor(app, plugin, childFiles, parentFile) {
-    const projectInfoByPath = new Map(
-      childFiles.map((file) => [file.path, getFileProjectNoteInfo(app, file)]),
+    const noteInfoByPath = new Map(
+      childFiles.map((file) => [file.path, getFileChildNoteInfo(app, file)]),
     );
-    const projectSummaryParts = getChildProjectStatusSummary(
-      childFiles,
-      projectInfoByPath,
-    );
+    const summaryParts = getChildNoteSummary(childFiles, noteInfoByPath);
 
     super(app, {
       items: childFiles,
@@ -3940,27 +4007,22 @@ class ChildNotePickerModal extends FilteredPickerModal {
         if (parentName) {
           text += ` under ${parentName}`;
         }
-        if (projectSummaryParts.length > 0) {
-          text += ` · ${projectSummaryParts.join(" · ")}`;
+        if (summaryParts.length > 0) {
+          text += ` · ${summaryParts.join(" · ")}`;
         }
         return text;
       },
       filterItem: (file, query) =>
-        childNoteMatchesQuery(file, projectInfoByPath.get(file.path), query),
+        childNoteMatchesQuery(file, noteInfoByPath.get(file.path), query),
       renderItem: (file, rowEl, query) => {
-        const projectInfo = projectInfoByPath.get(file.path);
+        const noteInfo = noteInfoByPath.get(file.path);
         const rowIcon = rowEl.createDiv({
           cls:
-            projectInfo && projectInfo.isProject
-              ? `bob-cnp-row-icon is-status-${projectInfo.variant}`
+            noteInfo && noteInfo.decorated
+              ? `bob-cnp-row-icon is-status-${noteInfo.variant}`
               : "bob-cnp-row-icon",
         });
-        applyIcon(
-          rowIcon,
-          projectInfo && projectInfo.isProject
-            ? projectInfo.icon
-            : "file-text",
-        );
+        applyIcon(rowIcon, noteInfo ? noteInfo.icon : "file-text");
 
         const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
         const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
@@ -3968,13 +4030,16 @@ class ChildNotePickerModal extends FilteredPickerModal {
         const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
         appendHighlighted(pathEl, file.path, query);
 
-        if (projectInfo && projectInfo.isProject) {
-          const statusText = [projectInfo.emoji, projectInfo.label]
+        if (noteInfo && noteInfo.decorated) {
+          const statusText = [noteInfo.emoji, noteInfo.label]
             .filter(Boolean)
             .join(" ");
-          const ariaLabel = `Project status: ${projectInfo.label}`;
+          const ariaLabel =
+            noteInfo.kind === "area"
+              ? "Area note"
+              : `Project status: ${noteInfo.label}`;
           const statusEl = rowEl.createDiv({
-            cls: `bob-cnp-row-status is-status-${projectInfo.variant}`,
+            cls: `bob-cnp-row-status is-status-${noteInfo.variant}`,
             attr: {
               "aria-label": ariaLabel,
               title: ariaLabel,

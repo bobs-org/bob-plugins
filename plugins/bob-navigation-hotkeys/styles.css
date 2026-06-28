@@ -262,6 +262,12 @@
   background-color: color-mix(in srgb, var(--color-red) 10%, transparent);
 }
 
+.bob-cnp-row-status.is-status-area {
+  color: var(--color-purple);
+  border-color: color-mix(in srgb, var(--color-purple) 45%, transparent);
+  background-color: color-mix(in srgb, var(--color-purple) 10%, transparent);
+}
+
 .bob-cnp-row-status.is-status-muted {
   color: var(--text-muted);
   border-color: var(--background-modifier-border);
@@ -281,6 +287,11 @@
 .bob-cnp-row-icon.is-status-canceled,
 .bob-cnp-row.is-selected .bob-cnp-row-icon.is-status-canceled {
   color: var(--color-red);
+}
+
+.bob-cnp-row-icon.is-status-area,
+.bob-cnp-row.is-selected .bob-cnp-row-icon.is-status-area {
+  color: var(--color-purple);
 }
 
 .bob-cnp-row-icon.is-status-muted,

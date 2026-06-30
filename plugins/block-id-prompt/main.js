@@ -16,11 +16,14 @@ const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
 const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "B"]);
+const DONE_OBSIDIAN_TASK_STATUSES = new Set(["x", "X", "-"]);
 const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
 const TRAILING_BLOCK_ID_RE = /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
+const INLINE_ID_FIELD_RE = /\[id::([ \t]*)([^\]\n]*?)([ \t]*)\]/;
+const INLINE_DEPENDS_ON_FIELD_RE = /\[dependsOn::([ \t]*)([^\]\n]*?)([ \t]*)\]/g;
 const TASKS_INLINE_FIELD_RE = /[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g;
 const TASKS_EMOJI_DATE_RE =
   /[ \t]*(?:[\u2600-\u27BF]|\uD83C[\uD000-\uDFFF]|\uD83D[\uD000-\uDFFF]|\uD83E[\uD000-\uDFFF])\s*\d{4}-\d{2}-\d{2}/g;
@@ -623,9 +626,8 @@ function taskItemFromLine(lineText, lineNumber) {
   };
 }
 
-function getOpenTasksInContent(content) {
+function forEachTaskPickerContentLine(content, callback) {
   const sourceLines = String(content || "").split("\n");
-  const tasks = [];
   let lineIndex = 0;
   let inFrontmatter = false;
   let inFence = null;
@@ -658,13 +660,144 @@ function getOpenTasksInContent(content) {
       continue;
     }
 
+    callback(line, lineIndex);
+  }
+}
+
+function getOpenTasksInContent(content) {
+  const tasks = [];
+
+  forEachTaskPickerContentLine(content, (line, lineIndex) => {
     const task = taskItemFromLine(line, lineIndex);
     if (task) {
       tasks.push(task);
     }
-  }
+  });
 
   return tasks;
+}
+
+function parseInlineIdField(lineText) {
+  const match = normalizeMarkdownLine(lineText).match(INLINE_ID_FIELD_RE);
+  if (!match) {
+    return null;
+  }
+
+  const value = normalizeText(match[2]);
+  return value || null;
+}
+
+function dedupeNonEmptyValues(values) {
+  const deduped = [];
+  const seen = new Set();
+
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    deduped.push(normalized);
+  }
+
+  return deduped;
+}
+
+function parseDependsOnIds(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  const ids = [];
+  let match;
+
+  INLINE_DEPENDS_ON_FIELD_RE.lastIndex = 0;
+  while ((match = INLINE_DEPENDS_ON_FIELD_RE.exec(line)) !== null) {
+    ids.push(...String(match[2] || "").split(","));
+  }
+
+  return dedupeNonEmptyValues(ids);
+}
+
+function taskIdKeysFromLine(lineText) {
+  return dedupeNonEmptyValues([
+    parseInlineIdField(lineText),
+    getTrailingBlockId(lineText),
+  ]);
+}
+
+function isDoneTaskStatus(status) {
+  return DONE_OBSIDIAN_TASK_STATUSES.has(status);
+}
+
+function buildTaskDependencyIndex(content) {
+  const index = new Map();
+
+  forEachTaskPickerContentLine(content, (line, lineNumber) => {
+    const match = getObsidianTaskLineMatch(line);
+    if (!match) {
+      return;
+    }
+
+    const status = match[1];
+    const entry = {
+      status,
+      done: isDoneTaskStatus(status),
+      title: cleanTaskDisplayText(line),
+      line: lineNumber,
+    };
+
+    taskIdKeysFromLine(line).forEach((key) => {
+      const existing = index.get(key);
+      if (!existing || (!entry.done && existing.done)) {
+        index.set(key, entry);
+      }
+    });
+  });
+
+  return index;
+}
+
+function resolveTaskDependencyState(rawLine, index) {
+  const depIds = parseDependsOnIds(rawLine);
+  const unmetBlockers = [];
+  const unresolvedIds = [];
+  let metCount = 0;
+
+  depIds.forEach((id) => {
+    const dependency = index.get(id);
+    if (!dependency) {
+      unresolvedIds.push(id);
+      return;
+    }
+
+    if (dependency.done) {
+      metCount += 1;
+      return;
+    }
+
+    unmetBlockers.push({
+      id,
+      title: dependency.title,
+      line: dependency.line,
+      status: dependency.status,
+    });
+  });
+
+  return {
+    depIds,
+    unmetBlockers,
+    metCount,
+    unresolvedIds,
+    isBlocked: unmetBlockers.length > 0,
+  };
+}
+
+function collectTaskPickerItems(content) {
+  const dependencyIndex = buildTaskDependencyIndex(content);
+
+  return getOpenTasksInContent(content).map((task) => ({
+    ...task,
+    dependency: resolveTaskDependencyState(task.rawLine, dependencyIndex),
+  }));
 }
 
 function fuzzyIncludes(text, query) {
@@ -1510,6 +1643,40 @@ function taskStatusClass(status) {
   return "todo";
 }
 
+function countBlockedTasks(tasks) {
+  return (tasks || [])
+    .filter((task) => task.dependency && task.dependency.isBlocked)
+    .length;
+}
+
+function blockedTaskCountSuffix(count) {
+  return count > 0 ? ` · ${count} blocked` : "";
+}
+
+function buildBlockedTooltip(dependency) {
+  const blockers = dependency && dependency.unmetBlockers
+    ? dependency.unmetBlockers
+    : [];
+  const visibleBlockers = blockers.slice(0, 3).map((blocker) =>
+    normalizeText(blocker.title) || blocker.id,
+  );
+  const remainingCount = Math.max(0, blockers.length - visibleBlockers.length);
+  let tooltip = `Blocked by: ${visibleBlockers.join(", ")}`;
+
+  if (remainingCount > 0) {
+    tooltip += `, +${remainingCount} more`;
+  }
+
+  const unresolvedCount = dependency && dependency.unresolvedIds
+    ? dependency.unresolvedIds.length
+    : 0;
+  if (unresolvedCount > 0) {
+    tooltip += `; ${unresolvedCount} unresolved`;
+  }
+
+  return tooltip;
+}
+
 class TaskLinkPickerModal extends Modal {
   constructor(app, plugin, source, tasks, targetFile) {
     super(app);
@@ -1668,8 +1835,13 @@ class TaskLinkPickerModal extends Modal {
     const query = this.getQuery();
     this.visibleTasks.forEach((task, index) => {
       const isSelected = index === this.selectedIndex;
+      const isDependencyBlocked = task.dependency && task.dependency.isBlocked;
       const rowEl = this.resultsEl.createDiv({
-        cls: `bid-tlp-row${isSelected ? " is-selected" : ""}`,
+        cls: [
+          "bid-tlp-row",
+          isSelected ? "is-selected" : "",
+          isDependencyBlocked ? "is-dep-blocked" : "",
+        ].filter(Boolean).join(" "),
         attr: {
           role: "option",
           "aria-selected": isSelected ? "true" : "false",
@@ -1699,6 +1871,27 @@ class TaskLinkPickerModal extends Modal {
 
     const metaEl = textEl.createDiv({ cls: "bid-tlp-row-meta" });
     metaEl.createSpan({ text: `Line ${task.line + 1}` });
+    if (task.dependency && task.dependency.isBlocked) {
+      const unmetCount = task.dependency.unmetBlockers.length;
+      const showUnmetCount = task.dependency.depIds.length > 1;
+      const tooltip = buildBlockedTooltip(task.dependency);
+      const chipEl = metaEl.createSpan({
+        cls: "bid-tlp-blocked-chip",
+        attr: {
+          "aria-label": tooltip,
+          title: tooltip,
+        },
+      });
+      const iconEl = chipEl.createSpan({
+        cls: "bid-tlp-blocked-icon",
+        attr: { "aria-hidden": "true" },
+      });
+      applyIcon(iconEl, "lock");
+      chipEl.createSpan({
+        cls: "bid-tlp-blocked-label",
+        text: showUnmetCount ? `Blocked · ${unmetCount}` : "Blocked",
+      });
+    }
 
     const badgeEl = rowEl.createDiv({
       cls: `bid-tlp-badge ${task.existingId ? "is-existing" : "is-create"}`,
@@ -1734,15 +1927,17 @@ class TaskLinkPickerModal extends Modal {
     const shown = this.visibleTasks.length;
     const basename = this.targetFile && this.targetFile.basename;
     if (shown !== total) {
-      this.subtitleEl.textContent = `Showing ${shown} of ${total}`;
+      this.subtitleEl.textContent =
+        `Showing ${shown} of ${total}${blockedTaskCountSuffix(
+          countBlockedTasks(this.visibleTasks),
+        )}`;
       return;
     }
 
-    this.subtitleEl.textContent = `${total} open ${pluralize(
-      total,
-      "task",
-      "tasks",
-    )}${basename ? ` in ${basename}` : ""}`;
+    this.subtitleEl.textContent =
+      `${total} open ${pluralize(total, "task", "tasks")}` +
+      `${basename ? ` in ${basename}` : ""}` +
+      blockedTaskCountSuffix(countBlockedTasks(this.tasks));
   }
 
   clampSelectedIndex(index, length) {
@@ -2181,7 +2376,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
         return;
       }
 
-      const tasks = getOpenTasksInContent(destination.content);
+      const tasks = collectTaskPickerItems(destination.content);
       new TaskLinkPickerModal(
         this.app,
         this,

@@ -11,7 +11,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 
 | Plugin                  | id                       | Version | Description                                                            |
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
-| Block ID Prompt         | `block-id-prompt`        |   1.1.1 | Prompt for custom block IDs and complete wiki block links to open tasks. |
+| Block ID Prompt         | `block-id-prompt`        |   1.2.0 | Prompt for custom block IDs, complete wiki block links to open tasks, and mark dependency-blocked tasks. |
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.0.0 | Expand Bob daily-note snippets and ledger time ranges.                |
 | Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.8.0 | Open parent/alternate notes and set bullet properties, including local task dependencies with a single Sub-projects-style `🔗 **DEPENDS ON:**` navigation bullet, `<Tab>` batch add/remove, sequential block-ID prompts, and a current-note consolidation command. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |

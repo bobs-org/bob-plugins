@@ -21,6 +21,8 @@ const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
+const HIDE_TASK_TAG_RE = /(^|[\s([{])#hide(?=$|[\s)\]},.;:!?])/;
+const HIDE_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#hide(?=$|[\s)\]},.;:!?])/g;
 const TRAILING_BLOCK_ID_RE = /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
 const INLINE_ID_FIELD_RE = /\[id::([ \t]*)([^\]\n]*?)([ \t]*)\]/;
 const INLINE_DEPENDS_ON_FIELD_RE = /\[dependsOn::([ \t]*)([^\]\n]*?)([ \t]*)\]/g;
@@ -576,17 +578,22 @@ function getTrailingBlockId(lineText) {
   return match ? match[1] : null;
 }
 
-function stripTaskTag(text) {
-  return String(text || "").replace(
-    PROJECT_TASK_TAG_GLOBAL_RE,
-    (match, prefix) => {
-      if (!prefix) {
-        return "";
-      }
+function hasHideTaskTag(text) {
+  return HIDE_TASK_TAG_RE.test(String(text || ""));
+}
 
-      return /\s/.test(prefix) ? " " : prefix;
-    },
-  );
+function collapseStrippedTagPrefix(match, prefix) {
+  if (!prefix) {
+    return "";
+  }
+
+  return /\s/.test(prefix) ? " " : prefix;
+}
+
+function stripInternalTaskTags(text) {
+  return String(text || "")
+    .replace(PROJECT_TASK_TAG_GLOBAL_RE, collapseStrippedTagPrefix)
+    .replace(HIDE_TASK_TAG_GLOBAL_RE, collapseStrippedTagPrefix);
 }
 
 function cleanTaskDisplayText(lineText) {
@@ -597,7 +604,7 @@ function cleanTaskDisplayText(lineText) {
     .replace(TRAILING_BLOCK_ID_RE, "")
     .replace(TASKS_INLINE_FIELD_RE, "")
     .replace(TASKS_EMOJI_DATE_RE, "");
-  text = stripTaskTag(text)
+  text = stripInternalTaskTags(text)
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
@@ -614,6 +621,10 @@ function taskItemFromLine(lineText, lineNumber) {
   const status = match[1];
   const body = match[2] || "";
   if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || !PROJECT_TASK_TAG_RE.test(body)) {
+    return null;
+  }
+
+  if (hasHideTaskTag(body)) {
     return null;
   }
 

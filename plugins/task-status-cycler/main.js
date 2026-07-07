@@ -2106,6 +2106,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     });
 
     this.registerChildBulletInputListeners();
+    this.registerTranscludedTaskStartInputListeners();
 
     this.addCommand({
       id: "toggle-task-open-done",
@@ -2987,6 +2988,101 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return "below";
   }
 
+  registerTranscludedTaskStartInputListeners() {
+    // Tracks events already dispatched so the window + document capture
+    // listeners cannot double-start when both fire for the same keydown.
+    this.handledTranscludedTaskStartEvents = new WeakSet();
+
+    const keydownHandler = (event) =>
+      this.handleTranscludedTaskStartPhysicalKeydown(event);
+
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleTranscludedTaskStartPhysicalKeydown(event) {
+    if (!this.isTranscludedTaskStartKeydown(event)) {
+      return false;
+    }
+    return this.dispatchTranscludedTaskStartEvent(event);
+  }
+
+  dispatchTranscludedTaskStartEvent(event) {
+    if (
+      this.handledTranscludedTaskStartEvents &&
+      this.handledTranscludedTaskStartEvents.has(event)
+    ) {
+      return false;
+    }
+
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view) {
+      return false;
+    }
+
+    const cm = this.resolveNormalModeVimCm(view.editor, view);
+    if (!cm) {
+      return false;
+    }
+
+    const activeFile =
+      view.file ||
+      (this.app.workspace &&
+      typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null);
+    const activePath = activeFile && activeFile.path;
+    const candidate = this.getActiveLineTranscludedTaskTarget(
+      view.editor,
+      activePath,
+    );
+    if (!candidate) {
+      return false;
+    }
+
+    if (this.handledTranscludedTaskStartEvents) {
+      this.handledTranscludedTaskStartEvents.add(event);
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+
+    void this.startActiveTranscludedTaskLine(
+      view.editor,
+      activeFile,
+      candidate,
+    ).catch(() => false);
+    return true;
+  }
+
+  isTranscludedTaskStartKeydown(event) {
+    return (
+      !!event &&
+      event.key === "@" &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey
+    );
+  }
+
   getFocusedMarkdownEditorView(event) {
     const workspace = this.app && this.app.workspace;
     const view =
@@ -3160,6 +3256,38 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context);
+  }
+
+  async startActiveTranscludedTaskLine(editor, activeFile, candidate = null) {
+    const activePath = activeFile && activeFile.path;
+    const target =
+      candidate || this.getActiveLineTranscludedTaskTarget(editor, activePath);
+    if (!activePath || !target) {
+      return false;
+    }
+
+    const context = {
+      editor,
+      activePath,
+      originPath: activePath,
+    };
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(target, context, {
+        taskStatusPredicate: isNonTranscludedStartableStatus,
+      });
+    } catch (error) {
+      return false;
+    }
+    if (!resolvedTarget) {
+      return false;
+    }
+
+    return this.replaceResolvedTranscludedTaskLine(
+      resolvedTarget,
+      context,
+      "/",
+    );
   }
 
   // Direct Pomodoro sub-bullet path: when the active line is an embedded

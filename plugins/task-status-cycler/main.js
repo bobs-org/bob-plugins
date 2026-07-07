@@ -113,6 +113,78 @@ function getVimRepeat(actionArgs) {
   return normalizeVimRepeat(actionArgs && actionArgs.repeat);
 }
 
+function getPendingVimRepeat(cm) {
+  const inputState = cm && cm.state && cm.state.vim && cm.state.vim.inputState;
+  const rawRepeat =
+    inputState && typeof inputState.getRepeat === "function"
+      ? inputState.getRepeat()
+      : null;
+  const repeat = Math.floor(Number(rawRepeat));
+
+  return Number.isFinite(repeat) && repeat > 0
+    ? { repeat, explicit: true }
+    : { repeat: 1, explicit: false };
+}
+
+function resetPendingVimInputState(cm, reason = "") {
+  const vimState = cm && cm.state && cm.state.vim;
+  const inputState = vimState && vimState.inputState;
+  if (!vimState || !inputState) {
+    return false;
+  }
+
+  try {
+    if (typeof inputState.constructor === "function") {
+      vimState.inputState = new inputState.constructor();
+      return true;
+    }
+  } catch (error) {
+    // Fall through to best-effort field clearing below.
+  }
+
+  const clearedArrayFields = [
+    "prefixRepeat",
+    "motionRepeat",
+    "keyBuffer",
+  ];
+  const clearedNullFields = [
+    "operator",
+    "operatorArgs",
+    "motion",
+    "motionArgs",
+    "registerName",
+    "selectedCharacter",
+  ];
+  const clearedFalseFields = ["operatorShortcut", "visualLine", "visualBlock"];
+
+  try {
+    for (const field of clearedArrayFields) {
+      if (Object.prototype.hasOwnProperty.call(inputState, field)) {
+        inputState[field] = [];
+      }
+    }
+    for (const field of clearedNullFields) {
+      if (Object.prototype.hasOwnProperty.call(inputState, field)) {
+        inputState[field] = null;
+      }
+    }
+    for (const field of clearedFalseFields) {
+      if (Object.prototype.hasOwnProperty.call(inputState, field)) {
+        inputState[field] = false;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(inputState, "repeat")) {
+      inputState.repeat = null;
+    }
+    if (reason && Object.prototype.hasOwnProperty.call(inputState, "reason")) {
+      inputState.reason = reason;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function replaceTaskStatusSymbol(lineText, nextSymbol) {
   const line = String(lineText || "");
   const match = line.match(TASK_LINE_RE);
@@ -1411,6 +1483,65 @@ function getUnambiguousTranscludedBlockCandidate(candidates, cursorCh) {
     (candidate) => ch >= candidate.startIndex && ch < candidate.endIndex,
   );
   return cursorMatches.length === 1 ? cursorMatches[0] : null;
+}
+
+function getTranscludedTaskTargetFromLine(
+  lineText,
+  sourcePath,
+  lineNumber,
+  cursorCh = null,
+) {
+  if (!sourcePath) {
+    return null;
+  }
+
+  const line = String(lineText || "");
+  const candidates = parseEmbeddedBlockTransclusions(line);
+  const hasCursorCh = cursorCh !== null && cursorCh !== undefined;
+  const candidate = hasCursorCh
+    ? getUnambiguousTranscludedBlockCandidate(candidates, cursorCh)
+    : candidates.length === 1
+      ? candidates[0]
+      : null;
+
+  return candidate
+    ? {
+        ...candidate,
+        sourcePath,
+        activeLine: lineNumber,
+        activeLineText: line,
+      }
+    : null;
+}
+
+function collectTranscludedTaskTargetsInLineRange(
+  lines,
+  sourcePath,
+  startLine,
+  endLine,
+  cursorCh = null,
+) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const firstLine = Math.max(0, Math.floor(Number(startLine) || 0));
+  const lastLine = Math.min(
+    Math.max(firstLine, Math.floor(Number(endLine) || firstLine)),
+    Math.max(sourceLines.length - 1, 0),
+  );
+  const targets = [];
+
+  for (let line = firstLine; line <= lastLine; line += 1) {
+    const target = getTranscludedTaskTargetFromLine(
+      sourceLines[line],
+      sourcePath,
+      line,
+      line === firstLine ? cursorCh : null,
+    );
+    if (target) {
+      targets.push(target);
+    }
+  }
+
+  return targets;
 }
 
 function getStandaloneBlockIdRegex(blockId) {
@@ -3552,6 +3683,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return false;
     }
 
+    const pendingRepeat = getPendingVimRepeat(cm);
     const activeFile =
       view.file ||
       (this.app.workspace &&
@@ -3577,11 +3709,21 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       event.stopImmediatePropagation();
     }
 
-    void this.toggleActiveTranscludedTaskStartState(
-      view.editor,
-      activeFile,
-      candidate,
-    ).catch(() => false);
+    if (pendingRepeat.explicit) {
+      resetPendingVimInputState(cm, "counted-transcluded-task-start");
+      void this.toggleTranscludedTaskStartStateRange(
+        view.editor,
+        activeFile,
+        candidate,
+        pendingRepeat.repeat,
+      ).catch(() => false);
+    } else {
+      void this.toggleActiveTranscludedTaskStartState(
+        view.editor,
+        activeFile,
+        candidate,
+      ).catch(() => false);
+    }
     return true;
   }
 
@@ -3807,6 +3949,79 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       context,
       nextSymbol,
     );
+  }
+
+  async toggleTranscludedTaskStartStateRange(
+    editor,
+    activeFile,
+    activeCandidate,
+    repeat,
+  ) {
+    const activePath = activeFile && activeFile.path;
+    if (!activePath || !activeCandidate) {
+      return false;
+    }
+
+    const lines = this.getEditorLineTexts(editor);
+    const startLine = Math.max(
+      0,
+      Math.floor(Number(activeCandidate.activeLine) || 0),
+    );
+    const lineCount = this.getEditorLineCount(editor);
+    const lastLine = Math.max(0, lineCount - 1);
+    const endLine = Math.min(startLine + Math.max(0, repeat), lastLine);
+    const targets = collectTranscludedTaskTargetsInLineRange(
+      lines,
+      activePath,
+      startLine,
+      endLine,
+      activeCandidate.startIndex,
+    );
+    const context = {
+      editor,
+      activePath,
+      originPath: activePath,
+    };
+    const seenResolvedTargets = new Set();
+    let changed = false;
+
+    for (const target of targets) {
+      let resolvedTarget;
+      try {
+        resolvedTarget = await this.resolveTranscludedBlockTarget(target, context, {
+          taskStatusPredicate: isTranscludedStartToggleableStatus,
+        });
+      } catch (error) {
+        continue;
+      }
+      if (!resolvedTarget || !resolvedTarget.file) {
+        continue;
+      }
+
+      const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
+      if (seenResolvedTargets.has(seenKey)) {
+        continue;
+      }
+      seenResolvedTargets.add(seenKey);
+
+      const nextSymbol = getNextTranscludedStartToggleSymbol(
+        resolvedTarget.taskStatus,
+      );
+      if (!nextSymbol) {
+        continue;
+      }
+
+      const wrote = await this.replaceResolvedTranscludedTaskLine(
+        resolvedTarget,
+        context,
+        nextSymbol,
+      );
+      if (wrote) {
+        changed = true;
+      }
+    }
+
+    return changed;
   }
 
   // Direct Pomodoro sub-bullet path: when the active line is an embedded
@@ -4670,21 +4885,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return null;
     }
 
-    const lineText = editor.getLine(cursor.line);
-    const candidates = parseEmbeddedBlockTransclusions(lineText);
-    const candidate = getUnambiguousTranscludedBlockCandidate(
-      candidates,
+    return getTranscludedTaskTargetFromLine(
+      editor.getLine(cursor.line),
+      sourcePath,
+      cursor.line,
       cursor.ch,
     );
-
-    return candidate
-      ? {
-          ...candidate,
-          sourcePath,
-          activeLine: cursor.line,
-          activeLineText: lineText,
-        }
-      : null;
   }
 
   getActiveLineBareNonTranscludedTaskTarget(editor, sourcePath) {
@@ -5447,6 +5653,8 @@ module.exports.helpers = {
   getTaskCheckboxMarkerToggle,
   getTaskStatusForLine,
   getVimRepeat,
+  getPendingVimRepeat,
+  resetPendingVimInputState,
   isPomodoroTaskLine,
   isLineInMarkdownSectionDirectBody,
   isProperObsidianTaskLine,
@@ -5466,6 +5674,8 @@ module.exports.helpers = {
   lineHasCreatedField,
   lineMatchesTasksGlobalFilterText,
   parseEmbeddedBlockTransclusions,
+  collectTranscludedTaskTargetsInLineRange,
+  getTranscludedTaskTargetFromLine,
   parseMarkdownHeadingLine,
   parseNonEmbeddedBlockLinks,
   parseTranscludedBlockTarget,

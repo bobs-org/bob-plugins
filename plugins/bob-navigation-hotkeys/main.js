@@ -1796,6 +1796,78 @@ function hasVimRepeat(actionArgs) {
   return actionArgs.repeat !== undefined && actionArgs.repeat !== null;
 }
 
+function getPendingVimRepeat(cm) {
+  const inputState = cm && cm.state && cm.state.vim && cm.state.vim.inputState;
+  const rawRepeat =
+    inputState && typeof inputState.getRepeat === "function"
+      ? inputState.getRepeat()
+      : null;
+  const repeat = Math.floor(numericOrDefault(rawRepeat, Number.NaN));
+
+  return Number.isFinite(repeat) && repeat > 0
+    ? { repeat, explicit: true }
+    : { repeat: 1, explicit: false };
+}
+
+function resetPendingVimInputState(cm, reason = "") {
+  const vimState = cm && cm.state && cm.state.vim;
+  const inputState = vimState && vimState.inputState;
+  if (!vimState || !inputState) {
+    return false;
+  }
+
+  try {
+    if (typeof inputState.constructor === "function") {
+      vimState.inputState = new inputState.constructor();
+      return true;
+    }
+  } catch (error) {
+    // Fall through to best-effort field clearing below.
+  }
+
+  const clearedArrayFields = [
+    "prefixRepeat",
+    "motionRepeat",
+    "keyBuffer",
+  ];
+  const clearedNullFields = [
+    "operator",
+    "operatorArgs",
+    "motion",
+    "motionArgs",
+    "registerName",
+    "selectedCharacter",
+  ];
+  const clearedFalseFields = ["operatorShortcut", "visualLine", "visualBlock"];
+
+  try {
+    for (const field of clearedArrayFields) {
+      if (Object.prototype.hasOwnProperty.call(inputState, field)) {
+        inputState[field] = [];
+      }
+    }
+    for (const field of clearedNullFields) {
+      if (Object.prototype.hasOwnProperty.call(inputState, field)) {
+        inputState[field] = null;
+      }
+    }
+    for (const field of clearedFalseFields) {
+      if (Object.prototype.hasOwnProperty.call(inputState, field)) {
+        inputState[field] = false;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(inputState, "repeat")) {
+      inputState.repeat = null;
+    }
+    if (reason && Object.prototype.hasOwnProperty.call(inputState, "reason")) {
+      inputState.reason = reason;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function getVimTargetOffset(actionArgs, direction, defaultOffset) {
   if (!hasVimRepeat(actionArgs)) {
     return defaultOffset;
@@ -4264,6 +4336,73 @@ function toggleLineTransclusions(line) {
     changes,
     found: true,
     changed: changes.length > 0,
+  };
+}
+
+function getTransclusionToggleChanges(targets, removeMarkers) {
+  return (Array.isArray(targets) ? targets : [])
+    .filter((target) => removeMarkers || !target.transcluded)
+    .map((target) => ({
+      index: target.markerIndex,
+      deleteCount: removeMarkers ? 1 : 0,
+      insertText: removeMarkers ? "" : "!",
+      delta: removeMarkers ? -1 : 1,
+    }));
+}
+
+function toggleLineRangeTransclusions(lines, startLine, endLine) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const firstLine = Math.max(
+    0,
+    Math.floor(numericOrDefault(startLine, 0)),
+  );
+  const lastLine = Math.min(
+    Math.max(firstLine, Math.floor(numericOrDefault(endLine, firstLine))),
+    Math.max(sourceLines.length - 1, 0),
+  );
+  const lineTargets = [];
+
+  for (let line = firstLine; line <= lastLine; line += 1) {
+    const lineText = String(sourceLines[line] || "");
+    const targets = findTransclusionToggleTargets(lineText);
+    if (targets.length > 0) {
+      lineTargets.push({ line, lineText, targets });
+    }
+  }
+
+  if (lineTargets.length === 0) {
+    return {
+      found: false,
+      changed: false,
+      removeMarkers: false,
+      lineTargets,
+      changesByLine: [],
+    };
+  }
+
+  const removeMarkers = lineTargets.every((entry) =>
+    entry.targets.every((target) => target.transcluded),
+  );
+  const changesByLine = lineTargets
+    .map((entry) => {
+      const changes = getTransclusionToggleChanges(entry.targets, removeMarkers);
+      return {
+        ...entry,
+        changes,
+        nextLineText:
+          changes.length > 0
+            ? applyTransclusionChanges(entry.lineText, changes)
+            : entry.lineText,
+      };
+    })
+    .filter((entry) => entry.changes.length > 0);
+
+  return {
+    found: true,
+    changed: changesByLine.length > 0,
+    removeMarkers,
+    lineTargets,
+    changesByLine,
   };
 }
 
@@ -6997,6 +7136,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     this.registerOpenTaskJumpInputListeners();
+    this.registerCountedTransclusionToggleInputListeners();
     this.registerClearSearchHighlightInputListeners();
 
     this.register(() => {
@@ -7040,6 +7180,67 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     );
     setEditorCursorSafely(cm, cursor.line, nextCh);
 
+    return true;
+  }
+
+  toggleCountedLineTransclusions(editor, cursor, repeat) {
+    const normalizedCursor = normalizePosition(cursor);
+    if (!normalizedCursor || !editor) {
+      return false;
+    }
+
+    const firstLine = getEditorFirstLine(editor);
+    const lastLine = getEditorLastLine(editor);
+    if (lastLine === null) {
+      return false;
+    }
+
+    const startLine = Math.max(
+      firstLine === null ? 0 : firstLine,
+      Math.min(normalizedCursor.line, lastLine),
+    );
+    const endLine = Math.min(startLine + Math.max(0, repeat), lastLine);
+    const lines = [];
+
+    for (let line = startLine; line <= endLine; line += 1) {
+      const lineText = getEditorLine(editor, line);
+      lines[line] = lineText === null ? "" : lineText;
+    }
+
+    const result = toggleLineRangeTransclusions(lines, startLine, endLine);
+    if (!result.found || !result.changed) {
+      return false;
+    }
+
+    for (const change of result.changesByLine) {
+      if (
+        !replaceEditorLine(
+          editor,
+          change.line,
+          change.lineText,
+          change.nextLineText,
+        )
+      ) {
+        return false;
+      }
+    }
+
+    const activeChange = result.changesByLine.find(
+      (change) => change.line === startLine,
+    );
+    const nextActiveLine =
+      activeChange && typeof activeChange.nextLineText === "string"
+        ? activeChange.nextLineText
+        : getEditorLine(editor, startLine) || "";
+    const nextCh = activeChange
+      ? adjustCursorChForTransclusionChanges(
+          normalizedCursor.ch,
+          activeChange.changes,
+          nextActiveLine.length,
+        )
+      : Math.min(Math.max(normalizedCursor.ch, 0), nextActiveLine.length);
+
+    setEditorCursorSafely(editor, startLine, nextCh);
     return true;
   }
 
@@ -7491,6 +7692,95 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         target.removeEventListener("keydown", keydownHandler, true);
       });
     }
+  }
+
+  registerCountedTransclusionToggleInputListeners() {
+    this.handledCountedTransclusionToggleEvents = new WeakSet();
+
+    const keydownHandler = (event) =>
+      this.handleCountedTransclusionTogglePhysicalKeydown(event);
+
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleCountedTransclusionTogglePhysicalKeydown(event) {
+    if (!this.isCountedTransclusionToggleKeydown(event)) {
+      return false;
+    }
+
+    if (
+      this.handledCountedTransclusionToggleEvents &&
+      this.handledCountedTransclusionToggleEvents.has(event)
+    ) {
+      return false;
+    }
+
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
+      return false;
+    }
+
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const pendingRepeat = getPendingVimRepeat(cm);
+    if (!pendingRepeat.explicit) {
+      return false;
+    }
+
+    const cursor = getEditorCursor(view.editor);
+    if (!cursor) {
+      return false;
+    }
+
+    const activeLineText = getEditorLine(view.editor, cursor.line);
+    if (
+      activeLineText === null ||
+      findTransclusionToggleTargets(activeLineText).length === 0
+    ) {
+      return false;
+    }
+
+    if (this.handledCountedTransclusionToggleEvents) {
+      this.handledCountedTransclusionToggleEvents.add(event);
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+
+    resetPendingVimInputState(cm, "counted-transclusion-toggle");
+    return this.toggleCountedLineTransclusions(
+      view.editor,
+      cursor,
+      pendingRepeat.repeat,
+    );
+  }
+
+  isCountedTransclusionToggleKeydown(event) {
+    return (
+      !!event &&
+      event.key === "!" &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey
+    );
   }
 
   handleClearSearchHighlightKeydown(event) {
@@ -10134,6 +10424,8 @@ module.exports.helpers = {
   normalizeVimRepeat,
   getVimRepeat,
   hasVimRepeat,
+  getPendingVimRepeat,
+  resetPendingVimInputState,
   getVimTargetOffset,
   getVimOffsetTargetLine,
   getVimEnterTargetLine,
@@ -10203,6 +10495,7 @@ module.exports.helpers = {
   setEditorCursorSafely,
   findTransclusionToggleTargets,
   toggleLineTransclusions,
+  toggleLineRangeTransclusions,
   adjustCursorChForTransclusionChanges,
   deferToNextFrame,
   cancelDeferred,

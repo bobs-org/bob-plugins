@@ -173,6 +173,10 @@ function isNonTranscludedStartableStatus(taskStatus) {
   return !!taskStatus && taskStatus.symbol === " ";
 }
 
+function isTranscludedStartToggleableStatus(taskStatus) {
+  return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "/");
+}
+
 function isTopLevelTaskLine(lineText) {
   return TOP_LEVEL_TASK_LINE_RE.test(String(lineText || ""));
 }
@@ -191,6 +195,14 @@ function getNextOpenDoneSymbol(taskStatus) {
   }
 
   return taskStatus.symbol === " " ? "x" : " ";
+}
+
+function getNextTranscludedStartToggleSymbol(taskStatus) {
+  if (!isTranscludedStartToggleableStatus(taskStatus)) {
+    return null;
+  }
+
+  return taskStatus.symbol === " " ? "/" : " ";
 }
 
 function normalizeTaskMetadataSpacing(lineText) {
@@ -3065,7 +3077,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       event.stopImmediatePropagation();
     }
 
-    void this.startActiveTranscludedTaskLine(
+    void this.toggleActiveTranscludedTaskStartState(
       view.editor,
       activeFile,
       candidate,
@@ -3258,7 +3270,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context);
   }
 
-  async startActiveTranscludedTaskLine(editor, activeFile, candidate = null) {
+  async toggleActiveTranscludedTaskStartState(editor, activeFile, candidate = null) {
     const activePath = activeFile && activeFile.path;
     const target =
       candidate || this.getActiveLineTranscludedTaskTarget(editor, activePath);
@@ -3274,7 +3286,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     let resolvedTarget;
     try {
       resolvedTarget = await this.resolveTranscludedBlockTarget(target, context, {
-        taskStatusPredicate: isNonTranscludedStartableStatus,
+        taskStatusPredicate: isTranscludedStartToggleableStatus,
       });
     } catch (error) {
       return false;
@@ -3283,10 +3295,17 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return false;
     }
 
+    const nextSymbol = getNextTranscludedStartToggleSymbol(
+      resolvedTarget.taskStatus,
+    );
+    if (!nextSymbol) {
+      return false;
+    }
+
     return this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
-      "/",
+      nextSymbol,
     );
   }
 
@@ -4576,6 +4595,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return isNonTranscludedStartableStatus(taskStatus);
     }
 
+    if (forcedNextSymbol === " ") {
+      return !!taskStatus && taskStatus.symbol === "/";
+    }
+
     return isOpenDoneTaskStatus(taskStatus);
   }
 
@@ -4902,6 +4925,7 @@ module.exports.helpers = {
   getLineTextFromSourceText,
   getListItemBlockRange,
   getNextOpenDoneSymbol,
+  getNextTranscludedStartToggleSymbol,
   getNextSectionBulletInsertion,
   getObsidianTaskToggle,
   getObsidianTaskToggleCursorCh,
@@ -4926,6 +4950,7 @@ module.exports.helpers = {
   isOpenDoneTaskStatus,
   isNonTranscludedStartResolvableStatus,
   isNonTranscludedStartableStatus,
+  isTranscludedStartToggleableStatus,
   isTranscludedCompletionClosableStatus,
   isTranscludedCompletionTraversableStatus,
   isTopLevelTaskLine,

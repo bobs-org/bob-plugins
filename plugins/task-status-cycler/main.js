@@ -6,6 +6,10 @@ const TASKS_GLOBAL_FILTER = "#task";
 const FIXED_SYMBOLS = [" ", "/", "B", "x", "-"];
 const QUERY_CODE_BLOCK_LANGS = new Set(["tasks", "dataview", "dataviewjs"]);
 const DEFAULT_HALF_PAGE_LINES = 20;
+const TASKS_QUERY_RESULT_SELECTOR = "ul.plugin-tasks-query-result";
+const TASKS_BLOCK_SELECTOR = ".block-language-tasks";
+const RENDERED_TASKS_SCROLL_PADDING_PX = 8;
+const RENDERED_TASKS_SCROLL_EDGE_EPSILON_PX = 2;
 const TASK_LINE_RE = /^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[)([^\]\n])(\])/;
 const CONTINUATION_TASK_LINE_RE =
   /^([ \t]*)(?:[-+*]|\d+[.)])[ \t]+\[[^\]\n]\](?:[ \t]+|$)/;
@@ -1982,6 +1986,179 @@ function getEditorViewFromEditor(editorOrCm) {
   return editorView;
 }
 
+function finiteNumberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function clampNumber(value, min, max) {
+  const safeMin = finiteNumberOrNull(min);
+  const safeMax = finiteNumberOrNull(max);
+  const lower = safeMin === null ? 0 : safeMin;
+  const upper =
+    safeMax === null ? Number.POSITIVE_INFINITY : Math.max(lower, safeMax);
+  return Math.min(Math.max(Number(value) || 0, lower), upper);
+}
+
+function getElementRect(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") {
+    return null;
+  }
+
+  try {
+    const rect = element.getBoundingClientRect();
+    if (
+      !rect ||
+      !Number.isFinite(rect.top) ||
+      !Number.isFinite(rect.bottom) ||
+      rect.bottom <= rect.top
+    ) {
+      return null;
+    }
+
+    return rect;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getVerticalIntersectionHeight(rect, viewportRect) {
+  if (!rect || !viewportRect) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.min(rect.bottom, viewportRect.bottom) -
+      Math.max(rect.top, viewportRect.top),
+  );
+}
+
+function getScrollDOMMaxScrollTop(scrollDOM) {
+  if (!scrollDOM) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const scrollHeight = finiteNumberOrNull(scrollDOM.scrollHeight);
+  const clientHeight = finiteNumberOrNull(scrollDOM.clientHeight);
+  if (scrollHeight === null || clientHeight === null || clientHeight <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return Math.max(0, scrollHeight - clientHeight);
+}
+
+function getRenderedTasksQueryScrollBounds(scrollDOM, queryRect, viewportRect) {
+  if (!scrollDOM || !queryRect || !viewportRect) {
+    return null;
+  }
+
+  const currentScrollTop = finiteNumberOrNull(scrollDOM.scrollTop);
+  const viewportHeight =
+    finiteNumberOrNull(scrollDOM.clientHeight) ||
+    finiteNumberOrNull(viewportRect.height) ||
+    viewportRect.bottom - viewportRect.top;
+  if (
+    currentScrollTop === null ||
+    !Number.isFinite(viewportHeight) ||
+    viewportHeight <= 0
+  ) {
+    return null;
+  }
+
+  const queryTop = currentScrollTop + queryRect.top - viewportRect.top;
+  const queryBottom = currentScrollTop + queryRect.bottom - viewportRect.top;
+  if (
+    !Number.isFinite(queryTop) ||
+    !Number.isFinite(queryBottom) ||
+    queryBottom <= queryTop
+  ) {
+    return null;
+  }
+
+  const maxScrollTop = getScrollDOMMaxScrollTop(scrollDOM);
+  const startScrollTop = clampNumber(
+    queryTop - RENDERED_TASKS_SCROLL_PADDING_PX,
+    0,
+    maxScrollTop,
+  );
+  const endScrollTop = clampNumber(
+    Math.max(
+      startScrollTop,
+      queryBottom - viewportHeight + RENDERED_TASKS_SCROLL_PADDING_PX,
+    ),
+    0,
+    maxScrollTop,
+  );
+
+  return {
+    currentScrollTop,
+    startScrollTop,
+    endScrollTop,
+    maxScrollTop,
+    viewportHeight,
+  };
+}
+
+function getRenderedTasksQueryScrollPlan(scrollDOM, queryRect, viewportRect, direction) {
+  const bounds = getRenderedTasksQueryScrollBounds(
+    scrollDOM,
+    queryRect,
+    viewportRect,
+  );
+  if (!bounds) {
+    return null;
+  }
+
+  const normalizedDirection = direction >= 0 ? 1 : -1;
+  const scrollAmount = Math.max(1, Math.floor(bounds.viewportHeight / 2));
+  let targetScrollTop;
+
+  if (normalizedDirection > 0) {
+    if (
+      bounds.currentScrollTop >=
+      bounds.endScrollTop - RENDERED_TASKS_SCROLL_EDGE_EPSILON_PX
+    ) {
+      return null;
+    }
+
+    const proposedScrollTop = bounds.currentScrollTop + scrollAmount;
+    targetScrollTop =
+      bounds.currentScrollTop <
+      bounds.startScrollTop - RENDERED_TASKS_SCROLL_EDGE_EPSILON_PX
+        ? Math.min(proposedScrollTop, bounds.startScrollTop)
+        : Math.min(proposedScrollTop, bounds.endScrollTop);
+  } else {
+    if (
+      bounds.currentScrollTop <=
+      bounds.startScrollTop + RENDERED_TASKS_SCROLL_EDGE_EPSILON_PX
+    ) {
+      return null;
+    }
+
+    const proposedScrollTop = bounds.currentScrollTop - scrollAmount;
+    targetScrollTop =
+      bounds.currentScrollTop >
+      bounds.endScrollTop + RENDERED_TASKS_SCROLL_EDGE_EPSILON_PX
+        ? Math.max(proposedScrollTop, bounds.endScrollTop)
+        : Math.max(proposedScrollTop, bounds.startScrollTop);
+  }
+
+  targetScrollTop = clampNumber(targetScrollTop, 0, bounds.maxScrollTop);
+  if (
+    Math.abs(targetScrollTop - bounds.currentScrollTop) <
+    RENDERED_TASKS_SCROLL_EDGE_EPSILON_PX
+  ) {
+    return null;
+  }
+
+  return {
+    ...bounds,
+    direction: normalizedDirection,
+    targetScrollTop,
+  };
+}
+
 function editorViewPositionFromLineCh(editorView, line, ch) {
   const doc = editorView && editorView.state && editorView.state.doc;
   if (!doc || typeof doc.line !== "function") {
@@ -2088,6 +2265,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     // placeholder after a completion keymap. Tracked so repeated presses cancel
     // the previous pending center instead of stacking stale scrolls.
     this.pendingPomodoroCenterDeferred = null;
+    this.pendingRenderedTasksScrollDeferred = null;
 
     this.addCommand({
       id: "cycle-task-status-forward",
@@ -2176,6 +2354,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     if (this.pendingPomodoroCenterDeferred) {
       cancelDeferred(this.pendingPomodoroCenterDeferred);
       this.pendingPomodoroCenterDeferred = null;
+    }
+    if (this.pendingRenderedTasksScrollDeferred) {
+      cancelDeferred(this.pendingRenderedTasksScrollDeferred);
+      this.pendingRenderedTasksScrollDeferred = null;
     }
     if (this.activeEditorDependencyTimer) {
       window.clearTimeout(this.activeEditorDependencyTimer);
@@ -2679,6 +2861,18 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       lastLine,
     );
     const queryBlocks = this.findQueryCodeBlocks(cm);
+    if (
+      this.handleRenderedTasksQueryHalfPageScroll(cm, direction, {
+        cursor,
+        firstLine,
+        lastLine,
+        queryBlocks,
+        rawTargetLine,
+      })
+    ) {
+      return;
+    }
+
     const targetLine = this.findNearestNonQueryLine(
       queryBlocks,
       rawTargetLine,
@@ -2693,6 +2887,312 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     cm.setCursor(targetLine, targetCh);
     if (typeof cm.scrollIntoView === "function") {
       cm.scrollIntoView({ line: targetLine, ch: targetCh });
+    }
+  }
+
+  handleRenderedTasksQueryHalfPageScroll(cm, direction, context) {
+    const editorView = getEditorViewFromEditor(cm);
+    const scrollDOM = editorView && editorView.scrollDOM;
+    if (!editorView || !scrollDOM) {
+      return false;
+    }
+
+    const renderedQuery = this.findActiveRenderedTasksQuery(
+      editorView,
+      scrollDOM,
+      direction,
+    );
+    if (!renderedQuery) {
+      return false;
+    }
+
+    const sourceCrossesQuery = this.sourceMovementCrossesQueryBlock(
+      context.queryBlocks,
+      context.cursor.line,
+      context.rawTargetLine,
+    );
+    const nearDistance =
+      finiteNumberOrNull(scrollDOM.clientHeight) || DEFAULT_HALF_PAGE_LINES;
+    const renderedQueryIsNear =
+      renderedQuery.intersectionHeight > 0 ||
+      renderedQuery.distance <= nearDistance ||
+      sourceCrossesQuery;
+    if (!renderedQueryIsNear) {
+      return false;
+    }
+
+    const scrollPlan = getRenderedTasksQueryScrollPlan(
+      scrollDOM,
+      renderedQuery.rect,
+      renderedQuery.viewportRect,
+      direction,
+    );
+    if (!scrollPlan) {
+      return false;
+    }
+
+    this.repairCursorOutsideQueryFence(
+      cm,
+      context.queryBlocks,
+      context.cursor,
+      direction,
+      context.firstLine,
+      context.lastLine,
+    );
+    this.applyRenderedTasksQueryScroll(scrollDOM, scrollPlan.targetScrollTop);
+    return true;
+  }
+
+  findActiveRenderedTasksQuery(editorView, scrollDOM, direction) {
+    const viewportRect = getElementRect(scrollDOM);
+    if (!viewportRect) {
+      return null;
+    }
+
+    const contexts = this.findRenderedTasksQueryContexts(
+      editorView,
+      viewportRect,
+    );
+    if (contexts.length === 0) {
+      return null;
+    }
+
+    const normalizedDirection = direction >= 0 ? 1 : -1;
+    const visible = [];
+    let nearest = null;
+
+    for (const context of contexts) {
+      const intersectionHeight = getVerticalIntersectionHeight(
+        context.rect,
+        viewportRect,
+      );
+      if (intersectionHeight > 0) {
+        visible.push({ ...context, intersectionHeight, distance: 0 });
+        continue;
+      }
+
+      let distance = null;
+      if (normalizedDirection > 0 && context.rect.top >= viewportRect.bottom) {
+        distance = context.rect.top - viewportRect.bottom;
+      } else if (
+        normalizedDirection < 0 &&
+        context.rect.bottom <= viewportRect.top
+      ) {
+        distance = viewportRect.top - context.rect.bottom;
+      }
+
+      if (distance === null) {
+        continue;
+      }
+
+      const candidate = { ...context, intersectionHeight: 0, distance };
+      if (!nearest || candidate.distance < nearest.distance) {
+        nearest = candidate;
+      }
+    }
+
+    if (visible.length > 0) {
+      visible.sort((left, right) => {
+        const intersectionDelta =
+          right.intersectionHeight - left.intersectionHeight;
+        if (intersectionDelta !== 0) {
+          return intersectionDelta;
+        }
+
+        return normalizedDirection > 0
+          ? left.rect.top - right.rect.top
+          : right.rect.bottom - left.rect.bottom;
+      });
+      return visible[0];
+    }
+
+    return nearest;
+  }
+
+  findRenderedTasksQueryContexts(editorView, viewportRect) {
+    const root = editorView && editorView.dom;
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return [];
+    }
+
+    let resultLists;
+    try {
+      resultLists = Array.from(root.querySelectorAll(TASKS_QUERY_RESULT_SELECTOR));
+    } catch (error) {
+      return [];
+    }
+
+    const seenContainers = new Set();
+    const contexts = [];
+    for (const resultList of resultLists) {
+      let container = resultList;
+      try {
+        if (resultList && typeof resultList.closest === "function") {
+          container = resultList.closest(TASKS_BLOCK_SELECTOR) || resultList;
+        }
+      } catch (error) {
+        container = resultList;
+      }
+
+      if (!container || seenContainers.has(container)) {
+        continue;
+      }
+      seenContainers.add(container);
+
+      const rect = getElementRect(container);
+      if (!rect) {
+        continue;
+      }
+
+      contexts.push({
+        element: container,
+        resultList,
+        rect,
+        viewportRect,
+      });
+    }
+
+    return contexts;
+  }
+
+  sourceMovementCrossesQueryBlock(blocks, startLine, endLine) {
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+      return false;
+    }
+
+    const fromLine = Math.min(startLine, endLine);
+    const toLine = Math.max(startLine, endLine);
+    return blocks.some(
+      (block) => block.endLine >= fromLine && block.startLine <= toLine,
+    );
+  }
+
+  repairCursorOutsideQueryFence(
+    cm,
+    blocks,
+    cursor,
+    direction,
+    firstLine,
+    lastLine,
+  ) {
+    if (!cursor || typeof cursor.line !== "number") {
+      return false;
+    }
+
+    const block = this.findQueryCodeBlockAtLine(blocks, cursor.line);
+    if (!block) {
+      return false;
+    }
+
+    const targetLine = this.getQueryFenceParkingLine(
+      blocks,
+      block,
+      direction,
+      firstLine,
+      lastLine,
+    );
+    if (targetLine === null) {
+      return false;
+    }
+
+    const targetCh = this.getCodeMirrorLineClampedCh(cm, targetLine, cursor.ch);
+    return this.setCodeMirrorCursor(cm, targetLine, targetCh);
+  }
+
+  getQueryFenceParkingLine(blocks, block, direction, firstLine, lastLine) {
+    const candidates =
+      direction >= 0
+        ? [block.startLine - 1, block.endLine + 1]
+        : [block.endLine + 1, block.startLine - 1];
+
+    for (const candidate of candidates) {
+      if (
+        candidate >= firstLine &&
+        candidate <= lastLine &&
+        !this.lineIsInsideAnyQueryCodeBlock(blocks, candidate)
+      ) {
+        return candidate;
+      }
+    }
+
+    const fallback = this.findNearestNonQueryLine(
+      blocks,
+      direction >= 0 ? block.startLine : block.endLine,
+      direction,
+      firstLine,
+      lastLine,
+    );
+    if (
+      fallback === null ||
+      this.lineIsInsideAnyQueryCodeBlock(blocks, fallback)
+    ) {
+      return null;
+    }
+
+    return fallback;
+  }
+
+  getCodeMirrorLineClampedCh(cm, line, ch) {
+    const lineText =
+      cm && typeof cm.getLine === "function" ? cm.getLine(line) || "" : "";
+    return Math.min(Math.max(Math.floor(Number(ch) || 0), 0), lineText.length);
+  }
+
+  setCodeMirrorCursor(cm, line, ch) {
+    if (!cm || typeof cm.setCursor !== "function") {
+      return false;
+    }
+
+    try {
+      cm.setCursor(line, ch);
+      return true;
+    } catch (error) {
+      // Fall through to the object-shaped Obsidian editor API below.
+    }
+
+    try {
+      cm.setCursor({ line, ch });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  applyRenderedTasksQueryScroll(scrollDOM, scrollTop) {
+    cancelDeferred(this.pendingRenderedTasksScrollDeferred);
+    this.setScrollDOMScrollTop(scrollDOM, scrollTop);
+    this.pendingRenderedTasksScrollDeferred = deferToNextFrame(() => {
+      this.pendingRenderedTasksScrollDeferred = null;
+      this.setScrollDOMScrollTop(scrollDOM, scrollTop);
+    });
+  }
+
+  setScrollDOMScrollTop(scrollDOM, scrollTop) {
+    if (!scrollDOM) {
+      return false;
+    }
+
+    const targetScrollTop = clampNumber(
+      scrollTop,
+      0,
+      getScrollDOMMaxScrollTop(scrollDOM),
+    );
+    const scrollLeft = finiteNumberOrNull(scrollDOM.scrollLeft) || 0;
+
+    if (typeof scrollDOM.scrollTo === "function") {
+      try {
+        scrollDOM.scrollTo({ top: targetScrollTop, left: scrollLeft });
+        return true;
+      } catch (error) {
+        // Fall through to direct assignment.
+      }
+    }
+
+    try {
+      scrollDOM.scrollTop = targetScrollTop;
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 
@@ -4915,6 +5415,9 @@ module.exports.helpers = {
   getBareNonEmbeddedBlockLinkTargetFromListItem,
   getCursorChAfterTextEdits,
   getEditorViewFromEditor,
+  getRenderedTasksQueryScrollBounds,
+  getRenderedTasksQueryScrollPlan,
+  getVerticalIntersectionHeight,
   getAdjacentBulletFormatState,
   getPlainBulletFormatToggle,
   getPlainListItemFormattingTarget,

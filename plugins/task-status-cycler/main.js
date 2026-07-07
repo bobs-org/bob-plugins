@@ -147,6 +147,19 @@ function isOpenDoneTaskStatus(taskStatus) {
   return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "x");
 }
 
+function isTranscludedCompletionTraversableStatus(taskStatus) {
+  return (
+    !!taskStatus &&
+    (taskStatus.symbol === " " ||
+      taskStatus.symbol === "/" ||
+      taskStatus.symbol === "x")
+  );
+}
+
+function isTranscludedCompletionClosableStatus(taskStatus) {
+  return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "/");
+}
+
 function isTopLevelTaskLine(lineText) {
   return TOP_LEVEL_TASK_LINE_RE.test(String(lineText || ""));
 }
@@ -3092,8 +3105,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
   // Direct Pomodoro sub-bullet path: when the active line is an embedded
   // transcluded task link under a Pomodoro task, recursively force that selected
-  // target tree to done, mirroring Pomodoro completion semantics (open -> done,
-  // already-done roots stay done but are still traversed for open descendants).
+  // target tree to done, mirroring Pomodoro completion semantics (eligible
+  // non-done targets -> done, already-done roots stay done but are still
+  // traversed for eligible descendants).
   // Unlike full Pomodoro completion this does not touch the local Pomodoro line,
   // create a placeholder, carry bullets forward, or move the cursor. Returns
   // true once the root target resolved as such a sub-bullet transclusion, even
@@ -3123,6 +3137,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       resolvedTarget = await this.resolveTranscludedBlockTarget(
         target.candidate,
         context,
+        {
+          taskStatusPredicate: isTranscludedCompletionTraversableStatus,
+        },
       );
     } catch (error) {
       return false;
@@ -3216,11 +3233,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   // is resolved relative to context.originPath; descendant embedded
   // transclusions are followed with originPath rebased to the resolved file so
   // same-file `![[#^child]]` links resolve correctly. Already-done targets are
-  // not rewritten but are still traversed for open descendants. The seen-set
+  // not rewritten but are still traversed for eligible descendants. The seen-set
   // (keyed by resolved `path#^block-id`) plus the depth/target caps keep cycles
   // and large accidental graphs bounded. Returns { visited, changed }: visited
   // is true once the candidate resolved to a fresh in-bounds target, changed is
-  // true when this node or any descendant was forced from open to done.
+  // true when this node or any descendant was forced to done.
   async completeTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
     if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
       return { visited: false, changed: false };
@@ -3228,7 +3245,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
     let resolvedTarget;
     try {
-      resolvedTarget = await this.resolveTranscludedBlockTarget(candidate, context);
+      resolvedTarget = await this.resolveTranscludedBlockTarget(candidate, context, {
+        taskStatusPredicate: isTranscludedCompletionTraversableStatus,
+      });
     } catch (error) {
       return { visited: false, changed: false };
     }
@@ -3291,9 +3310,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       }
     }
 
-    // Done parents stay done; only open tasks are forced to done. The
-    // replacement path revalidates the line and block ID before writing.
-    if (resolvedTarget.taskStatus && resolvedTarget.taskStatus.symbol === " ") {
+    // Done parents stay done; open and in-progress tasks are forced to done.
+    // The replacement path revalidates the line and block ID before writing.
+    if (isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)) {
       const wrote = await this.replaceResolvedTranscludedTaskLine(
         resolvedTarget,
         context,
@@ -3875,7 +3894,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return { candidate, pomodoroLine };
   }
 
-  async resolveTranscludedBlockTarget(candidate, context) {
+  async resolveTranscludedBlockTarget(candidate, context, options = {}) {
     const file = this.resolveTranscludedTargetFile(candidate, context.originPath);
     if (!this.isMarkdownFile(file)) {
       return null;
@@ -3896,6 +3915,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       sourceText,
       cachedLine,
       candidate.blockId,
+      options,
     );
 
     if (resolvedCachedLine) {
@@ -3912,6 +3932,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       sourceText,
       scannedLine,
       candidate.blockId,
+      options,
     );
 
     return resolvedScannedLine
@@ -3924,7 +3945,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       : null;
   }
 
-  resolveTranscludedTaskLineFromSourceText(sourceText, line, blockId) {
+  resolveTranscludedTaskLineFromSourceText(sourceText, line, blockId, options = {}) {
     if (line === null) {
       return null;
     }
@@ -3935,7 +3956,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     const taskStatus = getTaskStatusForLine(lineText, line);
-    if (!this.isOpenDoneTaskStatus(taskStatus)) {
+    const taskStatusPredicate =
+      typeof options.taskStatusPredicate === "function"
+        ? options.taskStatusPredicate
+        : this.isOpenDoneTaskStatus.bind(this);
+    if (!taskStatusPredicate(taskStatus)) {
       return null;
     }
 
@@ -4130,7 +4155,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     if (forcedNextSymbol) {
       if (
         !FIXED_SYMBOLS.includes(forcedNextSymbol) ||
-        !isOpenDoneTaskStatus(taskStatus) ||
+        (forcedNextSymbol === "x"
+          ? !isTranscludedCompletionClosableStatus(taskStatus)
+          : !isOpenDoneTaskStatus(taskStatus)) ||
         taskStatus.symbol === forcedNextSymbol
       ) {
         return null;
@@ -4166,6 +4193,14 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
   isOpenDoneTaskStatus(taskStatus) {
     return isOpenDoneTaskStatus(taskStatus);
+  }
+
+  isTranscludedCompletionTraversableStatus(taskStatus) {
+    return isTranscludedCompletionTraversableStatus(taskStatus);
+  }
+
+  isTranscludedCompletionClosableStatus(taskStatus) {
+    return isTranscludedCompletionClosableStatus(taskStatus);
   }
 
   getActiveTaskStatus(editor) {
@@ -4480,6 +4515,8 @@ module.exports.helpers = {
   isLineInMarkdownSectionDirectBody,
   isProperObsidianTaskLine,
   isOpenDoneTaskStatus,
+  isTranscludedCompletionClosableStatus,
+  isTranscludedCompletionTraversableStatus,
   isTopLevelTaskLine,
   isTopLevelBulletLikeLine,
   isTopLevelDashListToggleLine,

@@ -160,6 +160,19 @@ function isTranscludedCompletionClosableStatus(taskStatus) {
   return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "/");
 }
 
+function isNonTranscludedStartTraversableStatus(taskStatus) {
+  return (
+    !!taskStatus &&
+    (taskStatus.symbol === " " ||
+      taskStatus.symbol === "/" ||
+      taskStatus.symbol === "x")
+  );
+}
+
+function isNonTranscludedStartableStatus(taskStatus) {
+  return !!taskStatus && taskStatus.symbol === " ";
+}
+
 function isTopLevelTaskLine(lineText) {
   return TOP_LEVEL_TASK_LINE_RE.test(String(lineText || ""));
 }
@@ -741,6 +754,28 @@ function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLi
   return targets;
 }
 
+// Collect strict plain block links (`[[note#^id]]`, `[[#^id]]`) from descendant
+// list-item lines only when the descendant bullet body is exactly that one
+// non-embedded link. These targets drive in-progress recursion and intentionally
+// stay narrower than Pomodoro copy-forward classification.
+function collectBareNonTranscludedTaskTargetsInListItemBlock(sourceText, taskLine) {
+  const lines = splitTextByLineEndings(sourceText).map((line) => line.text);
+  const range = getListItemBlockRange(lines, taskLine);
+  if (!range) {
+    return [];
+  }
+
+  const targets = [];
+  for (let line = range.startLine + 1; line <= range.endLine; line += 1) {
+    const target = getBareNonEmbeddedBlockLinkTargetFromListItem(lines[line]);
+    if (target) {
+      targets.push(target);
+    }
+  }
+
+  return targets;
+}
+
 function getLineArrayReplacement(oldLines, newLines) {
   const before = Array.isArray(oldLines) ? oldLines : [];
   const after = Array.isArray(newLines) ? newLines : [];
@@ -924,7 +959,7 @@ function rewriteTaskLineForLocalFallback(lineText, nextSymbol, completionDateStr
     return addOrReplaceCompletionField(lineWithNextSymbol, completionDateString);
   }
 
-  if (nextSymbol === " ") {
+  if (nextSymbol === " " || nextSymbol === "/") {
     return removeCompletionField(lineWithNextSymbol);
   }
 
@@ -1072,6 +1107,34 @@ function parseNonEmbeddedBlockLinks(lineText) {
   return candidates;
 }
 
+function getBareNonEmbeddedBlockLinkTargetFromListItem(lineText) {
+  const line = String(lineText || "");
+  const listMatch = line.match(LIST_ITEM_MARKER_RE);
+  if (!listMatch) {
+    return null;
+  }
+
+  const body = listMatch[2] || "";
+  const leadingWhitespace = body.match(/^[ \t]*/)[0].length;
+  const trailingWhitespace = body.match(/[ \t]*$/)[0].length;
+  const bodyStart = listMatch[1].length;
+  const trimmedStart = bodyStart + leadingWhitespace;
+  const trimmedEnd = bodyStart + body.length - trailingWhitespace;
+  if (trimmedStart >= trimmedEnd) {
+    return null;
+  }
+
+  const candidates = parseNonEmbeddedBlockLinks(line);
+  if (candidates.length !== 1) {
+    return null;
+  }
+
+  const candidate = candidates[0];
+  return candidate.startIndex === trimmedStart && candidate.endIndex === trimmedEnd
+    ? candidate
+    : null;
+}
+
 function findPomodorosSectionInLines(lines) {
   if (!Array.isArray(lines)) {
     return null;
@@ -1142,12 +1205,14 @@ function getSubBulletBlockRange(lines, pomodoroLine, section = null) {
 function classifyPomodoroSubBullets(lines, range) {
   const transcludedTaskLinkBullets = [];
   const copyableTaskLinkBullets = [];
+  const bareNonTranscludedTaskLinkBullets = [];
   const noteBullets = [];
 
   if (!Array.isArray(lines) || !range) {
     return {
       transcludedTaskLinkBullets,
       copyableTaskLinkBullets,
+      bareNonTranscludedTaskLinkBullets,
       noteBullets,
     };
   }
@@ -1172,6 +1237,15 @@ function classifyPomodoroSubBullets(lines, range) {
         lineText,
         targets: nonEmbeddedTargets,
       });
+
+      const bareTarget = getBareNonEmbeddedBlockLinkTargetFromListItem(lineText);
+      if (bareTarget) {
+        bareNonTranscludedTaskLinkBullets.push({
+          line,
+          lineText,
+          targets: [bareTarget],
+        });
+      }
       continue;
     }
 
@@ -1184,6 +1258,7 @@ function classifyPomodoroSubBullets(lines, range) {
   return {
     transcludedTaskLinkBullets,
     copyableTaskLinkBullets,
+    bareNonTranscludedTaskLinkBullets,
     noteBullets,
   };
 }
@@ -2512,7 +2587,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         activeFile,
       );
       if (!handled) {
-        await this.toggleActiveTranscludedTaskOpenDone(view.editor, activeFile);
+        const started = await this.startActivePomodoroNonTranscludedTaskLine(
+          view.editor,
+          activeFile,
+        );
+        if (!started) {
+          await this.toggleActiveTranscludedTaskOpenDone(view.editor, activeFile);
+        }
       }
     })().catch(() => false);
   }
@@ -3163,6 +3244,59 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return true;
   }
 
+  // Direct Pomodoro sub-bullet path for a strict bare non-transcluded task
+  // block link. This starts the selected linked task tree without completing the
+  // local Pomodoro or copying bullets forward.
+  async startActivePomodoroNonTranscludedTaskLine(editor, activeFile) {
+    const activePath = activeFile && activeFile.path;
+    if (!activePath) {
+      return false;
+    }
+
+    const target = this.getActivePomodoroBareNonTranscludedTaskLineTarget(
+      editor,
+      activePath,
+    );
+    if (!target) {
+      return false;
+    }
+
+    const context = {
+      editor,
+      activePath,
+      originPath: activePath,
+    };
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(
+        target.candidate,
+        context,
+        {
+          linePredicate: isProperObsidianTaskLine,
+          taskStatusPredicate: isNonTranscludedStartTraversableStatus,
+        },
+      );
+    } catch (error) {
+      return false;
+    }
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return false;
+    }
+
+    const seen = new Set();
+    try {
+      await this.startResolvedNonTranscludedTaskTargetTree(
+        resolvedTarget,
+        context,
+        seen,
+      );
+    } catch (error) {
+      // Best effort: the keybinding was still handled because the root target
+      // resolved as an eligible Pomodoro sub-bullet target.
+    }
+    return true;
+  }
+
   async completeActivePomodoroTask(
     editor,
     activeFile,
@@ -3198,6 +3332,14 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         originPath: sourcePath,
       },
     );
+    await this.startPomodoroNonTranscludedTaskBullets(
+      subBullets.bareNonTranscludedTaskLinkBullets,
+      {
+        editor,
+        activePath: sourcePath,
+        originPath: sourcePath,
+      },
+    );
 
     lines = this.getEditorLineTexts(editor);
     section = findPomodorosSectionInLines(lines);
@@ -3224,6 +3366,19 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           await this.completeTranscludedTaskTargetTree(target, context, seen);
         } catch (error) {
           // Best effort: one broken embed should not block Pomodoro completion.
+        }
+      }
+    }
+  }
+
+  async startPomodoroNonTranscludedTaskBullets(bullets, context) {
+    const seen = new Set();
+    for (const bullet of Array.isArray(bullets) ? bullets : []) {
+      for (const target of Array.isArray(bullet.targets) ? bullet.targets : []) {
+        try {
+          await this.startNonTranscludedTaskTargetTree(target, context, seen);
+        } catch (error) {
+          // Best effort: one broken link should not block Pomodoro completion.
         }
       }
     }
@@ -3317,6 +3472,88 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         resolvedTarget,
         context,
         "x",
+      );
+      if (wrote) {
+        changed = true;
+      }
+    }
+
+    return { visited: true, changed };
+  }
+
+  async startNonTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
+    if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
+      return { visited: false, changed: false };
+    }
+
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(candidate, context, {
+        linePredicate: isProperObsidianTaskLine,
+        taskStatusPredicate: isNonTranscludedStartTraversableStatus,
+      });
+    } catch (error) {
+      return { visited: false, changed: false };
+    }
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return { visited: false, changed: false };
+    }
+
+    return this.startResolvedNonTranscludedTaskTargetTree(
+      resolvedTarget,
+      context,
+      seen,
+      depth,
+    );
+  }
+
+  async startResolvedNonTranscludedTaskTargetTree(
+    resolvedTarget,
+    context,
+    seen,
+    depth = 0,
+  ) {
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return { visited: false, changed: false };
+    }
+
+    const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
+    if (seen.has(seenKey) || seen.size >= MAX_TRANSCLUDED_RECURSION_TARGETS) {
+      return { visited: false, changed: false };
+    }
+    seen.add(seenKey);
+
+    const childContext = {
+      editor: context.editor,
+      activePath: context.activePath,
+      originPath: resolvedTarget.file.path,
+    };
+    const childTargets = collectBareNonTranscludedTaskTargetsInListItemBlock(
+      resolvedTarget.sourceText,
+      resolvedTarget.line,
+    );
+    let changed = false;
+    for (const childTarget of childTargets) {
+      try {
+        const childResult = await this.startNonTranscludedTaskTargetTree(
+          childTarget,
+          childContext,
+          seen,
+          depth + 1,
+        );
+        if (childResult && childResult.changed) {
+          changed = true;
+        }
+      } catch (error) {
+        // Best effort: one broken descendant should not block its siblings.
+      }
+    }
+
+    if (isNonTranscludedStartableStatus(resolvedTarget.taskStatus)) {
+      const wrote = await this.replaceResolvedTranscludedTaskLine(
+        resolvedTarget,
+        context,
+        "/",
       );
       if (wrote) {
         changed = true;
@@ -3851,6 +4088,34 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       : null;
   }
 
+  getActiveLineBareNonTranscludedTaskTarget(editor, sourcePath) {
+    if (
+      !sourcePath ||
+      !editor ||
+      typeof editor.getCursor !== "function" ||
+      typeof editor.getLine !== "function"
+    ) {
+      return null;
+    }
+
+    const cursor = editor.getCursor();
+    if (!cursor || typeof cursor.line !== "number") {
+      return null;
+    }
+
+    const lineText = editor.getLine(cursor.line);
+    const candidate = getBareNonEmbeddedBlockLinkTargetFromListItem(lineText);
+
+    return candidate
+      ? {
+          ...candidate,
+          sourcePath,
+          activeLine: cursor.line,
+          activeLineText: lineText,
+        }
+      : null;
+  }
+
   // Detect when the active line is an embedded transcluded task link that is a
   // sub-bullet of a Pomodoro task. Returns { candidate, pomodoroLine } so the
   // caller can run recursive forced-done over the selected tree; null otherwise,
@@ -3883,6 +4148,50 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       }
     }
     if (pomodoroLine === null) {
+      return null;
+    }
+
+    const range = getSubBulletBlockRange(lines, pomodoroLine, section);
+    if (!range || activeLine < range.startLine || activeLine >= range.endLine) {
+      return null;
+    }
+
+    return { candidate, pomodoroLine };
+  }
+
+  getActivePomodoroBareNonTranscludedTaskLineTarget(editor, activePath) {
+    const candidate = this.getActiveLineBareNonTranscludedTaskTarget(
+      editor,
+      activePath,
+    );
+    if (!candidate) {
+      return null;
+    }
+
+    const lines = this.getEditorLineTexts(editor);
+    const section = findPomodorosSectionInLines(lines);
+    const activeLine = candidate.activeLine;
+    if (!lineIsInPomodorosSection(section, activeLine)) {
+      return null;
+    }
+
+    if (!INDENTED_LIST_LINE_RE.test(String(lines[activeLine] || ""))) {
+      return null;
+    }
+
+    let pomodoroLine = null;
+    for (let line = activeLine - 1; line >= section.startLine; line -= 1) {
+      if (isTopLevelTaskLine(lines[line])) {
+        pomodoroLine = line;
+        break;
+      }
+    }
+    if (pomodoroLine === null) {
+      return null;
+    }
+
+    const pomodoroStatus = getTaskStatusForLine(lines[pomodoroLine], pomodoroLine);
+    if (!pomodoroStatus || pomodoroStatus.symbol !== " ") {
       return null;
     }
 
@@ -3952,6 +4261,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
     const lineText = getLineTextFromSourceText(sourceText, line);
     if (!lineContainsStandaloneBlockId(lineText, blockId)) {
+      return null;
+    }
+
+    const linePredicate =
+      typeof options.linePredicate === "function" ? options.linePredicate : null;
+    if (linePredicate && !linePredicate(lineText)) {
       return null;
     }
 
@@ -4154,10 +4469,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
     if (forcedNextSymbol) {
       if (
-        !FIXED_SYMBOLS.includes(forcedNextSymbol) ||
-        (forcedNextSymbol === "x"
-          ? !isTranscludedCompletionClosableStatus(taskStatus)
-          : !isOpenDoneTaskStatus(taskStatus)) ||
+        !this.canForceTranscludedTaskStatus(taskStatus, forcedNextSymbol) ||
         taskStatus.symbol === forcedNextSymbol
       ) {
         return null;
@@ -4169,6 +4481,22 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       nextSymbol,
       this.getCompletionDateString(),
     );
+  }
+
+  canForceTranscludedTaskStatus(taskStatus, forcedNextSymbol) {
+    if (!FIXED_SYMBOLS.includes(forcedNextSymbol)) {
+      return false;
+    }
+
+    if (forcedNextSymbol === "x") {
+      return isTranscludedCompletionClosableStatus(taskStatus);
+    }
+
+    if (forcedNextSymbol === "/") {
+      return isNonTranscludedStartableStatus(taskStatus);
+    }
+
+    return isOpenDoneTaskStatus(taskStatus);
   }
 
   fileMatchesPath(file, path) {
@@ -4465,6 +4793,7 @@ module.exports.helpers = {
   centerEditorViewOnPosition,
   classifyPomodoroSubBullets,
   cleanObsidianTaskBody,
+  collectBareNonTranscludedTaskTargetsInListItemBlock,
   collectEmbeddedTranscludedTaskTargetsInListItemBlock,
   collectObsidianTaskTokenRanges,
   collapseWhitespaceOutsideBracketSpans,
@@ -4481,6 +4810,7 @@ module.exports.helpers = {
   getBlockLineFromCache,
   getBlockLinkTargetKey,
   getBlockLinkTargetKeysFromLine,
+  getBareNonEmbeddedBlockLinkTargetFromListItem,
   getCursorChAfterTextEdits,
   getEditorViewFromEditor,
   getAdjacentBulletFormatState,
@@ -4515,6 +4845,8 @@ module.exports.helpers = {
   isLineInMarkdownSectionDirectBody,
   isProperObsidianTaskLine,
   isOpenDoneTaskStatus,
+  isNonTranscludedStartableStatus,
+  isNonTranscludedStartTraversableStatus,
   isTranscludedCompletionClosableStatus,
   isTranscludedCompletionTraversableStatus,
   isTopLevelTaskLine,

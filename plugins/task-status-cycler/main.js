@@ -15,10 +15,10 @@ const COMPLETION_FIELD_RE = /[ \t]*\[completion::\s*[^\]\n]*\]/g;
 const TRAILING_BLOCK_ID_RE = /[ \t]+\^[A-Za-z0-9-]+[ \t]*$/;
 const EMBEDDED_WIKILINK_RE = /!\[\[([^\]\n]+)\]\]/g;
 const BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
-// Conservative guards for recursive Pomodoro source-task closure. The seen-set
-// keyed by `path#^block-id` already stops cycles (A -> B -> A) and re-processing
-// of shared targets; these caps just keep a pathologically deep chain or a huge
-// accidental graph from running unbounded.
+// Conservative guards for recursive embedded Pomodoro source-task closure. The
+// seen-set keyed by `path#^block-id` already stops cycles (A -> B -> A) and
+// re-processing of shared targets; these caps just keep a pathologically deep
+// chain or a huge accidental graph from running unbounded.
 const MAX_TRANSCLUDED_RECURSION_DEPTH = 25;
 const MAX_TRANSCLUDED_RECURSION_TARGETS = 250;
 // Dependency-ID normalization: rewrite Tasks-generated `[id::]`/`[dependsOn::]`
@@ -160,7 +160,7 @@ function isTranscludedCompletionClosableStatus(taskStatus) {
   return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "/");
 }
 
-function isNonTranscludedStartTraversableStatus(taskStatus) {
+function isNonTranscludedStartResolvableStatus(taskStatus) {
   return (
     !!taskStatus &&
     (taskStatus.symbol === " " ||
@@ -747,28 +747,6 @@ function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLi
   const targets = [];
   for (let line = range.startLine + 1; line <= range.endLine; line += 1) {
     for (const target of parseEmbeddedBlockTransclusions(lines[line])) {
-      targets.push(target);
-    }
-  }
-
-  return targets;
-}
-
-// Collect strict plain block links (`[[note#^id]]`, `[[#^id]]`) from descendant
-// list-item lines only when the descendant bullet body is exactly that one
-// non-embedded link. These targets drive in-progress recursion and intentionally
-// stay narrower than Pomodoro copy-forward classification.
-function collectBareNonTranscludedTaskTargetsInListItemBlock(sourceText, taskLine) {
-  const lines = splitTextByLineEndings(sourceText).map((line) => line.text);
-  const range = getListItemBlockRange(lines, taskLine);
-  if (!range) {
-    return [];
-  }
-
-  const targets = [];
-  for (let line = range.startLine + 1; line <= range.endLine; line += 1) {
-    const target = getBareNonEmbeddedBlockLinkTargetFromListItem(lines[line]);
-    if (target) {
       targets.push(target);
     }
   }
@@ -3245,8 +3223,8 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   }
 
   // Direct Pomodoro sub-bullet path for a strict bare non-transcluded task
-  // block link. This starts the selected linked task tree without completing the
-  // local Pomodoro or copying bullets forward.
+  // block link. This starts only the selected linked root task without
+  // completing the local Pomodoro or copying bullets forward.
   async startActivePomodoroNonTranscludedTaskLine(editor, activeFile) {
     const activePath = activeFile && activeFile.path;
     if (!activePath) {
@@ -3273,7 +3251,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         context,
         {
           linePredicate: isProperObsidianTaskLine,
-          taskStatusPredicate: isNonTranscludedStartTraversableStatus,
+          taskStatusPredicate: isNonTranscludedStartResolvableStatus,
         },
       );
     } catch (error) {
@@ -3285,7 +3263,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
     const seen = new Set();
     try {
-      await this.startResolvedNonTranscludedTaskTargetTree(
+      await this.startResolvedNonTranscludedTaskTarget(
         resolvedTarget,
         context,
         seen,
@@ -3376,7 +3354,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     for (const bullet of Array.isArray(bullets) ? bullets : []) {
       for (const target of Array.isArray(bullet.targets) ? bullet.targets : []) {
         try {
-          await this.startNonTranscludedTaskTargetTree(target, context, seen);
+          await this.startNonTranscludedTaskTarget(target, context, seen);
         } catch (error) {
           // Best effort: one broken link should not block Pomodoro completion.
         }
@@ -3481,16 +3459,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return { visited: true, changed };
   }
 
-  async startNonTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
-    if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
-      return { visited: false, changed: false };
-    }
-
+  // Starts a single strict bare non-transcluded Pomodoro link target. Unlike
+  // embedded transclusions, non-transcluded starts deliberately treat the
+  // resolved source task as a leaf and do not inspect its descendants.
+  async startNonTranscludedTaskTarget(candidate, context, seen) {
     let resolvedTarget;
     try {
       resolvedTarget = await this.resolveTranscludedBlockTarget(candidate, context, {
         linePredicate: isProperObsidianTaskLine,
-        taskStatusPredicate: isNonTranscludedStartTraversableStatus,
+        taskStatusPredicate: isNonTranscludedStartResolvableStatus,
       });
     } catch (error) {
       return { visited: false, changed: false };
@@ -3499,56 +3476,31 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return { visited: false, changed: false };
     }
 
-    return this.startResolvedNonTranscludedTaskTargetTree(
+    return this.startResolvedNonTranscludedTaskTarget(
       resolvedTarget,
       context,
       seen,
-      depth,
     );
   }
 
-  async startResolvedNonTranscludedTaskTargetTree(
+  async startResolvedNonTranscludedTaskTarget(
     resolvedTarget,
     context,
     seen,
-    depth = 0,
   ) {
     if (!resolvedTarget || !resolvedTarget.file) {
       return { visited: false, changed: false };
     }
 
     const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
-    if (seen.has(seenKey) || seen.size >= MAX_TRANSCLUDED_RECURSION_TARGETS) {
+    if (seen && seen.has(seenKey)) {
       return { visited: false, changed: false };
     }
-    seen.add(seenKey);
-
-    const childContext = {
-      editor: context.editor,
-      activePath: context.activePath,
-      originPath: resolvedTarget.file.path,
-    };
-    const childTargets = collectBareNonTranscludedTaskTargetsInListItemBlock(
-      resolvedTarget.sourceText,
-      resolvedTarget.line,
-    );
-    let changed = false;
-    for (const childTarget of childTargets) {
-      try {
-        const childResult = await this.startNonTranscludedTaskTargetTree(
-          childTarget,
-          childContext,
-          seen,
-          depth + 1,
-        );
-        if (childResult && childResult.changed) {
-          changed = true;
-        }
-      } catch (error) {
-        // Best effort: one broken descendant should not block its siblings.
-      }
+    if (seen) {
+      seen.add(seenKey);
     }
 
+    let changed = false;
     if (isNonTranscludedStartableStatus(resolvedTarget.taskStatus)) {
       const wrote = await this.replaceResolvedTranscludedTaskLine(
         resolvedTarget,
@@ -4793,7 +4745,6 @@ module.exports.helpers = {
   centerEditorViewOnPosition,
   classifyPomodoroSubBullets,
   cleanObsidianTaskBody,
-  collectBareNonTranscludedTaskTargetsInListItemBlock,
   collectEmbeddedTranscludedTaskTargetsInListItemBlock,
   collectObsidianTaskTokenRanges,
   collapseWhitespaceOutsideBracketSpans,
@@ -4845,8 +4796,8 @@ module.exports.helpers = {
   isLineInMarkdownSectionDirectBody,
   isProperObsidianTaskLine,
   isOpenDoneTaskStatus,
+  isNonTranscludedStartResolvableStatus,
   isNonTranscludedStartableStatus,
-  isNonTranscludedStartTraversableStatus,
   isTranscludedCompletionClosableStatus,
   isTranscludedCompletionTraversableStatus,
   isTopLevelTaskLine,

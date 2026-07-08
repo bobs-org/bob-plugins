@@ -12,7 +12,7 @@ const LEVEL_TWO_HEADING_RE = /^ {0,3}##[ \t]+/;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})/;
 const TASK_LINE_RE = /^\s*(?:[-*+]|\d+[.)])\s+\[([^\]\n])\][ \t]+(.*)$/;
 const TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s\])}:.,;!?])/;
-const OPEN_TASK_STATUSES = new Set([" ", "/", "B"]);
+const OPEN_TASK_STATUSES = new Set([" ", "/", "*"]);
 
 function isMarkdownFile(file) {
   return file instanceof TFile && file.extension === "md";

@@ -6,7 +6,7 @@ const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
 const SECTION_HEADER_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
-const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "B"]);
+const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*"]);
 const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 // Pomodoro ledger navigation targets. Mirrors the minimal subset of
@@ -47,7 +47,7 @@ const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
 const PROJECT_PARENT_TYPE_BASENAMES = new Set(["area", "project"]);
-const PROJECT_OPEN_TASK_STATUSES = new Set([" ", "/", "B"]);
+const PROJECT_OPEN_TASK_STATUSES = new Set([" ", "/", "*"]);
 const PROJECT_LIST_ITEM_RE = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
 const PROJECT_SOURCE_TASK_LINE_RE =
   /^(\s*)(?:[-*+]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
@@ -5692,8 +5692,8 @@ function taskStatusClass(status) {
     return "active";
   }
 
-  if (status === "B") {
-    return "blocked";
+  if (status === "*") {
+    return "next";
   }
 
   return "todo";

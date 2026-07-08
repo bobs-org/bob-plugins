@@ -15,7 +15,7 @@ const MARKDOWN_LINK_RE = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
 const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
-const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "B"]);
+const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*"]);
 const DONE_OBSIDIAN_TASK_STATUSES = new Set(["x", "X", "-"]);
 const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
@@ -1647,8 +1647,8 @@ function taskStatusClass(status) {
     return "active";
   }
 
-  if (status === "B") {
-    return "blocked";
+  if (status === "*") {
+    return "next";
   }
 
   return "todo";

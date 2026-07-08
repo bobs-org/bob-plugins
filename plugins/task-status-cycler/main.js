@@ -3,7 +3,7 @@ const { EditorView } = require("@codemirror/view");
 
 const TASKS_COMMAND_PREFIX = "obsidian-tasks-plugin:set-status-symbol-to-";
 const TASKS_GLOBAL_FILTER = "#task";
-const FIXED_SYMBOLS = [" ", "/", "B", "x", "-"];
+const FIXED_SYMBOLS = [" ", "/", "*", "x", "-"];
 const QUERY_CODE_BLOCK_LANGS = new Set(["tasks", "dataview", "dataviewjs"]);
 const DEFAULT_HALF_PAGE_LINES = 20;
 const TASKS_QUERY_RESULT_SELECTOR = "ul.plugin-tasks-query-result";

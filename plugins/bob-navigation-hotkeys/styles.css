@@ -321,9 +321,9 @@
   border-color: color-mix(in srgb, var(--text-accent) 45%, transparent);
 }
 
-.bob-cnp-status-pill.is-blocked {
-  color: var(--text-error);
-  border-color: color-mix(in srgb, var(--text-error) 40%, transparent);
+.bob-cnp-status-pill.is-next {
+  color: var(--color-green, #3f8f5f);
+  border-color: color-mix(in srgb, var(--color-green, #3f8f5f) 45%, transparent);
 }
 
 .bob-cnp-mark {

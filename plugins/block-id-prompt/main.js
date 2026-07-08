@@ -19,6 +19,8 @@ const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*"]);
 const DONE_OBSIDIAN_TASK_STATUSES = new Set(["x", "X", "-"]);
 const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
+const TASK_CHECKBOX_STATUS_RE =
+  /^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[)[^\]\n](\])/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
 const HIDE_TASK_TAG_RE = /(^|[\s([{])#hide(?=$|[\s)\]},.;:!?])/;
@@ -29,6 +31,16 @@ const INLINE_DEPENDS_ON_FIELD_RE = /\[dependsOn::([ \t]*)([^\]\n]*?)([ \t]*)\]/g
 const TASKS_INLINE_FIELD_RE = /[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g;
 const TASKS_EMOJI_DATE_RE =
   /[ \t]*(?:[\u2600-\u27BF]|\uD83C[\uD000-\uDFFF]|\uD83D[\uD000-\uDFFF]|\uD83E[\uD000-\uDFFF])\s*\d{4}-\d{2}-\d{2}/g;
+// Keep these Pomodoro ledger recognizers in sync with bob-ledger-tools/main.js.
+const POMODOROS_HEADING_RE = /^##\s+Pomodoros(?:\s.*)?$/;
+const LEVEL_TWO_HEADING_RE = /^##\s+/;
+const LEDGER_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[([ /xX-])\]\s+)/;
+const LIST_ITEM_RE = /^([ \t]*)(?:[-*+]|\d+[.)])\s+/;
+const PLACEHOLDER_RE = /\(\s*\)/;
+const COLON_TIME_RANGE_RE =
+  /\((\*\*)?(\d\d):(\d\d)\s*-\s*(\d\d):(\d\d)(\*\*)?(\s+[^)]*)?\)/;
+const COMPACT_TIME_RANGE_RE =
+  /\((\*\*)?(\d\d)(\d\d)\s*-\s*(\d\d)(\d\d)(\*\*)?(\s+[^)]*)?\)/;
 const CANONICAL_BLOCK_LINK_PREFIX = "#^";
 const SCAN_DEBOUNCE_MS = 75;
 const EDIT_SUPPRESS_MS = 250;
@@ -1105,6 +1117,235 @@ function taskLineAppendEdit(content, lineNumber, id) {
     end: contentLineEnd,
     replacement: ` ^${id}`,
   };
+}
+
+function setCheckboxStatus(lineText, newStatus) {
+  const text = String(lineText || "");
+  const match = TASK_CHECKBOX_STATUS_RE.exec(text);
+  if (!match) {
+    return null;
+  }
+
+  const statusStart = match[1].length;
+  return text.slice(0, statusStart) + newStatus + text.slice(statusStart + 1);
+}
+
+function setCheckboxStatusEdit(content, lineNumber, newStatus) {
+  const lines = String(content || "").split("\n");
+  if (lineNumber < 0 || lineNumber >= lines.length) {
+    return null;
+  }
+
+  const lineText = lines[lineNumber];
+  const match = TASK_CHECKBOX_STATUS_RE.exec(lineText);
+  if (!match) {
+    return null;
+  }
+
+  const lineStart = lineStartIndexFromLines(lines, lineNumber);
+  const statusStart = lineStart + match[1].length;
+  return {
+    start: statusStart,
+    end: statusStart + 1,
+    replacement: newStatus,
+  };
+}
+
+function taskLineAppendWithStatusEdit(content, lineNumber, id, newStatus) {
+  const lines = String(content || "").split("\n");
+  if (lineNumber < 0 || lineNumber >= lines.length) {
+    return null;
+  }
+
+  const lineText = lines[lineNumber];
+  const lineStart = lineStartIndexFromLines(lines, lineNumber);
+  const lineEnd = lineEndIndexFromLines(lines, lineNumber);
+  const contentLineEnd = lineText.endsWith("\r") ? lineEnd - 1 : lineEnd;
+  const lineWithoutCarriageReturn = lineText.endsWith("\r")
+    ? lineText.slice(0, -1)
+    : lineText;
+  const trimmedLength = lineWithoutCarriageReturn.replace(/[ \t]+$/g, "").length;
+  const trimmedLine = lineWithoutCarriageReturn.slice(0, trimmedLength);
+  const updatedLine = setCheckboxStatus(trimmedLine, newStatus);
+  if (updatedLine === null) {
+    return null;
+  }
+
+  return {
+    start: lineStart,
+    end: contentLineEnd,
+    replacement: `${updatedLine} ^${id}`,
+  };
+}
+
+function isPomodorosHeadingLine(lineText) {
+  return POMODOROS_HEADING_RE.test(normalizeMarkdownLine(lineText));
+}
+
+function isLevelTwoHeadingLine(lineText) {
+  return LEVEL_TWO_HEADING_RE.test(normalizeMarkdownLine(lineText));
+}
+
+function findPomodorosSectionRange(lines) {
+  if (!Array.isArray(lines)) {
+    return null;
+  }
+
+  const headingLine = lines.findIndex((line) =>
+    isPomodorosHeadingLine(line),
+  );
+  if (headingLine === -1) {
+    return null;
+  }
+
+  let endLine = lines.length - 1;
+  for (let line = headingLine + 1; line < lines.length; line += 1) {
+    if (isLevelTwoHeadingLine(lines[line])) {
+      endLine = line - 1;
+      break;
+    }
+  }
+
+  return {
+    startLine: headingLine + 1,
+    endLine,
+  };
+}
+
+function minutesFromTimeParts(hoursText, minutesText) {
+  const hours = Number.parseInt(hoursText, 10);
+  const minutes = Number.parseInt(minutesText, 10);
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function timeRangeFromMatch(match) {
+  const openingBold = match[1] || "";
+  const closingBold = match[6] || "";
+  if (Boolean(openingBold) !== Boolean(closingBold)) {
+    return null;
+  }
+
+  const startMinutes = minutesFromTimeParts(match[2], match[3]);
+  const endMinutes = minutesFromTimeParts(match[4], match[5]);
+  if (startMinutes === null || endMinutes === null) {
+    return null;
+  }
+
+  return { startMinutes, endMinutes };
+}
+
+function parsePomodoroTimeRange(lineText) {
+  const text = String(lineText || "");
+  let match = COLON_TIME_RANGE_RE.exec(text);
+  if (match) {
+    return timeRangeFromMatch(match);
+  }
+
+  match = COMPACT_TIME_RANGE_RE.exec(text);
+  return match ? timeRangeFromMatch(match) : null;
+}
+
+function hasPomodoroTimeRange(lineText) {
+  return parsePomodoroTimeRange(lineText) !== null;
+}
+
+function isPomodoroEntryLine(lineText) {
+  const text = normalizeMarkdownLine(lineText);
+  if (lineIndentWidth(text) !== 0 || !LEDGER_LINE_RE.test(text)) {
+    return false;
+  }
+
+  return PLACEHOLDER_RE.test(text) || hasPomodoroTimeRange(text);
+}
+
+function lineIndentWidth(lineText) {
+  const match = /^[ \t]*/.exec(String(lineText || ""));
+  return match ? match[0].length : 0;
+}
+
+function isListItemLine(lineText) {
+  return LIST_ITEM_RE.test(normalizeMarkdownLine(lineText));
+}
+
+function isPomodoroSubBulletLine(lines, lineNumber) {
+  if (
+    !Array.isArray(lines) ||
+    !Number.isInteger(lineNumber) ||
+    lineNumber < 0 ||
+    lineNumber >= lines.length
+  ) {
+    return false;
+  }
+
+  const section = findPomodorosSectionRange(lines);
+  if (
+    !section ||
+    lineNumber < section.startLine ||
+    lineNumber > section.endLine ||
+    !isListItemLine(lines[lineNumber])
+  ) {
+    return false;
+  }
+
+  let currentIndent = lineIndentWidth(lines[lineNumber]);
+  if (currentIndent <= 0) {
+    return false;
+  }
+
+  for (let line = lineNumber - 1; line >= section.startLine; line -= 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim() || !isListItemLine(lineText)) {
+      continue;
+    }
+
+    const ancestorIndent = lineIndentWidth(lineText);
+    if (ancestorIndent >= currentIndent) {
+      continue;
+    }
+
+    if (isPomodoroEntryLine(lineText)) {
+      return true;
+    }
+
+    currentIndent = ancestorIndent;
+    if (currentIndent <= 0) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function sourceLineIsPomodoroSubBullet(source) {
+  if (
+    !source ||
+    !source.editor ||
+    typeof source.editor.getValue !== "function" ||
+    !Number.isInteger(source.line)
+  ) {
+    return false;
+  }
+
+  return isPomodoroSubBulletLine(source.editor.getValue().split("\n"), source.line);
+}
+
+function shouldPromoteTaskToNext(source, task) {
+  return Boolean(
+    task &&
+      task.status === " " &&
+      sourceLineIsPomodoroSubBullet(source),
+  );
 }
 
 function lineRangeText(lines, startLine, endLine) {
@@ -2451,11 +2692,34 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return null;
     }
 
+    const promoteToNext = shouldPromoteTaskToNext(source, task);
+    if (promoteToNext) {
+      const edit = setCheckboxStatusEdit(destination.content, task.line, "*");
+      if (!edit) {
+        new Notice(`Task link stopped: selected task changed in ${destination.file.path}`);
+        return null;
+      }
+
+      if (
+        !(await this.applyTaskLineEdit(
+          destination.file,
+          source,
+          edit,
+          destination.content,
+        ))
+      ) {
+        return null;
+      }
+    }
+
     if (!this.completeTaskSourceLink(source, task.existingId)) {
+      if (promoteToNext) {
+        new Notice("Task set Next, but the source link changed before completion");
+      }
       return null;
     }
 
-    new Notice("Linked task block");
+    new Notice(`Linked task block${promoteToNext ? " · set Next" : ""}`);
     return { completed: true };
   }
 
@@ -2737,6 +3001,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return false;
     }
 
+    const promoteToNext = shouldPromoteTaskToNext(source, source.task);
     if (
       !(await this.appendTaskBlockId(
         destination.file,
@@ -2744,17 +3009,20 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
         source.task,
         newId,
         destination.content,
+        { promoteToNext },
       ))
     ) {
       return false;
     }
 
     if (!this.completeTaskSourceLink(source, newId)) {
-      new Notice("Task block ID added, but the source link changed before completion");
+      new Notice(
+        `Task block ID added${promoteToNext ? " and task set Next" : ""}, but the source link changed before completion`,
+      );
       return true;
     }
 
-    new Notice("Added block ID and linked task");
+    new Notice(`Added block ID and linked task${promoteToNext ? " · set Next" : ""}`);
     return true;
   }
 
@@ -2782,7 +3050,19 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
-  async appendTaskBlockId(file, source, task, newId, expectedContent) {
+  async appendTaskBlockId(file, source, task, newId, expectedContent, options = {}) {
+    const edit = options.promoteToNext
+      ? taskLineAppendWithStatusEdit(expectedContent, task.line, newId, "*")
+      : taskLineAppendEdit(expectedContent, task.line, newId);
+    if (!edit) {
+      new Notice(`Task link stopped: selected task changed in ${file.path}`);
+      return false;
+    }
+
+    return this.applyTaskLineEdit(file, source, edit, expectedContent);
+  }
+
+  async applyTaskLineEdit(file, source, edit, expectedContent) {
     const content = await this.readFileSnapshot(file, source);
     if (content === null) {
       new Notice(`Task link stopped: ${file.path} could not be read`);
@@ -2791,12 +3071,6 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 
     if (content !== expectedContent) {
       new Notice(`Task link stopped: ${file.path} changed before update`);
-      return false;
-    }
-
-    const edit = taskLineAppendEdit(content, task.line, newId);
-    if (!edit) {
-      new Notice(`Task link stopped: selected task changed in ${file.path}`);
       return false;
     }
 

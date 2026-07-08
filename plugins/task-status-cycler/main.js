@@ -280,13 +280,16 @@ function isNonTranscludedStartResolvableStatus(taskStatus) {
   return (
     !!taskStatus &&
     (taskStatus.symbol === " " ||
+      taskStatus.symbol === "*" ||
       taskStatus.symbol === "/" ||
       taskStatus.symbol === "x")
   );
 }
 
 function isNonTranscludedStartableStatus(taskStatus) {
-  return !!taskStatus && taskStatus.symbol === " ";
+  return (
+    !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "*")
+  );
 }
 
 function isTopLevelTaskLine(lineText) {

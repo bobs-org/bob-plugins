@@ -1798,6 +1798,22 @@ function hasVimRepeat(actionArgs) {
 
 function getPendingVimRepeat(cm) {
   const inputState = cm && cm.state && cm.state.vim && cm.state.vim.inputState;
+  const rawKeyBuffer = inputState && inputState.keyBuffer;
+  const keyBufferText = Array.isArray(rawKeyBuffer)
+    ? rawKeyBuffer.join("")
+    : typeof rawKeyBuffer === "string"
+      ? rawKeyBuffer
+      : "";
+  const keyBufferMatch = keyBufferText.match(/^([1-9]\d*)/);
+  if (keyBufferMatch) {
+    const repeat = Math.floor(
+      numericOrDefault(keyBufferMatch[1], Number.NaN),
+    );
+    if (Number.isFinite(repeat) && repeat > 0) {
+      return { repeat, explicit: true };
+    }
+  }
+
   const rawRepeat =
     inputState && typeof inputState.getRepeat === "function"
       ? inputState.getRepeat()
@@ -1814,15 +1830,6 @@ function resetPendingVimInputState(cm, reason = "") {
   const inputState = vimState && vimState.inputState;
   if (!vimState || !inputState) {
     return false;
-  }
-
-  try {
-    if (typeof inputState.constructor === "function") {
-      vimState.inputState = new inputState.constructor();
-      return true;
-    }
-  } catch (error) {
-    // Fall through to best-effort field clearing below.
   }
 
   const clearedArrayFields = [
@@ -1842,9 +1849,7 @@ function resetPendingVimInputState(cm, reason = "") {
 
   try {
     for (const field of clearedArrayFields) {
-      if (Object.prototype.hasOwnProperty.call(inputState, field)) {
-        inputState[field] = [];
-      }
+      inputState[field] = [];
     }
     for (const field of clearedNullFields) {
       if (Object.prototype.hasOwnProperty.call(inputState, field)) {
@@ -1864,8 +1869,19 @@ function resetPendingVimInputState(cm, reason = "") {
     }
     return true;
   } catch (error) {
+    // Fall through to replacing the inputState as a last resort.
+  }
+
+  try {
+    if (typeof inputState.constructor === "function") {
+      vimState.inputState = new inputState.constructor();
+      return true;
+    }
+  } catch (error) {
     return false;
   }
+
+  return false;
 }
 
 function getVimTargetOffset(actionArgs, direction, defaultOffset) {

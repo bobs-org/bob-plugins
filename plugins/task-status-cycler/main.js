@@ -199,6 +199,28 @@ function resetPendingVimInputState(cm, reason = "") {
   return false;
 }
 
+function getOptionBracketTaskCycleDirection(event) {
+  if (
+    !event ||
+    event.ctrlKey ||
+    !event.altKey ||
+    event.shiftKey ||
+    event.metaKey
+  ) {
+    return null;
+  }
+
+  if (event.code === "BracketRight") {
+    return 1;
+  }
+
+  if (event.code === "BracketLeft") {
+    return -1;
+  }
+
+  return null;
+}
+
 function replaceTaskStatusSymbol(lineText, nextSymbol) {
   const line = String(lineText || "");
   const match = line.match(TASK_LINE_RE);
@@ -237,6 +259,10 @@ function isOpenDoneTaskStatus(taskStatus) {
   return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "x");
 }
 
+function isCyclableTaskStatus(taskStatus) {
+  return !!taskStatus && FIXED_SYMBOLS.includes(taskStatus.symbol);
+}
+
 function isTranscludedCompletionTraversableStatus(taskStatus) {
   return (
     !!taskStatus &&
@@ -263,10 +289,6 @@ function isNonTranscludedStartableStatus(taskStatus) {
   return !!taskStatus && taskStatus.symbol === " ";
 }
 
-function isTranscludedStartToggleableStatus(taskStatus) {
-  return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "/");
-}
-
 function isTopLevelTaskLine(lineText) {
   return TOP_LEVEL_TASK_LINE_RE.test(String(lineText || ""));
 }
@@ -285,14 +307,6 @@ function getNextOpenDoneSymbol(taskStatus) {
   }
 
   return taskStatus.symbol === " " ? "x" : " ";
-}
-
-function getNextTranscludedStartToggleSymbol(taskStatus) {
-  if (!isTranscludedStartToggleableStatus(taskStatus)) {
-    return null;
-  }
-
-  return taskStatus.symbol === " " ? "/" : " ";
 }
 
 function normalizeTaskMetadataSpacing(lineText) {
@@ -2441,7 +2455,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     });
 
     this.registerChildBulletInputListeners();
-    this.registerTranscludedTaskStartInputListeners();
+    this.registerCountedTaskCycleInputListeners();
 
     this.addCommand({
       id: "toggle-task-open-done",
@@ -3506,15 +3520,43 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     const taskStatus = this.getActiveTaskStatus(editor);
-    const nextSymbol = taskStatus
-      ? this.getAdjacentSymbol(taskStatus.symbol, direction)
-      : null;
-    if (nextSymbol) {
+    if (taskStatus) {
+      const nextSymbol = this.getAdjacentSymbol(taskStatus.symbol, direction);
+      if (!nextSymbol) {
+        return false;
+      }
+
       if (checking) {
         return true;
       }
 
       this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
+      return true;
+    }
+
+    const activeFile =
+      view.file ||
+      (this.app.workspace &&
+      typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null);
+    const activePath = activeFile && activeFile.path;
+    const candidate = this.getActiveLineTranscludedTaskTarget(editor, activePath);
+    if (candidate) {
+      if (checking) {
+        return true;
+      }
+
+      const context = {
+        editor,
+        activePath,
+        originPath: activePath,
+      };
+      void this.cycleResolvedTranscludedTaskLink(
+        candidate,
+        context,
+        direction,
+      ).catch(() => false);
       return true;
     }
 
@@ -3645,13 +3687,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return "below";
   }
 
-  registerTranscludedTaskStartInputListeners() {
+  registerCountedTaskCycleInputListeners() {
     // Tracks events already dispatched so the window + document capture
-    // listeners cannot double-start when both fire for the same keydown.
-    this.handledTranscludedTaskStartEvents = new WeakSet();
+    // listeners cannot double-cycle when both fire for the same keydown.
+    this.handledCountedTaskCycleEvents = new WeakSet();
 
     const keydownHandler = (event) =>
-      this.handleTranscludedTaskStartPhysicalKeydown(event);
+      this.handleCountedTaskCyclePhysicalKeydown(event);
 
     const targets = [];
     if (typeof window !== "undefined") {
@@ -3672,17 +3714,19 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
   }
 
-  handleTranscludedTaskStartPhysicalKeydown(event) {
-    if (!this.isTranscludedTaskStartKeydown(event)) {
+  handleCountedTaskCyclePhysicalKeydown(event) {
+    const direction = this.getCountedTaskCycleKeydownDirection(event);
+    if (!direction) {
       return false;
     }
-    return this.dispatchTranscludedTaskStartEvent(event);
+
+    return this.dispatchCountedTaskCycleEvent(event, direction);
   }
 
-  dispatchTranscludedTaskStartEvent(event) {
+  dispatchCountedTaskCycleEvent(event, direction) {
     if (
-      this.handledTranscludedTaskStartEvents &&
-      this.handledTranscludedTaskStartEvents.has(event)
+      this.handledCountedTaskCycleEvents &&
+      this.handledCountedTaskCycleEvents.has(event)
     ) {
       return false;
     }
@@ -3698,6 +3742,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     const pendingRepeat = getPendingVimRepeat(cm);
+    if (!pendingRepeat.explicit) {
+      return false;
+    }
+
     const activeFile =
       view.file ||
       (this.app.workspace &&
@@ -3705,16 +3753,19 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         ? this.app.workspace.getActiveFile()
         : null);
     const activePath = activeFile && activeFile.path;
-    const candidate = this.getActiveLineTranscludedTaskTarget(
-      view.editor,
-      activePath,
-    );
-    if (!candidate) {
+    const taskStatus = this.getActiveTaskStatus(view.editor);
+    if (taskStatus) {
+      if (!isCyclableTaskStatus(taskStatus)) {
+        return false;
+      }
+    } else if (
+      !this.getActiveLineTranscludedTaskTarget(view.editor, activePath)
+    ) {
       return false;
     }
 
-    if (this.handledTranscludedTaskStartEvents) {
-      this.handledTranscludedTaskStartEvents.add(event);
+    if (this.handledCountedTaskCycleEvents) {
+      this.handledCountedTaskCycleEvents.add(event);
     }
 
     event.preventDefault();
@@ -3723,32 +3774,132 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       event.stopImmediatePropagation();
     }
 
-    if (pendingRepeat.explicit) {
-      resetPendingVimInputState(cm, "counted-transcluded-task-start");
-      void this.toggleTranscludedTaskStartStateRange(
-        view.editor,
-        activeFile,
-        candidate,
-        pendingRepeat.repeat,
-      ).catch(() => false);
-    } else {
-      void this.toggleActiveTranscludedTaskStartState(
-        view.editor,
-        activeFile,
-        candidate,
-      ).catch(() => false);
-    }
+    resetPendingVimInputState(cm, "counted-cycle-task-status");
+    void this.cycleTaskStatusRange(
+      view.editor,
+      activeFile,
+      direction,
+      pendingRepeat.repeat,
+    ).catch(() => false);
     return true;
   }
 
-  isTranscludedTaskStartKeydown(event) {
-    return (
-      !!event &&
-      event.key === "@" &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey
+  getCountedTaskCycleKeydownDirection(event) {
+    return getOptionBracketTaskCycleDirection(event);
+  }
+
+  async cycleTaskStatusRange(editor, activeFile, direction, repeat) {
+    if (!editor || typeof editor.getCursor !== "function") {
+      return false;
+    }
+
+    const cursor = editor.getCursor();
+    if (!cursor || typeof cursor.line !== "number") {
+      return false;
+    }
+
+    const lines = this.getEditorLineTexts(editor);
+    const startLine = Math.max(0, Math.floor(Number(cursor.line) || 0));
+    const lineCount = this.getEditorLineCount(editor);
+    if (lineCount <= 0 || startLine >= lineCount) {
+      return false;
+    }
+
+    const lastLine = Math.max(0, lineCount - 1);
+    const endLine = Math.min(
+      startLine + Math.max(0, Math.floor(Number(repeat) || 0)),
+      lastLine,
     );
+    const activePath = activeFile && activeFile.path;
+    const context = activePath
+      ? {
+          editor,
+          activePath,
+          originPath: activePath,
+        }
+      : null;
+    const seenResolvedTargets = new Set();
+    let changed = false;
+
+    for (let line = startLine; line <= endLine; line += 1) {
+      const lineText = String(lines[line] || "");
+      const taskStatus = getTaskStatusForLine(lineText, line);
+      if (taskStatus) {
+        if (!isCyclableTaskStatus(taskStatus)) {
+          continue;
+        }
+
+        const nextSymbol = this.getAdjacentSymbol(taskStatus.symbol, direction);
+        if (!nextSymbol) {
+          continue;
+        }
+
+        const wrote =
+          line === startLine
+            ? this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol)
+            : this.setCheckboxStatusLocalForLine(editor, taskStatus, nextSymbol);
+        if (wrote) {
+          changed = true;
+        }
+        continue;
+      }
+
+      if (!context) {
+        continue;
+      }
+
+      const target = getTranscludedTaskTargetFromLine(
+        lineText,
+        activePath,
+        line,
+        line === startLine ? cursor.ch : null,
+      );
+      if (!target) {
+        continue;
+      }
+
+      let resolvedTarget;
+      try {
+        resolvedTarget = await this.resolveTranscludedBlockTarget(
+          target,
+          context,
+          {
+            taskStatusPredicate: isCyclableTaskStatus,
+          },
+        );
+      } catch (error) {
+        continue;
+      }
+      if (!resolvedTarget || !resolvedTarget.file) {
+        continue;
+      }
+
+      const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
+      if (seenResolvedTargets.has(seenKey)) {
+        continue;
+      }
+      seenResolvedTargets.add(seenKey);
+
+      const wrote = await this.cycleResolvedTranscludedTaskTarget(
+        resolvedTarget,
+        context,
+        direction,
+      );
+      if (wrote) {
+        changed = true;
+      }
+    }
+
+    if (typeof editor.setCursor === "function") {
+      const cursorLineText =
+        typeof editor.getLine === "function" ? editor.getLine(startLine) || "" : "";
+      editor.setCursor({
+        line: startLine,
+        ch: Math.max(0, Math.min(cursor.ch || 0, cursorLineText.length)),
+      });
+    }
+
+    return changed;
   }
 
   getFocusedMarkdownEditorView(event) {
@@ -3926,33 +4077,42 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context);
   }
 
-  async toggleActiveTranscludedTaskStartState(editor, activeFile, candidate = null) {
-    const activePath = activeFile && activeFile.path;
-    const target =
-      candidate || this.getActiveLineTranscludedTaskTarget(editor, activePath);
-    if (!activePath || !target) {
+  async cycleResolvedTranscludedTaskLink(candidate, context, direction) {
+    if (!candidate || !context || !context.activePath) {
       return false;
     }
 
-    const context = {
-      editor,
-      activePath,
-      originPath: activePath,
-    };
     let resolvedTarget;
     try {
-      resolvedTarget = await this.resolveTranscludedBlockTarget(target, context, {
-        taskStatusPredicate: isTranscludedStartToggleableStatus,
-      });
+      resolvedTarget = await this.resolveTranscludedBlockTarget(
+        candidate,
+        context,
+        {
+          taskStatusPredicate: isCyclableTaskStatus,
+        },
+      );
     } catch (error) {
       return false;
     }
-    if (!resolvedTarget) {
+    if (!resolvedTarget || !resolvedTarget.file) {
       return false;
     }
 
-    const nextSymbol = getNextTranscludedStartToggleSymbol(
-      resolvedTarget.taskStatus,
+    return this.cycleResolvedTranscludedTaskTarget(
+      resolvedTarget,
+      context,
+      direction,
+    );
+  }
+
+  async cycleResolvedTranscludedTaskTarget(resolvedTarget, context, direction) {
+    if (!resolvedTarget || !isCyclableTaskStatus(resolvedTarget.taskStatus)) {
+      return false;
+    }
+
+    const nextSymbol = this.getAdjacentSymbol(
+      resolvedTarget.taskStatus.symbol,
+      direction,
     );
     if (!nextSymbol) {
       return false;
@@ -3962,80 +4122,8 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       resolvedTarget,
       context,
       nextSymbol,
+      { allowAnyStatus: true },
     );
-  }
-
-  async toggleTranscludedTaskStartStateRange(
-    editor,
-    activeFile,
-    activeCandidate,
-    repeat,
-  ) {
-    const activePath = activeFile && activeFile.path;
-    if (!activePath || !activeCandidate) {
-      return false;
-    }
-
-    const lines = this.getEditorLineTexts(editor);
-    const startLine = Math.max(
-      0,
-      Math.floor(Number(activeCandidate.activeLine) || 0),
-    );
-    const lineCount = this.getEditorLineCount(editor);
-    const lastLine = Math.max(0, lineCount - 1);
-    const endLine = Math.min(startLine + Math.max(0, repeat), lastLine);
-    const targets = collectTranscludedTaskTargetsInLineRange(
-      lines,
-      activePath,
-      startLine,
-      endLine,
-      activeCandidate.startIndex,
-    );
-    const context = {
-      editor,
-      activePath,
-      originPath: activePath,
-    };
-    const seenResolvedTargets = new Set();
-    let changed = false;
-
-    for (const target of targets) {
-      let resolvedTarget;
-      try {
-        resolvedTarget = await this.resolveTranscludedBlockTarget(target, context, {
-          taskStatusPredicate: isTranscludedStartToggleableStatus,
-        });
-      } catch (error) {
-        continue;
-      }
-      if (!resolvedTarget || !resolvedTarget.file) {
-        continue;
-      }
-
-      const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
-      if (seenResolvedTargets.has(seenKey)) {
-        continue;
-      }
-      seenResolvedTargets.add(seenKey);
-
-      const nextSymbol = getNextTranscludedStartToggleSymbol(
-        resolvedTarget.taskStatus,
-      );
-      if (!nextSymbol) {
-        continue;
-      }
-
-      const wrote = await this.replaceResolvedTranscludedTaskLine(
-        resolvedTarget,
-        context,
-        nextSymbol,
-      );
-      if (wrote) {
-        changed = true;
-      }
-    }
-
-    return changed;
   }
 
   // Direct Pomodoro sub-bullet path: when the active line is an embedded
@@ -4657,6 +4745,22 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return this.setActiveCheckboxStatusLocal(editor, taskStatus, nextSymbol);
   }
 
+  setCheckboxStatusLocalForLine(editor, taskStatus, nextSymbol) {
+    if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
+      return false;
+    }
+
+    if (this.lineMatchesTasksGlobalFilter(taskStatus.lineText)) {
+      return this.setActiveCheckboxStatusLocalWithTaskMetadata(
+        editor,
+        taskStatus,
+        nextSymbol,
+      );
+    }
+
+    return this.setActiveCheckboxStatusLocal(editor, taskStatus, nextSymbol);
+  }
+
   setActiveCheckboxStatusLocalWithTaskMetadata(editor, taskStatus, nextSymbol) {
     if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
       return false;
@@ -5160,6 +5264,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     resolvedTarget,
     context,
     forcedNextSymbol = null,
+    options = {},
   ) {
     // Write through the editor only when the resolved task lives in the active
     // note; all other source notes are written through the vault.
@@ -5168,6 +5273,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         resolvedTarget,
         context && context.editor,
         forcedNextSymbol,
+        options,
       );
       if (replacedInEditor) {
         return true;
@@ -5177,6 +5283,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return this.replaceResolvedTranscludedTaskLineInVault(
       resolvedTarget,
       forcedNextSymbol,
+      options,
     );
   }
 
@@ -5184,6 +5291,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     resolvedTarget,
     editor,
     forcedNextSymbol = null,
+    options = {},
   ) {
     if (
       !editor ||
@@ -5199,6 +5307,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       resolvedTarget.line,
       resolvedTarget.blockId,
       forcedNextSymbol,
+      options,
     );
     if (nextLineText === null || nextLineText === currentLineText) {
       return false;
@@ -5215,6 +5324,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   async replaceResolvedTranscludedTaskLineInVault(
     resolvedTarget,
     forcedNextSymbol = null,
+    options = {},
   ) {
     if (!this.app.vault) {
       return false;
@@ -5231,6 +5341,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         resolvedTarget.line,
         resolvedTarget.blockId,
         forcedNextSymbol,
+        options,
       );
       if (nextLineText === null || nextLineText === currentLineText) {
         return sourceText;
@@ -5275,7 +5386,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
   }
 
-  getNextTranscludedTaskLineText(lineText, line, blockId, forcedNextSymbol = null) {
+  getNextTranscludedTaskLineText(
+    lineText,
+    line,
+    blockId,
+    forcedNextSymbol = null,
+    options = {},
+  ) {
     if (!lineContainsStandaloneBlockId(lineText, blockId)) {
       return null;
     }
@@ -5287,10 +5404,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     if (forcedNextSymbol) {
-      if (
-        !this.canForceTranscludedTaskStatus(taskStatus, forcedNextSymbol) ||
-        taskStatus.symbol === forcedNextSymbol
-      ) {
+      const canForce = options.allowAnyStatus
+        ? isCyclableTaskStatus(taskStatus) &&
+          FIXED_SYMBOLS.includes(forcedNextSymbol)
+        : this.canForceTranscludedTaskStatus(taskStatus, forcedNextSymbol);
+      if (!canForce || taskStatus.symbol === forcedNextSymbol) {
         return null;
       }
     }
@@ -5648,7 +5766,7 @@ module.exports.helpers = {
   getLineTextFromSourceText,
   getListItemBlockRange,
   getNextOpenDoneSymbol,
-  getNextTranscludedStartToggleSymbol,
+  getOptionBracketTaskCycleDirection,
   getNextSectionBulletInsertion,
   getObsidianTaskToggle,
   getObsidianTaskToggleCursorCh,
@@ -5672,10 +5790,10 @@ module.exports.helpers = {
   isPomodoroTaskLine,
   isLineInMarkdownSectionDirectBody,
   isProperObsidianTaskLine,
+  isCyclableTaskStatus,
   isOpenDoneTaskStatus,
   isNonTranscludedStartResolvableStatus,
   isNonTranscludedStartableStatus,
-  isTranscludedStartToggleableStatus,
   isTranscludedCompletionClosableStatus,
   isTranscludedCompletionTraversableStatus,
   isTopLevelTaskLine,

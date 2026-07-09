@@ -84,6 +84,11 @@ const DASH_FILE_PATH = "dash.md";
 const DASH_TASKS_HEADER = "## Tasks";
 const DASH_TASKS_JUMP_RETRIES = 8;
 const DASH_TASKS_SCROLL_ASSERT_FRAMES = 8;
+const DASH_LOCATION_RESTORE_RETRIES = 12;
+const DASH_RENDERED_TASKS_QUERY_RESULT_SELECTOR =
+  "ul.plugin-tasks-query-result";
+const DASH_RENDERED_TASKS_BLOCK_SELECTOR = ".block-language-tasks";
+const DASH_RENDERED_TASKS_SCROLL_PADDING_PX = 8;
 const PROJECT_STATUS_CANCELED_ALIASES = new Set(["canceled", "cancelled"]);
 const PROJECT_STATUS_PRESENTATIONS = Object.freeze({
   wip: Object.freeze({
@@ -209,6 +214,20 @@ const BULLET_PROPERTY_TASKS_EMOJI_DATE_RE =
 function numericOrDefault(value, fallback) {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function finiteNumberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function clampNumber(value, min, max) {
+  const safeMin = finiteNumberOrNull(min);
+  const safeMax = finiteNumberOrNull(max);
+  const lower = safeMin === null ? 0 : safeMin;
+  const upper =
+    safeMax === null ? Number.POSITIVE_INFINITY : Math.max(lower, safeMax);
+  return Math.min(Math.max(Number(value) || 0, lower), upper);
 }
 
 function showBulletPropertyNotice(message, options) {
@@ -3693,6 +3712,369 @@ function clampPositionToEditor(editor, position) {
   return { line, ch };
 }
 
+function getEditorViewFromEditor(editorOrCm) {
+  const editorView =
+    editorOrCm && (editorOrCm.cm6 || editorOrCm.cm || editorOrCm);
+  if (
+    !editorView ||
+    !editorView.state ||
+    !editorView.state.doc ||
+    typeof editorView.dispatch !== "function"
+  ) {
+    return null;
+  }
+
+  return editorView;
+}
+
+function getElementRect(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") {
+    return null;
+  }
+
+  try {
+    const rect = element.getBoundingClientRect();
+    if (
+      !rect ||
+      !Number.isFinite(rect.top) ||
+      !Number.isFinite(rect.bottom) ||
+      rect.bottom <= rect.top
+    ) {
+      return null;
+    }
+
+    return rect;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getVerticalIntersectionHeight(rect, viewportRect) {
+  if (!rect || !viewportRect) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.min(rect.bottom, viewportRect.bottom) -
+      Math.max(rect.top, viewportRect.top),
+  );
+}
+
+function getScrollDOMMaxScrollTop(scrollDOM) {
+  if (!scrollDOM) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const scrollHeight = finiteNumberOrNull(scrollDOM.scrollHeight);
+  const clientHeight = finiteNumberOrNull(scrollDOM.clientHeight);
+  if (scrollHeight === null || clientHeight === null || clientHeight <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return Math.max(0, scrollHeight - clientHeight);
+}
+
+function getScrollDOMMaxScrollLeft(scrollDOM) {
+  if (!scrollDOM) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const scrollWidth = finiteNumberOrNull(scrollDOM.scrollWidth);
+  const clientWidth = finiteNumberOrNull(scrollDOM.clientWidth);
+  if (scrollWidth === null || clientWidth === null || clientWidth <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return Math.max(0, scrollWidth - clientWidth);
+}
+
+function setScrollDOMPosition(scrollDOM, scrollTop, scrollLeft = null) {
+  if (!scrollDOM) {
+    return false;
+  }
+
+  const targetScrollTop = clampNumber(
+    scrollTop,
+    0,
+    getScrollDOMMaxScrollTop(scrollDOM),
+  );
+  const rawScrollLeft =
+    finiteNumberOrNull(scrollLeft) ?? finiteNumberOrNull(scrollDOM.scrollLeft) ?? 0;
+  const targetScrollLeft = clampNumber(
+    rawScrollLeft,
+    0,
+    getScrollDOMMaxScrollLeft(scrollDOM),
+  );
+
+  if (typeof scrollDOM.scrollTo === "function") {
+    try {
+      scrollDOM.scrollTo({ top: targetScrollTop, left: targetScrollLeft });
+      return true;
+    } catch (error) {
+      // Fall through to direct assignment.
+    }
+  }
+
+  try {
+    scrollDOM.scrollTop = targetScrollTop;
+    scrollDOM.scrollLeft = targetScrollLeft;
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getRenderedTasksQueryContexts(editorView, viewportRect) {
+  const root = editorView && editorView.dom;
+  if (!root || typeof root.querySelectorAll !== "function") {
+    return [];
+  }
+
+  let resultLists;
+  try {
+    resultLists = Array.from(
+      root.querySelectorAll(DASH_RENDERED_TASKS_QUERY_RESULT_SELECTOR),
+    );
+  } catch (error) {
+    return [];
+  }
+
+  const seenContainers = new Set();
+  const contexts = [];
+  for (const resultList of resultLists) {
+    let container = resultList;
+    try {
+      if (resultList && typeof resultList.closest === "function") {
+        container =
+          resultList.closest(DASH_RENDERED_TASKS_BLOCK_SELECTOR) || resultList;
+      }
+    } catch (error) {
+      container = resultList;
+    }
+
+    if (!container || seenContainers.has(container)) {
+      continue;
+    }
+    seenContainers.add(container);
+
+    const rect = getElementRect(container);
+    if (!rect) {
+      continue;
+    }
+
+    contexts.push({
+      index: contexts.length,
+      element: container,
+      resultList,
+      rect,
+      viewportRect,
+    });
+  }
+
+  return contexts;
+}
+
+function findDashboardRenderedTasksQueryContext(editorView, scrollDOM) {
+  const viewportRect = getElementRect(scrollDOM);
+  if (!viewportRect) {
+    return null;
+  }
+
+  const contexts = getRenderedTasksQueryContexts(editorView, viewportRect);
+  if (contexts.length === 0) {
+    return null;
+  }
+
+  const visible = [];
+  let nearest = null;
+  for (const context of contexts) {
+    const intersectionHeight = getVerticalIntersectionHeight(
+      context.rect,
+      viewportRect,
+    );
+    if (intersectionHeight > 0) {
+      visible.push({ ...context, intersectionHeight, distance: 0 });
+      continue;
+    }
+
+    const distance =
+      context.rect.bottom <= viewportRect.top
+        ? viewportRect.top - context.rect.bottom
+        : context.rect.top >= viewportRect.bottom
+          ? context.rect.top - viewportRect.bottom
+          : 0;
+    const candidate = { ...context, intersectionHeight: 0, distance };
+    if (!nearest || candidate.distance < nearest.distance) {
+      nearest = candidate;
+    }
+  }
+
+  if (visible.length > 0) {
+    visible.sort((left, right) => {
+      const intersectionDelta =
+        right.intersectionHeight - left.intersectionHeight;
+      if (intersectionDelta !== 0) {
+        return intersectionDelta;
+      }
+
+      return left.rect.top - right.rect.top;
+    });
+    return visible[0];
+  }
+
+  return nearest;
+}
+
+function getDashboardRenderedTasksQuerySnapshot(editorView, scrollDOM) {
+  const viewportRect = getElementRect(scrollDOM);
+  const currentScrollTop = finiteNumberOrNull(scrollDOM && scrollDOM.scrollTop);
+  if (!viewportRect || currentScrollTop === null) {
+    return null;
+  }
+
+  const context = findDashboardRenderedTasksQueryContext(editorView, scrollDOM);
+  if (!context) {
+    return null;
+  }
+
+  const queryDocumentTop =
+    currentScrollTop + context.rect.top - viewportRect.top;
+  const queryHeight = context.rect.bottom - context.rect.top;
+  if (!Number.isFinite(queryDocumentTop) || !Number.isFinite(queryHeight)) {
+    return null;
+  }
+
+  return {
+    index: context.index,
+    offsetTop: currentScrollTop - queryDocumentTop,
+    height: Math.max(0, queryHeight),
+  };
+}
+
+function normalizeDashboardRenderedTasksQuerySnapshot(snapshot) {
+  if (!snapshot) {
+    return null;
+  }
+
+  const index = Math.floor(numericOrDefault(snapshot.index, Number.NaN));
+  const offsetTop = finiteNumberOrNull(snapshot.offsetTop);
+  const height = finiteNumberOrNull(snapshot.height);
+  if (!Number.isFinite(index) || index < 0 || offsetTop === null) {
+    return null;
+  }
+
+  return {
+    index,
+    offsetTop,
+    height: height === null ? null : Math.max(0, height),
+  };
+}
+
+function normalizeDashLocation(location) {
+  if (!location) {
+    return null;
+  }
+
+  const sourcePosition = normalizePosition(
+    location.sourcePosition || location.cursor || location.position,
+  );
+  const scrollTop = finiteNumberOrNull(location.scrollTop);
+  const scrollLeft = finiteNumberOrNull(location.scrollLeft);
+  const renderedTasksQuery = normalizeDashboardRenderedTasksQuerySnapshot(
+    location.renderedTasksQuery,
+  );
+
+  if (
+    !sourcePosition &&
+    scrollTop === null &&
+    scrollLeft === null &&
+    !renderedTasksQuery
+  ) {
+    return null;
+  }
+
+  const normalized = {};
+  if (sourcePosition) {
+    normalized.sourcePosition = sourcePosition;
+  }
+  if (scrollTop !== null) {
+    normalized.scrollTop = Math.max(0, scrollTop);
+  }
+  if (scrollLeft !== null) {
+    normalized.scrollLeft = Math.max(0, scrollLeft);
+  }
+  if (renderedTasksQuery) {
+    normalized.renderedTasksQuery = renderedTasksQuery;
+  }
+
+  return normalized;
+}
+
+function getDashboardQueryRestoreScrollTop(snapshot, editorView, scrollDOM) {
+  const normalized = normalizeDashboardRenderedTasksQuerySnapshot(snapshot);
+  const viewportRect = getElementRect(scrollDOM);
+  const currentScrollTop = finiteNumberOrNull(scrollDOM && scrollDOM.scrollTop);
+  if (!normalized || !viewportRect || currentScrollTop === null) {
+    return null;
+  }
+
+  const contexts = getRenderedTasksQueryContexts(editorView, viewportRect);
+  const context = contexts[normalized.index];
+  if (!context) {
+    return null;
+  }
+
+  const queryDocumentTop =
+    currentScrollTop + context.rect.top - viewportRect.top;
+  const queryHeight = context.rect.bottom - context.rect.top;
+  const viewportHeight =
+    finiteNumberOrNull(scrollDOM && scrollDOM.clientHeight) ||
+    finiteNumberOrNull(viewportRect.height) ||
+    viewportRect.bottom - viewportRect.top;
+  if (
+    !Number.isFinite(queryDocumentTop) ||
+    !Number.isFinite(queryHeight) ||
+    !Number.isFinite(viewportHeight) ||
+    queryHeight <= 0 ||
+    viewportHeight <= 0
+  ) {
+    return null;
+  }
+
+  const minRelativeOffset = -Math.max(
+    0,
+    viewportHeight - DASH_RENDERED_TASKS_SCROLL_PADDING_PX,
+  );
+  const maxRelativeOffset = Math.max(
+    0,
+    queryHeight - DASH_RENDERED_TASKS_SCROLL_PADDING_PX,
+  );
+  const savedMaxRelativeOffset =
+    normalized.height === null
+      ? null
+      : Math.max(0, normalized.height - DASH_RENDERED_TASKS_SCROLL_PADDING_PX);
+  const saneRelativeOffset =
+    savedMaxRelativeOffset === null
+      ? normalized.offsetTop
+      : clampNumber(
+          normalized.offsetTop,
+          minRelativeOffset,
+          savedMaxRelativeOffset,
+        );
+  const targetRelativeOffset = clampNumber(
+    saneRelativeOffset,
+    minRelativeOffset,
+    maxRelativeOffset,
+  );
+
+  return clampNumber(
+    queryDocumentTop + targetRelativeOffset,
+    0,
+    getScrollDOMMaxScrollTop(scrollDOM),
+  );
+}
+
 function positionFromTextOffset(text, offset) {
   const value = String(text);
   const targetOffset = Math.min(
@@ -6942,9 +7324,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.currentFilePath = null;
     this.alternateFilePath = null;
     this.filePositions = new Map();
+    this.dashLocation = null;
     this.pendingRestoreDeferred = null;
     this.pendingDashTasksDeferred = null;
     this.pendingDashTasksScrollDeferred = null;
+    this.pendingDashLocationRestoreDeferred = null;
+    this.pendingDashLocationCaptureDeferred = null;
+    this.activeDashScrollDOM = null;
+    this.activeDashScrollHandler = null;
+    this.isRestoringDashLocation = false;
     this.pendingOpenTaskJumpCenterDeferred = null;
 
     this.addCommand({
@@ -7133,10 +7521,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         this.currentFilePath = activeFile.path;
         this.captureActiveFilePosition();
       }
+      this.refreshDashScrollCaptureTarget();
     });
 
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => this.trackOpenedFile(file)),
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () =>
+        this.refreshDashScrollCaptureTarget(),
+      ),
     );
 
     if (
@@ -7158,6 +7552,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.register(() => {
       this.cancelPendingRestore();
       this.cancelPendingDashTasksJump();
+      this.cancelPendingDashLocationRestore();
+      this.cancelPendingDashLocationCapture();
+      this.clearDashScrollCaptureTarget();
       cancelDeferred(this.pendingOpenTaskJumpCenterDeferred);
       this.pendingOpenTaskJumpCenterDeferred = null;
     });
@@ -8003,10 +8400,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     const activeView = this.getActiveMarkdownView();
     if (activeView && activeView.file.path === file.path) {
-      return this.jumpOrDeferDashTasks();
+      this.cancelPendingDashTasksJump();
+      this.cancelPendingDashLocationRestore();
+      this.refreshDashScrollCaptureTarget(activeView);
+      this.captureDashLocationFromView(activeView);
+      return true;
     }
 
     this.captureActiveFilePosition();
+    const rememberedDashLocation = this.getRememberedDashLocation();
+    let activatedExistingLeaf = false;
+    let openedFile = false;
 
     try {
       const existingLeaf = this.findMarkdownLeafByPath(file.path);
@@ -8014,16 +8418,29 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         const activated = await this.activateWorkspaceLeaf(existingLeaf);
         if (!activated) {
           await this.app.workspace.getLeaf(false).openFile(file);
+          openedFile = true;
+        } else {
+          activatedExistingLeaf = true;
         }
       } else {
         await this.app.workspace.getLeaf(false).openFile(file);
+        openedFile = true;
       }
     } catch (error) {
       new Notice(`Could not open ${DASH_FILE_PATH}`);
       return false;
     }
 
-    this.jumpOrDeferDashTasks();
+    this.refreshDashScrollCaptureTarget();
+
+    if (rememberedDashLocation) {
+      this.restoreOrDeferDashLocation(rememberedDashLocation);
+      return true;
+    }
+
+    if (openedFile && !activatedExistingLeaf) {
+      this.jumpOrDeferDashTasks();
+    }
     return true;
   }
 
@@ -8500,6 +8917,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   jumpOrDeferDashTasks(retriesRemaining = DASH_TASKS_JUMP_RETRIES) {
+    this.cancelPendingDashLocationRestore();
     this.cancelPendingDashTasksJump();
 
     if (this.jumpToActiveDashTasks()) {
@@ -8558,6 +8976,280 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.pendingDashTasksDeferred = null;
     cancelDeferred(this.pendingDashTasksScrollDeferred);
     this.pendingDashTasksScrollDeferred = null;
+  }
+
+  getRememberedDashLocation() {
+    const remembered = normalizeDashLocation(this.dashLocation);
+    if (remembered) {
+      return remembered;
+    }
+
+    const sourcePosition = normalizePosition(
+      this.filePositions.get(DASH_FILE_PATH),
+    );
+    return sourcePosition ? { sourcePosition } : null;
+  }
+
+  refreshDashScrollCaptureTarget(view = this.getActiveMarkdownView()) {
+    const isDashView =
+      view &&
+      view.file &&
+      view.file.path === DASH_FILE_PATH &&
+      view.editor;
+    const editorView = isDashView ? getEditorViewFromEditor(view.editor) : null;
+    const scrollDOM = editorView && editorView.scrollDOM;
+
+    if (scrollDOM && scrollDOM === this.activeDashScrollDOM) {
+      return true;
+    }
+
+    this.clearDashScrollCaptureTarget();
+    if (!scrollDOM || typeof scrollDOM.addEventListener !== "function") {
+      return false;
+    }
+
+    const handler = () => this.scheduleDashLocationCapture();
+    try {
+      scrollDOM.addEventListener("scroll", handler, { passive: true });
+    } catch (error) {
+      scrollDOM.addEventListener("scroll", handler);
+    }
+
+    this.activeDashScrollDOM = scrollDOM;
+    this.activeDashScrollHandler = handler;
+    return true;
+  }
+
+  clearDashScrollCaptureTarget() {
+    if (
+      this.activeDashScrollDOM &&
+      this.activeDashScrollHandler &&
+      typeof this.activeDashScrollDOM.removeEventListener === "function"
+    ) {
+      try {
+        this.activeDashScrollDOM.removeEventListener(
+          "scroll",
+          this.activeDashScrollHandler,
+        );
+      } catch (error) {
+        // Best-effort cleanup only.
+      }
+    }
+
+    this.activeDashScrollDOM = null;
+    this.activeDashScrollHandler = null;
+  }
+
+  scheduleDashLocationCapture() {
+    if (this.isRestoringDashLocation) {
+      return false;
+    }
+
+    this.cancelPendingDashLocationCapture();
+    this.pendingDashLocationCaptureDeferred = deferToNextFrame(() => {
+      this.pendingDashLocationCaptureDeferred = null;
+      if (!this.isRestoringDashLocation) {
+        this.captureActiveDashLocation();
+      }
+    });
+
+    return true;
+  }
+
+  cancelPendingDashLocationCapture() {
+    cancelDeferred(this.pendingDashLocationCaptureDeferred);
+    this.pendingDashLocationCaptureDeferred = null;
+  }
+
+  captureActiveDashLocation() {
+    const view = this.getActiveMarkdownView();
+    return this.captureDashLocationFromView(view);
+  }
+
+  captureDashLocationFromView(view, options = {}) {
+    if (
+      !view ||
+      !view.file ||
+      view.file.path !== DASH_FILE_PATH ||
+      !view.editor
+    ) {
+      return false;
+    }
+
+    if (this.isRestoringDashLocation && !options.force) {
+      return false;
+    }
+
+    const editorView = getEditorViewFromEditor(view.editor);
+    const scrollDOM = editorView && editorView.scrollDOM;
+    const sourcePosition =
+      normalizePosition(options.position) ||
+      (typeof view.editor.getCursor === "function"
+        ? normalizePosition(view.editor.getCursor())
+        : null) ||
+      normalizePosition(this.filePositions.get(DASH_FILE_PATH));
+    const location = {};
+
+    if (sourcePosition) {
+      location.sourcePosition = sourcePosition;
+      this.filePositions.set(DASH_FILE_PATH, sourcePosition);
+    }
+
+    if (scrollDOM) {
+      const scrollTop = finiteNumberOrNull(scrollDOM.scrollTop);
+      const scrollLeft = finiteNumberOrNull(scrollDOM.scrollLeft);
+      if (scrollTop !== null) {
+        location.scrollTop = Math.max(0, scrollTop);
+      }
+      if (scrollLeft !== null) {
+        location.scrollLeft = Math.max(0, scrollLeft);
+      }
+
+      const renderedTasksQuery = getDashboardRenderedTasksQuerySnapshot(
+        editorView,
+        scrollDOM,
+      );
+      if (renderedTasksQuery) {
+        location.renderedTasksQuery = renderedTasksQuery;
+      }
+    }
+
+    const normalized = normalizeDashLocation(location);
+    if (!normalized) {
+      return false;
+    }
+
+    this.dashLocation = normalized;
+    return true;
+  }
+
+  restoreOrDeferDashLocation(
+    location,
+    retriesRemaining = DASH_LOCATION_RESTORE_RETRIES,
+  ) {
+    const normalized = normalizeDashLocation(location);
+    if (!normalized) {
+      return false;
+    }
+
+    this.cancelPendingDashTasksJump();
+    this.cancelPendingDashLocationRestore();
+    this.isRestoringDashLocation = true;
+    return this.restoreOrDeferDashLocationInternal(
+      normalized,
+      retriesRemaining,
+    );
+  }
+
+  restoreOrDeferDashLocationInternal(location, retriesRemaining) {
+    const result = this.restoreActiveDashLocation(location);
+    const shouldRetry =
+      (!result.active || result.needsQueryRetry) && retriesRemaining > 0;
+
+    if (!shouldRetry) {
+      this.isRestoringDashLocation = false;
+      if (!result.active && retriesRemaining <= 0) {
+        new Notice("No active markdown editor");
+      }
+      return result.applied;
+    }
+
+    this.pendingDashLocationRestoreDeferred = deferToNextFrame(() => {
+      this.pendingDashLocationRestoreDeferred = null;
+      this.restoreOrDeferDashLocationInternal(location, retriesRemaining - 1);
+    });
+
+    return result.applied;
+  }
+
+  restoreActiveDashLocation(location) {
+    const normalized = normalizeDashLocation(location);
+    const result = {
+      active: false,
+      applied: false,
+      needsQueryRetry: false,
+    };
+    if (!normalized) {
+      return result;
+    }
+
+    const view = this.getActiveMarkdownView();
+    if (
+      !view ||
+      !view.file ||
+      view.file.path !== DASH_FILE_PATH ||
+      !view.editor
+    ) {
+      result.needsQueryRetry = !!normalized.renderedTasksQuery;
+      return result;
+    }
+
+    result.active = true;
+    this.refreshDashScrollCaptureTarget(view);
+
+    if (normalized.sourcePosition) {
+      const target = clampPositionToEditor(view.editor, normalized.sourcePosition);
+      if (target && setEditorCursor(view.editor, target)) {
+        this.filePositions.set(DASH_FILE_PATH, target);
+        result.applied = true;
+      }
+    }
+
+    const editorView = getEditorViewFromEditor(view.editor);
+    const scrollDOM = editorView && editorView.scrollDOM;
+    if (!scrollDOM) {
+      result.needsQueryRetry =
+        !!normalized.renderedTasksQuery || normalized.scrollTop !== undefined;
+      return result;
+    }
+
+    if (
+      normalized.scrollTop !== undefined ||
+      normalized.scrollLeft !== undefined
+    ) {
+      const targetScrollTop =
+        normalized.scrollTop !== undefined
+          ? normalized.scrollTop
+          : finiteNumberOrNull(scrollDOM.scrollTop) || 0;
+      const targetScrollLeft =
+        normalized.scrollLeft !== undefined
+          ? normalized.scrollLeft
+          : finiteNumberOrNull(scrollDOM.scrollLeft) || 0;
+      if (setScrollDOMPosition(scrollDOM, targetScrollTop, targetScrollLeft)) {
+        result.applied = true;
+      }
+    }
+
+    if (normalized.renderedTasksQuery) {
+      const queryScrollTop = getDashboardQueryRestoreScrollTop(
+        normalized.renderedTasksQuery,
+        editorView,
+        scrollDOM,
+      );
+      if (queryScrollTop === null) {
+        result.needsQueryRetry = true;
+      } else if (
+        setScrollDOMPosition(
+          scrollDOM,
+          queryScrollTop,
+          normalized.scrollLeft !== undefined
+            ? normalized.scrollLeft
+            : finiteNumberOrNull(scrollDOM.scrollLeft) || 0,
+        )
+      ) {
+        result.applied = true;
+        result.needsQueryRetry = false;
+      }
+    }
+
+    this.dashLocation = normalized;
+    return result;
+  }
+
+  cancelPendingDashLocationRestore() {
+    cancelDeferred(this.pendingDashLocationRestoreDeferred);
+    this.pendingDashLocationRestoreDeferred = null;
+    this.isRestoringDashLocation = false;
   }
 
   async openParentNote() {
@@ -9804,10 +10496,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
   trackOpenedFile(file) {
     if (!this.isMarkdownFile(file)) {
+      this.clearDashScrollCaptureTarget();
       return;
     }
 
     if (file.path === this.currentFilePath) {
+      this.refreshDashScrollCaptureTarget();
       return;
     }
 
@@ -9815,10 +10509,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       this.alternateFilePath = this.currentFilePath;
     }
     this.currentFilePath = file.path;
+    this.refreshDashScrollCaptureTarget();
   }
 
   trackSelectionUpdate(update) {
-    if (!update || (!update.selectionSet && !update.docChanged)) {
+    if (
+      !update ||
+      (!update.selectionSet && !update.docChanged && !update.viewportChanged)
+    ) {
       return;
     }
 
@@ -9831,7 +10529,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return;
     }
 
-    this.saveFilePosition(view.file.path, positionFromCodeMirrorUpdate(update));
+    const position =
+      update.selectionSet || update.docChanged
+        ? positionFromCodeMirrorUpdate(update)
+        : null;
+    if (position) {
+      this.saveFilePosition(view.file.path, position);
+    }
+
+    if (view.file.path === DASH_FILE_PATH) {
+      this.refreshDashScrollCaptureTarget(view);
+      this.captureDashLocationFromView(view, { position });
+    }
   }
 
   getActiveMarkdownFile() {
@@ -10433,8 +11142,22 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 };
 
 module.exports.helpers = {
+  finiteNumberOrNull,
+  clampNumber,
   normalizePosition,
   clampPositionToEditor,
+  getEditorViewFromEditor,
+  getElementRect,
+  getVerticalIntersectionHeight,
+  getScrollDOMMaxScrollTop,
+  getScrollDOMMaxScrollLeft,
+  setScrollDOMPosition,
+  getRenderedTasksQueryContexts,
+  findDashboardRenderedTasksQueryContext,
+  getDashboardRenderedTasksQuerySnapshot,
+  normalizeDashboardRenderedTasksQuerySnapshot,
+  normalizeDashLocation,
+  getDashboardQueryRestoreScrollTop,
   positionFromCodeMirrorUpdate,
   positionFromTextOffset,
   normalizeVimRepeat,

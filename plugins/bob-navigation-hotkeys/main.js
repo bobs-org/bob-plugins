@@ -84,7 +84,8 @@ const DASH_FILE_PATH = "dash.md";
 const DASH_TASKS_HEADER = "## Tasks";
 const DASH_TASKS_JUMP_RETRIES = 8;
 const DASH_TASKS_SCROLL_ASSERT_FRAMES = 8;
-const DASH_LOCATION_RESTORE_RETRIES = 12;
+const DASH_LOCATION_RESTORE_RETRIES = 24;
+const DASH_LOCATION_RESTORE_ASSERT_FRAMES = 8;
 const DASH_RENDERED_TASKS_QUERY_RESULT_SELECTOR =
   "ul.plugin-tasks-query-result";
 const DASH_RENDERED_TASKS_BLOCK_SELECTOR = ".block-language-tasks";
@@ -3863,8 +3864,28 @@ function getRenderedTasksQueryContexts(editorView, viewportRect) {
       continue;
     }
 
+    let sourceLine = null;
+    const doc = editorView && editorView.state && editorView.state.doc;
+    if (
+      editorView &&
+      typeof editorView.posAtDOM === "function" &&
+      doc &&
+      typeof doc.lineAt === "function"
+    ) {
+      try {
+        const position = editorView.posAtDOM(container);
+        const line = Number.isFinite(position) ? doc.lineAt(position) : null;
+        if (line && Number.isFinite(line.number) && line.number >= 1) {
+          sourceLine = Math.floor(line.number) - 1;
+        }
+      } catch (error) {
+        sourceLine = null;
+      }
+    }
+
     contexts.push({
       index: contexts.length,
+      sourceLine,
       element: container,
       resultList,
       rect,
@@ -3947,6 +3968,7 @@ function getDashboardRenderedTasksQuerySnapshot(editorView, scrollDOM) {
 
   return {
     index: context.index,
+    sourceLine: context.sourceLine,
     offsetTop: currentScrollTop - queryDocumentTop,
     height: Math.max(0, queryHeight),
   };
@@ -3958,6 +3980,16 @@ function normalizeDashboardRenderedTasksQuerySnapshot(snapshot) {
   }
 
   const index = Math.floor(numericOrDefault(snapshot.index, Number.NaN));
+  const rawSourceLine =
+    snapshot.sourceLine === null || snapshot.sourceLine === undefined
+      ? null
+      : Math.floor(numericOrDefault(snapshot.sourceLine, Number.NaN));
+  const sourceLine =
+    rawSourceLine !== null &&
+    Number.isFinite(rawSourceLine) &&
+    rawSourceLine >= 0
+      ? rawSourceLine
+      : null;
   const offsetTop = finiteNumberOrNull(snapshot.offsetTop);
   const height = finiteNumberOrNull(snapshot.height);
   if (!Number.isFinite(index) || index < 0 || offsetTop === null) {
@@ -3966,6 +3998,7 @@ function normalizeDashboardRenderedTasksQuerySnapshot(snapshot) {
 
   return {
     index,
+    sourceLine,
     offsetTop,
     height: height === null ? null : Math.max(0, height),
   };
@@ -4020,7 +4053,20 @@ function getDashboardQueryRestoreScrollTop(snapshot, editorView, scrollDOM) {
   }
 
   const contexts = getRenderedTasksQueryContexts(editorView, viewportRect);
-  const context = contexts[normalized.index];
+  let context = null;
+  if (normalized.sourceLine !== null) {
+    context =
+      contexts.find(
+        (candidate) => candidate.sourceLine === normalized.sourceLine,
+      ) || null;
+
+    const fallbackContext = contexts[normalized.index];
+    if (!context && fallbackContext && fallbackContext.sourceLine === null) {
+      context = fallbackContext;
+    }
+  } else {
+    context = contexts[normalized.index];
+  }
   if (!context) {
     return null;
   }
@@ -4150,6 +4196,20 @@ function setEditorCursor(editor, position) {
         // Cursor restore should still succeed if a scroll helper is unavailable.
       }
     }
+  }
+
+  return true;
+}
+
+function setEditorCursorWithoutScroll(editor, position) {
+  if (!editor || typeof editor.setCursor !== "function") {
+    return false;
+  }
+
+  try {
+    editor.setCursor(position.line, position.ch);
+  } catch (error) {
+    editor.setCursor(position);
   }
 
   return true;
@@ -9132,20 +9192,47 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.cancelPendingDashTasksJump();
     this.cancelPendingDashLocationRestore();
     this.isRestoringDashLocation = true;
+    const restoreState = {
+      cursorApplied: false,
+      rawScrollApplied: false,
+      anchoredWriteSucceeded: false,
+      assertFramesRemaining: 0,
+    };
     return this.restoreOrDeferDashLocationInternal(
       normalized,
       retriesRemaining,
+      restoreState,
     );
   }
 
-  restoreOrDeferDashLocationInternal(location, retriesRemaining) {
-    const result = this.restoreActiveDashLocation(location);
-    const shouldRetry =
-      (!result.active || result.needsQueryRetry) && retriesRemaining > 0;
+  restoreOrDeferDashLocationInternal(
+    location,
+    retriesRemaining,
+    restoreState,
+  ) {
+    const isAssertFrame =
+      restoreState.anchoredWriteSucceeded &&
+      restoreState.assertFramesRemaining > 0;
+    if (isAssertFrame) {
+      restoreState.assertFramesRemaining -= 1;
+    }
 
-    if (!shouldRetry) {
+    const result = this.restoreActiveDashLocation(location, restoreState);
+    const needsInitialRetry =
+      !restoreState.anchoredWriteSucceeded &&
+      (!result.active || result.needsQueryRetry);
+    const shouldRetry = needsInitialRetry && retriesRemaining > 0;
+    const shouldAssert =
+      restoreState.anchoredWriteSucceeded &&
+      restoreState.assertFramesRemaining > 0;
+
+    if (!shouldRetry && !shouldAssert) {
       this.isRestoringDashLocation = false;
-      if (!result.active && retriesRemaining <= 0) {
+      if (
+        !result.active &&
+        !restoreState.anchoredWriteSucceeded &&
+        retriesRemaining <= 0
+      ) {
         new Notice("No active markdown editor");
       }
       return result.applied;
@@ -9153,14 +9240,24 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.pendingDashLocationRestoreDeferred = deferToNextFrame(() => {
       this.pendingDashLocationRestoreDeferred = null;
-      this.restoreOrDeferDashLocationInternal(location, retriesRemaining - 1);
+      this.restoreOrDeferDashLocationInternal(
+        location,
+        shouldRetry ? retriesRemaining - 1 : retriesRemaining,
+        restoreState,
+      );
     });
 
     return result.applied;
   }
 
-  restoreActiveDashLocation(location) {
+  restoreActiveDashLocation(location, restoreState) {
     const normalized = normalizeDashLocation(location);
+    const state = restoreState || {
+      cursorApplied: false,
+      rawScrollApplied: false,
+      anchoredWriteSucceeded: false,
+      assertFramesRemaining: 0,
+    };
     const result = {
       active: false,
       applied: false,
@@ -9184,9 +9281,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     result.active = true;
     this.refreshDashScrollCaptureTarget(view);
 
-    if (normalized.sourcePosition) {
+    if (normalized.sourcePosition && !state.cursorApplied) {
       const target = clampPositionToEditor(view.editor, normalized.sourcePosition);
-      if (target && setEditorCursor(view.editor, target)) {
+      if (target && setEditorCursorWithoutScroll(view.editor, target)) {
+        state.cursorApplied = true;
         this.filePositions.set(DASH_FILE_PATH, target);
         result.applied = true;
       }
@@ -9196,13 +9294,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const scrollDOM = editorView && editorView.scrollDOM;
     if (!scrollDOM) {
       result.needsQueryRetry =
-        !!normalized.renderedTasksQuery || normalized.scrollTop !== undefined;
+        !!normalized.renderedTasksQuery ||
+        (!state.rawScrollApplied &&
+          (normalized.scrollTop !== undefined ||
+            normalized.scrollLeft !== undefined));
       return result;
     }
 
     if (
-      normalized.scrollTop !== undefined ||
-      normalized.scrollLeft !== undefined
+      !state.rawScrollApplied &&
+      !state.anchoredWriteSucceeded &&
+      (normalized.scrollTop !== undefined ||
+        normalized.scrollLeft !== undefined)
     ) {
       const targetScrollTop =
         normalized.scrollTop !== undefined
@@ -9213,6 +9316,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           ? normalized.scrollLeft
           : finiteNumberOrNull(scrollDOM.scrollLeft) || 0;
       if (setScrollDOMPosition(scrollDOM, targetScrollTop, targetScrollLeft)) {
+        state.rawScrollApplied = true;
         result.applied = true;
       }
     }
@@ -9225,6 +9329,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
       if (queryScrollTop === null) {
         result.needsQueryRetry = true;
+        if (normalized.renderedTasksQuery.sourceLine !== null) {
+          scrollEditorLineToTop(
+            view.editor,
+            normalized.renderedTasksQuery.sourceLine,
+          );
+        }
       } else if (
         setScrollDOMPosition(
           scrollDOM,
@@ -9234,6 +9344,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             : finiteNumberOrNull(scrollDOM.scrollLeft) || 0,
         )
       ) {
+        if (!state.anchoredWriteSucceeded) {
+          state.anchoredWriteSucceeded = true;
+          state.assertFramesRemaining = DASH_LOCATION_RESTORE_ASSERT_FRAMES;
+        }
         result.applied = true;
         result.needsQueryRetry = false;
       }
@@ -11223,6 +11337,7 @@ module.exports.helpers = {
   openMarkdownFileWithLeafReuse,
   getEditorCursor,
   getEditorLine,
+  setEditorCursorWithoutScroll,
   scrollEditorLineToTop,
   scrollEditorLineToCenter,
   scheduleOpenTaskJumpCenter,

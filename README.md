@@ -13,7 +13,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
 | Block ID Prompt         | `block-id-prompt`        |   1.2.1 | Prompt for custom block IDs, complete wiki block links to open tasks (skipping `#hide` tasks), and mark dependency-blocked tasks. |
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.0.0 | Expand Bob daily-note snippets and ledger time ranges.                |
-| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.8.0 | Open parent/alternate notes and set bullet properties, including local task dependencies with a single Sub-projects-style `🔗 **DEPENDS ON:**` navigation bullet, `<Tab>` batch add/remove, sequential block-ID prompts, and a current-note consolidation command. |
+| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.8.0 | Open parent/alternate notes, create scheduled projects from tasks, highlight future-scheduled child projects, and manage bullet properties and local task dependencies. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
 | Bob Vim Surround        | `bob-vim-surround`       |   1.4.0 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
 | Task Status Cycler      | `task-status-cycler`     |   1.0.0 | Cycle the active task line through configured Tasks statuses.         |
@@ -70,8 +70,13 @@ Each plugin folder contains the files Obsidian reads when loading a plugin:
 ### Validation
 
 ```bash
+npm test
 npm run validate
 ```
+
+`npm test` runs the focused pure-helper coverage for Bob Navigation Hotkeys,
+including scheduled-project task extraction, frontmatter handoff, date
+boundaries, and child-picker presentation metadata.
 
 `scripts/validate-manifests.mjs` checks every plugin under `plugins/`:
 

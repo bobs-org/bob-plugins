@@ -2324,6 +2324,77 @@ function getProjectPriorityField(description) {
   );
 }
 
+function validateProjectScheduledDate(value) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) {
+    return Object.freeze({
+      valid: false,
+      value: text,
+      message: "Scheduled date must use YYYY-MM-DD",
+    });
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (year >= 0 && year < 100) {
+    date.setUTCFullYear(year);
+  }
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return Object.freeze({
+      valid: false,
+      value: text,
+      message: `Scheduled date is not a valid calendar date: ${text}`,
+    });
+  }
+
+  return Object.freeze({ valid: true, value: text, year, month, day });
+}
+
+function extractProjectSourceSchedule(description) {
+  const text = String(description || "");
+  const fields = parseBulletPropertyFields(text).filter(
+    (field) => field.key === "scheduled",
+  );
+  if (fields.length === 0) {
+    return Object.freeze({
+      description: text,
+      scheduled: null,
+      error: null,
+    });
+  }
+  if (fields.length > 1) {
+    return Object.freeze({
+      description: text,
+      scheduled: null,
+      error: "Source task has multiple [scheduled:: ...] fields; keep exactly one",
+    });
+  }
+
+  const validation = validateProjectScheduledDate(fields[0].value);
+  if (!validation.valid) {
+    return Object.freeze({
+      description: text,
+      scheduled: null,
+      error: validation.message,
+    });
+  }
+
+  const field = fields[0];
+  return Object.freeze({
+    description:
+      text.slice(0, field.span.start) + text.slice(field.span.end),
+    scheduled: validation.value,
+    error: null,
+  });
+}
+
 function parseProjectSourceTaskLine(lineText) {
   const text = String(lineText || "");
   const match = PROJECT_SOURCE_TASK_LINE_RE.exec(text);
@@ -2359,6 +2430,9 @@ function parseProjectSourceTaskLine(lineText) {
       description.slice(priorityField.span.end);
   }
 
+  const schedule = extractProjectSourceSchedule(description);
+  description = schedule.description;
+
   description = collapseProjectTaskDescription(
     description.replace(PROJECT_TASK_TAG_GLOBAL_RE, "$1"),
   );
@@ -2371,6 +2445,8 @@ function parseProjectSourceTaskLine(lineText) {
     priority,
     blockId,
     status,
+    scheduled: schedule.scheduled,
+    scheduleError: schedule.error,
   });
 }
 
@@ -2835,6 +2911,20 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
     tasksInserted,
     tasksSectionMissing,
   });
+}
+
+function applyProjectCreationFrontmatter(
+  frontmatter,
+  parentLink,
+  scheduled = null,
+) {
+  frontmatter.parent = parentLink;
+  frontmatter.type = "[[project]]";
+  frontmatter.status = "wip";
+  if (scheduled !== null && scheduled !== undefined && scheduled !== "") {
+    frontmatter.scheduled = scheduled;
+  }
+  return frontmatter;
 }
 
 // Remove a previously captured source task block (parent line plus any child
@@ -5083,7 +5173,67 @@ function formatProjectStatusLabel(statusKey) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function getProjectNoteInfo(frontmatter) {
+const PROJECT_SCHEDULE_MONTHS = Object.freeze([
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+]);
+
+function projectScheduleLocalDate(validation) {
+  const date = new Date(0);
+  date.setHours(0, 0, 0, 0);
+  date.setFullYear(validation.year, validation.month - 1, validation.day);
+  return date;
+}
+
+function getFutureProjectSchedule(value, now = new Date()) {
+  const validation = validateProjectScheduledDate(value);
+  if (!validation.valid) {
+    return Object.freeze({
+      scheduled: false,
+      date: "",
+      label: "",
+    });
+  }
+
+  const scheduledDate = projectScheduleLocalDate(validation);
+  const localToday = getLocalDateStart(now);
+  if (compareLocalDates(scheduledDate, localToday) <= 0) {
+    return Object.freeze({
+      scheduled: false,
+      date: "",
+      label: "",
+    });
+  }
+
+  const tomorrow = addLocalDateDays(localToday, 1);
+  let label;
+  if (compareLocalDates(scheduledDate, tomorrow) === 0) {
+    label = "Tomorrow";
+  } else {
+    label = `${PROJECT_SCHEDULE_MONTHS[validation.month - 1]} ${validation.day}`;
+    if (validation.year !== localToday.getFullYear()) {
+      label += `, ${validation.year}`;
+    }
+  }
+
+  return Object.freeze({
+    scheduled: true,
+    date: validation.value,
+    label,
+  });
+}
+
+function getProjectNoteInfo(frontmatter, now = new Date()) {
   const isProject = Boolean(frontmatter) && isProjectType(frontmatter.type);
   if (!isProject) {
     return {
@@ -5093,9 +5243,13 @@ function getProjectNoteInfo(frontmatter) {
       emoji: "",
       icon: "file-text",
       variant: "",
+      scheduled: false,
+      scheduledDate: "",
+      scheduledLabel: "",
     };
   }
 
+  const schedule = getFutureProjectSchedule(frontmatter.scheduled, now);
   const normalizedStatus = normalizeStatus(frontmatter.status);
   const statusKey = PROJECT_STATUS_CANCELED_ALIASES.has(normalizedStatus)
     ? "canceled"
@@ -5109,6 +5263,9 @@ function getProjectNoteInfo(frontmatter) {
       emoji: presentation.emoji,
       icon: presentation.icon,
       variant: presentation.variant,
+      scheduled: schedule.scheduled,
+      scheduledDate: schedule.date,
+      scheduledLabel: schedule.label,
     };
   }
 
@@ -5119,11 +5276,14 @@ function getProjectNoteInfo(frontmatter) {
     emoji: PROJECT_STATUS_FALLBACK.emoji,
     icon: PROJECT_STATUS_FALLBACK.icon,
     variant: PROJECT_STATUS_FALLBACK.variant,
+    scheduled: schedule.scheduled,
+    scheduledDate: schedule.date,
+    scheduledLabel: schedule.label,
   };
 }
 
-function getChildNoteInfo(frontmatter) {
-  const projectInfo = getProjectNoteInfo(frontmatter);
+function getChildNoteInfo(frontmatter, now = new Date()) {
+  const projectInfo = getProjectNoteInfo(frontmatter, now);
   if (projectInfo.isProject) {
     return {
       kind: "project",
@@ -5133,6 +5293,9 @@ function getChildNoteInfo(frontmatter) {
       emoji: projectInfo.emoji,
       icon: projectInfo.icon,
       variant: projectInfo.variant,
+      scheduled: projectInfo.scheduled,
+      scheduledDate: projectInfo.scheduledDate,
+      scheduledLabel: projectInfo.scheduledLabel,
     };
   }
 
@@ -5145,6 +5308,9 @@ function getChildNoteInfo(frontmatter) {
       emoji: AREA_PRESENTATION.emoji,
       icon: AREA_PRESENTATION.icon,
       variant: AREA_PRESENTATION.variant,
+      scheduled: false,
+      scheduledDate: "",
+      scheduledLabel: "",
     };
   }
 
@@ -5156,22 +5322,26 @@ function getChildNoteInfo(frontmatter) {
     emoji: "",
     icon: "file-text",
     variant: "",
+    scheduled: false,
+    scheduledDate: "",
+    scheduledLabel: "",
   };
 }
 
-function getFileChildNoteInfo(app, file) {
+function getFileChildNoteInfo(app, file, now = new Date()) {
   const frontmatter =
     app &&
     app.metadataCache &&
     typeof app.metadataCache.getFileCache === "function"
       ? app.metadataCache.getFileCache(file)?.frontmatter
       : null;
-  return getChildNoteInfo(frontmatter);
+  return getChildNoteInfo(frontmatter, now);
 }
 
 function getChildNoteSummary(childFiles, noteInfoByPath) {
   let projectCount = 0;
   let areaCount = 0;
+  let futureScheduledCount = 0;
   const statusCounts = new Map();
 
   childFiles.forEach((file) => {
@@ -5190,6 +5360,9 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
     }
 
     projectCount += 1;
+    if (info.scheduled) {
+      futureScheduledCount += 1;
+    }
     const label = info.statusKey
       ? info.statusKey === "wip" ||
         info.statusKey === "done" ||
@@ -5218,6 +5391,12 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
       .forEach((label) => {
         parts.push(`${statusCounts.get(label)} ${label}`);
       });
+
+    if (futureScheduledCount > 0) {
+      parts.push(
+        `${futureScheduledCount} future-scheduled`,
+      );
+    }
   }
 
   if (areaCount > 0) {
@@ -5231,6 +5410,13 @@ function getChildNoteSearchText(file, noteInfo) {
   const parts = [file.path, file.basename];
   if (noteInfo && noteInfo.kind === "project") {
     parts.push("project", noteInfo.statusKey, noteInfo.label);
+    if (noteInfo.scheduled) {
+      parts.push(
+        "scheduled",
+        noteInfo.scheduledDate,
+        noteInfo.scheduledLabel,
+      );
+    }
     if (noteInfo.statusKey === "canceled") {
       parts.push("cancelled");
     }
@@ -5551,8 +5737,12 @@ class FilteredPickerModal extends Modal {
 
 class ChildNotePickerModal extends FilteredPickerModal {
   constructor(app, plugin, childFiles, parentFile) {
+    const now = new Date();
     const noteInfoByPath = new Map(
-      childFiles.map((file) => [file.path, getFileChildNoteInfo(app, file)]),
+      childFiles.map((file) => [
+        file.path,
+        getFileChildNoteInfo(app, file, now),
+      ]),
     );
     const summaryParts = getChildNoteSummary(childFiles, noteInfoByPath);
 
@@ -5600,6 +5790,30 @@ class ChildNotePickerModal extends FilteredPickerModal {
         appendHighlighted(pathEl, file.path, query);
 
         if (noteInfo && noteInfo.decorated) {
+          const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
+          if (noteInfo.kind === "project" && noteInfo.scheduled) {
+            const scheduleAriaLabel = `Project scheduled for ${noteInfo.scheduledDate}`;
+            const scheduleEl = badgesEl.createDiv({
+              cls: "bob-cnp-row-schedule",
+              attr: {
+                "aria-label": scheduleAriaLabel,
+                title: scheduleAriaLabel,
+              },
+            });
+            const scheduleIcon = scheduleEl.createSpan({
+              cls: "bob-cnp-row-schedule-icon",
+            });
+            applyIcon(scheduleIcon, "calendar-clock");
+            const scheduleLabel = scheduleEl.createSpan({
+              cls: "bob-cnp-row-schedule-label",
+            });
+            appendHighlighted(
+              scheduleLabel,
+              noteInfo.scheduledLabel,
+              query,
+            );
+          }
+
           const statusText = [noteInfo.emoji, noteInfo.label]
             .filter(Boolean)
             .join(" ");
@@ -5607,7 +5821,7 @@ class ChildNotePickerModal extends FilteredPickerModal {
             noteInfo.kind === "area"
               ? "Area note"
               : `Project status: ${noteInfo.label}`;
-          const statusEl = rowEl.createDiv({
+          const statusEl = badgesEl.createDiv({
             cls: `bob-cnp-row-status is-status-${noteInfo.variant}`,
             attr: {
               "aria-label": ariaLabel,
@@ -9852,6 +10066,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(getProjectSourceTaskLineNoticeText(lineText));
       return false;
     }
+    if (parsedTask.scheduleError) {
+      new Notice(parsedTask.scheduleError);
+      return false;
+    }
 
     if (!this.app.vault || typeof this.app.vault.process !== "function") {
       new Notice("Vault content updates are unavailable");
@@ -9928,6 +10146,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const createdFile = await this.createProjectNoteFile(
       sourceFile,
       projectBasename || undefined,
+      parsedTask.scheduled,
     );
     if (!createdFile) {
       return false;
@@ -10012,7 +10231,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  async createProjectNoteFile(creatingFile, basename) {
+  async createProjectNoteFile(creatingFile, basename, scheduled = null) {
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
       new Notice("Templater is not available");
@@ -10065,9 +10284,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       await this.app.fileManager.processFrontMatter(
         createdFile,
         (frontmatter) => {
-          frontmatter.parent = parentLink;
-          frontmatter.type = "[[project]]";
-          frontmatter.status = "wip";
+          applyProjectCreationFrontmatter(
+            frontmatter,
+            parentLink,
+            scheduled,
+          );
         },
       );
     } catch (error) {
@@ -11300,6 +11521,8 @@ module.exports.helpers = {
   normalizeRenameInput,
   getRenameTargetPath,
   getRenamedFileNoticeText,
+  validateProjectScheduledDate,
+  extractProjectSourceSchedule,
   parseProjectSourceTaskLine,
   getProjectSourceTaskBlock,
   parseProjectChildListItem,
@@ -11308,6 +11531,7 @@ module.exports.helpers = {
   formatProjectTaskCreatedDate,
   replaceProjectTasksPlaceholder,
   buildProjectContentFromTask,
+  applyProjectCreationFrontmatter,
   removeTaskBlockFromContent,
   getProjectBasenameFromTaskBlockId,
   getProjectBasenameSuffixForIndex,
@@ -11316,6 +11540,11 @@ module.exports.helpers = {
   rewriteBlockIdLinkOriginal,
   replaceLinkOriginalsInContent,
   getProjectFromTaskNoticeText,
+  getFutureProjectSchedule,
+  getProjectNoteInfo,
+  getChildNoteInfo,
+  getChildNoteSummary,
+  getChildNoteSearchText,
   getNoteTemplateForCreationPath,
   findLinkSubpathIndex,
   getLinkSubpath,

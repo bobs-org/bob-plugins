@@ -7282,7 +7282,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (this.stage === "properties" && isCtrlKey(event, "d")) {
       event.preventDefault();
       event.stopPropagation();
-      this.deleteSelectedProperty();
+      if (this.deleteSelectedProperty()) {
+        this.close();
+      }
       return;
     }
 
@@ -7292,13 +7294,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   deleteSelectedProperty() {
     const item = this.visibleItems[this.selectedIndex];
     if (!item || item.kind !== "property") {
-      return;
+      return false;
     }
 
     const propertyName = item.property.name;
     if (!item.defined) {
       new Notice(`${propertyName} is not set on this bullet`);
-      return;
+      return false;
     }
 
     const result = this.plugin.deleteBulletPropertyValue(
@@ -7306,7 +7308,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.cursor,
       propertyName,
     );
-    if (!result || !result.deleted) {
+    if (!result || result.deleted !== true) {
       if (result && result.line) {
         this.lineText = result.line;
         this.bulletSubtitle = truncateBulletPropertySubtitle(result.line);
@@ -7315,15 +7317,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           selectPropertyName: propertyName,
         });
       }
-      return;
+      return false;
     }
 
-    this.lineText = result.line;
-    this.bulletSubtitle = truncateBulletPropertySubtitle(result.line);
-    this.showPropertyStage({
-      clearQuery: false,
-      selectPropertyName: propertyName,
-    });
+    return true;
   }
 
   applySelectedValue(item) {

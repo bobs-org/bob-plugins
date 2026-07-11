@@ -218,6 +218,7 @@ const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
 const BULLET_PROPERTY_BLOCK_ID_ONLY_RE = /^\^[A-Za-z0-9-]+[ \t]*$/;
 const BULLET_PROPERTY_INVALID_NAME_CHARS_RE = /[\s[\]]|::/;
 const BULLET_PROPERTY_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
+const TASKS_DEPENDENCY_ID_RE = /^[A-Za-z0-9_-]+$/;
 const BULLET_PROPERTY_TASKS_INLINE_FIELD_RE =
   /[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g;
 const BULLET_PROPERTY_TASKS_EMOJI_DATE_RE =
@@ -786,9 +787,10 @@ function taskNeedsPromptedBlockId(task) {
 // Apply a confirmed/prompted block ID to a task line: always append the trailing
 // `^id` navigation target, and add `[id:: id]` only when the task lacks an
 // existing `[id::]` value (an existing one stays the canonical dependency value).
-function applyPromptedBlockIdToTaskLine(line, id) {
+function applyPromptedBlockIdToTaskLine(line, id, filePath = "") {
   const withBlockId = appendBlockIdToLine(line, id);
-  return insertMissingBulletProperty(withBlockId, "id", id).line;
+  const canonicalId = filePath ? dependencyId(filePath, id) : id;
+  return upsertBulletProperty(withBlockId, "id", canonicalId).line;
 }
 
 function resolveTargetTaskIdentity(line, options = {}) {
@@ -799,6 +801,7 @@ function resolveTargetTaskIdentity(line, options = {}) {
     ? normalizeBulletPropertyValue(idField.value)
     : "";
   const blockId = getTrailingBlockId(text);
+  const filePath = normalizeVaultRelativePath(options.filePath || "");
 
   // Stricter rule for the prompted flows: a missing trailing block ID always
   // means "ask the user", even when an `[id:: value]` is already present. The
@@ -806,36 +809,24 @@ function resolveTargetTaskIdentity(line, options = {}) {
   // dependency value while linking navigation to the confirmed block ID.
   if (promptWhenBlockIdMissing && !blockId) {
     return Object.freeze({
-      value: idFieldValue || null,
+      value: null,
       linkBlockId: null,
+      legacyValue: idFieldValue || null,
       needsBlockIdPrompt: true,
       targetEdits: Object.freeze([]),
     });
   }
 
-  if (idField && idFieldValue) {
-    // `[dependsOn:: ...]` keeps the [id::] value for Tasks compatibility, but the
-    // visible link must point at the real block: an existing trailing block ID
-    // wins, otherwise we are about to append `^idFieldValue` so the link uses it.
-    const nextLine = blockId ? text : appendBlockIdToLine(text, idFieldValue);
-    return Object.freeze({
-      value: idFieldValue,
-      linkBlockId: blockId || idFieldValue,
-      needsBlockIdPrompt: false,
-      targetEdits: Object.freeze(
-        getTargetEdit("append-block-id", text, nextLine),
-      ),
-    });
-  }
-
   if (blockId) {
-    const idResult = insertMissingBulletProperty(text, "id", blockId);
+    const canonicalId = filePath ? dependencyId(filePath, blockId) : blockId;
+    const idResult = upsertBulletProperty(text, "id", canonicalId);
     return Object.freeze({
-      value: blockId,
+      value: canonicalId,
       linkBlockId: blockId,
+      legacyValue: idFieldValue && idFieldValue !== canonicalId ? idFieldValue : null,
       needsBlockIdPrompt: false,
       targetEdits: Object.freeze(
-        getTargetEdit("add-id-field", text, idResult.line),
+        getTargetEdit(idField ? "normalize-id-field" : "add-id-field", text, idResult.line),
       ),
     });
   }
@@ -843,6 +834,7 @@ function resolveTargetTaskIdentity(line, options = {}) {
   return Object.freeze({
     value: null,
     linkBlockId: null,
+    legacyValue: idFieldValue || null,
     needsBlockIdPrompt: true,
     targetEdits: Object.freeze([]),
   });
@@ -1659,6 +1651,46 @@ function parseLocalTaskIdList(value) {
     .filter((part) => part.length > 0);
 }
 
+function rewriteDependsOnIdsInLine(line, replacements) {
+  const mapping = replacements instanceof Map
+    ? replacements
+    : new Map(Object.entries(replacements || {}));
+  if (mapping.size === 0) {
+    return String(line || "");
+  }
+  return String(line || "").replace(
+    /\[dependsOn::([^\]\n]*)\]/g,
+    (field, value) => {
+      let changed = false;
+      const nextValue = value
+        .split(",")
+        .map((segment) => {
+          const leading = /^\s*/.exec(segment)[0];
+          const trailing = /\s*$/.exec(segment)[0];
+          const token = segment.slice(leading.length, segment.length - trailing.length);
+          const replacement = mapping.get(token);
+          if (!replacement || replacement === token) {
+            return segment;
+          }
+          changed = true;
+          return `${leading}${replacement}${trailing}`;
+        })
+        .join(",");
+      return changed ? `[dependsOn::${nextValue}]` : field;
+    },
+  );
+}
+
+function rewriteDependsOnIdsInContent(content, replacements) {
+  const text = String(content || "");
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const next = text
+    .split(/\r?\n/)
+    .map((line) => rewriteDependsOnIdsInLine(line, replacements))
+    .join(newline);
+  return Object.freeze({ content: next, changed: next !== text });
+}
+
 function getUniqueLocalTaskIdValues(values) {
   const uniqueValues = [];
   const seenValues = new Set();
@@ -2098,6 +2130,38 @@ function normalizeVaultRelativePath(path) {
     .replace(/\\/g, "/")
     .replace(/\/+/g, "/")
     .replace(/^\.\/+/, "");
+}
+
+function validateDependencyId(value) {
+  const id = String(value || "");
+  if (!id) {
+    return Object.freeze({ valid: false, id, error: "dependency ID is empty" });
+  }
+  if (!TASKS_DEPENDENCY_ID_RE.test(id)) {
+    return Object.freeze({
+      valid: false,
+      id,
+      error: `dependency ID contains unsupported characters: ${id}`,
+    });
+  }
+  return Object.freeze({ valid: true, id, error: null });
+}
+
+function dependencyId(vaultRelativeMarkdownPath, blockId) {
+  const path = normalizeVaultRelativePath(vaultRelativeMarkdownPath);
+  const block = normalizeBulletPropertyValue(blockId).replace(/^\^/, "");
+  if (!path || !MARKDOWN_EXTENSION_RE.test(path)) {
+    throw new Error(`dependency note path must end in .md: ${path || "(empty)"}`);
+  }
+  if (!BULLET_PROPERTY_BLOCK_ID_RE.test(block)) {
+    throw new Error(`invalid dependency block ID: ${block || "(empty)"}`);
+  }
+  const id = `${path.replace(MARKDOWN_EXTENSION_RE, "").replaceAll("/", "__")}__${block}`;
+  const validation = validateDependencyId(id);
+  if (!validation.valid) {
+    throw new Error(validation.error);
+  }
+  return id;
 }
 
 function isUnsafeVaultPath(path) {
@@ -5137,7 +5201,12 @@ function findTaskLineByBlockId(lines, blockId) {
   return null;
 }
 
-function planSameFileDependencyToggle(content, lineIndex, nextLineText) {
+function planSameFileDependencyToggle(
+  content,
+  lineIndex,
+  nextLineText,
+  filePath = "Note.md",
+) {
   const text = String(content || "");
   const newline = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
@@ -5175,22 +5244,30 @@ function planSameFileDependencyToggle(content, lineIndex, nextLineText) {
     return unqualified("target-not-task");
   }
   const idField = findBulletPropertyField(lines[targetLine], "id");
-  const dependencyId =
-    (idField && normalizeBulletPropertyValue(idField.value)) || original.blockId;
+  const legacyId = idField && normalizeBulletPropertyValue(idField.value);
+  const canonicalId = dependencyId(filePath, original.blockId);
+  if (legacyId && legacyId !== canonicalId) {
+    for (let index = 0; index < lines.length; index += 1) {
+      lines[index] = rewriteDependsOnIdsInLine(
+        lines[index],
+        new Map([[legacyId, canonicalId]]),
+      );
+    }
+  }
   const dependencyEdit = applyLocalTaskDependencyListEdits(
     lines[parentLine],
     "dependsOn",
     next.transcluded
-      ? { add: [dependencyId] }
-      : { remove: [dependencyId, original.blockId] },
+      ? { add: [canonicalId] }
+      : { remove: [canonicalId, legacyId, original.blockId].filter(Boolean) },
   );
   lines[line] = String(nextLineText);
   lines[parentLine] = dependencyEdit.line;
-  if (next.transcluded && !idField) {
-    lines[targetLine] = insertMissingBulletProperty(
+  if (next.transcluded) {
+    lines[targetLine] = upsertBulletProperty(
       lines[targetLine],
       "id",
-      original.blockId,
+      canonicalId,
     ).line;
   }
   return Object.freeze({
@@ -5199,7 +5276,7 @@ function planSameFileDependencyToggle(content, lineIndex, nextLineText) {
     content: lines.join(newline),
     parentLine,
     targetLine,
-    dependencyId,
+    dependencyId: canonicalId,
     transcluded: next.transcluded,
   });
 }
@@ -7167,11 +7244,13 @@ function createBulletPropertyTypedDateItem(query, baseDate, currentValue) {
   });
 }
 
-function getLocalTaskDependencyIdentifier(task) {
+function getLocalTaskDependencyIdentifier(task, filePath = "") {
   if (!task) {
     return "";
   }
-
+  if (task.existingBlockId && filePath) {
+    return dependencyId(filePath, task.existingBlockId);
+  }
   return task.existingIdField || task.existingBlockId || "";
 }
 
@@ -7187,10 +7266,16 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
       // `[id::]`, then the trailing block ID). The link block ID is the trailing
       // `^block-id` the navigation bullet points at, which may be absent even
       // when a dependency value exists.
-      const dependencyValue = getLocalTaskDependencyIdentifier(task);
+      const dependencyValue = getLocalTaskDependencyIdentifier(
+        task,
+        options.filePath || "",
+      );
+      const legacyDependencyValue = task.existingIdField || task.existingBlockId || "";
       const linkBlockId = task.existingBlockId || "";
       const alreadyLinked = dependencyValue
-        ? dependencyValues.has(dependencyValue)
+        ? dependencyValues.has(dependencyValue) ||
+          (legacyDependencyValue !== dependencyValue &&
+            dependencyValues.has(legacyDependencyValue))
         : false;
       const needsBlockIdPrompt = !linkBlockId;
       const needsDependencyValue = !dependencyValue;
@@ -7201,6 +7286,7 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
         ...task,
         value: dependencyValue,
         dependencyValue,
+        legacyDependencyValue,
         linkBlockId,
         alreadyLinked,
         needsBlockIdPrompt,
@@ -7606,6 +7692,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const items = createBulletPropertyLocalTaskItems(this.getEditorContent(), {
       excludeLine: this.cursor.line,
       dependencyValues,
+      filePath: this.filePath,
     });
     this.resetLocalTaskMarks(items);
 
@@ -7950,6 +8037,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // prompted ID becomes the navigation block target).
     const resolved = resolveTargetTaskIdentity(targetLine, {
       promptWhenBlockIdMissing: true,
+      filePath: this.filePath,
     });
     if (resolved.needsBlockIdPrompt) {
       this.showBlockIdStage(item, { mode: "single" });
@@ -7966,6 +8054,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         resolved.targetEdits[resolved.targetEdits.length - 1].line;
       if (!replaceEditorLine(this.editor, item.line, targetLine, finalLine)) {
         new Notice("Could not update target task");
+        return false;
+      }
+    }
+
+    if (resolved.legacyValue && resolved.legacyValue !== resolved.value) {
+      const currentContent = this.getEditorContent();
+      const rewrite = rewriteDependsOnIdsInContent(
+        currentContent,
+        new Map([[resolved.legacyValue, resolved.value]]),
+      );
+      if (rewrite.changed && !replaceEditorContent(this.editor, currentContent, rewrite.content)) {
+        new Notice("Could not normalize existing dependency references");
         return false;
       }
     }
@@ -7991,7 +8091,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     const propertyName = this.selectedPropertyItem.property.name;
-    const cursorLineText = getEditorLine(this.editor, this.cursor.line);
+    let cursorLineText = getEditorLine(this.editor, this.cursor.line);
     if (cursorLineText === null) {
       new Notice("No active markdown editor");
       return false;
@@ -8016,6 +8116,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         // alreadyLinked implies a non-empty dependency value.
         removals.push({
           depValue: item.value,
+          legacyDepValue: item.legacyDependencyValue || null,
           linkBlockId:
             item.existingBlockId || item.existingIdField || item.value,
         });
@@ -8129,7 +8230,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    const updatedLine = applyPromptedBlockIdToTaskLine(targetLine, item.id);
+    const updatedLine = applyPromptedBlockIdToTaskLine(
+      targetLine,
+      item.id,
+      this.filePath,
+    );
     if (!replaceEditorLine(this.editor, task.line, targetLine, updatedLine)) {
       new Notice("Could not update target task");
       return false;
@@ -8137,9 +8242,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     // Keep an existing `[id:: value]` as the dependency value; otherwise the
     // confirmed block ID becomes both the id and the navigation target.
+    const depValue = dependencyId(this.filePath, item.id);
     const existingId = findBulletPropertyField(targetLine, "id");
-    const depValue =
-      (existingId && normalizeBulletPropertyValue(existingId.value)) || item.id;
+    const legacyId = existingId && normalizeBulletPropertyValue(existingId.value);
+    if (legacyId && legacyId !== depValue) {
+      const currentContent = this.getEditorContent();
+      const rewrite = rewriteDependsOnIdsInContent(
+        currentContent,
+        new Map([[legacyId, depValue]]),
+      );
+      if (rewrite.changed && !replaceEditorContent(this.editor, currentContent, rewrite.content)) {
+        new Notice("Could not normalize existing dependency references");
+        return false;
+      }
+    }
 
     const linked = this.plugin.setLocalTaskDependency(
       this.editor,
@@ -8161,7 +8277,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // bullets. Target-line edits are single-line replaces, so target indices stay
   // stable; only the nav reconciliation shifts lines and re-reads as it goes.
   executeDependencyBatch(batch) {
-    const cursorLineText = getEditorLine(this.editor, this.cursor.line);
+    let cursorLineText = getEditorLine(this.editor, this.cursor.line);
     if (cursorLineText === null) {
       new Notice("No active markdown editor");
       return false;
@@ -8179,6 +8295,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     const additions = [];
     const removals = batch.removals.slice();
+    const legacyReplacements = new Map();
     let skippedStale = 0;
     let skippedOther = 0;
 
@@ -8191,6 +8308,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
       const resolved = resolveTargetTaskIdentity(targetLine, {
         promptWhenBlockIdMissing: true,
+        filePath: this.filePath,
       });
       if (resolved.needsBlockIdPrompt || !resolved.value) {
         skippedOther += 1;
@@ -8212,6 +8330,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         depValue: resolved.value,
         linkBlockId: resolved.linkBlockId,
       });
+      if (resolved.legacyValue && resolved.legacyValue !== resolved.value) {
+        legacyReplacements.set(resolved.legacyValue, resolved.value);
+      }
     });
 
     batch.promptQueue.forEach((snapshot) => {
@@ -8241,6 +8362,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       const updatedLine = applyPromptedBlockIdToTaskLine(
         targetLine,
         confirmedId,
+        this.filePath,
       );
       if (
         !replaceEditorLine(this.editor, snapshot.line, targetLine, updatedLine)
@@ -8249,19 +8371,36 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return;
       }
 
-      const existingId = findBulletPropertyField(targetLine, "id");
-      const depValue =
-        (existingId && normalizeBulletPropertyValue(existingId.value)) ||
-        confirmedId;
+      const depValue = dependencyId(this.filePath, confirmedId);
       additions.push({ depValue, linkBlockId: confirmedId });
+      const existingId = findBulletPropertyField(targetLine, "id");
+      const legacyId = existingId && normalizeBulletPropertyValue(existingId.value);
+      if (legacyId && legacyId !== depValue) {
+        legacyReplacements.set(legacyId, depValue);
+      }
     });
+
+    if (legacyReplacements.size > 0) {
+      const currentContent = this.getEditorContent();
+      const rewrite = rewriteDependsOnIdsInContent(currentContent, legacyReplacements);
+      if (rewrite.changed && !replaceEditorContent(this.editor, currentContent, rewrite.content)) {
+        new Notice("Could not normalize existing dependency references");
+        return false;
+      }
+      cursorLineText = getEditorLine(this.editor, this.cursor.line);
+      if (cursorLineText === null) {
+        return false;
+      }
+    }
 
     const dependencyResult = applyLocalTaskDependencyListEdits(
       cursorLineText,
       batch.propertyName,
       {
         add: additions.map((addition) => addition.depValue),
-        remove: removals.map((removal) => removal.depValue),
+        remove: removals.flatMap((removal) =>
+          [removal.depValue, removal.legacyDepValue].filter(Boolean),
+        ),
       },
     );
     if (dependencyResult.reason === "not-bullet") {
@@ -8815,7 +8954,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             external = {
               file: targetFile,
               lines: String(content || "").split(/\r?\n/),
-              ensureIds: new Set(),
+              ensureIds: new Map(),
             };
             externalFiles.set(targetFile.path, external);
           } catch (error) {
@@ -8829,24 +8968,32 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         continue;
       }
       const idField = findBulletPropertyField(targetLines[targetLine], "id");
-      const dependencyId =
-        (idField && normalizeBulletPropertyValue(idField.value)) ||
-        original.blockId;
-      if (next.transcluded && !idField) {
+      const legacyId = idField && normalizeBulletPropertyValue(idField.value);
+      let canonicalId;
+      try {
+        canonicalId = dependencyId(targetFile.path, original.blockId);
+      } catch (error) {
+        new Notice(error.message || String(error));
+        continue;
+      }
+      if (next.transcluded) {
         if (targetFile.path === sourcePath) {
-          nextLines[targetLine] = insertMissingBulletProperty(
+          nextLines[targetLine] = upsertBulletProperty(
             nextLines[targetLine],
             "id",
-            original.blockId,
+            canonicalId,
           ).line;
         } else {
-          externalFiles.get(targetFile.path).ensureIds.add(original.blockId);
+          externalFiles
+            .get(targetFile.path)
+            .ensureIds.set(original.blockId, canonicalId);
         }
       }
       actions.push({
         parentLine,
         blockId: original.blockId,
-        dependencyId,
+        dependencyId: canonicalId,
+        legacyId: legacyId && legacyId !== canonicalId ? legacyId : null,
         transcluded: next.transcluded,
         targetPath: targetFile.path,
       });
@@ -8863,13 +9010,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             ? "\r\n"
             : "\n";
           const lines = String(content || "").split(/\r?\n/);
-          external.ensureIds.forEach((blockId) => {
+          external.ensureIds.forEach((canonicalId, blockId) => {
             const targetLine = findTaskLineByBlockId(lines, blockId);
             if (targetLine !== null) {
-              lines[targetLine] = insertMissingBulletProperty(
+              lines[targetLine] = upsertBulletProperty(
                 lines[targetLine],
                 "id",
-                blockId,
+                canonicalId,
               ).line;
             }
           });
@@ -8877,6 +9024,32 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         });
       } catch (error) {
         failedExternalPaths.add(path);
+      }
+    }
+
+    const legacyReplacements = new Map();
+    actions.forEach((action) => {
+      if (action.transcluded && failedExternalPaths.has(action.targetPath)) {
+        return;
+      }
+      if (action.transcluded && action.legacyId) {
+        legacyReplacements.set(action.legacyId, action.dependencyId);
+      }
+    });
+    if (legacyReplacements.size > 0) {
+      for (let index = 0; index < nextLines.length; index += 1) {
+        nextLines[index] = rewriteDependsOnIdsInLine(
+          nextLines[index],
+          legacyReplacements,
+        );
+      }
+      const propagated = await this.propagateDependencyIdReplacements(
+        legacyReplacements,
+        new Set([sourcePath, ...externalFiles.keys()]),
+      );
+      if (!propagated) {
+        new Notice("Dependency references could not all be normalized; source was not updated");
+        return false;
       }
     }
 
@@ -8889,7 +9062,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         "dependsOn",
         action.transcluded
           ? { add: [action.dependencyId] }
-          : { remove: [action.dependencyId, action.blockId] },
+          : {
+              remove: [
+                action.dependencyId,
+                action.legacyId,
+                action.blockId,
+              ].filter(Boolean),
+            },
       );
       nextLines[action.parentLine] = edit.line;
     });
@@ -8898,6 +9077,61 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     return replaceEditorContent(cm, originalContent, nextLines.join(newline));
+  }
+
+  async propagateDependencyIdReplacements(replacements, excludedPaths = new Set()) {
+    if (
+      !(replacements instanceof Map) ||
+      replacements.size === 0 ||
+      !this.app.vault ||
+      typeof this.app.vault.getMarkdownFiles !== "function"
+    ) {
+      return true;
+    }
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file || excludedPaths.has(file.path)) {
+        continue;
+      }
+      try {
+        const openEditor = this.getOpenMarkdownEditorForPath(file.path);
+        if (openEditor && typeof openEditor.getValue === "function") {
+          const content = String(openEditor.getValue() || "");
+          const rewrite = rewriteDependsOnIdsInContent(content, replacements);
+          if (
+            rewrite.changed &&
+            !replaceEditorContent(openEditor, content, rewrite.content)
+          ) {
+            return false;
+          }
+          continue;
+        }
+        await this.app.vault.process(file, (content) => {
+          const rewrite = rewriteDependsOnIdsInContent(content, replacements);
+          return rewrite.changed ? rewrite.content : content;
+        });
+      } catch (error) {
+        console.error("Could not normalize dependency references", file.path, error);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  getOpenMarkdownEditorForPath(filePath) {
+    if (!this.app.workspace) return null;
+    const active = this.getActiveMarkdownView();
+    if (active && active.file && active.file.path === filePath) {
+      return active.editor || null;
+    }
+    if (typeof this.app.workspace.getLeavesOfType !== "function") return null;
+    const leaf = this.app.workspace.getLeavesOfType("markdown").find(
+      (candidate) =>
+        candidate &&
+        candidate.view &&
+        candidate.view.file &&
+        candidate.view.file.path === filePath,
+    );
+    return leaf && leaf.view ? leaf.view.editor || null : null;
   }
 
   async toggleCurrentLineTransclusions(cm) {
@@ -9067,15 +9301,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    let filePath = "";
-    if (propertyContext.isProjectTask) {
-      const activeView = this.getActiveMarkdownView();
-      if (!activeView || activeView.editor !== cm || !activeView.file) {
-        new Notice("No active project note");
-        return false;
-      }
-      filePath = activeView.file.path;
+    const activeView = this.getActiveMarkdownView();
+    if (!activeView || activeView.editor !== cm || !activeView.file) {
+      new Notice("No active markdown note");
+      return false;
     }
+    const filePath = activeView.file.path;
 
     new BulletPropertyPickerModal(
       this.app,
@@ -12762,6 +12993,8 @@ module.exports.helpers = {
   getEditorLineText,
   isExternalLinkTarget,
   normalizeVaultRelativePath,
+  dependencyId,
+  validateDependencyId,
   isUnsafeVaultPath,
   hasNonMarkdownExtension,
   splitVaultPath,
@@ -12877,6 +13110,8 @@ module.exports.helpers = {
   applyPromptedBlockIdToTaskLine,
   resolveTargetTaskIdentity,
   parseLocalTaskIdList,
+  rewriteDependsOnIdsInLine,
+  rewriteDependsOnIdsInContent,
   getUniqueLocalTaskIdValues,
   upsertLocalTaskIdValue,
   applyLocalTaskDependencyListEdits,

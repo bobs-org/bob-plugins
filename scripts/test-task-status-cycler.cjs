@@ -10,6 +10,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
     MarkdownView = class MarkdownView {};
     return {
       MarkdownView,
+      Notice: class Notice {},
       Plugin: class Plugin {},
     };
   }
@@ -27,6 +28,56 @@ try {
 }
 
 const { helpers } = TaskStatusCyclerPlugin;
+
+test("dependency normalizer writes path-qualified IDs and is idempotent", () => {
+  const source = [
+    "- [ ] #task Parent [dependsOn:: a1b2c3, custom] ^parent",
+    "- [ ] #task Existing [id:: a1b2c3] ^review",
+    "- [ ] #task Legacy [id:: custom] ^legacy",
+  ].join("\n");
+  const result = helpers.normalizeTaskDependencyBlockIds(
+    source,
+    "projects/Shared.md",
+  );
+  assert.equal(result.changed, true);
+  assert.match(result.text, /\[id:: projects__Shared__review\] \^review/);
+  assert.match(result.text, /\[id:: projects__Shared__legacy\] \^legacy/);
+  assert.match(
+    result.text,
+    /\[dependsOn:: projects__Shared__review, projects__Shared__legacy\]/,
+  );
+  assert.equal(
+    helpers.normalizeTaskDependencyBlockIds(result.text, "projects/Shared.md").changed,
+    false,
+  );
+});
+
+test("Tasks-generated IDs become local block IDs when none exists", () => {
+  const result = helpers.normalizeTaskDependencyBlockIds(
+    "- [ ] #task Target [id:: z9y8x7]",
+    "Nested/Target.md",
+  );
+  assert.equal(
+    result.text,
+    "- [ ] #task Target [id:: Nested__Target__z9y8x7] ^z9y8x7",
+  );
+  assert.deepEqual(result.idMap, { z9y8x7: "Nested__Target__z9y8x7" });
+});
+
+test("note rename rewrites target IDs and yields exact propagation mappings", () => {
+  const result = helpers.rewriteRenamedDependencyIds(
+    "- [ ] #task Target [id:: Old__Path__review] ^review\n",
+    "Old/Path.md",
+    "New/Home.md",
+  );
+  assert.equal(
+    result.text,
+    "- [ ] #task Target [id:: New__Home__review] ^review\n",
+  );
+  assert.deepEqual(result.idMap, {
+    Old__Path__review: "New__Home__review",
+  });
+});
 
 function createInMemoryObsidianApp(initialSources) {
   const files = new Map();
@@ -57,6 +108,8 @@ function createInMemoryObsidianApp(initialSources) {
     app: {
       vault: {
         getAbstractFileByPath: (path) => files.get(path) || null,
+        getMarkdownFiles: () => [...files.values()],
+        cachedRead: async (file) => sources.get(file.path),
         read: async (file) => sources.get(file.path),
         modify: async (file, sourceText) => sources.set(file.path, sourceText),
         process: async (file, updateSourceText) => {
@@ -77,6 +130,46 @@ function getEmbeddedTarget(linkText) {
   assert.equal(targets.length, 1, `expected one embedded target in ${linkText}`);
   return targets[0];
 }
+
+test("normalization mappings propagate to every dependent file", async () => {
+  const harness = createInMemoryObsidianApp({
+    "Target.md": "- [ ] #task Target [id:: old] ^review",
+    "A.md": "- [ ] #task A [dependsOn:: old]",
+    "B.md": "- [ ] #task B [dependsOn:: old, keep]",
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  await plugin.propagateDependencyBlockIds(
+    { old: "Target__review" },
+    { path: "Target.md" },
+  );
+  assert.match(harness.getSource("A.md"), /\[dependsOn:: Target__review\]/);
+  assert.match(
+    harness.getSource("B.md"),
+    /\[dependsOn:: Target__review, keep\]/,
+  );
+});
+
+test("rename reconciliation rewrites the target and every dependent", async () => {
+  const harness = createInMemoryObsidianApp({
+    "New/Home.md": "- [ ] #task Target [id:: Old__Home__review] ^review",
+    "A.md": "- [ ] #task A [dependsOn:: Old__Home__review]",
+    "B.md": "- [ ] #task B [dependsOn:: Old__Home__review]",
+  });
+  harness.app.workspace = {};
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  assert.equal(
+    await plugin.reconcileRenamedDependencyIds(
+      harness.app.vault.getAbstractFileByPath("New/Home.md"),
+      "Old/Home.md",
+    ),
+    true,
+  );
+  assert.match(harness.getSource("New/Home.md"), /\[id:: New__Home__review\]/);
+  assert.match(harness.getSource("A.md"), /\[dependsOn:: New__Home__review\]/);
+  assert.match(harness.getSource("B.md"), /\[dependsOn:: New__Home__review\]/);
+});
 
 test("direct open/done transitions include incomplete statuses without broadening excluded statuses", () => {
   const cases = [

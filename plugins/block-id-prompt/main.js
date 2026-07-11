@@ -741,10 +741,10 @@ function parseDependsOnIds(lineText) {
 }
 
 function taskIdKeysFromLine(lineText) {
-  return dedupeNonEmptyValues([
-    parseInlineIdField(lineText),
-    getTrailingBlockId(lineText),
-  ]);
+  const explicitId = parseInlineIdField(lineText);
+  return explicitId
+    ? [explicitId]
+    : dedupeNonEmptyValues([getTrailingBlockId(lineText)]);
 }
 
 function isDoneTaskStatus(status) {
@@ -3614,4 +3614,13 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       this.scanView = null;
     }
   }
+};
+
+module.exports.helpers = {
+  buildTaskDependencyIndex,
+  collectTaskPickerItems,
+  parseDependsOnIds,
+  parseInlineIdField,
+  resolveTaskDependencyState,
+  taskIdKeysFromLine,
 };

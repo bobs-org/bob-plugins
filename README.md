@@ -11,12 +11,12 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 
 | Plugin                  | id                       | Version | Description                                                            |
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
-| Block ID Prompt         | `block-id-prompt`        |   1.2.1 | Prompt for custom block IDs, complete wiki block links to open tasks (skipping `#hide` tasks), and mark dependency-blocked tasks. |
+| Block ID Prompt         | `block-id-prompt`        |   1.3.0 | Prompt for custom block IDs, complete wiki block links to open tasks (skipping `#hide` tasks), and mark dependency-blocked tasks. |
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.0.0 | Expand Bob daily-note snippets and ledger time ranges.                |
-| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |   1.9.0 | Open parent/alternate notes, create and schedule projects from tasks, reconcile scheduled-project visibility, and manage bullet properties and local task dependencies. |
+| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.11.0 | Open parent/alternate notes, create and schedule projects from tasks, reconcile scheduled-project visibility, and manage bullet properties and task dependencies. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
 | Bob Vim Surround        | `bob-vim-surround`       |   1.4.0 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
-| Task Status Cycler      | `task-status-cycler`     |   1.0.0 | Cycle the active task line through configured Tasks statuses.         |
+| Task Status Cycler      | `task-status-cycler`     |   1.1.0 | Cycle task statuses and reconcile Tasks dependency IDs after Tasks writes or note renames. |
 
 Versions are tracked **per plugin** — there is no lockstep release. Each plugin's authoritative version lives in its own
 `plugins/<id>/manifest.json` (e.g. `bob-vim-surround` is ahead of the others at `1.4.0`).
@@ -31,6 +31,7 @@ bob-plugins/
   package.json                  # repo tooling only (not a bundler)
   scripts/
     validate-manifests.mjs      # manifest + main.js sanity checks
+    migrate-task-dependency-identities.mjs # dry-run-first identity migration
   plugins/
     block-id-prompt/{manifest.json,main.js,styles.css}
     bob-ledger-tools/{manifest.json,main.js}
@@ -88,6 +89,24 @@ reconciliation, deletion behavior, and child-picker presentation metadata.
 - `main.js` parses under Node (a syntax check via `node --check`; the code is never executed).
 
 It exits non-zero if any plugin fails, so it is safe to run in CI or a pre-commit hook.
+
+### Dependency identity migration
+
+Obsidian block fragments remain file-scoped, but Tasks metadata is vault-wide.
+The plugins encode `projects/Shared.md#^review` as
+`projects__Shared__review` in `[id::]` and `[dependsOn::]`, while navigation
+continues to use `[[projects/Shared#^review]]`.
+
+Preview or apply the idempotent migration with:
+
+```bash
+node scripts/migrate-task-dependency-identities.mjs --vault ~/bob
+node scripts/migrate-task-dependency-identities.mjs --vault ~/bob --write
+```
+
+Write mode refuses encoding collisions, ambiguous legacy IDs, and unsupported
+path characters. `_generated`, `_templates`, `.git`, and `.obsidian` are not
+scanned.
 
 ## Deploying to the vault
 

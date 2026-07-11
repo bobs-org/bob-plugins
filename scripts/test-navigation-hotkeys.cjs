@@ -424,6 +424,19 @@ test("dependency bullets render one canonical transclusion per target", () => {
   );
 });
 
+test("dependency IDs encode root and nested Markdown paths deterministically", () => {
+  assert.equal(helpers.dependencyId("cash.md", "unemployment"), "cash__unemployment");
+  assert.equal(
+    helpers.dependencyId("projects\\Shared.md", "review"),
+    "projects__Shared__review",
+  );
+  assert.equal(
+    helpers.dependencyId("done/team/Archive.md", "ship"),
+    "done__team__Archive__ship",
+  );
+  assert.throws(() => helpers.dependencyId("My Notes.md", "ship"), /unsupported/);
+});
+
 test("dependency sync splits legacy bullets and protects unrelated transclusions", () => {
   const input = [
     "- [ ] #task Parent [dependsOn:: a, b] ^parent",
@@ -515,19 +528,21 @@ test("same-file dependency toggle synchronizes dependsOn and target id", () => {
     input,
     1,
     "  - ![[#^child]]",
+    "projects/Here.md",
   );
   assert.equal(added.qualified, true);
-  assert.match(added.content, /Parent \[dependsOn:: child\] \^parent/);
-  assert.match(added.content, /Child \[id:: child\] \^child/);
+  assert.match(added.content, /Parent \[dependsOn:: projects__Here__child\] \^parent/);
+  assert.match(added.content, /Child \[id:: projects__Here__child\] \^child/);
 
   const removed = helpers.planSameFileDependencyToggle(
     added.content,
     1,
     "  - [[#^child]]",
+    "projects/Here.md",
   );
   assert.equal(removed.qualified, true);
   assert.doesNotMatch(removed.content, /dependsOn/);
-  assert.match(removed.content, /Child \[id:: child\] \^child/);
+  assert.match(removed.content, /Child \[id:: projects__Here__child\] \^child/);
 
   const unrelated = helpers.planSameFileDependencyToggle(
     input.replace("[[#^child]]", "[[#^ref]]"),
@@ -586,8 +601,8 @@ test("runtime dependency toggle synchronizes a cross-file target", async () => {
     ]),
     true,
   );
-  assert.match(editor.content, /Parent \[dependsOn:: target\] \^parent/);
-  assert.match(targetContent, /Target \[id:: target\] \^target/);
+  assert.match(editor.content, /Parent \[dependsOn:: Other__target\] \^parent/);
+  assert.match(targetContent, /Target \[id:: Other__target\] \^target/);
 
   assert.equal(
     await plugin.applyDependencyAwareTransclusionChanges(editor, [
@@ -596,7 +611,7 @@ test("runtime dependency toggle synchronizes a cross-file target", async () => {
     true,
   );
   assert.doesNotMatch(editor.content, /dependsOn/);
-  assert.match(targetContent, /Target \[id:: target\] \^target/);
+  assert.match(targetContent, /Target \[id:: Other__target\] \^target/);
 });
 
 test("counted transclusion toggle evaluates each line independently", () => {

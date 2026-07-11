@@ -178,6 +178,13 @@ const BULLET_PROPERTY_CONFIG_RELATIVE_PATH = "bob/config.yml";
 const BULLET_PROPERTY_CONFIG_MOBILE_NOTICE =
   "Bullet properties are only available on desktop";
 const BULLET_PROPERTY_LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
+const PROJECT_NOTE_PROPERTY_TARGETS = Object.freeze({
+  scheduled: Object.freeze({
+    kind: "project-frontmatter",
+    frontmatterKey: "scheduled",
+  }),
+});
+const PROJECT_HIDE_TAG = "#hide";
 // Visible label written into new managed dependency navigation child bullets.
 const DEPENDENCY_NAVIGATION_LABEL = "DEPENDS ON";
 const DEPENDENCY_NAVIGATION_EMOJI = "🔗";
@@ -6087,17 +6094,294 @@ function getBulletPropertyFieldMap(line) {
   return fields;
 }
 
-function createBulletPropertyItems(config, line) {
+function splitMarkdownContent(content) {
+  const text = String(content || "");
+  const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+  return {
+    lines: text.split(/\r?\n/),
+    lineEnding,
+  };
+}
+
+function isProjectLifecycleTaskLine(lineText) {
+  const text = String(lineText || "");
+  const match = OBSIDIAN_TASK_LINE_RE.exec(text);
+  if (!match || getTrailingBlockId(text) !== "prj") {
+    return false;
+  }
+
+  return PROJECT_TASK_TAG_RE.test(match[2] || "");
+}
+
+function getMarkdownLineContext(content, targetLine) {
+  const { lines } = splitMarkdownContent(content);
+  if (
+    !Number.isInteger(targetLine) ||
+    targetLine < 0 ||
+    targetLine >= lines.length
+  ) {
+    return Object.freeze({ valid: false, inFrontmatter: false, inFence: false });
+  }
+
+  let inFrontmatter = startsWithFrontmatter(lines);
+  let inFence = null;
+  for (let lineIndex = 0; lineIndex <= targetLine; lineIndex += 1) {
+    const line = String(lines[lineIndex] || "");
+    if (inFrontmatter) {
+      if (lineIndex > 0 && FRONTMATTER_DELIMITER_RE.test(line)) {
+        inFrontmatter = false;
+      }
+      if (lineIndex === targetLine) {
+        return Object.freeze({
+          valid: true,
+          inFrontmatter: true,
+          inFence: false,
+        });
+      }
+      continue;
+    }
+
+    if (inFence) {
+      const targetIsInFence = lineIndex === targetLine;
+      if (isClosingFence(line, inFence)) {
+        inFence = null;
+      }
+      if (targetIsInFence) {
+        return Object.freeze({
+          valid: true,
+          inFrontmatter: false,
+          inFence: true,
+        });
+      }
+      continue;
+    }
+
+    const openingFence = getFenceOpening(line);
+    if (openingFence) {
+      inFence = openingFence;
+      if (lineIndex === targetLine) {
+        return Object.freeze({
+          valid: true,
+          inFrontmatter: false,
+          inFence: true,
+        });
+      }
+      continue;
+    }
+
+    if (lineIndex === targetLine) {
+      return Object.freeze({
+        valid: true,
+        inFrontmatter: false,
+        inFence: false,
+      });
+    }
+  }
+
+  return Object.freeze({ valid: false, inFrontmatter: false, inFence: false });
+}
+
+function isProjectLifecycleTaskAtLine(content, lineIndex) {
+  const { lines } = splitMarkdownContent(content);
+  const context = getMarkdownLineContext(content, lineIndex);
+  return (
+    context.valid &&
+    !context.inFrontmatter &&
+    !context.inFence &&
+    isProjectLifecycleTaskLine(lines[lineIndex])
+  );
+}
+
+function getYamlScalarText(rawValue) {
+  const text = String(rawValue || "").trim();
+  const quoted = /^(["'])(.*)\1(?:[ \t]+#.*)?$/.exec(text);
+  if (quoted) {
+    return quoted[2].trim();
+  }
+
+  return text.replace(/[ \t]+#.*$/, "").trim();
+}
+
+function parseProjectNoteFrontmatter(content, options = {}) {
+  const { lines, lineEnding } = splitMarkdownContent(content);
+  if (!startsWithFrontmatter(lines)) {
+    return Object.freeze({
+      valid: false,
+      error: "Project note has no YAML frontmatter",
+    });
+  }
+
+  let closingLine = -1;
+  for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
+    if (FRONTMATTER_DELIMITER_RE.test(lines[lineIndex])) {
+      closingLine = lineIndex;
+      break;
+    }
+  }
+  if (closingLine === -1) {
+    return Object.freeze({
+      valid: false,
+      error: "Project note frontmatter is not closed",
+    });
+  }
+
+  const yamlText = lines.slice(1, closingLine).join("\n");
+  let data;
+  try {
+    const yamlParser = options.parseYaml || parseYaml;
+    data = yamlParser(yamlText);
+  } catch (error) {
+    return Object.freeze({
+      valid: false,
+      error: "Project note frontmatter is malformed",
+    });
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return Object.freeze({
+      valid: false,
+      error: "Project note frontmatter must be a YAML mapping",
+    });
+  }
+  const typeLine = lines
+    .slice(1, closingLine)
+    .map((line, index) => ({
+      line: index + 1,
+      match: /^type[ \t]*:(.*)$/.exec(line),
+    }))
+    .find((entry) => entry.match);
+  const rawType = typeLine ? getYamlScalarText(typeLine.match[1]) : "";
+  if (!isProjectType(data.type) && rawType !== PROJECT_TYPE_WIKILINK) {
+    return Object.freeze({
+      valid: false,
+      error: "The ^prj task is not in a project note",
+    });
+  }
+
+  const scheduledLines = [];
+  for (let lineIndex = 1; lineIndex < closingLine; lineIndex += 1) {
+    const match = /^scheduled[ \t]*:(.*)$/.exec(lines[lineIndex]);
+    if (match) {
+      scheduledLines.push({ line: lineIndex, rawValue: match[1] });
+    }
+  }
+  if (scheduledLines.length > 1) {
+    return Object.freeze({
+      valid: false,
+      error: "Project note has multiple scheduled properties",
+    });
+  }
+
+  const scheduledDefined = Object.prototype.hasOwnProperty.call(
+    data,
+    "scheduled",
+  );
+  if (scheduledDefined !== (scheduledLines.length === 1)) {
+    return Object.freeze({
+      valid: false,
+      error: "Project scheduled must be a top-level YAML property",
+    });
+  }
+
+  let scheduledValue = "";
+  if (scheduledDefined) {
+    const parsedValue = data.scheduled;
+    if (
+      parsedValue !== null &&
+      parsedValue !== undefined &&
+      typeof parsedValue !== "string" &&
+      !(parsedValue instanceof Date)
+    ) {
+      return Object.freeze({
+        valid: false,
+        error: "Project scheduled must be a YYYY-MM-DD date",
+      });
+    }
+    scheduledValue = getYamlScalarText(scheduledLines[0].rawValue);
+    const validation = validateProjectScheduledDate(scheduledValue);
+    if (!validation.valid) {
+      return Object.freeze({ valid: false, error: validation.message });
+    }
+    scheduledValue = validation.value;
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    data,
+    lines,
+    lineEnding,
+    closingLine,
+    scheduledDefined,
+    scheduledValue,
+    scheduledLine: scheduledDefined ? scheduledLines[0].line : null,
+  });
+}
+
+function getProjectNotePropertyContext(content, lineIndex, options = {}) {
+  if (!isProjectLifecycleTaskAtLine(content, lineIndex)) {
+    return Object.freeze({
+      valid: true,
+      isProjectTask: false,
+      frontmatter: null,
+    });
+  }
+
+  const frontmatter = parseProjectNoteFrontmatter(content, options);
+  if (!frontmatter.valid) {
+    return Object.freeze({
+      valid: false,
+      isProjectTask: true,
+      error: frontmatter.error,
+      frontmatter,
+    });
+  }
+
+  return Object.freeze({
+    valid: true,
+    isProjectTask: true,
+    error: null,
+    frontmatter,
+  });
+}
+
+function resolveBulletPropertyTarget(name, context = {}) {
+  const descriptor = Object.prototype.hasOwnProperty.call(
+    PROJECT_NOTE_PROPERTY_TARGETS,
+    name,
+  )
+    ? PROJECT_NOTE_PROPERTY_TARGETS[name]
+    : null;
+  if (descriptor && context.isProjectTask && context.valid) {
+    return descriptor;
+  }
+
+  return Object.freeze({ kind: "inline", fieldName: name });
+}
+
+function createBulletPropertyItems(config, line, context = {}) {
   const fields = getBulletPropertyFieldMap(line);
   return config.properties
     .map((property, order) => {
-      const field = fields.get(property.name) || null;
+      const target = resolveBulletPropertyTarget(property.name, context);
+      const field =
+        target.kind === "inline" ? fields.get(property.name) || null : null;
+      const frontmatterDefined =
+        target.kind === "project-frontmatter" &&
+        context.frontmatter &&
+        context.frontmatter.scheduledDefined;
+      const currentValue = frontmatterDefined
+        ? context.frontmatter.scheduledValue
+        : field
+          ? field.value
+          : "";
       return {
         kind: "property",
         property,
+        target,
         order,
-        defined: !!field,
-        currentValue: field ? field.value : "",
+        defined: frontmatterDefined || !!field,
+        currentValue,
       };
     })
     .sort((first, second) => {
@@ -6107,6 +6391,280 @@ function createBulletPropertyItems(config, line) {
 
       return first.order - second.order;
     });
+}
+
+function isTaskTagLeftBoundary(character) {
+  return (
+    character === undefined || /\s/.test(character) || "([{".includes(character)
+  );
+}
+
+function isTaskTagRightBoundary(character) {
+  return (
+    character === undefined ||
+    /\s/.test(character) ||
+    "])}:.,;!?".includes(character)
+  );
+}
+
+function getWholeTaskTagSpans(text, tag) {
+  const source = String(text || "");
+  const spans = [];
+  let offset = 0;
+  while (offset < source.length) {
+    const relativeIndex = source.indexOf(tag, offset);
+    if (relativeIndex === -1) {
+      break;
+    }
+    const end = relativeIndex + tag.length;
+    if (
+      isTaskTagLeftBoundary(source[relativeIndex - 1]) &&
+      isTaskTagRightBoundary(source[end])
+    ) {
+      spans.push(Object.freeze({ start: relativeIndex, end }));
+      offset = end;
+    } else {
+      offset = relativeIndex + 1;
+    }
+  }
+  return spans;
+}
+
+function removeTextSpans(line, spans) {
+  return (Array.isArray(spans) ? spans : [])
+    .slice()
+    .sort((left, right) => right.start - left.start)
+    .reduce(
+      (text, span) => removeBulletPropertyFieldSpan(text, span),
+      String(line || ""),
+    );
+}
+
+function normalizeTaskHideTag(lineText, hide) {
+  const text = String(lineText || "");
+  const spans = getWholeTaskTagSpans(text, PROJECT_HIDE_TAG);
+  if (!hide) {
+    return removeTextSpans(text, spans);
+  }
+  if (spans.length > 0) {
+    return removeTextSpans(text, spans.slice(1));
+  }
+
+  const trailingBlockId = getTrailingBlockIdSpan(text);
+  const insertionIndex = trailingBlockId
+    ? trailingBlockId.start
+    : text.trimEnd().length;
+  const before = text.slice(0, insertionIndex).replace(/[ \t]+$/, "");
+  const after = text.slice(insertionIndex);
+  return `${before} ${PROJECT_HIDE_TAG}${after}`;
+}
+
+function getRealMarkdownTaskLines(content) {
+  const { lines } = splitMarkdownContent(content);
+  const tasks = [];
+  let inFrontmatter = startsWithFrontmatter(lines);
+  let inFence = null;
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = String(lines[lineIndex] || "");
+    if (inFrontmatter) {
+      if (lineIndex > 0 && FRONTMATTER_DELIMITER_RE.test(line)) {
+        inFrontmatter = false;
+      }
+      continue;
+    }
+    if (inFence) {
+      if (isClosingFence(line, inFence)) {
+        inFence = null;
+      }
+      continue;
+    }
+    const openingFence = getFenceOpening(line);
+    if (openingFence) {
+      inFence = openingFence;
+      continue;
+    }
+    if (!OBSIDIAN_TASK_LINE_RE.test(line)) {
+      continue;
+    }
+
+    tasks.push(
+      Object.freeze({
+        line: lineIndex,
+        text: line,
+        isProjectTask: isProjectLifecycleTaskLine(line),
+      }),
+    );
+  }
+
+  return tasks;
+}
+
+function planProjectScheduleVisibility(content, scheduled, today = new Date()) {
+  const validation = validateProjectScheduledDate(scheduled);
+  if (!validation.valid) {
+    return Object.freeze({
+      valid: false,
+      error: validation.message,
+      content: String(content || ""),
+      changed: false,
+      changedTaskCount: 0,
+      taskCount: 0,
+    });
+  }
+
+  const scheduledDate = new Date(
+    validation.year,
+    validation.month - 1,
+    validation.day,
+  );
+  const localToday = getLocalDateStart(today);
+  const hide = compareLocalDates(scheduledDate, localToday) > 0;
+  const source = splitMarkdownContent(content);
+  const tasks = getRealMarkdownTaskLines(content);
+  let changedTaskCount = 0;
+  tasks.forEach((task) => {
+    const shouldEdit = hide || !task.isProjectTask || tasks.length === 1;
+    if (!shouldEdit) {
+      return;
+    }
+    const nextLine = normalizeTaskHideTag(task.text, hide);
+    if (nextLine !== task.text) {
+      source.lines[task.line] = nextLine;
+      changedTaskCount += 1;
+    }
+  });
+
+  const nextContent = source.lines.join(source.lineEnding);
+  return Object.freeze({
+    valid: true,
+    error: null,
+    content: nextContent,
+    changed: nextContent !== String(content || ""),
+    changedTaskCount,
+    taskCount: tasks.length,
+    hide,
+  });
+}
+
+function removeAllBulletProperties(line, name) {
+  let text = String(line || "");
+  let field = findBulletPropertyField(text, name);
+  while (field) {
+    text = removeBulletPropertyFieldSpan(text, field.span);
+    field = findBulletPropertyField(text, name);
+  }
+  return text;
+}
+
+function replaceMarkdownLine(content, lineIndex, nextLine) {
+  const source = splitMarkdownContent(content);
+  if (lineIndex < 0 || lineIndex >= source.lines.length) {
+    return String(content || "");
+  }
+  source.lines[lineIndex] = nextLine;
+  return source.lines.join(source.lineEnding);
+}
+
+function updateProjectScheduledFrontmatter(content, frontmatter, value) {
+  const source = splitMarkdownContent(content);
+  let cursorLineDelta = 0;
+  if (value === null) {
+    if (frontmatter.scheduledDefined) {
+      source.lines.splice(frontmatter.scheduledLine, 1);
+      cursorLineDelta = -1;
+    }
+  } else if (frontmatter.scheduledDefined) {
+    source.lines[frontmatter.scheduledLine] = `scheduled: ${value}`;
+  } else {
+    source.lines.splice(frontmatter.closingLine, 0, `scheduled: ${value}`);
+    cursorLineDelta = 1;
+  }
+
+  return Object.freeze({
+    content: source.lines.join(source.lineEnding),
+    cursorLineDelta,
+  });
+}
+
+function planProjectScheduledUpdate(
+  content,
+  cursorLine,
+  scheduled,
+  today = new Date(),
+  options = {},
+) {
+  const validation = validateProjectScheduledDate(scheduled);
+  if (!validation.valid) {
+    return Object.freeze({ valid: false, error: validation.message });
+  }
+  const context = getProjectNotePropertyContext(content, cursorLine, options);
+  if (!context.valid || !context.isProjectTask) {
+    return Object.freeze({
+      valid: false,
+      error: context.error || "Cursor is not on a valid ^prj task",
+    });
+  }
+
+  const { lines } = splitMarkdownContent(content);
+  const cleanedLine = removeAllBulletProperties(lines[cursorLine], "scheduled");
+  const cleanedContent = replaceMarkdownLine(content, cursorLine, cleanedLine);
+  const visibility = planProjectScheduleVisibility(
+    cleanedContent,
+    validation.value,
+    today,
+  );
+  if (!visibility.valid) {
+    return Object.freeze({ valid: false, error: visibility.error });
+  }
+  const frontmatterUpdate = updateProjectScheduledFrontmatter(
+    visibility.content,
+    context.frontmatter,
+    validation.value,
+  );
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    content: frontmatterUpdate.content,
+    changed: frontmatterUpdate.content !== String(content || ""),
+    cursorLine: cursorLine + frontmatterUpdate.cursorLineDelta,
+    scheduled: validation.value,
+    hidden: visibility.hide,
+    changedTaskCount: visibility.changedTaskCount,
+  });
+}
+
+function planProjectScheduledDelete(content, cursorLine, options = {}) {
+  const context = getProjectNotePropertyContext(content, cursorLine, options);
+  if (!context.valid || !context.isProjectTask) {
+    return Object.freeze({
+      valid: false,
+      error: context.error || "Cursor is not on a valid ^prj task",
+    });
+  }
+  if (!context.frontmatter.scheduledDefined) {
+    return Object.freeze({
+      valid: false,
+      error: "scheduled is not set on this project",
+    });
+  }
+
+  const { lines } = splitMarkdownContent(content);
+  const cleanedLine = removeAllBulletProperties(lines[cursorLine], "scheduled");
+  const cleanedContent = replaceMarkdownLine(content, cursorLine, cleanedLine);
+  const frontmatterUpdate = updateProjectScheduledFrontmatter(
+    cleanedContent,
+    context.frontmatter,
+    null,
+  );
+  return Object.freeze({
+    valid: true,
+    error: null,
+    content: frontmatterUpdate.content,
+    changed: frontmatterUpdate.content !== String(content || ""),
+    cursorLine: cursorLine + frontmatterUpdate.cursorLineDelta,
+  });
 }
 
 function getLocalDateStart(date) {
@@ -6428,7 +6986,7 @@ function createBulletPropertyValueItems(propertyItem, baseDate) {
 }
 
 class BulletPropertyPickerModal extends FilteredPickerModal {
-  constructor(app, plugin, editor, cursor, lineText, config) {
+  constructor(app, plugin, editor, cursor, lineText, config, context = {}) {
     super(app, {
       items: [],
       title: "Set bullet property",
@@ -6449,6 +7007,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.cursor = cursor;
     this.lineText = lineText;
     this.config = config;
+    this.propertyContext = context.propertyContext || {};
+    this.filePath = context.filePath || "";
     this.bulletSubtitle = truncateBulletPropertySubtitle(lineText);
     this.stage = "properties";
     this.selectedPropertyItem = null;
@@ -6471,7 +7031,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.clearPendingBatch();
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
-    const items = createBulletPropertyItems(this.config, this.lineText);
+    const items = createBulletPropertyItems(
+      this.config,
+      this.lineText,
+      this.propertyContext,
+    );
     this.applyOptions({
       items,
       title: "Set bullet property",
@@ -7496,16 +8060,30 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (this.stage === "properties" && isCtrlKey(event, "d")) {
       event.preventDefault();
       event.stopPropagation();
-      if (this.deleteSelectedProperty()) {
-        this.close();
+      if (this.opening) {
+        return;
       }
+      this.opening = true;
+      Promise.resolve()
+        .then(() => this.deleteSelectedProperty())
+        .then((deleted) => {
+          if (deleted) {
+            this.close();
+          }
+        })
+        .catch(() => {
+          new Notice("Could not delete bullet property");
+        })
+        .finally(() => {
+          this.opening = false;
+        });
       return;
     }
 
     super.handleKeydown(event);
   }
 
-  deleteSelectedProperty() {
+  async deleteSelectedProperty() {
     const item = this.visibleItems[this.selectedIndex];
     if (!item || item.kind !== "property") {
       return false;
@@ -7513,15 +8091,28 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     const propertyName = item.property.name;
     if (!item.defined) {
-      new Notice(`${propertyName} is not set on this bullet`);
+      new Notice(
+        item.target.kind === "project-frontmatter"
+          ? `${propertyName} is not set on this project`
+          : `${propertyName} is not set on this bullet`,
+      );
       return false;
     }
 
-    const result = this.plugin.deleteBulletPropertyValue(
-      this.editor,
-      this.cursor,
-      propertyName,
-    );
+    const result =
+      item.target.kind === "project-frontmatter"
+        ? await this.plugin.deleteProjectNoteScheduledValue(
+            this.editor,
+            this.cursor,
+            this.filePath,
+            this.lineText,
+            item.currentValue,
+          )
+        : this.plugin.deleteBulletPropertyValue(
+            this.editor,
+            this.cursor,
+            propertyName,
+          );
     if (!result || result.deleted !== true) {
       if (result && result.line) {
         this.lineText = result.line;
@@ -7537,9 +8128,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return true;
   }
 
-  applySelectedValue(item) {
+  async applySelectedValue(item) {
     if (!this.selectedPropertyItem || !item) {
       return false;
+    }
+
+    if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
+      return this.plugin.setProjectNoteScheduledValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        this.selectedPropertyItem.currentValue,
+        item.value,
+      );
     }
 
     return this.plugin.setBulletPropertyValue(
@@ -8001,6 +8603,29 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    const content =
+      cm && typeof cm.getValue === "function"
+        ? String(cm.getValue() || "")
+        : "";
+    const propertyContext = getProjectNotePropertyContext(
+      content,
+      cursor.line,
+    );
+    if (!propertyContext.valid) {
+      new Notice(propertyContext.error);
+      return false;
+    }
+
+    let filePath = "";
+    if (propertyContext.isProjectTask) {
+      const activeView = this.getActiveMarkdownView();
+      if (!activeView || activeView.editor !== cm || !activeView.file) {
+        new Notice("No active project note");
+        return false;
+      }
+      filePath = activeView.file.path;
+    }
+
     new BulletPropertyPickerModal(
       this.app,
       this,
@@ -8008,8 +8633,191 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cursor,
       lineText,
       config,
+      { filePath, propertyContext },
     ).open();
     return true;
+  }
+
+  getProjectScheduledWriteContext(
+    cm,
+    cursor,
+    filePath,
+    expectedLine,
+    expectedValue,
+    operation = "updated",
+  ) {
+    const activeView = this.getActiveMarkdownView();
+    if (
+      !activeView ||
+      activeView.editor !== cm ||
+      !activeView.file ||
+      activeView.file.path !== filePath
+    ) {
+      return Object.freeze({
+        valid: false,
+        error: `Active project note changed; scheduled was not ${operation}`,
+      });
+    }
+    if (!cm || typeof cm.getValue !== "function") {
+      return Object.freeze({
+        valid: false,
+        error: "No active markdown editor",
+      });
+    }
+
+    const content = String(cm.getValue() || "");
+    const liveCursor = getEditorCursor(cm);
+    if (!liveCursor || liveCursor.line !== cursor.line) {
+      return Object.freeze({
+        valid: false,
+        error: `Cursor moved from the ^prj task; scheduled was not ${operation}`,
+      });
+    }
+    const lineText = getEditorLine(cm, cursor.line);
+    if (lineText !== expectedLine) {
+      return Object.freeze({
+        valid: false,
+        error: `The ^prj task changed; scheduled was not ${operation}`,
+      });
+    }
+
+    const propertyContext = getProjectNotePropertyContext(content, cursor.line);
+    if (!propertyContext.valid || !propertyContext.isProjectTask) {
+      return Object.freeze({
+        valid: false,
+        error:
+          propertyContext.error ||
+          "Cursor is no longer on a valid ^prj task",
+      });
+    }
+    const currentValue = propertyContext.frontmatter.scheduledDefined
+      ? propertyContext.frontmatter.scheduledValue
+      : "";
+    if (currentValue !== normalizeBulletPropertyValue(expectedValue)) {
+      return Object.freeze({
+        valid: false,
+        error: `Project scheduled changed while the picker was open; it was not ${operation}`,
+      });
+    }
+
+    return Object.freeze({
+      valid: true,
+      content,
+      propertyContext,
+    });
+  }
+
+  async setProjectNoteScheduledValue(
+    cm,
+    cursor,
+    filePath,
+    expectedLine,
+    expectedValue,
+    value,
+  ) {
+    const writeContext = this.getProjectScheduledWriteContext(
+      cm,
+      cursor,
+      filePath,
+      expectedLine,
+      expectedValue,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+
+    const plan = planProjectScheduledUpdate(
+      writeContext.content,
+      cursor.line,
+      value,
+      new Date(),
+    );
+    if (!plan.valid) {
+      new Notice(plan.error);
+      return false;
+    }
+
+    try {
+      if (plan.changed) {
+        if (!cm || typeof cm.setValue !== "function") {
+          throw new Error("Editor cannot replace note content");
+        }
+        cm.setValue(plan.content);
+      }
+      const finalLine =
+        splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+      setEditorCursorSafely(
+        cm,
+        plan.cursorLine,
+        Math.min(Math.max(cursor.ch, 0), finalLine.length),
+      );
+    } catch (error) {
+      new Notice("Could not update project scheduled");
+      return false;
+    }
+
+    const visibility = plan.hidden ? "hid" : "showed";
+    new Notice(
+      `scheduled → ${plan.scheduled}; ${visibility} ${formatCountLabel(
+        plan.changedTaskCount,
+        "task",
+      )}`,
+    );
+    return true;
+  }
+
+  async deleteProjectNoteScheduledValue(
+    cm,
+    cursor,
+    filePath,
+    expectedLine,
+    expectedValue,
+  ) {
+    const writeContext = this.getProjectScheduledWriteContext(
+      cm,
+      cursor,
+      filePath,
+      expectedLine,
+      expectedValue,
+      "deleted",
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return null;
+    }
+
+    const plan = planProjectScheduledDelete(
+      writeContext.content,
+      cursor.line,
+    );
+    if (!plan.valid) {
+      new Notice(plan.error);
+      return null;
+    }
+
+    let finalLine = "";
+    try {
+      if (plan.changed) {
+        if (!cm || typeof cm.setValue !== "function") {
+          throw new Error("Editor cannot replace note content");
+        }
+        cm.setValue(plan.content);
+      }
+      finalLine =
+        splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+      setEditorCursorSafely(
+        cm,
+        plan.cursorLine,
+        Math.min(Math.max(cursor.ch, 0), finalLine.length),
+      );
+    } catch (error) {
+      new Notice("Could not delete project scheduled");
+      return null;
+    }
+
+    new Notice("scheduled ✗ removed");
+    return { deleted: true, line: finalLine };
   }
 
   setBulletPropertyValue(cm, cursor, name, value) {
@@ -11586,7 +12394,19 @@ module.exports.helpers = {
   findBulletPropertyField,
   getTrailingBlockIdSpan,
   getTrailingBlockId,
+  isProjectLifecycleTaskLine,
+  isProjectLifecycleTaskAtLine,
+  parseProjectNoteFrontmatter,
+  getProjectNotePropertyContext,
+  resolveBulletPropertyTarget,
   createBulletPropertyItems,
+  getWholeTaskTagSpans,
+  normalizeTaskHideTag,
+  getRealMarkdownTaskLines,
+  planProjectScheduleVisibility,
+  removeAllBulletProperties,
+  planProjectScheduledUpdate,
+  planProjectScheduledDelete,
   createBulletPropertyDateItems,
   parseBulletPropertyTypedDate,
   formatBulletPropertyDate,

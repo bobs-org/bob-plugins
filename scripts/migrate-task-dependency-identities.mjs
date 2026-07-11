@@ -31,6 +31,8 @@ const { helpers } = require(
 Module._load = originalLoad;
 
 const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/;
+const CODE_FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const CODE_FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const SKIPPED_DIRECTORIES = new Set([
   ".git",
   ".obsidian",
@@ -82,6 +84,77 @@ function addIndexValue(index, key, value) {
   index.set(key, values);
 }
 
+function splitTextByLineEndings(text) {
+  const source = String(text || "");
+  const lines = [];
+  const lineRe = /([^\r\n]*)(\r\n|\n|\r|$)/g;
+  let match;
+  while ((match = lineRe.exec(source)) !== null) {
+    if (match[0] === "" && match.index === source.length) break;
+    lines.push({ text: match[1], ending: match[2] });
+    if (!match[2]) break;
+  }
+  return lines.length ? lines : [{ text: "", ending: "" }];
+}
+
+function getFencedLineNumbers(lines) {
+  const fenced = new Set();
+  let opening = null;
+  for (let line = 0; line < lines.length; line += 1) {
+    const text = String(lines[line] || "");
+    if (!opening) {
+      const match = text.match(CODE_FENCE_OPEN_RE);
+      if (match) {
+        opening = { marker: match[1][0], length: match[1].length };
+        fenced.add(line);
+      }
+      continue;
+    }
+    fenced.add(line);
+    const close = text.match(CODE_FENCE_CLOSE_RE);
+    if (
+      close &&
+      close[1][0] === opening.marker &&
+      close[1].length >= opening.length
+    ) {
+      opening = null;
+    }
+  }
+  return fenced;
+}
+
+function restorePerLineEndings(beforeContent, afterContent) {
+  const before = splitTextByLineEndings(beforeContent);
+  const after = splitTextByLineEndings(afterContent);
+  let beforeIndex = 0;
+  const fallbackEnding = before.find((line) => line.ending)?.ending || "\n";
+
+  return after.map((line, afterIndex) => {
+    let ending = fallbackEnding;
+    const current = before[beforeIndex];
+    const nextBefore = before[beforeIndex + 1];
+    const nextAfter = after[afterIndex + 1];
+    if (current && line.text === current.text) {
+      ending = current.ending;
+      beforeIndex += 1;
+    } else if (current && nextAfter && nextAfter.text === current.text) {
+      // A line was inserted before the current original line.
+      ending = current.ending || fallbackEnding;
+    } else if (nextBefore && line.text === nextBefore.text) {
+      // The current original line was deleted.
+      ending = nextBefore.ending;
+      beforeIndex += 2;
+    } else if (current) {
+      // A one-for-one rewrite keeps the original line's terminator.
+      ending = current.ending;
+      beforeIndex += 1;
+    } else if (afterIndex === after.length - 1) {
+      ending = "";
+    }
+    return `${line.text}${ending}`;
+  }).join("");
+}
+
 function getTaskIndex(files) {
   const tasks = [];
   const byPathBlock = new Map();
@@ -94,7 +167,10 @@ function getTaskIndex(files) {
   for (const file of files) {
     const basename = path.posix.basename(file.relativePath, ".md");
     addIndexValue(basenamePaths, basename, file.relativePath);
-    file.content.split(/\r?\n/).forEach((lineText, line) => {
+    const lineEntries = splitTextByLineEndings(file.content);
+    const fenced = getFencedLineNumbers(lineEntries.map((line) => line.text));
+    lineEntries.forEach(({ text: lineText }, line) => {
+      if (fenced.has(line)) return;
       if (!LIST_ITEM_RE.test(lineText)) return;
       const actualBlockId = helpers.getTrailingBlockId(lineText);
       const idField = helpers.findBulletPropertyField(lineText, "id");
@@ -237,11 +313,15 @@ export function planMigration(inputFiles) {
   const parentUpdates = new Map();
   const unresolved = [];
   const ambiguous = [];
+  const positionalFallbacks = [];
   let resolvedEdges = 0;
 
   for (const file of files) {
-    const lines = file.content.split(/\r?\n/);
+    const lineEntries = splitTextByLineEndings(file.content);
+    const lines = lineEntries.map((line) => line.text);
+    const fenced = getFencedLineNumbers(lines);
     lines.forEach((lineText, parentLine) => {
+      if (fenced.has(parentLine)) return;
       const field = helpers.findBulletPropertyField(lineText, "dependsOn");
       if (!field) return;
       const ids = helpers.parseLocalTaskIdList(field.value);
@@ -268,6 +348,14 @@ export function planMigration(inputFiles) {
             resolution.task,
           );
           resolvedEdges += 1;
+          if (resolution.reason === "link-order") {
+            positionalFallbacks.push({
+              filePath: file.relativePath,
+              line: parentLine + 1,
+              id,
+              task: resolution.task,
+            });
+          }
         } else if (resolution.ambiguous) {
           ambiguous.push({ filePath: file.relativePath, line: parentLine + 1, id, tasks: resolution.ambiguous });
         } else {
@@ -284,41 +372,49 @@ export function planMigration(inputFiles) {
     });
   }
 
+  const resolutions = new Map();
+  for (const task of index.tasks) {
+    if (!task.canonicalId) continue;
+    const resolution = {
+      filePath: task.filePath,
+      blockId: task.blockId,
+      note: task.filePath.replace(/\.md$/i, ""),
+    };
+    resolutions.set(task.canonicalId, resolution);
+    if ((index.byExistingId.get(task.existingId) || []).length === 1) {
+      resolutions.set(task.existingId, resolution);
+    }
+  }
+
   const outputs = [];
   for (const file of files) {
-    const newline = file.content.includes("\r\n") ? "\r\n" : "\n";
-    const lines = file.content.split(/\r?\n/);
-    for (let line = 0; line < lines.length; line += 1) {
+    const lineEntries = splitTextByLineEndings(file.content);
+    const lines = lineEntries.map((line) => line.text);
+    const fenced = getFencedLineNumbers(lines);
+    for (let line = 0; line < lineEntries.length; line += 1) {
+      if (fenced.has(line)) continue;
       const target = targetUpdates.get(`${file.relativePath}:${line}`);
       if (target) {
         const withBlock = target.needsBlockId
-          ? helpers.appendBlockIdToLine(lines[line], target.blockId)
-          : lines[line];
-        lines[line] = helpers.upsertBulletProperty(withBlock, "id", target.canonicalId).line;
+          ? helpers.appendBlockIdToLine(lineEntries[line].text, target.blockId)
+          : lineEntries[line].text;
+        lineEntries[line].text = helpers.upsertBulletProperty(withBlock, "id", target.canonicalId).line;
       }
       const parent = parentUpdates.get(`${file.relativePath}:${line}`);
-      if (parent) lines[line] = rewriteDependencyFieldLine(lines[line], parent.resolvedIds);
-    }
-    let content = lines.join(newline);
-    const resolutions = new Map();
-    for (const task of index.tasks) {
-      if (!task.canonicalId) continue;
-      const resolution = {
-        filePath: task.filePath,
-        blockId: task.blockId,
-        note: task.filePath.replace(/\.md$/i, ""),
-      };
-      resolutions.set(task.canonicalId, resolution);
-      if ((index.byExistingId.get(task.existingId) || []).length === 1) {
-        resolutions.set(task.existingId, resolution);
+      if (parent) {
+        lineEntries[line].text = rewriteDependencyFieldLine(
+          lineEntries[line].text,
+          parent.resolvedIds,
+        );
       }
     }
+    let content = lineEntries.map((line) => `${line.text}${line.ending}`).join("");
     const navigation = helpers.transformDependencyBulletsInContent(
       content,
       file.relativePath,
       resolutions,
     );
-    content = navigation.content;
+    content = restorePerLineEndings(content, navigation.content);
     outputs.push({
       ...file,
       nextContent: content,
@@ -333,6 +429,7 @@ export function planMigration(inputFiles) {
     resolvedEdges,
     unresolved,
     ambiguous,
+    positionalFallbacks,
     encodingCollisions,
     unsupported,
   };
@@ -355,6 +452,11 @@ export async function runMigration(options) {
   for (const item of plan.unresolved) {
     console.warn(`unresolved ${item.filePath}:${item.line}: ${item.id}`);
   }
+  for (const item of plan.positionalFallbacks) {
+    console.warn(
+      `link-order fallback ${item.filePath}:${item.line}: ${item.id} -> ${item.task.filePath}#^${item.task.blockId}`,
+    );
+  }
   for (const item of plan.unsupported) {
     console.error(`unsupported ${item.filePath}:${item.line + 1}#^${item.blockId}`);
   }
@@ -369,7 +471,7 @@ export async function runMigration(options) {
   }
   const changedFiles = plan.files.filter((file) => file.changed).length;
   console.log(
-    `${options.write ? "Migration" : "Dry run"}: ${changedFiles} file(s), ${plan.targetUpdates} target ID(s), ${plan.resolvedEdges} dependency value(s), ${plan.unresolved.length} unresolved, ${plan.ambiguous.length} ambiguous, ${plan.encodingCollisions.length} encoding collision(s), ${plan.unsupported.length} unsupported path(s).`,
+    `${options.write ? "Migration" : "Dry run"}: ${changedFiles} file(s), ${plan.targetUpdates} target ID(s), ${plan.resolvedEdges} dependency value(s), ${plan.positionalFallbacks.length} link-order fallback(s), ${plan.unresolved.length} unresolved, ${plan.ambiguous.length} ambiguous, ${plan.encodingCollisions.length} encoding collision(s), ${plan.unsupported.length} unsupported path(s).`,
   );
   return plan;
 }

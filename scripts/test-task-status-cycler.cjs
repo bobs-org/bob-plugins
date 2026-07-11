@@ -4,13 +4,18 @@ const test = require("node:test");
 
 const originalLoad = Module._load;
 let MarkdownView;
+const notices = [];
 
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     MarkdownView = class MarkdownView {};
     return {
       MarkdownView,
-      Notice: class Notice {},
+      Notice: class Notice {
+        constructor(message) {
+          notices.push(String(message));
+        }
+      },
       Plugin: class Plugin {},
     };
   }
@@ -77,6 +82,41 @@ test("note rename rewrites target IDs and yields exact propagation mappings", ()
   assert.deepEqual(result.idMap, {
     Old__Path__review: "New__Home__review",
   });
+});
+
+test("note rename also rewrites same-file dependsOn references", () => {
+  const result = helpers.rewriteRenamedDependencyIds(
+    [
+      "- [ ] #task Parent [dependsOn:: Old__Path__review] ^parent",
+      "- [ ] #task Target [id:: Old__Path__review] ^review",
+    ].join("\n"),
+    "Old/Path.md",
+    "New/Home.md",
+  );
+  assert.match(result.text, /\[dependsOn:: New__Home__review\]/);
+  assert.match(result.text, /\[id:: New__Home__review\] \^review/);
+});
+
+test("dependency normalization skips unsupported paths and fenced examples", () => {
+  const source = [
+    "```md",
+    "- [ ] #task Example [id:: abc123] ^example",
+    "- [ ] #task Parent [dependsOn:: abc123]",
+    "```",
+    "- [ ] #task Real [id:: def456] ^real",
+  ].join("\n");
+  const supported = helpers.normalizeTaskDependencyBlockIds(source, "Tasks.md");
+  assert.match(supported.text, /Example \[id:: abc123\] \^example/);
+  assert.match(supported.text, /Parent \[dependsOn:: abc123\]/);
+  assert.match(supported.text, /Real \[id:: Tasks__real\] \^real/);
+
+  const unsupported = helpers.normalizeTaskDependencyBlockIds(
+    "- [ ] #task Real [id:: def456] ^real",
+    "Spaced Note.md",
+  );
+  assert.equal(helpers.dependencyId("Spaced Note.md", "real"), null);
+  assert.equal(unsupported.changed, false);
+  assert.equal(unsupported.unsupportedPath, true);
 });
 
 function createInMemoryObsidianApp(initialSources) {
@@ -174,6 +214,22 @@ test("normalization mappings propagate to every dependent file", async () => {
   );
 });
 
+test("runtime normalizer skips unsupported paths with one informative notice", async () => {
+  notices.length = 0;
+  const source = "- [ ] #task Target [id:: abc123] ^target";
+  const harness = createInMemoryObsidianApp({ "Spaced Note.md": source });
+  harness.app.workspace = {};
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  const file = harness.app.vault.getAbstractFileByPath("Spaced Note.md");
+
+  await plugin.normalizeVaultFileDependencyBlockIds(file);
+  await plugin.normalizeVaultFileDependencyBlockIds(file);
+  assert.equal(harness.getSource(file.path), source);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /unsupported characters/);
+});
+
 test("rename reconciliation rewrites the target and every dependent", async () => {
   const harness = createInMemoryObsidianApp({
     "New/Home.md": "- [ ] #task Target [id:: Old__Home__review] ^review",
@@ -193,6 +249,56 @@ test("rename reconciliation rewrites the target and every dependent", async () =
   assert.match(harness.getSource("New/Home.md"), /\[id:: New__Home__review\]/);
   assert.match(harness.getSource("A.md"), /\[dependsOn:: New__Home__review\]/);
   assert.match(harness.getSource("B.md"), /\[dependsOn:: New__Home__review\]/);
+});
+
+test("editor dependency normalization abandons and reschedules stale snapshots", async () => {
+  const editor = createTextEditor("- [ ] #task Target [id:: abc123] ^target");
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = { vault: {}, workspace: {} };
+  let rescheduled = 0;
+  plugin.scheduleActiveEditorDependencyNormalize = () => { rescheduled += 1; };
+  plugin.findAmbiguousDependencyIds = async () => {
+    editor.replaceRange("typed ", { line: 0, ch: 0 });
+    return new Set();
+  };
+  plugin.propagateDependencyBlockIds = async () => assert.fail("stale mapping propagated");
+
+  assert.equal(
+    await plugin.normalizeActiveEditorDependencyBlockIds(
+      editor,
+      { path: "Tasks.md" },
+    ),
+    false,
+  );
+  assert.equal(rescheduled, 1);
+  assert.match(editor.getValue(), /^typed .*\[id:: abc123\]/);
+});
+
+test("rename reconciliation abandons and reschedules stale editor snapshots", async () => {
+  const editor = createTextEditor(
+    "- [ ] #task Target [id:: Old__Home__review] ^review",
+  );
+  const file = { path: "New/Home.md" };
+  const view = Object.assign(new MarkdownView(), { editor, file });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {
+    vault: { cachedRead: async () => editor.getValue() },
+    workspace: { getActiveViewOfType: () => view },
+  };
+  plugin.findDependencyIdentityCollisions = async () => {
+    editor.replaceRange("typed ", { line: 0, ch: 0 });
+    return new Set();
+  };
+  let rescheduled = 0;
+  plugin.scheduleRenamedDependencyReconcile = () => { rescheduled += 1; };
+  plugin.propagateDependencyBlockIds = async () => assert.fail("stale rename propagated");
+
+  assert.equal(
+    await plugin.reconcileRenamedDependencyIds(file, "Old/Home.md"),
+    false,
+  );
+  assert.equal(rescheduled, 1);
+  assert.match(editor.getValue(), /\[id:: Old__Home__review\]/);
 });
 
 test("direct open/done transitions include incomplete statuses without broadening excluded statuses", () => {
@@ -378,6 +484,43 @@ test("closed-reference retirement is ancestry-aware, resolved, fenced, and idemp
   assert.equal(second.retired, 0);
 });
 
+test("retirement stops at prose boundaries and pairs strikethrough spans", () => {
+  const source = [
+    "- [ ] #task Parent",
+    "Paragraph separating the following list.",
+    "  - ![[A#^review|Protected]]",
+    "- [ ] #task Other",
+    "  - ~~before~~![[A#^review|Retire]]~~after~~",
+    "  - ~~![[A#^review|Already struck]]~~",
+  ].join("\n");
+  const result = helpers.retireClosedTaskReferencesInText(
+    source,
+    "Tasks.md",
+    [{ path: "A.md", blockId: "review" }],
+    () => "A.md",
+  );
+  assert.equal(result.retired, 2);
+  assert.match(result.text, /  - !\[\[A#\^review\|Protected\]\]/);
+  assert.match(
+    result.text,
+    /~~before~~ ~~\[\[A#\^review\|Retire\]\]~~ ~~after~~/,
+  );
+  assert.match(result.text, /~~\[\[A#\^review\|Already struck\]\]~~/);
+});
+
+test("retired Pomodoro links are not copied into the next Pomodoro", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] First",
+    "  - ~~[[Tasks#^done|Done]]~~",
+    "- [ ] Second",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.deepEqual(plan.copiedBulletLines, []);
+  assert.equal(plan.createdPomodoro, false);
+});
+
 test("retirement coordinator rewrites active editor and vault notes together", async () => {
   const harness = createInMemoryObsidianApp({
     "Daily.md": "## Pomodoros\n- [ ] Focus\n  - ![[Tasks#^done|Done]]",
@@ -408,6 +551,80 @@ test("retirement coordinator rewrites active editor and vault notes together", a
   assert.equal(result.retired, 2);
   assert.match(activeText, /~~\[\[Tasks#\^done\|Done\]\]~~/);
   assert.match(harness.getSource("Tasks.md"), /~~\[\[#\^done\|Self reference\]\]~~/);
+});
+
+test("no-op vault transforms and irrelevant retirement files avoid process writes", async () => {
+  let processCalls = 0;
+  const file = { path: "Notes.md" };
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {
+    vault: {
+      getMarkdownFiles: () => [file],
+      cachedRead: async () => "No dependency links here",
+      process: async () => { processCalls += 1; },
+    },
+    metadataCache: {},
+  };
+  assert.equal(await plugin.processVaultFileText(file, (text) => text), false);
+  await plugin.retireClosedTaskReferences(
+    [{ path: "Tasks.md", blockId: "done" }, { path: "Tasks.md" }],
+    {},
+  );
+  assert.equal(processCalls, 0);
+});
+
+test("ambiguity scans and notices are cached while dependency identity lines stay stable", async () => {
+  notices.length = 0;
+  let reads = 0;
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {
+    vault: {
+      getMarkdownFiles: () => [{ path: "Other.md" }],
+      cachedRead: async () => {
+        reads += 1;
+        return "ordinary prose";
+      },
+    },
+  };
+  const file = { path: "Tasks.md" };
+  const first = await plugin.findAmbiguousDependencyIds(
+    ["abc123"],
+    file,
+    "- [ ] #task Target [id:: abc123] ^target\nfirst prose",
+  );
+  const second = await plugin.findAmbiguousDependencyIds(
+    ["abc123"],
+    file,
+    "- [ ] #task Target [id:: abc123] ^target\nchanged prose",
+  );
+  assert.deepEqual([...first], []);
+  assert.deepEqual([...second], []);
+  assert.equal(reads, 1);
+
+  plugin.notifyDependencyIssue(file, "ambiguity", ["duplicate"]);
+  plugin.notifyDependencyIssue(file, "ambiguity", ["duplicate"]);
+  assert.equal(notices.length, 1);
+});
+
+test("non-Vim open/done command retires the closed task identity", async () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  const taskStatus = helpers.getTaskStatusForLine(
+    "- [ ] #task Close through command ^close",
+  );
+  const editor = {};
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  plugin.app = { workspace: { getActiveFile: () => view.file } };
+  plugin.getActiveTaskStatus = () => taskStatus;
+  plugin.toggleActiveCheckboxOpenDone = () => true;
+  let retired = null;
+  plugin.retireClosedTaskReferences = async (identities) => { retired = identities; };
+
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, editor, view), true);
+  await Promise.resolve();
+  assert.deepEqual(retired, [{ path: "Tasks.md", blockId: "close" }]);
 });
 
 test("full Pomodoro completion retires embeds only after carry-forward planning", async () => {

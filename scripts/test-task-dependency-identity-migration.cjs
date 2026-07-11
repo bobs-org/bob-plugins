@@ -74,3 +74,59 @@ test("identity migration gives uniquely resolved legacy targets a block ID", asy
     ].join("\n"),
   );
 });
+
+test("identity migration ignores fenced examples and preserves mixed line endings", async () => {
+  const { planMigration } = await import("./migrate-task-dependency-identities.mjs");
+  const fenced = [
+    "```md\r\n",
+    "- [ ] #task Example [id:: abc123] ^example\n",
+    "- [ ] #task Example parent [dependsOn:: abc123]\r\n",
+    "```\n",
+  ].join("");
+  const plan = planMigration([
+    {
+      relativePath: "Tasks.md",
+      content:
+        fenced +
+        "- [ ] #task Parent [dependsOn:: real]\r\n" +
+        "- [ ] #task Real [id:: real] ^real\n",
+    },
+  ]);
+  assert.equal(plan.unsupported.length, 0);
+  assert.equal(plan.unresolved.length, 0);
+  assert.ok(plan.files[0].nextContent.startsWith(fenced));
+  assert.match(plan.files[0].nextContent, /\[dependsOn:: Tasks__real\]\r\n/);
+  assert.match(plan.files[0].nextContent, /\[id:: Tasks__real\] \^real\n$/);
+});
+
+test("identity migration reports positional link-order fallbacks distinctly", async () => {
+  const { planMigration } = await import("./migrate-task-dependency-identities.mjs");
+  const plan = planMigration([
+    {
+      relativePath: "Parent.md",
+      content: [
+        "- [ ] #task Parent [dependsOn:: unmatched]",
+        "  - ![[Target#^target]]",
+      ].join("\n"),
+    },
+    {
+      relativePath: "Target.md",
+      content: "- [ ] #task Target [id:: different] ^target",
+    },
+  ]);
+  assert.equal(plan.positionalFallbacks.length, 1);
+  assert.deepEqual(
+    {
+      filePath: plan.positionalFallbacks[0].filePath,
+      line: plan.positionalFallbacks[0].line,
+      id: plan.positionalFallbacks[0].id,
+      target: `${plan.positionalFallbacks[0].task.filePath}#^${plan.positionalFallbacks[0].task.blockId}`,
+    },
+    {
+      filePath: "Parent.md",
+      line: 1,
+      id: "unmatched",
+      target: "Target.md#^target",
+    },
+  );
+});

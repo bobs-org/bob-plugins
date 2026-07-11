@@ -1,6 +1,12 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 const Module = require("node:module");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
+
+const notices = [];
 
 const originalLoad = Module._load;
 function parseTestYaml(text) {
@@ -30,10 +36,15 @@ function parseTestYaml(text) {
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
+    class TestNotice {
+      constructor(message) {
+        notices.push(String(message));
+      }
+    }
     return {
       MarkdownView: EmptyClass,
       Modal: EmptyClass,
-      Notice: EmptyClass,
+      Notice: TestNotice,
       Plugin: EmptyClass,
       parseYaml: parseTestYaml,
     };
@@ -568,6 +579,89 @@ test("dependency IDs encode root and nested Markdown paths deterministically", (
     "done__team__Archive__ship",
   );
   assert.throws(() => helpers.dependencyId("My Notes.md", "ship"), /unsupported/);
+  assert.equal(helpers.tryDependencyId("My Notes.md", "ship"), null);
+  assert.equal(
+    helpers.resolveTargetTaskIdentity("- [ ] #task Ship ^ship", {
+      filePath: "My Notes.md",
+    }).reason,
+    "unqualifiable-note-path",
+  );
+  assert.equal(
+    helpers.applyPromptedBlockIdToTaskLine(
+      "- [ ] #task Ship [id:: legacy]",
+      "ship",
+      "My Notes.md",
+    ),
+    null,
+  );
+});
+
+test("prompted block IDs truthfully replace legacy id fields", () => {
+  assert.equal(
+    helpers.applyPromptedBlockIdToTaskLine(
+      "- [ ] #task Ship [id:: legacy]",
+      "ship",
+      "Projects/Here.md",
+    ),
+    "- [ ] #task Ship [id:: Projects__Here__ship] ^ship",
+  );
+});
+
+test("dependency navigation identity includes note path and accepts aliases", () => {
+  const input = [
+    "- [ ] #task Parent [dependsOn:: Here__x, Other__x] ^parent",
+    "  - ![[#^x|local]]",
+    "  - ![[Other#^x|remote]]",
+    "- [ ] #task Local [id:: Here__x] ^x",
+  ].join("\n");
+  const collection = helpers.collectDependencyNavigationBullets(input, 0);
+  assert.deepEqual(
+    collection.targets.map(({ note, blockId }) => `${note}#^${blockId}`),
+    ["#^x", "Other#^x"],
+  );
+  const plan = helpers.planDependencyNavigationBulletSync(input, 0, [
+    { blockId: "x", note: "" },
+    { blockId: "x", note: "Other" },
+  ]);
+  assert.equal(plan.operation, "rewrite");
+  assert.deepEqual(plan.lineTexts, ["  - ![[#^x]]", "  - ![[Other#^x]]"]);
+
+  const keepRemote = helpers.planDependencyNavigationBulletSync(input, 0, [
+    { blockId: "x", note: "" },
+    { blockId: "x", note: "Other" },
+    "new",
+  ]);
+  assert.deepEqual(keepRemote.lineTexts, [
+    "  - ![[#^x]]",
+    "  - ![[Other#^x]]",
+    "  - ![[#^new]]",
+  ]);
+});
+
+test("retired dependency bullets are excluded from single and counted toggles", () => {
+  const retired = "  - ~~[[Other#^done]]~~";
+  assert.deepEqual(helpers.findTransclusionToggleTargets(retired), []);
+  assert.equal(helpers.toggleLineTransclusions(retired).changed, false);
+  const counted = helpers.toggleLineRangeTransclusions(
+    [retired, "  - [[Other#^open]]"],
+    0,
+    1,
+  );
+  assert.deepEqual(
+    counted.changesByLine.map(({ line, nextLineText }) => [line, nextLineText]),
+    [[1, "  - ![[Other#^open]]"]],
+  );
+});
+
+test("dependsOn replacement accepts spaces around field name and separator", () => {
+  const replacements = new Map([["old", "new"]]);
+  assert.equal(
+    helpers.rewriteDependsOnIdsInLine(
+      "- [ ] #task Parent [ dependsOn :: old, keep]",
+      replacements,
+    ),
+    "- [ ] #task Parent [ dependsOn :: new, keep]",
+  );
 });
 
 test("dependency sync splits legacy bullets and protects unrelated transclusions", () => {
@@ -848,6 +942,77 @@ test("runtime dependency toggle leaves external files untouched for invalid endp
   }
 });
 
+test("runtime dependency toggle rechecks source before external writes", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  const editor = new TestEditor(
+    "- [ ] #task Parent ^parent\n  - [[Other#^target]]",
+  );
+  let processCalls = 0;
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    metadataCache: { getFirstLinkpathDest: () => targetFile },
+    vault: {
+      cachedRead: async () => {
+        editor.content += "\nuser edit";
+        return "- [ ] #task Target ^target";
+      },
+      process: async () => {
+        processCalls += 1;
+      },
+    },
+  };
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(editor, [
+      { line: 1, nextLineText: "  - ![[Other#^target]]" },
+    ]),
+    false,
+  );
+  assert.equal(processCalls, 0);
+});
+
+test("dependency propagation prefilters files and continues after failures", async () => {
+  const contents = new Map([
+    ["clean.md", "- [ ] #task Clean"],
+    ["broken.md", "- [ ] #task Broken [dependsOn:: old]"],
+    ["updated.md", "- [ ] #task Updated [dependsOn:: old]"],
+  ]);
+  const reads = [];
+  const processes = [];
+  const files = Array.from(contents.keys(), (filePath) => ({ path: filePath }));
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    vault: {
+      getMarkdownFiles: () => files,
+      cachedRead: async (file) => {
+        reads.push(file.path);
+        return contents.get(file.path);
+      },
+      process: async (file, transform) => {
+        processes.push(file.path);
+        if (file.path === "broken.md") throw new Error("write failed");
+        contents.set(file.path, transform(contents.get(file.path)));
+      },
+    },
+  };
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(
+      await plugin.propagateDependencyIdReplacements(
+        new Map([["old", "new"]]),
+      ),
+      false,
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.deepEqual(reads, ["clean.md", "broken.md", "updated.md"]);
+  assert.deepEqual(processes, ["broken.md", "updated.md"]);
+  assert.match(contents.get("updated.md"), /dependsOn:: new/);
+});
+
 test("counted runtime toggles every link but synchronizes only valid task pairs", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const plugin = new NavigationHotkeysPlugin();
@@ -938,4 +1103,53 @@ test("migration transform rewrites only real tasks and reports skipped non-tasks
     resolutions,
   );
   assert.equal(second.changed, false);
+});
+
+test("migration warns and never rewrites ambiguous dependency IDs", (t) => {
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), "bob-dependency-migration-"));
+  t.after(() => fs.rmSync(vault, { recursive: true, force: true }));
+  const parentPath = path.join(vault, "Parent.md");
+  const originalParent = [
+    "- [ ] #task Parent [dependsOn:: x] ^parent",
+    "  - 🔗 **DEPENDENCIES:** [[#^x]]",
+  ].join("\n");
+  fs.writeFileSync(parentPath, originalParent);
+  fs.writeFileSync(path.join(vault, "A.md"), "- [ ] #task A ^x\n");
+  fs.writeFileSync(path.join(vault, "B.md"), "- [ ] #task B [id:: x] ^y\n");
+
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, "migrate-dependency-bullets.mjs"), "--vault", vault, "--write"],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /ambiguous dependency ID x:/);
+  assert.equal(fs.readFileSync(parentPath, "utf8"), originalParent);
+});
+
+test("dash restore suppresses editor notice after deliberate navigation", async () => {
+  notices.length = 0;
+  let activeFile = { path: "dash.md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+  };
+  plugin.restoreActiveDashLocation = () => ({
+    active: false,
+    applied: false,
+    needsQueryRetry: false,
+  });
+  plugin.restoreOrDeferDashLocation({ cursor: { line: 0, ch: 0 } }, 1);
+  activeFile = { path: "Other.md" };
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(notices, []);
+});
+
+test("open-task dispatch timeout is registered for plugin cleanup", () => {
+  const cleanups = [];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = (cleanup) => cleanups.push(cleanup);
+  plugin.markOpenTaskJumpDispatch({}, 1);
+  assert.equal(cleanups.length, 1);
+  cleanups[0]();
 });

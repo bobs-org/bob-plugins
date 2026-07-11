@@ -40,6 +40,8 @@ const DEPENDENCY_NORMALIZE_DEBOUNCE_MS = 400;
 const STANDALONE_BLOCK_ID_PREFIX_RE = "(^|[ \\t])";
 const STANDALONE_BLOCK_ID_SUFFIX_RE = "(?=$|[ \\t])";
 const MARKDOWN_EXTENSION_RE = /\.md$/i;
+const OPEN_DONE_TASK_SYMBOLS = new Set([" ", "*", "/", "x"]);
+const CLOSABLE_TASK_SYMBOLS = new Set([" ", "*", "/"]);
 const URI_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const TASK_CHECKBOX_MARKER_RE =
   /^([ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+)\[[^\]\n]\]([ \t]*)(.*)$/;
@@ -257,13 +259,7 @@ function getTaskStatusForLine(lineText, lineNumber = 0) {
 }
 
 function isOpenDoneTaskStatus(taskStatus) {
-  return (
-    !!taskStatus &&
-    (taskStatus.symbol === " " ||
-      taskStatus.symbol === "*" ||
-      taskStatus.symbol === "/" ||
-      taskStatus.symbol === "x")
-  );
+  return !!taskStatus && OPEN_DONE_TASK_SYMBOLS.has(taskStatus.symbol);
 }
 
 function isCyclableTaskStatus(taskStatus) {
@@ -271,32 +267,15 @@ function isCyclableTaskStatus(taskStatus) {
 }
 
 function isTranscludedCompletionTraversableStatus(taskStatus) {
-  return (
-    !!taskStatus &&
-    (taskStatus.symbol === " " ||
-      taskStatus.symbol === "*" ||
-      taskStatus.symbol === "/" ||
-      taskStatus.symbol === "x")
-  );
+  return isOpenDoneTaskStatus(taskStatus);
 }
 
 function isTranscludedCompletionClosableStatus(taskStatus) {
-  return (
-    !!taskStatus &&
-    (taskStatus.symbol === " " ||
-      taskStatus.symbol === "*" ||
-      taskStatus.symbol === "/")
-  );
+  return !!taskStatus && CLOSABLE_TASK_SYMBOLS.has(taskStatus.symbol);
 }
 
 function isNonTranscludedStartResolvableStatus(taskStatus) {
-  return (
-    !!taskStatus &&
-    (taskStatus.symbol === " " ||
-      taskStatus.symbol === "*" ||
-      taskStatus.symbol === "/" ||
-      taskStatus.symbol === "x")
-  );
+  return isOpenDoneTaskStatus(taskStatus);
 }
 
 function isNonTranscludedStartableStatus(taskStatus) {
@@ -1340,7 +1319,10 @@ function classifyPomodoroSubBullets(lines, range) {
       continue;
     }
 
-    const nonEmbeddedTargets = parseNonEmbeddedBlockLinks(lineText);
+    const strikeSpans = getStrikethroughSpans(lineText);
+    const nonEmbeddedTargets = parseNonEmbeddedBlockLinks(lineText).filter(
+      (target) => !rangeIsStruck(target.startIndex, target.endIndex, strikeSpans),
+    );
     if (nonEmbeddedTargets.length > 0) {
       copyableTaskLinkBullets.push({
         line,
@@ -1632,7 +1614,7 @@ function getFencedLineNumbers(lines) {
   for (let line = 0; line < lines.length; line += 1) {
     const text = String(lines[line] || "");
     if (!opening) {
-      const match = text.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
+      const match = text.match(CODE_FENCE_OPEN_RE);
       if (match) {
         opening = { marker: match[1][0], length: match[1].length };
         fenced.add(line);
@@ -1640,7 +1622,7 @@ function getFencedLineNumbers(lines) {
       continue;
     }
     fenced.add(line);
-    const close = text.match(/^[ \t]*(`{3,}|~{3,})[ \t]*$/);
+    const close = text.match(CODE_FENCE_CLOSE_RE);
     if (
       close &&
       close[1][0] === opening.marker &&
@@ -1650,6 +1632,25 @@ function getFencedLineNumbers(lines) {
     }
   }
   return fenced;
+}
+
+function getStrikethroughSpans(lineText) {
+  const line = String(lineText || "");
+  const delimiters = [];
+  let offset = 0;
+  while ((offset = line.indexOf("~~", offset)) !== -1) {
+    delimiters.push(offset);
+    offset += 2;
+  }
+  const spans = [];
+  for (let index = 0; index + 1 < delimiters.length; index += 2) {
+    spans.push({ start: delimiters[index] + 2, end: delimiters[index + 1] });
+  }
+  return spans;
+}
+
+function rangeIsStruck(start, end, spans) {
+  return (spans || []).some((span) => start >= span.start && end <= span.end);
 }
 
 function parseRetirementListLine(lineText) {
@@ -1684,7 +1685,13 @@ function hasEligibleRetirementAncestor(
       break;
     }
     const ancestor = parseRetirementListLine(text);
-    if (!ancestor || ancestor.indentation >= indentation) {
+    if (!ancestor) {
+      if (text.trim()) {
+        break;
+      }
+      continue;
+    }
+    if (ancestor.indentation >= indentation) {
       continue;
     }
     indentation = ancestor.indentation;
@@ -1746,6 +1753,7 @@ function retireClosedTaskReferencesInText(
       continue;
     }
     const line = lines[lineNumber];
+    const strikeSpans = getStrikethroughSpans(line);
     const edits = [];
     for (const candidate of parseEmbeddedBlockTransclusions(line)) {
       const resolved = candidate.pathPart
@@ -1759,13 +1767,21 @@ function retireClosedTaskReferencesInText(
         continue;
       }
       const linkText = line.slice(candidate.startIndex + 1, candidate.endIndex);
-      const alreadyStruck =
-        line.slice(Math.max(0, candidate.startIndex - 2), candidate.startIndex) ===
-          "~~" && line.slice(candidate.endIndex, candidate.endIndex + 2) === "~~";
+      const alreadyStruck = rangeIsStruck(
+        candidate.startIndex,
+        candidate.endIndex,
+        strikeSpans,
+      );
+      const needsLeadingSpace =
+        !alreadyStruck && line.slice(Math.max(0, candidate.startIndex - 2), candidate.startIndex) === "~~";
+      const needsTrailingSpace =
+        !alreadyStruck && line.slice(candidate.endIndex, candidate.endIndex + 2) === "~~";
       edits.push({
         start: candidate.startIndex,
         end: candidate.endIndex,
-        text: alreadyStruck ? linkText : `~~${linkText}~~`,
+        text: alreadyStruck
+          ? linkText
+          : `${needsLeadingSpace ? " " : ""}~~${linkText}~~${needsTrailingSpace ? " " : ""}`,
       });
     }
     if (edits.length === 0) {
@@ -1844,14 +1860,14 @@ function dependencyId(filePath, blockId) {
   const normalizedPath = normalizeDependencyMarkdownPath(filePath);
   const block = String(blockId || "").replace(/^\^/, "");
   if (!normalizedPath || !MARKDOWN_EXTENSION_RE.test(normalizedPath)) {
-    throw new Error(`dependency note path must end in .md: ${normalizedPath || "(empty)"}`);
+    return null;
   }
   if (!BLOCK_ID_RE.test(block)) {
-    throw new Error(`invalid dependency block ID: ${block || "(empty)"}`);
+    return null;
   }
   const value = `${normalizedPath.replace(MARKDOWN_EXTENSION_RE, "").replaceAll("/", "__")}__${block}`;
   if (!TASKS_DEPENDENCY_ID_RE.test(value)) {
-    throw new Error(`dependency ID contains unsupported characters: ${value}`);
+    return null;
   }
   return value;
 }
@@ -1882,6 +1898,9 @@ function rewriteGeneratedIdToBlockId(lineText, filePath = "Note.md", options = {
     return null;
   }
   const canonicalId = dependencyId(filePath, blockId);
+  if (!canonicalId) {
+    return null;
+  }
   let nextLineText =
     line.slice(0, idMatch.index) +
     `[id::${leadingWs}${canonicalId}${trailingWs}]` +
@@ -1954,8 +1973,12 @@ function rewriteDependsOnIdsInLine(lineText, idMap) {
 
 function rewriteDependsOnBlockIdsInText(sourceText, idMap) {
   const lines = splitTextByLineEndings(sourceText);
+  const fenced = getFencedLineNumbers(lines.map((line) => line.text));
   let changed = false;
-  const nextLines = lines.map((line) => {
+  const nextLines = lines.map((line, lineNumber) => {
+    if (fenced.has(lineNumber)) {
+      return line;
+    }
     const nextText = rewriteDependsOnIdsInLine(line.text, idMap);
     if (nextText !== line.text) {
       changed = true;
@@ -1985,9 +2008,23 @@ function normalizeTaskDependencyBlockIds(
   options = {},
 ) {
   const lines = splitTextByLineEndings(sourceText);
+  const fenced = getFencedLineNumbers(lines.map((line) => line.text));
+  const pathSupported = Boolean(dependencyId(filePath, "block"));
+  const unsupportedPath =
+    !pathSupported &&
+    lines.some((line, lineNumber) => {
+      if (fenced.has(lineNumber)) return false;
+      const idMatch = line.text.match(INLINE_ID_FIELD_RE);
+      return Boolean(
+        idMatch &&
+          (getTrailingBlockId(line.text) || isTasksGeneratedId(idMatch[2])),
+      );
+    });
   const idMap = {};
 
-  for (const line of lines) {
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
+    if (fenced.has(lineNumber)) continue;
+    const line = lines[lineNumber];
     const rewrite = rewriteGeneratedIdToBlockId(line.text, filePath, options);
     if (rewrite) {
       idMap[rewrite.oldId] = rewrite.dependencyId;
@@ -1995,7 +2032,10 @@ function normalizeTaskDependencyBlockIds(
   }
 
   let changed = false;
-  const nextLines = lines.map((line) => {
+  const nextLines = lines.map((line, lineNumber) => {
+    if (fenced.has(lineNumber)) {
+      return line;
+    }
     let text = line.text;
     const idRewrite = rewriteGeneratedIdToBlockId(text, filePath, options);
     if (idRewrite) {
@@ -2009,27 +2049,44 @@ function normalizeTaskDependencyBlockIds(
   });
 
   if (!changed) {
-    return { text: String(sourceText || ""), changed: false, idMap };
+    return {
+      text: String(sourceText || ""),
+      changed: false,
+      idMap,
+      unsupportedPath,
+    };
   }
 
   return {
     text: nextLines.map((line) => `${line.text}${line.ending}`).join(""),
     changed: true,
     idMap,
+    unsupportedPath,
   };
 }
 
 function rewriteRenamedDependencyIds(sourceText, oldPath, newPath) {
   const lines = splitTextByLineEndings(sourceText);
+  const fenced = getFencedLineNumbers(lines.map((line) => line.text));
   const idMap = {};
+  let unsupportedPath = false;
   let changed = false;
-  const next = lines.map((line) => {
+  const next = lines.map((line, lineNumber) => {
+    if (fenced.has(lineNumber)) return line;
     const blockId = getTrailingBlockId(line.text);
     const idMatch = line.text.match(INLINE_ID_FIELD_RE);
     if (!blockId || !idMatch) return line;
     const oldId = dependencyId(oldPath, blockId);
+    if (!oldId) {
+      unsupportedPath = true;
+      return line;
+    }
     if (idMatch[2] !== oldId) return line;
     const newId = dependencyId(newPath, blockId);
+    if (!newId) {
+      unsupportedPath = true;
+      return line;
+    }
     idMap[oldId] = newId;
     changed = true;
     return {
@@ -2040,12 +2097,19 @@ function rewriteRenamedDependencyIds(sourceText, oldPath, newPath) {
         line.text.slice(idMatch.index + idMatch[0].length),
     };
   });
+  const withDependents = next.map((line, lineNumber) => {
+    if (fenced.has(lineNumber)) return line;
+    const text = rewriteDependsOnIdsInLine(line.text, idMap);
+    if (text !== line.text) changed = true;
+    return text === line.text ? line : { ...line, text };
+  });
   return {
     text: changed
-      ? next.map((line) => `${line.text}${line.ending}`).join("")
+      ? withDependents.map((line) => `${line.text}${line.ending}`).join("")
       : String(sourceText || ""),
     changed,
     idMap,
+    unsupportedPath,
   };
 }
 
@@ -2728,6 +2792,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     // flow; vault modify events cover cross-file dependency creation.
     this.activeEditorDependencyTimer = null;
     this.vaultDependencyTimers = new Map();
+    this.renamedDependencyTimers = new Map();
+    this.dependencyAmbiguityCache = new Map();
+    this.dependencyIssueStates = new Map();
     this.registerEvent(
       this.app.workspace.on("editor-change", (editor, info) => {
         this.scheduleActiveEditorDependencyNormalize(editor, info);
@@ -2783,6 +2850,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       }
       this.vaultDependencyTimers.clear();
     }
+    if (this.renamedDependencyTimers) {
+      for (const timer of this.renamedDependencyTimers.values()) {
+        window.clearTimeout(timer);
+      }
+      this.renamedDependencyTimers.clear();
+    }
   }
 
   scheduleActiveEditorDependencyNormalize(editor, info) {
@@ -2796,6 +2869,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       typeof this.app.workspace.getActiveFile === "function"
         ? this.app.workspace.getActiveFile()
         : null);
+    this.invalidateDependencyAmbiguityCache(file && file.path);
 
     if (this.activeEditorDependencyTimer) {
       window.clearTimeout(this.activeEditorDependencyTimer);
@@ -2812,6 +2886,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     if (!file || !file.path || !MARKDOWN_EXTENSION_RE.test(file.path)) {
       return;
     }
+    this.invalidateDependencyAmbiguityCache(file.path);
 
     if (!this.vaultDependencyTimers) {
       this.vaultDependencyTimers = new Map();
@@ -2830,20 +2905,52 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     this.vaultDependencyTimers.set(path, timer);
   }
 
+  invalidateDependencyAmbiguityCache(changedPath) {
+    if (!this.dependencyAmbiguityCache) return;
+    for (const path of this.dependencyAmbiguityCache.keys()) {
+      if (!changedPath || path !== changedPath) {
+        this.dependencyAmbiguityCache.delete(path);
+      }
+    }
+  }
+
+  notifyDependencyIssue(file, kind, values = []) {
+    if (!this.dependencyIssueStates) this.dependencyIssueStates = new Map();
+    const path = file && file.path ? file.path : "(active note)";
+    const key = `${path}:${kind}`;
+    const signature = [...values].sort().join(",");
+    if (!signature) {
+      this.dependencyIssueStates.delete(key);
+      return;
+    }
+    if (this.dependencyIssueStates.get(key) === signature) return;
+    this.dependencyIssueStates.set(key, signature);
+    if (kind === "unsupported-path") {
+      new Notice(
+        `Dependency IDs were not normalized in ${path} because its path contains unsupported characters.`,
+      );
+      return;
+    }
+    new Notice(
+      `Dependency IDs not normalized because they are ambiguous: ${signature}`,
+    );
+  }
+
   async normalizeActiveEditorDependencyBlockIds(editor, file) {
     if (!editor || typeof editor.getLine !== "function") {
       return false;
     }
 
     const oldLines = this.getEditorLineArray(editor);
+    const snapshot = oldLines.join("\n");
     let result = normalizeTaskDependencyBlockIds(
-      oldLines.join("\n"),
+      snapshot,
       file && file.path ? file.path : "Note.md",
     );
     const ambiguousIds = await this.findAmbiguousDependencyIds(
       Object.keys(result.idMap || {}),
       file,
-      oldLines.join("\n"),
+      snapshot,
     );
     if (ambiguousIds.size > 0) {
       result = normalizeTaskDependencyBlockIds(
@@ -2851,9 +2958,17 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         file && file.path ? file.path : "Note.md",
         { skipIds: ambiguousIds },
       );
-      new Notice(
-        `Dependency IDs not normalized because they are ambiguous: ${[...ambiguousIds].join(", ")}`,
-      );
+    }
+    this.notifyDependencyIssue(file, "ambiguity", ambiguousIds);
+    this.notifyDependencyIssue(
+      file,
+      "unsupported-path",
+      result.unsupportedPath ? [file && file.path ? file.path : "active"] : [],
+    );
+
+    if (this.getEditorLineArray(editor).join("\n") !== snapshot) {
+      this.scheduleActiveEditorDependencyNormalize(editor, { file });
+      return false;
     }
 
     if (result.changed) {
@@ -2930,10 +3045,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       result = normalizeTaskDependencyBlockIds(snapshot, file.path, {
         skipIds: ambiguousIds,
       });
-      new Notice(
-        `Dependency IDs not normalized because they are ambiguous: ${[...ambiguousIds].join(", ")}`,
-      );
     }
+    this.notifyDependencyIssue(file, "ambiguity", ambiguousIds);
+    this.notifyDependencyIssue(
+      file,
+      "unsupported-path",
+      result.unsupportedPath ? [file.path] : [],
+    );
     const idMap = result.idMap || {};
     await this.processVaultFileText(file, (text) =>
       text === snapshot && result.changed ? result.text : text,
@@ -2944,9 +3062,26 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
   async findAmbiguousDependencyIds(ids, originFile, originText) {
     const candidates = new Set(ids || []);
+    const originPath = originFile && originFile.path ? originFile.path : "(active note)";
+    const idsKey = [...candidates].sort().join("\0");
+    const originLines = splitTextByLineEndings(originText);
+    const fenced = getFencedLineNumbers(originLines.map((line) => line.text));
+    const identityLines = originLines
+      .filter((line, lineNumber) => !fenced.has(lineNumber) && INLINE_ID_FIELD_RE.test(line.text))
+      .map((line) => line.text)
+      .join("\n");
+    if (!this.dependencyAmbiguityCache) this.dependencyAmbiguityCache = new Map();
+    const cached = this.dependencyAmbiguityCache.get(originPath);
+    if (cached && cached.idsKey === idsKey && cached.identityLines === identityLines) {
+      return new Set(cached.ambiguousIds);
+    }
     const counts = new Map([...candidates].map((id) => [id, 0]));
     const countText = (text) => {
-      for (const line of splitTextByLineEndings(text)) {
+      const lines = splitTextByLineEndings(text);
+      const fencedLines = getFencedLineNumbers(lines.map((line) => line.text));
+      for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
+        if (fencedLines.has(lineNumber)) continue;
+        const line = lines[lineNumber];
         const match = line.text.match(INLINE_ID_FIELD_RE);
         if (match && candidates.has(match[2])) {
           counts.set(match[2], (counts.get(match[2]) || 0) + 1);
@@ -2972,7 +3107,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         }
       }
     }
-    return new Set([...counts].filter(([, count]) => count !== 1).map(([id]) => id));
+    const ambiguousIds = new Set(
+      [...counts].filter(([, count]) => count !== 1).map(([id]) => id),
+    );
+    this.dependencyAmbiguityCache.set(originPath, {
+      idsKey,
+      identityLines,
+      ambiguousIds: [...ambiguousIds],
+    });
+    return ambiguousIds;
   }
 
   async propagateDependencyBlockIds(idMap, originFile) {
@@ -3094,6 +3237,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         ? await this.app.vault.cachedRead(file)
         : await this.app.vault.read(file);
     const result = rewriteRenamedDependencyIds(snapshot, oldPath, file.path);
+    if (result.unsupportedPath) {
+      this.notifyDependencyIssue(file, "unsupported-path", [file.path]);
+      return false;
+    }
+    this.notifyDependencyIssue(file, "unsupported-path", []);
     if (!result.changed) return false;
     const collisions = await this.findDependencyIdentityCollisions(
       new Set(Object.values(result.idMap)),
@@ -3103,6 +3251,14 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       throw new Error(
         `Dependency ID rename collision: ${[...collisions].join(", ")}`,
       );
+    }
+    if (
+      activeEditor &&
+      activeLines &&
+      this.getEditorLineArray(activeEditor).join("\n") !== snapshot
+    ) {
+      this.scheduleRenamedDependencyReconcile(file, oldPath);
+      return false;
     }
     let changed = false;
     if (activeEditor && activeLines) {
@@ -3136,6 +3292,21 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return changed;
   }
 
+  scheduleRenamedDependencyReconcile(file, oldPath) {
+    if (!file || !file.path) return;
+    if (!this.renamedDependencyTimers) this.renamedDependencyTimers = new Map();
+    if (this.renamedDependencyTimers.has(file.path)) {
+      window.clearTimeout(this.renamedDependencyTimers.get(file.path));
+    }
+    const timer = window.setTimeout(() => {
+      this.renamedDependencyTimers.delete(file.path);
+      Promise.resolve(this.reconcileRenamedDependencyIds(file, oldPath)).catch(
+        () => {},
+      );
+    }, DEPENDENCY_NORMALIZE_DEBOUNCE_MS);
+    this.renamedDependencyTimers.set(file.path, timer);
+  }
+
   async findDependencyIdentityCollisions(newIds, originFile) {
     const collisions = new Set();
     if (
@@ -3155,7 +3326,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         const blockId = getTrailingBlockId(line.text);
         if (blockId) {
           const canonicalId = dependencyId(file.path, blockId);
-          if (newIds.has(canonicalId)) collisions.add(canonicalId);
+          if (canonicalId && newIds.has(canonicalId)) collisions.add(canonicalId);
         }
       }
     }
@@ -3203,8 +3374,24 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     };
 
     try {
+      const snapshot =
+        typeof this.app.vault.cachedRead === "function"
+          ? await this.app.vault.cachedRead(file)
+          : typeof this.app.vault.read === "function"
+            ? await this.app.vault.read(file)
+            : null;
+      if (typeof snapshot !== "string") return false;
+      const planned = applyTransform(snapshot);
+      if (planned === snapshot) return false;
+      changed = false;
       if (typeof this.app.vault.process === "function") {
-        await this.app.vault.process(file, applyTransform);
+        await this.app.vault.process(file, (text) => {
+          if (text === snapshot) {
+            changed = true;
+            return planned;
+          }
+          return applyTransform(text);
+        });
         return changed;
       }
 
@@ -3230,7 +3417,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
   retireClosedTaskReferences(closedIdentities, context) {
     const closed = Array.from(closedIdentities || []).filter(
-      (identity) => identity && identity.path && BLOCK_ID_RE.test(identity.blockId),
+      (identity) =>
+        identity &&
+        identity.path &&
+        BLOCK_ID_RE.test(String(identity.blockId || "")),
     );
     if (closed.length === 0) {
       return Promise.resolve({ retired: 0, failures: [] });
@@ -3309,6 +3499,21 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         }
 
         let fileRetired = 0;
+        const snapshot =
+          typeof vault.cachedRead === "function"
+            ? await vault.cachedRead(file)
+            : typeof vault.read === "function"
+              ? await vault.read(file)
+              : null;
+        if (
+          typeof snapshot !== "string" ||
+          !snapshot.includes("![[") ||
+          !closedIdentities.some((identity) =>
+            snapshot.includes(`#^${identity.blockId}`),
+          )
+        ) {
+          continue;
+        }
         const transform = (text) => {
           const result = retireClosedTaskReferencesInText(
             text,
@@ -3319,20 +3524,26 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           fileRetired = result.retired;
           return result.text;
         };
+        const planned = transform(snapshot);
+        const plannedRetired = fileRetired;
+        if (planned === snapshot) {
+          continue;
+        }
+        fileRetired = 0;
         if (typeof vault.process === "function") {
           await vault.process(file, transform);
         } else if (
           typeof vault.read === "function" &&
           typeof vault.modify === "function"
         ) {
-          const snapshot = await vault.read(file);
-          const next = transform(snapshot);
+          const next = planned;
           if (next !== snapshot) {
             const live = await vault.read(file);
             if (live !== snapshot) {
               throw new Error("note changed while retirement was planned");
             }
             await vault.modify(file, next);
+            fileRetired = plannedRetired;
           }
         }
         retired += fileRetired;
@@ -4581,7 +4792,18 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return true;
     }
 
-    this.toggleActiveCheckboxOpenDone(editor, taskStatus);
+    const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
+    const activeFile = view.file || this.app.workspace.getActiveFile();
+    const identity =
+      wrote && isTranscludedCompletionClosableStatus(taskStatus)
+        ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
+        : null;
+    if (identity) {
+      void this.retireClosedTaskReferences([identity], {
+        editor,
+        activePath: activeFile && activeFile.path,
+      }).catch(() => {});
+    }
     return true;
   }
 

@@ -77,11 +77,29 @@ async function listMarkdownFiles(root) {
 }
 
 function indexDependencies(files) {
-  const byId = new Map();
-  const byBlockId = new Map();
+  const candidates = new Map();
+  const addCandidate = (id, resolution) => {
+    if (!id) return;
+    const key = `${resolution.filePath}#^${resolution.blockId}`;
+    let entries = candidates.get(id);
+    if (!entries) {
+      entries = new Map();
+      candidates.set(id, entries);
+    }
+    entries.set(key, resolution);
+  };
   for (const file of files) {
-    file.content.split(/\r?\n/).forEach((line, lineIndex) => {
-      if (!helpers.isObsidianTaskAtLine(file.content, lineIndex)) {
+    const lines = file.content.split(/\r?\n/);
+    const lineContexts = helpers.getMarkdownLineContexts(file.content);
+    lines.forEach((line, lineIndex) => {
+      if (
+        !helpers.isObsidianTaskAtLine(
+          file.content,
+          lineIndex,
+          lineContexts,
+          lines,
+        )
+      ) {
         return;
       }
       const blockId = helpers.getTrailingBlockId(line);
@@ -89,17 +107,23 @@ function indexDependencies(files) {
         return;
       }
       const resolution = { filePath: file.relativePath, blockId };
-      if (!byBlockId.has(blockId)) {
-        byBlockId.set(blockId, resolution);
-      }
+      addCandidate(blockId, resolution);
       const idField = helpers.findBulletPropertyField(line, "id");
       const id = idField && String(idField.value || "").trim();
-      if (id && !byId.has(id)) {
-        byId.set(id, resolution);
-      }
+      addCandidate(id, resolution);
     });
   }
-  return { byId, byBlockId };
+  const resolutions = new Map();
+  const ambiguities = new Map();
+  candidates.forEach((entries, id) => {
+    const matches = Array.from(entries.values());
+    if (matches.length === 1) {
+      resolutions.set(id, matches[0]);
+    } else {
+      ambiguities.set(id, matches);
+    }
+  });
+  return { resolutions, ambiguities };
 }
 
 async function main() {
@@ -113,8 +137,15 @@ async function main() {
     })),
   );
   const index = indexDependencies(files);
-  const resolutions = new Map(index.byBlockId);
-  index.byId.forEach((resolution, id) => resolutions.set(id, resolution));
+  const resolutions = index.resolutions;
+
+  index.ambiguities.forEach((matches, id) => {
+    console.warn(
+      `ambiguous dependency ID ${id}: ${matches
+        .map((match) => `${match.filePath}#^${match.blockId}`)
+        .join(", ")} (references will not be rewritten)`,
+    );
+  });
 
   let changedFiles = 0;
   let changedTasks = 0;
@@ -130,6 +161,7 @@ async function main() {
       file.content,
       file.relativePath,
       resolutions,
+      { ambiguousIds: new Set(index.ambiguities.keys()) },
     );
     unresolved.push(...result.unresolved);
     skippedNonTasks.push(...result.skippedNonTasks);
@@ -147,14 +179,16 @@ async function main() {
     }
   }
 
-  unresolved.forEach(({ filePath, line, id }) =>
-    console.warn(`unresolved ${filePath}:${line}: ${id}`),
-  );
+  unresolved.forEach(({ filePath, line, id, ambiguous }) => {
+    if (!ambiguous) {
+      console.warn(`unresolved ${filePath}:${line}: ${id}`);
+    }
+  });
   skippedNonTasks.forEach(({ filePath, line }) =>
     console.warn(`skipped non-task ${filePath}:${line}`),
   );
   console.log(
-    `${options.write ? "Migration" : "Dry run"}: ${propertyCount} dependsOn properties; ${changedFiles} file(s), ${changedTasks} task(s), ${dependencyItems} resolved dependency bullet(s), ${unresolved.length} unresolved id(s), ${skippedNonTasks.length} skipped non-task propert${skippedNonTasks.length === 1 ? "y" : "ies"}.`,
+    `${options.write ? "Migration" : "Dry run"}: ${propertyCount} dependsOn properties; ${changedFiles} file(s), ${changedTasks} task(s), ${dependencyItems} resolved dependency bullet(s), ${unresolved.length} unresolved id(s), ${index.ambiguities.size} ambiguous id(s), ${skippedNonTasks.length} skipped non-task propert${skippedNonTasks.length === 1 ? "y" : "ies"}.`,
   );
 }
 

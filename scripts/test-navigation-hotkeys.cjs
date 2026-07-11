@@ -420,6 +420,21 @@ test("dependency bullets render one canonical transclusion per target", () => {
       blockId: "remote",
       blockIds: ["remote"],
       transcluded: true,
+      terminal: false,
+    },
+  );
+  assert.deepEqual(
+    helpers.parseDependencyTransclusionBulletDetails(
+      "\t- ~~[[Other#^remote]]~~",
+    ),
+    {
+      indent: "\t",
+      marker: "-",
+      note: "Other",
+      blockId: "remote",
+      blockIds: ["remote"],
+      transcluded: false,
+      terminal: true,
     },
   );
 });
@@ -516,6 +531,46 @@ test("dependency sync inserts, removes, and preserves arbitrary child bullets", 
     helpers.planDependencyNavigationBulletSync(nested, 0, ["a"]).operation,
     "insert",
   );
+});
+
+test("dependency sync preserves terminal struck dependencies and protects unrelated strikes", () => {
+  const input = [
+    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
+    "  - ~~[[#^a]]~~",
+    "  - ~~[[#^ref]]~~",
+    "- [x] #task A [id:: a] ^a",
+    "- [ ] #task B [id:: b] ^b",
+  ].join("\n");
+  const collection = helpers.collectDependencyNavigationBullets(input, 0);
+  assert.deepEqual(collection.blockIds, ["a"]);
+  assert.deepEqual(collection.lineIndices, [1]);
+
+  const plan = helpers.planDependencyNavigationBulletSync(input, 0, ["a", "b"]);
+  assert.equal(plan.operation, "rewrite");
+  assert.deepEqual(plan.lineTexts, ["  - ~~[[#^a]]~~", "  - ![[#^b]]"]);
+
+  const canonical = [
+    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
+    "  - ~~[[#^a]]~~",
+    "  - ![[#^b]]",
+    "  - ~~[[#^ref]]~~",
+    "- [x] #task A [id:: a] ^a",
+    "- [ ] #task B [id:: b] ^b",
+  ].join("\n");
+  assert.equal(
+    helpers.planDependencyNavigationBulletSync(canonical, 0, ["a", "b"])
+      .changed,
+    false,
+  );
+
+  const remove = helpers.planDependencyNavigationBulletSync(
+    canonical.replace("[dependsOn:: a, b]", "[dependsOn:: ]"),
+    0,
+    [],
+    { managedBlockIds: ["a", "b"] },
+  );
+  assert.equal(remove.operation, "delete");
+  assert.deepEqual(remove.deleteLines, [1, 2]);
 });
 
 test("same-file dependency toggle synchronizes dependsOn and target id", () => {

@@ -1626,6 +1626,164 @@ function splitTextByLineEndings(text) {
   return lines.length ? lines : [{ text: "", ending: "" }];
 }
 
+function getFencedLineNumbers(lines) {
+  const fenced = new Set();
+  let opening = null;
+  for (let line = 0; line < lines.length; line += 1) {
+    const text = String(lines[line] || "");
+    if (!opening) {
+      const match = text.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
+      if (match) {
+        opening = { marker: match[1][0], length: match[1].length };
+        fenced.add(line);
+      }
+      continue;
+    }
+    fenced.add(line);
+    const close = text.match(/^[ \t]*(`{3,}|~{3,})[ \t]*$/);
+    if (
+      close &&
+      close[1][0] === opening.marker &&
+      close[1].length >= opening.length
+    ) {
+      opening = null;
+    }
+  }
+  return fenced;
+}
+
+function parseRetirementListLine(lineText) {
+  const text = String(lineText || "");
+  const match = text.match(/^([ \t]*)(?:[-+*]|\d+[.)])[ \t]+(.*)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    indentation: match[1].length,
+    taskStatus: getTaskStatusForLine(text),
+  };
+}
+
+function hasEligibleRetirementAncestor(
+  lines,
+  lineNumber,
+  fenced,
+  pomodoros,
+) {
+  const candidate = parseRetirementListLine(lines[lineNumber]);
+  if (!candidate || candidate.indentation === 0) {
+    return false;
+  }
+  let indentation = candidate.indentation;
+  for (let line = lineNumber - 1; line >= 0; line -= 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    const text = String(lines[line] || "");
+    if (parseMarkdownHeadingLine(text)) {
+      break;
+    }
+    const ancestor = parseRetirementListLine(text);
+    if (!ancestor || ancestor.indentation >= indentation) {
+      continue;
+    }
+    indentation = ancestor.indentation;
+    if (
+      ancestor.taskStatus &&
+      (lineMatchesTasksGlobalFilterText(text) ||
+        (ancestor.indentation === 0 &&
+          lineIsInPomodorosSection(pomodoros, line)))
+    ) {
+      return true;
+    }
+    if (indentation === 0) {
+      break;
+    }
+  }
+  return false;
+}
+
+function retirementIdentityKey(path, blockId) {
+  return `${String(path || "")}#^${String(blockId || "")}`;
+}
+
+function closedTaskIdentity(path, lineText) {
+  const blockId = getTrailingBlockId(lineText);
+  return path && blockId ? { path, blockId } : null;
+}
+
+// Retire matching embedded block links only inside managed task/Pomodoro list
+// trees. Resolution is injected so the parser remains deterministic and easy
+// to test while runtime callers can use Obsidian's link resolver.
+function retireClosedTaskReferencesInText(
+  sourceText,
+  originPath,
+  closedIdentities,
+  resolveLinkPath,
+) {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const lines = sourceLines.map((line) => line.text);
+  const fenced = getFencedLineNumbers(lines);
+  const pomodoros = findPomodorosSectionInLines(lines);
+  const closed = new Set(
+    Array.from(closedIdentities || []).map((identity) =>
+      retirementIdentityKey(identity.path, identity.blockId),
+    ),
+  );
+  let retired = 0;
+
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
+    if (
+      fenced.has(lineNumber) ||
+      !lines[lineNumber].includes("![[") ||
+      !hasEligibleRetirementAncestor(
+        lines,
+        lineNumber,
+        fenced,
+        pomodoros,
+      )
+    ) {
+      continue;
+    }
+    const line = lines[lineNumber];
+    const edits = [];
+    for (const candidate of parseEmbeddedBlockTransclusions(line)) {
+      const resolved = candidate.pathPart
+        ? resolveLinkPath(candidate.pathPart, originPath)
+        : originPath;
+      const resolvedPath =
+        resolved && typeof resolved === "object" ? resolved.path : resolved;
+      if (
+        !closed.has(retirementIdentityKey(resolvedPath, candidate.blockId))
+      ) {
+        continue;
+      }
+      const linkText = line.slice(candidate.startIndex + 1, candidate.endIndex);
+      const alreadyStruck =
+        line.slice(Math.max(0, candidate.startIndex - 2), candidate.startIndex) ===
+          "~~" && line.slice(candidate.endIndex, candidate.endIndex + 2) === "~~";
+      edits.push({
+        start: candidate.startIndex,
+        end: candidate.endIndex,
+        text: alreadyStruck ? linkText : `~~${linkText}~~`,
+      });
+    }
+    if (edits.length === 0) {
+      continue;
+    }
+    let nextLine = line;
+    for (const edit of edits.sort((left, right) => right.start - left.start)) {
+      nextLine = `${nextLine.slice(0, edit.start)}${edit.text}${nextLine.slice(edit.end)}`;
+      retired += 1;
+    }
+    lines[lineNumber] = nextLine;
+    sourceLines[lineNumber].text = nextLine;
+  }
+
+  const text = sourceLines.map((line) => `${line.text}${line.ending}`).join("");
+  return { text, changed: text !== String(sourceText || ""), retired };
+}
+
 function getLineTextFromSourceText(sourceText, lineNumber) {
   const lineIndex = Math.floor(Number(lineNumber));
   if (!Number.isFinite(lineIndex) || lineIndex < 0) {
@@ -2511,6 +2669,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     // the previous pending center instead of stacking stale scrolls.
     this.pendingPomodoroCenterDeferred = null;
     this.pendingRenderedTasksScrollDeferred = null;
+    this.referenceRetirementQueue = Promise.resolve();
 
     this.addCommand({
       id: "cycle-task-status-forward",
@@ -3069,6 +3228,128 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
   }
 
+  retireClosedTaskReferences(closedIdentities, context) {
+    const closed = Array.from(closedIdentities || []).filter(
+      (identity) => identity && identity.path && BLOCK_ID_RE.test(identity.blockId),
+    );
+    if (closed.length === 0) {
+      return Promise.resolve({ retired: 0, failures: [] });
+    }
+    const run = () => this.retireClosedTaskReferencesNow(closed, context || {});
+    const queued = (this.referenceRetirementQueue || Promise.resolve()).then(
+      run,
+      run,
+    );
+    this.referenceRetirementQueue = queued.catch(() => {});
+    return queued;
+  }
+
+  async retireClosedTaskReferencesNow(closedIdentities, context) {
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.getMarkdownFiles !== "function") {
+      return { retired: 0, failures: [] };
+    }
+    const editor = context && context.editor;
+    const activePath = context && context.activePath;
+    const resolveLinkPath = (pathPart, originPath) => {
+      if (
+        !this.app.metadataCache ||
+        typeof this.app.metadataCache.getFirstLinkpathDest !== "function"
+      ) {
+        return null;
+      }
+      const file = this.app.metadataCache.getFirstLinkpathDest(
+        pathPart,
+        originPath,
+      );
+      return file && file.path;
+    };
+    let retired = 0;
+    const failures = [];
+
+    for (const file of vault.getMarkdownFiles()) {
+      if (!file || !file.path) {
+        continue;
+      }
+      try {
+        if (
+          file.path === activePath &&
+          editor &&
+          typeof editor.getValue === "function"
+        ) {
+          const before = editor.getValue();
+          const result = retireClosedTaskReferencesInText(
+            before,
+            file.path,
+            closedIdentities,
+            resolveLinkPath,
+          );
+          if (result.changed) {
+            const oldLines = splitTextByLineEndings(before).map((line) => line.text);
+            const newLines = splitTextByLineEndings(result.text).map(
+              (line) => line.text,
+            );
+            const cursor =
+              typeof editor.getCursor === "function" ? editor.getCursor() : null;
+            for (let line = oldLines.length - 1; line >= 0; line -= 1) {
+              if (oldLines[line] !== newLines[line]) {
+                this.replaceEditorLine(line, newLines[line], editor);
+              }
+            }
+            if (cursor && typeof editor.setCursor === "function") {
+              const lineText = editor.getLine(cursor.line) || "";
+              editor.setCursor({
+                line: cursor.line,
+                ch: Math.min(cursor.ch, lineText.length),
+              });
+            }
+          }
+          retired += result.retired;
+          continue;
+        }
+
+        let fileRetired = 0;
+        const transform = (text) => {
+          const result = retireClosedTaskReferencesInText(
+            text,
+            file.path,
+            closedIdentities,
+            resolveLinkPath,
+          );
+          fileRetired = result.retired;
+          return result.text;
+        };
+        if (typeof vault.process === "function") {
+          await vault.process(file, transform);
+        } else if (
+          typeof vault.read === "function" &&
+          typeof vault.modify === "function"
+        ) {
+          const snapshot = await vault.read(file);
+          const next = transform(snapshot);
+          if (next !== snapshot) {
+            const live = await vault.read(file);
+            if (live !== snapshot) {
+              throw new Error("note changed while retirement was planned");
+            }
+            await vault.modify(file, next);
+          }
+        }
+        retired += fileRetired;
+      } catch (error) {
+        failures.push(`${file.path}: ${error.message || String(error)}`);
+      }
+    }
+
+    if (failures.length > 0) {
+      console.error("Could not retire all closed task references", failures);
+      new Notice(
+        `Closed tasks, but ${failures.length} note${failures.length === 1 ? "" : "s"} could not be checked for references.`,
+      );
+    }
+    return { retired, failures };
+  }
+
   registerVimMappings() {
     if (this.vimMappingsRegistered) {
       return true;
@@ -3194,7 +3475,17 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     if (this.isOpenDoneTaskStatus(taskStatus)) {
-      this.toggleActiveCheckboxOpenDone(view.editor, taskStatus);
+      const wrote = this.toggleActiveCheckboxOpenDone(view.editor, taskStatus);
+      const identity =
+        wrote && isTranscludedCompletionClosableStatus(taskStatus)
+          ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
+          : null;
+      if (identity) {
+        void this.retireClosedTaskReferences([identity], {
+          editor: view.editor,
+          activePath: activeFile && activeFile.path,
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -4362,7 +4653,20 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return false;
     }
 
-    return this.replaceResolvedTranscludedTaskLine(resolvedTarget, context);
+    const closing = isTranscludedCompletionClosableStatus(
+      resolvedTarget.taskStatus,
+    );
+    const wrote = await this.replaceResolvedTranscludedTaskLine(
+      resolvedTarget,
+      context,
+    );
+    if (wrote && closing) {
+      await this.retireClosedTaskReferences(
+        [{ path: resolvedTarget.file.path, blockId: resolvedTarget.blockId }],
+        context,
+      );
+    }
+    return wrote;
   }
 
   async cycleResolvedTranscludedTaskLink(candidate, context, direction) {
@@ -4462,11 +4766,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     // Fresh seen-set scopes cycle/dup detection to this single sub-bullet action.
     const seen = new Set();
     try {
-      await this.completeResolvedTranscludedTaskTargetTree(
+      const result = await this.completeResolvedTranscludedTaskTargetTree(
         resolvedTarget,
         context,
         seen,
       );
+      await this.retireClosedTaskReferences(result.closed, context);
     } catch (error) {
       // Best effort: a mid-traversal failure still counts as handled because the
       // root target resolved as a Pomodoro sub-bullet transclusion.
@@ -4554,7 +4859,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       section,
     );
     const subBullets = classifyPomodoroSubBullets(lines, subBulletRange);
-    await this.completePomodoroTranscludedTaskBullets(
+    const closed = await this.completePomodoroTranscludedTaskBullets(
       subBullets.transcludedTaskLinkBullets,
       {
         editor,
@@ -4582,7 +4887,27 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return false;
     }
 
-    this.applyPomodoroCompletionPlan(editor, plan, cursor, markdownView);
+    const pomodoroIdentity = closedTaskIdentity(
+      sourcePath,
+      lines[context.pomodoroLine],
+    );
+    if (pomodoroIdentity) {
+      closed.push(pomodoroIdentity);
+    }
+    const applied = this.applyPomodoroCompletionPlan(
+      editor,
+      plan,
+      cursor,
+      markdownView,
+    );
+    if (!applied) {
+      return false;
+    }
+    await this.retireClosedTaskReferences(closed, {
+      editor,
+      activePath: sourcePath,
+      originPath: sourcePath,
+    });
     return true;
   }
 
@@ -4590,15 +4915,24 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     // One shared seen-set across every immediate embedded target so the whole
     // Pomodoro operation dedupes targets and terminates on cycles.
     const seen = new Set();
+    const closed = [];
     for (const bullet of Array.isArray(bullets) ? bullets : []) {
       for (const target of Array.isArray(bullet.targets) ? bullet.targets : []) {
         try {
-          await this.completeTranscludedTaskTargetTree(target, context, seen);
+          const result = await this.completeTranscludedTaskTargetTree(
+            target,
+            context,
+            seen,
+          );
+          if (result && Array.isArray(result.closed)) {
+            closed.push(...result.closed);
+          }
         } catch (error) {
           // Best effort: one broken embed should not block Pomodoro completion.
         }
       }
     }
+    return closed;
   }
 
   async startPomodoroNonTranscludedTaskBullets(bullets, context) {
@@ -4620,12 +4954,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   // same-file `![[#^child]]` links resolve correctly. Already-done targets are
   // not rewritten but are still traversed for eligible descendants. The seen-set
   // (keyed by resolved `path#^block-id`) plus the depth/target caps keep cycles
-  // and large accidental graphs bounded. Returns { visited, changed }: visited
+  // and large accidental graphs bounded. Returns { visited, changed, closed }:
+  // visited
   // is true once the candidate resolved to a fresh in-bounds target, changed is
   // true when this node or any descendant was forced to done.
   async completeTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
     if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
-      return { visited: false, changed: false };
+      return { visited: false, changed: false, closed: [] };
     }
 
     let resolvedTarget;
@@ -4634,10 +4969,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         taskStatusPredicate: isTranscludedCompletionTraversableStatus,
       });
     } catch (error) {
-      return { visited: false, changed: false };
+      return { visited: false, changed: false, closed: [] };
     }
     if (!resolvedTarget || !resolvedTarget.file) {
-      return { visited: false, changed: false };
+      return { visited: false, changed: false, closed: [] };
     }
 
     return this.completeResolvedTranscludedTaskTargetTree(
@@ -4660,12 +4995,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     depth = 0,
   ) {
     if (!resolvedTarget || !resolvedTarget.file) {
-      return { visited: false, changed: false };
+      return { visited: false, changed: false, closed: [] };
     }
 
     const seenKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
     if (seen.has(seenKey) || seen.size >= MAX_TRANSCLUDED_RECURSION_TARGETS) {
-      return { visited: false, changed: false };
+      return { visited: false, changed: false, closed: [] };
     }
     seen.add(seenKey);
 
@@ -4679,6 +5014,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       resolvedTarget.line,
     );
     let changed = false;
+    const closed = [];
     for (const childTarget of childTargets) {
       try {
         const childResult = await this.completeTranscludedTaskTargetTree(
@@ -4689,6 +5025,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         );
         if (childResult && childResult.changed) {
           changed = true;
+        }
+        if (childResult && Array.isArray(childResult.closed)) {
+          closed.push(...childResult.closed);
         }
       } catch (error) {
         // Best effort: one broken descendant should not block its siblings.
@@ -4706,10 +5045,14 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       );
       if (wrote) {
         changed = true;
+        closed.push({
+          path: resolvedTarget.file.path,
+          blockId: resolvedTarget.blockId,
+        });
       }
     }
 
-    return { visited: true, changed };
+    return { visited: true, changed, closed };
   }
 
   // Starts a single strict bare non-transcluded Pomodoro link target. Unlike
@@ -6026,6 +6369,7 @@ module.exports.helpers = {
   collectEmbeddedTranscludedTaskTargetsInListItemBlock,
   collectObsidianTaskTokenRanges,
   collapseWhitespaceOutsideBracketSpans,
+  closedTaskIdentity,
   demoteObsidianTaskLine,
   dependencyId,
   editorViewPositionFromLineCh,
@@ -6101,6 +6445,7 @@ module.exports.helpers = {
   getTranscludedTaskTargetFromLine,
   parseMarkdownHeadingLine,
   parseNonEmbeddedBlockLinks,
+  retireClosedTaskReferencesInText,
   parseTranscludedBlockTarget,
   normalizeVimRepeat,
   promoteLineToObsidianTask,

@@ -211,7 +211,7 @@ const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
 );
 const DEPENDENCY_NAVIGATION_LINK_RE = /\[\[#\^([A-Za-z0-9-]+)\]\]/g;
 const DEPENDENCY_TRANSCLUSION_BULLET_RE =
-  /^(?<indent>\s*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)\]\][ \t]*$/;
+  /^(?<indent>\s*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<strike>~~)?(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)\]\]\k<strike>[ \t]*$/;
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
   /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
@@ -898,6 +898,9 @@ function normalizeDependencyNavigationTargets(targets) {
           target && typeof target === "object"
             ? String(target.note || target.target || "").trim()
             : "",
+        terminal: Boolean(
+          target && typeof target === "object" && target.terminal,
+        ),
       }),
     );
   });
@@ -913,8 +916,10 @@ function formatDependencyNavigationBulletWithMarker(target, indent, marker) {
   }
   return targets
     .map(
-      ({ blockId, note }) =>
-        `${indentText}${markerText} ![[${note ? `${note}` : ""}#^${blockId}]]`,
+      ({ blockId, note, terminal }) => {
+        const link = `[[${note ? `${note}` : ""}#^${blockId}]]`;
+        return `${indentText}${markerText} ${terminal ? `~~${link}~~` : `!${link}`}`;
+      },
     )
     .join("\n");
 }
@@ -928,7 +933,10 @@ function parseDependencyTransclusionBulletDetails(line) {
   if (!match) {
     return null;
   }
-  const { indent, marker, embed, note, blockId } = match.groups;
+  const { indent, marker, strike, embed, note, blockId } = match.groups;
+  if (strike && embed) {
+    return null;
+  }
   return Object.freeze({
     indent,
     marker,
@@ -936,6 +944,7 @@ function parseDependencyTransclusionBulletDetails(line) {
     blockId,
     blockIds: Object.freeze([blockId]),
     transcluded: Boolean(embed),
+    terminal: Boolean(strike),
   });
 }
 
@@ -1001,8 +1010,15 @@ function formatDependencyNavigationBulletFromDetails(details) {
   const blockIds = Array.isArray(details && details.blockIds)
     ? details.blockIds
     : [details && details.blockId];
+  const targets = details && details.terminal
+    ? blockIds.map((blockId) => ({
+        blockId,
+        note: details.note || "",
+        terminal: true,
+      }))
+    : blockIds;
   return formatDependencyNavigationBulletWithMarker(
-    blockIds,
+    targets,
     details && details.indent,
     details && details.marker,
   );
@@ -1202,7 +1218,7 @@ function collectDependencyNavigationBullets(
     const transclusionDetails = parseDependencyTransclusionBulletDetails(lineText);
     const transclusionManaged =
       transclusionDetails &&
-      transclusionDetails.transcluded &&
+      (transclusionDetails.transcluded || transclusionDetails.terminal) &&
       (managedIds.has(transclusionDetails.blockId) ||
         managedIds.has(taskIdentities.get(transclusionDetails.blockId)));
     const details = legacyDetails || (transclusionManaged ? transclusionDetails : null);
@@ -1232,6 +1248,9 @@ function collectDependencyNavigationBullets(
         Object.freeze({
           blockId: normalized,
           note: transclusionDetails ? transclusionDetails.note : "",
+          terminal: Boolean(
+            transclusionDetails && transclusionDetails.terminal,
+          ),
         }),
       );
     });
@@ -1374,13 +1393,21 @@ function planDependencyNavigationBulletSync(
   const existingTargets = new Map(
     (collection.targets || []).map((target) => [target.blockId, target]),
   );
-  const lineTexts = finalTargets.map((target) =>
-    formatDependencyNavigationBulletWithMarker(
-      target.note ? target : existingTargets.get(target.blockId) || target,
+  const lineTexts = finalTargets.map((target) => {
+    const existing = existingTargets.get(target.blockId);
+    const formattedTarget = existing
+      ? {
+          ...target,
+          note: target.note || existing.note,
+          terminal: existing.terminal,
+        }
+      : target;
+    return formatDependencyNavigationBulletWithMarker(
+      formattedTarget,
       collection.indent,
       collection.marker,
-    ),
-  );
+    );
+  });
   const lineText = lineTexts.join("\n");
   if (
     collection.lineIndices.length === lineTexts.length &&

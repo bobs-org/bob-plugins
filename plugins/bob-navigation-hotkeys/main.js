@@ -1026,19 +1026,23 @@ function formatDependencyNavigationBulletFromDetails(details) {
 
 function getTaskIdentityByBlockId(content) {
   const identities = new Map();
-  String(content || "")
-    .split(/\r?\n/)
-    .forEach((line) => {
-      const blockId = getTrailingBlockId(line);
-      if (!blockId) {
-        return;
-      }
-      const idField = findBulletPropertyField(line, "id");
-      identities.set(
-        blockId,
-        idField ? normalizeBulletPropertyValue(idField.value) || blockId : blockId,
-      );
-    });
+  const text = String(content || "");
+  text.split(/\r?\n/).forEach((line, lineIndex) => {
+    if (!isObsidianTaskAtLine(text, lineIndex)) {
+      return;
+    }
+    const blockId = getTrailingBlockId(line);
+    if (!blockId) {
+      return;
+    }
+    const idField = findBulletPropertyField(line, "id");
+    identities.set(
+      blockId,
+      idField
+        ? normalizeBulletPropertyValue(idField.value) || blockId
+        : blockId,
+    );
+  });
   return identities;
 }
 
@@ -1186,8 +1190,8 @@ function collectDependencyNavigationBullets(
     return emptyCollection("parent-out-of-range");
   }
 
-  if (!isBulletLine(lines[parentIndex])) {
-    return emptyCollection("not-bullet");
+  if (!isObsidianTaskAtLine(content, parentIndex)) {
+    return emptyCollection("not-task");
   }
 
   const block = findCurrentBulletChildBlock(lines, parentIndex);
@@ -1338,8 +1342,8 @@ function planDependencyNavigationBulletSync(
     return guard("parent-out-of-range");
   }
 
-  if (!isBulletLine(lines[parentIndex])) {
-    return guard("not-bullet");
+  if (!isObsidianTaskAtLine(content, parentIndex)) {
+    return guard("not-task");
   }
 
   const collection = collectDependencyNavigationBullets(content, parentIndex, [
@@ -1713,7 +1717,11 @@ function rewriteDependsOnIdsInContent(content, replacements) {
   const newline = text.includes("\r\n") ? "\r\n" : "\n";
   const next = text
     .split(/\r?\n/)
-    .map((line) => rewriteDependsOnIdsInLine(line, replacements))
+    .map((line, lineIndex) =>
+      isObsidianTaskAtLine(text, lineIndex)
+        ? rewriteDependsOnIdsInLine(line, replacements)
+        : line,
+    )
     .join(newline);
   return Object.freeze({ content: next, changed: next !== text });
 }
@@ -3690,21 +3698,27 @@ function getSectionHeaderJumpLine(lines, cursorLine, direction) {
   return null;
 }
 
-// True for a Markdown checkbox list item that carries a standalone `#task`
-// token (the Tasks plugin global filter) and an open status symbol (space, `/`,
-// or `B`). Supports indentation, blockquote prefixes, and ordered or unordered
-// markers. Plain checklists without `#task`, and done/cancelled tasks, return
-// false.
-function isOpenObsidianTaskLine(lineText) {
+// True for a genuine Markdown checkbox list item that carries the Tasks
+// plugin's standalone `#task` global-filter token. Status is deliberately not
+// considered here: done and custom-status tasks remain valid task records.
+function isObsidianTaskLine(lineText) {
   const match = OBSIDIAN_TASK_LINE_RE.exec(String(lineText || ""));
   if (!match) {
     return false;
   }
 
-  const status = match[1];
   const body = match[2] || "";
-  return (
-    OPEN_OBSIDIAN_TASK_STATUSES.has(status) && PROJECT_TASK_TAG_RE.test(body)
+  return PROJECT_TASK_TAG_RE.test(body);
+}
+
+// The dependency picker intentionally offers only open tasks. Keep that
+// lifecycle filter separate from the general valid-task predicate above.
+function isOpenObsidianTaskLine(lineText) {
+  const match = OBSIDIAN_TASK_LINE_RE.exec(String(lineText || ""));
+  return Boolean(
+    match &&
+      isObsidianTaskLine(lineText) &&
+      OPEN_OBSIDIAN_TASK_STATUSES.has(match[1]),
   );
 }
 
@@ -5211,17 +5225,24 @@ function findDependencyToggleParent(lines, childLine) {
   if (parentLine === null) {
     return null;
   }
-  return OBSIDIAN_TASK_LINE_RE.test(sourceLines[parentLine]) ? parentLine : null;
+  return isObsidianTaskAtLine(sourceLines.join("\n"), parentLine)
+    ? parentLine
+    : null;
 }
 
 function findTaskLineByBlockId(lines, blockId) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const content = sourceLines.join("\n");
   const id = normalizeBulletPropertyValue(blockId);
   if (!id) {
     return null;
   }
-  for (let line = 0; line < lines.length; line += 1) {
-    const text = String(lines[line] || "");
-    if (OBSIDIAN_TASK_LINE_RE.test(text) && getTrailingBlockId(text) === id) {
+  for (let line = 0; line < sourceLines.length; line += 1) {
+    const text = String(sourceLines[line] || "");
+    if (
+      isObsidianTaskAtLine(content, line) &&
+      getTrailingBlockId(text) === id
+    ) {
       return line;
     }
   }
@@ -5242,11 +5263,15 @@ function planSameFileDependencyToggle(
     ? parseDependencyTransclusionBulletDetails(lines[line])
     : null;
   const next = parseDependencyTransclusionBulletDetails(nextLineText);
+  const toggledLines = lines.slice();
+  if (Number.isFinite(line) && line >= 0 && line < toggledLines.length) {
+    toggledLines[line] = String(nextLineText);
+  }
   const unqualified = (reason) =>
     Object.freeze({
       qualified: false,
       reason,
-      content: text,
+      content: toggledLines.join(newline),
       parentLine: null,
       targetLine: null,
       dependencyId: null,
@@ -5275,10 +5300,12 @@ function planSameFileDependencyToggle(
   const canonicalId = dependencyId(filePath, original.blockId);
   if (legacyId && legacyId !== canonicalId) {
     for (let index = 0; index < lines.length; index += 1) {
-      lines[index] = rewriteDependsOnIdsInLine(
-        lines[index],
-        new Map([[legacyId, canonicalId]]),
-      );
+      if (isObsidianTaskAtLine(lines.join(newline), index)) {
+        lines[index] = rewriteDependsOnIdsInLine(
+          lines[index],
+          new Map([[legacyId, canonicalId]]),
+        );
+      }
     }
   }
   const dependencyEdit = applyLocalTaskDependencyListEdits(
@@ -5339,15 +5366,19 @@ function transformDependencyBulletsInContent(
       ? dependencyResolutions
       : new Map(Object.entries(dependencyResolutions || {}));
   const unresolved = [];
+  const skippedNonTasks = [];
   let changedTasks = 0;
   let dependencyItems = 0;
 
   for (let parentLine = lines.length - 1; parentLine >= 0; parentLine -= 1) {
-    if (!isBulletLine(lines[parentLine])) {
-      continue;
-    }
     const field = findBulletPropertyField(lines[parentLine], "dependsOn");
     if (!field) {
+      continue;
+    }
+    if (!isObsidianTaskAtLine(lines.join(newline), parentLine)) {
+      skippedNonTasks.push(
+        Object.freeze({ filePath, line: parentLine + 1 }),
+      );
       continue;
     }
     const desired = [];
@@ -5390,6 +5421,8 @@ function transformDependencyBulletsInContent(
     changedTasks,
     dependencyItems,
     unresolved: Object.freeze(unresolved),
+    skippedNonTaskCount: skippedNonTasks.length,
+    skippedNonTasks: Object.freeze(skippedNonTasks.reverse()),
   });
 }
 
@@ -6613,6 +6646,19 @@ function getMarkdownLineContext(content, targetLine) {
   return Object.freeze({ valid: false, inFrontmatter: false, inFence: false });
 }
 
+// Whole-note dependency operations must reject task-shaped examples in YAML
+// frontmatter and fenced code, even when the individual line looks valid.
+function isObsidianTaskAtLine(content, lineIndex) {
+  const { lines } = splitMarkdownContent(content);
+  const context = getMarkdownLineContext(content, lineIndex);
+  return (
+    context.valid &&
+    !context.inFrontmatter &&
+    !context.inFence &&
+    isObsidianTaskLine(lines[lineIndex])
+  );
+}
+
 function isProjectLifecycleTaskAtLine(content, lineIndex) {
   const { lines } = splitMarkdownContent(content);
   const context = getMarkdownLineContext(content, lineIndex);
@@ -6793,6 +6839,10 @@ function resolveBulletPropertyTarget(name, context = {}) {
 
 function createBulletPropertyItems(config, line, context = {}) {
   const fields = getBulletPropertyFieldMap(line);
+  const dependencyEligible =
+    context.isObsidianTask === undefined
+      ? isObsidianTaskLine(line)
+      : Boolean(context.isObsidianTask);
   return config.properties
     .map((property, order) => {
       const target = resolveBulletPropertyTarget(property.name, context);
@@ -6814,8 +6864,15 @@ function createBulletPropertyItems(config, line, context = {}) {
         order,
         defined: frontmatterDefined || !!field,
         currentValue,
+        dependencyEligible,
       };
     })
+    .filter(
+      (item) =>
+        item.property.values !== "local_task_id" ||
+        item.dependencyEligible ||
+        item.defined,
+    )
     .sort((first, second) => {
       if (first.defined !== second.defined) {
         return first.defined ? -1 : 1;
@@ -6823,6 +6880,40 @@ function createBulletPropertyItems(config, line, context = {}) {
 
       return first.order - second.order;
     });
+}
+
+function validateDependencyParentForEditor(editor, cursor, expectedLine = null) {
+  if (!editor || typeof editor.getValue !== "function" || !cursor) {
+    return Object.freeze({
+      valid: false,
+      line: null,
+      message: "No active markdown editor",
+    });
+  }
+  const line = getEditorLine(editor, cursor.line);
+  if (line === null) {
+    return Object.freeze({
+      valid: false,
+      line: null,
+      message: "No active markdown editor",
+    });
+  }
+  const content = String(editor.getValue() || "");
+  if (!isObsidianTaskAtLine(content, cursor.line)) {
+    return Object.freeze({
+      valid: false,
+      line,
+      message: "Dependencies can only be set on #task checkboxes.",
+    });
+  }
+  if (expectedLine !== null && line !== expectedLine) {
+    return Object.freeze({
+      valid: false,
+      line,
+      message: "Current task changed; dependencies not updated",
+    });
+  }
+  return Object.freeze({ valid: true, line, message: null });
 }
 
 function isTaskTagLeftBoundary(character) {
@@ -7528,6 +7619,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.selectedIndex = 0;
     const property = propertyItem.property;
     if (property.values === "local_task_id") {
+      const validation = validateDependencyParentForEditor(
+        this.editor,
+        this.cursor,
+        this.lineText,
+      );
+      if (!validation.valid) {
+        new Notice(validation.message);
+        this.showPropertyStage({ clearQuery: false });
+        return;
+      }
       this.showLocalTaskValueStage(propertyItem);
       return;
     }
@@ -8052,10 +8153,24 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
+    const parentValidation = validateDependencyParentForEditor(
+      this.editor,
+      this.cursor,
+      this.lineText,
+    );
+    if (!parentValidation.valid) {
+      new Notice(parentValidation.message);
+      return false;
+    }
+
     // Single-select path. Re-read the target so a stale row never writes.
     const targetLine = getEditorLine(this.editor, item.line);
     if (targetLine !== item.rawLine) {
       new Notice("Task changed; dependency not added");
+      return false;
+    }
+    if (!isObsidianTaskAtLine(this.getEditorContent(), item.line)) {
+      new Notice("Selected dependency is no longer a #task checkbox");
       return false;
     }
 
@@ -8118,21 +8233,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     const propertyName = this.selectedPropertyItem.property.name;
-    let cursorLineText = getEditorLine(this.editor, this.cursor.line);
-    if (cursorLineText === null) {
-      new Notice("No active markdown editor");
+    const parentValidation = validateDependencyParentForEditor(
+      this.editor,
+      this.cursor,
+      this.lineText,
+    );
+    if (!parentValidation.valid) {
+      new Notice(parentValidation.message);
       return false;
     }
-
-    if (!isBulletLine(cursorLineText)) {
-      new Notice("Cursor is not on a bullet");
-      return false;
-    }
-
-    if (cursorLineText !== this.lineText) {
-      new Notice("Current task changed; dependencies not updated");
-      return false;
-    }
+    const cursorLineText = parentValidation.line;
 
     const removals = [];
     const readyAdditions = [];
@@ -8250,10 +8360,23 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   confirmSingleBlockId(item) {
+    const parentValidation = validateDependencyParentForEditor(
+      this.editor,
+      this.cursor,
+      this.lineText,
+    );
+    if (!parentValidation.valid) {
+      new Notice(parentValidation.message);
+      return false;
+    }
     const task = this.pendingTask;
     const targetLine = getEditorLine(this.editor, task.line);
     if (targetLine !== task.rawLine) {
       new Notice("Task changed; dependency not added");
+      return false;
+    }
+    if (!isObsidianTaskAtLine(this.getEditorContent(), task.line)) {
+      new Notice("Selected dependency is no longer a #task checkbox");
       return false;
     }
 
@@ -8304,21 +8427,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // bullets. Target-line edits are single-line replaces, so target indices stay
   // stable; only the nav reconciliation shifts lines and re-reads as it goes.
   executeDependencyBatch(batch) {
-    let cursorLineText = getEditorLine(this.editor, this.cursor.line);
-    if (cursorLineText === null) {
-      new Notice("No active markdown editor");
+    const parentValidation = validateDependencyParentForEditor(
+      this.editor,
+      this.cursor,
+      batch.cursorLineText,
+    );
+    if (!parentValidation.valid) {
+      new Notice(parentValidation.message);
       return false;
     }
-
-    if (!isBulletLine(cursorLineText)) {
-      new Notice("Cursor is not on a bullet");
-      return false;
-    }
-
-    if (cursorLineText !== batch.cursorLineText) {
-      new Notice("Current task changed; dependencies not updated");
-      return false;
-    }
+    let cursorLineText = parentValidation.line;
 
     const additions = [];
     const removals = batch.removals.slice();
@@ -8330,6 +8448,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       const targetLine = getEditorLine(this.editor, snapshot.line);
       if (targetLine !== snapshot.rawLine) {
         skippedStale += 1;
+        return;
+      }
+      if (!isObsidianTaskAtLine(this.getEditorContent(), snapshot.line)) {
+        skippedOther += 1;
         return;
       }
 
@@ -8372,6 +8494,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       const targetLine = getEditorLine(this.editor, snapshot.line);
       if (targetLine !== snapshot.rawLine) {
         skippedStale += 1;
+        return;
+      }
+      if (!isObsidianTaskAtLine(this.getEditorContent(), snapshot.line)) {
+        skippedOther += 1;
         return;
       }
 
@@ -8961,6 +9087,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (parentLine === null || !activeFile) {
         continue;
       }
+      if (nextLines[parentLine] !== originalLines[parentLine]) {
+        continue;
+      }
       const targetFile = original.note
         ? this.resolveLinkTargetFile(`${original.note}#^${original.blockId}`, sourcePath)
         : activeFile;
@@ -8971,8 +9100,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       let targetLines;
       let targetLine;
       if (targetFile.path === sourcePath) {
-        targetLines = nextLines;
+        targetLines = originalLines;
         targetLine = findTaskLineByBlockId(targetLines, original.blockId);
+        if (
+          targetLine !== null &&
+          nextLines[targetLine] !== originalLines[targetLine]
+        ) {
+          targetLine = null;
+        }
       } else {
         let external = externalFiles.get(targetFile.path);
         if (!external) {
@@ -8980,8 +9115,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             const content = await this.app.vault.cachedRead(targetFile);
             external = {
               file: targetFile,
+              originalContent: String(content || ""),
               lines: String(content || "").split(/\r?\n/),
               ensureIds: new Map(),
+              targetSnapshots: new Map(),
             };
             externalFiles.set(targetFile.path, external);
           } catch (error) {
@@ -8994,6 +9131,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (targetLine === null) {
         continue;
       }
+      const targetSnapshot = String(targetLines[targetLine] || "");
       const idField = findBulletPropertyField(targetLines[targetLine], "id");
       const legacyId = idField && normalizeBulletPropertyValue(idField.value);
       let canonicalId;
@@ -9011,9 +9149,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             canonicalId,
           ).line;
         } else {
-          externalFiles
-            .get(targetFile.path)
-            .ensureIds.set(original.blockId, canonicalId);
+          const external = externalFiles.get(targetFile.path);
+          external.ensureIds.set(original.blockId, canonicalId);
+          external.targetSnapshots.set(original.blockId, targetSnapshot);
         }
       }
       actions.push({
@@ -9031,21 +9169,39 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (external.ensureIds.size === 0) {
         continue;
       }
+      if (String(cm.getValue() || "") !== originalContent) {
+        return false;
+      }
       try {
         await this.app.vault.process(external.file, (content) => {
+          if (String(content || "") !== external.originalContent) {
+            failedExternalPaths.add(path);
+            return content;
+          }
           const targetNewline = String(content || "").includes("\r\n")
             ? "\r\n"
             : "\n";
           const lines = String(content || "").split(/\r?\n/);
+          const targetsAreCurrent = Array.from(
+            external.ensureIds.keys(),
+          ).every((blockId) => {
+            const targetLine = findTaskLineByBlockId(lines, blockId);
+            return (
+              targetLine !== null &&
+              lines[targetLine] === external.targetSnapshots.get(blockId)
+            );
+          });
+          if (!targetsAreCurrent) {
+            failedExternalPaths.add(path);
+            return content;
+          }
           external.ensureIds.forEach((canonicalId, blockId) => {
             const targetLine = findTaskLineByBlockId(lines, blockId);
-            if (targetLine !== null) {
-              lines[targetLine] = upsertBulletProperty(
-                lines[targetLine],
-                "id",
-                canonicalId,
-              ).line;
-            }
+            lines[targetLine] = upsertBulletProperty(
+              lines[targetLine],
+              "id",
+              canonicalId,
+            ).line;
           });
           return lines.join(targetNewline);
         });
@@ -9065,18 +9221,19 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
     if (legacyReplacements.size > 0) {
       for (let index = 0; index < nextLines.length; index += 1) {
-        nextLines[index] = rewriteDependsOnIdsInLine(
-          nextLines[index],
-          legacyReplacements,
-        );
+        if (isObsidianTaskAtLine(nextLines.join(newline), index)) {
+          nextLines[index] = rewriteDependsOnIdsInLine(
+            nextLines[index],
+            legacyReplacements,
+          );
+        }
       }
       const propagated = await this.propagateDependencyIdReplacements(
         legacyReplacements,
         new Set([sourcePath, ...externalFiles.keys()]),
       );
       if (!propagated) {
-        new Notice("Dependency references could not all be normalized; source was not updated");
-        return false;
+        new Notice("Dependency references could not all be normalized");
       }
     }
 
@@ -9262,7 +9419,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const activeFile = this.app.workspace.getActiveFile();
     const filePath = activeFile ? activeFile.path : "";
     const resolutions = new Map();
-    content.split(/\r?\n/).forEach((lineText) => {
+    content.split(/\r?\n/).forEach((lineText, lineIndex) => {
+      if (!isObsidianTaskAtLine(content, lineIndex)) {
+        return;
+      }
       const blockId = getTrailingBlockId(lineText);
       if (!blockId) {
         return;
@@ -9319,14 +9479,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
-    const propertyContext = getProjectNotePropertyContext(
+    const basePropertyContext = getProjectNotePropertyContext(
       content,
       cursor.line,
     );
-    if (!propertyContext.valid) {
-      new Notice(propertyContext.error);
+    if (!basePropertyContext.valid) {
+      new Notice(basePropertyContext.error);
       return false;
     }
+    const propertyContext = {
+      ...basePropertyContext,
+      isObsidianTask: isObsidianTaskAtLine(content, cursor.line),
+    };
 
     const activeView = this.getActiveMarkdownView();
     if (!activeView || activeView.editor !== cm || !activeView.file) {
@@ -9560,11 +9724,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   setLocalTaskDependency(cm, cursor, name, id, options = {}) {
-    const lineText = getEditorLine(cm, cursor.line);
-    if (lineText === null) {
-      new Notice("No active markdown editor");
+    const parentValidation = validateDependencyParentForEditor(
+      cm,
+      cursor,
+      options.expectedParentLine === undefined
+        ? null
+        : options.expectedParentLine,
+    );
+    if (!parentValidation.valid) {
+      new Notice(parentValidation.message);
       return false;
     }
+    const lineText = parentValidation.line;
 
     const result = upsertLocalTaskIdValue(lineText, name, id);
     if (result.reason === "not-bullet") {
@@ -13070,6 +13241,8 @@ module.exports.helpers = {
   isSubpathOnlyLink,
   getSectionHeaderLines,
   getSectionHeaderJumpLine,
+  isObsidianTaskLine,
+  isObsidianTaskAtLine,
   isOpenObsidianTaskLine,
   isPomodorosHeading,
   isLevelTwoHeading,
@@ -13115,6 +13288,7 @@ module.exports.helpers = {
   getProjectNotePropertyContext,
   resolveBulletPropertyTarget,
   createBulletPropertyItems,
+  validateDependencyParentForEditor,
   getWholeTaskTagSpans,
   normalizeTaskHideTag,
   getRealMarkdownTaskLines,

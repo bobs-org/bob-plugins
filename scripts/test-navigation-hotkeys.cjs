@@ -48,6 +48,31 @@ const NavigationHotkeysPlugin = require("../plugins/bob-navigation-hotkeys/main.
 const { helpers } = NavigationHotkeysPlugin;
 Module._load = originalLoad;
 
+class TestEditor {
+  constructor(content) {
+    this.content = content;
+  }
+  getValue() {
+    return this.content;
+  }
+  getLine(line) {
+    return this.content.split("\n")[line] ?? null;
+  }
+  replaceRange(text, from, to = from) {
+    const offset = (position) => {
+      const lines = this.content.split("\n");
+      return (
+        lines
+          .slice(0, position.line)
+          .reduce((sum, line) => sum + line.length + 1, 0) + position.ch
+      );
+    };
+    const start = offset(from);
+    const end = offset(to);
+    this.content = this.content.slice(0, start) + text + this.content.slice(end);
+  }
+}
+
 test("project schedule validation accepts only real YYYY-MM-DD dates", () => {
   assert.equal(helpers.validateProjectScheduledDate("2028-02-29").valid, true);
   assert.equal(helpers.validateProjectScheduledDate("2026-02-29").valid, false);
@@ -198,6 +223,38 @@ test("project lifecycle task classification requires unfenced #task with trailin
   assert.equal(helpers.isProjectLifecycleTaskAtLine(content, 7), true);
 });
 
+test("valid Obsidian tasks require a standalone #task checkbox in real note content", () => {
+  for (const line of [
+    "- [ ] #task Open",
+    "1. [x] Done #task",
+    "> - [/] #task Active",
+    "- [?] Custom #task.",
+  ]) {
+    assert.equal(helpers.isObsidianTaskLine(line), true, line);
+  }
+  for (const line of [
+    "- [ ] (**1535-1705** [t:: 90m])",
+    "- [ ] Plain checkbox",
+    "- [ ] #taskish Wrong tag",
+    "- Plain #task bullet",
+  ]) {
+    assert.equal(helpers.isObsidianTaskLine(line), false, line);
+  }
+
+  const content = [
+    "---",
+    "example: - [ ] #task YAML",
+    "---",
+    "```md",
+    "- [ ] #task Fenced",
+    "```",
+    "- [x] #task Real",
+  ].join("\n");
+  assert.equal(helpers.isObsidianTaskAtLine(content, 1), false);
+  assert.equal(helpers.isObsidianTaskAtLine(content, 4), false);
+  assert.equal(helpers.isObsidianTaskAtLine(content, 6), true);
+});
+
 test("property targets use project YAML only for scheduled on ^prj", () => {
   const config = {
     properties: [
@@ -254,6 +311,67 @@ test("property targets use project YAML only for scheduled on ^prj", () => {
   const malformedContext = helpers.getProjectNotePropertyContext(malformed, 4);
   assert.equal(malformedContext.valid, false);
   assert.match(malformedContext.error, /valid calendar date/);
+});
+
+test("local task properties are addable only on valid tasks but invalid metadata stays removable", () => {
+  const config = {
+    properties: [
+      { name: "dependsOn", values: "local_task_id" },
+      { name: "priority", values: ["high"] },
+    ],
+  };
+  assert.deepEqual(
+    helpers
+      .createBulletPropertyItems(config, "- [ ] #task Parent", {})
+      .map((item) => item.property.name),
+    ["dependsOn", "priority"],
+  );
+  assert.deepEqual(
+    helpers
+      .createBulletPropertyItems(config, "- [ ] (**1535-1705** [t:: 90m])", {})
+      .map((item) => item.property.name),
+    ["priority"],
+  );
+  const historical = helpers.createBulletPropertyItems(
+    config,
+    "- [ ] Plain [dependsOn:: old]",
+    {},
+  );
+  assert.equal(historical[0].property.name, "dependsOn");
+  assert.equal(historical[0].defined, true);
+  assert.equal(historical[0].dependencyEligible, false);
+});
+
+test("dependency parent write validation rejects stale, Pomodoro, and fenced parents", () => {
+  const valid = new TestEditor("- [ ] #task Parent");
+  assert.equal(
+    helpers.validateDependencyParentForEditor(
+      valid,
+      { line: 0, ch: 0 },
+      "- [ ] #task Parent",
+    ).valid,
+    true,
+  );
+  valid.content = "- [ ] #task Changed";
+  assert.equal(
+    helpers.validateDependencyParentForEditor(
+      valid,
+      { line: 0, ch: 0 },
+      "- [ ] #task Parent",
+    ).valid,
+    false,
+  );
+  for (const content of [
+    "- [ ] (**1535-1705** [t:: 90m])",
+    "```md\n- [ ] #task Example\n```",
+  ]) {
+    const editor = new TestEditor(content);
+    const line = content.startsWith("```") ? 1 : 0;
+    assert.equal(
+      helpers.validateDependencyParentForEditor(editor, { line, ch: 0 }).valid,
+      false,
+    );
+  }
 });
 
 test("project schedule update coordinates YAML, inline cleanup, and visibility", () => {
@@ -483,7 +601,7 @@ test("dependency sync splits legacy bullets and protects unrelated transclusions
 
 test("dependency sync inserts, removes, and preserves arbitrary child bullets", () => {
   const propertyOnly = [
-    "- Parent [dependsOn:: a]",
+    "- [ ] #task Parent [dependsOn:: a]",
     "  - Keep me",
     "- [ ] #task A [id:: a] ^a",
   ].join("\n");
@@ -504,6 +622,12 @@ test("dependency sync inserts, removes, and preserves arbitrary child bullets", 
   );
   assert.equal(remove.operation, "delete");
   assert.deepEqual(remove.deleteLines, [1]);
+
+  const plain = propertyOnly.replace("- [ ] #task Parent", "- Plain parent");
+  assert.equal(
+    helpers.planDependencyNavigationBulletSync(plain, 0, ["a"]).operation,
+    "guard",
+  );
 
   const mixedIndent = [
     "- [ ] #task Parent [dependsOn:: a]",
@@ -607,28 +731,39 @@ test("same-file dependency toggle synchronizes dependsOn and target id", () => {
   assert.equal(unrelated.qualified, false);
 });
 
-test("runtime dependency toggle synchronizes a cross-file target", async () => {
-  class TestEditor {
-    constructor(content) {
-      this.content = content;
-    }
-    getValue() {
-      return this.content;
-    }
-    replaceRange(text, from, to = from) {
-      const offset = (position) => {
-        const lines = this.content.split("\n");
-        return (
-          lines.slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) +
-          position.ch
-        );
-      };
-      const start = offset(from);
-      const end = offset(to);
-      this.content = this.content.slice(0, start) + text + this.content.slice(end);
-    }
-  }
+test("same-file dependency toggle preserves plain toggling for invalid parents and targets", () => {
+  const pomodoro = [
+    "- [ ] (**1535-1705** [t:: 90m])",
+    "  - [[#^child]]",
+    "- [ ] #task Child ^child",
+  ].join("\n");
+  const pomodoroResult = helpers.planSameFileDependencyToggle(
+    pomodoro,
+    1,
+    "  - ![[#^child]]",
+    "Here.md",
+  );
+  assert.equal(pomodoroResult.qualified, false);
+  assert.match(pomodoroResult.content, /  - !\[\[#\^child\]\]/);
+  assert.doesNotMatch(pomodoroResult.content, /dependsOn|\[id::/);
 
+  const invalidTarget = [
+    "- [ ] #task Parent",
+    "  - [[#^child]]",
+    "- [ ] Plain target ^child",
+  ].join("\n");
+  const invalidTargetResult = helpers.planSameFileDependencyToggle(
+    invalidTarget,
+    1,
+    "  - ![[#^child]]",
+    "Here.md",
+  );
+  assert.equal(invalidTargetResult.qualified, false);
+  assert.match(invalidTargetResult.content, /  - !\[\[#\^child\]\]/);
+  assert.doesNotMatch(invalidTargetResult.content, /dependsOn|\[id::/);
+});
+
+test("runtime dependency toggle synchronizes a cross-file target", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const targetFile = { path: "Other.md", extension: "md" };
   let targetContent = "- [ ] #task Target ^target";
@@ -669,6 +804,88 @@ test("runtime dependency toggle synchronizes a cross-file target", async () => {
   assert.match(targetContent, /Target \[id:: Other__target\] \^target/);
 });
 
+test("runtime dependency toggle leaves external files untouched for invalid endpoints", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  for (const scenario of [
+    {
+      source: "- [ ] (**1535-1705** [t:: 90m])\n  - [[Other#^target]]",
+      target: "- [ ] #task Target ^target",
+    },
+    {
+      source: "- [ ] #task Parent\n  - [[Other#^target]]",
+      target: "- [ ] Plain target ^target",
+    },
+  ]) {
+    let targetContent = scenario.target;
+    let processCalls = 0;
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.app = {
+      workspace: { getActiveFile: () => activeFile },
+      metadataCache: {
+        getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
+      },
+      vault: {
+        cachedRead: async () => targetContent,
+        getAbstractFileByPath: () => null,
+        process: async (_file, transform) => {
+          processCalls += 1;
+          targetContent = transform(targetContent);
+        },
+      },
+    };
+    const editor = new TestEditor(scenario.source);
+    assert.equal(
+      await plugin.applyDependencyAwareTransclusionChanges(editor, [
+        { line: 1, nextLineText: "  - ![[Other#^target]]" },
+      ]),
+      true,
+    );
+    assert.match(editor.content, /!\[\[Other#\^target\]\]/);
+    assert.doesNotMatch(editor.content, /dependsOn/);
+    assert.equal(targetContent, scenario.target);
+    assert.equal(processCalls, 0);
+  }
+});
+
+test("counted runtime toggles every link but synchronizes only valid task pairs", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    vault: { getAbstractFileByPath: () => activeFile },
+  };
+  const editor = new TestEditor(
+    [
+      "- [ ] #task Parent",
+      "  - [[#^valid]]",
+      "- [ ] #task Valid target ^valid",
+      "- [ ] (**1535-1705** [t:: 90m])",
+      "  - [[#^plain]]",
+      "- [ ] Plain target ^plain",
+      "- [[loose]]",
+    ].join("\n"),
+  );
+  const toggle = helpers.toggleLineRangeTransclusions(
+    editor.content.split("\n"),
+    0,
+    6,
+  );
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(
+      editor,
+      toggle.changesByLine,
+    ),
+    true,
+  );
+  assert.match(editor.content, /  - !\[\[#\^valid\]\]/);
+  assert.match(editor.content, /  - !\[\[#\^plain\]\]/);
+  assert.match(editor.content, /- !\[\[loose\]\]/);
+  assert.match(editor.content, /Parent \[dependsOn:: Here__valid\]/);
+  assert.match(editor.content, /Valid target \[id:: Here__valid\] \^valid/);
+  assert.doesNotMatch(editor.content, /Here__plain|Plain target \[id::/);
+});
+
 test("counted transclusion toggle evaluates each line independently", () => {
   const result = helpers.toggleLineRangeTransclusions(
     ["- [[a]] and ![[b]]", "- ![[c]]"],
@@ -685,7 +902,7 @@ test("counted transclusion toggle evaluates each line independently", () => {
   );
 });
 
-test("migration transform handles tasks, plain bullets, cross-note targets, and idempotency", () => {
+test("migration transform rewrites only real tasks and reports skipped non-tasks", () => {
   const input = [
     "- [ ] #task Parent [dependsOn:: a, remote, missing]",
     "  - 🔗 **DEPENDENCIES:** [[#^a]] • [[#^remote]]",
@@ -705,7 +922,14 @@ test("migration transform handles tasks, plain bullets, cross-note targets, and 
   assert.equal(migrated.changed, true);
   assert.match(migrated.content, /  - !\[\[#\^a\]\]/);
   assert.match(migrated.content, /  - !\[\[Other#\^actual\]\]/);
-  assert.match(migrated.content, /- Plain parent \[dependsOn:: a\]\n\t- !\[\[#\^a\]\]/);
+  assert.match(
+    migrated.content,
+    /- Plain parent \[dependsOn:: a\]\n\t- arbitrary child/,
+  );
+  assert.equal(migrated.skippedNonTaskCount, 1);
+  assert.deepEqual(migrated.skippedNonTasks, [
+    { filePath: "Here.md", line: 3 },
+  ]);
   assert.equal(migrated.unresolved.length, 1);
   assert.equal(migrated.unresolved[0].id, "missing");
   const second = helpers.transformDependencyBulletsInContent(

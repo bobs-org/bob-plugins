@@ -79,9 +79,11 @@ async function listMarkdownFiles(root) {
 function indexDependencies(files) {
   const byId = new Map();
   const byBlockId = new Map();
-  const taskRe = /^\s*(?:[-*+]|\d+[.)])\s+\[[^\]\n]\]/;
   for (const file of files) {
-    file.content.split(/\r?\n/).forEach((line) => {
+    file.content.split(/\r?\n/).forEach((line, lineIndex) => {
+      if (!helpers.isObsidianTaskAtLine(file.content, lineIndex)) {
+        return;
+      }
       const blockId = helpers.getTrailingBlockId(line);
       if (!blockId) {
         return;
@@ -92,7 +94,7 @@ function indexDependencies(files) {
       }
       const idField = helpers.findBulletPropertyField(line, "id");
       const id = idField && String(idField.value || "").trim();
-      if (id && taskRe.test(line) && !byId.has(id)) {
+      if (id && !byId.has(id)) {
         byId.set(id, resolution);
       }
     });
@@ -119,6 +121,7 @@ async function main() {
   let dependencyItems = 0;
   let propertyCount = 0;
   const unresolved = [];
+  const skippedNonTasks = [];
   for (const file of files) {
     propertyCount += file.content.split(/\r?\n/).filter((line) =>
       Boolean(helpers.findBulletPropertyField(line, "dependsOn")),
@@ -129,6 +132,7 @@ async function main() {
       resolutions,
     );
     unresolved.push(...result.unresolved);
+    skippedNonTasks.push(...result.skippedNonTasks);
     if (!result.changed) {
       continue;
     }
@@ -146,8 +150,11 @@ async function main() {
   unresolved.forEach(({ filePath, line, id }) =>
     console.warn(`unresolved ${filePath}:${line}: ${id}`),
   );
+  skippedNonTasks.forEach(({ filePath, line }) =>
+    console.warn(`skipped non-task ${filePath}:${line}`),
+  );
   console.log(
-    `${options.write ? "Migration" : "Dry run"}: ${propertyCount} dependsOn properties; ${changedFiles} file(s), ${changedTasks} task(s), ${dependencyItems} resolved dependency bullet(s), ${unresolved.length} unresolved id(s).`,
+    `${options.write ? "Migration" : "Dry run"}: ${propertyCount} dependsOn properties; ${changedFiles} file(s), ${changedTasks} task(s), ${dependencyItems} resolved dependency bullet(s), ${unresolved.length} unresolved id(s), ${skippedNonTasks.length} skipped non-task propert${skippedNonTasks.length === 1 ? "y" : "ies"}.`,
   );
 }
 

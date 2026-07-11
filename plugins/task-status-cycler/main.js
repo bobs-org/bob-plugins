@@ -272,13 +272,19 @@ function isTranscludedCompletionTraversableStatus(taskStatus) {
   return (
     !!taskStatus &&
     (taskStatus.symbol === " " ||
+      taskStatus.symbol === "*" ||
       taskStatus.symbol === "/" ||
       taskStatus.symbol === "x")
   );
 }
 
 function isTranscludedCompletionClosableStatus(taskStatus) {
-  return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "/");
+  return (
+    !!taskStatus &&
+    (taskStatus.symbol === " " ||
+      taskStatus.symbol === "*" ||
+      taskStatus.symbol === "/")
+  );
 }
 
 function isNonTranscludedStartResolvableStatus(taskStatus) {
@@ -4136,8 +4142,8 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
   // Direct Pomodoro sub-bullet path: when the active line is an embedded
   // transcluded task link under a Pomodoro task, recursively force that selected
-  // target tree to done, mirroring Pomodoro completion semantics (eligible
-  // non-done targets -> done, already-done roots stay done but are still
+  // target tree to done, mirroring Pomodoro completion semantics (Todo, Next,
+  // and In Progress targets -> Done; already-Done roots stay Done but are still
   // traversed for eligible descendants).
   // Unlike full Pomodoro completion this does not touch the local Pomodoro line,
   // create a placeholder, carry bullets forward, or move the cursor. Returns
@@ -4415,8 +4421,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       }
     }
 
-    // Done parents stay done; open and in-progress tasks are forced to done.
-    // The replacement path revalidates the line and block ID before writing.
+    // Done parents stay done; Todo, Next, and In Progress tasks are forced to
+    // Done. The replacement path revalidates the line and block ID before
+    // writing.
     if (isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)) {
       const wrote = await this.replaceResolvedTranscludedTaskLine(
         resolvedTarget,

@@ -185,7 +185,9 @@ const PROJECT_NOTE_PROPERTY_TARGETS = Object.freeze({
   }),
 });
 const PROJECT_HIDE_TAG = "#hide";
-// Visible label written into new managed dependency navigation child bullets.
+// Legacy dependency-navigation bullets are still recognized so they can be
+// migrated to one transcluded block link per dependency. New bullets use the
+// canonical shape `\t- ![[#^block-id]]` (or a cross-note target before `#`).
 const DEPENDENCY_NAVIGATION_LABEL = "DEPENDS ON";
 const DEPENDENCY_NAVIGATION_EMOJI = "🔗";
 const DEPENDENCY_NAVIGATION_SEPARATOR = " • ";
@@ -208,6 +210,8 @@ const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
     .join("|")}):\\*\\*[ \\t]+(?<linkSpan>.*\\[\\[#\\^[A-Za-z0-9-]+\\]\\].*)[ \\t]*$`,
 );
 const DEPENDENCY_NAVIGATION_LINK_RE = /\[\[#\^([A-Za-z0-9-]+)\]\]/g;
+const DEPENDENCY_TRANSCLUSION_BULLET_RE =
+  /^(?<indent>\s*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)\]\][ \t]*$/;
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
   /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
@@ -850,29 +854,97 @@ function getBulletIndent(line) {
   return match ? match[1] : "";
 }
 
-function normalizeDependencyNavigationBlockIds(blockIds) {
-  const rawIds = Array.isArray(blockIds) ? blockIds : [blockIds];
-  return getUniqueLocalTaskIdValues(rawIds);
+function getBulletIndentWidth(line) {
+  let width = 0;
+  for (const character of getBulletIndent(line)) {
+    width = character === "\t" ? width + (4 - (width % 4)) : width + 1;
+  }
+  return width;
 }
 
-function formatDependencyNavigationBulletWithMarker(blockIds, indent, marker) {
+function findNearestParentListItem(lines, childLine) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const childIndex = Math.floor(numericOrDefault(childLine, Number.NaN));
+  if (!Number.isFinite(childIndex) || childIndex <= 0) {
+    return null;
+  }
+  const childIndentWidth = getBulletIndentWidth(sourceLines[childIndex] || "");
+  for (let line = childIndex - 1; line >= 0; line -= 1) {
+    const text = String(sourceLines[line] || "");
+    if (!text.trim() || getBulletIndentWidth(text) >= childIndentWidth) {
+      continue;
+    }
+    if (BULLET_PROPERTY_LIST_ITEM_RE.test(text)) {
+      return line;
+    }
+  }
+  return null;
+}
+
+function normalizeDependencyNavigationBlockIds(blockIds) {
+  return normalizeDependencyNavigationTargets(blockIds).map(
+    (target) => target.blockId,
+  );
+}
+
+function normalizeDependencyNavigationTargets(targets) {
+  const rawTargets = Array.isArray(targets) ? targets : [targets];
+  const normalized = [];
+  const seen = new Set();
+  rawTargets.forEach((target) => {
+    const blockId = normalizeBulletPropertyValue(
+      target && typeof target === "object" ? target.blockId : target,
+    );
+    if (!blockId || seen.has(blockId)) {
+      return;
+    }
+    seen.add(blockId);
+    normalized.push(
+      Object.freeze({
+        blockId,
+        note:
+          target && typeof target === "object"
+            ? String(target.note || target.target || "").trim()
+            : "",
+      }),
+    );
+  });
+  return normalized;
+}
+
+function formatDependencyNavigationBulletWithMarker(target, indent, marker) {
   const indentText = typeof indent === "string" ? indent : "";
   const markerText = typeof marker === "string" && marker ? marker : "-";
-  const ids = normalizeDependencyNavigationBlockIds(blockIds);
-  if (ids.length === 0) {
+  const targets = normalizeDependencyNavigationTargets(target);
+  if (targets.length === 0) {
     return "";
   }
-
-  const links = ids
-    .map((blockId) => `[[#^${blockId}]]`)
-    .join(DEPENDENCY_NAVIGATION_SEPARATOR);
-  return `${indentText}${markerText} ${DEPENDENCY_NAVIGATION_EMOJI} **${DEPENDENCY_NAVIGATION_LABEL}:** ${links}`;
+  return targets
+    .map(
+      ({ blockId, note }) =>
+        `${indentText}${markerText} ![[${note ? `${note}` : ""}#^${blockId}]]`,
+    )
+    .join("\n");
 }
 
-// Render the managed human-navigation child bullet for dependency block links.
-// Accepts either one block ID or an ordered list of block IDs.
-function formatDependencyNavigationBullet(blockIds, indent) {
-  return formatDependencyNavigationBulletWithMarker(blockIds, indent, "-");
+function formatDependencyNavigationBullet(target, indent) {
+  return formatDependencyNavigationBulletWithMarker(target, indent, "-");
+}
+
+function parseDependencyTransclusionBulletDetails(line) {
+  const match = DEPENDENCY_TRANSCLUSION_BULLET_RE.exec(String(line || ""));
+  if (!match) {
+    return null;
+  }
+  const { indent, marker, embed, note, blockId } = match.groups;
+  return Object.freeze({
+    indent,
+    marker,
+    note: String(note || "").trim(),
+    blockId,
+    blockIds: Object.freeze([blockId]),
+    transcluded: Boolean(embed),
+  });
 }
 
 function extractDependencyNavigationBlockIds(linkSpan) {
@@ -887,7 +959,9 @@ function extractDependencyNavigationBlockIds(linkSpan) {
 }
 
 function getDependencyNavigationBlockIds(line) {
-  const details = parseDependencyNavigationBulletDetails(line);
+  const details =
+    parseDependencyNavigationBulletDetails(line) ||
+    parseDependencyTransclusionBulletDetails(line);
   return details ? details.blockIds.slice() : [];
 }
 
@@ -895,7 +969,9 @@ function getDependencyNavigationBlockIds(line) {
 // bullet (current or legacy label), otherwise null. Kept for narrow legacy
 // callers; new code should use getDependencyNavigationBlockIds.
 function parseDependencyNavigationBullet(line) {
-  const details = parseDependencyNavigationBulletDetails(line);
+  const details =
+    parseDependencyNavigationBulletDetails(line) ||
+    parseDependencyTransclusionBulletDetails(line);
   return details && details.blockIds.length > 0 ? details.blockIds[0] : null;
 }
 
@@ -940,6 +1016,24 @@ function formatDependencyNavigationBulletFromDetails(details) {
   );
 }
 
+function getTaskIdentityByBlockId(content) {
+  const identities = new Map();
+  String(content || "")
+    .split(/\r?\n/)
+    .forEach((line) => {
+      const blockId = getTrailingBlockId(line);
+      if (!blockId) {
+        return;
+      }
+      const idField = findBulletPropertyField(line, "id");
+      identities.set(
+        blockId,
+        idField ? normalizeBulletPropertyValue(idField.value) || blockId : blockId,
+      );
+    });
+  return identities;
+}
+
 // Capture the index range of the current bullet's child block: every later line
 // that is blank or indented deeper than the parent, stopping at the first
 // nonblank line indented at or shallower than the parent (or EOF). Trailing
@@ -956,9 +1050,9 @@ function findCurrentBulletChildBlock(lines, parentLine) {
   }
 
   const startLine = parentIndex + 1;
-  const parentIndentLength = getBulletIndent(
+  const parentIndentLength = getBulletIndentWidth(
     String(sourceLines[parentIndex] || ""),
-  ).length;
+  );
   let endLineExclusive = startLine;
 
   for (let index = startLine; index < sourceLines.length; index += 1) {
@@ -967,7 +1061,7 @@ function findCurrentBulletChildBlock(lines, parentLine) {
       continue;
     }
 
-    if (getBulletIndent(lineText).length > parentIndentLength) {
+    if (getBulletIndentWidth(lineText) > parentIndentLength) {
       endLineExclusive = index + 1;
       continue;
     }
@@ -978,10 +1072,8 @@ function findCurrentBulletChildBlock(lines, parentLine) {
   return Object.freeze({ startLine, endLineExclusive });
 }
 
-// Pick the indentation for a new dependency child bullet: reuse the first
-// existing direct-child list item's indentation (so tab-indented blocks stay
-// consistent), otherwise indent the parent by two spaces to match the requested
-// `  - ...` shape for a top-level bullet.
+// Pick the indentation for a new dependency child bullet: reuse an existing
+// child indentation, otherwise use Obsidian's default TAB indentation.
 function getDependencyChildIndent(lines, parentLine) {
   const sourceLines = Array.isArray(lines)
     ? lines
@@ -998,12 +1090,15 @@ function getDependencyChildIndent(lines, parentLine) {
       continue;
     }
 
-    if (BULLET_PROPERTY_LIST_ITEM_RE.test(lineText)) {
+    if (
+      BULLET_PROPERTY_LIST_ITEM_RE.test(lineText) &&
+      findNearestParentListItem(sourceLines, index) === parentIndex
+    ) {
       return getBulletIndent(lineText);
     }
   }
 
-  return `${parentIndent}  `;
+  return `${parentIndent}\t`;
 }
 
 function getDependencyDirectChildIndentLength(lines, parentLine, block) {
@@ -1014,7 +1109,7 @@ function getDependencyDirectChildIndentLength(lines, parentLine, block) {
   const childBlock =
     block || findCurrentBulletChildBlock(sourceLines, parentIndex);
   const parentIndentLength = Number.isFinite(parentIndex)
-    ? getBulletIndent(String(sourceLines[parentIndex] || "")).length
+    ? getBulletIndentWidth(String(sourceLines[parentIndex] || ""))
     : 0;
   let childIndentLength = null;
 
@@ -1028,7 +1123,7 @@ function getDependencyDirectChildIndentLength(lines, parentLine, block) {
       continue;
     }
 
-    const indentLength = getBulletIndent(lineText).length;
+    const indentLength = getBulletIndentWidth(lineText);
     if (indentLength <= parentIndentLength) {
       continue;
     }
@@ -1045,6 +1140,7 @@ function createDependencyNavigationCollection(fields) {
   return Object.freeze({
     lineIndices: Object.freeze((fields.lineIndices || []).slice()),
     blockIds: Object.freeze((fields.blockIds || []).slice()),
+    targets: Object.freeze((fields.targets || []).slice()),
     indent: fields.indent === undefined ? null : fields.indent,
     marker: fields.marker === undefined ? null : fields.marker,
     anyLegacy: Boolean(fields.anyLegacy),
@@ -1055,7 +1151,11 @@ function createDependencyNavigationCollection(fields) {
   });
 }
 
-function collectDependencyNavigationBullets(content, parentLine) {
+function collectDependencyNavigationBullets(
+  content,
+  parentLine,
+  additionalManagedIds = [],
+) {
   const lines = String(content || "").split(/\r?\n/);
   const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
 
@@ -1083,28 +1183,37 @@ function collectDependencyNavigationBullets(content, parentLine) {
   }
 
   const block = findCurrentBulletChildBlock(lines, parentIndex);
-  const directChildIndentLength = getDependencyDirectChildIndentLength(
-    lines,
-    parentIndex,
-    block,
-  );
   const lineIndices = [];
   const blockIds = [];
+  const targets = [];
   const seenBlockIds = new Set();
   let indent = null;
   let marker = null;
   let anyLegacy = false;
+  const dependencyField = findBulletPropertyField(lines[parentIndex], "dependsOn");
+  const managedIds = new Set([
+    ...(dependencyField ? parseLocalTaskIdList(dependencyField.value) : []),
+    ...normalizeDependencyNavigationBlockIds(additionalManagedIds),
+  ]);
+  const taskIdentities = getTaskIdentityByBlockId(content);
 
   for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
     const lineText = String(lines[index] || "");
+    const legacyDetails = parseDependencyNavigationBulletDetails(lineText);
     if (
-      directChildIndentLength !== null &&
-      getBulletIndent(lineText).length !== directChildIndentLength
+      !legacyDetails &&
+      findNearestParentListItem(lines, index) !== parentIndex
     ) {
       continue;
     }
 
-    const details = parseDependencyNavigationBulletDetails(lineText);
+    const transclusionDetails = parseDependencyTransclusionBulletDetails(lineText);
+    const transclusionManaged =
+      transclusionDetails &&
+      transclusionDetails.transcluded &&
+      (managedIds.has(transclusionDetails.blockId) ||
+        managedIds.has(taskIdentities.get(transclusionDetails.blockId)));
+    const details = legacyDetails || (transclusionManaged ? transclusionDetails : null);
     if (details === null) {
       continue;
     }
@@ -1115,11 +1224,7 @@ function collectDependencyNavigationBullets(content, parentLine) {
     }
 
     lineIndices.push(index);
-    if (
-      details.isLegacy ||
-      !details.hasEmoji ||
-      lineText !== formatDependencyNavigationBulletFromDetails(details)
-    ) {
+    if (legacyDetails) {
       anyLegacy = true;
     }
 
@@ -1131,12 +1236,19 @@ function collectDependencyNavigationBullets(content, parentLine) {
 
       seenBlockIds.add(normalized);
       blockIds.push(normalized);
+      targets.push(
+        Object.freeze({
+          blockId: normalized,
+          note: transclusionDetails ? transclusionDetails.note : "",
+        }),
+      );
     });
   }
 
   return createDependencyNavigationCollection({
     lineIndices,
     blockIds,
+    targets,
     indent,
     marker,
     anyLegacy,
@@ -1180,6 +1292,7 @@ function createDependencyNavigationSyncPlan(fields) {
     insertLine: fields.insertLine === undefined ? null : fields.insertLine,
     replaceLine: fields.replaceLine === undefined ? null : fields.replaceLine,
     lineText: fields.lineText === undefined ? null : fields.lineText,
+    lineTexts: Object.freeze((fields.lineTexts || []).slice()),
     deleteLines: Object.freeze((fields.deleteLines || []).slice()),
     blockIds: Object.freeze((fields.blockIds || []).slice()),
     existingBlockIds: Object.freeze((fields.existingBlockIds || []).slice()),
@@ -1188,10 +1301,16 @@ function createDependencyNavigationSyncPlan(fields) {
   });
 }
 
-function planDependencyNavigationBulletSync(content, parentLine, finalBlockIds) {
+function planDependencyNavigationBulletSync(
+  content,
+  parentLine,
+  finalBlockIds,
+  options = {},
+) {
   const lines = String(content || "").split(/\r?\n/);
   const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
-  const finalIds = normalizeDependencyNavigationBlockIds(finalBlockIds);
+  const finalTargets = normalizeDependencyNavigationTargets(finalBlockIds);
+  const finalIds = finalTargets.map((target) => target.blockId);
   const guard = (reason) =>
     createDependencyNavigationSyncPlan({
       operation: "guard",
@@ -1212,7 +1331,10 @@ function planDependencyNavigationBulletSync(content, parentLine, finalBlockIds) 
     return guard("not-bullet");
   }
 
-  const collection = collectDependencyNavigationBullets(content, parentIndex);
+  const collection = collectDependencyNavigationBullets(content, parentIndex, [
+    ...finalIds,
+    ...(options.managedBlockIds || []),
+  ]);
   if (collection.reason) {
     return guard(collection.reason);
   }
@@ -1229,11 +1351,15 @@ function planDependencyNavigationBulletSync(content, parentLine, finalBlockIds) 
     }
 
     const indent = getDependencyChildIndent(lines, parentIndex);
+    const lineTexts = finalTargets.map((target) =>
+      formatDependencyNavigationBullet(target, indent),
+    );
     return createDependencyNavigationSyncPlan({
       operation: "insert",
       changed: true,
       insertLine: collection.startLine,
-      lineText: formatDependencyNavigationBullet(finalIds, indent),
+      lineText: lineTexts.join("\n"),
+      lineTexts,
       blockIds: finalIds,
       existingBlockIds: collection.blockIds,
       lineIndices: collection.lineIndices,
@@ -1253,14 +1379,22 @@ function planDependencyNavigationBulletSync(content, parentLine, finalBlockIds) 
   }
 
   const replaceLine = collection.lineIndices[0];
-  const lineText = formatDependencyNavigationBulletWithMarker(
-    finalIds,
-    collection.indent,
-    collection.marker,
+  const existingTargets = new Map(
+    (collection.targets || []).map((target) => [target.blockId, target]),
   );
+  const lineTexts = finalTargets.map((target) =>
+    formatDependencyNavigationBulletWithMarker(
+      target.note ? target : existingTargets.get(target.blockId) || target,
+      collection.indent,
+      collection.marker,
+    ),
+  );
+  const lineText = lineTexts.join("\n");
   if (
-    collection.lineIndices.length === 1 &&
-    lines[replaceLine] === lineText
+    collection.lineIndices.length === lineTexts.length &&
+    collection.lineIndices.every(
+      (lineIndex, index) => lines[lineIndex] === lineTexts[index],
+    )
   ) {
     return createDependencyNavigationSyncPlan({
       operation: "noop",
@@ -1276,6 +1410,7 @@ function planDependencyNavigationBulletSync(content, parentLine, finalBlockIds) 
     changed: true,
     replaceLine,
     lineText,
+    lineTexts,
     deleteLines: collection.lineIndices.slice(1),
     blockIds: finalIds,
     existingBlockIds: collection.blockIds,
@@ -1299,6 +1434,7 @@ function planDependencyNavigationBulletRemoval(content, parentLine, blockId) {
     content,
     parentLine,
     computeFinalDependencyLinkOrder(collection.blockIds, [], [blockId]),
+    { managedBlockIds: [blockId] },
   );
 }
 
@@ -1363,7 +1499,7 @@ function applyDependencyNavigationBulletSyncPlan(cm, plan) {
     }
   } else if (plan.operation === "insert") {
     if (insertEditorLine(cm, plan.insertLine, plan.lineText)) {
-      result.inserted += 1;
+      result.inserted += Math.max((plan.lineTexts || []).length, 1);
       result.changed = true;
     }
   }
@@ -4469,6 +4605,25 @@ function replaceEditorLine(cm, line, oldLineText, newLineText) {
   return true;
 }
 
+function replaceEditorContent(cm, oldContent, newContent) {
+  if (!cm || typeof cm.replaceRange !== "function") {
+    return false;
+  }
+  const oldText = String(oldContent || "");
+  const nextText = String(newContent || "");
+  if (oldText === nextText) {
+    return true;
+  }
+  const oldLines = oldText.split(/\r?\n/);
+  const lastLine = Math.max(oldLines.length - 1, 0);
+  cm.replaceRange(
+    nextText,
+    { line: 0, ch: 0 },
+    { line: lastLine, ch: String(oldLines[lastLine] || "").length },
+  );
+  return true;
+}
+
 // Insert a full new line at the `line` boundary, pushing the existing line at
 // that index (and everything below) down by one. When `line` is past the final
 // line, the new line is appended after the last line instead. Kept separate from
@@ -4935,11 +5090,9 @@ function toggleLineRangeTransclusions(lines, startLine, endLine) {
     };
   }
 
-  const removeMarkers = lineTargets.every((entry) =>
-    entry.targets.every((target) => target.transcluded),
-  );
   const changesByLine = lineTargets
     .map((entry) => {
+      const removeMarkers = entry.targets.every((target) => target.transcluded);
       const changes = getTransclusionToggleChanges(entry.targets, removeMarkers);
       return {
         ...entry,
@@ -4955,10 +5108,185 @@ function toggleLineRangeTransclusions(lines, startLine, endLine) {
   return {
     found: true,
     changed: changesByLine.length > 0,
-    removeMarkers,
+    removeMarkers: null,
     lineTargets,
     changesByLine,
   };
+}
+
+function findDependencyToggleParent(lines, childLine) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const parentLine = findNearestParentListItem(sourceLines, childLine);
+  if (parentLine === null) {
+    return null;
+  }
+  return OBSIDIAN_TASK_LINE_RE.test(sourceLines[parentLine]) ? parentLine : null;
+}
+
+function findTaskLineByBlockId(lines, blockId) {
+  const id = normalizeBulletPropertyValue(blockId);
+  if (!id) {
+    return null;
+  }
+  for (let line = 0; line < lines.length; line += 1) {
+    const text = String(lines[line] || "");
+    if (OBSIDIAN_TASK_LINE_RE.test(text) && getTrailingBlockId(text) === id) {
+      return line;
+    }
+  }
+  return null;
+}
+
+function planSameFileDependencyToggle(content, lineIndex, nextLineText) {
+  const text = String(content || "");
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  const line = Math.floor(numericOrDefault(lineIndex, Number.NaN));
+  const original = Number.isFinite(line)
+    ? parseDependencyTransclusionBulletDetails(lines[line])
+    : null;
+  const next = parseDependencyTransclusionBulletDetails(nextLineText);
+  const unqualified = (reason) =>
+    Object.freeze({
+      qualified: false,
+      reason,
+      content: text,
+      parentLine: null,
+      targetLine: null,
+      dependencyId: null,
+      transcluded: next ? next.transcluded : null,
+    });
+  if (
+    !original ||
+    !next ||
+    original.blockId !== next.blockId ||
+    original.transcluded === next.transcluded ||
+    original.note ||
+    next.note
+  ) {
+    return unqualified("not-sole-same-file-block-link");
+  }
+  const parentLine = findDependencyToggleParent(lines, line);
+  if (parentLine === null) {
+    return unqualified("no-parent-task");
+  }
+  const targetLine = findTaskLineByBlockId(lines, original.blockId);
+  if (targetLine === null) {
+    return unqualified("target-not-task");
+  }
+  const idField = findBulletPropertyField(lines[targetLine], "id");
+  const dependencyId =
+    (idField && normalizeBulletPropertyValue(idField.value)) || original.blockId;
+  const dependencyEdit = applyLocalTaskDependencyListEdits(
+    lines[parentLine],
+    "dependsOn",
+    next.transcluded
+      ? { add: [dependencyId] }
+      : { remove: [dependencyId, original.blockId] },
+  );
+  lines[line] = String(nextLineText);
+  lines[parentLine] = dependencyEdit.line;
+  if (next.transcluded && !idField) {
+    lines[targetLine] = insertMissingBulletProperty(
+      lines[targetLine],
+      "id",
+      original.blockId,
+    ).line;
+  }
+  return Object.freeze({
+    qualified: true,
+    reason: null,
+    content: lines.join(newline),
+    parentLine,
+    targetLine,
+    dependencyId,
+    transcluded: next.transcluded,
+  });
+}
+
+function applyDependencyNavigationPlanToLines(lines, plan) {
+  const nextLines = lines.slice();
+  if (!plan || !plan.changed) {
+    return nextLines;
+  }
+  (plan.deleteLines || [])
+    .slice()
+    .sort((a, b) => b - a)
+    .forEach((line) => nextLines.splice(line, 1));
+  const replacement = String(plan.lineText || "").split("\n");
+  if (plan.operation === "rewrite" && plan.replaceLine !== null) {
+    nextLines.splice(plan.replaceLine, 1, ...replacement);
+  } else if (plan.operation === "insert") {
+    nextLines.splice(plan.insertLine, 0, ...replacement);
+  }
+  return nextLines;
+}
+
+function transformDependencyBulletsInContent(
+  content,
+  filePath,
+  dependencyResolutions,
+) {
+  const text = String(content || "");
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  let lines = text.split(/\r?\n/);
+  const resolutions =
+    dependencyResolutions instanceof Map
+      ? dependencyResolutions
+      : new Map(Object.entries(dependencyResolutions || {}));
+  const unresolved = [];
+  let changedTasks = 0;
+  let dependencyItems = 0;
+
+  for (let parentLine = lines.length - 1; parentLine >= 0; parentLine -= 1) {
+    if (!isBulletLine(lines[parentLine])) {
+      continue;
+    }
+    const field = findBulletPropertyField(lines[parentLine], "dependsOn");
+    if (!field) {
+      continue;
+    }
+    const desired = [];
+    parseLocalTaskIdList(field.value).forEach((id) => {
+      const resolution = resolutions.get(id);
+      if (!resolution || !normalizeBulletPropertyValue(resolution.blockId)) {
+        unresolved.push(Object.freeze({ filePath, line: parentLine + 1, id }));
+        return;
+      }
+      const targetPath = String(resolution.filePath || "");
+      const basename = targetPath
+        .split("/")
+        .pop()
+        .replace(/\.md$/i, "");
+      desired.push({
+        blockId: resolution.blockId,
+        note:
+          targetPath && targetPath !== filePath
+            ? String(resolution.note || basename)
+            : "",
+      });
+    });
+    dependencyItems += desired.length;
+    const plan = planDependencyNavigationBulletSync(
+      lines.join(newline),
+      parentLine,
+      desired,
+      { managedBlockIds: desired.map((target) => target.blockId) },
+    );
+    if (plan.changed) {
+      lines = applyDependencyNavigationPlanToLines(lines, plan);
+      changedTasks += 1;
+    }
+  }
+
+  const nextContent = lines.join(newline);
+  return Object.freeze({
+    content: nextContent,
+    changed: nextContent !== text,
+    changedTasks,
+    dependencyItems,
+    unresolved: Object.freeze(unresolved),
+  });
 }
 
 function applyTransclusionChanges(line, changes) {
@@ -7998,6 +8326,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const collection = collectDependencyNavigationBullets(
       content,
       this.cursor.line,
+      removals.map((removal) => removal.linkBlockId),
     );
     const finalBlockIds = computeFinalDependencyLinkOrder(
       collection.blockIds,
@@ -8010,6 +8339,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       content,
       this.cursor.line,
       finalBlockIds,
+      { managedBlockIds: removals.map((removal) => removal.linkBlockId) },
     );
     const applied = applyDependencyNavigationBulletSyncPlan(this.editor, plan);
     if (plan.changed && !applied.changed) {
@@ -8278,7 +8608,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "consolidate-dependency-navigation-links",
-      name: "Consolidate DEPENDS ON navigation links (current note)",
+      name: "Rewrite dependency navigation links (current note)",
       editorCallback: (editor) =>
         this.consolidateDependencyNavigationLinks(editor),
     });
@@ -8433,7 +8763,144 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
   }
 
-  toggleCurrentLineTransclusions(cm) {
+  async applyDependencyAwareTransclusionChanges(cm, changesByLine) {
+    if (!cm || typeof cm.getValue !== "function") {
+      return false;
+    }
+    const originalContent = String(cm.getValue() || "");
+    const newline = originalContent.includes("\r\n") ? "\r\n" : "\n";
+    const originalLines = originalContent.split(/\r?\n/);
+    const nextLines = originalLines.slice();
+    const activeFile = this.app.workspace.getActiveFile();
+    const sourcePath = activeFile && activeFile.path;
+    const actions = [];
+    const externalFiles = new Map();
+
+    for (const change of changesByLine) {
+      nextLines[change.line] = change.nextLineText;
+      const original = parseDependencyTransclusionBulletDetails(
+        originalLines[change.line],
+      );
+      const next = parseDependencyTransclusionBulletDetails(change.nextLineText);
+      if (
+        !original ||
+        !next ||
+        original.blockId !== next.blockId ||
+        original.note !== next.note ||
+        original.transcluded === next.transcluded
+      ) {
+        continue;
+      }
+      const parentLine = findDependencyToggleParent(originalLines, change.line);
+      if (parentLine === null || !activeFile) {
+        continue;
+      }
+      const targetFile = original.note
+        ? this.resolveLinkTargetFile(`${original.note}#^${original.blockId}`, sourcePath)
+        : activeFile;
+      if (!targetFile || !targetFile.path) {
+        continue;
+      }
+
+      let targetLines;
+      let targetLine;
+      if (targetFile.path === sourcePath) {
+        targetLines = nextLines;
+        targetLine = findTaskLineByBlockId(targetLines, original.blockId);
+      } else {
+        let external = externalFiles.get(targetFile.path);
+        if (!external) {
+          try {
+            const content = await this.app.vault.cachedRead(targetFile);
+            external = {
+              file: targetFile,
+              lines: String(content || "").split(/\r?\n/),
+              ensureIds: new Set(),
+            };
+            externalFiles.set(targetFile.path, external);
+          } catch (error) {
+            continue;
+          }
+        }
+        targetLines = external.lines;
+        targetLine = findTaskLineByBlockId(targetLines, original.blockId);
+      }
+      if (targetLine === null) {
+        continue;
+      }
+      const idField = findBulletPropertyField(targetLines[targetLine], "id");
+      const dependencyId =
+        (idField && normalizeBulletPropertyValue(idField.value)) ||
+        original.blockId;
+      if (next.transcluded && !idField) {
+        if (targetFile.path === sourcePath) {
+          nextLines[targetLine] = insertMissingBulletProperty(
+            nextLines[targetLine],
+            "id",
+            original.blockId,
+          ).line;
+        } else {
+          externalFiles.get(targetFile.path).ensureIds.add(original.blockId);
+        }
+      }
+      actions.push({
+        parentLine,
+        blockId: original.blockId,
+        dependencyId,
+        transcluded: next.transcluded,
+        targetPath: targetFile.path,
+      });
+    }
+
+    const failedExternalPaths = new Set();
+    for (const [path, external] of externalFiles) {
+      if (external.ensureIds.size === 0) {
+        continue;
+      }
+      try {
+        await this.app.vault.process(external.file, (content) => {
+          const targetNewline = String(content || "").includes("\r\n")
+            ? "\r\n"
+            : "\n";
+          const lines = String(content || "").split(/\r?\n/);
+          external.ensureIds.forEach((blockId) => {
+            const targetLine = findTaskLineByBlockId(lines, blockId);
+            if (targetLine !== null) {
+              lines[targetLine] = insertMissingBulletProperty(
+                lines[targetLine],
+                "id",
+                blockId,
+              ).line;
+            }
+          });
+          return lines.join(targetNewline);
+        });
+      } catch (error) {
+        failedExternalPaths.add(path);
+      }
+    }
+
+    actions.forEach((action) => {
+      if (action.transcluded && failedExternalPaths.has(action.targetPath)) {
+        return;
+      }
+      const edit = applyLocalTaskDependencyListEdits(
+        nextLines[action.parentLine],
+        "dependsOn",
+        action.transcluded
+          ? { add: [action.dependencyId] }
+          : { remove: [action.dependencyId, action.blockId] },
+      );
+      nextLines[action.parentLine] = edit.line;
+    });
+
+    if (String(cm.getValue() || "") !== originalContent) {
+      return false;
+    }
+    return replaceEditorContent(cm, originalContent, nextLines.join(newline));
+  }
+
+  async toggleCurrentLineTransclusions(cm) {
     const cursor = getEditorCursor(cm);
     if (!cursor) {
       new Notice("No active markdown editor");
@@ -8452,10 +8919,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    if (
-      !result.changed ||
-      !replaceEditorLine(cm, cursor.line, lineText, result.line)
-    ) {
+    if (!result.changed) {
+      return false;
+    }
+    const applied = await this.applyDependencyAwareTransclusionChanges(cm, [
+      { line: cursor.line, nextLineText: result.line },
+    ]);
+    if (!applied) {
       return false;
     }
 
@@ -8469,7 +8939,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  toggleCountedLineTransclusions(editor, cursor, repeat) {
+  async toggleCountedLineTransclusions(editor, cursor, repeat) {
     const normalizedCursor = normalizePosition(cursor);
     if (!normalizedCursor || !editor) {
       return false;
@@ -8498,17 +8968,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    for (const change of result.changesByLine) {
-      if (
-        !replaceEditorLine(
-          editor,
-          change.line,
-          change.lineText,
-          change.nextLineText,
-        )
-      ) {
-        return false;
-      }
+    if (!(await this.applyDependencyAwareTransclusionChanges(editor, result.changesByLine))) {
+      return false;
     }
 
     const activeChange = result.changesByLine.find(
@@ -8536,46 +8997,36 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    const taskLines = [];
-    String(cm.getValue() || "")
-      .split(/\r?\n/)
-      .forEach((lineText, index) => {
-        if (OBSIDIAN_TASK_LINE_RE.test(lineText)) {
-          taskLines.push(index);
-        }
-      });
-
-    let consolidatedTasks = 0;
-    taskLines
-      .slice()
-      .reverse()
-      .forEach((line) => {
-        const content = String(cm.getValue() || "");
-        const lines = content.split(/\r?\n/);
-        if (line >= lines.length || !OBSIDIAN_TASK_LINE_RE.test(lines[line])) {
-          return;
-        }
-
-        const collection = collectDependencyNavigationBullets(content, line);
-        if (collection.lineIndices.length === 0) {
-          return;
-        }
-
-        const plan = planDependencyNavigationBulletSync(
-          content,
-          line,
-          collection.blockIds,
-        );
-        const applied = applyDependencyNavigationBulletSyncPlan(cm, plan);
-        if (applied.changed) {
-          consolidatedTasks += 1;
-        }
-      });
+    const content = String(cm.getValue() || "");
+    const activeFile = this.app.workspace.getActiveFile();
+    const filePath = activeFile ? activeFile.path : "";
+    const resolutions = new Map();
+    content.split(/\r?\n/).forEach((lineText) => {
+      const blockId = getTrailingBlockId(lineText);
+      if (!blockId) {
+        return;
+      }
+      const idField = findBulletPropertyField(lineText, "id");
+      const id =
+        (idField && normalizeBulletPropertyValue(idField.value)) || blockId;
+      if (!resolutions.has(id)) {
+        resolutions.set(id, { filePath, blockId });
+      }
+    });
+    const transformed = transformDependencyBulletsInContent(
+      content,
+      filePath,
+      resolutions,
+    );
+    const consolidatedTasks = transformed.changedTasks;
+    if (transformed.changed) {
+      replaceEditorContent(cm, content, transformed.content);
+    }
 
     new Notice(
       consolidatedTasks > 0
-        ? `Consolidated ${formatCountLabel(consolidatedTasks, "task")}`
-        : "Nothing to consolidate",
+        ? `Rewrote ${formatCountLabel(consolidatedTasks, "task")}`
+        : "Nothing to rewrite",
     );
     return consolidatedTasks > 0;
   }
@@ -12377,10 +12828,14 @@ module.exports.helpers = {
   scheduleOpenTaskJumpCenter,
   scheduleDashTasksScrollAssert,
   replaceEditorLine,
+  replaceEditorContent,
   setEditorCursorSafely,
   findTransclusionToggleTargets,
   toggleLineTransclusions,
   toggleLineRangeTransclusions,
+  findDependencyToggleParent,
+  findTaskLineByBlockId,
+  planSameFileDependencyToggle,
   adjustCursorChForTransclusionChanges,
   deferToNextFrame,
   cancelDeferred,
@@ -12434,6 +12889,7 @@ module.exports.helpers = {
   LEGACY_DEPENDENCY_NAVIGATION_LABELS,
   formatDependencyNavigationBullet,
   formatDependencyNavigationBulletFromDetails,
+  parseDependencyTransclusionBulletDetails,
   getDependencyNavigationBlockIds,
   parseDependencyNavigationBullet,
   parseDependencyNavigationBulletDetails,
@@ -12446,6 +12902,7 @@ module.exports.helpers = {
   planDependencyNavigationBulletRemoval,
   planDependencyNavigationLabelNormalizations,
   normalizeDependencyNavigationLabels,
+  transformDependencyBulletsInContent,
   buildLocalTaskDependencyNotice,
   buildMultiDependencyNotice,
   insertEditorLine,

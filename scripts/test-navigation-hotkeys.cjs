@@ -44,7 +44,8 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const { helpers } = require("../plugins/bob-navigation-hotkeys/main.js");
+const NavigationHotkeysPlugin = require("../plugins/bob-navigation-hotkeys/main.js");
+const { helpers } = NavigationHotkeysPlugin;
 Module._load = originalLoad;
 
 test("project schedule validation accepts only real YYYY-MM-DD dates", () => {
@@ -396,4 +397,251 @@ test("schedule deletion removes stale inline fields without changing visibility"
       "- [ ] #task Work #hide",
     ].join("\r\n"),
   );
+});
+
+test("dependency bullets render one canonical transclusion per target", () => {
+  assert.equal(
+    helpers.formatDependencyNavigationBullet(["a", "b"], "\t"),
+    "\t- ![[#^a]]\n\t- ![[#^b]]",
+  );
+  assert.equal(
+    helpers.formatDependencyNavigationBullet(
+      { blockId: "remote", note: "projects/Other" },
+      "  ",
+    ),
+    "  - ![[projects/Other#^remote]]",
+  );
+  assert.deepEqual(
+    helpers.parseDependencyTransclusionBulletDetails("  - ![[Other#^remote]]"),
+    {
+      indent: "  ",
+      marker: "-",
+      note: "Other",
+      blockId: "remote",
+      blockIds: ["remote"],
+      transcluded: true,
+    },
+  );
+});
+
+test("dependency sync splits legacy bullets and protects unrelated transclusions", () => {
+  const input = [
+    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
+    "  - 🔗 **DEPENDS ON:** [[#^a]] • [[#^b]]",
+    "  - ![[ref/chat/example#^ref]]",
+    "- [ ] #task A [id:: a] ^a",
+    "- [ ] #task B [id:: b] ^b",
+  ].join("\n");
+  const plan = helpers.planDependencyNavigationBulletSync(input, 0, ["a", "b"]);
+  assert.equal(plan.operation, "rewrite");
+  assert.deepEqual(plan.lineTexts, ["  - ![[#^a]]", "  - ![[#^b]]"]);
+
+  const canonical = [
+    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
+    "  - ![[#^a]]",
+    "  - ![[#^b]]",
+    "  - ![[ref/chat/example#^ref]]",
+    "- [ ] #task A [id:: a] ^a",
+    "- [ ] #task B [id:: b] ^b",
+  ].join("\n");
+  const collection = helpers.collectDependencyNavigationBullets(canonical, 0);
+  assert.deepEqual(collection.blockIds, ["a", "b"]);
+  assert.deepEqual(collection.lineIndices, [1, 2]);
+  assert.equal(
+    helpers.planDependencyNavigationBulletSync(canonical, 0, ["a", "b"]).changed,
+    false,
+  );
+});
+
+test("dependency sync inserts, removes, and preserves arbitrary child bullets", () => {
+  const propertyOnly = [
+    "- Parent [dependsOn:: a]",
+    "  - Keep me",
+    "- [ ] #task A [id:: a] ^a",
+  ].join("\n");
+  const insert = helpers.planDependencyNavigationBulletSync(propertyOnly, 0, ["a"]);
+  assert.equal(insert.operation, "insert");
+  assert.equal(insert.insertLine, 1);
+  assert.equal(insert.lineText, "  - ![[#^a]]");
+
+  const canonical = propertyOnly.replace(
+    "  - Keep me",
+    "  - ![[#^a]]\n  - Keep me",
+  );
+  const remove = helpers.planDependencyNavigationBulletSync(
+    canonical.replace("[dependsOn:: a]", "[dependsOn:: ]"),
+    0,
+    [],
+    { managedBlockIds: ["a"] },
+  );
+  assert.equal(remove.operation, "delete");
+  assert.deepEqual(remove.deleteLines, [1]);
+
+  const mixedIndent = [
+    "- [ ] #task Parent [dependsOn:: a]",
+    "  - 🔗 **DEPENDS ON:** [[#^a]]",
+    "\t- arbitrary child",
+    "- [ ] #task A [id:: a] ^a",
+  ].join("\n");
+  const mixedPlan = helpers.planDependencyNavigationBulletSync(
+    mixedIndent,
+    0,
+    ["a"],
+  );
+  assert.equal(mixedPlan.operation, "rewrite");
+  assert.equal(mixedPlan.replaceLine, 1);
+
+  const nested = [
+    "- [ ] #task Parent [dependsOn:: a]",
+    "  - arbitrary child",
+    "    - ![[#^a]]",
+    "- [ ] #task A [id:: a] ^a",
+  ].join("\n");
+  const nestedCollection = helpers.collectDependencyNavigationBullets(nested, 0);
+  assert.deepEqual(nestedCollection.blockIds, []);
+  assert.equal(
+    helpers.planDependencyNavigationBulletSync(nested, 0, ["a"]).operation,
+    "insert",
+  );
+});
+
+test("same-file dependency toggle synchronizes dependsOn and target id", () => {
+  const input = [
+    "- [ ] #task Parent ^parent",
+    "  - [[#^child]]",
+    "- [ ] #task Child ^child",
+  ].join("\n");
+  const added = helpers.planSameFileDependencyToggle(
+    input,
+    1,
+    "  - ![[#^child]]",
+  );
+  assert.equal(added.qualified, true);
+  assert.match(added.content, /Parent \[dependsOn:: child\] \^parent/);
+  assert.match(added.content, /Child \[id:: child\] \^child/);
+
+  const removed = helpers.planSameFileDependencyToggle(
+    added.content,
+    1,
+    "  - [[#^child]]",
+  );
+  assert.equal(removed.qualified, true);
+  assert.doesNotMatch(removed.content, /dependsOn/);
+  assert.match(removed.content, /Child \[id:: child\] \^child/);
+
+  const unrelated = helpers.planSameFileDependencyToggle(
+    input.replace("[[#^child]]", "[[#^ref]]"),
+    1,
+    "  - ![[#^ref]]",
+  );
+  assert.equal(unrelated.qualified, false);
+});
+
+test("runtime dependency toggle synchronizes a cross-file target", async () => {
+  class TestEditor {
+    constructor(content) {
+      this.content = content;
+    }
+    getValue() {
+      return this.content;
+    }
+    replaceRange(text, from, to = from) {
+      const offset = (position) => {
+        const lines = this.content.split("\n");
+        return (
+          lines.slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) +
+          position.ch
+        );
+      };
+      const start = offset(from);
+      const end = offset(to);
+      this.content = this.content.slice(0, start) + text + this.content.slice(end);
+    }
+  }
+
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  let targetContent = "- [ ] #task Target ^target";
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    metadataCache: {
+      getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
+    },
+    vault: {
+      cachedRead: async () => targetContent,
+      getAbstractFileByPath: (filePath) =>
+        filePath === activeFile.path ? activeFile : null,
+      process: async (_file, transform) => {
+        targetContent = transform(targetContent);
+      },
+    },
+  };
+  const editor = new TestEditor(
+    "- [ ] #task Parent ^parent\n  - [[Other#^target]]",
+  );
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(editor, [
+      { line: 1, nextLineText: "  - ![[Other#^target]]" },
+    ]),
+    true,
+  );
+  assert.match(editor.content, /Parent \[dependsOn:: target\] \^parent/);
+  assert.match(targetContent, /Target \[id:: target\] \^target/);
+
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(editor, [
+      { line: 1, nextLineText: "  - [[Other#^target]]" },
+    ]),
+    true,
+  );
+  assert.doesNotMatch(editor.content, /dependsOn/);
+  assert.match(targetContent, /Target \[id:: target\] \^target/);
+});
+
+test("counted transclusion toggle evaluates each line independently", () => {
+  const result = helpers.toggleLineRangeTransclusions(
+    ["- [[a]] and ![[b]]", "- ![[c]]"],
+    0,
+    1,
+  );
+  assert.deepEqual(
+    result.changesByLine.map((change) => change.nextLineText),
+    ["- ![[a]] and ![[b]]", "- [[c]]"],
+  );
+  assert.equal(
+    helpers.toggleLineTransclusions("prefix [[a]] and [[b]]").line,
+    "prefix ![[a]] and ![[b]]",
+  );
+});
+
+test("migration transform handles tasks, plain bullets, cross-note targets, and idempotency", () => {
+  const input = [
+    "- [ ] #task Parent [dependsOn:: a, remote, missing]",
+    "  - 🔗 **DEPENDENCIES:** [[#^a]] • [[#^remote]]",
+    "- Plain parent [dependsOn:: a]",
+    "\t- arbitrary child",
+    "- [ ] #task A [id:: a] ^a",
+  ].join("\n");
+  const resolutions = new Map([
+    ["a", { filePath: "Here.md", blockId: "a" }],
+    ["remote", { filePath: "folder/Other.md", blockId: "actual" }],
+  ]);
+  const migrated = helpers.transformDependencyBulletsInContent(
+    input,
+    "Here.md",
+    resolutions,
+  );
+  assert.equal(migrated.changed, true);
+  assert.match(migrated.content, /  - !\[\[#\^a\]\]/);
+  assert.match(migrated.content, /  - !\[\[Other#\^actual\]\]/);
+  assert.match(migrated.content, /- Plain parent \[dependsOn:: a\]\n\t- !\[\[#\^a\]\]/);
+  assert.equal(migrated.unresolved.length, 1);
+  assert.equal(migrated.unresolved[0].id, "missing");
+  const second = helpers.transformDependencyBulletsInContent(
+    migrated.content,
+    "Here.md",
+    resolutions,
+  );
+  assert.equal(second.changed, false);
 });

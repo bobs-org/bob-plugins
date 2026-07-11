@@ -6,7 +6,7 @@
   "license": "MIT",
   "author": "Bryan M Bugyi",
   "scripts": {
-    "test": "node --test scripts/test-navigation-hotkeys.cjs",
+    "test": "node --test scripts/test-navigation-hotkeys.cjs scripts/test-task-status-cycler.cjs",
     "validate": "node scripts/validate-manifests.mjs"
   }
 }

@@ -256,7 +256,12 @@ function getTaskStatusForLine(lineText, lineNumber = 0) {
 }
 
 function isOpenDoneTaskStatus(taskStatus) {
-  return !!taskStatus && (taskStatus.symbol === " " || taskStatus.symbol === "x");
+  return (
+    !!taskStatus &&
+    (taskStatus.symbol === " " ||
+      taskStatus.symbol === "*" ||
+      taskStatus.symbol === "x")
+  );
 }
 
 function isCyclableTaskStatus(taskStatus) {
@@ -309,7 +314,7 @@ function getNextOpenDoneSymbol(taskStatus) {
     return null;
   }
 
-  return taskStatus.symbol === " " ? "x" : " ";
+  return taskStatus.symbol === "x" ? " " : "x";
 }
 
 function normalizeTaskMetadataSpacing(lineText) {

@@ -260,6 +260,7 @@ function isOpenDoneTaskStatus(taskStatus) {
     !!taskStatus &&
     (taskStatus.symbol === " " ||
       taskStatus.symbol === "*" ||
+      taskStatus.symbol === "/" ||
       taskStatus.symbol === "x")
   );
 }

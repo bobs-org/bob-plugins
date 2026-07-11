@@ -78,12 +78,12 @@ function getEmbeddedTarget(linkText) {
   return targets[0];
 }
 
-test("direct open/done transitions include Next without broadening other statuses", () => {
+test("direct open/done transitions include incomplete statuses without broadening excluded statuses", () => {
   const cases = [
     { symbol: " ", eligible: true, next: "x" },
     { symbol: "*", eligible: true, next: "x" },
     { symbol: "x", eligible: true, next: " " },
-    { symbol: "/", eligible: false, next: null },
+    { symbol: "/", eligible: true, next: "x" },
     { symbol: "-", eligible: false, next: null },
   ];
 
@@ -198,7 +198,7 @@ test("recursive completion traverses Done parents and skips excluded siblings", 
   );
 });
 
-test("Vim Ctrl+Enter dispatches a Next task through the Tasks done command", () => {
+test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks done command", () => {
   const originalWindow = global.window;
   const actions = new Map();
   const mappings = [];
@@ -213,7 +213,7 @@ test("Vim Ctrl+Enter dispatches a Next task through the Tasks done command", () 
   global.window = { CodeMirrorAdapter: { Vim: vim } };
 
   try {
-    const lineText = "- [*] #task Complete the regression fix";
+    let lineText = "- [/] #task Complete the regression fix";
     const editor = {
       getCursor: () => ({ line: 0, ch: 6 }),
       getLine: () => lineText,
@@ -258,7 +258,9 @@ test("Vim Ctrl+Enter dispatches a Next task through the Tasks done command", () 
     }
 
     actions.get("taskStatusCyclerToggleTaskOpenDone")({});
-    assert.deepEqual(executedCommands, [doneCommand]);
+    lineText = "- [*] #task Preserve the existing Next behavior";
+    actions.get("taskStatusCyclerToggleTaskOpenDone")({});
+    assert.deepEqual(executedCommands, [doneCommand, doneCommand]);
   } finally {
     if (originalWindow === undefined) {
       delete global.window;

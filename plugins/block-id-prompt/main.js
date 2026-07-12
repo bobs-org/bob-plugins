@@ -148,39 +148,110 @@ function splitWikiLinkBody(body) {
   };
 }
 
-function parseTrailingTaskPickerMarker(match) {
-  const raw = match[0];
-  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
-  let markerIndex = destination.lastIndexOf("#^^");
-  let blockPrefix = "#^";
+function parseTaskPickerPosition(destination) {
+  let blockPrefix;
+  let targetText;
 
-  if (markerIndex === -1 || markerIndex + 3 !== destination.length) {
-    markerIndex = destination.lastIndexOf("^^");
+  if (destination.endsWith("#^")) {
+    blockPrefix = "#^";
+    targetText = destination.slice(0, -2);
+  } else if (destination.endsWith("^")) {
     blockPrefix = "^";
-    if (markerIndex === -1 || markerIndex + 2 !== destination.length) {
-      return null;
-    }
+    targetText = destination.slice(0, -1);
+  } else {
+    return null;
   }
 
-  const targetText = destination.slice(0, markerIndex);
   if (targetText.includes("^")) {
     return null;
   }
 
-  const markerStartCh = match.index + 2 + markerIndex;
-  const markerEndCh = match.index + 2 + destination.length;
+  return { targetText, blockPrefix };
+}
+
+function taskPickerMarkerFromPosition(
+  match,
+  position,
+  aliasSuffix,
+  raw,
+  endCh,
+  markerStartCh,
+  markerEndCh,
+) {
+  const parsedPosition = parseTaskPickerPosition(position);
+  if (!parsedPosition) {
+    return null;
+  }
 
   return {
     kind: "link-task-picker",
     raw,
-    targetText,
+    ...parsedPosition,
     aliasSuffix,
-    blockPrefix,
     startCh: match.index,
-    endCh: match.index + raw.length,
+    endCh,
     markerStartCh,
     markerEndCh,
   };
+}
+
+function parseTrailingTaskPickerMarker(match) {
+  const raw = match[0];
+  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
+  let markerLength;
+
+  if (destination.endsWith("#^^")) {
+    markerLength = 3;
+  } else if (destination.endsWith("^^")) {
+    markerLength = 2;
+  } else {
+    return null;
+  }
+
+  const markerStartCh = match.index + 2 + destination.length - markerLength;
+  const markerEndCh = match.index + 2 + destination.length;
+  const position = destination.slice(0, -1);
+
+  return taskPickerMarkerFromPosition(
+    match,
+    position,
+    aliasSuffix,
+    raw,
+    match.index + raw.length,
+    markerStartCh,
+    markerEndCh,
+  );
+}
+
+function parseRapidTaskPickerMarker(match, lineText) {
+  const linkRaw = match[0];
+  const markerStartCh = match.index + linkRaw.length;
+  if (
+    lineText.slice(markerStartCh, markerStartCh + 2) !== "^^" ||
+    lineText[markerStartCh + 2] === "^"
+  ) {
+    return null;
+  }
+
+  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
+  if (!normalizeText(destination)) {
+    return null;
+  }
+
+  const position = destination.endsWith("^")
+    ? destination
+    : `${getCaretCompletionDestination(destination)}^`;
+  const markerEndCh = markerStartCh + 2;
+
+  return taskPickerMarkerFromPosition(
+    match,
+    position,
+    aliasSuffix,
+    lineText.slice(match.index, markerEndCh),
+    markerEndCh,
+    markerStartCh,
+    markerEndCh,
+  );
 }
 
 function parseInlineMarkerLink(match) {
@@ -288,7 +359,7 @@ function parseTrailingCaretCompletionMarker(match, lineText) {
     return null;
   }
 
-  const { destination } = splitWikiLinkBody(match[1]);
+  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
   if (!normalizeText(destination)) {
     return null;
   }
@@ -300,8 +371,8 @@ function parseTrailingCaretCompletionMarker(match, lineText) {
     kind: "file-link-jump",
     raw: raw + "^",
     destination,
-    plainReplacement: `[[${completionDestination}]]`,
-    completionReplacement: `[[${completionDestination}^]]`,
+    plainReplacement: `[[${completionDestination}${aliasSuffix}]]`,
+    completionReplacement: `[[${completionDestination}^${aliasSuffix}]]`,
     startCh: match.index,
     endCh: markerCh + 1,
     insertionCh,
@@ -427,7 +498,9 @@ function findTaskPickerMarkerNearCursor(lineText, cursorCh) {
 
   WIKI_LINK_RE.lastIndex = 0;
   while ((match = WIKI_LINK_RE.exec(lineText)) !== null) {
-    const parsed = parseTrailingTaskPickerMarker(match);
+    const parsed =
+      parseTrailingTaskPickerMarker(match) ||
+      parseRapidTaskPickerMarker(match, lineText);
     if (!parsed) {
       continue;
     }
@@ -3617,10 +3690,17 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 };
 
 module.exports.helpers = {
+  applyFileLinkBlockCompletionWithEditorApi,
   buildTaskDependencyIndex,
   collectTaskPickerItems,
+  findMarkerLinkNearCursor,
+  findTaskPickerMarkerNearCursor,
+  lineIsInsideCodeFence,
   parseDependsOnIds,
   parseInlineIdField,
   resolveTaskDependencyState,
+  shouldPromoteTaskToNext,
   taskIdKeysFromLine,
+  taskPickerRevertCursorCh,
+  taskPickerRevertReplacement,
 };

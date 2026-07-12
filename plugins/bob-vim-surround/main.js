@@ -317,15 +317,27 @@ function rangeFromIndexes(doc, startIndex, endIndex) {
   };
 }
 
-function buildSurroundMatch(doc, targetKey, targetPair, openIndex, closeIndex) {
+function buildSurroundMatch(
+  doc,
+  targetKey,
+  targetPair,
+  openIndex,
+  closeIndex,
+  openLength = 1,
+  closeLength = 1,
+) {
   if (
     !doc ||
     !targetPair ||
     !isFiniteNumber(openIndex) ||
     !isFiniteNumber(closeIndex) ||
+    !isFiniteNumber(openLength) ||
+    !isFiniteNumber(closeLength) ||
     openIndex < 0 ||
-    closeIndex <= openIndex ||
-    closeIndex >= doc.text.length
+    openLength < 1 ||
+    closeLength < 1 ||
+    closeIndex < openIndex + openLength ||
+    closeIndex + closeLength > doc.text.length
   ) {
     return null;
   }
@@ -336,11 +348,13 @@ function buildSurroundMatch(doc, targetKey, targetPair, openIndex, closeIndex) {
     targetPair,
     open: {
       index: openIndex,
-      range: rangeFromIndexes(doc, openIndex, openIndex + 1),
+      length: openLength,
+      range: rangeFromIndexes(doc, openIndex, openIndex + openLength),
     },
     close: {
       index: closeIndex,
-      range: rangeFromIndexes(doc, closeIndex, closeIndex + 1),
+      length: closeLength,
+      range: rangeFromIndexes(doc, closeIndex, closeIndex + closeLength),
     },
   };
 }
@@ -349,26 +363,40 @@ function findQuoteSurroundPair(doc, targetKey, targetPair, cursor) {
   const line = Math.min(cursor.line, doc.lines.length - 1);
   const lineText = doc.lines[line] || "";
   const cursorCh = Math.min(cursor.ch, lineText.length);
-  const quotePositions = [];
+  const quoteRuns = [];
 
   for (let ch = 0; ch < lineText.length; ch += 1) {
     if (lineText[ch] === targetPair.open) {
-      quotePositions.push(ch);
+      const start = ch;
+      while (
+        ch + 1 < lineText.length &&
+        lineText[ch + 1] === targetPair.open
+      ) {
+        ch += 1;
+      }
+      quoteRuns.push({ start, length: ch - start + 1 });
     }
   }
 
-  for (let index = 0; index + 1 < quotePositions.length; index += 2) {
-    const openCh = quotePositions[index];
-    const closeCh = quotePositions[index + 1];
-    if (openCh <= cursorCh && cursorCh <= closeCh) {
-      const openIndex = doc.lineStarts[line] + openCh;
-      const closeIndex = doc.lineStarts[line] + closeCh;
+  for (let index = 0; index + 1 < quoteRuns.length; index += 2) {
+    const openRun = quoteRuns[index];
+    const closeRun = quoteRuns[index + 1];
+    const closeRunEnd = closeRun.start + closeRun.length;
+    if (
+      openRun.length === closeRun.length &&
+      openRun.start <= cursorCh &&
+      cursorCh < closeRunEnd
+    ) {
+      const openIndex = doc.lineStarts[line] + openRun.start;
+      const closeIndex = doc.lineStarts[line] + closeRun.start;
       return buildSurroundMatch(
         doc,
         targetKey,
         targetPair,
         openIndex,
         closeIndex,
+        openRun.length,
+        closeRun.length,
       );
     }
   }
@@ -487,7 +515,7 @@ function buildTargetSurroundSpans(match) {
   }
 
   const doc = match.doc;
-  let openingEndIndex = match.open.index + 1;
+  let openingEndIndex = match.open.index + match.open.length;
   let closingStartIndex = match.close.index;
 
   if (match.targetPair.padded) {
@@ -513,7 +541,7 @@ function buildTargetSurroundSpans(match) {
     closingRange: rangeFromIndexes(
       doc,
       closingStartIndex,
-      match.close.index + 1,
+      match.close.index + match.close.length,
     ),
   };
 }

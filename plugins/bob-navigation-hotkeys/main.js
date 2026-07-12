@@ -3757,7 +3757,7 @@ function getSectionHeaderJumpLine(lines, cursorLine, direction) {
         return headerLines[index];
       }
     }
-    return null;
+    return headerLines.length > 0 ? headerLines[headerLines.length - 1] : null;
   }
 
   for (const headerLine of headerLines) {
@@ -3766,7 +3766,7 @@ function getSectionHeaderJumpLine(lines, cursorLine, direction) {
     }
   }
 
-  return null;
+  return headerLines.length > 0 ? headerLines[0] : null;
 }
 
 // True for a genuine Markdown checkbox list item that carries the Tasks

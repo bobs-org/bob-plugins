@@ -95,6 +95,78 @@ class TestEditor {
   }
 }
 
+test("section-header navigation moves normally and cycles at boundaries", () => {
+  const lines = [
+    "---",
+    "# Frontmatter pseudo-heading",
+    "---",
+    "# First",
+    "Introduction",
+    "```md",
+    "## Fenced pseudo-heading",
+    "```",
+    "## Middle",
+    "Details",
+    "### Last",
+  ];
+
+  assert.deepEqual(helpers.getSectionHeaderLines(lines), [3, 8, 10]);
+  assert.equal(helpers.getSectionHeaderJumpLine(lines, 4, 1), 8);
+  assert.equal(helpers.getSectionHeaderJumpLine(lines, 9, -1), 8);
+
+  assert.deepEqual(
+    [3, 8, 10].map((line) =>
+      helpers.getSectionHeaderJumpLine(lines, line, 1),
+    ),
+    [8, 10, 3],
+  );
+  assert.deepEqual(
+    [10, 8, 3].map((line) =>
+      helpers.getSectionHeaderJumpLine(lines, line, -1),
+    ),
+    [8, 3, 10],
+  );
+});
+
+test("section-header navigation wraps from beyond document boundaries", () => {
+  const lines = ["# First", "Body", "## Last"];
+
+  assert.equal(helpers.getSectionHeaderJumpLine(lines, 99, 1), 0);
+  assert.equal(helpers.getSectionHeaderJumpLine(lines, -1, -1), 2);
+});
+
+test("section-header navigation handles single-header and no-header notes", () => {
+  const singleHeaderLines = [
+    "---",
+    "# Frontmatter pseudo-heading",
+    "---",
+    "```md",
+    "## Fenced pseudo-heading",
+    "```",
+    "# Only header",
+  ];
+
+  for (const direction of [-1, 1]) {
+    assert.equal(
+      helpers.getSectionHeaderJumpLine(singleHeaderLines, 6, direction),
+      6,
+    );
+  }
+
+  const noHeaderLines = [
+    "---",
+    "# Frontmatter pseudo-heading",
+    "---",
+    "```md",
+    "## Fenced pseudo-heading",
+    "```",
+    "Body",
+  ];
+  assert.deepEqual(helpers.getSectionHeaderLines(noHeaderLines), []);
+  assert.equal(helpers.getSectionHeaderJumpLine(noHeaderLines, 0, 1), null);
+  assert.equal(helpers.getSectionHeaderJumpLine(noHeaderLines, 6, -1), null);
+});
+
 test("project schedule validation accepts only real YYYY-MM-DD dates", () => {
   assert.equal(helpers.validateProjectScheduledDate("2028-02-29").valid, true);
   assert.equal(helpers.validateProjectScheduledDate("2026-02-29").valid, false);

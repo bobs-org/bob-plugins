@@ -13,7 +13,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
 | Block ID Prompt         | `block-id-prompt`        |   1.3.0 | Prompt for custom block IDs, complete wiki block links to open tasks (skipping `#hide` tasks), and mark dependency-blocked tasks. |
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.1.1 | Expand Bob daily-note snippets and ledger time ranges, and navigate and adjust Pomodoro entries. |
-| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.1 | Open and manage related notes and tabs, including toggling the current tab pin. |
+| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.2 | Open and manage related notes and tabs, including toggling the current tab pin. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
 | Bob Vim Surround        | `bob-vim-surround`       |   1.5.2 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
 | Task Status Cycler      | `task-status-cycler`     |   1.3.4 | Toggle tasks and Pomodoros with recursive close and root-only reopen, reset Pomodoro markers on reopen, bidirectionally retire and restore references, and reconcile Tasks dependency IDs. |

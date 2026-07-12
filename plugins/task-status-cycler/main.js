@@ -1199,8 +1199,14 @@ function parseNonEmbeddedBlockLinks(lineText) {
 
 function getBlockLinkTokenCandidates(lineText) {
   return [
-    ...parseEmbeddedBlockTransclusions(lineText),
-    ...parseNonEmbeddedBlockLinks(lineText),
+    ...parseEmbeddedBlockTransclusions(lineText).map((candidate) => ({
+      ...candidate,
+      embedded: true,
+    })),
+    ...parseNonEmbeddedBlockLinks(lineText).map((candidate) => ({
+      ...candidate,
+      embedded: false,
+    })),
   ].sort((left, right) => left.startIndex - right.startIndex);
 }
 
@@ -1229,17 +1235,27 @@ function getPomodoroMarkerTokenStart(lineText, candidate, strikeSpans = null) {
   return exactStrike ? exactStrike.start - 2 : candidate.startIndex;
 }
 
-function rewritePomodoroMarkersInLine(lineText, marked) {
+function rewritePomodoroMarkersInLine(lineText, markerPolicy) {
   const line = String(lineText || "");
   const strikeSpans = getStrikethroughSpans(line);
   const edits = [];
   for (const candidate of getBlockLinkTokenCandidates(line)) {
-    const tokenStart = getPomodoroMarkerTokenStart(
-      line,
-      candidate,
-      strikeSpans,
+    const exactStrike = strikeSpans.find(
+      (span) =>
+        candidate.startIndex === span.start && candidate.endIndex === span.end,
     );
+    const tokenStart = exactStrike
+      ? exactStrike.start - 2
+      : candidate.startIndex;
     const prefix = getPomodoroMarkerPrefix(line, tokenStart);
+    const marked = typeof markerPolicy === "function"
+      ? !!markerPolicy({
+        candidate,
+        embedded: candidate.embedded,
+        struck: !!exactStrike,
+        prefix,
+      })
+      : !!markerPolicy;
     const replacement = marked ? `${POMODORO_MARKER} ` : "";
     if (
       (marked && prefix.canonical) ||
@@ -1255,6 +1271,16 @@ function rewritePomodoroMarkersInLine(lineText, marked) {
     rewritten = `${rewritten.slice(0, edit.start)}${edit.text}${rewritten.slice(edit.end)}`;
   }
   return rewritten;
+}
+
+function completedPomodoroMarkerPolicy(occurrence) {
+  if (occurrence.embedded) {
+    return false;
+  }
+  if (occurrence.struck) {
+    return occurrence.prefix.count > 0;
+  }
+  return true;
 }
 
 function stripPomodoroMarkersFromLine(lineText) {
@@ -1536,7 +1562,10 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
       continue;
     }
     const sourceLineText = String(lines[line] || "");
-    const lineText = rewritePomodoroMarkersInLine(sourceLineText, true);
+    const lineText = rewritePomodoroMarkersInLine(
+      sourceLineText,
+      completedPomodoroMarkerPolicy,
+    );
     if (lineText !== sourceLineText) {
       edits.push({ type: "replaceLine", line, sourceLineText, lineText });
     }
@@ -1763,7 +1792,7 @@ function hasEligibleRetirementAncestor(
 ) {
   const candidate = parseRetirementListLine(lines[lineNumber]);
   if (!candidate || candidate.indentation === 0) {
-    return { eligible: false, donePomodoro: false };
+    return { eligible: false, pomodoro: false };
   }
   let indentation = candidate.indentation;
   for (let line = lineNumber - 1; line >= 0; line -= 1) {
@@ -1786,7 +1815,7 @@ function hasEligibleRetirementAncestor(
     }
     indentation = ancestor.indentation;
     if (ancestor.taskStatus && lineMatchesTasksGlobalFilterText(text)) {
-      return { eligible: true, donePomodoro: false };
+      return { eligible: true, pomodoro: false };
     }
     if (
       ancestor.taskStatus &&
@@ -1795,14 +1824,14 @@ function hasEligibleRetirementAncestor(
     ) {
       return {
         eligible: true,
-        donePomodoro: ["x", "X"].includes(ancestor.taskStatus.symbol),
+        pomodoro: true,
       };
     }
     if (indentation === 0) {
       break;
     }
   }
-  return { eligible: false, donePomodoro: false };
+  return { eligible: false, pomodoro: false };
 }
 
 function retirementIdentityKey(path, blockId) {
@@ -1861,7 +1890,11 @@ function retireClosedTaskReferencesInText(
       ) {
         continue;
       }
-      const linkText = line.slice(candidate.startIndex + 1, candidate.endIndex);
+      const wikilink = line.slice(candidate.startIndex + 1, candidate.endIndex);
+      const exactStrike = strikeSpans.find(
+        (span) =>
+          candidate.startIndex === span.start && candidate.endIndex === span.end,
+      );
       const alreadyStruck = rangeIsStruck(
         candidate.startIndex,
         candidate.endIndex,
@@ -1871,12 +1904,22 @@ function retireClosedTaskReferencesInText(
         !alreadyStruck && line.slice(Math.max(0, candidate.startIndex - 2), candidate.startIndex) === "~~";
       const needsTrailingSpace =
         !alreadyStruck && line.slice(candidate.endIndex, candidate.endIndex + 2) === "~~";
+      const retiredText = exactStrike
+        ? `~~${wikilink}~~`
+        : alreadyStruck
+          ? wikilink
+          : `${needsLeadingSpace ? " " : ""}~~${wikilink}~~${needsTrailingSpace ? " " : ""}`;
+      const displayStart = exactStrike
+        ? exactStrike.start - 2
+        : candidate.startIndex;
+      const displayEnd = exactStrike
+        ? exactStrike.end + 2
+        : candidate.endIndex;
+      const prefix = getPomodoroMarkerPrefix(line, displayStart);
       edits.push({
-        start: candidate.startIndex,
-        end: candidate.endIndex,
-        text: alreadyStruck
-          ? linkText
-          : `${needsLeadingSpace ? " " : ""}~~${linkText}~~${needsTrailingSpace ? " " : ""}`,
+        start: ancestry.pomodoro ? prefix.start : candidate.startIndex,
+        end: ancestry.pomodoro ? displayEnd : candidate.endIndex,
+        text: retiredText,
       });
     }
     if (edits.length === 0) {
@@ -1886,9 +1929,6 @@ function retireClosedTaskReferencesInText(
     for (const edit of edits.sort((left, right) => right.start - left.start)) {
       nextLine = `${nextLine.slice(0, edit.start)}${edit.text}${nextLine.slice(edit.end)}`;
       retired += 1;
-    }
-    if (ancestry.donePomodoro) {
-      nextLine = rewritePomodoroMarkersInLine(nextLine, true);
     }
     lines[lineNumber] = nextLine;
     sourceLines[lineNumber].text = nextLine;
@@ -6766,6 +6806,7 @@ module.exports.helpers = {
   parseMarkdownHeadingLine,
   parseNonEmbeddedBlockLinks,
   getPomodoroMarkerPrefix,
+  completedPomodoroMarkerPolicy,
   rewritePomodoroMarkersInLine,
   rewritePomodoroMarkersInText,
   stripPomodoroMarkersFromLine,

@@ -566,6 +566,73 @@ test("closed-reference retirement is ancestry-aware, resolved, fenced, and idemp
   assert.equal(second.retired, 0);
 });
 
+test("reopened-reference restoration is ancestry-aware, conservative, and idempotent", () => {
+  const source = [
+    "- [ ] #task Parent [dependsOn:: Projects__Alpha__review] ^parent",
+    "\t- ~~[[#^local|Local alias]]~~ and ~~[[Projects/Alpha#^review|Review]]~~",
+    "\t- ~~before [[Alpha#^review|Broad task strike]] after~~",
+    "\t- [[Alpha#^review|Already live]] and ~~[[Missing#^review|Unresolved]]~~",
+    "- Unmanaged tree",
+    "\t- ~~[[Alpha#^review|Protected]]~~",
+    "```md",
+    "- [ ] #task Example",
+    "\t- ~~[[Alpha#^review|Fenced]]~~",
+    "```",
+    "## Pomodoros",
+    "- [x] History",
+    "\t- 🍅 ~~[[Alpha#^review|History alias]]~~ and ~~[[Alpha#^review|Again]]~~",
+    "\t- ~~before [[Alpha#^review|Broad history strike]] after~~",
+  ].join("\r\n");
+  const resolve = (pathPart) => {
+    if (pathPart === "Projects/Alpha" || pathPart === "Alpha") {
+      return "Projects/Alpha.md";
+    }
+    return null;
+  };
+  const reopened = [
+    { path: "Tasks.md", blockId: "local" },
+    { path: "Projects/Alpha.md", blockId: "review" },
+  ];
+  const result = helpers.restoreReopenedTaskReferencesInText(
+    source,
+    "Tasks.md",
+    reopened,
+    resolve,
+  );
+  assert.equal(result.restored, 5);
+  assert.match(result.text, /!\[\[#\^local\|Local alias\]\]/);
+  assert.match(result.text, /!\[\[Projects\/Alpha#\^review\|Review\]\]/);
+  assert.match(
+    result.text,
+    /~~before !\[\[Alpha#\^review\|Broad task strike\]\] after~~/,
+  );
+  assert.match(result.text, /\[\[Alpha#\^review\|Already live\]\]/);
+  assert.match(result.text, /~~\[\[Missing#\^review\|Unresolved\]\]~~/);
+  assert.match(result.text, /- Unmanaged tree\r\n\t- ~~\[\[Alpha/);
+  assert.match(result.text, /```md\r\n- \[ \] #task Example\r\n\t- ~~\[\[Alpha/);
+  assert.match(
+    result.text,
+    /🍅 \[\[Alpha#\^review\|History alias\]\] and \[\[Alpha#\^review\|Again\]\]/,
+  );
+  assert.match(
+    result.text,
+    /~~before \[\[Alpha#\^review\|Broad history strike\]\] after~~/,
+  );
+  assert.match(
+    result.text,
+    /\[dependsOn:: Projects__Alpha__review\] \^parent/,
+  );
+  assert.equal(result.text.includes("\r\n"), true);
+  const second = helpers.restoreReopenedTaskReferencesInText(
+    result.text,
+    "Tasks.md",
+    reopened,
+    resolve,
+  );
+  assert.equal(second.changed, false);
+  assert.equal(second.restored, 0);
+});
+
 test("Pomodoro marker helpers normalize every block link and preserve fences and EOLs", () => {
   const source = [
     "  - Work on [[A#^plain|Alias]] and ![[B#^embed]]",
@@ -778,6 +845,74 @@ test("retirement coordinator rewrites active editor and vault notes together", a
   assert.match(harness.getSource("Tasks.md"), /~~\[\[#\^done\|Self reference\]\]~~/);
 });
 
+test("restoration coordinator rewrites active and vault notes, preserves the cursor, and isolates failures", async () => {
+  notices.length = 0;
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": "## Pomodoros\n- [x] Focus\n  - 🍅 ~~[[Tasks#^done|Done]]~~",
+    "Tasks.md": [
+      "- [ ] #task Parent",
+      "  - ~~[[#^done|Dependency]]~~",
+      "- [ ] #task Reopened ^done",
+    ].join("\n"),
+    "Broken.md": "- [ ] #task Parent\n  - ~~[[Tasks#^done]]~~",
+  });
+  const originalCachedRead = harness.app.vault.cachedRead;
+  harness.app.vault.cachedRead = async (file) => {
+    if (file.path === "Broken.md") throw new Error("unreadable");
+    return originalCachedRead(file);
+  };
+  const editor = createTextEditor(harness.getSource("Daily.md"), {
+    line: 2,
+    ch: 8,
+  });
+  const originalCursor = editor.getCursor();
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  const result = await plugin.restoreReopenedTaskReferences(
+    [
+      { path: "Tasks.md", blockId: "done" },
+      { path: "Tasks.md", blockId: "done" },
+      { path: "Tasks.md" },
+    ],
+    { editor, activePath: "Daily.md" },
+  );
+  assert.equal(result.restored, 2);
+  assert.equal(result.failures.length, 1);
+  assert.match(editor.getValue(), /🍅 \[\[Tasks#\^done\|Done\]\]/);
+  assert.match(harness.getSource("Tasks.md"), /!\[\[#\^done\|Dependency\]\]/);
+  assert.deepEqual(editor.getCursor(), originalCursor);
+  assert.match(notices.at(-1), /Reopened tasks, but 1 note/);
+});
+
+test("close and reopen reference mutations share one serialized queue", async () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  const order = [];
+  let releaseRetirement;
+  const retirementGate = new Promise((resolve) => {
+    releaseRetirement = resolve;
+  });
+  plugin.retireClosedTaskReferencesNow = async (identities) => {
+    order.push(`retire:${identities.length}`);
+    await retirementGate;
+    return { retired: 0, failures: [] };
+  };
+  plugin.restoreReopenedTaskReferencesNow = async (identities) => {
+    order.push(`restore:${identities.length}`);
+    return { restored: 0, failures: [] };
+  };
+  const identities = [
+    { path: "Tasks.md", blockId: "same" },
+    { path: "Tasks.md", blockId: "same" },
+  ];
+  const retiring = plugin.retireClosedTaskReferences(identities, {});
+  const restoring = plugin.restoreReopenedTaskReferences(identities, {});
+  await Promise.resolve();
+  assert.deepEqual(order, ["retire:1"]);
+  releaseRetirement();
+  await Promise.all([retiring, restoring]);
+  assert.deepEqual(order, ["retire:1", "restore:1"]);
+});
+
 test("no-op vault transforms and irrelevant retirement files avoid process writes", async () => {
   let processCalls = 0;
   const file = { path: "Notes.md" };
@@ -850,6 +985,29 @@ test("non-Vim open/done command retires the closed task identity", async () => {
   assert.equal(plugin.handleToggleOpenDoneCommand(false, editor, view), true);
   await Promise.resolve();
   assert.deepEqual(retired, [{ path: "Tasks.md", blockId: "close" }]);
+});
+
+test("non-Vim open/done command restores the reopened task identity", async () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  const taskStatus = helpers.getTaskStatusForLine(
+    "- [x] #task Reopen through command [completion:: stale] ^reopen",
+  );
+  const editor = {};
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  plugin.app = { workspace: { getActiveFile: () => view.file } };
+  plugin.getActiveTaskStatus = () => taskStatus;
+  plugin.toggleActiveCheckboxOpenDone = () => true;
+  let restored = null;
+  plugin.restoreReopenedTaskReferences = async (identities) => {
+    restored = identities;
+  };
+
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, editor, view), true);
+  await Promise.resolve();
+  assert.deepEqual(restored, [{ path: "Tasks.md", blockId: "reopen" }]);
 });
 
 test("full Pomodoro completion retires embeds only after carry-forward planning", async () => {
@@ -938,12 +1096,14 @@ test("selected same-file Done target reopens root-only in the live editor", asyn
     "- [x] #task Root [completion:: stale] ^root",
     "\t- ![[#^child]]",
     "- [x] #task Child [completion:: stale] ^child",
+    "- [ ] #task Dependency holder",
+    "\t- ~~[[#^root|Root]]~~ and ~~[[#^child|Child]]~~",
     "## Pomodoros",
     "- [ ] Focus",
     "\t- ![[#^root]]",
   ].join("\n");
   const harness = createInMemoryObsidianApp({ "Daily.md": daily });
-  const editor = createTextEditor(daily, { line: 6, ch: 8 });
+  const editor = createTextEditor(daily, { line: 8, ch: 8 });
   const plugin = new TaskStatusCyclerPlugin();
   plugin.app = harness.app;
 
@@ -957,9 +1117,13 @@ test("selected same-file Done target reopens root-only in the live editor", asyn
   assert.match(editor.getValue(), /^- \[ \] #task Root \^root/m);
   assert.match(editor.getValue(), /^- \[x\] #task Child \[completion:: stale\] \^child/m);
   assert.match(editor.getValue(), /\t- !\[\[#\^root\]\]$/m);
+  assert.match(
+    editor.getValue(),
+    /\t- !\[\[#\^root\|Root\]\] and ~~\[\[#\^child\|Child\]\]~~/,
+  );
 });
 
-test("selected retired link reopens its root without rewriting history", async () => {
+test("selected retired link reopens its root and restores the historical occurrence", async () => {
   const daily = "## Pomodoros\n- [x] History\n\t- 🍅 ~~[[Tasks#^done|Alias]]~~";
   const harness = createInMemoryObsidianApp({
     "Daily.md": daily,
@@ -977,7 +1141,10 @@ test("selected retired link reopens its root without rewriting history", async (
     true,
   );
   assert.equal(harness.getSource("Tasks.md"), "- [ ] #task Done ^done");
-  assert.equal(editor.getValue(), daily);
+  assert.equal(
+    editor.getValue(),
+    "## Pomodoros\n- [x] History\n\t- 🍅 [[Tasks#^done|Alias]]",
+  );
 });
 
 test("incomplete selected Pomodoro transclusion still closes recursively", async () => {
@@ -1064,7 +1231,9 @@ test("Done Pomodoro reopens direct roots while preserving its history and layout
     true,
   );
 
-  const expectedDaily = daily.replace("- [x] Finished session", "- [ ] Finished session");
+  const expectedDaily = daily
+    .replace("- [x] Finished session", "- [ ] Finished session")
+    .replace("~~[[Tasks#^retired|Retired]]~~", "[[Tasks#^retired|Retired]]");
   assert.equal(editor.getValue(), expectedDaily);
   assert.deepEqual(editor.getCursor(), originalCursor);
   assert.equal(tasksWrites, 2, "duplicate links should not duplicate source writes");
@@ -1079,7 +1248,46 @@ test("Done Pomodoro reopens direct roots while preserving its history and layout
   assert.equal(harness.getSource("Bad.md"), "- [x] #task Unreadable ^stale");
 });
 
-test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks done command", () => {
+test("Done Pomodoro reopen restores its own block reference after reopening direct roots", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [x] Finished session ^session",
+    "\t- ~~[[Tasks#^root|Root]]~~",
+  ].join("\n");
+  const tasks = [
+    "- [x] #task Root [dependsOn:: keep] [id:: Tasks__root] [completion:: stale] ^root",
+    "- [ ] #task Session dependency",
+    "\t- ~~[[Daily#^session|Session]]~~",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": tasks,
+  });
+  const editor = createTextEditor(daily, { line: 1, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+
+  assert.equal(
+    await plugin.reopenActivePomodoroTask(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+      { pomodoroLine: 1 },
+    ),
+    true,
+  );
+  assert.match(editor.getValue(), /^- \[ \] Finished session \^session/m);
+  assert.match(editor.getValue(), /\t- \[\[Tasks#\^root\|Root\]\]/);
+  assert.match(
+    harness.getSource("Tasks.md"),
+    /^- \[ \] #task Root \[dependsOn:: keep\] \[id:: Tasks__root\] \^root/m,
+  );
+  assert.match(
+    harness.getSource("Tasks.md"),
+    /\t- !\[\[Daily#\^session\|Session\]\]/,
+  );
+});
+
+test("Vim Ctrl+Enter dispatches task transitions and restores a reopened identity", async () => {
   const originalWindow = global.window;
   const actions = new Map();
   const mappings = [];
@@ -1107,7 +1315,12 @@ test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks don
     const doneCommand = "obsidian-tasks-plugin:set-status-symbol-to-x";
     const todoCommand = "obsidian-tasks-plugin:set-status-symbol-to-space";
     const executedCommands = [];
+    let restored = null;
     const plugin = new TaskStatusCyclerPlugin();
+    plugin.restoreReopenedTaskReferences = async (identities) => {
+      restored = identities;
+      return { restored: identities.length, failures: [] };
+    };
     plugin.app = {
       workspace: {
         getActiveViewOfType: (ViewType) => {
@@ -1142,13 +1355,15 @@ test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks don
     actions.get("taskStatusCyclerToggleTaskOpenDone")({});
     lineText = "- [*] #task Preserve the existing Next behavior";
     actions.get("taskStatusCyclerToggleTaskOpenDone")({});
-    lineText = "- [x] #task Reopen through the Tasks command";
+    lineText = "- [x] #task Reopen through the Tasks command ^reopen";
     actions.get("taskStatusCyclerToggleTaskOpenDone")({});
+    await Promise.resolve();
     assert.deepEqual(executedCommands, [
       doneCommand,
       doneCommand,
       todoCommand,
     ]);
+    assert.deepEqual(restored, [{ path: "Tasks.md", blockId: "reopen" }]);
   } finally {
     if (originalWindow === undefined) {
       delete global.window;

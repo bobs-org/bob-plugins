@@ -1942,6 +1942,31 @@ function closedTaskIdentity(path, lineText) {
   return path && blockId ? { path, blockId } : null;
 }
 
+function normalizeTaskReferenceIdentities(identities) {
+  const normalized = [];
+  const seen = new Set();
+  for (const identity of Array.from(identities || [])) {
+    if (
+      !identity ||
+      !identity.path ||
+      !BLOCK_ID_RE.test(String(identity.blockId || ""))
+    ) {
+      continue;
+    }
+    const next = {
+      path: String(identity.path),
+      blockId: String(identity.blockId),
+    };
+    const key = retirementIdentityKey(next.path, next.blockId);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(next);
+  }
+  return normalized;
+}
+
 // Retire matching embedded block links only inside managed task/Pomodoro list
 // trees. Resolution is injected so the parser remains deterministic and easy
 // to test while runtime callers can use Obsidian's link resolver.
@@ -2035,6 +2060,99 @@ function retireClosedTaskReferencesInText(
 
   const text = sourceLines.map((line) => `${line.text}${line.ending}`).join("");
   return { text, changed: text !== String(sourceText || ""), retired };
+}
+
+// Restore matching retired block links inside the same managed ancestry used
+// by close-time retirement. Exact per-link strike wrappers are attributable to
+// retirement and can be removed safely. Task descendants regain transclusion;
+// Pomodoro descendants remain plain historical links. When a task link sits in
+// a broader authored strike span, restore only its embed marker and preserve
+// the surrounding formatting.
+function restoreReopenedTaskReferencesInText(
+  sourceText,
+  originPath,
+  reopenedIdentities,
+  resolveLinkPath,
+) {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const lines = sourceLines.map((line) => line.text);
+  const fenced = getFencedLineNumbers(lines);
+  const pomodoros = findPomodorosSectionInLines(lines);
+  const reopened = new Set(
+    normalizeTaskReferenceIdentities(reopenedIdentities).map((identity) =>
+      retirementIdentityKey(identity.path, identity.blockId),
+    ),
+  );
+  let restored = 0;
+
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
+    if (fenced.has(lineNumber) || !lines[lineNumber].includes("[[")) {
+      continue;
+    }
+    const ancestry = hasEligibleRetirementAncestor(
+      lines,
+      lineNumber,
+      fenced,
+      pomodoros,
+    );
+    if (!ancestry.eligible) {
+      continue;
+    }
+    const line = lines[lineNumber];
+    const strikeSpans = getStrikethroughSpans(line);
+    const edits = [];
+    for (const candidate of parseNonEmbeddedBlockLinks(line)) {
+      const resolved = candidate.pathPart
+        ? resolveLinkPath(candidate.pathPart, originPath)
+        : originPath;
+      const resolvedPath =
+        resolved && typeof resolved === "object" ? resolved.path : resolved;
+      if (
+        !reopened.has(retirementIdentityKey(resolvedPath, candidate.blockId))
+      ) {
+        continue;
+      }
+      const exactStrike = strikeSpans.find(
+        (span) =>
+          candidate.startIndex === span.start && candidate.endIndex === span.end,
+      );
+      const struck = rangeIsStruck(
+        candidate.startIndex,
+        candidate.endIndex,
+        strikeSpans,
+      );
+      if (!struck || (!exactStrike && ancestry.pomodoro)) {
+        continue;
+      }
+      const wikilink = line.slice(candidate.startIndex, candidate.endIndex);
+      edits.push(
+        exactStrike
+          ? {
+              start: exactStrike.start - 2,
+              end: exactStrike.end + 2,
+              text: ancestry.pomodoro ? wikilink : `!${wikilink}`,
+            }
+          : {
+              start: candidate.startIndex,
+              end: candidate.startIndex,
+              text: "!",
+            },
+      );
+    }
+    if (edits.length === 0) {
+      continue;
+    }
+    let nextLine = line;
+    for (const edit of edits.sort((left, right) => right.start - left.start)) {
+      nextLine = `${nextLine.slice(0, edit.start)}${edit.text}${nextLine.slice(edit.end)}`;
+      restored += 1;
+    }
+    lines[lineNumber] = nextLine;
+    sourceLines[lineNumber].text = nextLine;
+  }
+
+  const text = sourceLines.map((line) => `${line.text}${line.ending}`).join("");
+  return { text, changed: text !== String(sourceText || ""), restored };
 }
 
 function getLineTextFromSourceText(sourceText, lineNumber) {
@@ -2970,7 +3088,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     // the previous pending center instead of stacking stale scrolls.
     this.pendingPomodoroCenterDeferred = null;
     this.pendingRenderedTasksScrollDeferred = null;
-    this.referenceRetirementQueue = Promise.resolve();
+    this.referenceMutationQueue = Promise.resolve();
 
     this.addCommand({
       id: "cycle-task-status-forward",
@@ -3653,28 +3771,71 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   }
 
   retireClosedTaskReferences(closedIdentities, context) {
-    const closed = Array.from(closedIdentities || []).filter(
-      (identity) =>
-        identity &&
-        identity.path &&
-        BLOCK_ID_RE.test(String(identity.blockId || "")),
-    );
+    const closed = normalizeTaskReferenceIdentities(closedIdentities);
     if (closed.length === 0) {
       return Promise.resolve({ retired: 0, failures: [] });
     }
     const run = () => this.retireClosedTaskReferencesNow(closed, context || {});
-    const queued = (this.referenceRetirementQueue || Promise.resolve()).then(
+    return this.enqueueTaskReferenceMutation(run);
+  }
+
+  restoreReopenedTaskReferences(reopenedIdentities, context) {
+    const reopened = normalizeTaskReferenceIdentities(reopenedIdentities);
+    if (reopened.length === 0) {
+      return Promise.resolve({ restored: 0, failures: [] });
+    }
+    const run = () =>
+      this.restoreReopenedTaskReferencesNow(reopened, context || {});
+    return this.enqueueTaskReferenceMutation(run);
+  }
+
+  enqueueTaskReferenceMutation(run) {
+    const queued = (this.referenceMutationQueue || Promise.resolve()).then(
       run,
       run,
     );
-    this.referenceRetirementQueue = queued.catch(() => {});
+    this.referenceMutationQueue = queued.catch(() => {});
     return queued;
   }
 
   async retireClosedTaskReferencesNow(closedIdentities, context) {
+    const result = await this.mutateTaskReferencesNow(
+      closedIdentities,
+      context,
+      {
+        transform: retireClosedTaskReferencesInText,
+        countField: "retired",
+        candidateText: "![[",
+        concurrentChangeMessage: "note changed while retirement was planned",
+        failureLog: "Could not retire all closed task references",
+        failureNotice: (count) =>
+          `Closed tasks, but ${count} note${count === 1 ? "" : "s"} could not be checked for references.`,
+      },
+    );
+    return { retired: result.count, failures: result.failures };
+  }
+
+  async restoreReopenedTaskReferencesNow(reopenedIdentities, context) {
+    const result = await this.mutateTaskReferencesNow(
+      reopenedIdentities,
+      context,
+      {
+        transform: restoreReopenedTaskReferencesInText,
+        countField: "restored",
+        candidateText: "[[",
+        concurrentChangeMessage: "note changed while restoration was planned",
+        failureLog: "Could not restore all reopened task references",
+        failureNotice: (count) =>
+          `Reopened tasks, but ${count} note${count === 1 ? "" : "s"} could not be checked for retired references.`,
+      },
+    );
+    return { restored: result.count, failures: result.failures };
+  }
+
+  async mutateTaskReferencesNow(identities, context, mutation) {
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.getMarkdownFiles !== "function") {
-      return { retired: 0, failures: [] };
+      return { count: 0, failures: [] };
     }
     const editor = context && context.editor;
     const activePath = context && context.activePath;
@@ -3691,7 +3852,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       );
       return file && file.path;
     };
-    let retired = 0;
+    let count = 0;
     const failures = [];
 
     for (const file of vault.getMarkdownFiles()) {
@@ -3705,10 +3866,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           typeof editor.getValue === "function"
         ) {
           const before = editor.getValue();
-          const result = retireClosedTaskReferencesInText(
+          const result = mutation.transform(
             before,
             file.path,
-            closedIdentities,
+            identities,
             resolveLinkPath,
           );
           if (result.changed) {
@@ -3731,11 +3892,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
               });
             }
           }
-          retired += result.retired;
+          count += result[mutation.countField];
           continue;
         }
 
-        let fileRetired = 0;
+        let fileCount = 0;
         const snapshot =
           typeof vault.cachedRead === "function"
             ? await vault.cachedRead(file)
@@ -3744,29 +3905,29 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
               : null;
         if (
           typeof snapshot !== "string" ||
-          !snapshot.includes("![[") ||
-          !closedIdentities.some((identity) =>
+          !snapshot.includes(mutation.candidateText) ||
+          !identities.some((identity) =>
             snapshot.includes(`#^${identity.blockId}`),
           )
         ) {
           continue;
         }
         const transform = (text) => {
-          const result = retireClosedTaskReferencesInText(
+          const result = mutation.transform(
             text,
             file.path,
-            closedIdentities,
+            identities,
             resolveLinkPath,
           );
-          fileRetired = result.retired;
+          fileCount = result[mutation.countField];
           return result.text;
         };
         const planned = transform(snapshot);
-        const plannedRetired = fileRetired;
+        const plannedCount = fileCount;
         if (planned === snapshot) {
           continue;
         }
-        fileRetired = 0;
+        fileCount = 0;
         if (typeof vault.process === "function") {
           await vault.process(file, transform);
         } else if (
@@ -3777,25 +3938,23 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           if (next !== snapshot) {
             const live = await vault.read(file);
             if (live !== snapshot) {
-              throw new Error("note changed while retirement was planned");
+              throw new Error(mutation.concurrentChangeMessage);
             }
             await vault.modify(file, next);
-            fileRetired = plannedRetired;
+            fileCount = plannedCount;
           }
         }
-        retired += fileRetired;
+        count += fileCount;
       } catch (error) {
         failures.push(`${file.path}: ${error.message || String(error)}`);
       }
     }
 
     if (failures.length > 0) {
-      console.error("Could not retire all closed task references", failures);
-      new Notice(
-        `Closed tasks, but ${failures.length} note${failures.length === 1 ? "" : "s"} could not be checked for references.`,
-      );
+      console.error(mutation.failureLog, failures);
+      new Notice(mutation.failureNotice(failures.length));
     }
-    return { retired, failures };
+    return { count, failures };
   }
 
   registerVimMappings() {
@@ -3938,11 +4097,16 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     if (this.isOpenDoneTaskStatus(taskStatus)) {
       const wrote = this.toggleActiveCheckboxOpenDone(view.editor, taskStatus);
       const identity =
-        wrote && isTranscludedCompletionClosableStatus(taskStatus)
+        wrote
           ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
           : null;
-      if (identity) {
+      if (identity && isTranscludedCompletionClosableStatus(taskStatus)) {
         void this.retireClosedTaskReferences([identity], {
+          editor: view.editor,
+          activePath: activeFile && activeFile.path,
+        }).catch(() => {});
+      } else if (identity && isTranscludedReopenableStatus(taskStatus)) {
+        void this.restoreReopenedTaskReferences([identity], {
           editor: view.editor,
           activePath: activeFile && activeFile.path,
         }).catch(() => {});
@@ -5033,11 +5197,16 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
     const activeFile = view.file || this.app.workspace.getActiveFile();
     const identity =
-      wrote && isTranscludedCompletionClosableStatus(taskStatus)
+      wrote
         ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
         : null;
-    if (identity) {
+    if (identity && isTranscludedCompletionClosableStatus(taskStatus)) {
       void this.retireClosedTaskReferences([identity], {
+        editor,
+        activePath: activeFile && activeFile.path,
+      }).catch(() => {});
+    } else if (identity && isTranscludedReopenableStatus(taskStatus)) {
+      void this.restoreReopenedTaskReferences([identity], {
         editor,
         activePath: activeFile && activeFile.path,
       }).catch(() => {});
@@ -5111,6 +5280,14 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     );
     if (!resolvedTarget) {
       return false;
+    }
+
+    if (isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
+      const result = await this.reopenResolvedTranscludedTaskTarget(
+        resolvedTarget,
+        context,
+      );
+      return result.changed;
     }
 
     const closing = isTranscludedCompletionClosableStatus(
@@ -5244,6 +5421,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       " ",
       { forcedStatusPredicate: isTranscludedReopenableStatus },
     );
+    if (changed) {
+      await this.restoreReopenedTaskReferences(
+        [{ path: resolvedTarget.file.path, blockId: resolvedTarget.blockId }],
+        context,
+      );
+    }
     return { resolved: true, changed };
   }
 
@@ -5567,7 +5750,22 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     if (!isTranscludedReopenableStatus(currentPomodoroStatus)) {
       return false;
     }
-    return this.setActiveCheckboxStatus(editor, currentPomodoroStatus, " ");
+    const pomodoroIdentity = closedTaskIdentity(
+      sourcePath,
+      currentPomodoroStatus.lineText,
+    );
+    const reopened = this.setActiveCheckboxStatus(
+      editor,
+      currentPomodoroStatus,
+      " ",
+    );
+    if (reopened && pomodoroIdentity) {
+      await this.restoreReopenedTaskReferences(
+        [pomodoroIdentity],
+        targetContext,
+      );
+    }
+    return reopened;
   }
 
   async completePomodoroTranscludedTaskBullets(bullets, context) {
@@ -7148,6 +7346,7 @@ module.exports.helpers = {
   rewritePomodoroMarkersInText,
   stripPomodoroMarkersFromLine,
   retireClosedTaskReferencesInText,
+  restoreReopenedTaskReferencesInText,
   parseTranscludedBlockTarget,
   normalizeVimRepeat,
   promoteLineToObsidianTask,

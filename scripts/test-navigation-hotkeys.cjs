@@ -1153,3 +1153,132 @@ test("open-task dispatch timeout is registered for plugin cleanup", () => {
   assert.equal(cleanups.length, 1);
   cleanups[0]();
 });
+
+test("tab pin Vim action registers once and toggles only the active leaf once", (t) => {
+  const originalWindow = global.window;
+  t.after(() => {
+    if (originalWindow === undefined) {
+      delete global.window;
+    } else {
+      global.window = originalWindow;
+    }
+  });
+
+  const actions = new Map();
+  const mappings = [];
+  global.window = {
+    CodeMirrorAdapter: {
+      Vim: {
+        defineAction: (name, handler) => actions.set(name, handler),
+        mapCommand: (...args) => mappings.push(args),
+      },
+    },
+  };
+
+  let firstToggleCount = 0;
+  let secondToggleCount = 0;
+  const firstLeaf = {
+    togglePinned: () => {
+      firstToggleCount += 1;
+    },
+  };
+  const secondLeaf = {
+    togglePinned: () => {
+      secondToggleCount += 1;
+    },
+  };
+  const workspace = { activeLeaf: firstLeaf };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { workspace };
+  plugin.vimMappingsRegistered = false;
+
+  assert.equal(plugin.registerVimMappings(), true);
+  assert.equal(plugin.registerVimMappings(), true);
+  assert.deepEqual(mappings, [
+    [
+      "\\p",
+      "action",
+      "bobNavigationToggleCurrentTabPin",
+      {},
+      { context: "normal" },
+    ],
+  ]);
+
+  actions.get("bobNavigationToggleCurrentTabPin")(null, { repeat: 5 });
+  assert.equal(firstToggleCount, 1);
+  assert.equal(secondToggleCount, 0);
+
+  workspace.activeLeaf = secondLeaf;
+  assert.equal(plugin.toggleCurrentTabPin(), true);
+  assert.equal(firstToggleCount, 1);
+  assert.equal(secondToggleCount, 1);
+});
+
+test("tab pin toggle fails safely without a supported active leaf", () => {
+  const plugin = new NavigationHotkeysPlugin();
+
+  for (const app of [
+    undefined,
+    {},
+    { workspace: {} },
+    { workspace: { activeLeaf: {} } },
+    {
+      workspace: {
+        activeLeaf: {
+          togglePinned: () => {
+            throw new Error("not available");
+          },
+        },
+      },
+    },
+  ]) {
+    plugin.app = app;
+    assert.equal(plugin.toggleCurrentTabPin(), false);
+  }
+});
+
+test("tab pin Vim registration retries after adapter availability", (t) => {
+  const originalWindow = global.window;
+  t.after(() => {
+    if (originalWindow === undefined) {
+      delete global.window;
+    } else {
+      global.window = originalWindow;
+    }
+  });
+
+  let activeLeafChangeHandler = null;
+  const removedRefs = [];
+  const registeredRefs = [];
+  const workspace = {
+    onLayoutReady: (callback) => callback(),
+    on: (event, callback) => {
+      assert.equal(event, "active-leaf-change");
+      activeLeafChangeHandler = callback;
+      return { event, callback };
+    },
+    offref: (ref) => removedRefs.push(ref),
+  };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { workspace };
+  plugin.vimMappingsRegistered = false;
+  plugin.registerEvent = (ref) => registeredRefs.push(ref);
+  global.window = {};
+
+  assert.equal(plugin.registerVimMappingsWhenReady(), true);
+  assert.equal(typeof activeLeafChangeHandler, "function");
+  assert.equal(registeredRefs.length, 1);
+
+  const mappings = [];
+  global.window.CodeMirrorAdapter = {
+    Vim: {
+      defineAction: () => {},
+      mapCommand: (...args) => mappings.push(args),
+    },
+  };
+  activeLeafChangeHandler();
+
+  assert.equal(plugin.registerVimMappings(), true);
+  assert.equal(mappings.length, 1);
+  assert.equal(removedRefs.length, 1);
+});

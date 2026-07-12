@@ -9023,6 +9023,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.activeDashScrollHandler = null;
     this.isRestoringDashLocation = false;
     this.pendingOpenTaskJumpCenterDeferred = null;
+    this.vimMappingsRegistered = false;
 
     this.addCommand({
       id: "open-parent-note",
@@ -9172,6 +9173,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "toggle-current-tab-pin",
+      name: "Toggle current tab pin",
+      callback: () => this.toggleCurrentTabPin(),
+    });
+
+    this.addCommand({
       id: "close-tabs-left",
       name: "Close tabs to the left",
       callback: () => this.closeSiblingTabs("left"),
@@ -9212,6 +9219,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
       this.refreshDashScrollCaptureTarget();
     });
+
+    this.registerVimMappingsWhenReady();
 
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => this.trackOpenedFile(file)),
@@ -10774,6 +10783,81 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.placeDuplicateTabAfterSource(sourceLeaf, targetLeaf);
     await this.focusWorkspaceLeaf(targetLeaf);
+    return true;
+  }
+
+  toggleCurrentTabPin() {
+    const workspace = this.app && this.app.workspace;
+    const activeLeaf = workspace && workspace.activeLeaf;
+    if (!activeLeaf || typeof activeLeaf.togglePinned !== "function") {
+      return false;
+    }
+
+    try {
+      activeLeaf.togglePinned();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  registerVimMappingsWhenReady() {
+    const workspace = this.app && this.app.workspace;
+    if (!workspace || typeof workspace.onLayoutReady !== "function") {
+      return false;
+    }
+
+    workspace.onLayoutReady(() => {
+      if (this.registerVimMappings()) {
+        return;
+      }
+
+      if (typeof workspace.on !== "function") {
+        return;
+      }
+
+      const ref = workspace.on("active-leaf-change", () => {
+        if (
+          this.registerVimMappings() &&
+          typeof workspace.offref === "function"
+        ) {
+          workspace.offref(ref);
+        }
+      });
+      this.registerEvent(ref);
+    });
+
+    return true;
+  }
+
+  registerVimMappings() {
+    if (this.vimMappingsRegistered) {
+      return true;
+    }
+
+    const codeMirrorAdapter =
+      typeof window === "undefined" ? null : window.CodeMirrorAdapter;
+    const vim = codeMirrorAdapter && codeMirrorAdapter.Vim;
+    if (
+      !vim ||
+      typeof vim.defineAction !== "function" ||
+      typeof vim.mapCommand !== "function"
+    ) {
+      return false;
+    }
+
+    vim.defineAction("bobNavigationToggleCurrentTabPin", () =>
+      this.toggleCurrentTabPin(),
+    );
+    vim.mapCommand(
+      "\\p",
+      "action",
+      "bobNavigationToggleCurrentTabPin",
+      {},
+      { context: "normal" },
+    );
+
+    this.vimMappingsRegistered = true;
     return true;
   }
 

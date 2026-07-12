@@ -1,9 +1,9 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "1.12.2",
+  "version": "1.13.0",
   "minAppVersion": "1.8.7",
-  "description": "Open parent, next, previous, and alternate notes from keyboard shortcuts.",
+  "description": "Open and manage related notes and tabs, including toggling the current tab pin.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

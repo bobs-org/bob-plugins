@@ -6,7 +6,7 @@
   "license": "MIT",
   "author": "Bryan M Bugyi",
   "scripts": {
-    "test": "node --test scripts/test-navigation-hotkeys.cjs scripts/test-task-status-cycler.cjs scripts/test-block-id-prompt.cjs scripts/test-task-dependency-identity-migration.cjs",
+    "test": "node --test scripts/test-navigation-hotkeys.cjs scripts/test-ledger-tools-vim-mappings.cjs scripts/test-task-status-cycler.cjs scripts/test-block-id-prompt.cjs scripts/test-task-dependency-identity-migration.cjs",
     "validate": "node scripts/validate-manifests.mjs"
   }
 }

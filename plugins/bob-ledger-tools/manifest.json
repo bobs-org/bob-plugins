@@ -1,9 +1,9 @@
 {
   "id": "bob-ledger-tools",
   "name": "Bob Ledger Tools",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minAppVersion": "1.8.7",
-  "description": "Expand Bob daily-note snippets and ledger time ranges.",
+  "description": "Expand Bob daily-note snippets and ledger time ranges, and navigate and adjust Pomodoro entries.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

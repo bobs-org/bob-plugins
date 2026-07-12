@@ -5370,6 +5370,12 @@ function planSameFileDependencyToggle(
   if (targetLine === null) {
     return unqualified("target-not-task");
   }
+  if (
+    next.transcluded &&
+    hasWholeTaskTag(lines[targetLine], PROJECT_HIDE_TAG)
+  ) {
+    return unqualified("target-hidden");
+  }
   const idField = findBulletPropertyField(lines[targetLine], "id");
   const legacyId = idField && normalizeBulletPropertyValue(idField.value);
   const canonicalId = tryDependencyId(filePath, original.blockId);
@@ -7115,6 +7121,10 @@ function getWholeTaskTagSpans(text, tag) {
     }
   }
   return spans;
+}
+
+function hasWholeTaskTag(text, tag) {
+  return getWholeTaskTagSpans(text, tag).length > 0;
 }
 
 function removeTextSpans(line, spans) {
@@ -9336,6 +9346,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         continue;
       }
       const targetSnapshot = String(targetLines[targetLine] || "");
+      if (
+        next.transcluded &&
+        hasWholeTaskTag(targetSnapshot, PROJECT_HIDE_TAG)
+      ) {
+        continue;
+      }
       const idField = findBulletPropertyField(targetLines[targetLine], "id");
       const legacyId = idField && normalizeBulletPropertyValue(idField.value);
       const canonicalId = tryDependencyId(targetFile.path, original.blockId);
@@ -13632,6 +13648,7 @@ module.exports.helpers = {
   createBulletPropertyItems,
   validateDependencyParentForEditor,
   getWholeTaskTagSpans,
+  hasWholeTaskTag,
   normalizeTaskHideTag,
   getRealMarkdownTaskLines,
   planProjectScheduleVisibility,

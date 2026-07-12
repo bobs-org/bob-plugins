@@ -908,6 +908,54 @@ test("same-file dependency toggle synchronizes dependsOn and target id", () => {
   assert.equal(unrelated.qualified, false);
 });
 
+test("same-file dependency toggle skips hidden targets using whole-tag boundaries", () => {
+  const hidden = [
+    "- [ ] #task Parent ^parent",
+    "  - [[#^child]]",
+    "- [ ] #task Child (#hide), ^child",
+  ].join("\n");
+  const hiddenResult = helpers.planSameFileDependencyToggle(
+    hidden,
+    1,
+    "  - ![[#^child]]",
+    "projects/Here.md",
+  );
+  assert.equal(hiddenResult.qualified, false);
+  assert.equal(hiddenResult.reason, "target-hidden");
+  assert.match(hiddenResult.content, /  - !\[\[#\^child\]\]/);
+  assert.doesNotMatch(hiddenResult.content, /dependsOn|\[id::/);
+
+  const nearMatchResult = helpers.planSameFileDependencyToggle(
+    hidden.replace("(#hide),", "#hidden"),
+    1,
+    "  - ![[#^child]]",
+    "projects/Here.md",
+  );
+  assert.equal(nearMatchResult.qualified, true);
+  assert.match(nearMatchResult.content, /\[dependsOn:: projects__Here__child\]/);
+  assert.match(nearMatchResult.content, /\[id:: projects__Here__child\]/);
+});
+
+test("same-file dependency toggle can unlink a target that became hidden", () => {
+  const input = [
+    "- [ ] #task Parent [dependsOn:: projects__Here__child] ^parent",
+    "  - ![[#^child]]",
+    "- [ ] #task Child #hide [id:: projects__Here__child] ^child",
+  ].join("\n");
+  const removed = helpers.planSameFileDependencyToggle(
+    input,
+    1,
+    "  - [[#^child]]",
+    "projects/Here.md",
+  );
+  assert.equal(removed.qualified, true);
+  assert.doesNotMatch(removed.content, /dependsOn/);
+  assert.match(
+    removed.content,
+    /Child #hide \[id:: projects__Here__child\] \^child/,
+  );
+});
+
 test("same-file dependency toggle preserves plain toggling for invalid parents and targets", () => {
   const pomodoro = [
     "- [ ] (**1535-1705** [t:: 90m])",
@@ -979,6 +1027,76 @@ test("runtime dependency toggle synchronizes a cross-file target", async () => {
   );
   assert.doesNotMatch(editor.content, /dependsOn/);
   assert.match(targetContent, /Target \[id:: Other__target\] \^target/);
+});
+
+test("runtime dependency toggle embeds hidden cross-file targets without writing them", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  const originalTargetContent = "- [ ] #task Target #hide ^target";
+  let targetContent = originalTargetContent;
+  let processCalls = 0;
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    metadataCache: {
+      getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
+    },
+    vault: {
+      cachedRead: async () => targetContent,
+      getAbstractFileByPath: () => null,
+      process: async (_file, transform) => {
+        processCalls += 1;
+        targetContent = transform(targetContent);
+      },
+    },
+  };
+  const editor = new TestEditor(
+    "- [ ] #task Parent ^parent\n  - [[Other#^target]]",
+  );
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(editor, [
+      { line: 1, nextLineText: "  - ![[Other#^target]]" },
+    ]),
+    true,
+  );
+  assert.match(editor.content, /  - !\[\[Other#\^target\]\]/);
+  assert.doesNotMatch(editor.content, /dependsOn/);
+  assert.equal(targetContent, originalTargetContent);
+  assert.equal(processCalls, 0);
+});
+
+test("runtime dependency toggle can unlink a hidden cross-file target", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  const targetContent =
+    "- [ ] #task Target #hide [id:: Other__target] ^target";
+  let processCalls = 0;
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    metadataCache: { getFirstLinkpathDest: () => targetFile },
+    vault: {
+      cachedRead: async () => targetContent,
+      process: async () => {
+        processCalls += 1;
+      },
+    },
+  };
+  const editor = new TestEditor(
+    [
+      "- [ ] #task Parent [dependsOn:: Other__target] ^parent",
+      "  - ![[Other#^target]]",
+    ].join("\n"),
+  );
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(editor, [
+      { line: 1, nextLineText: "  - [[Other#^target]]" },
+    ]),
+    true,
+  );
+  assert.match(editor.content, /  - \[\[Other#\^target\]\]/);
+  assert.doesNotMatch(editor.content, /dependsOn/);
+  assert.equal(processCalls, 0);
 });
 
 test("runtime dependency toggle leaves external files untouched for invalid endpoints", async () => {
@@ -1132,6 +1250,42 @@ test("counted runtime toggles every link but synchronizes only valid task pairs"
   assert.match(editor.content, /Parent \[dependsOn:: Here__valid\]/);
   assert.match(editor.content, /Valid target \[id:: Here__valid\] \^valid/);
   assert.doesNotMatch(editor.content, /Here__plain|Plain target \[id::/);
+});
+
+test("counted runtime dependency toggles handle hidden and visible targets independently", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    vault: { getAbstractFileByPath: () => activeFile },
+  };
+  const editor = new TestEditor(
+    [
+      "- [ ] #task Hidden parent",
+      "  - [[#^hidden]]",
+      "- [ ] #task Hidden target #hide ^hidden",
+      "- [ ] #task Visible parent",
+      "  - [[#^visible]]",
+      "- [ ] #task Visible target ^visible",
+    ].join("\n"),
+  );
+  const toggle = helpers.toggleLineRangeTransclusions(
+    editor.content.split("\n"),
+    0,
+    5,
+  );
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(
+      editor,
+      toggle.changesByLine,
+    ),
+    true,
+  );
+  assert.match(editor.content, /  - !\[\[#\^hidden\]\]/);
+  assert.match(editor.content, /  - !\[\[#\^visible\]\]/);
+  assert.doesNotMatch(editor.content, /Here__hidden/);
+  assert.match(editor.content, /Visible parent \[dependsOn:: Here__visible\]/);
+  assert.match(editor.content, /Visible target \[id:: Here__visible\] \^visible/);
 });
 
 test("counted transclusion toggle evaluates each line independently", () => {

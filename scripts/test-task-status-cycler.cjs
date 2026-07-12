@@ -484,6 +484,77 @@ test("closed-reference retirement is ancestry-aware, resolved, fenced, and idemp
   assert.equal(second.retired, 0);
 });
 
+test("Pomodoro marker helpers normalize every block link and preserve fences and EOLs", () => {
+  const source = [
+    "  - Work on [[A#^plain|Alias]] and ![[B#^embed]]",
+    "  - 🍅   ~~[[C#^struck]]~~ and 🍅 🍅 [[D#^duplicate]]",
+    "```md",
+    "  - [[E#^fenced]]",
+    "```",
+  ].join("\r\n");
+  const marked = helpers.rewritePomodoroMarkersInText(source, true);
+  assert.match(
+    marked,
+    /Work on 🍅 \[\[A#\^plain\|Alias\]\] and 🍅 !\[\[B#\^embed\]\]/,
+  );
+  assert.match(marked, /- 🍅 ~~\[\[C#\^struck\]\]~~ and 🍅 \[\[D#\^duplicate\]\]/);
+  assert.match(marked, /```md\r\n  - \[\[E#\^fenced\]\]\r\n```/);
+  assert.equal(marked.includes("\r\n"), true);
+  assert.equal(helpers.rewritePomodoroMarkersInText(marked, true), marked);
+
+  const stripped = helpers.rewritePomodoroMarkersInText(marked, false);
+  assert.match(stripped, /Work on \[\[A#\^plain\|Alias\]\] and !\[\[B#\^embed\]\]/);
+  assert.match(stripped, /- ~~\[\[C#\^struck\]\]~~ and \[\[D#\^duplicate\]\]/);
+  assert.match(stripped, /  - \[\[E#\^fenced\]\]/);
+});
+
+test("Pomodoro completion marks originals and carries clean live copies", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] Focus",
+    "  - 🍅   [[Tasks#^live|Live]] and [[Tasks#^other]]",
+    "  - ![[Tasks#^embedded|Embedded]]",
+    "  - ~~[[Tasks#^retired|Retired]]~~",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.deepEqual(plan.copiedBulletLines, [
+    "  - [[Tasks#^live|Live]] and [[Tasks#^other]]",
+  ]);
+  const replacements = new Map(
+    plan.edits
+      .filter((edit) => edit.type === "replaceLine")
+      .map((edit) => [edit.line, edit.lineText]),
+  );
+  assert.equal(
+    replacements.get(2),
+    "  - 🍅 [[Tasks#^live|Live]] and 🍅 [[Tasks#^other]]",
+  );
+  assert.equal(replacements.get(3), "  - 🍅 ![[Tasks#^embedded|Embedded]]");
+  assert.equal(replacements.get(4), "  - 🍅 ~~[[Tasks#^retired|Retired]]~~");
+});
+
+test("retirement keeps or adds markers only beneath done Pomodoros", () => {
+  const source = [
+    "- [ ] #task Parent",
+    "  - 🍅 ![[A#^done|Task tree]]",
+    "## Pomodoros",
+    "- [ ] Open",
+    "  - 🍅 ![[A#^done|Open session]]",
+    "- [x] Done",
+    "  - ![[A#^done|Done session]]",
+  ].join("\n");
+  const result = helpers.retireClosedTaskReferencesInText(
+    source,
+    "Daily.md",
+    [{ path: "A.md", blockId: "done" }],
+    () => "A.md",
+  );
+  assert.match(result.text, /- 🍅 ~~\[\[A#\^done\|Task tree\]\]~~/);
+  assert.match(result.text, /- 🍅 ~~\[\[A#\^done\|Open session\]\]~~/);
+  assert.match(result.text, /- \[x\] Done\n  - 🍅 ~~\[\[A#\^done\|Done session\]\]~~/);
+});
+
 test("retirement stops at prose boundaries and pairs strikethrough spans", () => {
   const source = [
     "- [ ] #task Parent",
@@ -523,7 +594,7 @@ test("retired Pomodoro links are not copied into the next Pomodoro", () => {
 
 test("retirement coordinator rewrites active editor and vault notes together", async () => {
   const harness = createInMemoryObsidianApp({
-    "Daily.md": "## Pomodoros\n- [ ] Focus\n  - ![[Tasks#^done|Done]]",
+    "Daily.md": "## Pomodoros\n- [x] Focus\n  - ![[Tasks#^done|Done]]",
     "Tasks.md": [
       "- [x] #task Done ^done",
       "  - ![[#^done|Self reference]]",
@@ -549,7 +620,7 @@ test("retirement coordinator rewrites active editor and vault notes together", a
     { editor, activePath: "Daily.md" },
   );
   assert.equal(result.retired, 2);
-  assert.match(activeText, /~~\[\[Tasks#\^done\|Done\]\]~~/);
+  assert.match(activeText, /🍅 ~~\[\[Tasks#\^done\|Done\]\]~~/);
   assert.match(harness.getSource("Tasks.md"), /~~\[\[#\^done\|Self reference\]\]~~/);
 });
 
@@ -656,7 +727,7 @@ test("full Pomodoro completion retires embeds only after carry-forward planning"
   assert.match(harness.getSource("Root.md"), /^- \[x\] #task Root/);
   assert.match(
     editor.getValue(),
-    /- \[x\] Focus\n\t- ~~\[\[Root#\^root\|Finished work\]\]~~\n\t- \[\[Notes\]\]/,
+    /- \[x\] Focus\n\t- 🍅 ~~\[\[Root#\^root\|Finished work\]\]~~\n\t- \[\[Notes\]\]/,
   );
   const occurrences = editor.getValue().match(/Root#\^root/g) || [];
   assert.equal(occurrences.length, 1, "completed embed was not carried forward");

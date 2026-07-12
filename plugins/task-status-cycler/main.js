@@ -61,6 +61,7 @@ const POMODORO_PLACEHOLDER_RE = /\(\s*\)/;
 const POMODORO_PLACEHOLDER_LINE = "- [ ] ()";
 const EMPTY_POMODORO_SUB_BULLET_LINE = "\t- ";
 const EMPTY_TASK_CHECKBOX_MARKER = "[ ] ";
+const POMODORO_MARKER = "🍅";
 // One Obsidian Tab-indent level for generated child bullets. A literal tab
 // matches how Obsidian indents list items via Tab and the vault's dominant
 // nested-list source style, unlike the prior two-space indent.
@@ -1196,6 +1197,84 @@ function parseNonEmbeddedBlockLinks(lineText) {
   return candidates;
 }
 
+function getBlockLinkTokenCandidates(lineText) {
+  return [
+    ...parseEmbeddedBlockTransclusions(lineText),
+    ...parseNonEmbeddedBlockLinks(lineText),
+  ].sort((left, right) => left.startIndex - right.startIndex);
+}
+
+function getPomodoroMarkerPrefix(lineText, tokenStart) {
+  const line = String(lineText || "");
+  const start = Math.max(0, Math.min(Number(tokenStart) || 0, line.length));
+  const match = line.slice(0, start).match(/(?:🍅[ \t]+)+$/u);
+  if (!match) {
+    return { start, end: start, count: 0, canonical: false };
+  }
+  return {
+    start: start - match[0].length,
+    end: start,
+    count: (match[0].match(/🍅/gu) || []).length,
+    canonical: match[0] === `${POMODORO_MARKER} `,
+  };
+}
+
+function getPomodoroMarkerTokenStart(lineText, candidate, strikeSpans = null) {
+  const line = String(lineText || "");
+  const spans = strikeSpans || getStrikethroughSpans(line);
+  const exactStrike = spans.find(
+    (span) =>
+      candidate.startIndex === span.start && candidate.endIndex === span.end,
+  );
+  return exactStrike ? exactStrike.start - 2 : candidate.startIndex;
+}
+
+function rewritePomodoroMarkersInLine(lineText, marked) {
+  const line = String(lineText || "");
+  const strikeSpans = getStrikethroughSpans(line);
+  const edits = [];
+  for (const candidate of getBlockLinkTokenCandidates(line)) {
+    const tokenStart = getPomodoroMarkerTokenStart(
+      line,
+      candidate,
+      strikeSpans,
+    );
+    const prefix = getPomodoroMarkerPrefix(line, tokenStart);
+    const replacement = marked ? `${POMODORO_MARKER} ` : "";
+    if (
+      (marked && prefix.canonical) ||
+      (!marked && prefix.count === 0)
+    ) {
+      continue;
+    }
+    edits.push({ start: prefix.start, end: tokenStart, text: replacement });
+  }
+
+  let rewritten = line;
+  for (const edit of edits.sort((left, right) => right.start - left.start)) {
+    rewritten = `${rewritten.slice(0, edit.start)}${edit.text}${rewritten.slice(edit.end)}`;
+  }
+  return rewritten;
+}
+
+function stripPomodoroMarkersFromLine(lineText) {
+  return rewritePomodoroMarkersInLine(lineText, false);
+}
+
+function rewritePomodoroMarkersInText(sourceText, marked) {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const fenced = getFencedLineNumbers(sourceLines.map((line) => line.text));
+  for (let line = 0; line < sourceLines.length; line += 1) {
+    if (!fenced.has(line)) {
+      sourceLines[line].text = rewritePomodoroMarkersInLine(
+        sourceLines[line].text,
+        marked,
+      );
+    }
+  }
+  return sourceLines.map((line) => `${line.text}${line.ending}`).join("");
+}
+
 function getBareNonEmbeddedBlockLinkTargetFromListItem(lineText) {
   const line = String(lineText || "");
   const listMatch = line.match(LIST_ITEM_MARKER_RE);
@@ -1307,7 +1386,7 @@ function classifyPomodoroSubBullets(lines, range) {
   }
 
   for (let line = range.startLine; line < range.endLine; line += 1) {
-    const lineText = String(lines[line] || "");
+    const lineText = stripPomodoroMarkersFromLine(lines[line]);
     const embeddedTargets = parseEmbeddedBlockTransclusions(lineText);
 
     if (embeddedTargets.length > 0) {
@@ -1443,6 +1522,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   const sourceRange = getSubBulletBlockRange(lines, pomodoroLine, section);
   const sourceBullets = classifyPomodoroSubBullets(lines, sourceRange);
   const nextPomodoroLine = findNextPomodoroLine(lines, section, pomodoroLine);
+  const fenced = getFencedLineNumbers(lines);
   const edits = [
     {
       type: "replaceLine",
@@ -1451,6 +1531,16 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
       lineText: replaceTaskStatusSymbol(lines[pomodoroLine], "x"),
     },
   ];
+  for (let line = sourceRange.startLine; line < sourceRange.endLine; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    const sourceLineText = String(lines[line] || "");
+    const lineText = rewritePomodoroMarkersInLine(sourceLineText, true);
+    if (lineText !== sourceLineText) {
+      edits.push({ type: "replaceLine", line, sourceLineText, lineText });
+    }
+  }
   // Only insert a fresh placeholder Pomodoro when there is something to carry
   // forward (one or more copyable, non-transcluded task-link bullets) or when
   // this is the last Pomodoro in the section. When a later Pomodoro already
@@ -1461,7 +1551,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   // copyable bullets; existing lower Pomodoros are left untouched and pushed
   // down by the insertion.
   const copyableBulletLines = sourceBullets.copyableTaskLinkBullets.map(
-    (bullet) => bullet.lineText,
+    (bullet) => stripPomodoroMarkersFromLine(bullet.lineText),
   );
   const isLastPomodoro = nextPomodoroLine === null;
   const shouldCreatePomodoro = copyableBulletLines.length > 0 || isLastPomodoro;
@@ -1673,7 +1763,7 @@ function hasEligibleRetirementAncestor(
 ) {
   const candidate = parseRetirementListLine(lines[lineNumber]);
   if (!candidate || candidate.indentation === 0) {
-    return false;
+    return { eligible: false, donePomodoro: false };
   }
   let indentation = candidate.indentation;
   for (let line = lineNumber - 1; line >= 0; line -= 1) {
@@ -1695,19 +1785,24 @@ function hasEligibleRetirementAncestor(
       continue;
     }
     indentation = ancestor.indentation;
+    if (ancestor.taskStatus && lineMatchesTasksGlobalFilterText(text)) {
+      return { eligible: true, donePomodoro: false };
+    }
     if (
       ancestor.taskStatus &&
-      (lineMatchesTasksGlobalFilterText(text) ||
-        (ancestor.indentation === 0 &&
-          lineIsInPomodorosSection(pomodoros, line)))
+      ancestor.indentation === 0 &&
+      lineIsInPomodorosSection(pomodoros, line)
     ) {
-      return true;
+      return {
+        eligible: true,
+        donePomodoro: ["x", "X"].includes(ancestor.taskStatus.symbol),
+      };
     }
     if (indentation === 0) {
       break;
     }
   }
-  return false;
+  return { eligible: false, donePomodoro: false };
 }
 
 function retirementIdentityKey(path, blockId) {
@@ -1740,16 +1835,16 @@ function retireClosedTaskReferencesInText(
   let retired = 0;
 
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    if (
-      fenced.has(lineNumber) ||
-      !lines[lineNumber].includes("![[") ||
-      !hasEligibleRetirementAncestor(
-        lines,
-        lineNumber,
-        fenced,
-        pomodoros,
-      )
-    ) {
+    if (fenced.has(lineNumber) || !lines[lineNumber].includes("![[")) {
+      continue;
+    }
+    const ancestry = hasEligibleRetirementAncestor(
+      lines,
+      lineNumber,
+      fenced,
+      pomodoros,
+    );
+    if (!ancestry.eligible) {
       continue;
     }
     const line = lines[lineNumber];
@@ -1791,6 +1886,9 @@ function retireClosedTaskReferencesInText(
     for (const edit of edits.sort((left, right) => right.start - left.start)) {
       nextLine = `${nextLine.slice(0, edit.start)}${edit.text}${nextLine.slice(edit.end)}`;
       retired += 1;
+    }
+    if (ancestry.donePomodoro) {
+      nextLine = rewritePomodoroMarkersInLine(nextLine, true);
     }
     lines[lineNumber] = nextLine;
     sourceLines[lineNumber].text = nextLine;
@@ -6667,6 +6765,10 @@ module.exports.helpers = {
   getTranscludedTaskTargetFromLine,
   parseMarkdownHeadingLine,
   parseNonEmbeddedBlockLinks,
+  getPomodoroMarkerPrefix,
+  rewritePomodoroMarkersInLine,
+  rewritePomodoroMarkersInText,
+  stripPomodoroMarkersFromLine,
   retireClosedTaskReferencesInText,
   parseTranscludedBlockTarget,
   normalizeVimRepeat,

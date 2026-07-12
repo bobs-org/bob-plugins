@@ -59,6 +59,17 @@ const NavigationHotkeysPlugin = require("../plugins/bob-navigation-hotkeys/main.
 const { helpers } = NavigationHotkeysPlugin;
 Module._load = originalLoad;
 
+test("Pomodoro-marked links are not managed dependency bullets", () => {
+  assert.equal(
+    helpers.parseDependencyNavigationBullet("  - 🍅 ![[Tasks#^dependency]]"),
+    null,
+  );
+  assert.equal(
+    helpers.parseDependencyNavigationBullet("  - 🍅 ~~[[Tasks#^dependency]]~~"),
+    null,
+  );
+});
+
 class TestEditor {
   constructor(content) {
     this.content = content;

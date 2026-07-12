@@ -10850,7 +10850,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       this.toggleCurrentTabPin(),
     );
     vim.mapCommand(
-      "\\p",
+      "\\s",
       "action",
       "bobNavigationToggleCurrentTabPin",
       {},

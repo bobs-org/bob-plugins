@@ -1207,13 +1207,14 @@ test("tab pin Vim action registers once and toggles only the active leaf once", 
   assert.equal(plugin.registerVimMappings(), true);
   assert.deepEqual(mappings, [
     [
-      "\\p",
+      "\\s",
       "action",
       "bobNavigationToggleCurrentTabPin",
       {},
       { context: "normal" },
     ],
   ]);
+  assert.equal(mappings.some(([key]) => key === "\\p"), false);
 
   actions.get("bobNavigationToggleCurrentTabPin")(null, { repeat: 5 });
   assert.equal(firstToggleCount, 1);

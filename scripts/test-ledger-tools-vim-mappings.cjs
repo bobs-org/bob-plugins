@@ -28,7 +28,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
 const LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
 Module._load = originalLoad;
 
-test("Ledger Vim mappings omit \\p and retain the other normal-mode actions", (t) => {
+test("Ledger Vim mappings restore \\p and retain the other normal-mode actions", (t) => {
   const originalWindow = global.window;
   t.after(() => {
     if (originalWindow === undefined) {
@@ -51,9 +51,12 @@ test("Ledger Vim mappings omit \\p and retain the other normal-mode actions", (t
 
   const plugin = new LedgerToolsPlugin();
   plugin.vimMappingsRegistered = false;
+  const pomodoroChanges = [];
+  plugin.changePomodoroUnits = (cm, units) =>
+    pomodoroChanges.push({ cm, units });
   assert.equal(plugin.registerVimMappings(), true);
 
-  assert.equal(actions.has("bobLedgerAddPomodoroUnit"), false);
+  assert.equal(actions.has("bobLedgerAddPomodoroUnit"), true);
   assert.deepEqual(
     mappings.map(([key, type, name, args, options]) => ({
       key,
@@ -63,6 +66,13 @@ test("Ledger Vim mappings omit \\p and retain the other normal-mode actions", (t
       context: options.context,
     })),
     [
+      {
+        key: "\\p",
+        type: "action",
+        name: "bobLedgerAddPomodoroUnit",
+        args: {},
+        context: "normal",
+      },
       {
         key: "\\P",
         type: "action",
@@ -89,4 +99,13 @@ test("Ledger Vim mappings omit \\p and retain the other normal-mode actions", (t
   for (const mapping of mappings) {
     assert.equal(actions.has(mapping[2]), true);
   }
+  assert.equal(mappings.some(([key]) => key === "\\s"), false);
+
+  const cm = {};
+  actions.get("bobLedgerAddPomodoroUnit")(cm);
+  actions.get("bobLedgerAddPomodoroUnit")(cm, { repeat: 3 });
+  assert.deepEqual(pomodoroChanges, [
+    { cm, units: 1 },
+    { cm, units: 3 },
+  ]);
 });

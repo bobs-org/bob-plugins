@@ -1562,6 +1562,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     vim.defineAction("bobLedgerJumpToCurrentPomodoro", (cm) =>
       this.jumpToCurrentPomodoro(cm),
     );
+    vim.defineAction("bobLedgerAddPomodoroUnit", (cm, actionArgs) =>
+      this.changePomodoroUnits(cm, this.getVimRepeat(actionArgs)),
+    );
     vim.defineAction("bobLedgerSubtractPomodoroUnit", (cm, actionArgs) =>
       this.changePomodoroUnits(cm, -this.getVimRepeat(actionArgs)),
     );
@@ -1572,6 +1575,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       this.offsetPomodoroRange(cm, -this.getVimRepeat(actionArgs) * STEP_MINUTES),
     );
 
+    vim.mapCommand("\\p", "action", "bobLedgerAddPomodoroUnit", {}, {
+      context: "normal",
+    });
     vim.mapCommand("\\P", "action", "bobLedgerSubtractPomodoroUnit", {}, {
       context: "normal",
     });

@@ -12,8 +12,8 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | Plugin                  | id                       | Version | Description                                                            |
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
 | Block ID Prompt         | `block-id-prompt`        |   1.3.0 | Prompt for custom block IDs, complete wiki block links to open tasks (skipping `#hide` tasks), and mark dependency-blocked tasks. |
-| Bob Ledger Tools        | `bob-ledger-tools`       |   1.1.0 | Expand Bob daily-note snippets and ledger time ranges, and navigate and adjust Pomodoro entries. |
-| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.0 | Open and manage related notes and tabs, including toggling the current tab pin. |
+| Bob Ledger Tools        | `bob-ledger-tools`       |   1.1.1 | Expand Bob daily-note snippets and ledger time ranges, and navigate and adjust Pomodoro entries. |
+| Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.1 | Open and manage related notes and tabs, including toggling the current tab pin. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
 | Bob Vim Surround        | `bob-vim-surround`       |   1.4.0 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
 | Task Status Cycler      | `task-status-cycler`     |   1.3.0 | Cycle task statuses, mark links under completed Pomodoros, retire references on closure, and reconcile Tasks dependency IDs. |
@@ -79,8 +79,9 @@ npm run validate
 including scheduled-project task extraction, frontmatter handoff, date
 boundaries, project-property target resolution, scheduled task-visibility
 reconciliation, deletion behavior, child-picker presentation metadata, and the
-tab-pin Vim mapping. It also guards Bob Ledger Tools' retained Vim mappings
-against reclaiming the transferred `\p` binding.
+tab-pin Vim mapping. It also guards the distinct Vim mapping ownership: Bob
+Ledger Tools uses `\p` for Pomodoro increments, while Bob Navigation Hotkeys
+uses `\s` for toggling the current tab pin.
 
 `scripts/validate-manifests.mjs` checks every plugin under `plugins/`:
 

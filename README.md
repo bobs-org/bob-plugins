@@ -15,11 +15,20 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.1.1 | Expand Bob daily-note snippets and ledger time ranges, and navigate and adjust Pomodoro entries. |
 | Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.1 | Open and manage related notes and tabs, including toggling the current tab pin. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
-| Bob Vim Surround        | `bob-vim-surround`       |   1.4.0 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
+| Bob Vim Surround        | `bob-vim-surround`       |   1.5.0 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
 | Task Status Cycler      | `task-status-cycler`     |   1.3.2 | Toggle tasks and Pomodoros open or done with recursive close and root-only reopen, retire completed references, and reconcile Tasks dependency IDs. |
 
 Versions are tracked **per plugin** — there is no lockstep release. Each plugin's authoritative version lives in its own
-`plugins/<id>/manifest.json` (e.g. `bob-vim-surround` is ahead of the others at `1.4.0`).
+`plugins/<id>/manifest.json` (e.g. `bob-vim-surround` is ahead of the others at `1.5.0`).
+
+Bob Vim Surround accepts every visible, single-UTF-16-code-unit letter, number,
+punctuation character, or symbol as a surround key. The standard bracket aliases
+retain vim-surround padding behavior; all other accepted characters are symmetric
+delimiters. Whitespace, controls and navigation keys, modifier chords, composition
+and dead keys, combining marks, and multi-code-unit characters such as emoji are
+not accepted. Symmetric delimiters are discovered as sequential same-line pairs around
+the cursor, so delimiter characters inside the content can make letter-based pairs
+ambiguous; this intentionally does not attempt nested parsing.
 
 ## Layout
 
@@ -82,6 +91,10 @@ reconciliation, deletion behavior, child-picker presentation metadata, and the
 tab-pin Vim mapping. It also guards the distinct Vim mapping ownership: Bob
 Ledger Tools uses `\p` for Pomodoro increments, while Bob Navigation Hotkeys
 uses `\s` for toggling the current tab pin.
+
+It also runs focused Bob Vim Surround coverage for accepted and rejected
+delimiter keys, `ys`/`cs`/`ds` edits, bracket padding, event handling, and
+dot-repeat.
 
 `scripts/validate-manifests.mjs` checks every plugin under `plugins/`:
 

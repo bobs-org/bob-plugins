@@ -6,8 +6,7 @@ const SURROUND_OPERATOR_NAME = "bobVimSurroundAdd";
 const SURROUND_OPERATOR_KEYS = "<A-b>s";
 const TRAILING_WHITESPACE_RE = /\s+$/;
 const HORIZONTAL_WHITESPACE_RE = /[ \t]/;
-const ALPHANUMERIC_RE = /[\p{L}\p{N}]/u;
-const WHITESPACE_RE = /\s/u;
+const VISIBLE_SURROUND_CHAR_RE = /^[\p{L}\p{N}\p{P}\p{S}]$/u;
 const MAX_SURROUND_SCAN_CHARS = 200000;
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 
@@ -206,10 +205,7 @@ function isSymmetricSurroundChar(key) {
   return (
     typeof key === "string" &&
     key.length === 1 &&
-    key.codePointAt(0) >= 0x21 &&
-    key.codePointAt(0) !== 0x7f &&
-    !ALPHANUMERIC_RE.test(key) &&
-    !WHITESPACE_RE.test(key)
+    VISIBLE_SURROUND_CHAR_RE.test(key)
   );
 }
 

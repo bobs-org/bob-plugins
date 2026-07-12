@@ -20,10 +20,12 @@ const TRAILING_BLOCK_ID_RE = /[ \t]+\^[A-Za-z0-9-]+[ \t]*$/;
 const EMBEDDED_WIKILINK_RE = /!\[\[([^\]\n]+)\]\]/g;
 const BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const TASKS_DEPENDENCY_ID_RE = /^[A-Za-z0-9_-]+$/;
-// Conservative guards for recursive embedded Pomodoro source-task closure. The
-// seen-set keyed by `path#^block-id` already stops cycles (A -> B -> A) and
-// re-processing of shared targets; these caps just keep a pathologically deep
-// chain or a huge accidental graph from running unbounded.
+// Ctrl+Enter closes open embedded Pomodoro source-task trees recursively, but
+// reopens Done task-link targets and completed Pomodoros root-only. Conservative
+// guards apply only to the recursive close side: the seen-set keyed by
+// `path#^block-id` already stops cycles (A -> B -> A) and re-processing of
+// shared targets; these caps keep a pathologically deep chain or a huge
+// accidental graph from running unbounded.
 const MAX_TRANSCLUDED_RECURSION_DEPTH = 25;
 const MAX_TRANSCLUDED_RECURSION_TARGETS = 250;
 // Dependency-ID normalization: rewrite Tasks-generated `[id::]`/`[dependsOn::]`
@@ -273,6 +275,10 @@ function isTranscludedCompletionTraversableStatus(taskStatus) {
 
 function isTranscludedCompletionClosableStatus(taskStatus) {
   return !!taskStatus && CLOSABLE_TASK_SYMBOLS.has(taskStatus.symbol);
+}
+
+function isTranscludedReopenableStatus(taskStatus) {
+  return !!taskStatus && taskStatus.symbol === "x";
 }
 
 function isNonTranscludedStartResolvableStatus(taskStatus) {
@@ -1625,7 +1631,9 @@ function getUnambiguousTranscludedBlockCandidate(candidates, cursorCh) {
 
   const ch = Math.max(0, Math.floor(Number(cursorCh) || 0));
   const cursorMatches = matches.filter(
-    (candidate) => ch >= candidate.startIndex && ch < candidate.endIndex,
+    (candidate) =>
+      ch >= (candidate.selectionStartIndex ?? candidate.startIndex) &&
+      ch < (candidate.selectionEndIndex ?? candidate.endIndex),
   );
   return cursorMatches.length === 1 ? cursorMatches[0] : null;
 }
@@ -1657,6 +1665,97 @@ function getTranscludedTaskTargetFromLine(
         activeLineText: line,
       }
     : null;
+}
+
+// Ctrl+Enter selection is intentionally broader than recursive Pomodoro
+// completion: a selected task block link may be embedded, plain, marked, or
+// canonically retired inside strikethrough. The cursor disambiguates lines with
+// multiple candidates; a line with one valid candidate remains selectable from
+// anywhere on that line.
+function getTaskBlockLinkTargetFromLine(
+  lineText,
+  sourcePath,
+  lineNumber,
+  cursorCh = null,
+) {
+  if (!sourcePath) {
+    return null;
+  }
+
+  const line = String(lineText || "");
+  const strikeSpans = getStrikethroughSpans(line);
+  const candidates = getBlockLinkTokenCandidates(line).map((candidate) => {
+    const exactStrike = strikeSpans.find(
+      (span) =>
+        candidate.startIndex === span.start && candidate.endIndex === span.end,
+    );
+    const tokenStart = exactStrike
+      ? exactStrike.start - 2
+      : candidate.startIndex;
+    const markerPrefix = getPomodoroMarkerPrefix(line, tokenStart);
+    return {
+      ...candidate,
+      selectionStartIndex: markerPrefix.start,
+      selectionEndIndex: exactStrike
+        ? exactStrike.end + 2
+        : candidate.endIndex,
+    };
+  });
+  const hasCursorCh = cursorCh !== null && cursorCh !== undefined;
+  const candidate = hasCursorCh
+    ? getUnambiguousTranscludedBlockCandidate(candidates, cursorCh)
+    : candidates.length === 1
+      ? candidates[0]
+      : null;
+
+  return candidate
+    ? {
+        ...candidate,
+        sourcePath,
+        activeLine: lineNumber,
+        activeLineText: line,
+      }
+    : null;
+}
+
+function collectTaskBlockLinkTargetsInLineRange(
+  lines,
+  sourcePath,
+  startLine,
+  endLine,
+) {
+  if (!sourcePath || !Array.isArray(lines) || lines.length === 0) {
+    return [];
+  }
+
+  const firstLine = Math.max(0, Math.floor(Number(startLine) || 0));
+  const requestedLastLine = Math.floor(Number(endLine) || 0);
+  if (requestedLastLine < firstLine) {
+    return [];
+  }
+  const lastLine = Math.min(
+    requestedLastLine,
+    lines.length - 1,
+  );
+  const fenced = getFencedLineNumbers(lines);
+  const targets = [];
+
+  for (let line = firstLine; line <= lastLine; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    const lineText = String(lines[line] || "");
+    for (const candidate of getBlockLinkTokenCandidates(lineText)) {
+      targets.push({
+        ...candidate,
+        sourcePath,
+        activeLine: line,
+        activeLineText: lineText,
+      });
+    }
+  }
+
+  return targets;
 }
 
 function collectTranscludedTaskTargetsInLineRange(
@@ -3809,16 +3908,29 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
     const taskStatus = this.getActiveTaskStatus(view.editor);
     const activeFile = view.file || this.app.workspace.getActiveFile();
-    const pomodoroContext =
+    const openPomodoroContext =
       activeFile && taskStatus && taskStatus.symbol === " "
         ? this.getActivePomodoroTaskContext(view.editor, taskStatus)
         : null;
-    if (pomodoroContext) {
+    if (openPomodoroContext) {
       void this.completeActivePomodoroTask(
         view.editor,
         activeFile,
-        pomodoroContext,
+        openPomodoroContext,
         view,
+      ).catch(() => false);
+      return;
+    }
+
+    const donePomodoroContext =
+      activeFile && taskStatus && isTranscludedReopenableStatus(taskStatus)
+        ? this.getActivePomodoroTaskContext(view.editor, taskStatus, "x")
+        : null;
+    if (donePomodoroContext) {
+      void this.reopenActivePomodoroTask(
+        view.editor,
+        activeFile,
+        donePomodoroContext,
       ).catch(() => false);
       return;
     }
@@ -3838,24 +3950,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return;
     }
 
-    // A transcluded task link that is a Pomodoro sub-bullet closes its whole
-    // embedded target tree recursively; any other transcluded line keeps the
-    // single-target open/done toggle.
-    void (async () => {
-      const handled = await this.completeActivePomodoroTranscludedTaskLine(
-        view.editor,
-        activeFile,
-      );
-      if (!handled) {
-        const started = await this.startActivePomodoroNonTranscludedTaskLine(
-          view.editor,
-          activeFile,
-        );
-        if (!started) {
-          await this.toggleActiveTranscludedTaskOpenDone(view.editor, activeFile);
-        }
-      }
-    })().catch(() => false);
+    // Resolve a selected task block link once, then choose reopen or the
+    // established context-sensitive close/start path from the resolved status.
+    void this.handleActiveTaskBlockLinkOpenDone(
+      view.editor,
+      activeFile,
+    ).catch(() => false);
   }
 
   handleVimToggleCheckboxMarker() {
@@ -5029,6 +5129,124 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return wrote;
   }
 
+  async handleActiveTaskBlockLinkOpenDone(editor, activeFile) {
+    const activePath = activeFile && activeFile.path;
+    const candidate = this.getActiveLineTaskBlockLinkTarget(editor, activePath);
+    if (!candidate) {
+      return false;
+    }
+
+    const context = {
+      editor,
+      activePath,
+      originPath: activePath,
+    };
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(
+        candidate,
+        context,
+        { taskStatusPredicate: isOpenDoneTaskStatus },
+      );
+    } catch (error) {
+      return false;
+    }
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return false;
+    }
+
+    // Reopen always wins after resolution and is deliberately root-only, even
+    // for an embedded child beneath a Pomodoro.
+    if (isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
+      await this.reopenResolvedTranscludedTaskTarget(resolvedTarget, context);
+      return true;
+    }
+
+    const pomodoroTransclusion = candidate.embedded
+      ? this.getActivePomodoroTranscludedTaskLineTarget(editor, activePath)
+      : null;
+    if (pomodoroTransclusion) {
+      try {
+        const result = await this.completeResolvedTranscludedTaskTargetTree(
+          resolvedTarget,
+          context,
+          new Set(),
+        );
+        await this.retireClosedTaskReferences(result.closed, context);
+      } catch (error) {
+        // Once the eligible root resolved, a partial recursive close remains a
+        // handled best-effort action.
+      }
+      return true;
+    }
+
+    const barePomodoroLink = !candidate.embedded
+      ? this.getActivePomodoroBareNonTranscludedTaskLineTarget(editor, activePath)
+      : null;
+    if (barePomodoroLink) {
+      try {
+        await this.startResolvedNonTranscludedTaskTarget(
+          resolvedTarget,
+          context,
+          new Set(),
+        );
+      } catch (error) {
+        // The resolved strict bare link still counts as handled.
+      }
+      return true;
+    }
+
+    const closing = isTranscludedCompletionClosableStatus(
+      resolvedTarget.taskStatus,
+    );
+    const wrote = await this.replaceResolvedTranscludedTaskLine(
+      resolvedTarget,
+      context,
+    );
+    if (wrote && closing) {
+      await this.retireClosedTaskReferences(
+        [{ path: resolvedTarget.file.path, blockId: resolvedTarget.blockId }],
+        context,
+      );
+    }
+    return wrote;
+  }
+
+  async reopenTranscludedTaskTarget(candidate, context) {
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(
+        candidate,
+        context,
+        { taskStatusPredicate: isTranscludedReopenableStatus },
+      );
+    } catch (error) {
+      return { resolved: false, changed: false };
+    }
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return { resolved: false, changed: false };
+    }
+
+    return this.reopenResolvedTranscludedTaskTarget(resolvedTarget, context);
+  }
+
+  async reopenResolvedTranscludedTaskTarget(resolvedTarget, context) {
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return { resolved: false, changed: false };
+    }
+    if (!isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
+      return { resolved: true, changed: false };
+    }
+
+    const changed = await this.replaceResolvedTranscludedTaskLine(
+      resolvedTarget,
+      context,
+      " ",
+      { forcedStatusPredicate: isTranscludedReopenableStatus },
+    );
+    return { resolved: true, changed };
+  }
+
   async cycleResolvedTranscludedTaskLink(candidate, context, direction) {
     if (!candidate || !context || !context.activePath) {
       return false;
@@ -5269,6 +5487,87 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       originPath: sourcePath,
     });
     return true;
+  }
+
+  async reopenActivePomodoroTask(
+    editor,
+    activeFile,
+    context = this.getActivePomodoroTaskContext(editor, undefined, "x"),
+  ) {
+    const sourcePath = activeFile && activeFile.path;
+    if (!sourcePath || !context) {
+      return false;
+    }
+
+    const lines = this.getEditorLineTexts(editor);
+    const section = findPomodorosSectionInLines(lines);
+    const pomodoroStatus = getTaskStatusForLine(
+      lines[context.pomodoroLine],
+      context.pomodoroLine,
+    );
+    if (
+      !isPomodoroTaskLine(lines, section, context.pomodoroLine) ||
+      !isTranscludedReopenableStatus(pomodoroStatus)
+    ) {
+      return false;
+    }
+
+    const subBulletRange = getSubBulletBlockRange(
+      lines,
+      context.pomodoroLine,
+      section,
+    );
+    const candidates = subBulletRange
+      ? collectTaskBlockLinkTargetsInLineRange(
+        lines,
+        sourcePath,
+        subBulletRange.startLine,
+        subBulletRange.endLine - 1,
+      )
+      : [];
+    const targetContext = {
+      editor,
+      activePath: sourcePath,
+      originPath: sourcePath,
+    };
+    const seen = new Set();
+
+    for (const candidate of candidates) {
+      try {
+        const resolvedTarget = await this.resolveTranscludedBlockTarget(
+          candidate,
+          targetContext,
+          { taskStatusPredicate: isOpenDoneTaskStatus },
+        );
+        if (!resolvedTarget || !resolvedTarget.file) {
+          continue;
+        }
+        const key = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        if (isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
+          await this.reopenResolvedTranscludedTaskTarget(
+            resolvedTarget,
+            targetContext,
+          );
+        }
+      } catch (error) {
+        // Best effort: one stale or unreadable source must not block siblings or
+        // the Pomodoro checkbox itself.
+      }
+    }
+
+    const currentLineText = editor.getLine(context.pomodoroLine);
+    const currentPomodoroStatus = getTaskStatusForLine(
+      currentLineText,
+      context.pomodoroLine,
+    );
+    if (!isTranscludedReopenableStatus(currentPomodoroStatus)) {
+      return false;
+    }
+    return this.setActiveCheckboxStatus(editor, currentPomodoroStatus, " ");
   }
 
   async completePomodoroTranscludedTaskBullets(bullets, context) {
@@ -5858,8 +6157,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   getActivePomodoroTaskContext(
     editor,
     taskStatus = this.getActiveTaskStatus(editor),
+    expectedSymbol = " ",
   ) {
-    if (!taskStatus || taskStatus.symbol !== " ") {
+    if (!taskStatus || taskStatus.symbol !== expectedSymbol) {
       return null;
     }
 
@@ -5996,6 +6296,33 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     return getTranscludedTaskTargetFromLine(
+      editor.getLine(cursor.line),
+      sourcePath,
+      cursor.line,
+      cursor.ch,
+    );
+  }
+
+  getActiveLineTaskBlockLinkTarget(editor, sourcePath) {
+    if (
+      !sourcePath ||
+      !editor ||
+      typeof editor.getCursor !== "function" ||
+      typeof editor.getLine !== "function"
+    ) {
+      return null;
+    }
+
+    const cursor = editor.getCursor();
+    if (!cursor || typeof cursor.line !== "number") {
+      return null;
+    }
+    const lines = this.getEditorLineTexts(editor);
+    if (getFencedLineNumbers(lines).has(cursor.line)) {
+      return null;
+    }
+
+    return getTaskBlockLinkTargetFromLine(
       editor.getLine(cursor.line),
       sourcePath,
       cursor.line,
@@ -6396,10 +6723,17 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     if (forcedNextSymbol) {
-      const canForce = options.allowAnyStatus
-        ? isCyclableTaskStatus(taskStatus) &&
+      const forcedStatusPredicate =
+        typeof options.forcedStatusPredicate === "function"
+          ? options.forcedStatusPredicate
+          : null;
+      const canForce = forcedStatusPredicate
+        ? forcedStatusPredicate(taskStatus) &&
           FIXED_SYMBOLS.includes(forcedNextSymbol)
-        : this.canForceTranscludedTaskStatus(taskStatus, forcedNextSymbol);
+        : options.allowAnyStatus
+          ? isCyclableTaskStatus(taskStatus) &&
+            FIXED_SYMBOLS.includes(forcedNextSymbol)
+          : this.canForceTranscludedTaskStatus(taskStatus, forcedNextSymbol);
       if (!canForce || taskStatus.symbol === forcedNextSymbol) {
         return null;
       }
@@ -6727,6 +7061,7 @@ module.exports.helpers = {
   classifyPomodoroSubBullets,
   cleanObsidianTaskBody,
   collectEmbeddedTranscludedTaskTargetsInListItemBlock,
+  collectTaskBlockLinkTargetsInLineRange,
   collectObsidianTaskTokenRanges,
   collapseWhitespaceOutsideBracketSpans,
   closedTaskIdentity,
@@ -6779,6 +7114,7 @@ module.exports.helpers = {
   getTaskCheckboxMarkerCursorCh,
   getTaskCheckboxMarkerToggle,
   getTaskStatusForLine,
+  getTaskBlockLinkTargetFromLine,
   getVimRepeat,
   getPendingVimRepeat,
   resetPendingVimInputState,
@@ -6791,6 +7127,7 @@ module.exports.helpers = {
   isNonTranscludedStartableStatus,
   isTranscludedCompletionClosableStatus,
   isTranscludedCompletionTraversableStatus,
+  isTranscludedReopenableStatus,
   isTopLevelTaskLine,
   isTopLevelBulletLikeLine,
   isTopLevelDashListToggleLine,

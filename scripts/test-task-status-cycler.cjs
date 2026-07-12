@@ -303,14 +303,15 @@ test("rename reconciliation abandons and reschedules stale editor snapshots", as
 
 test("direct open/done transitions include incomplete statuses without broadening excluded statuses", () => {
   const cases = [
-    { symbol: " ", eligible: true, next: "x" },
-    { symbol: "*", eligible: true, next: "x" },
-    { symbol: "x", eligible: true, next: " " },
-    { symbol: "/", eligible: true, next: "x" },
-    { symbol: "-", eligible: false, next: null },
+    { symbol: " ", eligible: true, reopenable: false, next: "x" },
+    { symbol: "*", eligible: true, reopenable: false, next: "x" },
+    { symbol: "x", eligible: true, reopenable: true, next: " " },
+    { symbol: "/", eligible: true, reopenable: false, next: "x" },
+    { symbol: "-", eligible: false, reopenable: false, next: null },
+    { symbol: "?", eligible: false, reopenable: false, next: null },
   ];
 
-  for (const { symbol, eligible, next } of cases) {
+  for (const { symbol, eligible, reopenable, next } of cases) {
     const taskStatus = helpers.getTaskStatusForLine(`- [${symbol}] #task Example`);
     assert.equal(
       helpers.isOpenDoneTaskStatus(taskStatus),
@@ -322,7 +323,88 @@ test("direct open/done transitions include incomplete statuses without broadenin
       next,
       `transition for [${symbol}]`,
     );
+    assert.equal(
+      helpers.isTranscludedReopenableStatus(taskStatus),
+      reopenable,
+      `reopen policy for [${symbol}]`,
+    );
   }
+  assert.equal(helpers.isTranscludedReopenableStatus(null), false);
+});
+
+test("Ctrl+Enter block-link selection recognizes live and retired forms", () => {
+  const cases = [
+    { line: "- ![[Tasks#^embed|Embedded]]", embedded: true },
+    { line: "- [[Tasks#^plain|Plain]]", embedded: false },
+    { line: "- 🍅 [[Tasks#^marked|Marked]]", embedded: false },
+    { line: "- ~~[[Tasks#^retired|Retired]]~~", embedded: false },
+  ];
+  for (const { line, embedded } of cases) {
+    const target = helpers.getTaskBlockLinkTargetFromLine(
+      line,
+      "Daily.md",
+      3,
+      0,
+    );
+    assert.ok(target, line);
+    assert.equal(target.embedded, embedded, line);
+    assert.equal(target.sourcePath, "Daily.md");
+  }
+
+  const mixed = "- [[A#^first]] and 🍅 ~~[[B#^second|Second]]~~";
+  assert.equal(
+    helpers.getTaskBlockLinkTargetFromLine(mixed, "Daily.md", 0, 0),
+    null,
+  );
+  assert.equal(
+    helpers.getTaskBlockLinkTargetFromLine(
+      mixed,
+      "Daily.md",
+      0,
+      mixed.indexOf("🍅"),
+    ).blockId,
+    "second",
+  );
+  assert.equal(
+    helpers.getTaskBlockLinkTargetFromLine("- [[A#Heading]]", "Daily.md", 0),
+    null,
+  );
+  assert.equal(
+    helpers.getTaskBlockLinkTargetFromLine("- [[A#^bad id]]", "Daily.md", 0),
+    null,
+  );
+  assert.deepEqual(
+    helpers.collectTaskBlockLinkTargetsInLineRange(
+      ["- [[A#^first]]", "- [[B#^second]]"],
+      "Daily.md",
+      1,
+      0,
+    ),
+    [],
+  );
+
+  const fencedEditor = createTextEditor(
+    "```md\n- [[Tasks#^example]]\n```",
+    { line: 1, ch: 7 },
+  );
+  const plugin = new TaskStatusCyclerPlugin();
+  assert.equal(
+    plugin.getActiveLineTaskBlockLinkTarget(fencedEditor, "Daily.md"),
+    null,
+  );
+});
+
+test("direct Done Tasks task reopens through the metadata-aware fallback", () => {
+  const editor = createTextEditor(
+    "- [x] #task Finished [completion:: 2026-07-11] ^finished",
+    { line: 0, ch: 4 },
+  );
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {
+    commands: { commands: {}, executeCommandById: () => false },
+  };
+  assert.equal(plugin.toggleActiveCheckboxOpenDone(editor), true);
+  assert.equal(editor.getValue(), "- [ ] #task Finished ^finished");
 });
 
 test("recursive completion status policy includes Next without broadening excluded statuses", () => {
@@ -818,6 +900,185 @@ test("full Pomodoro completion retires embeds only after carry-forward planning"
   assert.match(harness.getSource("Continue.md"), /^- \[\/\] #task Continue/m);
 });
 
+test("selected Done Pomodoro transclusion reopens only its cross-file root", async () => {
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Tree#^root|Work]]";
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tree.md": [
+      "- [x] #task Root [completion:: 2026-07-11] ^root",
+      "\t- ![[#^child]]",
+      "- [x] #task Child [completion:: 2026-07-11] ^child",
+    ].join("\n"),
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 10 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+
+  assert.equal(
+    await plugin.handleActiveTaskBlockLinkOpenDone(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+    ),
+    true,
+  );
+  assert.equal(
+    harness.getSource("Tree.md"),
+    [
+      "- [ ] #task Root ^root",
+      "\t- ![[#^child]]",
+      "- [x] #task Child [completion:: 2026-07-11] ^child",
+    ].join("\n"),
+  );
+  assert.equal(editor.getValue(), daily);
+});
+
+test("selected same-file Done target reopens root-only in the live editor", async () => {
+  const daily = [
+    "## Tasks",
+    "- [x] #task Root [completion:: stale] ^root",
+    "\t- ![[#^child]]",
+    "- [x] #task Child [completion:: stale] ^child",
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- ![[#^root]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const editor = createTextEditor(daily, { line: 6, ch: 8 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+
+  assert.equal(
+    await plugin.handleActiveTaskBlockLinkOpenDone(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+    ),
+    true,
+  );
+  assert.match(editor.getValue(), /^- \[ \] #task Root \^root/m);
+  assert.match(editor.getValue(), /^- \[x\] #task Child \[completion:: stale\] \^child/m);
+  assert.match(editor.getValue(), /\t- !\[\[#\^root\]\]$/m);
+});
+
+test("selected retired link reopens its root without rewriting history", async () => {
+  const daily = "## Pomodoros\n- [x] History\n\t- 🍅 ~~[[Tasks#^done|Alias]]~~";
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": "- [x] #task Done [completion:: stale] ^done",
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 18 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+
+  assert.equal(
+    await plugin.handleActiveTaskBlockLinkOpenDone(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+    ),
+    true,
+  );
+  assert.equal(harness.getSource("Tasks.md"), "- [ ] #task Done ^done");
+  assert.equal(editor.getValue(), daily);
+});
+
+test("incomplete selected Pomodoro transclusion still closes recursively", async () => {
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Tree#^root]]";
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tree.md": [
+      "- [ ] #task Root ^root",
+      "\t- ![[#^child]]",
+      "- [*] #task Child ^child",
+    ].join("\n"),
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 9 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  plugin.getCompletionDateString = () => "2026-07-12";
+  plugin.retireClosedTaskReferences = async () => ({ retired: 0, failures: [] });
+
+  assert.equal(
+    await plugin.handleActiveTaskBlockLinkOpenDone(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+    ),
+    true,
+  );
+  assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Root/m);
+  assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Child/m);
+});
+
+test("Done Pomodoro reopens direct roots while preserving its history and layout", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [x] Finished session",
+    "\t- 🍅 ![[Tasks#^done|Embedded]] and [[Tasks#^done|Duplicate]]",
+    "\t- ~~[[Tasks#^retired|Retired]]~~ and 🍅 [[Tasks#^open|Open]]",
+    "\t- [[Tasks#^progress]] and [[Tasks#^next]] and [[Tasks#^canceled]]",
+    "\t- [[Tasks#^custom]] and [[Missing#^missing]] and [[Bad#^stale]]",
+    "- [ ] Later session",
+    "\t- [[Tasks#^carry|Carry]]",
+  ].join("\n");
+  const tasks = [
+    "- [x] #task Done [completion:: old] ^done",
+    "\t- ![[#^child]]",
+    "- [x] #task Done child [completion:: old] ^child",
+    "- [X] #task Retired root [completion:: old] ^retired",
+    "- [ ] #task Open ^open",
+    "- [/] #task In progress ^progress",
+    "- [*] #task Next ^next",
+    "- [-] #task Canceled ^canceled",
+    "- [?] #task Custom ^custom",
+    "- [ ] #task Carry ^carry",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": tasks,
+    "Bad.md": "- [x] #task Unreadable ^stale",
+  });
+  const originalRead = harness.app.vault.read;
+  harness.app.vault.read = async (file) => {
+    if (file.path === "Bad.md") throw new Error("unreadable");
+    return originalRead(file);
+  };
+  const originalProcess = harness.app.vault.process;
+  let tasksWrites = 0;
+  harness.app.vault.process = async (file, updateSourceText) => {
+    if (file.path === "Tasks.md") tasksWrites += 1;
+    return originalProcess(file, updateSourceText);
+  };
+  const editor = createTextEditor(daily, { line: 1, ch: 5 });
+  const originalCursor = editor.getCursor();
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+
+  assert.equal(
+    await plugin.reopenActivePomodoroTask(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+      plugin.getActivePomodoroTaskContext(
+        editor,
+        plugin.getActiveTaskStatus(editor),
+        "x",
+      ),
+    ),
+    true,
+  );
+
+  const expectedDaily = daily.replace("- [x] Finished session", "- [ ] Finished session");
+  assert.equal(editor.getValue(), expectedDaily);
+  assert.deepEqual(editor.getCursor(), originalCursor);
+  assert.equal(tasksWrites, 2, "duplicate links should not duplicate source writes");
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task Done \^done/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task Retired root \^retired/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task Done child/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task Open/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[\/\] #task In progress/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[\*\] #task Next/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[-\] #task Canceled/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[\?\] #task Custom/m);
+  assert.equal(harness.getSource("Bad.md"), "- [x] #task Unreadable ^stale");
+});
+
 test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks done command", () => {
   const originalWindow = global.window;
   const actions = new Map();
@@ -844,6 +1105,7 @@ test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks don
       file: { path: "Tasks.md" },
     });
     const doneCommand = "obsidian-tasks-plugin:set-status-symbol-to-x";
+    const todoCommand = "obsidian-tasks-plugin:set-status-symbol-to-space";
     const executedCommands = [];
     const plugin = new TaskStatusCyclerPlugin();
     plugin.app = {
@@ -855,7 +1117,7 @@ test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks don
         getActiveFile: () => view.file,
       },
       commands: {
-        commands: { [doneCommand]: {} },
+        commands: { [doneCommand]: {}, [todoCommand]: {} },
         executeCommandById: (commandId) => {
           executedCommands.push(commandId);
           return true;
@@ -880,7 +1142,13 @@ test("Vim Ctrl+Enter dispatches In Progress and Next tasks through the Tasks don
     actions.get("taskStatusCyclerToggleTaskOpenDone")({});
     lineText = "- [*] #task Preserve the existing Next behavior";
     actions.get("taskStatusCyclerToggleTaskOpenDone")({});
-    assert.deepEqual(executedCommands, [doneCommand, doneCommand]);
+    lineText = "- [x] #task Reopen through the Tasks command";
+    actions.get("taskStatusCyclerToggleTaskOpenDone")({});
+    assert.deepEqual(executedCommands, [
+      doneCommand,
+      doneCommand,
+      todoCommand,
+    ]);
   } finally {
     if (originalWindow === undefined) {
       delete global.window;

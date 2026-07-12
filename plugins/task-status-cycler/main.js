@@ -1402,6 +1402,28 @@ function getSubBulletBlockRange(lines, pomodoroLine, section = null) {
   };
 }
 
+function buildPomodoroReopenMarkerEdits(lines, pomodoroLine) {
+  const section = findPomodorosSectionInLines(lines);
+  if (!isPomodoroTaskLine(lines, section, pomodoroLine)) {
+    return [];
+  }
+
+  const range = getSubBulletBlockRange(lines, pomodoroLine, section);
+  const fenced = getFencedLineNumbers(lines);
+  const edits = [];
+  for (let line = range.startLine; line < range.endLine; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    const sourceLineText = String(lines[line] || "");
+    const lineText = stripPomodoroMarkersFromLine(sourceLineText);
+    if (lineText !== sourceLineText) {
+      edits.push({ line, sourceLineText, lineText });
+    }
+  }
+  return edits;
+}
+
 function classifyPomodoroSubBullets(lines, range) {
   const transcludedTaskLinkBullets = [];
   const copyableTaskLinkBullets = [];
@@ -5765,7 +5787,37 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         targetContext,
       );
     }
+    if (reopened) {
+      this.clearReopenedPomodoroMarkers(editor, context.pomodoroLine);
+    }
     return reopened;
+  }
+
+  clearReopenedPomodoroMarkers(editor, pomodoroLine) {
+    if (!editor) {
+      return false;
+    }
+
+    // Target reopening and reference restoration are asynchronous and may
+    // rewrite this editor. Derive marker edits from the live text only after
+    // those operations have completed so restored links are normalized too.
+    const edits = buildPomodoroReopenMarkerEdits(
+      this.getEditorLineTexts(editor),
+      pomodoroLine,
+    );
+    const cursor =
+      typeof editor.getCursor === "function" ? editor.getCursor() : null;
+    for (const edit of edits.slice().sort((left, right) => right.line - left.line)) {
+      this.replaceEditorLine(edit.line, edit.lineText, editor);
+    }
+    if (cursor && typeof editor.setCursor === "function") {
+      const lineText = editor.getLine(cursor.line) || "";
+      editor.setCursor({
+        line: cursor.line,
+        ch: Math.min(cursor.ch, lineText.length),
+      });
+    }
+    return true;
   }
 
   async completePomodoroTranscludedTaskBullets(bullets, context) {
@@ -7255,6 +7307,7 @@ module.exports.helpers = {
   addOrReplaceCompletionField,
   addCreatedFieldToObsidianTaskLine,
   buildPomodoroCompletionPlan,
+  buildPomodoroReopenMarkerEdits,
   centerEditorViewOnPosition,
   classifyPomodoroSubBullets,
   cleanObsidianTaskBody,

@@ -1174,16 +1174,20 @@ test("incomplete selected Pomodoro transclusion still closes recursively", async
   assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Child/m);
 });
 
-test("Done Pomodoro reopens direct roots while preserving its history and layout", async () => {
+test("Done Pomodoro reopens direct roots and clears only its block-link markers", async () => {
   const daily = [
     "## Pomodoros",
     "- [x] Finished session",
-    "\t- 🍅 ![[Tasks#^done|Embedded]] and [[Tasks#^done|Duplicate]]",
-    "\t- ~~[[Tasks#^retired|Retired]]~~ and 🍅 [[Tasks#^open|Open]]",
-    "\t- [[Tasks#^progress]] and [[Tasks#^next]] and [[Tasks#^canceled]]",
-    "\t- [[Tasks#^custom]] and [[Missing#^missing]] and [[Bad#^stale]]",
+    "\t- 🍅 ![[Tasks#^done|Embedded]] and 🍅 [[Tasks#^done|Duplicate]]",
+    "\t- 🍅 ~~[[Tasks#^retired|Retired]]~~ and 🍅 [[Tasks#^open|Open]]",
+    "\t- 🍅 [[Tasks#^progress]] and 🍅 [[Tasks#^next]] and 🍅 [[Tasks#^canceled]]",
+    "\t- 🍅 [[Tasks#^custom]] and 🍅 [[Missing#^missing]] and 🍅 [[Bad#^stale]]",
+    "\t- Keep this unrelated 🍅 tomato and prose exactly as written",
+    "```md",
+    "\t- 🍅 [[Tasks#^done|Fenced example]]",
+    "```",
     "- [ ] Later session",
-    "\t- [[Tasks#^carry|Carry]]",
+    "\t- 🍅 [[Tasks#^carry|Carry]]",
   ].join("\n");
   const tasks = [
     "- [x] #task Done [completion:: old] ^done",
@@ -1231,9 +1235,20 @@ test("Done Pomodoro reopens direct roots while preserving its history and layout
     true,
   );
 
-  const expectedDaily = daily
-    .replace("- [x] Finished session", "- [ ] Finished session")
-    .replace("~~[[Tasks#^retired|Retired]]~~", "[[Tasks#^retired|Retired]]");
+  const expectedDaily = [
+    "## Pomodoros",
+    "- [ ] Finished session",
+    "\t- ![[Tasks#^done|Embedded]] and [[Tasks#^done|Duplicate]]",
+    "\t- [[Tasks#^retired|Retired]] and [[Tasks#^open|Open]]",
+    "\t- [[Tasks#^progress]] and [[Tasks#^next]] and [[Tasks#^canceled]]",
+    "\t- [[Tasks#^custom]] and [[Missing#^missing]] and [[Bad#^stale]]",
+    "\t- Keep this unrelated 🍅 tomato and prose exactly as written",
+    "```md",
+    "\t- 🍅 [[Tasks#^done|Fenced example]]",
+    "```",
+    "- [ ] Later session",
+    "\t- 🍅 [[Tasks#^carry|Carry]]",
+  ].join("\n");
   assert.equal(editor.getValue(), expectedDaily);
   assert.deepEqual(editor.getCursor(), originalCursor);
   assert.equal(tasksWrites, 2, "duplicate links should not duplicate source writes");
@@ -1285,6 +1300,29 @@ test("Done Pomodoro reopen restores its own block reference after reopening dire
     harness.getSource("Tasks.md"),
     /\t- !\[\[Daily#\^session\|Session\]\]/,
   );
+});
+
+test("Done Pomodoro markers remain when the Todo transition does not occur", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [x] Finished session",
+    "\t- 🍅 [[Missing#^stale|Keep history]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const editor = createTextEditor(daily, { line: 1, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  plugin.setActiveCheckboxStatus = () => false;
+
+  assert.equal(
+    await plugin.reopenActivePomodoroTask(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+      { pomodoroLine: 1 },
+    ),
+    false,
+  );
+  assert.equal(editor.getValue(), daily);
 });
 
 test("Vim Ctrl+Enter dispatches task transitions and restores a reopened identity", async () => {

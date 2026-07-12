@@ -568,8 +568,33 @@ function buildChangeSurroundEdit(match, replacementPair) {
   };
 }
 
+function buildDeleteSurroundSpans(match) {
+  if (!match || !match.doc || !match.targetPair) {
+    return null;
+  }
+
+  if (match.targetPair.open !== match.targetPair.close) {
+    return buildTargetSurroundSpans(match);
+  }
+
+  return {
+    doc: match.doc,
+    openingIndex: match.open.index,
+    openingRange: rangeFromIndexes(
+      match.doc,
+      match.open.index,
+      match.open.index + 1,
+    ),
+    closingRange: rangeFromIndexes(
+      match.doc,
+      match.close.index + match.close.length - 1,
+      match.close.index + match.close.length,
+    ),
+  };
+}
+
 function buildDeleteSurroundEdit(match) {
-  const spans = buildTargetSurroundSpans(match);
+  const spans = buildDeleteSurroundSpans(match);
   if (!spans) {
     return null;
   }

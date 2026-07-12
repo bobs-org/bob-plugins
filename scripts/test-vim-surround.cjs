@@ -371,15 +371,53 @@ test("ds removes representative broad symmetric delimiters", () => {
   }
 });
 
-test("ds removes complete repeated runs, including the reported block link", () => {
+test("ds preserves structural alias and padding rules", () => {
   const cases = [
-    ["~~MID~~", "~", "MID"],
-    ["***MID***", "*", "MID"],
-    ["~~[[sase#^fix-sdd-error]]~~", "~", "[[sase#^fix-sdd-error]]"],
+    ["( MID )", "(", "MID"],
+    ["( MID )", ")", " MID "],
+    ["[MID]", "[", "MID"],
+    ["< MID >", "<", "MID"],
   ];
 
   for (const [content, target, expected] of cases) {
-    const cursorPositions = [0, 1, 2, content.length - 2, content.length - 1];
+    const plugin = makePlugin();
+    const cm = new TestEditor(content, { line: 0, ch: 3 });
+    const event = makeKeyEvent(target);
+    plugin.pendingDeleteSurround = { cm };
+
+    assert.equal(plugin.handleSurroundKeydown(event), true, target);
+    assert.equal(cm.content, expected, target);
+    assert.deepEqual(cm.cursor, { line: 0, ch: 0 }, target);
+    assert.deepEqual(plugin.lastSurroundAction, {
+      type: "ds",
+      cm,
+      targetKey: target,
+    });
+    assertConsumedOnce(event);
+  }
+});
+
+test("ds removes one pair from repeated runs, including the reported block link", () => {
+  const cases = [
+    ["~~MID~~", "~", 2, "~MID~"],
+    ["***MID***", "*", 3, "**MID**"],
+    [
+      "~~[[sase#^fix-sdd-error]]~~",
+      "~",
+      2,
+      "~[[sase#^fix-sdd-error]]~",
+    ],
+  ];
+
+  for (const [content, target, runLength, expected] of cases) {
+    const cursorPositions = [
+      ...Array.from({ length: runLength }, (_, index) => index),
+      runLength + 1,
+      ...Array.from(
+        { length: runLength },
+        (_, index) => content.length - runLength + index,
+      ),
+    ];
     for (const ch of cursorPositions) {
       const plugin = makePlugin();
       const cm = new TestEditor(content, { line: 0, ch });
@@ -389,10 +427,57 @@ test("ds removes complete repeated runs, including the reported block link", () 
       assert.equal(plugin.handleSurroundKeydown(event), true, `${content}@${ch}`);
       assert.equal(cm.content, expected, `${content}@${ch}`);
       assert.equal(cm.replacements.length, 2, `${content}@${ch}`);
+      assert.deepEqual(
+        cm.replacements.map(({ text, from, to }) => ({ text, from, to })),
+        [
+          {
+            text: "",
+            from: { line: 0, ch: content.length - 1 },
+            to: { line: 0, ch: content.length },
+          },
+          {
+            text: "",
+            from: { line: 0, ch: 0 },
+            to: { line: 0, ch: 1 },
+          },
+        ],
+        `${content}@${ch}`,
+      );
       assert.deepEqual(cm.cursor, { line: 0, ch: 0 }, `${content}@${ch}`);
-      assert.equal(plugin.lastSurroundAction.type, "ds", `${content}@${ch}`);
+      assert.deepEqual(
+        plugin.lastSurroundAction,
+        { type: "ds", cm, targetKey: target },
+        `${content}@${ch}`,
+      );
       assertConsumedOnce(event);
     }
+  }
+});
+
+test("consecutive ds commands peel a triple symmetric surround", () => {
+  const plugin = makePlugin();
+  const cm = new TestEditor("***MID***", { line: 0, ch: 4 });
+  const expectedContents = ["**MID**", "*MID*", "MID"];
+
+  for (const expected of expectedContents) {
+    const replacementStart = cm.replacements.length;
+    const event = makeKeyEvent("*");
+    plugin.pendingDeleteSurround = { cm };
+
+    assert.equal(plugin.handleSurroundKeydown(event), true, expected);
+    assert.equal(cm.content, expected, expected);
+    assert.deepEqual(cm.cursor, { line: 0, ch: 0 }, expected);
+    assert.equal(cm.replacements.length, replacementStart + 2, expected);
+    for (const replacement of cm.replacements.slice(replacementStart)) {
+      assert.equal(replacement.text, "", expected);
+      assert.equal(replacement.to.ch - replacement.from.ch, 1, expected);
+    }
+    assert.deepEqual(plugin.lastSurroundAction, {
+      type: "ds",
+      cm,
+      targetKey: "*",
+    });
+    assertConsumedOnce(event);
   }
 });
 
@@ -468,6 +553,22 @@ test("unpaired and unequal symmetric runs are safe no-ops", () => {
     assert.equal(cm.operationCount, 0, content);
     assert.equal(plugin.lastSurroundAction, null, content);
     assertConsumedOnce(event);
+
+    const deletePlugin = makePlugin();
+    const deleteCm = new TestEditor(content, { line: 0, ch });
+    const deleteEvent = makeKeyEvent("~");
+    deletePlugin.pendingDeleteSurround = { cm: deleteCm };
+
+    assert.equal(
+      deletePlugin.handleSurroundKeydown(deleteEvent),
+      true,
+      content,
+    );
+    assert.equal(deleteCm.content, content, content);
+    assert.equal(deleteCm.replacements.length, 0, content);
+    assert.equal(deleteCm.operationCount, 0, content);
+    assert.equal(deletePlugin.lastSurroundAction, null, content);
+    assertConsumedOnce(deleteEvent);
   }
 });
 
@@ -609,7 +710,7 @@ test("dot-repeat replays ds against repeated symmetric runs", () => {
   const cm = new TestEditor("***ONE*** ***TWO***", { line: 0, ch: 4 });
   plugin.pendingDeleteSurround = { cm };
   plugin.handleSurroundKeydown(makeKeyEvent("*"));
-  assert.equal(cm.content, "ONE ***TWO***");
+  assert.equal(cm.content, "**ONE** ***TWO***");
   assert.deepEqual(cm.cursor, { line: 0, ch: 0 });
   assert.deepEqual(plugin.lastSurroundAction, {
     type: "ds",
@@ -623,8 +724,39 @@ test("dot-repeat replays ds against repeated symmetric runs", () => {
   const repeatEvent = makeKeyEvent(".");
 
   assert.equal(plugin.handleSurroundKeydown(repeatEvent), true);
-  assert.equal(cm.content, "ONE TWO");
-  assert.deepEqual(cm.cursor, { line: 0, ch: 4 });
+  assert.equal(cm.content, "**ONE** **TWO**");
+  assert.deepEqual(cm.cursor, { line: 0, ch: 8 });
   assert.equal(plugin.lastSurroundAction.type, "ds");
   assertConsumedOnce(repeatEvent);
+});
+
+test("consecutive dot-repeats peel a triple symmetric surround", () => {
+  const plugin = makePlugin();
+  const cm = new TestEditor("***MID***", { line: 0, ch: 4 });
+  plugin.pendingDeleteSurround = { cm };
+  plugin.handleSurroundKeydown(makeKeyEvent("*"));
+  assert.equal(cm.content, "**MID**");
+
+  plugin.resolveEventNormalModeVimCm = () => cm;
+  plugin.injectVimKey = () => true;
+
+  for (const expected of ["*MID*", "MID"]) {
+    const replacementStart = cm.replacements.length;
+    const repeatEvent = makeKeyEvent(".");
+
+    assert.equal(plugin.handleSurroundKeydown(repeatEvent), true, expected);
+    assert.equal(cm.content, expected, expected);
+    assert.deepEqual(cm.cursor, { line: 0, ch: 0 }, expected);
+    assert.equal(cm.replacements.length, replacementStart + 2, expected);
+    for (const replacement of cm.replacements.slice(replacementStart)) {
+      assert.equal(replacement.text, "", expected);
+      assert.equal(replacement.to.ch - replacement.from.ch, 1, expected);
+    }
+    assert.deepEqual(plugin.lastSurroundAction, {
+      type: "ds",
+      cm,
+      targetKey: "*",
+    });
+    assertConsumedOnce(repeatEvent);
+  }
 });

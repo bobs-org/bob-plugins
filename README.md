@@ -11,7 +11,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 
 | Plugin                  | id                       | Version | Description                                                            |
 | ----------------------- | ------------------------ | ------: | --------------------------------------------------------------------- |
-| Block ID Prompt         | `block-id-prompt`        |   1.3.0 | Prompt for custom block IDs, complete wiki block links to open tasks (skipping `#hide` tasks), and mark dependency-blocked tasks. |
+| Block ID Prompt         | `block-id-prompt`        |   1.3.1 | Prompt for custom block IDs, complete wiki block links to open tasks (skipping `#hide` tasks), prune duplicate links from future open Pomodoros, and mark dependency-blocked tasks. |
 | Bob Ledger Tools        | `bob-ledger-tools`       |   1.1.1 | Expand Bob daily-note snippets and ledger time ranges, and navigate and adjust Pomodoro entries. |
 | Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.3 | Open and manage related notes and tabs, including toggling the current tab pin; `!` synchronizes only visible task dependencies. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |

@@ -36,6 +36,7 @@ const POMODOROS_HEADING_RE = /^##\s+Pomodoros(?:\s.*)?$/;
 const LEVEL_TWO_HEADING_RE = /^##\s+/;
 const LEDGER_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[([ /xX-])\]\s+)/;
 const LIST_ITEM_RE = /^([ \t]*)(?:[-*+]|\d+[.)])\s+/;
+const LIST_ITEM_PREFIX_RE = /^([ \t]*)(?:[-*+]|\d+[.)])[ \t]+/;
 const PLACEHOLDER_RE = /\(\s*\)/;
 const COLON_TIME_RANGE_RE =
   /\((\*\*)?(\d\d):(\d\d)\s*-\s*(\d\d):(\d\d)(\*\*)?(\s+[^)]*)?\)/;
@@ -1342,6 +1343,20 @@ function isPomodoroEntryLine(lineText) {
   return PLACEHOLDER_RE.test(text) || hasPomodoroTimeRange(text);
 }
 
+function pomodoroEntryStatus(lineText) {
+  const text = normalizeMarkdownLine(lineText);
+  if (!isPomodoroEntryLine(text)) {
+    return null;
+  }
+
+  const match = LEDGER_LINE_RE.exec(text);
+  return match ? match[2] : null;
+}
+
+function isOpenPomodoroStatus(status) {
+  return typeof status === "string" && !DONE_OBSIDIAN_TASK_STATUSES.has(status);
+}
+
 function lineIndentWidth(lineText) {
   const match = /^[ \t]*/.exec(String(lineText || ""));
   return match ? match[0].length : 0;
@@ -1351,14 +1366,14 @@ function isListItemLine(lineText) {
   return LIST_ITEM_RE.test(normalizeMarkdownLine(lineText));
 }
 
-function isPomodoroSubBulletLine(lines, lineNumber) {
+function findPomodoroSourceContext(lines, lineNumber) {
   if (
     !Array.isArray(lines) ||
     !Number.isInteger(lineNumber) ||
     lineNumber < 0 ||
     lineNumber >= lines.length
   ) {
-    return false;
+    return null;
   }
 
   const section = findPomodorosSectionRange(lines);
@@ -1368,12 +1383,12 @@ function isPomodoroSubBulletLine(lines, lineNumber) {
     lineNumber > section.endLine ||
     !isListItemLine(lines[lineNumber])
   ) {
-    return false;
+    return null;
   }
 
   let currentIndent = lineIndentWidth(lines[lineNumber]);
   if (currentIndent <= 0) {
-    return false;
+    return null;
   }
 
   for (let line = lineNumber - 1; line >= section.startLine; line -= 1) {
@@ -1388,29 +1403,46 @@ function isPomodoroSubBulletLine(lines, lineNumber) {
     }
 
     if (isPomodoroEntryLine(lineText)) {
-      return true;
+      const status = pomodoroEntryStatus(lineText);
+      return {
+        section,
+        ownerLine: line,
+        status,
+        isOpen: isOpenPomodoroStatus(status),
+      };
     }
 
     currentIndent = ancestorIndent;
     if (currentIndent <= 0) {
-      return false;
+      return null;
     }
   }
 
-  return false;
+  return null;
 }
 
-function sourceLineIsPomodoroSubBullet(source) {
+function isPomodoroSubBulletLine(lines, lineNumber) {
+  return findPomodoroSourceContext(lines, lineNumber) !== null;
+}
+
+function sourcePomodoroContext(source) {
   if (
     !source ||
     !source.editor ||
     typeof source.editor.getValue !== "function" ||
     !Number.isInteger(source.line)
   ) {
-    return false;
+    return null;
   }
 
-  return isPomodoroSubBulletLine(source.editor.getValue().split("\n"), source.line);
+  return findPomodoroSourceContext(
+    source.editor.getValue().split("\n"),
+    source.line,
+  );
+}
+
+function sourceLineIsPomodoroSubBullet(source) {
+  return sourcePomodoroContext(source) !== null;
 }
 
 function shouldPromoteTaskToNext(source, task) {
@@ -1825,6 +1857,232 @@ function applyTextEdits(content, edits) {
   }
 
   return nextContent;
+}
+
+function pomodoroEntryEndLine(lines, entryLine, sectionEndLine) {
+  let endLine = entryLine;
+
+  for (let line = entryLine + 1; line <= sectionEndLine; line += 1) {
+    const lineText = normalizeMarkdownLine(lines[line]);
+    if (lineText.trim() && lineIndentWidth(lineText) === 0) {
+      break;
+    }
+
+    endLine = line;
+  }
+
+  return endLine;
+}
+
+function collectFutureOpenPomodoroRanges(lines, context) {
+  const ranges = [];
+  const sectionEndLine = context.section.endLine;
+
+  for (let line = context.ownerLine + 1; line <= sectionEndLine; line += 1) {
+    if (!isPomodoroEntryLine(lines[line])) {
+      continue;
+    }
+
+    const status = pomodoroEntryStatus(lines[line]);
+    const endLine = pomodoroEntryEndLine(lines, line, sectionEndLine);
+    if (isOpenPomodoroStatus(status)) {
+      ranges.push({
+        entryLine: line,
+        startLine: line + 1,
+        endLine,
+        status,
+      });
+    }
+
+    line = endLine;
+  }
+
+  return ranges;
+}
+
+function resolvedFilePath(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return value && typeof value.path === "string" ? value.path : null;
+}
+
+function referenceRemovalRange(content, reference) {
+  let start = reference.start;
+  let end = reference.end;
+
+  if (start > 0 && content[start - 1] === "!") {
+    start -= 1;
+  }
+
+  if (
+    start >= 2 &&
+    content.slice(start - 2, start) === "~~" &&
+    content.slice(end, end + 2) === "~~"
+  ) {
+    start -= 2;
+    end += 2;
+  }
+
+  return { start, end };
+}
+
+function lineContentBounds(lines, lineNumber) {
+  const start = lineStartIndexFromLines(lines, lineNumber);
+  const rawLine = String(lines[lineNumber] || "");
+  const line = normalizeMarkdownLine(rawLine);
+  return {
+    start,
+    end: start + line.length,
+    line,
+  };
+}
+
+function isDedicatedLinkBullet(lines, reference, removalRange) {
+  const bounds = lineContentBounds(lines, reference.line);
+  const prefix = LIST_ITEM_PREFIX_RE.exec(bounds.line);
+  if (!prefix) {
+    return false;
+  }
+
+  let bodyStart = prefix[0].length;
+  while (bodyStart < bounds.line.length && /[ \t]/.test(bounds.line[bodyStart])) {
+    bodyStart += 1;
+  }
+
+  let bodyEnd = bounds.line.length;
+  while (bodyEnd > bodyStart && /[ \t]/.test(bounds.line[bodyEnd - 1])) {
+    bodyEnd -= 1;
+  }
+
+  return (
+    removalRange.start === bounds.start + bodyStart &&
+    removalRange.end === bounds.start + bodyEnd
+  );
+}
+
+function listItemSubtreeEdit(content, lines, lineNumber, rangeEndLine) {
+  const itemIndent = lineIndentWidth(lines[lineNumber]);
+  let endLine = lineNumber;
+
+  for (let line = lineNumber + 1; line <= rangeEndLine; line += 1) {
+    const lineText = normalizeMarkdownLine(lines[line]);
+    if (lineText.trim() && lineIndentWidth(lineText) <= itemIndent) {
+      break;
+    }
+
+    endLine = line;
+  }
+
+  const start = lineStartIndexFromLines(lines, lineNumber);
+  const end =
+    endLine + 1 < lines.length
+      ? lineStartIndexFromLines(lines, endLine + 1)
+      : content.length;
+  return { start, end, replacement: "" };
+}
+
+function editContainsReference(edit, reference) {
+  return edit.start <= reference.start && edit.end >= reference.end;
+}
+
+function planFuturePomodoroLinkCleanup(content, options = {}) {
+  const snapshot = String(content || "");
+  const lines = snapshot.split("\n");
+  const context = findPomodoroSourceContext(lines, options.sourceLine);
+  const targetPath = resolvedFilePath(options.targetPath);
+  const targetBlockId = normalizeText(options.targetBlockId);
+  const resolveTarget = options.resolveTarget;
+
+  if (
+    !context ||
+    !context.isOpen ||
+    !targetPath ||
+    !targetBlockId ||
+    typeof resolveTarget !== "function"
+  ) {
+    return { edits: [], removedCount: 0 };
+  }
+
+  const futureRanges = collectFutureOpenPomodoroRanges(lines, context);
+  if (futureRanges.length === 0) {
+    return { edits: [], removedCount: 0 };
+  }
+
+  const matches = [];
+  for (const reference of collectWikiBlockReferences(snapshot)) {
+    if (reference.oldId !== targetBlockId) {
+      continue;
+    }
+
+    const pomodoroRange = futureRanges.find(
+      (range) =>
+        reference.line >= range.startLine && reference.line <= range.endLine,
+    );
+    if (!pomodoroRange) {
+      continue;
+    }
+
+    let resolved;
+    try {
+      resolved = resolveTarget(reference, options.sourcePath);
+    } catch (error) {
+      resolved = null;
+    }
+
+    if (resolvedFilePath(resolved) !== targetPath) {
+      continue;
+    }
+
+    matches.push({
+      reference,
+      pomodoroRange,
+      removalRange: referenceRemovalRange(snapshot, reference),
+    });
+  }
+
+  if (matches.length === 0) {
+    return { edits: [], removedCount: 0 };
+  }
+
+  const subtreeCandidates = matches
+    .filter(({ reference, removalRange }) =>
+      isDedicatedLinkBullet(lines, reference, removalRange),
+    )
+    .map(({ reference, pomodoroRange }) =>
+      listItemSubtreeEdit(
+        snapshot,
+        lines,
+        reference.line,
+        pomodoroRange.endLine,
+      ),
+    )
+    .sort((left, right) => left.start - right.start || right.end - left.end);
+
+  const subtreeEdits = [];
+  for (const edit of subtreeCandidates) {
+    if (subtreeEdits.some((existing) => edit.start >= existing.start && edit.end <= existing.end)) {
+      continue;
+    }
+
+    subtreeEdits.push(edit);
+  }
+
+  const tokenEdits = matches
+    .filter(({ reference }) =>
+      !subtreeEdits.some((edit) => editContainsReference(edit, reference)),
+    )
+    .map(({ removalRange }) => ({ ...removalRange, replacement: "" }));
+  const edits = [...subtreeEdits, ...tokenEdits].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+
+  if (!validateNonOverlappingEdits(edits)) {
+    return { edits: [], removedCount: 0 };
+  }
+
+  return { edits, removedCount: matches.length };
 }
 
 function pluralize(value, singular, plural) {
@@ -2785,14 +3043,21 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       }
     }
 
-    if (!this.completeTaskSourceLink(source, task.existingId)) {
+    const completion = this.completeTaskSourceLink(
+      source,
+      task.existingId,
+      destination.file.path,
+    );
+    if (!completion) {
       if (promoteToNext) {
         new Notice("Task set Next, but the source link changed before completion");
       }
       return null;
     }
 
-    new Notice(`Linked task block${promoteToNext ? " · set Next" : ""}`);
+    new Notice(
+      `Linked task block${promoteToNext ? " · set Next" : ""}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
+    );
     return { completed: true };
   }
 
@@ -3088,14 +3353,21 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return false;
     }
 
-    if (!this.completeTaskSourceLink(source, newId)) {
+    const completion = this.completeTaskSourceLink(
+      source,
+      newId,
+      destination.file.path,
+    );
+    if (!completion) {
       new Notice(
         `Task block ID added${promoteToNext ? " and task set Next" : ""}, but the source link changed before completion`,
       );
       return true;
     }
 
-    new Notice(`Added block ID and linked task${promoteToNext ? " · set Next" : ""}`);
+    new Notice(
+      `Added block ID and linked task${promoteToNext ? " · set Next" : ""}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
+    );
     return true;
   }
 
@@ -3345,28 +3617,81 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
-  completeTaskSourceLink(source, id) {
-    const lineText = source.editor.getLine(source.line) || "";
-    const currentText = lineText.slice(source.startCh, source.endCh);
-
-    if (currentText !== source.raw) {
+  completeTaskSourceLink(source, id, destinationPath) {
+    if (
+      !source.editor ||
+      typeof source.editor.getValue !== "function" ||
+      typeof source.editor.replaceRange !== "function"
+    ) {
       new Notice("Block marker link changed before it could be rewritten");
-      return false;
+      return null;
+    }
+
+    const snapshot = source.editor.getValue();
+    const markerStart = editorPositionToIndex(snapshot, {
+      line: source.line,
+      ch: source.startCh,
+    });
+    const markerEnd = markerStart === null ? null : markerStart + source.raw.length;
+    if (
+      markerStart === null ||
+      markerEnd === null ||
+      snapshot.slice(markerStart, markerEnd) !== source.raw
+    ) {
+      new Notice("Block marker link changed before it could be rewritten");
+      return null;
     }
 
     const replacement = sourceReplacement(source, id, CANONICAL_BLOCK_LINK_PREFIX);
+    const cleanup = planFuturePomodoroLinkCleanup(snapshot, {
+      sourceLine: source.line,
+      sourcePath: source.sourcePath,
+      targetPath: destinationPath,
+      targetBlockId: id,
+      resolveTarget: (reference) =>
+        this.resolveReferenceDestination(reference, source.sourcePath),
+    });
+    const edits = [
+      { start: markerStart, end: markerEnd, replacement },
+      ...cleanup.edits,
+    ];
+
+    if (
+      !validateNonOverlappingEdits(edits) ||
+      source.editor.getValue() !== snapshot
+    ) {
+      new Notice("Block marker link changed before it could be rewritten");
+      return null;
+    }
+
     this.suppressEditorScans();
-    source.editor.replaceRange(
-      replacement,
-      { line: source.line, ch: source.startCh },
-      { line: source.line, ch: source.endCh },
-    );
+    const sorted = [...edits].sort((left, right) => right.start - left.start);
+    for (const edit of sorted) {
+      source.editor.replaceRange(
+        edit.replacement,
+        indexToEditorPosition(snapshot, edit.start),
+        indexToEditorPosition(snapshot, edit.end),
+      );
+    }
+
     setEditorCursorIfPossible(source.editor, {
       line: source.line,
       ch: source.startCh + replacement.length,
     });
 
-    return true;
+    return { removedCount: cleanup.removedCount };
+  }
+
+  futureLinkCleanupNoticeSuffix(removedCount) {
+    if (!Number.isInteger(removedCount) || removedCount <= 0) {
+      return "";
+    }
+
+    return ` · removed ${removedCount} future ${pluralize(
+      removedCount,
+      "link",
+      "links",
+    )}`;
   }
 
   revertTaskPickerMarker(source, options = {}) {
@@ -3694,10 +4019,12 @@ module.exports.helpers = {
   buildTaskDependencyIndex,
   collectTaskPickerItems,
   findMarkerLinkNearCursor,
+  findPomodoroSourceContext,
   findTaskPickerMarkerNearCursor,
   lineIsInsideCodeFence,
   parseDependsOnIds,
   parseInlineIdField,
+  planFuturePomodoroLinkCleanup,
   resolveTaskDependencyState,
   shouldPromoteTaskToNext,
   taskIdKeysFromLine,

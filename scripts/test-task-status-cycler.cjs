@@ -692,6 +692,65 @@ test("completed Pomodoro markers are normalized per occurrence", () => {
   );
 });
 
+test("move-only Pomodoro links require a strict immediate hash directive", () => {
+  const parsed = helpers.getMoveOnlyPomodoroBlockLinkFromListItem(
+    "\t- [[Projects/Focus.md#^review-1|Review alias]]#  ",
+  );
+  assert.ok(parsed);
+  assert.equal(parsed.target.pathPart, "Projects/Focus");
+  assert.equal(parsed.target.blockId, "review-1");
+  assert.equal(
+    parsed.destinationLineText,
+    "\t- [[Projects/Focus.md#^review-1|Review alias]]  ",
+  );
+  assert.equal(
+    helpers.getBareNonEmbeddedBlockLinkTargetFromListItem(
+      "\t- [[Projects/Focus.md#^review-1|Review alias]]#  ",
+    ).blockId,
+    "review-1",
+  );
+
+  const nonMatches = [
+    "\t- ![[#^embedded]]#",
+    "\t- ~~[[#^retired]]~~#",
+    "\t- prose [[#^mixed]]#",
+    "\t- [[#^mixed]]# trailing prose",
+    "\t- [[#^spaced]] #",
+    "\t- [[#^double]]##",
+    "\t- [[#^tagged]] #carry",
+    "\t- #tag [[#^prefixed]]#",
+    "\t- [[#^hash-alias|Literal #]]",
+  ];
+  for (const line of nonMatches) {
+    assert.equal(
+      helpers.getMoveOnlyPomodoroBlockLinkFromListItem(line),
+      null,
+      line,
+    );
+  }
+
+  const ordinary = helpers.classifyPomodoroSubBullets(
+    nonMatches,
+    { startLine: 0, endLine: nonMatches.length },
+  );
+  assert.deepEqual(ordinary.moveOnlyTaskLinkBullets, []);
+
+  const fencedLines = [
+    "```md",
+    "\t- [[#^fenced]]#",
+    "```",
+  ];
+  const fenced = helpers.classifyPomodoroSubBullets(
+    fencedLines,
+    { startLine: 0, endLine: fencedLines.length },
+  );
+  assert.deepEqual(fenced.moveOnlyTaskLinkBullets, []);
+  assert.deepEqual(
+    fenced.noteBullets.map((bullet) => bullet.line),
+    [0, 1, 2],
+  );
+});
+
 test("Pomodoro completion marks originals and carries clean live copies", () => {
   const lines = [
     "## Pomodoros",
@@ -721,6 +780,69 @@ test("Pomodoro completion marks originals and carries clean live copies", () => 
     replacements.get(5),
     "  - 🍅 ~~[[Tasks#^marked-retired|Marked retirement]]~~",
   );
+});
+
+test("Pomodoro completion moves marked links in source order before a later Pomodoro", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] First",
+    "\t- [[Tasks#^ordinary-one|Ordinary one]]",
+    "\t- [[Projects/Focus#^move-one|Move one]]#",
+    "\t- keep this note",
+    "\t- [[#^move-two]]#",
+    "\t- [[Tasks#^ordinary-two|Ordinary two]]",
+    "- [ ] Later",
+    "\t- [[Tasks#^later|Keep later]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.equal(plan.createdPomodoro, true);
+  assert.equal(plan.cursorTargetLine, 5);
+  assert.deepEqual(plan.copiedBulletLines, [
+    "\t- [[Tasks#^ordinary-one|Ordinary one]]",
+    "\t- [[Projects/Focus#^move-one|Move one]]",
+    "\t- [[#^move-two]]",
+    "\t- [[Tasks#^ordinary-two|Ordinary two]]",
+  ]);
+  assert.deepEqual(
+    plan.sourceBullets.moveOnlyTaskLinkBullets.map((bullet) => bullet.line),
+    [3, 5],
+  );
+  assert.deepEqual(
+    plan.sourceBullets.bareNonTranscludedTaskLinkBullets.map(
+      (bullet) => bullet.line,
+    ),
+    [2, 3, 5, 6],
+  );
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(
+    plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()),
+    true,
+  );
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [x] First",
+      "\t- 🍅 [[Tasks#^ordinary-one|Ordinary one]]",
+      "\t- keep this note",
+      "\t- 🍅 [[Tasks#^ordinary-two|Ordinary two]]",
+      "- [ ] ()",
+      "\t- [[Tasks#^ordinary-one|Ordinary one]]",
+      "\t- [[Projects/Focus#^move-one|Move one]]",
+      "\t- [[#^move-two]]",
+      "\t- [[Tasks#^ordinary-two|Ordinary two]]",
+      "- [ ] Later",
+      "\t- [[Tasks#^later|Keep later]]",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.getCursor(), { line: 5, ch: 7 });
+  assert.equal((editor.getValue().match(/- \[ \] \(\)/g) || []).length, 1);
+  assert.equal(editor.getValue().includes("]]#"), false);
+  assert.equal(editor.getValue().includes("🍅 [[Projects/Focus#^move-one"), false);
 });
 
 test("retirement preserves task-tree markers and unmarks Pomodoro embeds", () => {
@@ -1056,6 +1178,46 @@ test("full Pomodoro completion retires embeds only after carry-forward planning"
   );
   assert.deepEqual(editor.getCursor(), { line: 5, ch: 7 });
   assert.match(harness.getSource("Continue.md"), /^- \[\/\] #task Continue/m);
+});
+
+test("full Pomodoro completion moves a marked same-note link without history", async () => {
+  const daily = [
+    "- [ ] #task Target ^gtd",
+    "## Pomodoros",
+    "- [ ] (**1110-1135** [t:: 25m])",
+    "  - [[#^gtd]]#",
+    "  - foo bar baz",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const editor = createTextEditor(daily, { line: 2, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  plugin.scheduleCenterEditorLineInView = () => {};
+
+  assert.equal(
+    await plugin.completeActivePomodoroTask(
+      editor,
+      { path: "Daily.md" },
+      { pomodoroLine: 2 },
+    ),
+    true,
+  );
+  assert.equal(
+    editor.getValue(),
+    [
+      "- [/] #task Target ^gtd",
+      "## Pomodoros",
+      "- [x] (**1110-1135** [t:: 25m])",
+      "  - foo bar baz",
+      "- [ ] ()",
+      "  - [[#^gtd]]",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.getCursor(), { line: 4, ch: 7 });
+  assert.equal((editor.getValue().match(/#\^gtd/g) || []).length, 1);
+  assert.equal((editor.getValue().match(/- \[ \] \(\)/g) || []).length, 1);
+  assert.equal(editor.getValue().includes("]]#"), false);
+  assert.equal(editor.getValue().includes("🍅"), false);
 });
 
 test("selected Done Pomodoro transclusion reopens only its cross-file root", async () => {

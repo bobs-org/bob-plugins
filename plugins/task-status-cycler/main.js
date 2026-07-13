@@ -1308,6 +1308,11 @@ function rewritePomodoroMarkersInText(sourceText, marked) {
 }
 
 function getBareNonEmbeddedBlockLinkTargetFromListItem(lineText) {
+  const moveOnlyLink = getMoveOnlyPomodoroBlockLinkFromListItem(lineText);
+  if (moveOnlyLink) {
+    return moveOnlyLink.target;
+  }
+
   const line = String(lineText || "");
   const listMatch = line.match(LIST_ITEM_MARKER_RE);
   if (!listMatch) {
@@ -1333,6 +1338,43 @@ function getBareNonEmbeddedBlockLinkTargetFromListItem(lineText) {
   return candidate.startIndex === trimmedStart && candidate.endIndex === trimmedEnd
     ? candidate
     : null;
+}
+
+function getMoveOnlyPomodoroBlockLinkFromListItem(lineText) {
+  const line = String(lineText || "");
+  const listMatch = line.match(LIST_ITEM_MARKER_RE);
+  if (!listMatch) {
+    return null;
+  }
+
+  const body = listMatch[2] || "";
+  const leadingWhitespace = body.match(/^[ \t]*/)[0].length;
+  const trailingWhitespace = body.match(/[ \t]*$/)[0].length;
+  const bodyStart = listMatch[1].length;
+  const trimmedStart = bodyStart + leadingWhitespace;
+  const trimmedEnd = bodyStart + body.length - trailingWhitespace;
+  const directiveIndex = trimmedEnd - 1;
+  if (directiveIndex <= trimmedStart || line[directiveIndex] !== "#") {
+    return null;
+  }
+
+  const candidates = parseNonEmbeddedBlockLinks(line);
+  if (candidates.length !== 1) {
+    return null;
+  }
+
+  const target = candidates[0];
+  if (
+    target.startIndex !== trimmedStart ||
+    target.endIndex !== directiveIndex
+  ) {
+    return null;
+  }
+
+  return {
+    target,
+    destinationLineText: `${line.slice(0, directiveIndex)}${line.slice(directiveIndex + 1)}`,
+  };
 }
 
 function findPomodorosSectionInLines(lines) {
@@ -1427,6 +1469,7 @@ function buildPomodoroReopenMarkerEdits(lines, pomodoroLine) {
 function classifyPomodoroSubBullets(lines, range) {
   const transcludedTaskLinkBullets = [];
   const copyableTaskLinkBullets = [];
+  const moveOnlyTaskLinkBullets = [];
   const bareNonTranscludedTaskLinkBullets = [];
   const noteBullets = [];
 
@@ -1434,13 +1477,20 @@ function classifyPomodoroSubBullets(lines, range) {
     return {
       transcludedTaskLinkBullets,
       copyableTaskLinkBullets,
+      moveOnlyTaskLinkBullets,
       bareNonTranscludedTaskLinkBullets,
       noteBullets,
     };
   }
 
+  const fenced = getFencedLineNumbers(lines);
   for (let line = range.startLine; line < range.endLine; line += 1) {
     const lineText = stripPomodoroMarkersFromLine(lines[line]);
+    if (fenced.has(line)) {
+      noteBullets.push({ line, lineText });
+      continue;
+    }
+
     const embeddedTargets = parseEmbeddedBlockTransclusions(lineText);
 
     if (embeddedTargets.length > 0) {
@@ -1449,6 +1499,19 @@ function classifyPomodoroSubBullets(lines, range) {
         lineText,
         targets: embeddedTargets,
       });
+      continue;
+    }
+
+    const moveOnlyLink = getMoveOnlyPomodoroBlockLinkFromListItem(lineText);
+    if (moveOnlyLink) {
+      const bullet = {
+        line,
+        lineText,
+        destinationLineText: moveOnlyLink.destinationLineText,
+        targets: [moveOnlyLink.target],
+      };
+      moveOnlyTaskLinkBullets.push(bullet);
+      bareNonTranscludedTaskLinkBullets.push(bullet);
       continue;
     }
 
@@ -1483,6 +1546,7 @@ function classifyPomodoroSubBullets(lines, range) {
   return {
     transcludedTaskLinkBullets,
     copyableTaskLinkBullets,
+    moveOnlyTaskLinkBullets,
     bareNonTranscludedTaskLinkBullets,
     noteBullets,
   };
@@ -1577,6 +1641,9 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   const sourceBullets = classifyPomodoroSubBullets(lines, sourceRange);
   const nextPomodoroLine = findNextPomodoroLine(lines, section, pomodoroLine);
   const fenced = getFencedLineNumbers(lines);
+  const movedSourceLines = new Set(
+    sourceBullets.moveOnlyTaskLinkBullets.map((bullet) => bullet.line),
+  );
   const edits = [
     {
       type: "replaceLine",
@@ -1586,6 +1653,14 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
     },
   ];
   for (let line = sourceRange.startLine; line < sourceRange.endLine; line += 1) {
+    if (movedSourceLines.has(line)) {
+      edits.push({
+        type: "removeLine",
+        line,
+        sourceLineText: String(lines[line] || ""),
+      });
+      continue;
+    }
     if (fenced.has(line)) {
       continue;
     }
@@ -1599,23 +1674,35 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
     }
   }
   // Only insert a fresh placeholder Pomodoro when there is something to carry
-  // forward (one or more copyable, non-transcluded task-link bullets) or when
-  // this is the last Pomodoro in the section. When a later Pomodoro already
-  // exists and there are no copyable bullets, complete in place and jump the
-  // cursor to that existing next Pomodoro instead of leaving an empty
-  // placeholder between them. A created placeholder is inserted directly below
-  // the completed Pomodoro's own sub-bullet block, carrying forward its
-  // copyable bullets; existing lower Pomodoros are left untouched and pushed
-  // down by the insertion.
-  const copyableBulletLines = sourceBullets.copyableTaskLinkBullets.map(
-    (bullet) => stripPomodoroMarkersFromLine(bullet.lineText),
-  );
+  // forward (an ordinary copyable link or a move-only link) or when this is the
+  // last Pomodoro in the section. When a later Pomodoro already exists and
+  // there is nothing to carry, complete in place and jump the cursor to that
+  // existing next Pomodoro instead of leaving an empty placeholder between
+  // them. A created placeholder is inserted directly below the completed
+  // Pomodoro's own sub-bullet block; existing lower Pomodoros are left untouched
+  // and pushed down by the insertion.
+  const copyableBulletLines = [
+    ...sourceBullets.copyableTaskLinkBullets.map((bullet) => ({
+      line: bullet.line,
+      lineText: stripPomodoroMarkersFromLine(bullet.lineText),
+    })),
+    ...sourceBullets.moveOnlyTaskLinkBullets.map((bullet) => ({
+      line: bullet.line,
+      lineText: bullet.destinationLineText,
+    })),
+  ]
+    .sort((left, right) => left.line - right.line)
+    .map((bullet) => bullet.lineText);
   const isLastPomodoro = nextPomodoroLine === null;
   const shouldCreatePomodoro = copyableBulletLines.length > 0 || isLastPomodoro;
+  const removedLineCountBefore = (line) =>
+    [...movedSourceLines].filter((removedLine) => removedLine < line).length;
 
   let createdPomodoro = false;
   let copiedBulletLines = [];
-  let cursorTargetLine = nextPomodoroLine;
+  let cursorTargetLine = Number.isInteger(nextPomodoroLine)
+    ? nextPomodoroLine - removedLineCountBefore(nextPomodoroLine)
+    : nextPomodoroLine;
 
   if (shouldCreatePomodoro) {
     createdPomodoro = true;
@@ -1630,7 +1717,8 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
           : [EMPTY_POMODORO_SUB_BULLET_LINE]),
       ],
     });
-    cursorTargetLine = sourceRange.endLine;
+    cursorTargetLine =
+      sourceRange.endLine - removedLineCountBefore(sourceRange.endLine);
   }
 
   return {
@@ -6439,6 +6527,8 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     for (const edit of sortedEdits) {
       if (edit.type === "insertLines") {
         this.insertEditorLines(edit.line, edit.lines, editor);
+      } else if (edit.type === "removeLine") {
+        this.removeEditorLine(edit.line, editor);
       } else if (edit.type === "replaceLine") {
         this.replaceEditorLine(edit.line, edit.lineText, editor);
       }
@@ -6491,6 +6581,44 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     editor.replaceRange(
       String(lineText || ""),
       { line, ch: 0 },
+      { line, ch: currentLineText.length },
+    );
+    return true;
+  }
+
+  removeEditorLine(line, editor) {
+    if (
+      !editor ||
+      typeof editor.getLine !== "function" ||
+      typeof editor.replaceRange !== "function"
+    ) {
+      return false;
+    }
+
+    const lineCount = this.getEditorLineCount(editor);
+    if (line < 0 || line >= lineCount) {
+      return false;
+    }
+
+    if (line < lineCount - 1) {
+      editor.replaceRange("", { line, ch: 0 }, { line: line + 1, ch: 0 });
+      return true;
+    }
+
+    const currentLineText = editor.getLine(line) || "";
+    if (line === 0) {
+      editor.replaceRange(
+        "",
+        { line, ch: 0 },
+        { line, ch: currentLineText.length },
+      );
+      return true;
+    }
+
+    const previousLineText = editor.getLine(line - 1) || "";
+    editor.replaceRange(
+      "",
+      { line: line - 1, ch: previousLineText.length },
       { line, ch: currentLineText.length },
     );
     return true;
@@ -7331,6 +7459,7 @@ module.exports.helpers = {
   getBlockLinkTargetKey,
   getBlockLinkTargetKeysFromLine,
   getBareNonEmbeddedBlockLinkTargetFromListItem,
+  getMoveOnlyPomodoroBlockLinkFromListItem,
   getCursorChAfterTextEdits,
   getEditorViewFromEditor,
   getRenderedTasksQueryScrollBounds,

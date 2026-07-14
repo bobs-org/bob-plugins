@@ -106,7 +106,7 @@ test("legacy tasks without an id field still fall back to their block ID", () =>
   assert.equal(helpers.collectTaskPickerItems(content)[0].dependency.isBlocked, true);
 });
 
-test("single caret relocation preserves embedding and aliases", () => {
+test("single caret relocation preserves embedding and removes aliases", () => {
   const line = "  - ![[Projects|Work queue]]^";
   const marker = helpers.findMarkerLinkNearCursor(line, line.length);
 
@@ -128,8 +128,8 @@ test("single caret relocation preserves embedding and aliases", () => {
       endCh: line.length,
       insertionCh: line.indexOf("[[") + 2 + "Projects".length,
       finalCursorCh: line.indexOf("[[") + 3 + "Projects".length,
-      plainReplacement: "[[Projects|Work queue]]",
-      completionReplacement: "[[Projects^|Work queue]]",
+      plainReplacement: "[[Projects]]",
+      completionReplacement: "[[Projects^]]",
     },
   );
 
@@ -138,7 +138,37 @@ test("single caret relocation preserves embedding and aliases", () => {
     helpers.applyFileLinkBlockCompletionWithEditorApi(editor, 0, marker),
     true,
   );
-  assert.equal(editor.getValue(), "  - ![[Projects^|Work queue]]");
+  assert.equal(editor.getValue(), "  - ![[Projects^]]");
+  assert.deepEqual(editor.cursor, { line: 0, ch: marker.finalCursorCh });
+});
+
+test("single caret relocation resets aliased block links", () => {
+  const line = "  - [[Projects#^existing|Ship it]]^";
+  const marker = helpers.findMarkerLinkNearCursor(line, line.length);
+
+  assert.deepEqual(
+    {
+      raw: marker.raw,
+      insertionCh: marker.insertionCh,
+      finalCursorCh: marker.finalCursorCh,
+      plainReplacement: marker.plainReplacement,
+      completionReplacement: marker.completionReplacement,
+    },
+    {
+      raw: "[[Projects#^existing|Ship it]]^",
+      insertionCh: line.indexOf("[[") + 2 + "Projects#".length,
+      finalCursorCh: line.indexOf("[[") + 3 + "Projects#".length,
+      plainReplacement: "[[Projects#]]",
+      completionReplacement: "[[Projects#^]]",
+    },
+  );
+
+  const editor = createEditor(line);
+  assert.equal(
+    helpers.applyFileLinkBlockCompletionWithEditorApi(editor, 0, marker),
+    true,
+  );
+  assert.equal(editor.getValue(), "  - [[Projects#^]]");
   assert.deepEqual(editor.cursor, { line: 0, ch: marker.finalCursorCh });
 });
 
@@ -175,9 +205,9 @@ test("rapid caret task picker supports embedded, aliased, and block links", () =
     {
       line: "- ![[Projects|Work queue]]^^",
       targetText: "Projects",
-      aliasSuffix: "|Work queue",
+      aliasSuffix: "",
       blockPrefix: "^",
-      revert: "[[Projects^|Work queue]]",
+      revert: "[[Projects^]]",
     },
     {
       line: "- [[Projects#^existing]]^^",
@@ -225,6 +255,31 @@ test("rapid caret task picker supports embedded, aliased, and block links", () =
     );
     assert.equal(expected.line[marker.startCh - 1] === "!", expected.line.includes("![["));
   }
+});
+
+test("rapid aliased task picker completion is alias-free", async () => {
+  const editor = createEditor("- ![[Tasks|Work queue]]^^");
+  const source = sourceForTaskPicker(editor, "Daily.md", 0);
+  const destinationContent = "- [ ] #task Ship it ^ship";
+  const task = helpers.collectTaskPickerItems(destinationContent)[0];
+  const plugin = new Plugin();
+  plugin.readDestinationForValidation = async () => ({
+    file: { path: "Tasks.md" },
+    content: destinationContent,
+  });
+  plugin.suppressEditorScans = () => {};
+
+  assert.equal(source.aliasSuffix, "");
+  assert.equal(helpers.taskPickerRevertReplacement(source), "[[Tasks^]]");
+
+  const result = await plugin.completeTaskLinkWithExistingId(source, task);
+
+  assert.deepEqual(result, { completed: true });
+  assert.equal(editor.getValue(), "- ![[Tasks#^ship]]");
+  assert.deepEqual(editor.cursor, {
+    line: 0,
+    ch: source.startCh + "[[Tasks#^ship]]".length,
+  });
 });
 
 test("rapid caret recognition respects cursor proximity and fenced code", () => {

@@ -234,7 +234,7 @@ function parseRapidTaskPickerMarker(match, lineText) {
     return null;
   }
 
-  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
+  const { destination } = splitWikiLinkBody(match[1]);
   if (!normalizeText(destination)) {
     return null;
   }
@@ -247,7 +247,7 @@ function parseRapidTaskPickerMarker(match, lineText) {
   return taskPickerMarkerFromPosition(
     match,
     position,
-    aliasSuffix,
+    "",
     lineText.slice(match.index, markerEndCh),
     markerEndCh,
     markerStartCh,
@@ -360,7 +360,7 @@ function parseTrailingCaretCompletionMarker(match, lineText) {
     return null;
   }
 
-  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
+  const { destination } = splitWikiLinkBody(match[1]);
   if (!normalizeText(destination)) {
     return null;
   }
@@ -372,8 +372,8 @@ function parseTrailingCaretCompletionMarker(match, lineText) {
     kind: "file-link-jump",
     raw: raw + "^",
     destination,
-    plainReplacement: `[[${completionDestination}${aliasSuffix}]]`,
-    completionReplacement: `[[${completionDestination}^${aliasSuffix}]]`,
+    plainReplacement: `[[${completionDestination}]]`,
+    completionReplacement: `[[${completionDestination}^]]`,
     startCh: match.index,
     endCh: markerCh + 1,
     insertionCh,

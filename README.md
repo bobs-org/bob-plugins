@@ -16,7 +16,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.3 | Open and manage related notes and tabs, including toggling the current tab pin; `!` synchronizes only visible task dependencies. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
 | Bob Vim Surround        | `bob-vim-surround`       |   1.5.2 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
-| Task Status Cycler      | `task-status-cycler`     |   1.5.0 | Toggle tasks and Pomodoros with recursive close and root-only reopen; normal-mode `#` marks one task link as move-only and `N#` includes the next `N` lines, then Ctrl+Enter moves marked links forward without history. |
+| Task Status Cycler      | `task-status-cycler`     |   1.5.1 | Toggle tasks and Pomodoros with recursive close and root-only reopen; normal-mode `#` toggles one task link's move-only directive and `N#` includes the next `N` lines, then Ctrl+Enter moves links left marked forward without history. |
 
 Versions are tracked **per plugin** — there is no lockstep release. Each plugin's authoritative version lives in its own
 `plugins/<id>/manifest.json` (e.g. `bob-vim-surround` is ahead of the others at `1.5.2`).

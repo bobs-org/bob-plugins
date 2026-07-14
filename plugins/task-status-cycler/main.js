@@ -1459,7 +1459,7 @@ function getSubBulletBlockRange(lines, pomodoroLine, section = null) {
   };
 }
 
-function buildPomodoroMoveOnlyMarkPlan(lines, cursorLine, additionalLines = 0) {
+function buildPomodoroMoveOnlyTogglePlan(lines, cursorLine, additionalLines = 0) {
   const ineligiblePlan = {
     eligible: false,
     edits: [],
@@ -1522,7 +1522,14 @@ function buildPomodoroMoveOnlyMarkPlan(lines, cursorLine, additionalLines = 0) {
     }
 
     const sourceLineText = String(lines[line] || "");
-    if (getMoveOnlyPomodoroBlockLinkFromListItem(sourceLineText)) {
+    const moveOnlyLink = getMoveOnlyPomodoroBlockLinkFromListItem(sourceLineText);
+    if (moveOnlyLink) {
+      edits.push({
+        type: "remove",
+        line,
+        sourceLineText,
+        lineText: moveOnlyLink.destinationLineText,
+      });
       continue;
     }
 
@@ -1532,6 +1539,7 @@ function buildPomodoroMoveOnlyMarkPlan(lines, cursorLine, additionalLines = 0) {
     }
 
     edits.push({
+      type: "add",
       line,
       sourceLineText,
       lineText: `${sourceLineText.slice(0, target.endIndex)}#${sourceLineText.slice(target.endIndex)}`,
@@ -4206,8 +4214,8 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     vim.defineAction("taskStatusCyclerOpenPreviousLineLink", (cm, actionArgs) =>
       this.handleVimBackspaceLinkOrFallthrough(cm, actionArgs),
     );
-    vim.defineAction("taskStatusCyclerMarkPomodoroMoveOnly", (cm, actionArgs) =>
-      this.handleVimMarkPomodoroMoveOnly(cm, actionArgs),
+    vim.defineAction("taskStatusCyclerTogglePomodoroMoveOnly", (cm, actionArgs) =>
+      this.handleVimTogglePomodoroMoveOnly(cm, actionArgs),
     );
     vim.mapCommand("<CR>", "action", "taskStatusCyclerOpenNextLineLink", {}, {
       context: "normal",
@@ -4238,7 +4246,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     vim.mapCommand("O", "action", "taskStatusCyclerOpenLineAbove", {}, {
       context: "normal",
     });
-    vim.mapCommand("#", "action", "taskStatusCyclerMarkPomodoroMoveOnly", {}, {
+    vim.mapCommand("#", "action", "taskStatusCyclerTogglePomodoroMoveOnly", {}, {
       context: "normal",
     });
     this.registerVimNavigationMappings(vim);
@@ -4280,7 +4288,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     this.vimEnterFallthrough(cm, repeat);
   }
 
-  handleVimMarkPomodoroMoveOnly(_cm, actionArgs) {
+  handleVimTogglePomodoroMoveOnly(_cm, actionArgs) {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view || !view.editor) {
       return;
@@ -4292,7 +4300,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     const additionalLines = getPomodoroMoveOnlyAdditionalLines(actionArgs);
-    void this.markPomodoroMoveOnlyRange(
+    void this.togglePomodoroMoveOnlyRange(
       view.editor,
       activeFile,
       additionalLines,
@@ -6645,7 +6653,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     };
   }
 
-  async markPomodoroMoveOnlyRange(editor, activeFile, additionalLines = 0) {
+  async togglePomodoroMoveOnlyRange(editor, activeFile, additionalLines = 0) {
     if (
       !editor ||
       !activeFile ||
@@ -6660,7 +6668,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return false;
     }
 
-    const plan = buildPomodoroMoveOnlyMarkPlan(
+    const plan = buildPomodoroMoveOnlyTogglePlan(
       this.getEditorLineTexts(editor),
       cursor.line,
       additionalLines,
@@ -6674,8 +6682,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       activePath: activeFile.path,
       originPath: activeFile.path,
     };
-    const validatedEdits = [];
+    const acceptedEdits = [];
     for (const edit of plan.edits) {
+      if (edit.type === "remove") {
+        acceptedEdits.push(edit);
+        continue;
+      }
+
       try {
         const resolvedTarget = await this.resolveTranscludedBlockTarget(
           edit.target,
@@ -6686,7 +6699,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           },
         );
         if (resolvedTarget) {
-          validatedEdits.push(edit);
+          acceptedEdits.push(edit);
         }
       } catch (error) {
         // Best effort: one stale or unreadable target must not block other
@@ -6696,7 +6709,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 
     let changed = false;
     try {
-      for (const edit of validatedEdits) {
+      for (const edit of acceptedEdits) {
         if (
           typeof editor.getLine !== "function" ||
           typeof editor.replaceRange !== "function" ||
@@ -7640,7 +7653,7 @@ module.exports.helpers = {
   addOrReplaceCompletionField,
   addCreatedFieldToObsidianTaskLine,
   buildPomodoroCompletionPlan,
-  buildPomodoroMoveOnlyMarkPlan,
+  buildPomodoroMoveOnlyTogglePlan,
   buildPomodoroReopenMarkerEdits,
   centerEditorViewOnPosition,
   classifyPomodoroSubBullets,

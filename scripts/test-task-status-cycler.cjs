@@ -751,59 +751,80 @@ test("move-only Pomodoro links require a strict immediate hash directive", () =>
   );
 });
 
-test("Pomodoro move-only planner treats an explicit count as additional physical lines", () => {
+test("Pomodoro move-only planner toggles links across additional physical lines", () => {
   const lines = [
     "## Pomodoros",
     "- [ ] Focus",
     "\t- [[#^first|First alias]]  ",
-    "\t- [[Projects/Tasks.md#^second]]",
+    "\t- [[Projects/Tasks.md#^second]]#\t",
     "\t- prose is left alone",
+    "\t- [[#^third]]",
     "- [ ] Later",
     "\t- [[#^later]]",
   ];
 
-  const counted = helpers.buildPomodoroMoveOnlyMarkPlan(lines, 2, 1);
+  const counted = helpers.buildPomodoroMoveOnlyTogglePlan(lines, 2, 3);
   assert.equal(counted.eligible, true);
   assert.equal(counted.startLine, 2);
-  assert.equal(counted.endLine, 4);
+  assert.equal(counted.endLine, 6);
   assert.deepEqual(
-    counted.edits.map(({ line, lineText }) => ({ line, lineText })),
+    counted.edits.map(({ type, line, lineText }) => ({ type, line, lineText })),
     [
-      { line: 2, lineText: "\t- [[#^first|First alias]]#  " },
-      { line: 3, lineText: "\t- [[Projects/Tasks.md#^second]]#" },
+      { type: "add", line: 2, lineText: "\t- [[#^first|First alias]]#  " },
+      { type: "remove", line: 3, lineText: "\t- [[Projects/Tasks.md#^second]]\t" },
+      { type: "add", line: 5, lineText: "\t- [[#^third]]#" },
     ],
   );
 
-  const bare = helpers.buildPomodoroMoveOnlyMarkPlan(lines, 2, 0);
+  const bare = helpers.buildPomodoroMoveOnlyTogglePlan(lines, 2, 0);
   assert.deepEqual(
-    bare.edits.map(({ line, lineText }) => ({ line, lineText })),
-    [{ line: 2, lineText: "\t- [[#^first|First alias]]#  " }],
+    bare.edits.map(({ type, line, lineText }) => ({ type, line, lineText })),
+    [{ type: "add", line: 2, lineText: "\t- [[#^first|First alias]]#  " }],
   );
 
-  const clamped = helpers.buildPomodoroMoveOnlyMarkPlan(lines, 3, 20);
-  assert.equal(clamped.endLine, 5);
-  assert.deepEqual(clamped.edits.map((edit) => edit.line), [3]);
+  const explicitOne = helpers.buildPomodoroMoveOnlyTogglePlan(lines, 2, 1);
+  assert.equal(explicitOne.endLine, 4);
+  assert.deepEqual(explicitOne.edits.map((edit) => edit.type), ["add", "remove"]);
+
+  const clamped = helpers.buildPomodoroMoveOnlyTogglePlan(lines, 3, 20);
+  assert.equal(clamped.endLine, 6);
+  assert.deepEqual(clamped.edits.map((edit) => edit.line), [3, 5]);
 });
 
-test("Pomodoro move-only planner is idempotent and rejects ineligible cursor lines", () => {
+test("Pomodoro move-only planner round trips exact text and rejects strict non-matches", () => {
   const base = ["## Pomodoros", "- [ ] Focus"];
-  const existing = helpers.buildPomodoroMoveOnlyMarkPlan(
-    [...base, "\t- [[#^marked|Marked]]#  ", "\t- [[#^next]]"],
+  const originalLine = "\t- [[Projects/Tasks.md#^marked|Marked alias]]\t  ";
+  const addition = helpers.buildPomodoroMoveOnlyTogglePlan(
+    [...base, originalLine],
     2,
-    1,
+    0,
   );
-  assert.equal(existing.eligible, true);
-  assert.deepEqual(existing.edits.map((edit) => edit.line), [3]);
+  assert.equal(addition.eligible, true);
+  assert.equal(addition.edits[0].type, "add");
+  const markedLine = addition.edits[0].lineText;
+  assert.equal(markedLine, "\t- [[Projects/Tasks.md#^marked|Marked alias]]#\t  ");
+
+  const removal = helpers.buildPomodoroMoveOnlyTogglePlan(
+    [...base, markedLine],
+    2,
+    0,
+  );
+  assert.equal(removal.eligible, true);
+  assert.equal(removal.edits[0].type, "remove");
+  assert.equal(removal.edits[0].lineText, originalLine);
 
   const rejectedLines = [
-    "\t- ![[#^embedded]]",
-    "\t- ~~[[#^retired]]~~",
+    "\t- ![[#^embedded]]#",
+    "\t- ~~[[#^retired]]~~#",
     "\t- prose [[#^mixed]]",
     "\t- [[#^first]] and [[#^second]]",
     "\t- [[#^bad id]]",
+    "\t- [[#^spaced]] #",
+    "\t- [[#^double]]##",
+    "\t- [[#^trailing]]# trailing prose",
   ];
   for (const lineText of rejectedLines) {
-    const plan = helpers.buildPomodoroMoveOnlyMarkPlan(
+    const plan = helpers.buildPomodoroMoveOnlyTogglePlan(
       [...base, lineText],
       2,
       0,
@@ -813,7 +834,7 @@ test("Pomodoro move-only planner is idempotent and rejects ineligible cursor lin
   }
 
   assert.equal(
-    helpers.buildPomodoroMoveOnlyMarkPlan(
+    helpers.buildPomodoroMoveOnlyTogglePlan(
       ["## Pomodoros", "- [x] Finished", "\t- [[#^done]]"],
       2,
       0,
@@ -821,7 +842,7 @@ test("Pomodoro move-only planner is idempotent and rejects ineligible cursor lin
     false,
   );
   assert.equal(
-    helpers.buildPomodoroMoveOnlyMarkPlan(
+    helpers.buildPomodoroMoveOnlyTogglePlan(
       ["## Other", "- [ ] Focus", "\t- [[#^outside]]"],
       2,
       0,
@@ -829,7 +850,7 @@ test("Pomodoro move-only planner is idempotent and rejects ineligible cursor lin
     false,
   );
   assert.equal(
-    helpers.buildPomodoroMoveOnlyMarkPlan(
+    helpers.buildPomodoroMoveOnlyTogglePlan(
       [
         "## Pomodoros",
         "- [ ] Focus",
@@ -844,15 +865,55 @@ test("Pomodoro move-only planner is idempotent and rejects ineligible cursor lin
   );
 });
 
-test("Pomodoro move-only runtime validates task targets independently and preserves the cursor", async () => {
+test("bare Pomodoro move-only toggle round trips a valid alias and preserves the cursor", async () => {
+  const daily = [
+    "- [/] #task Same-note target ^local",
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- [[#^local|Local alias]]\t  ",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const originalCursor = { line: 3, ch: 12 };
+  const editor = createTextEditor(daily, originalCursor);
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  const activeFile = harness.app.vault.getAbstractFileByPath("Daily.md");
+
+  assert.equal(
+    await plugin.togglePomodoroMoveOnlyRange(editor, activeFile, 0),
+    true,
+  );
+  assert.equal(
+    editor.getLine(3),
+    "\t- [[#^local|Local alias]]#\t  ",
+  );
+  assert.deepEqual(editor.getCursor(), originalCursor);
+
+  plugin.resolveTranscludedBlockTarget = async () => {
+    throw new Error("removals must not resolve targets");
+  };
+  assert.equal(
+    await plugin.togglePomodoroMoveOnlyRange(editor, activeFile, 0),
+    true,
+  );
+  assert.equal(editor.getValue(), daily);
+  assert.deepEqual(editor.getCursor(), originalCursor);
+});
+
+test("Pomodoro move-only runtime removes locally and validates additions independently", async () => {
   const daily = [
     "- [/] #task Same-note target ^local",
     "## Pomodoros",
     "- [ ] Focus",
     "\t- [[#^local|Local alias]]  ",
-    "\t- [[Tasks#^done|Cross-note alias]]",
-    "\t- [[Tasks#^missing]]",
-    "\t- [[Notes#^not-task]]",
+    "\t- [[Tasks#^done|Valid marked]]#\t",
+    "\t- [[Missing#^gone|Stale marked]]#",
+    "\t- [[Unreadable#^blocked|Unreadable marked]]#",
+    "\t- [[Notes#^not-task|No-longer task]]#",
+    "\t- [[Tasks#^done|Valid addition]]",
+    "\t- [[Tasks#^missing|Missing addition]]",
+    "\t- [[Notes#^not-task|Non-task addition]]",
+    "\t- [[Unreadable#^blocked|Unreadable addition]]",
     "\t- prose",
     "- [ ] Later",
     "\t- [[#^later]]",
@@ -861,14 +922,22 @@ test("Pomodoro move-only runtime validates task targets independently and preser
     "Daily.md": daily,
     "Tasks.md": "- [x] Completed #task ^done",
     "Notes.md": "- Plain note target ^not-task",
+    "Unreadable.md": "- [ ] #task Unreadable ^blocked",
   });
+  const read = harness.app.vault.read;
+  harness.app.vault.read = async (file) => {
+    if (file.path === "Unreadable.md") {
+      throw new Error("unreadable");
+    }
+    return read(file);
+  };
   const originalCursor = { line: 3, ch: 12 };
   const editor = createTextEditor(daily, originalCursor);
   const plugin = new TaskStatusCyclerPlugin();
   plugin.app = harness.app;
 
   assert.equal(
-    await plugin.markPomodoroMoveOnlyRange(
+    await plugin.togglePomodoroMoveOnlyRange(
       editor,
       harness.app.vault.getAbstractFileByPath("Daily.md"),
       20,
@@ -883,27 +952,58 @@ test("Pomodoro move-only runtime validates task targets independently and preser
       "## Pomodoros",
       "- [ ] Focus",
       "\t- [[#^local|Local alias]]#  ",
-      "\t- [[Tasks#^done|Cross-note alias]]#",
-      "\t- [[Tasks#^missing]]",
-      "\t- [[Notes#^not-task]]",
+      "\t- [[Tasks#^done|Valid marked]]\t",
+      "\t- [[Missing#^gone|Stale marked]]",
+      "\t- [[Unreadable#^blocked|Unreadable marked]]",
+      "\t- [[Notes#^not-task|No-longer task]]",
+      "\t- [[Tasks#^done|Valid addition]]#",
+      "\t- [[Tasks#^missing|Missing addition]]",
+      "\t- [[Notes#^not-task|Non-task addition]]",
+      "\t- [[Unreadable#^blocked|Unreadable addition]]",
       "\t- prose",
       "- [ ] Later",
       "\t- [[#^later]]",
     ].join("\n"),
   );
+});
+
+test("Pomodoro move-only runtime protects live lines after asynchronous failures", async () => {
+  const daily = [
+    "- [ ] #task Valid ^valid",
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- [[Missing#^stale|Marked]]#",
+    "\t- [[#^valid|Addition]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const originalCursor = { line: 3, ch: 5 };
+  const editor = createTextEditor(daily, originalCursor);
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  plugin.resolveTranscludedBlockTarget = async () => {
+    const liveLine = editor.getLine(3);
+    editor.replaceRange(
+      "\t- [[Missing#^stale|User changed alias]]#",
+      { line: 3, ch: 0 },
+      { line: 3, ch: liveLine.length },
+    );
+    throw new Error("resolver failed");
+  };
 
   assert.equal(
-    await plugin.markPomodoroMoveOnlyRange(
+    await plugin.togglePomodoroMoveOnlyRange(
       editor,
       harness.app.vault.getAbstractFileByPath("Daily.md"),
-      20,
+      1,
     ),
     false,
   );
+  assert.equal(editor.getLine(3), "\t- [[Missing#^stale|User changed alias]]#");
+  assert.equal(editor.getLine(4), "\t- [[#^valid|Addition]]");
   assert.deepEqual(editor.getCursor(), originalCursor);
 });
 
-test("Pomodoro hash Vim mapping distinguishes bare and explicit repeats", () => {
+test("Pomodoro hash Vim mapping distinguishes bare and explicit repeats", async () => {
   const originalWindow = global.window;
   const actions = new Map();
   const mappings = [];
@@ -929,8 +1029,12 @@ test("Pomodoro hash Vim mapping distinguishes bare and explicit repeats", () => 
         getActiveFile: () => file,
       },
     };
-    plugin.markPomodoroMoveOnlyRange = async (...args) => {
+    let rejectNextCall = false;
+    plugin.togglePomodoroMoveOnlyRange = async (...args) => {
       calls.push(args);
+      if (rejectNextCall) {
+        throw new Error("contained action failure");
+      }
       return true;
     };
 
@@ -940,12 +1044,12 @@ test("Pomodoro hash Vim mapping distinguishes bare and explicit repeats", () => 
         (mapping) =>
           mapping.key === "#" &&
           mapping.type === "action" &&
-          mapping.name === "taskStatusCyclerMarkPomodoroMoveOnly" &&
+          mapping.name === "taskStatusCyclerTogglePomodoroMoveOnly" &&
           mapping.options.context === "normal",
       ),
     );
 
-    const action = actions.get("taskStatusCyclerMarkPomodoroMoveOnly");
+    const action = actions.get("taskStatusCyclerTogglePomodoroMoveOnly");
     action({}, { repeat: 1, repeatIsExplicit: false });
     action({}, { repeat: 1, repeatIsExplicit: true });
     action({}, { repeat: 4, repeatIsExplicit: true });
@@ -962,6 +1066,11 @@ test("Pomodoro hash Vim mapping distinguishes bare and explicit repeats", () => 
       }),
       0,
     );
+
+    rejectNextCall = true;
+    action({}, { repeat: 2, repeatIsExplicit: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls[3], [editor, file, 2]);
   } finally {
     if (originalWindow === undefined) {
       delete global.window;

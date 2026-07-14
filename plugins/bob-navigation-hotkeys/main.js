@@ -7,6 +7,11 @@ const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
 const SECTION_HEADER_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*"]);
+const OBSIDIAN_TASK_STATUS_RANKS = Object.freeze({
+  " ": 0,
+  "*": 1,
+  "/": 2,
+});
 const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 // Pomodoro ledger navigation targets. Mirrors the minimal subset of
@@ -3782,6 +3787,50 @@ function isObsidianTaskLine(lineText) {
   return PROJECT_TASK_TAG_RE.test(body);
 }
 
+function getObsidianTaskCheckboxStatus(lineText) {
+  const match = OBSIDIAN_TASK_LINE_RE.exec(String(lineText || ""));
+  return match && isObsidianTaskLine(lineText) ? match[1] : null;
+}
+
+function getObsidianTaskStatusRank(status) {
+  const checkbox = String(status ?? "");
+  return Object.prototype.hasOwnProperty.call(
+    OBSIDIAN_TASK_STATUS_RANKS,
+    checkbox,
+  )
+    ? OBSIDIAN_TASK_STATUS_RANKS[checkbox]
+    : null;
+}
+
+function strongerObsidianTaskStatus(first, second) {
+  const firstRank = getObsidianTaskStatusRank(first);
+  const secondRank = getObsidianTaskStatusRank(second);
+  if (firstRank === null) return secondRank === null ? null : second;
+  if (secondRank === null) return first;
+  return secondRank > firstRank ? second : first;
+}
+
+function promoteObsidianTaskCheckboxStatus(lineText, desiredStatus) {
+  const line = String(lineText || "");
+  const currentStatus = getObsidianTaskCheckboxStatus(line);
+  const currentRank = getObsidianTaskStatusRank(currentStatus);
+  const desiredRank = getObsidianTaskStatusRank(desiredStatus);
+  if (
+    currentRank === null ||
+    desiredRank === null ||
+    currentRank >= desiredRank
+  ) {
+    return line;
+  }
+  const match = OBSIDIAN_TASK_LINE_RE.exec(line);
+  const checkboxOffset = match[0].indexOf(`[${currentStatus}]`) + 1;
+  return (
+    line.slice(0, checkboxOffset) +
+    String(desiredStatus) +
+    line.slice(checkboxOffset + 1)
+  );
+}
+
 // The dependency picker intentionally offers only open tasks. Keep that
 // lifecycle filter separate from the general valid-task predicate above.
 function isOpenObsidianTaskLine(lineText) {
@@ -5415,6 +5464,10 @@ function planSameFileDependencyToggle(
       "id",
       canonicalId,
     ).line;
+    lines[targetLine] = promoteObsidianTaskCheckboxStatus(
+      lines[targetLine],
+      getObsidianTaskCheckboxStatus(toggledLines[parentLine]),
+    );
   }
   return Object.freeze({
     qualified: true,
@@ -9279,11 +9332,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const activeFile = this.app.workspace.getActiveFile();
     const sourcePath = activeFile && activeFile.path;
     const actions = [];
+    const sameFileTargetEdits = new Map();
     const externalFiles = new Map();
     let showedUnqualifiablePathNotice = false;
 
     for (const change of changesByLine) {
       nextLines[change.line] = change.nextLineText;
+    }
+    for (const change of changesByLine) {
       const original = parseDependencyTransclusionBulletDetails(
         originalLines[change.line],
       );
@@ -9331,8 +9387,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               file: targetFile,
               originalContent: String(content || ""),
               lines: String(content || "").split(/\r?\n/),
-              ensureIds: new Map(),
-              targetSnapshots: new Map(),
+              targetEdits: new Map(),
             };
             externalFiles.set(targetFile.path, external);
           } catch (error) {
@@ -9365,16 +9420,38 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         continue;
       }
       if (next.transcluded) {
+        const desiredStatus = getObsidianTaskCheckboxStatus(
+          originalLines[parentLine],
+        );
         if (targetFile.path === sourcePath) {
-          nextLines[targetLine] = upsertBulletProperty(
-            nextLines[targetLine],
-            "id",
-            canonicalId,
-          ).line;
+          const existing = sameFileTargetEdits.get(targetLine);
+          if (existing) {
+            existing.desiredStatus = strongerObsidianTaskStatus(
+              existing.desiredStatus,
+              desiredStatus,
+            );
+          } else {
+            sameFileTargetEdits.set(targetLine, {
+              canonicalId,
+              desiredStatus,
+              targetSnapshot,
+            });
+          }
         } else {
           const external = externalFiles.get(targetFile.path);
-          external.ensureIds.set(original.blockId, canonicalId);
-          external.targetSnapshots.set(original.blockId, targetSnapshot);
+          const existing = external.targetEdits.get(original.blockId);
+          if (existing) {
+            existing.desiredStatus = strongerObsidianTaskStatus(
+              existing.desiredStatus,
+              desiredStatus,
+            );
+          } else {
+            external.targetEdits.set(original.blockId, {
+              canonicalId,
+              desiredStatus,
+              targetSnapshot,
+            });
+          }
         }
       }
       actions.push({
@@ -9387,6 +9464,21 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       });
     }
 
+    sameFileTargetEdits.forEach((edit, targetLine) => {
+      if (nextLines[targetLine] !== edit.targetSnapshot) {
+        return;
+      }
+      const withId = upsertBulletProperty(
+        nextLines[targetLine],
+        "id",
+        edit.canonicalId,
+      ).line;
+      nextLines[targetLine] = promoteObsidianTaskCheckboxStatus(
+        withId,
+        edit.desiredStatus,
+      );
+    });
+
     const failedExternalPaths = new Set();
     // Re-verify the source snapshot immediately before the first external
     // write. Link resolution and cached reads above can yield to user edits.
@@ -9397,7 +9489,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     for (const [path, external] of externalFiles) {
-      if (external.ensureIds.size === 0) {
+      if (external.targetEdits.size === 0) {
         continue;
       }
       if (String(cm.getValue() || "") !== originalContent) {
@@ -9405,7 +9497,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
       try {
         await this.app.vault.process(external.file, (content) => {
-          if (String(content || "") !== external.originalContent) {
+          if (
+            String(cm.getValue() || "") !== originalContent ||
+            String(content || "") !== external.originalContent
+          ) {
             failedExternalPaths.add(path);
             return content;
           }
@@ -9414,25 +9509,29 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             : "\n";
           const lines = String(content || "").split(/\r?\n/);
           const targetsAreCurrent = Array.from(
-            external.ensureIds.keys(),
-          ).every((blockId) => {
+            external.targetEdits.entries(),
+          ).every(([blockId, edit]) => {
             const targetLine = findTaskLineByBlockId(lines, blockId);
             return (
               targetLine !== null &&
-              lines[targetLine] === external.targetSnapshots.get(blockId)
+              lines[targetLine] === edit.targetSnapshot
             );
           });
           if (!targetsAreCurrent) {
             failedExternalPaths.add(path);
             return content;
           }
-          external.ensureIds.forEach((canonicalId, blockId) => {
+          external.targetEdits.forEach((edit, blockId) => {
             const targetLine = findTaskLineByBlockId(lines, blockId);
-            lines[targetLine] = upsertBulletProperty(
+            const withId = upsertBulletProperty(
               lines[targetLine],
               "id",
-              canonicalId,
+              edit.canonicalId,
             ).line;
+            lines[targetLine] = promoteObsidianTaskCheckboxStatus(
+              withId,
+              edit.desiredStatus,
+            );
           });
           return lines.join(targetNewline);
         });
@@ -13600,6 +13699,9 @@ module.exports.helpers = {
   getSectionHeaderJumpLine,
   isObsidianTaskLine,
   isObsidianTaskAtLine,
+  getObsidianTaskCheckboxStatus,
+  getObsidianTaskStatusRank,
+  promoteObsidianTaskCheckboxStatus,
   getMarkdownLineContexts,
   isOpenObsidianTaskLine,
   isPomodorosHeading,

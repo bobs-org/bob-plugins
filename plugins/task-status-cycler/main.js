@@ -119,6 +119,21 @@ function getVimRepeat(actionArgs) {
   return normalizeVimRepeat(actionArgs && actionArgs.repeat);
 }
 
+function getPomodoroMoveOnlyAdditionalLines(actionArgs) {
+  if (!actionArgs) {
+    return 0;
+  }
+
+  // CodeMirror Vim supplies repeat=1 even when no count was typed. Its
+  // repeatIsExplicit flag is what distinguishes bare `#` (the cursor line
+  // only) from `1#` (the cursor line and one additional physical line).
+  const repeatIsExplicit =
+    typeof actionArgs.repeatIsExplicit === "boolean"
+      ? actionArgs.repeatIsExplicit
+      : actionArgs.repeat !== undefined && actionArgs.repeat !== null;
+  return repeatIsExplicit ? getVimRepeat(actionArgs) : 0;
+}
+
 function getPendingVimRepeat(cm) {
   const inputState = cm && cm.state && cm.state.vim && cm.state.vim.inputState;
   const rawKeyBuffer = inputState && inputState.keyBuffer;
@@ -1441,6 +1456,96 @@ function getSubBulletBlockRange(lines, pomodoroLine, section = null) {
   return {
     startLine: pomodoroLine + 1,
     endLine: line,
+  };
+}
+
+function buildPomodoroMoveOnlyMarkPlan(lines, cursorLine, additionalLines = 0) {
+  const ineligiblePlan = {
+    eligible: false,
+    edits: [],
+  };
+  if (!Array.isArray(lines) || !Number.isInteger(cursorLine)) {
+    return ineligiblePlan;
+  }
+
+  const section = findPomodorosSectionInLines(lines);
+  const fenced = getFencedLineNumbers(lines);
+  if (
+    !lineIsInPomodorosSection(section, cursorLine) ||
+    fenced.has(cursorLine)
+  ) {
+    return ineligiblePlan;
+  }
+
+  let pomodoroLine = null;
+  for (let line = cursorLine - 1; line >= section.startLine; line -= 1) {
+    if (isTopLevelTaskLine(lines[line])) {
+      pomodoroLine = line;
+      break;
+    }
+  }
+  if (pomodoroLine === null) {
+    return ineligiblePlan;
+  }
+
+  const pomodoroStatus = getTaskStatusForLine(
+    lines[pomodoroLine],
+    pomodoroLine,
+  );
+  if (!pomodoroStatus || pomodoroStatus.symbol !== " ") {
+    return ineligiblePlan;
+  }
+
+  const range = getSubBulletBlockRange(lines, pomodoroLine, section);
+  if (
+    !range ||
+    cursorLine < range.startLine ||
+    cursorLine >= range.endLine ||
+    !getBareNonEmbeddedBlockLinkTargetFromListItem(lines[cursorLine])
+  ) {
+    return ineligiblePlan;
+  }
+
+  const boundedAdditionalLines = Math.max(
+    0,
+    Math.floor(Number(additionalLines) || 0),
+  );
+  const endLine = Math.min(
+    range.endLine,
+    cursorLine + boundedAdditionalLines + 1,
+  );
+  const edits = [];
+
+  for (let line = cursorLine; line < endLine; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+
+    const sourceLineText = String(lines[line] || "");
+    if (getMoveOnlyPomodoroBlockLinkFromListItem(sourceLineText)) {
+      continue;
+    }
+
+    const target = getBareNonEmbeddedBlockLinkTargetFromListItem(sourceLineText);
+    if (!target) {
+      continue;
+    }
+
+    edits.push({
+      line,
+      sourceLineText,
+      lineText: `${sourceLineText.slice(0, target.endIndex)}#${sourceLineText.slice(target.endIndex)}`,
+      target,
+    });
+  }
+
+  return {
+    eligible: true,
+    pomodoroLine,
+    range,
+    startLine: cursorLine,
+    endLine,
+    edits,
   };
 }
 
@@ -4101,6 +4206,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     vim.defineAction("taskStatusCyclerOpenPreviousLineLink", (cm, actionArgs) =>
       this.handleVimBackspaceLinkOrFallthrough(cm, actionArgs),
     );
+    vim.defineAction("taskStatusCyclerMarkPomodoroMoveOnly", (cm, actionArgs) =>
+      this.handleVimMarkPomodoroMoveOnly(cm, actionArgs),
+    );
     vim.mapCommand("<CR>", "action", "taskStatusCyclerOpenNextLineLink", {}, {
       context: "normal",
     });
@@ -4128,6 +4236,9 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       context: "normal",
     });
     vim.mapCommand("O", "action", "taskStatusCyclerOpenLineAbove", {}, {
+      context: "normal",
+    });
+    vim.mapCommand("#", "action", "taskStatusCyclerMarkPomodoroMoveOnly", {}, {
       context: "normal",
     });
     this.registerVimNavigationMappings(vim);
@@ -4167,6 +4278,25 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     this.vimEnterFallthrough(cm, repeat);
+  }
+
+  handleVimMarkPomodoroMoveOnly(_cm, actionArgs) {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || !view.editor) {
+      return;
+    }
+
+    const activeFile = view.file || this.app.workspace.getActiveFile();
+    if (!activeFile) {
+      return;
+    }
+
+    const additionalLines = getPomodoroMoveOnlyAdditionalLines(actionArgs);
+    void this.markPomodoroMoveOnlyRange(
+      view.editor,
+      activeFile,
+      additionalLines,
+    ).catch(() => false);
   }
 
   handleVimTaskToggleOpenDone() {
@@ -6515,6 +6645,81 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     };
   }
 
+  async markPomodoroMoveOnlyRange(editor, activeFile, additionalLines = 0) {
+    if (
+      !editor ||
+      !activeFile ||
+      !activeFile.path ||
+      typeof editor.getCursor !== "function"
+    ) {
+      return false;
+    }
+
+    const cursor = editor.getCursor();
+    if (!cursor || !Number.isInteger(cursor.line)) {
+      return false;
+    }
+
+    const plan = buildPomodoroMoveOnlyMarkPlan(
+      this.getEditorLineTexts(editor),
+      cursor.line,
+      additionalLines,
+    );
+    if (!plan.eligible) {
+      return false;
+    }
+
+    const context = {
+      editor,
+      activePath: activeFile.path,
+      originPath: activeFile.path,
+    };
+    const validatedEdits = [];
+    for (const edit of plan.edits) {
+      try {
+        const resolvedTarget = await this.resolveTranscludedBlockTarget(
+          edit.target,
+          context,
+          {
+            linePredicate: isProperObsidianTaskLine,
+            taskStatusPredicate: (taskStatus) => !!taskStatus,
+          },
+        );
+        if (resolvedTarget) {
+          validatedEdits.push(edit);
+        }
+      } catch (error) {
+        // Best effort: one stale or unreadable target must not block other
+        // eligible lines in the counted range.
+      }
+    }
+
+    let changed = false;
+    try {
+      for (const edit of validatedEdits) {
+        if (
+          typeof editor.getLine !== "function" ||
+          typeof editor.replaceRange !== "function" ||
+          editor.getLine(edit.line) !== edit.sourceLineText
+        ) {
+          continue;
+        }
+        editor.replaceRange(
+          edit.lineText,
+          { line: edit.line, ch: 0 },
+          { line: edit.line, ch: edit.sourceLineText.length },
+        );
+        changed = true;
+      }
+    } finally {
+      if (typeof editor.setCursor === "function") {
+        editor.setCursor(cursor);
+      }
+    }
+
+    return changed;
+  }
+
   applyPomodoroCompletionPlan(editor, plan, cursor, markdownView = null) {
     if (!editor || !plan || !Array.isArray(plan.edits)) {
       return false;
@@ -7435,6 +7640,7 @@ module.exports.helpers = {
   addOrReplaceCompletionField,
   addCreatedFieldToObsidianTaskLine,
   buildPomodoroCompletionPlan,
+  buildPomodoroMoveOnlyMarkPlan,
   buildPomodoroReopenMarkerEdits,
   centerEditorViewOnPosition,
   classifyPomodoroSubBullets,
@@ -7496,6 +7702,7 @@ module.exports.helpers = {
   getTaskStatusForLine,
   getTaskBlockLinkTargetFromLine,
   getVimRepeat,
+  getPomodoroMoveOnlyAdditionalLines,
   getPendingVimRepeat,
   resetPendingVimInputState,
   isPomodoroTaskLine,

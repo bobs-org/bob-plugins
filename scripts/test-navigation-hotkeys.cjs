@@ -78,20 +78,113 @@ class TestEditor {
     return this.content;
   }
   getLine(line) {
-    return this.content.split("\n")[line] ?? null;
+    return this.content.split(/\r?\n/)[line] ?? null;
   }
   replaceRange(text, from, to = from) {
     const offset = (position) => {
-      const lines = this.content.split("\n");
+      const newline = this.content.includes("\r\n") ? "\r\n" : "\n";
+      const lines = this.content.split(/\r?\n/);
       return (
         lines
           .slice(0, position.line)
-          .reduce((sum, line) => sum + line.length + 1, 0) + position.ch
+          .reduce((sum, line) => sum + line.length + newline.length, 0) +
+        position.ch
       );
     };
     const start = offset(from);
     const end = offset(to);
     this.content = this.content.slice(0, start) + text + this.content.slice(end);
+  }
+}
+
+class TransactionEditor extends TestEditor {
+  constructor(content, cursor, scrollTop = 640) {
+    super(content);
+    this.cursor = { ...cursor };
+    this.scrollTop = scrollTop;
+    this.transactions = [];
+    this.transactionScrollTops = [];
+    this.setCursorCalls = [];
+    this.undoGroups = 0;
+  }
+  getCursor() {
+    return { ...this.cursor };
+  }
+  getScrollInfo() {
+    return { left: 0, top: this.scrollTop };
+  }
+  setCursor(lineOrPosition, ch) {
+    const position =
+      typeof lineOrPosition === "object"
+        ? lineOrPosition
+        : { line: lineOrPosition, ch };
+    this.cursor = { ...position };
+    this.setCursorCalls.push({ ...position });
+  }
+  transaction(transaction) {
+    this.transactionScrollTops.push(this.scrollTop);
+    this.transactions.push(JSON.parse(JSON.stringify(transaction)));
+    if (transaction.changes && transaction.changes.length > 0) {
+      this.undoGroups += 1;
+    }
+    const changes = [...(transaction.changes || [])].sort(
+      (left, right) =>
+        right.from.line - left.from.line || right.from.ch - left.from.ch,
+    );
+    for (const change of changes) {
+      super.replaceRange(change.text, change.from, change.to || change.from);
+    }
+    if (transaction.selection) {
+      this.cursor = {
+        ...(transaction.selection.to || transaction.selection.from),
+      };
+    }
+  }
+}
+
+class RecordingFallbackEditor extends TestEditor {
+  constructor(content, cursor) {
+    super(content);
+    this.cursor = { ...cursor };
+    this.events = [];
+    this.replaceCalls = [];
+    this.setCursorCalls = [];
+  }
+  getCursor() {
+    return { ...this.cursor };
+  }
+  replaceRange(text, from, to = from) {
+    this.events.push(`replace:${from.line}`);
+    this.replaceCalls.push({
+      text,
+      from: { ...from },
+      to: { ...to },
+    });
+    super.replaceRange(text, from, to);
+  }
+  setCursor(lineOrPosition, ch) {
+    const position =
+      typeof lineOrPosition === "object"
+        ? lineOrPosition
+        : { line: lineOrPosition, ch };
+    this.events.push("cursor");
+    this.cursor = { ...position };
+    this.setCursorCalls.push({ ...position });
+  }
+}
+
+function assertLineBoundedTransaction(transaction, originalLines, changedLines) {
+  assert.deepEqual(
+    transaction.changes.map((change) => change.from.line),
+    changedLines,
+  );
+  for (const change of transaction.changes) {
+    assert.deepEqual(change.from, { line: change.from.line, ch: 0 });
+    assert.deepEqual(change.to, {
+      line: change.from.line,
+      ch: originalLines[change.from.line].length,
+    });
+    assert.doesNotMatch(change.text, /[\r\n]/);
   }
 }
 
@@ -1071,6 +1164,281 @@ test("same-file dependency toggle preserves plain toggling for invalid parents a
   assert.equal(invalidTargetResult.qualified, false);
   assert.match(invalidTargetResult.content, /  - !\[\[#\^child\]\]/);
   assert.doesNotMatch(invalidTargetResult.content, /dependsOn|\[id::/);
+});
+
+test("single runtime transclusion toggle preserves viewport in one line transaction", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const lines = Array.from({ length: 24 }, (_, index) => `context ${index}`);
+  const activeLine = 8;
+  lines[activeLine] = "- [[Target]] trailing";
+  const editor = new TransactionEditor(lines.join("\n"), {
+    line: activeLine,
+    ch: 10,
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+  };
+  const originalScrollTop = editor.getScrollInfo().top;
+
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.transactionScrollTops, [originalScrollTop]);
+  assert.equal(editor.getScrollInfo().top, originalScrollTop);
+  assert.deepEqual(editor.setCursorCalls, []);
+  assertLineBoundedTransaction(editor.transactions[0], lines, [activeLine]);
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: { line: activeLine, ch: 11 },
+    to: { line: activeLine, ch: 11 },
+  });
+  assert.equal(editor.getLine(activeLine), "- ![[Target]] trailing");
+});
+
+test("same-file runtime dependency add and removal use focused transactions", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const lines = Array.from({ length: 24 }, (_, index) => `context ${index}`);
+  const parentLine = 3;
+  const activeLine = 6;
+  const targetLine = 15;
+  lines[parentLine] = "- [/] #task Parent ^parent";
+  lines[4] = "  - supporting detail";
+  lines[5] = "  - another detail";
+  lines[activeLine] = "  - [[#^target]]";
+  lines[targetLine] = "- [ ] #task Target ^target";
+  const editor = new TransactionEditor(lines.join("\n"), {
+    line: activeLine,
+    ch: 12,
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+  };
+  const originalScrollTop = editor.getScrollInfo().top;
+
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assertLineBoundedTransaction(
+    editor.transactions[0],
+    lines,
+    [parentLine, activeLine, targetLine],
+  );
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: { line: activeLine, ch: 13 },
+    to: { line: activeLine, ch: 13 },
+  });
+  assert.match(editor.getLine(parentLine), /dependsOn:: Here__target/);
+  assert.equal(editor.getLine(activeLine), "  - ![[#^target]]");
+  assert.match(
+    editor.getLine(targetLine),
+    /- \[\/\] #task Target \[id:: Here__target\] \^target/,
+  );
+  assert.equal(editor.getScrollInfo().top, originalScrollTop);
+
+  const beforeRemovalLines = editor.content.split("\n");
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+
+  assert.equal(editor.transactions.length, 2);
+  assert.equal(editor.undoGroups, 2);
+  assertLineBoundedTransaction(
+    editor.transactions[1],
+    beforeRemovalLines,
+    [parentLine, activeLine],
+  );
+  assert.deepEqual(editor.transactions[1].selection, {
+    from: { line: activeLine, ch: 12 },
+    to: { line: activeLine, ch: 12 },
+  });
+  assert.doesNotMatch(editor.getLine(parentLine), /dependsOn/);
+  assert.equal(editor.getLine(activeLine), "  - [[#^target]]");
+  assert.match(editor.getLine(targetLine), /id:: Here__target/);
+  assert.equal(editor.getScrollInfo().top, originalScrollTop);
+});
+
+test("counted runtime transclusion toggle preserves viewport and caret", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const lines = Array.from({ length: 22 }, (_, index) => `context ${index}`);
+  const activeLine = 7;
+  lines[activeLine] = "- [[One]]";
+  lines[activeLine + 2] = "- ![[Two]]";
+  const cursor = { line: activeLine, ch: 7 };
+  const editor = new TransactionEditor(lines.join("\n"), cursor, 720);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+  };
+
+  assert.equal(
+    await plugin.toggleCountedLineTransclusions(editor, cursor, 2),
+    true,
+  );
+
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.transactionScrollTops, [720]);
+  assert.equal(editor.getScrollInfo().top, 720);
+  assertLineBoundedTransaction(
+    editor.transactions[0],
+    lines,
+    [activeLine, activeLine + 2],
+  );
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: { line: activeLine, ch: 8 },
+    to: { line: activeLine, ch: 8 },
+  });
+  assert.equal(editor.getLine(activeLine), "- ![[One]]");
+  assert.equal(editor.getLine(activeLine + 2), "- [[Two]]");
+});
+
+test("async cross-file runtime toggle applies one focused source transaction", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  const lines = Array.from({ length: 22 }, (_, index) => `context ${index}`);
+  const parentLine = 5;
+  const activeLine = 7;
+  lines[parentLine] = "- [/] #task Parent ^parent";
+  lines[6] = "  - supporting detail";
+  lines[activeLine] = "  - [[Other#^target]]";
+  let targetContent = "- [ ] #task Target ^target";
+  const editor = new TransactionEditor(lines.join("\n"), {
+    line: activeLine,
+    ch: 12,
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    metadataCache: { getFirstLinkpathDest: () => targetFile },
+    vault: {
+      cachedRead: async () => {
+        await Promise.resolve();
+        return targetContent;
+      },
+      getAbstractFileByPath: () => null,
+      process: async (_file, transform) => {
+        await Promise.resolve();
+        targetContent = transform(targetContent);
+      },
+    },
+  };
+
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assertLineBoundedTransaction(
+    editor.transactions[0],
+    lines,
+    [parentLine, activeLine],
+  );
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: { line: activeLine, ch: 13 },
+    to: { line: activeLine, ch: 13 },
+  });
+  assert.match(editor.getLine(parentLine), /dependsOn:: Other__target/);
+  assert.match(
+    targetContent,
+    /- \[\/\] #task Target \[id:: Other__target\] \^target/,
+  );
+  assert.equal(editor.getScrollInfo().top, 640);
+});
+
+test("cross-file write failure still toggles only the source link", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  const lines = [
+    "- [ ] #task Parent ^parent",
+    "  - [[Other#^target]]",
+    "context below",
+  ];
+  const editor = new TransactionEditor(lines.join("\n"), { line: 1, ch: 12 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    metadataCache: { getFirstLinkpathDest: () => targetFile },
+    vault: {
+      cachedRead: async () => "- [ ] #task Target ^target",
+      process: async () => {
+        throw new Error("write failed");
+      },
+    },
+  };
+
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+
+  assert.equal(editor.transactions.length, 1);
+  assertLineBoundedTransaction(editor.transactions[0], lines, [1]);
+  assert.equal(editor.getLine(1), "  - ![[Other#^target]]");
+  assert.doesNotMatch(editor.getLine(0), /dependsOn/);
+});
+
+test("line-local fallback applies bottom-up and preserves CRLF", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const lines = Array.from({ length: 22 }, (_, index) => `context ${index}`);
+  const parentLine = 3;
+  const activeLine = 6;
+  const targetLine = 15;
+  lines[parentLine] = "- [/] #task Parent ^parent";
+  lines[4] = "  - supporting detail";
+  lines[5] = "  - another detail";
+  lines[activeLine] = "  - [[#^target]]";
+  lines[targetLine] = "- [ ] #task Target ^target";
+  const editor = new RecordingFallbackEditor(lines.join("\r\n"), {
+    line: activeLine,
+    ch: 12,
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+  };
+
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+
+  assert.deepEqual(
+    editor.replaceCalls.map((call) => call.from.line),
+    [targetLine, activeLine, parentLine],
+  );
+  assert.equal(
+    editor.replaceCalls.every((call) => call.from.line === call.to.line),
+    true,
+  );
+  assert.deepEqual(editor.events, [
+    `replace:${targetLine}`,
+    `replace:${activeLine}`,
+    `replace:${parentLine}`,
+    "cursor",
+  ]);
+  assert.deepEqual(editor.setCursorCalls, [{ line: activeLine, ch: 13 }]);
+  const expected = lines.slice();
+  expected[parentLine] =
+    "- [/] #task Parent [dependsOn:: Here__target] ^parent";
+  expected[activeLine] = "  - ![[#^target]]";
+  expected[targetLine] =
+    "- [/] #task Target [id:: Here__target] ^target";
+  assert.equal(editor.content, expected.join("\r\n"));
+});
+
+test("source line-count invariant rejects embedded newline changes", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const editor = new TransactionEditor("before\n- [[Target]]\nafter", {
+    line: 1,
+    ch: 4,
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+  };
+
+  assert.equal(
+    await plugin.applyDependencyAwareTransclusionChanges(editor, [
+      { line: 1, nextLineText: "- ![[Target]]\nextra" },
+    ]),
+    false,
+  );
+  assert.equal(editor.content, "before\n- [[Target]]\nafter");
+  assert.deepEqual(editor.transactions, []);
 });
 
 test("runtime dependency toggle atomically promotes a cross-file target", async () => {

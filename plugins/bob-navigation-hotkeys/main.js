@@ -4830,6 +4830,58 @@ function replaceEditorLine(cm, line, oldLineText, newLineText) {
   return true;
 }
 
+function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null) {
+  if (
+    !cm ||
+    !Array.isArray(originalLines) ||
+    !Array.isArray(nextLines) ||
+    originalLines.length !== nextLines.length ||
+    nextLines.some((line) => /[\r\n]/.test(String(line)))
+  ) {
+    return false;
+  }
+
+  const changes = [];
+  for (let line = 0; line < originalLines.length; line += 1) {
+    const originalLine = String(originalLines[line] || "");
+    const nextLine = String(nextLines[line] || "");
+    if (originalLine === nextLine) {
+      continue;
+    }
+    changes.push({
+      from: { line, ch: 0 },
+      to: { line, ch: originalLine.length },
+      text: nextLine,
+    });
+  }
+
+  if (changes.length === 0) {
+    return true;
+  }
+
+  const cursor = normalizePosition(finalCursor);
+  if (typeof cm.transaction === "function") {
+    const transaction = { changes };
+    if (cursor) {
+      transaction.selection = { from: cursor, to: cursor };
+    }
+    cm.transaction(transaction);
+    return true;
+  }
+
+  if (typeof cm.replaceRange !== "function") {
+    return false;
+  }
+  for (let index = changes.length - 1; index >= 0; index -= 1) {
+    const change = changes[index];
+    cm.replaceRange(change.text, change.from, change.to);
+  }
+  if (cursor) {
+    setEditorCursorSafely(cm, cursor.line, cursor.ch);
+  }
+  return true;
+}
+
 function replaceEditorContent(cm, oldContent, newContent) {
   if (!cm || typeof cm.replaceRange !== "function") {
     return false;
@@ -9321,7 +9373,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
   }
 
-  async applyDependencyAwareTransclusionChanges(cm, changesByLine) {
+  async applyDependencyAwareTransclusionChanges(
+    cm,
+    changesByLine,
+    finalCursor = null,
+  ) {
     if (!cm || typeof cm.getValue !== "function") {
       return false;
     }
@@ -9599,7 +9655,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (String(cm.getValue() || "") !== originalContent) {
       return false;
     }
-    return replaceEditorContent(cm, originalContent, nextLines.join(newline));
+    return applyEditorLineChanges(cm, originalLines, nextLines, finalCursor);
   }
 
   async propagateDependencyIdReplacements(replacements, excludedPaths = new Set()) {
@@ -9688,19 +9744,19 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (!result.changed) {
       return false;
     }
-    const applied = await this.applyDependencyAwareTransclusionChanges(cm, [
-      { line: cursor.line, nextLineText: result.line },
-    ]);
-    if (!applied) {
-      return false;
-    }
-
     const nextCh = adjustCursorChForTransclusionChanges(
       cursor.ch,
       result.changes,
       result.line.length,
     );
-    setEditorCursorSafely(cm, cursor.line, nextCh);
+    const applied = await this.applyDependencyAwareTransclusionChanges(
+      cm,
+      [{ line: cursor.line, nextLineText: result.line }],
+      { line: cursor.line, ch: nextCh },
+    );
+    if (!applied) {
+      return false;
+    }
 
     return true;
   }
@@ -9734,10 +9790,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    if (!(await this.applyDependencyAwareTransclusionChanges(editor, result.changesByLine))) {
-      return false;
-    }
-
     const activeChange = result.changesByLine.find(
       (change) => change.line === startLine,
     );
@@ -9753,7 +9805,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         )
       : Math.min(Math.max(normalizedCursor.ch, 0), nextActiveLine.length);
 
-    setEditorCursorSafely(editor, startLine, nextCh);
+    if (
+      !(await this.applyDependencyAwareTransclusionChanges(
+        editor,
+        result.changesByLine,
+        { line: startLine, ch: nextCh },
+      ))
+    ) {
+      return false;
+    }
+
     return true;
   }
 

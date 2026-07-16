@@ -2358,6 +2358,530 @@ test("migration warns and never rewrites ambiguous dependency IDs", (t) => {
   assert.equal(fs.readFileSync(parentPath, "utf8"), originalParent);
 });
 
+test("counted task moves discover movable tasks without wrapping or examples", () => {
+  const lines = [
+    "---",
+    "example: - [ ] #task YAML",
+    "---",
+    "- [ ] #task Start ^start",
+    "prose",
+    "- [x] #task Done ^done",
+    "- [ ] #task Lifecycle ^prj",
+    "```md",
+    "- [ ] #task Fenced ^fake",
+    "```",
+    "- [?] #task Custom ^custom",
+  ];
+  const content = lines.join("\n");
+  const result = helpers.discoverMovableObsidianTaskTargets(content, 3, 3);
+  assert.equal(result.valid, true);
+  assert.equal(result.requestedCount, 4);
+  assert.equal(result.actualCount, 3);
+  assert.equal(result.clamped, true);
+  assert.deepEqual(
+    result.targets.map((target) => target.line),
+    [3, 5, 10],
+  );
+  assert.match(
+    helpers.discoverMovableObsidianTaskTargets(content, 6, 0).error,
+    /lifecycle/,
+  );
+  assert.match(
+    helpers.discoverMovableObsidianTaskTargets(content, 4, 0).error,
+    /real #task/,
+  );
+});
+
+test("task move ranges preserve quoted subtrees and collapse overlapping selections", () => {
+  const content = [
+    "Intro",
+    "> - [ ] #task Parent ^parent",
+    ">   Explanation",
+    ">",
+    ">   - [x] #task Child ^child",
+    ">     - ![[#^dependency]]",
+    "> - [ ] #task Sibling ^sibling",
+    "Tail",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(content, 1, 1);
+  assert.deepEqual(
+    discovery.targets.map((target) => target.line),
+    [1, 4],
+  );
+  const ranges = helpers.buildTaskMoveRanges(content, discovery.targets);
+  assert.equal(ranges.valid, true);
+  assert.equal(ranges.ranges.length, 1);
+  assert.deepEqual(ranges.ranges[0].selectedTargetLines, [1, 4]);
+  assert.deepEqual(helpers.rebaseTaskMoveBlock(ranges.ranges[0]), [
+    "- [ ] #task Parent ^parent",
+    "  Explanation",
+    "",
+    "  - [x] #task Child ^child",
+    "    - ![[#^dependency]]",
+  ]);
+
+  const childTarget = { line: 4, rawLine: content.split("\n")[4] };
+  const childRange = helpers.buildTaskMoveRanges(content, [childTarget]);
+  assert.deepEqual(helpers.rebaseTaskMoveBlock(childRange.ranges[0]), [
+    "- [x] #task Child ^child",
+    "  - ![[#^dependency]]",
+  ]);
+});
+
+test("task move removal handles disjoint ranges, blank seams, and CRLF", () => {
+  const content = [
+    "Before",
+    "",
+    "- [ ] #task One",
+    "  child",
+    "",
+    "- [/] #task Two",
+    "",
+    "After",
+    "",
+  ].join("\r\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(content, 2, 1);
+  const ranges = helpers.buildTaskMoveRanges(content, discovery.targets);
+  const removed = helpers.removeTaskMoveRanges(content, ranges.ranges);
+  assert.equal(removed.valid, true);
+  assert.equal(removed.content, "Before\r\n\r\nAfter\r\n");
+  assert.equal(removed.nextLine, 2);
+});
+
+test("task move destinations include areas and only open projects", () => {
+  const files = [
+    { path: "z/Waiting.md", basename: "Waiting" },
+    { path: "Source.md", basename: "Source" },
+    { path: "a/Area.md", basename: "Area" },
+    { path: "b/Wip.md", basename: "Wip" },
+    { path: "c/Done.md", basename: "Done" },
+    { path: "d/Unknown.md", basename: "Unknown" },
+    { path: "_templates/new_project.md", basename: "new_project" },
+  ];
+  const info = new Map([
+    ["z/Waiting.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "waiting" })],
+    ["Source.md", helpers.getChildNoteInfo({ type: "[[area]]" })],
+    ["a/Area.md", helpers.getChildNoteInfo({ type: "[[area]]" })],
+    ["b/Wip.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "wip" })],
+    ["c/Done.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "done" })],
+    ["d/Unknown.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "mystery" })],
+    ["_templates/new_project.md", helpers.getChildNoteInfo({ type: "[[area]]" })],
+  ]);
+  const destinations = helpers.collectTaskMoveDestinations(
+    files,
+    "Source.md",
+    (file) => info.get(file.path),
+  );
+  assert.deepEqual(
+    destinations.map((entry) => entry.file.path),
+    ["a/Area.md", "b/Wip.md", "z/Waiting.md"],
+  );
+  assert.match(
+    helpers.getChildNoteSearchText(
+      destinations[0].file,
+      destinations[0].noteInfo,
+    ),
+    /area/,
+  );
+  assert.match(
+    helpers.getChildNoteSearchText(
+      destinations[2].file,
+      destinations[2].noteInfo,
+    ),
+    /waiting/,
+  );
+});
+
+test("task move insertion replaces placeholders and creates area Tasks sections", () => {
+  const moved = [["- [x] #task Moved [p::3] ^moved", "  child"]];
+  const project = [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION)",
+    "",
+    "## Notes",
+    "Keep",
+  ].join("\n");
+  const inserted = helpers.insertTaskMoveBlocks(project, moved, "project");
+  assert.equal(inserted.valid, true);
+  assert.doesNotMatch(inserted.content, /REPLACE WITH TASK DESCRIPTION/);
+  assert.match(inserted.content, /- \[x\] #task Moved \[p::3\] \^moved\n  child/);
+  assert.match(inserted.content, /child\n\n## Notes/);
+
+  const area = [
+    "---",
+    "type: \"[[area]]\"",
+    "---",
+    "# Area",
+    "Body",
+    "",
+  ].join("\r\n");
+  const created = helpers.insertTaskMoveBlocks(area, moved, "area");
+  assert.equal(created.valid, true);
+  assert.match(created.content, /Body\r\n\r\n## Tasks\r\n\r\n- \[x\]/);
+  assert.equal(created.content.endsWith("\r\n"), true);
+
+  const invalidProject = helpers.insertTaskMoveBlocks(project.replace("## Tasks", "## Work"), moved, "project");
+  assert.equal(invalidProject.valid, false);
+  assert.match(invalidProject.error, /no valid ## Tasks/);
+});
+
+test("task move planning migrates identities and links across every affected note", () => {
+  const source = [
+    "- [ ] #task One [id:: Source__one] [dependsOn:: Source__two] ^one",
+    "  - ![[#^two|Two]]",
+    "  - [[#^stay|Stay]]",
+    "- [/] #task Two [id:: Source__two] ^two",
+    "- [ ] #task Stay [dependsOn:: Source__one] ^stay",
+    "  - [[#^one|Moved]]",
+  ].join("\n");
+  const destination = [
+    "---",
+    "type: \"[[project]]\"",
+    "status: waiting",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION)",
+  ].join("\n");
+  const refs = [
+    "- [ ] #task Ref [dependsOn:: Source__one]",
+    "![[Source#^one|Embedded alias]]",
+    "[Second](Source.md#^two)",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 1);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Projects/Dest.md",
+    sourceContent: source,
+    destinationContent: destination,
+    otherContents: new Map([["Refs.md", refs]]),
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const nextSource = plan.changes.get("Source.md").after;
+  assert.match(nextSource, /dependsOn:: Projects__Dest__one/);
+  assert.match(nextSource, /\[\[Projects\/Dest#\^one\|Moved\]\]/);
+  assert.doesNotMatch(nextSource, /#task One|#task Two/);
+
+  const nextDestination = plan.changes.get("Projects/Dest.md").after;
+  assert.match(nextDestination, /#task One \[id:: Projects__Dest__one\]/);
+  assert.match(nextDestination, /dependsOn:: Projects__Dest__two/);
+  assert.match(nextDestination, /!\[\[#\^two\|Two\]\]/);
+  assert.match(nextDestination, /\[\[Source#\^stay\|Stay\]\]/);
+  assert.match(nextDestination, /#task Two \[id:: Projects__Dest__two\]/);
+
+  const nextRefs = plan.changes.get("Refs.md").after;
+  assert.match(nextRefs, /dependsOn:: Projects__Dest__one/);
+  assert.match(nextRefs, /!\[\[Projects\/Dest#\^one\|Embedded alias\]\]/);
+  assert.match(nextRefs, /\(Projects\/Dest\.md#\^two\)/);
+});
+
+test("task move planning rejects destination collisions and malformed identities", () => {
+  const destination = [
+    "---",
+    "type: \"[[area]]\"",
+    "---",
+    "## Tasks",
+    "- [ ] #task Existing ^same",
+  ].join("\n");
+  const collisionSource = "- [ ] #task Move ^same";
+  let discovery = helpers.discoverMovableObsidianTaskTargets(collisionSource, 0, 0);
+  let plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Area.md",
+    sourceContent: collisionSource,
+    destinationContent: destination,
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, false);
+  assert.match(plan.error, /already contains block ID/);
+
+  const malformed = "- [ ] #task Move [id:: wrong] ^move";
+  discovery = helpers.discoverMovableObsidianTaskTargets(malformed, 0, 0);
+  plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Area.md",
+    sourceContent: malformed,
+    destinationContent: destination.replace("^same", "^other"),
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, false);
+  assert.match(plan.error, /ambiguous \[id::\]/);
+});
+
+test("physical task move chord consumes bare and counted Vim normal input once", () => {
+  const makeEvent = (overrides = {}) => {
+    const calls = { prevent: 0, stop: 0, immediate: 0 };
+    return {
+      key: "M",
+      code: "KeyM",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      metaKey: false,
+      preventDefault: () => calls.prevent += 1,
+      stopPropagation: () => calls.stop += 1,
+      stopImmediatePropagation: () => calls.immediate += 1,
+      calls,
+      ...overrides,
+    };
+  };
+  const inputState = {
+    keyBuffer: [],
+    repeat: null,
+    getRepeat: () => null,
+  };
+  const cm = {
+    state: { vim: { mode: "normal", inputState } },
+    getCursor: () => ({ line: 0, ch: 0 }),
+  };
+  const editor = { cm: { cm } };
+  const view = { editor };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.handledCountedTaskMoveEvents = new WeakSet();
+  plugin.getFocusedMarkdownEditorView = () => view;
+  const opens = [];
+  plugin.openTaskMoveDestinationPicker = (_editor, _view, options) => {
+    opens.push(options);
+    return true;
+  };
+
+  const bare = makeEvent();
+  assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(bare), true);
+  assert.deepEqual(opens[0], { countExplicit: false, additionalTaskCount: 0 });
+  assert.deepEqual(bare.calls, { prevent: 1, stop: 1, immediate: 1 });
+  assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(bare), false);
+
+  inputState.keyBuffer = ["2"];
+  inputState.repeat = 2;
+  inputState.getRepeat = () => 2;
+  const counted = makeEvent();
+  assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(counted), true);
+  assert.deepEqual(opens[1], { countExplicit: true, additionalTaskCount: 2 });
+  assert.deepEqual(inputState.keyBuffer, []);
+  assert.equal(inputState.repeat, null);
+
+  for (const mode of ["insert", "visual", "visual-line", "replace"]) {
+    cm.state.vim.mode = mode;
+    const event = makeEvent();
+    assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+  cm.state.vim.mode = "normal";
+  for (const overrides of [
+    { ctrlKey: false },
+    { shiftKey: false },
+    { altKey: true },
+    { metaKey: true },
+    { code: "KeyN", key: "N" },
+  ]) {
+    const event = makeEvent(overrides);
+    assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+});
+
+test("runtime task move writes destination before source and rolls back source failures", async () => {
+  notices.length = 0;
+  const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+  const destinationFile = { path: "Dest.md", basename: "Dest", extension: "md" };
+  const sourceContent = "- [ ] #task Move ^move\n- [ ] #task Stay ^stay";
+  const destinationContent = [
+    "---",
+    "type: \"[[area]]\"",
+    "---",
+    "# Destination",
+  ].join("\n");
+  class FailingSourceEditor extends TransactionEditor {
+    transaction() {
+      throw new Error("injected source failure");
+    }
+  }
+  const sourceEditor = new FailingSourceEditor(sourceContent, { line: 0, ch: 4 });
+  const contents = new Map([
+    [sourceFile.path, sourceContent],
+    [destinationFile.path, destinationContent],
+  ]);
+  const writeOrder = [];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    vault: {
+      getMarkdownFiles: () => [sourceFile, destinationFile],
+      cachedRead: async (file) => contents.get(file.path),
+      process: async (file, transform) => {
+        writeOrder.push(file.path);
+        contents.set(file.path, transform(contents.get(file.path)));
+      },
+    },
+    workspace: {},
+  };
+  plugin.getActiveMarkdownView = () => ({ file: sourceFile, editor: sourceEditor });
+  plugin.getOpenMarkdownEditorForPath = (path) =>
+    path === sourceFile.path ? sourceEditor : null;
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 0);
+  const session = {
+    sourceFile,
+    sourcePath: sourceFile.path,
+    sourceView: null,
+    editor: sourceEditor,
+    sourceContent,
+    cursor: { line: 0, ch: 4 },
+    scroll: null,
+    discovery,
+  };
+  const result = await plugin.commitTaskMoveSession(session, {
+    file: destinationFile,
+  });
+  assert.equal(result, false);
+  assert.equal(sourceEditor.content, sourceContent);
+  assert.equal(contents.get(destinationFile.path), destinationContent);
+  assert.deepEqual(writeOrder, ["Dest.md", "Dest.md"]);
+  assert.match(notices.at(-1), /rolled back.*source tasks were retained/);
+});
+
+test("runtime task move groups open-editor source and destination changes", async () => {
+  notices.length = 0;
+  const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+  const destinationFile = { path: "Dest.md", basename: "Dest", extension: "md" };
+  const sourceContent = "- [ ] #task Move ^move\n- [ ] #task Stay ^stay";
+  const destinationContent = [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task Existing ^existing",
+  ].join("\n");
+  const sourceEditor = new TransactionEditor(sourceContent, { line: 0, ch: 3 });
+  const destinationEditor = new TransactionEditor(destinationContent, { line: 6, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    vault: {
+      getMarkdownFiles: () => [sourceFile, destinationFile],
+      cachedRead: async () => "",
+      process: async () => {
+        throw new Error("open editors should not use vault.process");
+      },
+    },
+    workspace: {},
+  };
+  plugin.getActiveMarkdownView = () => ({ file: sourceFile, editor: sourceEditor });
+  plugin.getOpenMarkdownEditorForPath = (path) =>
+    path === sourceFile.path
+      ? sourceEditor
+      : path === destinationFile.path
+        ? destinationEditor
+        : null;
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 0);
+  const session = {
+    sourceFile,
+    sourcePath: sourceFile.path,
+    editor: sourceEditor,
+    sourceContent,
+    cursor: { line: 0, ch: 3 },
+    scroll: null,
+    discovery,
+  };
+  const result = await plugin.commitTaskMoveSession(session, { file: destinationFile });
+  assert.equal(result, true);
+  assert.equal(sourceEditor.undoGroups, 1);
+  assert.equal(destinationEditor.undoGroups, 1);
+  assert.doesNotMatch(sourceEditor.content, /#task Move/);
+  assert.match(destinationEditor.content, /#task Move \[id:: Dest__move\] \^move/);
+  assert.deepEqual(sourceEditor.cursor, { line: 0, ch: 3 });
+  assert.match(notices.at(-1), /Moved 1 task to Dest/);
+});
+
+test("runtime task move guards destination, auxiliary, and rollback failures", async () => {
+  const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+  const destinationFile = { path: "Dest.md", basename: "Dest", extension: "md" };
+  const refsFile = { path: "Refs.md", basename: "Refs", extension: "md" };
+  const sourceContent = "- [ ] #task Move ^move\n- [ ] #task Stay ^stay";
+  const destinationContent = [
+    "---",
+    "type: \"[[area]]\"",
+    "---",
+    "# Destination",
+  ].join("\n");
+  const refsContent = "![[Source#^move|Moved]]";
+
+  const run = async (failure) => {
+    notices.length = 0;
+    const sourceEditor = new TransactionEditor(sourceContent, { line: 0, ch: 0 });
+    const contents = new Map([
+      [sourceFile.path, sourceContent],
+      [destinationFile.path, destinationContent],
+      [refsFile.path, refsContent],
+    ]);
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.app = {
+      vault: {
+        getMarkdownFiles: () => [sourceFile, destinationFile, refsFile],
+        cachedRead: async (file) => contents.get(file.path),
+        process: async (file, transform) => {
+          const current = contents.get(file.path);
+          if (failure === "destination" && file.path === destinationFile.path) {
+            throw new Error("injected destination failure");
+          }
+          if (failure !== "destination" && file.path === refsFile.path) {
+            throw new Error("injected auxiliary failure");
+          }
+          if (
+            failure === "rollback" &&
+            file.path === destinationFile.path &&
+            current !== destinationContent
+          ) {
+            throw new Error("injected rollback failure");
+          }
+          contents.set(file.path, transform(current));
+        },
+      },
+      workspace: {},
+    };
+    plugin.getActiveMarkdownView = () => ({ file: sourceFile, editor: sourceEditor });
+    plugin.getOpenMarkdownEditorForPath = (path) =>
+      path === sourceFile.path ? sourceEditor : null;
+    const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 0);
+    const result = await plugin.commitTaskMoveSession(
+      {
+        sourceFile,
+        sourcePath: sourceFile.path,
+        editor: sourceEditor,
+        sourceContent,
+        cursor: { line: 0, ch: 0 },
+        scroll: null,
+        discovery,
+      },
+      { file: destinationFile },
+    );
+    return { result, contents, sourceEditor, notice: notices.at(-1) };
+  };
+
+  const destinationFailure = await run("destination");
+  assert.equal(destinationFailure.result, false);
+  assert.equal(destinationFailure.contents.get("Dest.md"), destinationContent);
+  assert.equal(destinationFailure.sourceEditor.content, sourceContent);
+
+  const auxiliaryFailure = await run("auxiliary");
+  assert.equal(auxiliaryFailure.result, false);
+  assert.equal(auxiliaryFailure.contents.get("Dest.md"), destinationContent);
+  assert.equal(auxiliaryFailure.contents.get("Refs.md"), refsContent);
+  assert.equal(auxiliaryFailure.sourceEditor.content, sourceContent);
+  assert.match(auxiliaryFailure.notice, /rolled back/);
+
+  const rollbackFailure = await run("rollback");
+  assert.equal(rollbackFailure.result, false);
+  assert.notEqual(rollbackFailure.contents.get("Dest.md"), destinationContent);
+  assert.equal(rollbackFailure.sourceEditor.content, sourceContent);
+  assert.match(rollbackFailure.notice, /recoverable duplicates.*Dest\.md/);
+});
+
 test("dash restore suppresses editor notice after deliberate navigation", async () => {
   notices.length = 0;
   let activeFile = { path: "dash.md" };

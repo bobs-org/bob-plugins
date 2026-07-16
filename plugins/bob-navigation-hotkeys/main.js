@@ -61,6 +61,11 @@ const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
 const PROJECT_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const PROJECT_TASKS_HEADER = "## Tasks";
 const PROJECT_TASKS_PLACEHOLDER = "(REPLACE WITH TASK DESCRIPTION)";
+const TASK_MOVE_OPEN_PROJECT_STATUSES = new Set(["wip", "waiting"]);
+const TASK_MOVE_TEMPLATE_PATHS = new Set([
+  ...Object.values(NOTE_TEMPLATE_PATHS),
+  PROJECT_TEMPLATE_PATH,
+]);
 const PROJECT_CHILD_LIST_ITEM_RE =
   /^(\s*)(?:[-*+]|\d+[.)])[ \t]+(?:\[([^\]\n])\][ \t]+)?(.*)$/;
 const PROJECT_DEFAULT_BASENAME_SUFFIX_ALPHABET =
@@ -6505,6 +6510,61 @@ class FilteredPickerModal extends Modal {
   }
 }
 
+function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {
+  const rowIcon = rowEl.createDiv({
+    cls:
+      noteInfo && noteInfo.decorated
+        ? `bob-cnp-row-icon is-status-${noteInfo.variant}`
+        : "bob-cnp-row-icon",
+  });
+  applyIcon(rowIcon, noteInfo ? noteInfo.icon : "file-text");
+
+  const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+  const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+  appendHighlighted(titleEl, file.basename, query);
+  const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+  appendHighlighted(pathEl, file.path, query);
+
+  if (!noteInfo || !noteInfo.decorated) {
+    return;
+  }
+  const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
+  if (noteInfo.kind === "project" && noteInfo.scheduled) {
+    const scheduleAriaLabel = `Project scheduled for ${noteInfo.scheduledDate}`;
+    const scheduleEl = badgesEl.createDiv({
+      cls: "bob-cnp-row-schedule",
+      attr: {
+        "aria-label": scheduleAriaLabel,
+        title: scheduleAriaLabel,
+      },
+    });
+    const scheduleIcon = scheduleEl.createSpan({
+      cls: "bob-cnp-row-schedule-icon",
+    });
+    applyIcon(scheduleIcon, "calendar-clock");
+    const scheduleLabel = scheduleEl.createSpan({
+      cls: "bob-cnp-row-schedule-label",
+    });
+    appendHighlighted(scheduleLabel, noteInfo.scheduledLabel, query);
+  }
+
+  const statusText = [noteInfo.emoji, noteInfo.label]
+    .filter(Boolean)
+    .join(" ");
+  const ariaLabel =
+    noteInfo.kind === "area"
+      ? "Area note"
+      : `Project status: ${noteInfo.label}`;
+  const statusEl = badgesEl.createDiv({
+    cls: `bob-cnp-row-status is-status-${noteInfo.variant}`,
+    attr: {
+      "aria-label": ariaLabel,
+      title: ariaLabel,
+    },
+  });
+  appendHighlighted(statusEl, statusText, query);
+}
+
 class ChildNotePickerModal extends FilteredPickerModal {
   constructor(app, plugin, childFiles, parentFile) {
     const now = new Date();
@@ -6543,65 +6603,45 @@ class ChildNotePickerModal extends FilteredPickerModal {
       },
       filterItem: (file, query) =>
         childNoteMatchesQuery(file, noteInfoByPath.get(file.path), query),
-      renderItem: (file, rowEl, query) => {
-        const noteInfo = noteInfoByPath.get(file.path);
-        const rowIcon = rowEl.createDiv({
-          cls:
-            noteInfo && noteInfo.decorated
-              ? `bob-cnp-row-icon is-status-${noteInfo.variant}`
-              : "bob-cnp-row-icon",
-        });
-        applyIcon(rowIcon, noteInfo ? noteInfo.icon : "file-text");
-
-        const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-        const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-        appendHighlighted(titleEl, file.basename, query);
-        const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-        appendHighlighted(pathEl, file.path, query);
-
-        if (noteInfo && noteInfo.decorated) {
-          const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
-          if (noteInfo.kind === "project" && noteInfo.scheduled) {
-            const scheduleAriaLabel = `Project scheduled for ${noteInfo.scheduledDate}`;
-            const scheduleEl = badgesEl.createDiv({
-              cls: "bob-cnp-row-schedule",
-              attr: {
-                "aria-label": scheduleAriaLabel,
-                title: scheduleAriaLabel,
-              },
-            });
-            const scheduleIcon = scheduleEl.createSpan({
-              cls: "bob-cnp-row-schedule-icon",
-            });
-            applyIcon(scheduleIcon, "calendar-clock");
-            const scheduleLabel = scheduleEl.createSpan({
-              cls: "bob-cnp-row-schedule-label",
-            });
-            appendHighlighted(
-              scheduleLabel,
-              noteInfo.scheduledLabel,
-              query,
-            );
-          }
-
-          const statusText = [noteInfo.emoji, noteInfo.label]
-            .filter(Boolean)
-            .join(" ");
-          const ariaLabel =
-            noteInfo.kind === "area"
-              ? "Area note"
-              : `Project status: ${noteInfo.label}`;
-          const statusEl = badgesEl.createDiv({
-            cls: `bob-cnp-row-status is-status-${noteInfo.variant}`,
-            attr: {
-              "aria-label": ariaLabel,
-              title: ariaLabel,
-            },
-          });
-          appendHighlighted(statusEl, statusText, query);
-        }
-      },
+      renderItem: (file, rowEl, query) =>
+        renderTypedNotePickerRow(
+          file,
+          noteInfoByPath.get(file.path),
+          rowEl,
+          query,
+        ),
       openItem: (file) => plugin.openChildNote(file),
+    });
+  }
+}
+
+class TaskMoveDestinationPickerModal extends FilteredPickerModal {
+  constructor(app, plugin, destinations, session) {
+    const selectedCount = session.discovery.actualCount;
+    const requestedCount = session.discovery.requestedCount;
+    const clampedText = session.discovery.clamped
+      ? ` · requested ${requestedCount}; reached end of note`
+      : "";
+    super(app, {
+      items: destinations,
+      title: "Move tasks to note",
+      headerIcon: "move-right",
+      inputLabel: "Filter task destinations",
+      placeholder: "Filter areas and open projects",
+      resultsLabel: "Task move destinations",
+      emptyText: "No matching areas or open projects",
+      getSubtitle: (visible, all) => {
+        const shown =
+          visible.length === all.length
+            ? `${all.length} destination${all.length === 1 ? "" : "s"}`
+            : `showing ${visible.length} of ${all.length} destinations`;
+        return `${selectedCount} selected task${selectedCount === 1 ? "" : "s"} · ${shown}${clampedText}`;
+      },
+      filterItem: (entry, query) =>
+        childNoteMatchesQuery(entry.file, entry.noteInfo, query),
+      renderItem: (entry, rowEl, query) =>
+        renderTypedNotePickerRow(entry.file, entry.noteInfo, rowEl, query),
+      openItem: (entry) => plugin.commitTaskMoveSession(session, entry),
     });
   }
 }
@@ -7329,6 +7369,852 @@ function validateCountedTaskSession(content, session) {
   }
 
   return Object.freeze({ valid: true, error: null, staleTarget: null });
+}
+
+// A task move uses the same count convention as counted property editing, but
+// project lifecycle tasks are structural controls and therefore never become
+// move targets. The first line must itself be movable; later ^prj tasks are
+// skipped without consuming the requested count.
+function discoverMovableObsidianTaskTargets(
+  content,
+  startLine,
+  additionalTaskCount,
+) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const line = Math.floor(numericOrDefault(startLine, Number.NaN));
+  const additional = Math.max(
+    0,
+    Math.floor(numericOrDefault(additionalTaskCount, 0)),
+  );
+  const requestedCount = additional + 1;
+  const contexts = getMarkdownLineContexts(text);
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      explicit: additional > 0,
+      startLine: Number.isFinite(line) ? line : null,
+      requestedAdditionalCount: additional,
+      requestedCount,
+      actualCount: 0,
+      clamped: false,
+      targets: Object.freeze([]),
+    });
+
+  if (
+    !Number.isFinite(line) ||
+    !isObsidianTaskAtLine(text, line, contexts, source.lines)
+  ) {
+    return invalid("Move tasks must start on a real #task checkbox");
+  }
+  if (isProjectLifecycleTaskLine(source.lines[line])) {
+    return invalid("Project lifecycle tasks cannot be moved");
+  }
+
+  const targets = [];
+  for (
+    let lineIndex = line;
+    lineIndex < source.lines.length && targets.length < requestedCount;
+    lineIndex += 1
+  ) {
+    if (
+      isObsidianTaskAtLine(text, lineIndex, contexts, source.lines) &&
+      !isProjectLifecycleTaskLine(source.lines[lineIndex])
+    ) {
+      targets.push(
+        Object.freeze({
+          line: lineIndex,
+          rawLine: String(source.lines[lineIndex] || ""),
+        }),
+      );
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    explicit: additional > 0,
+    startLine: line,
+    requestedAdditionalCount: additional,
+    requestedCount,
+    actualCount: targets.length,
+    clamped: targets.length < requestedCount,
+    targets: Object.freeze(targets),
+  });
+}
+
+function getTaskMoveColumn(text) {
+  let column = 0;
+  for (const character of String(text || "")) {
+    column += character === "\t" ? 4 : 1;
+  }
+  return column;
+}
+
+// Return the Markdown container prefix before a line's content. The prefix may
+// contain indentation and one or more blockquote markers. Keeping both its raw
+// text and display column lets subtree detection handle nested/quoted tasks
+// while still rebasing the captured block losslessly in the common case.
+function parseTaskMoveContainerPrefix(lineText) {
+  const text = String(lineText || "");
+  let index = 0;
+  let quoteDepth = 0;
+  let initialIndentEnd = 0;
+  let sawQuote = false;
+
+  while (index < text.length) {
+    const whitespaceStart = index;
+    while (index < text.length && (text[index] === " " || text[index] === "\t")) {
+      index += 1;
+    }
+    if (!sawQuote) {
+      initialIndentEnd = index;
+    }
+    if (text[index] !== ">") {
+      break;
+    }
+    sawQuote = true;
+    quoteDepth += 1;
+    index += 1;
+    if (text[index] === " " || text[index] === "\t") {
+      index += 1;
+    }
+    if (index === whitespaceStart) {
+      break;
+    }
+  }
+
+  const prefix = text.slice(0, index);
+  const initialIndent = text.slice(0, initialIndentEnd);
+  return Object.freeze({
+    prefix,
+    length: prefix.length,
+    column: getTaskMoveColumn(prefix),
+    quoteDepth,
+    initialIndentColumn: getTaskMoveColumn(initialIndent),
+  });
+}
+
+function parseTaskMoveListItem(lineText) {
+  const text = String(lineText || "");
+  const container = parseTaskMoveContainerPrefix(text);
+  const remainder = text.slice(container.length);
+  const markerMatch = /^(?:[-+*]|\d+[.)])[ \t]+/.exec(remainder);
+  if (!markerMatch) {
+    return null;
+  }
+  return Object.freeze({
+    ...container,
+    markerIndex: container.length,
+    markerText: markerMatch[0],
+    contentColumn: container.column + getTaskMoveColumn(markerMatch[0]),
+  });
+}
+
+function isTaskMoveBlankLine(lineText) {
+  return /^[\s>]*$/.test(String(lineText || ""));
+}
+
+function taskMoveLineIsDescendant(root, lineText) {
+  const text = String(lineText || "");
+  if (!root || isTaskMoveBlankLine(text)) {
+    return false;
+  }
+  const candidate = parseTaskMoveContainerPrefix(text);
+  if (candidate.quoteDepth < root.quoteDepth) {
+    return false;
+  }
+  // A top-level blockquote immediately following an unquoted task is a sibling
+  // block, not task content. An indented blockquote can still be a child.
+  if (
+    root.quoteDepth === 0 &&
+    candidate.quoteDepth > 0 &&
+    candidate.initialIndentColumn <= root.initialIndentColumn
+  ) {
+    return false;
+  }
+  return candidate.column >= root.contentColumn;
+}
+
+function captureTaskMoveSubtree(content, target) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const line = target && Number.isInteger(target.line) ? target.line : -1;
+  const contexts = getMarkdownLineContexts(text);
+  if (
+    line < 0 ||
+    line >= source.lines.length ||
+    source.lines[line] !== target.rawLine ||
+    !isObsidianTaskAtLine(text, line, contexts, source.lines) ||
+    isProjectLifecycleTaskLine(source.lines[line])
+  ) {
+    return Object.freeze({
+      valid: false,
+      error: "A selected task changed before it could be moved",
+    });
+  }
+
+  const root = parseTaskMoveListItem(source.lines[line]);
+  if (!root) {
+    return Object.freeze({ valid: false, error: "Selected task is not a list item" });
+  }
+
+  let endLineExclusive = line + 1;
+  let pendingBlankEnd = endLineExclusive;
+  for (let index = line + 1; index < source.lines.length; index += 1) {
+    const candidate = String(source.lines[index] || "");
+    if (isTaskMoveBlankLine(candidate)) {
+      pendingBlankEnd = index + 1;
+      continue;
+    }
+    if (!taskMoveLineIsDescendant(root, candidate)) {
+      break;
+    }
+    endLineExclusive = index + 1;
+    pendingBlankEnd = endLineExclusive;
+  }
+
+  // Blank lines are retained only when followed by deeper content. Trailing
+  // separators stay with the source/destination section rather than the task.
+  const blockLines = source.lines.slice(line, endLineExclusive);
+  return Object.freeze({
+    valid: true,
+    error: null,
+    startLine: line,
+    endLineExclusive,
+    lines: Object.freeze(blockLines),
+    root,
+    pendingBlankEnd,
+    selectedTargetLines: Object.freeze([line]),
+  });
+}
+
+function buildTaskMoveRanges(content, targets) {
+  const captured = [];
+  for (const target of Array.isArray(targets) ? targets : []) {
+    const block = captureTaskMoveSubtree(content, target);
+    if (!block.valid) {
+      return Object.freeze({ valid: false, error: block.error, ranges: [] });
+    }
+    captured.push(block);
+  }
+  captured.sort((left, right) => left.startLine - right.startLine);
+
+  const ranges = [];
+  for (const block of captured) {
+    const previous = ranges[ranges.length - 1];
+    if (previous && block.startLine < previous.endLineExclusive) {
+      previous.selectedTargetLines.push(block.startLine);
+      continue;
+    }
+    ranges.push({
+      startLine: block.startLine,
+      endLineExclusive: block.endLineExclusive,
+      lines: [...block.lines],
+      root: block.root,
+      selectedTargetLines: [...block.selectedTargetLines],
+    });
+  }
+
+  return Object.freeze({
+    valid: ranges.length > 0,
+    error: ranges.length > 0 ? null : "No movable tasks were selected",
+    ranges: Object.freeze(
+      ranges.map((range) =>
+        Object.freeze({
+          ...range,
+          lines: Object.freeze(range.lines),
+          selectedTargetLines: Object.freeze(range.selectedTargetLines),
+        }),
+      ),
+    ),
+  });
+}
+
+function removeTaskMoveRanges(content, ranges) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const nextLines = source.lines.slice();
+  const ordered = (Array.isArray(ranges) ? ranges : [])
+    .slice()
+    .sort((left, right) => right.startLine - left.startLine);
+  if (ordered.length === 0) {
+    return Object.freeze({
+      valid: false,
+      error: "No task ranges are available",
+      content: text,
+      nextLine: 0,
+    });
+  }
+
+  for (const range of ordered) {
+    const expected = Array.isArray(range.lines) ? range.lines : [];
+    const live = nextLines.slice(range.startLine, range.endLineExclusive);
+    if (
+      live.length !== expected.length ||
+      live.some((line, index) => line !== expected[index])
+    ) {
+      return Object.freeze({
+        valid: false,
+        error: "A selected task subtree changed before it could be moved",
+        content: text,
+        nextLine: range.startLine,
+      });
+    }
+
+    let deleteCount = range.endLineExclusive - range.startLine;
+    const before = nextLines[range.startLine - 1];
+    const after = nextLines[range.endLineExclusive];
+    if (
+      before !== undefined &&
+      after !== undefined &&
+      String(before).trim() === "" &&
+      String(after).trim() === ""
+    ) {
+      // Avoid leaving a doubled seam while preserving one existing separator.
+      deleteCount += 1;
+    }
+    nextLines.splice(range.startLine, deleteCount);
+  }
+
+  const firstStart = Math.min(...ordered.map((range) => range.startLine));
+  return Object.freeze({
+    valid: true,
+    error: null,
+    content: nextLines.join(source.lineEnding),
+    nextLine: Math.min(firstStart, Math.max(nextLines.length - 1, 0)),
+  });
+}
+
+function rebaseTaskMoveBlock(range) {
+  const lines = range && Array.isArray(range.lines) ? range.lines : [];
+  const root = range && range.root;
+  if (!root || lines.length === 0) {
+    return Object.freeze([]);
+  }
+  return Object.freeze(
+    lines.map((line, index) => {
+      const text = String(line || "");
+      if (isTaskMoveBlankLine(text)) {
+        return "";
+      }
+      if (index === 0) {
+        return text.slice(root.markerIndex);
+      }
+      if (root.prefix && text.startsWith(root.prefix)) {
+        return text.slice(root.prefix.length);
+      }
+      // Mixed tabs/spaces or quote spacing can make the raw prefix differ.
+      // Remove no more than the root's structural display width.
+      let column = 0;
+      let offset = 0;
+      while (offset < text.length && column < root.column) {
+        column += text[offset] === "\t" ? 4 : 1;
+        offset += 1;
+      }
+      return text.slice(offset);
+    }),
+  );
+}
+
+function flattenTaskMoveBlocks(blocks) {
+  const lines = [];
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    const blockLines = Array.isArray(block) ? block.map(String) : [];
+    if (blockLines.length === 0) {
+      continue;
+    }
+    if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
+      lines.push("");
+    }
+    lines.push(...blockLines);
+  }
+  return lines;
+}
+
+function parseTaskMoveDestinationFrontmatter(content, options = {}) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  if (!startsWithFrontmatter(source.lines)) {
+    return Object.freeze({ valid: false, error: "Destination has no YAML frontmatter" });
+  }
+  let closingLine = -1;
+  for (let index = 1; index < source.lines.length; index += 1) {
+    if (FRONTMATTER_DELIMITER_RE.test(source.lines[index])) {
+      closingLine = index;
+      break;
+    }
+  }
+  if (closingLine === -1) {
+    return Object.freeze({ valid: false, error: "Destination frontmatter is not closed" });
+  }
+
+  let data;
+  try {
+    const yamlParser = options.parseYaml || parseYaml;
+    data = yamlParser(source.lines.slice(1, closingLine).join("\n"));
+  } catch (error) {
+    return Object.freeze({ valid: false, error: "Destination frontmatter is malformed" });
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return Object.freeze({ valid: false, error: "Destination frontmatter must be a mapping" });
+  }
+
+  const noteInfo = getChildNoteInfo(data, options.now || new Date());
+  if (noteInfo.kind === "area") {
+    return Object.freeze({
+      valid: true,
+      error: null,
+      kind: "area",
+      statusKey: "",
+      data,
+      noteInfo,
+    });
+  }
+  if (
+    noteInfo.kind === "project" &&
+    TASK_MOVE_OPEN_PROJECT_STATUSES.has(noteInfo.statusKey)
+  ) {
+    return Object.freeze({
+      valid: true,
+      error: null,
+      kind: "project",
+      statusKey: noteInfo.statusKey,
+      data,
+      noteInfo,
+    });
+  }
+
+  const error =
+    noteInfo.kind === "project"
+      ? "Destination project is no longer open"
+      : "Destination is no longer an area or open project";
+  return Object.freeze({ valid: false, error, kind: noteInfo.kind, data, noteInfo });
+}
+
+function collectTaskMoveDestinations(files, sourcePath, getNoteInfo) {
+  const source = normalizeVaultRelativePath(sourcePath);
+  const infoFor =
+    typeof getNoteInfo === "function"
+      ? getNoteInfo
+      : () => getChildNoteInfo(null);
+  return (Array.isArray(files) ? files : [])
+    .filter((file) => {
+      const path = normalizeVaultRelativePath(file && file.path);
+      return (
+        path &&
+        MARKDOWN_EXTENSION_RE.test(path) &&
+        path !== source &&
+        !TASK_MOVE_TEMPLATE_PATHS.has(path)
+      );
+    })
+    .map((file) => ({ file, noteInfo: infoFor(file) }))
+    .filter(
+      ({ noteInfo }) =>
+        noteInfo &&
+        (noteInfo.kind === "area" ||
+          (noteInfo.kind === "project" &&
+            TASK_MOVE_OPEN_PROJECT_STATUSES.has(noteInfo.statusKey))),
+    )
+    .sort((left, right) => {
+      const leftPath = String(left.file.path || "");
+      const rightPath = String(right.file.path || "");
+      return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
+    })
+    .map((entry) => Object.freeze(entry));
+}
+
+function getTaskMoveSectionEnd(lines, headerIndex) {
+  let inFence = null;
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    const line = String(lines[index] || "");
+    if (inFence) {
+      if (isClosingFence(line, inFence)) {
+        inFence = null;
+      }
+      continue;
+    }
+    const openingFence = getFenceOpening(line);
+    if (openingFence) {
+      inFence = openingFence;
+      continue;
+    }
+    if (SECTION_HEADER_RE.test(line)) {
+      return index;
+    }
+  }
+  return lines.length;
+}
+
+function insertTaskMoveBlocks(content, blocks, destinationKind) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const movedLines = flattenTaskMoveBlocks(blocks);
+  if (movedLines.length === 0) {
+    return Object.freeze({ valid: false, error: "No task content is available", content: text });
+  }
+
+  let headerIndex = findProjectTasksHeaderIndex(source.lines);
+  if (headerIndex === -1) {
+    if (destinationKind !== "area") {
+      return Object.freeze({
+        valid: false,
+        error: "Open project destination has no valid ## Tasks section",
+        content: text,
+      });
+    }
+    const hadTerminalNewline = /\r?\n$/.test(text);
+    let next = text;
+    if (next && !next.endsWith(source.lineEnding)) {
+      next += source.lineEnding;
+    }
+    if (next && !next.endsWith(source.lineEnding + source.lineEnding)) {
+      next += source.lineEnding;
+    }
+    next += `${PROJECT_TASKS_HEADER}${source.lineEnding}${source.lineEnding}${movedLines.join(source.lineEnding)}`;
+    if (hadTerminalNewline) {
+      next += source.lineEnding;
+    }
+    return Object.freeze({ valid: true, error: null, content: next, createdSection: true });
+  }
+
+  const sectionEnd = getTaskMoveSectionEnd(source.lines, headerIndex);
+  const nonblankBody = [];
+  for (let index = headerIndex + 1; index < sectionEnd; index += 1) {
+    if (String(source.lines[index] || "").trim() !== "") {
+      nonblankBody.push(index);
+    }
+  }
+  const placeholderIndex =
+    nonblankBody.length === 1 &&
+    PROJECT_SOURCE_TASK_LINE_RE.test(source.lines[nonblankBody[0]]) &&
+    source.lines[nonblankBody[0]].includes(PROJECT_TASKS_PLACEHOLDER)
+      ? nonblankBody[0]
+      : -1;
+
+  let nextLines;
+  if (placeholderIndex !== -1) {
+    nextLines = source.lines
+      .slice(0, placeholderIndex)
+      .concat(movedLines, source.lines.slice(placeholderIndex + 1));
+  } else {
+    let insertAt = sectionEnd;
+    while (
+      insertAt > headerIndex + 1 &&
+      String(source.lines[insertAt - 1] || "").trim() === ""
+    ) {
+      insertAt -= 1;
+    }
+    const insertion = [];
+    if (
+      insertAt === headerIndex + 1 ||
+      String(source.lines[insertAt - 1] || "").trim() !== ""
+    ) {
+      insertion.push("");
+    }
+    insertion.push(...movedLines);
+    nextLines = source.lines
+      .slice(0, insertAt)
+      .concat(insertion, source.lines.slice(insertAt));
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    content: nextLines.join(source.lineEnding),
+    createdSection: false,
+  });
+}
+
+function collectTaskMoveBlockIds(content) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const ids = new Set();
+  for (let index = 0; index < source.lines.length; index += 1) {
+    const context = contexts[index];
+    if (!context || context.inFrontmatter || context.inFence) {
+      continue;
+    }
+    const id = getTrailingBlockId(source.lines[index]);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function prepareTaskMoveBlockIdentities(blocks, sourcePath, destinationPath) {
+  const nextBlocks = (Array.isArray(blocks) ? blocks : []).map((block) =>
+    Array.isArray(block) ? block.map(String) : [],
+  );
+  const movedBlockIds = new Set();
+  const idReplacements = new Map();
+
+  for (const block of nextBlocks) {
+    for (let index = 0; index < block.length; index += 1) {
+      const line = block[index];
+      const blockId = getTrailingBlockId(line);
+      if (!blockId) {
+        continue;
+      }
+      if (movedBlockIds.has(blockId)) {
+        return Object.freeze({ valid: false, error: `Moved task block ID is duplicated: ${blockId}` });
+      }
+      movedBlockIds.add(blockId);
+
+      if (!isObsidianTaskLine(line)) {
+        continue;
+      }
+      const oldCanonicalId = tryDependencyId(sourcePath, blockId);
+      const newCanonicalId = tryDependencyId(destinationPath, blockId);
+      if (!oldCanonicalId || !newCanonicalId) {
+        return Object.freeze({
+          valid: false,
+          error: `Task block ID cannot be encoded for the move: ${blockId}`,
+        });
+      }
+      const idFields = parseBulletPropertyFields(line).filter(
+        (field) => field.key === "id",
+      );
+      if (idFields.length > 1) {
+        return Object.freeze({
+          valid: false,
+          error: `Task has multiple [id::] fields: ${blockId}`,
+        });
+      }
+      if (idFields.length === 1) {
+        const existingId = normalizeBulletPropertyValue(idFields[0].value);
+        if (existingId !== oldCanonicalId && existingId !== blockId) {
+          return Object.freeze({
+            valid: false,
+            error: `Task has an ambiguous [id::] value: ${blockId}`,
+          });
+        }
+        if (existingId) {
+          idReplacements.set(existingId, newCanonicalId);
+        }
+      }
+      idReplacements.set(oldCanonicalId, newCanonicalId);
+      block[index] = upsertBulletProperty(line, "id", newCanonicalId).line;
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    blocks: Object.freeze(nextBlocks.map((block) => Object.freeze(block))),
+    movedBlockIds,
+    idReplacements,
+  });
+}
+
+function taskMoveLinkNoteMatchesPath(note, filePath) {
+  const target = normalizeVaultRelativePath(note).replace(MARKDOWN_EXTENSION_RE, "");
+  const path = normalizeVaultRelativePath(filePath).replace(MARKDOWN_EXTENSION_RE, "");
+  if (!target || !path) {
+    return false;
+  }
+  const basename = path.slice(path.lastIndexOf("/") + 1);
+  return target === path || target === basename;
+}
+
+function rewriteTaskMoveBlockLinks(content, options = {}) {
+  const text = String(content || "");
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+  const destinationPath = normalizeVaultRelativePath(options.destinationPath);
+  const currentPath = normalizeVaultRelativePath(options.currentPath);
+  const role = String(options.role || "external");
+  const movedBlockIds =
+    options.movedBlockIds instanceof Set
+      ? options.movedBlockIds
+      : new Set(options.movedBlockIds || []);
+  const sourceBlockIds =
+    options.sourceBlockIds instanceof Set
+      ? options.sourceBlockIds
+      : new Set(options.sourceBlockIds || []);
+  const sourceNote = sourcePath.replace(MARKDOWN_EXTENSION_RE, "");
+  const destinationNote = destinationPath.replace(MARKDOWN_EXTENSION_RE, "");
+
+  const nextNote = (note, blockId, markdown) => {
+    const pathless = !String(note || "").trim();
+    if (role === "moved" && pathless) {
+      if (movedBlockIds.has(blockId)) {
+        return note;
+      }
+      if (sourceBlockIds.has(blockId)) {
+        return markdown ? sourcePath : sourceNote;
+      }
+      return note;
+    }
+
+    const targetsSource = pathless
+      ? currentPath === sourcePath
+      : taskMoveLinkNoteMatchesPath(note, sourcePath);
+    if (targetsSource && movedBlockIds.has(blockId)) {
+      return markdown ? destinationPath : destinationNote;
+    }
+    return note;
+  };
+
+  const rewriteLine = (line) => {
+    let nextLine = String(line || "").replace(
+      /(!?)\[\[([^\]\n|#]*?)#\^([A-Za-z0-9-]+)(\|[^\]\n]*)?\]\]/g,
+      (match, embed, note, blockId, alias = "") => {
+        const replacementNote = nextNote(note, blockId, false);
+        return replacementNote === note
+          ? match
+          : `${embed}[[${replacementNote}#^${blockId}${alias || ""}]]`;
+      },
+    );
+    nextLine = nextLine.replace(
+      /(!?\[[^\]\n]*(?:\\.[^\]\n]*)*\]\()([^\s)#]*?)#\^([A-Za-z0-9-]+)([^)]*)\)/g,
+      (match, prefix, note, blockId, suffix = "") => {
+        const replacementNote = nextNote(note, blockId, true);
+        return replacementNote === note
+          ? match
+          : `${prefix}${replacementNote}#^${blockId}${suffix || ""})`;
+      },
+    );
+    return nextLine;
+  };
+  const source = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const next = source.lines
+    .map((line, index) =>
+      contexts[index] && contexts[index].inFence ? line : rewriteLine(line),
+    )
+    .join(source.lineEnding);
+  return Object.freeze({ content: next, changed: next !== text });
+}
+
+function rewriteTaskMoveReferences(content, options = {}) {
+  const text = String(content || "");
+  const dependencyRewrite = rewriteDependsOnIdsInContent(
+    text,
+    options.idReplacements || new Map(),
+  );
+  return rewriteTaskMoveBlockLinks(dependencyRewrite.content, options);
+}
+
+function planTaskMoveAcrossFiles(options = {}) {
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+  const destinationPath = normalizeVaultRelativePath(options.destinationPath);
+  const sourceContent = String(options.sourceContent || "");
+  const destinationContent = String(options.destinationContent || "");
+  if (!sourcePath || !destinationPath || sourcePath === destinationPath) {
+    return Object.freeze({ valid: false, error: "Task move source and destination are invalid" });
+  }
+
+  const destination = parseTaskMoveDestinationFrontmatter(
+    destinationContent,
+    options,
+  );
+  if (!destination.valid) {
+    return Object.freeze({ valid: false, error: destination.error });
+  }
+  const rangeResult = buildTaskMoveRanges(sourceContent, options.targets);
+  if (!rangeResult.valid) {
+    return Object.freeze({ valid: false, error: rangeResult.error });
+  }
+  const removal = removeTaskMoveRanges(sourceContent, rangeResult.ranges);
+  if (!removal.valid) {
+    return Object.freeze({ valid: false, error: removal.error });
+  }
+
+  const rebasedBlocks = rangeResult.ranges.map(rebaseTaskMoveBlock);
+  const identities = prepareTaskMoveBlockIdentities(
+    rebasedBlocks,
+    sourcePath,
+    destinationPath,
+  );
+  if (!identities.valid) {
+    return Object.freeze({ valid: false, error: identities.error });
+  }
+  const destinationBlockIds = collectTaskMoveBlockIds(destinationContent);
+  for (const blockId of identities.movedBlockIds) {
+    if (destinationBlockIds.has(blockId)) {
+      return Object.freeze({
+        valid: false,
+        error: `Destination already contains block ID: ${blockId}`,
+      });
+    }
+  }
+
+  const sourceBlockIds = collectTaskMoveBlockIds(sourceContent);
+  const referenceOptions = {
+    sourcePath,
+    destinationPath,
+    movedBlockIds: identities.movedBlockIds,
+    sourceBlockIds,
+    idReplacements: identities.idReplacements,
+  };
+  const movedBlocks = identities.blocks.map((block) => {
+    const rewritten = rewriteTaskMoveReferences(block.join("\n"), {
+      ...referenceOptions,
+      currentPath: sourcePath,
+      role: "moved",
+    });
+    return Object.freeze(rewritten.content.split("\n"));
+  });
+  const rewrittenSource = rewriteTaskMoveReferences(removal.content, {
+    ...referenceOptions,
+    currentPath: sourcePath,
+    role: "source",
+  }).content;
+  const rewrittenDestination = rewriteTaskMoveReferences(destinationContent, {
+    ...referenceOptions,
+    currentPath: destinationPath,
+    role: "destination",
+  }).content;
+  const insertion = insertTaskMoveBlocks(
+    rewrittenDestination,
+    movedBlocks,
+    destination.kind,
+  );
+  if (!insertion.valid) {
+    return Object.freeze({ valid: false, error: insertion.error });
+  }
+
+  const changes = new Map([
+    [sourcePath, Object.freeze({ before: sourceContent, after: rewrittenSource })],
+    [
+      destinationPath,
+      Object.freeze({ before: destinationContent, after: insertion.content }),
+    ],
+  ]);
+  const otherContents =
+    options.otherContents instanceof Map
+      ? options.otherContents
+      : new Map(Object.entries(options.otherContents || {}));
+  for (const [path, content] of otherContents.entries()) {
+    const normalizedPath = normalizeVaultRelativePath(path);
+    if (!normalizedPath || normalizedPath === sourcePath || normalizedPath === destinationPath) {
+      continue;
+    }
+    const before = String(content || "");
+    const after = rewriteTaskMoveReferences(before, {
+      ...referenceOptions,
+      currentPath: normalizedPath,
+      role: "external",
+    }).content;
+    if (after !== before) {
+      changes.set(normalizedPath, Object.freeze({ before, after }));
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    changes,
+    ranges: rangeResult.ranges,
+    movedBlocks: Object.freeze(movedBlocks),
+    movedBlockIds: identities.movedBlockIds,
+    idReplacements: identities.idReplacements,
+    nextSourceLine: removal.nextLine,
+    destinationKind: destination.kind,
+  });
 }
 
 function getCountedPropertyTargetState(
@@ -10086,6 +10972,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "move-tasks-to-note",
+      name: "Move tasks to note",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "M" }],
+      editorCallback: (editor, view) =>
+        this.openTaskMoveDestinationPicker(editor, view),
+    });
+
+    this.addCommand({
       id: "open-next-link",
       name: "Open next link",
       callback: () => this.openLabeledBodyLink("next"),
@@ -10262,6 +11156,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.registerOpenTaskJumpInputListeners();
     this.registerCountedTransclusionToggleInputListeners();
     this.registerCountedBulletPropertyInputListeners();
+    this.registerCountedTaskMoveInputListeners();
     this.registerClearSearchHighlightInputListeners();
 
     this.register(() => {
@@ -11696,6 +12591,71 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         target.removeEventListener("keydown", keydownHandler, true);
       });
     }
+  }
+
+  registerCountedTaskMoveInputListeners() {
+    this.handledCountedTaskMoveEvents = new WeakSet();
+    const keydownHandler = (event) =>
+      this.handleCountedTaskMovePhysicalKeydown(event);
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleCountedTaskMovePhysicalKeydown(event) {
+    if (!this.isCountedTaskMoveKeydown(event)) {
+      return false;
+    }
+    if (
+      this.handledCountedTaskMoveEvents &&
+      this.handledCountedTaskMoveEvents.has(event)
+    ) {
+      return false;
+    }
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
+      return false;
+    }
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const pendingRepeat = getPendingVimRepeat(cm);
+    if (this.handledCountedTaskMoveEvents) {
+      this.handledCountedTaskMoveEvents.add(event);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+    resetPendingVimInputState(cm, "counted-task-move");
+    this.openTaskMoveDestinationPicker(view.editor, view, {
+      countExplicit: pendingRepeat.explicit,
+      additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
+    });
+    return true;
+  }
+
+  isCountedTaskMoveKeydown(event) {
+    return Boolean(
+      event &&
+      event.ctrlKey &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      (event.code === "KeyM" || event.key === "m" || event.key === "M"),
+    );
   }
 
   handleCountedBulletPropertyPhysicalKeydown(event) {
@@ -13468,6 +14428,395 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
+  openTaskMoveDestinationPicker(editor, view, options = {}) {
+    const sourceView = view || this.getActiveMarkdownView();
+    const sourceFile = sourceView && sourceView.file;
+    if (
+      !editor ||
+      typeof editor.getValue !== "function" ||
+      !this.isMarkdownFile(sourceFile)
+    ) {
+      new Notice("Open a Markdown task before moving tasks");
+      return false;
+    }
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("Place the cursor on a real #task checkbox");
+      return false;
+    }
+    const sourceContent = String(editor.getValue() || "");
+    const discovery = discoverMovableObsidianTaskTargets(
+      sourceContent,
+      cursor.line,
+      options.additionalTaskCount || 0,
+    );
+    if (!discovery.valid) {
+      new Notice(discovery.error);
+      return false;
+    }
+    const ranges = buildTaskMoveRanges(sourceContent, discovery.targets);
+    if (!ranges.valid) {
+      new Notice(ranges.error);
+      return false;
+    }
+
+    const vault = this.app && this.app.vault;
+    const markdownFiles =
+      vault && typeof vault.getMarkdownFiles === "function"
+        ? vault.getMarkdownFiles()
+        : [];
+    const destinations = collectTaskMoveDestinations(
+      markdownFiles,
+      sourceFile.path,
+      (file) => getFileChildNoteInfo(this.app, file, new Date()),
+    );
+    const scroll =
+      typeof editor.getScrollInfo === "function"
+        ? editor.getScrollInfo()
+        : null;
+    const session = Object.freeze({
+      sourceFile,
+      sourcePath: sourceFile.path,
+      sourceView,
+      editor,
+      sourceContent,
+      cursor: Object.freeze({ ...cursor }),
+      scroll:
+        scroll && typeof scroll === "object"
+          ? Object.freeze({ left: scroll.left, top: scroll.top })
+          : null,
+      discovery,
+      ranges: ranges.ranges,
+    });
+    new TaskMoveDestinationPickerModal(
+      this.app,
+      this,
+      destinations,
+      session,
+    ).open();
+    return true;
+  }
+
+  async getTaskMoveFileSnapshot(file) {
+    if (!this.isMarkdownFile(file)) {
+      throw new Error("Task move file is not Markdown");
+    }
+    const openEditor = this.getOpenMarkdownEditorForPath(file.path);
+    if (openEditor && typeof openEditor.getValue === "function") {
+      return Object.freeze({
+        file,
+        editor: openEditor,
+        content: String(openEditor.getValue() || ""),
+      });
+    }
+    if (!this.app.vault || typeof this.app.vault.cachedRead !== "function") {
+      throw new Error("Vault content reads are unavailable");
+    }
+    return Object.freeze({
+      file,
+      editor: null,
+      content: String((await this.app.vault.cachedRead(file)) || ""),
+    });
+  }
+
+  async writeTaskMoveChange(path, change, file, session, finalCursor = null) {
+    const sourceEditor =
+      path === session.sourcePath ? session.editor : null;
+    const editor = sourceEditor || this.getOpenMarkdownEditorForPath(path);
+    if (editor && typeof editor.getValue === "function") {
+      if (String(editor.getValue() || "") !== change.before) {
+        throw new Error(`Task move preimage changed: ${path}`);
+      }
+      let applied = false;
+      try {
+        applied = applyEditorContentTransaction(
+          editor,
+          change.before,
+          change.after,
+          finalCursor,
+        );
+      } catch (error) {
+        if (String(editor.getValue() || "") === change.after) {
+          error.taskMoveAppliedEntry = Object.freeze({
+            path,
+            file,
+            editor,
+            change,
+          });
+        }
+        throw error;
+      }
+      if (!applied || String(editor.getValue() || "") !== change.after) {
+        const error = new Error(`Task move editor transaction failed: ${path}`);
+        if (String(editor.getValue() || "") === change.after) {
+          error.taskMoveAppliedEntry = Object.freeze({ path, file, editor, change });
+        }
+        throw error;
+      }
+      return Object.freeze({ path, file, editor, change });
+    }
+
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.process !== "function") {
+      throw new Error("Vault content updates are unavailable");
+    }
+    let transformed = false;
+    try {
+      await vault.process(file, (content) => {
+        if (String(content || "") !== change.before) {
+          throw new Error(`Task move preimage changed: ${path}`);
+        }
+        transformed = true;
+        return change.after;
+      });
+    } catch (error) {
+      try {
+        if (
+          typeof vault.cachedRead === "function" &&
+          String((await vault.cachedRead(file)) || "") === change.after
+        ) {
+          error.taskMoveAppliedEntry = Object.freeze({
+            path,
+            file,
+            editor: null,
+            change,
+          });
+        }
+      } catch (ignoredError) {
+        // The original process error remains authoritative.
+      }
+      throw error;
+    }
+    if (!transformed) {
+      throw new Error(`Task move file transaction failed: ${path}`);
+    }
+    return Object.freeze({ path, file, editor: null, change });
+  }
+
+  async rollbackTaskMoveChanges(written) {
+    const failedPaths = [];
+    for (const entry of (Array.isArray(written) ? written : []).slice().reverse()) {
+      const editor =
+        (entry.editor && typeof entry.editor.getValue === "function"
+          ? entry.editor
+          : this.getOpenMarkdownEditorForPath(entry.path));
+      try {
+        if (editor) {
+          if (String(editor.getValue() || "") !== entry.change.after) {
+            throw new Error("postimage changed");
+          }
+          if (
+            !applyEditorContentTransaction(
+              editor,
+              entry.change.after,
+              entry.change.before,
+            ) ||
+            String(editor.getValue() || "") !== entry.change.before
+          ) {
+            throw new Error("editor rollback failed");
+          }
+          continue;
+        }
+        let restored = false;
+        await this.app.vault.process(entry.file, (content) => {
+          if (String(content || "") !== entry.change.after) {
+            throw new Error("postimage changed");
+          }
+          restored = true;
+          return entry.change.before;
+        });
+        if (!restored) {
+          throw new Error("file rollback failed");
+        }
+      } catch (error) {
+        failedPaths.push(entry.path);
+      }
+    }
+    return failedPaths;
+  }
+
+  restoreTaskMoveSourceContext(session) {
+    const editor = session && session.editor;
+    if (!editor) {
+      return;
+    }
+    if (session.scroll && typeof editor.scrollTo === "function") {
+      try {
+        editor.scrollTo(session.scroll.left, session.scroll.top);
+      } catch (error) {
+        // Viewport restoration is best-effort after the guarded transaction.
+      }
+    }
+    if (typeof editor.focus === "function") {
+      try {
+        editor.focus();
+      } catch (error) {
+        // The source leaf is already active; focus is a final nicety.
+      }
+    }
+  }
+
+  async commitTaskMoveSession(session, destinationEntry) {
+    const destinationFile = destinationEntry && destinationEntry.file;
+    const activeView = this.getActiveMarkdownView();
+    if (
+      !session ||
+      !activeView ||
+      activeView.file.path !== session.sourcePath ||
+      activeView.editor !== session.editor ||
+      !this.isMarkdownFile(destinationFile)
+    ) {
+      new Notice("Source task note is no longer active; nothing was moved");
+      return false;
+    }
+    if (
+      destinationFile.path === session.sourcePath ||
+      TASK_MOVE_TEMPLATE_PATHS.has(destinationFile.path)
+    ) {
+      new Notice("Selected task destination is not eligible");
+      return false;
+    }
+    if (String(session.editor.getValue() || "") !== session.sourceContent) {
+      new Notice("A selected task changed while the destination picker was open");
+      return false;
+    }
+
+    const vault = this.app && this.app.vault;
+    if (
+      !vault ||
+      typeof vault.getMarkdownFiles !== "function" ||
+      typeof vault.process !== "function"
+    ) {
+      new Notice("Vault content updates are unavailable");
+      return false;
+    }
+
+    const snapshots = new Map();
+    const filesByPath = new Map();
+    try {
+      for (const file of vault.getMarkdownFiles()) {
+        if (!this.isMarkdownFile(file)) {
+          continue;
+        }
+        const snapshot = await this.getTaskMoveFileSnapshot(file);
+        snapshots.set(file.path, snapshot.content);
+        filesByPath.set(file.path, file);
+      }
+    } catch (error) {
+      new Notice("Could not read every affected note; nothing was moved");
+      return false;
+    }
+    if (
+      snapshots.get(session.sourcePath) !== session.sourceContent ||
+      !snapshots.has(destinationFile.path)
+    ) {
+      new Notice("Task move source or destination changed; nothing was moved");
+      return false;
+    }
+
+    const destinationContent = snapshots.get(destinationFile.path);
+    const otherContents = new Map(snapshots);
+    otherContents.delete(session.sourcePath);
+    otherContents.delete(destinationFile.path);
+    const plan = planTaskMoveAcrossFiles({
+      sourcePath: session.sourcePath,
+      destinationPath: destinationFile.path,
+      sourceContent: session.sourceContent,
+      destinationContent,
+      otherContents,
+      targets: session.discovery.targets,
+    });
+    if (!plan.valid) {
+      new Notice(`${plan.error}; nothing was moved`);
+      return false;
+    }
+
+    const sourceChange = plan.changes.get(session.sourcePath);
+    const sourceLines = splitMarkdownContent(sourceChange.after).lines;
+    const sourceLine = Math.min(
+      plan.nextSourceLine,
+      Math.max(sourceLines.length - 1, 0),
+    );
+    const finalCursor = {
+      line: sourceLine,
+      ch: Math.min(
+        session.cursor.ch,
+        String(sourceLines[sourceLine] || "").length,
+      ),
+    };
+    const auxiliaryPaths = Array.from(plan.changes.keys())
+      .filter(
+        (path) =>
+          path !== destinationFile.path && path !== session.sourcePath,
+      )
+      .sort();
+    const writeOrder = [
+      destinationFile.path,
+      ...auxiliaryPaths,
+      session.sourcePath,
+    ];
+    const written = [];
+    try {
+      for (const path of writeOrder) {
+        const change = plan.changes.get(path);
+        if (!change || change.before === change.after) {
+          continue;
+        }
+        if (
+          path === session.sourcePath &&
+          (this.getActiveMarkdownView()?.editor !== session.editor ||
+            String(session.editor.getValue() || "") !== change.before)
+        ) {
+          throw new Error("Source editor changed before final removal");
+        }
+        const file = filesByPath.get(path);
+        if (!this.isMarkdownFile(file)) {
+          throw new Error(`Affected Markdown file disappeared: ${path}`);
+        }
+        written.push(
+          await this.writeTaskMoveChange(
+            path,
+            change,
+            file,
+            session,
+            path === session.sourcePath ? finalCursor : null,
+          ),
+        );
+      }
+    } catch (error) {
+      if (
+        error &&
+        error.taskMoveAppliedEntry &&
+        !written.some((entry) => entry.path === error.taskMoveAppliedEntry.path)
+      ) {
+        written.push(error.taskMoveAppliedEntry);
+      }
+      const failedRollbacks = await this.rollbackTaskMoveChanges(written);
+      this.restoreTaskMoveSourceContext(session);
+      if (failedRollbacks.length > 0) {
+        new Notice(
+          `Task move could not finish; recoverable duplicates may need repair in ${failedRollbacks.join(", ")}`,
+        );
+      } else {
+        new Notice("Task move failed; completed writes were rolled back and source tasks were retained");
+      }
+      return false;
+    }
+
+    this.restoreTaskMoveSourceContext(session);
+    const count = session.discovery.actualCount;
+    const destinationName =
+      destinationFile.basename ||
+      getVaultPathBasenameWithoutExtension(destinationFile.path);
+    const clamped = session.discovery.clamped
+      ? ` (requested ${session.discovery.requestedCount}; reached end of note)`
+      : "";
+    new Notice(
+      `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}`,
+    );
+    return true;
+  }
+
   async createProjectNoteFromTask(editor, view) {
     const sourceFile = view && view.file;
     if (!editor || !this.isMarkdownFile(sourceFile)) {
@@ -15040,7 +16389,24 @@ module.exports.helpers = {
   resolveBulletPropertyTarget,
   createBulletPropertyItems,
   discoverCountedObsidianTaskTargets,
+  discoverMovableObsidianTaskTargets,
   validateCountedTaskSession,
+  parseTaskMoveContainerPrefix,
+  parseTaskMoveListItem,
+  taskMoveLineIsDescendant,
+  captureTaskMoveSubtree,
+  buildTaskMoveRanges,
+  removeTaskMoveRanges,
+  rebaseTaskMoveBlock,
+  flattenTaskMoveBlocks,
+  parseTaskMoveDestinationFrontmatter,
+  collectTaskMoveDestinations,
+  insertTaskMoveBlocks,
+  collectTaskMoveBlockIds,
+  prepareTaskMoveBlockIdentities,
+  rewriteTaskMoveBlockLinks,
+  rewriteTaskMoveReferences,
+  planTaskMoveAcrossFiles,
   createCountedBulletPropertyItems,
   validateDependencyParentForEditor,
   getWholeTaskTagSpans,

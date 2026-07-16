@@ -182,7 +182,8 @@ const YANK_PATH_PICKER_TITLES = {
 const BULLET_PROPERTY_CONFIG_RELATIVE_PATH = "bob/config.yml";
 const BULLET_PROPERTY_CONFIG_MOBILE_NOTICE =
   "Bullet properties are only available on desktop";
-const BULLET_PROPERTY_LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
+const BULLET_PROPERTY_LIST_ITEM_RE =
+  /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s/;
 const PROJECT_NOTE_PROPERTY_TARGETS = Object.freeze({
   scheduled: Object.freeze({
     kind: "project-frontmatter",
@@ -207,7 +208,7 @@ const LEGACY_DEPENDENCY_NAVIGATION_LABELS = Object.freeze(
 // indentation), `marker` (the list bullet), `emoji`, `label`, and `linkSpan`
 // (the raw text containing one or more block links).
 const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
-  `^(?<indent>\\s*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${DEPENDENCY_NAVIGATION_EMOJI}[ \\t]+)?\\*\\*(?<label>${[
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${DEPENDENCY_NAVIGATION_EMOJI}[ \\t]+)?\\*\\*(?<label>${[
     DEPENDENCY_NAVIGATION_LABEL,
     ...LEGACY_DEPENDENCY_NAVIGATION_LABELS,
   ]
@@ -216,7 +217,7 @@ const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
 );
 const DEPENDENCY_NAVIGATION_LINK_RE = /\[\[#\^([A-Za-z0-9-]+)\]\]/g;
 const DEPENDENCY_TRANSCLUSION_BULLET_RE =
-  /^(?<indent>\s*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<strike>~~)?(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]\k<strike>[ \t]*$/;
+  /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<strike>~~)?(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]\k<strike>[ \t]*$/;
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
   /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
@@ -685,9 +686,13 @@ function getOpenLocalTasks(content, options = {}) {
   const excludeLine = Number.isInteger(options.excludeLine)
     ? options.excludeLine
     : null;
+  const excludeLines =
+    options.excludeLines instanceof Set
+      ? options.excludeLines
+      : new Set(options.excludeLines || []);
 
   return getOpenObsidianTaskLines(lines)
-    .filter((line) => line !== excludeLine)
+    .filter((line) => line !== excludeLine && !excludeLines.has(line))
     .map((line) => {
       const rawLine = String(lines[line] || "");
       const match = OBSIDIAN_TASK_LINE_RE.exec(rawLine);
@@ -860,16 +865,24 @@ function resolveTargetTaskIdentity(line, options = {}) {
   });
 }
 
-// Leading whitespace of a line (the list-item indentation for bullets).
+// Leading list container prefix, including any Markdown blockquote markers.
 function getBulletIndent(line) {
-  const match = /^(\s*)/.exec(String(line || ""));
+  const match = /^(\s*(?:>\s*)*)/.exec(String(line || ""));
   return match ? match[1] : "";
 }
 
 function getBulletIndentWidth(line) {
   let width = 0;
   for (const character of getBulletIndent(line)) {
-    width = character === "\t" ? width + (4 - (width % 4)) : width + 1;
+    if (character === "\t") {
+      width += 4 - (width % 4);
+    } else if (character === ">") {
+      // Treat each quote level as one logical indentation stop so quoted
+      // navigation children remain inside the source task's quote context.
+      width += 4;
+    } else {
+      width += 1;
+    }
   }
   return width;
 }
@@ -4882,6 +4895,65 @@ function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null
   return true;
 }
 
+function applyEditorContentTransaction(
+  cm,
+  originalContent,
+  nextContent,
+  finalCursor = null,
+) {
+  if (!cm) {
+    return false;
+  }
+  const originalText = String(originalContent || "");
+  const nextText = String(nextContent || "");
+  const original = splitMarkdownContent(originalText);
+  const next = splitMarkdownContent(nextText);
+  const cursor = normalizePosition(finalCursor);
+
+  if (original.lines.length === next.lines.length) {
+    return applyEditorLineChanges(cm, original.lines, next.lines, cursor);
+  }
+  if (originalText === nextText) {
+    return true;
+  }
+
+  const lastLine = Math.max(original.lines.length - 1, 0);
+  const change = {
+    from: { line: 0, ch: 0 },
+    to: {
+      line: lastLine,
+      ch: String(original.lines[lastLine] || "").length,
+    },
+    text: nextText,
+  };
+  if (typeof cm.transaction === "function") {
+    const transaction = { changes: [change] };
+    if (cursor) {
+      transaction.selection = { from: cursor, to: cursor };
+    }
+    cm.transaction(transaction);
+    return true;
+  }
+  if (typeof cm.replaceRange !== "function") {
+    return false;
+  }
+
+  const scroll =
+    typeof cm.getScrollInfo === "function" ? cm.getScrollInfo() : null;
+  cm.replaceRange(change.text, change.from, change.to);
+  if (cursor) {
+    setEditorCursorSafely(cm, cursor.line, cursor.ch);
+  }
+  if (scroll && typeof cm.scrollTo === "function") {
+    try {
+      cm.scrollTo(scroll.left, scroll.top);
+    } catch (error) {
+      // Viewport restoration is best-effort on older editor adapters.
+    }
+  }
+  return true;
+}
+
 function replaceEditorContent(cm, oldContent, newContent) {
   if (!cm || typeof cm.replaceRange !== "function") {
     return false;
@@ -5741,6 +5813,8 @@ function getBulletPropertyBlockIdHints(options = {}) {
   let label = "Create & link";
   if (options.batch) {
     label = options.last ? "Apply all" : "Next";
+  } else if (options.counted) {
+    label = "Create & apply";
   }
 
   return [
@@ -7157,6 +7231,218 @@ function createBulletPropertyItems(config, line, context = {}) {
     });
 }
 
+// An explicit Vim count for the property picker means "additional tasks": a
+// repeat of 2 snapshots the current real task plus the next two real tasks in
+// document order. Physical line distance is deliberately irrelevant.
+function discoverCountedObsidianTaskTargets(
+  content,
+  startLine,
+  additionalTaskCount,
+) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const line = Math.floor(numericOrDefault(startLine, Number.NaN));
+  const additional = Math.max(
+    0,
+    Math.floor(numericOrDefault(additionalTaskCount, 0)),
+  );
+  const requestedCount = additional + 1;
+  const contexts = getMarkdownLineContexts(text);
+
+  if (
+    !Number.isFinite(line) ||
+    !isObsidianTaskAtLine(text, line, contexts, source.lines)
+  ) {
+    return Object.freeze({
+      valid: false,
+      error: "Counted property editing must start on a #task checkbox",
+      explicit: true,
+      startLine: Number.isFinite(line) ? line : null,
+      requestedAdditionalCount: additional,
+      requestedCount,
+      actualCount: 0,
+      clamped: false,
+      targets: Object.freeze([]),
+    });
+  }
+
+  const targets = [];
+  for (
+    let lineIndex = line;
+    lineIndex < source.lines.length && targets.length < requestedCount;
+    lineIndex += 1
+  ) {
+    if (
+      isObsidianTaskAtLine(text, lineIndex, contexts, source.lines)
+    ) {
+      targets.push(
+        Object.freeze({
+          line: lineIndex,
+          rawLine: String(source.lines[lineIndex] || ""),
+        }),
+      );
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    explicit: true,
+    startLine: line,
+    requestedAdditionalCount: additional,
+    requestedCount,
+    actualCount: targets.length,
+    clamped: targets.length < requestedCount,
+    targets: Object.freeze(targets),
+  });
+}
+
+function validateCountedTaskSession(content, session) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const targets = session && Array.isArray(session.targets)
+    ? session.targets
+    : [];
+  if (!session || session.valid === false || targets.length === 0) {
+    return Object.freeze({
+      valid: false,
+      error: "Counted task session is unavailable",
+      staleTarget: null,
+    });
+  }
+
+  for (const target of targets) {
+    const liveLine = Number.isInteger(target.line)
+      ? source.lines[target.line]
+      : undefined;
+    if (
+      liveLine !== target.rawLine ||
+      !isObsidianTaskAtLine(text, target.line, contexts, source.lines)
+    ) {
+      return Object.freeze({
+        valid: false,
+        error: "A counted task changed while the picker was open",
+        staleTarget: target,
+      });
+    }
+  }
+
+  return Object.freeze({ valid: true, error: null, staleTarget: null });
+}
+
+function getCountedPropertyTargetState(
+  content,
+  target,
+  property,
+  options = {},
+) {
+  const context = getProjectNotePropertyContext(
+    content,
+    target.line,
+    options,
+  );
+  if (!context.valid) {
+    return Object.freeze({ valid: false, error: context.error });
+  }
+
+  const descriptor = resolveBulletPropertyTarget(property.name, context);
+  if (descriptor.kind === "project-frontmatter") {
+    const defined = Boolean(
+      context.frontmatter && context.frontmatter.scheduledDefined,
+    );
+    return Object.freeze({
+      valid: true,
+      error: null,
+      target: descriptor,
+      context,
+      defined,
+      value: defined ? context.frontmatter.scheduledValue : "",
+    });
+  }
+
+  const field = findBulletPropertyField(target.rawLine, property.name);
+  return Object.freeze({
+    valid: true,
+    error: null,
+    target: descriptor,
+    context,
+    defined: Boolean(field),
+    value: field ? field.value : "",
+  });
+}
+
+// Aggregate a property row across counted source tasks. A value is "common"
+// only when every source defines the same value; partial presence is mixed.
+function createCountedBulletPropertyItems(
+  config,
+  content,
+  session,
+  options = {},
+) {
+  const validation = validateCountedTaskSession(content, session);
+  if (!validation.valid) {
+    return Object.freeze({ valid: false, error: validation.error, items: [] });
+  }
+
+  const items = [];
+  for (let order = 0; order < config.properties.length; order += 1) {
+    const property = config.properties[order];
+    const states = [];
+    for (const target of session.targets) {
+      const state = getCountedPropertyTargetState(
+        content,
+        target,
+        property,
+        options,
+      );
+      if (!state.valid) {
+        return Object.freeze({ valid: false, error: state.error, items: [] });
+      }
+      states.push(state);
+    }
+
+    const definedStates = states.filter((state) => state.defined);
+    const values = Array.from(
+      new Set(definedStates.map((state) => state.value)),
+    );
+    const allDefined = definedStates.length === states.length;
+    const valueState =
+      definedStates.length === 0
+        ? "absent"
+        : allDefined && values.length === 1
+          ? "common"
+          : "mixed";
+    items.push({
+      kind: "property",
+      property,
+      target: Object.freeze({ kind: "counted-task-batch" }),
+      order,
+      defined: definedStates.length > 0,
+      definedCount: definedStates.length,
+      targetCount: states.length,
+      currentValue: valueState === "common" ? values[0] : "",
+      currentValues: Object.freeze(values),
+      valueState,
+      mixed: valueState === "mixed",
+      dependencyEligible: true,
+      sourceStates: Object.freeze(states),
+    });
+  }
+
+  items.sort((first, second) => {
+    if (first.defined !== second.defined) {
+      return first.defined ? -1 : 1;
+    }
+    return first.order - second.order;
+  });
+  return Object.freeze({
+    valid: true,
+    error: null,
+    items: Object.freeze(items),
+  });
+}
+
 function validateDependencyParentForEditor(editor, cursor, expectedLine = null) {
   if (!editor || typeof editor.getValue !== "function" || !cursor) {
     return Object.freeze({
@@ -7469,6 +7755,417 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
   });
 }
 
+// Plan one counted set/delete without mutating the editor. Scheduled values on
+// ^prj sources are composed through project frontmatter and visibility first;
+// every other source remains an inline Dataview edit. The caller can therefore
+// commit the complete result as one guarded transaction.
+function planCountedBulletPropertyBatch(
+  content,
+  session,
+  name,
+  value,
+  options = {},
+) {
+  const text = String(content || "");
+  const propertyName = normalizeBulletPropertyName(name);
+  const operation = options.operation === "delete" ? "delete" : "set";
+  const normalizedValue = normalizeBulletPropertyValue(value);
+  const sessionValidation = validateCountedTaskSession(text, session);
+  if (!sessionValidation.valid) {
+    return Object.freeze({
+      valid: false,
+      stale: true,
+      error: sessionValidation.error,
+      content: text,
+      changed: false,
+    });
+  }
+  if (!propertyName) {
+    return Object.freeze({
+      valid: false,
+      stale: false,
+      error: "Bullet property name is empty",
+      content: text,
+      changed: false,
+    });
+  }
+
+  const targetStates = [];
+  const property = { name: propertyName };
+  for (const target of session.targets) {
+    const state = getCountedPropertyTargetState(
+      text,
+      target,
+      property,
+      options,
+    );
+    if (!state.valid) {
+      return Object.freeze({
+        valid: false,
+        stale: false,
+        error: state.error,
+        content: text,
+        changed: false,
+      });
+    }
+    targetStates.push({ target, state });
+  }
+
+  const projectTargets =
+    propertyName === "scheduled"
+      ? targetStates.filter(
+          (entry) => entry.state.target.kind === "project-frontmatter",
+        )
+      : [];
+  let nextContent = text;
+  let taskLineDelta = 0;
+  let visibilityChangedTaskCount = 0;
+  let projectPropertyChanged = false;
+
+  if (projectTargets.length > 0) {
+    const firstProject = projectTargets[0];
+    const frontmatter = firstProject.state.context.frontmatter;
+    if (operation === "set") {
+      const projectPlan = planProjectScheduledUpdate(
+        text,
+        firstProject.target.line,
+        normalizedValue,
+        options.today || new Date(),
+        options,
+      );
+      if (!projectPlan.valid) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: projectPlan.error,
+          content: text,
+          changed: false,
+        });
+      }
+      nextContent = projectPlan.content;
+      taskLineDelta = projectPlan.cursorLine - firstProject.target.line;
+      visibilityChangedTaskCount = projectPlan.changedTaskCount;
+      projectPropertyChanged =
+        !frontmatter.scheduledDefined ||
+        frontmatter.scheduledValue !== normalizedValue;
+    } else if (frontmatter.scheduledDefined) {
+      const projectPlan = planProjectScheduledDelete(
+        text,
+        firstProject.target.line,
+        options,
+      );
+      if (!projectPlan.valid) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: projectPlan.error,
+          content: text,
+          changed: false,
+        });
+      }
+      nextContent = projectPlan.content;
+      taskLineDelta = projectPlan.cursorLine - firstProject.target.line;
+      projectPropertyChanged = true;
+    }
+  }
+
+  const source = splitMarkdownContent(nextContent);
+  const changedTargets = [];
+  const unchangedTargets = [];
+  for (const { target, state } of targetStates) {
+    const mappedLine = target.line + taskLineDelta;
+    const liveLine = String(source.lines[mappedLine] || "");
+    let nextLine = liveLine;
+    let targetChanged = false;
+
+    if (
+      propertyName === "scheduled" &&
+      state.target.kind === "project-frontmatter"
+    ) {
+      // Keep the existing ^prj rule strict even if several lifecycle task
+      // sources were counted: scheduled is represented only in frontmatter.
+      if (operation === "set" || state.defined) {
+        nextLine = removeAllBulletProperties(liveLine, propertyName);
+      }
+      targetChanged =
+        projectPropertyChanged ||
+        Boolean(findBulletPropertyField(target.rawLine, propertyName)) ||
+        nextLine !== liveLine;
+    } else {
+      const result =
+        operation === "delete"
+          ? deleteBulletProperty(liveLine, propertyName)
+          : upsertBulletProperty(liveLine, propertyName, normalizedValue);
+      nextLine = result.line;
+      targetChanged = result.changed;
+    }
+
+    source.lines[mappedLine] = nextLine;
+    const detail = Object.freeze({
+      line: mappedLine,
+      originalLine: target.line,
+      rawLine: target.rawLine,
+      lineText: nextLine,
+    });
+    (targetChanged ? changedTargets : unchangedTargets).push(detail);
+  }
+
+  nextContent = source.lines.join(source.lineEnding);
+  const cursorLine = session.targets[0].line + taskLineDelta;
+  return Object.freeze({
+    valid: true,
+    stale: false,
+    error: null,
+    operation,
+    propertyName,
+    value: normalizedValue,
+    content: nextContent,
+    changed: nextContent !== text,
+    changedTaskCount: changedTargets.length,
+    unchangedTaskCount: unchangedTargets.length,
+    targetCount: session.targets.length,
+    changedTargets: Object.freeze(changedTargets),
+    unchangedTargets: Object.freeze(unchangedTargets),
+    cursorLine,
+    cursorLineDelta: taskLineDelta,
+    visibilityChangedTaskCount,
+  });
+}
+
+// Converge one selected dependency across every counted source task. All
+// source fields, target identity normalization, and per-parent navigation
+// bullets are built in memory so the runtime path can apply exactly one write.
+function planCountedLocalTaskDependency(
+  content,
+  session,
+  dependencyTask,
+  filePath,
+  options = {},
+) {
+  const text = String(content || "");
+  const sessionValidation = validateCountedTaskSession(text, session);
+  if (!sessionValidation.valid) {
+    return Object.freeze({
+      valid: false,
+      stale: true,
+      error: sessionValidation.error,
+      content: text,
+      changed: false,
+    });
+  }
+
+  const dependencyLine = dependencyTask && dependencyTask.line;
+  const sourceLines = new Set(session.targets.map((target) => target.line));
+  const currentDependencyLine = Number.isInteger(dependencyLine)
+    ? splitMarkdownContent(text).lines[dependencyLine]
+    : undefined;
+  if (
+    !dependencyTask ||
+    sourceLines.has(dependencyLine) ||
+    currentDependencyLine !== dependencyTask.rawLine ||
+    !isObsidianTaskAtLine(text, dependencyLine)
+  ) {
+    return Object.freeze({
+      valid: false,
+      stale: true,
+      error: "The selected dependency changed while the picker was open",
+      content: text,
+      changed: false,
+    });
+  }
+
+  const confirmedBlockId = normalizeBulletPropertyValue(
+    options.confirmedBlockId,
+  );
+  let dependencyLineText = currentDependencyLine;
+  let resolved = resolveTargetTaskIdentity(dependencyLineText, {
+    promptWhenBlockIdMissing: true,
+    filePath,
+  });
+  if (resolved.needsBlockIdPrompt) {
+    if (!confirmedBlockId) {
+      return Object.freeze({
+        valid: false,
+        stale: false,
+        needsBlockIdPrompt: true,
+        error: "The selected dependency needs a block ID",
+        content: text,
+        changed: false,
+      });
+    }
+    const blockIdValidation = validateBlockIdCandidate(
+      confirmedBlockId,
+      text,
+    );
+    if (!blockIdValidation.valid) {
+      return Object.freeze({
+        valid: false,
+        stale: false,
+        error: blockIdValidation.message,
+        content: text,
+        changed: false,
+      });
+    }
+    dependencyLineText = applyPromptedBlockIdToTaskLine(
+      dependencyLineText,
+      confirmedBlockId,
+      filePath,
+    );
+    if (dependencyLineText === null) {
+      return Object.freeze({
+        valid: false,
+        stale: false,
+        error: "This note path cannot be encoded as a dependency ID",
+        content: text,
+        changed: false,
+      });
+    }
+    resolved = Object.freeze({
+      value: tryDependencyId(filePath, confirmedBlockId),
+      linkBlockId: confirmedBlockId,
+      legacyValue:
+        normalizeBulletPropertyValue(dependencyTask.existingIdField) || null,
+      needsBlockIdPrompt: false,
+      targetEdits: Object.freeze([]),
+    });
+  } else if (resolved.targetEdits.length > 0) {
+    dependencyLineText =
+      resolved.targetEdits[resolved.targetEdits.length - 1].line;
+  }
+
+  if (!resolved.value || !resolved.linkBlockId) {
+    return Object.freeze({
+      valid: false,
+      stale: false,
+      error: "Could not identify the selected dependency",
+      content: text,
+      changed: false,
+    });
+  }
+
+  const dependencyAliases = new Set(
+    [
+      resolved.value,
+      resolved.legacyValue,
+      dependencyTask.existingIdField,
+      dependencyTask.existingBlockId,
+    ]
+      .map(normalizeBulletPropertyValue)
+      .filter(Boolean),
+  );
+  const linkedBefore = session.targets.map((target) => {
+    const field = findBulletPropertyField(target.rawLine, "dependsOn");
+    const values = new Set(
+      field ? parseLocalTaskIdList(field.value) : [],
+    );
+    return Array.from(dependencyAliases).some((alias) => values.has(alias));
+  });
+  const remove = linkedBefore.every(Boolean);
+
+  let nextSource = splitMarkdownContent(text);
+  nextSource.lines[dependencyLine] = dependencyLineText;
+  let nextContent = nextSource.lines.join(nextSource.lineEnding);
+  if (resolved.legacyValue && resolved.legacyValue !== resolved.value) {
+    nextContent = rewriteDependsOnIdsInContent(
+      nextContent,
+      new Map([[resolved.legacyValue, resolved.value]]),
+    ).content;
+  }
+
+  nextSource = splitMarkdownContent(nextContent);
+  const sourceResults = [];
+  session.targets.forEach((target) => {
+    const currentLine = String(nextSource.lines[target.line] || "");
+    const result = applyLocalTaskDependencyListEdits(
+      currentLine,
+      "dependsOn",
+      remove
+        ? { remove: Array.from(dependencyAliases) }
+        : {
+            add: [resolved.value],
+            remove: Array.from(dependencyAliases).filter(
+              (alias) => alias !== resolved.value,
+            ),
+          },
+    );
+    nextSource.lines[target.line] = result.line;
+    sourceResults.push({
+      target,
+      dependencyChanged: result.changed || currentLine !== target.rawLine,
+    });
+  });
+  nextContent = nextSource.lines.join(nextSource.lineEnding);
+
+  // Process parents bottom-to-top. Navigation edits only shift lines below the
+  // current parent, so every still-pending source retains its snapshot index.
+  const navigationTarget = Object.freeze({
+    blockId: resolved.linkBlockId,
+    note: "",
+  });
+  let navigationChangedCount = 0;
+  const orderedSourceResults = sourceResults
+    .slice()
+    .sort((first, second) => second.target.line - first.target.line);
+  for (const entry of orderedSourceResults) {
+    const collection = collectDependencyNavigationBullets(
+      nextContent,
+      entry.target.line,
+      [navigationTarget],
+    );
+    const finalTargets = computeFinalDependencyLinkOrder(
+      collection.targets,
+      remove ? [] : [navigationTarget],
+      remove ? [navigationTarget] : [],
+    );
+    const navigationPlan = planDependencyNavigationBulletSync(
+      nextContent,
+      entry.target.line,
+      finalTargets,
+      { managedBlockIds: [navigationTarget] },
+    );
+    if (navigationPlan.operation === "guard") {
+      return Object.freeze({
+        valid: false,
+        stale: false,
+        error: "Could not plan dependency navigation for every source task",
+        content: text,
+        changed: false,
+      });
+    }
+    if (navigationPlan.changed) {
+      const current = splitMarkdownContent(nextContent);
+      current.lines = applyDependencyNavigationPlanToLines(
+        current.lines,
+        navigationPlan,
+      );
+      nextContent = current.lines.join(current.lineEnding);
+      entry.navigationChanged = true;
+      navigationChangedCount += 1;
+    }
+  }
+
+  const changedTaskCount = sourceResults.filter(
+    (entry) => entry.dependencyChanged || entry.navigationChanged,
+  ).length;
+  return Object.freeze({
+    valid: true,
+    stale: false,
+    needsBlockIdPrompt: false,
+    error: null,
+    content: nextContent,
+    changed: nextContent !== text,
+    operation: remove ? "remove" : "add",
+    dependencyValue: resolved.value,
+    linkBlockId: resolved.linkBlockId,
+    targetIdentityChanged: dependencyLineText !== currentDependencyLine,
+    changedTaskCount,
+    unchangedTaskCount: session.targets.length - changedTaskCount,
+    targetCount: session.targets.length,
+    navigationChangedCount,
+    cursorLine: session.targets[0].line,
+  });
+}
+
 function getLocalDateStart(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
@@ -7656,8 +8353,16 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
     options.dependencyValues instanceof Set
       ? options.dependencyValues
       : new Set(options.dependencyValues || []);
+  const dependencyValueSets = Array.isArray(options.dependencyValueSets)
+    ? options.dependencyValueSets.map((values) =>
+        values instanceof Set ? values : new Set(values || []),
+      )
+    : [dependencyValues];
 
-  return getOpenLocalTasks(content, { excludeLine: options.excludeLine }).map(
+  return getOpenLocalTasks(content, {
+    excludeLine: options.excludeLine,
+    excludeLines: options.excludeLines,
+  }).map(
     (task) => {
       // The dependency value stored in `[dependsOn:: ...]` (prefers an existing
       // `[id::]`, then the trailing block ID). The link block ID is the trailing
@@ -7669,11 +8374,21 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
       );
       const legacyDependencyValue = task.existingIdField || task.existingBlockId || "";
       const linkBlockId = task.existingBlockId || "";
-      const alreadyLinked = dependencyValue
-        ? dependencyValues.has(dependencyValue) ||
-          (legacyDependencyValue !== dependencyValue &&
-            dependencyValues.has(legacyDependencyValue))
-        : false;
+      const linkedSourceCount = dependencyValue
+        ? dependencyValueSets.filter(
+            (values) =>
+              values.has(dependencyValue) ||
+              (legacyDependencyValue !== dependencyValue &&
+                values.has(legacyDependencyValue)),
+          ).length
+        : 0;
+      const linkState =
+        linkedSourceCount === 0
+          ? "none"
+          : linkedSourceCount === dependencyValueSets.length
+            ? "all"
+            : "mixed";
+      const alreadyLinked = linkState === "all";
       const needsBlockIdPrompt = !linkBlockId;
       const needsDependencyValue = !dependencyValue;
       const needsPromptForAdd = !alreadyLinked && needsBlockIdPrompt;
@@ -7686,6 +8401,9 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
         legacyDependencyValue,
         linkBlockId,
         alreadyLinked,
+        linkedSourceCount,
+        sourceCount: dependencyValueSets.length,
+        linkState,
         needsBlockIdPrompt,
         needsDependencyValue,
         needsPromptForAdd,
@@ -7695,6 +8413,7 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
           task.status,
           dependencyValue,
           alreadyLinked ? "depends linked" : "",
+          linkState === "mixed" ? "mixed partially linked" : "",
           needsPromptForAdd
             ? "needs id block create"
             : dependencyValue
@@ -7820,6 +8539,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.config = config;
     this.propertyContext = context.propertyContext || {};
     this.filePath = context.filePath || "";
+    this.taskSession = context.taskSession || null;
     this.bulletSubtitle = truncateBulletPropertySubtitle(lineText);
     this.stage = "properties";
     this.selectedPropertyItem = null;
@@ -7829,10 +8549,33 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // Batch block-ID prompting state; populated only while the modal is
     // collecting block IDs for a pending multi-task apply (see commit flow).
     this.pendingBatch = null;
+    this.pendingCountedDependency = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.valueBaseDate = getLocalDateStart(new Date());
     this.showPropertyStage({ clearQuery: false });
+  }
+
+  isCountedSession() {
+    return Boolean(
+      this.taskSession &&
+      this.taskSession.explicit &&
+      Array.isArray(this.taskSession.targets) &&
+      this.taskSession.targets.length > 0,
+    );
+  }
+
+  getTaskSessionSubtitle() {
+    if (!this.isCountedSession()) {
+      return this.bulletSubtitle;
+    }
+    if (this.taskSession.clamped) {
+      return `${formatCountLabel(
+        this.taskSession.actualCount,
+        "task",
+      )} of ${this.taskSession.requestedCount} requested · end of note`;
+    }
+    return formatCountLabel(this.taskSession.actualCount, "task");
   }
 
   showPropertyStage(options = {}) {
@@ -7842,11 +8585,26 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.clearPendingBatch();
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
-    const items = createBulletPropertyItems(
-      this.config,
-      this.lineText,
-      this.propertyContext,
-    );
+    let items;
+    if (this.isCountedSession()) {
+      const aggregate = createCountedBulletPropertyItems(
+        this.config,
+        this.getEditorContent(),
+        this.taskSession,
+      );
+      if (!aggregate.valid) {
+        new Notice(aggregate.error);
+        items = [];
+      } else {
+        items = aggregate.items;
+      }
+    } else {
+      items = createBulletPropertyItems(
+        this.config,
+        this.lineText,
+        this.propertyContext,
+      );
+    }
     this.applyOptions({
       items,
       title: "Set bullet property",
@@ -7861,11 +8619,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           visibleItems.length === allItems.length
             ? ""
             : `Showing ${visibleItems.length} of ${allItems.length} · `;
-        return `${countText}${this.bulletSubtitle}`;
+        return `${countText}${this.getTaskSessionSubtitle()}`;
       },
       filterItem: (item, query) =>
         fuzzyMatchesText(
-          `${item.property.name} ${item.currentValue || ""}`,
+          `${item.property.name} ${item.currentValue || ""} ${
+            item.currentValues ? item.currentValues.join(" ") : ""
+          } ${item.valueState || ""}`,
           query,
         ),
       renderItem: (item, rowEl, query) =>
@@ -7898,13 +8658,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.selectedIndex = 0;
     const property = propertyItem.property;
     if (property.values === "local_task_id") {
-      const validation = validateDependencyParentForEditor(
-        this.editor,
-        this.cursor,
-        this.lineText,
-      );
+      const validation = this.isCountedSession()
+        ? validateCountedTaskSession(
+            this.getEditorContent(),
+            this.taskSession,
+          )
+        : validateDependencyParentForEditor(
+            this.editor,
+            this.cursor,
+            this.lineText,
+          );
       if (!validation.valid) {
-        new Notice(validation.message);
+        new Notice(validation.message || validation.error);
         this.showPropertyStage({ clearQuery: false });
         return;
       }
@@ -7930,10 +8695,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       resultsLabel: `${property.name} values`,
       emptyText: "No matching values",
       footerHints: BULLET_PROPERTY_STAGE_TWO_HINTS,
-      getSubtitle: () =>
-        propertyItem.currentValue
-          ? `Choose a value · current: ${propertyItem.currentValue}`
-          : "Choose a value",
+      getSubtitle: () => {
+        const scope = this.isCountedSession()
+          ? `${this.getTaskSessionSubtitle()} · `
+          : "";
+        if (propertyItem.valueState === "mixed") {
+          return `${scope}Choose a value · current values mixed`;
+        }
+        return propertyItem.currentValue
+          ? `${scope}Choose a value · current: ${propertyItem.currentValue}`
+          : `${scope}Choose a value`;
+      },
       filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
       renderItem: (item, rowEl, query) =>
         this.renderValueItem(item, rowEl, query),
@@ -7988,6 +8760,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
   clearPendingBatch() {
     this.pendingBatch = null;
+    this.pendingCountedDependency = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
   }
@@ -8039,6 +8812,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getLocalTaskFooterHints() {
+    if (this.isCountedSession()) {
+      return BULLET_PROPERTY_LOCAL_TASK_HINTS.filter(
+        (hint) => !hint.keys.includes("⇥"),
+      );
+    }
     return getBulletPropertyLocalTaskHints(this.getMarkedCount() > 0);
   }
 
@@ -8057,7 +8835,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         ? ""
         : `Showing ${visibleItems.length} of ${allItems.length} · `;
     if (this.getMarkedCount() === 0) {
-      return `${countText}Choose a task dependency · ⇥ to mark several`;
+      return this.isCountedSession()
+        ? `${countText}${this.getTaskSessionSubtitle()} · choose a dependency`
+        : `${countText}Choose a task dependency · ⇥ to mark several`;
     }
 
     const diff = this.getMarkedTaskDiff();
@@ -8100,12 +8880,22 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.clearPendingBatch();
     this.selectedIndex = 0;
     const property = propertyItem.property;
-    const dependencyValues = new Set(
-      parseLocalTaskIdList(this.getCurrentPropertyValue(property.name)),
-    );
+    const dependencyValueSets = this.isCountedSession()
+      ? propertyItem.sourceStates.map(
+          (state) => new Set(parseLocalTaskIdList(state.value)),
+        )
+      : [
+          new Set(
+            parseLocalTaskIdList(this.getCurrentPropertyValue(property.name)),
+          ),
+        ];
     const items = createBulletPropertyLocalTaskItems(this.getEditorContent(), {
-      excludeLine: this.cursor.line,
-      dependencyValues,
+      excludeLine: this.isCountedSession() ? null : this.cursor.line,
+      excludeLines: this.isCountedSession()
+        ? new Set(this.taskSession.targets.map((target) => target.line))
+        : new Set(),
+      dependencyValues: dependencyValueSets[0],
+      dependencyValueSets,
       filePath: this.filePath,
     });
     this.resetLocalTaskMarks(items);
@@ -8146,7 +8936,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   showBlockIdStage(task, options = {}) {
     this.stage = "blockid";
     this.pendingTask = task;
-    this.blockIdMode = options.mode === "batch" ? "batch" : "single";
+    this.blockIdMode = ["batch", "counted-source"].includes(options.mode)
+      ? options.mode
+      : "single";
     this.blockIdContext =
       this.blockIdMode === "batch"
         ? {
@@ -8180,11 +8972,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       footerHints: getBulletPropertyBlockIdHints({
         batch: this.blockIdMode === "batch",
         last: isLast,
+        counted: this.blockIdMode === "counted-source",
       }),
       getSubtitle: () =>
         this.blockIdMode === "batch"
           ? `Block ID ${this.blockIdContext.position} of ${this.blockIdContext.total} · line ${task.line + 1}`
-          : `Create an ID for line ${task.line + 1}`,
+          : this.blockIdMode === "counted-source"
+            ? `${this.getTaskSessionSubtitle()} · create an ID for dependency on line ${task.line + 1}`
+            : `Create an ID for line ${task.line + 1}`,
       filterItem: () => true,
       renderItem: (item, rowEl, query) =>
         this.renderBlockIdPreviewItem(item, rowEl, query),
@@ -8257,11 +9052,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     appendHighlighted(titleEl, item.property.name, query);
 
     const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    pathEl.setText(
-      item.defined ? `Current value: ${item.currentValue}` : "Not set",
-    );
+    const propertyStateText = item.mixed
+      ? `Mixed across ${item.definedCount} of ${item.targetCount} tasks`
+      : item.defined
+        ? `Current value: ${item.currentValue}`
+        : "Not set";
+    pathEl.setText(propertyStateText);
 
-    if (item.defined) {
+    if (item.mixed) {
+      rowEl.createDiv({
+        cls: "bob-cnp-pill bob-cnp-property-pill",
+        text: "mixed",
+      });
+    } else if (item.defined) {
       rowEl.createDiv({
         cls: "bob-cnp-pill bob-cnp-property-pill",
         text: `${item.property.name} · ${item.currentValue}`,
@@ -8315,6 +9118,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       rowEl,
       "bob-cnp-task-value-row",
       item.alreadyLinked ? "is-linked" : "",
+      item.linkState === "mixed" ? "is-mixed" : "",
       item.needsBlockIdPrompt ? "is-create" : "is-existing",
       marked ? "is-marked" : "",
       markedRemove ? "is-marked-remove" : "",
@@ -8373,6 +9177,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         cls: "bob-cnp-task-badge-action",
         text: "✓ depends",
       });
+    } else if (item.linkState === "mixed") {
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action",
+        text: `${item.linkedSourceCount}/${item.sourceCount} depend`,
+      });
     } else if (item.needsBlockIdPrompt) {
       // Unmarked, not yet linked, and missing a trailing block ID: pressing
       // Enter prompts for one before linking.
@@ -8428,6 +9237,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   chooseTaskDependency(item) {
     if (!this.selectedPropertyItem) {
       return false;
+    }
+
+    if (this.isCountedSession()) {
+      return this.chooseCountedTaskDependency(item);
     }
 
     if (this.getMarkedCount() > 0) {
@@ -8502,6 +9315,46 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.selectedPropertyItem.property.name,
       resolved.value,
       { linkBlockId: resolved.linkBlockId },
+    );
+  }
+
+  chooseCountedTaskDependency(item) {
+    if (!item) {
+      return false;
+    }
+    const sessionValidation = validateCountedTaskSession(
+      this.getEditorContent(),
+      this.taskSession,
+    );
+    if (!sessionValidation.valid) {
+      new Notice(`${sessionValidation.error}; no tasks were updated`);
+      return false;
+    }
+    const targetLine = getEditorLine(this.editor, item.line);
+    if (
+      targetLine !== item.rawLine ||
+      !isObsidianTaskAtLine(this.getEditorContent(), item.line)
+    ) {
+      new Notice("Selected dependency changed; no tasks were updated");
+      return false;
+    }
+
+    const resolved = resolveTargetTaskIdentity(targetLine, {
+      promptWhenBlockIdMissing: true,
+      filePath: this.filePath,
+    });
+    if (resolved.needsBlockIdPrompt) {
+      this.pendingCountedDependency = item;
+      this.showBlockIdStage(item, { mode: "counted-source" });
+      return false;
+    }
+
+    return this.plugin.applyCountedLocalTaskDependency(
+      this.editor,
+      this.cursor,
+      this.filePath,
+      this.taskSession,
+      item,
     );
   }
 
@@ -8612,7 +9465,33 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return this.confirmBatchBlockId(item);
     }
 
+    if (
+      this.blockIdMode === "counted-source" &&
+      this.pendingCountedDependency
+    ) {
+      return this.confirmCountedDependencyBlockId(item);
+    }
+
     return this.confirmSingleBlockId(item);
+  }
+
+  confirmCountedDependencyBlockId(item) {
+    const dependencyTask = this.pendingCountedDependency;
+    if (!dependencyTask || !item.valid) {
+      return false;
+    }
+    const applied = this.plugin.applyCountedLocalTaskDependency(
+      this.editor,
+      this.cursor,
+      this.filePath,
+      this.taskSession,
+      dependencyTask,
+      { confirmedBlockId: item.id },
+    );
+    if (applied) {
+      this.clearPendingBatch();
+    }
+    return applied;
   }
 
   // Record one confirmed block ID and either advance to the next prompt (modal
@@ -8959,7 +9838,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   handleKeydown(event) {
-    if (this.isLocalTaskStage() && event.key === "Tab") {
+    if (
+      this.isLocalTaskStage() &&
+      !this.isCountedSession() &&
+      event.key === "Tab"
+    ) {
       event.preventDefault();
       event.stopPropagation();
       this.toggleHighlightedLocalTaskMark();
@@ -9030,8 +9913,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    const result =
-      item.target.kind === "project-frontmatter"
+    const result = this.isCountedSession()
+      ? this.plugin.deleteCountedBulletPropertyValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.taskSession,
+          propertyName,
+        )
+      : item.target.kind === "project-frontmatter"
         ? await this.plugin.deleteProjectNoteScheduledValue(
             this.editor,
             this.cursor,
@@ -9062,6 +9952,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   async applySelectedValue(item) {
     if (!this.selectedPropertyItem || !item) {
       return false;
+    }
+
+    if (this.isCountedSession()) {
+      return this.plugin.setCountedBulletPropertyValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.taskSession,
+        this.selectedPropertyItem.property.name,
+        item.value,
+      );
     }
 
     if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
@@ -9360,6 +10261,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.registerOpenTaskJumpInputListeners();
     this.registerCountedTransclusionToggleInputListeners();
+    this.registerCountedBulletPropertyInputListeners();
     this.registerClearSearchHighlightInputListeners();
 
     this.register(() => {
@@ -9870,7 +10772,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return consolidatedTasks > 0;
   }
 
-  openBulletPropertyPicker(cm) {
+  openBulletPropertyPicker(cm, options = {}) {
     const cursor = getEditorCursor(cm);
     if (!cursor) {
       new Notice("No active markdown editor");
@@ -9883,7 +10785,24 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    if (!isBulletLine(lineText)) {
+    const content =
+      cm && typeof cm.getValue === "function"
+        ? String(cm.getValue() || "")
+        : "";
+    let taskSession = options.taskSession || null;
+    if (options.countExplicit && !taskSession) {
+      taskSession = discoverCountedObsidianTaskTargets(
+        content,
+        cursor.line,
+        options.additionalTaskCount,
+      );
+    }
+    if (taskSession && taskSession.explicit) {
+      if (!taskSession.valid) {
+        new Notice(taskSession.error);
+        return false;
+      }
+    } else if (!isBulletLine(lineText)) {
       new Notice("Cursor is not on a bullet");
       return false;
     }
@@ -9892,11 +10811,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (!config) {
       return false;
     }
+    if (taskSession && taskSession.explicit) {
+      const aggregate = createCountedBulletPropertyItems(
+        config,
+        content,
+        taskSession,
+      );
+      if (!aggregate.valid) {
+        new Notice(aggregate.error);
+        return false;
+      }
+    }
 
-    const content =
-      cm && typeof cm.getValue === "function"
-        ? String(cm.getValue() || "")
-        : "";
     const basePropertyContext = getProjectNotePropertyContext(
       content,
       cursor.line,
@@ -9924,8 +10850,238 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cursor,
       lineText,
       config,
-      { filePath, propertyContext },
+      { filePath, propertyContext, taskSession },
     ).open();
+    return true;
+  }
+
+  getCountedTaskWriteContext(cm, filePath, session) {
+    const activeView = this.getActiveMarkdownView();
+    if (
+      !activeView ||
+      activeView.editor !== cm ||
+      !activeView.file ||
+      activeView.file.path !== filePath
+    ) {
+      return Object.freeze({
+        valid: false,
+        error: "Active note changed; no tasks were updated",
+      });
+    }
+    if (!cm || typeof cm.getValue !== "function") {
+      return Object.freeze({
+        valid: false,
+        error: "No active markdown editor",
+      });
+    }
+    const content = String(cm.getValue() || "");
+    const validation = validateCountedTaskSession(content, session);
+    if (!validation.valid) {
+      return Object.freeze({
+        valid: false,
+        error: `${validation.error}; no tasks were updated`,
+      });
+    }
+    return Object.freeze({ valid: true, error: null, content });
+  }
+
+  getCountedTaskNoticeSuffix(session, unchangedTaskCount = 0) {
+    const parts = [];
+    if (unchangedTaskCount > 0) {
+      parts.push(`${formatCountLabel(unchangedTaskCount, "task")} unchanged`);
+    }
+    if (session && session.clamped) {
+      parts.push(
+        `requested ${session.requestedCount}, found ${session.actualCount} at end of note`,
+      );
+    }
+    return parts.length > 0 ? `; ${parts.join("; ")}` : "";
+  }
+
+  setCountedBulletPropertyValue(
+    cm,
+    cursor,
+    filePath,
+    session,
+    name,
+    value,
+  ) {
+    const writeContext = this.getCountedTaskWriteContext(
+      cm,
+      filePath,
+      session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+    const plan = planCountedBulletPropertyBatch(
+      writeContext.content,
+      session,
+      name,
+      value,
+      { operation: "set", today: new Date() },
+    );
+    if (!plan.valid) {
+      new Notice(
+        plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+      );
+      return false;
+    }
+    const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    try {
+      if (
+        plan.changed &&
+        !applyEditorContentTransaction(
+          cm,
+          writeContext.content,
+          plan.content,
+          {
+            line: plan.cursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+        )
+      ) {
+        throw new Error("Editor cannot apply a counted property transaction");
+      }
+    } catch (error) {
+      new Notice("Could not update counted task properties; no tasks were updated");
+      return false;
+    }
+    const visibilitySuffix =
+      plan.visibilityChangedTaskCount > 0
+        ? `; reconciled visibility for ${formatCountLabel(
+            plan.visibilityChangedTaskCount,
+            "task",
+          )}`
+        : "";
+    new Notice(
+      `${name} → ${normalizeBulletPropertyValue(value)} on ${formatCountLabel(
+        plan.changedTaskCount,
+        "task",
+      )}${this.getCountedTaskNoticeSuffix(
+        session,
+        plan.unchangedTaskCount,
+      )}${visibilitySuffix}`,
+    );
+    return true;
+  }
+
+  deleteCountedBulletPropertyValue(cm, cursor, filePath, session, name) {
+    const writeContext = this.getCountedTaskWriteContext(
+      cm,
+      filePath,
+      session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return null;
+    }
+    const plan = planCountedBulletPropertyBatch(
+      writeContext.content,
+      session,
+      name,
+      null,
+      { operation: "delete" },
+    );
+    if (!plan.valid) {
+      new Notice(
+        plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+      );
+      return null;
+    }
+    const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    try {
+      if (
+        plan.changed &&
+        !applyEditorContentTransaction(
+          cm,
+          writeContext.content,
+          plan.content,
+          {
+            line: plan.cursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+        )
+      ) {
+        throw new Error("Editor cannot apply a counted property transaction");
+      }
+    } catch (error) {
+      new Notice("Could not delete counted task properties; no tasks were updated");
+      return null;
+    }
+    new Notice(
+      `${name} ✗ removed from ${formatCountLabel(
+        plan.changedTaskCount,
+        "task",
+      )}${this.getCountedTaskNoticeSuffix(
+        session,
+        plan.unchangedTaskCount,
+      )}`,
+    );
+    return { deleted: true, line: finalLine };
+  }
+
+  applyCountedLocalTaskDependency(
+    cm,
+    cursor,
+    filePath,
+    session,
+    dependencyTask,
+    options = {},
+  ) {
+    const writeContext = this.getCountedTaskWriteContext(
+      cm,
+      filePath,
+      session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+    const plan = planCountedLocalTaskDependency(
+      writeContext.content,
+      session,
+      dependencyTask,
+      filePath,
+      options,
+    );
+    if (!plan.valid) {
+      const suffix = plan.stale ? "; no tasks were updated" : "";
+      new Notice(`${plan.error}${suffix}`);
+      return false;
+    }
+    const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    try {
+      if (
+        plan.changed &&
+        !applyEditorContentTransaction(
+          cm,
+          writeContext.content,
+          plan.content,
+          {
+            line: plan.cursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+        )
+      ) {
+        throw new Error("Editor cannot apply a counted dependency transaction");
+      }
+    } catch (error) {
+      new Notice("Could not update counted dependencies; no tasks were updated");
+      return false;
+    }
+    const verb = plan.operation === "remove" ? "Removed" : "Added";
+    const identity = plan.targetIdentityChanged
+      ? `; prepared ^${plan.linkBlockId}`
+      : "";
+    new Notice(
+      `${verb} ${plan.dependencyValue} ${
+        plan.operation === "remove" ? "from" : "to"
+      } ${formatCountLabel(plan.targetCount, "task")}${identity}${
+        this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)
+      }`,
+    );
     return true;
   }
 
@@ -10518,6 +11674,77 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
   }
 
+  registerCountedBulletPropertyInputListeners() {
+    this.handledCountedBulletPropertyEvents = new WeakSet();
+
+    const keydownHandler = (event) =>
+      this.handleCountedBulletPropertyPhysicalKeydown(event);
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleCountedBulletPropertyPhysicalKeydown(event) {
+    if (!this.isCountedBulletPropertyKeydown(event)) {
+      return false;
+    }
+    if (
+      this.handledCountedBulletPropertyEvents &&
+      this.handledCountedBulletPropertyEvents.has(event)
+    ) {
+      return false;
+    }
+
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
+      return false;
+    }
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const pendingRepeat = getPendingVimRepeat(cm);
+    if (!pendingRepeat.explicit) {
+      return false;
+    }
+
+    if (this.handledCountedBulletPropertyEvents) {
+      this.handledCountedBulletPropertyEvents.add(event);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+    resetPendingVimInputState(cm, "counted-bullet-property");
+    return this.openBulletPropertyPicker(view.editor, {
+      countExplicit: true,
+      additionalTaskCount: pendingRepeat.repeat,
+    });
+  }
+
+  isCountedBulletPropertyKeydown(event) {
+    return Boolean(
+      event &&
+      event.ctrlKey &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      (event.code === "KeyP" || event.key === "p" || event.key === "P"),
+    );
+  }
+
   handleCountedTransclusionTogglePhysicalKeydown(event) {
     if (!this.isCountedTransclusionToggleKeydown(event)) {
       return false;
@@ -10734,6 +11961,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     const mode = this.getCurrentVimMode(cm);
+    if (!(cm.state && cm.state.vim) && mode === null) {
+      return false;
+    }
     return !["insert", "visual", "visual-block", "visual-line", "replace"].includes(
       mode,
     );
@@ -13809,6 +15039,9 @@ module.exports.helpers = {
   getProjectNotePropertyContext,
   resolveBulletPropertyTarget,
   createBulletPropertyItems,
+  discoverCountedObsidianTaskTargets,
+  validateCountedTaskSession,
+  createCountedBulletPropertyItems,
   validateDependencyParentForEditor,
   getWholeTaskTagSpans,
   hasWholeTaskTag,
@@ -13818,6 +15051,8 @@ module.exports.helpers = {
   removeAllBulletProperties,
   planProjectScheduledUpdate,
   planProjectScheduledDelete,
+  planCountedBulletPropertyBatch,
+  planCountedLocalTaskDependency,
   createBulletPropertyDateItems,
   parseBulletPropertyTypedDate,
   formatBulletPropertyDate,
@@ -13864,6 +15099,7 @@ module.exports.helpers = {
   transformDependencyBulletsInContent,
   buildLocalTaskDependencyNotice,
   buildMultiDependencyNotice,
+  applyEditorContentTransaction,
   insertEditorLine,
   deleteEditorLine,
 };

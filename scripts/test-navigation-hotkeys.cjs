@@ -561,6 +561,192 @@ test("dependency parent write validation rejects stale, Pomodoro, and fenced par
   }
 });
 
+test("counted property targets mean current plus N real tasks without wrapping", () => {
+  const content = [
+    "---",
+    "example: - [ ] #task YAML",
+    "---",
+    "- [ ] #task Read SASE beads ^read-sase-beads",
+    "\t- ![[#^transcluded-child]]",
+    "prose between tasks",
+    "- ordinary bullet",
+    "- [ ] (**0900-0930** [t:: 30m])",
+    "  - [/] #task Fix just ^fix-fix-just",
+    "```md",
+    "- [*] #task Fenced example",
+    "```",
+    "> - [x] #task Fix GitHub actions ^fix-gh-act-and-pub",
+    "1. [-] #task Canceled custom status",
+    "- [?] #task Arbitrary custom status",
+  ].join("\r\n");
+
+  const firstThree = helpers.discoverCountedObsidianTaskTargets(content, 3, 2);
+  assert.equal(firstThree.valid, true);
+  assert.equal(firstThree.requestedCount, 3);
+  assert.equal(firstThree.actualCount, 3);
+  assert.equal(firstThree.clamped, false);
+  assert.deepEqual(
+    firstThree.targets.map((target) => target.line),
+    [3, 8, 12],
+  );
+  assert.deepEqual(
+    firstThree.targets.map((target) => target.rawLine.match(/\^([\w-]+)/)?.[1]),
+    ["read-sase-beads", "fix-fix-just", "fix-gh-act-and-pub"],
+  );
+
+  const allStatuses = helpers.discoverCountedObsidianTaskTargets(content, 3, 9);
+  assert.deepEqual(
+    allStatuses.targets.map((target) =>
+      helpers.getObsidianTaskCheckboxStatus(target.rawLine),
+    ),
+    [" ", "/", "x", "-", "?"],
+  );
+  assert.equal(allStatuses.actualCount, 5);
+  assert.equal(allStatuses.requestedCount, 10);
+  assert.equal(allStatuses.clamped, true);
+  assert.equal(allStatuses.targets.some((target) => target.line < 3), false);
+
+  const invalid = helpers.discoverCountedObsidianTaskTargets(content, 6, 2);
+  assert.equal(invalid.valid, false);
+  assert.match(invalid.error, /start on a #task checkbox/);
+});
+
+test("counted property metadata distinguishes absent, common, and mixed values", () => {
+  const content = [
+    "- [ ] #task One [p:: high] [scheduled:: 2026-07-23]",
+    "- [/] #task Two [p:: high]",
+    "- [x] #task Three [p:: high] [scheduled:: 2026-07-24]",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 2);
+  const aggregate = helpers.createCountedBulletPropertyItems(
+    {
+      properties: [
+        { name: "p", values: ["high", "low"] },
+        { name: "scheduled", values: "date" },
+        { name: "created", values: "date" },
+      ],
+    },
+    content,
+    session,
+  );
+  assert.equal(aggregate.valid, true);
+  const byName = new Map(
+    aggregate.items.map((item) => [item.property.name, item]),
+  );
+  assert.equal(byName.get("p").valueState, "common");
+  assert.equal(byName.get("p").currentValue, "high");
+  assert.equal(byName.get("scheduled").valueState, "mixed");
+  assert.equal(byName.get("scheduled").defined, true);
+  assert.equal(byName.get("scheduled").currentValue, "");
+  assert.equal(byName.get("created").valueState, "absent");
+  assert.equal(byName.get("created").defined, false);
+});
+
+test("counted scheduled planning updates the motivating three tasks atomically", () => {
+  const input = [
+    "- [ ] #task Read SASE beads [created:: 2026-07-01] ^read-sase-beads",
+    "\t- ![[#^transcluded-child]]",
+    "intervening prose",
+    "- [/] #task Fix just [scheduled:: 2026-07-20] [created:: 2026-07-02] ^fix-fix-just",
+    "- ordinary bullet [scheduled:: keep]",
+    "> - [x] #task Fix GitHub actions [scheduled:: 2026-07-23] ^fix-gh-act-and-pub",
+  ].join("\r\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-23",
+    { operation: "set", today: new Date(2026, 6, 16, 12) },
+  );
+  assert.equal(plan.valid, true);
+  assert.equal(plan.changedTaskCount, 2);
+  assert.equal(plan.unchangedTaskCount, 1);
+  assert.equal(plan.content.includes("\r\n"), true);
+  assert.match(
+    plan.content,
+    /Read SASE beads \[created:: 2026-07-01\] \[scheduled:: 2026-07-23\] \^read-sase-beads/,
+  );
+  assert.match(
+    plan.content,
+    /Fix just \[scheduled:: 2026-07-23\] \[created:: 2026-07-02\] \^fix-fix-just/,
+  );
+  assert.match(plan.content, /\t- !\[\[#\^transcluded-child\]\]/);
+  assert.match(plan.content, /ordinary bullet \[scheduled:: keep\]/);
+  assert.equal(
+    (plan.content.match(/\[scheduled:: 2026-07-23\]/g) || []).length,
+    3,
+  );
+
+  const deleteSession = helpers.discoverCountedObsidianTaskTargets(
+    plan.content,
+    0,
+    2,
+  );
+  const deleted = helpers.planCountedBulletPropertyBatch(
+    plan.content,
+    deleteSession,
+    "scheduled",
+    null,
+    { operation: "delete" },
+  );
+  assert.equal(deleted.valid, true);
+  assert.equal(deleted.changedTaskCount, 3);
+  assert.doesNotMatch(deleted.content, /#task[^\r\n]*\[scheduled::/);
+  assert.match(deleted.content, /ordinary bullet \[scheduled:: keep\]/);
+  assert.match(deleted.content, /\[created:: 2026-07-01\].*\^read-sase-beads/);
+});
+
+test("counted property planning rejects any stale source with no partial result", () => {
+  const input = [
+    "- [ ] #task One",
+    "- [ ] #task Two",
+    "- [ ] #task Three",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const changed = input.replace("#task Two", "#task Two changed");
+  const plan = helpers.planCountedBulletPropertyBatch(
+    changed,
+    session,
+    "p",
+    "high",
+  );
+  assert.equal(plan.valid, false);
+  assert.equal(plan.stale, true);
+  assert.equal(plan.content, changed);
+  assert.doesNotMatch(plan.content, /\[p::/);
+});
+
+test("counted scheduled planning composes project YAML with ordinary inline tasks", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "status: wip",
+    "---",
+    "- [ ] #task Ship [scheduled:: stale] [created:: 2026-07-01] ^prj",
+    "supporting prose",
+    "- [/] #task Follow up [created:: 2026-07-02] ^follow-up",
+  ].join("\r\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 4, 1);
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-23",
+    { operation: "set", today: new Date(2026, 6, 16, 12) },
+  );
+  assert.equal(plan.valid, true);
+  assert.equal(plan.cursorLine, 5);
+  assert.equal((plan.content.match(/^scheduled:/gm) || []).length, 1);
+  assert.match(plan.content, /^scheduled: 2026-07-23$/m);
+  assert.doesNotMatch(plan.content, /Ship[^\r\n]*\[scheduled::/);
+  assert.match(
+    plan.content,
+    /Follow up \[created:: 2026-07-02\] #hide \[scheduled:: 2026-07-23\] \^follow-up/,
+  );
+  assert.match(plan.content, /Ship \[created:: 2026-07-01\] #hide \^prj/);
+});
+
 test("project schedule update coordinates YAML, inline cleanup, and visibility", () => {
   const input = [
     "---",
@@ -1293,6 +1479,287 @@ test("counted runtime transclusion toggle preserves viewport and caret", async (
   assert.equal(editor.getLine(activeLine + 2), "- [[Two]]");
 });
 
+test("counted property runtime uses one transaction and preserves caret and viewport", () => {
+  notices.length = 0;
+  const lines = [
+    "- [ ] #task One [created:: 2026-07-01] ^one",
+    "prose",
+    "- [/] #task Two [scheduled:: 2026-07-20] ^two",
+    "- plain bullet",
+    "> - [x] #task Three [scheduled:: 2026-07-23] ^three",
+  ];
+  const cursor = { line: 0, ch: 18 };
+  const editor = new TransactionEditor(lines.join("\r\n"), cursor, 812);
+  const session = helpers.discoverCountedObsidianTaskTargets(
+    editor.content,
+    0,
+    2,
+  );
+  const file = { path: "sase.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+
+  assert.equal(
+    plugin.setCountedBulletPropertyValue(
+      editor,
+      cursor,
+      file.path,
+      session,
+      "scheduled",
+      "2026-07-23",
+    ),
+    true,
+  );
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.transactionScrollTops, [812]);
+  assert.equal(editor.getScrollInfo().top, 812);
+  assertLineBoundedTransaction(editor.transactions[0], lines, [0, 2]);
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: cursor,
+    to: cursor,
+  });
+  assert.match(editor.getLine(0), /\[created:: 2026-07-01\].*\^one/);
+  assert.match(editor.getLine(2), /\[scheduled:: 2026-07-23\].*\^two/);
+  assert.match(notices.at(-1), /2 tasks.*1 task unchanged/);
+});
+
+test("counted property runtime aborts a stale batch without a transaction", () => {
+  notices.length = 0;
+  const editor = new TransactionEditor(
+    "- [ ] #task One\n- [ ] #task Two",
+    { line: 0, ch: 4 },
+  );
+  const session = helpers.discoverCountedObsidianTaskTargets(
+    editor.content,
+    0,
+    1,
+  );
+  editor.content = editor.content.replace("Two", "Two changed");
+  const file = { path: "Tasks.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+
+  assert.equal(
+    plugin.setCountedBulletPropertyValue(
+      editor,
+      { line: 0, ch: 4 },
+      file.path,
+      session,
+      "p",
+      "high",
+    ),
+    false,
+  );
+  assert.deepEqual(editor.transactions, []);
+  assert.doesNotMatch(editor.content, /\[p::/);
+  assert.match(notices.at(-1), /no tasks were updated/);
+});
+
+test("counted project scheduling is one structural transaction", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [ ] #task Ship ^prj",
+    "- [/] #task Follow up ^follow",
+  ].join("\r\n");
+  const cursor = { line: 3, ch: 12 };
+  const editor = new TransactionEditor(input, cursor, 934);
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 3, 1);
+  const file = { path: "projects/Ship.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+
+  assert.equal(
+    plugin.setCountedBulletPropertyValue(
+      editor,
+      cursor,
+      file.path,
+      session,
+      "scheduled",
+      "2026-07-23",
+    ),
+    true,
+  );
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.transactionScrollTops, [934]);
+  assert.equal(editor.transactions[0].changes.length, 1);
+  assert.deepEqual(editor.transactions[0].changes[0].from, { line: 0, ch: 0 });
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: { line: 4, ch: 12 },
+    to: { line: 4, ch: 12 },
+  });
+  assert.equal(editor.content.includes("\r\n"), true);
+  assert.match(editor.content, /^scheduled: 2026-07-23$/m);
+  assert.doesNotMatch(editor.getLine(4), /\[scheduled::/);
+  assert.match(editor.getLine(5), /\[scheduled:: 2026-07-23\]/);
+});
+
+test("counted dependencies converge mixed sources and maintain one link per parent", () => {
+  const input = [
+    "- [ ] #task One [dependsOn:: Tasks__target] ^one",
+    "- [/] #task Two ^two",
+    "> - [*] #task Three [dependsOn:: legacy-target] ^three",
+    "- [ ] #task Target [id:: legacy-target] ^target",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const dependencyTask = helpers
+    .getOpenLocalTasks(input)
+    .find((task) => task.line === 3);
+  const added = helpers.planCountedLocalTaskDependency(
+    input,
+    session,
+    dependencyTask,
+    "Tasks.md",
+  );
+  assert.equal(added.valid, true);
+  assert.equal(added.operation, "add");
+  assert.equal(added.targetCount, 3);
+  assert.equal(
+    (added.content.match(/\[dependsOn:: Tasks__target\]/g) || []).length,
+    3,
+  );
+  assert.equal((added.content.match(/!\[\[#\^target\]\]/g) || []).length, 3);
+  assert.match(added.content, /> \t- !\[\[#\^target\]\]/);
+  assert.match(added.content, /Target \[id:: Tasks__target\] \^target/);
+  assert.doesNotMatch(added.content, /legacy-target/);
+
+  const removeSession = helpers.discoverCountedObsidianTaskTargets(
+    added.content,
+    0,
+    2,
+  );
+  const updatedDependencyTask = helpers
+    .getOpenLocalTasks(added.content)
+    .find((task) => task.existingBlockId === "target");
+  const removed = helpers.planCountedLocalTaskDependency(
+    added.content,
+    removeSession,
+    updatedDependencyTask,
+    "Tasks.md",
+  );
+  assert.equal(removed.valid, true);
+  assert.equal(removed.operation, "remove");
+  assert.doesNotMatch(removed.content, /dependsOn|!\[\[#\^target\]\]/);
+  assert.match(removed.content, /Target \[id:: Tasks__target\] \^target/);
+});
+
+test("counted dependency candidates exclude every source and expose mixed state", () => {
+  const input = [
+    "- [ ] #task One [dependsOn:: Tasks__target] ^one",
+    "- [/] #task Two ^two",
+    "- [*] #task Three [dependsOn:: Tasks__target] ^three",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const items = helpers.createBulletPropertyLocalTaskItems(input, {
+    excludeLines: new Set([0, 1, 2]),
+    dependencyValueSets: [
+      new Set(["Tasks__target"]),
+      new Set(),
+      new Set(["Tasks__target"]),
+    ],
+    filePath: "Tasks.md",
+  });
+  assert.deepEqual(items.map((item) => item.line), [3]);
+  assert.equal(items[0].linkState, "mixed");
+  assert.equal(items[0].linkedSourceCount, 2);
+  assert.equal(items[0].sourceCount, 3);
+});
+
+test("counted dependency block-ID prompting is planned atomically", () => {
+  const input = [
+    "- [ ] #task One ^one",
+    "- [/] #task Two ^two",
+    "- [ ] #task Target",
+  ].join("\r\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 1);
+  const dependencyTask = helpers
+    .getOpenLocalTasks(input)
+    .find((task) => task.line === 2);
+  const needsPrompt = helpers.planCountedLocalTaskDependency(
+    input,
+    session,
+    dependencyTask,
+    "Tasks.md",
+  );
+  assert.equal(needsPrompt.valid, false);
+  assert.equal(needsPrompt.needsBlockIdPrompt, true);
+  assert.equal(needsPrompt.content, input);
+
+  const planned = helpers.planCountedLocalTaskDependency(
+    input,
+    session,
+    dependencyTask,
+    "Tasks.md",
+    { confirmedBlockId: "target" },
+  );
+  assert.equal(planned.valid, true);
+  assert.equal(planned.content.includes("\r\n"), true);
+  assert.match(planned.content, /Target \[id:: Tasks__target\] \^target/);
+  assert.equal(
+    (planned.content.match(/\[dependsOn:: Tasks__target\]/g) || []).length,
+    2,
+  );
+  assert.equal((planned.content.match(/!\[\[#\^target\]\]/g) || []).length, 2);
+
+  const stale = input.replace("#task Two", "#task Two changed");
+  const rejected = helpers.planCountedLocalTaskDependency(
+    stale,
+    session,
+    dependencyTask,
+    "Tasks.md",
+    { confirmedBlockId: "target" },
+  );
+  assert.equal(rejected.valid, false);
+  assert.equal(rejected.stale, true);
+  assert.equal(rejected.content, stale);
+  assert.doesNotMatch(rejected.content, /dependsOn|\[id::/);
+});
+
+test("counted dependency runtime applies target, parents, and navigation in one undo group", () => {
+  const input = [
+    "- [ ] #task One ^one",
+    "- [/] #task Two ^two",
+    "- [ ] #task Target ^target",
+  ].join("\r\n");
+  const cursor = { line: 0, ch: 8 };
+  const editor = new TransactionEditor(input, cursor, 455);
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 1);
+  const dependencyTask = helpers
+    .getOpenLocalTasks(input)
+    .find((task) => task.existingBlockId === "target");
+  const file = { path: "Tasks.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+
+  assert.equal(
+    plugin.applyCountedLocalTaskDependency(
+      editor,
+      cursor,
+      file.path,
+      session,
+      dependencyTask,
+    ),
+    true,
+  );
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.transactionScrollTops, [455]);
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: cursor,
+    to: cursor,
+  });
+  assert.equal(editor.content.includes("\r\n"), true);
+  assert.equal(
+    (editor.content.match(/\[dependsOn:: Tasks__target\]/g) || []).length,
+    2,
+  );
+  assert.equal((editor.content.match(/!\[\[#\^target\]\]/g) || []).length, 2);
+  assert.match(editor.content, /Target \[id:: Tasks__target\] \^target/);
+});
+
 test("async cross-file runtime toggle applies one focused source transaction", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const targetFile = { path: "Other.md", extension: "md" };
@@ -1916,6 +2383,102 @@ test("open-task dispatch timeout is registered for plugin cleanup", () => {
   plugin.markOpenTaskJumpDispatch({}, 1);
   assert.equal(cleanups.length, 1);
   cleanups[0]();
+});
+
+test("physical counted property chord consumes only explicit normal-mode Vim counts", () => {
+  const makeEvent = (overrides = {}) => {
+    const calls = { prevent: 0, stop: 0, immediate: 0 };
+    return {
+      key: "P",
+      code: "KeyP",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      metaKey: false,
+      preventDefault: () => {
+        calls.prevent += 1;
+      },
+      stopPropagation: () => {
+        calls.stop += 1;
+      },
+      stopImmediatePropagation: () => {
+        calls.immediate += 1;
+      },
+      calls,
+      ...overrides,
+    };
+  };
+  const inputState = {
+    keyBuffer: ["2"],
+    repeat: 2,
+    getRepeat: () => 2,
+  };
+  const cm = {
+    state: { vim: { mode: "normal", inputState } },
+    getCursor: () => ({ line: 0, ch: 0 }),
+  };
+  const editor = { cm: { cm } };
+  const view = { editor };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.handledCountedBulletPropertyEvents = new WeakSet();
+  plugin.getFocusedMarkdownEditorView = () => view;
+  const opens = [];
+  plugin.openBulletPropertyPicker = (_editor, options) => {
+    opens.push(options);
+    return true;
+  };
+
+  const counted = makeEvent();
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(counted), true);
+  assert.deepEqual(opens, [
+    { countExplicit: true, additionalTaskCount: 2 },
+  ]);
+  assert.deepEqual(counted.calls, { prevent: 1, stop: 1, immediate: 1 });
+  assert.deepEqual(inputState.keyBuffer, []);
+  assert.equal(inputState.repeat, null);
+
+  // The same physical event delivered to both window and document is ignored.
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(counted), false);
+  assert.equal(opens.length, 1);
+
+  inputState.getRepeat = () => null;
+  const bare = makeEvent();
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(bare), false);
+  assert.deepEqual(bare.calls, { prevent: 0, stop: 0, immediate: 0 });
+
+  for (const mode of ["insert", "visual", "visual-line", "replace"]) {
+    cm.state.vim.mode = mode;
+    inputState.keyBuffer = ["3"];
+    inputState.getRepeat = () => 3;
+    const event = makeEvent();
+    assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+
+  cm.state.vim.mode = "normal";
+  for (const overrides of [
+    { ctrlKey: false },
+    { shiftKey: false },
+    { altKey: true },
+    { metaKey: true },
+    { key: "O", code: "KeyO" },
+  ]) {
+    const event = makeEvent(overrides);
+    assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+
+  delete cm.state.vim;
+  const disabled = makeEvent();
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(disabled), false);
+  assert.equal(disabled.calls.prevent, 0);
+
+  cm.state.vim = { mode: "normal", inputState };
+  plugin.getFocusedMarkdownEditorView = () => null;
+  const unfocused = makeEvent();
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(unfocused), false);
+  assert.equal(unfocused.calls.prevent, 0);
+  assert.equal(opens.length, 1);
 });
 
 test("tab pin Vim action registers once and toggles only the active leaf once", (t) => {

@@ -1,9 +1,9 @@
 {
   "id": "task-status-cycler",
   "name": "Task Status Cycler",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "minAppVersion": "1.8.7",
-  "description": "Toggle tasks, Pomodoros, and counted move-only # ranges, then move marked links forward without history.",
+  "description": "Complete Pomodoros from child bullets while preserving selected embedded tasks and counted move-only # rollover.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

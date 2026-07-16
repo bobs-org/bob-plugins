@@ -195,6 +195,50 @@ function createTextEditor(initialText, initialCursor = { line: 0, ch: 0 }) {
   };
 }
 
+function attachActiveMarkdownView(plugin, harness, editor, path = "Daily.md") {
+  const file = harness.app.vault.getAbstractFileByPath(path);
+  assert.ok(file, `expected ${path} in the in-memory vault`);
+  const view = Object.assign(new MarkdownView(), { editor, file });
+  harness.app.workspace = {
+    getActiveViewOfType: (ViewType) => {
+      assert.equal(ViewType, MarkdownView);
+      return view;
+    },
+    getActiveFile: () => file,
+  };
+  plugin.app = harness.app;
+  return { file, view };
+}
+
+function registerTaskToggleVimAction(plugin) {
+  const originalWindow = global.window;
+  const actions = new Map();
+  const vim = {
+    defineAction(name, handler) {
+      actions.set(name, handler);
+    },
+    mapCommand() {},
+  };
+  global.window = { CodeMirrorAdapter: { Vim: vim } };
+  try {
+    assert.equal(plugin.registerVimMappings(), true);
+  } finally {
+    if (originalWindow === undefined) {
+      delete global.window;
+    } else {
+      global.window = originalWindow;
+    }
+  }
+
+  const action = actions.get("taskStatusCyclerToggleTaskOpenDone");
+  assert.equal(typeof action, "function");
+  return action;
+}
+
+async function flushAsyncActions() {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 test("normalization mappings propagate to every dependent file", async () => {
   const harness = createInMemoryObsidianApp({
     "Target.md": "- [ ] #task Target [id:: old] ^review",
@@ -392,6 +436,58 @@ test("Ctrl+Enter block-link selection recognizes live and retired forms", () => 
     plugin.getActiveLineTaskBlockLinkTarget(fencedEditor, "Daily.md"),
     null,
   );
+});
+
+test("Pomodoro child ownership is status-neutral and bounded by contiguous list structure", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [x] Historical",
+    "\t- direct child",
+    "\t\t- nested child",
+    "- [ ] Open",
+    "  - open child",
+    "  prose boundary",
+    "    - orphan after prose",
+    "- [/] In progress",
+    "\t- progress child",
+    "",
+    "\t- orphan after blank",
+    "- [-] Canceled",
+    "\t- canceled child",
+    "## Tasks",
+    "\t- outside the section",
+  ];
+
+  for (const [activeLine, pomodoroLine, symbol] of [
+    [2, 1, "x"],
+    [3, 1, "x"],
+    [5, 4, " "],
+    [9, 8, "/"],
+    [13, 12, "-"],
+  ]) {
+    const context = helpers.getOwningPomodoroContextForLine(lines, activeLine);
+    assert.ok(context, `expected line ${activeLine} to resolve`);
+    assert.equal(context.pomodoroLine, pomodoroLine);
+    assert.equal(context.taskStatus.symbol, symbol);
+    assert.equal(context.activeLine, activeLine);
+  }
+
+  for (const activeLine of [0, 1, 4, 6, 7, 8, 10, 11, 12, 14, 15]) {
+    assert.equal(
+      helpers.getOwningPomodoroContextForLine(lines, activeLine),
+      null,
+      `line ${activeLine} must not resolve across a structural boundary`,
+    );
+  }
+
+  const qualifiesForParentCompletion = (activeLine) => {
+    const context = helpers.getOwningPomodoroContextForLine(lines, activeLine);
+    return !!context && context.taskStatus.symbol === " ";
+  };
+  assert.equal(qualifiesForParentCompletion(5), true);
+  for (const activeLine of [2, 3, 9, 13]) {
+    assert.equal(qualifiesForParentCompletion(activeLine), false);
+  }
 });
 
 test("direct Done Tasks task reopens through the metadata-aware fallback", () => {
@@ -1814,6 +1910,291 @@ test("Done Pomodoro markers remain when the Todo transition does not occur", asy
     false,
   );
   assert.equal(editor.getValue(), daily);
+});
+
+test("registered Ctrl+Enter completes an open Pomodoro from every non-selected-embed child shape", async () => {
+  const cases = [
+    {
+      name: "prose bullet",
+      children: ["\t- planning notes"],
+      cursor: { line: 2, ch: 0 },
+    },
+    {
+      name: "plain block link",
+      children: ["\t- [[Missing#^plain|Plain]]"],
+      cursor: { line: 2, ch: 0 },
+    },
+    {
+      name: "marked block link",
+      children: ["\t- 🍅 [[Missing#^marked|Marked]]"],
+      cursor: { line: 2, ch: 0 },
+    },
+    {
+      name: "nested bullet",
+      children: ["\t- parent note", "\t\t- nested note"],
+      cursor: { line: 3, ch: 0 },
+    },
+    {
+      name: "child checkbox",
+      children: ["\t- [ ] Child checkbox"],
+      cursor: { line: 2, ch: 5 },
+      unchangedChild: "\t- [ ] Child checkbox",
+    },
+    {
+      name: "ambiguous embedded links",
+      children: ["\t- ![[Missing#^one]] and ![[Missing#^two]]"],
+      cursor: { line: 2, ch: 0 },
+    },
+  ];
+
+  for (const testCase of cases) {
+    const daily = [
+      "## Pomodoros",
+      "- [ ] Focus",
+      ...testCase.children,
+    ].join("\n");
+    const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+    const editor = createTextEditor(daily, testCase.cursor);
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.scheduleCenterEditorLineInView = () => {};
+    attachActiveMarkdownView(plugin, harness, editor);
+    const action = registerTaskToggleVimAction(plugin);
+
+    action({});
+    await flushAsyncActions();
+
+    assert.equal(editor.getLine(1), "- [x] Focus", testCase.name);
+    if (testCase.unchangedChild) {
+      assert.equal(editor.getLine(2), testCase.unchangedChild, testCase.name);
+    }
+  }
+});
+
+test("child-line Ctrl+Enter produces the same rollover and cursor target as parent completion", async () => {
+  const daily = [
+    "- [ ] #task Carry ^carry",
+    "- [ ] #task Move ^move",
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- [[#^carry|Carry]]",
+    "\t- [[#^move|Move]]#",
+    "\t- keep this note",
+    "- [ ] Later",
+    "\t- later note",
+  ].join("\n");
+
+  const runCompletion = async (cursor) => {
+    const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+    const editor = createTextEditor(daily, cursor);
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.scheduleCenterEditorLineInView = () => {};
+    attachActiveMarkdownView(plugin, harness, editor);
+    const action = registerTaskToggleVimAction(plugin);
+    action({});
+    await flushAsyncActions();
+    return { text: editor.getValue(), cursor: editor.getCursor() };
+  };
+
+  const parentResult = await runCompletion({ line: 3, ch: 4 });
+  const childResult = await runCompletion({ line: 6, ch: 6 });
+  assert.deepEqual(childResult, parentResult);
+  assert.equal(
+    childResult.text,
+    [
+      "- [/] #task Carry ^carry",
+      "- [/] #task Move ^move",
+      "## Pomodoros",
+      "- [x] Focus",
+      "\t- 🍅 [[#^carry|Carry]]",
+      "\t- keep this note",
+      "- [ ] ()",
+      "\t- [[#^carry|Carry]]",
+      "\t- [[#^move|Move]]",
+      "- [ ] Later",
+      "\t- later note",
+    ].join("\n"),
+  );
+  assert.deepEqual(childResult.cursor, { line: 6, ch: 7 });
+  assert.equal((childResult.text.match(/- \[ \] \(\)/g) || []).length, 1);
+  assert.equal(childResult.text.includes("]]#"), false);
+});
+
+test("selected embedded Pomodoro children keep recursive close and root-only reopen dispatch", async () => {
+  for (const symbol of [" ", "/", "*"]) {
+    const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Tree#^root]]";
+    const tree = [
+      `- [${symbol}] #task Root ^root`,
+      "\t- ![[#^child]]",
+      "- [/] #task Child ^child",
+    ].join("\n");
+    const harness = createInMemoryObsidianApp({
+      "Daily.md": daily,
+      "Tree.md": tree,
+    });
+    const editor = createTextEditor(daily, { line: 2, ch: 0 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.getCompletionDateString = () => "2026-07-16";
+    plugin.retireClosedTaskReferences = async () => ({ retired: 0, failures: [] });
+    let parentCompletions = 0;
+    const completeParent = plugin.completeActivePomodoroTask.bind(plugin);
+    plugin.completeActivePomodoroTask = async (...args) => {
+      parentCompletions += 1;
+      return completeParent(...args);
+    };
+    attachActiveMarkdownView(plugin, harness, editor);
+    const action = registerTaskToggleVimAction(plugin);
+
+    action({});
+    await flushAsyncActions();
+
+    assert.equal(parentCompletions, 0, `selected [${symbol}] root`);
+    assert.equal(editor.getValue(), daily, `selected [${symbol}] root`);
+    assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Root/m);
+    assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Child/m);
+  }
+
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Tree#^root]]";
+  const tree = [
+    "- [x] #task Root [completion:: stale] ^root",
+    "\t- ![[#^child]]",
+    "- [x] #task Child [completion:: stale] ^child",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tree.md": tree,
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 0 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.restoreReopenedTaskReferences = async () => ({
+    restored: 0,
+    failures: [],
+  });
+  let parentCompletions = 0;
+  plugin.completeActivePomodoroTask = async () => {
+    parentCompletions += 1;
+    return true;
+  };
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+
+  assert.equal(parentCompletions, 0);
+  assert.equal(editor.getLine(1), "- [ ] Focus");
+  assert.match(harness.getSource("Tree.md"), /^- \[ \] #task Root \^root/m);
+  assert.match(
+    harness.getSource("Tree.md"),
+    /^- \[x\] #task Child \[completion:: stale\] \^child/m,
+  );
+});
+
+test("selected unresolved or excluded embedded children are consumed as no-ops", async () => {
+  const cases = [
+    { name: "stale", targetSource: null },
+    { name: "non-task", targetSource: "- Plain note block ^root" },
+    { name: "excluded", targetSource: "- [-] #task Canceled ^root" },
+  ];
+
+  for (const testCase of cases) {
+    const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Target#^root]]";
+    const sources = { "Daily.md": daily };
+    if (testCase.targetSource !== null) {
+      sources["Target.md"] = testCase.targetSource;
+    }
+    const harness = createInMemoryObsidianApp(sources);
+    const editor = createTextEditor(daily, { line: 2, ch: 0 });
+    const plugin = new TaskStatusCyclerPlugin();
+    let parentCompletions = 0;
+    plugin.completeActivePomodoroTask = async () => {
+      parentCompletions += 1;
+      return true;
+    };
+    attachActiveMarkdownView(plugin, harness, editor);
+    const action = registerTaskToggleVimAction(plugin);
+
+    action({});
+    await flushAsyncActions();
+
+    assert.equal(parentCompletions, 0, testCase.name);
+    assert.equal(editor.getValue(), daily, testCase.name);
+    if (testCase.targetSource !== null) {
+      assert.equal(
+        harness.getSource("Target.md"),
+        testCase.targetSource,
+        testCase.name,
+      );
+    }
+  }
+});
+
+test("Ctrl+Enter behavior stays generic outside open Pomodoro child ranges", async () => {
+  {
+    const daily = "- [ ] Ordinary checkbox\n## Pomodoros\n- [ ] Focus\n\t- note";
+    const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+    const editor = createTextEditor(daily, { line: 0, ch: 4 });
+    const plugin = new TaskStatusCyclerPlugin();
+    attachActiveMarkdownView(plugin, harness, editor);
+    registerTaskToggleVimAction(plugin)({});
+    await flushAsyncActions();
+    assert.equal(editor.getLine(0), "- [x] Ordinary checkbox");
+    assert.equal(editor.getLine(2), "- [ ] Focus");
+  }
+
+  {
+    const daily = [
+      "- [ ] Linked task ^target",
+      "- [[#^target]]",
+      "## Pomodoros",
+      "- [ ] Focus",
+      "\t- note",
+    ].join("\n");
+    const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+    const editor = createTextEditor(daily, { line: 1, ch: 0 });
+    const plugin = new TaskStatusCyclerPlugin();
+    attachActiveMarkdownView(plugin, harness, editor);
+    registerTaskToggleVimAction(plugin)({});
+    await flushAsyncActions();
+    assert.equal(editor.getLine(0), "- [x] Linked task ^target");
+    assert.equal(editor.getLine(3), "- [ ] Focus");
+  }
+
+  {
+    const daily = "## Pomodoros\n- [x] Historical\n\t- [ ] Child checkbox";
+    const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+    const editor = createTextEditor(daily, { line: 2, ch: 5 });
+    const plugin = new TaskStatusCyclerPlugin();
+    attachActiveMarkdownView(plugin, harness, editor);
+    registerTaskToggleVimAction(plugin)({});
+    await flushAsyncActions();
+    assert.equal(editor.getLine(1), "- [x] Historical");
+    assert.equal(editor.getLine(2), "\t- [x] Child checkbox");
+  }
+
+  {
+    const daily = "## Pomodoros\n- [-] Canceled\n\t- ![[Tree#^root]]";
+    const tree = [
+      "- [x] #task Root [completion:: stale] ^root",
+      "\t- ![[#^child]]",
+      "- [x] #task Child [completion:: stale] ^child",
+    ].join("\n");
+    const harness = createInMemoryObsidianApp({
+      "Daily.md": daily,
+      "Tree.md": tree,
+    });
+    const editor = createTextEditor(daily, { line: 2, ch: 0 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.restoreReopenedTaskReferences = async () => ({
+      restored: 0,
+      failures: [],
+    });
+    attachActiveMarkdownView(plugin, harness, editor);
+    registerTaskToggleVimAction(plugin)({});
+    await flushAsyncActions();
+    assert.equal(editor.getLine(1), "- [-] Canceled");
+    assert.match(harness.getSource("Tree.md"), /^- \[ \] #task Root \^root/m);
+    assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Child/m);
+  }
 });
 
 test("Vim Ctrl+Enter dispatches task transitions and restores a reopened identity", async () => {

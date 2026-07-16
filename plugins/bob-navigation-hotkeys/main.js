@@ -6,7 +6,7 @@ const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
 const SECTION_HEADER_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
-const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*"]);
+const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*", "?"]);
 const OBSIDIAN_TASK_STATUS_RANKS = Object.freeze({
   " ": 0,
   "*": 1,
@@ -3828,6 +3828,13 @@ function strongerObsidianTaskStatus(first, second) {
   return secondRank > firstRank ? second : first;
 }
 
+// Blocked is open for dependency semantics but intentionally has no active
+// promotion rank. A blocked parent therefore contributes the minimum Ready
+// request while Next and In Progress retain their existing ordering.
+function getDependencyPromotionStatus(status) {
+  return status === "?" ? " " : status;
+}
+
 function promoteObsidianTaskCheckboxStatus(lineText, desiredStatus) {
   const line = String(lineText || "");
   const currentStatus = getObsidianTaskCheckboxStatus(line);
@@ -3847,6 +3854,17 @@ function promoteObsidianTaskCheckboxStatus(lineText, desiredStatus) {
     String(desiredStatus) +
     line.slice(checkboxOffset + 1)
   );
+}
+
+function blockObsidianTaskCheckboxStatus(lineText) {
+  const line = String(lineText || "");
+  const currentStatus = getObsidianTaskCheckboxStatus(line);
+  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(currentStatus) || currentStatus === "?") {
+    return line;
+  }
+  const match = OBSIDIAN_TASK_LINE_RE.exec(line);
+  const checkboxOffset = match[0].indexOf(`[${currentStatus}]`) + 1;
+  return line.slice(0, checkboxOffset) + "?" + line.slice(checkboxOffset + 1);
 }
 
 // The dependency picker intentionally offers only open tasks. Keep that
@@ -5554,6 +5572,7 @@ function planSameFileDependencyToggle(
   ) {
     return unqualified("target-hidden");
   }
+  const targetIsOpen = isOpenObsidianTaskLine(lines[targetLine]);
   const idField = findBulletPropertyField(lines[targetLine], "id");
   const legacyId = idField && normalizeBulletPropertyValue(idField.value);
   const canonicalId = tryDependencyId(filePath, original.blockId);
@@ -5595,8 +5614,13 @@ function planSameFileDependencyToggle(
     ).line;
     lines[targetLine] = promoteObsidianTaskCheckboxStatus(
       lines[targetLine],
-      getObsidianTaskCheckboxStatus(toggledLines[parentLine]),
+      getDependencyPromotionStatus(
+        getObsidianTaskCheckboxStatus(toggledLines[parentLine]),
+      ),
     );
+    if (targetIsOpen) {
+      lines[parentLine] = blockObsidianTaskCheckboxStatus(lines[parentLine]);
+    }
   }
   return Object.freeze({
     qualified: true,
@@ -11260,6 +11284,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       ) {
         continue;
       }
+      const targetIsOpen = isOpenObsidianTaskLine(targetSnapshot);
       const idField = findBulletPropertyField(targetLines[targetLine], "id");
       const legacyId = idField && normalizeBulletPropertyValue(idField.value);
       const canonicalId = tryDependencyId(targetFile.path, original.blockId);
@@ -11273,8 +11298,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         continue;
       }
       if (next.transcluded) {
-        const desiredStatus = getObsidianTaskCheckboxStatus(
-          originalLines[parentLine],
+        const desiredStatus = getDependencyPromotionStatus(
+          getObsidianTaskCheckboxStatus(originalLines[parentLine]),
         );
         if (targetFile.path === sourcePath) {
           const existing = sameFileTargetEdits.get(targetLine);
@@ -11313,6 +11338,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         dependencyId: canonicalId,
         legacyId: legacyId && legacyId !== canonicalId ? legacyId : null,
         transcluded: next.transcluded,
+        blockParent: next.transcluded && targetIsOpen,
         targetPath: targetFile.path,
       });
     }
@@ -11394,6 +11420,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     const legacyReplacements = new Map();
+    const parentsToBlock = new Set();
     actions.forEach((action) => {
       if (action.transcluded && failedExternalPaths.has(action.targetPath)) {
         return;
@@ -11447,6 +11474,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             },
       );
       nextLines[action.parentLine] = edit.line;
+      if (action.blockParent) {
+        parentsToBlock.add(action.parentLine);
+      }
+    });
+    parentsToBlock.forEach((parentLine) => {
+      nextLines[parentLine] = blockObsidianTaskCheckboxStatus(
+        nextLines[parentLine],
+      );
     });
 
     if (String(cm.getValue() || "") !== originalContent) {
@@ -16341,7 +16376,9 @@ module.exports.helpers = {
   isObsidianTaskAtLine,
   getObsidianTaskCheckboxStatus,
   getObsidianTaskStatusRank,
+  getDependencyPromotionStatus,
   promoteObsidianTaskCheckboxStatus,
+  blockObsidianTaskCheckboxStatus,
   getMarkdownLineContexts,
   isOpenObsidianTaskLine,
   isPomodorosHeading,

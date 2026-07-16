@@ -119,6 +119,101 @@ test("dependency normalization skips unsupported paths and fenced examples", () 
   assert.equal(unsupported.unsupportedPath, true);
 });
 
+test("blocked-dependent planner matches the CLI dependency truth table", () => {
+  const documents = [
+    {
+      path: "Targets.md",
+      text: [
+        "- [x] #task Closed root [id:: root] ^root",
+        "- [ ] #task Other open (id:: other) ^other",
+        "- [!] #task Unknown target [id:: unknown] ^unknown",
+        "```md",
+        "- [ ] #task Fenced target [id:: fenced] ^fenced",
+        "```",
+      ].join("\n"),
+    },
+    {
+      path: "Dependents.md",
+      text: [
+        "- [?] #task Bracket [dependsOn:: root] ^bracket",
+        "- [?] #task Parenthesized (dependsOn:: root) ^paren",
+        "- [?] #task Missing is ignored [dependsOn:: root, missing] ^missing",
+        "- [?] #task Other remains open [dependsOn:: root, other] ^remaining",
+        "- [?] #task Unknown is not open [dependsOn:: root, unknown] ^unknown-parent",
+        "- [?] #task Self remains blocked [id:: self] [dependsOn:: root, self] ^self",
+        "- [?] #task Cycle A [id:: cycle-a] [dependsOn:: root, cycle-b] ^cycle-a",
+        "- [?] #task Cycle B [id:: cycle-b] [dependsOn:: cycle-a] ^cycle-b",
+        "- [ ] #task Already active [dependsOn:: root] ^active",
+        "- [x] #task Done dependent [dependsOn:: root] ^done",
+        "- [-] #task Canceled dependent [dependsOn:: root] ^canceled",
+        "- [~] #task Non-task dependent [dependsOn:: root] ^non-task",
+        "- [!] #task Unknown dependent [dependsOn:: root] ^unknown-status",
+        "- [?] #task No dependencies ^unrelated",
+        "```tasks",
+        "- [?] #task Fenced dependent [dependsOn:: root] ^fenced-parent",
+        "```",
+      ].join("\n"),
+    },
+  ];
+  const plan = helpers.buildBlockedDependentRecoveryPlan(
+    documents,
+    [
+      { path: "Targets.md", blockId: "root" },
+      { path: "Targets.md", blockId: "root" },
+    ],
+  );
+  assert.deepEqual(plan.closedIds, ["root"]);
+  assert.deepEqual(
+    plan.edits.map((edit) => edit.sourceLineText.match(/\^([^ ]+)$/)[1]),
+    ["bracket", "paren", "missing", "unknown-parent"],
+  );
+
+  const duplicateOpen = helpers.buildBlockedDependentRecoveryPlan(
+    [
+      ...documents,
+      {
+        path: "Duplicate.md",
+        text: "- [ ] #task Open duplicate [id:: root] ^duplicate",
+      },
+    ],
+    [{ path: "Targets.md", blockId: "root" }],
+  );
+  assert.equal(duplicateOpen.edits.length, 0);
+
+  const absentIdentity = helpers.buildBlockedDependentRecoveryPlan(
+    documents,
+    [{ path: "Targets.md", blockId: "absent" }],
+  );
+  assert.equal(absentIdentity.edits.length, 0);
+});
+
+test("blocked-dependent edits preserve EOLs and skip stale lines idempotently", () => {
+  const source = [
+    "- [?] #task First [dependsOn:: root] ^first",
+    "- [?] #task Second (dependsOn:: root) ^second",
+  ].join("\r\n");
+  const plan = helpers.buildBlockedDependentRecoveryPlan(
+    [{ path: "Tasks.md", text: source }],
+    [{ path: "Closed.md", taskId: "root" }],
+  );
+  const staleSource = source.replace("Second", "Second changed");
+  const applied = helpers.applyBlockedDependentRecoveryEdits(
+    staleSource,
+    plan.edits,
+  );
+  assert.equal(applied.reopened, 1);
+  assert.equal(applied.stale.length, 1);
+  assert.match(applied.text, /^- \[ \] #task First/m);
+  assert.match(applied.text, /^- \[\?\] #task Second changed/m);
+  assert.equal(applied.text.includes("\r\n"), true);
+  const second = helpers.applyBlockedDependentRecoveryEdits(
+    applied.text,
+    plan.edits,
+  );
+  assert.equal(second.reopened, 0);
+  assert.equal(second.text, applied.text);
+});
+
 function createInMemoryObsidianApp(initialSources) {
   const files = new Map();
   const sources = new Map();
@@ -1460,6 +1555,95 @@ test("close and reopen reference mutations share one serialized queue", async ()
   assert.deepEqual(order, ["retire:1", "restore:1"]);
 });
 
+test("post-close finalizer serializes dependent recovery before reference retirement", async () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  const order = [];
+  plugin.recoverBlockedDependentsNow = async (identities) => {
+    order.push(`recover:${identities.length}`);
+    return { reopened: 1, failures: [] };
+  };
+  plugin.retireClosedTaskReferencesNow = async (identities) => {
+    order.push(`retire:${identities.length}`);
+    return { retired: 2, failures: [] };
+  };
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "root", taskId: "root-id" }],
+    {},
+  );
+  assert.deepEqual(order, ["recover:1", "retire:1"]);
+  assert.deepEqual(result, {
+    reopened: 1,
+    retired: 2,
+    recoveryFailures: [],
+    retirementFailures: [],
+  });
+});
+
+test("dependent recovery uses live editor buffers and preserves the cursor", async () => {
+  const disk = [
+    "- [ ] #task Root [id:: root] ^root",
+    "- [?] #task Dependent [dependsOn:: root] ^dependent",
+  ].join("\n");
+  const live = disk.replace("- [ ] #task Root", "- [x] #task Root");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": disk });
+  const editor = createTextEditor(live, { line: 1, ch: 18 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Tasks.md");
+  const cursor = editor.getCursor();
+
+  const result = await plugin.recoverBlockedDependentsNow(
+    [{ path: "Tasks.md", blockId: "root" }],
+    { editor, activePath: "Tasks.md" },
+  );
+  assert.equal(result.reopened, 1);
+  assert.match(editor.getValue(), /^- \[ \] #task Dependent/m);
+  assert.deepEqual(editor.getCursor(), cursor);
+  assert.equal(harness.getSource("Tasks.md"), disk);
+  const second = await plugin.recoverBlockedDependentsNow(
+    [{ path: "Tasks.md", taskId: "root" }],
+    { editor, activePath: "Tasks.md" },
+  );
+  assert.equal(second.reopened, 0);
+});
+
+test("dependent recovery preserves successful siblings across stale and failed notes", async () => {
+  notices.length = 0;
+  const harness = createInMemoryObsidianApp({
+    "Closed.md": "- [x] #task Root [id:: root] ^root",
+    "Good.md": "- [?] #task Good [dependsOn:: root] ^good",
+    "Stale.md": "- [?] #task Stale [dependsOn:: root] ^stale",
+    "BrokenRead.md": "- [?] #task Unreadable [dependsOn:: root] ^unreadable",
+    "BrokenWrite.md": "- [?] #task Unwritable [dependsOn:: root] ^unwritable",
+  });
+  const cachedRead = harness.app.vault.cachedRead;
+  harness.app.vault.cachedRead = async (file) => {
+    if (file.path === "BrokenRead.md") throw new Error("read failed");
+    return cachedRead(file);
+  };
+  const process = harness.app.vault.process;
+  harness.app.vault.process = async (file, updateSourceText) => {
+    if (file.path === "BrokenWrite.md") throw new Error("write failed");
+    if (file.path === "Stale.md") {
+      return process(file, (text) =>
+        updateSourceText(text.replace("Stale", "Stale changed")),
+      );
+    }
+    return process(file, updateSourceText);
+  };
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  const result = await plugin.recoverBlockedDependentsNow(
+    [{ path: "Closed.md", blockId: "root" }],
+    {},
+  );
+  assert.equal(result.reopened, 1);
+  assert.equal(result.failures.length, 3);
+  assert.match(harness.getSource("Good.md"), /^- \[ \] #task Good/);
+  assert.match(harness.getSource("Stale.md"), /^- \[\?\] #task Stale changed/);
+  assert.match(harness.getSource("BrokenWrite.md"), /^- \[\?\]/);
+  assert.match(notices.at(-1), /3 notes could not be checked/);
+});
+
 test("no-op vault transforms and irrelevant retirement files avoid process writes", async () => {
   let processCalls = 0;
   const file = { path: "Notes.md" };
@@ -1513,7 +1697,7 @@ test("ambiguity scans and notices are cached while dependency identity lines sta
   assert.equal(notices.length, 1);
 });
 
-test("non-Vim open/done command retires the closed task identity", async () => {
+test("non-Vim open/done command finalizes the closed task identity", async () => {
   const plugin = new TaskStatusCyclerPlugin();
   const taskStatus = helpers.getTaskStatusForLine(
     "- [ ] #task Close through command ^close",
@@ -1526,12 +1710,12 @@ test("non-Vim open/done command retires the closed task identity", async () => {
   plugin.app = { workspace: { getActiveFile: () => view.file } };
   plugin.getActiveTaskStatus = () => taskStatus;
   plugin.toggleActiveCheckboxOpenDone = () => true;
-  let retired = null;
-  plugin.retireClosedTaskReferences = async (identities) => { retired = identities; };
+  let finalized = null;
+  plugin.finalizeClosedTasks = async (identities) => { finalized = identities; };
 
   assert.equal(plugin.handleToggleOpenDoneCommand(false, editor, view), true);
   await Promise.resolve();
-  assert.deepEqual(retired, [{ path: "Tasks.md", blockId: "close" }]);
+  assert.deepEqual(finalized, [{ path: "Tasks.md", blockId: "close" }]);
 });
 
 test("non-Vim open/done command restores the reopened task identity", async () => {
@@ -1603,6 +1787,38 @@ test("full Pomodoro completion retires embeds only after carry-forward planning"
   );
   assert.deepEqual(editor.getCursor(), { line: 5, ch: 7 });
   assert.match(harness.getSource("Continue.md"), /^- \[\/\] #task Continue/m);
+});
+
+test("full Pomodoro completion recovers after a deduplicated multi-target batch", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- ![[A#^a]]",
+    "\t- ![[A#^a|Repeated]]",
+    "\t- ![[B#^b]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "A.md": "- [ ] #task A [id:: a] ^a",
+    "B.md": "- [/] #task B (id:: b) ^b",
+    "Dependent.md": "- [?] #task Dependent [dependsOn:: a, b] ^dependent",
+  });
+  const editor = createTextEditor(daily, { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+
+  assert.equal(
+    await plugin.completeActivePomodoroTask(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+    ),
+    true,
+  );
+  assert.match(harness.getSource("A.md"), /^- \[x\] #task A/m);
+  assert.match(harness.getSource("B.md"), /^- \[x\] #task B/m);
+  assert.match(harness.getSource("Dependent.md"), /^- \[ \] #task Dependent/m);
 });
 
 test("full Pomodoro completion moves a marked same-note link without history", async () => {
@@ -1748,7 +1964,7 @@ test("incomplete selected Pomodoro transclusion still closes recursively", async
   const plugin = new TaskStatusCyclerPlugin();
   plugin.app = harness.app;
   plugin.getCompletionDateString = () => "2026-07-12";
-  plugin.retireClosedTaskReferences = async () => ({ retired: 0, failures: [] });
+  plugin.finalizeClosedTasks = async () => ({ reopened: 0, retired: 0 });
 
   assert.equal(
     await plugin.handleActiveTaskBlockLinkOpenDone(
@@ -1970,6 +2186,50 @@ test("registered Ctrl+Enter completes an open Pomodoro from every non-selected-e
   }
 });
 
+test("registered Ctrl+Enter immediately recovers a same-file dependent", async () => {
+  const source = [
+    "- [ ] #task Root [id:: root]",
+    "- [?] #task Dependent [dependsOn:: root] ^dependent",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": source });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  attachActiveMarkdownView(plugin, harness, editor, "Tasks.md");
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[x\] #task Root \[id:: root\]/m);
+  assert.match(editor.getValue(), /^- \[ \] #task Dependent/m);
+});
+
+test("registered Ctrl+Enter immediately recovers a cross-file dependent", async () => {
+  const daily = "- [[Tasks#^root|Root]]";
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": "- [/] #task Root [id:: root] ^root",
+    "Dependent.md": "- [?] #task Dependent (dependsOn:: root) ^dependent",
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(daily, { line: 0, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task Root/m);
+  assert.match(harness.getSource("Dependent.md"), /^- \[ \] #task Dependent/m);
+  assert.equal(editor.getValue(), daily);
+});
+
 test("child-line Ctrl+Enter produces the same rollover and cursor target as parent completion", async () => {
   const daily = [
     "- [ ] #task Carry ^carry",
@@ -2034,7 +2294,7 @@ test("selected embedded Pomodoro children keep recursive close and root-only reo
     const editor = createTextEditor(daily, { line: 2, ch: 0 });
     const plugin = new TaskStatusCyclerPlugin();
     plugin.getCompletionDateString = () => "2026-07-16";
-    plugin.retireClosedTaskReferences = async () => ({ retired: 0, failures: [] });
+    plugin.finalizeClosedTasks = async () => ({ reopened: 0, retired: 0 });
     let parentCompletions = 0;
     const completeParent = plugin.completeActivePomodoroTask.bind(plugin);
     plugin.completeActivePomodoroTask = async (...args) => {

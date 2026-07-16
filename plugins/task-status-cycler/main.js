@@ -20,6 +20,9 @@ const TRAILING_BLOCK_ID_RE = /[ \t]+\^[A-Za-z0-9-]+[ \t]*$/;
 const EMBEDDED_WIKILINK_RE = /!\[\[([^\]\n]+)\]\]/g;
 const BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const TASKS_DEPENDENCY_ID_RE = /^[A-Za-z0-9_-]+$/;
+const DEPENDENCY_OPEN_TASK_SYMBOLS = new Set([" ", "*", "/", "?"]);
+const TASK_DEPENDENCY_FIELD_RE =
+  /\[([A-Za-z][A-Za-z0-9]*)::([^\]\n]*)\]|\(([A-Za-z][A-Za-z0-9]*)::([^\)\n]*)\)/g;
 // Ctrl+Enter closes open embedded Pomodoro source-task trees recursively, but
 // reopens Done task-link targets and completed Pomodoros root-only. Conservative
 // guards apply only to the recursive close side: the seen-set keyed by
@@ -2217,9 +2220,236 @@ function retirementIdentityKey(path, blockId) {
   return `${String(path || "")}#^${String(blockId || "")}`;
 }
 
+function validTaskDependencyIdentity(value) {
+  return TASKS_DEPENDENCY_ID_RE.test(String(value || ""));
+}
+
+function parseTaskDependencyIds(value) {
+  const text = String(value || "");
+  if (!text || text.includes("\t")) {
+    return null;
+  }
+  const ids = text.split(",").map((part) => part.replace(/^ +| +$/g, ""));
+  return ids.every(validTaskDependencyIdentity) ? ids : null;
+}
+
+function parseTaskDependencyMetadata(lineText) {
+  const line = String(lineText || "");
+  const metadata = { taskId: null, dependsOn: [] };
+  let foundDependsOn = false;
+  let match;
+  TASK_DEPENDENCY_FIELD_RE.lastIndex = 0;
+  while ((match = TASK_DEPENDENCY_FIELD_RE.exec(line)) !== null) {
+    const key = match[1] || match[3];
+    const value = String(match[2] ?? match[4] ?? "").trim();
+    if (key === "id" && metadata.taskId === null) {
+      if (validTaskDependencyIdentity(value)) {
+        metadata.taskId = value;
+      }
+      continue;
+    }
+    if (key === "dependsOn" && !foundDependsOn) {
+      const ids = parseTaskDependencyIds(value);
+      if (ids) {
+        metadata.dependsOn = ids;
+      }
+      foundDependsOn = true;
+    }
+  }
+  return metadata;
+}
+
+function parseTaskDependencyLine(lineText, path = "", line = 0) {
+  const taskStatus = getTaskStatusForLine(lineText, line);
+  if (!taskStatus || !lineMatchesTasksGlobalFilterText(lineText)) {
+    return null;
+  }
+  const metadata = parseTaskDependencyMetadata(lineText);
+  return {
+    path: String(path || ""),
+    line,
+    lineText: String(lineText || ""),
+    status: taskStatus.symbol,
+    statusStart: taskStatus.statusStart,
+    blockId: getTrailingBlockId(lineText),
+    taskId: metadata.taskId,
+    dependsOn: metadata.dependsOn,
+  };
+}
+
+function parseTaskDependencyDocument(sourceText, path = "") {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const lines = sourceLines.map((line) => line.text);
+  const fenced = getFencedLineNumbers(lines);
+  const tasks = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    const task = parseTaskDependencyLine(lines[line], path, line);
+    if (task) {
+      tasks.push(task);
+    }
+  }
+  return tasks;
+}
+
 function closedTaskIdentity(path, lineText) {
   const blockId = getTrailingBlockId(lineText);
-  return path && blockId ? { path, blockId } : null;
+  const taskId = lineMatchesTasksGlobalFilterText(lineText)
+    ? parseTaskDependencyMetadata(lineText).taskId
+    : null;
+  if (!path || (!blockId && !taskId)) {
+    return null;
+  }
+  return {
+    path: String(path),
+    ...(blockId ? { blockId } : {}),
+    ...(taskId ? { taskId } : {}),
+  };
+}
+
+function normalizeClosedTaskIdentities(identities) {
+  const normalized = [];
+  const seen = new Set();
+  for (const identity of Array.from(identities || [])) {
+    if (!identity || !identity.path) {
+      continue;
+    }
+    const blockId = BLOCK_ID_RE.test(String(identity.blockId || ""))
+      ? String(identity.blockId)
+      : null;
+    const taskId = validTaskDependencyIdentity(identity.taskId)
+      ? String(identity.taskId)
+      : null;
+    if (!blockId && !taskId) {
+      continue;
+    }
+    const next = {
+      path: String(identity.path),
+      ...(blockId ? { blockId } : {}),
+      ...(taskId ? { taskId } : {}),
+    };
+    const key = `${next.path}\0${blockId || ""}\0${taskId || ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(next);
+  }
+  return normalized;
+}
+
+function buildBlockedDependentRecoveryPlan(documents, closedIdentities) {
+  const parsedDocuments = Array.from(documents || []).map((document) => ({
+    ...document,
+    path: String((document && document.path) || ""),
+    text: String((document && document.text) || ""),
+    tasks: parseTaskDependencyDocument(
+      document && document.text,
+      document && document.path,
+    ),
+  }));
+  const openIds = new Set();
+  for (const document of parsedDocuments) {
+    for (const task of document.tasks) {
+      if (
+        task.taskId &&
+        DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)
+      ) {
+        openIds.add(task.taskId);
+      }
+    }
+  }
+
+  const closedIds = new Set();
+  const closed = normalizeClosedTaskIdentities(closedIdentities);
+  for (const identity of closed) {
+    if (identity.taskId) {
+      closedIds.add(identity.taskId);
+    }
+    if (!identity.blockId) {
+      continue;
+    }
+    const document = parsedDocuments.find(
+      (candidate) => candidate.path === identity.path,
+    );
+    const task = document && document.tasks.find(
+      (candidate) => candidate.blockId === identity.blockId,
+    );
+    if (task && task.taskId) {
+      closedIds.add(task.taskId);
+    }
+  }
+
+  const edits = [];
+  const seenEdits = new Set();
+  for (const document of parsedDocuments) {
+    for (const task of document.tasks) {
+      if (
+        task.status !== "?" ||
+        !task.dependsOn.some((id) => closedIds.has(id)) ||
+        task.dependsOn.some((id) => openIds.has(id))
+      ) {
+        continue;
+      }
+      const key = `${task.path}\0${task.line}`;
+      if (seenEdits.has(key)) {
+        continue;
+      }
+      seenEdits.add(key);
+      edits.push({
+        path: task.path,
+        line: task.line,
+        sourceLineText: task.lineText,
+        statusStart: task.statusStart,
+        taskId: task.taskId,
+        dependsOn: task.dependsOn.slice(),
+      });
+    }
+  }
+
+  return {
+    documents: parsedDocuments,
+    openIds: [...openIds].sort(),
+    closedIds: [...closedIds].sort(),
+    edits,
+  };
+}
+
+function applyBlockedDependentRecoveryEdits(sourceText, edits) {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  let reopened = 0;
+  const stale = [];
+  const seen = new Set();
+  for (const edit of Array.from(edits || [])) {
+    const key = `${edit.line}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const sourceLine = sourceLines[edit.line];
+    if (!sourceLine || sourceLine.text !== edit.sourceLineText) {
+      stale.push(edit);
+      continue;
+    }
+    const task = parseTaskDependencyLine(
+      sourceLine.text,
+      edit.path,
+      edit.line,
+    );
+    if (!task || task.status !== "?" || task.statusStart !== edit.statusStart) {
+      stale.push(edit);
+      continue;
+    }
+    sourceLine.text = `${sourceLine.text.slice(0, task.statusStart)} ${sourceLine.text.slice(task.statusStart + 1)}`;
+    reopened += 1;
+  }
+  return {
+    text: sourceLines.map((line) => `${line.text}${line.ending}`).join(""),
+    reopened,
+    stale,
+  };
 }
 
 function normalizeTaskReferenceIdentities(identities) {
@@ -4078,6 +4308,210 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return queued;
   }
 
+  finalizeClosedTasks(closedIdentities, context) {
+    const closed = normalizeClosedTaskIdentities(closedIdentities);
+    if (closed.length === 0) {
+      return Promise.resolve({
+        reopened: 0,
+        retired: 0,
+        recoveryFailures: [],
+        retirementFailures: [],
+      });
+    }
+    return this.enqueueTaskReferenceMutation(async () => {
+      let recovery;
+      try {
+        recovery = await this.recoverBlockedDependentsNow(
+          closed,
+          context || {},
+        );
+      } catch (error) {
+        const message = error && error.message ? error.message : String(error);
+        console.error("Could not recover blocked dependents", error);
+        new Notice("Closed tasks, but blocked dependents could not be checked.");
+        recovery = { reopened: 0, failures: [message] };
+      }
+      const retirement = await this.retireClosedTaskReferencesNow(
+        normalizeTaskReferenceIdentities(closed),
+        context || {},
+      );
+      return {
+        reopened: recovery.reopened,
+        retired: retirement.retired,
+        recoveryFailures: recovery.failures,
+        retirementFailures: retirement.failures,
+      };
+    });
+  }
+
+  getOpenMarkdownEditors(context = {}) {
+    const editors = new Map();
+    const addView = (view) => {
+      if (
+        view &&
+        view.file &&
+        view.file.path &&
+        view.editor &&
+        typeof view.editor.getValue === "function"
+      ) {
+        editors.set(view.file.path, view.editor);
+      }
+    };
+    if (
+      context.activePath &&
+      context.editor &&
+      typeof context.editor.getValue === "function"
+    ) {
+      editors.set(context.activePath, context.editor);
+    }
+    const workspace = this.app && this.app.workspace;
+    if (!workspace) {
+      return editors;
+    }
+    if (typeof workspace.getActiveViewOfType === "function") {
+      addView(workspace.getActiveViewOfType(MarkdownView));
+    }
+    if (typeof workspace.getLeavesOfType === "function") {
+      for (const leaf of workspace.getLeavesOfType("markdown")) {
+        addView(leaf && leaf.view);
+      }
+    }
+    return editors;
+  }
+
+  async recoverBlockedDependentsNow(closedIdentities, context) {
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.getMarkdownFiles !== "function") {
+      return { reopened: 0, failures: [] };
+    }
+    const openEditors = this.getOpenMarkdownEditors(context || {});
+    const files = vault.getMarkdownFiles().filter(
+      (file) => file && file.path && MARKDOWN_EXTENSION_RE.test(file.path),
+    );
+    const fileByPath = new Map(files.map((file) => [file.path, file]));
+    const documents = [];
+    const failures = [];
+    const failedPaths = new Set();
+    const recordFailure = (path, message) => {
+      const filePath = String(path || "(unknown note)");
+      failures.push(`${filePath}: ${message}`);
+      failedPaths.add(filePath);
+    };
+
+    for (const file of files) {
+      try {
+        const editor = openEditors.get(file.path);
+        const text = editor
+          ? editor.getValue()
+          : typeof vault.cachedRead === "function"
+            ? await vault.cachedRead(file)
+            : typeof vault.read === "function"
+              ? await vault.read(file)
+              : null;
+        if (typeof text !== "string") {
+          recordFailure(file.path, "note could not be read");
+          continue;
+        }
+        documents.push({ path: file.path, text, file, editor: editor || null });
+      } catch (error) {
+        recordFailure(file.path, error.message || String(error));
+      }
+    }
+
+    const plan = buildBlockedDependentRecoveryPlan(
+      documents,
+      closedIdentities,
+    );
+    const editsByPath = new Map();
+    for (const edit of plan.edits) {
+      if (!editsByPath.has(edit.path)) {
+        editsByPath.set(edit.path, []);
+      }
+      editsByPath.get(edit.path).push(edit);
+    }
+    let reopened = 0;
+
+    for (const [path, edits] of editsByPath) {
+      const editor = openEditors.get(path);
+      if (editor) {
+        const cursor =
+          typeof editor.getCursor === "function" ? editor.getCursor() : null;
+        for (const edit of edits) {
+          const currentLine =
+            typeof editor.getLine === "function" ? editor.getLine(edit.line) : null;
+          const task = currentLine === edit.sourceLineText
+            ? parseTaskDependencyLine(currentLine, path, edit.line)
+            : null;
+          if (
+            !task ||
+            task.status !== "?" ||
+            task.statusStart !== edit.statusStart ||
+            typeof editor.replaceRange !== "function"
+          ) {
+            recordFailure(path, `line ${edit.line + 1} changed before recovery`);
+            continue;
+          }
+          editor.replaceRange(
+            " ",
+            { line: edit.line, ch: task.statusStart },
+            { line: edit.line, ch: task.statusStart + 1 },
+          );
+          reopened += 1;
+        }
+        if (cursor && typeof editor.setCursor === "function") {
+          const cursorLine = editor.getLine(cursor.line) || "";
+          editor.setCursor({
+            line: cursor.line,
+            ch: Math.min(cursor.ch, cursorLine.length),
+          });
+        }
+        continue;
+      }
+
+      const file = fileByPath.get(path);
+      if (!file) {
+        recordFailure(path, "note disappeared before recovery");
+        continue;
+      }
+      try {
+        let result = { reopened: 0, stale: [], text: null };
+        const transform = (text) => {
+          result = applyBlockedDependentRecoveryEdits(text, edits);
+          return result.text;
+        };
+        if (typeof vault.process === "function") {
+          await vault.process(file, transform);
+        } else if (
+          typeof vault.read === "function" &&
+          typeof vault.modify === "function"
+        ) {
+          const liveText = await vault.read(file);
+          const nextText = transform(liveText);
+          if (nextText !== liveText) {
+            await vault.modify(file, nextText);
+          }
+        } else {
+          recordFailure(path, "note cannot be updated safely");
+          continue;
+        }
+        reopened += result.reopened;
+        for (const stale of result.stale) {
+          recordFailure(path, `line ${stale.line + 1} changed before recovery`);
+        }
+      } catch (error) {
+        recordFailure(path, error.message || String(error));
+      }
+    }
+
+    if (failures.length > 0) {
+      console.error("Could not recover all blocked dependents", failures);
+      new Notice(
+        `Closed tasks, but ${failedPaths.size} note${failedPaths.size === 1 ? "" : "s"} could not be checked for blocked dependents.`,
+      );
+    }
+    return { reopened, failures };
+  }
+
   async retireClosedTaskReferencesNow(closedIdentities, context) {
     const result = await this.mutateTaskReferencesNow(
       closedIdentities,
@@ -4437,7 +4871,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
           : null;
       if (identity && isTranscludedCompletionClosableStatus(taskStatus)) {
-        void this.retireClosedTaskReferences([identity], {
+        void this.finalizeClosedTasks([identity], {
           editor: view.editor,
           activePath: activeFile && activeFile.path,
         }).catch(() => {});
@@ -5537,7 +5971,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
         : null;
     if (identity && isTranscludedCompletionClosableStatus(taskStatus)) {
-      void this.retireClosedTaskReferences([identity], {
+      void this.finalizeClosedTasks([identity], {
         editor,
         activePath: activeFile && activeFile.path,
       }).catch(() => {});
@@ -5634,10 +6068,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       context,
     );
     if (wrote && closing) {
-      await this.retireClosedTaskReferences(
-        [{ path: resolvedTarget.file.path, blockId: resolvedTarget.blockId }],
-        context,
-      );
+      const identity = closedTaskIdentity(
+        resolvedTarget.file.path,
+        resolvedTarget.taskStatus.lineText,
+      ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
+      await this.finalizeClosedTasks([identity], context);
     }
     return wrote;
   }
@@ -5685,7 +6120,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           context,
           new Set(),
         );
-        await this.retireClosedTaskReferences(result.closed, context);
+        await this.finalizeClosedTasks(result.closed, context);
       } catch (error) {
         // Once the eligible root resolved, a partial recursive close remains a
         // handled best-effort action.
@@ -5701,10 +6136,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       context,
     );
     if (wrote && closing) {
-      await this.retireClosedTaskReferences(
-        [{ path: resolvedTarget.file.path, blockId: resolvedTarget.blockId }],
-        context,
-      );
+      const identity = closedTaskIdentity(
+        resolvedTarget.file.path,
+        resolvedTarget.taskStatus.lineText,
+      ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
+      await this.finalizeClosedTasks([identity], context);
     }
     return wrote;
   }
@@ -5852,7 +6288,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         context,
         seen,
       );
-      await this.retireClosedTaskReferences(result.closed, context);
+      await this.finalizeClosedTasks(result.closed, context);
     } catch (error) {
       // Best effort: a mid-traversal failure still counts as handled because the
       // root target resolved as a Pomodoro sub-bullet transclusion.
@@ -5931,7 +6367,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     if (!applied) {
       return false;
     }
-    await this.retireClosedTaskReferences(closed, {
+    await this.finalizeClosedTasks(closed, {
       editor,
       activePath: sourcePath,
       originPath: sourcePath,
@@ -6199,10 +6635,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       );
       if (wrote) {
         changed = true;
-        closed.push({
-          path: resolvedTarget.file.path,
-          blockId: resolvedTarget.blockId,
-        });
+        closed.push(
+          closedTaskIdentity(
+            resolvedTarget.file.path,
+            resolvedTarget.taskStatus.lineText,
+          ) || {
+            path: resolvedTarget.file.path,
+            blockId: resolvedTarget.blockId,
+          },
+        );
       }
     }
 
@@ -7592,6 +8033,8 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
 module.exports.helpers = {
   addOrReplaceCompletionField,
   addCreatedFieldToObsidianTaskLine,
+  applyBlockedDependentRecoveryEdits,
+  buildBlockedDependentRecoveryPlan,
   buildPomodoroCompletionPlan,
   buildPomodoroMoveOnlyTogglePlan,
   buildPomodoroReopenMarkerEdits,
@@ -7647,6 +8090,7 @@ module.exports.helpers = {
   getTrailingBlockId,
   isTasksGeneratedId,
   normalizeTaskDependencyBlockIds,
+  normalizeClosedTaskIdentities,
   rewriteDependsOnBlockIdsInText,
   rewriteDependsOnIdsInLine,
   rewriteGeneratedIdToBlockId,
@@ -7679,6 +8123,9 @@ module.exports.helpers = {
   lineHasCreatedField,
   lineMatchesTasksGlobalFilterText,
   parseEmbeddedBlockTransclusions,
+  parseTaskDependencyDocument,
+  parseTaskDependencyLine,
+  parseTaskDependencyMetadata,
   collectTranscludedTaskTargetsInLineRange,
   getTranscludedTaskTargetFromLine,
   parseMarkdownHeadingLine,

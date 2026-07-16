@@ -16,7 +16,7 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 | Bob Navigation Hotkeys  | `bob-navigation-hotkeys` |  1.13.8 | Open and manage related notes and tabs; `N<Ctrl+Shift+P>` edits the current task plus the next N real tasks, bare `Ctrl+Shift+M` moves the current task, `N<Ctrl+Shift+M>` moves it plus the next N movable tasks, and `!` synchronizes visible task dependencies while marking parents Blocked for open targets. |
 | Bob Project Tasks       | `bob-project-tasks`      |   1.0.0 | Keep project task counts materialized in frontmatter.                 |
 | Bob Vim Surround        | `bob-vim-surround`       |   1.5.2 | Add vim-surround `ys` motions, `cs` changes, `ds` deletes, and dot-repeat to Obsidian Vim mode. |
-| Task Status Cycler      | `task-status-cycler`     |   1.6.0 | Complete Pomodoros from parent or child bullets, except selected embedded tasks retain recursive close/root-only reopen; normal-mode `#` toggles one task link's move-only directive and `N#` includes the next `N` lines before Ctrl+Enter rollover. |
+| Task Status Cycler      | `task-status-cycler`     |   1.6.1 | Complete Pomodoros and immediately recover affected Blocked dependents after their final open dependency closes; selected embedded tasks retain recursive close/root-only reopen, and `N#` controls move-only rollover. |
 
 Versions are tracked **per plugin** — there is no lockstep release. Each plugin's authoritative version lives in its own
 `plugins/<id>/manifest.json` (e.g. `bob-vim-surround` is ahead of the others at `1.5.2`).

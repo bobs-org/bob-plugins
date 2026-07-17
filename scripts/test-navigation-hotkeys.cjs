@@ -2618,8 +2618,117 @@ test("task move destinations include areas and only open projects", () => {
   );
 });
 
-test("task move insertion replaces placeholders and creates area Tasks sections", () => {
-  const moved = [["- [x] #task Moved [p::3] ^moved", "  child"]];
+test("task move picker closes before commit while other pickers retain delayed close", async () => {
+  const destinations = [
+    { file: { path: "Area.md", basename: "Area" }, noteInfo: {} },
+  ];
+  const session = {
+    discovery: { actualCount: 2, requestedCount: 2, clamped: false },
+  };
+
+  for (const commitResult of [true, false]) {
+    const events = [];
+    let settleCommit;
+    const commit = new Promise((resolve) => {
+      settleCommit = resolve;
+    });
+    const plugin = {
+      commitTaskMoveSession: () => {
+        events.push("commit");
+        return commit;
+      },
+    };
+    const picker = new helpers.TaskMoveDestinationPickerModal(
+      {},
+      plugin,
+      destinations,
+      session,
+    );
+    picker.close = () => events.push("close");
+
+    const selection = picker.openItemAtIndex(0);
+    assert.deepEqual(events, ["close", "commit"]);
+    await picker.openItemAtIndex(0);
+    assert.deepEqual(events, ["close", "commit"]);
+
+    settleCommit(commitResult);
+    await selection;
+    assert.deepEqual(events, ["close", "commit"]);
+  }
+
+  for (const openResult of [true, false]) {
+    const events = [];
+    let settleOpen;
+    const opening = new Promise((resolve) => {
+      settleOpen = resolve;
+    });
+    const picker = new helpers.FilteredPickerModal({}, {
+      items: ["item"],
+      openItem: () => {
+        events.push("open");
+        return opening;
+      },
+    });
+    picker.close = () => events.push("close");
+
+    const selection = picker.openItemAtIndex(0);
+    assert.deepEqual(events, ["open"]);
+    settleOpen(openResult);
+    await selection;
+    assert.deepEqual(events, openResult ? ["open", "close"] : ["open"]);
+  }
+});
+
+test("task move insertion preserves exact task and section spacing", () => {
+  const moved = [
+    [
+      "- [x] #task Moved [p::3] ^moved",
+      "  child",
+      "",
+      "  continuation",
+    ],
+    ["- [ ] #task Second ^second"],
+  ];
+  assert.deepEqual(helpers.flattenTaskMoveBlocks(moved), [
+    "- [x] #task Moved [p::3] ^moved",
+    "  child",
+    "",
+    "  continuation",
+    "- [ ] #task Second ^second",
+  ]);
+
+  const existing = [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task Existing ^existing",
+    "",
+    "## Notes",
+    "Keep",
+  ].join("\n");
+  const appended = helpers.insertTaskMoveBlocks(existing, moved, "project");
+  assert.equal(appended.valid, true);
+  assert.equal(appended.content, [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task Existing ^existing",
+    "- [x] #task Moved [p::3] ^moved",
+    "  child",
+    "",
+    "  continuation",
+    "- [ ] #task Second ^second",
+    "",
+    "## Notes",
+    "Keep",
+  ].join("\n"));
+
   const project = [
     "---",
     "type: \"[[project]]\"",
@@ -2634,9 +2743,22 @@ test("task move insertion replaces placeholders and creates area Tasks sections"
   ].join("\n");
   const inserted = helpers.insertTaskMoveBlocks(project, moved, "project");
   assert.equal(inserted.valid, true);
-  assert.doesNotMatch(inserted.content, /REPLACE WITH TASK DESCRIPTION/);
-  assert.match(inserted.content, /- \[x\] #task Moved \[p::3\] \^moved\n  child/);
-  assert.match(inserted.content, /child\n\n## Notes/);
+  assert.equal(inserted.content, [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "",
+    "- [x] #task Moved [p::3] ^moved",
+    "  child",
+    "",
+    "  continuation",
+    "- [ ] #task Second ^second",
+    "",
+    "## Notes",
+    "Keep",
+  ].join("\n"));
 
   const area = [
     "---",
@@ -2648,8 +2770,35 @@ test("task move insertion replaces placeholders and creates area Tasks sections"
   ].join("\r\n");
   const created = helpers.insertTaskMoveBlocks(area, moved, "area");
   assert.equal(created.valid, true);
-  assert.match(created.content, /Body\r\n\r\n## Tasks\r\n\r\n- \[x\]/);
-  assert.equal(created.content.endsWith("\r\n"), true);
+  assert.equal(created.content, [
+    "---",
+    "type: \"[[area]]\"",
+    "---",
+    "# Area",
+    "Body",
+    "",
+    "## Tasks",
+    "",
+    "- [x] #task Moved [p::3] ^moved",
+    "  child",
+    "",
+    "  continuation",
+    "- [ ] #task Second ^second",
+    "",
+  ].join("\r\n"));
+
+  const areaWithoutTerminalNewline = area.slice(0, -2);
+  const createdWithoutTerminalNewline = helpers.insertTaskMoveBlocks(
+    areaWithoutTerminalNewline,
+    moved,
+    "area",
+  );
+  assert.equal(createdWithoutTerminalNewline.valid, true);
+  assert.equal(createdWithoutTerminalNewline.content.endsWith("\r\n"), false);
+  assert.match(
+    createdWithoutTerminalNewline.content,
+    /Body\r\n\r\n## Tasks\r\n\r\n- \[x\]/,
+  );
 
   const invalidProject = helpers.insertTaskMoveBlocks(project.replace("## Tasks", "## Work"), moved, "project");
   assert.equal(invalidProject.valid, false);
@@ -2672,7 +2821,10 @@ test("task move planning migrates identities and links across every affected not
     "---",
     "## Tasks",
     "",
-    "- [ ] #task (REPLACE WITH TASK DESCRIPTION)",
+    "- [ ] #task Existing [id:: Projects__Dest__existing] ^existing",
+    "",
+    "## Notes",
+    "Keep",
   ].join("\n");
   const refs = [
     "- [ ] #task Ref [dependsOn:: Source__one]",
@@ -2695,11 +2847,22 @@ test("task move planning migrates identities and links across every affected not
   assert.doesNotMatch(nextSource, /#task One|#task Two/);
 
   const nextDestination = plan.changes.get("Projects/Dest.md").after;
-  assert.match(nextDestination, /#task One \[id:: Projects__Dest__one\]/);
-  assert.match(nextDestination, /dependsOn:: Projects__Dest__two/);
-  assert.match(nextDestination, /!\[\[#\^two\|Two\]\]/);
-  assert.match(nextDestination, /\[\[Source#\^stay\|Stay\]\]/);
-  assert.match(nextDestination, /#task Two \[id:: Projects__Dest__two\]/);
+  assert.equal(nextDestination, [
+    "---",
+    "type: \"[[project]]\"",
+    "status: waiting",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task Existing [id:: Projects__Dest__existing] ^existing",
+    "- [ ] #task One [id:: Projects__Dest__one] [dependsOn:: Projects__Dest__two] ^one",
+    "  - ![[#^two|Two]]",
+    "  - [[Source#^stay|Stay]]",
+    "- [/] #task Two [id:: Projects__Dest__two] ^two",
+    "",
+    "## Notes",
+    "Keep",
+  ].join("\n"));
 
   const nextRefs = plan.changes.get("Refs.md").after;
   assert.match(nextRefs, /dependsOn:: Projects__Dest__one/);

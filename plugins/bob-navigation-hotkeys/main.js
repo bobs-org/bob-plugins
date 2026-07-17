@@ -6238,6 +6238,7 @@ class FilteredPickerModal extends Modal {
     super(app);
     this.selectedIndex = 0;
     this.opening = false;
+    this.closeBeforeOpenItem = false;
     this.footerHints = KEYBOARD_HINTS;
     this.items = [];
     this.visibleItems = [];
@@ -6278,6 +6279,9 @@ class FilteredPickerModal extends Modal {
     }
     if (Object.prototype.hasOwnProperty.call(options, "openItem")) {
       this.openItem = options.openItem;
+    }
+    if (Object.prototype.hasOwnProperty.call(options, "closeBeforeOpenItem")) {
+      this.closeBeforeOpenItem = Boolean(options.closeBeforeOpenItem);
     }
     if (Object.prototype.hasOwnProperty.call(options, "footerHints")) {
       this.footerHints = options.footerHints || [];
@@ -6524,8 +6528,12 @@ class FilteredPickerModal extends Modal {
     }
 
     this.opening = true;
+    const closeBeforeOpenItem = this.closeBeforeOpenItem;
+    if (closeBeforeOpenItem) {
+      this.close();
+    }
     try {
-      if (await this.openItem(item)) {
+      if ((await this.openItem(item)) && !closeBeforeOpenItem) {
         this.close();
       }
     } finally {
@@ -6665,6 +6673,7 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
         childNoteMatchesQuery(entry.file, entry.noteInfo, query),
       renderItem: (entry, rowEl, query) =>
         renderTypedNotePickerRow(entry.file, entry.noteInfo, rowEl, query),
+      closeBeforeOpenItem: true,
       openItem: (entry) => plugin.commitTaskMoveSession(session, entry),
     });
   }
@@ -7749,9 +7758,6 @@ function flattenTaskMoveBlocks(blocks) {
     if (blockLines.length === 0) {
       continue;
     }
-    if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
-      lines.push("");
-    }
     lines.push(...blockLines);
   }
   return lines;
@@ -7931,10 +7937,7 @@ function insertTaskMoveBlocks(content, blocks, destinationKind) {
       insertAt -= 1;
     }
     const insertion = [];
-    if (
-      insertAt === headerIndex + 1 ||
-      String(source.lines[insertAt - 1] || "").trim() !== ""
-    ) {
+    if (insertAt === headerIndex + 1) {
       insertion.push("");
     }
     insertion.push(...movedLines);
@@ -16290,6 +16293,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 };
 
 module.exports.helpers = {
+  FilteredPickerModal,
+  TaskMoveDestinationPickerModal,
   finiteNumberOrNull,
   clampNumber,
   normalizePosition,

@@ -256,14 +256,23 @@ function makeView(path, content, cursor, scrollOptions) {
 }
 
 function makeLeaf(view) {
-  return { view };
+  return {
+    view,
+    focusCalls: 0,
+    focus() {
+      this.focusCalls += 1;
+    },
+  };
 }
 
 class TestWorkspace {
   constructor(activeLeaf, leaves = [activeLeaf]) {
     this.activeLeaf = activeLeaf;
+    this.focusedLeaf = activeLeaf;
     this.leaves = leaves.filter(Boolean);
     this.handlers = new Map();
+    this.revealLeafCalls = [];
+    this.setActiveLeafCalls = [];
   }
 
   getActiveFile() {
@@ -280,11 +289,15 @@ class TestWorkspace {
   }
 
   async revealLeaf(leaf) {
-    this.activateLeaf(leaf);
+    this.revealLeafCalls.push(leaf);
   }
 
-  async setActiveLeaf(leaf) {
+  async setActiveLeaf(leaf, options = {}) {
+    this.setActiveLeafCalls.push({ leaf, options });
     this.activateLeaf(leaf);
+    if (options.focus) {
+      this.focusedLeaf = leaf;
+    }
   }
 
   activateLeaf(leaf) {
@@ -426,6 +439,7 @@ test("the first fallback press only opens daily and the second press jumps", asy
 
   assert.equal(await plugin.jumpToCurrentPomodoro(workView.editor), true);
   assert.equal(workspace.getActiveFile().path, "Daily.md");
+  assert.equal(dailyView.editor.focusCalls, 1);
   assert.deepEqual(dailyView.editor.setCursorCalls, []);
   assert.deepEqual(dailyView.editor.cm.dispatchCalls, []);
   frames.flushAll();
@@ -472,10 +486,51 @@ test("an already-open daily leaf retains its live cursor and viewport", async (t
 
   assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
   assert.equal(workspace.activeLeaf, dailyLeaf);
+  assert.equal(workspace.revealLeafCalls.at(-1), dailyLeaf);
+  assert.equal(workspace.setActiveLeafCalls.at(-1).leaf, dailyLeaf);
+  assert.deepEqual(workspace.setActiveLeafCalls.at(-1).options, { focus: true });
+  assert.equal(workspace.focusedLeaf, dailyLeaf);
+  assert.equal(dailyView.editor.focusCalls, 1);
   assert.deepEqual(dailyView.editor.cursor, { line: 2, ch: 7 });
   assert.equal(dailyView.editor.scrollDOM.scrollTop, 480);
   assert.deepEqual(dailyView.editor.setCursorCalls, []);
   assert.deepEqual(dailyView.editor.scrollDOM.scrollToCalls, []);
+});
+
+test("a second press after reused-leaf fallback performs the Pomodoro jump", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const dailyView = makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 4 });
+  const dailyLeaf = makeLeaf(dailyView);
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, dailyLeaf]);
+  const app = makeApp(workspace, dailyView);
+  const { plugin, frames } = setupPlugin(t, app);
+
+  assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
+  const activeView = workspace.getActiveViewOfType(TestMarkdownView);
+  assert.equal(activeView, dailyView);
+  assert.equal(plugin.jumpToCurrentPomodoro(activeView.editor), true);
+  assert.deepEqual(dailyView.editor.setCursorCalls, [{ line: 3, ch: 0 }]);
+  frames.flushAll();
+  assert.equal(dailyView.editor.cm.dispatchCalls.length, 1);
+});
+
+test("the standalone daily-note command activates a reused daily leaf", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const dailyLeaf = makeLeaf(
+    makeView("Daily.md", POMODORO_NOTE, { line: 2, ch: 0 }),
+  );
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, dailyLeaf]);
+  const app = makeApp(workspace, dailyLeaf.view);
+  const { plugin } = setupPlugin(t, app);
+  const command = plugin.commands.find(
+    (candidate) => candidate.id === "open-today-daily-note",
+  );
+
+  await command.callback();
+
+  assert.equal(workspace.activeLeaf, dailyLeaf);
+  assert.equal(workspace.focusedLeaf, dailyLeaf);
+  assert.deepEqual(notices, []);
 });
 
 test("a closed then reopened daily note restores its in-session location", async (t) => {
@@ -497,6 +552,8 @@ test("a closed then reopened daily note restores its in-session location", async
   app.dailyView = reopenedView;
 
   assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
+  assert.equal(workspace.getActiveFile().path, "Daily.md");
+  assert.equal(reopenedView.editor.focusCalls, 1);
   assert.deepEqual(reopenedView.editor.setCursorCalls, [{ line: 2, ch: 6 }]);
   assert.deepEqual(reopenedView.editor.scrollDOM.scrollToCalls[0], {
     top: 525,

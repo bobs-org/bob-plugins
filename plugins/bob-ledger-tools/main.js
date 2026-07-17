@@ -1276,15 +1276,39 @@ async function activateMarkdownLeaf(app, leaf, options = {}) {
     return null;
   }
 
-  try {
-    if (typeof workspace.revealLeaf === "function") {
+  if (typeof workspace.revealLeaf === "function") {
+    try {
       await workspace.revealLeaf(leaf);
-    } else if (typeof workspace.setActiveLeaf === "function") {
-      await workspace.setActiveLeaf(leaf, { focus: true });
-    } else {
-      return null;
+    } catch (error) {
+      // Continue with direct activation when revealing is unavailable or fails.
     }
-  } catch (error) {
+  }
+
+  let activated = false;
+  if (typeof workspace.setActiveLeaf === "function") {
+    try {
+      await workspace.setActiveLeaf(leaf, { focus: true });
+      activated = true;
+    } catch (error) {
+      try {
+        await workspace.setActiveLeaf(leaf);
+        activated = true;
+      } catch (ignoredError) {
+        // Fall through to the leaf-level focus API below.
+      }
+    }
+  }
+
+  if (!activated && typeof leaf.focus === "function") {
+    try {
+      await leaf.focus();
+      activated = true;
+    } catch (error) {
+      // Report activation failure below.
+    }
+  }
+
+  if (!activated) {
     return null;
   }
 
@@ -2276,6 +2300,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       return false;
     }
 
+    focusEditor(result.view.editor);
     this.refreshDailyScrollCaptureTarget(result.view);
     if (!result.reusedOpenLeaf && rememberedLocation) {
       this.restoreOrDeferDailyLocation(dailyPath, rememberedLocation);

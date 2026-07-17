@@ -10,6 +10,8 @@ const DAILY_FORMAT_TOKENS = ["YYYY", "YY", "MM", "DD", "M", "D"];
 const DAILY_OPEN_ATTEMPTS = 10;
 const DAILY_OPEN_RETRY_DELAY_MS = 50;
 const CENTER_ON_LINE_ATTEMPTS = 5;
+const DAILY_LOCATION_RESTORE_RETRIES = 5;
+const DAILY_LOCATION_RESTORE_ASSERT_FRAMES = 2;
 const TRIGGER_RE = /(^|[^A-Za-z0-9_])((?:dt|[dt])-?\d+|se\d*(?:-\d*)?|ta)$/;
 const LEDGER_TRIGGER_RE = /^se(\d*)(?:-(\d*))?$/;
 const DATE_TIME_TRIGGER_RE = /^(dt|[dt])(-?\d+)$/;
@@ -105,6 +107,61 @@ function parseTrigger(textBeforeCursor) {
 function numericOrDefault(value, fallback) {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function finiteNumberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function clampNumber(value, min, max) {
+  const safeMin = finiteNumberOrNull(min);
+  const safeMax = finiteNumberOrNull(max);
+  const lower = safeMin === null ? 0 : safeMin;
+  const upper =
+    safeMax === null ? Number.POSITIVE_INFINITY : Math.max(lower, safeMax);
+  return Math.min(Math.max(Number(value) || 0, lower), upper);
+}
+
+function normalizeEditorPosition(position) {
+  if (!position) {
+    return null;
+  }
+
+  const line = Math.floor(numericOrDefault(position.line, Number.NaN));
+  const ch = Math.floor(numericOrDefault(position.ch, 0));
+  if (!Number.isFinite(line) || line < 0) {
+    return null;
+  }
+
+  return { line, ch: Math.max(ch, 0) };
+}
+
+function normalizeDailyLocation(location) {
+  if (!location) {
+    return null;
+  }
+
+  const cursor = normalizeEditorPosition(
+    location.cursor || location.position || location.sourcePosition,
+  );
+  const scrollTop = finiteNumberOrNull(location.scrollTop);
+  const scrollLeft = finiteNumberOrNull(location.scrollLeft);
+  if (!cursor && scrollTop === null && scrollLeft === null) {
+    return null;
+  }
+
+  const normalized = {};
+  if (cursor) {
+    normalized.cursor = cursor;
+  }
+  if (scrollTop !== null) {
+    normalized.scrollTop = Math.max(0, scrollTop);
+  }
+  if (scrollLeft !== null) {
+    normalized.scrollLeft = Math.max(0, scrollLeft);
+  }
+  return normalized;
 }
 
 function normalizeMinutes(minutes) {
@@ -1237,7 +1294,7 @@ async function activateMarkdownLeaf(app, leaf, options = {}) {
   );
 }
 
-async function openTodayDailyNote(app, options = {}) {
+async function openTodayDailyNoteWithState(app, options = {}) {
   const dailyPath = todayDailyPath(
     options.now || new Date(),
     options.dailyOptions || getDailyNotesOptions(app),
@@ -1253,11 +1310,14 @@ async function openTodayDailyNote(app, options = {}) {
 
   const existingLeaf = findOpenMarkdownLeafByPath(app, dailyPath);
   if (existingLeaf) {
-    return activateMarkdownLeaf(app, existingLeaf, {
+    const view = await activateMarkdownLeaf(app, existingLeaf, {
       path: dailyPath,
       attempts,
       delayMs,
     });
+    return view
+      ? { view, path: dailyPath, reusedOpenLeaf: true }
+      : null;
   }
 
   if (await executeDailyNotesCommand(app)) {
@@ -1267,7 +1327,7 @@ async function openTodayDailyNote(app, options = {}) {
       delayMs,
     });
     if (commandView) {
-      return commandView;
+      return { view: commandView, path: dailyPath, reusedOpenLeaf: false };
     }
   }
 
@@ -1276,13 +1336,25 @@ async function openTodayDailyNote(app, options = {}) {
     return null;
   }
 
-  return (
+  const view =
     (await waitForActiveMarkdownView(app, {
       path: dailyPath,
       attempts,
       delayMs,
-    })) || getActiveMarkdownView(app)
-  );
+    })) || getActiveMarkdownView(app);
+  if (
+    !view ||
+    !sameVaultPath(getActiveMarkdownViewPath(app, view), dailyPath)
+  ) {
+    return null;
+  }
+
+  return { view, path: dailyPath, reusedOpenLeaf: false };
+}
+
+async function openTodayDailyNote(app, options = {}) {
+  const result = await openTodayDailyNoteWithState(app, options);
+  return result ? result.view : null;
 }
 
 function getActiveEditorView(app) {
@@ -1309,6 +1381,168 @@ function getEditorViewFromEditor(cm) {
   }
 
   return editorView;
+}
+
+function positionFromCodeMirrorUpdate(update) {
+  const state = update && (update.state || (update.view && update.view.state));
+  const selection = state && state.selection;
+  const mainSelection = selection && selection.main;
+  const rawHead = mainSelection && mainSelection.head;
+  const head = Math.floor(numericOrDefault(rawHead, Number.NaN));
+  const doc = state && state.doc;
+  if (!Number.isFinite(head) || !doc) {
+    return null;
+  }
+
+  if (typeof doc.lineAt === "function") {
+    try {
+      const line = doc.lineAt(head);
+      if (line && Number.isFinite(line.number) && Number.isFinite(line.from)) {
+        return normalizeEditorPosition({
+          line: line.number - 1,
+          ch: head - line.from,
+        });
+      }
+    } catch (error) {
+      return null;
+    }
+  }
+
+  if (typeof doc.toString === "function") {
+    const text = doc.toString();
+    const safeHead = Math.min(Math.max(head, 0), text.length);
+    const beforeCursor = text.slice(0, safeHead);
+    const lines = beforeCursor.split("\n");
+    const line = lines.length - 1;
+    const lastLine = lines[line] || "";
+    return {
+      line,
+      ch: lastLine.endsWith("\r") ? lastLine.length - 1 : lastLine.length,
+    };
+  }
+
+  return null;
+}
+
+function getEditorLastLine(cm) {
+  if (!cm) {
+    return null;
+  }
+
+  if (typeof cm.lastLine === "function") {
+    const line = Math.floor(numericOrDefault(cm.lastLine(), Number.NaN));
+    if (Number.isFinite(line)) {
+      return Math.max(line, 0);
+    }
+  }
+
+  if (typeof cm.lineCount === "function") {
+    const count = Math.floor(numericOrDefault(cm.lineCount(), Number.NaN));
+    if (Number.isFinite(count)) {
+      return Math.max(count - 1, 0);
+    }
+  }
+
+  if (typeof cm.getValue === "function") {
+    return Math.max(String(cm.getValue()).split(/\r?\n/).length - 1, 0);
+  }
+
+  return null;
+}
+
+function getEditorLineText(cm, line) {
+  if (!cm) {
+    return null;
+  }
+
+  if (typeof cm.getLine === "function") {
+    const text = cm.getLine(line);
+    return text === null || text === undefined ? "" : String(text);
+  }
+
+  if (typeof cm.getValue === "function") {
+    const lines = String(cm.getValue()).split(/\r?\n/);
+    return lines[line] === undefined ? "" : lines[line];
+  }
+
+  return null;
+}
+
+function clampEditorPosition(cm, position) {
+  const normalized = normalizeEditorPosition(position);
+  if (!normalized) {
+    return null;
+  }
+
+  const lastLine = getEditorLastLine(cm);
+  const line =
+    lastLine === null ? normalized.line : Math.min(normalized.line, lastLine);
+  const lineText = getEditorLineText(cm, line);
+  const ch =
+    lineText === null ? normalized.ch : Math.min(normalized.ch, lineText.length);
+  return { line, ch };
+}
+
+function getScrollDOMMaxScrollTop(scrollDOM) {
+  if (!scrollDOM) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const scrollHeight = finiteNumberOrNull(scrollDOM.scrollHeight);
+  const clientHeight = finiteNumberOrNull(scrollDOM.clientHeight);
+  if (scrollHeight === null || clientHeight === null || clientHeight <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, scrollHeight - clientHeight);
+}
+
+function getScrollDOMMaxScrollLeft(scrollDOM) {
+  if (!scrollDOM) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const scrollWidth = finiteNumberOrNull(scrollDOM.scrollWidth);
+  const clientWidth = finiteNumberOrNull(scrollDOM.clientWidth);
+  if (scrollWidth === null || clientWidth === null || clientWidth <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, scrollWidth - clientWidth);
+}
+
+function setScrollDOMPosition(scrollDOM, scrollTop, scrollLeft = null) {
+  if (!scrollDOM) {
+    return false;
+  }
+
+  const targetScrollTop = clampNumber(
+    scrollTop,
+    0,
+    getScrollDOMMaxScrollTop(scrollDOM),
+  );
+  const rawScrollLeft =
+    finiteNumberOrNull(scrollLeft) ?? finiteNumberOrNull(scrollDOM.scrollLeft) ?? 0;
+  const targetScrollLeft = clampNumber(
+    rawScrollLeft,
+    0,
+    getScrollDOMMaxScrollLeft(scrollDOM),
+  );
+
+  if (typeof scrollDOM.scrollTo === "function") {
+    try {
+      scrollDOM.scrollTo({ top: targetScrollTop, left: targetScrollLeft });
+      return true;
+    } catch (error) {
+      // Fall through to direct assignment.
+    }
+  }
+
+  try {
+    scrollDOM.scrollTop = targetScrollTop;
+    scrollDOM.scrollLeft = targetScrollLeft;
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
 function editorViewPositionFromLineCh(editorView, line, ch) {
@@ -1479,6 +1713,15 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   onload() {
     this.vimMappingsRegistered = false;
     this.pendingCenterDeferred = null;
+    this.dailyLocations = new Map();
+    this.dailyNavigationActionId = 0;
+    this.dailyLocationRestoreToken = 0;
+    this.pendingDailyLocationRestoreDeferred = null;
+    this.pendingDailyLocationRestorePath = null;
+    this.pendingDailyLocationCaptureDeferred = null;
+    this.activeDailyScrollDOM = null;
+    this.activeDailyScrollHandler = null;
+    this.isRestoringDailyLocation = false;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -1528,7 +1771,33 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       ),
     );
 
+    if (
+      EditorView &&
+      EditorView.updateListener &&
+      typeof EditorView.updateListener.of === "function"
+    ) {
+      this.registerEditorExtension(
+        EditorView.updateListener.of((update) =>
+          this.trackDailyLocationUpdate(update),
+        ),
+      );
+    }
+
+    const workspace = this.app && this.app.workspace;
+    if (workspace && typeof workspace.on === "function") {
+      this.registerEvent(
+        workspace.on("active-leaf-change", () =>
+          this.handleActiveDailyViewChange(),
+        ),
+      );
+      this.registerEvent(
+        workspace.on("file-open", () => this.handleActiveDailyViewChange()),
+      );
+    }
+
     this.app.workspace.onLayoutReady(() => {
+      this.refreshDailyScrollCaptureTarget();
+      this.captureActiveDailyLocation();
       if (this.registerVimMappings()) {
         return;
       }
@@ -1545,6 +1814,352 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   onunload() {
     cancelDeferred(this.pendingCenterDeferred);
     this.pendingCenterDeferred = null;
+    this.dailyNavigationActionId += 1;
+    this.cancelPendingDailyLocationRestore();
+    this.cancelPendingDailyLocationCapture();
+    this.clearDailyScrollCaptureTarget();
+    if (this.dailyLocations) {
+      this.dailyLocations.clear();
+    }
+  }
+
+  currentDailyPath() {
+    return todayDailyPath(new Date(), getDailyNotesOptions(this.app));
+  }
+
+  dailyLocationMap() {
+    if (!(this.dailyLocations instanceof Map)) {
+      this.dailyLocations = new Map();
+    }
+    return this.dailyLocations;
+  }
+
+  getRememberedDailyLocation(path) {
+    const dailyPath = normalizeVaultPath(path);
+    const remembered = normalizeDailyLocation(
+      this.dailyLocationMap().get(dailyPath),
+    );
+    return remembered
+      ? {
+          ...remembered,
+          ...(remembered.cursor ? { cursor: { ...remembered.cursor } } : {}),
+        }
+      : null;
+  }
+
+  isCurrentDailyView(view, expectedPath = this.currentDailyPath()) {
+    return !!(
+      view &&
+      view.file &&
+      view.editor &&
+      sameVaultPath(view.file.path, expectedPath)
+    );
+  }
+
+  handleActiveDailyViewChange() {
+    const activeFile = getActiveFile(this.app);
+    const activePath = activeFile && activeFile.path;
+    if (
+      this.pendingDailyLocationRestorePath &&
+      !sameVaultPath(activePath, this.pendingDailyLocationRestorePath)
+    ) {
+      this.cancelPendingDailyLocationRestore();
+    }
+
+    this.cancelPendingDailyLocationCapture();
+    this.refreshDailyScrollCaptureTarget();
+    this.captureActiveDailyLocation();
+  }
+
+  refreshDailyScrollCaptureTarget(view = getActiveMarkdownView(this.app)) {
+    const dailyPath = this.currentDailyPath();
+    const editorView = this.isCurrentDailyView(view, dailyPath)
+      ? getEditorViewFromEditor(view.editor)
+      : null;
+    const scrollDOM = editorView && editorView.scrollDOM;
+    if (scrollDOM && scrollDOM === this.activeDailyScrollDOM) {
+      return true;
+    }
+
+    this.clearDailyScrollCaptureTarget();
+    if (!scrollDOM || typeof scrollDOM.addEventListener !== "function") {
+      return false;
+    }
+
+    const handler = () => this.scheduleDailyLocationCapture();
+    try {
+      scrollDOM.addEventListener("scroll", handler, { passive: true });
+    } catch (error) {
+      scrollDOM.addEventListener("scroll", handler);
+    }
+    this.activeDailyScrollDOM = scrollDOM;
+    this.activeDailyScrollHandler = handler;
+    return true;
+  }
+
+  clearDailyScrollCaptureTarget() {
+    if (
+      this.activeDailyScrollDOM &&
+      this.activeDailyScrollHandler &&
+      typeof this.activeDailyScrollDOM.removeEventListener === "function"
+    ) {
+      try {
+        this.activeDailyScrollDOM.removeEventListener(
+          "scroll",
+          this.activeDailyScrollHandler,
+        );
+      } catch (error) {
+        // Best-effort cleanup only.
+      }
+    }
+
+    this.activeDailyScrollDOM = null;
+    this.activeDailyScrollHandler = null;
+  }
+
+  scheduleDailyLocationCapture() {
+    if (this.isRestoringDailyLocation) {
+      return false;
+    }
+
+    this.cancelPendingDailyLocationCapture();
+    this.pendingDailyLocationCaptureDeferred = deferToNextFrame(() => {
+      this.pendingDailyLocationCaptureDeferred = null;
+      if (!this.isRestoringDailyLocation) {
+        this.captureActiveDailyLocation();
+      }
+    });
+    return true;
+  }
+
+  cancelPendingDailyLocationCapture() {
+    cancelDeferred(this.pendingDailyLocationCaptureDeferred);
+    this.pendingDailyLocationCaptureDeferred = null;
+  }
+
+  trackDailyLocationUpdate(update) {
+    if (
+      this.isRestoringDailyLocation ||
+      !update ||
+      (!update.selectionSet && !update.docChanged && !update.viewportChanged)
+    ) {
+      return false;
+    }
+
+    const view = getActiveMarkdownView(this.app);
+    if (!this.isCurrentDailyView(view)) {
+      return false;
+    }
+
+    const editorView = getEditorViewFromEditor(view.editor);
+    if (update.view && (!editorView || update.view !== editorView)) {
+      return false;
+    }
+
+    this.refreshDailyScrollCaptureTarget(view);
+    const cursor =
+      update.selectionSet || update.docChanged
+        ? positionFromCodeMirrorUpdate(update)
+        : null;
+    return this.captureDailyLocationFromView(view, { cursor });
+  }
+
+  captureActiveDailyLocation() {
+    return this.captureDailyLocationFromView(getActiveMarkdownView(this.app));
+  }
+
+  captureDailyLocationFromView(view, options = {}) {
+    const dailyPath = this.currentDailyPath();
+    if (
+      !this.isCurrentDailyView(view, dailyPath) ||
+      (this.isRestoringDailyLocation && !options.force)
+    ) {
+      return false;
+    }
+
+    const editorView = getEditorViewFromEditor(view.editor);
+    const scrollDOM = editorView && editorView.scrollDOM;
+    const cursor =
+      normalizeEditorPosition(options.cursor) ||
+      (typeof view.editor.getCursor === "function"
+        ? normalizeEditorPosition(view.editor.getCursor())
+        : null);
+    const location = {};
+    if (cursor) {
+      location.cursor = cursor;
+    }
+    if (scrollDOM) {
+      const scrollTop = finiteNumberOrNull(scrollDOM.scrollTop);
+      const scrollLeft = finiteNumberOrNull(scrollDOM.scrollLeft);
+      if (scrollTop !== null) {
+        location.scrollTop = Math.max(0, scrollTop);
+      }
+      if (scrollLeft !== null) {
+        location.scrollLeft = Math.max(0, scrollLeft);
+      }
+    }
+
+    const normalized = normalizeDailyLocation(location);
+    if (!normalized) {
+      return false;
+    }
+    this.dailyLocationMap().set(dailyPath, normalized);
+    return true;
+  }
+
+  restoreOrDeferDailyLocation(
+    path,
+    location,
+    retriesRemaining = DAILY_LOCATION_RESTORE_RETRIES,
+  ) {
+    const dailyPath = normalizeVaultPath(path);
+    const normalized = normalizeDailyLocation(location);
+    if (!dailyPath || !normalized) {
+      return false;
+    }
+
+    this.cancelPendingDailyLocationCapture();
+    this.cancelPendingDailyLocationRestore();
+    this.isRestoringDailyLocation = true;
+    this.pendingDailyLocationRestorePath = dailyPath;
+    const token = this.dailyLocationRestoreToken;
+    const state = {
+      cursorApplied: !normalized.cursor,
+      scrollApplied:
+        normalized.scrollTop === undefined &&
+        normalized.scrollLeft === undefined,
+      assertFramesRemaining: DAILY_LOCATION_RESTORE_ASSERT_FRAMES,
+    };
+
+    return this.restoreOrDeferDailyLocationInternal(
+      dailyPath,
+      normalized,
+      Math.max(0, Math.floor(numericOrDefault(retriesRemaining, 0))),
+      state,
+      token,
+      false,
+    );
+  }
+
+  restoreOrDeferDailyLocationInternal(
+    path,
+    location,
+    retriesRemaining,
+    state,
+    token,
+    assertScroll,
+  ) {
+    if (token !== this.dailyLocationRestoreToken) {
+      return false;
+    }
+
+    const result = this.restoreActiveDailyLocation(
+      path,
+      location,
+      state,
+      { assertScroll },
+    );
+    if (!result.active) {
+      const activeFile = getActiveFile(this.app);
+      const activePath = activeFile && activeFile.path;
+      if (!sameVaultPath(activePath, path) || retriesRemaining <= 0) {
+        this.finishDailyLocationRestore(token);
+        return false;
+      }
+    }
+
+    const ready = state.cursorApplied && state.scrollApplied;
+    const shouldAssert = ready && state.assertFramesRemaining > 0;
+    const shouldRetry = !ready && retriesRemaining > 0;
+    if (!shouldAssert && !shouldRetry) {
+      this.finishDailyLocationRestore(token);
+      return result.applied;
+    }
+
+    if (shouldAssert) {
+      state.assertFramesRemaining -= 1;
+    }
+    this.pendingDailyLocationRestoreDeferred = deferToNextFrame(() => {
+      this.pendingDailyLocationRestoreDeferred = null;
+      this.restoreOrDeferDailyLocationInternal(
+        path,
+        location,
+        shouldRetry ? retriesRemaining - 1 : retriesRemaining,
+        state,
+        token,
+        shouldAssert,
+      );
+    });
+    return result.applied;
+  }
+
+  restoreActiveDailyLocation(path, location, state, options = {}) {
+    const result = { active: false, applied: false };
+    const view = getActiveMarkdownView(this.app);
+    if (!this.isCurrentDailyView(view, path)) {
+      return result;
+    }
+    result.active = true;
+    this.refreshDailyScrollCaptureTarget(view);
+
+    if (!state.cursorApplied && location.cursor) {
+      const cursor = clampEditorPosition(view.editor, location.cursor);
+      if (
+        cursor &&
+        setEditorCursor(view.editor, cursor.line, cursor.ch, { scroll: false })
+      ) {
+        state.cursorApplied = true;
+        result.applied = true;
+      }
+    }
+
+    const editorView = getEditorViewFromEditor(view.editor);
+    const scrollDOM = editorView && editorView.scrollDOM;
+    const needsScroll =
+      location.scrollTop !== undefined || location.scrollLeft !== undefined;
+    if (
+      scrollDOM &&
+      needsScroll &&
+      (!state.scrollApplied || options.assertScroll)
+    ) {
+      const scrollTop =
+        location.scrollTop !== undefined
+          ? location.scrollTop
+          : finiteNumberOrNull(scrollDOM.scrollTop) || 0;
+      const scrollLeft =
+        location.scrollLeft !== undefined
+          ? location.scrollLeft
+          : finiteNumberOrNull(scrollDOM.scrollLeft) || 0;
+      if (setScrollDOMPosition(scrollDOM, scrollTop, scrollLeft)) {
+        state.scrollApplied = true;
+        result.applied = true;
+      }
+    }
+    return result;
+  }
+
+  finishDailyLocationRestore(token) {
+    if (token !== this.dailyLocationRestoreToken) {
+      return;
+    }
+
+    const path = this.pendingDailyLocationRestorePath;
+    this.pendingDailyLocationRestoreDeferred = null;
+    this.pendingDailyLocationRestorePath = null;
+    this.isRestoringDailyLocation = false;
+    const view = getActiveMarkdownView(this.app);
+    if (this.isCurrentDailyView(view, path)) {
+      this.captureDailyLocationFromView(view, { force: true });
+    }
+  }
+
+  cancelPendingDailyLocationRestore() {
+    cancelDeferred(this.pendingDailyLocationRestoreDeferred);
+    this.pendingDailyLocationRestoreDeferred = null;
+    this.pendingDailyLocationRestorePath = null;
+    this.isRestoringDailyLocation = false;
+    this.dailyLocationRestoreToken =
+      Math.floor(numericOrDefault(this.dailyLocationRestoreToken, 0)) + 1;
   }
 
   registerVimMappings() {
@@ -1604,6 +2219,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   }
 
   jumpToCurrentPomodoro(cm) {
+    this.dailyNavigationActionId =
+      Math.floor(numericOrDefault(this.dailyNavigationActionId, 0)) + 1;
+    const actionId = this.dailyNavigationActionId;
     const lines = getEditorLines(cm);
     if (!lines) {
       new Notice("No active markdown editor");
@@ -1612,13 +2230,14 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
     const { target, error } = getJumpPomodoroTarget(lines);
     if (!target) {
-      return this.openDailyFallbackAndJump(error);
+      return this.openDailyFallbackOnly(error, actionId);
     }
 
     return this.jumpToPomodoroTarget(cm, target);
   }
 
   jumpToPomodoroTarget(cm, target) {
+    this.cancelPendingDailyLocationRestore();
     if (!setEditorCursor(cm, target.line, 0, { scroll: false })) {
       return false;
     }
@@ -1633,31 +2252,37 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     return true;
   }
 
-  async openDailyFallbackAndJump(error) {
+  async openDailyFallbackOnly(error, actionId) {
     if (isTodayDailyFile(this.app, getActiveFile(this.app))) {
       new Notice(error || "No active Pomodoro line found");
       return false;
     }
 
-    const view = await openTodayDailyNote(this.app);
-    if (!view || !view.editor) {
+    const dailyPath = this.currentDailyPath();
+    // Snapshot before opening: activating a fresh daily editor can emit capture
+    // events for its initial top-of-file state before the open promise resolves.
+    const rememberedLocation = this.getRememberedDailyLocation(dailyPath);
+    const result = await openTodayDailyNoteWithState(this.app);
+    if (actionId !== this.dailyNavigationActionId) {
+      return !!result;
+    }
+    if (!result || !result.view || !result.view.editor) {
       new Notice("Could not open daily note");
       return false;
     }
 
-    const lines = getEditorLines(view.editor);
-    if (!lines) {
+    if (!sameVaultPath(result.path, dailyPath)) {
       new Notice("Could not open daily note");
       return false;
     }
 
-    const { target, error: dailyError } = getJumpPomodoroTarget(lines);
-    if (!target) {
-      new Notice(dailyError || "No active Pomodoro line found");
-      return false;
+    this.refreshDailyScrollCaptureTarget(result.view);
+    if (!result.reusedOpenLeaf && rememberedLocation) {
+      this.restoreOrDeferDailyLocation(dailyPath, rememberedLocation);
+    } else {
+      this.captureDailyLocationFromView(result.view);
     }
-
-    return this.jumpToPomodoroTarget(view.editor, target);
+    return true;
   }
 
   scheduleCenterOnLine(cm, line, options = {}) {
@@ -1882,7 +2507,13 @@ module.exports.helpers = {
   findOpenMarkdownLeafByPath,
   waitForMarkdownLeafViewByPath,
   activateMarkdownLeaf,
+  openTodayDailyNoteWithState,
   openTodayDailyNote,
+  normalizeEditorPosition,
+  normalizeDailyLocation,
+  clampEditorPosition,
+  positionFromCodeMirrorUpdate,
+  setScrollDOMPosition,
   deferToNextFrame,
   cancelDeferred,
   findExpansion,

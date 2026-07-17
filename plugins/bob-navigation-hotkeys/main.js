@@ -6676,6 +6676,18 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
       closeBeforeOpenItem: true,
       openItem: (entry) => plugin.commitTaskMoveSession(session, entry),
     });
+    this.plugin = plugin;
+    this.session = session;
+  }
+
+  onClose() {
+    if (
+      this.plugin &&
+      this.plugin.activeTaskMoveDestinationPicker === this
+    ) {
+      this.plugin.activeTaskMoveDestinationPicker = null;
+    }
+    super.onClose();
   }
 }
 
@@ -10953,6 +10965,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.isRestoringDashLocation = false;
     this.pendingOpenTaskJumpCenterDeferred = null;
     this.vimMappingsRegistered = false;
+    this.activeTaskMoveDestinationPicker = null;
 
     this.addCommand({
       id: "open-parent-note",
@@ -12654,6 +12667,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   handleCountedTaskMovePhysicalKeydown(event) {
+    if (event && event.repeat) {
+      return false;
+    }
     if (!this.isCountedTaskMoveKeydown(event)) {
       return false;
     }
@@ -14467,6 +14483,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   openTaskMoveDestinationPicker(editor, view, options = {}) {
+    const activePicker = this.activeTaskMoveDestinationPicker;
+    if (activePicker) {
+      const incomingCountExplicit = options.countExplicit === true;
+      const activeCountExplicit = Boolean(
+        activePicker.session && activePicker.session.countExplicit,
+      );
+      if (!incomingCountExplicit || activeCountExplicit) {
+        return true;
+      }
+      activePicker.close();
+    }
+
     const sourceView = view || this.getActiveMarkdownView();
     const sourceFile = sourceView && sourceView.file;
     if (
@@ -14523,15 +14551,25 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         scroll && typeof scroll === "object"
           ? Object.freeze({ left: scroll.left, top: scroll.top })
           : null,
+      countExplicit: options.countExplicit === true,
       discovery,
       ranges: ranges.ranges,
     });
-    new TaskMoveDestinationPickerModal(
+    const picker = new TaskMoveDestinationPickerModal(
       this.app,
       this,
       destinations,
       session,
-    ).open();
+    );
+    this.activeTaskMoveDestinationPicker = picker;
+    try {
+      picker.open();
+    } catch (error) {
+      if (this.activeTaskMoveDestinationPicker === picker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      throw error;
+    }
     return true;
   }
 

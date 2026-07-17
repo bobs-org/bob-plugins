@@ -36,6 +36,28 @@ function parseTestYaml(text) {
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
+    class TestModal {
+      constructor(app) {
+        this.app = app;
+        this.isOpen = false;
+        this.modalEl = { removeClass: () => {} };
+        this.contentEl = { empty: () => {} };
+      }
+      open() {
+        this.isOpen = true;
+        return this;
+      }
+      close() {
+        if (!this.isOpen) {
+          return this;
+        }
+        this.isOpen = false;
+        if (typeof this.onClose === "function") {
+          this.onClose();
+        }
+        return this;
+      }
+    }
     class TestNotice {
       constructor(message) {
         notices.push(String(message));
@@ -43,7 +65,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
     }
     return {
       MarkdownView: EmptyClass,
-      Modal: EmptyClass,
+      Modal: TestModal,
       Notice: TestNotice,
       Plugin: EmptyClass,
       parseYaml: parseTestYaml,
@@ -2618,6 +2640,117 @@ test("task move destinations include areas and only open projects", () => {
   );
 });
 
+function createTaskMovePickerHarness() {
+  const sourceFile = {
+    path: "Source.md",
+    basename: "Source",
+    extension: "md",
+  };
+  const destinationFile = {
+    path: "Area.md",
+    basename: "Area",
+    extension: "md",
+  };
+  const editor = new TransactionEditor(
+    [
+      "- [ ] #task One ^one",
+      "- [ ] #task Two ^two",
+      "- [ ] #task Three ^three",
+    ].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const view = { editor, file: sourceFile };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    metadataCache: {
+      getFileCache: (file) =>
+        file.path === destinationFile.path
+          ? { frontmatter: { type: "[[area]]" } }
+          : null,
+    },
+    vault: {
+      getMarkdownFiles: () => [sourceFile, destinationFile],
+    },
+  };
+  plugin.commitTaskMoveSession = async () => true;
+  return { editor, plugin, view };
+}
+
+test("task move picker reconciles duplicate bare and counted opens", () => {
+  {
+    const { editor, plugin, view } = createTaskMovePickerHarness();
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    const barePicker = plugin.activeTaskMoveDestinationPicker;
+    assert.equal(barePicker.isOpen, true);
+    assert.equal(barePicker.session.countExplicit, false);
+
+    assert.equal(
+      plugin.openTaskMoveDestinationPicker(editor, view, {
+        countExplicit: true,
+        additionalTaskCount: 1,
+      }),
+      true,
+    );
+    const countedPicker = plugin.activeTaskMoveDestinationPicker;
+    assert.notEqual(countedPicker, barePicker);
+    assert.equal(barePicker.isOpen, false);
+    assert.equal(countedPicker.isOpen, true);
+    assert.equal(countedPicker.session.countExplicit, true);
+    assert.equal(countedPicker.session.discovery.actualCount, 2);
+  }
+
+  {
+    const { editor, plugin, view } = createTaskMovePickerHarness();
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    const firstPicker = plugin.activeTaskMoveDestinationPicker;
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    assert.equal(plugin.activeTaskMoveDestinationPicker, firstPicker);
+    assert.equal(firstPicker.isOpen, true);
+  }
+
+  {
+    const { editor, plugin, view } = createTaskMovePickerHarness();
+    assert.equal(
+      plugin.openTaskMoveDestinationPicker(editor, view, {
+        countExplicit: true,
+        additionalTaskCount: 1,
+      }),
+      true,
+    );
+    const countedPicker = plugin.activeTaskMoveDestinationPicker;
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    assert.equal(plugin.activeTaskMoveDestinationPicker, countedPicker);
+    assert.equal(countedPicker.isOpen, true);
+    assert.equal(countedPicker.session.countExplicit, true);
+  }
+});
+
+test("task move picker close lifecycle clears tracking for fresh sessions", async () => {
+  const { editor, plugin, view } = createTaskMovePickerHarness();
+  assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+  const firstPicker = plugin.activeTaskMoveDestinationPicker;
+
+  firstPicker.close();
+  assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+
+  editor.cursor = { line: 1, ch: 0 };
+  assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+  const secondPicker = plugin.activeTaskMoveDestinationPicker;
+  assert.notEqual(secondPicker.session, firstPicker.session);
+  assert.deepEqual(secondPicker.session.cursor, { line: 1, ch: 0 });
+
+  const selection = secondPicker.openItemAtIndex(0);
+  assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+  await selection;
+
+  editor.cursor = { line: 2, ch: 0 };
+  assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+  const thirdPicker = plugin.activeTaskMoveDestinationPicker;
+  assert.notEqual(thirdPicker.session, secondPicker.session);
+  assert.deepEqual(thirdPicker.session.cursor, { line: 2, ch: 0 });
+  assert.equal(thirdPicker.isOpen, true);
+});
+
 test("task move picker closes before commit while other pickers retain delayed close", async () => {
   const destinations = [
     { file: { path: "Area.md", basename: "Area" }, noteInfo: {} },
@@ -2903,7 +3036,7 @@ test("task move planning rejects destination collisions and malformed identities
   assert.match(plan.error, /ambiguous \[id::\]/);
 });
 
-test("physical task move chord consumes bare and counted Vim normal input once", () => {
+test("physical task move chord declines auto-repeat and consumes Vim normal input once", () => {
   const makeEvent = (overrides = {}) => {
     const calls = { prevent: 0, stop: 0, immediate: 0 };
     return {
@@ -2913,6 +3046,7 @@ test("physical task move chord consumes bare and counted Vim normal input once",
       shiftKey: true,
       altKey: false,
       metaKey: false,
+      repeat: false,
       preventDefault: () => calls.prevent += 1,
       stopPropagation: () => calls.stop += 1,
       stopImmediatePropagation: () => calls.immediate += 1,
@@ -2933,15 +3067,26 @@ test("physical task move chord consumes bare and counted Vim normal input once",
   const view = { editor };
   const plugin = new NavigationHotkeysPlugin();
   plugin.handledCountedTaskMoveEvents = new WeakSet();
-  plugin.getFocusedMarkdownEditorView = () => view;
+  let focusedViewReads = 0;
+  plugin.getFocusedMarkdownEditorView = () => {
+    focusedViewReads += 1;
+    return view;
+  };
   const opens = [];
   plugin.openTaskMoveDestinationPicker = (_editor, _view, options) => {
     opens.push(options);
     return true;
   };
 
+  const repeated = makeEvent({ repeat: true });
+  assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(repeated), false);
+  assert.deepEqual(repeated.calls, { prevent: 0, stop: 0, immediate: 0 });
+  assert.equal(focusedViewReads, 0);
+  assert.deepEqual(opens, []);
+
   const bare = makeEvent();
   assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(bare), true);
+  assert.equal(focusedViewReads, 1);
   assert.deepEqual(opens[0], { countExplicit: false, additionalTaskCount: 0 });
   assert.deepEqual(bare.calls, { prevent: 1, stop: 1, immediate: 1 });
   assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(bare), false);

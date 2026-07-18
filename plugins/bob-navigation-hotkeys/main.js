@@ -9693,6 +9693,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // Dismissing the modal mid-prompt is a clean cancel: no writes happen until
   // the final block ID is confirmed, so just drop the pending batch state.
   onClose() {
+    if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
+      this.plugin.activeBulletPropertyPicker = null;
+    }
     this.clearPendingBatch();
     super.onClose();
   }
@@ -10966,6 +10969,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.pendingOpenTaskJumpCenterDeferred = null;
     this.vimMappingsRegistered = false;
     this.activeTaskMoveDestinationPicker = null;
+    this.activeBulletPropertyPicker = null;
 
     this.addCommand({
       id: "open-parent-note",
@@ -11719,6 +11723,21 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   openBulletPropertyPicker(cm, options = {}) {
+    const activePicker = this.activeBulletPropertyPicker;
+    if (activePicker) {
+      const incomingCountExplicit = Boolean(
+        options.countExplicit === true ||
+          (options.taskSession && options.taskSession.explicit),
+      );
+      const activeCountExplicit = Boolean(
+        activePicker.taskSession && activePicker.taskSession.explicit,
+      );
+      if (!incomingCountExplicit || activeCountExplicit) {
+        return true;
+      }
+      activePicker.close();
+    }
+
     const cursor = getEditorCursor(cm);
     if (!cursor) {
       new Notice("No active markdown editor");
@@ -11753,7 +11772,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    const config = loadBulletPropertyConfig();
+    const config = options.config || loadBulletPropertyConfig();
     if (!config) {
       return false;
     }
@@ -11789,7 +11808,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     const filePath = activeView.file.path;
 
-    new BulletPropertyPickerModal(
+    const picker = new BulletPropertyPickerModal(
       this.app,
       this,
       cm,
@@ -11797,7 +11816,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       lineText,
       config,
       { filePath, propertyContext, taskSession },
-    ).open();
+    );
+    this.activeBulletPropertyPicker = picker;
+    try {
+      picker.open();
+    } catch (error) {
+      if (this.activeBulletPropertyPicker === picker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      throw error;
+    }
     return true;
   }
 
@@ -12713,6 +12741,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   handleCountedBulletPropertyPhysicalKeydown(event) {
+    if (event && event.repeat) {
+      return false;
+    }
     if (!this.isCountedBulletPropertyKeydown(event)) {
       return false;
     }

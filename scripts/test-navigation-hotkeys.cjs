@@ -2676,6 +2676,106 @@ function createTaskMovePickerHarness() {
   return { editor, plugin, view };
 }
 
+function createBulletPropertyPickerHarness() {
+  const editor = new TransactionEditor(
+    [
+      "- [ ] #task One ^one",
+      "- [ ] #task Two ^two",
+      "- [ ] #task Three ^three",
+    ].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const file = { path: "Tasks.md", basename: "Tasks", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  const config = helpers.validateBulletPropertyConfig({
+    properties: [{ name: "p", values: ["high"] }],
+  });
+  const open = (options = {}) =>
+    plugin.openBulletPropertyPicker(editor, { config, ...options });
+  return { config, editor, file, open, plugin };
+}
+
+test("bullet property picker reconciles duplicate bare and counted opens", () => {
+  {
+    const { open, plugin } = createBulletPropertyPickerHarness();
+    assert.equal(open(), true);
+    const barePicker = plugin.activeBulletPropertyPicker;
+    assert.equal(barePicker.isOpen, true);
+    assert.equal(barePicker.taskSession, null);
+
+    assert.equal(
+      open({ countExplicit: true, additionalTaskCount: 1 }),
+      true,
+    );
+    const countedPicker = plugin.activeBulletPropertyPicker;
+    assert.notEqual(countedPicker, barePicker);
+    assert.equal(barePicker.isOpen, false);
+    assert.equal(countedPicker.isOpen, true);
+    assert.equal(countedPicker.taskSession.explicit, true);
+    assert.equal(countedPicker.taskSession.actualCount, 2);
+  }
+
+  {
+    const { open, plugin } = createBulletPropertyPickerHarness();
+    assert.equal(open(), true);
+    const firstPicker = plugin.activeBulletPropertyPicker;
+    assert.equal(open(), true);
+    assert.equal(plugin.activeBulletPropertyPicker, firstPicker);
+    assert.equal(firstPicker.isOpen, true);
+  }
+
+  {
+    const { open, plugin } = createBulletPropertyPickerHarness();
+    assert.equal(
+      open({ countExplicit: true, additionalTaskCount: 1 }),
+      true,
+    );
+    const countedPicker = plugin.activeBulletPropertyPicker;
+    assert.equal(open(), true);
+    assert.equal(plugin.activeBulletPropertyPicker, countedPicker);
+    assert.equal(countedPicker.isOpen, true);
+    assert.equal(countedPicker.taskSession.explicit, true);
+  }
+});
+
+test("bullet property picker close lifecycle clears tracking for fresh sessions", async () => {
+  const { editor, open, plugin } = createBulletPropertyPickerHarness();
+  assert.equal(open({ countExplicit: true, additionalTaskCount: 0 }), true);
+  const firstPicker = plugin.activeBulletPropertyPicker;
+  const firstSession = firstPicker.taskSession;
+
+  // Obsidian's Escape handling closes the modal through this lifecycle.
+  firstPicker.close();
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+
+  editor.cursor = { line: 1, ch: 0 };
+  assert.equal(open({ countExplicit: true, additionalTaskCount: 0 }), true);
+  const secondPicker = plugin.activeBulletPropertyPicker;
+  assert.notEqual(secondPicker.taskSession, firstSession);
+  assert.deepEqual(
+    secondPicker.taskSession.targets.map((target) => target.line),
+    [1],
+  );
+
+  await secondPicker.openItemAtIndex(0);
+  assert.equal(plugin.activeBulletPropertyPicker, secondPicker);
+  await secondPicker.openItemAtIndex(0);
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+  assert.match(editor.getLine(1), /\[p:: high\]/);
+
+  editor.cursor = { line: 2, ch: 0 };
+  assert.equal(open({ countExplicit: true, additionalTaskCount: 0 }), true);
+  const thirdPicker = plugin.activeBulletPropertyPicker;
+  assert.notEqual(thirdPicker.taskSession, secondPicker.taskSession);
+  assert.deepEqual(
+    thirdPicker.taskSession.targets.map((target) => target.line),
+    [2],
+  );
+  assert.equal(thirdPicker.isOpen, true);
+});
+
 test("task move picker reconciles duplicate bare and counted opens", () => {
   {
     const { editor, plugin, view } = createTaskMovePickerHarness();
@@ -3386,7 +3486,14 @@ test("physical counted property chord consumes only explicit normal-mode Vim cou
     return true;
   };
 
-  const counted = makeEvent();
+  const repeated = makeEvent({ repeat: true });
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(repeated), false);
+  assert.deepEqual(repeated.calls, { prevent: 0, stop: 0, immediate: 0 });
+  assert.deepEqual(opens, []);
+  assert.deepEqual(inputState.keyBuffer, ["2"]);
+  assert.equal(inputState.repeat, 2);
+
+  const counted = makeEvent({ repeat: false });
   assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(counted), true);
   assert.deepEqual(opens, [
     { countExplicit: true, additionalTaskCount: 2 },

@@ -1643,7 +1643,7 @@ function classifyPomodoroSubBullets(lines, range) {
   const transcludedTaskLinkBullets = [];
   const copyableTaskLinkBullets = [];
   const moveOnlyTaskLinkBullets = [];
-  const bareNonTranscludedTaskLinkBullets = [];
+  const startableNonTranscludedTaskLinkBullets = [];
   const noteBullets = [];
 
   if (!Array.isArray(lines) || !range) {
@@ -1651,7 +1651,7 @@ function classifyPomodoroSubBullets(lines, range) {
       transcludedTaskLinkBullets,
       copyableTaskLinkBullets,
       moveOnlyTaskLinkBullets,
-      bareNonTranscludedTaskLinkBullets,
+      startableNonTranscludedTaskLinkBullets,
       noteBullets,
     };
   }
@@ -1684,7 +1684,6 @@ function classifyPomodoroSubBullets(lines, range) {
         targets: [moveOnlyLink.target],
       };
       moveOnlyTaskLinkBullets.push(bullet);
-      bareNonTranscludedTaskLinkBullets.push(bullet);
       continue;
     }
 
@@ -1701,7 +1700,7 @@ function classifyPomodoroSubBullets(lines, range) {
 
       const bareTarget = getBareNonEmbeddedBlockLinkTargetFromListItem(lineText);
       if (bareTarget) {
-        bareNonTranscludedTaskLinkBullets.push({
+        startableNonTranscludedTaskLinkBullets.push({
           line,
           lineText,
           targets: [bareTarget],
@@ -1720,7 +1719,7 @@ function classifyPomodoroSubBullets(lines, range) {
     transcludedTaskLinkBullets,
     copyableTaskLinkBullets,
     moveOnlyTaskLinkBullets,
-    bareNonTranscludedTaskLinkBullets,
+    startableNonTranscludedTaskLinkBullets,
     noteBullets,
   };
 }
@@ -6332,7 +6331,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       },
     );
     await this.startPomodoroNonTranscludedTaskBullets(
-      subBullets.bareNonTranscludedTaskLinkBullets,
+      subBullets.startableNonTranscludedTaskLinkBullets,
       {
         editor,
         activePath: sourcePath,

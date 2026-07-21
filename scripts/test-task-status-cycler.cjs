@@ -901,6 +901,21 @@ test("move-only Pomodoro links require a strict immediate hash directive", () =>
     "review-1",
   );
 
+  const strictLinks = helpers.classifyPomodoroSubBullets(
+    ["\t- [[#^ordinary]]", "\t- [[#^move-only]]#"],
+    { startLine: 0, endLine: 2 },
+  );
+  assert.deepEqual(
+    strictLinks.moveOnlyTaskLinkBullets.map((bullet) => bullet.line),
+    [1],
+  );
+  assert.deepEqual(
+    strictLinks.startableNonTranscludedTaskLinkBullets.map(
+      (bullet) => bullet.line,
+    ),
+    [0],
+  );
+
   const nonMatches = [
     "\t- ![[#^embedded]]#",
     "\t- ~~[[#^retired]]~~#",
@@ -1329,10 +1344,10 @@ test("Pomodoro completion moves marked links in source order before a later Pomo
     [3, 5],
   );
   assert.deepEqual(
-    plan.sourceBullets.bareNonTranscludedTaskLinkBullets.map(
+    plan.sourceBullets.startableNonTranscludedTaskLinkBullets.map(
       (bullet) => bullet.line,
     ),
-    [2, 3, 5, 6],
+    [2, 6],
   );
 
   const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
@@ -1846,7 +1861,7 @@ test("full Pomodoro completion moves a marked same-note link without history", a
   assert.equal(
     editor.getValue(),
     [
-      "- [/] #task Target ^gtd",
+      "- [ ] #task Target ^gtd",
       "## Pomodoros",
       "- [x] (**1110-1135** [t:: 25m])",
       "  - foo bar baz",
@@ -2262,7 +2277,7 @@ test("child-line Ctrl+Enter produces the same rollover and cursor target as pare
     childResult.text,
     [
       "- [/] #task Carry ^carry",
-      "- [/] #task Move ^move",
+      "- [ ] #task Move ^move",
       "## Pomodoros",
       "- [x] Focus",
       "\t- 🍅 [[#^carry|Carry]]",
@@ -2277,6 +2292,45 @@ test("child-line Ctrl+Enter produces the same rollover and cursor target as pare
   assert.deepEqual(childResult.cursor, { line: 6, ch: 7 });
   assert.equal((childResult.text.match(/- \[ \] \(\)/g) || []).length, 1);
   assert.equal(childResult.text.includes("]]#"), false);
+});
+
+test("Ctrl+Enter preserves cross-file move-only targets while ordinary duplicates still start", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- [[Tasks#^todo|Todo]]#",
+    "\t- [[Tasks#^next|Next]]#",
+    "\t- [[Tasks#^duplicate|Ordinary duplicate]]",
+    "\t- [[Tasks#^duplicate|Move-only duplicate]]#",
+  ].join("\n");
+  const tasks = [
+    "- [ ] #task Todo ^todo",
+    "- [*] #task Next ^next",
+    "- [ ] #task Duplicate ^duplicate",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": tasks,
+  });
+  const editor = createTextEditor(daily, { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+
+  assert.equal(
+    harness.getSource("Tasks.md"),
+    [
+      "- [ ] #task Todo ^todo",
+      "- [*] #task Next ^next",
+      "- [/] #task Duplicate ^duplicate",
+    ].join("\n"),
+  );
+  assert.equal(editor.getLine(1), "- [x] Focus");
+  assert.equal(editor.getValue().includes("]]#"), false);
 });
 
 test("selected embedded Pomodoro children keep recursive close and root-only reopen dispatch", async () => {

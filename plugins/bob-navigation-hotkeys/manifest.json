@@ -1,9 +1,9 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "1.13.12",
+  "version": "1.13.13",
   "minAppVersion": "1.8.7",
-  "description": "Open and manage related notes and tabs, including dependency promotion and future-schedule Blocked status.",
+  "description": "Open and manage related notes and tabs, including dependency promotion and bidirectional inline-schedule status reconciliation.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

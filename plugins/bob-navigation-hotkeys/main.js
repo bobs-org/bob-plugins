@@ -12,6 +12,23 @@ const OBSIDIAN_TASK_STATUS_RANKS = Object.freeze({
   "*": 1,
   "/": 2,
 });
+const TASKS_SETTINGS_PATH =
+  ".obsidian/plugins/obsidian-tasks-plugin/data.json";
+const TASK_STATUS_OPEN_TYPES = new Set(["TODO", "IN_PROGRESS", "ON_HOLD"]);
+const TASK_STATUS_CLOSED_TYPES = new Set([
+  "DONE",
+  "CANCELLED",
+  "NON_TASK",
+  "EMPTY",
+]);
+const CONVENTIONAL_TASK_STATUS_TYPES = Object.freeze({
+  " ": "TODO",
+  x: "DONE",
+  X: "DONE",
+  "/": "IN_PROGRESS",
+  "*": "ON_HOLD",
+  "-": "CANCELLED",
+});
 const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 // Pomodoro ledger navigation targets. Mirrors the minimal subset of
@@ -3865,6 +3882,853 @@ function blockObsidianTaskCheckboxStatus(lineText) {
   const match = OBSIDIAN_TASK_LINE_RE.exec(line);
   const checkboxOffset = match[0].indexOf(`[${currentStatus}]`) + 1;
   return line.slice(0, checkboxOffset) + "?" + line.slice(checkboxOffset + 1);
+}
+
+function replaceObsidianTaskCheckboxStatus(
+  lineText,
+  replacement,
+  expectedStatus = null,
+) {
+  const line = String(lineText || "");
+  const currentStatus = getObsidianTaskCheckboxStatus(line);
+  if (
+    currentStatus === null ||
+    (expectedStatus !== null && currentStatus !== expectedStatus) ||
+    String(replacement || "").length !== 1
+  ) {
+    return line;
+  }
+  const match = OBSIDIAN_TASK_LINE_RE.exec(line);
+  const checkboxOffset = match[0].indexOf(`[${currentStatus}]`) + 1;
+  return (
+    line.slice(0, checkboxOffset) +
+    replacement +
+    line.slice(checkboxOffset + 1)
+  );
+}
+
+function unavailableTasksStatusRegistry(error) {
+  return Object.freeze({
+    safe: false,
+    error: String(error || "Tasks status registry is unavailable"),
+    globalFilter: "#task",
+    statusTypes: CONVENTIONAL_TASK_STATUS_TYPES,
+  });
+}
+
+function parseTasksStatusRegistry(settings) {
+  let value = settings;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch (_error) {
+      return unavailableTasksStatusRegistry(
+        "Tasks settings are not valid JSON",
+      );
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return unavailableTasksStatusRegistry("Tasks settings are unreadable");
+  }
+
+  const globalFilter =
+    typeof value.globalFilter === "string"
+      ? value.globalFilter
+      : "#task";
+  const statusTypes = { ...CONVENTIONAL_TASK_STATUS_TYPES };
+  const configuredSymbols = new Set();
+  const definitions = [];
+  let ambiguous = false;
+  for (const collection of ["coreStatuses", "customStatuses"]) {
+    const statuses =
+      value.statusSettings &&
+      Array.isArray(value.statusSettings[collection])
+        ? value.statusSettings[collection]
+        : [];
+    for (const status of statuses) {
+      if (!status || typeof status !== "object") {
+        ambiguous = true;
+        continue;
+      }
+      const symbol =
+        typeof status.symbol === "string" ? status.symbol : "";
+      const characters = Array.from(symbol);
+      if (characters.length !== 1) {
+        ambiguous = true;
+        continue;
+      }
+      if (configuredSymbols.has(symbol)) {
+        ambiguous = true;
+        continue;
+      }
+      configuredSymbols.add(symbol);
+      const type =
+        typeof status.type === "string" ? status.type : "TODO";
+      statusTypes[symbol] = type;
+      definitions.push({
+        symbol,
+        name: typeof status.name === "string" ? status.name : "",
+        nextStatusSymbol:
+          typeof status.nextStatusSymbol === "string"
+            ? status.nextStatusSymbol
+            : "",
+        availableAsCommand: status.availableAsCommand === true,
+        type,
+      });
+    }
+  }
+
+  const blocked = definitions.filter(
+    (definition) =>
+      definition.symbol === "?" ||
+      definition.name.toLowerCase() === "blocked",
+  );
+  const compatibleBlocked =
+    blocked.length === 1 &&
+    blocked[0].symbol === "?" &&
+    blocked[0].name === "Blocked" &&
+    blocked[0].type === "ON_HOLD" &&
+    blocked[0].nextStatusSymbol === " " &&
+    blocked[0].availableAsCommand;
+  const safe = !ambiguous && compatibleBlocked;
+  return Object.freeze({
+    safe,
+    error: safe
+      ? null
+      : ambiguous
+        ? "Tasks status registry is ambiguous"
+        : "Tasks Blocked status is missing or incompatible",
+    globalFilter,
+    statusTypes: Object.freeze(statusTypes),
+  });
+}
+
+function recoveryTaskStatusType(registry, status) {
+  if (
+    !registry ||
+    !registry.statusTypes ||
+    !Object.prototype.hasOwnProperty.call(registry.statusTypes, status)
+  ) {
+    return null;
+  }
+  return registry.statusTypes[status];
+}
+
+function parseRecoveryTaskDependencies(value) {
+  const text = String(value || "");
+  if (!text || text.includes("\t")) {
+    return null;
+  }
+  const dependencies = text.split(",").map((part) => part.trim());
+  return dependencies.every((dependency) =>
+    TASKS_DEPENDENCY_ID_RE.test(dependency),
+  )
+    ? dependencies
+    : null;
+}
+
+function validRecoveryTaskDateShape(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+}
+
+function parseTrailingRecoveryTaskMetadata(body) {
+  let state = String(body || "").trimEnd();
+  const trailingBlock = /\s+\^[A-Za-z0-9-]+\s*$/.exec(state);
+  if (trailingBlock) {
+    state = state.slice(0, trailingBlock.index).trimEnd();
+  }
+  const metadata = { taskId: null, dependsOn: [] };
+
+  for (let iteration = 0; iteration < 20; iteration += 1) {
+    state = state.trimEnd().replace(/,\s*$/, "").trimEnd();
+    const close = state.at(-1);
+    const open = close === "]" ? "[" : close === ")" ? "(" : null;
+    if (!open) {
+      const tag = /(?:^|\s)#[^\s#]+$/.exec(state);
+      if (tag) {
+        state = state.slice(0, tag.index).trimEnd();
+        continue;
+      }
+      break;
+    }
+    const start = state.lastIndexOf(open);
+    if (start === -1) {
+      break;
+    }
+    const inner = state.slice(start + 1, -1).trim();
+    const delimiter = inner.indexOf("::");
+    if (delimiter === -1) {
+      break;
+    }
+    const key = inner.slice(0, delimiter);
+    const value = inner.slice(delimiter + 2).trim();
+    let recognized = false;
+    if (key === "id" && TASKS_DEPENDENCY_ID_RE.test(value)) {
+      metadata.taskId = value;
+      recognized = true;
+    } else if (key === "dependsOn") {
+      const dependencies = parseRecoveryTaskDependencies(value);
+      if (dependencies) {
+        metadata.dependsOn = dependencies;
+        recognized = true;
+      }
+    } else if (key === "priority") {
+      recognized = [
+        "highest",
+        "high",
+        "medium",
+        "low",
+        "lowest",
+      ].includes(value);
+    } else if (key === "scheduled") {
+      recognized = validateProjectScheduledDate(value).valid;
+    } else if (
+      ["start", "created", "due", "completion", "cancelled"].includes(key)
+    ) {
+      recognized = validRecoveryTaskDateShape(value);
+    } else if (key === "repeat") {
+      recognized = /^[A-Za-z0-9, !]*$/.test(value);
+    } else if (key === "onCompletion") {
+      recognized = /^[A-Za-z]+$/.test(value);
+    }
+    if (!recognized) {
+      break;
+    }
+    state = state.slice(0, start).trimEnd();
+  }
+  return metadata;
+}
+
+function parseScheduledRecoveryTaskLine(
+  lineText,
+  registry,
+  line = -1,
+) {
+  const text = String(lineText || "");
+  const match = OBSIDIAN_TASK_LINE_RE.exec(text);
+  if (!match) {
+    return null;
+  }
+  const body = match[2] || "";
+  const globalFilter =
+    registry && typeof registry.globalFilter === "string"
+      ? registry.globalFilter
+      : "#task";
+  if (!body.includes(globalFilter)) {
+    return null;
+  }
+  const status = match[1];
+  const statusType = recoveryTaskStatusType(registry, status);
+  const metadata = parseTrailingRecoveryTaskMetadata(body);
+  return Object.freeze({
+    line,
+    text,
+    status,
+    statusType,
+    statusRecognized: statusType !== null,
+    blockId: getTrailingBlockId(text),
+    taskId: metadata.taskId,
+    dependsOn: Object.freeze(metadata.dependsOn.slice()),
+  });
+}
+
+function recoveryIdentity(path, blockId) {
+  return `${normalizeVaultRelativePath(path)}\u0000${String(blockId || "")}`;
+}
+
+function isScheduledRecoveryMarkdownPath(path) {
+  const normalized = normalizeVaultRelativePath(path);
+  if (!MARKDOWN_EXTENSION_RE.test(normalized)) {
+    return false;
+  }
+  const directories = normalized.split("/").slice(0, -1);
+  return !directories.some(
+    (directory) =>
+      directory === "done" ||
+      directory === "_generated" ||
+      directory === "_templates" ||
+      directory.startsWith("."),
+  );
+}
+
+function canonicalRecoveryMarkdownPath(target) {
+  const text = normalizeVaultRelativePath(target);
+  if (
+    !text ||
+    text.startsWith("/") ||
+    text.split("/").some((part) => !part || part === "." || part === "..")
+  ) {
+    return null;
+  }
+  return MARKDOWN_EXTENSION_RE.test(text) ? text : `${text}.md`;
+}
+
+function recoveryMarkdownBasename(path) {
+  const parts = normalizeVaultRelativePath(path).split("/");
+  return String(parts.at(-1) || "").replace(MARKDOWN_EXTENSION_RE, "");
+}
+
+function createScheduledRecoveryNoteIndex(files) {
+  const paths = new Set();
+  const basenames = new Map();
+  let duplicatePath = false;
+  for (const file of files) {
+    const path = normalizeVaultRelativePath(file.path);
+    if (paths.has(path)) {
+      duplicatePath = true;
+      continue;
+    }
+    paths.add(path);
+    const basename = recoveryMarkdownBasename(path).toLowerCase();
+    if (!basenames.has(basename)) {
+      basenames.set(basename, path);
+    } else if (basenames.get(basename) !== path) {
+      basenames.set(basename, null);
+    }
+  }
+  return { paths, basenames, duplicatePath };
+}
+
+function resolveScheduledRecoveryNote(index, sourcePath, target) {
+  const rawTarget = String(target || "").trim();
+  if (!rawTarget) {
+    return normalizeVaultRelativePath(sourcePath);
+  }
+  const exact = canonicalRecoveryMarkdownPath(rawTarget);
+  if (!exact) {
+    return null;
+  }
+  if (index.paths.has(exact)) {
+    return exact;
+  }
+  return index.basenames.get(recoveryMarkdownBasename(exact).toLowerCase()) || null;
+}
+
+function parseRecoveryTransclusion(lineText) {
+  const match =
+    /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+!\[\[([^#|\]\n]*)#\^([A-Za-z0-9-]+)\]\]\s*$/.exec(
+      String(lineText || ""),
+    );
+  return match
+    ? Object.freeze({ target: match[1].trim(), blockId: match[2] })
+    : null;
+}
+
+function recoveryStrikethroughSpans(lineText) {
+  const text = String(lineText || "");
+  const delimiters = [];
+  let offset = 0;
+  while ((offset = text.indexOf("~~", offset)) !== -1) {
+    delimiters.push(offset);
+    offset += 2;
+  }
+  const spans = [];
+  for (let index = 0; index + 1 < delimiters.length; index += 2) {
+    spans.push({ start: delimiters[index], end: delimiters[index + 1] + 2 });
+  }
+  return spans;
+}
+
+function recoveryBlockReferences(lineText) {
+  const text = String(lineText || "");
+  const spans = recoveryStrikethroughSpans(text);
+  const references = [];
+  const pattern = /!?\[\[([^|\]\n]*?)#\^([A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]/g;
+  let match = null;
+  while ((match = pattern.exec(text)) !== null) {
+    const start = match.index;
+    const end = match.index + match[0].length;
+    const retired = spans.some(
+      (span) => start >= span.start + 2 && end <= span.end - 2,
+    );
+    if (!retired) {
+      references.push(
+        Object.freeze({ target: match[1].trim(), blockId: match[2] }),
+      );
+    }
+  }
+  return references;
+}
+
+function recentPomodoroReferences(content) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const heading = lines.findIndex(
+    (line, index) =>
+      !contexts[index].inFrontmatter &&
+      !contexts[index].inFence &&
+      isPomodorosHeading(line),
+  );
+  if (heading === -1) {
+    return Object.freeze([]);
+  }
+  const references = [];
+  let eligibleEntry = false;
+  for (let index = heading + 1; index < lines.length; index += 1) {
+    const line = String(lines[index] || "");
+    if (!contexts[index].inFence && isLevelTwoHeading(line)) {
+      break;
+    }
+    if (contexts[index].inFence) {
+      continue;
+    }
+    if (/^(?:[-*+]|\d+[.)])\s+/.test(line)) {
+      const entry = /^-\s+\[([^\]\n])\](?:\s+(.*))?$/.exec(line);
+      eligibleEntry = Boolean(
+        entry && POMODORO_NAVIGATION_STATUSES.has(entry[1]),
+      );
+      continue;
+    }
+    if (line.trim() && !/^[ \t]/.test(line)) {
+      eligibleEntry = false;
+      continue;
+    }
+    if (!eligibleEntry || !/^\s+(?:[-*+]|\d+[.)])\s+/.test(line)) {
+      continue;
+    }
+    references.push(...recoveryBlockReferences(line));
+  }
+  return Object.freeze(references);
+}
+
+function canonicalRecoveryDailyDate(path) {
+  const match = /^(\d{4})\/(\d{4})(\d{2})(\d{2})\.md$/.exec(
+    normalizeVaultRelativePath(path),
+  );
+  if (!match || match[1] !== match[2]) {
+    return null;
+  }
+  const year = Number(match[2]);
+  const month = Number(match[3]);
+  const day = Number(match[4]);
+  if (!isValidDateParts(match[2], match[3], match[4])) {
+    return null;
+  }
+  return Object.freeze({
+    value: year * 10000 + month * 100 + day,
+    path: normalizeVaultRelativePath(path),
+  });
+}
+
+function scheduledRecoveryDailyPaths(files, today = new Date()) {
+  const localToday = getLocalDateStart(today);
+  const todayValue =
+    localToday.getFullYear() * 10000 +
+    (localToday.getMonth() + 1) * 100 +
+    localToday.getDate();
+  const dates = files
+    .map((file) => canonicalRecoveryDailyDate(file.path))
+    .filter(Boolean);
+  const current = dates.find((entry) => entry.value === todayValue) || null;
+  const previous =
+    dates
+      .filter((entry) => entry.value < todayValue)
+      .sort((left, right) => right.value - left.value)[0] || null;
+  return Object.freeze({
+    current: current ? current.path : null,
+    previous: previous ? previous.path : null,
+  });
+}
+
+function strongestScheduledRecoveryRank(tasks) {
+  let rank = null;
+  for (const task of tasks || []) {
+    const current = getObsidianTaskStatusRank(task.status);
+    if (current !== null && (rank === null || current > rank)) {
+      rank = current;
+    }
+  }
+  return rank;
+}
+
+function computeScheduledRecoveryRanks(roots, edges, blocks) {
+  const ranks = new Map();
+  const queue = [];
+  for (const root of roots) {
+    const rank = Math.max(1, strongestScheduledRecoveryRank(blocks.get(root)) ?? 1);
+    if (!ranks.has(root) || ranks.get(root) < rank) {
+      ranks.set(root, rank);
+      queue.push(root);
+    }
+  }
+  while (queue.length > 0) {
+    const source = queue.shift();
+    const sourceRank = ranks.get(source);
+    for (const target of edges.get(source) || []) {
+      const targetRank = Math.max(
+        sourceRank,
+        strongestScheduledRecoveryRank(blocks.get(target)) ?? sourceRank,
+      );
+      if (!ranks.has(target) || ranks.get(target) < targetRank) {
+        ranks.set(target, targetRank);
+        queue.push(target);
+      }
+    }
+  }
+  return ranks;
+}
+
+function deferredScheduledRecovery(reason) {
+  return Object.freeze({
+    state: "deferred",
+    rank: null,
+    reason: String(reason || "status reconciliation is unsafe"),
+  });
+}
+
+function buildScheduledRecoveryIndex(files, registry, today = new Date()) {
+  const markdownFiles = (Array.isArray(files) ? files : [])
+    .filter((file) => isScheduledRecoveryMarkdownPath(file.path))
+    .map((file) => ({
+      path: normalizeVaultRelativePath(file.path),
+      content: String(file.content || ""),
+    }));
+  const noteIndex = createScheduledRecoveryNoteIndex(markdownFiles);
+  const tasksByTarget = new Map();
+  const blocks = new Map();
+  const dependencyIds = new Map();
+  const fileModels = new Map();
+  let rankSafe = !noteIndex.duplicatePath;
+
+  for (const file of markdownFiles) {
+    const { lines } = splitMarkdownContent(file.content);
+    const contexts = getMarkdownLineContexts(file.content);
+    const tasks = [];
+    for (let line = 0; line < lines.length; line += 1) {
+      if (contexts[line].inFrontmatter || contexts[line].inFence) {
+        continue;
+      }
+      const task = parseScheduledRecoveryTaskLine(
+        lines[line],
+        registry,
+        line,
+      );
+      if (!task) {
+        continue;
+      }
+      tasks.push(task);
+      tasksByTarget.set(recoveryIdentity(file.path, String(line)), task);
+      if (task.blockId) {
+        const identity = recoveryIdentity(file.path, task.blockId);
+        if (!blocks.has(identity)) {
+          blocks.set(identity, []);
+        }
+        blocks.get(identity).push(task);
+      }
+      if (task.taskId) {
+        if (!dependencyIds.has(task.taskId)) {
+          dependencyIds.set(task.taskId, []);
+        }
+        dependencyIds.get(task.taskId).push(task);
+      }
+    }
+    fileModels.set(file.path, { file, lines, contexts, tasks });
+  }
+
+  const edges = new Map();
+  for (const [path, model] of fileModels) {
+    for (const task of model.tasks) {
+      if (!task.blockId) {
+        continue;
+      }
+      const source = recoveryIdentity(path, task.blockId);
+      const sourceIndent = getBulletIndentWidth(model.lines[task.line]);
+      for (let line = task.line + 1; line < model.lines.length; line += 1) {
+        const lineText = String(model.lines[line] || "");
+        if (!lineText.trim() || model.contexts[line].inFence) {
+          continue;
+        }
+        if (getBulletIndentWidth(lineText) <= sourceIndent) {
+          break;
+        }
+        if (findNearestParentListItem(model.lines, line) !== task.line) {
+          continue;
+        }
+        const reference = parseRecoveryTransclusion(lineText);
+        if (!reference) {
+          continue;
+        }
+        const targetPath = resolveScheduledRecoveryNote(
+          noteIndex,
+          path,
+          reference.target,
+        );
+        const target = targetPath
+          ? recoveryIdentity(targetPath, reference.blockId)
+          : null;
+        if (!target || !blocks.has(target)) {
+          rankSafe = false;
+          continue;
+        }
+        if (!edges.has(source)) {
+          edges.set(source, new Set());
+        }
+        edges.get(source).add(target);
+      }
+    }
+  }
+
+  const dailyPaths = scheduledRecoveryDailyPaths(markdownFiles, today);
+  const roots = new Set();
+  for (const dailyPath of [dailyPaths.current, dailyPaths.previous]) {
+    if (!dailyPath) {
+      continue;
+    }
+    const daily = fileModels.get(dailyPath);
+    for (const reference of recentPomodoroReferences(daily.file.content)) {
+      const targetPath = resolveScheduledRecoveryNote(
+        noteIndex,
+        dailyPath,
+        reference.target,
+      );
+      const target = targetPath
+        ? recoveryIdentity(targetPath, reference.blockId)
+        : null;
+      if (!target || !blocks.has(target)) {
+        rankSafe = false;
+        continue;
+      }
+      roots.add(target);
+    }
+  }
+  const ranks = computeScheduledRecoveryRanks(roots, edges, blocks);
+
+  return Object.freeze({
+    safe: Boolean(registry && registry.safe),
+    error:
+      registry && registry.safe
+        ? null
+        : registry && registry.error
+          ? registry.error
+          : "Tasks status registry is unavailable",
+    rankSafe,
+    registry,
+    tasksByTarget,
+    blocks,
+    dependencyIds,
+    ranks,
+    dailyPaths,
+  });
+}
+
+function getScheduledRecoveryMetadata(index, filePath, line) {
+  if (!index || !index.registry || !index.registry.safe) {
+    return deferredScheduledRecovery(
+      index && index.error
+        ? index.error
+        : "Tasks status registry is unavailable",
+    );
+  }
+  const path = normalizeVaultRelativePath(filePath);
+  const task = index.tasksByTarget.get(
+    recoveryIdentity(path, String(line)),
+  );
+  if (!task || task.status !== "?" || !task.statusRecognized) {
+    return deferredScheduledRecovery(
+      "selected Blocked task could not be identified safely",
+    );
+  }
+
+  let dependencyAmbiguous = false;
+  for (const dependency of task.dependsOn) {
+    const matches = index.dependencyIds.get(dependency);
+    if (!matches) {
+      continue;
+    }
+    let open = false;
+    let unknown = false;
+    for (const target of matches) {
+      const type = target.statusType;
+      if (
+        target.statusRecognized &&
+        TASK_STATUS_OPEN_TYPES.has(type)
+      ) {
+        open = true;
+      } else if (
+        !target.statusRecognized ||
+        !TASK_STATUS_CLOSED_TYPES.has(type)
+      ) {
+        unknown = true;
+      }
+    }
+    if (open) {
+      return Object.freeze({
+        state: "blocked",
+        rank: null,
+        reason: `open dependency: ${dependency}`,
+      });
+    }
+    dependencyAmbiguous ||= unknown;
+  }
+  if (dependencyAmbiguous) {
+    return deferredScheduledRecovery(
+      "dependency status could not be resolved safely",
+    );
+  }
+  if (!task.blockId) {
+    return Object.freeze({ state: "ready", rank: " ", reason: null });
+  }
+  const identity = recoveryIdentity(path, task.blockId);
+  if ((index.blocks.get(identity) || []).length !== 1) {
+    return deferredScheduledRecovery("task block identity is ambiguous");
+  }
+  if (!index.rankSafe) {
+    return deferredScheduledRecovery(
+      "recent activity could not be resolved safely",
+    );
+  }
+  const rank = index.ranks.get(identity);
+  if (rank === 2) {
+    return Object.freeze({
+      state: "in-progress",
+      rank: "/",
+      reason: null,
+    });
+  }
+  if (rank === 1) {
+    return Object.freeze({ state: "next", rank: "*", reason: null });
+  }
+  return Object.freeze({ state: "ready", rank: " ", reason: null });
+}
+
+async function readTasksStatusRegistry(app) {
+  const vault = app && app.vault;
+  if (!vault) {
+    return unavailableTasksStatusRegistry("Vault is unavailable");
+  }
+  try {
+    const settingsFile =
+      typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(TASKS_SETTINGS_PATH)
+        : null;
+    let contents = null;
+    if (settingsFile && typeof vault.read === "function") {
+      contents = await vault.read(settingsFile);
+    } else if (
+      vault.adapter &&
+      typeof vault.adapter.read === "function"
+    ) {
+      contents = await vault.adapter.read(TASKS_SETTINGS_PATH);
+    } else if (settingsFile && typeof vault.cachedRead === "function") {
+      contents = await vault.cachedRead(settingsFile);
+    }
+    if (contents === null) {
+      return unavailableTasksStatusRegistry("Tasks settings are unavailable");
+    }
+    return parseTasksStatusRegistry(contents);
+  } catch (_error) {
+    return unavailableTasksStatusRegistry("Tasks settings could not be read");
+  }
+}
+
+function getOpenMarkdownBufferContents(app) {
+  const buffers = new Map();
+  buffers.ambiguous = false;
+  const workspace = app && app.workspace;
+  if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+    return buffers;
+  }
+  for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+    const view = leaf && leaf.view;
+    if (
+      view &&
+      view.file &&
+      view.file.path &&
+      view.editor &&
+      typeof view.editor.getValue === "function"
+    ) {
+      const path = normalizeVaultRelativePath(view.file.path);
+      const content = String(view.editor.getValue() || "");
+      if (buffers.has(path) && buffers.get(path) !== content) {
+        buffers.ambiguous = true;
+      }
+      buffers.set(path, content);
+    }
+  }
+  return buffers;
+}
+
+async function buildInteractiveScheduledRecoverySnapshot(
+  app,
+  options = {},
+) {
+  const vault = app && app.vault;
+  if (!vault || typeof vault.getMarkdownFiles !== "function") {
+    return buildScheduledRecoveryIndex(
+      [],
+      unavailableTasksStatusRegistry("Vault Markdown files are unavailable"),
+      options.today || new Date(),
+    );
+  }
+  const registryPromise = readTasksStatusRegistry(app);
+  const buffers = getOpenMarkdownBufferContents(app);
+  if (buffers.ambiguous) {
+    return buildScheduledRecoveryIndex(
+      [],
+      unavailableTasksStatusRegistry(
+        "Open Markdown buffers are ambiguous",
+      ),
+      options.today || new Date(),
+    );
+  }
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+  if (sourcePath) {
+    buffers.set(sourcePath, String(options.sourceContent || ""));
+  }
+  const vaultFiles = vault.getMarkdownFiles() || [];
+  const files = [];
+  try {
+    for (const file of vaultFiles) {
+      const path = normalizeVaultRelativePath(file.path);
+      const content = buffers.has(path)
+        ? buffers.get(path)
+        : typeof vault.cachedRead === "function"
+          ? await vault.cachedRead(file)
+          : null;
+      if (content === null) {
+        throw new Error("Markdown file could not be read");
+      }
+      files.push({ path, content: String(content || "") });
+    }
+    if (sourcePath && !files.some((file) => file.path === sourcePath)) {
+      files.push({
+        path: sourcePath,
+        content: String(options.sourceContent || ""),
+      });
+    }
+  } catch (_error) {
+    return buildScheduledRecoveryIndex(
+      [],
+      unavailableTasksStatusRegistry("Vault Markdown files could not be read"),
+      options.today || new Date(),
+    );
+  }
+  return buildScheduledRecoveryIndex(
+    files,
+    await registryPromise,
+    options.today || new Date(),
+  );
+}
+
+async function buildTargetScheduledRecoveryByLine(
+  app,
+  sourcePath,
+  sourceContent,
+  targetLines,
+  today = new Date(),
+) {
+  const snapshot = await buildInteractiveScheduledRecoverySnapshot(app, {
+    sourcePath,
+    sourceContent,
+    today,
+  });
+  return new Map(
+    (Array.isArray(targetLines) ? targetLines : [targetLines]).map((line) => [
+      line,
+      getScheduledRecoveryMetadata(snapshot, sourcePath, line),
+    ]),
+  );
 }
 
 // The dependency picker intentionally offers only open tasks. Keep that
@@ -8693,6 +9557,107 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
   });
 }
 
+function isDueInlineScheduledValue(value, today = new Date()) {
+  const validation = validateProjectScheduledDate(value);
+  return (
+    validation.valid &&
+    !isFutureInlineScheduledValue(validation.value, today)
+  );
+}
+
+function getTargetScheduledRecovery(options, line) {
+  const recoveryByLine = options && options.recoveryByLine;
+  if (recoveryByLine instanceof Map) {
+    return recoveryByLine.get(line) || null;
+  }
+  if (recoveryByLine && typeof recoveryByLine === "object") {
+    return recoveryByLine[line] || null;
+  }
+  return null;
+}
+
+function reconcileBlockedScheduledTaskLine(lineText, recovery) {
+  const line = String(lineText || "");
+  const taskMatch = OBSIDIAN_TASK_LINE_RE.exec(line);
+  if (!taskMatch || taskMatch[1] !== "?") {
+    return Object.freeze({
+      line,
+      changed: false,
+      outcome: null,
+    });
+  }
+  const decision =
+    recovery || deferredScheduledRecovery("recovery snapshot is unavailable");
+  if (
+    !["ready", "next", "in-progress"].includes(decision.state) ||
+    ![" ", "*", "/"].includes(decision.rank)
+  ) {
+    return Object.freeze({
+      line,
+      changed: false,
+      outcome:
+        decision.state === "blocked" ? "still-blocked" : "deferred",
+    });
+  }
+  const checkboxOffset = taskMatch[0].indexOf("[?]") + 1;
+  const nextLine =
+    line.slice(0, checkboxOffset) +
+    decision.rank +
+    line.slice(checkboxOffset + 1);
+  return Object.freeze({
+    line: nextLine,
+    changed: nextLine !== line,
+    outcome: decision.state,
+  });
+}
+
+function emptyScheduledRecoveryCounts() {
+  return {
+    ready: 0,
+    next: 0,
+    inProgress: 0,
+    stillBlocked: 0,
+    deferred: 0,
+  };
+}
+
+function recordScheduledRecoveryOutcome(counts, outcome) {
+  if (outcome === "ready") counts.ready += 1;
+  if (outcome === "next") counts.next += 1;
+  if (outcome === "in-progress") counts.inProgress += 1;
+  if (outcome === "still-blocked") counts.stillBlocked += 1;
+  if (outcome === "deferred") counts.deferred += 1;
+}
+
+function scheduledRecoveryNoticeSuffix(counts = {}) {
+  const parts = [];
+  if (counts.ready > 0) {
+    parts.push(`recovered ${formatCountLabel(counts.ready, "task")} Ready`);
+  }
+  if (counts.next > 0) {
+    parts.push(`recovered ${formatCountLabel(counts.next, "task")} Next`);
+  }
+  if (counts.inProgress > 0) {
+    parts.push(
+      `recovered ${formatCountLabel(counts.inProgress, "task")} In Progress`,
+    );
+  }
+  if (counts.stillBlocked > 0) {
+    parts.push(
+      `${formatCountLabel(counts.stillBlocked, "task")} still Blocked`,
+    );
+  }
+  if (counts.deferred > 0) {
+    parts.push(
+      `${formatCountLabel(
+        counts.deferred,
+        "task",
+      )} deferred to bob task-status-hooks`,
+    );
+  }
+  return parts.length > 0 ? `; ${parts.join("; ")}` : "";
+}
+
 // Plan one counted set/delete without mutating the editor. Scheduled values on
 // ^prj sources are composed through project frontmatter and visibility first;
 // every other source remains an inline Dataview edit. The caller can therefore
@@ -8715,6 +9680,14 @@ function planCountedBulletPropertyBatch(
       normalizedValue,
       options.today || new Date(),
     );
+  const shouldRecoverInlineTasks =
+    propertyName === "scheduled" &&
+    (operation === "delete" ||
+      (operation === "set" &&
+        isDueInlineScheduledValue(
+          normalizedValue,
+          options.today || new Date(),
+        )));
   const sessionValidation = validateCountedTaskSession(text, session);
   if (!sessionValidation.valid) {
     return Object.freeze({
@@ -8818,6 +9791,7 @@ function planCountedBulletPropertyBatch(
   const changedTargets = [];
   const unchangedTargets = [];
   let blockedTaskCount = 0;
+  const recoveryCounts = emptyScheduledRecoveryCounts();
   for (const { target, state } of targetStates) {
     const mappedLine = target.line + taskLineDelta;
     const liveLine = String(source.lines[mappedLine] || "");
@@ -8851,6 +9825,17 @@ function planCountedBulletPropertyBatch(
           targetChanged = true;
           blockedTaskCount += 1;
         }
+      } else if (shouldRecoverInlineTasks) {
+        const recovery = reconcileBlockedScheduledTaskLine(
+          nextLine,
+          getTargetScheduledRecovery(options, target.line),
+        );
+        nextLine = recovery.line;
+        targetChanged ||= recovery.changed;
+        recordScheduledRecoveryOutcome(
+          recoveryCounts,
+          recovery.outcome,
+        );
       }
     }
 
@@ -8884,6 +9869,11 @@ function planCountedBulletPropertyBatch(
     cursorLineDelta: taskLineDelta,
     visibilityChangedTaskCount,
     blockedTaskCount,
+    recoveredReadyTaskCount: recoveryCounts.ready,
+    recoveredNextTaskCount: recoveryCounts.next,
+    recoveredInProgressTaskCount: recoveryCounts.inProgress,
+    stillBlockedTaskCount: recoveryCounts.stillBlocked,
+    deferredRecoveryTaskCount: recoveryCounts.deferred,
   });
 }
 
@@ -10871,7 +11861,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    const result = this.isCountedSession()
+    const result = await (this.isCountedSession()
       ? this.plugin.deleteCountedBulletPropertyValue(
           this.editor,
           this.cursor,
@@ -10891,7 +11881,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             this.editor,
             this.cursor,
             propertyName,
-          );
+            {
+              filePath: this.filePath,
+              expectedLine: this.lineText,
+            },
+          ));
     if (!result || result.deleted !== true) {
       if (result && result.line) {
         this.lineText = result.line;
@@ -10913,7 +11907,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.isCountedSession()) {
-      return this.plugin.setCountedBulletPropertyValue(
+      return await this.plugin.setCountedBulletPropertyValue(
         this.editor,
         this.cursor,
         this.filePath,
@@ -10924,7 +11918,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
-      return this.plugin.setProjectNoteScheduledValue(
+      return await this.plugin.setProjectNoteScheduledValue(
         this.editor,
         this.cursor,
         this.filePath,
@@ -10934,11 +11928,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       );
     }
 
-    return this.plugin.setBulletPropertyValue(
+    return await this.plugin.setBulletPropertyValue(
       this.editor,
       this.cursor,
       this.selectedPropertyItem.property.name,
       item.value,
+      {
+        filePath: this.filePath,
+        expectedLine: this.lineText,
+      },
     );
   }
 }
@@ -11889,6 +12887,60 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return Object.freeze({ valid: true, error: null, content });
   }
 
+  getInlinePropertyWriteContext(cm, cursor, options = {}) {
+    if (
+      !cm ||
+      typeof cm.getValue !== "function" ||
+      !cursor ||
+      !Number.isInteger(cursor.line)
+    ) {
+      return Object.freeze({
+        valid: false,
+        error: "No active markdown editor",
+      });
+    }
+    const filePath = normalizeVaultRelativePath(options.filePath);
+    if (filePath) {
+      const activeView = this.getActiveMarkdownView();
+      if (
+        !activeView ||
+        activeView.editor !== cm ||
+        !activeView.file ||
+        normalizeVaultRelativePath(activeView.file.path) !== filePath
+      ) {
+        return Object.freeze({
+          valid: false,
+          error: "Active note changed; bullet property was not updated",
+        });
+      }
+    }
+    const content = String(cm.getValue() || "");
+    const line = getEditorLine(cm, cursor.line);
+    if (line === null) {
+      return Object.freeze({
+        valid: false,
+        error: "No active markdown editor",
+      });
+    }
+    if (
+      options.expectedLine !== undefined &&
+      options.expectedLine !== null &&
+      line !== options.expectedLine
+    ) {
+      return Object.freeze({
+        valid: false,
+        error: "Current task changed; bullet property was not updated",
+      });
+    }
+    return Object.freeze({
+      valid: true,
+      error: null,
+      filePath,
+      content,
+      line,
+    });
+  }
+
   getCountedTaskNoticeSuffix(session, unchangedTaskCount = 0) {
     const parts = [];
     if (unchangedTaskCount > 0) {
@@ -11902,7 +12954,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return parts.length > 0 ? `; ${parts.join("; ")}` : "";
   }
 
-  setCountedBulletPropertyValue(
+  async setCountedBulletPropertyValue(
     cm,
     cursor,
     filePath,
@@ -11919,12 +12971,39 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(writeContext.error);
       return false;
     }
+    const today = new Date();
+    let recoveryByLine = null;
+    if (
+      normalizeBulletPropertyName(name) === "scheduled" &&
+      isDueInlineScheduledValue(value, today)
+    ) {
+      recoveryByLine = await buildTargetScheduledRecoveryByLine(
+        this.app,
+        filePath,
+        writeContext.content,
+        session.targets.map((target) => target.line),
+        today,
+      );
+      const guarded = this.getCountedTaskWriteContext(
+        cm,
+        filePath,
+        session,
+      );
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return false;
+      }
+    }
     const plan = planCountedBulletPropertyBatch(
       writeContext.content,
       session,
       name,
       value,
-      { operation: "set", today: new Date() },
+      { operation: "set", today, recoveryByLine },
     );
     if (!plan.valid) {
       new Notice(
@@ -11966,6 +13045,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             "task",
           )} Blocked`
         : "";
+    const recoverySuffix = scheduledRecoveryNoticeSuffix({
+      ready: plan.recoveredReadyTaskCount,
+      next: plan.recoveredNextTaskCount,
+      inProgress: plan.recoveredInProgressTaskCount,
+      stillBlocked: plan.stillBlockedTaskCount,
+      deferred: plan.deferredRecoveryTaskCount,
+    });
     new Notice(
       `${name} → ${normalizeBulletPropertyValue(value)} on ${formatCountLabel(
         plan.changedTaskCount,
@@ -11973,12 +13059,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${visibilitySuffix}${blockedSuffix}`,
+      )}${visibilitySuffix}${blockedSuffix}${recoverySuffix}`,
     );
     return true;
   }
 
-  deleteCountedBulletPropertyValue(cm, cursor, filePath, session, name) {
+  async deleteCountedBulletPropertyValue(
+    cm,
+    cursor,
+    filePath,
+    session,
+    name,
+  ) {
     const writeContext = this.getCountedTaskWriteContext(
       cm,
       filePath,
@@ -11988,12 +13080,35 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(writeContext.error);
       return null;
     }
+    let recoveryByLine = null;
+    if (normalizeBulletPropertyName(name) === "scheduled") {
+      recoveryByLine = await buildTargetScheduledRecoveryByLine(
+        this.app,
+        filePath,
+        writeContext.content,
+        session.targets.map((target) => target.line),
+        new Date(),
+      );
+      const guarded = this.getCountedTaskWriteContext(
+        cm,
+        filePath,
+        session,
+      );
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return null;
+      }
+    }
     const plan = planCountedBulletPropertyBatch(
       writeContext.content,
       session,
       name,
       null,
-      { operation: "delete" },
+      { operation: "delete", recoveryByLine },
     );
     if (!plan.valid) {
       new Notice(
@@ -12028,7 +13143,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}`,
+      )}${scheduledRecoveryNoticeSuffix({
+        ready: plan.recoveredReadyTaskCount,
+        next: plan.recoveredNextTaskCount,
+        inProgress: plan.recoveredInProgressTaskCount,
+        stillBlocked: plan.stillBlockedTaskCount,
+        deferred: plan.deferredRecoveryTaskCount,
+      })}`,
     );
     return { deleted: true, line: finalLine };
   }
@@ -12278,11 +13399,46 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return { deleted: true, line: finalLine };
   }
 
-  setBulletPropertyValue(cm, cursor, name, value) {
-    const lineText = getEditorLine(cm, cursor.line);
-    if (lineText === null) {
-      new Notice("No active markdown editor");
+  async setBulletPropertyValue(cm, cursor, name, value, options = {}) {
+    const writeContext = this.getInlinePropertyWriteContext(
+      cm,
+      cursor,
+      options,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
       return false;
+    }
+    const lineText = writeContext.line;
+    const propertyName = normalizeBulletPropertyName(name);
+    const today = new Date();
+    const shouldRecover =
+      propertyName === "scheduled" &&
+      isDueInlineScheduledValue(value, today) &&
+      !isProjectLifecycleTaskLine(lineText);
+    let recovery = null;
+    if (shouldRecover) {
+      const recoveryByLine = await buildTargetScheduledRecoveryByLine(
+        this.app,
+        writeContext.filePath,
+        writeContext.content,
+        [cursor.line],
+        today,
+      );
+      recovery = recoveryByLine.get(cursor.line);
+      const guarded = this.getInlinePropertyWriteContext(cm, cursor, options);
+      if (
+        !guarded.valid ||
+        guarded.content !== writeContext.content ||
+        guarded.line !== lineText
+      ) {
+        new Notice(
+          guarded.valid
+            ? "Current task changed; bullet property was not updated"
+            : guarded.error,
+        );
+        return false;
+      }
     }
 
     const result = upsertBulletProperty(lineText, name, value);
@@ -12293,14 +13449,22 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     let nextLine = result.line;
     let blocked = false;
+    let recoveryOutcome = null;
     if (
-      normalizeBulletPropertyName(name) === "scheduled" &&
-      isFutureInlineScheduledValue(value, new Date()) &&
+      propertyName === "scheduled" &&
+      isFutureInlineScheduledValue(value, today) &&
       !isProjectLifecycleTaskLine(lineText)
     ) {
       const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
       blocked = blockedLine !== nextLine;
       nextLine = blockedLine;
+    } else if (shouldRecover) {
+      const reconciliation = reconcileBlockedScheduledTaskLine(
+        nextLine,
+        recovery,
+      );
+      nextLine = reconciliation.line;
+      recoveryOutcome = reconciliation.outcome;
     }
 
     if (
@@ -12319,7 +13483,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     new Notice(
       `${name} → ${normalizeBulletPropertyValue(value)}${
         blocked ? "; marked task Blocked" : ""
-      }`,
+      }${scheduledRecoveryNoticeSuffix({
+        ready: recoveryOutcome === "ready" ? 1 : 0,
+        next: recoveryOutcome === "next" ? 1 : 0,
+        inProgress: recoveryOutcome === "in-progress" ? 1 : 0,
+        stillBlocked: recoveryOutcome === "still-blocked" ? 1 : 0,
+        deferred: recoveryOutcome === "deferred" ? 1 : 0,
+      })}`,
     );
     return true;
   }
@@ -12434,11 +13604,44 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  deleteBulletPropertyValue(cm, cursor, name) {
-    const lineText = getEditorLine(cm, cursor.line);
-    if (lineText === null) {
-      new Notice("No active markdown editor");
+  async deleteBulletPropertyValue(cm, cursor, name, options = {}) {
+    const writeContext = this.getInlinePropertyWriteContext(
+      cm,
+      cursor,
+      options,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
       return null;
+    }
+    const lineText = writeContext.line;
+    const propertyName = normalizeBulletPropertyName(name);
+    const shouldRecover =
+      propertyName === "scheduled" &&
+      !isProjectLifecycleTaskLine(lineText);
+    let recovery = null;
+    if (shouldRecover) {
+      const recoveryByLine = await buildTargetScheduledRecoveryByLine(
+        this.app,
+        writeContext.filePath,
+        writeContext.content,
+        [cursor.line],
+        new Date(),
+      );
+      recovery = recoveryByLine.get(cursor.line);
+      const guarded = this.getInlinePropertyWriteContext(cm, cursor, options);
+      if (
+        !guarded.valid ||
+        guarded.content !== writeContext.content ||
+        guarded.line !== lineText
+      ) {
+        new Notice(
+          guarded.valid
+            ? "Current task changed; bullet property was not deleted"
+            : guarded.error.replace("updated", "deleted"),
+        );
+        return null;
+      }
     }
 
     const result = deleteBulletProperty(lineText, name);
@@ -12457,9 +13660,20 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return { deleted: false, line: lineText };
     }
 
+    let nextLine = result.line;
+    let recoveryOutcome = null;
+    if (shouldRecover) {
+      const reconciliation = reconcileBlockedScheduledTaskLine(
+        nextLine,
+        recovery,
+      );
+      nextLine = reconciliation.line;
+      recoveryOutcome = reconciliation.outcome;
+    }
+
     if (
-      result.changed &&
-      !replaceEditorLine(cm, cursor.line, lineText, result.line)
+      nextLine !== lineText &&
+      !replaceEditorLine(cm, cursor.line, lineText, nextLine)
     ) {
       new Notice("Could not delete bullet property");
       return null;
@@ -12468,10 +13682,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     setEditorCursorSafely(
       cm,
       cursor.line,
-      Math.min(Math.max(cursor.ch, 0), result.line.length),
+      Math.min(Math.max(cursor.ch, 0), nextLine.length),
     );
-    new Notice(`${name} ✗ removed`);
-    return { deleted: true, line: result.line };
+    new Notice(
+      `${name} ✗ removed${scheduledRecoveryNoticeSuffix({
+        ready: recoveryOutcome === "ready" ? 1 : 0,
+        next: recoveryOutcome === "next" ? 1 : 0,
+        inProgress: recoveryOutcome === "in-progress" ? 1 : 0,
+        stillBlocked: recoveryOutcome === "still-blocked" ? 1 : 0,
+        deferred: recoveryOutcome === "deferred" ? 1 : 0,
+      })}`,
+    );
+    return { deleted: true, line: nextLine };
   }
 
   insertBlankLine(cm, direction) {
@@ -16507,6 +17729,21 @@ module.exports.helpers = {
   getDependencyPromotionStatus,
   promoteObsidianTaskCheckboxStatus,
   blockObsidianTaskCheckboxStatus,
+  replaceObsidianTaskCheckboxStatus,
+  parseTasksStatusRegistry,
+  parseTrailingRecoveryTaskMetadata,
+  parseScheduledRecoveryTaskLine,
+  parseRecoveryTransclusion,
+  recoveryBlockReferences,
+  recentPomodoroReferences,
+  canonicalRecoveryDailyDate,
+  scheduledRecoveryDailyPaths,
+  computeScheduledRecoveryRanks,
+  buildScheduledRecoveryIndex,
+  getScheduledRecoveryMetadata,
+  buildInteractiveScheduledRecoverySnapshot,
+  reconcileBlockedScheduledTaskLine,
+  scheduledRecoveryNoticeSuffix,
   getMarkdownLineContexts,
   isOpenObsidianTaskLine,
   isPomodorosHeading,
@@ -16582,6 +17819,7 @@ module.exports.helpers = {
   removeAllBulletProperties,
   planProjectScheduledUpdate,
   planProjectScheduledDelete,
+  isDueInlineScheduledValue,
   planCountedBulletPropertyBatch,
   planCountedLocalTaskDependency,
   createBulletPropertyDateItems,

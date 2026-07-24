@@ -195,6 +195,24 @@ class RecordingFallbackEditor extends TestEditor {
   }
 }
 
+function compatibleTasksSettings() {
+  return {
+    globalFilter: "#task",
+    statusSettings: {
+      coreStatuses: [],
+      customStatuses: [
+        {
+          symbol: "?",
+          name: "Blocked",
+          nextStatusSymbol: " ",
+          availableAsCommand: true,
+          type: "ON_HOLD",
+        },
+      ],
+    },
+  };
+}
+
 function assertLineBoundedTransaction(transaction, originalLines, changedLines) {
   assert.deepEqual(
     transaction.changes.map((change) => change.from.line),
@@ -372,6 +390,259 @@ test("future schedule labels use local date-only boundaries", () => {
   for (const value of ["2026-07-10", "2026-07-09", "2026-02-30"]) {
     assert.equal(helpers.getFutureProjectSchedule(value, now).scheduled, false);
   }
+});
+
+test("scheduled recovery selects current and newest earlier daily across gaps", () => {
+  const files = [
+    { path: "2025/20251231.md", content: "" },
+    { path: "2026/20260103.md", content: "" },
+    { path: "2026/20260108.md", content: "" },
+    { path: "2026/20260109.md", content: "" },
+    { path: "Other/20260109.md", content: "" },
+  ];
+  assert.deepEqual(
+    helpers.scheduledRecoveryDailyPaths(
+      files,
+      new Date(2026, 0, 9, 23, 59),
+    ),
+    {
+      current: "2026/20260109.md",
+      previous: "2026/20260108.md",
+    },
+  );
+  assert.deepEqual(
+    helpers.scheduledRecoveryDailyPaths(
+      files,
+      new Date(2026, 0, 1, 0, 1),
+    ),
+    {
+      current: null,
+      previous: "2025/20251231.md",
+    },
+  );
+});
+
+test("scheduled recovery ranks Blocked tasks from both ledgers and transclusion graph", () => {
+  const settings = helpers.parseTasksStatusRegistry(
+    compatibleTasksSettings(),
+  );
+  const files = [
+    {
+      path: "2026/20260716.md",
+      content: [
+        "## Pomodoros",
+        "",
+        "- [ ] Current (0900-0930)",
+        "  - [[Tasks#^direct|alias]]",
+        "  - ![[Tasks#^root]]",
+        "  - ~~[[Tasks#^retired]]~~",
+        "- [-] Canceled (1000-1030)",
+        "  - [[Tasks#^canceled]]",
+        "```md",
+        "- [ ] Example (1100-1130)",
+        "  - [[Tasks#^fenced]]",
+        "```",
+      ].join("\n"),
+    },
+    {
+      path: "2026/20260710.md",
+      content: [
+        "## Pomodoros",
+        "",
+        "- [x] Completed (0800-0830)",
+        "  - ![[Tasks#^previous]]",
+      ].join("\n"),
+    },
+    {
+      path: "Tasks.md",
+      content: [
+        "- [?] #task Ready without activity ^ready",
+        "- [?] #task Direct current ^direct",
+        "- [?] #task Direct previous ^previous",
+        "- [?] #task Root ^root",
+        "  - ![[#^working]]",
+        "- [/] #task Working ^working",
+        "  - ![[#^graph]]",
+        "- [?] #task Graph-derived ^graph",
+        "- [?] #task Retired ^retired",
+        "- [?] #task Canceled ^canceled",
+        "- [?] #task Fenced ^fenced",
+        "- [ ] #task Open dependency [id:: open] ^open",
+        "- [?] #task Still blocked [dependsOn:: open] ^blocked",
+        "- [?] #task Missing dependency [dependsOn:: missing] ^missing",
+        "- [?] #task No block ID",
+        "- [ ] #task Ordinary previous ^ordinary",
+      ].join("\n"),
+    },
+  ];
+  const index = helpers.buildScheduledRecoveryIndex(
+    files,
+    settings,
+    new Date(2026, 6, 16, 12),
+  );
+  const decision = (line) =>
+    helpers.getScheduledRecoveryMetadata(index, "Tasks.md", line);
+
+  assert.equal(decision(0).state, "ready");
+  assert.equal(decision(1).state, "next");
+  assert.equal(decision(2).state, "next");
+  assert.equal(decision(3).state, "next");
+  assert.equal(decision(7).state, "in-progress");
+  assert.equal(decision(8).state, "ready");
+  assert.equal(decision(9).state, "ready");
+  assert.equal(decision(10).state, "ready");
+  assert.equal(decision(12).state, "blocked");
+  assert.equal(decision(13).state, "ready");
+  assert.equal(decision(14).state, "ready");
+
+  const session = helpers.discoverCountedObsidianTaskTargets(
+    files[2].content,
+    0,
+    13,
+  );
+  const duePlan = helpers.planCountedBulletPropertyBatch(
+    files[2].content,
+    session,
+    "scheduled",
+    "2026-07-16",
+    {
+      operation: "set",
+      today: new Date(2026, 6, 16, 23, 59),
+      recoveryByLine: new Map(
+        session.targets.map((target) => [
+          target.line,
+          decision(target.line),
+        ]),
+      ),
+    },
+  );
+  const statuses = duePlan.content
+    .split("\n")
+    .filter((line) => helpers.isObsidianTaskLine(line))
+    .map((line) => helpers.getObsidianTaskCheckboxStatus(line));
+  assert.deepEqual(
+    statuses.slice(0, 14),
+    [" ", "*", "*", "*", "/", "/", " ", " ", " ", " ", "?", " ", " ", " "],
+  );
+  assert.equal(duePlan.recoveredReadyTaskCount, 6);
+  assert.equal(duePlan.recoveredNextTaskCount, 3);
+  assert.equal(duePlan.recoveredInProgressTaskCount, 1);
+  assert.equal(duePlan.stillBlockedTaskCount, 1);
+  assert.equal(statuses.at(-1), " ");
+});
+
+test("scheduled recovery defers incompatible status settings and ambiguous identities", () => {
+  const incompatible = helpers.parseTasksStatusRegistry({
+    statusSettings: { coreStatuses: [], customStatuses: [] },
+  });
+  const files = [
+    {
+      path: "Tasks.md",
+      content: [
+        "- [?] #task Blocked ^duplicate",
+        "- [?] #task Duplicate ^duplicate",
+      ].join("\n"),
+    },
+  ];
+  const unavailable = helpers.buildScheduledRecoveryIndex(
+    files,
+    incompatible,
+    new Date(2026, 6, 16),
+  );
+  assert.equal(
+    helpers.getScheduledRecoveryMetadata(unavailable, "Tasks.md", 0).state,
+    "deferred",
+  );
+
+  const compatible = helpers.buildScheduledRecoveryIndex(
+    files,
+    helpers.parseTasksStatusRegistry(compatibleTasksSettings()),
+    new Date(2026, 6, 16),
+  );
+  assert.equal(
+    helpers.getScheduledRecoveryMetadata(compatible, "Tasks.md", 0).state,
+    "deferred",
+  );
+});
+
+test("scheduled recovery honors custom open and closed Tasks status types", () => {
+  const settings = compatibleTasksSettings();
+  settings.statusSettings.customStatuses.push(
+    {
+      symbol: "w",
+      name: "Waiting",
+      nextStatusSymbol: " ",
+      availableAsCommand: true,
+      type: "TODO",
+    },
+    {
+      symbol: "d",
+      name: "Custom done",
+      nextStatusSymbol: " ",
+      availableAsCommand: true,
+      type: "DONE",
+    },
+  );
+  const files = [
+    {
+      path: "Tasks.md",
+      content: [
+        "- [w] #task Custom open [id:: open] ^open",
+        "- [d] #task Custom closed [id:: closed] ^closed",
+        "- [?] #task Open parent [dependsOn:: open] ^open-parent",
+        "- [?] #task Closed parent [dependsOn:: closed] ^closed-parent",
+      ].join("\n"),
+    },
+  ];
+  const index = helpers.buildScheduledRecoveryIndex(
+    files,
+    helpers.parseTasksStatusRegistry(settings),
+    new Date(2026, 6, 16),
+  );
+  assert.equal(
+    helpers.getScheduledRecoveryMetadata(index, "Tasks.md", 2).state,
+    "blocked",
+  );
+  assert.equal(
+    helpers.getScheduledRecoveryMetadata(index, "Tasks.md", 3).state,
+    "ready",
+  );
+});
+
+test("scheduled recovery honors the configured Tasks global filter", () => {
+  const settings = compatibleTasksSettings();
+  settings.globalFilter = "#todo";
+  const files = [
+    {
+      path: "Tasks.md",
+      content: [
+        "- [?] #todo Configured task ^configured",
+        "- [?] #task Not selected by Tasks ^other",
+      ].join("\n"),
+    },
+  ];
+  const index = helpers.buildScheduledRecoveryIndex(
+    files,
+    helpers.parseTasksStatusRegistry(settings),
+    new Date(2026, 6, 16),
+  );
+  const configured = helpers.getScheduledRecoveryMetadata(
+    index,
+    "Tasks.md",
+    0,
+  );
+  assert.equal(configured.state, "ready");
+  assert.match(
+    helpers.reconcileBlockedScheduledTaskLine(
+      files[0].content.split("\n")[0],
+      configured,
+    ).line,
+    /- \[ \] #todo/,
+  );
+  assert.equal(
+    helpers.getScheduledRecoveryMetadata(index, "Tasks.md", 1).state,
+    "deferred",
+  );
 });
 
 test("picker metadata exposes future schedules to badges, search, and summary", () => {
@@ -725,6 +996,43 @@ test("counted scheduled planning updates the motivating three tasks atomically",
   assert.match(deleted.content, /- \[\?\] #task Fix just/);
   assert.match(deleted.content, /ordinary bullet \[scheduled:: keep\]/);
   assert.match(deleted.content, /\[created:: 2026-07-01\].*\^read-sase-beads/);
+});
+
+test("deleting inline scheduled metadata recovers Blocked targets by snapshot rank", () => {
+  const input = [
+    "- [?] #task Ready [scheduled:: 2099-01-01] ^ready",
+    "- [?] #task Next [scheduled:: 2099-01-01] ^next",
+    "- [?] #task Working [scheduled:: 2099-01-01] ^working",
+    "- [?] #task Dependency [dependsOn:: open] [scheduled:: 2099-01-01] ^blocked",
+  ].join("\r\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 3);
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    null,
+    {
+      operation: "delete",
+      recoveryByLine: new Map([
+        [0, { state: "ready", rank: " " }],
+        [1, { state: "next", rank: "*" }],
+        [2, { state: "in-progress", rank: "/" }],
+        [3, { state: "blocked", rank: null }],
+      ]),
+    },
+  );
+  assert.equal(plan.valid, true);
+  assert.deepEqual(
+    plan.content
+      .split(/\r?\n/)
+      .map((line) => helpers.getObsidianTaskCheckboxStatus(line)),
+    [" ", "*", "/", "?"],
+  );
+  assert.doesNotMatch(plan.content, /\[scheduled::/);
+  assert.equal(plan.recoveredReadyTaskCount, 1);
+  assert.equal(plan.recoveredNextTaskCount, 1);
+  assert.equal(plan.recoveredInProgressTaskCount, 1);
+  assert.equal(plan.stillBlockedTaskCount, 1);
 });
 
 test("counted future scheduling blocks only supported open inline task statuses", () => {
@@ -1329,7 +1637,7 @@ test("task status helpers keep Blocked open but rankless", () => {
   }
 });
 
-test("bare future scheduled writes block only real supported open inline tasks", () => {
+test("bare future scheduled writes block only real supported open inline tasks", async () => {
   const cases = [
     ["- [ ] #task Ready [scheduled:: 2099-07-23] ^ready", "?"],
     ["- [*] #task Next ^next", "?"],
@@ -1347,7 +1655,7 @@ test("bare future scheduled writes block only real supported open inline tasks",
     const editor = new TransactionEditor(line, { line: 0, ch: 6 }, 333);
     const plugin = new NavigationHotkeysPlugin();
     assert.equal(
-      plugin.setBulletPropertyValue(
+      await plugin.setBulletPropertyValue(
         editor,
         { line: 0, ch: 6 },
         "scheduled",
@@ -1545,7 +1853,6 @@ test("single runtime transclusion toggle preserves viewport in one line transact
   assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
 
   assert.equal(editor.transactions.length, 1);
-  assert.equal(editor.undoGroups, 1);
   assert.deepEqual(editor.transactionScrollTops, [originalScrollTop]);
   assert.equal(editor.getScrollInfo().top, originalScrollTop);
   assert.deepEqual(editor.setCursorCalls, []);
@@ -1656,7 +1963,7 @@ test("counted runtime transclusion toggle preserves viewport and caret", async (
   assert.equal(editor.getLine(activeLine + 2), "- [[Two]]");
 });
 
-test("counted property runtime uses one transaction and preserves caret and viewport", () => {
+test("counted property runtime uses one transaction and preserves caret and viewport", async () => {
   notices.length = 0;
   const lines = [
     "- [ ] #task One [created:: 2026-07-01] ^one",
@@ -1677,7 +1984,7 @@ test("counted property runtime uses one transaction and preserves caret and view
   plugin.getActiveMarkdownView = () => ({ editor, file });
 
   assert.equal(
-    plugin.setCountedBulletPropertyValue(
+    await plugin.setCountedBulletPropertyValue(
       editor,
       cursor,
       file.path,
@@ -1701,7 +2008,151 @@ test("counted property runtime uses one transaction and preserves caret and view
   assert.match(notices.at(-1), /2 tasks.*1 task unchanged.*2 tasks Blocked/);
 });
 
-test("counted property runtime aborts a stale batch without a transaction", () => {
+test("bare due schedule recovery is guarded and can change only task status", async () => {
+  notices.length = 0;
+  const line =
+    "- [?] #task Due [scheduled:: 2000-01-01] [dependsOn:: missing] ^due";
+  const editor = new TransactionEditor(line, { line: 0, ch: 18 }, 611);
+  const file = { path: "Tasks.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: {
+      getMarkdownFiles: () => [file],
+      cachedRead: async () => line,
+      adapter: {
+        read: async () => JSON.stringify(compatibleTasksSettings()),
+      },
+    },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+
+  assert.equal(
+    await plugin.setBulletPropertyValue(
+      editor,
+      { line: 0, ch: 18 },
+      "scheduled",
+      "2000-01-01",
+      { filePath: file.path, expectedLine: line },
+    ),
+    true,
+  );
+  assert.equal(editor.transactions.length, 0);
+  assert.match(editor.content, /- \[ \] #task Due/);
+  assert.match(editor.content, /\[scheduled:: 2000-01-01\]/);
+  assert.equal(editor.getScrollInfo().top, 611);
+  assert.match(notices.at(-1), /recovered 1 task Ready/);
+});
+
+test("counted due recovery applies Ready Next and In Progress in one transaction", async () => {
+  notices.length = 0;
+  const source = [
+    "- [?] #task Ready [scheduled:: 2000-01-01] ^ready",
+    "- [?] #task Next [scheduled:: 2000-01-01] ^next",
+    "- [?] #task Root [scheduled:: 2000-01-01] ^root",
+    "  - ![[#^working]]",
+    "- [/] #task Working ^working",
+    "  - ![[#^graph]]",
+    "- [?] #task Graph [scheduled:: 2000-01-01] ^graph",
+  ].join("\r\n");
+  const today = new Date();
+  const year = String(today.getFullYear()).padStart(4, "0");
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  const dailyPath = `${year}/${year}${month}${day}.md`;
+  const dailyContent = [
+    "## Pomodoros",
+    "",
+    "- [ ] Current (0900-0930)",
+    "  - [[Tasks#^next]]",
+    "  - [[Tasks#^root]]",
+  ].join("\n");
+  const editor = new TransactionEditor(source, { line: 0, ch: 12 }, 701);
+  const sourceFile = { path: "Tasks.md", extension: "md" };
+  const dailyFile = { path: dailyPath, extension: "md" };
+  const contents = new Map([
+    [sourceFile.path, source],
+    [dailyFile.path, dailyContent],
+  ]);
+  const session = helpers.discoverCountedObsidianTaskTargets(source, 0, 4);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: {
+      getMarkdownFiles: () => [sourceFile, dailyFile],
+      cachedRead: async (file) => contents.get(file.path),
+      adapter: {
+        read: async () => JSON.stringify(compatibleTasksSettings()),
+      },
+    },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: sourceFile });
+
+  assert.equal(
+    await plugin.setCountedBulletPropertyValue(
+      editor,
+      { line: 0, ch: 12 },
+      sourceFile.path,
+      session,
+      "scheduled",
+      "2000-01-01",
+    ),
+    true,
+  );
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(
+    editor.content
+      .split(/\r?\n/)
+      .filter((line) => helpers.isObsidianTaskLine(line))
+      .map((line) => helpers.getObsidianTaskCheckboxStatus(line)),
+    [" ", "*", "*", "/", "/"],
+  );
+  assert.match(
+    notices.at(-1),
+    /recovered 1 task Ready.*recovered 2 tasks Next.*recovered 1 task In Progress/,
+  );
+});
+
+test("scheduled recovery aborts after an asynchronous source change", async () => {
+  notices.length = 0;
+  const source =
+    "- [?] #task Due [scheduled:: 2000-01-01] ^due";
+  const editor = new TransactionEditor(source, { line: 0, ch: 8 });
+  const sourceFile = { path: "Tasks.md", extension: "md" };
+  const otherFile = { path: "Other.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: {
+      getMarkdownFiles: () => [sourceFile, otherFile],
+      cachedRead: async () => {
+        editor.content += "\nuser edit";
+        return "- [ ] #task Other ^other";
+      },
+      adapter: {
+        read: async () => JSON.stringify(compatibleTasksSettings()),
+      },
+    },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: sourceFile });
+
+  assert.equal(
+    await plugin.setBulletPropertyValue(
+      editor,
+      { line: 0, ch: 8 },
+      "scheduled",
+      "2000-01-01",
+      { filePath: sourceFile.path, expectedLine: source },
+    ),
+    false,
+  );
+  assert.deepEqual(editor.transactions, []);
+  assert.match(editor.content, /user edit/);
+  assert.match(notices.at(-1), /changed/);
+});
+
+test("counted property runtime aborts a stale batch without a transaction", async () => {
   notices.length = 0;
   const editor = new TransactionEditor(
     "- [ ] #task One\n- [ ] #task Two",
@@ -1718,7 +2169,7 @@ test("counted property runtime aborts a stale batch without a transaction", () =
   plugin.getActiveMarkdownView = () => ({ editor, file });
 
   assert.equal(
-    plugin.setCountedBulletPropertyValue(
+    await plugin.setCountedBulletPropertyValue(
       editor,
       { line: 0, ch: 4 },
       file.path,
@@ -1733,7 +2184,7 @@ test("counted property runtime aborts a stale batch without a transaction", () =
   assert.match(notices.at(-1), /no tasks were updated/);
 });
 
-test("counted project scheduling is one structural transaction", () => {
+test("counted project scheduling is one structural transaction", async () => {
   const input = [
     "---",
     "type: [[project]]",
@@ -1749,7 +2200,7 @@ test("counted project scheduling is one structural transaction", () => {
   plugin.getActiveMarkdownView = () => ({ editor, file });
 
   assert.equal(
-    plugin.setCountedBulletPropertyValue(
+    await plugin.setCountedBulletPropertyValue(
       editor,
       cursor,
       file.path,

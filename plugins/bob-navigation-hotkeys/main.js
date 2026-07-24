@@ -5994,6 +5994,19 @@ function projectScheduleLocalDate(validation) {
   return date;
 }
 
+function isFutureInlineScheduledValue(value, today = new Date()) {
+  const validation = validateProjectScheduledDate(value);
+  if (!validation.valid) {
+    return false;
+  }
+  return (
+    compareLocalDates(
+      projectScheduleLocalDate(validation),
+      getLocalDateStart(today),
+    ) > 0
+  );
+}
+
 function getFutureProjectSchedule(value, now = new Date()) {
   const validation = validateProjectScheduledDate(value);
   if (!validation.valid) {
@@ -8695,6 +8708,13 @@ function planCountedBulletPropertyBatch(
   const propertyName = normalizeBulletPropertyName(name);
   const operation = options.operation === "delete" ? "delete" : "set";
   const normalizedValue = normalizeBulletPropertyValue(value);
+  const shouldBlockInlineTasks =
+    operation === "set" &&
+    propertyName === "scheduled" &&
+    isFutureInlineScheduledValue(
+      normalizedValue,
+      options.today || new Date(),
+    );
   const sessionValidation = validateCountedTaskSession(text, session);
   if (!sessionValidation.valid) {
     return Object.freeze({
@@ -8797,6 +8817,7 @@ function planCountedBulletPropertyBatch(
   const source = splitMarkdownContent(nextContent);
   const changedTargets = [];
   const unchangedTargets = [];
+  let blockedTaskCount = 0;
   for (const { target, state } of targetStates) {
     const mappedLine = target.line + taskLineDelta;
     const liveLine = String(source.lines[mappedLine] || "");
@@ -8823,6 +8844,14 @@ function planCountedBulletPropertyBatch(
           : upsertBulletProperty(liveLine, propertyName, normalizedValue);
       nextLine = result.line;
       targetChanged = result.changed;
+      if (shouldBlockInlineTasks) {
+        const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+        if (blockedLine !== nextLine) {
+          nextLine = blockedLine;
+          targetChanged = true;
+          blockedTaskCount += 1;
+        }
+      }
     }
 
     source.lines[mappedLine] = nextLine;
@@ -8854,6 +8883,7 @@ function planCountedBulletPropertyBatch(
     cursorLine,
     cursorLineDelta: taskLineDelta,
     visibilityChangedTaskCount,
+    blockedTaskCount,
   });
 }
 
@@ -11929,6 +11959,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             "task",
           )}`
         : "";
+    const blockedSuffix =
+      plan.blockedTaskCount > 0
+        ? `; marked ${formatCountLabel(
+            plan.blockedTaskCount,
+            "task",
+          )} Blocked`
+        : "";
     new Notice(
       `${name} → ${normalizeBulletPropertyValue(value)} on ${formatCountLabel(
         plan.changedTaskCount,
@@ -11936,7 +11973,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${visibilitySuffix}`,
+      )}${visibilitySuffix}${blockedSuffix}`,
     );
     return true;
   }
@@ -12254,9 +12291,21 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    let nextLine = result.line;
+    let blocked = false;
     if (
-      result.changed &&
-      !replaceEditorLine(cm, cursor.line, lineText, result.line)
+      normalizeBulletPropertyName(name) === "scheduled" &&
+      isFutureInlineScheduledValue(value, new Date()) &&
+      !isProjectLifecycleTaskLine(lineText)
+    ) {
+      const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+      blocked = blockedLine !== nextLine;
+      nextLine = blockedLine;
+    }
+
+    if (
+      nextLine !== lineText &&
+      !replaceEditorLine(cm, cursor.line, lineText, nextLine)
     ) {
       new Notice("Could not update bullet property");
       return false;
@@ -12265,9 +12314,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     setEditorCursorSafely(
       cm,
       cursor.line,
-      Math.min(Math.max(cursor.ch, 0), result.line.length),
+      Math.min(Math.max(cursor.ch, 0), nextLine.length),
     );
-    new Notice(`${name} → ${normalizeBulletPropertyValue(value)}`);
+    new Notice(
+      `${name} → ${normalizeBulletPropertyValue(value)}${
+        blocked ? "; marked task Blocked" : ""
+      }`,
+    );
     return true;
   }
 
@@ -16436,6 +16489,7 @@ module.exports.helpers = {
   replaceLinkOriginalsInContent,
   getProjectFromTaskNoticeText,
   getFutureProjectSchedule,
+  isFutureInlineScheduledValue,
   getProjectNoteInfo,
   getChildNoteInfo,
   getChildNoteSummary,

@@ -353,6 +353,10 @@ test("project creation frontmatter receives source scheduling atomically", () =>
 
 test("future schedule labels use local date-only boundaries", () => {
   const now = new Date(2026, 6, 10, 23, 45);
+  assert.equal(helpers.isFutureInlineScheduledValue("2026-07-09", now), false);
+  assert.equal(helpers.isFutureInlineScheduledValue("2026-07-10", now), false);
+  assert.equal(helpers.isFutureInlineScheduledValue("2026-07-11", now), true);
+  assert.equal(helpers.isFutureInlineScheduledValue("2026-02-30", now), false);
   assert.deepEqual(
     helpers.getFutureProjectSchedule("2026-07-11", now),
     { scheduled: true, date: "2026-07-11", label: "Tomorrow" },
@@ -684,14 +688,15 @@ test("counted scheduled planning updates the motivating three tasks atomically",
   assert.equal(plan.valid, true);
   assert.equal(plan.changedTaskCount, 2);
   assert.equal(plan.unchangedTaskCount, 1);
+  assert.equal(plan.blockedTaskCount, 2);
   assert.equal(plan.content.includes("\r\n"), true);
   assert.match(
     plan.content,
-    /Read SASE beads \[created:: 2026-07-01\] \[scheduled:: 2026-07-23\] \^read-sase-beads/,
+    /\[\?\] #task Read SASE beads \[created:: 2026-07-01\] \[scheduled:: 2026-07-23\] \^read-sase-beads/,
   );
   assert.match(
     plan.content,
-    /Fix just \[scheduled:: 2026-07-23\] \[created:: 2026-07-02\] \^fix-fix-just/,
+    /\[\?\] #task Fix just \[scheduled:: 2026-07-23\] \[created:: 2026-07-02\] \^fix-fix-just/,
   );
   assert.match(plan.content, /\t- !\[\[#\^transcluded-child\]\]/);
   assert.match(plan.content, /ordinary bullet \[scheduled:: keep\]/);
@@ -714,9 +719,70 @@ test("counted scheduled planning updates the motivating three tasks atomically",
   );
   assert.equal(deleted.valid, true);
   assert.equal(deleted.changedTaskCount, 3);
+  assert.equal(deleted.blockedTaskCount, 0);
   assert.doesNotMatch(deleted.content, /#task[^\r\n]*\[scheduled::/);
+  assert.match(deleted.content, /- \[\?\] #task Read SASE beads/);
+  assert.match(deleted.content, /- \[\?\] #task Fix just/);
   assert.match(deleted.content, /ordinary bullet \[scheduled:: keep\]/);
   assert.match(deleted.content, /\[created:: 2026-07-01\].*\^read-sase-beads/);
+});
+
+test("counted future scheduling blocks only supported open inline task statuses", () => {
+  const input = [
+    "- [ ] #task Ready [scheduled:: 2026-07-17] ^ready",
+    "- [*] #task Next [scheduled:: 2026-07-17] ^next",
+    "- [/] #task Working [scheduled:: 2026-07-17] ^working",
+    "- [?] #task Blocked [scheduled:: 2026-07-17] ^blocked",
+    "- [x] #task Done ^done",
+    "- [-] #task Canceled [scheduled:: 2026-07-15] ^canceled",
+    "- [!] #task Unknown ^unknown",
+    "- ordinary bullet [scheduled:: 2026-07-17]",
+  ].join("\r\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 6);
+  const future = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-17",
+    { operation: "set", today: new Date(2026, 6, 16, 23, 59) },
+  );
+  assert.equal(future.valid, true);
+  assert.equal(future.changedTaskCount, 6);
+  assert.equal(future.unchangedTaskCount, 1);
+  assert.equal(future.blockedTaskCount, 3);
+  assert.equal(
+    (
+      future.content
+        .split(/\r?\n/)
+        .slice(0, 7)
+        .filter((line) => line.includes("[scheduled:: 2026-07-17]"))
+    ).length,
+    7,
+  );
+  assert.deepEqual(
+    future.content
+      .split(/\r?\n/)
+      .slice(0, 7)
+      .map((line) => helpers.getObsidianTaskCheckboxStatus(line)),
+    ["?", "?", "?", "?", "x", "-", "!"],
+  );
+  assert.match(future.content, /ordinary bullet \[scheduled:: 2026-07-17\]/);
+
+  const today = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-16",
+    { operation: "set", today: new Date(2026, 6, 16, 0, 1) },
+  );
+  assert.equal(today.blockedTaskCount, 0);
+  assert.deepEqual(
+    today.content
+      .split(/\r?\n/)
+      .slice(0, 7)
+      .map((line) => helpers.getObsidianTaskCheckboxStatus(line)),
+    [" ", "*", "/", "?", "x", "-", "!"],
+  );
 });
 
 test("counted property planning rejects any stale source with no partial result", () => {
@@ -730,13 +796,14 @@ test("counted property planning rejects any stale source with no partial result"
   const plan = helpers.planCountedBulletPropertyBatch(
     changed,
     session,
-    "p",
-    "high",
+    "scheduled",
+    "2099-07-23",
   );
   assert.equal(plan.valid, false);
   assert.equal(plan.stale, true);
   assert.equal(plan.content, changed);
-  assert.doesNotMatch(plan.content, /\[p::/);
+  assert.doesNotMatch(plan.content, /\[scheduled::/);
+  assert.doesNotMatch(plan.content, /\[\?\]/);
 });
 
 test("counted scheduled planning composes project YAML with ordinary inline tasks", () => {
@@ -764,9 +831,10 @@ test("counted scheduled planning composes project YAML with ordinary inline task
   assert.doesNotMatch(plan.content, /Ship[^\r\n]*\[scheduled::/);
   assert.match(
     plan.content,
-    /Follow up \[created:: 2026-07-02\] #hide \[scheduled:: 2026-07-23\] \^follow-up/,
+    /\[\?\] #task Follow up \[created:: 2026-07-02\] #hide \[scheduled:: 2026-07-23\] \^follow-up/,
   );
   assert.match(plan.content, /Ship \[created:: 2026-07-01\] #hide \^prj/);
+  assert.equal(plan.blockedTaskCount, 1);
 });
 
 test("project schedule update coordinates YAML, inline cleanup, and visibility", () => {
@@ -1261,6 +1329,44 @@ test("task status helpers keep Blocked open but rankless", () => {
   }
 });
 
+test("bare future scheduled writes block only real supported open inline tasks", () => {
+  const cases = [
+    ["- [ ] #task Ready [scheduled:: 2099-07-23] ^ready", "?"],
+    ["- [*] #task Next ^next", "?"],
+    ["- [/] #task Working ^working", "?"],
+    ["- [?] #task Blocked ^blocked", "?"],
+    ["- [x] #task Done ^done", "x"],
+    ["- [-] #task Canceled ^canceled", "-"],
+    ["- [!] #task Unknown ^unknown", "!"],
+    ["- [ ] Plain checkbox", null],
+    ["- ordinary bullet", null],
+    ["- [ ] #task Project lifecycle ^prj", " "],
+  ];
+  for (const [line, expectedStatus] of cases) {
+    notices.length = 0;
+    const editor = new TransactionEditor(line, { line: 0, ch: 6 }, 333);
+    const plugin = new NavigationHotkeysPlugin();
+    assert.equal(
+      plugin.setBulletPropertyValue(
+        editor,
+        { line: 0, ch: 6 },
+        "scheduled",
+        "2099-07-23",
+      ),
+      true,
+      line,
+    );
+    assert.match(editor.content, /\[scheduled:: 2099-07-23\]/, line);
+    assert.equal(
+      helpers.getObsidianTaskCheckboxStatus(editor.content),
+      expectedStatus,
+      line,
+    );
+    assert.equal(editor.getScrollInfo().top, 333);
+    assert.deepEqual(editor.getCursor(), { line: 0, ch: 6 });
+  }
+});
+
 test("same-file dependency toggle promotes monotonically and unlinking is status-neutral", () => {
   for (const scenario of [
     { parent: "*", target: " ", expected: "*" },
@@ -1557,7 +1663,7 @@ test("counted property runtime uses one transaction and preserves caret and view
     "prose",
     "- [/] #task Two [scheduled:: 2026-07-20] ^two",
     "- plain bullet",
-    "> - [x] #task Three [scheduled:: 2026-07-23] ^three",
+    "> - [x] #task Three [scheduled:: 2099-07-23] ^three",
   ];
   const cursor = { line: 0, ch: 18 };
   const editor = new TransactionEditor(lines.join("\r\n"), cursor, 812);
@@ -1577,7 +1683,7 @@ test("counted property runtime uses one transaction and preserves caret and view
       file.path,
       session,
       "scheduled",
-      "2026-07-23",
+      "2099-07-23",
     ),
     true,
   );
@@ -1590,9 +1696,9 @@ test("counted property runtime uses one transaction and preserves caret and view
     from: cursor,
     to: cursor,
   });
-  assert.match(editor.getLine(0), /\[created:: 2026-07-01\].*\^one/);
-  assert.match(editor.getLine(2), /\[scheduled:: 2026-07-23\].*\^two/);
-  assert.match(notices.at(-1), /2 tasks.*1 task unchanged/);
+  assert.match(editor.getLine(0), /\[\?\].*\[created:: 2026-07-01\].*\^one/);
+  assert.match(editor.getLine(2), /\[\?\].*\[scheduled:: 2099-07-23\].*\^two/);
+  assert.match(notices.at(-1), /2 tasks.*1 task unchanged.*2 tasks Blocked/);
 });
 
 test("counted property runtime aborts a stale batch without a transaction", () => {

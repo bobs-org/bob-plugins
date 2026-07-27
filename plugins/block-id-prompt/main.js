@@ -211,7 +211,13 @@ function parseTrailingTaskPickerMarker(match) {
 
   const markerStartCh = match.index + 2 + destination.length - markerLength;
   const markerEndCh = match.index + 2 + destination.length;
-  const position = destination.slice(0, -1);
+  const rawBase = destination.slice(0, destination.length - markerLength);
+  if (rawBase.endsWith("^")) {
+    return null;
+  }
+
+  const base = markerLength === 3 ? `${rawBase}#` : rawBase;
+  const position = `${getCaretCompletionDestination(base)}^`;
 
   return taskPickerMarkerFromPosition(
     match,
@@ -234,20 +240,18 @@ function parseRapidTaskPickerMarker(match, lineText) {
     return null;
   }
 
-  const { destination } = splitWikiLinkBody(match[1]);
+  const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
   if (!normalizeText(destination)) {
     return null;
   }
 
-  const position = destination.endsWith("^")
-    ? destination
-    : `${getCaretCompletionDestination(destination)}^`;
+  const position = `${getCaretCompletionDestination(destination)}^`;
   const markerEndCh = markerStartCh + 2;
 
   return taskPickerMarkerFromPosition(
     match,
     position,
-    "",
+    aliasSuffix,
     lineText.slice(match.index, markerEndCh),
     markerEndCh,
     markerStartCh,
@@ -313,16 +317,8 @@ function parseTrailingBlockDestination(destination) {
 }
 
 function getCaretCompletionDestination(destination) {
-  const parsed = parseTrailingBlockDestination(destination);
-  if (!parsed) {
-    return destination;
-  }
-
-  if (parsed.blockPrefix === "#^") {
-    return `${parsed.targetText}#`;
-  }
-
-  return parsed.targetText;
+  const path = stripLinkSubpath(destination);
+  return path === destination ? path : `${path}#`;
 }
 
 function hasSingleTrailingMarker(lineText, markerCh, markerChar) {
@@ -1445,11 +1441,48 @@ function sourceLineIsPomodoroSubBullet(source) {
   return sourcePomodoroContext(source) !== null;
 }
 
+function isSoleContentLinkBullet(lineText, startCh, endCh) {
+  if (!Number.isInteger(startCh) || !Number.isInteger(endCh)) {
+    return false;
+  }
+
+  const line = normalizeMarkdownLine(lineText);
+  const bounds = listItemBodyBounds(line);
+  if (!bounds) {
+    return false;
+  }
+
+  const linkStart =
+    startCh > 0 && line[startCh - 1] === "!" ? startCh - 1 : startCh;
+  return bounds.start === linkStart && bounds.end === endCh;
+}
+
+function sourceLinkIsSoleBulletContent(source) {
+  if (
+    !source ||
+    !source.editor ||
+    typeof source.editor.getLine !== "function" ||
+    !Number.isInteger(source.line)
+  ) {
+    return false;
+  }
+
+  let lineText;
+  try {
+    lineText = source.editor.getLine(source.line);
+  } catch (error) {
+    return false;
+  }
+
+  return isSoleContentLinkBullet(lineText, source.startCh, source.endCh);
+}
+
 function shouldPromoteTaskToNext(source, task) {
   return Boolean(
     task &&
       task.status === " " &&
-      sourceLineIsPomodoroSubBullet(source),
+      sourceLineIsPomodoroSubBullet(source) &&
+      sourceLinkIsSoleBulletContent(source),
   );
 }
 
@@ -1939,26 +1972,36 @@ function lineContentBounds(lines, lineNumber) {
   };
 }
 
+function listItemBodyBounds(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  const prefix = LIST_ITEM_PREFIX_RE.exec(line);
+  if (!prefix) {
+    return null;
+  }
+
+  let start = prefix[0].length;
+  while (start < line.length && /[ \t]/.test(line[start])) {
+    start += 1;
+  }
+
+  let end = line.length;
+  while (end > start && /[ \t]/.test(line[end - 1])) {
+    end -= 1;
+  }
+
+  return start < end ? { start, end } : null;
+}
+
 function isDedicatedLinkBullet(lines, reference, removalRange) {
   const bounds = lineContentBounds(lines, reference.line);
-  const prefix = LIST_ITEM_PREFIX_RE.exec(bounds.line);
-  if (!prefix) {
+  const bodyBounds = listItemBodyBounds(bounds.line);
+  if (!bodyBounds) {
     return false;
   }
 
-  let bodyStart = prefix[0].length;
-  while (bodyStart < bounds.line.length && /[ \t]/.test(bounds.line[bodyStart])) {
-    bodyStart += 1;
-  }
-
-  let bodyEnd = bounds.line.length;
-  while (bodyEnd > bodyStart && /[ \t]/.test(bounds.line[bodyEnd - 1])) {
-    bodyEnd -= 1;
-  }
-
   return (
-    removalRange.start === bounds.start + bodyStart &&
-    removalRange.end === bounds.start + bodyEnd
+    removalRange.start === bounds.start + bodyBounds.start &&
+    removalRange.end === bounds.start + bodyBounds.end
   );
 }
 
@@ -4021,7 +4064,10 @@ module.exports.helpers = {
   findMarkerLinkNearCursor,
   findPomodoroSourceContext,
   findTaskPickerMarkerNearCursor,
+  getCaretCompletionDestination,
+  isSoleContentLinkBullet,
   lineIsInsideCodeFence,
+  listItemBodyBounds,
   parseDependsOnIds,
   parseInlineIdField,
   planFuturePomodoroLinkCleanup,

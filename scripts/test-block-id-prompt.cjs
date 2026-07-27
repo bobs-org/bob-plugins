@@ -75,7 +75,8 @@ function applyPlannedEdits(content, edits) {
 
 function sourceForTaskPicker(editor, sourcePath, line) {
   const lineText = editor.getLine(line);
-  const marker = helpers.findTaskPickerMarkerNearCursor(lineText, lineText.length);
+  const cursorCh = lineText.lastIndexOf("^^") + 2;
+  const marker = helpers.findTaskPickerMarkerNearCursor(lineText, cursorCh);
   assert.ok(marker);
   return { ...marker, editor, sourcePath, line };
 }
@@ -172,70 +173,134 @@ test("single caret relocation resets aliased block links", () => {
   assert.deepEqual(editor.cursor, { line: 0, ch: marker.finalCursorCh });
 });
 
-test("rapid external carets normalize to the staged task picker form", () => {
-  const rapidLine = "  - [[Projects]]^^";
-  const stagedLine = "  - [[Projects^^]]";
-  const rapid = helpers.findTaskPickerMarkerNearCursor(
-    rapidLine,
-    rapidLine.length,
-  );
-  const staged = helpers.findTaskPickerMarkerNearCursor(
-    stagedLine,
-    stagedLine.indexOf("^^") + 2,
-  );
+test("single caret relocation strips heading and block subpaths", () => {
+  const cases = [
+    ["[[Projects#Heading]]^", "[[Projects#^]]"],
+    ["[[Projects#^existing]]^", "[[Projects#^]]"],
+    ["[[Projects^existing]]^", "[[Projects#^]]"],
+  ];
 
-  assert.ok(rapid);
-  assert.ok(staged);
-  for (const property of ["kind", "targetText", "aliasSuffix", "blockPrefix"]) {
-    assert.equal(rapid[property], staged[property]);
+  for (const [line, expected] of cases) {
+    const marker = helpers.findMarkerLinkNearCursor(line, line.length);
+    assert.ok(marker, line);
+
+    const editor = createEditor(line);
+    assert.equal(
+      helpers.applyFileLinkBlockCompletionWithEditorApi(editor, 0, marker),
+      true,
+      line,
+    );
+    assert.equal(editor.getValue(), expected, line);
   }
-  assert.equal(rapid.raw, "[[Projects]]^^");
-  assert.equal(rapid.startCh, rapidLine.indexOf("[["));
-  assert.equal(rapid.endCh, rapidLine.length);
-  assert.equal(rapidLine.slice(rapid.startCh, rapid.endCh), rapid.raw);
-  assert.equal(helpers.taskPickerRevertReplacement(rapid), "[[Projects^]]");
-  assert.equal(
-    helpers.taskPickerRevertCursorCh(rapid),
-    rapid.startCh + "[[Projects^".length,
-  );
 });
 
-test("rapid caret task picker supports embedded, aliased, and block links", () => {
+test("task picker normalizes every supported wiki block-link form", () => {
   const cases = [
     {
-      line: "- ![[Projects|Work queue]]^^",
-      targetText: "Projects",
+      line: "[[note]]^^",
+      targetText: "note",
       aliasSuffix: "",
       blockPrefix: "^",
-      revert: "[[Projects^]]",
+      revert: "[[note^]]",
     },
     {
-      line: "- [[Projects#^existing]]^^",
-      targetText: "Projects",
+      line: "[[note^^]]",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "^",
+      revert: "[[note^]]",
+    },
+    {
+      line: "[[note#^^]]",
+      targetText: "note",
       aliasSuffix: "",
       blockPrefix: "#^",
-      revert: "[[Projects#^]]",
+      revert: "[[note#^]]",
     },
     {
-      line: "- [[#^existing]]^^",
+      line: "[[note#^abc]]^^",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "#^",
+      revert: "[[note#^]]",
+    },
+    {
+      line: "[[note#^abc^^]]",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "#^",
+      revert: "[[note#^]]",
+    },
+    {
+      line: "[[note#Heading]]^^",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "#^",
+      revert: "[[note#^]]",
+    },
+    {
+      line: "[[note#Heading^^]]",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "#^",
+      revert: "[[note#^]]",
+    },
+    {
+      line: "[[^^]]",
+      targetText: "",
+      aliasSuffix: "",
+      blockPrefix: "^",
+      revert: "[[^]]",
+    },
+    {
+      line: "[[#^^]]",
       targetText: "",
       aliasSuffix: "",
       blockPrefix: "#^",
       revert: "[[#^]]",
     },
     {
-      line: "- [[Projects#^]]^^",
-      targetText: "Projects",
+      line: "[[#^abc]]^^",
+      targetText: "",
       aliasSuffix: "",
       blockPrefix: "#^",
-      revert: "[[Projects#^]]",
+      revert: "[[#^]]",
+    },
+    {
+      line: "[[note|alias]]^^",
+      targetText: "note",
+      aliasSuffix: "|alias",
+      blockPrefix: "^",
+      revert: "[[note^|alias]]",
+    },
+    {
+      line: "![[note]]^^",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "^",
+      revert: "[[note^]]",
+    },
+    {
+      line: "[[note^abc]]^^",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "#^",
+      revert: "[[note#^]]",
+    },
+    {
+      line: "[[note^]]^^",
+      targetText: "note",
+      aliasSuffix: "",
+      blockPrefix: "#^",
+      revert: "[[note#^]]",
     },
   ];
 
   for (const expected of cases) {
+    const cursorCh = expected.line.lastIndexOf("^^") + 2;
     const marker = helpers.findTaskPickerMarkerNearCursor(
       expected.line,
-      expected.line.length,
+      cursorCh,
     );
     assert.ok(marker, expected.line);
     assert.equal(marker.targetText, expected.targetText, expected.line);
@@ -253,11 +318,43 @@ test("rapid caret task picker supports embedded, aliased, and block links", () =
       expected.revert,
       expected.line,
     );
-    assert.equal(expected.line[marker.startCh - 1] === "!", expected.line.includes("![["));
+    assert.equal(
+      helpers.taskPickerRevertCursorCh(marker),
+      marker.startCh +
+        2 +
+        expected.targetText.length +
+        expected.blockPrefix.length,
+      expected.line,
+    );
+  }
+
+  const rapid = helpers.findTaskPickerMarkerNearCursor(
+    "[[note]]^^",
+    "[[note]]^^".length,
+  );
+  const staged = helpers.findTaskPickerMarkerNearCursor(
+    "[[note^^]]",
+    "[[note^^]]".indexOf("^^") + 2,
+  );
+  for (const property of ["kind", "targetText", "aliasSuffix", "blockPrefix"]) {
+    assert.equal(rapid[property], staged[property]);
   }
 });
 
-test("rapid aliased task picker completion is alias-free", async () => {
+test("three or more carets never trigger the task picker", () => {
+  for (const line of ["[[note^^^]]", "[[note#^^^]]", "[[note]]^^^"]) {
+    assert.equal(
+      helpers.findTaskPickerMarkerNearCursor(
+        line,
+        line.indexOf("^^") + 2,
+      ),
+      null,
+      line,
+    );
+  }
+});
+
+test("rapid aliased task picker completion preserves the alias", async () => {
   const editor = createEditor("- ![[Tasks|Work queue]]^^");
   const source = sourceForTaskPicker(editor, "Daily.md", 0);
   const destinationContent = "- [ ] #task Ship it ^ship";
@@ -269,20 +366,92 @@ test("rapid aliased task picker completion is alias-free", async () => {
   });
   plugin.suppressEditorScans = () => {};
 
-  assert.equal(source.aliasSuffix, "");
-  assert.equal(helpers.taskPickerRevertReplacement(source), "[[Tasks^]]");
+  assert.equal(source.aliasSuffix, "|Work queue");
+  assert.equal(
+    helpers.taskPickerRevertReplacement(source),
+    "[[Tasks^|Work queue]]",
+  );
 
   const result = await plugin.completeTaskLinkWithExistingId(source, task);
 
   assert.deepEqual(result, { completed: true });
-  assert.equal(editor.getValue(), "- ![[Tasks#^ship]]");
+  assert.equal(editor.getValue(), "- ![[Tasks#^ship|Work queue]]");
   assert.deepEqual(editor.cursor, {
     line: 0,
-    ch: source.startCh + "[[Tasks#^ship]]".length,
+    ch: source.startCh + "[[Tasks#^ship|Work queue]]".length,
   });
 });
 
-test("rapid caret recognition respects cursor proximity and fenced code", () => {
+test("task picker recognition is independent of Markdown source context", () => {
+  const cases = [
+    {
+      name: "prose paragraph",
+      lines: ["## Pomodoros", "- [ ] Open ()", "Text [[note]]^^"],
+      line: 2,
+    },
+    {
+      name: "ATX heading",
+      lines: ["## Pomodoros", "- [ ] Open ()", "### [[note]]^^"],
+      line: 2,
+    },
+    {
+      name: "blockquote",
+      lines: ["## Pomodoros", "- [ ] Open ()", "> [[note]]^^"],
+      line: 2,
+    },
+    {
+      name: "table cell",
+      lines: ["## Pomodoros", "- [ ] Open ()", "| x | [[note]]^^ |"],
+      line: 2,
+    },
+    {
+      name: "top-level bullet",
+      lines: ["## Pomodoros", "- [ ] Open ()", "- [[note]]^^"],
+      line: 2,
+    },
+    {
+      name: "deeply nested bullet",
+      lines: ["- Parent", "        - [[note]]^^"],
+      line: 1,
+    },
+    {
+      name: "ordinary task line",
+      lines: [
+        "## Pomodoros",
+        "- [ ] Open ()",
+        "- [ ] #task [[note]]^^",
+      ],
+      line: 2,
+    },
+    {
+      name: "ordinary task sub-bullet",
+      lines: [
+        "## Pomodoros",
+        "- [ ] #task Parent",
+        "  - [[note]]^^",
+      ],
+      line: 2,
+    },
+    {
+      name: "note without a Pomodoros section",
+      lines: ["- [ ] Open ()", "  - [[note]]^^"],
+      line: 1,
+    },
+  ];
+
+  for (const context of cases) {
+    const editor = createEditor(context.lines.join("\n"));
+    const source = sourceForTaskPicker(editor, "Note.md", context.line);
+    assert.equal(source.targetText, "note", context.name);
+    assert.equal(
+      helpers.shouldPromoteTaskToNext(source, { status: " " }),
+      false,
+      context.name,
+    );
+  }
+});
+
+test("task picker recognition respects cursor proximity and fenced code", () => {
   const line = "prefix text  - [[Projects]]^^";
   assert.equal(helpers.findTaskPickerMarkerNearCursor(line, 0), null);
   assert.ok(helpers.findTaskPickerMarkerNearCursor(line, line.length));
@@ -301,36 +470,88 @@ test("rapid caret recognition respects cursor proximity and fenced code", () => 
   assert.equal(helpers.lineIsInsideCodeFence(editor, 1), true);
 });
 
-test("task promotion remains limited to open tasks under Pomodoro entries", () => {
+test("list item body bounds trim whitespace and reject empty bullets", () => {
+  const line = "  - \t [[note]]^^ \t\r";
+  assert.deepEqual(helpers.listItemBodyBounds(line), {
+    start: line.indexOf("[["),
+    end: line.indexOf("^^") + 2,
+  });
+  assert.deepEqual(helpers.listItemBodyBounds("  1. [[note]]^^"), {
+    start: "  1. ".length,
+    end: "  1. [[note]]^^".length,
+  });
+  assert.equal(helpers.listItemBodyBounds("  -   \r"), null);
+  assert.equal(helpers.listItemBodyBounds("    [[note]]^^"), null);
+});
+
+test("task promotion requires a sole-content Pomodoro sub-bullet", () => {
+  const cases = [
+    ["    - [[note]]^^", true],
+    ["    - ![[note]]^^", true],
+    ["    - [[note]]^^   ", true],
+    ["    - [[note#^abc^^]]", true],
+    ["    1. [[note]]^^", true],
+    ["        - [[note]]^^", true],
+    ["    - working on [[note]]^^", false],
+    ["    - [[note]]^^ — blocked on Bob", false],
+    ["    - [[note]]^^ [[other]]", false],
+    ["    - [ ] #task [[note]]^^", false],
+    ["    [[note]]^^", false],
+    ["- [[note]]^^", false],
+  ];
+
+  for (const [lineText, expected] of cases) {
+    const editor = createEditor(
+      [
+        "## Pomodoros",
+        "- [ ] (**10:00 - 10:25**)",
+        lineText,
+      ].join("\n"),
+    );
+    const source = sourceForTaskPicker(editor, "Daily.md", 2);
+    assert.equal(
+      helpers.shouldPromoteTaskToNext(source, { status: " " }),
+      expected,
+      lineText,
+    );
+  }
+
   const ordinaryEditor = createEditor(
-    ["- [ ] #task Parent", "  - [[Projects]]^^"].join("\n"),
-  );
-  const pomodoroEditor = createEditor(
     [
       "## Pomodoros",
-      "- [ ] (**10:00 - 10:25**)",
-      "  - [[Projects]]^^",
+      "- [ ] #task Ordinary task",
+      "  - [[note]]^^",
     ].join("\n"),
   );
-  const ordinarySource = { editor: ordinaryEditor, line: 1 };
-  const pomodoroSource = { editor: pomodoroEditor, line: 2 };
-
+  const ordinarySource = sourceForTaskPicker(
+    ordinaryEditor,
+    "Daily.md",
+    2,
+  );
   assert.equal(
     helpers.shouldPromoteTaskToNext(ordinarySource, { status: " " }),
     false,
   );
-  assert.equal(
-    helpers.shouldPromoteTaskToNext(pomodoroSource, { status: " " }),
-    true,
+
+  const pomodoroEditor = createEditor(
+    [
+      "## Pomodoros",
+      "- [ ] (**10:00 - 10:25**)",
+      "  - [[note]]^^",
+    ].join("\n"),
   );
-  assert.equal(
-    helpers.shouldPromoteTaskToNext(pomodoroSource, { status: "/" }),
-    false,
+  const pomodoroSource = sourceForTaskPicker(
+    pomodoroEditor,
+    "Daily.md",
+    2,
   );
-  assert.equal(
-    helpers.shouldPromoteTaskToNext(pomodoroSource, { status: "*" }),
-    false,
-  );
+  for (const status of ["/", "*"]) {
+    assert.equal(
+      helpers.shouldPromoteTaskToNext(pomodoroSource, { status }),
+      false,
+      status,
+    );
+  }
 });
 
 test("Pomodoro source context distinguishes ledger ancestry and open state", () => {

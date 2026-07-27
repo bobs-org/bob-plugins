@@ -9330,8 +9330,11 @@ function removeTextSpans(line, spans) {
     );
 }
 
-function normalizeTaskHideTag(lineText, hide) {
+function normalizeProjectLifecycleHideTag(lineText, hide, includeProjectTask) {
   const text = String(lineText || "");
+  if (!includeProjectTask) {
+    return text;
+  }
   const spans = getWholeTaskTagSpans(text, PROJECT_HIDE_TAG);
   if (!hide) {
     return removeTextSpans(text, spans);
@@ -9347,6 +9350,76 @@ function normalizeTaskHideTag(lineText, hide) {
   const before = text.slice(0, insertionIndex).replace(/[ \t]+$/, "");
   const after = text.slice(insertionIndex);
   return `${before} ${PROJECT_HIDE_TAG}${after}`;
+}
+
+function parseProjectTaskScheduledFields(lineText) {
+  const text = String(lineText || "");
+  const fields = [];
+  const pattern =
+    /(?:\[([^\[\]\n]+?)::([^\]\n]*)\]|\(([^()\n]+?)::([^)\n]*)\))/g;
+  let match = pattern.exec(text);
+  while (match) {
+    const key = String(match[1] ?? match[3] ?? "").trim();
+    if (key === "scheduled") {
+      fields.push(
+        Object.freeze({
+          key,
+          value: String(match[2] ?? match[4] ?? "").trim(),
+          raw: match[0],
+          span: Object.freeze({
+            start: match.index,
+            end: match.index + match[0].length,
+          }),
+        }),
+      );
+    }
+    match = pattern.exec(text);
+  }
+  return fields;
+}
+
+function upsertProjectTaskScheduledField(lineText, scheduled) {
+  const text = String(lineText || "");
+  const fields = parseProjectTaskScheduledFields(text);
+  if (fields.length > 1) {
+    return Object.freeze({ line: text, changed: false, ambiguous: true });
+  }
+  if (fields.length === 1) {
+    const validation = validateProjectScheduledDate(fields[0].value);
+    if (validation.valid && validation.value >= scheduled) {
+      return Object.freeze({
+        line: text,
+        changed: false,
+        ambiguous: false,
+      });
+    }
+    const nextLine =
+      text.slice(0, fields[0].span.start) +
+      formatBulletPropertyField("scheduled", scheduled) +
+      text.slice(fields[0].span.end);
+    return Object.freeze({
+      line: nextLine,
+      changed: nextLine !== text,
+      ambiguous: false,
+    });
+  }
+  const inserted = upsertBulletProperty(text, "scheduled", scheduled);
+  return Object.freeze({
+    line: inserted.line,
+    changed: inserted.changed,
+    ambiguous: false,
+  });
+}
+
+function removeProjectTaskScheduledFields(lineText, predicate = () => true) {
+  const text = String(lineText || "");
+  const spans = parseProjectTaskScheduledFields(text)
+    .filter((field) => predicate(field))
+    .map((field) => field.span);
+  return Object.freeze({
+    line: removeTextSpans(text, spans),
+    removedCount: spans.length,
+  });
 }
 
 function getRealMarkdownTaskLines(content) {
@@ -9390,7 +9463,24 @@ function getRealMarkdownTaskLines(content) {
   return tasks;
 }
 
-function planProjectScheduleVisibility(content, scheduled, today = new Date()) {
+function getProjectScheduleRecoveryTargetLines(content) {
+  return getRealMarkdownTaskLines(content)
+    .filter((task) => {
+      if (task.isProjectTask) {
+        return false;
+      }
+      const match = OBSIDIAN_TASK_LINE_RE.exec(task.text);
+      return Boolean(match && OPEN_OBSIDIAN_TASK_STATUSES.has(match[1]));
+    })
+    .map((task) => task.line);
+}
+
+function planProjectTaskSchedules(
+  content,
+  scheduled,
+  today = new Date(),
+  options = {},
+) {
   const validation = validateProjectScheduledDate(scheduled);
   if (!validation.valid) {
     return Object.freeze({
@@ -9399,6 +9489,15 @@ function planProjectScheduleVisibility(content, scheduled, today = new Date()) {
       content: String(content || ""),
       changed: false,
       changedTaskCount: 0,
+      scheduledTaskCount: 0,
+      removedHideTaskCount: 0,
+      blockedTaskCount: 0,
+      recoveredReadyTaskCount: 0,
+      recoveredNextTaskCount: 0,
+      recoveredInProgressTaskCount: 0,
+      stillBlockedTaskCount: 0,
+      deferredRecoveryTaskCount: 0,
+      ambiguousTaskLines: Object.freeze([]),
       taskCount: 0,
     });
   }
@@ -9409,16 +9508,78 @@ function planProjectScheduleVisibility(content, scheduled, today = new Date()) {
     validation.day,
   );
   const localToday = getLocalDateStart(today);
-  const hide = compareLocalDates(scheduledDate, localToday) > 0;
+  const future = compareLocalDates(scheduledDate, localToday) > 0;
   const source = splitMarkdownContent(content);
   const tasks = getRealMarkdownTaskLines(content);
   let changedTaskCount = 0;
+  let scheduledTaskCount = 0;
+  let removedHideTaskCount = 0;
+  let blockedTaskCount = 0;
+  let projectHideChanged = false;
+  const ambiguousTaskLines = [];
+  const recoveryCounts = emptyScheduledRecoveryCounts();
   tasks.forEach((task) => {
-    const shouldEdit = hide || !task.isProjectTask || tasks.length === 1;
-    if (!shouldEdit) {
+    if (task.isProjectTask) {
+      let nextLine = normalizeProjectLifecycleHideTag(
+        task.text,
+        future,
+        future || tasks.length === 1,
+      );
+      nextLine = removeProjectTaskScheduledFields(nextLine).line;
+      if (nextLine !== task.text) {
+        source.lines[task.line] = nextLine;
+        changedTaskCount += 1;
+        projectHideChanged =
+          getWholeTaskTagSpans(nextLine, PROJECT_HIDE_TAG).length !==
+          getWholeTaskTagSpans(task.text, PROJECT_HIDE_TAG).length;
+      }
       return;
     }
-    const nextLine = normalizeTaskHideTag(task.text, hide);
+
+    const scheduledFields = parseProjectTaskScheduledFields(task.text);
+    if (scheduledFields.length > 1) {
+      ambiguousTaskLines.push(task.line);
+      return;
+    }
+
+    let nextLine = removeTextSpans(
+      task.text,
+      getWholeTaskTagSpans(task.text, PROJECT_HIDE_TAG),
+    );
+    if (nextLine !== task.text) {
+      removedHideTaskCount += 1;
+    }
+    const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
+    const status = match ? match[1] : null;
+    if (OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+      const scheduleResult = upsertProjectTaskScheduledField(
+        nextLine,
+        validation.value,
+      );
+      nextLine = scheduleResult.line;
+      if (scheduleResult.changed) {
+        scheduledTaskCount += 1;
+      }
+
+      const finalFields = parseProjectTaskScheduledFields(nextLine);
+      const futureTaskSchedule =
+        finalFields.length === 1 &&
+        isFutureInlineScheduledValue(finalFields[0].value, today);
+      if (futureTaskSchedule) {
+        const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+        if (blockedLine !== nextLine) {
+          nextLine = blockedLine;
+          blockedTaskCount += 1;
+        }
+      } else if (finalFields.length === 1) {
+        const recovery = reconcileBlockedScheduledTaskLine(
+          nextLine,
+          getTargetScheduledRecovery(options, task.line),
+        );
+        nextLine = recovery.line;
+        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      }
+    }
     if (nextLine !== task.text) {
       source.lines[task.line] = nextLine;
       changedTaskCount += 1;
@@ -9432,8 +9593,18 @@ function planProjectScheduleVisibility(content, scheduled, today = new Date()) {
     content: nextContent,
     changed: nextContent !== String(content || ""),
     changedTaskCount,
+    scheduledTaskCount,
+    removedHideTaskCount,
+    blockedTaskCount,
+    recoveredReadyTaskCount: recoveryCounts.ready,
+    recoveredNextTaskCount: recoveryCounts.next,
+    recoveredInProgressTaskCount: recoveryCounts.inProgress,
+    stillBlockedTaskCount: recoveryCounts.stillBlocked,
+    deferredRecoveryTaskCount: recoveryCounts.deferred,
+    ambiguousTaskLines: Object.freeze(ambiguousTaskLines),
     taskCount: tasks.length,
-    hide,
+    future,
+    projectHideChanged,
   });
 }
 
@@ -9496,19 +9667,17 @@ function planProjectScheduledUpdate(
     });
   }
 
-  const { lines } = splitMarkdownContent(content);
-  const cleanedLine = removeAllBulletProperties(lines[cursorLine], "scheduled");
-  const cleanedContent = replaceMarkdownLine(content, cursorLine, cleanedLine);
-  const visibility = planProjectScheduleVisibility(
-    cleanedContent,
+  const propagation = planProjectTaskSchedules(
+    content,
     validation.value,
     today,
+    options,
   );
-  if (!visibility.valid) {
-    return Object.freeze({ valid: false, error: visibility.error });
+  if (!propagation.valid) {
+    return Object.freeze({ valid: false, error: propagation.error });
   }
   const frontmatterUpdate = updateProjectScheduledFrontmatter(
-    visibility.content,
+    propagation.content,
     context.frontmatter,
     validation.value,
   );
@@ -9520,8 +9689,18 @@ function planProjectScheduledUpdate(
     changed: frontmatterUpdate.content !== String(content || ""),
     cursorLine: cursorLine + frontmatterUpdate.cursorLineDelta,
     scheduled: validation.value,
-    hidden: visibility.hide,
-    changedTaskCount: visibility.changedTaskCount,
+    future: propagation.future,
+    changedTaskCount: propagation.changedTaskCount,
+    scheduledTaskCount: propagation.scheduledTaskCount,
+    removedHideTaskCount: propagation.removedHideTaskCount,
+    blockedTaskCount: propagation.blockedTaskCount,
+    recoveredReadyTaskCount: propagation.recoveredReadyTaskCount,
+    recoveredNextTaskCount: propagation.recoveredNextTaskCount,
+    recoveredInProgressTaskCount:
+      propagation.recoveredInProgressTaskCount,
+    stillBlockedTaskCount: propagation.stillBlockedTaskCount,
+    deferredRecoveryTaskCount: propagation.deferredRecoveryTaskCount,
+    ambiguousTaskLines: propagation.ambiguousTaskLines,
   });
 }
 
@@ -9540,9 +9719,51 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
     });
   }
 
-  const { lines } = splitMarkdownContent(content);
-  const cleanedLine = removeAllBulletProperties(lines[cursorLine], "scheduled");
-  const cleanedContent = replaceMarkdownLine(content, cursorLine, cleanedLine);
+  const scheduled = context.frontmatter.scheduledValue;
+  const source = splitMarkdownContent(content);
+  const tasks = getRealMarkdownTaskLines(content);
+  let changedTaskCount = 0;
+  let removedScheduledTaskCount = 0;
+  const recoveryCounts = emptyScheduledRecoveryCounts();
+  tasks.forEach((task) => {
+    let nextLine = task.text;
+    if (task.isProjectTask) {
+      nextLine = removeProjectTaskScheduledFields(nextLine).line;
+    } else {
+      const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
+      const status = match ? match[1] : null;
+      if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+        return;
+      }
+      const removed = removeProjectTaskScheduledFields(
+        nextLine,
+        (field) => field.value === scheduled,
+      );
+      nextLine = removed.line;
+      if (removed.removedCount > 0) {
+        removedScheduledTaskCount += 1;
+      }
+      const remaining = parseProjectTaskScheduledFields(nextLine);
+      if (
+        remaining.length === 1 &&
+        isFutureInlineScheduledValue(remaining[0].value, options.today || new Date())
+      ) {
+        nextLine = blockObsidianTaskCheckboxStatus(nextLine);
+      } else if (remaining.length < 2) {
+        const recovery = reconcileBlockedScheduledTaskLine(
+          nextLine,
+          getTargetScheduledRecovery(options, task.line),
+        );
+        nextLine = recovery.line;
+        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      }
+    }
+    if (nextLine !== task.text) {
+      source.lines[task.line] = nextLine;
+      changedTaskCount += 1;
+    }
+  });
+  const cleanedContent = source.lines.join(source.lineEnding);
   const frontmatterUpdate = updateProjectScheduledFrontmatter(
     cleanedContent,
     context.frontmatter,
@@ -9554,6 +9775,14 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
     content: frontmatterUpdate.content,
     changed: frontmatterUpdate.content !== String(content || ""),
     cursorLine: cursorLine + frontmatterUpdate.cursorLineDelta,
+    scheduled,
+    changedTaskCount,
+    removedScheduledTaskCount,
+    recoveredReadyTaskCount: recoveryCounts.ready,
+    recoveredNextTaskCount: recoveryCounts.next,
+    recoveredInProgressTaskCount: recoveryCounts.inProgress,
+    stillBlockedTaskCount: recoveryCounts.stillBlocked,
+    deferredRecoveryTaskCount: recoveryCounts.deferred,
   });
 }
 
@@ -9659,7 +9888,7 @@ function scheduledRecoveryNoticeSuffix(counts = {}) {
 }
 
 // Plan one counted set/delete without mutating the editor. Scheduled values on
-// ^prj sources are composed through project frontmatter and visibility first;
+// ^prj sources are composed through project frontmatter and task schedules first;
 // every other source remains an inline Dataview edit. The caller can therefore
 // commit the complete result as one guarded transaction.
 function planCountedBulletPropertyBatch(
@@ -9737,7 +9966,12 @@ function planCountedBulletPropertyBatch(
       : [];
   let nextContent = text;
   let taskLineDelta = 0;
-  let visibilityChangedTaskCount = 0;
+  let propagatedScheduleTaskCount = 0;
+  let removedProjectScheduleTaskCount = 0;
+  let removedHideTaskCount = 0;
+  let blockedTaskCount = 0;
+  let ambiguousProjectTaskCount = 0;
+  const recoveryCounts = emptyScheduledRecoveryCounts();
   let projectPropertyChanged = false;
 
   if (projectTargets.length > 0) {
@@ -9762,7 +9996,16 @@ function planCountedBulletPropertyBatch(
       }
       nextContent = projectPlan.content;
       taskLineDelta = projectPlan.cursorLine - firstProject.target.line;
-      visibilityChangedTaskCount = projectPlan.changedTaskCount;
+      propagatedScheduleTaskCount = projectPlan.scheduledTaskCount;
+      removedHideTaskCount = projectPlan.removedHideTaskCount;
+      blockedTaskCount = projectPlan.blockedTaskCount;
+      ambiguousProjectTaskCount = projectPlan.ambiguousTaskLines.length;
+      recoveryCounts.ready += projectPlan.recoveredReadyTaskCount;
+      recoveryCounts.next += projectPlan.recoveredNextTaskCount;
+      recoveryCounts.inProgress +=
+        projectPlan.recoveredInProgressTaskCount;
+      recoveryCounts.stillBlocked += projectPlan.stillBlockedTaskCount;
+      recoveryCounts.deferred += projectPlan.deferredRecoveryTaskCount;
       projectPropertyChanged =
         !frontmatter.scheduledDefined ||
         frontmatter.scheduledValue !== normalizedValue;
@@ -9783,6 +10026,14 @@ function planCountedBulletPropertyBatch(
       }
       nextContent = projectPlan.content;
       taskLineDelta = projectPlan.cursorLine - firstProject.target.line;
+      removedProjectScheduleTaskCount =
+        projectPlan.removedScheduledTaskCount;
+      recoveryCounts.ready += projectPlan.recoveredReadyTaskCount;
+      recoveryCounts.next += projectPlan.recoveredNextTaskCount;
+      recoveryCounts.inProgress +=
+        projectPlan.recoveredInProgressTaskCount;
+      recoveryCounts.stillBlocked += projectPlan.stillBlockedTaskCount;
+      recoveryCounts.deferred += projectPlan.deferredRecoveryTaskCount;
       projectPropertyChanged = true;
     }
   }
@@ -9790,8 +10041,6 @@ function planCountedBulletPropertyBatch(
   const source = splitMarkdownContent(nextContent);
   const changedTargets = [];
   const unchangedTargets = [];
-  let blockedTaskCount = 0;
-  const recoveryCounts = emptyScheduledRecoveryCounts();
   for (const { target, state } of targetStates) {
     const mappedLine = target.line + taskLineDelta;
     const liveLine = String(source.lines[mappedLine] || "");
@@ -9813,9 +10062,13 @@ function planCountedBulletPropertyBatch(
         nextLine !== liveLine;
     } else {
       const result =
-        operation === "delete"
-          ? deleteBulletProperty(liveLine, propertyName)
-          : upsertBulletProperty(liveLine, propertyName, normalizedValue);
+        operation === "set" &&
+        propertyName === "scheduled" &&
+        projectTargets.length > 0
+          ? upsertProjectTaskScheduledField(liveLine, normalizedValue)
+          : operation === "delete"
+            ? deleteBulletProperty(liveLine, propertyName)
+            : upsertBulletProperty(liveLine, propertyName, normalizedValue);
       nextLine = result.line;
       targetChanged = result.changed;
       if (shouldBlockInlineTasks) {
@@ -9867,7 +10120,10 @@ function planCountedBulletPropertyBatch(
     unchangedTargets: Object.freeze(unchangedTargets),
     cursorLine,
     cursorLineDelta: taskLineDelta,
-    visibilityChangedTaskCount,
+    propagatedScheduleTaskCount,
+    removedProjectScheduleTaskCount,
+    removedHideTaskCount,
+    ambiguousProjectTaskCount,
     blockedTaskCount,
     recoveredReadyTaskCount: recoveryCounts.ready,
     recoveredNextTaskCount: recoveryCounts.next,
@@ -12977,11 +13233,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       normalizeBulletPropertyName(name) === "scheduled" &&
       isDueInlineScheduledValue(value, today)
     ) {
+      const includesProjectSchedule = session.targets.some((target) =>
+        isProjectLifecycleTaskAtLine(writeContext.content, target.line),
+      );
+      const recoveryLines = includesProjectSchedule
+        ? getProjectScheduleRecoveryTargetLines(writeContext.content)
+        : session.targets.map((target) => target.line);
       recoveryByLine = await buildTargetScheduledRecoveryByLine(
         this.app,
         filePath,
         writeContext.content,
-        session.targets.map((target) => target.line),
+        recoveryLines,
         today,
       );
       const guarded = this.getCountedTaskWriteContext(
@@ -13031,12 +13293,26 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice("Could not update counted task properties; no tasks were updated");
       return false;
     }
-    const visibilitySuffix =
-      plan.visibilityChangedTaskCount > 0
-        ? `; reconciled visibility for ${formatCountLabel(
-            plan.visibilityChangedTaskCount,
+    const propagationSuffix =
+      plan.propagatedScheduleTaskCount > 0
+        ? `; scheduled ${formatCountLabel(
+            plan.propagatedScheduleTaskCount,
             "task",
           )}`
+        : "";
+    const hideSuffix =
+      plan.removedHideTaskCount > 0
+        ? `; removed #hide from ${formatCountLabel(
+            plan.removedHideTaskCount,
+            "task",
+          )}`
+        : "";
+    const ambiguitySuffix =
+      plan.ambiguousProjectTaskCount > 0
+        ? `; ${formatCountLabel(
+            plan.ambiguousProjectTaskCount,
+            "task",
+          )} with multiple scheduled fields unchanged`
         : "";
     const blockedSuffix =
       plan.blockedTaskCount > 0
@@ -13059,7 +13335,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${visibilitySuffix}${blockedSuffix}${recoverySuffix}`,
+      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}`,
     );
     return true;
   }
@@ -13082,11 +13358,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     let recoveryByLine = null;
     if (normalizeBulletPropertyName(name) === "scheduled") {
+      const includesProjectSchedule = session.targets.some((target) =>
+        isProjectLifecycleTaskAtLine(writeContext.content, target.line),
+      );
+      const recoveryLines = includesProjectSchedule
+        ? getProjectScheduleRecoveryTargetLines(writeContext.content)
+        : session.targets.map((target) => target.line);
       recoveryByLine = await buildTargetScheduledRecoveryByLine(
         this.app,
         filePath,
         writeContext.content,
-        session.targets.map((target) => target.line),
+        recoveryLines,
         new Date(),
       );
       const guarded = this.getCountedTaskWriteContext(
@@ -13143,7 +13425,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${scheduledRecoveryNoticeSuffix({
+      )}${
+        plan.removedProjectScheduleTaskCount > 0
+          ? `; removed propagated schedule from ${formatCountLabel(
+              plan.removedProjectScheduleTaskCount,
+              "task",
+            )}`
+          : ""
+      }${scheduledRecoveryNoticeSuffix({
         ready: plan.recoveredReadyTaskCount,
         next: plan.recoveredNextTaskCount,
         inProgress: plan.recoveredInProgressTaskCount,
@@ -13306,11 +13595,38 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    const today = new Date();
+    let recoveryByLine = null;
+    if (isDueInlineScheduledValue(value, today)) {
+      recoveryByLine = await buildTargetScheduledRecoveryByLine(
+        this.app,
+        filePath,
+        writeContext.content,
+        getProjectScheduleRecoveryTargetLines(writeContext.content),
+        today,
+      );
+      const guarded = this.getProjectScheduledWriteContext(
+        cm,
+        cursor,
+        filePath,
+        expectedLine,
+        expectedValue,
+      );
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active project note changed; scheduled was not updated"
+            : guarded.error,
+        );
+        return false;
+      }
+    }
     const plan = planProjectScheduledUpdate(
       writeContext.content,
       cursor.line,
       value,
-      new Date(),
+      today,
+      { recoveryByLine },
     );
     if (!plan.valid) {
       new Notice(plan.error);
@@ -13318,30 +13634,62 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     try {
-      if (plan.changed) {
-        if (!cm || typeof cm.setValue !== "function") {
-          throw new Error("Editor cannot replace note content");
-        }
-        cm.setValue(plan.content);
-      }
       const finalLine =
         splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
-      setEditorCursorSafely(
-        cm,
-        plan.cursorLine,
-        Math.min(Math.max(cursor.ch, 0), finalLine.length),
-      );
+      if (
+        plan.changed &&
+        !applyEditorContentTransaction(
+          cm,
+          writeContext.content,
+          plan.content,
+          {
+            line: plan.cursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+        )
+      ) {
+        throw new Error("Editor cannot replace note content");
+      }
     } catch (error) {
       new Notice("Could not update project scheduled");
       return false;
     }
 
-    const visibility = plan.hidden ? "hid" : "showed";
+    const parts = [`scheduled → ${plan.scheduled}`];
+    if (plan.scheduledTaskCount > 0) {
+      parts.push(
+        `scheduled ${formatCountLabel(plan.scheduledTaskCount, "task")}`,
+      );
+    }
+    if (plan.removedHideTaskCount > 0) {
+      parts.push(
+        `removed #hide from ${formatCountLabel(
+          plan.removedHideTaskCount,
+          "task",
+        )}`,
+      );
+    }
+    if (plan.blockedTaskCount > 0) {
+      parts.push(
+        `marked ${formatCountLabel(plan.blockedTaskCount, "task")} Blocked`,
+      );
+    }
+    if (plan.ambiguousTaskLines.length > 0) {
+      parts.push(
+        `${formatCountLabel(
+          plan.ambiguousTaskLines.length,
+          "task",
+        )} with multiple scheduled fields unchanged`,
+      );
+    }
     new Notice(
-      `scheduled → ${plan.scheduled}; ${visibility} ${formatCountLabel(
-        plan.changedTaskCount,
-        "task",
-      )}`,
+      `${parts.join("; ")}${scheduledRecoveryNoticeSuffix({
+        ready: plan.recoveredReadyTaskCount,
+        next: plan.recoveredNextTaskCount,
+        inProgress: plan.recoveredInProgressTaskCount,
+        stillBlocked: plan.stillBlockedTaskCount,
+        deferred: plan.deferredRecoveryTaskCount,
+      })}`,
     );
     return true;
   }
@@ -13366,9 +13714,34 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return null;
     }
 
+    const today = new Date();
+    const recoveryByLine = await buildTargetScheduledRecoveryByLine(
+      this.app,
+      filePath,
+      writeContext.content,
+      getProjectScheduleRecoveryTargetLines(writeContext.content),
+      today,
+    );
+    const guarded = this.getProjectScheduledWriteContext(
+      cm,
+      cursor,
+      filePath,
+      expectedLine,
+      expectedValue,
+      "deleted",
+    );
+    if (!guarded.valid || guarded.content !== writeContext.content) {
+      new Notice(
+        guarded.valid
+          ? "Active project note changed; scheduled was not deleted"
+          : guarded.error,
+      );
+      return null;
+    }
     const plan = planProjectScheduledDelete(
       writeContext.content,
       cursor.line,
+      { today, recoveryByLine },
     );
     if (!plan.valid) {
       new Notice(plan.error);
@@ -13377,25 +13750,43 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     let finalLine = "";
     try {
-      if (plan.changed) {
-        if (!cm || typeof cm.setValue !== "function") {
-          throw new Error("Editor cannot replace note content");
-        }
-        cm.setValue(plan.content);
-      }
       finalLine =
         splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
-      setEditorCursorSafely(
-        cm,
-        plan.cursorLine,
-        Math.min(Math.max(cursor.ch, 0), finalLine.length),
-      );
+      if (
+        plan.changed &&
+        !applyEditorContentTransaction(
+          cm,
+          writeContext.content,
+          plan.content,
+          {
+            line: plan.cursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+        )
+      ) {
+        throw new Error("Editor cannot replace note content");
+      }
     } catch (error) {
       new Notice("Could not delete project scheduled");
       return null;
     }
 
-    new Notice("scheduled ✗ removed");
+    new Notice(
+      `scheduled ✗ removed${
+        plan.removedScheduledTaskCount > 0
+          ? `; removed propagated schedule from ${formatCountLabel(
+              plan.removedScheduledTaskCount,
+              "task",
+            )}`
+          : ""
+      }${scheduledRecoveryNoticeSuffix({
+        ready: plan.recoveredReadyTaskCount,
+        next: plan.recoveredNextTaskCount,
+        inProgress: plan.recoveredInProgressTaskCount,
+        stillBlocked: plan.stillBlockedTaskCount,
+        deferred: plan.deferredRecoveryTaskCount,
+      })}`,
+    );
     return { deleted: true, line: finalLine };
   }
 
@@ -17813,9 +18204,11 @@ module.exports.helpers = {
   validateDependencyParentForEditor,
   getWholeTaskTagSpans,
   hasWholeTaskTag,
-  normalizeTaskHideTag,
+  normalizeProjectLifecycleHideTag,
+  parseProjectTaskScheduledFields,
   getRealMarkdownTaskLines,
-  planProjectScheduleVisibility,
+  getProjectScheduleRecoveryTargetLines,
+  planProjectTaskSchedules,
   removeAllBulletProperties,
   planProjectScheduledUpdate,
   planProjectScheduledDelete,

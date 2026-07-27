@@ -585,6 +585,306 @@ test("Pomodoro child ownership is status-neutral and bounded by contiguous list 
   }
 });
 
+test("daily-note paths follow the canonical YYYY/YYYYMMDD.md layout", () => {
+  assert.equal(
+    helpers.getDailyNoteDateFromPath("2026/20260727.md"),
+    "2026-07-27",
+  );
+  assert.equal(helpers.isDailyNotePath("2026/20260727.md"), true);
+  assert.equal(helpers.isDailyNotePath("2024/20240229.md"), true);
+
+  for (const path of [
+    "2026/20260727_poms.md",
+    "2026/20260727_done.md",
+    "2025/20260727.md",
+    "20260727.md",
+    "2026/07/20260727.md",
+    "2026/20261332.md",
+    "2026/20260231.md",
+    "2023/20230229.md",
+    "projects/foo.md",
+  ]) {
+    assert.equal(
+      helpers.getDailyNoteDateFromPath(path),
+      null,
+      `${path} must not be a daily note`,
+    );
+    assert.equal(helpers.isDailyNotePath(path), false);
+  }
+});
+
+test("Pomodoro bullet toggle accepts empty indented list items", () => {
+  for (const sourceLineText of [
+    "\t- ",
+    "  - ",
+    "\t\t- ",
+    "\t* ",
+    "\t-   ",
+    "\t-",
+  ]) {
+    const lines = [
+      "## Pomodoros",
+      "- [x] Earlier Pomodoro",
+      sourceLineText,
+      "## Notes",
+    ];
+    assert.deepEqual(
+      helpers.getPomodoroBulletToggle(lines, 2),
+      {
+        line: 2,
+        direction: "to-pomodoro",
+        sourceLineText,
+        lineText: "- [ ] ()",
+        cursorCh: 7,
+      },
+      JSON.stringify(sourceLineText),
+    );
+  }
+});
+
+test("Pomodoro bullet toggle rejects non-empty or out-of-section bullets", () => {
+  for (const sourceLineText of [
+    "\t- [[sase#^read-sase-beads]]",
+    "\t- [ ] ",
+    "- ",
+  ]) {
+    assert.equal(
+      helpers.getPomodoroBulletToggle(
+        ["## Pomodoros", sourceLineText, "## Notes"],
+        1,
+      ),
+      null,
+      JSON.stringify(sourceLineText),
+    );
+  }
+
+  assert.equal(
+    helpers.getPomodoroBulletToggle(
+      ["## Pomodoros", "- [x] Focus", "## Notes", "\t- "],
+      3,
+    ),
+    null,
+  );
+});
+
+test("Pomodoro bullet toggle reverses only empty open childless placeholders", () => {
+  for (const sourceLineText of ["- [ ] ()", "- [ ] ( )"]) {
+    assert.deepEqual(
+      helpers.getPomodoroBulletToggle(
+        ["## Pomodoros", sourceLineText, "## Notes"],
+        1,
+      ),
+      {
+        line: 1,
+        direction: "to-bullet",
+        sourceLineText,
+        lineText: "\t- ",
+        cursorCh: 3,
+      },
+      sourceLineText,
+    );
+  }
+
+  for (const sourceLineText of [
+    "- [ ] (**0630-0645** [t:: 15m])",
+    "- [x] ()",
+    "- [/] ()",
+    "- [-] ()",
+    "- [ ] () ^blockid",
+    "- [ ] () 🍅 [[x#^y]]",
+  ]) {
+    assert.equal(
+      helpers.getPomodoroBulletToggle(
+        ["## Pomodoros", sourceLineText, "## Notes"],
+        1,
+      ),
+      null,
+      sourceLineText,
+    );
+  }
+
+  assert.equal(
+    helpers.getPomodoroBulletToggle(
+      ["## Pomodoros", "- [ ] ()", "\t- child", "## Notes"],
+      1,
+    ),
+    null,
+  );
+  assert.equal(
+    helpers.getPomodoroBulletToggle(
+      ["## Pomodoros", "## Notes", "- [ ] ()"],
+      2,
+    ),
+    null,
+  );
+});
+
+test("Pomodoro bullet toggle round trips and normalizes child indentation", () => {
+  for (const [sourceLineText, normalizedLineText] of [
+    ["\t- ", "\t- "],
+    ["  - ", "\t- "],
+  ]) {
+    const lines = ["## Pomodoros", sourceLineText, "## Notes"];
+    const forward = helpers.getPomodoroBulletToggle(lines, 1);
+    assert.ok(forward);
+    lines[1] = forward.lineText;
+
+    const reverse = helpers.getPomodoroBulletToggle(lines, 1);
+    assert.ok(reverse);
+    assert.equal(reverse.lineText, normalizedLineText);
+  }
+});
+
+test("Pomodoro bullet toggle changes only the eligible line in a realistic daily shape", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [x] (**0630-0645** [t:: 15m])",
+    "\t- ~~[[Tasks#^done|Done]]~~",
+    "- [ ] ()",
+    "\t- [[Tasks#^open|Open]]",
+    "- [ ] ()",
+    "\t- ",
+    "## Notes",
+  ];
+  const original = [...lines];
+
+  assert.equal(helpers.getPomodoroBulletToggle(lines, 1), null);
+  assert.equal(helpers.getPomodoroBulletToggle(lines, 3), null);
+  assert.equal(helpers.getPomodoroBulletToggle(lines, 5), null);
+
+  const toggle = helpers.getPomodoroBulletToggle(lines, 6);
+  assert.ok(toggle);
+  lines[toggle.line] = toggle.lineText;
+  assert.equal(lines[6], "- [ ] ()");
+  for (let line = 0; line < lines.length; line += 1) {
+    if (line !== 6) {
+      assert.equal(lines[line], original[line], `line ${line}`);
+    }
+  }
+});
+
+test("Pomodoro toggle key gate does not shadow bare Option bracket cycling", () => {
+  const ctrlAltRight = {
+    code: "BracketRight",
+    ctrlKey: true,
+    altKey: true,
+    shiftKey: false,
+    metaKey: false,
+  };
+  assert.equal(helpers.getPomodoroBulletToggleKeydown(ctrlAltRight), true);
+  for (const event of [
+    { ...ctrlAltRight, ctrlKey: false },
+    { ...ctrlAltRight, altKey: false },
+    { ...ctrlAltRight, shiftKey: true },
+    { ...ctrlAltRight, metaKey: true },
+    { ...ctrlAltRight, code: "BracketLeft" },
+  ]) {
+    assert.equal(helpers.getPomodoroBulletToggleKeydown(event), false);
+  }
+
+  assert.equal(
+    helpers.getOptionBracketTaskCycleDirection({
+      ...ctrlAltRight,
+      ctrlKey: false,
+    }),
+    1,
+  );
+  assert.equal(
+    helpers.getOptionBracketTaskCycleDirection({
+      ...ctrlAltRight,
+      ctrlKey: false,
+      code: "BracketLeft",
+    }),
+    -1,
+  );
+  assert.equal(helpers.getOptionBracketTaskCycleDirection(ctrlAltRight), null);
+});
+
+test("Pomodoro toggle command is daily-only and places the cursor for both directions", () => {
+  const source = ["## Pomodoros", "- [x] Earlier", "\t- "].join("\n");
+  const editor = createTextEditor(source, { line: 2, ch: 0 });
+  const dailyView = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "2026/20260727.md" },
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => dailyView.file },
+  };
+
+  assert.equal(
+    plugin.handlePomodoroBulletToggleCommand(true, editor, dailyView),
+    true,
+  );
+  assert.equal(
+    plugin.handlePomodoroBulletToggleCommand(false, editor, dailyView),
+    true,
+  );
+  assert.equal(editor.getLine(2), "- [ ] ()");
+  assert.deepEqual(editor.getCursor(), { line: 2, ch: 7 });
+
+  assert.equal(
+    plugin.handlePomodoroBulletToggleCommand(false, editor, dailyView),
+    true,
+  );
+  assert.equal(editor.getLine(2), "\t- ");
+  assert.deepEqual(editor.getCursor(), { line: 2, ch: 3 });
+
+  const nonDailyEditor = createTextEditor(source, { line: 2, ch: 0 });
+  const nonDailyView = Object.assign(new MarkdownView(), {
+    editor: nonDailyEditor,
+    file: { path: "projects/notes.md" },
+  });
+  assert.equal(
+    plugin.handlePomodoroBulletToggleCommand(
+      false,
+      nonDailyEditor,
+      nonDailyView,
+    ),
+    false,
+  );
+  assert.equal(nonDailyEditor.getValue(), source);
+});
+
+test("Pomodoro Vim fallback consumes eligible keydowns once and lets others fall through", () => {
+  const source = ["## Pomodoros", "- [x] Earlier", "\t- "].join("\n");
+  const editor = createTextEditor(source, { line: 2, ch: 0 });
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "2026/20260727.md" },
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => view.file },
+  };
+  plugin.handledPomodoroBulletToggleEvents = new WeakSet();
+  plugin.getFocusedMarkdownEditorView = () => view;
+  plugin.resolveNormalModeVimCm = () => ({});
+
+  const calls = { prevent: 0, stop: 0, immediate: 0 };
+  const event = {
+    preventDefault: () => { calls.prevent += 1; },
+    stopPropagation: () => { calls.stop += 1; },
+    stopImmediatePropagation: () => { calls.immediate += 1; },
+  };
+  assert.equal(plugin.dispatchPomodoroBulletToggleEvent(event), true);
+  assert.equal(editor.getLine(2), "- [ ] ()");
+  assert.deepEqual(calls, { prevent: 1, stop: 1, immediate: 1 });
+  assert.equal(plugin.dispatchPomodoroBulletToggleEvent(event), false);
+  assert.deepEqual(calls, { prevent: 1, stop: 1, immediate: 1 });
+
+  editor.setCursor({ line: 1, ch: 0 });
+  const ineligibleEvent = {
+    preventDefault: () => { calls.prevent += 1; },
+    stopPropagation: () => { calls.stop += 1; },
+  };
+  assert.equal(
+    plugin.dispatchPomodoroBulletToggleEvent(ineligibleEvent),
+    false,
+  );
+  assert.deepEqual(calls, { prevent: 1, stop: 1, immediate: 1 });
+});
+
 test("direct Done Tasks task reopens through the metadata-aware fallback", () => {
   const editor = createTextEditor(
     "- [x] #task Finished [completion:: 2026-07-11] ^finished",

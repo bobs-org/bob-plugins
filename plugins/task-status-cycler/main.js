@@ -113,6 +113,49 @@ function formatLocalDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function getDailyNoteDateFromPath(path) {
+  const match = String(path || "").match(
+    /^(\d{4})\/(\d{4})(\d{2})(\d{2})\.md$/,
+  );
+  if (!match || match[1] !== match[2]) {
+    return null;
+  }
+
+  const year = Number(match[2]);
+  const month = Number(match[3]);
+  const day = Number(match[4]);
+  const isLeapYear =
+    year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    isLeapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  if (
+    month < 1 ||
+    month > daysInMonth.length ||
+    day < 1 ||
+    day > daysInMonth[month - 1]
+  ) {
+    return null;
+  }
+
+  return `${match[2]}-${match[3]}-${match[4]}`;
+}
+
+function isDailyNotePath(path) {
+  return getDailyNoteDateFromPath(path) !== null;
+}
+
 function normalizeVimRepeat(value) {
   const repeat = Math.floor(Number(value === undefined ? 1 : value));
   return Number.isFinite(repeat) && repeat > 0 ? repeat : 1;
@@ -243,6 +286,17 @@ function getOptionBracketTaskCycleDirection(event) {
   }
 
   return null;
+}
+
+function getPomodoroBulletToggleKeydown(event) {
+  return !!(
+    event &&
+    event.ctrlKey &&
+    event.altKey &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    event.code === "BracketRight"
+  );
 }
 
 function replaceTaskStatusSymbol(lineText, nextSymbol) {
@@ -1459,6 +1513,71 @@ function getSubBulletBlockRange(lines, pomodoroLine, section = null) {
   return {
     startLine: pomodoroLine + 1,
     endLine: line,
+  };
+}
+
+function getPomodoroBulletToggle(lines, activeLine) {
+  if (
+    !Array.isArray(lines) ||
+    !Number.isInteger(activeLine) ||
+    activeLine < 0 ||
+    activeLine >= lines.length
+  ) {
+    return null;
+  }
+
+  const section = findPomodorosSectionInLines(lines);
+  if (!lineIsInPomodorosSection(section, activeLine)) {
+    return null;
+  }
+
+  const sourceLineText = String(lines[activeLine] || "");
+  if (isTopLevelTaskLine(sourceLineText)) {
+    const taskStatus = getTaskStatusForLine(sourceLineText, activeLine);
+    const taskMatch = sourceLineText.match(TASK_LINE_RE);
+    const body = taskMatch
+      ? sourceLineText.slice(taskMatch[0].length).trim()
+      : "";
+    const placeholderMatch = body.match(POMODORO_PLACEHOLDER_RE);
+    const subBulletRange = getSubBulletBlockRange(
+      lines,
+      activeLine,
+      section,
+    );
+    if (
+      taskStatus &&
+      taskStatus.symbol === " " &&
+      placeholderMatch &&
+      placeholderMatch.index === 0 &&
+      placeholderMatch[0].length === body.length &&
+      subBulletRange &&
+      subBulletRange.startLine === subBulletRange.endLine
+    ) {
+      return {
+        line: activeLine,
+        direction: "to-bullet",
+        sourceLineText,
+        lineText: EMPTY_POMODORO_SUB_BULLET_LINE,
+        cursorCh: EMPTY_POMODORO_SUB_BULLET_LINE.length,
+      };
+    }
+    return null;
+  }
+
+  const listMarkerMatch = sourceLineText.match(INDENTED_LIST_LINE_RE);
+  if (
+    !listMarkerMatch ||
+    sourceLineText.slice(listMarkerMatch[0].length).trim()
+  ) {
+    return null;
+  }
+
+  return {
+    line: activeLine,
+    direction: "to-pomodoro",
+    sourceLineText,
+    lineText: POMODORO_PLACEHOLDER_LINE,
+    cursorCh: getPomodoroCursorTargetCh(POMODORO_PLACEHOLDER_LINE),
   };
 }
 
@@ -3627,7 +3746,16 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         this.handleOpenChildBulletLineCommand(checking, editor, view, "above"),
     });
 
+    this.addCommand({
+      id: "toggle-pomodoro-bullet",
+      name: "Toggle Pomodoro placeholder/sub-bullet",
+      hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "]" }],
+      editorCheckCallback: (checking, editor, view) =>
+        this.handlePomodoroBulletToggleCommand(checking, editor, view),
+    });
+
     this.registerChildBulletInputListeners();
+    this.registerPomodoroBulletToggleInputListeners();
     this.registerCountedTaskCycleInputListeners();
 
     this.addCommand({
@@ -5556,6 +5684,33 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return true;
   }
 
+  handlePomodoroBulletToggleCommand(checking, editor, view) {
+    if (!(view instanceof MarkdownView)) {
+      return false;
+    }
+
+    const activeFile =
+      view.file ||
+      (this.app.workspace &&
+      typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null);
+    if (!isDailyNotePath(activeFile && activeFile.path)) {
+      return false;
+    }
+
+    const toggle = this.getActivePomodoroBulletToggle(editor);
+    if (!toggle) {
+      return false;
+    }
+
+    if (checking) {
+      return true;
+    }
+
+    return this.applyPomodoroBulletToggle(editor, toggle);
+  }
+
   registerChildBulletInputListeners() {
     // Tracks events already dispatched so the window + document capture
     // listeners cannot double-insert when both fire for the same keydown.
@@ -5646,6 +5801,81 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     // Ctrl+Shift+o opens a child bullet below; there is no shifted "above"
     // variant.
     return "below";
+  }
+
+  registerPomodoroBulletToggleInputListeners() {
+    // Tracks events already dispatched so the window + document capture
+    // listeners cannot double-toggle when both fire for the same keydown.
+    this.handledPomodoroBulletToggleEvents = new WeakSet();
+
+    const keydownHandler = (event) =>
+      this.handlePomodoroBulletTogglePhysicalKeydown(event);
+
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handlePomodoroBulletTogglePhysicalKeydown(event) {
+    if (!getPomodoroBulletToggleKeydown(event)) {
+      return false;
+    }
+    return this.dispatchPomodoroBulletToggleEvent(event);
+  }
+
+  dispatchPomodoroBulletToggleEvent(event) {
+    if (
+      this.handledPomodoroBulletToggleEvents &&
+      this.handledPomodoroBulletToggleEvents.has(event)
+    ) {
+      return false;
+    }
+
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view || !this.resolveNormalModeVimCm(view.editor, view)) {
+      return false;
+    }
+
+    const activeFile =
+      view.file ||
+      (this.app.workspace &&
+      typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null);
+    if (!isDailyNotePath(activeFile && activeFile.path)) {
+      return false;
+    }
+
+    const toggle = this.getActivePomodoroBulletToggle(view.editor);
+    if (!toggle) {
+      return false;
+    }
+
+    if (this.handledPomodoroBulletToggleEvents) {
+      this.handledPomodoroBulletToggleEvents.add(event);
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+
+    return this.applyPomodoroBulletToggle(view.editor, toggle);
   }
 
   registerCountedTaskCycleInputListeners() {
@@ -7025,6 +7255,22 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     };
   }
 
+  getActivePomodoroBulletToggle(editor) {
+    if (!editor || typeof editor.getCursor !== "function") {
+      return null;
+    }
+
+    const cursor = editor.getCursor();
+    if (!cursor || typeof cursor.line !== "number") {
+      return null;
+    }
+
+    return getPomodoroBulletToggle(
+      this.getEditorLineArray(editor),
+      cursor.line,
+    );
+  }
+
   getActiveObsidianTaskToggle(editor) {
     const cursor = editor.getCursor();
     if (!cursor || typeof cursor.line !== "number") {
@@ -7083,6 +7329,33 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           toggle.lineText,
           toggle.edits,
         ),
+      });
+    }
+
+    return true;
+  }
+
+  applyPomodoroBulletToggle(
+    editor,
+    toggle = this.getActivePomodoroBulletToggle(editor),
+  ) {
+    if (
+      !toggle ||
+      !editor ||
+      typeof editor.getLine !== "function" ||
+      editor.getLine(toggle.line) !== toggle.sourceLineText
+    ) {
+      return false;
+    }
+
+    if (!this.replaceEditorLine(toggle.line, toggle.lineText, editor)) {
+      return false;
+    }
+
+    if (typeof editor.setCursor === "function") {
+      editor.setCursor({
+        line: toggle.line,
+        ch: toggle.cursorCh,
       });
     }
 
@@ -8056,6 +8329,7 @@ module.exports.helpers = {
   findPomodorosSectionInLines,
   findTaskRoutingSections,
   formatLocalDate,
+  getDailyNoteDateFromPath,
   getBlockLineFromCache,
   getBlockLinkTargetKey,
   getBlockLinkTargetKeysFromLine,
@@ -8081,6 +8355,8 @@ module.exports.helpers = {
   getObsidianTaskToggle,
   getObsidianTaskToggleCursorCh,
   getObsidianTaskToggleDocumentPlan,
+  getPomodoroBulletToggle,
+  getPomodoroBulletToggleKeydown,
   getPomodoroCursorTargetCh,
   getOwningPomodoroContextForLine,
   getSectionInsertionLine,
@@ -8102,6 +8378,7 @@ module.exports.helpers = {
   getPomodoroMoveOnlyAdditionalLines,
   getPendingVimRepeat,
   resetPendingVimInputState,
+  isDailyNotePath,
   isPomodoroTaskLine,
   isLineInMarkdownSectionDirectBody,
   isProperObsidianTaskLine,

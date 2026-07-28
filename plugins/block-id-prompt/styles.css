@@ -152,6 +152,7 @@
   padding: var(--size-4-2) var(--size-4-3);
   border-left: 3px solid transparent;
   border-radius: var(--radius-m);
+  scroll-margin-block: 34px;
   cursor: pointer;
 }
 
@@ -170,8 +171,8 @@
   background-color: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
 }
 
-.bid-tlp-row.is-dep-blocked:not(.is-selected) {
-  border-left-color: color-mix(in srgb, var(--color-orange) 55%, transparent);
+.bid-tlp-row.is-blocked:not(.is-selected) {
+  border-left-color: color-mix(in srgb, var(--color-orange, #c1782a) 55%, transparent);
 }
 
 .bid-tlp-status-pill {
@@ -198,6 +199,44 @@
 .bid-tlp-status-pill.is-next {
   color: var(--color-green, #3f8f5f);
   border-color: color-mix(in srgb, var(--color-green, #3f8f5f) 45%, transparent);
+}
+
+.bid-tlp-status-pill.is-blocked {
+  color: var(--color-orange, #c1782a);
+  border-color: color-mix(in srgb, var(--color-orange, #c1782a) 45%, transparent);
+}
+
+.bid-tlp-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+  margin: var(--size-4-3) 0 var(--size-2-2);
+  padding: var(--size-2-1) var(--size-4-3) var(--size-2-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+  background-color: var(--background-primary);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.bid-tlp-group:first-child {
+  margin-top: 0;
+}
+
+.bid-tlp-group.is-blocked {
+  color: color-mix(in srgb, var(--color-orange, #c1782a) 70%, var(--text-faint));
+}
+
+.bid-tlp-group-count {
+  color: var(--text-faint);
+  font-weight: var(--font-normal);
+  letter-spacing: 0;
 }
 
 .bid-tlp-row-text {
@@ -229,10 +268,10 @@
   gap: var(--size-2-1);
   min-height: 18px;
   padding: 1px 6px;
-  border: 1px solid color-mix(in srgb, var(--color-orange) 42%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-orange, #c1782a) 42%, transparent);
   border-radius: var(--radius-s);
-  color: color-mix(in srgb, var(--color-orange) 82%, var(--text-normal));
-  background-color: color-mix(in srgb, var(--color-orange) 12%, transparent);
+  color: color-mix(in srgb, var(--color-orange, #c1782a) 82%, var(--text-normal));
+  background-color: color-mix(in srgb, var(--color-orange, #c1782a) 12%, transparent);
   line-height: 1.25;
   cursor: help;
   white-space: nowrap;

@@ -15,7 +15,13 @@ const MARKDOWN_LINK_RE = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
 const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
-const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*"]);
+const BLOCKED_OBSIDIAN_TASK_STATUS = "?";
+const OPEN_OBSIDIAN_TASK_STATUSES = new Set([
+  " ",
+  "/",
+  "*",
+  BLOCKED_OBSIDIAN_TASK_STATUS,
+]);
 const DONE_OBSIDIAN_TASK_STATUSES = new Set(["x", "X", "-"]);
 const OBSIDIAN_TASK_LINE_RE =
   /^\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
@@ -2266,12 +2272,34 @@ function taskStatusClass(status) {
     return "next";
   }
 
+  if (status === BLOCKED_OBSIDIAN_TASK_STATUS) {
+    return "blocked";
+  }
+
   return "todo";
+}
+
+function taskBlockedState(task) {
+  const dependency = (task && task.dependency) || null;
+  const statusBlocked =
+    Boolean(task) && task.status === BLOCKED_OBSIDIAN_TASK_STATUS;
+  const dependencyBlocked = Boolean(dependency && dependency.isBlocked);
+
+  return {
+    isBlocked: statusBlocked || dependencyBlocked,
+    statusBlocked,
+    dependencyBlocked,
+    depCount: dependency ? dependency.depIds.length : 0,
+    metCount: dependency ? dependency.metCount : 0,
+    unmetCount: dependency ? dependency.unmetBlockers.length : 0,
+    unresolvedCount: dependency ? dependency.unresolvedIds.length : 0,
+    unmetBlockers: dependency ? dependency.unmetBlockers : [],
+  };
 }
 
 function countBlockedTasks(tasks) {
   return (tasks || [])
-    .filter((task) => task.dependency && task.dependency.isBlocked)
+    .filter((task) => taskBlockedState(task).isBlocked)
     .length;
 }
 
@@ -2279,10 +2307,49 @@ function blockedTaskCountSuffix(count) {
   return count > 0 ? ` · ${count} blocked` : "";
 }
 
-function buildBlockedTooltip(dependency) {
-  const blockers = dependency && dependency.unmetBlockers
-    ? dependency.unmetBlockers
-    : [];
+function partitionTaskPickerItems(tasks) {
+  const unblocked = [];
+  const blocked = [];
+
+  (tasks || []).forEach((task) => {
+    (taskBlockedState(task).isBlocked ? blocked : unblocked).push(task);
+  });
+
+  return { unblocked, blocked };
+}
+
+function blockedChipLabel(state) {
+  return state.dependencyBlocked && state.depCount > 1
+    ? `Blocked · ${state.unmetCount}`
+    : "Blocked";
+}
+
+function buildBlockedTooltip(state) {
+  if (!state || !state.isBlocked) {
+    return "";
+  }
+
+  if (!state.dependencyBlocked) {
+    if (state.depCount === 0) {
+      return "Marked Blocked in the note; no dependencies listed";
+    }
+
+    if (state.unresolvedCount > 0) {
+      return `Marked Blocked in the note; ${state.unresolvedCount} unresolved dependency ${pluralize(
+        state.unresolvedCount,
+        "reference",
+        "references",
+      )}`;
+    }
+
+    return `Marked Blocked in the note; all ${state.depCount} ${pluralize(
+      state.depCount,
+      "dependency",
+      "dependencies",
+    )} are done`;
+  }
+
+  const blockers = state.unmetBlockers || [];
   const visibleBlockers = blockers.slice(0, 3).map((blocker) =>
     normalizeText(blocker.title) || blocker.id,
   );
@@ -2293,11 +2360,8 @@ function buildBlockedTooltip(dependency) {
     tooltip += `, +${remainingCount} more`;
   }
 
-  const unresolvedCount = dependency && dependency.unresolvedIds
-    ? dependency.unresolvedIds.length
-    : 0;
-  if (unresolvedCount > 0) {
-    tooltip += `; ${unresolvedCount} unresolved`;
+  if (state.unresolvedCount > 0) {
+    tooltip += `; ${state.unresolvedCount} unresolved`;
   }
 
   return tooltip;
@@ -2445,7 +2509,8 @@ class TaskLinkPickerModal extends Modal {
       return;
     }
 
-    this.visibleTasks = this.getFilteredTasks();
+    const groups = partitionTaskPickerItems(this.getFilteredTasks());
+    this.visibleTasks = groups.unblocked.concat(groups.blocked);
     this.selectedIndex = this.clampSelectedIndex(
       this.selectedIndex,
       this.visibleTasks.length,
@@ -2458,15 +2523,24 @@ class TaskLinkPickerModal extends Modal {
       return;
     }
 
+    const showGroupHeaders =
+      groups.unblocked.length > 0 && groups.blocked.length > 0;
     const query = this.getQuery();
     this.visibleTasks.forEach((task, index) => {
+      if (showGroupHeaders && index === 0) {
+        this.renderGroupHeader("Unblocked", groups.unblocked.length, "unblocked");
+      }
+      if (showGroupHeaders && index === groups.unblocked.length) {
+        this.renderGroupHeader("Blocked", groups.blocked.length, "blocked");
+      }
+
       const isSelected = index === this.selectedIndex;
-      const isDependencyBlocked = task.dependency && task.dependency.isBlocked;
+      const blockedState = taskBlockedState(task);
       const rowEl = this.resultsEl.createDiv({
         cls: [
           "bid-tlp-row",
           isSelected ? "is-selected" : "",
-          isDependencyBlocked ? "is-dep-blocked" : "",
+          blockedState.isBlocked ? "is-blocked" : "",
         ].filter(Boolean).join(" "),
         attr: {
           role: "option",
@@ -2485,6 +2559,15 @@ class TaskLinkPickerModal extends Modal {
     });
   }
 
+  renderGroupHeader(label, count, variant) {
+    const headerEl = this.resultsEl.createDiv({
+      cls: `bid-tlp-group is-${variant}`,
+      attr: { role: "presentation", "aria-hidden": "true" },
+    });
+    headerEl.createSpan({ cls: "bid-tlp-group-label", text: label });
+    headerEl.createSpan({ cls: "bid-tlp-group-count", text: String(count) });
+  }
+
   renderTaskRow(rowEl, task, query) {
     rowEl.createDiv({
       cls: `bid-tlp-status-pill is-${taskStatusClass(task.status)}`,
@@ -2497,10 +2580,9 @@ class TaskLinkPickerModal extends Modal {
 
     const metaEl = textEl.createDiv({ cls: "bid-tlp-row-meta" });
     metaEl.createSpan({ text: `Line ${task.line + 1}` });
-    if (task.dependency && task.dependency.isBlocked) {
-      const unmetCount = task.dependency.unmetBlockers.length;
-      const showUnmetCount = task.dependency.depIds.length > 1;
-      const tooltip = buildBlockedTooltip(task.dependency);
+    const blockedState = taskBlockedState(task);
+    if (blockedState.isBlocked) {
+      const tooltip = buildBlockedTooltip(blockedState);
       const chipEl = metaEl.createSpan({
         cls: "bid-tlp-blocked-chip",
         attr: {
@@ -2515,7 +2597,7 @@ class TaskLinkPickerModal extends Modal {
       applyIcon(iconEl, "lock");
       chipEl.createSpan({
         cls: "bid-tlp-blocked-label",
-        text: showUnmetCount ? `Blocked · ${unmetCount}` : "Blocked",
+        text: blockedChipLabel(blockedState),
       });
     }
 
@@ -4059,8 +4141,11 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 
 module.exports.helpers = {
   applyFileLinkBlockCompletionWithEditorApi,
+  blockedChipLabel,
+  buildBlockedTooltip,
   buildTaskDependencyIndex,
   collectTaskPickerItems,
+  countBlockedTasks,
   findMarkerLinkNearCursor,
   findPomodoroSourceContext,
   findTaskPickerMarkerNearCursor,
@@ -4070,10 +4155,13 @@ module.exports.helpers = {
   listItemBodyBounds,
   parseDependsOnIds,
   parseInlineIdField,
+  partitionTaskPickerItems,
   planFuturePomodoroLinkCleanup,
   resolveTaskDependencyState,
   shouldPromoteTaskToNext,
+  taskBlockedState,
   taskIdKeysFromLine,
   taskPickerRevertCursorCh,
   taskPickerRevertReplacement,
+  taskStatusClass,
 };

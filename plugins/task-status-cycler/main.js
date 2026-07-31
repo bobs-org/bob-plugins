@@ -1972,18 +1972,21 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   // them. A created placeholder is inserted directly below the completed
   // Pomodoro's own sub-bullet block; existing lower Pomodoros are left untouched
   // and pushed down by the insertion.
+  //
+  // Carried links are grouped worked-on (copyable) links first, then deferred
+  // (#-marked, move-only) links second, each group kept in its own source
+  // order: the fresh Pomodoro reads as "keep going on what you were working
+  // on, then pick up what you deferred".
   const copyableBulletLines = [
-    ...sourceBullets.copyableTaskLinkBullets.map((bullet) => ({
-      line: bullet.line,
-      lineText: stripPomodoroMarkersFromLine(bullet.lineText),
-    })),
-    ...sourceBullets.moveOnlyTaskLinkBullets.map((bullet) => ({
-      line: bullet.line,
-      lineText: bullet.destinationLineText,
-    })),
-  ]
-    .sort((left, right) => left.line - right.line)
-    .map((bullet) => bullet.lineText);
+    ...sourceBullets.copyableTaskLinkBullets
+      .slice()
+      .sort((left, right) => left.line - right.line)
+      .map((bullet) => stripPomodoroMarkersFromLine(bullet.lineText)),
+    ...sourceBullets.moveOnlyTaskLinkBullets
+      .slice()
+      .sort((left, right) => left.line - right.line)
+      .map((bullet) => bullet.destinationLineText),
+  ];
   const isLastPomodoro = nextPomodoroLine === null;
   const shouldCreatePomodoro = copyableBulletLines.length > 0 || isLastPomodoro;
   const removedLineCountBefore = (line) =>

@@ -1884,40 +1884,6 @@ function getBlockLinkTargetKeysFromLine(lineText) {
   ]);
 }
 
-function getPomodoroSubBulletTargetKeys(lines, range) {
-  const keys = new Set();
-  if (!Array.isArray(lines) || !range) {
-    return keys;
-  }
-
-  for (let line = range.startLine; line < range.endLine; line += 1) {
-    for (const key of getBlockLinkTargetKeysFromLine(lines[line])) {
-      keys.add(key);
-    }
-  }
-
-  return keys;
-}
-
-function getNonDuplicateCopyablePomodoroBullets(copyableBullets, existingKeys) {
-  const keys = existingKeys instanceof Set ? new Set(existingKeys) : new Set();
-  const copiedBullets = [];
-
-  for (const bullet of Array.isArray(copyableBullets) ? copyableBullets : []) {
-    const bulletKeys = getBlockLinkTargetKeys(bullet.targets);
-    if (bulletKeys.some((key) => keys.has(key))) {
-      continue;
-    }
-
-    copiedBullets.push(bullet.lineText);
-    for (const key of bulletKeys) {
-      keys.add(key);
-    }
-  }
-
-  return copiedBullets;
-}
-
 function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   if (!isPomodoroTaskLine(lines, section, pomodoroLine)) {
     return null;

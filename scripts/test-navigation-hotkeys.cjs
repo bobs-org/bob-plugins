@@ -3686,6 +3686,17 @@ async function choosePriorityLevel(harness, label) {
   return picker;
 }
 
+async function openBulletPropertyValueStage(harness, propertyName, options = {}) {
+  assert.equal(harness.open(options), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const propertyIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === propertyName,
+  );
+  assert.notEqual(propertyIndex, -1);
+  await picker.openItemAtIndex(propertyIndex);
+  return picker;
+}
+
 test("priority scheduling rolls inclusively and clamps a random value of one", () => {
   const level = { minDays: 2, maxDays: 7 };
   const baseDate = new Date(2026, 7, 3, 16, 45);
@@ -3973,6 +3984,167 @@ test("counted priority runtime aborts a stale session without rolling writes", a
   assert.deepEqual(editor.transactions, []);
   assert.doesNotMatch(editor.content, /\[priority::|\[scheduled::/);
   assert.match(notices.at(-1), /no tasks were updated/);
+});
+
+test("scheduled picker pins a priority roll only for configured current priorities", async () => {
+  const config = createPriorityPickerConfig();
+  const baseDate = new Date(2026, 7, 3);
+  const prioritized = createBulletPropertyPickerHarness({
+    config,
+    content: "- [ ] #task One [priority:: high] ^one",
+    baseDate,
+    random: () => 0,
+  });
+  const picker = await openBulletPropertyValueStage(
+    prioritized,
+    "scheduled",
+  );
+
+  assert.equal(picker.items.length, 11);
+  assert.deepEqual(
+    {
+      label: picker.items[0].label,
+      value: picker.items[0].value,
+      detail: picker.items[0].detail,
+      priorityRoll: picker.items[0].priorityRoll,
+      level: picker.items[0].level.label,
+      searchText: picker.items[0].searchText,
+    },
+    {
+      label: "P2 roll",
+      value: "2026-08-05",
+      detail: "2026-08-05 · Wed · random in 2–7 days",
+      priorityRoll: true,
+      level: "P2",
+      searchText: "P2 roll 2026-08-05 Wed random priority",
+    },
+  );
+  assert.equal(
+    picker.footerHints.some((hint) => hint.keys.includes("^R")),
+    true,
+  );
+
+  for (const content of [
+    "- [ ] #task One ^one",
+    "- [ ] #task One [priority:: highest] ^one",
+  ]) {
+    const withoutSuggestion = createBulletPropertyPickerHarness({
+      config,
+      content,
+      baseDate,
+      random: () => 0,
+    });
+    const plainPicker = await openBulletPropertyValueStage(
+      withoutSuggestion,
+      "scheduled",
+    );
+    assert.equal(plainPicker.items.length, 10);
+    assert.equal(plainPicker.items.some((item) => item.priorityRoll), false);
+    assert.equal(
+      plainPicker.footerHints.some((hint) => hint.keys.includes("^R")),
+      false,
+    );
+  }
+});
+
+test("Ctrl+R replaces only the pinned priority roll and keeps it selected", async () => {
+  const rolls = [0, 1];
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    content: "- [ ] #task One [priority:: high] ^one",
+    baseDate: new Date(2026, 7, 3),
+    random: () => rolls.shift(),
+  });
+  const picker = await openBulletPropertyValueStage(harness, "scheduled");
+  const unchangedItems = picker.items.slice(1);
+  let prevented = false;
+  let stopped = false;
+
+  picker.handleKeydown({
+    key: "r",
+    ctrlKey: true,
+    altKey: false,
+    metaKey: false,
+    preventDefault: () => {
+      prevented = true;
+    },
+    stopPropagation: () => {
+      stopped = true;
+    },
+  });
+
+  assert.equal(picker.items[0].value, "2026-08-10");
+  assert.deepEqual(picker.items.slice(1), unchangedItems);
+  assert.equal(picker.selectedIndex, 0);
+  assert.equal(picker.visibleItems[0], picker.items[0]);
+  assert.equal(prevented, true);
+  assert.equal(stopped, true);
+});
+
+test("choosing a priority roll uses the ordinary scheduled write path", async () => {
+  const makeHarness = () =>
+    createBulletPropertyPickerHarness({
+      config: createPriorityPickerConfig(),
+      content: "- [ ] #task One [priority:: high] ^one",
+      baseDate: new Date(2026, 7, 3),
+      random: () => 0,
+    });
+
+  notices.length = 0;
+  const rolled = makeHarness();
+  const rolledPicker = await openBulletPropertyValueStage(rolled, "scheduled");
+  await rolledPicker.openItemAtIndex(0);
+  const rolledNotice = notices.at(-1);
+
+  notices.length = 0;
+  const preset = makeHarness();
+  const presetPicker = await openBulletPropertyValueStage(preset, "scheduled");
+  const presetIndex = presetPicker.visibleItems.findIndex(
+    (item) => item.label === "In 2 days",
+  );
+  assert.notEqual(presetIndex, -1);
+  await presetPicker.openItemAtIndex(presetIndex);
+
+  assert.equal(rolled.editor.content, preset.editor.content);
+  assert.equal(rolledNotice, notices.at(-1));
+  assert.match(rolled.editor.content, /\[scheduled:: 2026-08-05\]/);
+});
+
+test("counted scheduled picker requires one shared configured priority", async () => {
+  const config = createPriorityPickerConfig();
+  const baseDate = new Date(2026, 7, 3);
+  const mixed = createBulletPropertyPickerHarness({
+    config,
+    content: [
+      "- [ ] #task One [priority:: high] ^one",
+      "- [ ] #task Two [priority:: medium] ^two",
+    ].join("\n"),
+    baseDate,
+    random: () => 0,
+  });
+  const mixedPicker = await openBulletPropertyValueStage(mixed, "scheduled", {
+    countExplicit: true,
+    additionalTaskCount: 1,
+  });
+  assert.equal(mixedPicker.items.length, 10);
+  assert.equal(mixedPicker.items.some((item) => item.priorityRoll), false);
+
+  const common = createBulletPropertyPickerHarness({
+    config,
+    content: [
+      "- [ ] #task One [priority:: high] ^one",
+      "- [ ] #task Two [priority:: high] ^two",
+    ].join("\n"),
+    baseDate,
+    random: () => 0,
+  });
+  const commonPicker = await openBulletPropertyValueStage(common, "scheduled", {
+    countExplicit: true,
+    additionalTaskCount: 1,
+  });
+  assert.equal(commonPicker.items.length, 11);
+  assert.equal(commonPicker.items[0].priorityRoll, true);
+  assert.equal(commonPicker.items[0].level.label, "P2");
 });
 
 test("bullet property picker reconciles duplicate bare and counted opens", () => {

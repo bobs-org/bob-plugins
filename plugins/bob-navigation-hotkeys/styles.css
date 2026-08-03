@@ -602,6 +602,28 @@
   );
 }
 
+.bob-cnp-property-value-row.is-priority-roll {
+  border-left: 3px solid
+    color-mix(in srgb, var(--text-accent) 72%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--text-accent) 9%,
+    transparent
+  );
+}
+
+.bob-cnp-property-value-row.is-priority-roll .bob-cnp-row-icon {
+  color: var(--text-accent);
+}
+
+.bob-cnp-property-value-row.is-priority-roll.is-selected {
+  background-color: color-mix(
+    in srgb,
+    var(--text-accent) 22%,
+    var(--background-primary)
+  );
+}
+
 .bob-cnp-pill {
   display: inline-flex;
   align-items: center;

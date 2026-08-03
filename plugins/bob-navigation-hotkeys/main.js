@@ -6869,6 +6869,18 @@ const BULLET_PROPERTY_STAGE_TWO_HINTS = [
   { keys: ["esc"], label: "Dismiss" },
 ];
 
+function getBulletPropertyStageTwoHints(hasPriorityRoll) {
+  if (!hasPriorityRoll) {
+    return BULLET_PROPERTY_STAGE_TWO_HINTS;
+  }
+
+  return [
+    ...BULLET_PROPERTY_STAGE_TWO_HINTS.slice(0, -1),
+    { keys: ["^R"], label: "Re-roll" },
+    BULLET_PROPERTY_STAGE_TWO_HINTS[BULLET_PROPERTY_STAGE_TWO_HINTS.length - 1],
+  ];
+}
+
 const BULLET_PROPERTY_LOCAL_TASK_HINTS = [
   { keys: ["↑", "↓"], label: "Navigate" },
   { keys: ["^N", "^P"], label: "Move" },
@@ -10825,6 +10837,28 @@ function createBulletPropertyDateItems(baseDate, currentValue) {
   );
 }
 
+function createPriorityRollDateItem(
+  level,
+  baseDate,
+  currentValue,
+  random = Math.random,
+) {
+  const date = rollPriorityScheduledDate(level, baseDate, random);
+  const value = formatBulletPropertyDate(date);
+  const weekday = getBulletPropertyDateWeekday(date);
+  return {
+    kind: "value",
+    value,
+    label: `${level.label} roll`,
+    detail: `${value} · ${weekday} · random in ${level.minDays}–${level.maxDays} days`,
+    current: value === currentValue,
+    dynamic: false,
+    priorityRoll: true,
+    level,
+    searchText: `${level.label} roll ${value} ${weekday} random priority`,
+  };
+}
+
 function parseBulletPropertyTypedDate(query, baseDate) {
   const text = String(query || "").trim();
   if (!text) {
@@ -11276,8 +11310,23 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     const isDateProperty = property.values === "date";
     const isPriorityProperty = property.values === "priority";
+    const items = createBulletPropertyValueItems(
+      propertyItem,
+      this.valueBaseDate,
+    );
+    const priorityRollLevel = this.getPriorityRollLevel(property);
+    if (priorityRollLevel) {
+      items.unshift(
+        createPriorityRollDateItem(
+          priorityRollLevel,
+          this.valueBaseDate,
+          propertyItem.currentValue || "",
+          this.priorityRandom,
+        ),
+      );
+    }
     this.applyOptions({
-      items: createBulletPropertyValueItems(propertyItem, this.valueBaseDate),
+      items,
       title: property.name,
       headerIcon: isDateProperty
         ? "calendar-days"
@@ -11294,7 +11343,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         ? "priority levels"
         : `${property.name} values`,
       emptyText: "No matching values",
-      footerHints: BULLET_PROPERTY_STAGE_TWO_HINTS,
+      footerHints: getBulletPropertyStageTwoHints(Boolean(priorityRollLevel)),
       getSubtitle: () => {
         const scope = this.isCountedSession()
           ? `${this.getTaskSessionSubtitle()} · `
@@ -11340,6 +11389,66 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       name,
     );
     return field ? field.value : "";
+  }
+
+  getPriorityRollLevel(dateProperty) {
+    if (!dateProperty || dateProperty.values !== "date") {
+      return null;
+    }
+
+    const priorityProperty = this.config.properties.find(
+      (property) =>
+        property.values === "priority" &&
+        property.schedules === dateProperty.name,
+    );
+    if (!priorityProperty) {
+      return null;
+    }
+
+    let currentValue;
+    if (this.isCountedSession()) {
+      const aggregate = createCountedBulletPropertyItems(
+        this.config,
+        this.getEditorContent(),
+        this.taskSession,
+      );
+      if (!aggregate.valid) {
+        return null;
+      }
+      const priorityItem = aggregate.items.find(
+        (item) => item.property === priorityProperty,
+      );
+      if (!priorityItem || priorityItem.valueState !== "common") {
+        return null;
+      }
+      currentValue = priorityItem.currentValue;
+    } else {
+      currentValue = this.getCurrentPropertyValue(priorityProperty.name);
+    }
+
+    return priorityProperty.levelsByValue.get(currentValue) || null;
+  }
+
+  rerollPriorityDateSuggestion() {
+    const rollIndex = this.items.findIndex((item) => item.priorityRoll);
+    if (rollIndex === -1) {
+      return false;
+    }
+
+    const previous = this.items[rollIndex];
+    const nextItems = [...this.items];
+    nextItems[rollIndex] = createPriorityRollDateItem(
+      previous.level,
+      this.valueBaseDate,
+      this.selectedPropertyItem.currentValue || "",
+      this.priorityRandom,
+    );
+    this.applyOptions({ items: nextItems });
+    this.selectedIndex = rollIndex;
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+    return true;
   }
 
   clearLocalTaskMarks() {
@@ -11693,6 +11802,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       rowEl,
       "bob-cnp-property-value-row",
       item.priorityLevel ? "bob-cnp-priority-value-row" : "",
+      item.priorityRoll ? "is-priority-roll" : "",
       item.current ? "is-current" : "",
       item.dynamic ? "is-dynamic" : "",
     );
@@ -11700,7 +11810,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
     applyIcon(
       rowIcon,
-      item.current ? "check-circle-2" : item.dynamic ? "calendar-plus" : "circle",
+      item.priorityRoll
+        ? "dices"
+        : item.current
+          ? "check-circle-2"
+          : item.dynamic
+            ? "calendar-plus"
+            : "circle",
     );
 
     const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
@@ -11722,6 +11838,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       rowEl.createDiv({
         cls: "bob-cnp-pill bob-cnp-property-pill",
         text: `${item.priorityLevel.minDays}–${item.priorityLevel.maxDays}d`,
+      });
+    }
+    if (item.priorityRoll) {
+      rowEl.createDiv({
+        cls: "bob-cnp-pill bob-cnp-property-pill",
+        text: item.level.label,
       });
     }
   }
@@ -12510,6 +12632,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           this.opening = false;
         });
       return;
+    }
+
+    if (this.stage === "value" && isCtrlKey(event, "r")) {
+      if (this.rerollPriorityDateSuggestion()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
     }
 
     super.handleKeydown(event);
@@ -18942,6 +19072,7 @@ module.exports.helpers = {
   planCountedLocalTaskDependency,
   rollPriorityScheduledDate,
   createBulletPropertyDateItems,
+  createPriorityRollDateItem,
   createBulletPropertyValueItems,
   parseBulletPropertyTypedDate,
   formatBulletPropertyDate,

@@ -10090,7 +10090,7 @@ function recordScheduledRecoveryOutcome(counts, outcome) {
   if (outcome === "deferred") counts.deferred += 1;
 }
 
-function scheduledRecoveryNoticeSuffix(counts = {}) {
+function scheduledRecoveryNoticeParts(counts = {}) {
   const parts = [];
   if (counts.ready > 0) {
     parts.push(`recovered ${formatCountLabel(counts.ready, "task")} Ready`);
@@ -10116,6 +10116,29 @@ function scheduledRecoveryNoticeSuffix(counts = {}) {
       )} deferred to bob task-status-hooks`,
     );
   }
+  return Object.freeze(parts);
+}
+
+function scheduledRecoveryNoticeSuffix(counts = {}) {
+  const parts = scheduledRecoveryNoticeParts(counts);
+  return parts.length > 0 ? `; ${parts.join("; ")}` : "";
+}
+
+function getCountedTaskNoticeParts(session, unchangedTaskCount = 0) {
+  const parts = [];
+  if (unchangedTaskCount > 0) {
+    parts.push(`${formatCountLabel(unchangedTaskCount, "task")} unchanged`);
+  }
+  if (session && session.clamped) {
+    parts.push(
+      `requested ${session.requestedCount}, found ${session.actualCount} at end of note`,
+    );
+  }
+  return Object.freeze(parts);
+}
+
+function getCountedTaskNoticeSuffix(session, unchangedTaskCount = 0) {
+  const parts = getCountedTaskNoticeParts(session, unchangedTaskCount);
   return parts.length > 0 ? `; ${parts.join("; ")}` : "";
 }
 
@@ -10753,6 +10776,47 @@ function addLocalDateDays(date, days) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
 
+function getLocalDayOffset(baseDate, targetDate) {
+  const baseTime = getLocalDateStart(baseDate).getTime();
+  const targetTime = getLocalDateStart(targetDate).getTime();
+  return Math.round((targetTime - baseTime) / 86_400_000);
+}
+
+function formatRelativeDayOffset(offset) {
+  const days = Number(offset);
+  if (!Number.isFinite(days)) {
+    return "";
+  }
+  if (days === 0) {
+    return "today";
+  }
+  if (days === 1) {
+    return "tomorrow";
+  }
+  if (days === -1) {
+    return "yesterday";
+  }
+  if (days > 1) {
+    return `in ${days} days`;
+  }
+  return `${Math.abs(days)} days ago`;
+}
+
+function formatRelativeDayRange(minOffset, maxOffset) {
+  const min = Number(minOffset);
+  const max = Number(maxOffset);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return "";
+  }
+  if (min === max) {
+    return formatRelativeDayOffset(min);
+  }
+  if (min >= 1) {
+    return `in ${min}–${max} days`;
+  }
+  return `${formatRelativeDayOffset(min)} to ${formatRelativeDayOffset(max)}`;
+}
+
 function rollPriorityScheduledDate(level, baseDate, random = Math.random) {
   const span = level.maxDays - level.minDays + 1;
   const rolledOffset = Math.floor(random() * span);
@@ -10857,6 +10921,346 @@ function createPriorityRollDateItem(
     level,
     searchText: `${level.label} roll ${value} ${weekday} random priority`,
   };
+}
+
+function getPriorityLevelIconName(levelIndex) {
+  if (levelIndex === 0) {
+    return "signal-high";
+  }
+  if (levelIndex === 1) {
+    return "signal-medium";
+  }
+  if (levelIndex === 2) {
+    return "signal-low";
+  }
+  return "signal";
+}
+
+function normalizePriorityLevelIndex(property, level, levelIndex) {
+  if (Number.isInteger(levelIndex) && levelIndex >= 0) {
+    return levelIndex;
+  }
+  const levels = property && Array.isArray(property.levels)
+    ? property.levels
+    : [];
+  const directIndex = levels.indexOf(level);
+  if (directIndex >= 0) {
+    return directIndex;
+  }
+  const levelLabel = level && normalizeBulletPropertyValue(level.label);
+  const levelValue = level && normalizeBulletPropertyValue(level.value);
+  const matchingIndex = levels.findIndex(
+    (candidate) =>
+      normalizeBulletPropertyValue(candidate && candidate.label) === levelLabel &&
+      normalizeBulletPropertyValue(candidate && candidate.value) === levelValue,
+  );
+  return matchingIndex >= 0 ? matchingIndex : 0;
+}
+
+function parsePriorityNoticeScheduledValue(value) {
+  const text = normalizeBulletPropertyValue(value);
+  const validation = validateProjectScheduledDate(text);
+  if (!validation.valid) {
+    return Object.freeze({
+      text: text || validation.value,
+      valid: false,
+      date: null,
+      time: null,
+      weekday: "",
+    });
+  }
+  const date = projectScheduleLocalDate(validation);
+  return Object.freeze({
+    text: validation.value,
+    valid: true,
+    date,
+    time: getLocalDateStart(date).getTime(),
+    weekday: getBulletPropertyDateWeekday(date),
+  });
+}
+
+function getPriorityNoticeScheduleSummary(values, baseDate) {
+  const entries = (Array.isArray(values) ? values : [values])
+    .map(parsePriorityNoticeScheduledValue)
+    .filter((entry) => entry.text);
+  if (entries.length === 0) {
+    return Object.freeze({ dateText: "", relativeText: "" });
+  }
+  const validEntries = entries.filter((entry) => entry.valid);
+  if (validEntries.length !== entries.length) {
+    if (entries.length === 1) {
+      return Object.freeze({ dateText: entries[0].text, relativeText: "" });
+    }
+    return Object.freeze({
+      dateText: `${entries[0].text} to ${entries[entries.length - 1].text}`,
+      relativeText: "",
+    });
+  }
+
+  const sortedEntries = validEntries
+    .slice()
+    .sort((first, second) => first.time - second.time);
+  const first = sortedEntries[0];
+  const last = sortedEntries[sortedEntries.length - 1];
+  if (first.time === last.time) {
+    return Object.freeze({
+      dateText: `${first.text} · ${first.weekday}`,
+      relativeText: formatRelativeDayOffset(
+        getLocalDayOffset(baseDate, first.date),
+      ),
+    });
+  }
+
+  const minOffset = getLocalDayOffset(baseDate, first.date);
+  const maxOffset = getLocalDayOffset(baseDate, last.date);
+  return Object.freeze({
+    dateText: `${first.text} to ${last.text}`,
+    relativeText: formatRelativeDayRange(minOffset, maxOffset),
+  });
+}
+
+function normalizePriorityNoticeCount(value) {
+  return Math.max(0, Math.floor(numericOrDefault(value, 0)));
+}
+
+function getPriorityNoticeRecoveryCounts(outcome = {}) {
+  const recoveryCounts = outcome.recoveryCounts || {};
+  return Object.freeze({
+    ready: normalizePriorityNoticeCount(
+      recoveryCounts.ready ?? outcome.recoveredReadyTaskCount,
+    ),
+    next: normalizePriorityNoticeCount(
+      recoveryCounts.next ?? outcome.recoveredNextTaskCount,
+    ),
+    inProgress: normalizePriorityNoticeCount(
+      recoveryCounts.inProgress ?? outcome.recoveredInProgressTaskCount,
+    ),
+    stillBlocked: normalizePriorityNoticeCount(
+      recoveryCounts.stillBlocked ?? outcome.stillBlockedTaskCount,
+    ),
+    deferred: normalizePriorityNoticeCount(
+      recoveryCounts.deferred ?? outcome.deferredRecoveryTaskCount,
+    ),
+  });
+}
+
+function getPriorityNoticeBlockedText(count, scope) {
+  if (count <= 0) {
+    return "";
+  }
+  if (scope === "task") {
+    return "marked task Blocked";
+  }
+  return `marked ${formatCountLabel(count, "task")} Blocked`;
+}
+
+function getPriorityNoticeOutcomeParts(outcome = {}, scope = "task") {
+  const parts = [];
+  if (scope === "counted") {
+    parts.push(
+      ...getCountedTaskNoticeParts(
+        outcome.session,
+        normalizePriorityNoticeCount(outcome.unchangedTaskCount),
+      ),
+    );
+  }
+  const propagatedScheduleTaskCount = normalizePriorityNoticeCount(
+    outcome.propagatedScheduleTaskCount ?? outcome.scheduledTaskCount,
+  );
+  if (propagatedScheduleTaskCount > 0) {
+    parts.push(
+      `scheduled ${formatCountLabel(propagatedScheduleTaskCount, "task")}`,
+    );
+  }
+  const removedHideTaskCount = normalizePriorityNoticeCount(
+    outcome.removedHideTaskCount,
+  );
+  if (removedHideTaskCount > 0) {
+    parts.push(
+      `removed #hide from ${formatCountLabel(removedHideTaskCount, "task")}`,
+    );
+  }
+  const blockedText = getPriorityNoticeBlockedText(
+    normalizePriorityNoticeCount(outcome.blockedTaskCount),
+    scope,
+  );
+  if (blockedText) {
+    parts.push(blockedText);
+  }
+  const ambiguousTaskCount = normalizePriorityNoticeCount(
+    outcome.ambiguousTaskCount ?? outcome.ambiguousProjectTaskCount,
+  );
+  if (ambiguousTaskCount > 0) {
+    parts.push(
+      `${formatCountLabel(ambiguousTaskCount, "task")} with multiple scheduled fields unchanged`,
+    );
+  }
+  parts.push(...scheduledRecoveryNoticeParts(getPriorityNoticeRecoveryCounts(outcome)));
+  return Object.freeze(parts);
+}
+
+function getPriorityNoticeChipTone(text) {
+  if (/^recovered /.test(text)) {
+    return "ok";
+  }
+  if (/Blocked$/.test(text)) {
+    return "warn";
+  }
+  if (/^(scheduled|removed #hide)/.test(text)) {
+    return "info";
+  }
+  return "muted";
+}
+
+function getPriorityNoticeChipText(text) {
+  const markedMatch = /^marked (?:(\d+) tasks?|task) Blocked$/.exec(text);
+  if (!markedMatch) {
+    return text;
+  }
+  return markedMatch[1] ? `${markedMatch[1]} Blocked` : "Blocked";
+}
+
+function formatPriorityNoticeText(model) {
+  const parts = [];
+  if (model.textHeader) {
+    parts.push(model.textHeader);
+  }
+  if (model.dateText) {
+    const dateLabel = model.textDateLabel || model.dateLabel || "scheduled";
+    const relativeText = model.relativeText ? ` · ${model.relativeText}` : "";
+    parts.push(`${dateLabel} → ${model.dateText}${relativeText}`);
+  }
+  if (Array.isArray(model.outcomeTextParts)) {
+    parts.push(...model.outcomeTextParts);
+  }
+  return parts.join("; ");
+}
+
+function buildPriorityNoticeModel(options = {}) {
+  const property = options.property || {};
+  const level = options.level || {};
+  const scope = ["task", "counted", "project"].includes(options.scope)
+    ? options.scope
+    : "task";
+  const propertyName = normalizeBulletPropertyName(property.name) || "priority";
+  const scheduledName =
+    normalizeBulletPropertyName(property.schedules) || "scheduled";
+  const levelIndex = normalizePriorityLevelIndex(
+    property,
+    level,
+    options.levelIndex,
+  );
+  const pill = normalizeBulletPropertyValue(level.label);
+  const levelValue = normalizeBulletPropertyValue(level.value);
+  const taskCount = Math.max(
+    1,
+    normalizePriorityNoticeCount(options.taskCount || 1),
+  );
+  const scheduleSummary = getPriorityNoticeScheduleSummary(
+    options.scheduledValues || [],
+    options.baseDate instanceof Date
+      ? getLocalDateStart(options.baseDate)
+      : getLocalDateStart(new Date()),
+  );
+  const outcomeTextParts = getPriorityNoticeOutcomeParts(
+    options.outcome || {},
+    scope,
+  );
+  const textHeader =
+    scope === "counted"
+      ? `${propertyName} → ${pill} (${levelValue}) on ${formatCountLabel(
+          taskCount,
+          "task",
+        )}`
+      : `${propertyName} → ${pill} (${levelValue})`;
+  const model = {
+    iconName: getPriorityLevelIconName(levelIndex),
+    levelIndex,
+    pill,
+    countPill: scope === "counted" ? formatCountLabel(taskCount, "task") : "",
+    receipt: `[${propertyName}:: ${levelValue}]`,
+    dateLabel: scope === "project" ? `${scheduledName} (project)` : scheduledName,
+    textDateLabel: scheduledName,
+    dateText: scheduleSummary.dateText,
+    relativeText: scheduleSummary.relativeText,
+    chips: Object.freeze(
+      outcomeTextParts.map((part) =>
+        Object.freeze({
+          text: getPriorityNoticeChipText(part),
+          tone: getPriorityNoticeChipTone(part),
+        }),
+      ),
+    ),
+    outcomeTextParts,
+    textHeader,
+  };
+  model.text = formatPriorityNoticeText(model);
+  return Object.freeze(model);
+}
+
+function renderPriorityNoticeFragment(model, root) {
+  const levelClass =
+    Number.isInteger(model.levelIndex) &&
+    model.levelIndex >= 0 &&
+    model.levelIndex <= 2
+      ? ` is-level-${model.levelIndex}`
+      : "";
+  const card = root.createDiv({
+    cls: `bob-nh-notice${levelClass}`,
+    attr: { "aria-label": model.text },
+  });
+  const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
+  const iconEl = headerEl.createSpan({ cls: "bob-nh-notice-icon" });
+  applyIcon(iconEl, model.iconName);
+  headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.pill });
+  if (model.countPill) {
+    headerEl.createSpan({ cls: "bob-nh-notice-count", text: model.countPill });
+  }
+  headerEl.createSpan({ cls: "bob-nh-notice-receipt", text: model.receipt });
+
+  const dateEl = card.createDiv({ cls: "bob-nh-notice-date" });
+  const dateIconEl = dateEl.createSpan({ cls: "bob-nh-notice-date-icon" });
+  applyIcon(dateIconEl, "dices");
+  dateEl.createSpan({ cls: "bob-nh-notice-date-label", text: model.dateLabel });
+  dateEl.createSpan({ cls: "bob-nh-notice-date-value", text: model.dateText });
+  if (model.relativeText) {
+    dateEl.createSpan({
+      cls: "bob-nh-notice-relative",
+      text: model.relativeText,
+    });
+  }
+
+  if (model.chips.length > 0) {
+    const chipsEl = card.createDiv({ cls: "bob-nh-notice-chips" });
+    model.chips.forEach((chip) => {
+      chipsEl.createSpan({
+        cls: `bob-nh-notice-chip is-${chip.tone}`,
+        text: chip.text,
+      });
+    });
+  }
+
+  return card;
+}
+
+function showPriorityNotice(model, options = {}) {
+  const fallbackText =
+    model && typeof model.text === "string" ? model.text : String(model || "");
+  try {
+    if (typeof document === "undefined") {
+      showBulletPropertyNotice(fallbackText, options);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    if (!fragment || typeof fragment.createDiv !== "function") {
+      showBulletPropertyNotice(fallbackText, options);
+      return;
+    }
+    renderPriorityNoticeFragment(model, fragment);
+    showBulletPropertyNotice(fragment, options);
+  } catch (error) {
+    showBulletPropertyNotice(fallbackText, options);
+  }
 }
 
 function parseBulletPropertyTypedDate(query, baseDate) {
@@ -13778,16 +14182,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   getCountedTaskNoticeSuffix(session, unchangedTaskCount = 0) {
-    const parts = [];
-    if (unchangedTaskCount > 0) {
-      parts.push(`${formatCountLabel(unchangedTaskCount, "task")} unchanged`);
-    }
-    if (session && session.clamped) {
-      parts.push(
-        `requested ${session.requestedCount}, found ${session.actualCount} at end of note`,
-      );
-    }
-    return parts.length > 0 ? `; ${parts.join("; ")}` : "";
+    return getCountedTaskNoticeSuffix(session, unchangedTaskCount);
   }
 
   async setCountedBulletPropertyValue(
@@ -14034,50 +14429,30 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    const propagationSuffix =
-      plan.propagatedScheduleTaskCount > 0
-        ? `; scheduled ${formatCountLabel(
-            plan.propagatedScheduleTaskCount,
-            "task",
-          )}`
-        : "";
-    const hideSuffix =
-      plan.removedHideTaskCount > 0
-        ? `; removed #hide from ${formatCountLabel(
-            plan.removedHideTaskCount,
-            "task",
-          )}`
-        : "";
-    const blockedSuffix =
-      plan.blockedTaskCount > 0
-        ? `; marked ${formatCountLabel(
-            plan.blockedTaskCount,
-            "task",
-          )} Blocked`
-        : "";
-    const ambiguitySuffix =
-      plan.ambiguousProjectTaskCount > 0
-        ? `; ${formatCountLabel(
-            plan.ambiguousProjectTaskCount,
-            "task",
-          )} with multiple scheduled fields unchanged`
-        : "";
-    new Notice(
-      `${property.name} → ${level.label} (${level.value}) on ${formatCountLabel(
-        plan.changedTaskCount,
-        "task",
-      )}; ${property.schedules} rolled per task${this.getCountedTaskNoticeSuffix(
-        session,
-        plan.unchangedTaskCount,
-      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${scheduledRecoveryNoticeSuffix(
-        {
-          ready: plan.recoveredReadyTaskCount,
-          next: plan.recoveredNextTaskCount,
-          inProgress: plan.recoveredInProgressTaskCount,
-          stillBlocked: plan.stillBlockedTaskCount,
-          deferred: plan.deferredRecoveryTaskCount,
+    showPriorityNotice(
+      buildPriorityNoticeModel({
+        property,
+        level,
+        levelIndex: normalizePriorityLevelIndex(property, level),
+        baseDate,
+        scheduledValues: Array.from(scheduledValueByLine.values()),
+        taskCount: plan.changedTaskCount,
+        scope: "counted",
+        outcome: {
+          blockedTaskCount: plan.blockedTaskCount,
+          propagatedScheduleTaskCount: plan.propagatedScheduleTaskCount,
+          removedHideTaskCount: plan.removedHideTaskCount,
+          ambiguousTaskCount: plan.ambiguousProjectTaskCount,
+          unchangedTaskCount: plan.unchangedTaskCount,
+          session,
+          recoveredReadyTaskCount: plan.recoveredReadyTaskCount,
+          recoveredNextTaskCount: plan.recoveredNextTaskCount,
+          recoveredInProgressTaskCount: plan.recoveredInProgressTaskCount,
+          stillBlockedTaskCount: plan.stillBlockedTaskCount,
+          deferredRecoveryTaskCount: plan.deferredRecoveryTaskCount,
         },
-      )}`,
+      }),
+      options,
     );
     return true;
   }
@@ -14338,7 +14713,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    const today = new Date();
+    const today =
+      options.today instanceof Date ? getLocalDateStart(options.today) : new Date();
     let recoveryByLine = null;
     if (isDueInlineScheduledValue(value, today)) {
       recoveryByLine = await buildTargetScheduledRecoveryByLine(
@@ -14437,15 +14813,30 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         )} with multiple scheduled fields unchanged`,
       );
     }
-    new Notice(
-      `${options.noticePrefix || ""}${parts.join("; ")}${scheduledRecoveryNoticeSuffix({
-        ready: plan.recoveredReadyTaskCount,
-        next: plan.recoveredNextTaskCount,
-        inProgress: plan.recoveredInProgressTaskCount,
-        stillBlocked: plan.stillBlockedTaskCount,
-        deferred: plan.deferredRecoveryTaskCount,
-      })}`,
-    );
+    const recoveryCounts = {
+      ready: plan.recoveredReadyTaskCount,
+      next: plan.recoveredNextTaskCount,
+      inProgress: plan.recoveredInProgressTaskCount,
+      stillBlocked: plan.stillBlockedTaskCount,
+      deferred: plan.deferredRecoveryTaskCount,
+    };
+    if (typeof options.buildNotice === "function") {
+      showPriorityNotice(
+        options.buildNotice({
+          scheduled: plan.scheduled,
+          scheduledTaskCount: plan.scheduledTaskCount,
+          removedHideTaskCount: plan.removedHideTaskCount,
+          blockedTaskCount: plan.blockedTaskCount,
+          ambiguousTaskCount: plan.ambiguousTaskLines.length,
+          recoveryCounts,
+        }),
+        options,
+      );
+    } else {
+      new Notice(
+        `${parts.join("; ")}${scheduledRecoveryNoticeSuffix(recoveryCounts)}`,
+      );
+    }
     return true;
   }
 
@@ -14562,7 +14953,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     const lineText = writeContext.line;
-    const today = new Date();
+    const today =
+      options.today instanceof Date ? getLocalDateStart(options.today) : new Date();
     const hasScheduledValue =
       scheduledValue !== null && scheduledValue !== undefined;
     const normalizedScheduledValue = hasScheduledValue
@@ -14651,17 +15043,25 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       `${firstEdit ? firstEdit.name : "property"} → ${
         firstEdit ? normalizeBulletPropertyValue(firstEdit.value) : ""
       }`;
-    new Notice(
-      `${noticeText}${
-        blocked ? "; marked task Blocked" : ""
-      }${scheduledRecoveryNoticeSuffix({
-        ready: recoveryOutcome === "ready" ? 1 : 0,
-        next: recoveryOutcome === "next" ? 1 : 0,
-        inProgress: recoveryOutcome === "in-progress" ? 1 : 0,
-        stillBlocked: recoveryOutcome === "still-blocked" ? 1 : 0,
-        deferred: recoveryOutcome === "deferred" ? 1 : 0,
-      })}`,
-    );
+    const recoveryCounts = {
+      ready: recoveryOutcome === "ready" ? 1 : 0,
+      next: recoveryOutcome === "next" ? 1 : 0,
+      inProgress: recoveryOutcome === "in-progress" ? 1 : 0,
+      stillBlocked: recoveryOutcome === "still-blocked" ? 1 : 0,
+      deferred: recoveryOutcome === "deferred" ? 1 : 0,
+    };
+    if (typeof options.buildNotice === "function") {
+      showPriorityNotice(
+        options.buildNotice({ blocked, recoveryOutcome, recoveryCounts }),
+        options,
+      );
+    } else {
+      new Notice(
+        `${noticeText}${
+          blocked ? "; marked task Blocked" : ""
+        }${scheduledRecoveryNoticeSuffix(recoveryCounts)}`,
+      );
+    }
     return true;
   }
 
@@ -14691,17 +15091,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     const baseDate =
-      context.baseDate instanceof Date ? context.baseDate : new Date();
+      context.baseDate instanceof Date
+        ? getLocalDateStart(context.baseDate)
+        : getLocalDateStart(new Date());
     const rolledDate = rollPriorityScheduledDate(
       level,
       baseDate,
       typeof context.random === "function" ? context.random : Math.random,
     );
     const rolledValue = formatBulletPropertyDate(rolledDate);
-    const priorityNotice = `${property.name} → ${level.label} (${level.value})`;
-    const scheduledNotice = `${property.schedules} → ${rolledValue} · ${getBulletPropertyDateWeekday(
-      rolledDate,
-    )}`;
+    const levelIndex = normalizePriorityLevelIndex(property, level);
     const propertyContext =
       context.propertyContext ||
       getProjectNotePropertyContext(
@@ -14727,7 +15126,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         rolledValue,
         {
           inlineEdits: [{ name: property.name, value: level.value }],
-          noticePrefix: `${priorityNotice}; `,
+          today: baseDate,
+          buildNotice: (outcome) =>
+            buildPriorityNoticeModel({
+              property,
+              level,
+              levelIndex,
+              baseDate,
+              scheduledValues: [outcome.scheduled || rolledValue],
+              taskCount: 1,
+              scope: "project",
+              outcome,
+            }),
         },
       );
     }
@@ -14743,7 +15153,21 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       {
         filePath,
         expectedLine: lineText,
-        noticeText: `${priorityNotice}; ${scheduledNotice}`,
+        today: baseDate,
+        buildNotice: ({ blocked, recoveryCounts }) =>
+          buildPriorityNoticeModel({
+            property,
+            level,
+            levelIndex,
+            baseDate,
+            scheduledValues: [rolledValue],
+            taskCount: 1,
+            scope: "task",
+            outcome: {
+              blockedTaskCount: blocked ? 1 : 0,
+              recoveryCounts,
+            },
+          }),
         // Rebuild an existing schedules field after the priority, matching the
         // counted writer, so a level value outside Tasks' priority names can
         // never hide the rolled date from a right-to-left trailing-field parse.
@@ -19001,7 +19425,10 @@ module.exports.helpers = {
   getScheduledRecoveryMetadata,
   buildInteractiveScheduledRecoverySnapshot,
   reconcileBlockedScheduledTaskLine,
+  scheduledRecoveryNoticeParts,
   scheduledRecoveryNoticeSuffix,
+  getCountedTaskNoticeParts,
+  getCountedTaskNoticeSuffix,
   getMarkdownLineContexts,
   isOpenObsidianTaskLine,
   isPomodorosHeading,
@@ -19083,7 +19510,15 @@ module.exports.helpers = {
   isDueInlineScheduledValue,
   planCountedBulletPropertyBatch,
   planCountedLocalTaskDependency,
+  getLocalDayOffset,
+  formatRelativeDayOffset,
+  formatRelativeDayRange,
+  getPriorityLevelIconName,
   rollPriorityScheduledDate,
+  buildPriorityNoticeModel,
+  formatPriorityNoticeText,
+  renderPriorityNoticeFragment,
+  showPriorityNotice,
   createBulletPropertyDateItems,
   createPriorityRollDateItem,
   createBulletPropertyValueItems,

@@ -3686,6 +3686,93 @@ async function choosePriorityLevel(harness, label) {
   return picker;
 }
 
+function createFragmentNode(tag = "fragment", spec = {}) {
+  const node = {
+    tag,
+    attrs: {},
+    classes: [],
+    children: [],
+    text: "",
+    classList: {
+      add: (...classes) => {
+        for (const cls of classes.flatMap((item) =>
+          String(item || "").split(/\s+/),
+        )) {
+          if (cls && !node.classes.includes(cls)) {
+            node.classes.push(cls);
+          }
+        }
+      },
+    },
+    createDiv(childSpec = {}) {
+      return createFragmentChild(node, "div", childSpec);
+    },
+    createSpan(childSpec = {}) {
+      return createFragmentChild(node, "span", childSpec);
+    },
+    appendText(text) {
+      const child = createFragmentNode("text");
+      child.text = String(text);
+      node.children.push(child);
+      node.text += child.text;
+    },
+    setText(text) {
+      node.children = [];
+      node.text = "";
+      node.appendText(text);
+    },
+    setAttr(name, value) {
+      node.attrs[name] = String(value);
+    },
+  };
+  applyFragmentSpec(node, spec);
+  return node;
+}
+
+function createFragmentChild(parent, tag, spec) {
+  const child = createFragmentNode(tag, spec);
+  parent.children.push(child);
+  return child;
+}
+
+function applyFragmentSpec(node, spec) {
+  if (typeof spec === "string") {
+    node.classList.add(spec);
+    return;
+  }
+  if (!spec || typeof spec !== "object") {
+    return;
+  }
+  if (spec.cls) {
+    node.classList.add(spec.cls);
+  }
+  if (spec.attr) {
+    for (const [name, value] of Object.entries(spec.attr)) {
+      node.setAttr(name, value);
+    }
+  }
+  if (spec.text !== undefined) {
+    node.setText(spec.text);
+  }
+}
+
+function findFragmentNode(node, predicate) {
+  if (predicate(node)) {
+    return node;
+  }
+  for (const child of node.children || []) {
+    const match = findFragmentNode(child, predicate);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function nodeHasClass(className) {
+  return (node) => node.classes && node.classes.includes(className);
+}
+
 async function openBulletPropertyValueStage(harness, propertyName, options = {}) {
   assert.equal(harness.open(options), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
@@ -3696,6 +3783,264 @@ async function openBulletPropertyValueStage(harness, propertyName, options = {})
   await picker.openItemAtIndex(propertyIndex);
   return picker;
 }
+
+test("priority notice relative day helpers handle offsets ranges and icons", () => {
+  assert.equal(
+    helpers.getLocalDayOffset(new Date(2026, 7, 3, 23), new Date(2026, 7, 3)),
+    0,
+  );
+  assert.equal(
+    helpers.getLocalDayOffset(new Date(2026, 7, 3), new Date(2026, 7, 4)),
+    1,
+  );
+  assert.equal(
+    helpers.getLocalDayOffset(new Date(2026, 7, 3), new Date(2026, 8, 14)),
+    42,
+  );
+  assert.equal(
+    helpers.getLocalDayOffset(new Date(2026, 2, 7), new Date(2026, 2, 14)),
+    7,
+  );
+
+  assert.equal(helpers.formatRelativeDayOffset(0), "today");
+  assert.equal(helpers.formatRelativeDayOffset(1), "tomorrow");
+  assert.equal(helpers.formatRelativeDayOffset(2), "in 2 days");
+  assert.equal(helpers.formatRelativeDayOffset(42), "in 42 days");
+  assert.equal(helpers.formatRelativeDayOffset(-1), "yesterday");
+  assert.equal(helpers.formatRelativeDayOffset(-3), "3 days ago");
+
+  assert.equal(helpers.formatRelativeDayRange(3, 3), "in 3 days");
+  assert.equal(helpers.formatRelativeDayRange(2, 7), "in 2–7 days");
+  assert.equal(helpers.formatRelativeDayRange(0, 7), "today to in 7 days");
+
+  assert.equal(helpers.getPriorityLevelIconName(0), "signal-high");
+  assert.equal(helpers.getPriorityLevelIconName(1), "signal-medium");
+  assert.equal(helpers.getPriorityLevelIconName(2), "signal-low");
+  assert.equal(helpers.getPriorityLevelIconName(3), "signal");
+  assert.equal(helpers.getPriorityLevelIconName(9), "signal");
+});
+
+test("priority notice model summarizes single counted and project writes", () => {
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+  const level = property.levels[0];
+  const baseDate = new Date(2026, 7, 3);
+
+  const single = helpers.buildPriorityNoticeModel({
+    property,
+    level,
+    levelIndex: 0,
+    baseDate,
+    scheduledValues: ["2026-08-06"],
+    taskCount: 1,
+    scope: "task",
+    outcome: { blockedTaskCount: 1 },
+  });
+  assert.deepEqual(
+    {
+      iconName: single.iconName,
+      pill: single.pill,
+      countPill: single.countPill,
+      receipt: single.receipt,
+      dateLabel: single.dateLabel,
+      dateText: single.dateText,
+      relativeText: single.relativeText,
+      chips: single.chips,
+      text: single.text,
+    },
+    {
+      iconName: "signal-high",
+      pill: "P2",
+      countPill: "",
+      receipt: "[priority:: high]",
+      dateLabel: "scheduled",
+      dateText: "2026-08-06 · Thu",
+      relativeText: "in 3 days",
+      chips: [{ text: "Blocked", tone: "warn" }],
+      text: "priority → P2 (high); scheduled → 2026-08-06 · Thu · in 3 days; marked task Blocked",
+    },
+  );
+
+  const counted = helpers.buildPriorityNoticeModel({
+    property,
+    level,
+    levelIndex: 0,
+    baseDate,
+    scheduledValues: ["2026-08-05", "2026-08-08", "2026-08-10"],
+    taskCount: 3,
+    scope: "counted",
+    outcome: {
+      blockedTaskCount: 3,
+      unchangedTaskCount: 1,
+      session: { clamped: true, requestedCount: 5, actualCount: 3 },
+    },
+  });
+  assert.equal(counted.countPill, "3 tasks");
+  assert.equal(counted.dateText, "2026-08-05 to 2026-08-10");
+  assert.equal(counted.relativeText, "in 2–7 days");
+  assert.deepEqual(counted.chips, [
+    { text: "1 task unchanged", tone: "muted" },
+    { text: "requested 5, found 3 at end of note", tone: "muted" },
+    { text: "3 Blocked", tone: "warn" },
+  ]);
+  assert.equal(
+    counted.text,
+    "priority → P2 (high) on 3 tasks; scheduled → 2026-08-05 to 2026-08-10 · in 2–7 days; 1 task unchanged; requested 5, found 3 at end of note; marked 3 tasks Blocked",
+  );
+
+  const project = helpers.buildPriorityNoticeModel({
+    property,
+    level,
+    levelIndex: 0,
+    baseDate,
+    scheduledValues: ["2026-08-05"],
+    taskCount: 1,
+    scope: "project",
+    outcome: {
+      scheduledTaskCount: 4,
+      removedHideTaskCount: 2,
+      blockedTaskCount: 4,
+      recoveryCounts: { ready: 1 },
+    },
+  });
+  assert.equal(project.dateLabel, "scheduled (project)");
+  assert.equal(project.dateText, "2026-08-05 · Wed");
+  assert.equal(project.relativeText, "in 2 days");
+  assert.deepEqual(project.chips, [
+    { text: "scheduled 4 tasks", tone: "info" },
+    { text: "removed #hide from 2 tasks", tone: "info" },
+    { text: "4 Blocked", tone: "warn" },
+    { text: "recovered 1 task Ready", tone: "ok" },
+  ]);
+  assert.equal(
+    project.text,
+    "priority → P2 (high); scheduled → 2026-08-05 · Wed · in 2 days; scheduled 4 tasks; removed #hide from 2 tasks; marked 4 tasks Blocked; recovered 1 task Ready",
+  );
+
+  const sameDayCounted = helpers.buildPriorityNoticeModel({
+    property,
+    level,
+    baseDate,
+    scheduledValues: ["2026-08-05", "2026-08-05"],
+    taskCount: 2,
+    scope: "counted",
+  });
+  assert.equal(sameDayCounted.dateText, "2026-08-05 · Wed");
+  assert.equal(sameDayCounted.relativeText, "in 2 days");
+
+  const invalidDate = helpers.buildPriorityNoticeModel({
+    property,
+    level,
+    baseDate,
+    scheduledValues: ["not-a-date"],
+    taskCount: 1,
+    scope: "task",
+  });
+  assert.equal(invalidDate.dateText, "not-a-date");
+  assert.equal(invalidDate.relativeText, "");
+  assert.doesNotMatch(invalidDate.text, /NaN/);
+});
+
+test("priority notice renderer builds an accessible fragment", () => {
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+  const model = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[0],
+    levelIndex: 0,
+    baseDate: new Date(2026, 7, 3),
+    scheduledValues: ["2026-08-06"],
+    taskCount: 1,
+    scope: "task",
+    outcome: { blockedTaskCount: 1 },
+  });
+  const root = createFragmentNode();
+
+  helpers.renderPriorityNoticeFragment(model, root);
+
+  const card = findFragmentNode(root, nodeHasClass("bob-nh-notice"));
+  assert.ok(card);
+  assert.ok(card.classes.includes("is-level-0"));
+  assert.equal(card.attrs["aria-label"], model.text);
+  assert.equal(
+    findFragmentNode(root, nodeHasClass("bob-nh-notice-relative")).text,
+    "in 3 days",
+  );
+  assert.equal(
+    findFragmentNode(root, nodeHasClass("bob-nh-notice-chip")).text,
+    "Blocked",
+  );
+
+  const noChipRoot = createFragmentNode();
+  helpers.renderPriorityNoticeFragment(
+    helpers.buildPriorityNoticeModel({
+      property,
+      level: property.levels[1],
+      levelIndex: 1,
+      baseDate: new Date(2026, 7, 3),
+      scheduledValues: ["2026-08-11"],
+      taskCount: 1,
+      scope: "task",
+    }),
+    noChipRoot,
+  );
+  assert.equal(findFragmentNode(noChipRoot, nodeHasClass("bob-nh-notice-chips")), null);
+});
+
+test("priority notice falls back to one plain notice without a DOM", () => {
+  notices.length = 0;
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+  const model = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[0],
+    baseDate: new Date(2026, 7, 3),
+    scheduledValues: ["2026-08-06"],
+    taskCount: 1,
+    scope: "task",
+  });
+
+  helpers.showPriorityNotice(model);
+
+  assert.deepEqual(notices, [model.text]);
+});
+
+test("priority notice falls back to plain text when fragment rendering fails", () => {
+  notices.length = 0;
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+  const model = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[0],
+    baseDate: new Date(2026, 7, 3),
+    scheduledValues: ["2026-08-06"],
+    taskCount: 1,
+    scope: "task",
+  });
+  const previousDocument = global.document;
+  global.document = {
+    createDocumentFragment: () => ({
+      createDiv: () => {
+        throw new Error("render failed");
+      },
+    }),
+  };
+  try {
+    helpers.showPriorityNotice(model);
+  } finally {
+    if (previousDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = previousDocument;
+    }
+  }
+
+  assert.deepEqual(notices, [model.text]);
+});
 
 test("priority scheduling rolls inclusively and clamps a random value of one", () => {
   const level = { minDays: 2, maxDays: 7 };
@@ -3785,7 +4130,7 @@ test("priority picker writes priority then rolled schedule in one guarded edit",
     /- \[\?\] #task One \[priority:: high\] \[scheduled:: 2026-08-05\] \^one/,
   );
   assert.deepEqual(notices, [
-    "priority → P2 (high); scheduled → 2026-08-05 · Wed; marked task Blocked",
+    "priority → P2 (high); scheduled → 2026-08-05 · Wed · in 2 days; marked task Blocked",
   ]);
 });
 
@@ -3865,7 +4210,10 @@ test("priority picker writes project priority inline and schedule to frontmatter
   assert.match(harness.editor.content, /#task Ship.*\[priority:: high\] \^prj/);
   assert.doesNotMatch(harness.editor.content, /#task Ship.*\[scheduled::/);
   assert.equal(notices.length, 1);
-  assert.match(notices[0], /^priority → P2 \(high\); scheduled → 2026-08-05/);
+  assert.match(
+    notices[0],
+    /^priority → P2 \(high\); scheduled → 2026-08-05 · Wed · in 2 days/,
+  );
 });
 
 test("counted priority picker rolls an independent schedule for every task", async () => {
@@ -3905,7 +4253,7 @@ test("counted priority picker rolls an independent schedule for every task", asy
     ],
   );
   assert.deepEqual(notices, [
-    "priority → P2 (high) on 3 tasks; scheduled rolled per task; marked 3 tasks Blocked",
+    "priority → P2 (high) on 3 tasks; scheduled → 2026-08-05 to 2026-08-10 · in 2–7 days; marked 3 tasks Blocked",
   ]);
 });
 

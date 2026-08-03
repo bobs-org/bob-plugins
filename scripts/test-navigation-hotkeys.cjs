@@ -4099,6 +4099,30 @@ test("priority notice renderer builds an accessible fragment", () => {
   assert.doesNotMatch(invalidCard.attrs["aria-label"], /NaN/);
 });
 
+test("priority notice stylesheet scopes Obsidian notice overrides and uses theme tokens", () => {
+  const stylesPath = path.join(
+    __dirname,
+    "../plugins/bob-navigation-hotkeys/styles.css",
+  );
+  const styles = fs.readFileSync(stylesPath, "utf8");
+  const noticeClassPattern = /(^|[^\w-])\.notice(?![\w-])/;
+  const unscopedNoticeSelectors = [...styles.matchAll(/([^{}]+)\{/g)]
+    .map((match) => match[1].trim())
+    .filter((selector) => noticeClassPattern.test(selector))
+    .filter((selector) => !selector.includes(".bob-nh-notice"));
+
+  assert.deepEqual(unscopedNoticeSelectors, []);
+
+  const marker = "/* --- Priority notice";
+  const priorityNoticeStart = styles.indexOf(marker);
+  assert.notEqual(priorityNoticeStart, -1);
+  const priorityNoticeStyles = styles.slice(priorityNoticeStart);
+
+  assert.doesNotMatch(priorityNoticeStyles, /#[0-9a-f]{6}\b/i);
+  assert.doesNotMatch(priorityNoticeStyles, /\brgb\(/i);
+  assert.doesNotMatch(priorityNoticeStyles, /\bhsl\(/i);
+});
+
 test("priority notice falls back to one plain notice without a DOM", () => {
   notices.length = 0;
   const property = createPriorityPickerConfig().properties.find(

@@ -10984,16 +10984,40 @@ function getPriorityNoticeScheduleSummary(values, baseDate) {
     .map(parsePriorityNoticeScheduledValue)
     .filter((entry) => entry.text);
   if (entries.length === 0) {
-    return Object.freeze({ dateText: "", relativeText: "" });
+    return Object.freeze({
+      exactDateText: "",
+      dateStartText: "",
+      dateEndText: "",
+      weekdayText: "",
+      relativeText: "",
+      textDateText: "",
+      dateText: "",
+    });
   }
   const validEntries = entries.filter((entry) => entry.valid);
   if (validEntries.length !== entries.length) {
     if (entries.length === 1) {
-      return Object.freeze({ dateText: entries[0].text, relativeText: "" });
+      return Object.freeze({
+        exactDateText: entries[0].text,
+        dateStartText: entries[0].text,
+        dateEndText: "",
+        weekdayText: "",
+        relativeText: "",
+        textDateText: entries[0].text,
+        dateText: entries[0].text,
+      });
     }
+    const firstText = entries[0].text;
+    const lastText = entries[entries.length - 1].text;
+    const textDateText = `${firstText} to ${lastText}`;
     return Object.freeze({
-      dateText: `${entries[0].text} to ${entries[entries.length - 1].text}`,
+      exactDateText: `${firstText} → ${lastText}`,
+      dateStartText: firstText,
+      dateEndText: lastText,
+      weekdayText: "",
       relativeText: "",
+      textDateText,
+      dateText: textDateText,
     });
   }
 
@@ -11003,19 +11027,31 @@ function getPriorityNoticeScheduleSummary(values, baseDate) {
   const first = sortedEntries[0];
   const last = sortedEntries[sortedEntries.length - 1];
   if (first.time === last.time) {
+    const textDateText = `${first.text} · ${first.weekday}`;
     return Object.freeze({
-      dateText: `${first.text} · ${first.weekday}`,
+      exactDateText: first.text,
+      dateStartText: first.text,
+      dateEndText: "",
+      weekdayText: first.weekday,
       relativeText: formatRelativeDayOffset(
         getLocalDayOffset(baseDate, first.date),
       ),
+      textDateText,
+      dateText: textDateText,
     });
   }
 
   const minOffset = getLocalDayOffset(baseDate, first.date);
   const maxOffset = getLocalDayOffset(baseDate, last.date);
+  const textDateText = `${first.text} to ${last.text}`;
   return Object.freeze({
-    dateText: `${first.text} to ${last.text}`,
+    exactDateText: `${first.text} → ${last.text}`,
+    dateStartText: first.text,
+    dateEndText: last.text,
+    weekdayText: "",
     relativeText: formatRelativeDayRange(minOffset, maxOffset),
+    textDateText,
+    dateText: textDateText,
   });
 }
 
@@ -11125,10 +11161,11 @@ function formatPriorityNoticeText(model) {
   if (model.textHeader) {
     parts.push(model.textHeader);
   }
-  if (model.dateText) {
+  const dateText = model.textDateText || model.dateText || model.exactDateText;
+  if (dateText) {
     const dateLabel = model.textDateLabel || model.dateLabel || "scheduled";
     const relativeText = model.relativeText ? ` · ${model.relativeText}` : "";
-    parts.push(`${dateLabel} → ${model.dateText}${relativeText}`);
+    parts.push(`${dateLabel} → ${dateText}${relativeText}`);
   }
   if (Array.isArray(model.outcomeTextParts)) {
     parts.push(...model.outcomeTextParts);
@@ -11181,6 +11218,11 @@ function buildPriorityNoticeModel(options = {}) {
     receipt: `[${propertyName}:: ${levelValue}]`,
     dateLabel: scope === "project" ? `${scheduledName} (project)` : scheduledName,
     textDateLabel: scheduledName,
+    exactDateText: scheduleSummary.exactDateText,
+    dateStartText: scheduleSummary.dateStartText,
+    dateEndText: scheduleSummary.dateEndText,
+    weekdayText: scheduleSummary.weekdayText,
+    textDateText: scheduleSummary.textDateText,
     dateText: scheduleSummary.dateText,
     relativeText: scheduleSummary.relativeText,
     chips: Object.freeze(
@@ -11219,14 +11261,47 @@ function renderPriorityNoticeFragment(model, root) {
   headerEl.createSpan({ cls: "bob-nh-notice-receipt", text: model.receipt });
 
   const dateEl = card.createDiv({ cls: "bob-nh-notice-date" });
-  const dateIconEl = dateEl.createSpan({ cls: "bob-nh-notice-date-icon" });
+  const dateHeadingEl = dateEl.createDiv({
+    cls: "bob-nh-notice-date-heading",
+  });
+  const dateIconEl = dateHeadingEl.createSpan({ cls: "bob-nh-notice-date-icon" });
   applyIcon(dateIconEl, "dices");
-  dateEl.createSpan({ cls: "bob-nh-notice-date-label", text: model.dateLabel });
-  dateEl.createSpan({ cls: "bob-nh-notice-date-value", text: model.dateText });
+  dateHeadingEl.createSpan({
+    cls: "bob-nh-notice-date-label",
+    text: model.dateLabel,
+  });
   if (model.relativeText) {
-    dateEl.createSpan({
+    dateHeadingEl.createSpan({
       cls: "bob-nh-notice-relative",
       text: model.relativeText,
+    });
+  }
+  const receiptEl = dateEl.createDiv({
+    cls: "bob-nh-notice-date-receipt",
+  });
+  receiptEl.createSpan({
+    cls: "bob-nh-notice-date-iso",
+    text: model.dateStartText || model.exactDateText || "",
+  });
+  if (model.dateEndText) {
+    receiptEl.createSpan({
+      cls: "bob-nh-notice-date-arrow",
+      text: "→",
+      attr: { "aria-hidden": "true" },
+    });
+    receiptEl.createSpan({
+      cls: "bob-nh-notice-date-iso",
+      text: model.dateEndText,
+    });
+  } else if (model.weekdayText) {
+    receiptEl.createSpan({
+      cls: "bob-nh-notice-date-separator",
+      text: "·",
+      attr: { "aria-hidden": "true" },
+    });
+    receiptEl.createSpan({
+      cls: "bob-nh-notice-date-weekday",
+      text: model.weekdayText,
     });
   }
 

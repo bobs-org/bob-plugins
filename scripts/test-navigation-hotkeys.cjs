@@ -3769,6 +3769,16 @@ function findFragmentNode(node, predicate) {
   return null;
 }
 
+function collectFragmentNodes(node, predicate, matches = []) {
+  if (predicate(node)) {
+    matches.push(node);
+  }
+  for (const child of node.children || []) {
+    collectFragmentNodes(child, predicate, matches);
+  }
+  return matches;
+}
+
 function nodeHasClass(className) {
   return (node) => node.classes && node.classes.includes(className);
 }
@@ -3845,6 +3855,11 @@ test("priority notice model summarizes single counted and project writes", () =>
       receipt: single.receipt,
       dateLabel: single.dateLabel,
       dateText: single.dateText,
+      exactDateText: single.exactDateText,
+      dateStartText: single.dateStartText,
+      dateEndText: single.dateEndText,
+      weekdayText: single.weekdayText,
+      textDateText: single.textDateText,
       relativeText: single.relativeText,
       chips: single.chips,
       text: single.text,
@@ -3856,6 +3871,11 @@ test("priority notice model summarizes single counted and project writes", () =>
       receipt: "[priority:: high]",
       dateLabel: "scheduled",
       dateText: "2026-08-06 · Thu",
+      exactDateText: "2026-08-06",
+      dateStartText: "2026-08-06",
+      dateEndText: "",
+      weekdayText: "Thu",
+      textDateText: "2026-08-06 · Thu",
       relativeText: "in 3 days",
       chips: [{ text: "Blocked", tone: "warn" }],
       text: "priority → P2 (high); scheduled → 2026-08-06 · Thu · in 3 days; marked task Blocked",
@@ -3867,7 +3887,7 @@ test("priority notice model summarizes single counted and project writes", () =>
     level,
     levelIndex: 0,
     baseDate,
-    scheduledValues: ["2026-08-05", "2026-08-08", "2026-08-10"],
+    scheduledValues: ["2026-08-10", "2026-08-05", "2026-08-08"],
     taskCount: 3,
     scope: "counted",
     outcome: {
@@ -3878,6 +3898,11 @@ test("priority notice model summarizes single counted and project writes", () =>
   });
   assert.equal(counted.countPill, "3 tasks");
   assert.equal(counted.dateText, "2026-08-05 to 2026-08-10");
+  assert.equal(counted.exactDateText, "2026-08-05 → 2026-08-10");
+  assert.equal(counted.dateStartText, "2026-08-05");
+  assert.equal(counted.dateEndText, "2026-08-10");
+  assert.equal(counted.weekdayText, "");
+  assert.equal(counted.textDateText, "2026-08-05 to 2026-08-10");
   assert.equal(counted.relativeText, "in 2–7 days");
   assert.deepEqual(counted.chips, [
     { text: "1 task unchanged", tone: "muted" },
@@ -3906,6 +3931,11 @@ test("priority notice model summarizes single counted and project writes", () =>
   });
   assert.equal(project.dateLabel, "scheduled (project)");
   assert.equal(project.dateText, "2026-08-05 · Wed");
+  assert.equal(project.exactDateText, "2026-08-05");
+  assert.equal(project.dateStartText, "2026-08-05");
+  assert.equal(project.dateEndText, "");
+  assert.equal(project.weekdayText, "Wed");
+  assert.equal(project.textDateText, "2026-08-05 · Wed");
   assert.equal(project.relativeText, "in 2 days");
   assert.deepEqual(project.chips, [
     { text: "scheduled 4 tasks", tone: "info" },
@@ -3927,6 +3957,10 @@ test("priority notice model summarizes single counted and project writes", () =>
     scope: "counted",
   });
   assert.equal(sameDayCounted.dateText, "2026-08-05 · Wed");
+  assert.equal(sameDayCounted.exactDateText, "2026-08-05");
+  assert.equal(sameDayCounted.dateStartText, "2026-08-05");
+  assert.equal(sameDayCounted.dateEndText, "");
+  assert.equal(sameDayCounted.weekdayText, "Wed");
   assert.equal(sameDayCounted.relativeText, "in 2 days");
 
   const invalidDate = helpers.buildPriorityNoticeModel({
@@ -3938,6 +3972,10 @@ test("priority notice model summarizes single counted and project writes", () =>
     scope: "task",
   });
   assert.equal(invalidDate.dateText, "not-a-date");
+  assert.equal(invalidDate.exactDateText, "not-a-date");
+  assert.equal(invalidDate.dateStartText, "not-a-date");
+  assert.equal(invalidDate.dateEndText, "");
+  assert.equal(invalidDate.weekdayText, "");
   assert.equal(invalidDate.relativeText, "");
   assert.doesNotMatch(invalidDate.text, /NaN/);
 });
@@ -3969,9 +4007,52 @@ test("priority notice renderer builds an accessible fragment", () => {
     "in 3 days",
   );
   assert.equal(
+    findFragmentNode(root, nodeHasClass("bob-nh-notice-date-label")).text,
+    "scheduled",
+  );
+  assert.equal(
+    findFragmentNode(root, nodeHasClass("bob-nh-notice-date-iso")).text,
+    "2026-08-06",
+  );
+  assert.equal(
+    findFragmentNode(root, nodeHasClass("bob-nh-notice-date-weekday")).text,
+    "Thu",
+  );
+  assert.match(card.attrs["aria-label"], /2026-08-06/);
+  assert.equal(
     findFragmentNode(root, nodeHasClass("bob-nh-notice-chip")).text,
     "Blocked",
   );
+
+  const rangeRoot = createFragmentNode();
+  helpers.renderPriorityNoticeFragment(
+    helpers.buildPriorityNoticeModel({
+      property,
+      level: property.levels[0],
+      levelIndex: 0,
+      baseDate: new Date(2026, 7, 3),
+      scheduledValues: ["2026-08-10", "2026-08-05", "2026-08-08"],
+      taskCount: 3,
+      scope: "counted",
+    }),
+    rangeRoot,
+  );
+  assert.deepEqual(
+    collectFragmentNodes(
+      rangeRoot,
+      nodeHasClass("bob-nh-notice-date-iso"),
+    ).map((node) => node.text),
+    ["2026-08-05", "2026-08-10"],
+  );
+  const rangeArrow = findFragmentNode(
+    rangeRoot,
+    nodeHasClass("bob-nh-notice-date-arrow"),
+  );
+  assert.equal(rangeArrow.text, "→");
+  assert.equal(rangeArrow.attrs["aria-hidden"], "true");
+  const rangeCard = findFragmentNode(rangeRoot, nodeHasClass("bob-nh-notice"));
+  assert.match(rangeCard.attrs["aria-label"], /2026-08-05/);
+  assert.match(rangeCard.attrs["aria-label"], /2026-08-10/);
 
   const noChipRoot = createFragmentNode();
   helpers.renderPriorityNoticeFragment(
@@ -3980,13 +4061,42 @@ test("priority notice renderer builds an accessible fragment", () => {
       level: property.levels[1],
       levelIndex: 1,
       baseDate: new Date(2026, 7, 3),
-      scheduledValues: ["2026-08-11"],
+      scheduledValues: ["2026-08-05"],
       taskCount: 1,
-      scope: "task",
+      scope: "project",
     }),
     noChipRoot,
   );
+  assert.equal(
+    findFragmentNode(noChipRoot, nodeHasClass("bob-nh-notice-date-label")).text,
+    "scheduled (project)",
+  );
   assert.equal(findFragmentNode(noChipRoot, nodeHasClass("bob-nh-notice-chips")), null);
+
+  const invalidRoot = createFragmentNode();
+  const longInvalidReceipt =
+    "not-a-date-with-a-very-long-raw-receipt-value-2026-08-what";
+  const invalidModel = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[2],
+    levelIndex: 2,
+    baseDate: new Date(2026, 7, 3),
+    scheduledValues: [longInvalidReceipt],
+    taskCount: 1,
+    scope: "task",
+  });
+  helpers.renderPriorityNoticeFragment(invalidModel, invalidRoot);
+  assert.equal(
+    findFragmentNode(invalidRoot, nodeHasClass("bob-nh-notice-date-iso")).text,
+    longInvalidReceipt,
+  );
+  assert.equal(
+    findFragmentNode(invalidRoot, nodeHasClass("bob-nh-notice-relative")),
+    null,
+  );
+  const invalidCard = findFragmentNode(invalidRoot, nodeHasClass("bob-nh-notice"));
+  assert.match(invalidCard.attrs["aria-label"], /not-a-date-with-a-very-long/);
+  assert.doesNotMatch(invalidCard.attrs["aria-label"], /NaN/);
 });
 
 test("priority notice falls back to one plain notice without a DOM", () => {

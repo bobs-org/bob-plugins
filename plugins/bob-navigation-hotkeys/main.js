@@ -16284,6 +16284,41 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
   }
 
+  isWorkspaceLeafPinned(leaf) {
+    if (!leaf || (typeof leaf !== "object" && typeof leaf !== "function")) {
+      return false;
+    }
+
+    try {
+      if (leaf.pinned) {
+        return true;
+      }
+    } catch (error) {
+      // Fall through to the view-state representations.
+    }
+
+    let viewState = null;
+    try {
+      viewState = this.getLeafViewState(leaf);
+    } catch (error) {
+      return false;
+    }
+    if (!viewState || typeof viewState !== "object") {
+      return false;
+    }
+
+    try {
+      if (viewState.pinned) {
+        return true;
+      }
+
+      const state = viewState.state;
+      return Boolean(state && typeof state === "object" && state.pinned);
+    } catch (error) {
+      return false;
+    }
+  }
+
   registerVimMappingsWhenReady() {
     const workspace = this.app && this.app.workspace;
     if (!workspace || typeof workspace.onLayoutReady !== "function") {
@@ -16667,6 +16702,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    leavesToClose = leavesToClose.filter(
+      (leaf) => !this.isWorkspaceLeafPinned(leaf),
+    );
     if (leavesToClose.length === 0) {
       return false;
     }

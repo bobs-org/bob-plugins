@@ -1,9 +1,9 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "1.13.14",
+  "version": "1.14.0",
   "minAppVersion": "1.8.7",
-  "description": "Open and manage related notes and tabs, including project schedule propagation to task-level scheduled properties and Blocked status.",
+  "description": "Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

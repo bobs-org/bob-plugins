@@ -1125,6 +1125,50 @@ test("counted property metadata distinguishes absent, common, and mixed values",
   assert.equal(byName.get("created").defined, false);
 });
 
+test("counted priority metadata reports labels for common and mixed values", () => {
+  const config = createPriorityPickerConfig();
+  const commonContent = [
+    "- [ ] #task One [priority:: high] ^one",
+    "- [ ] #task Two [priority:: high] ^two",
+  ].join("\n");
+  const commonSession = helpers.discoverCountedObsidianTaskTargets(
+    commonContent,
+    0,
+    1,
+  );
+  const common = helpers.createCountedBulletPropertyItems(
+    config,
+    commonContent,
+    commonSession,
+  );
+  const commonPriority = common.items.find(
+    (item) => item.property.name === "priority",
+  );
+  assert.equal(commonPriority.valueState, "common");
+  assert.equal(commonPriority.currentValue, "high");
+  assert.equal(commonPriority.currentLabel, "P2");
+
+  const mixedContent = commonContent.replace(
+    "Two [priority:: high]",
+    "Two [priority:: low]",
+  );
+  const mixedSession = helpers.discoverCountedObsidianTaskTargets(
+    mixedContent,
+    0,
+    1,
+  );
+  const mixed = helpers.createCountedBulletPropertyItems(
+    config,
+    mixedContent,
+    mixedSession,
+  );
+  const mixedPriority = mixed.items.find(
+    (item) => item.property.name === "priority",
+  );
+  assert.equal(mixedPriority.valueState, "mixed");
+  assert.deepEqual(mixedPriority.currentLabels, ["P2", "P4"]);
+});
+
 test("counted scheduled planning updates the motivating three tasks atomically", () => {
   const input = [
     "- [ ] #task Read SASE beads [created:: 2026-07-01] ^read-sase-beads",
@@ -3781,6 +3825,154 @@ test("priority picker writes project priority inline and schedule to frontmatter
   assert.doesNotMatch(harness.editor.content, /#task Ship.*\[scheduled::/);
   assert.equal(notices.length, 1);
   assert.match(notices[0], /^priority → P2 \(high\); scheduled → 2026-08-05/);
+});
+
+test("counted priority picker rolls an independent schedule for every task", async () => {
+  notices.length = 0;
+  const rolls = [0, 0.5, 0.999999];
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    baseDate: new Date(2026, 7, 3),
+    random: () => rolls.shift(),
+  });
+
+  assert.equal(
+    harness.open({ countExplicit: true, additionalTaskCount: 2 }),
+    true,
+  );
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const propertyIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "priority",
+  );
+  await picker.openItemAtIndex(propertyIndex);
+  const levelIndex = picker.visibleItems.findIndex(
+    (item) => item.label === "P2",
+  );
+  await picker.openItemAtIndex(levelIndex);
+
+  assert.equal(harness.editor.transactions.length, 1);
+  assert.deepEqual(
+    harness.editor.content.split("\n").map((line) => ({
+      status: helpers.getObsidianTaskCheckboxStatus(line),
+      priority: helpers.findBulletPropertyField(line, "priority").value,
+      scheduled: helpers.findBulletPropertyField(line, "scheduled").value,
+    })),
+    [
+      { status: "?", priority: "high", scheduled: "2026-08-05" },
+      { status: "?", priority: "high", scheduled: "2026-08-08" },
+      { status: "?", priority: "high", scheduled: "2026-08-10" },
+    ],
+  );
+  assert.deepEqual(notices, [
+    "priority → P2 (high) on 3 tasks; scheduled rolled per task; marked 3 tasks Blocked",
+  ]);
+});
+
+test("counted priority planning keeps project schedules in frontmatter", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [ ] #task Ship ^prj",
+    "- [/] #task Follow up ^follow",
+  ].join("\r\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 3, 1);
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "priority",
+    null,
+    {
+      operation: "set-priority",
+      priorityValue: "high",
+      scheduledPropertyName: "scheduled",
+      scheduledValueByLine: new Map([
+        [3, "2026-08-05"],
+        [4, "2026-08-08"],
+      ]),
+      today: new Date(2026, 7, 3),
+    },
+  );
+
+  assert.equal(plan.valid, true);
+  assert.match(plan.content, /^scheduled: 2026-08-05$/m);
+  assert.match(plan.content, /#task Ship.*\[priority:: high\].*\^prj/);
+  assert.doesNotMatch(plan.content, /#task Ship.*\[scheduled::/);
+  assert.match(
+    plan.content,
+    /#task Follow up.*\[priority:: high\] \[scheduled:: 2026-08-08\].*\^follow/,
+  );
+});
+
+test("counted priority planning evaluates Blocked recovery per rolled date", () => {
+  const input = [
+    "- [?] #task Due [scheduled:: 2099-01-01] ^due",
+    "- [ ] #task Future ^future",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 1);
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "priority",
+    null,
+    {
+      operation: "set-priority",
+      priorityValue: "high",
+      scheduledPropertyName: "scheduled",
+      scheduledValueByLine: new Map([
+        [0, "2026-08-03"],
+        [1, "2026-08-04"],
+      ]),
+      today: new Date(2026, 7, 3),
+      recoveryByLine: new Map([[0, { state: "ready", rank: " " }]]),
+    },
+  );
+
+  assert.equal(plan.valid, true);
+  assert.deepEqual(
+    plan.content
+      .split("\n")
+      .map((line) => helpers.getObsidianTaskCheckboxStatus(line)),
+    [" ", "?"],
+  );
+  assert.equal(plan.recoveredReadyTaskCount, 1);
+  assert.equal(plan.blockedTaskCount, 1);
+});
+
+test("counted priority runtime aborts a stale session without rolling writes", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor(
+    "- [ ] #task One\n- [ ] #task Two",
+    { line: 0, ch: 4 },
+  );
+  const session = helpers.discoverCountedObsidianTaskTargets(
+    editor.content,
+    0,
+    1,
+  );
+  editor.content = editor.content.replace("Two", "Two changed");
+  const file = { path: "Tasks.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+
+  assert.equal(
+    await plugin.setCountedBulletPriorityValue(
+      editor,
+      { line: 0, ch: 4 },
+      file.path,
+      session,
+      property,
+      property.levels[0],
+      { baseDate: new Date(2026, 7, 3), random: () => 0 },
+    ),
+    false,
+  );
+  assert.deepEqual(editor.transactions, []);
+  assert.doesNotMatch(editor.content, /\[priority::|\[scheduled::/);
+  assert.match(notices.at(-1), /no tasks were updated/);
 });
 
 test("bullet property picker reconciles duplicate bare and counted opens", () => {

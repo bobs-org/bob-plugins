@@ -10120,8 +10120,23 @@ function planCountedBulletPropertyBatch(
 ) {
   const text = String(content || "");
   const propertyName = normalizeBulletPropertyName(name);
-  const operation = options.operation === "delete" ? "delete" : "set";
-  const normalizedValue = normalizeBulletPropertyValue(value);
+  const operation =
+    options.operation === "delete"
+      ? "delete"
+      : options.operation === "set-priority"
+        ? "set-priority"
+        : "set";
+  const isPriorityOperation = operation === "set-priority";
+  const normalizedValue = normalizeBulletPropertyValue(
+    isPriorityOperation ? options.priorityValue : value,
+  );
+  const scheduledPropertyName = isPriorityOperation
+    ? normalizeBulletPropertyName(options.scheduledPropertyName)
+    : "";
+  const scheduledValueByLine =
+    isPriorityOperation && options.scheduledValueByLine instanceof Map
+      ? options.scheduledValueByLine
+      : null;
   const shouldBlockInlineTasks =
     operation === "set" &&
     propertyName === "scheduled" &&
@@ -10156,9 +10171,22 @@ function planCountedBulletPropertyBatch(
       changed: false,
     });
   }
+  if (
+    isPriorityOperation &&
+    (!normalizedValue || !scheduledPropertyName || !scheduledValueByLine)
+  ) {
+    return Object.freeze({
+      valid: false,
+      stale: false,
+      error: "Counted priority update is missing configured values",
+      content: text,
+      changed: false,
+    });
+  }
 
   const targetStates = [];
   const property = { name: propertyName };
+  const scheduledProperty = { name: scheduledPropertyName };
   for (const target of session.targets) {
     const state = getCountedPropertyTargetState(
       text,
@@ -10175,13 +10203,50 @@ function planCountedBulletPropertyBatch(
         changed: false,
       });
     }
-    targetStates.push({ target, state });
+    let scheduledState = null;
+    if (isPriorityOperation) {
+      const scheduledValue = normalizeBulletPropertyValue(
+        scheduledValueByLine.get(target.line),
+      );
+      if (
+        !scheduledValue ||
+        !validateProjectScheduledDate(scheduledValue).valid
+      ) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: `Counted priority update has no valid scheduled date for line ${
+            target.line + 1
+          }`,
+          content: text,
+          changed: false,
+        });
+      }
+      scheduledState = getCountedPropertyTargetState(
+        text,
+        target,
+        scheduledProperty,
+        options,
+      );
+      if (!scheduledState.valid) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: scheduledState.error,
+          content: text,
+          changed: false,
+        });
+      }
+    }
+    targetStates.push({ target, state, scheduledState });
   }
 
   const projectTargets =
-    propertyName === "scheduled"
+    propertyName === "scheduled" || isPriorityOperation
       ? targetStates.filter(
-          (entry) => entry.state.target.kind === "project-frontmatter",
+          (entry) =>
+            (isPriorityOperation ? entry.scheduledState : entry.state).target
+              .kind === "project-frontmatter",
         )
       : [];
   let nextContent = text;
@@ -10196,12 +10261,20 @@ function planCountedBulletPropertyBatch(
 
   if (projectTargets.length > 0) {
     const firstProject = projectTargets[0];
-    const frontmatter = firstProject.state.context.frontmatter;
-    if (operation === "set") {
+    const projectState = isPriorityOperation
+      ? firstProject.scheduledState
+      : firstProject.state;
+    const frontmatter = projectState.context.frontmatter;
+    const projectScheduledValue = isPriorityOperation
+      ? normalizeBulletPropertyValue(
+          scheduledValueByLine.get(firstProject.target.line),
+        )
+      : normalizedValue;
+    if (operation === "set" || isPriorityOperation) {
       const projectPlan = planProjectScheduledUpdate(
         text,
         firstProject.target.line,
-        normalizedValue,
+        projectScheduledValue,
         options.today || new Date(),
         options,
       );
@@ -10228,7 +10301,7 @@ function planCountedBulletPropertyBatch(
       recoveryCounts.deferred += projectPlan.deferredRecoveryTaskCount;
       projectPropertyChanged =
         !frontmatter.scheduledDefined ||
-        frontmatter.scheduledValue !== normalizedValue;
+        frontmatter.scheduledValue !== projectScheduledValue;
     } else if (frontmatter.scheduledDefined) {
       const projectPlan = planProjectScheduledDelete(
         text,
@@ -10261,13 +10334,75 @@ function planCountedBulletPropertyBatch(
   const source = splitMarkdownContent(nextContent);
   const changedTargets = [];
   const unchangedTargets = [];
-  for (const { target, state } of targetStates) {
+  for (const { target, state, scheduledState } of targetStates) {
     const mappedLine = target.line + taskLineDelta;
     const liveLine = String(source.lines[mappedLine] || "");
     let nextLine = liveLine;
     let targetChanged = false;
 
-    if (
+    if (isPriorityOperation) {
+      const priorityBaseLine = removeAllBulletProperties(
+        liveLine,
+        scheduledPropertyName,
+      );
+      const priorityResult = upsertBulletProperty(
+        priorityBaseLine,
+        propertyName,
+        normalizedValue,
+      );
+      nextLine = priorityResult.line;
+      targetChanged =
+        priorityBaseLine !== liveLine || priorityResult.changed;
+      const scheduledValue = normalizeBulletPropertyValue(
+        scheduledValueByLine.get(target.line),
+      );
+      if (scheduledState.target.kind === "project-frontmatter") {
+        nextLine = removeAllBulletProperties(
+          nextLine,
+          scheduledPropertyName,
+        );
+        targetChanged ||=
+          projectPropertyChanged ||
+          Boolean(
+            findBulletPropertyField(target.rawLine, scheduledPropertyName),
+          ) ||
+          nextLine !== priorityResult.line;
+      } else {
+        const scheduledResult = upsertBulletProperty(
+          nextLine,
+          scheduledPropertyName,
+          scheduledValue,
+        );
+        nextLine = scheduledResult.line;
+        targetChanged ||= scheduledResult.changed;
+        if (
+          isFutureInlineScheduledValue(
+            scheduledValue,
+            options.today || new Date(),
+          )
+        ) {
+          const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+          if (blockedLine !== nextLine) {
+            nextLine = blockedLine;
+            targetChanged = true;
+            blockedTaskCount += 1;
+          }
+        } else if (
+          isDueInlineScheduledValue(
+            scheduledValue,
+            options.today || new Date(),
+          )
+        ) {
+          const recovery = reconcileBlockedScheduledTaskLine(
+            nextLine,
+            getTargetScheduledRecovery(options, target.line),
+          );
+          nextLine = recovery.line;
+          targetChanged ||= recovery.changed;
+          recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+        }
+      }
+    } else if (
       propertyName === "scheduled" &&
       state.target.kind === "project-frontmatter"
     ) {
@@ -10331,6 +10466,7 @@ function planCountedBulletPropertyBatch(
     operation,
     propertyName,
     value: normalizedValue,
+    scheduledPropertyName,
     content: nextContent,
     changed: nextContent !== text,
     changedTaskCount: changedTargets.length,
@@ -12441,6 +12577,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.isCountedSession()) {
+      if (this.selectedPropertyItem.property.values === "priority") {
+        return await this.plugin.setCountedBulletPriorityValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.taskSession,
+          this.selectedPropertyItem.property,
+          item.priorityLevel,
+          {
+            baseDate: this.valueBaseDate,
+            random: this.priorityRandom,
+          },
+        );
+      }
       return await this.plugin.setCountedBulletPropertyValue(
         this.editor,
         this.cursor,
@@ -13636,6 +13786,168 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         session,
         plan.unchangedTaskCount,
       )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}`,
+    );
+    return true;
+  }
+
+  async setCountedBulletPriorityValue(
+    cm,
+    cursor,
+    filePath,
+    session,
+    property,
+    level,
+    options = {},
+  ) {
+    if (!property || property.values !== "priority" || !level) {
+      new Notice("Could not update priority: invalid configured level");
+      return false;
+    }
+    const writeContext = this.getCountedTaskWriteContext(
+      cm,
+      filePath,
+      session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+
+    const baseDate =
+      options.baseDate instanceof Date
+        ? getLocalDateStart(options.baseDate)
+        : getLocalDateStart(new Date());
+    const random =
+      typeof options.random === "function" ? options.random : Math.random;
+    const scheduledValueByLine = new Map(
+      session.targets.map((target) => [
+        target.line,
+        formatBulletPropertyDate(
+          rollPriorityScheduledDate(level, baseDate, random),
+        ),
+      ]),
+    );
+    const includesDueDate = Array.from(scheduledValueByLine.values()).some(
+      (scheduledValue) =>
+        isDueInlineScheduledValue(scheduledValue, baseDate),
+    );
+    let recoveryByLine = null;
+    if (includesDueDate) {
+      const includesProjectSchedule = session.targets.some((target) =>
+        isProjectLifecycleTaskAtLine(writeContext.content, target.line),
+      );
+      const recoveryLines = includesProjectSchedule
+        ? getProjectScheduleRecoveryTargetLines(writeContext.content)
+        : session.targets.map((target) => target.line);
+      recoveryByLine = await buildTargetScheduledRecoveryByLine(
+        this.app,
+        filePath,
+        writeContext.content,
+        recoveryLines,
+        baseDate,
+      );
+      const guarded = this.getCountedTaskWriteContext(
+        cm,
+        filePath,
+        session,
+      );
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return false;
+      }
+    }
+
+    const plan = planCountedBulletPropertyBatch(
+      writeContext.content,
+      session,
+      property.name,
+      null,
+      {
+        operation: "set-priority",
+        priorityValue: level.value,
+        scheduledPropertyName: property.schedules,
+        scheduledValueByLine,
+        today: baseDate,
+        recoveryByLine,
+      },
+    );
+    if (!plan.valid) {
+      new Notice(
+        plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+      );
+      return false;
+    }
+
+    const finalLine =
+      splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+    try {
+      if (
+        plan.changed &&
+        !applyEditorContentTransaction(
+          cm,
+          writeContext.content,
+          plan.content,
+          {
+            line: plan.cursorLine,
+            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+          },
+        )
+      ) {
+        throw new Error("Editor cannot apply a counted priority transaction");
+      }
+    } catch (error) {
+      new Notice("Could not update counted task priorities; no tasks were updated");
+      return false;
+    }
+
+    const propagationSuffix =
+      plan.propagatedScheduleTaskCount > 0
+        ? `; scheduled ${formatCountLabel(
+            plan.propagatedScheduleTaskCount,
+            "task",
+          )}`
+        : "";
+    const hideSuffix =
+      plan.removedHideTaskCount > 0
+        ? `; removed #hide from ${formatCountLabel(
+            plan.removedHideTaskCount,
+            "task",
+          )}`
+        : "";
+    const blockedSuffix =
+      plan.blockedTaskCount > 0
+        ? `; marked ${formatCountLabel(
+            plan.blockedTaskCount,
+            "task",
+          )} Blocked`
+        : "";
+    const ambiguitySuffix =
+      plan.ambiguousProjectTaskCount > 0
+        ? `; ${formatCountLabel(
+            plan.ambiguousProjectTaskCount,
+            "task",
+          )} with multiple scheduled fields unchanged`
+        : "";
+    new Notice(
+      `${property.name} → ${level.label} (${level.value}) on ${formatCountLabel(
+        plan.changedTaskCount,
+        "task",
+      )}; ${property.schedules} rolled per task${this.getCountedTaskNoticeSuffix(
+        session,
+        plan.unchangedTaskCount,
+      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${scheduledRecoveryNoticeSuffix(
+        {
+          ready: plan.recoveredReadyTaskCount,
+          next: plan.recoveredNextTaskCount,
+          inProgress: plan.recoveredInProgressTaskCount,
+          stillBlocked: plan.stillBlockedTaskCount,
+          deferred: plan.deferredRecoveryTaskCount,
+        },
+      )}`,
     );
     return true;
   }

@@ -3803,8 +3803,38 @@ test("priority picker replaces both existing values without duplicating fields",
 
   assert.equal((harness.editor.content.match(/\[priority::/g) || []).length, 1);
   assert.equal((harness.editor.content.match(/\[scheduled::/g) || []).length, 1);
-  assert.match(harness.editor.content, /\[priority:: high\]/);
-  assert.match(harness.editor.content, /\[scheduled:: 2026-08-08\]/);
+  // The rolled date must stay to the right of the priority: Tasks-format
+  // parsers read trailing inline fields right to left and stop at the first
+  // unrecognized one, so a level value outside Tasks' own priority names would
+  // otherwise hide the date from every query.
+  assert.equal(
+    harness.editor.content,
+    "- [?] #task One [priority:: high] [scheduled:: 2026-08-08] ^one",
+  );
+});
+
+test("counted priority writes keep the rolled date right of the priority", async () => {
+  notices.length = 0;
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    content: "- [ ] #task One [scheduled:: 2026-09-01] [id:: one] ^one",
+    baseDate: new Date(2026, 7, 3),
+    random: () => 0.5,
+  });
+
+  assert.equal(harness.open({ countExplicit: true }), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await picker.openItemAtIndex(
+    picker.visibleItems.findIndex((item) => item.property.name === "priority"),
+  );
+  await picker.openItemAtIndex(
+    picker.visibleItems.findIndex((item) => item.label === "P2"),
+  );
+
+  assert.equal(
+    harness.editor.content,
+    "- [?] #task One [id:: one] [priority:: high] [scheduled:: 2026-08-08] ^one",
+  );
 });
 
 test("priority picker writes project priority inline and schedule to frontmatter atomically", async () => {

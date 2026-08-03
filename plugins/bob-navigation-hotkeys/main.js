@@ -14597,7 +14597,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     }
 
-    const result = applyBulletPropertyEdits(lineText, edits);
+    // Dropping a field before re-adding it moves it to the end of the line, so
+    // callers that care about trailing-field order (priority must never sit to
+    // the right of the date metadata, since Tasks-format parsers read trailing
+    // fields right to left) can rebuild the order they need.
+    const editBaseLine = (
+      Array.isArray(options.reorderPropertyNames)
+        ? options.reorderPropertyNames
+        : []
+    ).reduce((line, name) => removeAllBulletProperties(line, name), lineText);
+    const result = applyBulletPropertyEdits(editBaseLine, edits);
     if (result.reason === "not-bullet") {
       new Notice("Cursor is not on a bullet");
       return false;
@@ -14735,6 +14744,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         filePath,
         expectedLine: lineText,
         noticeText: `${priorityNotice}; ${scheduledNotice}`,
+        // Rebuild an existing schedules field after the priority, matching the
+        // counted writer, so a level value outside Tasks' priority names can
+        // never hide the rolled date from a right-to-left trailing-field parse.
+        reorderPropertyNames: [property.schedules],
       },
     );
   }

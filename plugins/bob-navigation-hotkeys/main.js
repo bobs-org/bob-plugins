@@ -811,6 +811,28 @@ function upsertBulletProperty(line, name, value) {
   });
 }
 
+function applyBulletPropertyEdits(line, edits) {
+  const originalLine = String(line || "");
+  let nextLine = originalLine;
+  for (const edit of Array.isArray(edits) ? edits : []) {
+    const result = upsertBulletProperty(nextLine, edit.name, edit.value);
+    if (result.reason) {
+      return Object.freeze({
+        line: originalLine,
+        changed: false,
+        reason: result.reason,
+      });
+    }
+    nextLine = result.line;
+  }
+
+  return Object.freeze({
+    line: nextLine,
+    changed: nextLine !== originalLine,
+    reason: null,
+  });
+}
+
 function insertMissingBulletProperty(line, name, value) {
   const text = String(line || "");
   const existingField = findBulletPropertyField(text, name);
@@ -8324,6 +8346,22 @@ function resolveBulletPropertyTarget(name, context = {}) {
   return Object.freeze({ kind: "inline", fieldName: name });
 }
 
+function getBulletPropertyCurrentLabel(property, value) {
+  const currentValue = normalizeBulletPropertyValue(value);
+  if (
+    property &&
+    property.values === "priority" &&
+    property.levelsByValue instanceof Map
+  ) {
+    const level = property.levelsByValue.get(currentValue);
+    if (level) {
+      return level.label;
+    }
+  }
+
+  return currentValue;
+}
+
 function createBulletPropertyItems(config, line, context = {}) {
   const fields = getBulletPropertyFieldMap(line);
   const dependencyEligible =
@@ -8351,6 +8389,7 @@ function createBulletPropertyItems(config, line, context = {}) {
         order,
         defined: frontmatterDefined || !!field,
         currentValue,
+        currentLabel: getBulletPropertyCurrentLabel(property, currentValue),
         dependencyEligible,
       };
     })
@@ -9391,6 +9430,9 @@ function createCountedBulletPropertyItems(
         : allDefined && values.length === 1
           ? "common"
           : "mixed";
+    const currentLabels = Object.freeze(
+      values.map((value) => getBulletPropertyCurrentLabel(property, value)),
+    );
     items.push({
       kind: "property",
       property,
@@ -9400,7 +9442,9 @@ function createCountedBulletPropertyItems(
       definedCount: definedStates.length,
       targetCount: states.length,
       currentValue: valueState === "common" ? values[0] : "",
+      currentLabel: valueState === "common" ? currentLabels[0] : "",
       currentValues: Object.freeze(values),
+      currentLabels,
       valueState,
       mixed: valueState === "mixed",
       dependencyEligible: true,
@@ -10561,6 +10605,14 @@ function addLocalDateDays(date, days) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
 
+function rollPriorityScheduledDate(level, baseDate, random = Math.random) {
+  const span = level.maxDays - level.minDays + 1;
+  const rolledOffset = Math.floor(random() * span);
+  const offset =
+    level.minDays + clampNumber(rolledOffset, 0, Math.max(0, span - 1));
+  return addLocalDateDays(getLocalDateStart(baseDate), offset);
+}
+
 function addLocalDateMonths(date, months) {
   const targetMonthIndex = date.getMonth() + months;
   const targetYear = date.getFullYear() + Math.floor(targetMonthIndex / 12);
@@ -10881,6 +10933,19 @@ function createBulletPropertyValueItems(propertyItem, baseDate) {
     return [];
   }
 
+  if (property.values === "priority") {
+    return property.levels.map((level) => ({
+      kind: "value",
+      value: level.value,
+      label: level.label,
+      detail: `${level.value} · in ${level.minDays}–${level.maxDays} days`,
+      current: level.value === currentValue,
+      dynamic: false,
+      priorityLevel: level,
+      searchText: `${level.label} ${level.value} ${level.minDays}–${level.maxDays} days`,
+    }));
+  }
+
   return property.values.map((value) => ({
     kind: "value",
     value,
@@ -10923,13 +10988,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingTask = null;
     this.markedLines = new Set();
     this.taskItemsByLine = new Map();
+    this.priorityRandom =
+      typeof context.random === "function" ? context.random : Math.random;
+    this.fixedValueBaseDate =
+      context.baseDate instanceof Date
+        ? getLocalDateStart(context.baseDate)
+        : null;
     // Batch block-ID prompting state; populated only while the modal is
     // collecting block IDs for a pending multi-task apply (see commit flow).
     this.pendingBatch = null;
     this.pendingCountedDependency = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
-    this.valueBaseDate = getLocalDateStart(new Date());
+    this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     this.showPropertyStage({ clearQuery: false });
   }
 
@@ -11000,7 +11071,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       },
       filterItem: (item, query) =>
         fuzzyMatchesText(
-          `${item.property.name} ${item.currentValue || ""} ${
+          `${item.property.name} ${item.currentLabel || ""} ${
+            item.currentValue || ""
+          } ${
+            item.currentLabels ? item.currentLabels.join(" ") : ""
+          } ${
             item.currentValues ? item.currentValues.join(" ") : ""
           } ${item.valueState || ""}`,
           query,
@@ -11031,7 +11106,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.stage = "value";
     this.selectedPropertyItem = propertyItem;
     this.pendingTask = null;
-    this.valueBaseDate = getLocalDateStart(new Date());
+    this.valueBaseDate =
+      this.fixedValueBaseDate || getLocalDateStart(new Date());
     this.selectedIndex = 0;
     const property = propertyItem.property;
     if (property.values === "local_task_id") {
@@ -11063,13 +11139,24 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.clearLocalTaskMarks();
 
     const isDateProperty = property.values === "date";
+    const isPriorityProperty = property.values === "priority";
     this.applyOptions({
       items: createBulletPropertyValueItems(propertyItem, this.valueBaseDate),
       title: property.name,
-      headerIcon: isDateProperty ? "calendar-days" : "list-checks",
+      headerIcon: isDateProperty
+        ? "calendar-days"
+        : isPriorityProperty
+          ? "signal-high"
+          : "list-checks",
       inputLabel: `Filter ${property.name} values`,
-      placeholder: isDateProperty ? "Type date, +3d, or 6/24" : "Filter values",
-      resultsLabel: `${property.name} values`,
+      placeholder: isDateProperty
+        ? "Type date, +3d, or 6/24"
+        : isPriorityProperty
+          ? "Filter priorities"
+          : "Filter values",
+      resultsLabel: isPriorityProperty
+        ? "priority levels"
+        : `${property.name} values`,
       emptyText: "No matching values",
       footerHints: BULLET_PROPERTY_STAGE_TWO_HINTS,
       getSubtitle: () => {
@@ -11077,10 +11164,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           ? `${this.getTaskSessionSubtitle()} · `
           : "";
         if (propertyItem.valueState === "mixed") {
-          return `${scope}Choose a value · current values mixed`;
+          return isPriorityProperty
+            ? `${scope}Choose a level · rolls a scheduled date · current values mixed`
+            : `${scope}Choose a value · current values mixed`;
         }
-        return propertyItem.currentValue
-          ? `${scope}Choose a value · current: ${propertyItem.currentValue}`
+        const currentLabel = propertyItem.currentLabel || "";
+        if (isPriorityProperty) {
+          return currentLabel
+            ? `${scope}Choose a level · rolls a scheduled date · current: ${currentLabel}`
+            : `${scope}Choose a level · rolls a scheduled date`;
+        }
+        return currentLabel
+          ? `${scope}Choose a value · current: ${currentLabel}`
           : `${scope}Choose a value`;
       },
       filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
@@ -11435,7 +11530,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const propertyStateText = item.mixed
       ? `Mixed across ${item.definedCount} of ${item.targetCount} tasks`
       : item.defined
-        ? `Current value: ${item.currentValue}`
+        ? `Current value: ${item.currentLabel}`
         : "Not set";
     pathEl.setText(propertyStateText);
 
@@ -11447,7 +11542,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     } else if (item.defined) {
       rowEl.createDiv({
         cls: "bob-cnp-pill bob-cnp-property-pill",
-        text: `${item.property.name} · ${item.currentValue}`,
+        text: `${item.property.name} · ${item.currentLabel}`,
       });
     } else {
       rowEl.createDiv({
@@ -11461,6 +11556,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     addElementClasses(
       rowEl,
       "bob-cnp-property-value-row",
+      item.priorityLevel ? "bob-cnp-priority-value-row" : "",
       item.current ? "is-current" : "",
       item.dynamic ? "is-dynamic" : "",
     );
@@ -11484,6 +11580,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       rowEl.createDiv({
         cls: "bob-cnp-pill bob-cnp-property-pill",
         text: "current",
+      });
+    }
+    if (item.priorityLevel) {
+      rowEl.createDiv({
+        cls: "bob-cnp-pill bob-cnp-property-pill",
+        text: `${item.priorityLevel.minDays}–${item.priorityLevel.maxDays}d`,
       });
     }
   }
@@ -12346,6 +12448,22 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.taskSession,
         this.selectedPropertyItem.property.name,
         item.value,
+      );
+    }
+
+    if (this.selectedPropertyItem.property.values === "priority") {
+      return await this.plugin.setBulletPriorityValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        this.selectedPropertyItem.property,
+        item.priorityLevel,
+        {
+          propertyContext: this.propertyContext,
+          baseDate: this.valueBaseDate,
+          random: this.priorityRandom,
+        },
       );
     }
 
@@ -13275,7 +13393,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cursor,
       lineText,
       config,
-      { filePath, propertyContext, taskSession },
+      {
+        filePath,
+        propertyContext,
+        taskSession,
+        random: options.random,
+        baseDate: options.baseDate,
+      },
     );
     this.activeBulletPropertyPicker = picker;
     try {
@@ -13758,6 +13882,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     expectedLine,
     expectedValue,
     value,
+    options = {},
   ) {
     const writeContext = this.getProjectScheduledWriteContext(
       cm,
@@ -13809,15 +13934,27 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    const plannedSource = splitMarkdownContent(plan.content);
+    let finalLine = plannedSource.lines[plan.cursorLine] || "";
+    const inlineResult = applyBulletPropertyEdits(
+      finalLine,
+      options.inlineEdits,
+    );
+    if (inlineResult.reason === "not-bullet") {
+      new Notice("Cursor is not on a bullet");
+      return false;
+    }
+    finalLine = inlineResult.line;
+    plannedSource.lines[plan.cursorLine] = finalLine;
+    const finalContent = plannedSource.lines.join(plannedSource.lineEnding);
+
     try {
-      const finalLine =
-        splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
       if (
-        plan.changed &&
+        finalContent !== writeContext.content &&
         !applyEditorContentTransaction(
           cm,
           writeContext.content,
-          plan.content,
+          finalContent,
           {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
@@ -13859,7 +13996,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
     }
     new Notice(
-      `${parts.join("; ")}${scheduledRecoveryNoticeSuffix({
+      `${options.noticePrefix || ""}${parts.join("; ")}${scheduledRecoveryNoticeSuffix({
         ready: plan.recoveredReadyTaskCount,
         next: plan.recoveredNextTaskCount,
         inProgress: plan.recoveredInProgressTaskCount,
@@ -13966,7 +14103,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return { deleted: true, line: finalLine };
   }
 
-  async setBulletPropertyValue(cm, cursor, name, value, options = {}) {
+  async setInlineBulletPropertyValues(
+    cm,
+    cursor,
+    edits,
+    scheduledValue,
+    options = {},
+  ) {
     const writeContext = this.getInlinePropertyWriteContext(
       cm,
       cursor,
@@ -13977,11 +14120,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     const lineText = writeContext.line;
-    const propertyName = normalizeBulletPropertyName(name);
     const today = new Date();
+    const hasScheduledValue =
+      scheduledValue !== null && scheduledValue !== undefined;
+    const normalizedScheduledValue = hasScheduledValue
+      ? normalizeBulletPropertyValue(scheduledValue)
+      : "";
     const shouldRecover =
-      propertyName === "scheduled" &&
-      isDueInlineScheduledValue(value, today) &&
+      hasScheduledValue &&
+      isDueInlineScheduledValue(normalizedScheduledValue, today) &&
       !isProjectLifecycleTaskLine(lineText);
     let recovery = null;
     if (shouldRecover) {
@@ -14008,7 +14155,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     }
 
-    const result = upsertBulletProperty(lineText, name, value);
+    const result = applyBulletPropertyEdits(lineText, edits);
     if (result.reason === "not-bullet") {
       new Notice("Cursor is not on a bullet");
       return false;
@@ -14018,8 +14165,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     let blocked = false;
     let recoveryOutcome = null;
     if (
-      propertyName === "scheduled" &&
-      isFutureInlineScheduledValue(value, today) &&
+      hasScheduledValue &&
+      isFutureInlineScheduledValue(normalizedScheduledValue, today) &&
       !isProjectLifecycleTaskLine(lineText)
     ) {
       const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
@@ -14047,8 +14194,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cursor.line,
       Math.min(Math.max(cursor.ch, 0), nextLine.length),
     );
+    const firstEdit = Array.isArray(edits) ? edits[0] : null;
+    const noticeText =
+      options.noticeText ||
+      `${firstEdit ? firstEdit.name : "property"} → ${
+        firstEdit ? normalizeBulletPropertyValue(firstEdit.value) : ""
+      }`;
     new Notice(
-      `${name} → ${normalizeBulletPropertyValue(value)}${
+      `${noticeText}${
         blocked ? "; marked task Blocked" : ""
       }${scheduledRecoveryNoticeSuffix({
         ready: recoveryOutcome === "ready" ? 1 : 0,
@@ -14059,6 +14212,89 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       })}`,
     );
     return true;
+  }
+
+  async setBulletPropertyValue(cm, cursor, name, value, options = {}) {
+    const propertyName = normalizeBulletPropertyName(name);
+    return await this.setInlineBulletPropertyValues(
+      cm,
+      cursor,
+      [{ name, value }],
+      propertyName === "scheduled" ? value : null,
+      options,
+    );
+  }
+
+  async setBulletPriorityValue(
+    cm,
+    cursor,
+    filePath,
+    lineText,
+    property,
+    level,
+    context = {},
+  ) {
+    if (!property || property.values !== "priority" || !level) {
+      new Notice("Could not update priority: invalid configured level");
+      return false;
+    }
+
+    const baseDate =
+      context.baseDate instanceof Date ? context.baseDate : new Date();
+    const rolledDate = rollPriorityScheduledDate(
+      level,
+      baseDate,
+      typeof context.random === "function" ? context.random : Math.random,
+    );
+    const rolledValue = formatBulletPropertyDate(rolledDate);
+    const priorityNotice = `${property.name} → ${level.label} (${level.value})`;
+    const scheduledNotice = `${property.schedules} → ${rolledValue} · ${getBulletPropertyDateWeekday(
+      rolledDate,
+    )}`;
+    const propertyContext =
+      context.propertyContext ||
+      getProjectNotePropertyContext(
+        cm && typeof cm.getValue === "function" ? cm.getValue() : "",
+        cursor.line,
+      );
+    const scheduledTarget = resolveBulletPropertyTarget(
+      property.schedules,
+      propertyContext,
+    );
+    if (scheduledTarget.kind === "project-frontmatter") {
+      const expectedScheduledValue =
+        propertyContext.frontmatter &&
+        propertyContext.frontmatter.scheduledDefined
+          ? propertyContext.frontmatter.scheduledValue
+          : "";
+      return await this.setProjectNoteScheduledValue(
+        cm,
+        cursor,
+        filePath,
+        lineText,
+        expectedScheduledValue,
+        rolledValue,
+        {
+          inlineEdits: [{ name: property.name, value: level.value }],
+          noticePrefix: `${priorityNotice}; `,
+        },
+      );
+    }
+
+    return await this.setInlineBulletPropertyValues(
+      cm,
+      cursor,
+      [
+        { name: property.name, value: level.value },
+        { name: property.schedules, value: rolledValue },
+      ],
+      rolledValue,
+      {
+        filePath,
+        expectedLine: lineText,
+        noticeText: `${priorityNotice}; ${scheduledNotice}`,
+      },
+    );
   }
 
   setLocalTaskDependency(cm, cursor, name, id, options = {}) {
@@ -18356,6 +18592,7 @@ module.exports.helpers = {
   parseProjectNoteFrontmatter,
   getProjectNotePropertyContext,
   resolveBulletPropertyTarget,
+  getBulletPropertyCurrentLabel,
   createBulletPropertyItems,
   discoverCountedObsidianTaskTargets,
   discoverMovableObsidianTaskTargets,
@@ -18391,7 +18628,9 @@ module.exports.helpers = {
   isDueInlineScheduledValue,
   planCountedBulletPropertyBatch,
   planCountedLocalTaskDependency,
+  rollPriorityScheduledDate,
   createBulletPropertyDateItems,
+  createBulletPropertyValueItems,
   parseBulletPropertyTypedDate,
   formatBulletPropertyDate,
   cleanTaskDisplayText,

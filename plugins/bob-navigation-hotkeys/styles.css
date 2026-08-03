@@ -580,6 +580,28 @@
   color: var(--text-accent);
 }
 
+.bob-cnp-priority-value-row {
+  border-left: 2px solid
+    color-mix(in srgb, var(--text-accent) 42%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--background-secondary) 72%,
+    transparent
+  );
+}
+
+.bob-cnp-priority-value-row .bob-cnp-row-icon {
+  color: var(--text-accent);
+}
+
+.bob-cnp-priority-value-row.is-selected {
+  background-color: color-mix(
+    in srgb,
+    var(--interactive-accent) 14%,
+    transparent
+  );
+}
+
 .bob-cnp-pill {
   display: inline-flex;
   align-items: center;

@@ -3575,26 +3575,213 @@ function createTaskMovePickerHarness() {
   return { editor, plugin, view };
 }
 
-function createBulletPropertyPickerHarness() {
+function createBulletPropertyPickerHarness(harnessOptions = {}) {
   const editor = new TransactionEditor(
-    [
-      "- [ ] #task One ^one",
-      "- [ ] #task Two ^two",
-      "- [ ] #task Three ^three",
-    ].join("\n"),
-    { line: 0, ch: 0 },
+    harnessOptions.content ||
+      [
+        "- [ ] #task One ^one",
+        "- [ ] #task Two ^two",
+        "- [ ] #task Three ^three",
+      ].join("\n"),
+    harnessOptions.cursor || { line: 0, ch: 0 },
   );
-  const file = { path: "Tasks.md", basename: "Tasks", extension: "md" };
+  const file = harnessOptions.file || {
+    path: "Tasks.md",
+    basename: "Tasks",
+    extension: "md",
+  };
   const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {};
+  plugin.app = harnessOptions.app || {};
   plugin.getActiveMarkdownView = () => ({ editor, file });
-  const config = helpers.validateBulletPropertyConfig({
-    properties: [{ name: "p", values: ["high"] }],
-  });
+  const config =
+    harnessOptions.config ||
+    helpers.validateBulletPropertyConfig({
+      properties: [{ name: "p", values: ["high"] }],
+    });
   const open = (options = {}) =>
-    plugin.openBulletPropertyPicker(editor, { config, ...options });
+    plugin.openBulletPropertyPicker(editor, {
+      config,
+      random: options.random || harnessOptions.random,
+      baseDate: options.baseDate || harnessOptions.baseDate,
+      ...options,
+    });
   return { config, editor, file, open, plugin };
 }
+
+function createPriorityPickerConfig() {
+  return helpers.validateBulletPropertyConfig({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P2", value: "high", min_days: 2, max_days: 7 },
+          { label: "P3", value: "medium", min_days: 8, max_days: 30 },
+          { label: "P4", value: "low", min_days: 31, max_days: 90 },
+        ],
+      },
+    ],
+  });
+}
+
+async function choosePriorityLevel(harness, label) {
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const propertyIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "priority",
+  );
+  assert.notEqual(propertyIndex, -1);
+  await picker.openItemAtIndex(propertyIndex);
+  const levelIndex = picker.visibleItems.findIndex(
+    (item) => item.label === label,
+  );
+  assert.notEqual(levelIndex, -1);
+  await picker.openItemAtIndex(levelIndex);
+  return picker;
+}
+
+test("priority scheduling rolls inclusively and clamps a random value of one", () => {
+  const level = { minDays: 2, maxDays: 7 };
+  const baseDate = new Date(2026, 7, 3, 16, 45);
+  const roll = (random) =>
+    helpers.formatBulletPropertyDate(
+      helpers.rollPriorityScheduledDate(level, baseDate, random),
+    );
+
+  assert.equal(roll(() => 0), "2026-08-05");
+  assert.equal(roll(() => 0.5), "2026-08-08");
+  assert.equal(roll(() => 0.999999), "2026-08-10");
+  assert.equal(roll(() => 1), "2026-08-10");
+});
+
+test("priority value rows preserve config order and expose labels ranges and current state", () => {
+  const config = createPriorityPickerConfig();
+  const property = config.properties.find((item) => item.name === "priority");
+  const items = helpers.createBulletPropertyValueItems(
+    { property, currentValue: "medium" },
+    new Date(2026, 7, 3),
+  );
+
+  assert.deepEqual(
+    items.map((item) => ({
+      label: item.label,
+      value: item.value,
+      detail: item.detail,
+      searchText: item.searchText,
+      current: item.current,
+      priorityLevel: item.priorityLevel,
+    })),
+    [
+      {
+        label: "P2",
+        value: "high",
+        detail: "high · in 2–7 days",
+        searchText: "P2 high 2–7 days",
+        current: false,
+        priorityLevel: property.levels[0],
+      },
+      {
+        label: "P3",
+        value: "medium",
+        detail: "medium · in 8–30 days",
+        searchText: "P3 medium 8–30 days",
+        current: true,
+        priorityLevel: property.levels[1],
+      },
+      {
+        label: "P4",
+        value: "low",
+        detail: "low · in 31–90 days",
+        searchText: "P4 low 31–90 days",
+        current: false,
+        priorityLevel: property.levels[2],
+      },
+    ],
+  );
+
+  const propertyItems = helpers.createBulletPropertyItems(
+    config,
+    "- [ ] #task One [priority:: medium] ^one",
+  );
+  assert.equal(
+    propertyItems.find((item) => item.property.name === "priority").currentLabel,
+    "P3",
+  );
+});
+
+test("priority picker writes priority then rolled schedule in one guarded edit", async () => {
+  notices.length = 0;
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    content: "- [ ] #task One ^one",
+    baseDate: new Date(2026, 7, 3),
+    random: () => 0,
+  });
+
+  const picker = await choosePriorityLevel(harness, "P2");
+
+  assert.equal(picker.headerIcon, "signal-high");
+  assert.equal(picker.placeholder, "Filter priorities");
+  assert.equal(picker.resultsLabel, "priority levels");
+  assert.match(
+    harness.editor.content,
+    /- \[\?\] #task One \[priority:: high\] \[scheduled:: 2026-08-05\] \^one/,
+  );
+  assert.deepEqual(notices, [
+    "priority → P2 (high); scheduled → 2026-08-05 · Wed; marked task Blocked",
+  ]);
+});
+
+test("priority picker replaces both existing values without duplicating fields", async () => {
+  notices.length = 0;
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    content:
+      "- [ ] #task One [priority:: medium] [scheduled:: 2026-09-01] ^one",
+    baseDate: new Date(2026, 7, 3),
+    random: () => 0.5,
+  });
+
+  await choosePriorityLevel(harness, "P2");
+
+  assert.equal((harness.editor.content.match(/\[priority::/g) || []).length, 1);
+  assert.equal((harness.editor.content.match(/\[scheduled::/g) || []).length, 1);
+  assert.match(harness.editor.content, /\[priority:: high\]/);
+  assert.match(harness.editor.content, /\[scheduled:: 2026-08-08\]/);
+});
+
+test("priority picker writes project priority inline and schedule to frontmatter atomically", async () => {
+  notices.length = 0;
+  const content = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [ ] #task Ship ^prj",
+  ].join("\n");
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    content,
+    cursor: { line: 3, ch: 12 },
+    file: {
+      path: "projects/Ship.md",
+      basename: "Ship",
+      extension: "md",
+    },
+    baseDate: new Date(2026, 7, 3),
+    random: () => 0,
+  });
+
+  await choosePriorityLevel(harness, "P2");
+
+  assert.equal(harness.editor.transactions.length, 1);
+  assert.match(harness.editor.content, /^scheduled: 2026-08-05$/m);
+  assert.match(harness.editor.content, /#task Ship.*\[priority:: high\] \^prj/);
+  assert.doesNotMatch(harness.editor.content, /#task Ship.*\[scheduled::/);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /^priority → P2 \(high\); scheduled → 2026-08-05/);
+});
 
 test("bullet property picker reconciles duplicate bare and counted opens", () => {
   {

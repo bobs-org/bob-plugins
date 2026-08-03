@@ -739,6 +739,192 @@ test("valid Obsidian tasks require a standalone #task checkbox in real note cont
   assert.equal(helpers.isObsidianTaskAtLine(content, 6), true);
 });
 
+test("priority bullet property config normalizes frozen levels and preserves existing shapes", () => {
+  const config = helpers.validateBulletPropertyConfig({
+    properties: [
+      { name: "scheduled", values: "date" },
+      { name: "dependsOn", values: "local_task_id" },
+      { name: "status", values: ["next", 2, false] },
+      {
+        name: "priority",
+        values: "priority",
+        levels: [
+          { label: " P2 ", value: " high ", min_days: 2, max_days: 7 },
+          { label: "P3", value: "medium", min_days: 8, max_days: 30 },
+        ],
+      },
+    ],
+  });
+
+  assert.ok(config);
+  assert.deepEqual(config.properties.slice(0, 3), [
+    { name: "scheduled", values: "date" },
+    { name: "dependsOn", values: "local_task_id" },
+    { name: "status", values: ["next", "2", "false"] },
+  ]);
+  const priority = config.properties[3];
+  assert.deepEqual(
+    {
+      name: priority.name,
+      values: priority.values,
+      schedules: priority.schedules,
+      levels: priority.levels,
+      levelsByValue: priority.levelsByValue,
+    },
+    {
+      name: "priority",
+      values: "priority",
+      schedules: "scheduled",
+      levels: [
+        { label: "P2", value: "high", minDays: 2, maxDays: 7 },
+        { label: "P3", value: "medium", minDays: 8, maxDays: 30 },
+      ],
+      levelsByValue: new Map([
+        ["high", { label: "P2", value: "high", minDays: 2, maxDays: 7 }],
+        ["medium", { label: "P3", value: "medium", minDays: 8, maxDays: 30 }],
+      ]),
+    },
+  );
+  assert.equal(priority.levelsByValue.get("high"), priority.levels[0]);
+  assert.equal(Object.isFrozen(config), true);
+  assert.equal(Object.isFrozen(config.properties), true);
+  assert.equal(Object.isFrozen(config.properties[2]), true);
+  assert.equal(Object.isFrozen(config.properties[2].values), true);
+  assert.equal(Object.isFrozen(priority), true);
+  assert.equal(Object.isFrozen(priority.levels), true);
+  assert.equal(Object.isFrozen(priority.levels[0]), true);
+  assert.equal(Object.isFrozen(priority.levelsByValue), true);
+});
+
+test("priority bullet property config rejects each invalid schema category once", () => {
+  const validLevel = {
+    label: "P2",
+    value: "high",
+    min_days: 2,
+    max_days: 7,
+  };
+  const priorityEntry = (overrides = {}) => ({
+    name: "priority",
+    values: "priority",
+    levels: [validLevel],
+    ...overrides,
+  });
+  const withScheduled = (entry) => ({
+    properties: [{ name: "scheduled", values: "date" }, entry],
+  });
+  const cases = [
+    {
+      name: "priority levels must be a non-empty list",
+      config: withScheduled(priorityEntry({ levels: [] })),
+      message: /levels must be a non-empty list/,
+    },
+    {
+      name: "levels are forbidden for other value kinds",
+      config: withScheduled({
+        name: "priority",
+        values: ["high"],
+        levels: [validLevel],
+      }),
+      message: /only valid when values is "priority"/,
+    },
+    {
+      name: "labels must be non-empty strings",
+      config: withScheduled(
+        priorityEntry({ levels: [{ ...validLevel, label: " " }] }),
+      ),
+      message: /level #1.*non-empty string label/,
+    },
+    {
+      name: "labels must be unique",
+      config: withScheduled(
+        priorityEntry({
+          levels: [validLevel, { ...validLevel, value: "medium" }],
+        }),
+      ),
+      message: /level #2.*label.*duplicated/,
+    },
+    {
+      name: "values must be scalars",
+      config: withScheduled(
+        priorityEntry({ levels: [{ ...validLevel, value: {} }] }),
+      ),
+      message: /level #1.*non-empty scalar value/,
+    },
+    {
+      name: "values must be unique",
+      config: withScheduled(
+        priorityEntry({
+          levels: [validLevel, { ...validLevel, label: "P3" }],
+        }),
+      ),
+      message: /level #2.*value.*duplicated/,
+    },
+    {
+      name: "values cannot contain inline-field delimiters",
+      config: withScheduled(
+        priorityEntry({ levels: [{ ...validLevel, value: "[high]" }] }),
+      ),
+      message: /level #1.*value cannot contain/,
+    },
+    {
+      name: "values cannot contain newlines",
+      config: withScheduled(
+        priorityEntry({ levels: [{ ...validLevel, value: "high\n" }] }),
+      ),
+      message: /level #1.*value cannot contain/,
+    },
+    {
+      name: "day bounds must be integers",
+      config: withScheduled(
+        priorityEntry({ levels: [{ ...validLevel, min_days: 2.5 }] }),
+      ),
+      message: /level #1.*min_days.*non-negative integer/,
+    },
+    {
+      name: "day bounds cannot be negative",
+      config: withScheduled(
+        priorityEntry({ levels: [{ ...validLevel, max_days: -1 }] }),
+      ),
+      message: /level #1.*max_days.*non-negative integer/,
+    },
+    {
+      name: "day ranges cannot be inverted",
+      config: withScheduled(
+        priorityEntry({
+          levels: [{ ...validLevel, min_days: 8, max_days: 7 }],
+        }),
+      ),
+      message: /level #1.*min_days cannot exceed max_days/,
+    },
+    {
+      name: "schedules must target another date property",
+      config: withScheduled(priorityEntry({ schedules: "dependsOn" })),
+      message: /schedules must name another date property in the same config/,
+    },
+    {
+      name: "duplicate property names remain invalid",
+      config: {
+        properties: [
+          { name: "priority", values: ["high"] },
+          { name: "priority", values: ["low"] },
+        ],
+      },
+      message: /Duplicate bullet property name "priority"/,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const messages = [];
+    const result = helpers.validateBulletPropertyConfig(testCase.config, {
+      showNotice: (message) => messages.push(message),
+    });
+    assert.equal(result, null, testCase.name);
+    assert.equal(messages.length, 1, testCase.name);
+    assert.match(messages[0], /"priority"/, testCase.name);
+    assert.match(messages[0], testCase.message, testCase.name);
+  }
+});
+
 test("property targets use project YAML only for scheduled on ^prj", () => {
   const config = {
     properties: [

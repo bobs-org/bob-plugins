@@ -374,12 +374,16 @@ function normalizeBulletPropertyValues(name, values, options) {
     return "local_task_id";
   }
 
+  if (values === "priority") {
+    return "priority";
+  }
+
   if (Array.isArray(values) && values.length > 0) {
     const normalizedValues = [];
     for (const value of values) {
       if (!isBulletPropertyScalar(value)) {
         showBulletPropertyNotice(
-          `Bullet property "${name}" values must be "date", "local_task_id", or a non-empty scalar list`,
+          `Bullet property "${name}" values must be "date", "local_task_id", "priority", or a non-empty scalar list`,
           options,
         );
         return null;
@@ -392,10 +396,144 @@ function normalizeBulletPropertyValues(name, values, options) {
   }
 
   showBulletPropertyNotice(
-    `Bullet property "${name}" values must be "date", "local_task_id", or a non-empty scalar list`,
+    `Bullet property "${name}" values must be "date", "local_task_id", "priority", or a non-empty scalar list`,
     options,
   );
   return null;
+}
+
+function normalizeBulletPriorityLevel(name, level, index, options) {
+  const levelPrefix = `Bullet property "${name}" level #${index + 1}`;
+  if (!level || typeof level !== "object" || Array.isArray(level)) {
+    showBulletPropertyNotice(`${levelPrefix} must be an object`, options);
+    return null;
+  }
+
+  if (typeof level.label !== "string" || !level.label.trim()) {
+    showBulletPropertyNotice(
+      `${levelPrefix} must define a non-empty string label`,
+      options,
+    );
+    return null;
+  }
+
+  if (!isBulletPropertyScalar(level.value)) {
+    showBulletPropertyNotice(
+      `${levelPrefix} must define a non-empty scalar value`,
+      options,
+    );
+    return null;
+  }
+
+  const label = level.label.trim();
+  const rawValue = String(level.value);
+  const value = rawValue.trim();
+  if (!value) {
+    showBulletPropertyNotice(
+      `${levelPrefix} must define a non-empty scalar value`,
+      options,
+    );
+    return null;
+  }
+  if (/[\[\]\n]|::/.test(rawValue)) {
+    showBulletPropertyNotice(
+      `${levelPrefix} value cannot contain "[", "]", "::", or a newline`,
+      options,
+    );
+    return null;
+  }
+
+  if (!Number.isInteger(level.min_days) || level.min_days < 0) {
+    showBulletPropertyNotice(
+      `${levelPrefix} min_days must be a non-negative integer`,
+      options,
+    );
+    return null;
+  }
+  if (!Number.isInteger(level.max_days) || level.max_days < 0) {
+    showBulletPropertyNotice(
+      `${levelPrefix} max_days must be a non-negative integer`,
+      options,
+    );
+    return null;
+  }
+  if (level.min_days > level.max_days) {
+    showBulletPropertyNotice(
+      `${levelPrefix} min_days cannot exceed max_days`,
+      options,
+    );
+    return null;
+  }
+
+  return Object.freeze({
+    label,
+    value,
+    minDays: level.min_days,
+    maxDays: level.max_days,
+  });
+}
+
+function normalizeBulletPriorityProperty(name, entry, options) {
+  if (!Array.isArray(entry.levels) || entry.levels.length === 0) {
+    showBulletPropertyNotice(
+      `Bullet property "${name}" levels must be a non-empty list`,
+      options,
+    );
+    return null;
+  }
+
+  const levels = [];
+  const seenLabels = new Set();
+  const seenValues = new Set();
+  for (let index = 0; index < entry.levels.length; index += 1) {
+    const level = normalizeBulletPriorityLevel(
+      name,
+      entry.levels[index],
+      index,
+      options,
+    );
+    if (level === null) {
+      return null;
+    }
+    if (seenLabels.has(level.label)) {
+      showBulletPropertyNotice(
+        `Bullet property "${name}" level #${index + 1} label "${level.label}" is duplicated`,
+        options,
+      );
+      return null;
+    }
+    if (seenValues.has(level.value)) {
+      showBulletPropertyNotice(
+        `Bullet property "${name}" level #${index + 1} value "${level.value}" is duplicated`,
+        options,
+      );
+      return null;
+    }
+
+    seenLabels.add(level.label);
+    seenValues.add(level.value);
+    levels.push(level);
+  }
+
+  const schedules = entry.schedules === undefined ? "scheduled" : entry.schedules;
+  if (typeof schedules !== "string" || !schedules.trim()) {
+    showBulletPropertyNotice(
+      `Bullet property "${name}" schedules must name another date property`,
+      options,
+    );
+    return null;
+  }
+
+  const frozenLevels = Object.freeze(levels);
+  return Object.freeze({
+    name,
+    values: "priority",
+    schedules: schedules.trim(),
+    levels: frozenLevels,
+    levelsByValue: Object.freeze(
+      new Map(frozenLevels.map((level) => [level.value, level])),
+    ),
+  });
 }
 
 function validateBulletPropertyConfig(config, options = {}) {
@@ -442,8 +580,46 @@ function validateBulletPropertyConfig(config, options = {}) {
       return null;
     }
 
+    if (
+      values !== "priority" &&
+      Object.prototype.hasOwnProperty.call(entry, "levels")
+    ) {
+      showBulletPropertyNotice(
+        `Bullet property "${name}" levels are only valid when values is "priority"`,
+        options,
+      );
+      return null;
+    }
+
     seenNames.add(name);
-    properties.push(Object.freeze({ name, values }));
+    if (values === "priority") {
+      const property = normalizeBulletPriorityProperty(name, entry, options);
+      if (property === null) {
+        return null;
+      }
+      properties.push(property);
+    } else {
+      properties.push(Object.freeze({ name, values }));
+    }
+  }
+
+  for (const property of properties) {
+    if (property.values !== "priority") {
+      continue;
+    }
+    const scheduledProperty = properties.find(
+      (candidate) =>
+        candidate.name === property.schedules &&
+        candidate.name !== property.name &&
+        candidate.values === "date",
+    );
+    if (!scheduledProperty) {
+      showBulletPropertyNotice(
+        `Bullet property "${property.name}" schedules must name another date property in the same config`,
+        options,
+      );
+      return null;
+    }
   }
 
   return Object.freeze({

@@ -909,6 +909,10 @@
   --bob-nh-level-color: var(--color-blue);
 }
 
+.bob-nh-notice.is-level-3 {
+  --bob-nh-level-color: var(--color-purple);
+}
+
 .bob-nh-notice .bob-nh-notice-header,
 .bob-nh-notice .bob-nh-notice-chips {
   display: flex;

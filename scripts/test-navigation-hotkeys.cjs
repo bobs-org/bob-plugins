@@ -749,8 +749,8 @@ test("priority bullet property config normalizes frozen levels and preserves exi
         name: "priority",
         values: "priority",
         levels: [
-          { label: " P2 ", value: " high ", min_days: 2, max_days: 7 },
-          { label: "P3", value: "medium", min_days: 8, max_days: 30 },
+          { label: " P1 ", value: " high ", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
         ],
       },
     ],
@@ -776,12 +776,12 @@ test("priority bullet property config normalizes frozen levels and preserves exi
       values: "priority",
       schedules: "scheduled",
       levels: [
-        { label: "P2", value: "high", minDays: 2, maxDays: 7 },
-        { label: "P3", value: "medium", minDays: 8, maxDays: 30 },
+        { label: "P1", value: "high", minDays: 2, maxDays: 7 },
+        { label: "P2", value: "medium", minDays: 8, maxDays: 30 },
       ],
       levelsByValue: new Map([
-        ["high", { label: "P2", value: "high", minDays: 2, maxDays: 7 }],
-        ["medium", { label: "P3", value: "medium", minDays: 8, maxDays: 30 }],
+        ["high", { label: "P1", value: "high", minDays: 2, maxDays: 7 }],
+        ["medium", { label: "P2", value: "medium", minDays: 8, maxDays: 30 }],
       ]),
     },
   );
@@ -798,7 +798,7 @@ test("priority bullet property config normalizes frozen levels and preserves exi
 
 test("priority bullet property config rejects each invalid schema category once", () => {
   const validLevel = {
-    label: "P2",
+    label: "P1",
     value: "high",
     min_days: 2,
     max_days: 7,
@@ -854,7 +854,7 @@ test("priority bullet property config rejects each invalid schema category once"
       name: "values must be unique",
       config: withScheduled(
         priorityEntry({
-          levels: [validLevel, { ...validLevel, label: "P3" }],
+          levels: [validLevel, { ...validLevel, label: "P2" }],
         }),
       ),
       message: /level #2.*value.*duplicated/,
@@ -1146,7 +1146,7 @@ test("counted priority metadata reports labels for common and mixed values", () 
   );
   assert.equal(commonPriority.valueState, "common");
   assert.equal(commonPriority.currentValue, "high");
-  assert.equal(commonPriority.currentLabel, "P2");
+  assert.equal(commonPriority.currentLabel, "P1");
 
   const mixedContent = commonContent.replace(
     "Two [priority:: high]",
@@ -1166,7 +1166,7 @@ test("counted priority metadata reports labels for common and mixed values", () 
     (item) => item.property.name === "priority",
   );
   assert.equal(mixedPriority.valueState, "mixed");
-  assert.deepEqual(mixedPriority.currentLabels, ["P2", "P4"]);
+  assert.deepEqual(mixedPriority.currentLabels, ["P1", "P3"]);
 });
 
 test("counted scheduled planning updates the motivating three tasks atomically", () => {
@@ -3661,9 +3661,10 @@ function createPriorityPickerConfig() {
         values: "priority",
         schedules: "scheduled",
         levels: [
-          { label: "P2", value: "high", min_days: 2, max_days: 7 },
-          { label: "P3", value: "medium", min_days: 8, max_days: 30 },
-          { label: "P4", value: "low", min_days: 31, max_days: 90 },
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+          { label: "P3", value: "low", min_days: 31, max_days: 90 },
+          { label: "P4", value: "lowest", min_days: 91, max_days: 365 },
         ],
       },
     ],
@@ -3826,8 +3827,8 @@ test("priority notice relative day helpers handle offsets ranges and icons", () 
   assert.equal(helpers.getPriorityLevelIconName(0), "signal-high");
   assert.equal(helpers.getPriorityLevelIconName(1), "signal-medium");
   assert.equal(helpers.getPriorityLevelIconName(2), "signal-low");
-  assert.equal(helpers.getPriorityLevelIconName(3), "signal");
-  assert.equal(helpers.getPriorityLevelIconName(9), "signal");
+  assert.equal(helpers.getPriorityLevelIconName(3), "signal-zero");
+  assert.equal(helpers.getPriorityLevelIconName(9), "signal-zero");
 });
 
 test("priority notice model summarizes single counted and project writes", () => {
@@ -3866,7 +3867,7 @@ test("priority notice model summarizes single counted and project writes", () =>
     },
     {
       iconName: "signal-high",
-      pill: "P2",
+      pill: "P1",
       countPill: "",
       receipt: "[priority:: high]",
       dateLabel: "scheduled",
@@ -3878,7 +3879,7 @@ test("priority notice model summarizes single counted and project writes", () =>
       textDateText: "2026-08-06 · Thu",
       relativeText: "in 3 days",
       chips: [{ text: "Blocked", tone: "warn" }],
-      text: "priority → P2 (high); scheduled → 2026-08-06 · Thu · in 3 days; marked task Blocked",
+      text: "priority → P1 (high); scheduled → 2026-08-06 · Thu · in 3 days; marked task Blocked",
     },
   );
 
@@ -3911,7 +3912,7 @@ test("priority notice model summarizes single counted and project writes", () =>
   ]);
   assert.equal(
     counted.text,
-    "priority → P2 (high) on 3 tasks; scheduled → 2026-08-05 to 2026-08-10 · in 2–7 days; 1 task unchanged; requested 5, found 3 at end of note; marked 3 tasks Blocked",
+    "priority → P1 (high) on 3 tasks; scheduled → 2026-08-05 to 2026-08-10 · in 2–7 days; 1 task unchanged; requested 5, found 3 at end of note; marked 3 tasks Blocked",
   );
 
   const project = helpers.buildPriorityNoticeModel({
@@ -3945,7 +3946,7 @@ test("priority notice model summarizes single counted and project writes", () =>
   ]);
   assert.equal(
     project.text,
-    "priority → P2 (high); scheduled → 2026-08-05 · Wed · in 2 days; scheduled 4 tasks; removed #hide from 2 tasks; marked 4 tasks Blocked; recovered 1 task Ready",
+    "priority → P1 (high); scheduled → 2026-08-05 · Wed · in 2 days; scheduled 4 tasks; removed #hide from 2 tasks; marked 4 tasks Blocked; recovered 1 task Ready",
   );
 
   const sameDayCounted = helpers.buildPriorityNoticeModel({
@@ -4071,7 +4072,28 @@ test("priority notice renderer builds an accessible fragment", () => {
     findFragmentNode(noChipRoot, nodeHasClass("bob-nh-notice-date-label")).text,
     "scheduled (project)",
   );
-  assert.equal(findFragmentNode(noChipRoot, nodeHasClass("bob-nh-notice-chips")), null);
+  assert.equal(
+    findFragmentNode(noChipRoot, nodeHasClass("bob-nh-notice-chips")),
+    null,
+  );
+
+  const fourthModel = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[3],
+    levelIndex: 3,
+    baseDate: new Date(2026, 7, 3),
+    scheduledValues: ["2026-11-02"],
+    taskCount: 1,
+    scope: "task",
+  });
+  assert.equal(fourthModel.iconName, "signal-zero");
+  const fourthRoot = createFragmentNode();
+  helpers.renderPriorityNoticeFragment(fourthModel, fourthRoot);
+  const fourthCard = findFragmentNode(
+    fourthRoot,
+    nodeHasClass("bob-nh-notice"),
+  );
+  assert.ok(fourthCard.classes.includes("is-level-3"));
 
   const invalidRoot = createFragmentNode();
   const longInvalidReceipt =
@@ -4094,7 +4116,10 @@ test("priority notice renderer builds an accessible fragment", () => {
     findFragmentNode(invalidRoot, nodeHasClass("bob-nh-notice-relative")),
     null,
   );
-  const invalidCard = findFragmentNode(invalidRoot, nodeHasClass("bob-nh-notice"));
+  const invalidCard = findFragmentNode(
+    invalidRoot,
+    nodeHasClass("bob-nh-notice"),
+  );
   assert.match(invalidCard.attrs["aria-label"], /not-a-date-with-a-very-long/);
   assert.doesNotMatch(invalidCard.attrs["aria-label"], /NaN/);
 });
@@ -4188,6 +4213,20 @@ test("priority scheduling rolls inclusively and clamps a random value of one", (
   assert.equal(roll(() => 0.5), "2026-08-08");
   assert.equal(roll(() => 0.999999), "2026-08-10");
   assert.equal(roll(() => 1), "2026-08-10");
+
+  const wideLevel = createPriorityPickerConfig().properties
+    .find((item) => item.name === "priority")
+    .levels[3];
+  const wideRoll = (random) =>
+    helpers.formatBulletPropertyDate(
+      helpers.rollPriorityScheduledDate(
+        wideLevel,
+        new Date(2026, 7, 3),
+        random,
+      ),
+    );
+  assert.equal(wideRoll(() => 0), "2026-11-02");
+  assert.equal(wideRoll(() => 0.999999), "2027-08-03");
 });
 
 test("priority value rows preserve config order and expose labels ranges and current state", () => {
@@ -4209,28 +4248,36 @@ test("priority value rows preserve config order and expose labels ranges and cur
     })),
     [
       {
-        label: "P2",
+        label: "P1",
         value: "high",
         detail: "high · in 2–7 days",
-        searchText: "P2 high 2–7 days",
+        searchText: "P1 high 2–7 days",
         current: false,
         priorityLevel: property.levels[0],
       },
       {
-        label: "P3",
+        label: "P2",
         value: "medium",
         detail: "medium · in 8–30 days",
-        searchText: "P3 medium 8–30 days",
+        searchText: "P2 medium 8–30 days",
         current: true,
         priorityLevel: property.levels[1],
       },
       {
-        label: "P4",
+        label: "P3",
         value: "low",
         detail: "low · in 31–90 days",
-        searchText: "P4 low 31–90 days",
+        searchText: "P3 low 31–90 days",
         current: false,
         priorityLevel: property.levels[2],
+      },
+      {
+        label: "P4",
+        value: "lowest",
+        detail: "lowest · in 91–365 days",
+        searchText: "P4 lowest 91–365 days",
+        current: false,
+        priorityLevel: property.levels[3],
       },
     ],
   );
@@ -4241,7 +4288,7 @@ test("priority value rows preserve config order and expose labels ranges and cur
   );
   assert.equal(
     propertyItems.find((item) => item.property.name === "priority").currentLabel,
-    "P3",
+    "P2",
   );
 });
 
@@ -4254,7 +4301,7 @@ test("priority picker writes priority then rolled schedule in one guarded edit",
     random: () => 0,
   });
 
-  const picker = await choosePriorityLevel(harness, "P2");
+  const picker = await choosePriorityLevel(harness, "P1");
 
   assert.equal(picker.headerIcon, "signal-high");
   assert.equal(picker.placeholder, "Filter priorities");
@@ -4264,7 +4311,27 @@ test("priority picker writes priority then rolled schedule in one guarded edit",
     /- \[\?\] #task One \[priority:: high\] \[scheduled:: 2026-08-05\] \^one/,
   );
   assert.deepEqual(notices, [
-    "priority → P2 (high); scheduled → 2026-08-05 · Wed · in 2 days; marked task Blocked",
+    "priority → P1 (high); scheduled → 2026-08-05 · Wed · in 2 days; marked task Blocked",
+  ]);
+});
+
+test("priority picker writes lowest priority with a wide rolled schedule", async () => {
+  notices.length = 0;
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    content: "- [ ] #task One ^one",
+    baseDate: new Date(2026, 7, 3),
+    random: () => 0,
+  });
+
+  await choosePriorityLevel(harness, "P4");
+
+  assert.equal(
+    harness.editor.content,
+    "- [?] #task One [priority:: lowest] [scheduled:: 2026-11-02] ^one",
+  );
+  assert.deepEqual(notices, [
+    "priority → P4 (lowest); scheduled → 2026-11-02 · Mon · in 91 days; marked task Blocked",
   ]);
 });
 
@@ -4278,7 +4345,7 @@ test("priority picker replaces both existing values without duplicating fields",
     random: () => 0.5,
   });
 
-  await choosePriorityLevel(harness, "P2");
+  await choosePriorityLevel(harness, "P1");
 
   assert.equal((harness.editor.content.match(/\[priority::/g) || []).length, 1);
   assert.equal((harness.editor.content.match(/\[scheduled::/g) || []).length, 1);
@@ -4307,7 +4374,7 @@ test("counted priority writes keep the rolled date right of the priority", async
     picker.visibleItems.findIndex((item) => item.property.name === "priority"),
   );
   await picker.openItemAtIndex(
-    picker.visibleItems.findIndex((item) => item.label === "P2"),
+    picker.visibleItems.findIndex((item) => item.label === "P1"),
   );
 
   assert.equal(
@@ -4337,7 +4404,7 @@ test("priority picker writes project priority inline and schedule to frontmatter
     random: () => 0,
   });
 
-  await choosePriorityLevel(harness, "P2");
+  await choosePriorityLevel(harness, "P1");
 
   assert.equal(harness.editor.transactions.length, 1);
   assert.match(harness.editor.content, /^scheduled: 2026-08-05$/m);
@@ -4346,7 +4413,7 @@ test("priority picker writes project priority inline and schedule to frontmatter
   assert.equal(notices.length, 1);
   assert.match(
     notices[0],
-    /^priority → P2 \(high\); scheduled → 2026-08-05 · Wed · in 2 days/,
+    /^priority → P1 \(high\); scheduled → 2026-08-05 · Wed · in 2 days/,
   );
 });
 
@@ -4369,7 +4436,7 @@ test("counted priority picker rolls an independent schedule for every task", asy
   );
   await picker.openItemAtIndex(propertyIndex);
   const levelIndex = picker.visibleItems.findIndex(
-    (item) => item.label === "P2",
+    (item) => item.label === "P1",
   );
   await picker.openItemAtIndex(levelIndex);
 
@@ -4387,7 +4454,7 @@ test("counted priority picker rolls an independent schedule for every task", asy
     ],
   );
   assert.deepEqual(notices, [
-    "priority → P2 (high) on 3 tasks; scheduled → 2026-08-05 to 2026-08-10 · in 2–7 days; marked 3 tasks Blocked",
+    "priority → P1 (high) on 3 tasks; scheduled → 2026-08-05 to 2026-08-10 · in 2–7 days; marked 3 tasks Blocked",
   ]);
 });
 
@@ -4523,12 +4590,12 @@ test("scheduled picker pins a priority roll only for configured current prioriti
       searchText: picker.items[0].searchText,
     },
     {
-      label: "P2 roll",
+      label: "P1 roll",
       value: "2026-08-05",
       detail: "2026-08-05 · Wed · random in 2–7 days",
       priorityRoll: true,
-      level: "P2",
-      searchText: "P2 roll 2026-08-05 Wed random priority",
+      level: "P1",
+      searchText: "P1 roll 2026-08-05 Wed random priority",
     },
   );
   assert.equal(
@@ -4656,7 +4723,7 @@ test("counted scheduled picker requires one shared configured priority", async (
   });
   assert.equal(commonPicker.items.length, 11);
   assert.equal(commonPicker.items[0].priorityRoll, true);
-  assert.equal(commonPicker.items[0].level.label, "P2");
+  assert.equal(commonPicker.items[0].level.label, "P1");
 });
 
 test("bullet property picker reconciles duplicate bare and counted opens", () => {

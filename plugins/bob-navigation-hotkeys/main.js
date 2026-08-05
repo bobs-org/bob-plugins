@@ -10933,7 +10933,7 @@ function getPriorityLevelIconName(levelIndex) {
   if (levelIndex === 2) {
     return "signal-low";
   }
-  return "signal";
+  return "signal-zero";
 }
 
 function normalizePriorityLevelIndex(property, level, levelIndex) {
@@ -11244,7 +11244,7 @@ function renderPriorityNoticeFragment(model, root) {
   const levelClass =
     Number.isInteger(model.levelIndex) &&
     model.levelIndex >= 0 &&
-    model.levelIndex <= 2
+    model.levelIndex <= 3
       ? ` is-level-${model.levelIndex}`
       : "";
   const card = root.createDiv({

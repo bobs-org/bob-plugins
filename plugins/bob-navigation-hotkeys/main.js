@@ -255,6 +255,16 @@ const SCHEDULE_LOG_ENTRY_EMPHASIS = "*";
 const SCHEDULE_LOG_INDENT_UNIT = "\t";
 const SCHEDULE_LOG_SEPARATOR = " — ";
 const SCHEDULE_LOG_TRANSITION = " → ";
+// A machine-rolled date logs its own reason instead of prompting for one. The
+// die matches the `dices` icon the picker already uses for the pinned
+// priority-roll row, and marks the entry as written by the plugin rather than
+// typed by a human.
+const SCHEDULE_LOG_AUTO_REASON_EMOJI = "🎲";
+const SCHEDULE_LOG_AUTO_REASON_SEPARATOR = " · ";
+// A task with no priority field is the implicit highest level, P0. The picker
+// has no P0 row (Ctrl+D clears the field instead), so this label exists only to
+// render the previous side of a priority transition in a log entry.
+const IMPLICIT_PRIORITY_LEVEL_LABEL = "P0";
 const SCHEDULE_LOG_PARENT_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${SCHEDULE_LOG_EMOJI}[ \\t]+)?\\*\\*(?<label>${[
     SCHEDULE_LOG_LABEL,
@@ -1657,6 +1667,74 @@ function applyScheduleLogEntryToLines(lines, plan) {
   const lineTexts = Array.isArray(plan.lineTexts) ? plan.lineTexts : [];
   lines.splice(insertLine, 0, ...lineTexts);
   return lineTexts.length;
+}
+
+// The roll window as the picker states it, e.g. `random in 8–30 days`. Shared
+// by the pinned roll row's detail line and by the deterministic log reason so
+// the note can never disagree with the row the user clicked. Note the en dash.
+function formatPriorityRollWindowText(level) {
+  return `random in ${level.minDays}–${level.maxDays} days`;
+}
+
+// The previous priority as a picker label for the left side of a transition.
+// An absent field is the implicit P0; a value outside the configured levels
+// falls through as itself rather than being dropped.
+function getPriorityRollFromLevelLabel(property, value) {
+  return getBulletPropertyCurrentLabel(property, value) || IMPLICIT_PRIORITY_LEVEL_LABEL;
+}
+
+// Deterministic reason text for a machine-rolled scheduled date. `source` is
+// "priority" when the user picked a level (the level, and any change to it, is
+// the reason) or "scheduled" when they picked the pinned roll row in the date
+// stage (the roll itself is the reason).
+function formatPriorityRollScheduleReason(details = {}) {
+  const level = details.level;
+  if (!level || !level.label) {
+    return "";
+  }
+
+  const head =
+    details.source === "priority"
+      ? `priority ${
+          details.fromLevelLabel && details.fromLevelLabel !== level.label
+            ? `${details.fromLevelLabel}${SCHEDULE_LOG_TRANSITION}${level.label}`
+            : level.label
+        }`
+      : `${level.label} roll`;
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} ${head}${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}${formatPriorityRollWindowText(
+    level,
+  )}`;
+}
+
+// An automatic entry records a scheduling change, so a roll that landed on the
+// date the task already had writes nothing. A typed reason is a human decision
+// and is never suppressed this way.
+function shouldWriteAutomaticScheduleLog(from, to) {
+  const fromValue = normalizeBulletPropertyValue(from);
+  const toValue = normalizeBulletPropertyValue(to);
+  return Boolean(toValue) && fromValue !== toValue;
+}
+
+// Build the `options.scheduleLog` payload for a machine-rolled date, or null
+// when nothing should be logged. Returning null (rather than a flag the callers
+// must check) lets every writer keep its existing "falsy scheduleLog means no
+// log" guard unchanged.
+function buildPriorityRollScheduleLog(details = {}) {
+  if (!shouldWriteAutomaticScheduleLog(details.from, details.to)) {
+    return null;
+  }
+
+  const reason = formatPriorityRollScheduleReason(details);
+  if (!reason) {
+    return null;
+  }
+
+  return Object.freeze({
+    from: normalizeBulletPropertyValue(details.from),
+    to: normalizeBulletPropertyValue(details.to),
+    reason,
+    automatic: true,
+  });
 }
 
 function createDependencyNavigationCollection(fields) {
@@ -10598,6 +10676,7 @@ function planCountedBulletPropertyBatch(
   let ambiguousProjectTaskCount = 0;
   const recoveryCounts = emptyScheduledRecoveryCounts();
   let projectPropertyChanged = false;
+  let projectScheduledValue = "";
 
   if (projectTargets.length > 0) {
     const firstProject = projectTargets[0];
@@ -10605,7 +10684,7 @@ function planCountedBulletPropertyBatch(
       ? firstProject.scheduledState
       : firstProject.state;
     const frontmatter = projectState.context.frontmatter;
-    const projectScheduledValue = isPriorityOperation
+    projectScheduledValue = isPriorityOperation
       ? normalizeBulletPropertyValue(
           scheduledValueByLine.get(firstProject.target.line),
         )
@@ -10797,38 +10876,50 @@ function planCountedBulletPropertyBatch(
     (targetChanged ? changedTargets : unchangedTargets).push(detail);
   }
 
-  // One shared reason, applied as one entry per changed target using that
-  // target's own previous value (captured above via getCountedPropertyTargetState).
-  // Unchanged targets never get an entry. Insertions apply in descending
-  // insertLine order so an earlier (smaller-index) insert position is never
-  // invalidated by a later one.
+  // One entry per changed target, using that target's own previous value
+  // (captured above via getCountedPropertyTargetState) and its own rolled date.
+  // A priority batch supplies reasonByLine because each task may have had a
+  // different previous level; a scheduled batch supplies one shared reason.
+  // Insertions apply in descending insertLine order so an earlier (smaller-index)
+  // insert position is never invalidated by a later one.
   let scheduleLoggedTaskCount = 0;
   let scheduleLogCreatedParentCount = 0;
-  const scheduleLogReason =
-    operation === "set" &&
-    propertyName === "scheduled" &&
-    options.scheduleLog &&
-    !normalizeScheduleReasonText(options.scheduleLog.reason).empty
-      ? normalizeScheduleReasonText(options.scheduleLog.reason).reason
+  const scheduleLogOptions =
+    options.scheduleLog && (isPriorityOperation || (operation === "set" && propertyName === "scheduled"))
+      ? options.scheduleLog
       : null;
-  if (scheduleLogReason) {
-    const stateByOriginalLine = new Map(
-      targetStates.map((entry) => [entry.target.line, entry.state]),
-    );
+  if (scheduleLogOptions) {
+    const entryByOriginalLine = new Map(targetStates.map((entry) => [entry.target.line, entry]));
     const scheduleLogPlans = changedTargets
       .map((detail) => {
-        const state = stateByOriginalLine.get(detail.originalLine);
-        return planScheduleLogEntry(
-          source.lines.join(source.lineEnding),
-          detail.line,
-          {
-            from: state ? state.value : "",
-            to: normalizedValue,
-            reason: scheduleLogReason,
-          },
-        );
+        const entry = entryByOriginalLine.get(detail.originalLine);
+        const scheduledState = isPriorityOperation ? entry && entry.scheduledState : entry && entry.state;
+        // Only the first ^prj target's roll reaches frontmatter, so every
+        // project-frontmatter target logs the value that was actually written.
+        const to = !isPriorityOperation
+          ? normalizedValue
+          : scheduledState && scheduledState.target.kind === "project-frontmatter"
+            ? projectScheduledValue
+            : normalizeBulletPropertyValue(scheduledValueByLine.get(detail.originalLine));
+        const from = scheduledState ? scheduledState.value : "";
+        const rawReason =
+          scheduleLogOptions.reasonByLine instanceof Map && scheduleLogOptions.reasonByLine.has(detail.originalLine)
+            ? scheduleLogOptions.reasonByLine.get(detail.originalLine)
+            : scheduleLogOptions.reason;
+        const normalizedReason = normalizeScheduleReasonText(rawReason);
+        if (normalizedReason.empty) {
+          return null;
+        }
+        if (scheduleLogOptions.automatic && !shouldWriteAutomaticScheduleLog(from, to)) {
+          return null;
+        }
+        return planScheduleLogEntry(source.lines.join(source.lineEnding), detail.line, {
+          from,
+          to,
+          reason: normalizedReason.reason,
+        });
       })
-      .filter((scheduleLogPlan) => scheduleLogPlan.valid)
+      .filter((scheduleLogPlan) => scheduleLogPlan && scheduleLogPlan.valid)
       .sort((first, second) => second.insertLine - first.insertLine);
     for (const scheduleLogPlan of scheduleLogPlans) {
       if (applyScheduleLogEntryToLines(source.lines, scheduleLogPlan) > 0) {
@@ -11264,7 +11355,7 @@ function createPriorityRollDateItem(
     kind: "value",
     value,
     label: `${level.label} roll`,
-    detail: `${value} · ${weekday} · random in ${level.minDays}–${level.maxDays} days`,
+    detail: `${value} · ${weekday} · ${formatPriorityRollWindowText(level)}`,
     current: value === currentValue,
     dynamic: false,
     priorityRoll: true,
@@ -11466,6 +11557,12 @@ function getPriorityNoticeOutcomeParts(outcome = {}, scope = "task") {
       `removed #hide from ${formatCountLabel(removedHideTaskCount, "task")}`,
     );
   }
+  const scheduleLoggedTaskCount = normalizePriorityNoticeCount(outcome.scheduleLoggedTaskCount);
+  if (scheduleLoggedTaskCount > 0) {
+    parts.push(
+      scope === "counted" ? `logged reason on ${formatCountLabel(scheduleLoggedTaskCount, "task")}` : "logged reason",
+    );
+  }
   const blockedText = getPriorityNoticeBlockedText(
     normalizePriorityNoticeCount(outcome.blockedTaskCount),
     scope,
@@ -11495,15 +11592,22 @@ function getPriorityNoticeChipTone(text) {
   if (/^(scheduled|removed #hide)/.test(text)) {
     return "info";
   }
+  if (/^logged reason/.test(text)) {
+    return "info";
+  }
   return "muted";
 }
 
 function getPriorityNoticeChipText(text) {
   const markedMatch = /^marked (?:(\d+) tasks?|task) Blocked$/.exec(text);
-  if (!markedMatch) {
-    return text;
+  if (markedMatch) {
+    return markedMatch[1] ? `${markedMatch[1]} Blocked` : "Blocked";
   }
-  return markedMatch[1] ? `${markedMatch[1]} Blocked` : "Blocked";
+  const loggedMatch = /^logged reason(?: on (\d+) tasks?)?$/.exec(text);
+  if (loggedMatch) {
+    return loggedMatch[1] ? `${loggedMatch[1]} logged` : "logged";
+  }
+  return text;
 }
 
 function formatPriorityNoticeText(model) {
@@ -12199,6 +12303,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       openItem:
         normalizeBulletPropertyName(property.name) === "scheduled"
           ? (item) => {
+              if (item.priorityRoll) {
+                return this.applySelectedValue(item, {
+                  scheduleLog: this.buildPriorityRollScheduleLogForItem(item),
+                });
+              }
               this.showScheduleReasonStage(item);
               return false;
             }
@@ -12210,21 +12319,47 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
   }
 
+  // The scheduled value a picked date replaces: frontmatter for a ^prj task,
+  // the inline field otherwise. Empty in a counted session, where each target's
+  // own previous value is resolved by the counted planner instead.
+  getPendingScheduleFrom() {
+    const propertyItem = this.selectedPropertyItem;
+    if (!propertyItem || this.isCountedSession()) {
+      return "";
+    }
+
+    return normalizeBulletPropertyValue(
+      propertyItem.target && propertyItem.target.kind === "project-frontmatter"
+        ? propertyItem.currentValue
+        : this.getCurrentPropertyValue(propertyItem.property.name),
+    );
+  }
+
+  // The pinned priority-roll row is a date the plugin chose, so it never prompts:
+  // it writes straight through with a deterministic reason. Null when the roll
+  // landed on the date the task already has.
+  buildPriorityRollScheduleLogForItem(item) {
+    if (!item || !item.priorityRoll || !item.level) {
+      return null;
+    }
+
+    return buildPriorityRollScheduleLog({
+      source: "scheduled",
+      level: item.level,
+      from: this.getPendingScheduleFrom(),
+      to: item.value,
+    });
+  }
+
   // Free-text prompt shown after a `scheduled` date is chosen, mirroring the
   // block-ID stage: nothing is written until this prompt is confirmed (Enter,
   // empty or not) or the modal is dismissed (Esc, a clean cancel of the date
   // too — see onClose's contract).
   showScheduleReasonStage(dateItem) {
     this.stage = "reason";
-    const propertyItem = this.selectedPropertyItem;
-    const from = this.isCountedSession()
-      ? ""
-      : propertyItem.target && propertyItem.target.kind === "project-frontmatter"
-        ? propertyItem.currentValue
-        : this.getCurrentPropertyValue(propertyItem.property.name);
     this.pendingScheduleReason = Object.freeze({
       dateItem,
-      from: normalizeBulletPropertyValue(from),
+      from: this.getPendingScheduleFrom(),
       to: dateItem.value,
     });
     this.clearLocalTaskMarks();
@@ -14992,6 +15127,23 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     }
 
+    // `target.rawLine` is guaranteed to equal the live line here —
+    // getCountedTaskWriteContext ran validateCountedTaskSession above — so the
+    // previous priority can be read straight off it.
+    const scheduleLogReasonByLine = new Map(
+      session.targets.map((target) => [
+        target.line,
+        formatPriorityRollScheduleReason({
+          source: "priority",
+          level,
+          fromLevelLabel: getPriorityRollFromLevelLabel(
+            property,
+            (findBulletPropertyField(target.rawLine, property.name) || {}).value || "",
+          ),
+        }),
+      ]),
+    );
+
     const plan = planCountedBulletPropertyBatch(
       writeContext.content,
       session,
@@ -15004,6 +15156,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         scheduledValueByLine,
         today: baseDate,
         recoveryByLine,
+        scheduleLog: { automatic: true, reasonByLine: scheduleLogReasonByLine },
       },
     );
     if (!plan.valid) {
@@ -15056,6 +15209,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           recoveredInProgressTaskCount: plan.recoveredInProgressTaskCount,
           stillBlockedTaskCount: plan.stillBlockedTaskCount,
           deferredRecoveryTaskCount: plan.deferredRecoveryTaskCount,
+          scheduleLoggedTaskCount: plan.scheduleLoggedTaskCount,
         },
       }),
       options,
@@ -15463,6 +15617,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           blockedTaskCount: plan.blockedTaskCount,
           ambiguousTaskCount: plan.ambiguousTaskLines.length,
           recoveryCounts,
+          scheduleLogOutcome,
         }),
         options,
       );
@@ -15708,7 +15863,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     };
     if (typeof options.buildNotice === "function") {
       showPriorityNotice(
-        options.buildNotice({ blocked, recoveryOutcome, recoveryCounts }),
+        options.buildNotice({
+          blocked,
+          recoveryOutcome,
+          recoveryCounts,
+          scheduleLogOutcome,
+        }),
         options,
       );
     } else {
@@ -15765,6 +15925,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     );
     const rolledValue = formatBulletPropertyDate(rolledDate);
     const levelIndex = normalizePriorityLevelIndex(property, level);
+    // Read the live line rather than the captured one so the transition is correct
+    // even if `lineText` was not supplied; the writers' own expectedLine guard is
+    // what aborts the whole write if the note moved underneath us.
+    const currentLine = getEditorLine(cm, cursor.line) ?? lineText ?? "";
+    const priorityField = findBulletPropertyField(currentLine, property.name);
+    const fromLevelLabel = getPriorityRollFromLevelLabel(property, priorityField ? priorityField.value : "");
     const propertyContext =
       context.propertyContext ||
       getProjectNotePropertyContext(
@@ -15791,6 +15957,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         {
           inlineEdits: [{ name: property.name, value: level.value }],
           today: baseDate,
+          scheduleLog: buildPriorityRollScheduleLog({
+            source: "priority",
+            level,
+            fromLevelLabel,
+            from: expectedScheduledValue,
+            to: rolledValue,
+          }),
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
               property,
@@ -15800,7 +15973,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               scheduledValues: [outcome.scheduled || rolledValue],
               taskCount: 1,
               scope: "project",
-              outcome,
+              outcome: {
+                ...outcome,
+                scheduleLoggedTaskCount:
+                  outcome.scheduleLogOutcome === "added" ||
+                  outcome.scheduleLogOutcome === "created"
+                    ? 1
+                    : 0,
+              },
             }),
         },
       );
@@ -15818,7 +15998,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         filePath,
         expectedLine: lineText,
         today: baseDate,
-        buildNotice: ({ blocked, recoveryCounts }) =>
+        scheduleLog: buildPriorityRollScheduleLog({
+          source: "priority",
+          level,
+          fromLevelLabel,
+          from: (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
+          to: rolledValue,
+        }),
+        buildNotice: (outcome) =>
           buildPriorityNoticeModel({
             property,
             level,
@@ -15828,8 +16015,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             taskCount: 1,
             scope: "task",
             outcome: {
-              blockedTaskCount: blocked ? 1 : 0,
-              recoveryCounts,
+              blockedTaskCount: outcome.blocked ? 1 : 0,
+              recoveryCounts: outcome.recoveryCounts,
+              scheduleLoggedTaskCount:
+                outcome.scheduleLogOutcome === "added" ||
+                outcome.scheduleLogOutcome === "created"
+                  ? 1
+                  : 0,
             },
           }),
         // Rebuild an existing schedules field after the priority, matching the
@@ -20345,6 +20537,11 @@ module.exports.helpers = {
   getScheduleLogEntryIndent,
   planScheduleLogEntry,
   applyScheduleLogEntryToLines,
+  formatPriorityRollWindowText,
+  getPriorityRollFromLevelLabel,
+  formatPriorityRollScheduleReason,
+  shouldWriteAutomaticScheduleLog,
+  buildPriorityRollScheduleLog,
   getBulletPropertyScheduleReasonHints,
   collectDependencyNavigationBullets,
   computeFinalDependencyLinkOrder,

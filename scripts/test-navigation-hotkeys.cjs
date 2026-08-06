@@ -4632,6 +4632,9 @@ test("a counted priority batch writes one entry per task using each task's own p
   assert.equal(plan.valid, true);
   assert.equal(plan.cursorLine, 0);
   assert.equal(plan.scheduleLoggedTaskCount, 3);
+  // A priority roll's generated reason is never empty, so no target can ever
+  // take the fallback branch.
+  assert.equal(plan.scheduleLogFallbackTaskCount, 0);
   assert.equal(
     plan.content,
     [
@@ -4848,7 +4851,9 @@ test("choosing a priority roll writes immediately with a deterministic reason in
   );
 
   // A non-roll row still enters the reason stage, and confirming it empty
-  // writes the date with no log.
+  // writes the date with no log. This task has no 🗓️ **SCHEDULE LOG** marker,
+  // so this also doubles as the regression guard for the escape hatch: an
+  // empty reason never creates a log on a task that didn't already have one.
   const preset = makeHarness();
   const presetPicker = await openBulletPropertyValueStage(preset, "scheduled");
   const presetIndex = presetPicker.visibleItems.findIndex(
@@ -6804,6 +6809,121 @@ test("planScheduleLogEntry extends a legacy on-disk log whose one existing entry
   ]);
 });
 
+test("planScheduleLogEntry uses the fallback only when a marker exists", () => {
+  const withMarker = [
+    "- [ ] #task Ship the thing [scheduled:: 2026-08-20] ^ship",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-08-13 → 2026-08-20* — waiting on the API review to land",
+  ].join("\n");
+  const marked = helpers.planScheduleLogEntry(withMarker, 0, {
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "",
+    fallbackReason: "🤷 no reason given",
+  });
+  assert.equal(marked.valid, true);
+  assert.equal(marked.usedFallback, true);
+  assert.equal(marked.createdParent, false);
+  assert.deepEqual(marked.lineTexts, [
+    "    - *2026-08-13 → 2026-08-20* — 🤷 no reason given",
+  ]);
+
+  const withoutMarker = "- [ ] #task Ship the thing [scheduled:: 2026-08-20] ^ship";
+  const unmarked = helpers.planScheduleLogEntry(withoutMarker, 0, {
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "",
+    fallbackReason: "🤷 no reason given",
+  });
+  assert.equal(unmarked.valid, false);
+  assert.equal(unmarked.reason, "no-schedule-log");
+  assert.equal(unmarked.usedFallback, false);
+});
+
+test("a typed reason wins over the fallback", () => {
+  const withMarker = [
+    "- [ ] #task Ship the thing [scheduled:: 2026-08-20] ^ship",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-08-13 → 2026-08-20* — waiting on the API review to land",
+  ].join("\n");
+  const plan = helpers.planScheduleLogEntry(withMarker, 0, {
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "back from sick leave",
+    fallbackReason: "🤷 no reason given",
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.usedFallback, false);
+  assert.deepEqual(plan.lineTexts, [
+    "    - *2026-08-13 → 2026-08-20* — back from sick leave",
+  ]);
+});
+
+// Paired with "a typed reason on an unchanged date is still written": together
+// they are the whole automatic-vs-human rule.
+test("the fallback is suppressed on an unchanged date", () => {
+  const withMarker = [
+    "- [ ] #task Ship the thing [scheduled:: 2026-08-20] ^ship",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-08-13 → 2026-08-20* — waiting on the API review to land",
+  ].join("\n");
+  const plan = helpers.planScheduleLogEntry(withMarker, 0, {
+    from: "2026-08-20",
+    to: "2026-08-20",
+    reason: "",
+    fallbackReason: "🤷 no reason given",
+  });
+  assert.equal(plan.valid, false);
+  assert.equal(plan.reason, "unchanged-date");
+});
+
+test("no reason and no fallback still guards empty-reason", () => {
+  const fresh = "- [ ] #task Ship the thing [scheduled:: 2026-08-20] ^ship";
+  const plan = helpers.planScheduleLogEntry(fresh, 0, {
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "",
+    fallbackReason: "",
+  });
+  assert.equal(plan.valid, false);
+  assert.equal(plan.reason, "empty-reason");
+  assert.equal(plan.usedFallback, false);
+});
+
+test("getScheduleLogWriteOutcome maps plan outcomes for writers", () => {
+  const createdPlan = { valid: true, createdParent: true, usedFallback: false };
+  const addedPlan = { valid: true, createdParent: false, usedFallback: false };
+  const fallbackPlan = { valid: true, createdParent: false, usedFallback: true };
+  assert.equal(helpers.getScheduleLogWriteOutcome(createdPlan, true), "created");
+  assert.equal(helpers.getScheduleLogWriteOutcome(addedPlan, true), "added");
+  assert.equal(helpers.getScheduleLogWriteOutcome(fallbackPlan, true), "added-fallback");
+
+  for (const reason of ["empty-reason", "no-schedule-log", "unchanged-date"]) {
+    assert.equal(
+      helpers.getScheduleLogWriteOutcome({ valid: false, reason }, false),
+      null,
+    );
+  }
+
+  assert.equal(
+    helpers.getScheduleLogWriteOutcome({ valid: false, reason: "not-list-item" }, false),
+    "guard-failed",
+  );
+  assert.equal(helpers.getScheduleLogWriteOutcome(addedPlan, false), "guard-failed");
+  assert.equal(helpers.getScheduleLogWriteOutcome(null, true), null);
+});
+
+test("hasScheduleLogReasonInput detects a typed reason or a fallback-only payload", () => {
+  assert.equal(helpers.hasScheduleLogReasonInput(null), false);
+  assert.equal(helpers.hasScheduleLogReasonInput({}), false);
+  assert.equal(helpers.hasScheduleLogReasonInput({ reason: "  " }), false);
+  assert.equal(helpers.hasScheduleLogReasonInput({ reason: "kickoff" }), true);
+  assert.equal(
+    helpers.hasScheduleLogReasonInput({ reason: "", fallbackReason: "🤷 no reason given" }),
+    true,
+  );
+});
+
 test("counted scheduled reason logs one entry per changed task, prepends above an existing log, and skips unchanged tasks", () => {
   const input = [
     "- [ ] #task Alpha [scheduled:: 2026-07-01] ^alpha",
@@ -6872,6 +6992,112 @@ test("empty reason through the counted planner writes no schedule log entries", 
   assert.equal(withEmptyReason.content, withoutScheduleLog.content);
   assert.equal(withEmptyReason.scheduleLoggedTaskCount, 0);
   assert.equal(withEmptyReason.scheduleLogCreatedParentCount, 0);
+
+  // Neither fixture task has a marker, so a fallback alone still creates
+  // nothing: the fallback only ever fires on a task that already keeps a log.
+  const withFallbackOnly = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-10",
+    {
+      operation: "set",
+      today: new Date(2026, 7, 1),
+      scheduleLog: { reason: "   ", fallbackReason: "🤷 no reason given" },
+    },
+  );
+  assert.equal(withFallbackOnly.content, withoutScheduleLog.content);
+  assert.equal(withFallbackOnly.scheduleLoggedTaskCount, 0);
+  assert.equal(withFallbackOnly.scheduleLogCreatedParentCount, 0);
+  assert.equal(withFallbackOnly.scheduleLogFallbackTaskCount, 0);
+});
+
+test("a counted scheduled session logs only the tasks that already keep a log", () => {
+  const input = [
+    "- [ ] #task Alpha [scheduled:: 2026-07-01] ^alpha",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-06-20 → 2026-07-01* — first push",
+    "- [ ] #task Beta [scheduled:: 2026-07-05] ^beta",
+    "- [ ] #task Gamma [scheduled:: 2026-07-20] ^gamma",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-20",
+    {
+      operation: "set",
+      today: new Date(2026, 7, 1),
+      scheduleLog: { reason: "   ", fallbackReason: "🤷 no reason given" },
+    },
+  );
+  assert.equal(plan.valid, true);
+  assert.equal(plan.scheduleLoggedTaskCount, 1);
+  assert.equal(plan.scheduleLogFallbackTaskCount, 1);
+  assert.equal(plan.scheduleLogCreatedParentCount, 0);
+  assert.equal(plan.cursorLine, 0);
+  assert.equal(
+    plan.content,
+    [
+      "- [ ] #task Alpha [scheduled:: 2026-07-20] ^alpha",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "    - *2026-07-01 → 2026-07-20* — 🤷 no reason given",
+      "    - *2026-06-20 → 2026-07-01* — first push",
+      "- [ ] #task Beta [scheduled:: 2026-07-20] ^beta",
+      "- [ ] #task Gamma [scheduled:: 2026-07-20] ^gamma",
+    ].join("\n"),
+  );
+});
+
+test("the counted notice wording distinguishes a fallback batch from a typed-reason batch", async () => {
+  const input = [
+    "- [ ] #task Alpha [scheduled:: 2026-07-01] ^alpha",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-06-20 → 2026-07-01* — first push",
+    "- [ ] #task Beta [scheduled:: 2026-07-05] ^beta",
+    "- [ ] #task Gamma [scheduled:: 2026-07-20] ^gamma",
+  ].join("\n");
+  const cursor = { line: 0, ch: 4 };
+  const file = { path: "Tasks.md", extension: "md" };
+
+  notices.length = 0;
+  const fallbackSession = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const fallbackEditor = new TransactionEditor(input, cursor);
+  const fallbackPlugin = new NavigationHotkeysPlugin();
+  fallbackPlugin.getActiveMarkdownView = () => ({ editor: fallbackEditor, file });
+  assert.equal(
+    await fallbackPlugin.setCountedBulletPropertyValue(
+      fallbackEditor,
+      cursor,
+      file.path,
+      fallbackSession,
+      "scheduled",
+      "2026-07-20",
+      { scheduleLog: { reason: "   ", fallbackReason: "🤷 no reason given" } },
+    ),
+    true,
+  );
+  assert.match(notices.at(-1), /; logged without a reason on 1 task$/);
+
+  notices.length = 0;
+  const typedSession = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const typedEditor = new TransactionEditor(input, cursor);
+  const typedPlugin = new NavigationHotkeysPlugin();
+  typedPlugin.getActiveMarkdownView = () => ({ editor: typedEditor, file });
+  assert.equal(
+    await typedPlugin.setCountedBulletPropertyValue(
+      typedEditor,
+      cursor,
+      file.path,
+      typedSession,
+      "scheduled",
+      "2026-07-20",
+      { scheduleLog: { reason: "sprint replan" } },
+    ),
+    true,
+  );
+  assert.match(notices.at(-1), /; logged reason on 2 tasks$/);
 });
 
 test("setBulletPropertyValue writes an inline scheduled date plus a schedule log entry", async () => {
@@ -7036,6 +7262,66 @@ test("choosing a priority level does not enter the reason stage", async () => {
   );
 });
 
+test("confirming an empty reason on a task with an existing schedule log appends an unexplained entry", async () => {
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: [
+      "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "    - *2026-08-06 → 2026-08-13* — was out sick",
+    ].join("\n"),
+    baseDate: new Date(2026, 7, 3),
+  });
+  notices.length = 0;
+  const picker = await openBulletPropertyValueStage(harness, "scheduled");
+  const dateIndex = picker.visibleItems.findIndex(
+    (item) => item.label === "In 2 days",
+  );
+  assert.notEqual(dateIndex, -1);
+  const dateValue = picker.visibleItems[dateIndex].value;
+  await picker.openItemAtIndex(dateIndex);
+  assert.equal(picker.stage, "reason");
+
+  await confirmScheduleReasonStage(picker, "");
+
+  assert.equal(
+    harness.editor.content,
+    [
+      `- [ ] #task Ship the thing [scheduled:: ${dateValue}] ^ship`,
+      "  - 🗓️ **SCHEDULE LOG**",
+      `    - *2026-08-13 → ${dateValue}* — 🤷 no reason given`,
+      "    - *2026-08-06 → 2026-08-13* — was out sick",
+    ].join("\n"),
+  );
+  assert.match(notices.at(-1), /; logged without a reason/);
+});
+
+test("confirming an empty reason on a task with no schedule log writes only the date", async () => {
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship",
+    baseDate: new Date(2026, 7, 3),
+  });
+  notices.length = 0;
+  const picker = await openBulletPropertyValueStage(harness, "scheduled");
+  const dateIndex = picker.visibleItems.findIndex(
+    (item) => item.label === "In 2 days",
+  );
+  assert.notEqual(dateIndex, -1);
+  const dateValue = picker.visibleItems[dateIndex].value;
+  await picker.openItemAtIndex(dateIndex);
+  assert.equal(picker.stage, "reason");
+
+  await confirmScheduleReasonStage(picker, "");
+
+  assert.equal(
+    harness.editor.content,
+    `- [ ] #task Ship the thing [scheduled:: ${dateValue}] ^ship`,
+  );
+  assert.doesNotMatch(harness.editor.content, /SCHEDULE LOG/);
+  assert.doesNotMatch(notices.at(-1), /schedule log/);
+});
+
 test("reason stage getFilteredItems always returns exactly one synthetic item", () => {
   const config = buildScheduleReasonConfig();
   const lineText = "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship";
@@ -7073,6 +7359,80 @@ test("reason stage getFilteredItems always returns exactly one synthetic item", 
   const warningItems = picker.getFilteredItems();
   assert.equal(warningItems.length, 1);
   assert.equal(warningItems[0].hasInlineField, true);
+});
+
+test("the preview row previews the entry it will write", () => {
+  const config = buildScheduleReasonConfig();
+
+  const markedLines = [
+    "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-08-06 → 2026-08-13* — was out sick",
+  ];
+  const markedEditor = new TestEditor(markedLines.join("\n"));
+  const markedPicker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    markedEditor,
+    { line: 0, ch: 0 },
+    markedLines[0],
+    config,
+    { filePath: "Tasks.md" },
+  );
+  const markedScheduledItem = markedPicker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  markedPicker.showValueStage(markedScheduledItem);
+  markedPicker.showScheduleReasonStage({ value: "2026-08-20" });
+  markedPicker.inputEl = { value: "" };
+  const markedItem = markedPicker.getFilteredItems()[0];
+  assert.equal(markedItem.empty, true);
+  assert.equal(markedItem.fallback, true);
+  assert.equal(markedItem.parentExists, true);
+
+  const unmarkedLines = ["- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship"];
+  const unmarkedEditor = new TestEditor(unmarkedLines.join("\n"));
+  const unmarkedPicker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    unmarkedEditor,
+    { line: 0, ch: 0 },
+    unmarkedLines[0],
+    config,
+    { filePath: "Tasks.md" },
+  );
+  const unmarkedScheduledItem = unmarkedPicker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  unmarkedPicker.showValueStage(unmarkedScheduledItem);
+  unmarkedPicker.showScheduleReasonStage({ value: "2026-08-20" });
+  unmarkedPicker.inputEl = { value: "" };
+  const unmarkedItem = unmarkedPicker.getFilteredItems()[0];
+  assert.equal(unmarkedItem.empty, true);
+  assert.equal(unmarkedItem.fallback, false);
+  assert.equal(unmarkedItem.parentExists, false);
+
+  // Marker exists but the picked date equals the current one: still no
+  // fallback, since a generated entry never claims a change that did not
+  // happen.
+  const sameDatePicker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    markedEditor,
+    { line: 0, ch: 0 },
+    markedLines[0],
+    config,
+    { filePath: "Tasks.md" },
+  );
+  const sameDateScheduledItem = sameDatePicker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  sameDatePicker.showValueStage(sameDateScheduledItem);
+  sameDatePicker.showScheduleReasonStage({ value: "2026-08-13" });
+  sameDatePicker.inputEl = { value: "" };
+  const sameDateItem = sameDatePicker.getFilteredItems()[0];
+  assert.equal(sameDateItem.empty, true);
+  assert.equal(sameDateItem.fallback, false);
 });
 
 test("the reason-stage footer hint flips between Skip reason and Log reason as the user types", () => {
@@ -7116,6 +7476,51 @@ test("the reason-stage footer hint flips between Skip reason and Log reason as t
     picker.renderResults();
     assert.match(
       picker.footerHints.find((hint) => hint.keys.includes("↵")).label,
+      /^Log reason$/,
+    );
+  } finally {
+    helpers.FilteredPickerModal.prototype.renderResults = originalRenderResults;
+  }
+
+  // A task that already keeps a log still gets "Log without a reason" instead
+  // of "Skip reason", since ↵ on an empty input still writes something.
+  const markedLines = [
+    "- [ ] #task Ship the thing ^ship",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-08-06* — was out sick",
+  ];
+  const markedEditor = new TestEditor(markedLines.join("\n"));
+  const markedPicker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    markedEditor,
+    { line: 0, ch: 0 },
+    markedLines[0],
+    config,
+    { filePath: "Tasks.md" },
+  );
+  const markedScheduledItem = markedPicker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  markedPicker.showValueStage(markedScheduledItem);
+  const markedDateItem = markedPicker.items.find((item) => item.kind === "value");
+  markedPicker.openItem(markedDateItem);
+  assert.equal(markedPicker.stage, "reason");
+  helpers.FilteredPickerModal.prototype.renderResults = function stubbedRenderResults() {
+    this.visibleItems = this.getFilteredItems();
+  };
+  try {
+    markedPicker.inputEl = { value: "" };
+    markedPicker.renderResults();
+    assert.match(
+      markedPicker.footerHints.find((hint) => hint.keys.includes("↵")).label,
+      /^Log without a reason$/,
+    );
+
+    markedPicker.inputEl = { value: "waiting on the API review to land" };
+    markedPicker.renderResults();
+    assert.match(
+      markedPicker.footerHints.find((hint) => hint.keys.includes("↵")).label,
       /^Log reason$/,
     );
   } finally {

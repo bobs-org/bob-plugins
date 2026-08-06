@@ -566,6 +566,20 @@
   color: var(--text-muted);
 }
 
+.bob-cnp-schedule-reason-row.is-fallback .bob-cnp-row-icon,
+.bob-cnp-schedule-reason-row.is-fallback .bob-cnp-row-title {
+  color: var(--text-muted);
+}
+
+.bob-cnp-schedule-reason-row.is-fallback.is-selected {
+  border-left-color: var(--text-muted);
+  background-color: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+.bob-cnp-schedule-reason-row.is-fallback .bob-cnp-schedule-reason-preview {
+  border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
+}
+
 .bob-cnp-schedule-reason-row.is-valid.is-selected {
   border-left-color: var(--color-green);
   background-color: color-mix(in srgb, var(--color-green) 12%, transparent);

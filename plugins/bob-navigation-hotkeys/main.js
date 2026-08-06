@@ -265,6 +265,17 @@ const SCHEDULE_LOG_AUTO_REASON_SEPARATOR = " · ";
 // has no P0 row (Ctrl+D clears the field instead), so this label exists only to
 // render the previous side of a priority transition in a log entry.
 const IMPLICIT_PRIORITY_LEVEL_LABEL = "P0";
+// A skipped reason prompt still records the change on a task that already keeps
+// a log: a gap in a history the task maintains is worse than an unexplained
+// entry. The shrug marks the text as plugin-written, matching the die that
+// marks a machine-rolled date. `🤷` is U+1F937 — one code point, no variation
+// selector and no gendered ZWJ sequence.
+const SCHEDULE_LOG_SKIPPED_REASON_EMOJI = "🤷";
+const SCHEDULE_LOG_SKIPPED_REASON_TEXT = `${SCHEDULE_LOG_SKIPPED_REASON_EMOJI} no reason given`;
+// Reason codes planScheduleLogEntry guards out with that are ordinary outcomes
+// rather than failures: nothing was asked for, the task keeps no log, or the
+// date did not move. They produce no notice text; anything else does.
+const SCHEDULE_LOG_SILENT_GUARD_REASONS = Object.freeze(new Set(["empty-reason", "no-schedule-log", "unchanged-date"]));
 const SCHEDULE_LOG_PARENT_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${SCHEDULE_LOG_EMOJI}[ \\t]+)?\\*\\*(?<label>${[
     SCHEDULE_LOG_LABEL,
@@ -1587,6 +1598,7 @@ function planScheduleLogEntry(content, taskLine, details = {}) {
       reason,
       changed: false,
       createdParent: false,
+      usedFallback: false,
       insertLine: null,
       lineTexts: Object.freeze([]),
       lineText: null,
@@ -1601,17 +1613,34 @@ function planScheduleLogEntry(content, taskLine, details = {}) {
   }
 
   const normalized = normalizeScheduleReasonText(details.reason);
-  if (normalized.empty) {
+  const fallback = normalizeScheduleReasonText(details.fallbackReason);
+  // An empty reason falls back only on a task that already keeps a log; a task
+  // with no marker is still left completely untouched, which is the documented
+  // escape hatch for "I do not want a log on this one".
+  const usedFallback = normalized.empty && !fallback.empty;
+  const reasonText = usedFallback ? fallback.reason : normalized.reason;
+  if (!reasonText) {
     return guard("empty-reason");
   }
 
   const entryFields = {
     from: normalizeBulletPropertyValue(details.from),
     to: normalizeBulletPropertyValue(details.to),
-    reason: normalized.reason,
+    reason: reasonText,
   };
 
   const existingParent = findScheduleLogParent(lines, taskIndex);
+  if (usedFallback) {
+    if (!existingParent) {
+      return guard("no-schedule-log");
+    }
+    // Generated text never claims a change that did not happen — the same rule
+    // shouldWriteAutomaticScheduleLog applies to a rolled date's reason. A typed
+    // reason on an unchanged date is a human decision and is still written.
+    if (!shouldWriteAutomaticScheduleLog(entryFields.from, entryFields.to)) {
+      return guard("unchanged-date");
+    }
+  }
   if (existingParent) {
     const entryIndent = getScheduleLogEntryIndent(lines, existingParent.line);
     const lineText = formatScheduleLogEntryBullet(
@@ -1624,6 +1653,7 @@ function planScheduleLogEntry(content, taskLine, details = {}) {
       reason: null,
       changed: true,
       createdParent: false,
+      usedFallback,
       insertLine: existingParent.line + 1,
       lineTexts: Object.freeze([lineText]),
       lineText,
@@ -1667,6 +1697,35 @@ function applyScheduleLogEntryToLines(lines, plan) {
   const lineTexts = Array.isArray(plan.lineTexts) ? plan.lineTexts : [];
   lines.splice(insertLine, 0, ...lineTexts);
   return lineTexts.length;
+}
+
+// True when a scheduleLog payload carries anything a writer could log: a typed
+// reason, or a fallback that a task with an existing log would use. The writers
+// call this before planning so an absent payload costs nothing.
+function hasScheduleLogReasonInput(scheduleLog) {
+  if (!scheduleLog) {
+    return false;
+  }
+
+  return (
+    !normalizeScheduleReasonText(scheduleLog.reason).empty ||
+    !normalizeScheduleReasonText(scheduleLog.fallbackReason).empty
+  );
+}
+
+// Map a planned (and attempted) schedule-log write to the outcome the writers
+// report. Null means "say nothing": the task keeps no log, or the date did not
+// move, and neither is a failure worth a notice.
+function getScheduleLogWriteOutcome(plan, applied) {
+  if (!plan) {
+    return null;
+  }
+
+  if (plan.valid && applied) {
+    return plan.createdParent ? "created" : plan.usedFallback ? "added-fallback" : "added";
+  }
+
+  return !plan.valid && SCHEDULE_LOG_SILENT_GUARD_REASONS.has(plan.reason) ? null : "guard-failed";
 }
 
 // The roll window as the picker states it, e.g. `random in 8–30 days`. Shared
@@ -7248,7 +7307,10 @@ function getBulletPropertyBlockIdHints(options = {}) {
 // Esc cancels the date write too.
 function getBulletPropertyScheduleReasonHints(options = {}) {
   return [
-    { keys: ["↵"], label: options.empty ? "Skip reason" : "Log reason" },
+    {
+      keys: ["↵"],
+      label: options.empty ? (options.fallback ? "Log without a reason" : "Skip reason") : "Log reason",
+    },
     { keys: ["esc"], label: "Cancel" },
   ];
 }
@@ -10884,6 +10946,7 @@ function planCountedBulletPropertyBatch(
   // insert position is never invalidated by a later one.
   let scheduleLoggedTaskCount = 0;
   let scheduleLogCreatedParentCount = 0;
+  let scheduleLogFallbackTaskCount = 0;
   const scheduleLogOptions =
     options.scheduleLog && (isPriorityOperation || (operation === "set" && propertyName === "scheduled"))
       ? options.scheduleLog
@@ -10907,7 +10970,9 @@ function planCountedBulletPropertyBatch(
             ? scheduleLogOptions.reasonByLine.get(detail.originalLine)
             : scheduleLogOptions.reason;
         const normalizedReason = normalizeScheduleReasonText(rawReason);
-        if (normalizedReason.empty) {
+        // planScheduleLogEntry decides per target whether an empty reason falls
+        // back, since only it knows whether that task already keeps a log.
+        if (normalizedReason.empty && normalizeScheduleReasonText(scheduleLogOptions.fallbackReason).empty) {
           return null;
         }
         if (scheduleLogOptions.automatic && !shouldWriteAutomaticScheduleLog(from, to)) {
@@ -10917,6 +10982,7 @@ function planCountedBulletPropertyBatch(
           from,
           to,
           reason: normalizedReason.reason,
+          fallbackReason: scheduleLogOptions.fallbackReason,
         });
       })
       .filter((scheduleLogPlan) => scheduleLogPlan && scheduleLogPlan.valid)
@@ -10926,6 +10992,9 @@ function planCountedBulletPropertyBatch(
         scheduleLoggedTaskCount += 1;
         if (scheduleLogPlan.createdParent) {
           scheduleLogCreatedParentCount += 1;
+        }
+        if (scheduleLogPlan.usedFallback) {
+          scheduleLogFallbackTaskCount += 1;
         }
       }
     }
@@ -10957,6 +11026,7 @@ function planCountedBulletPropertyBatch(
     blockedTaskCount,
     scheduleLoggedTaskCount,
     scheduleLogCreatedParentCount,
+    scheduleLogFallbackTaskCount,
     recoveredReadyTaskCount: recoveryCounts.ready,
     recoveredNextTaskCount: recoveryCounts.next,
     recoveredInProgressTaskCount: recoveryCounts.inProgress,
@@ -12335,6 +12405,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
   }
 
+  // Whether pressing ↵ on an empty input still logs an entry: only when the
+  // date actually moves and the task already keeps a log. A counted session
+  // answers yes on behalf of the batch — each target is decided at write time.
+  willLogWithoutReason() {
+    const pending = this.pendingScheduleReason;
+    if (!pending || !pending.to || pending.from === pending.to) {
+      return false;
+    }
+
+    return (
+      this.isCountedSession() ||
+      Boolean(findScheduleLogParent(this.getEditorContent(), this.cursor.line))
+    );
+  }
+
   // The pinned priority-roll row is a date the plugin chose, so it never prompts:
   // it writes straight through with a deterministic reason. Null when the roll
   // landed on the date the task already has.
@@ -12372,7 +12457,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       placeholder: "Why this date? (↵ to skip)",
       resultsLabel: "Schedule reason preview",
       emptyText: "Type a reason",
-      footerHints: getBulletPropertyScheduleReasonHints({ empty: true }),
+      footerHints: getBulletPropertyScheduleReasonHints({
+        empty: true,
+        fallback: this.willLogWithoutReason(),
+      }),
       getSubtitle: () => this.getScheduleReasonSubtitle(),
       filterItem: () => true,
       renderItem: (item, rowEl, query) =>
@@ -12408,7 +12496,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   renderScheduleReasonPreviewItem(item, rowEl, query) {
-    const state = item.empty ? "empty" : item.hasInlineField ? "warning" : "valid";
+    const state = item.empty ? (item.fallback ? "fallback" : "empty") : item.hasInlineField ? "warning" : "valid";
     addElementClasses(rowEl, "bob-cnp-schedule-reason-row", `is-${state}`);
 
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
@@ -12425,7 +12513,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
     const pending = this.pendingScheduleReason;
 
-    if (item.empty) {
+    if (item.empty && !item.fallback) {
       appendHighlighted(titleEl, "No reason", query);
       textEl.createDiv({
         cls: "bob-cnp-row-meta",
@@ -12441,7 +12529,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       formatScheduleLogEntryText({
         from: pending ? pending.from : "",
         to: pending ? pending.to : "",
-        reason: item.reason,
+        reason: item.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : item.reason,
       }),
       query,
     );
@@ -12455,9 +12543,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     textEl.createDiv({
       cls: "bob-cnp-schedule-reason-preview",
-      text: item.parentExists
-        ? `Appends to the existing ${SCHEDULE_LOG_MARKER_TEXT} on this task`
-        : `Adds a ${SCHEDULE_LOG_MARKER_TEXT} child bullet to this task`,
+      text: item.counted
+        ? item.empty
+          ? `Appends to every counted task that already has a ${SCHEDULE_LOG_MARKER_TEXT}`
+          : `Appends to every counted task, adding a ${SCHEDULE_LOG_MARKER_TEXT} where missing`
+        : item.parentExists
+          ? `Appends to the existing ${SCHEDULE_LOG_MARKER_TEXT} on this task`
+          : `Adds a ${SCHEDULE_LOG_MARKER_TEXT} child bullet to this task`,
     });
   }
 
@@ -12467,10 +12559,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    const scheduleLog = item.empty
-      ? null
-      : { from: pending.from, to: pending.to, reason: item.reason };
-    return this.applySelectedValue(pending.dateItem, { scheduleLog });
+    // The payload is supplied even for an empty input: a task that already keeps
+    // a log records the change anyway, and planScheduleLogEntry is what decides
+    // that per task (per target, in a counted session).
+    return this.applySelectedValue(pending.dateItem, {
+      scheduleLog: {
+        from: pending.from,
+        to: pending.to,
+        reason: item.empty ? "" : item.reason,
+        fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
+      },
+    });
   }
 
   getEditorContent() {
@@ -12827,6 +12926,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           kind: "schedule-reason-preview",
           ...normalized,
           parentExists,
+          counted: this.isCountedSession(),
+          fallback: normalized.empty && this.willLogWithoutReason(),
           searchText: normalized.reason,
         }),
       ];
@@ -12878,8 +12979,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   renderResults() {
     super.renderResults();
     if (this.stage === "reason") {
-      const empty = normalizeScheduleReasonText(this.getRawQuery()).empty;
-      this.footerHints = getBulletPropertyScheduleReasonHints({ empty });
+      const item = (this.visibleItems || [])[0];
+      this.footerHints = getBulletPropertyScheduleReasonHints({
+        empty: Boolean(item && item.empty),
+        fallback: Boolean(item && item.fallback),
+      });
       this.renderFooter();
     }
   }
@@ -15039,10 +15143,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
     const scheduleLogSuffix =
       plan.scheduleLoggedTaskCount > 0
-        ? `; logged reason on ${formatCountLabel(
-            plan.scheduleLoggedTaskCount,
-            "task",
-          )}`
+        ? `; ${
+            plan.scheduleLogFallbackTaskCount === plan.scheduleLoggedTaskCount
+              ? "logged without a reason on"
+              : "logged reason on"
+          } ${formatCountLabel(plan.scheduleLoggedTaskCount, "task")}`
         : "";
     new Notice(
       `${name} → ${normalizeBulletPropertyValue(value)} on ${formatCountLabel(
@@ -15526,25 +15631,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     plannedSource.lines[plan.cursorLine] = finalLine;
 
     let scheduleLogOutcome = null;
-    if (
-      options.scheduleLog &&
-      !normalizeScheduleReasonText(options.scheduleLog.reason).empty
-    ) {
+    if (hasScheduleLogReasonInput(options.scheduleLog)) {
       const scheduleLogPlan = planScheduleLogEntry(
         plannedSource.lines.join(plannedSource.lineEnding),
         plan.cursorLine,
         options.scheduleLog,
       );
-      if (
-        scheduleLogPlan.valid &&
-        applyScheduleLogEntryToLines(plannedSource.lines, scheduleLogPlan) > 0
-      ) {
-        scheduleLogOutcome = scheduleLogPlan.createdParent
-          ? "created"
-          : "added";
-      } else {
-        scheduleLogOutcome = "guard-failed";
-      }
+      scheduleLogOutcome = getScheduleLogWriteOutcome(
+        scheduleLogPlan,
+        scheduleLogPlan.valid && applyScheduleLogEntryToLines(plannedSource.lines, scheduleLogPlan) > 0,
+      );
     }
 
     const finalContent = plannedSource.lines.join(plannedSource.lineEnding);
@@ -15598,6 +15694,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     if (scheduleLogOutcome === "created" || scheduleLogOutcome === "added") {
       parts.push("logged reason");
+    } else if (scheduleLogOutcome === "added-fallback") {
+      parts.push("logged without a reason");
     } else if (scheduleLogOutcome === "guard-failed") {
       parts.push("schedule log not written");
     }
@@ -15822,25 +15920,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     let scheduleLogOutcome = null;
-    if (
-      options.scheduleLog &&
-      !normalizeScheduleReasonText(options.scheduleLog.reason).empty
-    ) {
+    if (hasScheduleLogReasonInput(options.scheduleLog)) {
       const scheduleLogPlan = planScheduleLogEntry(
         String(cm.getValue() || ""),
         cursor.line,
         options.scheduleLog,
       );
-      if (
-        scheduleLogPlan.valid &&
-        insertEditorLine(cm, scheduleLogPlan.insertLine, scheduleLogPlan.lineText)
-      ) {
-        scheduleLogOutcome = scheduleLogPlan.createdParent
-          ? "created"
-          : "added";
-      } else {
-        scheduleLogOutcome = "guard-failed";
-      }
+      scheduleLogOutcome = getScheduleLogWriteOutcome(
+        scheduleLogPlan,
+        scheduleLogPlan.valid && insertEditorLine(cm, scheduleLogPlan.insertLine, scheduleLogPlan.lineText),
+      );
     }
 
     setEditorCursorSafely(
@@ -15875,11 +15964,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       const scheduleLogSuffix =
         scheduleLogOutcome === "added"
           ? "; logged reason"
-          : scheduleLogOutcome === "created"
-            ? "; created schedule log"
-            : scheduleLogOutcome === "guard-failed"
-              ? "; schedule log not written"
-              : "";
+          : scheduleLogOutcome === "added-fallback"
+            ? "; logged without a reason"
+            : scheduleLogOutcome === "created"
+              ? "; created schedule log"
+              : scheduleLogOutcome === "guard-failed"
+                ? "; schedule log not written"
+                : "";
       new Notice(
         `${noticeText}${
           blocked ? "; marked task Blocked" : ""
@@ -20537,6 +20628,8 @@ module.exports.helpers = {
   getScheduleLogEntryIndent,
   planScheduleLogEntry,
   applyScheduleLogEntryToLines,
+  hasScheduleLogReasonInput,
+  getScheduleLogWriteOutcome,
   formatPriorityRollWindowText,
   getPriorityRollFromLevelLabel,
   formatPriorityRollScheduleReason,

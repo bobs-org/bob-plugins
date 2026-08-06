@@ -3619,6 +3619,23 @@ function createTaskMovePickerHarness() {
   return { editor, plugin, view };
 }
 
+function createTaskMoveDestinationFocusHarness(options = {}) {
+  const plugin = new NavigationHotkeysPlugin();
+  const captureCalls = [];
+  plugin.captureActiveFilePosition = () => {
+    captureCalls.push(true);
+    return true;
+  };
+  const openCalls = [];
+  plugin.openMarkdownFileWithLeafReuse = async (file, failureNotice) => {
+    openCalls.push({ file, failureNotice });
+    return options.openResult === undefined ? true : options.openResult;
+  };
+  plugin.getActiveMarkdownView =
+    options.getActiveMarkdownView || (() => null);
+  return { plugin, captureCalls, openCalls };
+}
+
 function createBulletPropertyPickerHarness(harnessOptions = {}) {
   const editor = new TransactionEditor(
     harnessOptions.content ||
@@ -4990,6 +5007,79 @@ test("task move insertion preserves exact task and section spacing", () => {
     "## Notes",
     "Keep",
   ].join("\n"));
+  assert.equal(
+    appended.content.split(/\r?\n/)[appended.insertedLine],
+    moved[0][0],
+  );
+
+  const existingCRLF = existing.replace(/\n/g, "\r\n");
+  const appendedCRLF = helpers.insertTaskMoveBlocks(existingCRLF, moved, "project");
+  assert.equal(appendedCRLF.valid, true);
+  assert.equal(
+    appendedCRLF.content.split(/\r?\n/)[appendedCRLF.insertedLine],
+    moved[0][0],
+  );
+
+  const emptySection = ["## Tasks", "## Notes", "Keep"].join("\n");
+  const insertedIntoEmptySection = helpers.insertTaskMoveBlocks(
+    emptySection,
+    moved,
+    "project",
+  );
+  assert.equal(insertedIntoEmptySection.valid, true);
+  assert.equal(insertedIntoEmptySection.content, [
+    "## Tasks",
+    "",
+    "- [x] #task Moved [p::3] ^moved",
+    "  child",
+    "",
+    "  continuation",
+    "- [ ] #task Second ^second",
+    "## Notes",
+    "Keep",
+  ].join("\n"));
+  assert.equal(
+    insertedIntoEmptySection.content.split(/\r?\n/)[
+      insertedIntoEmptySection.insertedLine
+    ],
+    moved[0][0],
+  );
+
+  const trailingBlankBeforeLaterHeader = [
+    "## Tasks",
+    "",
+    "- [ ] #task Existing ^existing",
+    "",
+    "",
+    "## Notes",
+    "Keep",
+  ].join("\n");
+  const insertedBeforeTrailingBlanks = helpers.insertTaskMoveBlocks(
+    trailingBlankBeforeLaterHeader,
+    moved,
+    "project",
+  );
+  assert.equal(insertedBeforeTrailingBlanks.valid, true);
+  assert.equal(insertedBeforeTrailingBlanks.content, [
+    "## Tasks",
+    "",
+    "- [ ] #task Existing ^existing",
+    "- [x] #task Moved [p::3] ^moved",
+    "  child",
+    "",
+    "  continuation",
+    "- [ ] #task Second ^second",
+    "",
+    "",
+    "## Notes",
+    "Keep",
+  ].join("\n"));
+  assert.equal(
+    insertedBeforeTrailingBlanks.content.split(/\r?\n/)[
+      insertedBeforeTrailingBlanks.insertedLine
+    ],
+    moved[0][0],
+  );
 
   const project = [
     "---",
@@ -5021,6 +5111,10 @@ test("task move insertion preserves exact task and section spacing", () => {
     "## Notes",
     "Keep",
   ].join("\n"));
+  assert.equal(
+    inserted.content.split(/\r?\n/)[inserted.insertedLine],
+    moved[0][0],
+  );
 
   const area = [
     "---",
@@ -5048,6 +5142,10 @@ test("task move insertion preserves exact task and section spacing", () => {
     "- [ ] #task Second ^second",
     "",
   ].join("\r\n"));
+  assert.equal(
+    created.content.split(/\r?\n/)[created.insertedLine],
+    moved[0][0],
+  );
 
   const areaWithoutTerminalNewline = area.slice(0, -2);
   const createdWithoutTerminalNewline = helpers.insertTaskMoveBlocks(
@@ -5060,6 +5158,12 @@ test("task move insertion preserves exact task and section spacing", () => {
   assert.match(
     createdWithoutTerminalNewline.content,
     /Body\r\n\r\n## Tasks\r\n\r\n- \[x\]/,
+  );
+  assert.equal(
+    createdWithoutTerminalNewline.content.split(/\r?\n/)[
+      createdWithoutTerminalNewline.insertedLine
+    ],
+    moved[0][0],
   );
 
   const invalidProject = helpers.insertTaskMoveBlocks(project.replace("## Tasks", "## Work"), moved, "project");
@@ -5130,6 +5234,49 @@ test("task move planning migrates identities and links across every affected not
   assert.match(nextRefs, /dependsOn:: Projects__Dest__one/);
   assert.match(nextRefs, /!\[\[Projects\/Dest#\^one\|Embedded alias\]\]/);
   assert.match(nextRefs, /\(Projects\/Dest\.md#\^two\)/);
+
+  assert.equal(
+    nextDestination.split("\n")[plan.destinationLine],
+    plan.destinationAnchorText,
+  );
+  assert.equal(
+    plan.destinationAnchorText,
+    "- [ ] #task One [id:: Projects__Dest__one] [dependsOn:: Projects__Dest__two] ^one",
+  );
+  assert.equal(plan.destinationBlockId, "one");
+});
+
+test("task move planning exposes a destination anchor for area destinations and counted moves", () => {
+  const countedSource = [
+    "- [ ] #task First",
+    "- [ ] #task Second ^second",
+    "- [ ] #task Third ^third",
+    "- [ ] #task Stay",
+  ].join("\n");
+  const areaDestination = [
+    "---",
+    "type: \"[[area]]\"",
+    "---",
+    "# Area",
+    "Body",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(countedSource, 0, 2);
+  assert.equal(discovery.actualCount, 3);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Area.md",
+    sourceContent: countedSource,
+    destinationContent: areaDestination,
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const nextDestination = plan.changes.get("Area.md").after;
+  assert.equal(
+    nextDestination.split("\n")[plan.destinationLine],
+    plan.destinationAnchorText,
+  );
+  assert.equal(plan.destinationAnchorText, "- [ ] #task First");
+  assert.equal(plan.destinationBlockId, null);
 });
 
 test("task move planning rejects destination collisions and malformed identities", () => {
@@ -5163,6 +5310,167 @@ test("task move planning rejects destination collisions and malformed identities
   });
   assert.equal(plan.valid, false);
   assert.match(plan.error, /ambiguous \[id::\]/);
+});
+
+test("resolveTaskMoveDestinationLine resolves via planned, block-id, text, and clamped fallbacks", () => {
+  const content = [
+    "## Tasks",
+    "",
+    "- [ ] #task Existing ^existing",
+    "- [ ] #task Moved ^moved",
+  ].join("\n");
+  const anchor = { line: 3, text: "- [ ] #task Moved ^moved", blockId: "moved" };
+  assert.deepEqual(helpers.resolveTaskMoveDestinationLine(content, anchor), {
+    line: 3,
+    source: "planned",
+  });
+
+  const shiftedByFrontmatter = [
+    "---",
+    "task_count: 1",
+    "---",
+    "## Tasks",
+    "",
+    "- [ ] #task Existing ^existing",
+    "- [ ] #task Moved ^moved",
+  ].join("\n");
+  assert.deepEqual(
+    helpers.resolveTaskMoveDestinationLine(shiftedByFrontmatter, anchor),
+    { line: 6, source: "block-id" },
+  );
+  assert.deepEqual(
+    helpers.resolveTaskMoveDestinationLine(shiftedByFrontmatter, {
+      line: 3,
+      text: "- [ ] #task Moved ^moved",
+      blockId: null,
+    }),
+    { line: 6, source: "text" },
+  );
+
+  const anchorText = "- [ ] #task Fenced ^fenced";
+  const fencedOnly = [
+    "## Tasks",
+    "",
+    "```",
+    anchorText,
+    "```",
+    "- [ ] #task Real ^real",
+  ].join("\n");
+  assert.deepEqual(
+    helpers.resolveTaskMoveDestinationLine(fencedOnly, {
+      line: 1,
+      text: anchorText,
+      blockId: null,
+    }),
+    { line: 1, source: "clamped" },
+  );
+
+  const frontmatterAnchorText = "type: \"[[project]]\"";
+  const frontmatterOnly = [
+    "---",
+    frontmatterAnchorText,
+    "---",
+    "## Tasks",
+    "- [ ] #task Real ^real",
+  ].join("\n");
+  assert.deepEqual(
+    helpers.resolveTaskMoveDestinationLine(frontmatterOnly, {
+      line: 3,
+      text: frontmatterAnchorText,
+      blockId: null,
+    }),
+    { line: 3, source: "clamped" },
+  );
+
+  const shrunken = "- [ ] #task Only ^only";
+  assert.deepEqual(
+    helpers.resolveTaskMoveDestinationLine(shrunken, {
+      line: 5,
+      text: "- [ ] #task Missing ^missing",
+      blockId: null,
+    }),
+    { line: 0, source: "clamped" },
+  );
+
+  assert.deepEqual(
+    helpers.resolveTaskMoveDestinationLine("", {
+      line: 3,
+      text: "x",
+      blockId: null,
+    }),
+    { line: 0, source: "clamped" },
+  );
+});
+
+test("focusTaskMoveDestination opens the destination file and anchors the cursor", async () => {
+  const editor = new TransactionEditor(
+    ["- [ ] #task Existing ^existing", "- [ ] #task Moved ^moved"].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const destinationFile = { path: "Area.md", basename: "Area", extension: "md" };
+  const { plugin, captureCalls, openCalls } = createTaskMoveDestinationFocusHarness({
+    getActiveMarkdownView: () => ({ file: destinationFile, editor }),
+  });
+  const anchor = { line: 1, text: "- [ ] #task Moved ^moved", blockId: "moved" };
+
+  const result = await plugin.focusTaskMoveDestination(destinationFile, anchor);
+
+  assert.equal(result, true);
+  assert.equal(captureCalls.length, 1);
+  assert.equal(openCalls.length, 1);
+  assert.equal(openCalls[0].file, destinationFile);
+  assert.deepEqual(editor.getCursor(), { line: 1, ch: 0 });
+});
+
+test("focusTaskMoveDestination returns false without moving the cursor when the open fails", async () => {
+  const editor = new TransactionEditor(
+    ["- [ ] #task Existing ^existing"].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const destinationFile = { path: "Area.md", basename: "Area", extension: "md" };
+  const { plugin, openCalls } = createTaskMoveDestinationFocusHarness({
+    openResult: false,
+    getActiveMarkdownView: () => ({ file: destinationFile, editor }),
+  });
+  const anchor = {
+    line: 0,
+    text: "- [ ] #task Existing ^existing",
+    blockId: "existing",
+  };
+
+  const result = await plugin.focusTaskMoveDestination(destinationFile, anchor);
+
+  assert.equal(result, false);
+  assert.equal(openCalls.length, 1);
+  assert.deepEqual(editor.getCursor(), { line: 0, ch: 0 });
+  assert.equal(editor.setCursorCalls.length, 0);
+});
+
+test("focusTaskMoveDestination re-anchors by block ID when the destination content drifted", async () => {
+  const editor = new TransactionEditor(
+    [
+      "---",
+      "task_count: 1",
+      "---",
+      "## Tasks",
+      "",
+      "- [ ] #task Existing ^existing",
+      "- [ ] #task Moved ^moved",
+    ].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const destinationFile = { path: "Area.md", basename: "Area", extension: "md" };
+  const { plugin } = createTaskMoveDestinationFocusHarness({
+    getActiveMarkdownView: () => ({ file: destinationFile, editor }),
+  });
+  // Planned index (3) pointed at the moved task before bob-project-tasks inserted
+  // frontmatter lines after the write; block-ID re-anchoring must still find it.
+  const anchor = { line: 3, text: "- [ ] #task Moved ^moved", blockId: "moved" };
+
+  const result = await plugin.focusTaskMoveDestination(destinationFile, anchor);
+
+  assert.equal(result, true);
+  assert.deepEqual(editor.getCursor(), { line: 6, ch: 0 });
 });
 
 test("physical task move chord declines auto-repeat and consumes Vim normal input once", () => {
@@ -5324,6 +5632,7 @@ test("runtime task move groups open-editor source and destination changes", asyn
   const sourceEditor = new TransactionEditor(sourceContent, { line: 0, ch: 3 });
   const destinationEditor = new TransactionEditor(destinationContent, { line: 6, ch: 0 });
   const plugin = new NavigationHotkeysPlugin();
+  plugin.filePositions = new Map();
   plugin.app = {
     vault: {
       getMarkdownFiles: () => [sourceFile, destinationFile],

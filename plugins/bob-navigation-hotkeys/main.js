@@ -110,6 +110,7 @@ const FINAL_EXTENSION_RE = /\.[^./]+$/;
 const DASH_FILE_PATH = "dash.md";
 const DASH_TASKS_HEADER = "## Tasks";
 const DASH_TASKS_JUMP_RETRIES = 8;
+const TASK_MOVE_DESTINATION_JUMP_RETRIES = 8;
 const DASH_TASKS_SCROLL_ASSERT_FRAMES = 8;
 const DASH_LOCATION_RESTORE_RETRIES = 24;
 const DASH_LOCATION_RESTORE_ASSERT_FRAMES = 8;
@@ -9018,11 +9019,13 @@ function insertTaskMoveBlocks(content, blocks, destinationKind) {
     if (next && !next.endsWith(source.lineEnding + source.lineEnding)) {
       next += source.lineEnding;
     }
-    next += `${PROJECT_TASKS_HEADER}${source.lineEnding}${source.lineEnding}${movedLines.join(source.lineEnding)}`;
+    next += `${PROJECT_TASKS_HEADER}${source.lineEnding}${source.lineEnding}`;
+    const insertedLine = next.split(source.lineEnding).length - 1;
+    next += movedLines.join(source.lineEnding);
     if (hadTerminalNewline) {
       next += source.lineEnding;
     }
-    return Object.freeze({ valid: true, error: null, content: next, createdSection: true });
+    return Object.freeze({ valid: true, error: null, content: next, createdSection: true, insertedLine });
   }
 
   const sectionEnd = getTaskMoveSectionEnd(source.lines, headerIndex);
@@ -9040,10 +9043,12 @@ function insertTaskMoveBlocks(content, blocks, destinationKind) {
       : -1;
 
   let nextLines;
+  let insertedLine;
   if (placeholderIndex !== -1) {
     nextLines = source.lines
       .slice(0, placeholderIndex)
       .concat(movedLines, source.lines.slice(placeholderIndex + 1));
+    insertedLine = placeholderIndex;
   } else {
     let insertAt = sectionEnd;
     while (
@@ -9060,6 +9065,7 @@ function insertTaskMoveBlocks(content, blocks, destinationKind) {
     nextLines = source.lines
       .slice(0, insertAt)
       .concat(insertion, source.lines.slice(insertAt));
+    insertedLine = insertAt + (insertion.length - movedLines.length);
   }
 
   return Object.freeze({
@@ -9067,6 +9073,7 @@ function insertTaskMoveBlocks(content, blocks, destinationKind) {
     error: null,
     content: nextLines.join(source.lineEnding),
     createdSection: false,
+    insertedLine,
   });
 }
 
@@ -9357,7 +9364,57 @@ function planTaskMoveAcrossFiles(options = {}) {
     idReplacements: identities.idReplacements,
     nextSourceLine: removal.nextLine,
     destinationKind: destination.kind,
+    destinationLine: insertion.insertedLine,
+    destinationAnchorText: movedBlocks[0][0],
+    destinationBlockId: getTrailingBlockId(movedBlocks[0][0]) || null,
   });
+}
+
+function resolveTaskMoveDestinationLine(content, anchor) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const anchorInfo = anchor && typeof anchor === "object" ? anchor : {};
+  const anchorLine = anchorInfo.line;
+  const anchorText = anchorInfo.text;
+  const anchorBlockId = anchorInfo.blockId;
+
+  if (
+    Number.isInteger(anchorLine) &&
+    anchorLine >= 0 &&
+    anchorLine < lines.length &&
+    lines[anchorLine] === anchorText
+  ) {
+    return Object.freeze({ line: anchorLine, source: "planned" });
+  }
+
+  if (anchorBlockId) {
+    const blockIdLine = findTaskLineByBlockId(lines, anchorBlockId);
+    if (blockIdLine !== null) {
+      return Object.freeze({ line: blockIdLine, source: "block-id" });
+    }
+  }
+
+  if (anchorText) {
+    const contexts = getMarkdownLineContexts(text);
+    for (let index = 0; index < lines.length; index += 1) {
+      const context = contexts[index];
+      if (context && (context.inFrontmatter || context.inFence)) {
+        continue;
+      }
+      if (lines[index] === anchorText) {
+        return Object.freeze({ line: index, source: "text" });
+      }
+    }
+  }
+
+  if (lines.length === 0) {
+    return Object.freeze({ line: 0, source: "clamped" });
+  }
+  const clampedLine = Math.min(
+    Math.max(numericOrDefault(anchorLine, 0), 0),
+    lines.length - 1,
+  );
+  return Object.freeze({ line: clampedLine, source: "clamped" });
 }
 
 function getCountedPropertyTargetState(
@@ -13307,6 +13364,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.vimMappingsRegistered = false;
     this.activeTaskMoveDestinationPicker = null;
     this.activeBulletPropertyPicker = null;
+    this.pendingTaskMoveJumpDeferred = null;
 
     this.addCommand({
       id: "open-parent-note",
@@ -13548,6 +13606,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       this.clearDashScrollCaptureTarget();
       cancelDeferred(this.pendingOpenTaskJumpCenterDeferred);
       this.pendingOpenTaskJumpCenterDeferred = null;
+      this.cancelPendingTaskMoveJump();
     });
   }
 
@@ -17980,7 +18039,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    this.restoreTaskMoveSourceContext(session);
+    await this.focusTaskMoveDestination(destinationFile, {
+      line: plan.destinationLine,
+      text: plan.destinationAnchorText,
+      blockId: plan.destinationBlockId,
+    });
     const count = session.discovery.actualCount;
     const destinationName =
       destinationFile.basename ||
@@ -17992,6 +18055,74 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}`,
     );
     return true;
+  }
+
+  async focusTaskMoveDestination(file, anchor) {
+    this.captureActiveFilePosition();
+
+    const destinationName =
+      file.basename || getVaultPathBasenameWithoutExtension(file.path);
+    const opened = await this.openMarkdownFileWithLeafReuse(
+      file,
+      `Moved tasks, but could not open ${destinationName}`,
+    );
+    if (!opened) {
+      return false;
+    }
+
+    return this.jumpOrDeferTaskMoveDestination(file.path, anchor);
+  }
+
+  jumpOrDeferTaskMoveDestination(
+    path,
+    anchor,
+    retriesRemaining = TASK_MOVE_DESTINATION_JUMP_RETRIES,
+  ) {
+    this.cancelPendingTaskMoveJump();
+
+    if (this.jumpToActiveTaskMoveDestination(path, anchor)) {
+      return true;
+    }
+
+    if (retriesRemaining <= 0) {
+      return false;
+    }
+
+    this.pendingTaskMoveJumpDeferred = deferToNextFrame(() => {
+      this.pendingTaskMoveJumpDeferred = null;
+      this.jumpOrDeferTaskMoveDestination(path, anchor, retriesRemaining - 1);
+    });
+
+    return false;
+  }
+
+  jumpToActiveTaskMoveDestination(path, anchor) {
+    const view = this.getActiveMarkdownView();
+    if (
+      !view ||
+      !view.file ||
+      view.file.path !== path ||
+      !view.editor ||
+      typeof view.editor.getValue !== "function"
+    ) {
+      return false;
+    }
+
+    const resolved = resolveTaskMoveDestinationLine(
+      view.editor.getValue(),
+      anchor,
+    );
+    if (!setEditorCursor(view.editor, { line: resolved.line, ch: 0 })) {
+      return false;
+    }
+
+    scheduleOpenTaskJumpCenter(this, view.editor, resolved.line, 0);
+    return true;
+  }
+
+  cancelPendingTaskMoveJump() {
+    cancelDeferred(this.pendingTaskMoveJumpDeferred);
+    this.pendingTaskMoveJumpDeferred = null;
   }
 
   async createProjectNoteFromTask(editor, view) {
@@ -19608,6 +19739,7 @@ module.exports.helpers = {
   rewriteTaskMoveBlockLinks,
   rewriteTaskMoveReferences,
   planTaskMoveAcrossFiles,
+  resolveTaskMoveDestinationLine,
   createCountedBulletPropertyItems,
   validateDependencyParentForEditor,
   getWholeTaskTagSpans,

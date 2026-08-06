@@ -241,6 +241,20 @@ const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
 const DEPENDENCY_NAVIGATION_LINK_RE = /\[\[#\^([A-Za-z0-9-]+)\]\]/g;
 const DEPENDENCY_TRANSCLUSION_BULLET_RE =
   /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<strike>~~)?(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]\k<strike>[ \t]*$/;
+// Managed "schedule log" child bullet, e.g. `  - 🗓️ **Schedule log:**` with a
+// newest-first list of `**<from> → <to>** — <reason>` entries under it. The
+// emoji is `U+1F5D3 U+FE0F` (keep the variation selector); a marker written by
+// hand without the emoji is still recognized so it is never silently rewritten.
+const SCHEDULE_LOG_EMOJI = "🗓️";
+const SCHEDULE_LOG_LABEL = "Schedule log";
+const SCHEDULE_LOG_SEPARATOR = " — ";
+const SCHEDULE_LOG_TRANSITION = " → ";
+const SCHEDULE_LOG_PARENT_RE = new RegExp(
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${SCHEDULE_LOG_EMOJI}[ \\t]+)?\\*\\*${SCHEDULE_LOG_LABEL}:\\*\\*[ \\t]*$`,
+);
+const SCHEDULE_LOG_ENTRY_RE = new RegExp(
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*\\*(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\*\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,
+);
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
   /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
@@ -1419,6 +1433,207 @@ function getDependencyDirectChildIndentLength(lines, parentLine, block) {
   }
 
   return childIndentLength;
+}
+
+// Render the managed schedule-log parent marker bullet, e.g.
+// `  - 🗓️ **Schedule log:**`, reusing an existing marker's own indent/marker.
+function formatScheduleLogParentBullet(indent, marker) {
+  return `${indent}${marker} ${SCHEDULE_LOG_EMOJI} **${SCHEDULE_LOG_LABEL}:**`;
+}
+
+// Render one schedule-log entry bullet: `**<from> → <to>** — <reason>`, or
+// `**<to>** — <reason>` when there was no previous value.
+function formatScheduleLogEntryBullet(indent, marker, { from, to, reason }) {
+  const fromText = from ? `${from}${SCHEDULE_LOG_TRANSITION}` : "";
+  return `${indent}${marker} **${fromText}${to}**${SCHEDULE_LOG_SEPARATOR}${reason}`;
+}
+
+function parseScheduleLogParentBullet(line) {
+  const match = SCHEDULE_LOG_PARENT_RE.exec(String(line || ""));
+  if (!match) {
+    return null;
+  }
+
+  const { indent, marker, emoji } = match.groups;
+  return Object.freeze({ indent, marker, hasEmoji: Boolean(emoji) });
+}
+
+function parseScheduleLogEntryBullet(line) {
+  const match = SCHEDULE_LOG_ENTRY_RE.exec(String(line || ""));
+  if (!match) {
+    return null;
+  }
+
+  const { indent, marker, from, to, reason } = match.groups;
+  return Object.freeze({ indent, marker, from: from || "", to, reason });
+}
+
+// Trim and collapse a raw reason input to a single normalized string, without
+// otherwise mutating it: wikilinks, backticks, and markdown are preserved
+// verbatim. `hasInlineField` flags a Dataview-style `key:: value` span so the
+// caller can warn (not block) before it lands inside a plain-markdown bullet.
+function normalizeScheduleReasonText(raw) {
+  const reason = String(raw === null || raw === undefined ? "" : raw)
+    .replace(/\s+/g, " ")
+    .trim();
+  return Object.freeze({
+    reason,
+    empty: reason === "",
+    hasInlineField: /::/.test(reason),
+  });
+}
+
+// Find the managed `🗓️ **Schedule log:**` marker among `taskLine`'s direct
+// children, ignoring a marker that belongs to a nested grandchild bullet.
+// Returns the first match (a second marker under the same task is left alone).
+function findScheduleLogParent(lines, taskLine) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  if (!Number.isFinite(taskIndex) || taskIndex < 0) {
+    return null;
+  }
+
+  const block = findCurrentBulletChildBlock(sourceLines, taskIndex);
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+
+    const parsed = parseScheduleLogParentBullet(lineText);
+    if (parsed && findNearestParentListItem(sourceLines, index) === taskIndex) {
+      return Object.freeze({
+        line: index,
+        indent: parsed.indent,
+        marker: parsed.marker,
+      });
+    }
+  }
+
+  return null;
+}
+
+// Pick the indentation for a new schedule-log entry: reuse an existing
+// entry's indentation when the marker already has entries, otherwise the
+// marker's own indent plus one tab (mirrors getDependencyChildIndent).
+function getScheduleLogEntryIndent(lines, parentLine) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const markerIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  const markerIndent = Number.isFinite(markerIndex)
+    ? getBulletIndent(String(sourceLines[markerIndex] || ""))
+    : "";
+  const block = findCurrentBulletChildBlock(sourceLines, markerIndex);
+
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+
+    if (
+      BULLET_PROPERTY_LIST_ITEM_RE.test(lineText) &&
+      findNearestParentListItem(sourceLines, index) === markerIndex
+    ) {
+      return getBulletIndent(lineText);
+    }
+  }
+
+  return `${markerIndent}\t`;
+}
+
+// Plan the schedule-log write for one task: either prepend a new entry above
+// an existing marker's entries, or append a fresh marker + entry as the last
+// direct child. Guards (never throws) on an out-of-range line, a non-list-item
+// line, or an empty/whitespace-only reason.
+function planScheduleLogEntry(content, taskLine, details = {}) {
+  const lines = String(content || "").split(/\r?\n/);
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  const guard = (reason) =>
+    Object.freeze({
+      valid: false,
+      reason,
+      changed: false,
+      createdParent: false,
+      insertLine: null,
+      lineTexts: Object.freeze([]),
+      lineText: null,
+    });
+
+  if (!Number.isFinite(taskIndex) || taskIndex < 0 || taskIndex >= lines.length) {
+    return guard("task-out-of-range");
+  }
+
+  if (!isBulletLine(String(lines[taskIndex] || ""))) {
+    return guard("not-list-item");
+  }
+
+  const normalized = normalizeScheduleReasonText(details.reason);
+  if (normalized.empty) {
+    return guard("empty-reason");
+  }
+
+  const entryFields = {
+    from: normalizeBulletPropertyValue(details.from),
+    to: normalizeBulletPropertyValue(details.to),
+    reason: normalized.reason,
+  };
+
+  const existingParent = findScheduleLogParent(lines, taskIndex);
+  if (existingParent) {
+    const entryIndent = getScheduleLogEntryIndent(lines, existingParent.line);
+    const lineText = formatScheduleLogEntryBullet(
+      entryIndent,
+      existingParent.marker,
+      entryFields,
+    );
+    return Object.freeze({
+      valid: true,
+      reason: null,
+      changed: true,
+      createdParent: false,
+      insertLine: existingParent.line + 1,
+      lineTexts: Object.freeze([lineText]),
+      lineText,
+    });
+  }
+
+  const block = findCurrentBulletChildBlock(lines, taskIndex);
+  const indent = getDependencyChildIndent(lines, taskIndex);
+  const lineTexts = Object.freeze([
+    formatScheduleLogParentBullet(indent, "-"),
+    formatScheduleLogEntryBullet(indent, "-", entryFields),
+  ]);
+  return Object.freeze({
+    valid: true,
+    reason: null,
+    changed: true,
+    createdParent: true,
+    insertLine: block.endLineExclusive,
+    lineTexts,
+    lineText: lineTexts.join("\n"),
+  });
+}
+
+// Shared primitive for the two content-level schedule-log writers (project
+// frontmatter and counted batch): splice a plan's lines into a mutable line
+// array. Editor-level writers use insertEditorLine directly instead.
+function applyScheduleLogEntryToLines(lines, plan) {
+  if (!plan || !plan.changed || !Array.isArray(lines)) {
+    return 0;
+  }
+
+  const insertLine = Math.floor(numericOrDefault(plan.insertLine, Number.NaN));
+  if (!Number.isFinite(insertLine) || insertLine < 0) {
+    return 0;
+  }
+
+  const lineTexts = Array.isArray(plan.lineTexts) ? plan.lineTexts : [];
+  lines.splice(insertLine, 0, ...lineTexts);
+  return lineTexts.length;
 }
 
 function createDependencyNavigationCollection(fields) {
@@ -6927,6 +7142,16 @@ function getBulletPropertyBlockIdHints(options = {}) {
   ];
 }
 
+// Footer hints for the schedule-log reason prompt: Enter always confirms the
+// stage (writing the date, plus a log entry when a reason was typed), while
+// Esc cancels the date write too.
+function getBulletPropertyScheduleReasonHints(options = {}) {
+  return [
+    { keys: ["↵"], label: options.empty ? "Skip reason" : "Log reason" },
+    { keys: ["esc"], label: "Cancel" },
+  ];
+}
+
 // Render a Lucide icon into `el` via Obsidian's setIcon, guarding against
 // environments (e.g. the test harness) where setIcon is unavailable so the UI
 // degrades to text-only instead of throwing.
@@ -10549,6 +10774,49 @@ function planCountedBulletPropertyBatch(
     (targetChanged ? changedTargets : unchangedTargets).push(detail);
   }
 
+  // One shared reason, applied as one entry per changed target using that
+  // target's own previous value (captured above via getCountedPropertyTargetState).
+  // Unchanged targets never get an entry. Insertions apply in descending
+  // insertLine order so an earlier (smaller-index) insert position is never
+  // invalidated by a later one.
+  let scheduleLoggedTaskCount = 0;
+  let scheduleLogCreatedParentCount = 0;
+  const scheduleLogReason =
+    operation === "set" &&
+    propertyName === "scheduled" &&
+    options.scheduleLog &&
+    !normalizeScheduleReasonText(options.scheduleLog.reason).empty
+      ? normalizeScheduleReasonText(options.scheduleLog.reason).reason
+      : null;
+  if (scheduleLogReason) {
+    const stateByOriginalLine = new Map(
+      targetStates.map((entry) => [entry.target.line, entry.state]),
+    );
+    const scheduleLogPlans = changedTargets
+      .map((detail) => {
+        const state = stateByOriginalLine.get(detail.originalLine);
+        return planScheduleLogEntry(
+          source.lines.join(source.lineEnding),
+          detail.line,
+          {
+            from: state ? state.value : "",
+            to: normalizedValue,
+            reason: scheduleLogReason,
+          },
+        );
+      })
+      .filter((scheduleLogPlan) => scheduleLogPlan.valid)
+      .sort((first, second) => second.insertLine - first.insertLine);
+    for (const scheduleLogPlan of scheduleLogPlans) {
+      if (applyScheduleLogEntryToLines(source.lines, scheduleLogPlan) > 0) {
+        scheduleLoggedTaskCount += 1;
+        if (scheduleLogPlan.createdParent) {
+          scheduleLogCreatedParentCount += 1;
+        }
+      }
+    }
+  }
+
   nextContent = source.lines.join(source.lineEnding);
   const cursorLine = session.targets[0].line + taskLineDelta;
   return Object.freeze({
@@ -10573,6 +10841,8 @@ function planCountedBulletPropertyBatch(
     removedHideTaskCount,
     ambiguousProjectTaskCount,
     blockedTaskCount,
+    scheduleLoggedTaskCount,
+    scheduleLogCreatedParentCount,
     recoveredReadyTaskCount: recoveryCounts.ready,
     recoveredNextTaskCount: recoveryCounts.next,
     recoveredInProgressTaskCount: recoveryCounts.inProgress,
@@ -11706,6 +11976,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
+    this.pendingScheduleReason = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     this.showPropertyStage({ clearQuery: false });
   }
@@ -11902,12 +12173,145 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
       renderItem: (item, rowEl, query) =>
         this.renderValueItem(item, rowEl, query),
-      openItem: (item) => this.applySelectedValue(item),
+      openItem:
+        normalizeBulletPropertyName(property.name) === "scheduled"
+          ? (item) => {
+              this.showScheduleReasonStage(item);
+              return false;
+            }
+          : (item) => this.applySelectedValue(item),
     });
 
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
     }
+  }
+
+  // Free-text prompt shown after a `scheduled` date is chosen, mirroring the
+  // block-ID stage: nothing is written until this prompt is confirmed (Enter,
+  // empty or not) or the modal is dismissed (Esc, a clean cancel of the date
+  // too — see onClose's contract).
+  showScheduleReasonStage(dateItem) {
+    this.stage = "reason";
+    const propertyItem = this.selectedPropertyItem;
+    const from = this.isCountedSession()
+      ? ""
+      : propertyItem.target && propertyItem.target.kind === "project-frontmatter"
+        ? propertyItem.currentValue
+        : this.getCurrentPropertyValue(propertyItem.property.name);
+    this.pendingScheduleReason = Object.freeze({
+      dateItem,
+      from: normalizeBulletPropertyValue(from),
+      to: dateItem.value,
+    });
+    this.clearLocalTaskMarks();
+    this.selectedIndex = 0;
+    this.applyOptions({
+      items: [],
+      title: "Reason",
+      headerIcon: "message-square-quote",
+      inputLabel: "Schedule reason",
+      placeholder: "Why this date? (↵ to skip)",
+      resultsLabel: "Schedule reason preview",
+      emptyText: "Type a reason",
+      footerHints: getBulletPropertyScheduleReasonHints({ empty: true }),
+      getSubtitle: () => this.getScheduleReasonSubtitle(),
+      filterItem: () => true,
+      renderItem: (item, rowEl, query) =>
+        this.renderScheduleReasonPreviewItem(item, rowEl, query),
+      openItem: (item) => this.confirmScheduleReason(item),
+    });
+
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+  }
+
+  getScheduleReasonSubtitle() {
+    const pending = this.pendingScheduleReason;
+    if (!pending) {
+      return "";
+    }
+
+    const transitionText = pending.from
+      ? `${pending.from}${SCHEDULE_LOG_TRANSITION}${pending.to}`
+      : pending.to;
+    const parts = [transitionText];
+    const validation = validateProjectScheduledDate(pending.to);
+    if (validation.valid) {
+      const date = projectScheduleLocalDate(validation);
+      parts.push(getBulletPropertyDateWeekday(date));
+      parts.push(
+        formatRelativeDayOffset(getLocalDayOffset(this.valueBaseDate, date)),
+      );
+    }
+    parts.push("nothing written yet");
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  renderScheduleReasonPreviewItem(item, rowEl, query) {
+    const state = item.empty ? "empty" : item.hasInlineField ? "warning" : "valid";
+    addElementClasses(rowEl, "bob-cnp-schedule-reason-row", `is-${state}`);
+
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(
+      rowIcon,
+      item.empty
+        ? "minus-circle"
+        : item.hasInlineField
+          ? "alert-triangle"
+          : "check-circle-2",
+    );
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    const pending = this.pendingScheduleReason;
+
+    if (item.empty) {
+      appendHighlighted(titleEl, "No reason", query);
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: `scheduled → ${
+          pending ? pending.to : ""
+        } only; no schedule log entry`,
+      });
+      return;
+    }
+
+    const fromText = pending && pending.from
+      ? `${pending.from}${SCHEDULE_LOG_TRANSITION}`
+      : "";
+    appendHighlighted(
+      titleEl,
+      `**${fromText}${pending ? pending.to : ""}**${SCHEDULE_LOG_SEPARATOR}${item.reason}`,
+      query,
+    );
+
+    if (item.hasInlineField) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: '"::" creates a Dataview inline field on this bullet',
+      });
+    }
+
+    textEl.createDiv({
+      cls: "bob-cnp-schedule-reason-preview",
+      text: item.parentExists
+        ? `Appends to the existing ${SCHEDULE_LOG_EMOJI} **${SCHEDULE_LOG_LABEL}:** on this task`
+        : `Adds a ${SCHEDULE_LOG_EMOJI} **${SCHEDULE_LOG_LABEL}:** child bullet to this task`,
+    });
+  }
+
+  confirmScheduleReason(item) {
+    const pending = this.pendingScheduleReason;
+    if (!pending || !item) {
+      return false;
+    }
+
+    const scheduleLog = item.empty
+      ? null
+      : { from: pending.from, to: pending.to, reason: item.reason };
+    return this.applySelectedValue(pending.dateItem, { scheduleLog });
   }
 
   getEditorContent() {
@@ -12016,6 +12420,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
+    this.pendingScheduleReason = null;
   }
 
   // Dismissing the modal mid-prompt is a clean cancel: no writes happen until
@@ -12253,6 +12658,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getFilteredItems() {
+    if (this.stage === "reason") {
+      const normalized = normalizeScheduleReasonText(this.getRawQuery());
+      const parentExists = Boolean(
+        findScheduleLogParent(this.getEditorContent(), this.cursor.line),
+      );
+      return [
+        Object.freeze({
+          kind: "schedule-reason-preview",
+          ...normalized,
+          parentExists,
+          searchText: normalized.reason,
+        }),
+      ];
+    }
+
     if (this.stage === "blockid") {
       const validation = validateBlockIdCandidate(
         this.getRawQuery(),
@@ -12291,6 +12711,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       typedItem,
       ...items.filter((item) => item.value !== typedItem.value),
     ];
+  }
+
+  // The base class's input listener only calls renderResults(), so this is
+  // what flips the reason-stage footer hint (Skip reason ⇄ Log reason) live
+  // as the user types, mirroring refreshLocalTaskFooter.
+  renderResults() {
+    super.renderResults();
+    if (this.stage === "reason") {
+      const empty = normalizeScheduleReasonText(this.getRawQuery()).empty;
+      this.footerHints = getBulletPropertyScheduleReasonHints({ empty });
+      this.renderFooter();
+    }
   }
 
   renderPropertyItem(item, rowEl, query) {
@@ -13237,7 +13669,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return true;
   }
 
-  async applySelectedValue(item) {
+  async applySelectedValue(item, options = {}) {
     if (!this.selectedPropertyItem || !item) {
       return false;
     }
@@ -13264,6 +13696,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.taskSession,
         this.selectedPropertyItem.property.name,
         item.value,
+        { scheduleLog: options.scheduleLog },
       );
     }
 
@@ -13291,6 +13724,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.lineText,
         this.selectedPropertyItem.currentValue,
         item.value,
+        { scheduleLog: options.scheduleLog },
       );
     }
 
@@ -13302,6 +13736,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       {
         filePath: this.filePath,
         expectedLine: this.lineText,
+        scheduleLog: options.scheduleLog,
       },
     );
   }
@@ -14326,6 +14761,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     session,
     name,
     value,
+    options = {},
   ) {
     const writeContext = this.getCountedTaskWriteContext(
       cm,
@@ -14374,7 +14810,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       session,
       name,
       value,
-      { operation: "set", today, recoveryByLine },
+      {
+        operation: "set",
+        today,
+        recoveryByLine,
+        scheduleLog: options.scheduleLog,
+      },
     );
     if (!plan.valid) {
       new Notice(
@@ -14437,6 +14878,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       stillBlocked: plan.stillBlockedTaskCount,
       deferred: plan.deferredRecoveryTaskCount,
     });
+    const scheduleLogSuffix =
+      plan.scheduleLoggedTaskCount > 0
+        ? `; logged reason on ${formatCountLabel(
+            plan.scheduleLoggedTaskCount,
+            "task",
+          )}`
+        : "";
     new Notice(
       `${name} → ${normalizeBulletPropertyValue(value)} on ${formatCountLabel(
         plan.changedTaskCount,
@@ -14444,7 +14892,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}`,
+      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}`,
     );
     return true;
   }
@@ -14898,6 +15346,29 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     finalLine = inlineResult.line;
     plannedSource.lines[plan.cursorLine] = finalLine;
+
+    let scheduleLogOutcome = null;
+    if (
+      options.scheduleLog &&
+      !normalizeScheduleReasonText(options.scheduleLog.reason).empty
+    ) {
+      const scheduleLogPlan = planScheduleLogEntry(
+        plannedSource.lines.join(plannedSource.lineEnding),
+        plan.cursorLine,
+        options.scheduleLog,
+      );
+      if (
+        scheduleLogPlan.valid &&
+        applyScheduleLogEntryToLines(plannedSource.lines, scheduleLogPlan) > 0
+      ) {
+        scheduleLogOutcome = scheduleLogPlan.createdParent
+          ? "created"
+          : "added";
+      } else {
+        scheduleLogOutcome = "guard-failed";
+      }
+    }
+
     const finalContent = plannedSource.lines.join(plannedSource.lineEnding);
 
     try {
@@ -14946,6 +15417,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           "task",
         )} with multiple scheduled fields unchanged`,
       );
+    }
+    if (scheduleLogOutcome === "created" || scheduleLogOutcome === "added") {
+      parts.push("logged reason");
+    } else if (scheduleLogOutcome === "guard-failed") {
+      parts.push("schedule log not written");
     }
     const recoveryCounts = {
       ready: plan.recoveredReadyTaskCount,
@@ -15166,6 +15642,28 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    let scheduleLogOutcome = null;
+    if (
+      options.scheduleLog &&
+      !normalizeScheduleReasonText(options.scheduleLog.reason).empty
+    ) {
+      const scheduleLogPlan = planScheduleLogEntry(
+        String(cm.getValue() || ""),
+        cursor.line,
+        options.scheduleLog,
+      );
+      if (
+        scheduleLogPlan.valid &&
+        insertEditorLine(cm, scheduleLogPlan.insertLine, scheduleLogPlan.lineText)
+      ) {
+        scheduleLogOutcome = scheduleLogPlan.createdParent
+          ? "created"
+          : "added";
+      } else {
+        scheduleLogOutcome = "guard-failed";
+      }
+    }
+
     setEditorCursorSafely(
       cm,
       cursor.line,
@@ -15190,10 +15688,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         options,
       );
     } else {
+      const scheduleLogSuffix =
+        scheduleLogOutcome === "added"
+          ? "; logged reason"
+          : scheduleLogOutcome === "created"
+            ? "; created schedule log"
+            : scheduleLogOutcome === "guard-failed"
+              ? "; schedule log not written"
+              : "";
       new Notice(
         `${noticeText}${
           blocked ? "; marked task Blocked" : ""
-        }${scheduledRecoveryNoticeSuffix(recoveryCounts)}`,
+        }${scheduledRecoveryNoticeSuffix(recoveryCounts)}${scheduleLogSuffix}`,
       );
     }
     return true;
@@ -19565,6 +20071,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 module.exports.helpers = {
   FilteredPickerModal,
   TaskMoveDestinationPickerModal,
+  BulletPropertyPickerModal,
   finiteNumberOrNull,
   clampNumber,
   normalizePosition,
@@ -19802,6 +20309,18 @@ module.exports.helpers = {
   parseDependencyNavigationBulletDetails,
   findCurrentBulletChildBlock,
   getDependencyChildIndent,
+  SCHEDULE_LOG_EMOJI,
+  SCHEDULE_LOG_LABEL,
+  formatScheduleLogParentBullet,
+  formatScheduleLogEntryBullet,
+  parseScheduleLogParentBullet,
+  parseScheduleLogEntryBullet,
+  normalizeScheduleReasonText,
+  findScheduleLogParent,
+  getScheduleLogEntryIndent,
+  planScheduleLogEntry,
+  applyScheduleLogEntryToLines,
+  getBulletPropertyScheduleReasonHints,
   collectDependencyNavigationBullets,
   computeFinalDependencyLinkOrder,
   planDependencyNavigationBulletSync,

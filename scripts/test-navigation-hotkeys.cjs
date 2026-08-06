@@ -3812,6 +3812,17 @@ async function openBulletPropertyValueStage(harness, propertyName, options = {})
   return picker;
 }
 
+// Complete the reason-stage prompt through the same openItemAtIndex entry
+// point production code uses. The test harness never calls onOpen(), so
+// resultsEl stays unset and renderAll() never refreshes visibleItems; refresh
+// it manually here the way renderResults() would.
+async function confirmScheduleReasonStage(picker, reasonText = "") {
+  assert.equal(picker.stage, "reason");
+  picker.inputEl = { value: reasonText };
+  picker.visibleItems = picker.getFilteredItems();
+  return await picker.openItemAtIndex(0);
+}
+
 test("priority notice relative day helpers handle offsets ranges and icons", () => {
   assert.equal(
     helpers.getLocalDayOffset(new Date(2026, 7, 3, 23), new Date(2026, 7, 3)),
@@ -4690,6 +4701,7 @@ test("choosing a priority roll uses the ordinary scheduled write path", async ()
   const rolled = makeHarness();
   const rolledPicker = await openBulletPropertyValueStage(rolled, "scheduled");
   await rolledPicker.openItemAtIndex(0);
+  await confirmScheduleReasonStage(rolledPicker);
   const rolledNotice = notices.at(-1);
 
   notices.length = 0;
@@ -4700,6 +4712,7 @@ test("choosing a priority roll uses the ordinary scheduled write path", async ()
   );
   assert.notEqual(presetIndex, -1);
   await presetPicker.openItemAtIndex(presetIndex);
+  await confirmScheduleReasonStage(presetPicker);
 
   assert.equal(rolled.editor.content, preset.editor.content);
   assert.equal(rolledNotice, notices.at(-1));
@@ -6191,4 +6204,576 @@ test("tab pin Vim registration retries after adapter availability", (t) => {
   assert.equal(plugin.registerVimMappings(), true);
   assert.equal(mappings.length, 1);
   assert.equal(removedRefs.length, 1);
+});
+
+test("schedule log bullet formatting and parsing round-trip with and without a previous value", () => {
+  const parentTab = helpers.formatScheduleLogParentBullet("\t", "-");
+  assert.equal(parentTab, "\t- 🗓️ **Schedule log:**");
+  assert.deepEqual(helpers.parseScheduleLogParentBullet(parentTab), {
+    indent: "\t",
+    marker: "-",
+    hasEmoji: true,
+  });
+
+  const parentTwoSpace = helpers.formatScheduleLogParentBullet("  ", "*");
+  assert.equal(parentTwoSpace, "  * 🗓️ **Schedule log:**");
+  assert.deepEqual(helpers.parseScheduleLogParentBullet(parentTwoSpace), {
+    indent: "  ",
+    marker: "*",
+    hasEmoji: true,
+  });
+
+  // A marker written by hand without the emoji is still recognized (and
+  // never silently rewritten with one).
+  assert.deepEqual(
+    helpers.parseScheduleLogParentBullet("  + **Schedule log:**"),
+    { indent: "  ", marker: "+", hasEmoji: false },
+  );
+  assert.equal(
+    helpers.parseScheduleLogParentBullet("  - **Schedule log:** trailing"),
+    null,
+  );
+  assert.equal(helpers.parseScheduleLogParentBullet("plain text"), null);
+
+  const entryWithFrom = helpers.formatScheduleLogEntryBullet("\t\t", "-", {
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "waiting on the API review to land",
+  });
+  assert.equal(
+    entryWithFrom,
+    "\t\t- **2026-08-13 → 2026-08-20** — waiting on the API review to land",
+  );
+  assert.deepEqual(helpers.parseScheduleLogEntryBullet(entryWithFrom), {
+    indent: "\t\t",
+    marker: "-",
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "waiting on the API review to land",
+  });
+
+  const entryWithoutFrom = helpers.formatScheduleLogEntryBullet("  ", "+", {
+    from: "",
+    to: "2026-08-20",
+    reason: "was out sick",
+  });
+  assert.equal(entryWithoutFrom, "  + **2026-08-20** — was out sick");
+  assert.deepEqual(helpers.parseScheduleLogEntryBullet(entryWithoutFrom), {
+    indent: "  ",
+    marker: "+",
+    from: "",
+    to: "2026-08-20",
+    reason: "was out sick",
+  });
+});
+
+test("schedule reason text normalization trims, collapses whitespace, and flags inline fields", () => {
+  assert.deepEqual(helpers.normalizeScheduleReasonText(""), {
+    reason: "",
+    empty: true,
+    hasInlineField: false,
+  });
+  assert.deepEqual(helpers.normalizeScheduleReasonText("   "), {
+    reason: "",
+    empty: true,
+    hasInlineField: false,
+  });
+  assert.deepEqual(
+    helpers.normalizeScheduleReasonText("  waiting on \n\n the   API \treview  "),
+    { reason: "waiting on the API review", empty: false, hasInlineField: false },
+  );
+  assert.deepEqual(helpers.normalizeScheduleReasonText("blocked:: x"), {
+    reason: "blocked:: x",
+    empty: false,
+    hasInlineField: true,
+  });
+  assert.deepEqual(
+    helpers.normalizeScheduleReasonText("blocked by [[sase_gate]]"),
+    { reason: "blocked by [[sase_gate]]", empty: false, hasInlineField: false },
+  );
+});
+
+test("findScheduleLogParent finds a direct-child marker but ignores a nested grandchild's", () => {
+  const withMarker = [
+    "- [ ] #task Parent ^parent",
+    "  - freeform note",
+    "  - 🗓️ **Schedule log:**",
+    "    - **2026-07-01** — reason",
+    "  - ![[#^dep]]",
+  ].join("\n");
+  assert.deepEqual(helpers.findScheduleLogParent(withMarker, 0), {
+    line: 2,
+    indent: "  ",
+    marker: "-",
+  });
+
+  const nested = [
+    "- [ ] #task Parent ^parent",
+    "  - ![[#^dep]]",
+    "    - 🗓️ **Schedule log:**",
+    "      - **2026-07-01** — nested, not parent's",
+  ].join("\n");
+  assert.equal(helpers.findScheduleLogParent(nested, 0), null);
+
+  const absent = ["- [ ] #task Parent ^parent", "  - no log here"].join("\n");
+  assert.equal(helpers.findScheduleLogParent(absent, 0), null);
+});
+
+test("getScheduleLogEntryIndent reuses an existing entry indent or falls back to marker indent plus a tab", () => {
+  const withEntries = [
+    "- [ ] #task T ^t",
+    "\t- 🗓️ **Schedule log:**",
+    "\t\t- **2026-07-01** — a",
+  ].join("\n");
+  assert.equal(helpers.getScheduleLogEntryIndent(withEntries, 1), "\t\t");
+
+  const withoutEntries = ["- [ ] #task T ^t", "  - 🗓️ **Schedule log:**"].join(
+    "\n",
+  );
+  assert.equal(helpers.getScheduleLogEntryIndent(withoutEntries, 1), "  \t");
+});
+
+test("planScheduleLogEntry creates, prepends, guards, and preserves blockquote context", () => {
+  const fresh = "- [ ] #task Ship the thing [scheduled:: 2026-08-20] ^ship";
+  const created = helpers.planScheduleLogEntry(fresh, 0, {
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "waiting on the API review to land",
+  });
+  assert.equal(created.valid, true);
+  assert.equal(created.changed, true);
+  assert.equal(created.createdParent, true);
+  assert.equal(created.insertLine, 1);
+  assert.deepEqual(created.lineTexts, [
+    "\t- 🗓️ **Schedule log:**",
+    "\t- **2026-08-13 → 2026-08-20** — waiting on the API review to land",
+  ]);
+
+  // A new marker is inserted as the last direct child, after any existing
+  // children, reusing an existing sibling's indentation.
+  const withOtherChild = [
+    "- [ ] #task Ship [scheduled:: 2026-08-20] ^ship",
+    "  - some existing note",
+  ].join("\n");
+  const createdAfterNote = helpers.planScheduleLogEntry(withOtherChild, 0, {
+    to: "2026-08-20",
+    reason: "kickoff",
+  });
+  assert.equal(createdAfterNote.insertLine, 2);
+  assert.deepEqual(createdAfterNote.lineTexts, [
+    "  - 🗓️ **Schedule log:**",
+    "  - **2026-08-20** — kickoff",
+  ]);
+
+  // Prepends a new entry above an existing one (newest first), reusing the
+  // marker's own list-marker character and indentation.
+  const existing = [
+    "- [ ] #task Ship [scheduled:: 2026-08-20] ^ship",
+    "  * 🗓️ **Schedule log:**",
+    "    * **2026-08-06 → 2026-08-13** — was out sick",
+  ].join("\n");
+  const prepended = helpers.planScheduleLogEntry(existing, 0, {
+    from: "2026-08-13",
+    to: "2026-08-20",
+    reason: "back from sick leave",
+  });
+  assert.equal(prepended.valid, true);
+  assert.equal(prepended.createdParent, false);
+  assert.equal(prepended.insertLine, 2);
+  assert.deepEqual(prepended.lineTexts, [
+    "    * **2026-08-13 → 2026-08-20** — back from sick leave",
+  ]);
+
+  // Guards never throw.
+  assert.equal(
+    helpers.planScheduleLogEntry(fresh, 0, { to: "x", reason: "" }).valid,
+    false,
+  );
+  assert.equal(
+    helpers.planScheduleLogEntry(fresh, 0, { to: "x", reason: "" }).reason,
+    "empty-reason",
+  );
+  assert.equal(
+    helpers.planScheduleLogEntry(fresh, 0, { to: "x", reason: "   " }).reason,
+    "empty-reason",
+  );
+  assert.equal(
+    helpers.planScheduleLogEntry(fresh, 99, { to: "x", reason: "y" }).reason,
+    "task-out-of-range",
+  );
+  assert.equal(
+    helpers.planScheduleLogEntry(fresh, -1, { to: "x", reason: "y" }).reason,
+    "task-out-of-range",
+  );
+  assert.equal(
+    helpers.planScheduleLogEntry("not a list item", 0, {
+      to: "x",
+      reason: "y",
+    }).reason,
+    "not-list-item",
+  );
+
+  // Last line of file, no trailing newline: still inserts past the end.
+  const lastLine = "- [ ] #task Only ^only";
+  const atEnd = helpers.planScheduleLogEntry(lastLine, 0, {
+    to: "2026-08-20",
+    reason: "first pass",
+  });
+  assert.equal(atEnd.insertLine, 1);
+  assert.equal(atEnd.createdParent, true);
+
+  // A blockquoted task keeps its log inside the same quote context.
+  const quoted = "> - [ ] #task Quoted [scheduled:: 2026-08-20] ^quoted";
+  const inQuote = helpers.planScheduleLogEntry(quoted, 0, {
+    to: "2026-08-20",
+    reason: "quoted context",
+  });
+  assert.deepEqual(inQuote.lineTexts, [
+    "> \t- 🗓️ **Schedule log:**",
+    "> \t- **2026-08-20** — quoted context",
+  ]);
+});
+
+test("counted scheduled reason logs one entry per changed task, prepends above an existing log, and skips unchanged tasks", () => {
+  const input = [
+    "- [ ] #task Alpha [scheduled:: 2026-07-01] ^alpha",
+    "  - 🗓️ **Schedule log:**",
+    "    - **2026-06-20 → 2026-07-01** — first push",
+    "- [ ] #task Beta [scheduled:: 2026-07-10] ^beta",
+    "- [ ] #task Gamma [scheduled:: 2026-07-05] ^gamma",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-10",
+    {
+      operation: "set",
+      today: new Date(2026, 7, 1),
+      scheduleLog: { reason: "sprint replan" },
+    },
+  );
+  assert.equal(plan.valid, true);
+  assert.equal(plan.changedTaskCount, 2);
+  assert.equal(plan.unchangedTaskCount, 1);
+  assert.equal(plan.scheduleLoggedTaskCount, 2);
+  assert.equal(plan.scheduleLogCreatedParentCount, 1);
+  assert.equal(plan.cursorLine, 0);
+  assert.equal(
+    plan.content,
+    [
+      "- [ ] #task Alpha [scheduled:: 2026-07-10] ^alpha",
+      "  - 🗓️ **Schedule log:**",
+      "    - **2026-07-01 → 2026-07-10** — sprint replan",
+      "    - **2026-06-20 → 2026-07-01** — first push",
+      "- [ ] #task Beta [scheduled:: 2026-07-10] ^beta",
+      "- [ ] #task Gamma [scheduled:: 2026-07-10] ^gamma",
+      "\t- 🗓️ **Schedule log:**",
+      "\t- **2026-07-05 → 2026-07-10** — sprint replan",
+    ].join("\n"),
+  );
+});
+
+test("empty reason through the counted planner writes no schedule log entries", () => {
+  const input = [
+    "- [ ] #task Alpha [scheduled:: 2026-07-01] ^alpha",
+    "- [ ] #task Beta [scheduled:: 2026-07-05] ^beta",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 1);
+  const withoutScheduleLog = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-10",
+    { operation: "set", today: new Date(2026, 7, 1) },
+  );
+  const withEmptyReason = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-07-10",
+    {
+      operation: "set",
+      today: new Date(2026, 7, 1),
+      scheduleLog: { reason: "   " },
+    },
+  );
+  assert.equal(withEmptyReason.content, withoutScheduleLog.content);
+  assert.equal(withEmptyReason.scheduleLoggedTaskCount, 0);
+  assert.equal(withEmptyReason.scheduleLogCreatedParentCount, 0);
+});
+
+test("setBulletPropertyValue writes an inline scheduled date plus a schedule log entry", async () => {
+  notices.length = 0;
+  const lines = [
+    "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship",
+    "  - some existing note",
+  ];
+  const editor = new TestEditor(lines.join("\n"));
+  const file = { path: "Tasks.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+
+  const wrote = await plugin.setBulletPropertyValue(
+    editor,
+    { line: 0, ch: 10 },
+    "scheduled",
+    "2026-08-20",
+    {
+      filePath: file.path,
+      expectedLine: lines[0],
+      today: new Date(2026, 7, 1),
+      scheduleLog: {
+        from: "2026-08-13",
+        to: "2026-08-20",
+        reason: "waiting on the API review to land",
+      },
+    },
+  );
+  assert.equal(wrote, true);
+  assert.equal(
+    editor.content,
+    [
+      "- [?] #task Ship the thing [scheduled:: 2026-08-20] ^ship",
+      "  - some existing note",
+      "  - 🗓️ **Schedule log:**",
+      "  - **2026-08-13 → 2026-08-20** — waiting on the API review to land",
+    ].join("\n"),
+  );
+  assert.match(notices.at(-1), /; created schedule log/);
+});
+
+test("setProjectNoteScheduledValue writes a schedule log entry under the ^prj task", async () => {
+  notices.length = 0;
+  const input = [
+    "---",
+    "type: [[project]]",
+    "scheduled: 2026-08-13",
+    "---",
+    "- [ ] #task Ship ^prj",
+  ].join("\n");
+  const cursor = { line: 4, ch: 12 };
+  const editor = new TransactionEditor(input, cursor, 700);
+  const file = { path: "projects/Ship.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+
+  const wrote = await plugin.setProjectNoteScheduledValue(
+    editor,
+    cursor,
+    file.path,
+    input.split(/\r?\n/)[4],
+    "2026-08-13",
+    "2026-08-20",
+    {
+      today: new Date(2026, 7, 1),
+      scheduleLog: {
+        from: "2026-08-13",
+        to: "2026-08-20",
+        reason: "waiting on the API review to land",
+      },
+    },
+  );
+  assert.equal(wrote, true);
+  assert.match(editor.content, /^scheduled: 2026-08-20$/m);
+  assert.match(
+    editor.content,
+    /- \[ \] #task Ship #hide \^prj\n\t- 🗓️ \*\*Schedule log:\*\*\n\t- \*\*2026-08-13 → 2026-08-20\*\* — waiting on the API review to land/,
+  );
+  assert.match(notices.at(-1), /logged reason/);
+});
+
+function buildScheduleReasonConfig() {
+  return helpers.validateBulletPropertyConfig({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        levels: [{ label: "P1", value: "high", min_days: 1, max_days: 3 }],
+      },
+    ],
+  });
+}
+
+test("choosing a scheduled date enters the reason stage without writing anything", () => {
+  const config = buildScheduleReasonConfig();
+  const lineText = "- [ ] #task Ship the thing ^ship";
+  const editor = new TestEditor(lineText);
+  const cursor = { line: 0, ch: 0 };
+  const picker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    editor,
+    cursor,
+    lineText,
+    config,
+    { filePath: "Tasks.md" },
+  );
+
+  const scheduledItem = picker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  assert.ok(scheduledItem);
+  picker.showValueStage(scheduledItem);
+  assert.equal(picker.stage, "value");
+
+  const dateItem = picker.items.find((item) => item.kind === "value");
+  assert.ok(dateItem);
+  const opened = picker.openItem(dateItem);
+  assert.equal(opened, false);
+  assert.equal(picker.stage, "reason");
+  assert.deepEqual(picker.pendingScheduleReason, {
+    dateItem,
+    from: "",
+    to: dateItem.value,
+  });
+  assert.equal(editor.content, lineText);
+});
+
+test("choosing a priority level does not enter the reason stage", async () => {
+  const config = buildScheduleReasonConfig();
+  const lineText = "- [ ] #task Ship the thing ^ship";
+  const editor = new TestEditor(lineText);
+  const cursor = { line: 0, ch: 0 };
+  const plugin = { setBulletPriorityValue: async () => true };
+  const picker = new helpers.BulletPropertyPickerModal(
+    {},
+    plugin,
+    editor,
+    cursor,
+    lineText,
+    config,
+    { filePath: "Tasks.md" },
+  );
+
+  const priorityItem = picker.items.find(
+    (item) => item.property.name === "priority",
+  );
+  assert.ok(priorityItem);
+  picker.showValueStage(priorityItem);
+
+  const levelItem = picker.items.find((item) => item.priorityLevel);
+  assert.ok(levelItem);
+  await picker.openItem(levelItem);
+
+  assert.equal(picker.stage, "value");
+  assert.equal(picker.pendingScheduleReason, null);
+});
+
+test("reason stage getFilteredItems always returns exactly one synthetic item", () => {
+  const config = buildScheduleReasonConfig();
+  const lineText = "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship";
+  const editor = new TestEditor(lineText);
+  const cursor = { line: 0, ch: 0 };
+  const picker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    editor,
+    cursor,
+    lineText,
+    config,
+    { filePath: "Tasks.md" },
+  );
+  const scheduledItem = picker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  picker.showValueStage(scheduledItem);
+  const dateItem = picker.items.find((item) => item.kind === "value");
+  picker.openItem(dateItem);
+  assert.equal(picker.stage, "reason");
+
+  picker.inputEl = { value: "" };
+  const emptyItems = picker.getFilteredItems();
+  assert.equal(emptyItems.length, 1);
+  assert.equal(emptyItems[0].empty, true);
+
+  picker.inputEl = { value: "waiting on the API review to land" };
+  const typedItems = picker.getFilteredItems();
+  assert.equal(typedItems.length, 1);
+  assert.equal(typedItems[0].empty, false);
+  assert.equal(typedItems[0].reason, "waiting on the API review to land");
+
+  picker.inputEl = { value: "blocked:: x" };
+  const warningItems = picker.getFilteredItems();
+  assert.equal(warningItems.length, 1);
+  assert.equal(warningItems[0].hasInlineField, true);
+});
+
+test("the reason-stage footer hint flips between Skip reason and Log reason as the user types", () => {
+  const config = buildScheduleReasonConfig();
+  const lineText = "- [ ] #task Ship the thing ^ship";
+  const editor = new TestEditor(lineText);
+  const cursor = { line: 0, ch: 0 };
+  const picker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    editor,
+    cursor,
+    lineText,
+    config,
+    { filePath: "Tasks.md" },
+  );
+  const scheduledItem = picker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  picker.showValueStage(scheduledItem);
+  const dateItem = picker.items.find((item) => item.kind === "value");
+  picker.openItem(dateItem);
+  assert.equal(picker.stage, "reason");
+
+  // renderResults() drives real DOM rendering through the base class; stub it
+  // out here so only this subclass override's post-super.renderResults()
+  // footer-hint logic (the thing under test) actually runs.
+  const originalRenderResults = helpers.FilteredPickerModal.prototype.renderResults;
+  helpers.FilteredPickerModal.prototype.renderResults = function stubbedRenderResults() {
+    this.visibleItems = this.getFilteredItems();
+  };
+  try {
+    picker.inputEl = { value: "" };
+    picker.renderResults();
+    assert.match(
+      picker.footerHints.find((hint) => hint.keys.includes("↵")).label,
+      /^Skip reason$/,
+    );
+
+    picker.inputEl = { value: "waiting on the API review to land" };
+    picker.renderResults();
+    assert.match(
+      picker.footerHints.find((hint) => hint.keys.includes("↵")).label,
+      /^Log reason$/,
+    );
+  } finally {
+    helpers.FilteredPickerModal.prototype.renderResults = originalRenderResults;
+  }
+});
+
+test("closing the picker during the reason stage clears pendingScheduleReason and writes nothing", () => {
+  const config = buildScheduleReasonConfig();
+  const lineText = "- [ ] #task Ship the thing ^ship";
+  const editor = new TestEditor(lineText);
+  const cursor = { line: 0, ch: 0 };
+  const picker = new helpers.BulletPropertyPickerModal(
+    {},
+    {},
+    editor,
+    cursor,
+    lineText,
+    config,
+    { filePath: "Tasks.md" },
+  );
+  const scheduledItem = picker.items.find(
+    (item) => item.property.name === "scheduled",
+  );
+  picker.showValueStage(scheduledItem);
+  const dateItem = picker.items.find((item) => item.kind === "value");
+  picker.openItem(dateItem);
+  assert.equal(picker.stage, "reason");
+  assert.ok(picker.pendingScheduleReason);
+
+  picker.onClose();
+
+  assert.equal(picker.pendingScheduleReason, null);
+  assert.equal(editor.content, lineText);
 });

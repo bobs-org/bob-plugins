@@ -1,7 +1,7 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "1.18.0",
+  "version": "1.18.1",
   "minAppVersion": "1.8.7",
   "description": "Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates.",
   "author": "Bryan",

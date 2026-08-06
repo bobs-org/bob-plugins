@@ -241,19 +241,30 @@ const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
 const DEPENDENCY_NAVIGATION_LINK_RE = /\[\[#\^([A-Za-z0-9-]+)\]\]/g;
 const DEPENDENCY_TRANSCLUSION_BULLET_RE =
   /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<strike>~~)?(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]\k<strike>[ \t]*$/;
-// Managed "schedule log" child bullet, e.g. `  - 🗓️ **Schedule log:**` with a
-// newest-first list of `**<from> → <to>** — <reason>` entries under it. The
-// emoji is `U+1F5D3 U+FE0F` (keep the variation selector); a marker written by
-// hand without the emoji is still recognized so it is never silently rewritten.
+// Managed "schedule log" child bullet, e.g. `  - 🗓️ **SCHEDULE LOG**`, with a
+// newest-first list of `*<from> → <to>* — <reason>` entries nested one level
+// under it. The emoji is `U+1F5D3 U+FE0F` (keep the variation selector). A
+// marker written by hand without the emoji, and the legacy `**Schedule log:**`
+// spelling, are both still recognized so an existing log is never orphaned or
+// silently rewritten.
 const SCHEDULE_LOG_EMOJI = "🗓️";
-const SCHEDULE_LOG_LABEL = "Schedule log";
+const SCHEDULE_LOG_LABEL = "SCHEDULE LOG";
+const LEGACY_SCHEDULE_LOG_LABELS = Object.freeze(new Set(["Schedule log"]));
+const SCHEDULE_LOG_MARKER_TEXT = `${SCHEDULE_LOG_EMOJI} **${SCHEDULE_LOG_LABEL}**`;
+const SCHEDULE_LOG_ENTRY_EMPHASIS = "*";
+const SCHEDULE_LOG_INDENT_UNIT = "\t";
 const SCHEDULE_LOG_SEPARATOR = " — ";
 const SCHEDULE_LOG_TRANSITION = " → ";
 const SCHEDULE_LOG_PARENT_RE = new RegExp(
-  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${SCHEDULE_LOG_EMOJI}[ \\t]+)?\\*\\*${SCHEDULE_LOG_LABEL}:\\*\\*[ \\t]*$`,
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${SCHEDULE_LOG_EMOJI}[ \\t]+)?\\*\\*(?<label>${[
+    SCHEDULE_LOG_LABEL,
+    ...LEGACY_SCHEDULE_LOG_LABELS,
+  ]
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")}):?\\*\\*[ \\t]*$`,
 );
 const SCHEDULE_LOG_ENTRY_RE = new RegExp(
-  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*\\*(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\*\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emphasis>\\*\\*?)(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\k<emphasis>${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,
 );
 const BULLET_PROPERTY_FIELD_RE = /\[([^\[\]\n]+?)::([^\]\n]*)\]/g;
 const BULLET_PROPERTY_TRAILING_BLOCK_ID_RE =
@@ -1435,17 +1446,25 @@ function getDependencyDirectChildIndentLength(lines, parentLine, block) {
   return childIndentLength;
 }
 
-// Render the managed schedule-log parent marker bullet, e.g.
-// `  - 🗓️ **Schedule log:**`, reusing an existing marker's own indent/marker.
+// Render the managed schedule-log marker bullet, e.g. `  - 🗓️ **SCHEDULE LOG**`,
+// reusing an existing marker's own indent/marker character.
 function formatScheduleLogParentBullet(indent, marker) {
-  return `${indent}${marker} ${SCHEDULE_LOG_EMOJI} **${SCHEDULE_LOG_LABEL}:**`;
+  return `${indent}${marker} ${SCHEDULE_LOG_MARKER_TEXT}`;
 }
 
-// Render one schedule-log entry bullet: `**<from> → <to>** — <reason>`, or
-// `**<to>** — <reason>` when there was no previous value.
-function formatScheduleLogEntryBullet(indent, marker, { from, to, reason }) {
+// The text of one schedule-log entry without its indentation or list marker:
+// `*<from> → <to>* — <reason>`, or `*<to>* — <reason>` when there was no
+// previous value. Split out from formatScheduleLogEntryBullet so the modal
+// preview renders the exact text the writers insert instead of duplicating the
+// format inline.
+function formatScheduleLogEntryText({ from, to, reason }) {
+  const emphasis = SCHEDULE_LOG_ENTRY_EMPHASIS;
   const fromText = from ? `${from}${SCHEDULE_LOG_TRANSITION}` : "";
-  return `${indent}${marker} **${fromText}${to}**${SCHEDULE_LOG_SEPARATOR}${reason}`;
+  return `${emphasis}${fromText}${to}${emphasis}${SCHEDULE_LOG_SEPARATOR}${reason}`;
+}
+
+function formatScheduleLogEntryBullet(indent, marker, fields) {
+  return `${indent}${marker} ${formatScheduleLogEntryText(fields)}`;
 }
 
 function parseScheduleLogParentBullet(line) {
@@ -1542,7 +1561,7 @@ function getScheduleLogEntryIndent(lines, parentLine) {
     }
   }
 
-  return `${markerIndent}\t`;
+  return `${markerIndent}${SCHEDULE_LOG_INDENT_UNIT}`;
 }
 
 // Plan the schedule-log write for one task: either prepend a new entry above
@@ -1602,10 +1621,14 @@ function planScheduleLogEntry(content, taskLine, details = {}) {
   }
 
   const block = findCurrentBulletChildBlock(lines, taskIndex);
-  const indent = getDependencyChildIndent(lines, taskIndex);
+  const markerIndent = getDependencyChildIndent(lines, taskIndex);
+  // The entry is a grandchild of the task: one Obsidian Tab level deeper than
+  // the marker it belongs to, matching getScheduleLogEntryIndent's fallback for
+  // a marker that exists but has no entries yet.
+  const entryIndent = `${markerIndent}${SCHEDULE_LOG_INDENT_UNIT}`;
   const lineTexts = Object.freeze([
-    formatScheduleLogParentBullet(indent, "-"),
-    formatScheduleLogEntryBullet(indent, "-", entryFields),
+    formatScheduleLogParentBullet(markerIndent, "-"),
+    formatScheduleLogEntryBullet(entryIndent, "-", entryFields),
   ]);
   return Object.freeze({
     valid: true,
@@ -12278,12 +12301,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return;
     }
 
-    const fromText = pending && pending.from
-      ? `${pending.from}${SCHEDULE_LOG_TRANSITION}`
-      : "";
     appendHighlighted(
       titleEl,
-      `**${fromText}${pending ? pending.to : ""}**${SCHEDULE_LOG_SEPARATOR}${item.reason}`,
+      formatScheduleLogEntryText({
+        from: pending ? pending.from : "",
+        to: pending ? pending.to : "",
+        reason: item.reason,
+      }),
       query,
     );
 
@@ -12297,8 +12321,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     textEl.createDiv({
       cls: "bob-cnp-schedule-reason-preview",
       text: item.parentExists
-        ? `Appends to the existing ${SCHEDULE_LOG_EMOJI} **${SCHEDULE_LOG_LABEL}:** on this task`
-        : `Adds a ${SCHEDULE_LOG_EMOJI} **${SCHEDULE_LOG_LABEL}:** child bullet to this task`,
+        ? `Appends to the existing ${SCHEDULE_LOG_MARKER_TEXT} on this task`
+        : `Adds a ${SCHEDULE_LOG_MARKER_TEXT} child bullet to this task`,
     });
   }
 
@@ -20312,6 +20336,7 @@ module.exports.helpers = {
   SCHEDULE_LOG_EMOJI,
   SCHEDULE_LOG_LABEL,
   formatScheduleLogParentBullet,
+  formatScheduleLogEntryText,
   formatScheduleLogEntryBullet,
   parseScheduleLogParentBullet,
   parseScheduleLogEntryBullet,

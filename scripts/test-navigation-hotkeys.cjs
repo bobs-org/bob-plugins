@@ -6208,7 +6208,7 @@ test("tab pin Vim registration retries after adapter availability", (t) => {
 
 test("schedule log bullet formatting and parsing round-trip with and without a previous value", () => {
   const parentTab = helpers.formatScheduleLogParentBullet("\t", "-");
-  assert.equal(parentTab, "\t- 🗓️ **Schedule log:**");
+  assert.equal(parentTab, "\t- 🗓️ **SCHEDULE LOG**");
   assert.deepEqual(helpers.parseScheduleLogParentBullet(parentTab), {
     indent: "\t",
     marker: "-",
@@ -6216,21 +6216,25 @@ test("schedule log bullet formatting and parsing round-trip with and without a p
   });
 
   const parentTwoSpace = helpers.formatScheduleLogParentBullet("  ", "*");
-  assert.equal(parentTwoSpace, "  * 🗓️ **Schedule log:**");
+  assert.equal(parentTwoSpace, "  * 🗓️ **SCHEDULE LOG**");
   assert.deepEqual(helpers.parseScheduleLogParentBullet(parentTwoSpace), {
     indent: "  ",
     marker: "*",
     hasEmoji: true,
   });
 
-  // A marker written by hand without the emoji is still recognized (and
-  // never silently rewritten with one).
+  // The legacy "Schedule log:" spelling is still recognized (and never
+  // silently rewritten to the new spelling), with or without the emoji.
+  assert.deepEqual(
+    helpers.parseScheduleLogParentBullet("\t- 🗓️ **Schedule log:**"),
+    { indent: "\t", marker: "-", hasEmoji: true },
+  );
   assert.deepEqual(
     helpers.parseScheduleLogParentBullet("  + **Schedule log:**"),
     { indent: "  ", marker: "+", hasEmoji: false },
   );
   assert.equal(
-    helpers.parseScheduleLogParentBullet("  - **Schedule log:** trailing"),
+    helpers.parseScheduleLogParentBullet("  - **SCHEDULE LOG** trailing"),
     null,
   );
   assert.equal(helpers.parseScheduleLogParentBullet("plain text"), null);
@@ -6242,7 +6246,7 @@ test("schedule log bullet formatting and parsing round-trip with and without a p
   });
   assert.equal(
     entryWithFrom,
-    "\t\t- **2026-08-13 → 2026-08-20** — waiting on the API review to land",
+    "\t\t- *2026-08-13 → 2026-08-20* — waiting on the API review to land",
   );
   assert.deepEqual(helpers.parseScheduleLogEntryBullet(entryWithFrom), {
     indent: "\t\t",
@@ -6257,7 +6261,7 @@ test("schedule log bullet formatting and parsing round-trip with and without a p
     to: "2026-08-20",
     reason: "was out sick",
   });
-  assert.equal(entryWithoutFrom, "  + **2026-08-20** — was out sick");
+  assert.equal(entryWithoutFrom, "  + *2026-08-20* — was out sick");
   assert.deepEqual(helpers.parseScheduleLogEntryBullet(entryWithoutFrom), {
     indent: "  ",
     marker: "+",
@@ -6265,6 +6269,40 @@ test("schedule log bullet formatting and parsing round-trip with and without a p
     to: "2026-08-20",
     reason: "was out sick",
   });
+
+  // Legacy double-star entry emphasis still parses so nothing reading the
+  // log breaks mid-migration.
+  assert.deepEqual(
+    helpers.parseScheduleLogEntryBullet(
+      "\t\t- **2026-08-13 → 2026-08-20** — legacy bold",
+    ),
+    {
+      indent: "\t\t",
+      marker: "-",
+      from: "2026-08-13",
+      to: "2026-08-20",
+      reason: "legacy bold",
+    },
+  );
+});
+
+test("formatScheduleLogEntryText renders entry text without indent or marker", () => {
+  assert.equal(
+    helpers.formatScheduleLogEntryText({
+      from: "2026-08-13",
+      to: "2026-08-20",
+      reason: "waiting on the API review to land",
+    }),
+    "*2026-08-13 → 2026-08-20* — waiting on the API review to land",
+  );
+  assert.equal(
+    helpers.formatScheduleLogEntryText({
+      from: "",
+      to: "2026-08-20",
+      reason: "was out sick",
+    }),
+    "*2026-08-20* — was out sick",
+  );
 });
 
 test("schedule reason text normalization trims, collapses whitespace, and flags inline fields", () => {
@@ -6297,8 +6335,8 @@ test("findScheduleLogParent finds a direct-child marker but ignores a nested gra
   const withMarker = [
     "- [ ] #task Parent ^parent",
     "  - freeform note",
-    "  - 🗓️ **Schedule log:**",
-    "    - **2026-07-01** — reason",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-07-01* — reason",
     "  - ![[#^dep]]",
   ].join("\n");
   assert.deepEqual(helpers.findScheduleLogParent(withMarker, 0), {
@@ -6310,8 +6348,8 @@ test("findScheduleLogParent finds a direct-child marker but ignores a nested gra
   const nested = [
     "- [ ] #task Parent ^parent",
     "  - ![[#^dep]]",
-    "    - 🗓️ **Schedule log:**",
-    "      - **2026-07-01** — nested, not parent's",
+    "    - 🗓️ **SCHEDULE LOG**",
+    "      - *2026-07-01* — nested, not parent's",
   ].join("\n");
   assert.equal(helpers.findScheduleLogParent(nested, 0), null);
 
@@ -6322,12 +6360,12 @@ test("findScheduleLogParent finds a direct-child marker but ignores a nested gra
 test("getScheduleLogEntryIndent reuses an existing entry indent or falls back to marker indent plus a tab", () => {
   const withEntries = [
     "- [ ] #task T ^t",
-    "\t- 🗓️ **Schedule log:**",
-    "\t\t- **2026-07-01** — a",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t\t- *2026-07-01* — a",
   ].join("\n");
   assert.equal(helpers.getScheduleLogEntryIndent(withEntries, 1), "\t\t");
 
-  const withoutEntries = ["- [ ] #task T ^t", "  - 🗓️ **Schedule log:**"].join(
+  const withoutEntries = ["- [ ] #task T ^t", "  - 🗓️ **SCHEDULE LOG**"].join(
     "\n",
   );
   assert.equal(helpers.getScheduleLogEntryIndent(withoutEntries, 1), "  \t");
@@ -6345,12 +6383,21 @@ test("planScheduleLogEntry creates, prepends, guards, and preserves blockquote c
   assert.equal(created.createdParent, true);
   assert.equal(created.insertLine, 1);
   assert.deepEqual(created.lineTexts, [
-    "\t- 🗓️ **Schedule log:**",
-    "\t- **2026-08-13 → 2026-08-20** — waiting on the API review to land",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t\t- *2026-08-13 → 2026-08-20* — waiting on the API review to land",
   ]);
 
+  // Regression guard: the entry must always be one indent unit deeper than
+  // the marker it belongs to, never a sibling of it.
+  const [markerLine, entryLine] = created.lineTexts;
+  assert.equal(
+    helpers.getBulletIndent(entryLine),
+    `${helpers.getBulletIndent(markerLine)}\t`,
+  );
+
   // A new marker is inserted as the last direct child, after any existing
-  // children, reusing an existing sibling's indentation.
+  // children, reusing an existing sibling's indentation; the entry nests one
+  // Tab deeper than that adopted indentation, giving the mixed "  \t" shape.
   const withOtherChild = [
     "- [ ] #task Ship [scheduled:: 2026-08-20] ^ship",
     "  - some existing note",
@@ -6361,16 +6408,16 @@ test("planScheduleLogEntry creates, prepends, guards, and preserves blockquote c
   });
   assert.equal(createdAfterNote.insertLine, 2);
   assert.deepEqual(createdAfterNote.lineTexts, [
-    "  - 🗓️ **Schedule log:**",
-    "  - **2026-08-20** — kickoff",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "  \t- *2026-08-20* — kickoff",
   ]);
 
   // Prepends a new entry above an existing one (newest first), reusing the
   // marker's own list-marker character and indentation.
   const existing = [
     "- [ ] #task Ship [scheduled:: 2026-08-20] ^ship",
-    "  * 🗓️ **Schedule log:**",
-    "    * **2026-08-06 → 2026-08-13** — was out sick",
+    "  * 🗓️ **SCHEDULE LOG**",
+    "    * *2026-08-06 → 2026-08-13* — was out sick",
   ].join("\n");
   const prepended = helpers.planScheduleLogEntry(existing, 0, {
     from: "2026-08-13",
@@ -6381,7 +6428,7 @@ test("planScheduleLogEntry creates, prepends, guards, and preserves blockquote c
   assert.equal(prepended.createdParent, false);
   assert.equal(prepended.insertLine, 2);
   assert.deepEqual(prepended.lineTexts, [
-    "    * **2026-08-13 → 2026-08-20** — back from sick leave",
+    "    * *2026-08-13 → 2026-08-20* — back from sick leave",
   ]);
 
   // Guards never throw.
@@ -6429,16 +6476,42 @@ test("planScheduleLogEntry creates, prepends, guards, and preserves blockquote c
     reason: "quoted context",
   });
   assert.deepEqual(inQuote.lineTexts, [
-    "> \t- 🗓️ **Schedule log:**",
-    "> \t- **2026-08-20** — quoted context",
+    "> \t- 🗓️ **SCHEDULE LOG**",
+    "> \t\t- *2026-08-20* — quoted context",
+  ]);
+});
+
+test("planScheduleLogEntry extends a legacy on-disk log whose one existing entry is a sibling of the marker", () => {
+  // This is the transitional shape sitting in the vault today: the marker
+  // uses the legacy spelling and its one entry is a sibling, not a child,
+  // because it was written before this nesting fix. The legacy marker is
+  // found and reused in place; because it has no children yet,
+  // getScheduleLogEntryIndent falls back to marker indent + one Tab, so the
+  // new entry is correctly nested even though the old sibling entry below it
+  // is not. That mixed shape is expected and is why the vault note itself is
+  // migrated by hand rather than auto-migrated by the plugin.
+  const legacy = [
+    "- [ ] #task Ship [scheduled:: 2026-09-06] ^ship",
+    "\t- 🗓️ **Schedule log:**",
+    "\t- **2026-08-09 → 2026-09-06** — Because I like it.",
+  ].join("\n");
+  const next = helpers.planScheduleLogEntry(legacy, 0, {
+    from: "2026-09-06",
+    to: "2026-09-20",
+    reason: "slipped again",
+  });
+  assert.equal(next.createdParent, false);
+  assert.equal(next.insertLine, 2);
+  assert.deepEqual(next.lineTexts, [
+    "\t\t- *2026-09-06 → 2026-09-20* — slipped again",
   ]);
 });
 
 test("counted scheduled reason logs one entry per changed task, prepends above an existing log, and skips unchanged tasks", () => {
   const input = [
     "- [ ] #task Alpha [scheduled:: 2026-07-01] ^alpha",
-    "  - 🗓️ **Schedule log:**",
-    "    - **2026-06-20 → 2026-07-01** — first push",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-06-20 → 2026-07-01* — first push",
     "- [ ] #task Beta [scheduled:: 2026-07-10] ^beta",
     "- [ ] #task Gamma [scheduled:: 2026-07-05] ^gamma",
   ].join("\n");
@@ -6464,13 +6537,13 @@ test("counted scheduled reason logs one entry per changed task, prepends above a
     plan.content,
     [
       "- [ ] #task Alpha [scheduled:: 2026-07-10] ^alpha",
-      "  - 🗓️ **Schedule log:**",
-      "    - **2026-07-01 → 2026-07-10** — sprint replan",
-      "    - **2026-06-20 → 2026-07-01** — first push",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "    - *2026-07-01 → 2026-07-10* — sprint replan",
+      "    - *2026-06-20 → 2026-07-01* — first push",
       "- [ ] #task Beta [scheduled:: 2026-07-10] ^beta",
       "- [ ] #task Gamma [scheduled:: 2026-07-10] ^gamma",
-      "\t- 🗓️ **Schedule log:**",
-      "\t- **2026-07-05 → 2026-07-10** — sprint replan",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-07-05 → 2026-07-10* — sprint replan",
     ].join("\n"),
   );
 });
@@ -6537,8 +6610,8 @@ test("setBulletPropertyValue writes an inline scheduled date plus a schedule log
     [
       "- [?] #task Ship the thing [scheduled:: 2026-08-20] ^ship",
       "  - some existing note",
-      "  - 🗓️ **Schedule log:**",
-      "  - **2026-08-13 → 2026-08-20** — waiting on the API review to land",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "  \t- *2026-08-13 → 2026-08-20* — waiting on the API review to land",
     ].join("\n"),
   );
   assert.match(notices.at(-1), /; created schedule log/);
@@ -6579,7 +6652,7 @@ test("setProjectNoteScheduledValue writes a schedule log entry under the ^prj ta
   assert.match(editor.content, /^scheduled: 2026-08-20$/m);
   assert.match(
     editor.content,
-    /- \[ \] #task Ship #hide \^prj\n\t- 🗓️ \*\*Schedule log:\*\*\n\t- \*\*2026-08-13 → 2026-08-20\*\* — waiting on the API review to land/,
+    /- \[ \] #task Ship #hide \^prj\n\t- 🗓️ \*\*SCHEDULE LOG\*\*\n\t\t- \*2026-08-13 → 2026-08-20\* — waiting on the API review to land/,
   );
   assert.match(notices.at(-1), /logged reason/);
 });

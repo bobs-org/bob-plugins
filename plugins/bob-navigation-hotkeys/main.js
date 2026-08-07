@@ -5360,6 +5360,415 @@ function isPomodoroNavigationTaskLine(lineText) {
   return POMODORO_PLACEHOLDER_RE.test(body) || hasPomodoroTimeRange(body);
 }
 
+// Checkbox statuses that make a top-level Pomodoro ledger entry closed.
+// Mirrors `pomodoro::open_ledger_task` in bob-cli (src/native/pomodoro.rs):
+// any single-character checkbox other than `x`/`X`/`-` counts as open.
+const POMODORO_LEDGER_CLOSED_STATUSES = new Set(["x", "X", "-"]);
+// Column-0 (`- [c] ...`) ledger line only — the same shape
+// `pomodoro::open_ledger_task` requires before it inspects the checkbox.
+const POMODORO_LEDGER_TOP_LEVEL_LINE_RE = /^-[ \t]+\[([^\]])\](?:[ \t]+(.*))?$/;
+
+// True for a top-level open Pomodoro ledger entry: a column-0 `- [c] ...` line
+// whose checkbox is not closed (`x`, `X`, or `-`). This is deliberately
+// broader than `isPomodoroNavigationTaskLine` above — it has no placeholder/
+// time-range requirement and it recognizes `[*]`/`[?]` as open — because it
+// mirrors `pomodoro::open_ledger_task`, the exact rule `bob task-status-hooks`
+// uses to decide which Pomodoro entries seed its promotion graph.
+function isOpenPomodoroLedgerEntryLine(lineText) {
+  const match = POMODORO_LEDGER_TOP_LEVEL_LINE_RE.exec(String(lineText || ""));
+  return Boolean(match && !POMODORO_LEDGER_CLOSED_STATUSES.has(match[1]));
+}
+
+// The line range of the first unfenced `## Pomodoros` heading and its section
+// body (up to but excluding the next unfenced level-two heading, or EOF).
+// Returns null when the note has no such section. Frontmatter and fenced code
+// are excluded via `getMarkdownLineContexts` so a heading-shaped line inside
+// either is never mistaken for the section boundary.
+function findPomodorosSectionRange(content) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const startLine = lines.findIndex(
+    (line, index) =>
+      !contexts[index].inFrontmatter &&
+      !contexts[index].inFence &&
+      isPomodorosHeading(line),
+  );
+  if (startLine === -1) {
+    return null;
+  }
+
+  let endLine = lines.length - 1;
+  for (let index = startLine + 1; index < lines.length; index += 1) {
+    if (!contexts[index].inFence && isLevelTwoHeading(lines[index])) {
+      endLine = index - 1;
+      break;
+    }
+  }
+
+  return Object.freeze({ startLine, endLine });
+}
+
+// Every open Pomodoro entry inside `section`, each with the line range of its
+// sub-bullets (`startLine`..`endLine`, inclusive, possibly empty). A closed
+// entry's block is skipped entirely: its child lines never satisfy the
+// column-0 entry regex, so they cannot be mistaken for entries themselves.
+function collectOpenPomodoroRanges(lines, contexts, section) {
+  if (!section) {
+    return [];
+  }
+
+  const ranges = [];
+  for (let line = section.startLine + 1; line <= section.endLine; line += 1) {
+    if (contexts[line] && contexts[line].inFence) {
+      continue;
+    }
+    if (!isOpenPomodoroLedgerEntryLine(lines[line])) {
+      continue;
+    }
+    const block = findCurrentBulletChildBlock(lines, line);
+    const endLine = Math.min(block.endLineExclusive - 1, section.endLine);
+    ranges.push(Object.freeze({ entryLine: line, startLine: line + 1, endLine }));
+  }
+  return ranges;
+}
+
+// Every `[[target#^id]]` / `![[target#^id]]` occurrence on one line, including
+// an optional leading run of `🍅 ` markers in its span so a stray marker is
+// never left orphaned when the link is removed. `struck` is true when the
+// link itself (not the marker) sits inside a `~~...~~` span, using the same
+// containment rule as `recoveryBlockReferences`.
+const POMODORO_BLOCK_LINK_RE =
+  /((?:🍅[ \t]+)*)(!)?\[\[([^|\]\n]*?)#\^([A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]/g;
+
+function collectPomodoroBlockLinkOccurrences(lineText) {
+  const line = String(lineText || "");
+  const strikeSpans = recoveryStrikethroughSpans(line);
+  const occurrences = [];
+  POMODORO_BLOCK_LINK_RE.lastIndex = 0;
+  let match = null;
+  while ((match = POMODORO_BLOCK_LINK_RE.exec(line)) !== null) {
+    const markerRun = match[1] || "";
+    const start = match.index;
+    const end = match.index + match[0].length;
+    const linkStart = start + markerRun.length;
+    const struck = strikeSpans.some(
+      (span) => linkStart >= span.start + 2 && end <= span.end - 2,
+    );
+    occurrences.push(
+      Object.freeze({
+        start,
+        end,
+        markerStart: markerRun ? start : null,
+        target: match[3].trim(),
+        blockId: match[4],
+        embedded: Boolean(match[2]),
+        struck,
+      }),
+    );
+  }
+  return occurrences;
+}
+
+// The trimmed body span of a list-item line (indent + marker + trailing
+// whitespace excluded on both ends), or null when the line is not a list item
+// or its body is empty.
+function pomodoroBulletBodyBounds(lineText) {
+  const line = String(lineText || "");
+  const match = PROJECT_LIST_ITEM_RE.exec(line);
+  if (!match) {
+    return null;
+  }
+  const start = match[0].length;
+  let end = line.length;
+  while (end > start && /[ \t]/.test(line[end - 1])) {
+    end -= 1;
+  }
+  return start < end ? Object.freeze({ start, end }) : null;
+}
+
+// True when one or more matched link occurrences make up a bullet's entire
+// body (only whitespace, if anything, between adjacent occurrences). Two
+// matched links on one otherwise-empty bullet still count as dedicated.
+function isDedicatedPomodoroLinkLine(lineText, occurrences) {
+  const bounds = pomodoroBulletBodyBounds(lineText);
+  const list = Array.isArray(occurrences) ? occurrences : [];
+  if (!bounds || list.length === 0) {
+    return false;
+  }
+  const sorted = list.slice().sort((left, right) => left.start - right.start);
+  if (
+    sorted[0].start !== bounds.start ||
+    sorted[sorted.length - 1].end !== bounds.end
+  ) {
+    return false;
+  }
+  const line = String(lineText || "");
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (line.slice(sorted[index - 1].end, sorted[index].start).trim() !== "") {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Resolve `{ path, blockId }` deferred-pomodoro targets from a set of task
+// line numbers (as produced by the writers below). A line with no trailing
+// `^block-id` cannot be linked from a Pomodoro sub-bullet, so it contributes
+// nothing.
+function deferredPomodoroTargetsFromLines(sourcePath, lines, lineNumbers) {
+  const path = normalizeVaultRelativePath(sourcePath);
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const targets = [];
+  for (const lineNumber of Array.isArray(lineNumbers) ? lineNumbers : []) {
+    const blockId = getTrailingBlockId(String(sourceLines[lineNumber] || ""));
+    if (blockId) {
+      targets.push(Object.freeze({ path, blockId }));
+    }
+  }
+  return Object.freeze(targets);
+}
+
+function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
+  return Object.freeze({
+    content,
+    changed: false,
+    removedBulletCount: 0,
+    removedLinkCount: 0,
+    removedTargets: Object.freeze([]),
+    removedLineRanges: Object.freeze([]),
+    unresolvedCount,
+  });
+}
+
+// Plan the removal of every live link (in today's daily note, under an open
+// Pomodoro entry) to one of `targets`. `options` carries `dailyPath` (the
+// daily note's own vault-relative path, used to resolve a same-note
+// `[[#^id]]` link) and `noteIndex` (from `createScheduledRecoveryNoteIndex`,
+// used to resolve `[[target#^id]]` links to a vault path). Struck links and
+// links under a closed/cancelled entry are never candidates. A dedicated link
+// bullet (the link, its marker, and nothing else) is removed subtree and all;
+// otherwise only the matched token is removed from its bullet.
+function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
+  const snapshot = String(dailyContent || "");
+  const targetList = Array.from(targets || []).filter(
+    (target) => target && target.path && target.blockId,
+  );
+  if (targetList.length === 0) {
+    return emptyDeferredPomodoroLinkCleanup(snapshot);
+  }
+
+  const { lines, lineEnding } = splitMarkdownContent(snapshot);
+  const contexts = getMarkdownLineContexts(snapshot);
+  const section = findPomodorosSectionRange(snapshot);
+  if (!section) {
+    return emptyDeferredPomodoroLinkCleanup(snapshot);
+  }
+  const openRanges = collectOpenPomodoroRanges(lines, contexts, section);
+  if (openRanges.length === 0) {
+    return emptyDeferredPomodoroLinkCleanup(snapshot);
+  }
+
+  const dailyPath = normalizeVaultRelativePath(options.dailyPath);
+  const noteIndex = options.noteIndex || null;
+  const targetKeys = new Set(
+    targetList.map(
+      (target) =>
+        `${normalizeVaultRelativePath(target.path)} ${target.blockId}`,
+    ),
+  );
+
+  const lineStarts = [];
+  let runningOffset = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    lineStarts.push(runningOffset);
+    runningOffset += lines[index].length + lineEnding.length;
+  }
+
+  const matches = [];
+  const removedTargetKeys = new Set();
+  let unresolvedCount = 0;
+
+  for (const range of openRanges) {
+    for (let line = range.startLine; line <= range.endLine; line += 1) {
+      if (contexts[line] && contexts[line].inFence) {
+        continue;
+      }
+      const lineText = String(lines[line] || "");
+      const occurrences = collectPomodoroBlockLinkOccurrences(lineText);
+      for (const occurrence of occurrences) {
+        if (occurrence.struck) {
+          continue;
+        }
+        const resolved = noteIndex
+          ? resolveScheduledRecoveryNote(noteIndex, dailyPath, occurrence.target)
+          : null;
+        if (!resolved) {
+          unresolvedCount += 1;
+          continue;
+        }
+        const key = `${resolved} ${occurrence.blockId}`;
+        if (!targetKeys.has(key)) {
+          continue;
+        }
+        matches.push({
+          line,
+          lineText,
+          occurrence,
+          start: lineStarts[line] + occurrence.start,
+          end: lineStarts[line] + occurrence.end,
+        });
+        removedTargetKeys.add(key);
+      }
+    }
+  }
+
+  if (matches.length === 0) {
+    return emptyDeferredPomodoroLinkCleanup(snapshot, unresolvedCount);
+  }
+
+  const matchesByLine = new Map();
+  for (const match of matches) {
+    if (!matchesByLine.has(match.line)) {
+      matchesByLine.set(match.line, []);
+    }
+    matchesByLine.get(match.line).push(match);
+  }
+
+  const subtreeCandidates = [];
+  for (const [line, lineMatches] of matchesByLine) {
+    if (
+      !isDedicatedPomodoroLinkLine(
+        lineMatches[0].lineText,
+        lineMatches.map((entry) => entry.occurrence),
+      )
+    ) {
+      continue;
+    }
+    const block = findCurrentBulletChildBlock(lines, line);
+    const end =
+      block.endLineExclusive < lines.length
+        ? lineStarts[block.endLineExclusive]
+        : snapshot.length;
+    subtreeCandidates.push({
+      start: lineStarts[line],
+      end,
+      replacement: "",
+      startLine: line,
+      endLineExclusive: block.endLineExclusive,
+    });
+  }
+  subtreeCandidates.sort(
+    (left, right) => left.start - right.start || right.end - left.end,
+  );
+
+  // Merge overlapping or contained candidates into one edit (adjacent
+  // dedicated bullets can overlap once the EOF adjustment below is applied).
+  const subtreeEdits = [];
+  for (const candidate of subtreeCandidates) {
+    const last = subtreeEdits[subtreeEdits.length - 1];
+    if (last && candidate.start <= last.end) {
+      last.end = Math.max(last.end, candidate.end);
+      last.endLineExclusive = Math.max(
+        last.endLineExclusive,
+        candidate.endLineExclusive,
+      );
+      continue;
+    }
+    subtreeEdits.push({ ...candidate });
+  }
+
+  // A merged edit reaching EOF removes each deleted line's own trailing
+  // separator except the very last one, which has none — so its *leading*
+  // separator (the newline ending the line before the run) is removed
+  // instead, to avoid leaving a dangling trailing blank line.
+  for (const edit of subtreeEdits) {
+    if (edit.endLineExclusive >= lines.length && edit.startLine > 0) {
+      edit.start -= lineEnding.length;
+    }
+  }
+
+  const tokenMatches = matches.filter(
+    (match) =>
+      !subtreeEdits.some(
+        (edit) => edit.start <= match.start && edit.end >= match.end,
+      ),
+  );
+  const tokenMatchesByLine = new Map();
+  for (const match of tokenMatches) {
+    if (!tokenMatchesByLine.has(match.line)) {
+      tokenMatchesByLine.set(match.line, []);
+    }
+    tokenMatchesByLine.get(match.line).push(match);
+  }
+
+  const lineEdits = [];
+  for (const [line, lineMatches] of tokenMatchesByLine) {
+    const lineStart = lineStarts[line];
+    const lineText = String(lines[line] || "");
+    let nextLine = lineText;
+    const sorted = lineMatches
+      .slice()
+      .sort((left, right) => right.occurrence.start - left.occurrence.start);
+    for (const match of sorted) {
+      nextLine =
+        nextLine.slice(0, match.occurrence.start) +
+        nextLine.slice(match.occurrence.end);
+    }
+    // Collapse and trim only the bullet's body — the leading indent and list
+    // marker must survive untouched even when they happen to contain runs of
+    // spaces (e.g. a wide indent).
+    const prefixLength = (PROJECT_LIST_ITEM_RE.exec(nextLine) || [""])[0].length;
+    nextLine =
+      nextLine.slice(0, prefixLength) +
+      nextLine
+        .slice(prefixLength)
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/[ \t]+$/, "");
+    lineEdits.push({
+      start: lineStart,
+      end: lineStart + lineText.length,
+      replacement: nextLine,
+    });
+  }
+
+  const edits = [...subtreeEdits, ...lineEdits].sort(
+    (left, right) => right.start - left.start,
+  );
+  let nextContent = snapshot;
+  for (const edit of edits) {
+    nextContent =
+      nextContent.slice(0, edit.start) +
+      edit.replacement +
+      nextContent.slice(edit.end);
+  }
+
+  return Object.freeze({
+    content: nextContent,
+    changed: nextContent !== snapshot,
+    // Counts dedicated bullets found, not text-splice operations — adjacent
+    // dedicated bullets can merge into one contiguous edit above.
+    removedBulletCount: subtreeCandidates.length,
+    removedLinkCount: matches.length,
+    removedTargets: Object.freeze(
+      targetList.filter((target) =>
+        removedTargetKeys.has(
+          `${normalizeVaultRelativePath(target.path)} ${target.blockId}`,
+        ),
+      ),
+    ),
+    removedLineRanges: Object.freeze(
+      subtreeEdits.map((edit) =>
+        Object.freeze({
+          startLine: edit.startLine,
+          endLineExclusive: edit.endLineExclusive,
+        }),
+      ),
+    ),
+    unresolvedCount,
+  });
+}
+
 // Zero-based line indices of every open `#task` line, skipping leading
 // frontmatter and fenced code blocks with the same state machine used for
 // section headers so task-shaped lines inside YAML, examples, and `tasks`
@@ -10176,6 +10585,7 @@ function planProjectTaskSchedules(
       deferredRecoveryTaskCount: 0,
       ambiguousTaskLines: Object.freeze([]),
       taskCount: 0,
+      futureScheduledTaskLines: Object.freeze([]),
     });
   }
 
@@ -10194,6 +10604,7 @@ function planProjectTaskSchedules(
   let blockedTaskCount = 0;
   let projectHideChanged = false;
   const ambiguousTaskLines = [];
+  const futureScheduledTaskLines = [];
   const recoveryCounts = emptyScheduledRecoveryCounts();
   tasks.forEach((task) => {
     if (task.isProjectTask) {
@@ -10209,6 +10620,13 @@ function planProjectTaskSchedules(
         projectHideChanged =
           getWholeTaskTagSpans(nextLine, PROJECT_HIDE_TAG).length !==
           getWholeTaskTagSpans(task.text, PROJECT_HIDE_TAG).length;
+      }
+      // `^prj` never receives an inline `scheduled` field — its schedule lives
+      // in frontmatter only — so it is never blocked by the branch below. It
+      // still needs pruning from today's open Pomodoros when the project
+      // itself moves to a future date.
+      if (future) {
+        futureScheduledTaskLines.push(task.line);
       }
       return;
     }
@@ -10243,6 +10661,7 @@ function planProjectTaskSchedules(
         finalFields.length === 1 &&
         isFutureInlineScheduledValue(finalFields[0].value, today);
       if (futureTaskSchedule) {
+        futureScheduledTaskLines.push(task.line);
         const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
         if (blockedLine !== nextLine) {
           nextLine = blockedLine;
@@ -10282,6 +10701,7 @@ function planProjectTaskSchedules(
     taskCount: tasks.length,
     future,
     projectHideChanged,
+    futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
   });
 }
 
@@ -10370,6 +10790,7 @@ function planProjectScheduledUpdate(
     changedTaskCount: propagation.changedTaskCount,
     scheduledTaskCount: propagation.scheduledTaskCount,
     removedHideTaskCount: propagation.removedHideTaskCount,
+    futureScheduledTaskLines: propagation.futureScheduledTaskLines,
     blockedTaskCount: propagation.blockedTaskCount,
     recoveredReadyTaskCount: propagation.recoveredReadyTaskCount,
     recoveredNextTaskCount: propagation.recoveredNextTaskCount,
@@ -10739,6 +11160,9 @@ function planCountedBulletPropertyBatch(
   const recoveryCounts = emptyScheduledRecoveryCounts();
   let projectPropertyChanged = false;
   let projectScheduledValue = "";
+  // Original (pre-batch) line numbers, matching the convention `target.line`
+  // and `recoveryByLine` already use throughout this function.
+  const futureScheduledTaskLines = [];
 
   if (projectTargets.length > 0) {
     const firstProject = projectTargets[0];
@@ -10783,6 +11207,7 @@ function planCountedBulletPropertyBatch(
       projectPropertyChanged =
         !frontmatter.scheduledDefined ||
         frontmatter.scheduledValue !== projectScheduledValue;
+      futureScheduledTaskLines.push(...projectPlan.futureScheduledTaskLines);
     } else if (frontmatter.scheduledDefined) {
       const projectPlan = planProjectScheduledDelete(
         text,
@@ -10862,6 +11287,7 @@ function planCountedBulletPropertyBatch(
             options.today || new Date(),
           )
         ) {
+          futureScheduledTaskLines.push(target.line);
           const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
           if (blockedLine !== nextLine) {
             nextLine = blockedLine;
@@ -10908,6 +11334,7 @@ function planCountedBulletPropertyBatch(
       nextLine = result.line;
       targetChanged = result.changed;
       if (shouldBlockInlineTasks) {
+        futureScheduledTaskLines.push(target.line);
         const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
         if (blockedLine !== nextLine) {
           nextLine = blockedLine;
@@ -11032,6 +11459,7 @@ function planCountedBulletPropertyBatch(
     recoveredInProgressTaskCount: recoveryCounts.inProgress,
     stillBlockedTaskCount: recoveryCounts.stillBlocked,
     deferredRecoveryTaskCount: recoveryCounts.deferred,
+    futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
   });
 }
 
@@ -11649,6 +12077,16 @@ function getPriorityNoticeOutcomeParts(outcome = {}, scope = "task") {
     );
   }
   parts.push(...scheduledRecoveryNoticeParts(getPriorityNoticeRecoveryCounts(outcome)));
+  const removedPomodoroLinkCount = normalizePriorityNoticeCount(
+    outcome.removedPomodoroLinkCount,
+  );
+  if (removedPomodoroLinkCount > 0) {
+    parts.push(
+      `removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`,
+    );
+  } else if (outcome.pomodoroPruneFailed) {
+    parts.push("Pomodoro links not removed");
+  }
   return Object.freeze(parts);
 }
 
@@ -11659,7 +12097,10 @@ function getPriorityNoticeChipTone(text) {
   if (/Blocked$/.test(text)) {
     return "warn";
   }
-  if (/^(scheduled|removed #hide)/.test(text)) {
+  if (text === "Pomodoro links not removed") {
+    return "warn";
+  }
+  if (/^(scheduled|removed #hide|removed \d+ Pomodoro links?)/.test(text)) {
     return "info";
   }
   if (/^logged reason/.test(text)) {
@@ -11676,6 +12117,13 @@ function getPriorityNoticeChipText(text) {
   const loggedMatch = /^logged reason(?: on (\d+) tasks?)?$/.exec(text);
   if (loggedMatch) {
     return loggedMatch[1] ? `${loggedMatch[1]} logged` : "logged";
+  }
+  const pomodoroRemovedMatch = /^removed (\d+) Pomodoro links?$/.exec(text);
+  if (pomodoroRemovedMatch) {
+    return `${pomodoroRemovedMatch[1]} removed`;
+  }
+  if (text === "Pomodoro links not removed") {
+    return "not removed";
   }
   return text;
 }
@@ -14668,6 +15116,132 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return leaf && leaf.view ? leaf.view.editor || null : null;
   }
 
+  // Snapshot today's daily note ahead of a scheduling write that will defer a
+  // task to the future. Returns null (clean no-op for the caller) when the
+  // vault API is unavailable, open Markdown buffers are ambiguous, there is no
+  // daily note for `today`, or the read throws. When the edited note (
+  // `options.sourcePath`) *is* today's daily note, `sameFile` is true and
+  // `file`/`editor`/`content` are left unused — the caller already holds the
+  // note's content and folds the prune into its own single write instead of
+  // reading or writing the daily note separately here.
+  async readDeferredPomodoroSnapshot(app, options = {}) {
+    const vault = app && app.vault;
+    if (!vault || typeof vault.getMarkdownFiles !== "function") {
+      return null;
+    }
+    const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+    const today = options.today instanceof Date ? options.today : new Date();
+    const buffers = getOpenMarkdownBufferContents(app);
+    if (buffers.ambiguous) {
+      return null;
+    }
+    if (sourcePath) {
+      buffers.set(sourcePath, String(options.sourceContent || ""));
+    }
+    let vaultFiles;
+    try {
+      vaultFiles = vault.getMarkdownFiles() || [];
+    } catch (error) {
+      return null;
+    }
+    const dailyPath = scheduledRecoveryDailyPaths(vaultFiles, today).current;
+    if (!dailyPath) {
+      return null;
+    }
+    const noteIndex = createScheduledRecoveryNoteIndex(
+      vaultFiles.map((file) => ({
+        path: normalizeVaultRelativePath(file.path),
+      })),
+    );
+    if (dailyPath === sourcePath) {
+      return Object.freeze({
+        dailyPath,
+        file: null,
+        editor: null,
+        content: null,
+        noteIndex,
+        sameFile: true,
+      });
+    }
+
+    const dailyFile = vaultFiles.find(
+      (file) => normalizeVaultRelativePath(file.path) === dailyPath,
+    );
+    if (!dailyFile) {
+      return null;
+    }
+    const editor = this.getOpenMarkdownEditorForPath(dailyPath);
+    let content = null;
+    if (buffers.has(dailyPath)) {
+      content = buffers.get(dailyPath);
+    } else if (editor && typeof editor.getValue === "function") {
+      content = String(editor.getValue() || "");
+    } else if (typeof vault.cachedRead === "function") {
+      try {
+        content = String((await vault.cachedRead(dailyFile)) || "");
+      } catch (error) {
+        return null;
+      }
+    }
+    if (content === null) {
+      return null;
+    }
+    return Object.freeze({
+      dailyPath,
+      file: dailyFile,
+      editor,
+      content,
+      noteIndex,
+      sameFile: false,
+    });
+  }
+
+  // Apply a `planDeferredPomodoroLinkCleanup` plan to the (separate-file)
+  // daily note captured by `snapshot`, guarded by the same preimage-check
+  // pattern as `writeTaskMoveChange`. Never throws: the schedule write this
+  // follows is already durable, so a prune failure is reported and dropped,
+  // never retried and never allowed to roll the schedule back. Returns true
+  // for a same-file snapshot or an unchanged plan, since the caller is
+  // responsible for folding those into its own primary write instead.
+  async writeDeferredPomodoroCleanup(snapshot, plan) {
+    if (!snapshot || snapshot.sameFile || !plan || !plan.changed) {
+      return true;
+    }
+    const { dailyPath, file } = snapshot;
+    try {
+      const editor =
+        snapshot.editor && typeof snapshot.editor.getValue === "function"
+          ? snapshot.editor
+          : this.getOpenMarkdownEditorForPath(dailyPath);
+      if (editor && typeof editor.getValue === "function") {
+        if (String(editor.getValue() || "") !== snapshot.content) {
+          return false;
+        }
+        const applied = applyEditorContentTransaction(
+          editor,
+          snapshot.content,
+          plan.content,
+        );
+        return applied && String(editor.getValue() || "") === plan.content;
+      }
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.process !== "function" || !file) {
+        return false;
+      }
+      let transformed = false;
+      await vault.process(file, (content) => {
+        if (String(content || "") !== snapshot.content) {
+          throw new Error("Daily note preimage changed");
+        }
+        transformed = true;
+        return plan.content;
+      });
+      return transformed;
+    } catch (error) {
+      return false;
+    }
+  }
+
   async toggleCurrentLineTransclusions(cm) {
     const cursor = getEditorCursor(cm);
     if (!cursor) {
@@ -15086,16 +15660,78 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
       return false;
     }
-    const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+
+    let finalContent = plan.content;
+    let finalCursorLine = plan.cursorLine;
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    if (plan.futureScheduledTaskLines.length > 0) {
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: filePath,
+        sourceContent: writeContext.content,
+        today,
+      });
+      const guarded = this.getCountedTaskWriteContext(cm, filePath, session);
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return false;
+      }
+      if (pomodoroSnapshot) {
+        const targets = deferredPomodoroTargetsFromLines(
+          filePath,
+          splitMarkdownContent(writeContext.content).lines,
+          plan.futureScheduledTaskLines,
+        );
+        if (targets.length > 0) {
+          if (pomodoroSnapshot.sameFile) {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              finalContent,
+              targets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+            if (dailyCleanupPlan.changed) {
+              const linesRemovedBeforeCursor =
+                dailyCleanupPlan.removedLineRanges.reduce(
+                  (total, range) =>
+                    range.endLineExclusive <= plan.cursorLine
+                      ? total + (range.endLineExclusive - range.startLine)
+                      : total,
+                  0,
+                );
+              finalContent = dailyCleanupPlan.content;
+              finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;
+            }
+          } else {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              pomodoroSnapshot.content,
+              targets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+          }
+        }
+      }
+    }
+
+    const finalLine = splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
     try {
       if (
-        plan.changed &&
+        finalContent !== writeContext.content &&
         !applyEditorContentTransaction(
           cm,
           writeContext.content,
-          plan.content,
+          finalContent,
           {
-            line: plan.cursorLine,
+            line: finalCursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
         )
@@ -15106,6 +15742,25 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice("Could not update counted task properties; no tasks were updated");
       return false;
     }
+
+    let removedPomodoroLinkCount = 0;
+    let pomodoroPruneFailed = false;
+    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
+      if (pomodoroSnapshot.sameFile) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        const written = await this.writeDeferredPomodoroCleanup(
+          pomodoroSnapshot,
+          dailyCleanupPlan,
+        );
+        if (written) {
+          removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+        } else {
+          pomodoroPruneFailed = true;
+        }
+      }
+    }
+
     const propagationSuffix =
       plan.propagatedScheduleTaskCount > 0
         ? `; scheduled ${formatCountLabel(
@@ -15149,6 +15804,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               : "logged reason on"
           } ${formatCountLabel(plan.scheduleLoggedTaskCount, "task")}`
         : "";
+    const pomodoroPruneSuffix =
+      removedPomodoroLinkCount > 0
+        ? `; removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`
+        : pomodoroPruneFailed
+          ? "; Pomodoro links not removed"
+          : "";
     new Notice(
       `${name} → ${normalizeBulletPropertyValue(value)} on ${formatCountLabel(
         plan.changedTaskCount,
@@ -15156,7 +15817,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}`,
+      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${pomodoroPruneSuffix}`,
     );
     return true;
   }
@@ -15271,17 +15932,78 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    let finalContent = plan.content;
+    let finalCursorLine = plan.cursorLine;
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    if (plan.futureScheduledTaskLines.length > 0) {
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: filePath,
+        sourceContent: writeContext.content,
+        today: baseDate,
+      });
+      const guarded = this.getCountedTaskWriteContext(cm, filePath, session);
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return false;
+      }
+      if (pomodoroSnapshot) {
+        const targets = deferredPomodoroTargetsFromLines(
+          filePath,
+          splitMarkdownContent(writeContext.content).lines,
+          plan.futureScheduledTaskLines,
+        );
+        if (targets.length > 0) {
+          if (pomodoroSnapshot.sameFile) {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              finalContent,
+              targets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+            if (dailyCleanupPlan.changed) {
+              const linesRemovedBeforeCursor =
+                dailyCleanupPlan.removedLineRanges.reduce(
+                  (total, range) =>
+                    range.endLineExclusive <= plan.cursorLine
+                      ? total + (range.endLineExclusive - range.startLine)
+                      : total,
+                  0,
+                );
+              finalContent = dailyCleanupPlan.content;
+              finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;
+            }
+          } else {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              pomodoroSnapshot.content,
+              targets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+          }
+        }
+      }
+    }
+
     const finalLine =
-      splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
+      splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
     try {
       if (
-        plan.changed &&
+        finalContent !== writeContext.content &&
         !applyEditorContentTransaction(
           cm,
           writeContext.content,
-          plan.content,
+          finalContent,
           {
-            line: plan.cursorLine,
+            line: finalCursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
         )
@@ -15291,6 +16013,24 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     } catch (error) {
       new Notice("Could not update counted task priorities; no tasks were updated");
       return false;
+    }
+
+    let removedPomodoroLinkCount = 0;
+    let pomodoroPruneFailed = false;
+    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
+      if (pomodoroSnapshot.sameFile) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        const written = await this.writeDeferredPomodoroCleanup(
+          pomodoroSnapshot,
+          dailyCleanupPlan,
+        );
+        if (written) {
+          removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+        } else {
+          pomodoroPruneFailed = true;
+        }
+      }
     }
 
     showPriorityNotice(
@@ -15315,6 +16055,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           stillBlockedTaskCount: plan.stillBlockedTaskCount,
           deferredRecoveryTaskCount: plan.deferredRecoveryTaskCount,
           scheduleLoggedTaskCount: plan.scheduleLoggedTaskCount,
+          removedPomodoroLinkCount,
+          pomodoroPruneFailed,
         },
       }),
       options,
@@ -15643,7 +16385,73 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
     }
 
-    const finalContent = plannedSource.lines.join(plannedSource.lineEnding);
+    let finalContent = plannedSource.lines.join(plannedSource.lineEnding);
+    let finalCursorLine = plan.cursorLine;
+
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    if (plan.futureScheduledTaskLines.length > 0) {
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: filePath,
+        sourceContent: writeContext.content,
+        today,
+      });
+      const guarded = this.getProjectScheduledWriteContext(
+        cm,
+        cursor,
+        filePath,
+        expectedLine,
+        expectedValue,
+      );
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active project note changed; scheduled was not updated"
+            : guarded.error,
+        );
+        return false;
+      }
+      if (pomodoroSnapshot) {
+        const targets = deferredPomodoroTargetsFromLines(
+          filePath,
+          splitMarkdownContent(writeContext.content).lines,
+          plan.futureScheduledTaskLines,
+        );
+        if (targets.length > 0) {
+          if (pomodoroSnapshot.sameFile) {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              finalContent,
+              targets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+            if (dailyCleanupPlan.changed) {
+              const linesRemovedBeforeCursor =
+                dailyCleanupPlan.removedLineRanges.reduce(
+                  (total, range) =>
+                    range.endLineExclusive <= plan.cursorLine
+                      ? total + (range.endLineExclusive - range.startLine)
+                      : total,
+                  0,
+                );
+              finalContent = dailyCleanupPlan.content;
+              finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;
+            }
+          } else {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              pomodoroSnapshot.content,
+              targets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+          }
+        }
+      }
+    }
 
     try {
       if (
@@ -15653,7 +16461,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           writeContext.content,
           finalContent,
           {
-            line: plan.cursorLine,
+            line: finalCursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
         )
@@ -15663,6 +16471,32 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     } catch (error) {
       new Notice("Could not update project scheduled");
       return false;
+    }
+
+    let removedPomodoroLinkCount = 0;
+    let pomodoroPruneFailed = false;
+    if (
+      dailyCleanupPlan &&
+      dailyCleanupPlan.changed &&
+      pomodoroSnapshot &&
+      !pomodoroSnapshot.sameFile
+    ) {
+      const written = await this.writeDeferredPomodoroCleanup(
+        pomodoroSnapshot,
+        dailyCleanupPlan,
+      );
+      if (written) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        pomodoroPruneFailed = true;
+      }
+    } else if (
+      dailyCleanupPlan &&
+      dailyCleanupPlan.changed &&
+      pomodoroSnapshot &&
+      pomodoroSnapshot.sameFile
+    ) {
+      removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
     }
 
     const parts = [`scheduled → ${plan.scheduled}`];
@@ -15716,12 +16550,20 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           ambiguousTaskCount: plan.ambiguousTaskLines.length,
           recoveryCounts,
           scheduleLogOutcome,
+          removedPomodoroLinkCount,
+          pomodoroPruneFailed,
         }),
         options,
       );
     } else {
+      const pomodoroPruneSuffix =
+        removedPomodoroLinkCount > 0
+          ? `; removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`
+          : pomodoroPruneFailed
+            ? "; Pomodoro links not removed"
+            : "";
       new Notice(
-        `${parts.join("; ")}${scheduledRecoveryNoticeSuffix(recoveryCounts)}`,
+        `${parts.join("; ")}${scheduledRecoveryNoticeSuffix(recoveryCounts)}${pomodoroPruneSuffix}`,
       );
     }
     return true;
@@ -15851,16 +16693,30 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       hasScheduledValue &&
       isDueInlineScheduledValue(normalizedScheduledValue, today) &&
       !isProjectLifecycleTaskLine(lineText);
+    const shouldPrune =
+      hasScheduledValue &&
+      isFutureInlineScheduledValue(normalizedScheduledValue, today) &&
+      !isProjectLifecycleTaskLine(lineText);
     let recovery = null;
-    if (shouldRecover) {
-      const recoveryByLine = await buildTargetScheduledRecoveryByLine(
-        this.app,
-        writeContext.filePath,
-        writeContext.content,
-        [cursor.line],
-        today,
-      );
-      recovery = recoveryByLine.get(cursor.line);
+    let pomodoroSnapshot = null;
+    if (shouldRecover || shouldPrune) {
+      if (shouldRecover) {
+        const recoveryByLine = await buildTargetScheduledRecoveryByLine(
+          this.app,
+          writeContext.filePath,
+          writeContext.content,
+          [cursor.line],
+          today,
+        );
+        recovery = recoveryByLine.get(cursor.line);
+      }
+      if (shouldPrune) {
+        pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+          sourcePath: writeContext.filePath,
+          sourceContent: writeContext.content,
+          today,
+        });
+      }
       const guarded = this.getInlinePropertyWriteContext(cm, cursor, options);
       if (
         !guarded.valid ||
@@ -15894,11 +16750,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     let nextLine = result.line;
     let blocked = false;
     let recoveryOutcome = null;
-    if (
-      hasScheduledValue &&
-      isFutureInlineScheduledValue(normalizedScheduledValue, today) &&
-      !isProjectLifecycleTaskLine(lineText)
-    ) {
+    if (shouldPrune) {
       const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
       blocked = blockedLine !== nextLine;
       nextLine = blockedLine;
@@ -15911,7 +16763,70 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       recoveryOutcome = reconciliation.outcome;
     }
 
-    if (
+    // When the deferred task's live Pomodoro links sit in this same note, the
+    // property edit and the prune are folded into one editor transaction below
+    // instead of two, so they land in a single undo group (edge case: the
+    // source note is today's daily note).
+    let dailyCleanupPlan = null;
+    let foldedDailyContent = null;
+    let effectiveCursorLine = cursor.line;
+    if (shouldPrune && pomodoroSnapshot) {
+      const blockId = getTrailingBlockId(nextLine);
+      const targets = blockId
+        ? [
+            Object.freeze({
+              path: normalizeVaultRelativePath(writeContext.filePath),
+              blockId,
+            }),
+          ]
+        : [];
+      if (targets.length > 0) {
+        if (pomodoroSnapshot.sameFile) {
+          const merged = splitMarkdownContent(writeContext.content);
+          merged.lines[cursor.line] = nextLine;
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            merged.lines.join(merged.lineEnding),
+            targets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
+          );
+          if (dailyCleanupPlan.changed) {
+            foldedDailyContent = dailyCleanupPlan.content;
+          }
+        } else {
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            pomodoroSnapshot.content,
+            targets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
+          );
+        }
+      }
+    }
+
+    if (foldedDailyContent !== null) {
+      const linesRemovedBeforeCursor = dailyCleanupPlan.removedLineRanges.reduce(
+        (total, range) =>
+          range.endLineExclusive <= cursor.line
+            ? total + (range.endLineExclusive - range.startLine)
+            : total,
+        0,
+      );
+      effectiveCursorLine = cursor.line - linesRemovedBeforeCursor;
+      if (
+        !applyEditorContentTransaction(cm, writeContext.content, foldedDailyContent, {
+          line: effectiveCursorLine,
+          ch: Math.min(Math.max(cursor.ch, 0), nextLine.length),
+        })
+      ) {
+        new Notice("Could not update bullet property");
+        return false;
+      }
+    } else if (
       nextLine !== lineText &&
       !replaceEditorLine(cm, cursor.line, lineText, nextLine)
     ) {
@@ -15919,11 +16834,27 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    let removedPomodoroLinkCount = 0;
+    let pomodoroPruneFailed = false;
+    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot && !pomodoroSnapshot.sameFile) {
+      const written = await this.writeDeferredPomodoroCleanup(
+        pomodoroSnapshot,
+        dailyCleanupPlan,
+      );
+      if (written) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        pomodoroPruneFailed = true;
+      }
+    } else if (foldedDailyContent !== null) {
+      removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+    }
+
     let scheduleLogOutcome = null;
     if (hasScheduleLogReasonInput(options.scheduleLog)) {
       const scheduleLogPlan = planScheduleLogEntry(
         String(cm.getValue() || ""),
-        cursor.line,
+        effectiveCursorLine,
         options.scheduleLog,
       );
       scheduleLogOutcome = getScheduleLogWriteOutcome(
@@ -15934,7 +16865,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     setEditorCursorSafely(
       cm,
-      cursor.line,
+      effectiveCursorLine,
       Math.min(Math.max(cursor.ch, 0), nextLine.length),
     );
     const firstEdit = Array.isArray(edits) ? edits[0] : null;
@@ -15957,6 +16888,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           recoveryOutcome,
           recoveryCounts,
           scheduleLogOutcome,
+          removedPomodoroLinkCount,
+          pomodoroPruneFailed,
         }),
         options,
       );
@@ -15971,10 +16904,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               : scheduleLogOutcome === "guard-failed"
                 ? "; schedule log not written"
                 : "";
+      const pomodoroPruneSuffix =
+        removedPomodoroLinkCount > 0
+          ? `; removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`
+          : pomodoroPruneFailed
+            ? "; Pomodoro links not removed"
+            : "";
       new Notice(
         `${noticeText}${
           blocked ? "; marked task Blocked" : ""
-        }${scheduledRecoveryNoticeSuffix(recoveryCounts)}${scheduleLogSuffix}`,
+        }${scheduledRecoveryNoticeSuffix(recoveryCounts)}${scheduleLogSuffix}${pomodoroPruneSuffix}`,
       );
     }
     return true;
@@ -16113,6 +17052,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
                 outcome.scheduleLogOutcome === "created"
                   ? 1
                   : 0,
+              removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
+              pomodoroPruneFailed: outcome.pomodoroPruneFailed,
             },
           }),
         // Rebuild an existing schedules field after the priority, matching the
@@ -20478,6 +21419,8 @@ module.exports.helpers = {
   recentPomodoroReferences,
   canonicalRecoveryDailyDate,
   scheduledRecoveryDailyPaths,
+  createScheduledRecoveryNoteIndex,
+  resolveScheduledRecoveryNote,
   computeScheduledRecoveryRanks,
   buildScheduledRecoveryIndex,
   getScheduledRecoveryMetadata,
@@ -20493,6 +21436,15 @@ module.exports.helpers = {
   isLevelTwoHeading,
   hasPomodoroTimeRange,
   isPomodoroNavigationTaskLine,
+  POMODORO_LEDGER_CLOSED_STATUSES,
+  isOpenPomodoroLedgerEntryLine,
+  findPomodorosSectionRange,
+  collectOpenPomodoroRanges,
+  collectPomodoroBlockLinkOccurrences,
+  pomodoroBulletBodyBounds,
+  isDedicatedPomodoroLinkLine,
+  deferredPomodoroTargetsFromLines,
+  planDeferredPomodoroLinkCleanup,
   getOpenObsidianTaskLines,
   getOpenTaskNavigationLines,
   getOpenObsidianTaskJumpLine,
@@ -20574,6 +21526,9 @@ module.exports.helpers = {
   formatRelativeDayRange,
   getPriorityLevelIconName,
   rollPriorityScheduledDate,
+  getPriorityNoticeOutcomeParts,
+  getPriorityNoticeChipTone,
+  getPriorityNoticeChipText,
   buildPriorityNoticeModel,
   formatPriorityNoticeText,
   renderPriorityNoticeFragment,

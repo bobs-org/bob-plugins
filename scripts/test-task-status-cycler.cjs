@@ -3029,3 +3029,240 @@ test("Vim Ctrl+Enter dispatches task transitions and restores a reopened identit
     }
   }
 });
+
+test("Ctrl+Enter on a task line wrapping an embedded transclusion closes the source task and recovers its dependents", async () => {
+  const blockers = "- [ ] #task ![[Source#^target]] [created:: 2026-08-07]";
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Source#^target]]";
+  const harness = createInMemoryObsidianApp({
+    "Blockers.md": blockers,
+    "Source.md": "- [/] #task Source task [id:: target] ^target",
+    "Daily.md": daily,
+    "Dependent.md": "- [?] #task Dependent [dependsOn:: target] ^dependent",
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-08-07";
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[x\] #task !\[\[Source#\^target\]\] \[created:: 2026-08-07\]/);
+  assert.match(
+    harness.getSource("Source.md"),
+    /^- \[x\] #task Source task \[id:: target\]\s+\[completion:: 2026-08-07\]\s+\^target/,
+  );
+  assert.match(harness.getSource("Daily.md"), /\t- ~~\[\[Source#\^target\]\]~~/);
+  assert.match(harness.getSource("Dependent.md"), /^- \[ \] #task Dependent/m);
+});
+
+test("Ctrl+Enter reopen restores both the local line and the transcluded source, un-retiring references", async () => {
+  const blockers =
+    "- [x] #task ![[Source#^target]] [created:: 2026-08-07]  [completion:: 2026-08-07]";
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- ~~[[Source#^target]]~~";
+  const harness = createInMemoryObsidianApp({
+    "Blockers.md": blockers,
+    "Source.md":
+      "- [x] #task Source task [id:: target]  [completion:: 2026-08-07] ^target",
+    "Daily.md": daily,
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[ \] #task !\[\[Source#\^target\]\] \[created:: 2026-08-07\]/);
+  assert.doesNotMatch(editor.getValue(), /completion::/);
+  assert.match(harness.getSource("Source.md"), /^- \[ \] #task Source task \[id:: target\] \^target/);
+  // Pomodoro-descendant restoration deliberately un-strikes to a plain link
+  // rather than re-embedding it, matching the existing carry-forward convention.
+  assert.match(harness.getSource("Daily.md"), /\t- \[\[Source#\^target\]\]/);
+});
+
+test("Ctrl+Enter reopening the local line over an already-open target does not accidentally close it", async () => {
+  const blockers =
+    "- [x] #task ![[Source#^target]] [created:: 2026-08-07]  [completion:: 2026-08-07]";
+  const harness = createInMemoryObsidianApp({
+    "Blockers.md": blockers,
+    "Source.md": "- [ ] #task Source task [id:: target] ^target",
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const action = registerTaskToggleVimAction(plugin);
+  const sourceBefore = harness.getSource("Source.md");
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[ \] #task !\[\[Source#\^target\]\]/);
+  assert.equal(harness.getSource("Source.md"), sourceBefore);
+});
+
+test("Ctrl+Enter closing the local line over an already-closed target does not write it a second time", async () => {
+  const blockers = "- [ ] #task ![[Source#^target]] [created:: 2026-08-07]";
+  const harness = createInMemoryObsidianApp({
+    "Blockers.md": blockers,
+    "Source.md":
+      "- [x] #task Source task [id:: target]  [completion:: 2026-08-07] ^target",
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const action = registerTaskToggleVimAction(plugin);
+  const sourceBefore = harness.getSource("Source.md");
+  let finalizeCalls = 0;
+  plugin.finalizeClosedTasks = async () => {
+    finalizeCalls += 1;
+    return { reopened: 0, retired: 0, recoveryFailures: [], retirementFailures: [] };
+  };
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[x\] #task !\[\[Source#\^target\]\]/);
+  assert.equal(harness.getSource("Source.md"), sourceBefore);
+  assert.equal(finalizeCalls, 0);
+});
+
+test("Ctrl+Enter on an unresolvable embedded transclusion still closes the local line without error", async () => {
+  const blockers = "- [ ] #task ![[Missing#^nope]] [created:: 2026-08-07]";
+  const harness = createInMemoryObsidianApp({ "Blockers.md": blockers });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[x\] #task !\[\[Missing#\^nope\]\]/);
+});
+
+test("Ctrl+Enter on a task line with two embeds and the cursor outside both toggles only the local line", async () => {
+  const blockers = "- [ ] #task ![[A#^a]] and ![[B#^b]] [created:: 2026-08-07]";
+  const harness = createInMemoryObsidianApp({
+    "Blockers.md": blockers,
+    "A.md": "- [ ] #task A ^a",
+    "B.md": "- [ ] #task B ^b",
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 0, ch: 0 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const action = registerTaskToggleVimAction(plugin);
+  const aBefore = harness.getSource("A.md");
+  const bBefore = harness.getSource("B.md");
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(editor.getValue(), /^- \[x\] #task !\[\[A#\^a\]\] and !\[\[B#\^b\]\]/);
+  assert.equal(harness.getSource("A.md"), aBefore);
+  assert.equal(harness.getSource("B.md"), bBefore);
+});
+
+test("Ctrl+Enter on a task line inside a fenced code block does not propagate to its embedded transclusion", async () => {
+  const blockers = [
+    "```md",
+    "- [ ] #task ![[Source#^target]] [created:: 2026-08-07]",
+    "```",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Blockers.md": blockers,
+    "Source.md": "- [ ] #task Source task [id:: target] ^target",
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const action = registerTaskToggleVimAction(plugin);
+  const sourceBefore = harness.getSource("Source.md");
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.equal(harness.getSource("Source.md"), sourceBefore);
+});
+
+test("Ctrl+Enter with a transcluded task line still uses the Tasks-plugin command for the local write", async () => {
+  const originalWindow = global.window;
+  const actions = new Map();
+  const vim = {
+    defineAction(name, handler) {
+      actions.set(name, handler);
+    },
+    mapCommand() {},
+  };
+  global.window = { CodeMirrorAdapter: { Vim: vim } };
+
+  try {
+    const lineText = "- [ ] #task ![[Source#^target]] [created:: 2026-08-07]";
+    const editor = {
+      getCursor: () => ({ line: 0, ch: 6 }),
+      getLine: () => lineText,
+      replaceRange: () => assert.fail("Tasks command should handle the write"),
+    };
+    const view = Object.assign(new MarkdownView(), {
+      editor,
+      file: { path: "Blockers.md" },
+    });
+    const doneCommand = "obsidian-tasks-plugin:set-status-symbol-to-x";
+    const executedCommands = [];
+    const plugin = new TaskStatusCyclerPlugin();
+    const harness = createInMemoryObsidianApp({
+      "Blockers.md": lineText,
+      "Source.md": "- [ ] #task Source task [id:: target] ^target",
+    });
+    plugin.app = {
+      ...harness.app,
+      workspace: {
+        getActiveViewOfType: (ViewType) => {
+          assert.equal(ViewType, MarkdownView);
+          return view;
+        },
+        getActiveFile: () => view.file,
+      },
+      commands: {
+        commands: { [doneCommand]: {} },
+        executeCommandById: (commandId) => {
+          executedCommands.push(commandId);
+          return true;
+        },
+      },
+    };
+
+    assert.equal(plugin.registerVimMappings(), true);
+    actions.get("taskStatusCyclerToggleTaskOpenDone")({});
+    await flushAsyncActions();
+    await plugin.referenceMutationQueue;
+
+    assert.deepEqual(executedCommands, [doneCommand]);
+    assert.match(
+      harness.getSource("Source.md"),
+      /^- \[x\] #task Source task \[id:: target\]\s+\[completion::/,
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      delete global.window;
+    } else {
+      global.window = originalWindow;
+    }
+  }
+});

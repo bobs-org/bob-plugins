@@ -4961,22 +4961,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     if (this.isOpenDoneTaskStatus(taskStatus)) {
-      const wrote = this.toggleActiveCheckboxOpenDone(view.editor, taskStatus);
-      const identity =
-        wrote
-          ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
-          : null;
-      if (identity && isTranscludedCompletionClosableStatus(taskStatus)) {
-        void this.finalizeClosedTasks([identity], {
-          editor: view.editor,
-          activePath: activeFile && activeFile.path,
-        }).catch(() => {});
-      } else if (identity && isTranscludedReopenableStatus(taskStatus)) {
-        void this.restoreReopenedTaskReferences([identity], {
-          editor: view.editor,
-          activePath: activeFile && activeFile.path,
-        }).catch(() => {});
-      }
+      void this.toggleActiveCheckboxOpenDoneAndPropagate(
+        view.editor,
+        activeFile,
+        taskStatus,
+      ).catch(() => false);
       return;
     }
 
@@ -6162,23 +6151,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return true;
     }
 
-    const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
     const activeFile = view.file || this.app.workspace.getActiveFile();
-    const identity =
-      wrote
-        ? closedTaskIdentity(activeFile && activeFile.path, taskStatus.lineText)
-        : null;
-    if (identity && isTranscludedCompletionClosableStatus(taskStatus)) {
-      void this.finalizeClosedTasks([identity], {
-        editor,
-        activePath: activeFile && activeFile.path,
-      }).catch(() => {});
-    } else if (identity && isTranscludedReopenableStatus(taskStatus)) {
-      void this.restoreReopenedTaskReferences([identity], {
-        editor,
-        activePath: activeFile && activeFile.path,
-      }).catch(() => {});
-    }
+    void this.toggleActiveCheckboxOpenDoneAndPropagate(
+      editor,
+      activeFile,
+      taskStatus,
+    ).catch(() => false);
     return true;
   }
 
@@ -6273,6 +6251,100 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       await this.finalizeClosedTasks([identity], context);
     }
     return wrote;
+  }
+
+  // Shared body for the Vim Ctrl+Enter dispatch and the non-Vim open/done
+  // command: toggle the local checkbox, then propagate the same open/done
+  // transition to an embedded block transclusion on the active line (if any),
+  // and finalize both identities together in one batch. The candidate embed
+  // is captured before the local write so a Tasks-plugin recurrence insertion
+  // above the active line cannot shift which line's transclusion is selected.
+  async toggleActiveCheckboxOpenDoneAndPropagate(editor, activeFile, taskStatus) {
+    const activePath = activeFile && activeFile.path;
+    const cursor =
+      typeof editor.getCursor === "function" ? editor.getCursor() : null;
+    const isFenced =
+      cursor && typeof cursor.line === "number"
+        ? getFencedLineNumbers(this.getEditorLineTexts(editor)).has(cursor.line)
+        : false;
+    const transclusionCandidate = isFenced
+      ? null
+      : this.getActiveLineTranscludedTaskTarget(editor, activePath);
+
+    const wrote = this.toggleActiveCheckboxOpenDone(editor, taskStatus);
+    if (!wrote) {
+      return false;
+    }
+
+    const localIdentity = closedTaskIdentity(activePath, taskStatus.lineText);
+    const closing = isTranscludedCompletionClosableStatus(taskStatus);
+    const targetIdentity = await this.closeOrReopenTranscludedTaskLine(
+      transclusionCandidate,
+      editor,
+      activePath,
+      closing,
+    );
+    const identities = [localIdentity, targetIdentity].filter(Boolean);
+    if (identities.length) {
+      const context = { editor, activePath };
+      if (closing) {
+        await this.finalizeClosedTasks(identities, context);
+      } else {
+        await this.restoreReopenedTaskReferences(identities, context);
+      }
+    }
+    return true;
+  }
+
+  // Force-close or force-reopen an already-selected embedded block
+  // transclusion candidate against the local line's own open/done direction
+  // (`closing`), independent of the target's current status beyond whether
+  // that status is eligible to be forced. Returns the target's closed-task
+  // identity when a write actually landed, `null` otherwise (no candidate,
+  // unresolvable target, or target ineligible for the forced direction).
+  async closeOrReopenTranscludedTaskLine(candidate, editor, activePath, closing) {
+    if (!candidate) {
+      return null;
+    }
+
+    const context = { editor, activePath, originPath: activePath };
+    let resolvedTarget;
+    try {
+      resolvedTarget = await this.resolveTranscludedBlockTarget(candidate, context, {
+        taskStatusPredicate: isOpenDoneTaskStatus,
+      });
+    } catch (error) {
+      return null;
+    }
+    if (!resolvedTarget || !resolvedTarget.file) {
+      return null;
+    }
+
+    let wrote = false;
+    if (closing) {
+      if (isTranscludedCompletionClosableStatus(resolvedTarget.taskStatus)) {
+        wrote = await this.replaceResolvedTranscludedTaskLine(
+          resolvedTarget,
+          context,
+          "x",
+        );
+      }
+    } else if (isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
+      wrote = await this.replaceResolvedTranscludedTaskLine(
+        resolvedTarget,
+        context,
+        " ",
+        { forcedStatusPredicate: isTranscludedReopenableStatus },
+      );
+    }
+    if (!wrote) {
+      return null;
+    }
+
+    return (
+      closedTaskIdentity(resolvedTarget.file.path, resolvedTarget.taskStatus.lineText) ||
+      { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId }
+    );
   }
 
   async handleActiveTaskBlockLinkOpenDone(editor, activeFile) {

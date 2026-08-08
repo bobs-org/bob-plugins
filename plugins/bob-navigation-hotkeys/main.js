@@ -1728,11 +1728,40 @@ function getScheduleLogWriteOutcome(plan, applied) {
   return !plan.valid && SCHEDULE_LOG_SILENT_GUARD_REASONS.has(plan.reason) ? null : "guard-failed";
 }
 
-// The roll window as the picker states it, e.g. `random in 8–30 days`. Shared
-// by the pinned roll row's detail line and by the deterministic log reason so
-// the note can never disagree with the row the user clicked. Note the en dash.
+// The roll window as the picker states it, e.g. `random in 8–30 days`. The
+// durable schedule-log reason adds the exact chosen offset separately. Note
+// the en dash.
 function formatPriorityRollWindowText(level) {
   return `random in ${level.minDays}–${level.maxDays} days`;
+}
+
+function getPriorityRollBounds(level) {
+  const minDays = Number(level && level.minDays);
+  const maxDays = Number(level && level.maxDays);
+  if (
+    !Number.isInteger(minDays) ||
+    !Number.isInteger(maxDays) ||
+    minDays > maxDays
+  ) {
+    return null;
+  }
+
+  return Object.freeze({ minDays, maxDays });
+}
+
+function formatPriorityRollChosenWindowText(level, rolledDays) {
+  const bounds = getPriorityRollBounds(level);
+  const days = Number(rolledDays);
+  if (
+    !bounds ||
+    !Number.isInteger(days) ||
+    days < bounds.minDays ||
+    days > bounds.maxDays
+  ) {
+    return "";
+  }
+
+  return `random in **${days}** (${bounds.minDays}–${bounds.maxDays}) days`;
 }
 
 // The previous priority as a picker label for the left side of a transition.
@@ -1752,6 +1781,14 @@ function formatPriorityRollScheduleReason(details = {}) {
     return "";
   }
 
+  const windowText = formatPriorityRollChosenWindowText(
+    level,
+    details.rolledDays,
+  );
+  if (!windowText) {
+    return "";
+  }
+
   const head =
     details.source === "priority"
       ? `priority ${
@@ -1760,9 +1797,7 @@ function formatPriorityRollScheduleReason(details = {}) {
             : level.label
         }`
       : `${level.label} roll`;
-  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} ${head}${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}${formatPriorityRollWindowText(
-    level,
-  )}`;
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} ${head}${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}${windowText}`;
 }
 
 // An automatic entry records a scheduling change, so a roll that landed on the
@@ -11756,12 +11791,23 @@ function formatRelativeDayRange(minOffset, maxOffset) {
   return `${formatRelativeDayOffset(min)} to ${formatRelativeDayOffset(max)}`;
 }
 
-function rollPriorityScheduledDate(level, baseDate, random = Math.random) {
+function rollPriorityScheduledDateWithOffset(
+  level,
+  baseDate,
+  random = Math.random,
+) {
   const span = level.maxDays - level.minDays + 1;
   const rolledOffset = Math.floor(random() * span);
   const offset =
     level.minDays + clampNumber(rolledOffset, 0, Math.max(0, span - 1));
-  return addLocalDateDays(getLocalDateStart(baseDate), offset);
+  return Object.freeze({
+    date: addLocalDateDays(getLocalDateStart(baseDate), offset),
+    offset,
+  });
+}
+
+function rollPriorityScheduledDate(level, baseDate, random = Math.random) {
+  return rollPriorityScheduledDateWithOffset(level, baseDate, random).date;
 }
 
 function addLocalDateMonths(date, months) {
@@ -11846,7 +11892,8 @@ function createPriorityRollDateItem(
   currentValue,
   random = Math.random,
 ) {
-  const date = rollPriorityScheduledDate(level, baseDate, random);
+  const roll = rollPriorityScheduledDateWithOffset(level, baseDate, random);
+  const date = roll.date;
   const value = formatBulletPropertyDate(date);
   const weekday = getBulletPropertyDateWeekday(date);
   return {
@@ -11858,6 +11905,7 @@ function createPriorityRollDateItem(
     dynamic: false,
     priorityRoll: true,
     level,
+    rolledDays: roll.offset,
     searchText: `${level.label} roll ${value} ${weekday} random priority`,
   };
 }
@@ -12879,6 +12927,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return buildPriorityRollScheduleLog({
       source: "scheduled",
       level: item.level,
+      rolledDays: item.rolledDays,
       from: this.getPendingScheduleFrom(),
       to: item.value,
     });
@@ -15851,12 +15900,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         : getLocalDateStart(new Date());
     const random =
       typeof options.random === "function" ? options.random : Math.random;
-    const scheduledValueByLine = new Map(
+    const rollByLine = new Map(
       session.targets.map((target) => [
         target.line,
-        formatBulletPropertyDate(
-          rollPriorityScheduledDate(level, baseDate, random),
-        ),
+        rollPriorityScheduledDateWithOffset(level, baseDate, random),
+      ]),
+    );
+    const scheduledValueByLine = new Map(
+      Array.from(rollByLine, ([line, roll]) => [
+        line,
+        formatBulletPropertyDate(roll.date),
       ]),
     );
     const includesDueDate = Array.from(scheduledValueByLine.values()).some(
@@ -15902,6 +15955,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         formatPriorityRollScheduleReason({
           source: "priority",
           level,
+          rolledDays: (rollByLine.get(target.line) || {}).offset,
           fromLevelLabel: getPriorityRollFromLevelLabel(
             property,
             (findBulletPropertyField(target.rawLine, property.name) || {}).value || "",
@@ -16948,11 +17002,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       context.baseDate instanceof Date
         ? getLocalDateStart(context.baseDate)
         : getLocalDateStart(new Date());
-    const rolledDate = rollPriorityScheduledDate(
+    const roll = rollPriorityScheduledDateWithOffset(
       level,
       baseDate,
       typeof context.random === "function" ? context.random : Math.random,
     );
+    const rolledDate = roll.date;
     const rolledValue = formatBulletPropertyDate(rolledDate);
     const levelIndex = normalizePriorityLevelIndex(property, level);
     // Read the live line rather than the captured one so the transition is correct
@@ -16990,6 +17045,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           scheduleLog: buildPriorityRollScheduleLog({
             source: "priority",
             level,
+            rolledDays: roll.offset,
             fromLevelLabel,
             from: expectedScheduledValue,
             to: rolledValue,
@@ -17031,6 +17087,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         scheduleLog: buildPriorityRollScheduleLog({
           source: "priority",
           level,
+          rolledDays: roll.offset,
           fromLevelLabel,
           from: (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
           to: rolledValue,
@@ -21525,6 +21582,7 @@ module.exports.helpers = {
   formatRelativeDayOffset,
   formatRelativeDayRange,
   getPriorityLevelIconName,
+  rollPriorityScheduledDateWithOffset,
   rollPriorityScheduledDate,
   getPriorityNoticeOutcomeParts,
   getPriorityNoticeChipTone,

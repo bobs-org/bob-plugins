@@ -4237,29 +4237,58 @@ test("priority notice falls back to plain text when fragment rendering fails", (
 test("priority scheduling rolls inclusively and clamps a random value of one", () => {
   const level = { minDays: 2, maxDays: 7 };
   const baseDate = new Date(2026, 7, 3, 16, 45);
-  const roll = (random) =>
-    helpers.formatBulletPropertyDate(
-      helpers.rollPriorityScheduledDate(level, baseDate, random),
+  const roll = (random) => {
+    const result = helpers.rollPriorityScheduledDateWithOffset(
+      level,
+      baseDate,
+      random,
     );
+    return {
+      date: helpers.formatBulletPropertyDate(result.date),
+      offset: result.offset,
+    };
+  };
 
-  assert.equal(roll(() => 0), "2026-08-05");
-  assert.equal(roll(() => 0.5), "2026-08-08");
-  assert.equal(roll(() => 0.999999), "2026-08-10");
-  assert.equal(roll(() => 1), "2026-08-10");
+  assert.deepEqual(roll(() => 0), { date: "2026-08-05", offset: 2 });
+  assert.deepEqual(roll(() => 0.5), { date: "2026-08-08", offset: 5 });
+  assert.deepEqual(roll(() => 0.999999), { date: "2026-08-10", offset: 7 });
+  assert.deepEqual(roll(() => 1), { date: "2026-08-10", offset: 7 });
+
+  let calls = 0;
+  assert.deepEqual(
+    roll(() => {
+      calls += 1;
+      return 0.5;
+    }),
+    { date: "2026-08-08", offset: 5 },
+  );
+  assert.equal(calls, 1);
+  assert.equal(
+    helpers.formatBulletPropertyDate(
+      helpers.rollPriorityScheduledDate(level, baseDate, () => 0),
+    ),
+    "2026-08-05",
+  );
 
   const wideLevel = createPriorityPickerConfig().properties
     .find((item) => item.name === "priority")
     .levels[3];
-  const wideRoll = (random) =>
-    helpers.formatBulletPropertyDate(
-      helpers.rollPriorityScheduledDate(
-        wideLevel,
-        new Date(2026, 7, 3),
-        random,
-      ),
+  const wideRoll = (random) => {
+    const result = helpers.rollPriorityScheduledDateWithOffset(
+      wideLevel,
+      new Date(2026, 7, 3),
+      random,
     );
-  assert.equal(wideRoll(() => 0), "2026-11-02");
-  assert.equal(wideRoll(() => 0.999999), "2027-08-03");
+    return {
+      date: helpers.formatBulletPropertyDate(result.date),
+      offset: result.offset,
+    };
+  };
+  assert.deepEqual(wideRoll(() => 0), { date: "2026-11-02", offset: 91 });
+  assert.deepEqual(wideRoll(() => 0.999999), {
+    date: "2027-08-03",
+    offset: 365,
+  });
 });
 
 test("priority value rows preserve config order and expose labels ranges and current state", () => {
@@ -4364,7 +4393,7 @@ test("priority picker writes lowest priority with a wide rolled schedule", async
     [
       "- [?] #task One [priority:: lowest] [scheduled:: 2026-11-02] ^one",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days",
+      "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days",
     ].join("\n"),
   );
   assert.deepEqual(notices, [
@@ -4395,7 +4424,7 @@ test("priority picker replaces both existing values without duplicating fields",
     [
       "- [?] #task One [priority:: high] [scheduled:: 2026-08-08] ^one",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 priority P2 → P1 · random in 2–7 days",
+      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 priority P2 → P1 · random in **5** (2–7) days",
     ].join("\n"),
   );
 });
@@ -4423,7 +4452,7 @@ test("counted priority writes keep the rolled date right of the priority", async
     [
       "- [?] #task One [id:: one] [priority:: high] [scheduled:: 2026-08-08] ^one",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 priority P0 → P1 · random in 2–7 days",
+      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 priority P0 → P1 · random in **5** (2–7) days",
     ].join("\n"),
   );
 });
@@ -4503,9 +4532,9 @@ test("counted priority picker rolls an independent schedule for every task", asy
   assert.deepEqual(
     lines.filter((line) => line.includes("🎲")),
     [
-      "\t\t- *2026-08-05* — 🎲 priority P0 → P1 · random in 2–7 days",
-      "\t\t- *2026-08-08* — 🎲 priority P0 → P1 · random in 2–7 days",
-      "\t\t- *2026-08-10* — 🎲 priority P0 → P1 · random in 2–7 days",
+      "\t\t- *2026-08-05* — 🎲 priority P0 → P1 · random in **2** (2–7) days",
+      "\t\t- *2026-08-08* — 🎲 priority P0 → P1 · random in **5** (2–7) days",
+      "\t\t- *2026-08-10* — 🎲 priority P0 → P1 · random in **7** (2–7) days",
     ],
   );
   assert.deepEqual(notices, [
@@ -4597,16 +4626,19 @@ test("a counted priority batch writes one entry per task using each task's own p
     [0, helpers.formatPriorityRollScheduleReason({
       source: "priority",
       level: { label: "P2", minDays: 8, maxDays: 30 },
+      rolledDays: 17,
       fromLevelLabel: "P1",
     })],
     [1, helpers.formatPriorityRollScheduleReason({
       source: "priority",
       level: { label: "P2", minDays: 8, maxDays: 30 },
+      rolledDays: 18,
       fromLevelLabel: "P3",
     })],
     [2, helpers.formatPriorityRollScheduleReason({
       source: "priority",
       level: { label: "P2", minDays: 8, maxDays: 30 },
+      rolledDays: 19,
       fromLevelLabel: "P0",
     })],
   ]);
@@ -4640,13 +4672,13 @@ test("a counted priority batch writes one entry per task using each task's own p
     [
       "- [?] #task Alpha [priority:: medium] [scheduled:: 2026-08-20] ^alpha",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-05 → 2026-08-20* — 🎲 priority P1 → P2 · random in 8–30 days",
+      "\t\t- *2026-08-05 → 2026-08-20* — 🎲 priority P1 → P2 · random in **17** (8–30) days",
       "- [?] #task Beta [priority:: medium] [scheduled:: 2026-08-21] ^beta",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-10 → 2026-08-21* — 🎲 priority P3 → P2 · random in 8–30 days",
+      "\t\t- *2026-08-10 → 2026-08-21* — 🎲 priority P3 → P2 · random in **18** (8–30) days",
       "- [?] #task Gamma [priority:: medium] [scheduled:: 2026-08-22] ^gamma",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-22* — 🎲 priority P0 → P2 · random in 8–30 days",
+      "\t\t- *2026-08-22* — 🎲 priority P0 → P2 · random in **19** (8–30) days",
     ].join("\n"),
   );
 });
@@ -4659,8 +4691,24 @@ test("a counted priority batch skips a task whose rolled date equals its current
   const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 1);
   const level = { label: "P2", minDays: 8, maxDays: 30 };
   const reasonByLine = new Map([
-    [0, helpers.formatPriorityRollScheduleReason({ source: "priority", level, fromLevelLabel: "P1" })],
-    [1, helpers.formatPriorityRollScheduleReason({ source: "priority", level, fromLevelLabel: "P1" })],
+    [
+      0,
+      helpers.formatPriorityRollScheduleReason({
+        source: "priority",
+        level,
+        rolledDays: 17,
+        fromLevelLabel: "P1",
+      }),
+    ],
+    [
+      1,
+      helpers.formatPriorityRollScheduleReason({
+        source: "priority",
+        level,
+        rolledDays: 22,
+        fromLevelLabel: "P1",
+      }),
+    ],
   ]);
   const plan = helpers.planCountedBulletPropertyBatch(
     input,
@@ -4688,7 +4736,7 @@ test("a counted priority batch skips a task whose rolled date equals its current
       "- [?] #task Alpha [priority:: medium] [scheduled:: 2026-08-20] ^alpha",
       "- [?] #task Beta [priority:: medium] [scheduled:: 2026-08-25] ^beta",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-21 → 2026-08-25* — 🎲 priority P1 → P2 · random in 8–30 days",
+      "\t\t- *2026-08-21 → 2026-08-25* — 🎲 priority P1 → P2 · random in **22** (8–30) days",
     ].join("\n"),
   );
 });
@@ -4751,6 +4799,7 @@ test("scheduled picker pins a priority roll only for configured current prioriti
       detail: picker.items[0].detail,
       priorityRoll: picker.items[0].priorityRoll,
       level: picker.items[0].level.label,
+      rolledDays: picker.items[0].rolledDays,
       searchText: picker.items[0].searchText,
     },
     {
@@ -4759,6 +4808,7 @@ test("scheduled picker pins a priority roll only for configured current prioriti
       detail: "2026-08-05 · Wed · random in 2–7 days",
       priorityRoll: true,
       level: "P1",
+      rolledDays: 2,
       searchText: "P1 roll 2026-08-05 Wed random priority",
     },
   );
@@ -4817,11 +4867,25 @@ test("Ctrl+R replaces only the pinned priority roll and keeps it selected", asyn
   });
 
   assert.equal(picker.items[0].value, "2026-08-10");
+  assert.equal(picker.items[0].rolledDays, 7);
   assert.deepEqual(picker.items.slice(1), unchangedItems);
   assert.equal(picker.selectedIndex, 0);
   assert.equal(picker.visibleItems[0], picker.items[0]);
   assert.equal(prevented, true);
   assert.equal(stopped, true);
+
+  await picker.openItemAtIndex(0);
+  const status = helpers.getObsidianTaskCheckboxStatus(
+    harness.editor.content.split("\n")[0],
+  );
+  assert.equal(
+    harness.editor.content,
+    [
+      `- [${status}] #task One [priority:: high] [scheduled:: 2026-08-10] ^one`,
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-08-10* — 🎲 P1 roll · random in **7** (2–7) days",
+    ].join("\n"),
+  );
 });
 
 test("choosing a priority roll writes immediately with a deterministic reason instead of prompting", async () => {
@@ -4846,7 +4910,7 @@ test("choosing a priority roll writes immediately with a deterministic reason in
     [
       `- [${rolledStatus}] #task One [priority:: high] [scheduled:: 2026-08-05] ^one`,
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-05* — 🎲 P1 roll · random in 2–7 days",
+      "\t\t- *2026-08-05* — 🎲 P1 roll · random in **2** (2–7) days",
     ].join("\n"),
   );
 
@@ -6362,37 +6426,75 @@ test("formatPriorityRollScheduleReason covers all four shapes", () => {
     helpers.formatPriorityRollScheduleReason({
       source: "priority",
       level,
+      rolledDays: 30,
       fromLevelLabel: "P1",
     }),
-    "🎲 priority P1 → P2 · random in 8–30 days",
+    "🎲 priority P1 → P2 · random in **30** (8–30) days",
   );
   assert.equal(
     helpers.formatPriorityRollScheduleReason({
       source: "priority",
       level,
+      rolledDays: 8,
       fromLevelLabel: "P0",
     }),
-    "🎲 priority P0 → P2 · random in 8–30 days",
+    "🎲 priority P0 → P2 · random in **8** (8–30) days",
   );
   assert.equal(
     helpers.formatPriorityRollScheduleReason({
       source: "priority",
       level,
+      rolledDays: 17,
       fromLevelLabel: "P2",
     }),
-    "🎲 priority P2 · random in 8–30 days",
+    "🎲 priority P2 · random in **17** (8–30) days",
   );
   assert.equal(
-    helpers.formatPriorityRollScheduleReason({ source: "scheduled", level }),
-    "🎲 P2 roll · random in 8–30 days",
+    helpers.formatPriorityRollScheduleReason({
+      source: "scheduled",
+      level,
+      rolledDays: 20,
+    }),
+    "🎲 P2 roll · random in **20** (8–30) days",
   );
   assert.equal(
-    helpers.formatPriorityRollScheduleReason({ source: "priority" }),
+    helpers.formatPriorityRollScheduleReason({
+      source: "priority",
+      rolledDays: 20,
+    }),
+    "",
+  );
+  assert.equal(
+    helpers.formatPriorityRollScheduleReason({ source: "priority", level }),
+    "",
+  );
+  assert.equal(
+    helpers.formatPriorityRollScheduleReason({
+      source: "priority",
+      level,
+      rolledDays: 7,
+    }),
+    "",
+  );
+  assert.equal(
+    helpers.formatPriorityRollScheduleReason({
+      source: "priority",
+      level,
+      rolledDays: 31,
+    }),
+    "",
+  );
+  assert.equal(
+    helpers.formatPriorityRollScheduleReason({
+      source: "priority",
+      level,
+      rolledDays: 12.5,
+    }),
     "",
   );
 });
 
-test("the priority-roll picker row and the deterministic reason agree on the window text", () => {
+test("the priority-roll picker row keeps range detail and stores the exact roll", () => {
   const level = { label: "P2", minDays: 8, maxDays: 30 };
   const rollItem = helpers.createPriorityRollDateItem(
     level,
@@ -6404,6 +6506,15 @@ test("the priority-roll picker row and the deterministic reason agree on the win
     rollItem.detail,
     new RegExp(`${helpers.formatPriorityRollWindowText(level)}$`),
   );
+  assert.equal(rollItem.rolledDays, 8);
+  assert.equal(
+    helpers.formatPriorityRollScheduleReason({
+      source: "scheduled",
+      level,
+      rolledDays: rollItem.rolledDays,
+    }),
+    "🎲 P2 roll · random in **8** (8–30) days",
+  );
 });
 
 test("buildPriorityRollScheduleLog returns null when the roll does not move the date", () => {
@@ -6412,6 +6523,7 @@ test("buildPriorityRollScheduleLog returns null when the roll does not move the 
     helpers.buildPriorityRollScheduleLog({
       source: "priority",
       level,
+      rolledDays: 30,
       fromLevelLabel: "P1",
       from: "2026-09-02",
       to: "2026-09-02",
@@ -6422,16 +6534,23 @@ test("buildPriorityRollScheduleLog returns null when the roll does not move the 
     helpers.buildPriorityRollScheduleLog({
       source: "priority",
       level,
+      rolledDays: 30,
       fromLevelLabel: "P1",
       from: "2026-08-13",
       to: "2026-09-02",
     }),
-    { from: "2026-08-13", to: "2026-09-02", reason: "🎲 priority P1 → P2 · random in 8–30 days", automatic: true },
+    {
+      from: "2026-08-13",
+      to: "2026-09-02",
+      reason: "🎲 priority P1 → P2 · random in **30** (8–30) days",
+      automatic: true,
+    },
   );
   assert.equal(
     helpers.buildPriorityRollScheduleLog({
       source: "priority",
       level,
+      rolledDays: 30,
       fromLevelLabel: "P1",
       from: "2026-08-13",
       to: "",
@@ -6556,6 +6675,19 @@ test("schedule log bullet formatting and parsing round-trip with and without a p
     from: "2026-08-13",
     to: "2026-08-20",
     reason: "waiting on the API review to land",
+  });
+
+  const entryWithMarkdownReason = helpers.formatScheduleLogEntryBullet("\t\t", "-", {
+    from: "2026-08-13",
+    to: "2026-09-02",
+    reason: "🎲 priority P1 → P2 · random in **30** (8–30) days",
+  });
+  assert.deepEqual(helpers.parseScheduleLogEntryBullet(entryWithMarkdownReason), {
+    indent: "\t\t",
+    marker: "-",
+    from: "2026-08-13",
+    to: "2026-09-02",
+    reason: "🎲 priority P1 → P2 · random in **30** (8–30) days",
   });
 
   const entryWithoutFrom = helpers.formatScheduleLogEntryBullet("  ", "+", {
@@ -7257,7 +7389,7 @@ test("choosing a priority level does not enter the reason stage", async () => {
     [
       "- [?] #task Ship the thing [priority:: high] [scheduled:: 2026-08-05] ^ship",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-05* — 🎲 priority P0 → P1 · random in 2–7 days",
+      "\t\t- *2026-08-05* — 🎲 priority P0 → P1 · random in **2** (2–7) days",
     ].join("\n"),
   );
 });
@@ -7999,6 +8131,14 @@ test("planProjectTaskSchedules and planProjectScheduledUpdate report futureSched
   assert.deepEqual(update.futureScheduledTaskLines.slice().sort(), [3, 4]);
 });
 
+function getTodayDailyFile() {
+  const today = new Date();
+  const year = String(today.getFullYear()).padStart(4, "0");
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return { path: `${year}/${year}${month}${day}.md`, extension: "md" };
+}
+
 test("runtime: a future scheduled write prunes the task's live link from today's open Pomodoro", async () => {
   notices.length = 0;
   const line = "- [ ] #task Ship it ^ship";
@@ -8139,7 +8279,7 @@ test("runtime: daily note preimage changed under the snapshot keeps the schedule
   const line = "- [ ] #task Ship it ^ship";
   const editor = new TransactionEditor(line, { line: 0, ch: 0 }, 500);
   const sourceFile = { path: "Tasks.md", extension: "md" };
-  const dailyFile = { path: "2026/20260807.md", extension: "md" };
+  const dailyFile = getTodayDailyFile();
   const dailyContent = [
     "## Pomodoros",
     "",
@@ -8181,7 +8321,7 @@ test("runtime: vault.process throwing during the daily-note write is reported wi
   const line = "- [ ] #task Ship it ^ship";
   const editor = new TransactionEditor(line, { line: 0, ch: 0 }, 500);
   const sourceFile = { path: "Tasks.md", extension: "md" };
-  const dailyFile = { path: "2026/20260807.md", extension: "md" };
+  const dailyFile = getTodayDailyFile();
   const dailyContent = [
     "## Pomodoros",
     "",
@@ -8226,7 +8366,7 @@ test("runtime: the daily note open in another editor is written through that edi
   const line = "- [ ] #task Ship it ^ship";
   const editor = new TransactionEditor(line, { line: 0, ch: 0 }, 500);
   const sourceFile = { path: "Tasks.md", extension: "md" };
-  const dailyFile = { path: "2026/20260807.md", extension: "md" };
+  const dailyFile = getTodayDailyFile();
   const dailyContent = [
     "## Pomodoros",
     "",
@@ -8280,7 +8420,7 @@ test("runtime: re-running the same deferral gesture is idempotent", async () => 
   const line = "- [?] #task Ship it [scheduled:: 2099-01-01] ^ship";
   const editor = new TransactionEditor(line, { line: 0, ch: 0 }, 500);
   const sourceFile = { path: "Tasks.md", extension: "md" };
-  const dailyFile = { path: "2026/20260807.md", extension: "md" };
+  const dailyFile = getTodayDailyFile();
   const dailyContent = ["## Pomodoros", "", "- [ ] Current (0900-0930)"].join("\n");
   const contents = new Map([
     [sourceFile.path, line],
@@ -8325,7 +8465,7 @@ test("runtime: a counted scheduled batch prunes exactly the targets that land on
   ].join("\n");
   const editor = new TransactionEditor(source, { line: 0, ch: 0 }, 500);
   const sourceFile = { path: "Tasks.md", extension: "md" };
-  const dailyFile = { path: "2026/20260807.md", extension: "md" };
+  const dailyFile = getTodayDailyFile();
   const dailyContent = [
     "## Pomodoros",
     "",
@@ -8388,7 +8528,7 @@ test("runtime: a ^prj project schedule prunes the propagated tasks and the ^prj 
   const cursor = { line: 4, ch: 0 };
   const editor = new TransactionEditor(input, cursor, 700);
   const sourceFile = { path: "projects/Ship.md", extension: "md" };
-  const dailyFile = { path: "2026/20260807.md", extension: "md" };
+  const dailyFile = getTodayDailyFile();
   const dailyContent = [
     "## Pomodoros",
     "",
@@ -8446,7 +8586,7 @@ test("runtime: the source note being today's daily note folds the prune into a s
   ].join("\n");
   const cursor = { line: 7, ch: 0 };
   const editor = new TransactionEditor(content, cursor, 500);
-  const dailyFile = { path: "2026/20260807.md", extension: "md" };
+  const dailyFile = getTodayDailyFile();
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
     workspace: { getLeavesOfType: () => [] },

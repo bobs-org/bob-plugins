@@ -1728,9 +1728,9 @@ function getScheduleLogWriteOutcome(plan, applied) {
   return !plan.valid && SCHEDULE_LOG_SILENT_GUARD_REASONS.has(plan.reason) ? null : "guard-failed";
 }
 
-// The roll window as the picker states it, e.g. `random in 8–30 days`. The
-// durable schedule-log reason adds the exact chosen offset separately. Note
-// the en dash.
+// The roll window as the picker states it, e.g. `random in 8–30 days`.
+// Durable schedule-log reasons lean on the die emoji instead and say
+// `in **8** (8–30) days`. Note the en dash.
 function formatPriorityRollWindowText(level) {
   return `random in ${level.minDays}–${level.maxDays} days`;
 }
@@ -1761,7 +1761,7 @@ function formatPriorityRollChosenWindowText(level, rolledDays) {
     return "";
   }
 
-  return `random in **${days}** (${bounds.minDays}–${bounds.maxDays}) days`;
+  return `in **${days}** (${bounds.minDays}–${bounds.maxDays}) days`;
 }
 
 // The previous priority as a picker label for the left side of a transition.
@@ -1771,10 +1771,10 @@ function getPriorityRollFromLevelLabel(property, value) {
   return getBulletPropertyCurrentLabel(property, value) || IMPLICIT_PRIORITY_LEVEL_LABEL;
 }
 
-// Deterministic reason text for a machine-rolled scheduled date. `source` is
-// "priority" when the user picked a level (the level, and any change to it, is
-// the reason) or "scheduled" when they picked the pinned roll row in the date
-// stage (the roll itself is the reason).
+// Deterministic reason text for a machine-rolled scheduled date. Priority
+// choices use the level or transition as the head; pinned scheduled-stage
+// choices keep a `roll` suffix so they stay distinguishable from unchanged
+// priority picks.
 function formatPriorityRollScheduleReason(details = {}) {
   const level = details.level;
   if (!level || !level.label) {
@@ -1791,11 +1791,9 @@ function formatPriorityRollScheduleReason(details = {}) {
 
   const head =
     details.source === "priority"
-      ? `priority ${
-          details.fromLevelLabel && details.fromLevelLabel !== level.label
-            ? `${details.fromLevelLabel}${SCHEDULE_LOG_TRANSITION}${level.label}`
-            : level.label
-        }`
+      ? details.fromLevelLabel && details.fromLevelLabel !== level.label
+        ? `${details.fromLevelLabel}${SCHEDULE_LOG_TRANSITION}${level.label}`
+        : level.label
       : `${level.label} roll`;
   return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} ${head}${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}${windowText}`;
 }

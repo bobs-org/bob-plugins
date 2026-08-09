@@ -4393,7 +4393,7 @@ test("priority picker writes lowest priority with a wide rolled schedule", async
     [
       "- [?] #task One [priority:: lowest] [scheduled:: 2026-11-02] ^one",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days",
+      "\t\t- *2026-11-02* — 🎲 P0 → P4 · in **91** (91–365) days",
     ].join("\n"),
   );
   assert.deepEqual(notices, [
@@ -4424,7 +4424,7 @@ test("priority picker replaces both existing values without duplicating fields",
     [
       "- [?] #task One [priority:: high] [scheduled:: 2026-08-08] ^one",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 priority P2 → P1 · random in **5** (2–7) days",
+      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 P2 → P1 · in **5** (2–7) days",
     ].join("\n"),
   );
 });
@@ -4452,7 +4452,7 @@ test("counted priority writes keep the rolled date right of the priority", async
     [
       "- [?] #task One [id:: one] [priority:: high] [scheduled:: 2026-08-08] ^one",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 priority P0 → P1 · random in **5** (2–7) days",
+      "\t\t- *2026-09-01 → 2026-08-08* — 🎲 P0 → P1 · in **5** (2–7) days",
     ].join("\n"),
   );
 });
@@ -4532,9 +4532,9 @@ test("counted priority picker rolls an independent schedule for every task", asy
   assert.deepEqual(
     lines.filter((line) => line.includes("🎲")),
     [
-      "\t\t- *2026-08-05* — 🎲 priority P0 → P1 · random in **2** (2–7) days",
-      "\t\t- *2026-08-08* — 🎲 priority P0 → P1 · random in **5** (2–7) days",
-      "\t\t- *2026-08-10* — 🎲 priority P0 → P1 · random in **7** (2–7) days",
+      "\t\t- *2026-08-05* — 🎲 P0 → P1 · in **2** (2–7) days",
+      "\t\t- *2026-08-08* — 🎲 P0 → P1 · in **5** (2–7) days",
+      "\t\t- *2026-08-10* — 🎲 P0 → P1 · in **7** (2–7) days",
     ],
   );
   assert.deepEqual(notices, [
@@ -4672,13 +4672,13 @@ test("a counted priority batch writes one entry per task using each task's own p
     [
       "- [?] #task Alpha [priority:: medium] [scheduled:: 2026-08-20] ^alpha",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-05 → 2026-08-20* — 🎲 priority P1 → P2 · random in **17** (8–30) days",
+      "\t\t- *2026-08-05 → 2026-08-20* — 🎲 P1 → P2 · in **17** (8–30) days",
       "- [?] #task Beta [priority:: medium] [scheduled:: 2026-08-21] ^beta",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-10 → 2026-08-21* — 🎲 priority P3 → P2 · random in **18** (8–30) days",
+      "\t\t- *2026-08-10 → 2026-08-21* — 🎲 P3 → P2 · in **18** (8–30) days",
       "- [?] #task Gamma [priority:: medium] [scheduled:: 2026-08-22] ^gamma",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-22* — 🎲 priority P0 → P2 · random in **19** (8–30) days",
+      "\t\t- *2026-08-22* — 🎲 P0 → P2 · in **19** (8–30) days",
     ].join("\n"),
   );
 });
@@ -4736,7 +4736,7 @@ test("a counted priority batch skips a task whose rolled date equals its current
       "- [?] #task Alpha [priority:: medium] [scheduled:: 2026-08-20] ^alpha",
       "- [?] #task Beta [priority:: medium] [scheduled:: 2026-08-25] ^beta",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-21 → 2026-08-25* — 🎲 priority P1 → P2 · random in **22** (8–30) days",
+      "\t\t- *2026-08-21 → 2026-08-25* — 🎲 P1 → P2 · in **22** (8–30) days",
     ].join("\n"),
   );
 });
@@ -4883,7 +4883,7 @@ test("Ctrl+R replaces only the pinned priority roll and keeps it selected", asyn
     [
       `- [${status}] #task One [priority:: high] [scheduled:: 2026-08-10] ^one`,
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-10* — 🎲 P1 roll · random in **7** (2–7) days",
+      "\t\t- *2026-08-10* — 🎲 P1 roll · in **7** (2–7) days",
     ].join("\n"),
   );
 });
@@ -4910,7 +4910,7 @@ test("choosing a priority roll writes immediately with a deterministic reason in
     [
       `- [${rolledStatus}] #task One [priority:: high] [scheduled:: 2026-08-05] ^one`,
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-05* — 🎲 P1 roll · random in **2** (2–7) days",
+      "\t\t- *2026-08-05* — 🎲 P1 roll · in **2** (2–7) days",
     ].join("\n"),
   );
 
@@ -6422,14 +6422,16 @@ test("tab pin Vim registration retries after adapter availability", (t) => {
 
 test("formatPriorityRollScheduleReason covers all four shapes", () => {
   const level = { label: "P2", minDays: 8, maxDays: 30 };
+  const priorityTransitionReason = helpers.formatPriorityRollScheduleReason({
+    source: "priority",
+    level,
+    rolledDays: 30,
+    fromLevelLabel: "P1",
+  });
+  assert.doesNotMatch(priorityTransitionReason, /\b(?:priority|random)\b/);
   assert.equal(
-    helpers.formatPriorityRollScheduleReason({
-      source: "priority",
-      level,
-      rolledDays: 30,
-      fromLevelLabel: "P1",
-    }),
-    "🎲 priority P1 → P2 · random in **30** (8–30) days",
+    priorityTransitionReason,
+    "🎲 P1 → P2 · in **30** (8–30) days",
   );
   assert.equal(
     helpers.formatPriorityRollScheduleReason({
@@ -6438,7 +6440,7 @@ test("formatPriorityRollScheduleReason covers all four shapes", () => {
       rolledDays: 8,
       fromLevelLabel: "P0",
     }),
-    "🎲 priority P0 → P2 · random in **8** (8–30) days",
+    "🎲 P0 → P2 · in **8** (8–30) days",
   );
   assert.equal(
     helpers.formatPriorityRollScheduleReason({
@@ -6447,7 +6449,7 @@ test("formatPriorityRollScheduleReason covers all four shapes", () => {
       rolledDays: 17,
       fromLevelLabel: "P2",
     }),
-    "🎲 priority P2 · random in **17** (8–30) days",
+    "🎲 P2 · in **17** (8–30) days",
   );
   assert.equal(
     helpers.formatPriorityRollScheduleReason({
@@ -6455,7 +6457,7 @@ test("formatPriorityRollScheduleReason covers all four shapes", () => {
       level,
       rolledDays: 20,
     }),
-    "🎲 P2 roll · random in **20** (8–30) days",
+    "🎲 P2 roll · in **20** (8–30) days",
   );
   assert.equal(
     helpers.formatPriorityRollScheduleReason({
@@ -6506,6 +6508,7 @@ test("the priority-roll picker row keeps range detail and stores the exact roll"
     rollItem.detail,
     new RegExp(`${helpers.formatPriorityRollWindowText(level)}$`),
   );
+  assert.match(rollItem.detail, /\brandom in\b/);
   assert.equal(rollItem.rolledDays, 8);
   assert.equal(
     helpers.formatPriorityRollScheduleReason({
@@ -6513,7 +6516,7 @@ test("the priority-roll picker row keeps range detail and stores the exact roll"
       level,
       rolledDays: rollItem.rolledDays,
     }),
-    "🎲 P2 roll · random in **8** (8–30) days",
+    "🎲 P2 roll · in **8** (8–30) days",
   );
 });
 
@@ -6542,7 +6545,7 @@ test("buildPriorityRollScheduleLog returns null when the roll does not move the 
     {
       from: "2026-08-13",
       to: "2026-09-02",
-      reason: "🎲 priority P1 → P2 · random in **30** (8–30) days",
+      reason: "🎲 P1 → P2 · in **30** (8–30) days",
       automatic: true,
     },
   );
@@ -6680,14 +6683,14 @@ test("schedule log bullet formatting and parsing round-trip with and without a p
   const entryWithMarkdownReason = helpers.formatScheduleLogEntryBullet("\t\t", "-", {
     from: "2026-08-13",
     to: "2026-09-02",
-    reason: "🎲 priority P1 → P2 · random in **30** (8–30) days",
+    reason: "🎲 P1 → P2 · in **30** (8–30) days",
   });
   assert.deepEqual(helpers.parseScheduleLogEntryBullet(entryWithMarkdownReason), {
     indent: "\t\t",
     marker: "-",
     from: "2026-08-13",
     to: "2026-09-02",
-    reason: "🎲 priority P1 → P2 · random in **30** (8–30) days",
+    reason: "🎲 P1 → P2 · in **30** (8–30) days",
   });
 
   const entryWithoutFrom = helpers.formatScheduleLogEntryBullet("  ", "+", {
@@ -7389,7 +7392,7 @@ test("choosing a priority level does not enter the reason stage", async () => {
     [
       "- [?] #task Ship the thing [priority:: high] [scheduled:: 2026-08-05] ^ship",
       "\t- 🗓️ **SCHEDULE LOG**",
-      "\t\t- *2026-08-05* — 🎲 priority P0 → P1 · random in **2** (2–7) days",
+      "\t\t- *2026-08-05* — 🎲 P0 → P1 · in **2** (2–7) days",
     ].join("\n"),
   );
 });

@@ -8630,3 +8630,324 @@ test("runtime: the source note being today's daily note folds the prune into a s
   );
   assert.match(notices.at(-1), /removed 1 Pomodoro link/);
 });
+
+test("buildProjectSeedFromChildBullets: an ALL-CAPS bullet becomes a section only when it has nested list items", () => {
+  const withChildren = helpers.buildProjectSeedFromChildBullets(
+    ["  - REQUIREMENTS", "    - Must work offline"],
+    "2026-08-12",
+  );
+  assert.deepEqual(withChildren.taskLines, []);
+  assert.deepEqual(withChildren.sections, [
+    { title: "Requirements", noteLines: ["- Must work offline"] },
+  ]);
+  assert.equal(withChildren.lossless, true);
+
+  const withoutChildren = helpers.buildProjectSeedFromChildBullets(
+    ["  - REQUIREMENTS"],
+    "2026-08-12",
+  );
+  assert.deepEqual(withoutChildren.sections, []);
+  assert.deepEqual(withoutChildren.taskLines, [
+    "- [ ] #task REQUIREMENTS [created::2026-08-12]",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets: a checked ALL-CAPS bullet stays a task even with nested list items", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    ["  - [ ] REQUIREMENTS", "    - Must work offline"],
+    "2026-08-12",
+  );
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task REQUIREMENTS [created::2026-08-12]",
+    "  - Must work offline",
+  ]);
+});
+
+test("parseProjectSectionBulletTitle rejects wikilinks, tags, block IDs, mixed case, snake_case, and inline code", () => {
+  assert.equal(helpers.parseProjectSectionBulletTitle("[[SOME_NOTE]]"), null);
+  assert.equal(helpers.parseProjectSectionBulletTitle("#TODO"), null);
+  assert.equal(
+    helpers.parseProjectSectionBulletTitle("REQUIREMENTS ^abc"),
+    null,
+  );
+  assert.equal(helpers.parseProjectSectionBulletTitle("Mixed Case"), null);
+  assert.equal(helpers.parseProjectSectionBulletTitle("SNAKE_CASE"), null);
+  assert.equal(helpers.parseProjectSectionBulletTitle("`CODE`"), null);
+  assert.equal(
+    helpers.parseProjectSectionBulletTitle("REQUIREMENTS"),
+    "Requirements",
+  );
+});
+
+test("formatProjectSectionTitle title-cases without preserving acronyms and collapses whitespace", () => {
+  assert.equal(helpers.formatProjectSectionTitle("FUTURE WORK"), "Future Work");
+  assert.equal(helpers.formatProjectSectionTitle("NON-GOALS"), "Non-Goals");
+  assert.equal(
+    helpers.formatProjectSectionTitle("OPEN   QUESTIONS"),
+    "Open Questions",
+  );
+  assert.equal(helpers.formatProjectSectionTitle("API DESIGN"), "Api Design");
+  assert.equal(helpers.formatProjectSectionTitle("Q&A"), "Q&A");
+});
+
+test("insertProjectSectionNotes fills an empty existing section with a blank line then the notes", () => {
+  const content = ["## Requirements", "", "## Future Work"].join("\n");
+  const result = helpers.insertProjectSectionNotes(content, [
+    { title: "Requirements", noteLines: ["- Must work offline"] },
+  ]);
+  assert.equal(result.insertedCount, 1);
+  assert.equal(result.createdCount, 0);
+  assert.equal(
+    result.content,
+    ["## Requirements", "", "- Must work offline", "", "## Future Work"].join(
+      "\n",
+    ),
+  );
+});
+
+test("insertProjectSectionNotes appends after the last nonblank line of a non-empty existing section, leaving trailing blanks and the header untouched", () => {
+  const content = [
+    "## Requirements",
+    "- Existing requirement",
+    "",
+    "",
+    "## Future Work",
+  ].join("\n");
+  const result = helpers.insertProjectSectionNotes(content, [
+    { title: "Requirements", noteLines: ["- Must work offline"] },
+  ]);
+  assert.equal(result.insertedCount, 1);
+  assert.equal(
+    result.content,
+    [
+      "## Requirements",
+      "- Existing requirement",
+      "- Must work offline",
+      "",
+      "",
+      "## Future Work",
+    ].join("\n"),
+  );
+});
+
+test("insertProjectSectionNotes matches an existing header case-insensitively and keeps its casing", () => {
+  const content = ["## API Design", "", "## Future Work"].join("\n");
+  const result = helpers.insertProjectSectionNotes(content, [
+    { title: "Api Design", noteLines: ["- Uses REST"] },
+  ]);
+  assert.equal(result.insertedCount, 1);
+  assert.equal(result.createdCount, 0);
+  assert.equal(
+    result.content,
+    ["## API Design", "", "- Uses REST", "", "## Future Work"].join("\n"),
+  );
+});
+
+test("insertProjectSectionNotes appends new sections at EOF in source order and preserves a trailing newline", () => {
+  const content = "## Tasks\n\n- [ ] #task Example\n";
+  const result = helpers.insertProjectSectionNotes(content, [
+    { title: "Open Questions", noteLines: ["- Who owns rollout?"] },
+    { title: "Non-Goals", noteLines: ["- Supporting legacy clients"] },
+  ]);
+  assert.equal(result.insertedCount, 0);
+  assert.equal(result.createdCount, 2);
+  assert.equal(
+    result.content,
+    [
+      "## Tasks",
+      "",
+      "- [ ] #task Example",
+      "",
+      "## Open Questions",
+      "",
+      "- Who owns rollout?",
+      "",
+      "## Non-Goals",
+      "",
+      "- Supporting legacy clients",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("insertProjectSectionNotes does not add a trailing newline when the original content had none", () => {
+  const content = "## Tasks\n\n- [ ] #task Example";
+  const result = helpers.insertProjectSectionNotes(content, [
+    { title: "Open Questions", noteLines: ["- Who owns rollout?"] },
+  ]);
+  assert.equal(
+    result.content,
+    "## Tasks\n\n- [ ] #task Example\n\n## Open Questions\n\n- Who owns rollout?",
+  );
+});
+
+test("insertProjectSectionNotes preserves CRLF line endings for an existing section", () => {
+  const content = ["## Requirements", "", "## Future Work"].join("\r\n");
+  const result = helpers.insertProjectSectionNotes(content, [
+    { title: "Requirements", noteLines: ["- Must work offline"] },
+  ]);
+  assert.equal(
+    result.content,
+    [
+      "## Requirements",
+      "",
+      "- Must work offline",
+      "",
+      "## Future Work",
+    ].join("\r\n"),
+  );
+});
+
+test("insertProjectSectionNotes creates a new section using the document's CRLF line ending", () => {
+  const content = "## Tasks\r\n\r\n- [ ] #task Example\r\n";
+  const result = helpers.insertProjectSectionNotes(content, [
+    { title: "Open Questions", noteLines: ["- Who owns rollout?"] },
+  ]);
+  assert.equal(
+    result.content,
+    "## Tasks\r\n\r\n- [ ] #task Example\r\n\r\n## Open Questions\r\n\r\n- Who owns rollout?\r\n",
+  );
+});
+
+test("buildProjectSeedFromChildBullets merges section bullets with equally-normalized titles in source order", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - OPEN QUESTIONS",
+      "    - Who owns rollout?",
+      "  - Draft the API",
+      "  - OPEN  QUESTIONS",
+      "    - What about backfill?",
+    ],
+    "2026-08-12",
+  );
+  assert.deepEqual(result.sections, [
+    {
+      title: "Open Questions",
+      noteLines: ["- Who owns rollout?", "- What about backfill?"],
+    },
+  ]);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Draft the API [created::2026-08-12]",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and sections, preserving relative note depth verbatim", () => {
+  const childLines = [
+    "  - Draft the API",
+    "  - REQUIREMENTS",
+    "    - Must work offline",
+    "    - p95 under 200ms",
+    "      - measured at the edge",
+    "  - OPEN QUESTIONS",
+    "    - Who owns rollout?",
+    "  - Write the migration",
+  ];
+
+  const result = helpers.buildProjectSeedFromChildBullets(
+    childLines,
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Draft the API [created::2026-08-12]",
+    "- [ ] #task Write the migration [created::2026-08-12]",
+  ]);
+  assert.deepEqual(result.sections, [
+    {
+      title: "Requirements",
+      noteLines: [
+        "- Must work offline",
+        "- p95 under 200ms",
+        "  - measured at the edge",
+      ],
+    },
+    {
+      title: "Open Questions",
+      noteLines: ["- Who owns rollout?"],
+    },
+  ]);
+  // Notes are copied verbatim: no #task token and no [created::] field.
+  for (const section of result.sections) {
+    for (const line of section.noteLines) {
+      assert.doesNotMatch(line, /#task/);
+      assert.doesNotMatch(line, /\[created::/);
+    }
+  }
+});
+
+test("buildProjectSeedFromChildBullets marks lossless false for content that fits neither a task nor a section, without losing the other tasks", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - Draft the API",
+      "    Stray paragraph nested under the task",
+      "not a list item and not indented under anything",
+    ],
+    "2026-08-12",
+  );
+  assert.equal(result.lossless, false);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Draft the API [created::2026-08-12]",
+    "  Stray paragraph nested under the task",
+  ]);
+});
+
+test("buildProjectContentFromTask appends a TASKS section bullet's notes after the converted child tasks", () => {
+  const content = [
+    "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+    "",
+    "## Future Work",
+    "",
+    "## Requirements",
+  ].join("\n");
+
+  const result = helpers.buildProjectContentFromTask(
+    content,
+    { description: "Ship the widget", priority: null },
+    {
+      childTaskLines: ["- [ ] #task Draft the API [created::2026-08-12]"],
+      sections: [
+        { title: "Tasks", noteLines: ["- Follow-up call with vendor"] },
+      ],
+    },
+  );
+
+  assert.equal(result.tasksInserted, true);
+  assert.equal(result.sectionsInserted, 1);
+  assert.equal(result.sectionsCreated, 0);
+  assert.equal(
+    result.content,
+    [
+      "- [ ] #task #prj Ship the widget #hide ^prj",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] #task Draft the API [created::2026-08-12]",
+      "- Follow-up call with vendor",
+      "",
+      "## Future Work",
+      "",
+      "## Requirements",
+    ].join("\n"),
+  );
+});
+
+test("getProjectFromTaskNoticeText reports a singular/plural section count like the link chip", () => {
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText("Ship the widget", "Area", "Ship_widget", 0, 2),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area; 2 sections seeded)',
+  );
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText("Ship the widget", "Area", "Ship_widget", 1, 1),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area; 1 link updated; 1 section seeded)',
+  );
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText("Ship the widget", "Area", "Ship_widget", 0, 0),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area)',
+  );
+});

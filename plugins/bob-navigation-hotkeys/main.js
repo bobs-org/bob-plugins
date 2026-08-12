@@ -78,6 +78,15 @@ const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
 const PROJECT_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const PROJECT_TASKS_HEADER = "## Tasks";
 const PROJECT_TASKS_PLACEHOLDER = "(REPLACE WITH TASK DESCRIPTION)";
+// Whitelist for an ALL-CAPS project-note section title: uppercase letters,
+// digits, spaces/tabs, and a small set of punctuation. Deliberately narrow so
+// Markdown constructs (wikilinks, tags, block IDs, inline code, snake_case)
+// are never mistaken for a section title.
+const PROJECT_SECTION_TITLE_RE = /^[A-Z0-9][A-Z0-9 \t&'(),./-]*$/;
+// Any unfenced level-two (`##`) heading, capturing its title text.
+const PROJECT_SECTION_HEADER_RE = /^ {0,3}##(?:[ \t]+(.*))?$/;
+// A level-one or level-two heading, used to bound a project section's body.
+const PROJECT_SECTION_BOUNDARY_HEADER_RE = /^ {0,3}#{1,2}(?:[ \t]|$)/;
 const TASK_MOVE_OPEN_PROJECT_STATUSES = new Set(["wip", "waiting"]);
 const TASK_MOVE_TEMPLATE_PATHS = new Set([
   ...Object.values(NOTE_TEMPLATE_PATHS),
@@ -3578,13 +3587,77 @@ function normalizeNestedChildLine(lineText, directChildIndent) {
   return `${relativeIndent}${content}`;
 }
 
+// Re-indent a line nested below a project-note section bullet. Identical to
+// normalizeNestedChildLine() except an empty relative indent stays empty: a
+// section's direct children become top-level notes at column 0 rather than
+// nesting under a converted task.
+function normalizeProjectSectionNoteLine(lineText, baseIndent) {
+  const text = String(lineText || "");
+  if (text.trim() === "") {
+    return "";
+  }
+
+  const leadingMatch = /^(\s*)/.exec(text);
+  const leading = leadingMatch ? leadingMatch[1] : "";
+  const content = text.slice(leading.length);
+  const base = String(baseIndent || "");
+  let relativeIndent;
+  if (base && leading.startsWith(base)) {
+    relativeIndent = leading.slice(base.length);
+  } else {
+    relativeIndent = "\t";
+  }
+
+  return `${relativeIndent}${content}`;
+}
+
+// Lowercase the whole body, uppercase the first character of every maximal
+// run of letters/digits, and collapse internal whitespace runs to a single
+// space. Acronyms are not special-cased: "API DESIGN" becomes "Api Design".
+function formatProjectSectionTitle(body) {
+  const collapsed = String(body || "")
+    .trim()
+    .replace(/\s+/g, " ");
+  return collapsed
+    .toLowerCase()
+    .replace(/[a-z0-9]+/g, (run) => run.charAt(0).toUpperCase() + run.slice(1));
+}
+
+// The title-cased section title for a direct-child bullet body, or null when
+// the trimmed body does not match the ALL-CAPS title shape (PROJECT_SECTION_TITLE_RE
+// plus at least one letter, so an all-digit or empty body is rejected too).
+function parseProjectSectionBulletTitle(body) {
+  const trimmed = String(body || "").trim();
+  if (!PROJECT_SECTION_TITLE_RE.test(trimmed) || !/[A-Z]/.test(trimmed)) {
+    return null;
+  }
+
+  return formatProjectSectionTitle(trimmed);
+}
+
+// Casefolded, whitespace-collapsed comparison key for matching a section
+// bullet's title against an existing note header regardless of casing.
+function normalizeProjectSectionTitle(title) {
+  return String(title || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 // Convert the captured child block into rendered Markdown lines for the new
-// project's `## Tasks` section. Direct child list items (those at the shallowest
-// child indentation) become top-level tasks; deeper lines stay nested below the
-// task they belong to. Returns { taskLines, lossless } where `lossless` is false
-// when any nonblank child line could not be represented (so the caller can keep
-// the source block instead of losing content).
-function buildProjectTasksFromChildBullets(childLines, createdDateString) {
+// project's `## Tasks` section plus any note sections destined for other
+// headers. Direct child list items (those at the shallowest child
+// indentation) become top-level tasks unless they qualify as a section
+// bullet: no checkbox, an ALL-CAPS title (see PROJECT_SECTION_TITLE_RE), and
+// at least one nonblank list item nested deeper than it. A qualifying bullet's
+// descendants are copied in verbatim as that section's notes instead; a
+// non-qualifying bullet keeps today's task-conversion behavior. Two section
+// bullets whose titles normalize equally merge into one section, in source
+// order. Returns { taskLines, sections, lossless }, where `sections` is
+// [{ title, noteLines }] in source order and `lossless` is false when any
+// nonblank child line could not be represented as a task or a section note
+// (so the caller can keep the source block instead of losing content).
+function buildProjectSeedFromChildBullets(childLines, createdDateString) {
   const lines = Array.isArray(childLines)
     ? childLines.map((line) =>
         String(line === null || line === undefined ? "" : line),
@@ -3609,15 +3682,58 @@ function buildProjectTasksFromChildBullets(childLines, createdDateString) {
     const hasContent = lines.some((line) => line.trim() !== "");
     return Object.freeze({
       taskLines: Object.freeze([]),
+      sections: Object.freeze([]),
       lossless: !hasContent,
     });
   }
 
+  // Pre-pass: for each direct-child line, record whether a nonblank list item
+  // is nested deeper than it before the next direct child (section-bullet
+  // eligibility needs this lookahead), and the indent of the shallowest such
+  // nested list item (the base for re-indenting that section's notes).
+  const directChildIndexes = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const listMatch = PROJECT_LIST_ITEM_RE.exec(lines[index]);
+    if (listMatch && listMatch[1].length === directChildIndentLength) {
+      directChildIndexes.push(index);
+    }
+  }
+
+  const sectionSpanInfo = new Map();
+  for (let i = 0; i < directChildIndexes.length; i += 1) {
+    const start = directChildIndexes[i];
+    const end =
+      i + 1 < directChildIndexes.length
+        ? directChildIndexes[i + 1]
+        : lines.length;
+    let nestedIndentLength = null;
+    let nestedIndent = "";
+    for (let index = start + 1; index < end; index += 1) {
+      const listMatch = PROJECT_LIST_ITEM_RE.exec(lines[index]);
+      if (listMatch && listMatch[1].length > directChildIndentLength) {
+        if (
+          nestedIndentLength === null ||
+          listMatch[1].length < nestedIndentLength
+        ) {
+          nestedIndentLength = listMatch[1].length;
+          nestedIndent = listMatch[1];
+        }
+      }
+    }
+    sectionSpanInfo.set(start, {
+      hasNestedListItem: nestedIndentLength !== null,
+      baseIndent: nestedIndent,
+    });
+  }
+
   const taskLines = [];
+  const sectionEntries = [];
+  const sectionEntryByTitle = new Map();
   let current = null;
+  let currentSection = null;
   let lossless = true;
 
-  const flush = () => {
+  const flushTask = () => {
     if (!current) {
       return;
     }
@@ -3636,10 +3752,37 @@ function buildProjectTasksFromChildBullets(childLines, createdDateString) {
     current = null;
   };
 
-  for (const line of lines) {
+  const flushSection = () => {
+    if (!currentSection) {
+      return;
+    }
+
+    const noteLines = currentSection.noteLines.slice();
+    while (noteLines.length && noteLines[0].trim() === "") {
+      noteLines.shift();
+    }
+    while (noteLines.length && noteLines[noteLines.length - 1].trim() === "") {
+      noteLines.pop();
+    }
+
+    let entry = sectionEntryByTitle.get(currentSection.normalizedTitle);
+    if (!entry) {
+      entry = { title: currentSection.title, noteLines: [] };
+      sectionEntryByTitle.set(currentSection.normalizedTitle, entry);
+      sectionEntries.push(entry);
+    }
+    entry.noteLines.push(...noteLines);
+    currentSection = null;
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (line.trim() === "") {
       if (current) {
         current.nested.push("");
+      }
+      if (currentSection) {
+        currentSection.noteLines.push("");
       }
       continue;
     }
@@ -3649,11 +3792,29 @@ function buildProjectTasksFromChildBullets(childLines, createdDateString) {
     const listMatch = PROJECT_LIST_ITEM_RE.exec(line);
 
     if (listMatch && listMatch[1].length === directChildIndentLength) {
-      flush();
+      flushTask();
+      flushSection();
+
       const parsedChild = parseProjectChildListItem(
         line,
         directChildIndentLength - 1,
       );
+      const sectionTitle =
+        parsedChild && parsedChild.status === null
+          ? parseProjectSectionBulletTitle(parsedChild.body)
+          : null;
+      const spanInfo = sectionSpanInfo.get(index);
+
+      if (sectionTitle && spanInfo && spanInfo.hasNestedListItem) {
+        currentSection = {
+          title: sectionTitle,
+          normalizedTitle: normalizeProjectSectionTitle(sectionTitle),
+          noteLines: [],
+          baseIndent: spanInfo.baseIndent,
+        };
+        continue;
+      }
+
       const taskLine = buildProjectTaskLineFromChildBullet(
         parsedChild,
         createdDateString,
@@ -3671,15 +3832,28 @@ function buildProjectTasksFromChildBullets(childLines, createdDateString) {
       current = { taskLine, nested: [], directChildIndent: leading };
     } else if (leading.length > directChildIndentLength && current) {
       current.nested.push(normalizeNestedChildLine(line, current.directChildIndent));
+    } else if (leading.length > directChildIndentLength && currentSection) {
+      currentSection.noteLines.push(
+        normalizeProjectSectionNoteLine(line, currentSection.baseIndent),
+      );
     } else {
       lossless = false;
     }
   }
 
-  flush();
+  flushTask();
+  flushSection();
 
   return Object.freeze({
     taskLines: Object.freeze(taskLines),
+    sections: Object.freeze(
+      sectionEntries.map((entry) =>
+        Object.freeze({
+          title: entry.title,
+          noteLines: Object.freeze(entry.noteLines),
+        }),
+      ),
+    ),
     lossless,
   });
 }
@@ -3818,6 +3992,176 @@ function replaceProjectTasksPlaceholder(content, renderedTaskLines) {
   });
 }
 
+// Locate an existing unfenced `##` header matching `title` (case-insensitive,
+// whitespace-collapsed), skipping frontmatter. Returns
+// { headerIndex, bodyEndExclusive } or null when no such header exists.
+// bodyEndExclusive is one past the section's last nonblank line, bounded by
+// the next level-one-or-two header (fence-aware) or EOF; it equals
+// headerIndex + 1 for an empty body.
+function findProjectSectionRange(lines, title) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const normalizedTarget = normalizeProjectSectionTitle(title);
+  if (!normalizedTarget) {
+    return null;
+  }
+
+  let lineIndex = 0;
+  let inFrontmatter = false;
+  let inFence = null;
+
+  if (startsWithFrontmatter(sourceLines)) {
+    inFrontmatter = true;
+    lineIndex = 1;
+  }
+
+  for (; lineIndex < sourceLines.length; lineIndex += 1) {
+    const line = String(sourceLines[lineIndex] || "");
+
+    if (inFrontmatter) {
+      if (FRONTMATTER_DELIMITER_RE.test(line)) {
+        inFrontmatter = false;
+      }
+      continue;
+    }
+
+    if (inFence) {
+      if (isClosingFence(line, inFence)) {
+        inFence = null;
+      }
+      continue;
+    }
+
+    const openingFence = getFenceOpening(line);
+    if (openingFence) {
+      inFence = openingFence;
+      continue;
+    }
+
+    const headerMatch = PROJECT_SECTION_HEADER_RE.exec(line);
+    if (
+      !headerMatch ||
+      normalizeProjectSectionTitle(headerMatch[1] || "") !== normalizedTarget
+    ) {
+      continue;
+    }
+
+    const headerIndex = lineIndex;
+    let bodyEndExclusive = headerIndex + 1;
+    let bodyInFence = null;
+    for (let index = headerIndex + 1; index < sourceLines.length; index += 1) {
+      const bodyLine = String(sourceLines[index] || "");
+
+      if (bodyInFence) {
+        if (isClosingFence(bodyLine, bodyInFence)) {
+          bodyInFence = null;
+        }
+        bodyEndExclusive = index + 1;
+        continue;
+      }
+
+      const bodyOpeningFence = getFenceOpening(bodyLine);
+      if (bodyOpeningFence) {
+        bodyInFence = bodyOpeningFence;
+        bodyEndExclusive = index + 1;
+        continue;
+      }
+
+      if (PROJECT_SECTION_BOUNDARY_HEADER_RE.test(bodyLine)) {
+        break;
+      }
+
+      if (bodyLine.trim() !== "") {
+        bodyEndExclusive = index + 1;
+      }
+    }
+
+    return Object.freeze({ headerIndex, bodyEndExclusive });
+  }
+
+  return null;
+}
+
+// Insert each section's notes into `content`: reuse a matching existing `##`
+// header (leaving the header line byte-identical) when one exists, otherwise
+// append a new `## Title` section at EOF, in source order. Existing-header
+// insertions are applied highest line index first so earlier insert points
+// stay valid. Returns { content, insertedCount, createdCount }.
+function insertProjectSectionNotes(content, sections) {
+  const text = String(content || "");
+  const sectionList = Array.isArray(sections) ? sections : [];
+  const validSections = sectionList
+    .map((section) => ({
+      title: String(section && section.title ? section.title : "").trim(),
+      noteLines: Array.isArray(section && section.noteLines)
+        ? section.noteLines.map((line) =>
+            String(line === null || line === undefined ? "" : line),
+          )
+        : [],
+    }))
+    .filter((section) => section.title && section.noteLines.length > 0);
+
+  if (validSections.length === 0) {
+    return Object.freeze({ content: text, insertedCount: 0, createdCount: 0 });
+  }
+
+  const { lineEnding } = splitMarkdownContent(text);
+  let lines = text.split(/\r?\n/);
+
+  const matches = [];
+  const newSections = [];
+  for (const section of validSections) {
+    const range = findProjectSectionRange(lines, section.title);
+    if (range) {
+      matches.push({
+        headerIndex: range.headerIndex,
+        bodyEndExclusive: range.bodyEndExclusive,
+        noteLines: section.noteLines,
+      });
+    } else {
+      newSections.push(section);
+    }
+  }
+
+  matches.sort((left, right) => right.headerIndex - left.headerIndex);
+
+  for (const match of matches) {
+    const bodyEmpty = match.bodyEndExclusive === match.headerIndex + 1;
+    const insertion = bodyEmpty
+      ? ["", ...match.noteLines]
+      : match.noteLines.slice();
+    lines = lines
+      .slice(0, match.bodyEndExclusive)
+      .concat(insertion, lines.slice(match.bodyEndExclusive));
+  }
+
+  let nextContent = lines.join(lineEnding);
+
+  if (newSections.length > 0) {
+    const hadTerminalNewline = /\r?\n$/.test(nextContent);
+    for (const section of newSections) {
+      if (nextContent && !nextContent.endsWith(lineEnding)) {
+        nextContent += lineEnding;
+      }
+      if (nextContent && !nextContent.endsWith(lineEnding + lineEnding)) {
+        nextContent += lineEnding;
+      }
+      nextContent += `## ${section.title}${lineEnding}${lineEnding}`;
+      nextContent += section.noteLines.join(lineEnding);
+    }
+    if (hadTerminalNewline) {
+      nextContent += lineEnding;
+    }
+  }
+
+  return Object.freeze({
+    content: nextContent,
+    insertedCount: matches.length,
+    createdCount: newSections.length,
+  });
+}
+
 // Seed the new project note from the parsed source task: fill the `^prj`
 // completion criteria, apply the source task's priority, and optionally insert
 // converted child tasks into the `## Tasks` section. Returns a result object:
@@ -3833,6 +4177,8 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
       seeded: false,
       tasksInserted: false,
       tasksSectionMissing: false,
+      sectionsInserted: 0,
+      sectionsCreated: 0,
     });
   }
 
@@ -3865,11 +4211,23 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
     }
   }
 
+  const sections = Array.isArray(options.sections) ? options.sections : [];
+  let sectionsInserted = 0;
+  let sectionsCreated = 0;
+  if (sections.length > 0) {
+    const sectionsResult = insertProjectSectionNotes(nextContent, sections);
+    nextContent = sectionsResult.content;
+    sectionsInserted = sectionsResult.insertedCount;
+    sectionsCreated = sectionsResult.createdCount;
+  }
+
   return Object.freeze({
     content: nextContent,
     seeded: true,
     tasksInserted,
     tasksSectionMissing,
+    sectionsInserted,
+    sectionsCreated,
   });
 }
 
@@ -3960,6 +4318,7 @@ function getProjectFromTaskNoticeText(
   sourceBasename,
   createdBasename,
   updatedLinkCount,
+  sectionCount,
 ) {
   const taskText = truncateProjectTaskDescription(description);
   const sourceText = String(sourceBasename || "").trim();
@@ -3971,6 +4330,12 @@ function getProjectFromTaskNoticeText(
   if (numericLinkCount > 0) {
     details.push(
       `${numericLinkCount} ${numericLinkCount === 1 ? "link" : "links"} updated`,
+    );
+  }
+  const numericSectionCount = numericOrDefault(sectionCount, 0);
+  if (numericSectionCount > 0) {
+    details.push(
+      `${numericSectionCount} ${numericSectionCount === 1 ? "section" : "sections"} seeded`,
     );
   }
 
@@ -19990,17 +20355,22 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     const createdDate = formatProjectTaskCreatedDate(new Date());
     let convertedChildTaskLines = [];
+    let convertedChildSections = [];
     let childConversionLossy = false;
     const hasChildContent = sourceBlock.childLines.some(
       (line) => String(line || "").trim() !== "",
     );
     if (hasChildContent) {
-      const conversion = buildProjectTasksFromChildBullets(
+      const conversion = buildProjectSeedFromChildBullets(
         sourceBlock.childLines,
         createdDate,
       );
-      if (conversion.lossless && conversion.taskLines.length > 0) {
+      if (
+        conversion.lossless &&
+        (conversion.taskLines.length > 0 || conversion.sections.length > 0)
+      ) {
         convertedChildTaskLines = conversion.taskLines;
+        convertedChildSections = conversion.sections;
       } else {
         childConversionLossy = true;
       }
@@ -20058,6 +20428,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       await this.app.vault.process(createdFile, (content) => {
         seedResult = buildProjectContentFromTask(content, parsedTask, {
           childTaskLines: convertedChildTaskLines,
+          sections: convertedChildSections,
         });
         return seedResult.content;
       });
@@ -20074,6 +20445,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (convertedChildTaskLines.length > 0 && !seedResult.tasksInserted) {
       new Notice(
         "Created project, but the Tasks section was missing; source task was kept",
+      );
+      return true;
+    }
+
+    const sectionsHandled =
+      (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0);
+    if (
+      convertedChildSections.length > 0 &&
+      sectionsHandled < convertedChildSections.length
+    ) {
+      new Notice(
+        "Created project, but a section could not be added; source task was kept",
       );
       return true;
     }
@@ -20127,6 +20510,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         sourceBasename,
         projectBasename ? createdFile.basename : undefined,
         updatedLinkCount,
+        sectionsHandled,
       ),
     );
     return true;
@@ -21433,9 +21817,15 @@ module.exports.helpers = {
   getProjectSourceTaskBlock,
   parseProjectChildListItem,
   buildProjectTaskLineFromChildBullet,
-  buildProjectTasksFromChildBullets,
+  normalizeProjectSectionNoteLine,
+  formatProjectSectionTitle,
+  parseProjectSectionBulletTitle,
+  normalizeProjectSectionTitle,
+  buildProjectSeedFromChildBullets,
   formatProjectTaskCreatedDate,
   replaceProjectTasksPlaceholder,
+  findProjectSectionRange,
+  insertProjectSectionNotes,
   buildProjectContentFromTask,
   applyProjectCreationFrontmatter,
   removeTaskBlockFromContent,

@@ -8664,6 +8664,150 @@ test("buildProjectSeedFromChildBullets: a checked ALL-CAPS bullet stays a task e
   ]);
 });
 
+test("buildProjectSeedFromChildBullets moves a direct-child schedule log under the project task", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+      "\t\t- *2026-08-05* — waiting on the vendor quote",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, []);
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.scheduleLogLines, [
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+    "\t\t- *2026-08-05* — waiting on the vendor quote",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets preserves schedule-log marker spellings and source order", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - **SCHEDULE LOG**",
+      "    - *2026-08-05* — first",
+      "  - 🗓️ **Schedule log:**",
+      "    - *2026-08-06* — second",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, []);
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.scheduleLogLines, [
+    "\t- **SCHEDULE LOG**",
+    "\t  - *2026-08-05* — first",
+    "\t- 🗓️ **Schedule log:**",
+    "\t  - *2026-08-06* — second",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets keeps schedule-log boundary cases on the existing paths", () => {
+  const checkbox = helpers.buildProjectSeedFromChildBullets(
+    ["  - [ ] 🗓️ **SCHEDULE LOG**", "    - Child note"],
+    "2026-08-12",
+  );
+  assert.deepEqual(checkbox.scheduleLogLines, []);
+  assert.deepEqual(checkbox.sections, []);
+  assert.deepEqual(checkbox.taskLines, [
+    "- [ ] #task 🗓️ **SCHEDULE LOG** [created::2026-08-12]",
+    "  - Child note",
+  ]);
+
+  const plainSection = helpers.buildProjectSeedFromChildBullets(
+    ["  - SCHEDULE LOG", "    - Preserve as a section note"],
+    "2026-08-12",
+  );
+  assert.deepEqual(plainSection.scheduleLogLines, []);
+  assert.deepEqual(plainSection.taskLines, []);
+  assert.deepEqual(plainSection.sections, [
+    { title: "Schedule Log", noteLines: ["- Preserve as a section note"] },
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets leaves a nested schedule log under the converted child task", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - Draft the API",
+      "    - 🗓️ **SCHEDULE LOG**",
+      "      - *2026-08-05* — reason",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.scheduleLogLines, []);
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Draft the API [created::2026-08-12]",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-08-05* — reason",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets moves empty and deeply nested schedule logs without forcing task output", () => {
+  const empty = helpers.buildProjectSeedFromChildBullets(
+    ["\t- 🗓️ **SCHEDULE LOG**"],
+    "2026-08-12",
+  );
+  assert.equal(empty.lossless, true);
+  assert.deepEqual(empty.taskLines, []);
+  assert.deepEqual(empty.sections, []);
+  assert.deepEqual(empty.scheduleLogLines, ["\t- 🗓️ **SCHEDULE LOG**"]);
+
+  const deep = helpers.buildProjectSeedFromChildBullets(
+    [
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-08-05* — reason",
+      "\t\t\t- nested context",
+    ],
+    "2026-08-12",
+  );
+  assert.deepEqual(deep.scheduleLogLines, [
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t\t- *2026-08-05* — reason",
+    "\t\t\t- nested context",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, sections, and the schedule log", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - Draft the API",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "    - *2026-08-05* — waiting on the vendor quote",
+      "  - REQUIREMENTS",
+      "    - Must work offline",
+      "  - Write the migration",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Draft the API [created::2026-08-12]",
+    "- [ ] #task Write the migration [created::2026-08-12]",
+  ]);
+  assert.deepEqual(result.sections, [
+    { title: "Requirements", noteLines: ["- Must work offline"] },
+  ]);
+  assert.deepEqual(result.scheduleLogLines, [
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t  - *2026-08-05* — waiting on the vendor quote",
+  ]);
+});
+
+test("normalizeProjectScheduleLogLine falls back to one extra tab for mixed indentation", () => {
+  assert.equal(
+    helpers.normalizeProjectScheduleLogLine("  - *2026-08-05* — reason", "\t"),
+    "\t\t- *2026-08-05* — reason",
+  );
+});
+
 test("parseProjectSectionBulletTitle rejects wikilinks, tags, block IDs, mixed case, snake_case, and inline code", () => {
   assert.equal(helpers.parseProjectSectionBulletTitle("[[SOME_NOTE]]"), null);
   assert.equal(helpers.parseProjectSectionBulletTitle("#TODO"), null);
@@ -8937,6 +9081,133 @@ test("buildProjectContentFromTask appends a TASKS section bullet's notes after t
   );
 });
 
+test("buildProjectContentFromTask inserts schedule-log lines directly under the project lifecycle task", () => {
+  const content = [
+    "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+    "",
+    "## Future Work",
+    "",
+    "## Requirements",
+  ].join("\n");
+
+  const result = helpers.buildProjectContentFromTask(
+    content,
+    { description: "Ship the widget", priority: null },
+    {
+      scheduleLogLines: [
+        "\t- 🗓️ **SCHEDULE LOG**",
+        "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+      ],
+      childTaskLines: ["- [ ] #task Draft the API [created::2026-08-12]"],
+      sections: [{ title: "Requirements", noteLines: ["- Must work offline"] }],
+    },
+  );
+
+  assert.equal(result.seeded, true);
+  assert.equal(result.scheduleLogInserted, true);
+  assert.equal(result.tasksInserted, true);
+  assert.equal(result.sectionsInserted, 1);
+  assert.equal(result.sectionsCreated, 0);
+  assert.equal(
+    result.content,
+    [
+      "- [ ] #task #prj Ship the widget #hide ^prj",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] #task Draft the API [created::2026-08-12]",
+      "",
+      "## Future Work",
+      "",
+      "## Requirements",
+      "",
+      "- Must work offline",
+    ].join("\n"),
+  );
+});
+
+test("buildProjectContentFromTask reports schedule-log insertion failure without blocking other seeding", () => {
+  const content = [
+    "- [ ] #task (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^notprj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+  ].join("\n");
+
+  const result = helpers.buildProjectContentFromTask(
+    content,
+    { description: "Ship the widget", priority: null },
+    {
+      scheduleLogLines: ["\t- 🗓️ **SCHEDULE LOG**"],
+      childTaskLines: ["- [ ] #task Draft the API [created::2026-08-12]"],
+    },
+  );
+
+  assert.equal(result.seeded, true);
+  assert.equal(result.scheduleLogInserted, false);
+  assert.equal(result.tasksInserted, true);
+  assert.equal(
+    result.content,
+    [
+      "- [ ] #task Ship the widget #hide ^notprj",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] #task Draft the API [created::2026-08-12]",
+    ].join("\n"),
+  );
+});
+
+test("insertProjectScheduleLogLines preserves CRLF line endings", () => {
+  const result = helpers.insertProjectScheduleLogLines(
+    [
+      "---",
+      "type: project",
+      "---",
+      "- [ ] #task #prj Ship the widget #hide ^prj",
+      "",
+      "## Tasks",
+    ].join("\r\n"),
+    ["\t- 🗓️ **SCHEDULE LOG**", "\t\t- *2026-08-05* — reason"],
+  );
+
+  assert.equal(result.inserted, true);
+  assert.equal(
+    result.content,
+    [
+      "---",
+      "type: project",
+      "---",
+      "- [ ] #task #prj Ship the widget #hide ^prj",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-08-05* — reason",
+      "",
+      "## Tasks",
+    ].join("\r\n"),
+  );
+});
+
+test("findProjectLifecycleTaskIndex skips frontmatter and fenced code blocks", () => {
+  const lines = [
+    "---",
+    'sample: "- [ ] #task #prj Frontmatter #hide ^prj"',
+    "---",
+    "```markdown",
+    "- [ ] #task #prj Fence #hide ^prj",
+    "```",
+    "- [ ] #task #prj Real #hide ^prj",
+  ];
+
+  assert.equal(helpers.findProjectLifecycleTaskIndex(lines), 6);
+});
+
 test("getProjectFromTaskNoticeText reports a singular/plural section count like the link chip", () => {
   assert.equal(
     helpers.getProjectFromTaskNoticeText("Ship the widget", "Area", "Ship_widget", 0, 2),
@@ -8949,5 +9220,16 @@ test("getProjectFromTaskNoticeText reports a singular/plural section count like 
   assert.equal(
     helpers.getProjectFromTaskNoticeText("Ship the widget", "Area", "Ship_widget", 0, 0),
     'Created project Ship_widget from task "Ship the widget" (task removed from Area)',
+  );
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText(
+      "Ship the widget",
+      "Area",
+      "Ship_widget",
+      0,
+      1,
+      true,
+    ),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area; 1 section seeded; schedule log moved)',
   );
 });

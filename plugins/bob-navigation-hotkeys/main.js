@@ -3611,6 +3611,33 @@ function normalizeProjectSectionNoteLine(lineText, baseIndent) {
   return `${relativeIndent}${content}`;
 }
 
+// Re-indent a line from the source task's schedule-log subtree so the marker
+// bullet sits one Obsidian Tab level under the new note's `^prj` task and every
+// descendant keeps its depth relative to that marker. Blank lines collapse to
+// "". A descendant whose indentation does not extend the marker's falls back to
+// one level deeper, like normalizeNestedChildLine().
+function normalizeProjectScheduleLogLine(lineText, markerIndent) {
+  const text = String(lineText || "");
+  if (text.trim() === "") {
+    return "";
+  }
+
+  const leadingMatch = /^(\s*)/.exec(text);
+  const leading = leadingMatch ? leadingMatch[1] : "";
+  const content = text.slice(leading.length);
+  const base = String(markerIndent || "");
+  let relativeIndent;
+  if (base && leading.startsWith(base)) {
+    relativeIndent = leading.slice(base.length);
+  } else if (!base && leading === "") {
+    relativeIndent = "";
+  } else {
+    relativeIndent = SCHEDULE_LOG_INDENT_UNIT;
+  }
+
+  return `${SCHEDULE_LOG_INDENT_UNIT}${relativeIndent}${content}`;
+}
+
 // Lowercase the whole body, uppercase the first character of every maximal
 // run of letters/digits, and collapse internal whitespace runs to a single
 // space. Acronyms are not special-cased: "API DESIGN" becomes "Api Design".
@@ -3645,18 +3672,20 @@ function normalizeProjectSectionTitle(title) {
 }
 
 // Convert the captured child block into rendered Markdown lines for the new
-// project's `## Tasks` section plus any note sections destined for other
-// headers. Direct child list items (those at the shallowest child
-// indentation) become top-level tasks unless they qualify as a section
-// bullet: no checkbox, an ALL-CAPS title (see PROJECT_SECTION_TITLE_RE), and
-// at least one nonblank list item nested deeper than it. A qualifying bullet's
-// descendants are copied in verbatim as that section's notes instead; a
-// non-qualifying bullet keeps today's task-conversion behavior. Two section
-// bullets whose titles normalize equally merge into one section, in source
-// order. Returns { taskLines, sections, lossless }, where `sections` is
-// [{ title, noteLines }] in source order and `lossless` is false when any
-// nonblank child line could not be represented as a task or a section note
-// (so the caller can keep the source block instead of losing content).
+// project's `## Tasks` section, note sections destined for other headers, and
+// managed schedule-log child lines for the `^prj` task. Direct child list items
+// (those at the shallowest child indentation) become top-level tasks unless they
+// qualify as a managed schedule-log marker or as a section bullet: no checkbox,
+// an ALL-CAPS title (see PROJECT_SECTION_TITLE_RE), and at least one nonblank
+// list item nested deeper than it. A qualifying section bullet's descendants
+// are copied in verbatim as that section's notes instead; a non-qualifying
+// bullet keeps today's task-conversion behavior. Two section bullets whose
+// titles normalize equally merge into one section, in source order. Returns
+// { taskLines, sections, scheduleLogLines, lossless }, where `sections` is
+// [{ title, noteLines }] in source order, `scheduleLogLines` is already
+// re-indented for insertion under `^prj`, and `lossless` is false when any
+// nonblank child line could not be represented (so the caller can keep the
+// source block instead of losing content).
 function buildProjectSeedFromChildBullets(childLines, createdDateString) {
   const lines = Array.isArray(childLines)
     ? childLines.map((line) =>
@@ -3683,6 +3712,7 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
     return Object.freeze({
       taskLines: Object.freeze([]),
       sections: Object.freeze([]),
+      scheduleLogLines: Object.freeze([]),
       lossless: !hasContent,
     });
   }
@@ -3729,8 +3759,10 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
   const taskLines = [];
   const sectionEntries = [];
   const sectionEntryByTitle = new Map();
+  const scheduleLogLines = [];
   let current = null;
   let currentSection = null;
+  let currentScheduleLog = null;
   let lossless = true;
 
   const flushTask = () => {
@@ -3775,6 +3807,22 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
     currentSection = null;
   };
 
+  const flushScheduleLog = () => {
+    if (!currentScheduleLog) {
+      return;
+    }
+
+    const logLines = currentScheduleLog.lines.slice();
+    while (logLines.length && logLines[0].trim() === "") {
+      logLines.shift();
+    }
+    while (logLines.length && logLines[logLines.length - 1].trim() === "") {
+      logLines.pop();
+    }
+    scheduleLogLines.push(...logLines);
+    currentScheduleLog = null;
+  };
+
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (line.trim() === "") {
@@ -3783,6 +3831,9 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
       }
       if (currentSection) {
         currentSection.noteLines.push("");
+      }
+      if (currentScheduleLog) {
+        currentScheduleLog.lines.push("");
       }
       continue;
     }
@@ -3794,6 +3845,18 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
     if (listMatch && listMatch[1].length === directChildIndentLength) {
       flushTask();
       flushSection();
+      flushScheduleLog();
+
+      const parsedScheduleLog = parseScheduleLogParentBullet(line);
+      if (parsedScheduleLog) {
+        currentScheduleLog = {
+          markerIndent: parsedScheduleLog.indent,
+          lines: [
+            normalizeProjectScheduleLogLine(line, parsedScheduleLog.indent),
+          ],
+        };
+        continue;
+      }
 
       const parsedChild = parseProjectChildListItem(
         line,
@@ -3836,6 +3899,10 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
       currentSection.noteLines.push(
         normalizeProjectSectionNoteLine(line, currentSection.baseIndent),
       );
+    } else if (leading.length > directChildIndentLength && currentScheduleLog) {
+      currentScheduleLog.lines.push(
+        normalizeProjectScheduleLogLine(line, currentScheduleLog.markerIndent),
+      );
     } else {
       lossless = false;
     }
@@ -3843,6 +3910,7 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
 
   flushTask();
   flushSection();
+  flushScheduleLog();
 
   return Object.freeze({
     taskLines: Object.freeze(taskLines),
@@ -3854,6 +3922,7 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
         }),
       ),
     ),
+    scheduleLogLines: Object.freeze(scheduleLogLines),
     lossless,
   });
 }
@@ -3912,6 +3981,81 @@ function findProjectTasksHeaderIndex(lines) {
   }
 
   return -1;
+}
+
+// Locate the project lifecycle `^prj` task line, ignoring frontmatter and fenced
+// code, or -1 when there is no such task.
+function findProjectLifecycleTaskIndex(lines) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  let lineIndex = 0;
+  let inFrontmatter = false;
+  let inFence = null;
+
+  if (startsWithFrontmatter(sourceLines)) {
+    inFrontmatter = true;
+    lineIndex = 1;
+  }
+
+  for (; lineIndex < sourceLines.length; lineIndex += 1) {
+    const line = String(sourceLines[lineIndex] || "");
+
+    if (inFrontmatter) {
+      if (FRONTMATTER_DELIMITER_RE.test(line)) {
+        inFrontmatter = false;
+      }
+      continue;
+    }
+
+    if (inFence) {
+      if (isClosingFence(line, inFence)) {
+        inFence = null;
+      }
+      continue;
+    }
+
+    const openingFence = getFenceOpening(line);
+    if (openingFence) {
+      inFence = openingFence;
+      continue;
+    }
+
+    if (isProjectLifecycleTaskLine(line)) {
+      return lineIndex;
+    }
+  }
+
+  return -1;
+}
+
+// Insert already-rendered schedule-log lines directly under the new note's
+// lifecycle task. Returns { content, inserted }; inserted is false when there is
+// nothing to insert or no `^prj` task exists.
+function insertProjectScheduleLogLines(content, scheduleLogLines) {
+  const text = String(content || "");
+  const logLines = Array.isArray(scheduleLogLines)
+    ? scheduleLogLines.map((line) =>
+        String(line === null || line === undefined ? "" : line),
+      )
+    : [];
+  if (logLines.length === 0) {
+    return Object.freeze({ content: text, inserted: false });
+  }
+
+  const { lines, lineEnding } = splitMarkdownContent(text);
+  const lifecycleIndex = findProjectLifecycleTaskIndex(lines);
+  if (lifecycleIndex === -1) {
+    return Object.freeze({ content: text, inserted: false });
+  }
+
+  return Object.freeze({
+    content: lines
+      .slice(0, lifecycleIndex + 1)
+      .concat(logLines, lines.slice(lifecycleIndex + 1))
+      .join(lineEnding),
+    inserted: true,
+  });
 }
 
 // Insert the rendered child tasks into the `## Tasks` section, replacing the
@@ -4163,18 +4307,21 @@ function insertProjectSectionNotes(content, sections) {
 }
 
 // Seed the new project note from the parsed source task: fill the `^prj`
-// completion criteria, apply the source task's priority, and optionally insert
-// converted child tasks into the `## Tasks` section. Returns a result object:
-//   seeded              - the `^prj` completion placeholder was found & filled
-//   tasksInserted       - child tasks were inserted into `## Tasks`
-//   tasksSectionMissing - child tasks were requested but `## Tasks` was absent
-//   content             - the rewritten content (unchanged when not seeded)
+// completion criteria, apply the source task's priority, optionally move the
+// source task's schedule log under `^prj`, and optionally insert converted child
+// tasks into the `## Tasks` section. Returns a result object:
+//   seeded               - the `^prj` completion placeholder was found & filled
+//   scheduleLogInserted  - schedule-log lines were inserted under `^prj`
+//   tasksInserted        - child tasks were inserted into `## Tasks`
+//   tasksSectionMissing  - child tasks were requested but `## Tasks` was absent
+//   content              - the rewritten content (unchanged when not seeded)
 function buildProjectContentFromTask(content, parsedTask, options = {}) {
   const text = String(content || "");
   if (!text.includes(PROJECT_COMPLETION_PLACEHOLDER)) {
     return Object.freeze({
       content: text,
       seeded: false,
+      scheduleLogInserted: false,
       tasksInserted: false,
       tasksSectionMissing: false,
       sectionsInserted: 0,
@@ -4191,6 +4338,21 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
       /\[p::\s*2\s*\]/,
       `[p::${parsedTask.priority}]`,
     );
+  }
+
+  const scheduleLogLines = Array.isArray(options.scheduleLogLines)
+    ? options.scheduleLogLines
+    : [];
+  let scheduleLogInserted = false;
+  if (scheduleLogLines.length > 0) {
+    const scheduleLogResult = insertProjectScheduleLogLines(
+      nextContent,
+      scheduleLogLines,
+    );
+    if (scheduleLogResult.inserted) {
+      nextContent = scheduleLogResult.content;
+      scheduleLogInserted = true;
+    }
   }
 
   const childTaskLines = Array.isArray(options.childTaskLines)
@@ -4224,6 +4386,7 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
   return Object.freeze({
     content: nextContent,
     seeded: true,
+    scheduleLogInserted,
     tasksInserted,
     tasksSectionMissing,
     sectionsInserted,
@@ -4319,6 +4482,7 @@ function getProjectFromTaskNoticeText(
   createdBasename,
   updatedLinkCount,
   sectionCount,
+  scheduleLogMoved = false,
 ) {
   const taskText = truncateProjectTaskDescription(description);
   const sourceText = String(sourceBasename || "").trim();
@@ -4337,6 +4501,9 @@ function getProjectFromTaskNoticeText(
     details.push(
       `${numericSectionCount} ${numericSectionCount === 1 ? "section" : "sections"} seeded`,
     );
+  }
+  if (scheduleLogMoved) {
+    details.push("schedule log moved");
   }
 
   return `Created project${projectSuffix} from task "${taskText}" (${details.join("; ")})`;
@@ -20356,6 +20523,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const createdDate = formatProjectTaskCreatedDate(new Date());
     let convertedChildTaskLines = [];
     let convertedChildSections = [];
+    let convertedScheduleLogLines = [];
     let childConversionLossy = false;
     const hasChildContent = sourceBlock.childLines.some(
       (line) => String(line || "").trim() !== "",
@@ -20367,10 +20535,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
       if (
         conversion.lossless &&
-        (conversion.taskLines.length > 0 || conversion.sections.length > 0)
+        (conversion.taskLines.length > 0 ||
+          conversion.sections.length > 0 ||
+          conversion.scheduleLogLines.length > 0)
       ) {
         convertedChildTaskLines = conversion.taskLines;
         convertedChildSections = conversion.sections;
+        convertedScheduleLogLines = conversion.scheduleLogLines;
       } else {
         childConversionLossy = true;
       }
@@ -20429,6 +20600,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         seedResult = buildProjectContentFromTask(content, parsedTask, {
           childTaskLines: convertedChildTaskLines,
           sections: convertedChildSections,
+          scheduleLogLines: convertedScheduleLogLines,
         });
         return seedResult.content;
       });
@@ -20445,6 +20617,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (convertedChildTaskLines.length > 0 && !seedResult.tasksInserted) {
       new Notice(
         "Created project, but the Tasks section was missing; source task was kept",
+      );
+      return true;
+    }
+
+    if (
+      convertedScheduleLogLines.length > 0 &&
+      !seedResult.scheduleLogInserted
+    ) {
+      new Notice(
+        "Created project, but the schedule log could not be added; source task was kept",
       );
       return true;
     }
@@ -20511,6 +20693,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         projectBasename ? createdFile.basename : undefined,
         updatedLinkCount,
         sectionsHandled,
+        convertedScheduleLogLines.length > 0,
       ),
     );
     return true;
@@ -21818,11 +22001,14 @@ module.exports.helpers = {
   parseProjectChildListItem,
   buildProjectTaskLineFromChildBullet,
   normalizeProjectSectionNoteLine,
+  normalizeProjectScheduleLogLine,
   formatProjectSectionTitle,
   parseProjectSectionBulletTitle,
   normalizeProjectSectionTitle,
   buildProjectSeedFromChildBullets,
   formatProjectTaskCreatedDate,
+  findProjectLifecycleTaskIndex,
+  insertProjectScheduleLogLines,
   replaceProjectTasksPlaceholder,
   findProjectSectionRange,
   insertProjectSectionNotes,

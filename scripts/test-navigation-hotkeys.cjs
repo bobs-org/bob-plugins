@@ -300,6 +300,100 @@ test("section-header navigation handles single-header and no-header notes", () =
   assert.equal(helpers.getSectionHeaderJumpLine(noHeaderLines, 6, -1), null);
 });
 
+test("open-task navigation scan includes Ready In Progress and Next and excludes Blocked", () => {
+  assert.equal(helpers.isActiveObsidianTaskNavigationLine("- [ ] #task Ready"), true);
+  assert.equal(
+    helpers.isActiveObsidianTaskNavigationLine("- [/] #task Working"),
+    true,
+  );
+  assert.equal(helpers.isActiveObsidianTaskNavigationLine("- [*] #task Next"), true);
+  assert.equal(
+    helpers.isActiveObsidianTaskNavigationLine("- [?] #task Blocked"),
+    false,
+  );
+  assert.equal(helpers.isActiveObsidianTaskNavigationLine("- [x] #task Done"), false);
+  assert.equal(
+    helpers.isActiveObsidianTaskNavigationLine("- [-] #task Cancelled"),
+    false,
+  );
+  assert.equal(
+    helpers.isActiveObsidianTaskNavigationLine("- [!] #task Unknown"),
+    false,
+  );
+  assert.equal(
+    helpers.isActiveObsidianTaskNavigationLine("- [ ] Untagged checkbox"),
+    false,
+  );
+  assert.equal(helpers.isOpenObsidianTaskLine("- [?] #task Blocked"), true);
+
+  const lines = [
+    "---",
+    "- [ ] #task Frontmatter",
+    "---",
+    "- [ ] #task Ready",
+    "- [/] #task Working",
+    "- [*] #task Next",
+    "- [?] #task Blocked",
+    "- [x] #task Done",
+    "- [-] #task Cancelled",
+    "- [!] #task Unknown",
+    "- [ ] Untagged checkbox",
+    "```md",
+    "- [ ] #task Fenced",
+    "```",
+    "- [ ] #task After fence",
+  ];
+  assert.deepEqual(helpers.getOpenTaskNavigationLines(lines), [3, 4, 5, 14]);
+});
+
+test("open-task navigation keeps existing Pomodoro ledger targets", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] Future ()",
+    "- [/] Working (09:00-09:25)",
+    "- [x] Done (0930-1000)",
+    "- [X] Also done (10:00-10:25)",
+    "- [-] Cancelled (1025-1050)",
+    "- [*] On hold ()",
+    "- [?] Blocked ()",
+    "  - [ ] Indented child ()",
+    "- [ ] Missing ledger shape",
+    "## Tasks",
+    "- [ ] #task After section",
+    "- [?] #task Blocked after section",
+  ];
+  assert.deepEqual(helpers.getOpenTaskNavigationLines(lines), [1, 2, 3, 4, 11]);
+});
+
+test("next and previous jumps skip Blocked tasks and wrap to an allowed task", () => {
+  const lines = [
+    "- [ ] #task Ready",
+    "- [?] #task Blocked mid",
+    "- [/] #task Working",
+    "- [?] #task Blocked last",
+  ];
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, 1), 2);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 2, 1), 0);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 2, -1), 0);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, -1), 2);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 1, 1), 2);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 1, -1), 0);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 3, 1), 0);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 3, -1), 2);
+});
+
+test("blocked-only notes and a sole current allowed task have no jump target", () => {
+  const blockedOnly = ["- [?] #task One", "- [?] #task Two"];
+  assert.deepEqual(helpers.getOpenTaskNavigationLines(blockedOnly), []);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(blockedOnly, 0, 1), null);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(blockedOnly, 1, -1), null);
+
+  const singleAllowed = ["- [ ] #task Only"];
+  assert.deepEqual(helpers.getOpenTaskNavigationLines(singleAllowed), [0]);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(singleAllowed, 0, 1), null);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(singleAllowed, 0, -1), null);
+});
+
 test("project schedule validation accepts only real YYYY-MM-DD dates", () => {
   assert.equal(helpers.validateProjectScheduledDate("2028-02-29").valid, true);
   assert.equal(helpers.validateProjectScheduledDate("2026-02-29").valid, false);

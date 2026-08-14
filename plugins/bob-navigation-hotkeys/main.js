@@ -6,7 +6,13 @@ const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})\s*$/;
 const SECTION_HEADER_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+// Broadly open `#task` statuses, including Blocked (`?`) for dependency,
+// scheduling, task-moving, and related non-navigation workflows.
 const OPEN_OBSIDIAN_TASK_STATUSES = new Set([" ", "/", "*", "?"]);
+// Ctrl+Shift+J/K proper-task jump targets: Ready (`[ ]`), In Progress (`[/]`),
+// and Next (`[*]`). Blocked (`[?]`) stays open for the workflows above but is
+// never a navigation target.
+const ACTIVE_OBSIDIAN_TASK_NAVIGATION_STATUSES = new Set([" ", "/", "*"]);
 const OBSIDIAN_TASK_STATUS_RANKS = Object.freeze({
   " ": 0,
   "*": 1,
@@ -5881,6 +5887,18 @@ function isOpenObsidianTaskLine(lineText) {
   );
 }
 
+// True for a proper `#task` line whose checkbox is an active navigation
+// target (Ready, In Progress, or Next). Blocked tasks remain open via
+// `isOpenObsidianTaskLine` but are omitted from Ctrl+Shift+J/K jumps.
+function isActiveObsidianTaskNavigationLine(lineText) {
+  const match = OBSIDIAN_TASK_LINE_RE.exec(String(lineText || ""));
+  return Boolean(
+    match &&
+      isObsidianTaskLine(lineText) &&
+      ACTIVE_OBSIDIAN_TASK_NAVIGATION_STATUSES.has(match[1]),
+  );
+}
+
 // True for an unfenced `## Pomodoros` heading line (allowing a trailing dataview
 // summary suffix such as the daily template's duration expression).
 function isPomodorosHeading(lineText) {
@@ -6383,13 +6401,15 @@ function getOpenObsidianTaskLines(lines) {
   return taskLines;
 }
 
-// Zero-based line indices of every open-task navigation target: open `#task`
-// lines anywhere in the note plus open or done top-level Pomodoro ledger lines
-// inside a `## Pomodoros` section. Leading frontmatter and fenced code blocks are
-// skipped with the same state machine used for the proper-task scanner, so
-// task-shaped lines inside YAML, examples, and `tasks` query blocks are ignored.
-// A line that qualifies as both a `#task` and a Pomodoro is added once, and
-// indices are returned in ascending file order.
+// Zero-based line indices of every open-task navigation target: Ready, In
+// Progress, and Next `#task` lines anywhere in the note (Blocked `[?]` stays
+// open for dependency/scheduling workflows but is not a jump target) plus
+// open or done top-level Pomodoro ledger lines inside a `## Pomodoros`
+// section. Leading frontmatter and fenced code blocks are skipped with the
+// same state machine used for the proper-task scanner, so task-shaped lines
+// inside YAML, examples, and `tasks` query blocks are ignored. A line that
+// qualifies as both a `#task` and a Pomodoro is added once, and indices are
+// returned in ascending file order.
 function getOpenTaskNavigationLines(lines) {
   const sourceLines = Array.isArray(lines)
     ? lines
@@ -6435,7 +6455,7 @@ function getOpenTaskNavigationLines(lines) {
       inPomodorosSection = isPomodorosHeading(line);
     }
 
-    if (isOpenObsidianTaskLine(line)) {
+    if (isActiveObsidianTaskNavigationLine(line)) {
       taskLines.push(lineIndex);
     } else if (inPomodorosSection && isPomodoroNavigationTaskLine(line)) {
       taskLines.push(lineIndex);
@@ -6446,11 +6466,11 @@ function getOpenTaskNavigationLines(lines) {
 }
 
 // Circular open-task navigation: jump to the nearest navigation target
-// (open `#task` line or open/done Pomodoro ledger line) in the given direction,
-// wrapping across the file boundary when there is no strict neighbour. Returns
-// null only when there are no matching targets, or when the sole matching target
-// is already on the cursor line (so the caller can show its no-target notice and
-// leave the editor untouched).
+// (Ready/In Progress/Next `#task` line or open/done Pomodoro ledger line) in
+// the given direction, wrapping across the file boundary when there is no
+// strict neighbour. Returns null only when there are no matching targets, or
+// when the sole matching target is already on the cursor line (so the caller
+// can show its no-target notice and leave the editor untouched).
 function getOpenObsidianTaskJumpLine(lines, cursorLine, direction) {
   const currentLine = Math.floor(numericOrDefault(cursorLine, Number.NaN));
   if (!Number.isFinite(currentLine)) {
@@ -22063,6 +22083,7 @@ module.exports.helpers = {
   getCountedTaskNoticeSuffix,
   getMarkdownLineContexts,
   isOpenObsidianTaskLine,
+  isActiveObsidianTaskNavigationLine,
   isPomodorosHeading,
   isLevelTwoHeading,
   hasPomodoroTimeRange,

@@ -17,6 +17,8 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       MarkdownView: EmptyClass,
       Modal: EmptyClass,
       Notice: NoticeStub,
+      normalizePath: (value) =>
+        String(value || "").replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/|\/$/g, ""),
       Plugin: EmptyClass,
       Setting: EmptyClass,
       TFile: EmptyClass,
@@ -24,7 +26,9 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
     };
   }
   if (request === "@codemirror/view") {
-    return { EditorView: class EditorView {} };
+    class EditorView {}
+    EditorView.updateListener = { of: (callback) => ({ callback }) };
+    return { EditorView };
   }
   return originalLoad.call(this, request, parent, isMain);
 };
@@ -75,6 +79,12 @@ function createEditor(content) {
     setCursor(nextCursor) {
       cursor = nextCursor;
     },
+    getCursor() {
+      return cursor;
+    },
+    listSelections() {
+      return cursor ? [{ anchor: cursor, head: cursor }] : [];
+    },
     get cursor() {
       return cursor;
     },
@@ -98,6 +108,13 @@ function sourceForTaskPicker(editor, sourcePath, line) {
   const marker = helpers.findTaskPickerMarkerNearCursor(lineText, cursorCh);
   assert.ok(marker);
   return { ...marker, editor, sourcePath, line };
+}
+
+function sourceForPomodoroLink(editor, sourcePath, line) {
+  const lineText = editor.getLine(line);
+  const task = helpers.findDirectPomodoroLinkTask(lineText, line);
+  assert.ok(task);
+  return { kind: "link-task-pomodoro", editor, sourcePath, line, task: { ...task } };
 }
 
 test("explicit task IDs exclusively own dependency lookup", () => {
@@ -1791,4 +1808,699 @@ test("a source marker edited after a successful new-ID target write reports an a
     lastNotice(),
     "Task block ID added and unscheduled, set Next, but the source link changed before completion",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Ctrl+Shift+Enter direct Pomodoro link.
+// ---------------------------------------------------------------------------
+
+test("planTargetTaskUpdate forceNext promotes every open status to Next, unlike plain activationEligible", () => {
+  const now = localDate(2026, 8, 15);
+  for (const status of [" ", "/", "*", "?"]) {
+    const plan = helpers.planTargetTaskUpdate(`- [${status}] #task Do it`, 0, {
+      forceNext: true,
+      now,
+    });
+    assert.equal(plan.newStatus, "*");
+    assert.equal(plan.statusChanged, status !== "*");
+  }
+});
+
+test("planTargetTaskUpdate without forceNext leaves an In Progress task and an unscheduled Blocked task alone", () => {
+  const now = localDate(2026, 8, 15);
+  const inProgress = helpers.planTargetTaskUpdate("- [/] #task Do it", 0, {
+    activationEligible: true,
+    now,
+  });
+  assert.equal(inProgress.newStatus, "/");
+  assert.equal(inProgress.statusChanged, false);
+
+  const blockedNoSchedule = helpers.planTargetTaskUpdate("- [?] #task Do it", 0, {
+    activationEligible: true,
+    now,
+  });
+  assert.equal(blockedNoSchedule.newStatus, "?");
+  assert.equal(blockedNoSchedule.statusChanged, false);
+});
+
+test("planTargetTaskUpdate forceNext still removes a uniquely future schedule and logs it against an existing Schedule Log", () => {
+  const now = localDate(2026, 8, 15);
+  const content = [
+    "- [?] #task Ship it [scheduled:: 2026-08-20]",
+    "  - 🗓️ **SCHEDULE LOG**",
+  ].join("\n");
+  const plan = helpers.planTargetTaskUpdate(content, 0, { forceNext: true, now });
+  assert.equal(plan.removedFutureSchedule, true);
+  assert.equal(plan.newStatus, "*");
+  assert.equal(plan.logEntryAdded, true);
+});
+
+test("planTargetTaskUpdate forceNext never creates a Schedule Log for a task that keeps none", () => {
+  const now = localDate(2026, 8, 15);
+  const plan = helpers.planTargetTaskUpdate(
+    "- [?] #task Ship it [scheduled:: 2026-08-20]",
+    0,
+    { forceNext: true, now },
+  );
+  assert.equal(plan.removedFutureSchedule, true);
+  assert.equal(plan.newStatus, "*");
+  assert.equal(plan.logEntryAdded, false);
+  assert.equal(plan.content, "- [*] #task Ship it");
+});
+
+test("findDirectPomodoroLinkTask includes a #hide project task, unlike the task-picker's own listing", () => {
+  const line = "- [ ] #task #hide Secret errand";
+  const task = helpers.findDirectPomodoroLinkTask(line, 0);
+  assert.ok(task);
+  assert.equal(task.status, " ");
+  assert.equal(helpers.collectTaskPickerItems(line).length, 0);
+});
+
+test("findDirectPomodoroLinkTask rejects closed/canceled tasks and non-task lines", () => {
+  assert.equal(helpers.findDirectPomodoroLinkTask("- [x] #task Done already", 0), null);
+  assert.equal(helpers.findDirectPomodoroLinkTask("- [-] #task Canceled", 0), null);
+  assert.equal(helpers.findDirectPomodoroLinkTask("Just a paragraph.", 0), null);
+  assert.equal(helpers.findDirectPomodoroLinkTask("- plain list item, not a task", 0), null);
+  assert.equal(helpers.findDirectPomodoroLinkTask("- [ ] no task tag here", 0), null);
+});
+
+test("findDirectPomodoroLinkTask accepts every open status and carries the existing block ID", () => {
+  for (const status of [" ", "/", "*", "?"]) {
+    const task = helpers.findDirectPomodoroLinkTask(`- [${status}] #task Ship it ^ship`, 3);
+    assert.ok(task);
+    assert.equal(task.status, status);
+    assert.equal(task.existingId, "ship");
+    assert.equal(task.line, 3);
+  }
+});
+
+test("todayDailyPath formats the default YYYY/YYYYMMDD layout under the configured folder", () => {
+  const path = helpers.todayDailyPath(localDate(2026, 8, 5), {
+    folder: "Daily",
+    format: "YYYY/YYYYMMDD",
+  });
+  assert.equal(path, "Daily/2026/20260805.md");
+});
+
+test("todayDailyPath honors a custom Daily Notes format and an empty folder", () => {
+  const path = helpers.todayDailyPath(localDate(2026, 3, 9), { folder: "", format: "YYYY-MM-DD" });
+  assert.equal(path, "2026-03-09.md");
+});
+
+test("formatDailyDate resolves bracketed literal text alongside date tokens", () => {
+  const text = helpers.formatDailyDate(localDate(2026, 1, 2), "[Day] YYYY-MM-DD");
+  assert.equal(text, "Day 2026-01-02");
+});
+
+test("getDailyNotesOptions reads the daily-notes core plugin's configured options", () => {
+  const app = {
+    internalPlugins: {
+      plugins: {
+        "daily-notes": { instance: { options: { folder: "Daily", format: "YYYY/YYYYMMDD" } } },
+      },
+    },
+  };
+  assert.deepEqual(helpers.getDailyNotesOptions(app), { folder: "Daily", format: "YYYY/YYYYMMDD" });
+  assert.deepEqual(helpers.getDailyNotesOptions({}), {});
+});
+
+test("computeFencedLineFlags marks opening and closing fence lines and everything between", () => {
+  const lines = ["before", "```", "inside", "```", "after"];
+  assert.deepEqual(helpers.computeFencedLineFlags(lines), [false, true, true, true, false]);
+});
+
+test("selectPomodoroInsertionTarget prefers the single open timed entry over a placeholder", () => {
+  const lines = ["## Pomodoros", "- [ ] Next ()", "- [ ] Current (10:00-10:25)"];
+  const section = { startLine: 1, endLine: 2 };
+  const fenced = helpers.computeFencedLineFlags(lines);
+  assert.deepEqual(helpers.selectPomodoroInsertionTarget(lines, section, fenced), {
+    entryLine: 2,
+  });
+});
+
+test("selectPomodoroInsertionTarget falls back to the first open placeholder when nothing is timed", () => {
+  const lines = ["## Pomodoros", "- [x] Done (09:00-09:25)", "- [ ] Later ()", "- [ ] Even later ()"];
+  const section = { startLine: 1, endLine: 3 };
+  const fenced = helpers.computeFencedLineFlags(lines);
+  assert.deepEqual(helpers.selectPomodoroInsertionTarget(lines, section, fenced), {
+    entryLine: 2,
+  });
+});
+
+test("selectPomodoroInsertionTarget rejects more than one open timed entry", () => {
+  const lines = ["## Pomodoros", "- [ ] A (10:00-10:25)", "- [ ] B (11:00-11:25)"];
+  const section = { startLine: 1, endLine: 2 };
+  const fenced = helpers.computeFencedLineFlags(lines);
+  assert.deepEqual(helpers.selectPomodoroInsertionTarget(lines, section, fenced), {
+    error: "multiple-open-timed",
+  });
+});
+
+test("selectPomodoroInsertionTarget ignores fenced and nested entries and picks the remaining eligible one", () => {
+  const lines = [
+    "## Pomodoros",
+    "```",
+    "- [ ] Fake (10:00-10:25)",
+    "```",
+    "- [ ] Real ()",
+    "  - [ ] #task nested, not a top-level entry (12:00-12:25)",
+  ];
+  const section = { startLine: 1, endLine: 5 };
+  const fenced = helpers.computeFencedLineFlags(lines);
+  assert.deepEqual(helpers.selectPomodoroInsertionTarget(lines, section, fenced), {
+    entryLine: 4,
+  });
+});
+
+test("findPomodoroChildIndentation reuses an existing child bullet, then the section's, then falls back to two spaces", () => {
+  const withOwnChild = ["## Pomodoros", "- [ ] Current ()", "\t- existing child"];
+  assert.equal(
+    helpers.findPomodoroChildIndentation(withOwnChild, 1, 2, { startLine: 1, endLine: 2 }),
+    "\t",
+  );
+
+  const withSectionChild = ["## Pomodoros", "- [ ] Current ()", "- [ ] Other ()", "\t- other's child"];
+  assert.equal(
+    helpers.findPomodoroChildIndentation(withSectionChild, 1, 1, { startLine: 1, endLine: 3 }),
+    "\t",
+  );
+
+  const withNoChild = ["## Pomodoros", "- [ ] Current ()"];
+  assert.equal(
+    helpers.findPomodoroChildIndentation(withNoChild, 1, 1, { startLine: 1, endLine: 1 }),
+    "  ",
+  );
+});
+
+test("planPomodoroLinkInsertion inserts under the selected entry using an existing child's indentation", () => {
+  const daily = [
+    "## Pomodoros",
+    "- [x] Done (09:00-09:25) old task",
+    "- [ ] Current (10:00-10:25) something",
+    "  - [[Other#^abc]]",
+    "- [ ] Next ()",
+  ].join("\n");
+  const plan = helpers.planPomodoroLinkInsertion(daily, {
+    blockId: "foobar",
+    targetPath: "Tasks.md",
+    sourcePath: "Daily.md",
+    resolveTarget: (reference) =>
+      reference.oldId === "abc" ? "Other.md" : reference.oldId === "foobar" ? "Tasks.md" : null,
+    linkText: "[[Tasks#^foobar]]",
+  });
+  assert.equal(plan.entryLine, 2);
+  assert.equal(plan.alreadyLinked, false);
+  assert.equal(plan.removedCount, 0);
+  assert.equal(
+    plan.content,
+    [
+      "## Pomodoros",
+      "- [x] Done (09:00-09:25) old task",
+      "- [ ] Current (10:00-10:25) something",
+      "  - [[Other#^abc]]",
+      "  - [[Tasks#^foobar]]",
+      "- [ ] Next ()",
+    ].join("\n"),
+  );
+});
+
+test("planPomodoroLinkInsertion is idempotent and prunes a matching link from a later open Pomodoro", () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] Current (10:00-10:25)",
+    "  - [[Tasks#^foobar]]",
+    "- [ ] Next ()",
+    "  - [[Tasks#^foobar]]",
+  ].join("\n");
+  const plan = helpers.planPomodoroLinkInsertion(daily, {
+    blockId: "foobar",
+    targetPath: "Tasks.md",
+    sourcePath: "Daily.md",
+    resolveTarget: (reference) => (reference.oldId === "foobar" ? "Tasks.md" : null),
+    linkText: "[[Tasks#^foobar]]",
+  });
+  assert.equal(plan.alreadyLinked, true);
+  assert.equal(plan.removedCount, 1);
+  assert.equal(
+    plan.content,
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^foobar]]", "- [ ] Next ()", ""].join(
+      "\n",
+    ),
+  );
+});
+
+test("planPomodoroLinkInsertion reports no-section, no-eligible-entry, and multiple-open-timed without any edits", () => {
+  const base = {
+    blockId: "foobar",
+    targetPath: "Tasks.md",
+    sourcePath: "Daily.md",
+    resolveTarget: () => null,
+    linkText: "[[Tasks#^foobar]]",
+  };
+  assert.deepEqual(helpers.planPomodoroLinkInsertion("# Notes\nhello", base), {
+    error: "no-section",
+  });
+  assert.deepEqual(
+    helpers.planPomodoroLinkInsertion(["## Pomodoros", "- [x] Done (10:00-10:25)"].join("\n"), base),
+    { error: "no-eligible-entry" },
+  );
+  assert.deepEqual(
+    helpers.planPomodoroLinkInsertion(
+      ["## Pomodoros", "- [ ] A (10:00-10:25)", "- [ ] B (11:00-11:25)"].join("\n"),
+      base,
+    ),
+    { error: "multiple-open-timed" },
+  );
+});
+
+test("planFuturePomodoroLinkCleanup accepts a direct ownerLine/section context, bypassing findPomodoroSourceContext", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] Current (10:00-10:25)",
+    "- [ ] Later ()",
+    "  - [[Tasks#^ship]]",
+  ].join("\n");
+  const result = helpers.planFuturePomodoroLinkCleanup(content, {
+    ownerLine: 1,
+    section: { startLine: 1, endLine: 3 },
+    sourcePath: "Daily.md",
+    targetPath: "Tasks.md",
+    targetBlockId: "ship",
+    resolveTarget: (reference) => (reference.oldId === "ship" ? "Tasks.md" : null),
+  });
+  assert.equal(result.removedCount, 1);
+});
+
+test("Ctrl+Shift+Enter is registered as the link-task-to-pomodoro command", () => {
+  const plugin = new Plugin();
+  const commands = [];
+  plugin.addCommand = (command) => commands.push(command);
+  plugin.registerEditorExtension = () => {};
+  plugin.register = () => {};
+
+  plugin.onload();
+
+  assert.ok(commands.find((entry) => entry.id === "rename-selected-block-id"));
+
+  const command = commands.find((entry) => entry.id === "link-task-to-pomodoro");
+  assert.ok(command);
+  assert.equal(command.name, "Link task to Pomodoro");
+  assert.deepEqual(command.hotkeys, [{ modifiers: ["Ctrl", "Shift"], key: "Enter" }]);
+  assert.equal(typeof command.editorCallback, "function");
+
+  let calledWith = null;
+  plugin.openPomodoroTaskLink = (editor, view) => {
+    calledWith = [editor, view];
+  };
+  const fakeEditor = {};
+  const fakeView = {};
+  command.editorCallback(fakeEditor, fakeView);
+  assert.deepEqual(calledWith, [fakeEditor, fakeView]);
+});
+
+test("resolvePomodoroLinkTaskFromEditor requires a single cursor", () => {
+  const plugin = new Plugin();
+  const editor = createEditor("- [ ] #task Ship it");
+  assert.deepEqual(plugin.resolvePomodoroLinkTaskFromEditor(editor), {
+    error: "No active Markdown task selected",
+  });
+
+  editor.setCursor({ line: 0, ch: 5 });
+  editor.listSelections = () => [
+    { head: { line: 0, ch: 5 } },
+    { head: { line: 0, ch: 6 } },
+  ];
+  assert.deepEqual(plugin.resolvePomodoroLinkTaskFromEditor(editor), {
+    error: "No active Markdown task selected",
+  });
+});
+
+test("resolvePomodoroLinkTaskFromEditor rejects a cursor inside a fenced code block", () => {
+  const plugin = new Plugin();
+  const editor = createEditor(["```", "- [ ] #task Fake", "```"].join("\n"));
+  editor.setCursor({ line: 1, ch: 2 });
+  assert.deepEqual(plugin.resolvePomodoroLinkTaskFromEditor(editor), {
+    error: "Cannot link a task inside a code block",
+  });
+});
+
+test("resolvePomodoroLinkTaskFromEditor rejects a non-task line and a closed task", () => {
+  const plugin = new Plugin();
+  const paragraph = createEditor("Just a paragraph.");
+  paragraph.setCursor({ line: 0, ch: 0 });
+  assert.deepEqual(plugin.resolvePomodoroLinkTaskFromEditor(paragraph), {
+    error: "No open task under cursor",
+  });
+
+  const closed = createEditor("- [x] #task Already done");
+  closed.setCursor({ line: 0, ch: 0 });
+  assert.deepEqual(plugin.resolvePomodoroLinkTaskFromEditor(closed), {
+    error: "No open task under cursor",
+  });
+});
+
+test("resolvePomodoroLinkTaskFromEditor accepts a #hide project task directly under the cursor", () => {
+  const plugin = new Plugin();
+  const editor = createEditor("- [ ] #task #hide Secret errand");
+  editor.setCursor({ line: 0, ch: 0 });
+  const result = plugin.resolvePomodoroLinkTaskFromEditor(editor);
+  assert.ok(result.task);
+  assert.equal(result.task.displayText, "Secret errand");
+});
+
+test("resolvePomodoroLinkTaskFromEditor rejects a block ID duplicated elsewhere in the same note", () => {
+  const plugin = new Plugin();
+  const editor = createEditor(
+    ["- [ ] #task Ship it ^dup", "- [ ] #task Also uses it ^dup"].join("\n"),
+  );
+  editor.setCursor({ line: 0, ch: 0 });
+  assert.deepEqual(plugin.resolvePomodoroLinkTaskFromEditor(editor), {
+    error: "Block ID 'dup' is duplicated in this note",
+  });
+});
+
+test("existing-ID Pomodoro link runtime: cross-note guarded write, canonical link, forced Next, and success notice", async () => {
+  resetNotices();
+  const editor = createEditor("- [?] #task Ship it [scheduled:: 2026-08-20] ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const dailyContent = ["## Pomodoros", "- [ ] Current (10:00-10:25)"].join("\n");
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let written = null;
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? dailyContent : null),
+      modify: async (file, content) => {
+        written = { path: file.path, content };
+      },
+    },
+    metadataCache: {
+      fileToLinktext: (file) => file.path.replace(/\.md$/, ""),
+    },
+  };
+  plugin.resolveReferenceDestination = () => null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.ok(written);
+  assert.equal(written.path, "Daily.md");
+  assert.equal(
+    written.content,
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^ship]]"].join("\n"),
+  );
+  assert.equal(lastNotice(), "Linked task to Pomodoro · removed future schedule · set Next");
+});
+
+test("new-ID Pomodoro link runtime: cross-note guarded write, appended ID stays final, forced Next for an In Progress task", async () => {
+  resetNotices();
+  const editor = createEditor("- [/] #task Ship it [priority:: high]");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const dailyContent = ["## Pomodoros", "- [ ] Later ()"].join("\n");
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let written = null;
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? dailyContent : null),
+      modify: async (file, content) => {
+        written = { path: file.path, content };
+      },
+    },
+    metadataCache: {
+      fileToLinktext: (file) => file.path.replace(/\.md$/, ""),
+    },
+  };
+  plugin.resolveReferenceDestination = () => null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.submitPomodoroTaskLinkBlockId(source, "ship");
+
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it [priority:: high] ^ship");
+  assert.ok(written);
+  assert.equal(
+    written.content,
+    ["## Pomodoros", "- [ ] Later ()", "  - [[Tasks#^ship]]"].join("\n"),
+  );
+  assert.equal(lastNotice(), "Added block ID and linked task to Pomodoro · set Next");
+});
+
+test("submitPomodoroTaskLinkBlockId rejects a newly duplicated ID discovered at submit time", async () => {
+  resetNotices();
+  const editor = createEditor(["- [ ] #task Ship it", "- [ ] #task Other ^dup"].join("\n"));
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+
+  const plugin = new Plugin();
+  const result = await plugin.submitPomodoroTaskLinkBlockId(source, "dup");
+
+  assert.equal(result, false);
+  assert.equal(lastNotice(), "Block ID 'dup' already exists in Tasks.md");
+});
+
+test("submitPomodoroTaskLinkBlockId aborts when the task text changed while the modal was open", async () => {
+  resetNotices();
+  const editor = createEditor("- [ ] #task Ship it");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  editor.replaceRange(
+    "- [ ] #task Ship it NOW",
+    { line: 0, ch: 0 },
+    { line: 0, ch: editor.getLine(0).length },
+  );
+
+  const plugin = new Plugin();
+  const result = await plugin.submitPomodoroTaskLinkBlockId(source, "ship");
+
+  assert.equal(result, false);
+  assert.equal(lastNotice(), "Task link blocked: selected task changed in Tasks.md");
+});
+
+test("same-note Pomodoro link runtime: task and ledger edits merge into one transaction", async () => {
+  resetNotices();
+  const editor = createEditor(
+    [
+      "- [?] #task Ship it [scheduled:: 2026-08-20] ^ship",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+    ].join("\n"),
+  );
+  const source = sourceForPomodoroLink(editor, "Daily.md", 0);
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Daily.md" ? { path: "Daily.md" } : null);
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "" ? { path: "Daily.md" } : null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "- [*] #task Ship it ^ship",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "  \t- _2026-08-20 → 2026-08-15_ — 🍅 pulled into today's Pomodoro",
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[#^ship]]",
+    ].join("\n"),
+  );
+  assert.equal(
+    lastNotice(),
+    "Linked task to Pomodoro · removed future schedule · set Next · logged schedule change",
+  );
+});
+
+test("repeating the Pomodoro link command does not duplicate the link and reports it as already linked", async () => {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const dailyContent = ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^ship]]"].join(
+    "\n",
+  );
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let modifyCalled = false;
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? dailyContent : null),
+      modify: async () => {
+        modifyCalled = true;
+      },
+    },
+    metadataCache: {
+      fileToLinktext: (file) => file.path.replace(/\.md$/, ""),
+    },
+  };
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, true);
+  assert.equal(modifyCalled, false);
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(lastNotice(), "Task already linked to Pomodoro");
+});
+
+test("Pomodoro link stops before any mutation when today's daily note is missing", async () => {
+  resetNotices();
+  const editor = createEditor("- [ ] #task Ship it ^ship");
+  const before = editor.getValue();
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => null;
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, false);
+  assert.equal(editor.getValue(), before);
+  assert.equal(lastNotice(), "Task link blocked: today's daily note could not be found");
+});
+
+test("Pomodoro link stops before any task mutation when the daily note has no Pomodoros section", async () => {
+  resetNotices();
+  const editor = createEditor("- [ ] #task Ship it ^ship");
+  const before = editor.getValue();
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let modifyCalled = false;
+  plugin.app = {
+    vault: {
+      read: async () => "# Notes\nNothing here",
+      modify: async () => {
+        modifyCalled = true;
+      },
+    },
+  };
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, false);
+  assert.equal(modifyCalled, false);
+  assert.equal(editor.getValue(), before);
+  assert.equal(lastNotice(), "Task link blocked: Daily.md has no Pomodoros section");
+});
+
+test("Pomodoro link stops before any task mutation when the daily note has multiple open timed Pomodoros", async () => {
+  resetNotices();
+  const editor = createEditor("- [ ] #task Ship it ^ship");
+  const before = editor.getValue();
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let modifyCalled = false;
+  plugin.app = {
+    vault: {
+      read: async () =>
+        ["## Pomodoros", "- [ ] A (10:00-10:25)", "- [ ] B (11:00-11:25)"].join("\n"),
+      modify: async () => {
+        modifyCalled = true;
+      },
+    },
+  };
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, false);
+  assert.equal(modifyCalled, false);
+  assert.equal(editor.getValue(), before);
+  assert.equal(
+    lastNotice(),
+    "Task link blocked: Daily.md has multiple open timed Pomodoros",
+  );
+});
+
+test("Pomodoro link aborts without any write when the task line changed since it was selected", async () => {
+  resetNotices();
+  const editor = createEditor("- [ ] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  editor.replaceRange(
+    "- [ ] #task Ship it NOW ^ship",
+    { line: 0, ch: 0 },
+    { line: 0, ch: editor.getLine(0).length },
+  );
+  const plugin = new Plugin();
+  let dailyResolved = false;
+  plugin.resolveTodayDailyFile = () => {
+    dailyResolved = true;
+    return { path: "Daily.md" };
+  };
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, false);
+  assert.equal(dailyResolved, false);
+  assert.equal(lastNotice(), "Task link blocked: selected task changed in Tasks.md");
+});
+
+test("Pomodoro link reports the exact partial result when the daily note write fails after the task write succeeds", async () => {
+  resetNotices();
+  const editor = createEditor("- [?] #task Ship it [scheduled:: 2026-08-20] ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plannedDaily = ["## Pomodoros", "- [ ] Current (10:00-10:25)"].join("\n");
+  const staleDaily = plannedDaily.replace("Current", "Current NOW");
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let readCount = 0;
+  plugin.app = {
+    vault: {
+      read: async (file) => {
+        if (file.path !== "Daily.md") {
+          return null;
+        }
+        readCount += 1;
+        return readCount === 1 ? plannedDaily : staleDaily;
+      },
+      modify: async () => {
+        throw new Error("should not be called");
+      },
+    },
+    metadataCache: {
+      fileToLinktext: (file) => file.path.replace(/\.md$/, ""),
+    },
+  };
+  plugin.resolveReferenceDestination = () => null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, false);
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(lastNotice(), "Task unscheduled, set Next, but Daily.md could not be updated");
+});
+
+test("canceling the Pomodoro block-ID modal leaves the note untouched", () => {
+  resetNotices();
+  const editor = createEditor("- [ ] #task Ship it");
+  const source = {
+    kind: "link-task-pomodoro",
+    editor,
+    sourcePath: "Tasks.md",
+    line: 0,
+    task: { line: 0, rawLine: "- [ ] #task Ship it" },
+  };
+  const plugin = new Plugin();
+  const before = editor.getValue();
+
+  plugin.cancelBlockIdPrompt(source);
+
+  assert.equal(editor.getValue(), before);
 });

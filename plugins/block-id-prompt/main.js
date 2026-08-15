@@ -74,6 +74,12 @@ const SCHEDULE_LOG_ENTRY_EMPHASIS = "_";
 const SCHEDULE_LOG_TRANSITION = " → ";
 const SCHEDULE_LOG_SEPARATOR = " — ";
 const SCHEDULE_LOG_POMODORO_REASON = "🍅 pulled into today's Pomodoro";
+const WORK_LOG_EMOJI = "🛠️";
+const WORK_LOG_LABEL = "WORK LOG";
+const LEGACY_WORK_LOG_LABEL = "Work log";
+const WORK_LOG_PARENT_RE = new RegExp(
+  `^([ \\t]*)([-*+]|\\d+[.)])[ \\t]+(?:${WORK_LOG_EMOJI}[ \\t]+)?\\*\\*(?:${WORK_LOG_LABEL}|${LEGACY_WORK_LOG_LABEL}):?\\*\\*[ \\t]*$`,
+);
 // Daily Notes core-plugin lookup and filename-format parsing, mirroring
 // bob-ledger-tools/main.js. Kept as an independent copy for the same reason
 // as the Schedule Log constants above: plugins are deployed separately and
@@ -1501,6 +1507,38 @@ function parseScheduleLogMarkerLine(lineText) {
   return match ? { indent: match[1], marker: match[2] } : null;
 }
 
+function parseWorkLogMarkerLine(lineText) {
+  const match = WORK_LOG_PARENT_RE.exec(normalizeMarkdownLine(lineText));
+  return match ? { indent: match[1], marker: match[2] } : null;
+}
+
+function parseListItemPrefix(lineText) {
+  const match = /^([ \t]*)([-*+]|\d+[.)])[ \t]+/.exec(
+    normalizeMarkdownLine(lineText),
+  );
+  return match ? { indent: match[1], marker: match[2] } : null;
+}
+
+function normalizeWorkSummary(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function workSummaryContainsDataviewInlineField(value) {
+  return normalizeWorkSummary(value).includes("::");
+}
+
+function workSummaryPromptState(value) {
+  const summary = normalizeWorkSummary(value);
+  return {
+    summary,
+    isBlank: summary.length === 0,
+    hasDataviewWarning: summary.includes("::"),
+    primaryButtonText: summary ? "Set Open & log" : "Set Open",
+  };
+}
+
 // The exclusive-of-nothing-past-it last line of `parentLine`'s child block:
 // every later line that is blank or indented deeper than the parent, stopping
 // at the first nonblank line indented at or shallower than the parent.
@@ -1570,6 +1608,179 @@ function findScheduleLogMarker(lines, taskLine) {
   }
 
   return null;
+}
+
+// The managed Work Log marker among `taskLine`'s direct children, or null.
+// A marker belonging to a nested child task or any deeper subtree is ignored.
+function findWorkLogMarker(lines, taskLine) {
+  if (!Array.isArray(lines) || !Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
+    return null;
+  }
+
+  const endLine = findChildBlockEndLine(lines, taskLine);
+  for (let line = taskLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const parsed = parseWorkLogMarkerLine(lineText);
+    if (parsed && findNearestParentListItemLine(lines, line) === taskLine) {
+      return { line, indent: parsed.indent, marker: parsed.marker };
+    }
+  }
+
+  return null;
+}
+
+function findTaskDirectChildPrefix(lines, taskLine) {
+  if (!Array.isArray(lines) || !Number.isInteger(taskLine)) {
+    return null;
+  }
+
+  const endLine = findChildBlockEndLine(lines, taskLine);
+  for (let line = taskLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const parsed = parseListItemPrefix(lineText);
+    if (parsed && findNearestParentListItemLine(lines, line) === taskLine) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function canonicalTaskChildIndent(lines, taskLine) {
+  const taskPrefix = parseListItemPrefix(lines[taskLine] || "");
+  return `${taskPrefix ? taskPrefix.indent : ""}${CANONICAL_POMODORO_CHILD_INDENT}`;
+}
+
+function findWorkLogEntryPrefix(lines, markerLine) {
+  if (!Array.isArray(lines) || !Number.isInteger(markerLine)) {
+    return null;
+  }
+
+  const endLine = findChildBlockEndLine(lines, markerLine);
+  for (let line = markerLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const parsed = parseListItemPrefix(lineText);
+    if (parsed && findNearestParentListItemLine(lines, line) === markerLine) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function lineEndingForInsertion(content, lines, lineNumber) {
+  if (
+    Number.isInteger(lineNumber) &&
+    lineNumber >= 0 &&
+    lineNumber < lines.length &&
+    String(lines[lineNumber] || "").endsWith("\r")
+  ) {
+    return "\r\n";
+  }
+
+  return String(content || "").includes("\r\n") ? "\r\n" : "\n";
+}
+
+function insertionEditAtLine(content, lines, insertLine, insertedLines, lineEnding) {
+  if (insertLine < lines.length) {
+    const insertionIndex = lineStartIndexFromLines(lines, insertLine);
+    return {
+      start: insertionIndex,
+      end: insertionIndex,
+      replacement: `${insertedLines.join(lineEnding)}${lineEnding}`,
+    };
+  }
+
+  return {
+    start: content.length,
+    end: content.length,
+    replacement: `${lineEnding}${insertedLines.join(lineEnding)}`,
+  };
+}
+
+function planWorkLogInsertion(preimageContent, taskLine, rawSummary) {
+  const summary = normalizeWorkSummary(rawSummary);
+  const content = String(preimageContent === null || preimageContent === undefined ? "" : preimageContent);
+  if (!summary) {
+    return {
+      content,
+      edits: [],
+      summary,
+      workLogEntryAdded: false,
+      workLogInsertLine: null,
+      hasChanges: false,
+    };
+  }
+
+  const lines = content.split("\n");
+  if (!Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
+    return null;
+  }
+
+  const taskLineText = normalizeMarkdownLine(lines[taskLine] || "");
+  if (!getObsidianTaskLineMatch(taskLineText)) {
+    return null;
+  }
+
+  const marker = findWorkLogMarker(lines, taskLine);
+  let edit;
+  let workLogInsertLine;
+
+  if (marker) {
+    const entryPrefix =
+      findWorkLogEntryPrefix(lines, marker.line) || {
+        indent: `${marker.indent}${CANONICAL_POMODORO_CHILD_INDENT}`,
+        marker: marker.marker,
+      };
+    const entryLineText = `${entryPrefix.indent}${entryPrefix.marker} ${summary}`;
+    workLogInsertLine = marker.line + 1;
+    edit = insertionEditAtLine(
+      content,
+      lines,
+      workLogInsertLine,
+      [entryLineText],
+      lineEndingForInsertion(content, lines, marker.line),
+    );
+  } else {
+    const directChildPrefix =
+      findTaskDirectChildPrefix(lines, taskLine) || {
+        indent: canonicalTaskChildIndent(lines, taskLine),
+        marker: "-",
+      };
+    const entryIndent = `${directChildPrefix.indent}${CANONICAL_POMODORO_CHILD_INDENT}`;
+    const markerLineText = `${directChildPrefix.indent}${directChildPrefix.marker} ${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`;
+    const entryLineText = `${entryIndent}- ${summary}`;
+    workLogInsertLine = findChildBlockEndLine(lines, taskLine) + 1;
+    edit = insertionEditAtLine(
+      content,
+      lines,
+      workLogInsertLine,
+      [markerLineText, entryLineText],
+      lineEndingForInsertion(content, lines, taskLine),
+    );
+  }
+
+  const edits = [edit];
+  return {
+    content: applyTextEdits(content, edits),
+    edits,
+    summary,
+    workLogEntryAdded: true,
+    workLogInsertLine,
+    hasChanges: true,
+  };
 }
 
 // The indentation for a new entry under `markerLine`: reuse an existing direct
@@ -2859,7 +3070,13 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   };
 }
 
-function planTargetTaskOpenUpdate(preimageContent, taskLine) {
+function planTargetTaskOpenUpdate(preimageContent, taskLine, options = {}) {
+  const expectedStatus = Object.prototype.hasOwnProperty.call(options, "expectedStatus")
+    ? options.expectedStatus
+    : "*";
+  const workSummary = Object.prototype.hasOwnProperty.call(options, "workSummary")
+    ? options.workSummary
+    : "";
   const content = String(preimageContent === null || preimageContent === undefined ? "" : preimageContent);
   const lines = content.split("\n");
 
@@ -2872,29 +3089,39 @@ function planTargetTaskOpenUpdate(preimageContent, taskLine) {
   const lineText = hasCR ? rawLine.slice(0, -1) : rawLine;
   const taskMatch = getObsidianTaskLineMatch(lineText);
   const checkboxMatch = TASK_CHECKBOX_STATUS_RE.exec(lineText);
-  if (!taskMatch || !checkboxMatch || taskMatch[1] !== "*") {
+  if (!taskMatch || !checkboxMatch || taskMatch[1] !== expectedStatus) {
     return null;
   }
 
   const statusStart = lineStartIndexFromLines(lines, taskLine) + checkboxMatch[1].length;
-  const updatedLineText = setCheckboxStatus(lineText, " ");
-  const nextLines = lines.slice();
-  nextLines[taskLine] = hasCR ? `${updatedLineText}\r` : updatedLineText;
+  const edits = [
+    {
+      start: statusStart,
+      end: statusStart + 1,
+      replacement: " ",
+    },
+  ];
+  let nextContent = applyTextEdits(content, edits);
+  const workLogPlan = planWorkLogInsertion(nextContent, taskLine, workSummary);
+  if (!workLogPlan) {
+    return null;
+  }
+  if (workLogPlan.edits.length > 0) {
+    edits.push(...workLogPlan.edits);
+    nextContent = applyTextEdits(content, edits);
+  }
 
   return {
-    content: nextLines.join("\n"),
-    edits: [
-      {
-        start: statusStart,
-        end: statusStart + 1,
-        replacement: " ",
-      },
-    ],
-    oldStatus: "*",
+    content: nextContent,
+    edits,
+    oldStatus: expectedStatus,
     newStatus: " ",
     statusChanged: true,
     removedFutureSchedule: false,
     logEntryAdded: false,
+    workLogEntryAdded: workLogPlan.workLogEntryAdded,
+    workLogSummary: workLogPlan.summary,
+    workLogInsertLine: workLogPlan.workLogInsertLine,
     blockIdAppended: false,
     hasChanges: true,
   };
@@ -3654,6 +3881,173 @@ class BlockIdPromptModal extends Modal {
   }
 }
 
+class WorkSummaryPromptModal extends Modal {
+  constructor(app, plugin, source) {
+    super(app);
+    this.plugin = plugin;
+    this.source = source;
+    this.completed = false;
+    this.submitting = false;
+    this.inputEl = null;
+    this.previewEl = null;
+    this.warningEl = null;
+    this.primaryButton = null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.addClass("bid-wlp-modal");
+    contentEl.addClass("bid-wlp");
+
+    const header = contentEl.createDiv({ cls: "bid-wlp-header" });
+    const headerIcon = header.createDiv({ cls: "bid-wlp-header-icon" });
+    applyIcon(headerIcon, "pause-circle");
+    const headerText = header.createDiv({ cls: "bid-wlp-header-text" });
+    headerText.createDiv({ cls: "bid-wlp-title", text: "Pause task" });
+    headerText.createDiv({
+      cls: "bid-wlp-subtitle",
+      text: "Sets the task Open and removes it from current/future Pomodoros.",
+    });
+
+    const contextEl = contentEl.createDiv({
+      cls: "bid-wlp-context",
+      attr: { role: "note", "aria-label": "Selected task" },
+    });
+    contextEl.createDiv({
+      cls: "bid-wlp-context-task",
+      text: this.source.task && this.source.task.displayText
+        ? this.source.task.displayText
+        : "(untitled task)",
+    });
+    contextEl.createDiv({
+      cls: "bid-wlp-context-source",
+      text: this.source.sourcePath || "Current note",
+    });
+
+    const fieldEl = contentEl.createDiv({ cls: "bid-wlp-field" });
+    fieldEl.createEl("label", {
+      cls: "bid-wlp-label",
+      attr: { for: "bid-wlp-summary" },
+      text: "Work summary (optional)",
+    });
+    this.inputEl = fieldEl.createEl("input", {
+      cls: "bid-wlp-input",
+      attr: {
+        id: "bid-wlp-summary",
+        "aria-describedby": "bid-wlp-preview bid-wlp-warning",
+        placeholder: "What did you get done?",
+        type: "text",
+      },
+    });
+    this.inputEl.addEventListener("input", () => this.updatePreview());
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      this.submit();
+    });
+
+    this.previewEl = contentEl.createDiv({
+      cls: "bid-wlp-preview",
+      attr: { id: "bid-wlp-preview", role: "note", "aria-live": "polite" },
+    });
+    this.warningEl = contentEl.createDiv({
+      cls: "bid-wlp-warning",
+      attr: { id: "bid-wlp-warning", role: "status" },
+      text: "Contains ::, which Dataview may read as an inline field.",
+    });
+
+    new Setting(contentEl)
+      .addButton((button) =>
+        button
+          .setButtonText("Cancel")
+          .onClick(() => this.close()),
+      )
+      .addButton((button) => {
+        this.primaryButton = button;
+        button
+          .setButtonText("Set Open")
+          .setCta()
+          .onClick(() => this.submit());
+      });
+
+    this.updatePreview();
+    window.setTimeout(() => {
+      if (this.inputEl) {
+        this.inputEl.focus();
+      }
+    }, 0);
+  }
+
+  updatePreview() {
+    if (!this.previewEl) {
+      return;
+    }
+
+    const state = workSummaryPromptState(this.inputEl ? this.inputEl.value : "");
+    if (this.primaryButton && typeof this.primaryButton.setButtonText === "function") {
+      this.primaryButton.setButtonText(state.primaryButtonText);
+    }
+
+    this.previewEl.empty();
+    if (state.isBlank) {
+      this.previewEl.createDiv({
+        cls: "bid-wlp-preview-muted",
+        text: "No work-log entry will be added.",
+      });
+    } else {
+      this.previewEl.createDiv({
+        cls: "bid-wlp-preview-marker",
+        text: `${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`,
+      });
+      this.previewEl.createDiv({
+        cls: "bid-wlp-preview-entry",
+        text: state.summary,
+      });
+    }
+
+    if (this.warningEl) {
+      this.warningEl.toggleClass("is-hidden", !state.hasDataviewWarning);
+    }
+  }
+
+  async submit() {
+    if (this.submitting) {
+      return;
+    }
+
+    this.submitting = true;
+    try {
+      const accepted = await this.plugin.submitPomodoroWorkSummary(
+        this.source,
+        this.inputEl ? this.inputEl.value : "",
+      );
+      if (accepted) {
+        this.completed = true;
+        this.close();
+      }
+    } finally {
+      this.submitting = false;
+    }
+  }
+
+  onClose() {
+    this.modalEl.removeClass("bid-wlp-modal");
+    this.contentEl.empty();
+
+    if (!this.completed && !this.submitting) {
+      this.plugin.cancelWorkSummaryPrompt(this.source);
+    }
+
+    this.plugin.lastPromptKey = null;
+    this.plugin.promptOpen = false;
+  }
+}
+
 module.exports = class BlockIdPromptPlugin extends Plugin {
   onload() {
     this.promptOpen = false;
@@ -4369,6 +4763,11 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return;
     }
 
+    if (task.status === "/") {
+      this.openWorkSummaryPrompt(source);
+      return;
+    }
+
     if (task.existingId) {
       this.promptOpen = true;
       try {
@@ -4376,6 +4775,11 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       } finally {
         this.promptOpen = false;
       }
+      return;
+    }
+
+    if (task.status !== " " && task.status !== BLOCKED_OBSIDIAN_TASK_STATUS) {
+      new Notice("No open task under cursor");
       return;
     }
 
@@ -4474,6 +4878,26 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     return this.applyPomodoroTaskLink(source, newId, true);
+  }
+
+  openWorkSummaryPrompt(source) {
+    if (this.promptOpen) {
+      return;
+    }
+
+    this.promptOpen = true;
+    new WorkSummaryPromptModal(this.app, this, source).open();
+  }
+
+  cancelWorkSummaryPrompt(_source) {
+    // Cancellation intentionally leaves the selected task and daily note untouched.
+  }
+
+  async submitPomodoroWorkSummary(source, rawSummary) {
+    return this.applyPomodoroTaskUnlink(source, {
+      expectedStatus: "/",
+      workSummary: rawSummary,
+    });
   }
 
   // Shared core for both the existing-ID (completePomodoroTaskLink) and
@@ -4588,25 +5012,46 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
-  async applyPomodoroTaskUnlink(source) {
+  async applyPomodoroTaskUnlink(source, options = {}) {
+    const expectedStatus = Object.prototype.hasOwnProperty.call(options, "expectedStatus")
+      ? options.expectedStatus
+      : "*";
+    const normalizedSummary = normalizeWorkSummary(options.workSummary || "");
+    const isPause = expectedStatus === "/";
+    const noticeNoun = isPause ? "pause" : "toggle";
+    const noticePrefix = `Task ${noticeNoun}`;
     const currentLine = source.editor.getLine(source.line) || "";
     if (currentLine !== source.task.rawLine) {
-      new Notice(`Task toggle blocked: selected task changed in ${source.sourcePath}`);
+      new Notice(`Task ${noticeNoun} blocked: selected task changed in ${source.sourcePath}`);
       return false;
+    }
+
+    if (isPause && source.task.existingId) {
+      const duplicateMatches = blockTokenMatches(
+        source.editor.getValue(),
+        source.task.existingId,
+      );
+      if (duplicateMatches.length !== 1) {
+        new Notice(`Block ID '${source.task.existingId}' is duplicated in this note`);
+        return false;
+      }
     }
 
     const taskFile = source.file || this.resolveTaskFile(source.sourcePath);
     if (!taskFile) {
-      new Notice("Task toggle blocked: active note could not be resolved");
+      new Notice(`Task ${noticeNoun} blocked: active note could not be resolved`);
       return false;
     }
 
     const taskContent = source.editor.getValue();
     const originalCursor =
       typeof source.editor.getCursor === "function" ? source.editor.getCursor() : null;
-    const taskPlan = planTargetTaskOpenUpdate(taskContent, source.line);
+    const taskPlan = planTargetTaskOpenUpdate(taskContent, source.line, {
+      expectedStatus,
+      workSummary: normalizedSummary,
+    });
     if (!taskPlan) {
-      new Notice(`Task toggle stopped: selected task changed in ${source.sourcePath}`);
+      new Notice(`Task ${noticeNoun} stopped: selected task changed in ${source.sourcePath}`);
       return false;
     }
 
@@ -4627,7 +5072,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
           ? taskContent
           : await this.readFileSnapshot(dailyFile, source);
         if (dailyContent === null) {
-          new Notice(`Task toggle blocked: ${dailyFile.path} could not be read`);
+          new Notice(`Task ${noticeNoun} blocked: ${dailyFile.path} could not be read`);
           return false;
         }
 
@@ -4645,7 +5090,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
             !validateNonOverlappingEdits(allEdits) ||
             source.editor.getValue() !== taskContent
           ) {
-            new Notice(`Task toggle stopped: ${source.sourcePath} changed before update`);
+            new Notice(`Task ${noticeNoun} stopped: ${source.sourcePath} changed before update`);
             return false;
           }
 
@@ -4660,7 +5105,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
           }
 
           setEditorCursorIfPossible(source.editor, originalCursor);
-          this.reportPomodoroUnlinkOutcome(cleanupPlan);
+          this.reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan);
           return true;
         }
       }
@@ -4673,7 +5118,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
           source,
           cleanupPlan,
           dailyContent,
-          { noticePrefix: "Task toggle stopped" },
+          { noticePrefix: `${noticePrefix} stopped` },
         ))
       ) {
         return false;
@@ -4686,19 +5131,19 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       taskPlan,
       taskContent,
       {
-        noticePrefix: "Task toggle stopped",
+        noticePrefix: `${noticePrefix} stopped`,
         quiet: cleanupPlan.removedCount > 0,
       },
     );
     if (!statusApplied) {
       if (cleanupPlan.removedCount > 0) {
-        this.reportPomodoroUnlinkPartialFailure(cleanupPlan);
+        this.reportPomodoroUnlinkPartialFailure(cleanupPlan, taskPlan);
       }
       return false;
     }
 
     setEditorCursorIfPossible(source.editor, originalCursor);
-    this.reportPomodoroUnlinkOutcome(cleanupPlan);
+    this.reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan);
     return true;
   }
 
@@ -4727,20 +5172,26 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     );
   }
 
-  reportPomodoroUnlinkOutcome(cleanupPlan) {
+  reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan = {}) {
+    const logged = taskPlan.workLogEntryAdded ? " · logged work" : "";
     new Notice(
-      `Task set Open${this.currentFutureLinkCleanupNoticeSuffix(cleanupPlan.removedCount, { includeNoop: true })}`,
+      `Task set Open${logged}${this.currentFutureLinkCleanupNoticeSuffix(cleanupPlan.removedCount, { includeNoop: true })}`,
     );
   }
 
-  reportPomodoroUnlinkPartialFailure(cleanupPlan) {
+  reportPomodoroUnlinkPartialFailure(cleanupPlan, taskPlan = {}) {
     const removedCount = cleanupPlan.removedCount;
+    const statusName = taskPlan.oldStatus === "/" ? "In Progress" : "Next";
+    const summarySuffix =
+      taskPlan.oldStatus === "/" && taskPlan.workLogSummary
+        ? " and work summary was not logged"
+        : "";
     new Notice(
       `Removed ${removedCount} current/future Pomodoro ${pluralize(
         removedCount,
         "link",
         "links",
-      )}, but task remains Next`,
+      )}, but task remains ${statusName}${summarySuffix}`,
     );
   }
 
@@ -5463,6 +5914,8 @@ module.exports.helpers = {
   findScheduleLogMarker,
   findSingleFutureScheduledField,
   findTaskPickerMarkerNearCursor,
+  findWorkLogEntryPrefix,
+  findWorkLogMarker,
   formatCalendarDate,
   formatDailyDate,
   getCaretCompletionDestination,
@@ -5470,6 +5923,7 @@ module.exports.helpers = {
   isSoleContentLinkBullet,
   lineIsInsideCodeFence,
   listItemBodyBounds,
+  normalizeWorkSummary,
   parseDependsOnIds,
   parseInlineIdField,
   parseStrictCalendarDate,
@@ -5479,6 +5933,7 @@ module.exports.helpers = {
   planPomodoroLinkInsertion,
   planTargetTaskOpenUpdate,
   planTargetTaskUpdate,
+  planWorkLogInsertion,
   resolveTaskDependencyState,
   selectPomodoroInsertionTarget,
   sourceQualifiesForPomodoroActivation,
@@ -5488,4 +5943,6 @@ module.exports.helpers = {
   taskPickerRevertReplacement,
   taskStatusClass,
   todayDailyPath,
+  workSummaryContainsDataviewInlineField,
+  workSummaryPromptState,
 };

@@ -3,6 +3,7 @@ const Module = require("node:module");
 const test = require("node:test");
 
 const noticeMessages = [];
+let obsidianStubs = null;
 
 const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
@@ -13,7 +14,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
         noticeMessages.push(message);
       }
     }
-    return {
+    obsidianStubs = {
       MarkdownView: EmptyClass,
       Modal: EmptyClass,
       Notice: NoticeStub,
@@ -24,6 +25,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       TFile: EmptyClass,
       setIcon: () => {},
     };
+    return obsidianStubs;
   }
   if (request === "@codemirror/view") {
     class EditorView {}
@@ -115,6 +117,19 @@ function sourceForPomodoroLink(editor, sourcePath, line) {
   const task = helpers.findDirectPomodoroLinkTask(lineText, line);
   assert.ok(task);
   return { kind: "link-task-pomodoro", editor, sourcePath, line, task: { ...task } };
+}
+
+function createTFile(path) {
+  const file = new obsidianStubs.TFile();
+  file.path = path;
+  file.extension = path.split(".").pop();
+  return file;
+}
+
+function createMarkdownView(file) {
+  const view = new obsidianStubs.MarkdownView();
+  view.file = file;
+  return view;
 }
 
 test("explicit task IDs exclusively own dependency lookup", () => {
@@ -2091,6 +2106,97 @@ test("planFuturePomodoroLinkCleanup accepts a direct ownerLine/section context, 
   assert.equal(result.removedCount, 1);
 });
 
+test("all-open cleanup removes current and future links while preserving history and unresolved links", () => {
+  const content = [
+    "## Pomodoros",
+    "- [x] Earlier done (09:00-09:25)",
+    "  - [[#^ship]]",
+    "- [ ] Current (10:00-10:25)",
+    "  - [[#^ship]]",
+    "    - remove this child too",
+    "- [/] Running ()",
+    "  - Keep ![[Alias#^ship|Ship]] and [[Other#^ship]] and [[Missing#^ship]]",
+    "  ```md",
+    "  - [[#^ship]]",
+    "  ```",
+    "- [ ] Later ()",
+    "  - [[../daily/Daily#^ship]]",
+    "- [-] Canceled ()",
+    "  - [[#^ship]]",
+    "## Notes",
+    "- [[#^ship]]",
+  ].join("\n");
+  const paths = new Map([
+    ["", "daily/Daily.md"],
+    ["Alias", "daily/Daily.md"],
+    ["../daily/Daily", "daily/Daily.md"],
+    ["Other", "projects/Other.md"],
+  ]);
+
+  const plan = helpers.planAllOpenPomodoroLinkCleanup(content, {
+    sourcePath: "daily/Daily.md",
+    targetPath: "daily/Daily.md",
+    targetBlockId: "ship",
+    resolveTarget: (reference) => paths.get(reference.targetText) || null,
+  });
+  const result = applyPlannedEdits(content, plan.edits);
+
+  assert.equal(plan.removedCount, 3);
+  assert.equal(plan.hasChanges, true);
+  assert.doesNotMatch(result, /remove this child too/);
+  assert.match(result, /Keep  and \[\[Other#\^ship\]\] and \[\[Missing#\^ship\]\]/);
+  assert.match(result, /```md\n  - \[\[#\^ship\]\]\n  ```/);
+  assert.match(result, /\[x\] Earlier done[\s\S]*\[\[#\^ship\]\]/);
+  assert.match(result, /\[-\] Canceled[\s\S]*\[\[#\^ship\]\]/);
+  assert.match(result, /## Notes\n- \[\[#\^ship\]\]/);
+  assert.doesNotMatch(result, /Alias#\^ship/);
+  assert.doesNotMatch(result, /\.\.\/daily\/Daily#\^ship/);
+});
+
+test("all-open cleanup treats missing section, no open entries, and no matches as no-op successes", () => {
+  const base = {
+    sourcePath: "Daily.md",
+    targetPath: "Tasks.md",
+    targetBlockId: "ship",
+    resolveTarget: () => "Tasks.md",
+  };
+
+  for (const content of [
+    "# Notes\n- [[Tasks#^ship]]",
+    ["## Pomodoros", "- [x] Done (09:00-09:25)", "  - [[Tasks#^ship]]"].join("\n"),
+    ["## Pomodoros", "- [ ] Current ()", "  - [[Tasks#^other]]"].join("\n"),
+  ]) {
+    const plan = helpers.planAllOpenPomodoroLinkCleanup(content, base);
+    assert.equal(plan.removedCount, 0);
+    assert.equal(plan.hasChanges, false);
+    assert.deepEqual(plan.edits, []);
+    assert.equal(plan.content, content);
+  }
+});
+
+test("planTargetTaskOpenUpdate changes only an original Next checkbox to Open", () => {
+  const content = [
+    "- [*] #task Ship it [scheduled:: 2026-08-20] [priority:: high] ^ship",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "  \t- _2026-08-10 → 2026-08-15_ — already logged",
+    "",
+  ].join("\r\n");
+  const plan = helpers.planTargetTaskOpenUpdate(content, 0);
+  const result = applyPlannedEdits(content, plan.edits);
+
+  assert.equal(plan.oldStatus, "*");
+  assert.equal(plan.newStatus, " ");
+  assert.equal(plan.statusChanged, true);
+  assert.equal(plan.removedFutureSchedule, false);
+  assert.equal(plan.logEntryAdded, false);
+  assert.equal(plan.blockIdAppended, false);
+  assert.equal(plan.edits.length, 1);
+  assert.equal(result, content.replace("- [*]", "- [ ]"));
+  assert.equal(plan.content, result);
+  assert.doesNotMatch(result, /(^|[^\r])\n/);
+  assert.equal(helpers.planTargetTaskOpenUpdate("- [ ] #task Ship it ^ship", 0), null);
+});
+
 test("Ctrl+Shift+Enter is registered as the link-task-to-pomodoro command", () => {
   const plugin = new Plugin();
   const commands = [];
@@ -2104,7 +2210,7 @@ test("Ctrl+Shift+Enter is registered as the link-task-to-pomodoro command", () =
 
   const command = commands.find((entry) => entry.id === "link-task-to-pomodoro");
   assert.ok(command);
-  assert.equal(command.name, "Link task to Pomodoro");
+  assert.equal(command.name, "Toggle task Pomodoro link");
   assert.deepEqual(command.hotkeys, [{ modifiers: ["Ctrl", "Shift"], key: "Enter" }]);
   assert.equal(typeof command.editorCallback, "function");
 
@@ -2320,9 +2426,9 @@ test("same-note Pomodoro link runtime: task and ledger edits merge into one tran
   );
 });
 
-test("repeating the Pomodoro link command does not duplicate the link and reports it as already linked", async () => {
+test("non-Next Pomodoro link command does not duplicate an existing current link", async () => {
   resetNotices();
-  const editor = createEditor("- [*] #task Ship it ^ship");
+  const editor = createEditor("- [ ] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
   const dailyContent = ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^ship]]"].join(
     "\n",
@@ -2352,7 +2458,219 @@ test("repeating the Pomodoro link command does not duplicate the link and report
   assert.equal(result, true);
   assert.equal(modifyCalled, false);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
-  assert.equal(lastNotice(), "Task already linked to Pomodoro");
+  assert.equal(lastNotice(), "Task already linked to Pomodoro · set Next");
+});
+
+test("Next task without a block ID toggles Open without prompting or resolving today's note", async () => {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it [scheduled:: 2026-08-20]");
+  editor.setCursor({ line: 0, ch: 4 });
+  const file = createTFile("Tasks.md");
+  const view = createMarkdownView(file);
+  const plugin = new Plugin();
+  let prompted = false;
+  let dailyResolved = false;
+  plugin.app = {
+    workspace: {
+      getActiveViewOfType: () => view,
+      getActiveFile: () => file,
+    },
+  };
+  plugin.openBlockIdPrompt = () => {
+    prompted = true;
+  };
+  plugin.resolveTodayDailyFile = () => {
+    dailyResolved = true;
+    return null;
+  };
+  plugin.suppressEditorScans = () => {};
+
+  await plugin.openPomodoroTaskLink(editor, view);
+
+  assert.equal(prompted, false);
+  assert.equal(dailyResolved, false);
+  assert.equal(plugin.promptOpen, false);
+  assert.equal(editor.getValue(), "- [ ] #task Ship it [scheduled:: 2026-08-20]");
+  assert.deepEqual(editor.cursor, { line: 0, ch: 4 });
+  assert.equal(lastNotice(), "Task set Open · no current/future Pomodoro links removed");
+});
+
+test("Next task with a block ID still becomes Open when today's daily note is missing", async () => {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.resolveTodayDailyFile = () => null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [ ] #task Ship it ^ship");
+  assert.equal(lastNotice(), "Task set Open · no current/future Pomodoro links removed");
+});
+
+test("Next task unlink removes current and future links before changing cross-note task status", async () => {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const dailyContent = [
+    "## Pomodoros",
+    "- [ ] Current (10:00-10:25)",
+    "  - [[Tasks#^ship]]",
+    "    - nested note",
+    "- [ ] Later ()",
+    "  - Work [[Tasks#^ship|Ship]] and [[Other#^ship]]",
+    "- [x] Done (09:00-09:25)",
+    "  - [[Tasks#^ship]]",
+  ].join("\n");
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let written = null;
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? dailyContent : null),
+      modify: async (file, content) => {
+        assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+        written = { path: file.path, content };
+      },
+    },
+  };
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "Tasks" ? { path: "Tasks.md" } : { path: "Other.md" };
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [ ] #task Ship it ^ship");
+  assert.deepEqual(written, {
+    path: "Daily.md",
+    content: [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "- [ ] Later ()",
+      "  - Work  and [[Other#^ship]]",
+      "- [x] Done (09:00-09:25)",
+      "  - [[Tasks#^ship]]",
+    ].join("\n"),
+  });
+  assert.equal(lastNotice(), "Task set Open · removed 2 current/future Pomodoro links");
+});
+
+test("same-note Next unlink merges status and all-open cleanup in the active editor", async () => {
+  resetNotices();
+  const editor = createEditor(
+    [
+      "- [*] #task Ship it ^ship",
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[#^ship]]",
+      "- [ ] Later ()",
+      "  - Keep [[#^ship]] and notes",
+      "- [x] Done (09:00-09:25)",
+      "  - [[#^ship]]",
+    ].join("\n"),
+  );
+  editor.setCursor({ line: 0, ch: 9 });
+  const source = {
+    ...sourceForPomodoroLink(editor, "Daily.md", 0),
+    file: { path: "Daily.md" },
+  };
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "" ? { path: "Daily.md" } : null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "- [ ] #task Ship it ^ship",
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "- [ ] Later ()",
+      "  - Keep  and notes",
+      "- [x] Done (09:00-09:25)",
+      "  - [[#^ship]]",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.cursor, { line: 0, ch: 9 });
+  assert.equal(lastNotice(), "Task set Open · removed 2 current/future Pomodoro links");
+});
+
+test("Next unlink stops before status when daily cleanup write is stale", async () => {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plannedDaily = ["## Pomodoros", "- [ ] Current ()", "  - [[Tasks#^ship]]"].join("\n");
+  const staleDaily = plannedDaily.replace("Current", "Current NOW");
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let readCount = 0;
+  let modifyCalled = false;
+  plugin.app = {
+    vault: {
+      read: async () => {
+        readCount += 1;
+        return readCount === 1 ? plannedDaily : staleDaily;
+      },
+      modify: async () => {
+        modifyCalled = true;
+      },
+    },
+  };
+  plugin.resolveReferenceDestination = () => ({ path: "Tasks.md" });
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, false);
+  assert.equal(modifyCalled, false);
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(lastNotice(), "Task toggle stopped: Daily.md changed before update");
+});
+
+test("Next unlink reports retryable partial failure when cleanup succeeds but task status is stale", async () => {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const dailyContent = ["## Pomodoros", "- [ ] Current ()", "  - [[Tasks#^ship]]"].join("\n");
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let written = null;
+  plugin.app = {
+    vault: {
+      read: async () => dailyContent,
+      modify: async (file, content) => {
+        written = { path: file.path, content };
+        editor.replaceRange(
+          "- [*] #task Ship it NOW ^ship",
+          { line: 0, ch: 0 },
+          { line: 0, ch: editor.getLine(0).length },
+        );
+      },
+    },
+  };
+  plugin.resolveReferenceDestination = () => ({ path: "Tasks.md" });
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, false);
+  assert.deepEqual(written, {
+    path: "Daily.md",
+    content: ["## Pomodoros", "- [ ] Current ()", ""].join("\n"),
+  });
+  assert.equal(editor.getValue(), "- [*] #task Ship it NOW ^ship");
+  assert.equal(lastNotice(), "Removed 1 current/future Pomodoro link, but task remains Next");
 });
 
 test("Pomodoro link stops before any mutation when today's daily note is missing", async () => {

@@ -2108,6 +2108,35 @@ function collectFutureOpenPomodoroRanges(lines, context) {
   return ranges;
 }
 
+function collectAllOpenPomodoroRanges(lines, section) {
+  const ranges = [];
+  if (!Array.isArray(lines) || !section) {
+    return ranges;
+  }
+
+  const fencedLines = computeFencedLineFlags(lines);
+  for (let line = section.startLine; line <= section.endLine; line += 1) {
+    if (fencedLines[line] || !isPomodoroEntryLine(lines[line])) {
+      continue;
+    }
+
+    const status = pomodoroEntryStatus(lines[line]);
+    const endLine = pomodoroEntryEndLine(lines, line, section.endLine);
+    if (isOpenPomodoroStatus(status)) {
+      ranges.push({
+        entryLine: line,
+        startLine: line + 1,
+        endLine,
+        status,
+      });
+    }
+
+    line = endLine;
+  }
+
+  return ranges;
+}
+
 function resolvedFilePath(value) {
   if (typeof value === "string") {
     return value;
@@ -2205,35 +2234,20 @@ function editContainsReference(edit, reference) {
   return edit.start <= reference.start && edit.end >= reference.end;
 }
 
-// `options.ownerLine` (paired with `options.section`) lets a caller that
-// already knows the owning Pomodoro entry — e.g. the direct Ctrl+Shift+Enter
-// link command, which selects the entry itself rather than deriving it from
-// an existing marker's sub-bullet position — bypass the sub-bullet-relative
-// `findPomodoroSourceContext` lookup. The owner is always treated as open:
-// callers only pass `ownerLine` for an entry they already filtered to open.
-function planFuturePomodoroLinkCleanup(content, options = {}) {
+function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   const snapshot = String(content || "");
   const lines = snapshot.split("\n");
-  const context =
-    Number.isInteger(options.ownerLine) && options.section
-      ? { section: options.section, ownerLine: options.ownerLine, isOpen: true }
-      : findPomodoroSourceContext(lines, options.sourceLine);
   const targetPath = resolvedFilePath(options.targetPath);
   const targetBlockId = normalizeText(options.targetBlockId);
   const resolveTarget = options.resolveTarget;
 
   if (
-    !context ||
-    !context.isOpen ||
+    !Array.isArray(ranges) ||
+    ranges.length === 0 ||
     !targetPath ||
     !targetBlockId ||
     typeof resolveTarget !== "function"
   ) {
-    return { edits: [], removedCount: 0 };
-  }
-
-  const futureRanges = collectFutureOpenPomodoroRanges(lines, context);
-  if (futureRanges.length === 0) {
     return { edits: [], removedCount: 0 };
   }
 
@@ -2243,7 +2257,7 @@ function planFuturePomodoroLinkCleanup(content, options = {}) {
       continue;
     }
 
-    const pomodoroRange = futureRanges.find(
+    const pomodoroRange = ranges.find(
       (range) =>
         reference.line >= range.startLine && reference.line <= range.endLine,
     );
@@ -2310,6 +2324,55 @@ function planFuturePomodoroLinkCleanup(content, options = {}) {
   }
 
   return { edits, removedCount: matches.length };
+}
+
+// `options.ownerLine` (paired with `options.section`) lets a caller that
+// already knows the owning Pomodoro entry — e.g. the direct Ctrl+Shift+Enter
+// link command, which selects the entry itself rather than deriving it from
+// an existing marker's sub-bullet position — bypass the sub-bullet-relative
+// `findPomodoroSourceContext` lookup. The owner is always treated as open:
+// callers only pass `ownerLine` for an entry they already filtered to open.
+function planFuturePomodoroLinkCleanup(content, options = {}) {
+  const snapshot = String(content || "");
+  const lines = snapshot.split("\n");
+  const context =
+    Number.isInteger(options.ownerLine) && options.section
+      ? { section: options.section, ownerLine: options.ownerLine, isOpen: true }
+      : findPomodoroSourceContext(lines, options.sourceLine);
+
+  if (!context || !context.isOpen) {
+    return { edits: [], removedCount: 0 };
+  }
+
+  const futureRanges = collectFutureOpenPomodoroRanges(lines, context);
+  return planPomodoroLinkCleanupForRanges(snapshot, futureRanges, options);
+}
+
+function planAllOpenPomodoroLinkCleanup(content, options = {}) {
+  const snapshot = String(content || "");
+  const lines = snapshot.split("\n");
+  const section = findPomodorosSectionRange(lines);
+  if (!section) {
+    return {
+      section: null,
+      ranges: [],
+      edits: [],
+      removedCount: 0,
+      content: snapshot,
+      hasChanges: false,
+    };
+  }
+
+  const ranges = collectAllOpenPomodoroRanges(lines, section);
+  const cleanup = planPomodoroLinkCleanupForRanges(snapshot, ranges, options);
+  return {
+    section,
+    ranges,
+    edits: cleanup.edits,
+    removedCount: cleanup.removedCount,
+    content: cleanup.edits.length > 0 ? applyTextEdits(snapshot, cleanup.edits) : snapshot,
+    hasChanges: cleanup.edits.length > 0,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2793,6 +2856,47 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
     logInsertLine,
     blockIdAppended: Boolean(newBlockId),
     hasChanges: removedFutureSchedule || statusChanged || logEntryAdded || Boolean(newBlockId),
+  };
+}
+
+function planTargetTaskOpenUpdate(preimageContent, taskLine) {
+  const content = String(preimageContent === null || preimageContent === undefined ? "" : preimageContent);
+  const lines = content.split("\n");
+
+  if (!Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
+    return null;
+  }
+
+  const rawLine = lines[taskLine];
+  const hasCR = rawLine.endsWith("\r");
+  const lineText = hasCR ? rawLine.slice(0, -1) : rawLine;
+  const taskMatch = getObsidianTaskLineMatch(lineText);
+  const checkboxMatch = TASK_CHECKBOX_STATUS_RE.exec(lineText);
+  if (!taskMatch || !checkboxMatch || taskMatch[1] !== "*") {
+    return null;
+  }
+
+  const statusStart = lineStartIndexFromLines(lines, taskLine) + checkboxMatch[1].length;
+  const updatedLineText = setCheckboxStatus(lineText, " ");
+  const nextLines = lines.slice();
+  nextLines[taskLine] = hasCR ? `${updatedLineText}\r` : updatedLineText;
+
+  return {
+    content: nextLines.join("\n"),
+    edits: [
+      {
+        start: statusStart,
+        end: statusStart + 1,
+        replacement: " ",
+      },
+    ],
+    oldStatus: "*",
+    newStatus: " ",
+    statusChanged: true,
+    removedFutureSchedule: false,
+    logEntryAdded: false,
+    blockIdAppended: false,
+    hasChanges: true,
   };
 }
 
@@ -3568,7 +3672,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 
     this.addCommand({
       id: "link-task-to-pomodoro",
-      name: "Link task to Pomodoro",
+      name: "Toggle task Pomodoro link",
       hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "Enter" }],
       editorCallback: (editor, view) =>
         this.openPomodoroTaskLink(editor, view),
@@ -4215,11 +4319,10 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
-  // Ctrl+Shift+Enter: link the open Obsidian task under the single cursor to
-  // today's current/next Pomodoro. Unlike the `^^` task-picker flow, this
-  // command already knows both the task (the cursor's own line) and the
-  // destination (today's daily note) — there is no marker text to complete or
-  // revert, only a fresh block link to insert.
+  // Ctrl+Shift+Enter: non-Next tasks link to today's current/next Pomodoro and
+  // become Next; Next tasks become Open and lose current/future Pomodoro links.
+  // Unlike the `^^` task-picker flow, this command already knows the task (the
+  // cursor's own line) and has no marker text to complete or revert.
   async openPomodoroTaskLink(editor, view) {
     if (this.promptOpen) {
       return;
@@ -4250,10 +4353,21 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     const source = {
       kind: "link-task-pomodoro",
       editor,
+      file,
       sourcePath: file.path,
       line: task.line,
       task: { ...task },
     };
+
+    if (task.status === "*") {
+      this.promptOpen = true;
+      try {
+        await this.applyPomodoroTaskUnlink(source);
+      } finally {
+        this.promptOpen = false;
+      }
+      return;
+    }
 
     if (task.existingId) {
       this.promptOpen = true;
@@ -4474,6 +4588,120 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
+  async applyPomodoroTaskUnlink(source) {
+    const currentLine = source.editor.getLine(source.line) || "";
+    if (currentLine !== source.task.rawLine) {
+      new Notice(`Task toggle blocked: selected task changed in ${source.sourcePath}`);
+      return false;
+    }
+
+    const taskFile = source.file || this.resolveTaskFile(source.sourcePath);
+    if (!taskFile) {
+      new Notice("Task toggle blocked: active note could not be resolved");
+      return false;
+    }
+
+    const taskContent = source.editor.getValue();
+    const originalCursor =
+      typeof source.editor.getCursor === "function" ? source.editor.getCursor() : null;
+    const taskPlan = planTargetTaskOpenUpdate(taskContent, source.line);
+    if (!taskPlan) {
+      new Notice(`Task toggle stopped: selected task changed in ${source.sourcePath}`);
+      return false;
+    }
+
+    let cleanupPlan = {
+      edits: [],
+      removedCount: 0,
+      content: "",
+      hasChanges: false,
+    };
+    let dailyFile = null;
+    let dailyContent = null;
+
+    if (source.task.existingId) {
+      dailyFile = this.resolveTodayDailyFile();
+      if (dailyFile) {
+        const sameNote = dailyFile.path === taskFile.path;
+        dailyContent = sameNote
+          ? taskContent
+          : await this.readFileSnapshot(dailyFile, source);
+        if (dailyContent === null) {
+          new Notice(`Task toggle blocked: ${dailyFile.path} could not be read`);
+          return false;
+        }
+
+        cleanupPlan = planAllOpenPomodoroLinkCleanup(dailyContent, {
+          sourcePath: dailyFile.path,
+          targetPath: taskFile.path,
+          targetBlockId: source.task.existingId,
+          resolveTarget: (reference, referrerPath) =>
+            this.resolveReferenceDestination(reference, referrerPath),
+        });
+
+        if (sameNote) {
+          const allEdits = [...taskPlan.edits, ...cleanupPlan.edits];
+          if (
+            !validateNonOverlappingEdits(allEdits) ||
+            source.editor.getValue() !== taskContent
+          ) {
+            new Notice(`Task toggle stopped: ${source.sourcePath} changed before update`);
+            return false;
+          }
+
+          this.suppressEditorScans();
+          const sorted = [...allEdits].sort((left, right) => right.start - left.start);
+          for (const edit of sorted) {
+            source.editor.replaceRange(
+              edit.replacement,
+              indexToEditorPosition(taskContent, edit.start),
+              indexToEditorPosition(taskContent, edit.end),
+            );
+          }
+
+          setEditorCursorIfPossible(source.editor, originalCursor);
+          this.reportPomodoroUnlinkOutcome(cleanupPlan);
+          return true;
+        }
+      }
+    }
+
+    if (cleanupPlan.hasChanges) {
+      if (
+        !(await this.applyTargetTaskPlan(
+          dailyFile,
+          source,
+          cleanupPlan,
+          dailyContent,
+          { noticePrefix: "Task toggle stopped" },
+        ))
+      ) {
+        return false;
+      }
+    }
+
+    const statusApplied = await this.applyTargetTaskPlan(
+      taskFile,
+      source,
+      taskPlan,
+      taskContent,
+      {
+        noticePrefix: "Task toggle stopped",
+        quiet: cleanupPlan.removedCount > 0,
+      },
+    );
+    if (!statusApplied) {
+      if (cleanupPlan.removedCount > 0) {
+        this.reportPomodoroUnlinkPartialFailure(cleanupPlan);
+      }
+      return false;
+    }
+
+    setEditorCursorIfPossible(source.editor, originalCursor);
+    this.reportPomodoroUnlinkOutcome(cleanupPlan);
+    return true;
+  }
+
   pomodoroPlanErrorNotice(error, dailyPath) {
     switch (error) {
       case "no-section":
@@ -4499,6 +4727,23 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     );
   }
 
+  reportPomodoroUnlinkOutcome(cleanupPlan) {
+    new Notice(
+      `Task set Open${this.currentFutureLinkCleanupNoticeSuffix(cleanupPlan.removedCount, { includeNoop: true })}`,
+    );
+  }
+
+  reportPomodoroUnlinkPartialFailure(cleanupPlan) {
+    const removedCount = cleanupPlan.removedCount;
+    new Notice(
+      `Removed ${removedCount} current/future Pomodoro ${pluralize(
+        removedCount,
+        "link",
+        "links",
+      )}, but task remains Next`,
+    );
+  }
+
   reportPomodoroLinkPartialFailure(plan, isNewId, dailyPath) {
     const parts = activationPartialFailureParts(plan);
     if (isNewId) {
@@ -4511,6 +4756,18 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     new Notice(
       `Task ${parts.length ? parts.join(", ") : "updated"}, but ${dailyPath} could not be updated`,
     );
+  }
+
+  currentFutureLinkCleanupNoticeSuffix(removedCount, options = {}) {
+    if (Number.isInteger(removedCount) && removedCount > 0) {
+      return ` · removed ${removedCount} current/future Pomodoro ${pluralize(
+        removedCount,
+        "link",
+        "links",
+      )}`;
+    }
+
+    return options.includeNoop ? " · no current/future Pomodoro links removed" : "";
   }
 
   sourceMarkerStillPresent(source, options = {}) {
@@ -4543,21 +4800,29 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
   // complete postimage is written in a single vault.modify call. Re-reads and
   // matches `expectedContent` first so a target that changed since the plan
   // was built is never silently overwritten.
-  async applyTargetTaskPlan(file, source, plan, expectedContent) {
+  async applyTargetTaskPlan(file, source, plan, expectedContent, options = {}) {
+    const noticePrefix = options.noticePrefix || "Task link stopped";
+    const quiet = options.quiet === true;
     const content = await this.readFileSnapshot(file, source);
     if (content === null) {
-      new Notice(`Task link stopped: ${file.path} could not be read`);
+      if (!quiet) {
+        new Notice(`${noticePrefix}: ${file.path} could not be read`);
+      }
       return false;
     }
 
     if (content !== expectedContent) {
-      new Notice(`Task link stopped: ${file.path} changed before update`);
+      if (!quiet) {
+        new Notice(`${noticePrefix}: ${file.path} changed before update`);
+      }
       return false;
     }
 
     if (file.path === source.sourcePath) {
       if (!source.editor || typeof source.editor.replaceRange !== "function") {
-        new Notice("Task link stopped: active note could not be modified");
+        if (!quiet) {
+          new Notice(`${noticePrefix}: active note could not be modified`);
+        }
         return false;
       }
 
@@ -4578,7 +4843,9 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return true;
     } catch (error) {
       console.error("Block ID Prompt failed to modify task note", error);
-      new Notice(`Task link stopped: ${file.path} could not be modified`);
+      if (!quiet) {
+        new Notice(`${noticePrefix}: ${file.path} could not be modified`);
+      }
       return false;
     }
   }
@@ -5183,6 +5450,7 @@ module.exports.helpers = {
   blockedChipLabel,
   buildBlockedTooltip,
   buildTaskDependencyIndex,
+  collectAllOpenPomodoroRanges,
   collectTaskPickerItems,
   computeFencedLineFlags,
   countBlockedTasks,
@@ -5206,8 +5474,10 @@ module.exports.helpers = {
   parseInlineIdField,
   parseStrictCalendarDate,
   partitionTaskPickerItems,
+  planAllOpenPomodoroLinkCleanup,
   planFuturePomodoroLinkCleanup,
   planPomodoroLinkInsertion,
+  planTargetTaskOpenUpdate,
   planTargetTaskUpdate,
   resolveTaskDependencyState,
   selectPomodoroInsertionTarget,

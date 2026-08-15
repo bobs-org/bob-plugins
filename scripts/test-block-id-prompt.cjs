@@ -51,6 +51,8 @@ function localDate(year, month, day) {
   return new Date(year, month - 1, day);
 }
 
+const WORK_LOG_DATE = { year: 2026, month: 8, day: 15 };
+
 function createEditor(content) {
   let value = content;
   let cursor = null;
@@ -2181,19 +2183,52 @@ test("work summary normalization trims, collapses whitespace, preserves Markdown
     helpers.normalizeWorkSummary("Kept [[Project|project]], `code`, and **bold**"),
     "Kept [[Project|project]], `code`, and **bold**",
   );
+  assert.equal(
+    helpers.formatWorkLogEntry("  Kept [[Project|project]], `code`, and **bold**  ", WORK_LOG_DATE),
+    "*2026-08-15* — Kept [[Project|project]], `code`, and **bold**",
+  );
+  assert.equal(helpers.formatWorkLogEntry(" \n\t ", WORK_LOG_DATE), "");
   assert.equal(helpers.workSummaryContainsDataviewInlineField("progress:: shipped"), true);
-  assert.deepEqual(helpers.workSummaryPromptState("  "), {
+  assert.deepEqual(helpers.workSummaryPromptState("  ", { date: WORK_LOG_DATE }), {
     summary: "",
+    date: WORK_LOG_DATE,
+    formattedEntry: "",
     isBlank: true,
     hasDataviewWarning: false,
     primaryButtonText: "Set Open",
   });
-  assert.deepEqual(helpers.workSummaryPromptState("progress:: shipped"), {
+  assert.deepEqual(helpers.workSummaryPromptState("progress:: shipped", { date: WORK_LOG_DATE }), {
     summary: "progress:: shipped",
+    date: WORK_LOG_DATE,
+    formattedEntry: "*2026-08-15* — progress:: shipped",
     isBlank: false,
     hasDataviewWarning: true,
     primaryButtonText: "Set Open & log",
   });
+});
+
+test("work log date helpers use local calendar components", () => {
+  class LocalLateNightDate extends Date {
+    getFullYear() {
+      return 2026;
+    }
+
+    getMonth() {
+      return 7;
+    }
+
+    getDate() {
+      return 15;
+    }
+
+    toISOString() {
+      return "2026-08-16T03:30:00.000Z";
+    }
+  }
+
+  const localParts = helpers.localTodayParts(new LocalLateNightDate());
+  assert.deepEqual(localParts, WORK_LOG_DATE);
+  assert.equal(helpers.formatWorkLogEntry("Added guarded cleanup", localParts), "*2026-08-15* — Added guarded cleanup");
 });
 
 test("planWorkLogInsertion creates the canonical marker as the final direct-child subtree", () => {
@@ -2202,16 +2237,20 @@ test("planWorkLogInsertion creates the canonical marker as the final direct-chil
     "  - Keep this child",
     "- [ ] #task Sibling",
   ].join("\n");
-  const plan = helpers.planWorkLogInsertion(content, 0, "Added guarded cleanup");
+  const plan = helpers.planWorkLogInsertion(content, 0, "Added guarded cleanup", {
+    date: WORK_LOG_DATE,
+  });
 
   assert.equal(plan.workLogEntryAdded, true);
+  assert.deepEqual(plan.workLogDate, WORK_LOG_DATE);
+  assert.equal(plan.workLogFormattedEntry, "*2026-08-15* — Added guarded cleanup");
   assert.equal(
     plan.content,
     [
       "- [ ] #task Ship it ^ship",
       "  - Keep this child",
       "  - 🛠️ **WORK LOG**",
-      "    - Added guarded cleanup",
+      "    - *2026-08-15* — Added guarded cleanup",
       "- [ ] #task Sibling",
     ].join("\n"),
   );
@@ -2224,11 +2263,11 @@ test("planWorkLogInsertion prepends newest-first entries into existing marker sp
     "    * Yesterday's work",
   ].join("\n");
   assert.equal(
-    helpers.planWorkLogInsertion(canonical, 0, "Today").content,
+    helpers.planWorkLogInsertion(canonical, 0, "Today", { date: WORK_LOG_DATE }).content,
     [
       "- [ ] #task Ship it ^ship",
       "  * 🛠️ **WORK LOG**",
-      "    * Today",
+      "    * *2026-08-15* — Today",
       "    * Yesterday's work",
     ].join("\n"),
   );
@@ -2238,11 +2277,11 @@ test("planWorkLogInsertion prepends newest-first entries into existing marker sp
     "  + **Work log:**",
   ].join("\n");
   assert.equal(
-    helpers.planWorkLogInsertion(legacy, 0, "Legacy marker").content,
+    helpers.planWorkLogInsertion(legacy, 0, "Legacy marker", { date: WORK_LOG_DATE }).content,
     [
       "- [ ] #task Ship it ^ship",
       "  + **Work log:**",
-      "    + Legacy marker",
+      "    + *2026-08-15* — Legacy marker",
     ].join("\n"),
   );
 
@@ -2261,21 +2300,21 @@ test("planWorkLogInsertion ignores nested child-task markers and preserves CRLF"
     "      - Child work",
   ].join("\n");
   assert.equal(
-    helpers.planWorkLogInsertion(nested, 0, "Parent work").content,
+    helpers.planWorkLogInsertion(nested, 0, "Parent work", { date: WORK_LOG_DATE }).content,
     [
       "- [ ] #task Parent ^parent",
       "  - [ ] #task Child ^child",
       "    - **WORK LOG**",
       "      - Child work",
       "  - 🛠️ **WORK LOG**",
-      "    - Parent work",
+      "    - *2026-08-15* — Parent work",
     ].join("\n"),
   );
 
   const crlf = ["- [ ] #task Ship ^ship", "  - 🛠️ **WORK LOG**", "    - Old"].join("\r\n");
-  const plan = helpers.planWorkLogInsertion(crlf, 0, "New");
+  const plan = helpers.planWorkLogInsertion(crlf, 0, "New", { date: WORK_LOG_DATE });
   assert.doesNotMatch(plan.content, /(^|[^\r])\n/);
-  assert.match(plan.content, /New\r\n    - Old/);
+  assert.match(plan.content, /\*2026-08-15\* — New\r\n    - Old/);
 });
 
 test("planWorkLogInsertion treats blank summaries as no-op structural edits", () => {
@@ -2283,6 +2322,8 @@ test("planWorkLogInsertion treats blank summaries as no-op structural edits", ()
   const plan = helpers.planWorkLogInsertion(content, 0, " \n\t ");
 
   assert.equal(plan.workLogEntryAdded, false);
+  assert.equal(plan.workLogDate, null);
+  assert.equal(plan.workLogFormattedEntry, "");
   assert.equal(plan.hasChanges, false);
   assert.deepEqual(plan.edits, []);
   assert.equal(plan.content, content);
@@ -2317,6 +2358,7 @@ test("planTargetTaskOpenUpdate can pause only an In Progress task and append one
   const plan = helpers.planTargetTaskOpenUpdate(content, 0, {
     expectedStatus: "/",
     workSummary: "  Added\ncoverage  ",
+    workLogDate: WORK_LOG_DATE,
   });
 
   assert.equal(plan.oldStatus, "/");
@@ -2328,7 +2370,7 @@ test("planTargetTaskOpenUpdate can pause only an In Progress task and append one
       "- [ ] #task Ship it ^ship",
       "  - Keep detail",
       "  - 🛠️ **WORK LOG**",
-      "    - Added coverage",
+      "    - *2026-08-15* — Added coverage",
     ].join("\n"),
   );
   assert.equal(
@@ -2712,6 +2754,7 @@ test("In Progress pause with a summary sets Open and creates a Work Log", async 
   const plugin = new Plugin();
   plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
   plugin.suppressEditorScans = () => {};
+  plugin.now = () => localDate(2026, 8, 15);
 
   const result = await plugin.submitPomodoroWorkSummary(source, " Added\ncoverage ");
 
@@ -2722,7 +2765,7 @@ test("In Progress pause with a summary sets Open and creates a Work Log", async 
       "- [ ] #task Ship it",
       "  - Keep detail",
       "  - 🛠️ **WORK LOG**",
-      "    - Added coverage",
+      "    - *2026-08-15* — Added coverage",
     ].join("\n"),
   );
   assert.equal(lastNotice(), "Task set Open · logged work · no current/future Pomodoro links removed");
@@ -2837,6 +2880,7 @@ test("In Progress pause removes cross-note Pomodoro links before setting Open an
   plugin.resolveReferenceDestination = (reference) =>
     reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
   plugin.suppressEditorScans = () => {};
+  plugin.now = () => localDate(2026, 8, 15);
 
   const result = await plugin.submitPomodoroWorkSummary(source, "Finished cleanup");
 
@@ -2855,7 +2899,7 @@ test("In Progress pause removes cross-note Pomodoro links before setting Open an
     [
       "- [ ] #task Ship it ^ship",
       "  - 🛠️ **WORK LOG**",
-      "    - Finished cleanup",
+      "    - *2026-08-15* — Finished cleanup",
     ].join("\n"),
   );
   assert.equal(lastNotice(), "Task set Open · logged work · removed 1 current/future Pomodoro link");
@@ -2927,6 +2971,7 @@ test("same-note In Progress pause merges cleanup, status, and Work Log in the ac
   plugin.resolveReferenceDestination = (reference) =>
     reference.targetText === "" ? { path: "Daily.md" } : null;
   plugin.suppressEditorScans = () => {};
+  plugin.now = () => localDate(2026, 8, 15);
 
   const result = await plugin.submitPomodoroWorkSummary(source, "Paused after tests");
 
@@ -2936,7 +2981,7 @@ test("same-note In Progress pause merges cleanup, status, and Work Log in the ac
     [
       "- [ ] #task Ship it ^ship",
       "  - 🛠️ **WORK LOG**",
-      "    - Paused after tests",
+      "    - *2026-08-15* — Paused after tests",
       "## Pomodoros",
       "- [ ] Current (10:00-10:25)",
       "- [x] Done (09:00-09:25)",

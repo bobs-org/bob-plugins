@@ -80,6 +80,8 @@ const LEGACY_WORK_LOG_LABEL = "Work log";
 const WORK_LOG_PARENT_RE = new RegExp(
   `^([ \\t]*)([-*+]|\\d+[.)])[ \\t]+(?:${WORK_LOG_EMOJI}[ \\t]+)?\\*\\*(?:${WORK_LOG_LABEL}|${LEGACY_WORK_LOG_LABEL}):?\\*\\*[ \\t]*$`,
 );
+const WORK_LOG_ENTRY_EMPHASIS = "*";
+const WORK_LOG_ENTRY_SEPARATOR = " — ";
 // Daily Notes core-plugin lookup and filename-format parsing, mirroring
 // bob-ledger-tools/main.js. Kept as an independent copy for the same reason
 // as the Schedule Log constants above: plugins are deployed separately and
@@ -1525,14 +1527,27 @@ function normalizeWorkSummary(value) {
     .replace(/\s+/g, " ");
 }
 
+function formatWorkLogEntry(summary, dateParts) {
+  const normalizedSummary = normalizeWorkSummary(summary);
+  if (!normalizedSummary) {
+    return "";
+  }
+
+  return `${WORK_LOG_ENTRY_EMPHASIS}${formatCalendarDate(dateParts)}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${normalizedSummary}`;
+}
+
 function workSummaryContainsDataviewInlineField(value) {
   return normalizeWorkSummary(value).includes("::");
 }
 
-function workSummaryPromptState(value) {
+function workSummaryPromptState(value, options = {}) {
   const summary = normalizeWorkSummary(value);
+  const date = options.date || localTodayParts(options.now);
+  const formattedEntry = summary ? formatWorkLogEntry(summary, date) : "";
   return {
     summary,
+    date,
+    formattedEntry,
     isBlank: summary.length === 0,
     hasDataviewWarning: summary.includes("::"),
     primaryButtonText: summary ? "Set Open & log" : "Set Open",
@@ -1710,7 +1725,7 @@ function insertionEditAtLine(content, lines, insertLine, insertedLines, lineEndi
   };
 }
 
-function planWorkLogInsertion(preimageContent, taskLine, rawSummary) {
+function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {}) {
   const summary = normalizeWorkSummary(rawSummary);
   const content = String(preimageContent === null || preimageContent === undefined ? "" : preimageContent);
   if (!summary) {
@@ -1718,11 +1733,16 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary) {
       content,
       edits: [],
       summary,
+      workLogDate: null,
+      workLogFormattedEntry: "",
       workLogEntryAdded: false,
       workLogInsertLine: null,
       hasChanges: false,
     };
   }
+
+  const workLogDate = options.date || localTodayParts(options.now);
+  const workLogFormattedEntry = formatWorkLogEntry(summary, workLogDate);
 
   const lines = content.split("\n");
   if (!Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
@@ -1744,7 +1764,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary) {
         indent: `${marker.indent}${CANONICAL_POMODORO_CHILD_INDENT}`,
         marker: marker.marker,
       };
-    const entryLineText = `${entryPrefix.indent}${entryPrefix.marker} ${summary}`;
+    const entryLineText = `${entryPrefix.indent}${entryPrefix.marker} ${workLogFormattedEntry}`;
     workLogInsertLine = marker.line + 1;
     edit = insertionEditAtLine(
       content,
@@ -1761,7 +1781,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary) {
       };
     const entryIndent = `${directChildPrefix.indent}${CANONICAL_POMODORO_CHILD_INDENT}`;
     const markerLineText = `${directChildPrefix.indent}${directChildPrefix.marker} ${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`;
-    const entryLineText = `${entryIndent}- ${summary}`;
+    const entryLineText = `${entryIndent}- ${workLogFormattedEntry}`;
     workLogInsertLine = findChildBlockEndLine(lines, taskLine) + 1;
     edit = insertionEditAtLine(
       content,
@@ -1777,6 +1797,8 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary) {
     content: applyTextEdits(content, edits),
     edits,
     summary,
+    workLogDate,
+    workLogFormattedEntry,
     workLogEntryAdded: true,
     workLogInsertLine,
     hasChanges: true,
@@ -3077,6 +3099,10 @@ function planTargetTaskOpenUpdate(preimageContent, taskLine, options = {}) {
   const workSummary = Object.prototype.hasOwnProperty.call(options, "workSummary")
     ? options.workSummary
     : "";
+  const normalizedWorkSummary = normalizeWorkSummary(workSummary);
+  const workLogDate = normalizedWorkSummary
+    ? options.workLogDate || localTodayParts(options.now)
+    : null;
   const content = String(preimageContent === null || preimageContent === undefined ? "" : preimageContent);
   const lines = content.split("\n");
 
@@ -3102,7 +3128,9 @@ function planTargetTaskOpenUpdate(preimageContent, taskLine, options = {}) {
     },
   ];
   let nextContent = applyTextEdits(content, edits);
-  const workLogPlan = planWorkLogInsertion(nextContent, taskLine, workSummary);
+  const workLogPlan = planWorkLogInsertion(nextContent, taskLine, workSummary, {
+    date: workLogDate,
+  });
   if (!workLogPlan) {
     return null;
   }
@@ -3121,6 +3149,8 @@ function planTargetTaskOpenUpdate(preimageContent, taskLine, options = {}) {
     logEntryAdded: false,
     workLogEntryAdded: workLogPlan.workLogEntryAdded,
     workLogSummary: workLogPlan.summary,
+    workLogDate: workLogPlan.workLogDate,
+    workLogFormattedEntry: workLogPlan.workLogFormattedEntry,
     workLogInsertLine: workLogPlan.workLogInsertLine,
     blockIdAppended: false,
     hasChanges: true,
@@ -3886,6 +3916,7 @@ class WorkSummaryPromptModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.source = source;
+    this.workLogDate = localTodayParts(plugin.now());
     this.completed = false;
     this.submitting = false;
     this.inputEl = null;
@@ -3988,24 +4019,39 @@ class WorkSummaryPromptModal extends Modal {
       return;
     }
 
-    const state = workSummaryPromptState(this.inputEl ? this.inputEl.value : "");
+    const state = workSummaryPromptState(this.inputEl ? this.inputEl.value : "", {
+      date: this.workLogDate,
+    });
     if (this.primaryButton && typeof this.primaryButton.setButtonText === "function") {
       this.primaryButton.setButtonText(state.primaryButtonText);
     }
 
     this.previewEl.empty();
     if (state.isBlank) {
+      this.previewEl.setAttribute("aria-label", "No work-log entry will be added.");
       this.previewEl.createDiv({
         cls: "bid-wlp-preview-muted",
         text: "No work-log entry will be added.",
       });
     } else {
+      this.previewEl.setAttribute("aria-label", state.formattedEntry);
       this.previewEl.createDiv({
         cls: "bid-wlp-preview-marker",
         text: `${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`,
       });
-      this.previewEl.createDiv({
+      const entryEl = this.previewEl.createDiv({
         cls: "bid-wlp-preview-entry",
+      });
+      entryEl.createEl("em", {
+        cls: "bid-wlp-preview-date",
+        text: formatCalendarDate(state.date),
+      });
+      entryEl.createSpan({
+        cls: "bid-wlp-preview-separator",
+        text: WORK_LOG_ENTRY_SEPARATOR,
+      });
+      entryEl.createSpan({
+        cls: "bid-wlp-preview-summary",
         text: state.summary,
       });
     }
@@ -4025,6 +4071,7 @@ class WorkSummaryPromptModal extends Modal {
       const accepted = await this.plugin.submitPomodoroWorkSummary(
         this.source,
         this.inputEl ? this.inputEl.value : "",
+        { workLogDate: this.workLogDate },
       );
       if (accepted) {
         this.completed = true;
@@ -4893,10 +4940,15 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     // Cancellation intentionally leaves the selected task and daily note untouched.
   }
 
-  async submitPomodoroWorkSummary(source, rawSummary) {
+  async submitPomodoroWorkSummary(source, rawSummary, options = {}) {
+    const normalizedSummary = normalizeWorkSummary(rawSummary);
+    const workLogDate = normalizedSummary
+      ? options.workLogDate || localTodayParts(this.now())
+      : null;
     return this.applyPomodoroTaskUnlink(source, {
       expectedStatus: "/",
-      workSummary: rawSummary,
+      workSummary: normalizedSummary,
+      workLogDate,
     });
   }
 
@@ -5049,6 +5101,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     const taskPlan = planTargetTaskOpenUpdate(taskContent, source.line, {
       expectedStatus,
       workSummary: normalizedSummary,
+      workLogDate: options.workLogDate || null,
     });
     if (!taskPlan) {
       new Notice(`Task ${noticeNoun} stopped: selected task changed in ${source.sourcePath}`);
@@ -5918,11 +5971,13 @@ module.exports.helpers = {
   findWorkLogMarker,
   formatCalendarDate,
   formatDailyDate,
+  formatWorkLogEntry,
   getCaretCompletionDestination,
   getDailyNotesOptions,
   isSoleContentLinkBullet,
   lineIsInsideCodeFence,
   listItemBodyBounds,
+  localTodayParts,
   normalizeWorkSummary,
   parseDependsOnIds,
   parseInlineIdField,

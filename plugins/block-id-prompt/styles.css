@@ -541,6 +541,19 @@
   overflow-wrap: anywhere;
 }
 
+.bid-wlp-preview-date {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.bid-wlp-preview-separator {
+  color: var(--text-faint);
+}
+
+.bid-wlp-preview-summary {
+  color: var(--text-normal);
+}
+
 .bid-wlp-warning {
   padding: var(--size-2-3) var(--size-4-3);
   color: var(--text-warning);

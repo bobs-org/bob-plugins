@@ -51,6 +51,28 @@ const COMPACT_TIME_RANGE_RE =
 const CANONICAL_BLOCK_LINK_PREFIX = "#^";
 const SCAN_DEBOUNCE_MS = 75;
 const EDIT_SUPPRESS_MS = 250;
+// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`:
+// `[scheduled:: YYYY-MM-DD]` and `(scheduled:: YYYY-MM-DD)`, anywhere on the
+// line and in any field order. The captured value is validated separately so
+// a malformed date still counts toward "more than one recognized field".
+const SCHEDULED_FIELD_RE = /\[scheduled::([^\]\n]*)\]|\(scheduled::([^)\n]*)\)/g;
+const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DAYS_IN_MONTH = Object.freeze([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]);
+// Managed "schedule log" child bullet, mirroring
+// bob-navigation-hotkeys/main.js's SCHEDULE_LOG_PARENT_RE: `🗓️ **SCHEDULE LOG**`,
+// the emoji-less `**SCHEDULE LOG**`, and the legacy `**Schedule log:**` spelling.
+// Kept as an independent copy here since plugins are deployed separately and
+// must not import each other's main.js.
+const SCHEDULE_LOG_EMOJI = "🗓️";
+const SCHEDULE_LOG_LABEL = "SCHEDULE LOG";
+const LEGACY_SCHEDULE_LOG_LABEL = "Schedule log";
+const SCHEDULE_LOG_PARENT_RE = new RegExp(
+  `^([ \\t]*)([-*+]|\\d+[.)])[ \\t]+(?:${SCHEDULE_LOG_EMOJI}[ \\t]+)?\\*\\*(?:${SCHEDULE_LOG_LABEL}|${LEGACY_SCHEDULE_LOG_LABEL}):?\\*\\*[ \\t]*$`,
+);
+const SCHEDULE_LOG_ENTRY_EMPHASIS = "_";
+const SCHEDULE_LOG_TRANSITION = " → ";
+const SCHEDULE_LOG_SEPARATOR = " — ";
+const SCHEDULE_LOG_POMODORO_REASON = "🍅 pulled into today's Pomodoro";
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -666,6 +688,102 @@ function getTrailingBlockId(lineText) {
   return match ? match[1] : null;
 }
 
+// Find every recognized `scheduled` field on a line, bracket or paren form, in
+// any position/order. `value` is trimmed; callers decide validity separately
+// so a malformed or duplicate field still counts toward ambiguity.
+function findScheduledFieldMatches(lineText) {
+  const text = normalizeMarkdownLine(lineText);
+  const matches = [];
+  let match;
+
+  SCHEDULED_FIELD_RE.lastIndex = 0;
+  while ((match = SCHEDULED_FIELD_RE.exec(text)) !== null) {
+    const rawValue = match[1] !== undefined ? match[1] : match[2];
+    matches.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      value: rawValue.trim(),
+    });
+  }
+
+  return matches;
+}
+
+function isLeapYear(year) {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInMonth(year, month) {
+  return month === 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
+}
+
+// Require an exact four-digit year/two-digit month/two-digit day and validate
+// the actual calendar date (rejects e.g. 2026-02-30).
+function parseStrictCalendarDate(value) {
+  const match = CALENDAR_DATE_RE.exec(String(value === null || value === undefined ? "" : value));
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
+function compareCalendarDates(left, right) {
+  return left.year - right.year || left.month - right.month || left.day - right.day;
+}
+
+function formatCalendarDate({ year, month, day }) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+// The clock is injectable so callers can pass a fixed `Date` in tests. Local
+// calendar components are read directly (not toISOString()) so a date near a
+// timezone boundary is never shifted to the wrong day.
+function localTodayParts(now) {
+  const date = now instanceof Date ? now : new Date();
+  return { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() };
+}
+
+// Exactly one recognized scheduled field, syntactically valid, and strictly
+// later than `today` — the only shape that qualifies for future-schedule
+// removal. Two or more recognized fields, an invalid date, or a today/past
+// date are all treated the same way: left completely untouched.
+function findSingleFutureScheduledField(lineText, today) {
+  const matches = findScheduledFieldMatches(lineText);
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  const parsed = parseStrictCalendarDate(matches[0].value);
+  if (!parsed || compareCalendarDates(parsed, today) <= 0) {
+    return null;
+  }
+
+  return { ...matches[0], date: parsed };
+}
+
+// Remove `[start, end)` and collapse the whitespace it exposed so surviving
+// tokens stay separated by exactly one space, without introducing trailing
+// whitespace. Mirrors lineWithoutBlockToken's collapse rule.
+function removeSpanWithSpaceCollapse(lineText, start, end) {
+  const before = lineText.slice(0, start);
+  const after = lineText.slice(end);
+
+  if (before.trim() && after.trim()) {
+    return `${before.replace(/[ \t]+$/g, "")} ${after.replace(/^[ \t]+/g, "")}`;
+  }
+
+  return before.replace(/[ \t]+$/g, "") + after.replace(/^[ \t]+/g, "");
+}
+
 function hasHideTaskTag(text) {
   return HIDE_TASK_TAG_RE.test(String(text || ""));
 }
@@ -1173,28 +1291,6 @@ function contentLineAt(content, lineNumber) {
   return lines[lineNumber];
 }
 
-function taskLineAppendEdit(content, lineNumber, id) {
-  const lines = String(content || "").split("\n");
-  if (lineNumber < 0 || lineNumber >= lines.length) {
-    return null;
-  }
-
-  const lineText = lines[lineNumber];
-  const lineStart = lineStartIndexFromLines(lines, lineNumber);
-  const lineEnd = lineEndIndexFromLines(lines, lineNumber);
-  const contentLineEnd = lineText.endsWith("\r") ? lineEnd - 1 : lineEnd;
-  const lineWithoutCarriageReturn = lineText.endsWith("\r")
-    ? lineText.slice(0, -1)
-    : lineText;
-  const trimmedLength = lineWithoutCarriageReturn.replace(/[ \t]+$/g, "").length;
-
-  return {
-    start: lineStart + trimmedLength,
-    end: contentLineEnd,
-    replacement: ` ^${id}`,
-  };
-}
-
 function setCheckboxStatus(lineText, newStatus) {
   const text = String(lineText || "");
   const match = TASK_CHECKBOX_STATUS_RE.exec(text);
@@ -1204,54 +1300,6 @@ function setCheckboxStatus(lineText, newStatus) {
 
   const statusStart = match[1].length;
   return text.slice(0, statusStart) + newStatus + text.slice(statusStart + 1);
-}
-
-function setCheckboxStatusEdit(content, lineNumber, newStatus) {
-  const lines = String(content || "").split("\n");
-  if (lineNumber < 0 || lineNumber >= lines.length) {
-    return null;
-  }
-
-  const lineText = lines[lineNumber];
-  const match = TASK_CHECKBOX_STATUS_RE.exec(lineText);
-  if (!match) {
-    return null;
-  }
-
-  const lineStart = lineStartIndexFromLines(lines, lineNumber);
-  const statusStart = lineStart + match[1].length;
-  return {
-    start: statusStart,
-    end: statusStart + 1,
-    replacement: newStatus,
-  };
-}
-
-function taskLineAppendWithStatusEdit(content, lineNumber, id, newStatus) {
-  const lines = String(content || "").split("\n");
-  if (lineNumber < 0 || lineNumber >= lines.length) {
-    return null;
-  }
-
-  const lineText = lines[lineNumber];
-  const lineStart = lineStartIndexFromLines(lines, lineNumber);
-  const lineEnd = lineEndIndexFromLines(lines, lineNumber);
-  const contentLineEnd = lineText.endsWith("\r") ? lineEnd - 1 : lineEnd;
-  const lineWithoutCarriageReturn = lineText.endsWith("\r")
-    ? lineText.slice(0, -1)
-    : lineText;
-  const trimmedLength = lineWithoutCarriageReturn.replace(/[ \t]+$/g, "").length;
-  const trimmedLine = lineWithoutCarriageReturn.slice(0, trimmedLength);
-  const updatedLine = setCheckboxStatus(trimmedLine, newStatus);
-  if (updatedLine === null) {
-    return null;
-  }
-
-  return {
-    start: lineStart,
-    end: contentLineEnd,
-    replacement: `${updatedLine} ^${id}`,
-  };
 }
 
 function isPomodorosHeadingLine(lineText) {
@@ -1427,6 +1475,107 @@ function isPomodoroSubBulletLine(lines, lineNumber) {
   return findPomodoroSourceContext(lines, lineNumber) !== null;
 }
 
+function parseScheduleLogMarkerLine(lineText) {
+  const match = SCHEDULE_LOG_PARENT_RE.exec(normalizeMarkdownLine(lineText));
+  return match ? { indent: match[1], marker: match[2] } : null;
+}
+
+// The exclusive-of-nothing-past-it last line of `parentLine`'s child block:
+// every later line that is blank or indented deeper than the parent, stopping
+// at the first nonblank line indented at or shallower than the parent.
+function findChildBlockEndLine(lines, parentLine) {
+  const parentIndent = lineIndentWidth(lines[parentLine] || "");
+  let endLine = parentLine;
+
+  for (let line = parentLine + 1; line < lines.length; line += 1) {
+    const lineText = normalizeMarkdownLine(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    if (lineIndentWidth(lineText) > parentIndent) {
+      endLine = line;
+      continue;
+    }
+
+    break;
+  }
+
+  return endLine;
+}
+
+// Scanning backward from `childLine`, the nearest earlier list item whose
+// indent is strictly smaller. Non-list lines with a smaller indent are
+// skipped rather than stopping the search, matching
+// bob-navigation-hotkeys/main.js's findNearestParentListItem.
+function findNearestParentListItemLine(lines, childLine) {
+  if (!Number.isInteger(childLine) || childLine <= 0) {
+    return null;
+  }
+
+  const childIndent = lineIndentWidth(lines[childLine] || "");
+  for (let line = childLine - 1; line >= 0; line -= 1) {
+    const lineText = normalizeMarkdownLine(lines[line] || "");
+    if (!lineText.trim() || lineIndentWidth(lineText) >= childIndent) {
+      continue;
+    }
+
+    if (isListItemLine(lineText)) {
+      return line;
+    }
+  }
+
+  return null;
+}
+
+// The managed Schedule Log marker among `taskLine`'s direct children, or null.
+// A marker belonging to a nested grandchild is ignored.
+function findScheduleLogMarker(lines, taskLine) {
+  if (!Array.isArray(lines) || !Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
+    return null;
+  }
+
+  const endLine = findChildBlockEndLine(lines, taskLine);
+  for (let line = taskLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const parsed = parseScheduleLogMarkerLine(lineText);
+    if (parsed && findNearestParentListItemLine(lines, line) === taskLine) {
+      return { line, indent: parsed.indent, marker: parsed.marker };
+    }
+  }
+
+  return null;
+}
+
+// The indentation for a new entry under `markerLine`: reuse an existing direct
+// child's indentation when the marker already has entries, otherwise the
+// marker's own indent plus one tab.
+function findScheduleLogEntryIndent(lines, markerLine) {
+  const markerIndent = (/^[ \t]*/.exec(String(lines[markerLine] || "")) || [""])[0];
+  const endLine = findChildBlockEndLine(lines, markerLine);
+
+  for (let line = markerLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    if (isListItemLine(lineText) && findNearestParentListItemLine(lines, line) === markerLine) {
+      return (/^[ \t]*/.exec(normalizeMarkdownLine(lineText)) || [""])[0];
+    }
+  }
+
+  return `${markerIndent}\t`;
+}
+
+function formatScheduleLogEntryLine(indent, marker, oldDateText, newDateText) {
+  return `${indent}${marker} ${SCHEDULE_LOG_ENTRY_EMPHASIS}${oldDateText}${SCHEDULE_LOG_TRANSITION}${newDateText}${SCHEDULE_LOG_ENTRY_EMPHASIS}${SCHEDULE_LOG_SEPARATOR}${SCHEDULE_LOG_POMODORO_REASON}`;
+}
+
 function sourcePomodoroContext(source) {
   if (
     !source ||
@@ -1441,10 +1590,6 @@ function sourcePomodoroContext(source) {
     source.editor.getValue().split("\n"),
     source.line,
   );
-}
-
-function sourceLineIsPomodoroSubBullet(source) {
-  return sourcePomodoroContext(source) !== null;
 }
 
 function isSoleContentLinkBullet(lineText, startCh, endCh) {
@@ -1483,13 +1628,16 @@ function sourceLinkIsSoleBulletContent(source) {
   return isSoleContentLinkBullet(lineText, source.startCh, source.endCh);
 }
 
-function shouldPromoteTaskToNext(source, task) {
-  return Boolean(
-    task &&
-      task.status === " " &&
-      sourceLineIsPomodoroSubBullet(source) &&
-      sourceLinkIsSoleBulletContent(source),
-  );
+// Whether `source` is a task-picker link that is the sole content of an
+// indented sub-bullet under an OPEN Pomodoro entry. This is the shared
+// qualification for both the legacy Ready promotion and future-schedule
+// activation; it intentionally does not look at the target task's status.
+// Adding a link under completed/canceled Pomodoro history must never
+// activate a target, so `isOpen` is checked explicitly here rather than
+// merely requiring a Pomodoro owner to exist.
+function sourceQualifiesForPomodoroActivation(source) {
+  const context = sourcePomodoroContext(source);
+  return Boolean(context && context.isOpen && sourceLinkIsSoleBulletContent(source));
 }
 
 function lineRangeText(lines, startLine, endLine) {
@@ -2132,6 +2280,172 @@ function planFuturePomodoroLinkCleanup(content, options = {}) {
   }
 
   return { edits, removedCount: matches.length };
+}
+
+// Pure target-note mutation planner for a `^^` task-picker completion. Given
+// the destination note's preimage and the selected task's line, composes:
+//   - future-schedule removal (only when `activationEligible` and the task
+//     carries exactly one valid, strictly future `scheduled` field);
+//   - the resulting checkbox status (Ready/Blocked promoted to Next only when
+//     `activationEligible`; an already Next/In-Progress task is preserved);
+//   - an optional trailing block ID append, kept as the final task token; and
+//   - a Schedule Log entry, only when the task already owns a direct-child
+//     marker.
+// Returns the complete postimage plus outcome metadata and the discrete edits
+// needed to apply the same change to a live editor without disturbing
+// unrelated document state. Returns null if `taskLine` cannot be read as an
+// Obsidian task line (defensive; callers already guard freshness upstream).
+function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
+  const activationEligible = Boolean(options.activationEligible);
+  const newBlockId = normalizeText(options.newBlockId) || null;
+  const content = String(preimageContent === null || preimageContent === undefined ? "" : preimageContent);
+  const lines = content.split("\n");
+
+  if (!Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
+    return null;
+  }
+
+  const rawLine = lines[taskLine];
+  const hasCR = rawLine.endsWith("\r");
+  const lineText = hasCR ? rawLine.slice(0, -1) : rawLine;
+  const taskMatch = getObsidianTaskLineMatch(lineText);
+  if (!taskMatch) {
+    return null;
+  }
+
+  const currentStatus = taskMatch[1];
+  const today = localTodayParts(options.now);
+  const futureField = activationEligible
+    ? findSingleFutureScheduledField(lineText, today)
+    : null;
+
+  let updatedLineText = lineText;
+  let removedFutureSchedule = false;
+  let oldScheduledDate = null;
+  if (futureField) {
+    updatedLineText = removeSpanWithSpaceCollapse(updatedLineText, futureField.start, futureField.end);
+    removedFutureSchedule = true;
+    oldScheduledDate = futureField.value;
+  }
+
+  let newStatus = currentStatus;
+  if (activationEligible) {
+    if (removedFutureSchedule) {
+      if (currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS || currentStatus === " ") {
+        newStatus = "*";
+      }
+    } else if (currentStatus === " ") {
+      newStatus = "*";
+    }
+  }
+
+  const statusChanged = newStatus !== currentStatus;
+  if (statusChanged) {
+    updatedLineText = setCheckboxStatus(updatedLineText, newStatus);
+  }
+
+  if (newBlockId) {
+    const trimmedLength = updatedLineText.replace(/[ \t]+$/g, "").length;
+    updatedLineText = `${updatedLineText.slice(0, trimmedLength)} ^${newBlockId}`;
+  }
+
+  const lineStart = lineStartIndexFromLines(lines, taskLine);
+  const lineEnd = lineEndIndexFromLines(lines, taskLine);
+  const edits = [
+    {
+      start: lineStart,
+      end: hasCR ? lineEnd - 1 : lineEnd,
+      replacement: updatedLineText,
+    },
+  ];
+
+  const nextLines = lines.slice();
+  nextLines[taskLine] = hasCR ? `${updatedLineText}\r` : updatedLineText;
+
+  let logEntryAdded = false;
+  let logInsertLine = null;
+  if (removedFutureSchedule) {
+    const marker = findScheduleLogMarker(nextLines, taskLine);
+    if (marker) {
+      const entryIndent = findScheduleLogEntryIndent(nextLines, marker.line);
+      const entryLineText = formatScheduleLogEntryLine(
+        entryIndent,
+        marker.marker,
+        oldScheduledDate,
+        formatCalendarDate(today),
+      );
+      logInsertLine = marker.line + 1;
+
+      const markerHasCR = Boolean(lines[marker.line] && lines[marker.line].endsWith("\r"));
+      if (logInsertLine < lines.length) {
+        const insertionIndex = lineStartIndexFromLines(lines, logInsertLine);
+        edits.push({
+          start: insertionIndex,
+          end: insertionIndex,
+          replacement: `${entryLineText}${markerHasCR ? "\r" : ""}\n`,
+        });
+      } else {
+        edits.push({
+          start: content.length,
+          end: content.length,
+          replacement: `\n${entryLineText}`,
+        });
+      }
+
+      nextLines.splice(logInsertLine, 0, markerHasCR ? `${entryLineText}\r` : entryLineText);
+      logEntryAdded = true;
+    }
+  }
+
+  return {
+    content: nextLines.join("\n"),
+    edits,
+    removedFutureSchedule,
+    oldScheduledDate,
+    statusChanged,
+    newStatus,
+    logEntryAdded,
+    logInsertLine,
+    blockIdAppended: Boolean(newBlockId),
+    hasChanges: removedFutureSchedule || statusChanged || logEntryAdded || Boolean(newBlockId),
+  };
+}
+
+// Success-notice chips for a planTargetTaskUpdate outcome, in display order.
+function activationSuccessChips(plan) {
+  const chips = [];
+  if (plan.removedFutureSchedule) {
+    chips.push("removed future schedule");
+  }
+  if (plan.statusChanged) {
+    chips.push("set Next");
+  }
+  if (plan.logEntryAdded) {
+    chips.push("logged schedule change");
+  }
+  return chips;
+}
+
+function activationSuccessSuffix(plan) {
+  const chips = activationSuccessChips(plan);
+  return chips.length ? ` · ${chips.join(" · ")}` : "";
+}
+
+// Past-tense clauses for a partial-failure notice (target written, source
+// link completion stopped). Never claims "set Next" alone when other target
+// mutations also happened.
+function activationPartialFailureParts(plan) {
+  const parts = [];
+  if (plan.removedFutureSchedule) {
+    parts.push("unscheduled");
+  }
+  if (plan.statusChanged) {
+    parts.push("set Next");
+  }
+  if (plan.logEntryAdded) {
+    parts.push("logged");
+  }
+  return parts;
 }
 
 function pluralize(value, singular, plural) {
@@ -3148,40 +3462,42 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return null;
     }
 
-    const promoteToNext = shouldPromoteTaskToNext(source, task);
-    if (promoteToNext) {
-      const edit = setCheckboxStatusEdit(destination.content, task.line, "*");
-      if (!edit) {
-        new Notice(`Task link stopped: selected task changed in ${destination.file.path}`);
-        return null;
-      }
+    const activationEligible = sourceQualifiesForPomodoroActivation(source);
+    const plan = planTargetTaskUpdate(destination.content, task.line, {
+      activationEligible,
+      now: this.now(),
+    });
+    if (!plan) {
+      new Notice(`Task link stopped: selected task changed in ${destination.file.path}`);
+      return null;
+    }
 
+    if (plan.hasChanges) {
       if (
-        !(await this.applyTaskLineEdit(
-          destination.file,
-          source,
-          edit,
-          destination.content,
-        ))
+        !(await this.applyTargetTaskPlan(destination.file, source, plan, destination.content))
       ) {
         return null;
       }
     }
 
+    const completionSource = this.adjustSourceForPlan(source, destination.file.path, plan);
     const completion = this.completeTaskSourceLink(
-      source,
+      completionSource,
       task.existingId,
       destination.file.path,
     );
     if (!completion) {
-      if (promoteToNext) {
-        new Notice("Task set Next, but the source link changed before completion");
+      if (plan.hasChanges) {
+        const parts = activationPartialFailureParts(plan);
+        new Notice(
+          `Task ${parts.length ? parts.join(", ") : "linked"}, but the source link changed before completion`,
+        );
       }
       return null;
     }
 
     new Notice(
-      `Linked task block${promoteToNext ? " · set Next" : ""}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
+      `Linked task block${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
     );
     return { completed: true };
   }
@@ -3464,34 +3780,39 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return false;
     }
 
-    const promoteToNext = shouldPromoteTaskToNext(source, source.task);
+    const activationEligible = sourceQualifiesForPomodoroActivation(source);
+    const plan = planTargetTaskUpdate(destination.content, source.task.line, {
+      newBlockId: newId,
+      activationEligible,
+      now: this.now(),
+    });
+    if (!plan) {
+      new Notice(`Task link stopped: selected task changed in ${destination.file.path}`);
+      return false;
+    }
+
     if (
-      !(await this.appendTaskBlockId(
-        destination.file,
-        source,
-        source.task,
-        newId,
-        destination.content,
-        { promoteToNext },
-      ))
+      !(await this.applyTargetTaskPlan(destination.file, source, plan, destination.content))
     ) {
       return false;
     }
 
+    const completionSource = this.adjustSourceForPlan(source, destination.file.path, plan);
     const completion = this.completeTaskSourceLink(
-      source,
+      completionSource,
       newId,
       destination.file.path,
     );
     if (!completion) {
+      const parts = activationPartialFailureParts(plan);
       new Notice(
-        `Task block ID added${promoteToNext ? " and task set Next" : ""}, but the source link changed before completion`,
+        `Task block ID added${parts.length ? ` and ${parts.join(", ")}` : ""}, but the source link changed before completion`,
       );
       return true;
     }
 
     new Notice(
-      `Added block ID and linked task${promoteToNext ? " · set Next" : ""}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
+      `Added block ID and linked task${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
     );
     return true;
   }
@@ -3520,19 +3841,13 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
-  async appendTaskBlockId(file, source, task, newId, expectedContent, options = {}) {
-    const edit = options.promoteToNext
-      ? taskLineAppendWithStatusEdit(expectedContent, task.line, newId, "*")
-      : taskLineAppendEdit(expectedContent, task.line, newId);
-    if (!edit) {
-      new Notice(`Task link stopped: selected task changed in ${file.path}`);
-      return false;
-    }
-
-    return this.applyTaskLineEdit(file, source, edit, expectedContent);
-  }
-
-  async applyTaskLineEdit(file, source, edit, expectedContent) {
+  // Apply a planTargetTaskUpdate() plan as one guarded target-note write: for
+  // the active source note, every discrete edit is applied to the live editor
+  // (so unrelated document state is left untouched); for any other note, the
+  // complete postimage is written in a single vault.modify call. Re-reads and
+  // matches `expectedContent` first so a target that changed since the plan
+  // was built is never silently overwritten.
+  async applyTargetTaskPlan(file, source, plan, expectedContent) {
     const content = await this.readFileSnapshot(file, source);
     if (content === null) {
       new Notice(`Task link stopped: ${file.path} could not be read`);
@@ -3551,24 +3866,43 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       }
 
       this.suppressEditorScans();
-      source.editor.replaceRange(
-        edit.replacement,
-        indexToEditorPosition(content, edit.start),
-        indexToEditorPosition(content, edit.end),
-      );
+      const sortedEdits = [...plan.edits].sort((left, right) => right.start - left.start);
+      for (const edit of sortedEdits) {
+        source.editor.replaceRange(
+          edit.replacement,
+          indexToEditorPosition(content, edit.start),
+          indexToEditorPosition(content, edit.end),
+        );
+      }
       return true;
     }
 
-    const nextContent =
-      content.slice(0, edit.start) + edit.replacement + content.slice(edit.end);
     try {
-      await this.app.vault.modify(file, nextContent);
+      await this.app.vault.modify(file, plan.content);
       return true;
     } catch (error) {
       console.error("Block ID Prompt failed to modify task note", error);
       new Notice(`Task link stopped: ${file.path} could not be modified`);
       return false;
     }
+  }
+
+  // When a Schedule Log entry was inserted into the same note the Pomodoro
+  // source link lives in, everything from that insertion point onward shifts
+  // down by one line. Return a copy of `source` with its line corrected so
+  // sourceMarkerStillPresent/completeTaskSourceLink keep locating the marker
+  // by position rather than by fuzzy text search.
+  adjustSourceForPlan(source, targetPath, plan) {
+    if (
+      !plan ||
+      !plan.logEntryAdded ||
+      targetPath !== source.sourcePath ||
+      plan.logInsertLine > source.line
+    ) {
+      return source;
+    }
+
+    return { ...source, line: source.line + 1 };
   }
 
   directRenameSourceStillPresent(source) {
@@ -4137,9 +4471,18 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       this.scanView = null;
     }
   }
+
+  // The "today" clock for planTargetTaskUpdate's future-schedule comparison.
+  // Overridable so tests can inject a fixed local date.
+  now() {
+    return new Date();
+  }
 };
 
 module.exports.helpers = {
+  activationPartialFailureParts,
+  activationSuccessChips,
+  activationSuccessSuffix,
   applyFileLinkBlockCompletionWithEditorApi,
   blockedChipLabel,
   buildBlockedTooltip,
@@ -4148,17 +4491,24 @@ module.exports.helpers = {
   countBlockedTasks,
   findMarkerLinkNearCursor,
   findPomodoroSourceContext,
+  findScheduledFieldMatches,
+  findScheduleLogEntryIndent,
+  findScheduleLogMarker,
+  findSingleFutureScheduledField,
   findTaskPickerMarkerNearCursor,
+  formatCalendarDate,
   getCaretCompletionDestination,
   isSoleContentLinkBullet,
   lineIsInsideCodeFence,
   listItemBodyBounds,
   parseDependsOnIds,
   parseInlineIdField,
+  parseStrictCalendarDate,
   partitionTaskPickerItems,
   planFuturePomodoroLinkCleanup,
+  planTargetTaskUpdate,
   resolveTaskDependencyState,
-  shouldPromoteTaskToNext,
+  sourceQualifiesForPomodoroActivation,
   taskBlockedState,
   taskIdKeysFromLine,
   taskPickerRevertCursorCh,

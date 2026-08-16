@@ -12,9 +12,9 @@ const DAILY_OPEN_RETRY_DELAY_MS = 50;
 const CENTER_ON_LINE_ATTEMPTS = 5;
 const DAILY_LOCATION_RESTORE_RETRIES = 5;
 const DAILY_LOCATION_RESTORE_ASSERT_FRAMES = 2;
-const TRIGGER_RE = /(^|[^A-Za-z0-9_])((?:dt|[dt])-?\d+|se\d*(?:-\d*)?|ta)$/;
+const TRIGGER_RE = /(^|[^A-Za-z0-9_])((?:dt|[dtD])-?\d+|se\d*(?:-\d*)?|ta)$/;
 const LEDGER_TRIGGER_RE = /^se(\d*)(?:-(\d*))?$/;
-const DATE_TIME_TRIGGER_RE = /^(dt|[dt])(-?\d+)$/;
+const DATE_TIME_TRIGGER_RE = /^(dt|[dtD])(-?\d+)$/;
 const WORD_CHAR_RE = /[A-Za-z0-9_]/;
 const POMODOROS_HEADING_RE = /^##\s+Pomodoros(?:\s.*)?$/;
 const LEVEL_TWO_HEADING_RE = /^##\s+/;
@@ -66,8 +66,17 @@ function parseTrigger(textBeforeCursor) {
       return null;
     }
 
+    let kind = "time";
+    if (prefix === "dt") {
+      kind = "datetime";
+    } else if (prefix === "d") {
+      kind = "date";
+    } else if (prefix === "D") {
+      kind = "datedEntry";
+    }
+
     return {
-      kind: prefix === "dt" ? "datetime" : prefix === "d" ? "date" : "time",
+      kind,
       trigger,
       startCh,
       endCh,
@@ -848,6 +857,16 @@ function computeSnippetExpansion(trigger, now = new Date()) {
   if (trigger.kind === "date") {
     const text = formatOffsetDate(now, trigger.offset);
     return { replacement: text, text };
+  }
+
+  if (trigger.kind === "datedEntry") {
+    const dateText = formatOffsetDate(now, trigger.offset);
+    const replacement = `_${dateText}_ — `;
+    return {
+      replacement,
+      cursorOffset: replacement.length,
+      text: replacement,
+    };
   }
 
   if (trigger.kind === "datetime") {

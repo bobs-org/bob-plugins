@@ -333,12 +333,366 @@ function getTaskStatusForLine(lineText, lineNumber = 0) {
   };
 }
 
+// `?` (Blocked) joins the option-bracket cycle as a source-only slot: it is
+// always readable as a starting status, but never a writable destination
+// (see getAdjacentSymbol). FIXED_SYMBOLS stays the destination set.
+const BLOCKED_TASK_STATUS_SYMBOL = "?";
+const SOURCE_STATUS_CYCLE = [BLOCKED_TASK_STATUS_SYMBOL, ...FIXED_SYMBOLS];
+
+// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`
+// and `plugins/block-id-prompt/main.js`: `[scheduled:: YYYY-MM-DD]` and
+// `(scheduled:: YYYY-MM-DD)`, anywhere on the line and in any field order.
+// The captured value is validated separately so a malformed or duplicate
+// field still counts toward ambiguity.
+const SCHEDULED_FIELD_RE = /\[scheduled::([^\]\n]*)\]|\(scheduled::([^)\n]*)\)/g;
+const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DAYS_IN_MONTH = Object.freeze([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]);
+
+function isCalendarLeapYear(year) {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInScheduledMonth(year, month) {
+  return month === 2 && isCalendarLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
+}
+
+// Require an exact four-digit year/two-digit month/two-digit day and validate
+// the actual calendar date (rejects e.g. 2026-02-30).
+function parseStrictCalendarDate(value) {
+  const match = CALENDAR_DATE_RE.exec(
+    String(value === null || value === undefined ? "" : value),
+  );
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > daysInScheduledMonth(year, month)) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
+function compareCalendarDates(left, right) {
+  return left.year - right.year || left.month - right.month || left.day - right.day;
+}
+
+function formatCalendarDate({ year, month, day }) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+function findScheduledFieldMatches(lineText) {
+  const text = String(lineText || "");
+  const matches = [];
+  let match;
+
+  SCHEDULED_FIELD_RE.lastIndex = 0;
+  while ((match = SCHEDULED_FIELD_RE.exec(text)) !== null) {
+    const rawValue = match[1] !== undefined ? match[1] : match[2];
+    matches.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      value: rawValue.trim(),
+    });
+  }
+
+  return matches;
+}
+
+// Exactly one recognized scheduled field, syntactically valid, and strictly
+// later than `todayDateString` — the only shape that qualifies for
+// Blocked-retirement. Two or more recognized fields, an invalid date, or a
+// today/past date are all treated the same way: left completely untouched.
+function findSingleFutureScheduledField(lineText, todayDateString) {
+  const today = parseStrictCalendarDate(todayDateString);
+  if (!today) {
+    return null;
+  }
+
+  const matches = findScheduledFieldMatches(lineText);
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  const parsed = parseStrictCalendarDate(matches[0].value);
+  if (!parsed || compareCalendarDates(parsed, today) <= 0) {
+    return null;
+  }
+
+  return { ...matches[0], date: parsed };
+}
+
+// Remove `[start, end)` and collapse the whitespace it exposed so surviving
+// tokens stay separated by exactly one space, without introducing trailing
+// whitespace. Other inline fields, tags, prose, list/quote prefixes, and a
+// trailing block ID are all left untouched since they sit outside the span.
+function removeSpanWithSpaceCollapse(lineText, start, end) {
+  const line = String(lineText || "");
+  const before = line.slice(0, start);
+  const after = line.slice(end);
+
+  if (before.trim() && after.trim()) {
+    return `${before.replace(/[ \t]+$/g, "")} ${after.replace(/^[ \t]+/g, "")}`;
+  }
+
+  return before.replace(/[ \t]+$/g, "") + after.replace(/^[ \t]+/g, "");
+}
+
+function parseListItemPrefix(lineText) {
+  const match = String(lineText || "").match(/^([ \t]*)([-*+]|\d+[.)])[ \t]+/);
+  return match ? { indent: match[1], marker: match[2] } : null;
+}
+
+// Scanning backward from `childLine`, the nearest earlier list item whose
+// indent is strictly smaller. Non-list lines with a smaller indent are
+// skipped rather than stopping the search.
+function findNearestParentListItemLine(lines, childLine) {
+  if (!Array.isArray(lines) || !Number.isInteger(childLine) || childLine <= 0) {
+    return null;
+  }
+
+  const childIndent = getLineIndentation(lines[childLine] || "").length;
+  for (let line = childLine - 1; line >= 0; line -= 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim() || getLineIndentation(lineText).length >= childIndent) {
+      continue;
+    }
+
+    if (parseListItemPrefix(lineText)) {
+      return line;
+    }
+  }
+
+  return null;
+}
+
+// The exclusive-of-nothing-past-it last line of `parentLine`'s child block:
+// every later line that is blank or indented deeper than the parent, stopping
+// at the first nonblank line indented at or shallower than the parent.
+function findTaskChildBlockEndLine(lines, parentLine) {
+  const parentIndent = getLineIndentation(lines[parentLine] || "").length;
+  let endLine = parentLine;
+
+  for (let line = parentLine + 1; line < lines.length; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+    if (getLineIndentation(lineText).length > parentIndent) {
+      endLine = line;
+      continue;
+    }
+    break;
+  }
+
+  return endLine;
+}
+
+// Managed "schedule log" child bullet grammar: `- 🗓️ **SCHEDULE LOG**`, the
+// emoji-less `- **SCHEDULE LOG**`, and the legacy `- **Schedule log:**`
+// spelling. Mirrors plugins/bob-navigation-hotkeys/main.js's
+// SCHEDULE_LOG_PARENT_RE and plugins/block-id-prompt/main.js and must stay
+// compatible; kept as an independent copy since plugins are deployed
+// separately and must not import each other's main.js.
+const SCHEDULE_LOG_EMOJI = "🗓️";
+const SCHEDULE_LOG_LABEL = "SCHEDULE LOG";
+const LEGACY_SCHEDULE_LOG_LABEL = "Schedule log";
+const SCHEDULE_LOG_PARENT_RE = new RegExp(
+  `^([ \\t]*)([-*+]|\\d+[.)])[ \\t]+(?:${SCHEDULE_LOG_EMOJI}[ \\t]+)?\\*\\*(?:${SCHEDULE_LOG_LABEL}|${LEGACY_SCHEDULE_LOG_LABEL}):?\\*\\*[ \\t]*$`,
+);
+// bob-navigation-hotkeys' SCHEDULE_LOG_ENTRY_EMPHASIS/TRANSITION/SEPARATOR and
+// bob-cli's capture_schedule_log.rs are the canonical entry-formatting
+// vocabulary; the leading 🔓 (U+1F513) marks this entry as machine-written,
+// joining 🎲, 🤷, and 🍅.
+const SCHEDULE_LOG_ENTRY_EMPHASIS = "*";
+const SCHEDULE_LOG_TRANSITION = " → ";
+const SCHEDULE_LOG_SEPARATOR = " — ";
+const SCHEDULE_LOG_UNBLOCKED_REASON = "🔓 unblocked by hand";
+
+function parseScheduleLogMarkerLine(lineText) {
+  const match = SCHEDULE_LOG_PARENT_RE.exec(String(lineText || ""));
+  return match ? { indent: match[1], marker: match[2] } : null;
+}
+
+// The managed Schedule Log marker among `taskLine`'s direct children, or
+// null. A marker belonging to a nested grandchild is ignored.
+function findScheduleLogMarker(lines, taskLine) {
+  if (
+    !Array.isArray(lines) ||
+    !Number.isInteger(taskLine) ||
+    taskLine < 0 ||
+    taskLine >= lines.length
+  ) {
+    return null;
+  }
+
+  const endLine = findTaskChildBlockEndLine(lines, taskLine);
+  for (let line = taskLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const parsed = parseScheduleLogMarkerLine(lineText);
+    if (parsed && findNearestParentListItemLine(lines, line) === taskLine) {
+      return { line, indent: parsed.indent, marker: parsed.marker };
+    }
+  }
+
+  return null;
+}
+
+// The indentation of the marker's first direct-child entry, or null when the
+// log has no entries yet.
+function findScheduleLogEntryIndent(lines, markerLine) {
+  const endLine = findTaskChildBlockEndLine(lines, markerLine);
+  for (let line = markerLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const prefix = parseListItemPrefix(lineText);
+    if (prefix && findNearestParentListItemLine(lines, line) === markerLine) {
+      return prefix.indent;
+    }
+  }
+
+  return null;
+}
+
+function formatScheduleLogEntry(removedDate, todayDate) {
+  return `${SCHEDULE_LOG_ENTRY_EMPHASIS}${removedDate}${SCHEDULE_LOG_TRANSITION}${todayDate}${SCHEDULE_LOG_ENTRY_EMPHASIS}${SCHEDULE_LOG_SEPARATOR}${SCHEDULE_LOG_UNBLOCKED_REASON}`;
+}
+
+// Composes Blocked-status retirement for one task line: when (and only when)
+// it carries exactly one syntactically valid, strictly future `scheduled`
+// field, remove that field and, only if the task already owns a direct-child
+// Schedule Log marker, plan one newest-first entry recording the move from
+// the removed date to today. Never creates a marker. Returns null when
+// nothing applies (no field, an ambiguous/invalid/past field, or the line is
+// not a `#task`).
+function planBlockedStatusRetirement(lines, taskLine, todayDateString) {
+  if (
+    !Array.isArray(lines) ||
+    !Number.isInteger(taskLine) ||
+    taskLine < 0 ||
+    taskLine >= lines.length
+  ) {
+    return null;
+  }
+
+  const taskLineText = String(lines[taskLine] || "");
+  if (
+    !getTaskStatusForLine(taskLineText, taskLine) ||
+    !lineMatchesTasksGlobalFilterText(taskLineText)
+  ) {
+    return null;
+  }
+
+  const field = findSingleFutureScheduledField(taskLineText, todayDateString);
+  if (!field) {
+    return null;
+  }
+
+  const nextTaskLineText = removeSpanWithSpaceCollapse(
+    taskLineText,
+    field.start,
+    field.end,
+  );
+  const removedDate = formatCalendarDate(field.date);
+
+  const marker = findScheduleLogMarker(lines, taskLine);
+  if (!marker) {
+    return { lineText: nextTaskLineText, removedDate, insertion: null };
+  }
+
+  const existingIndent = findScheduleLogEntryIndent(lines, marker.line);
+  const entryIndent =
+    existingIndent !== null
+      ? existingIndent
+      : `${marker.indent}${CHILD_BULLET_INDENT_UNIT}`;
+  const entryText = `${entryIndent}${marker.marker} ${formatScheduleLogEntry(removedDate, todayDateString)}`;
+
+  return {
+    lineText: nextTaskLineText,
+    removedDate,
+    insertion: { line: marker.line + 1, text: entryText },
+  };
+}
+
+// Insert `newLineText` as a new line immediately before line index
+// `insertLine` (or, when it equals the line count, as the new final line),
+// giving it `inheritedEnding` and fixing up the now-former-last line's ending
+// so the file's trailing-newline state is preserved.
+function insertLineInSourceText(sourceText, insertLine, newLineText, inheritedEnding) {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const index = Math.max(
+    0,
+    Math.min(Math.floor(Number(insertLine) || 0), sourceLines.length),
+  );
+  const nextLines = sourceLines.slice();
+  const precedingIndex = index - 1;
+  const precedingLine = precedingIndex >= 0 ? nextLines[precedingIndex] : null;
+
+  if (precedingLine && precedingLine.ending === "") {
+    nextLines[precedingIndex] = {
+      ...precedingLine,
+      ending: inheritedEnding || "\n",
+    };
+  }
+
+  nextLines.splice(index, 0, {
+    text: String(newLineText || ""),
+    ending: inheritedEnding || "",
+  });
+
+  return nextLines.map((line) => `${line.text}${line.ending}`).join("");
+}
+
+// Text-level wrapper for the vault write path: re-derives the retirement plan
+// from `sourceText` itself (never from stale coordinates) and applies the
+// field removal and, when planned, the log insertion together, preserving
+// each line's own ending and giving a new entry line the marker line's
+// ending.
+function applyBlockedStatusRetirementToSourceText(sourceText, taskLine, todayDateString) {
+  const text = String(sourceText || "");
+  const sourceLines = splitTextByLineEndings(text);
+  const lines = sourceLines.map((line) => line.text);
+  const plan = planBlockedStatusRetirement(lines, taskLine, todayDateString);
+  if (!plan) {
+    return null;
+  }
+
+  let nextText = replaceLineInSourceText(text, taskLine, plan.lineText);
+  if (nextText === null) {
+    return null;
+  }
+
+  if (plan.insertion) {
+    const markerLine = plan.insertion.line - 1;
+    const markerEnding = sourceLines[markerLine] ? sourceLines[markerLine].ending : "\n";
+    nextText = insertLineInSourceText(
+      nextText,
+      plan.insertion.line,
+      plan.insertion.text,
+      markerEnding,
+    );
+  }
+
+  return { text: nextText, removedDate: plan.removedDate };
+}
+
 function isOpenDoneTaskStatus(taskStatus) {
   return !!taskStatus && OPEN_DONE_TASK_SYMBOLS.has(taskStatus.symbol);
 }
 
 function isCyclableTaskStatus(taskStatus) {
-  return !!taskStatus && FIXED_SYMBOLS.includes(taskStatus.symbol);
+  return !!taskStatus && SOURCE_STATUS_CYCLE.includes(taskStatus.symbol);
 }
 
 function isTranscludedCompletionTraversableStatus(taskStatus) {
@@ -5577,7 +5931,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         return true;
       }
 
-      this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
+      const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
+      if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
+        this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
+      }
       return true;
     }
 
@@ -5970,6 +6327,34 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     const seenResolvedTargets = new Set();
     let changed = false;
 
+    // Predict, from the pre-write snapshot, every line where cycling out of
+    // Blocked will insert a Schedule Log entry. Recorded in snapshot
+    // coordinates so editor writes for later lines in the range can be
+    // mapped through the resulting offset before any of those insertions
+    // actually happen: a task's own entry lands inside its child block,
+    // which can sit below a nested child task the loop has not visited yet.
+    const todayDateString = this.getScheduleLogDateString();
+    const insertionPositions = [];
+    for (let line = startLine; line <= endLine; line += 1) {
+      const snapshotTaskStatus = getTaskStatusForLine(String(lines[line] || ""), line);
+      if (snapshotTaskStatus && snapshotTaskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
+        const plan = planBlockedStatusRetirement(lines, line, todayDateString);
+        if (plan && plan.insertion) {
+          insertionPositions.push(plan.insertion.line);
+        }
+      }
+    }
+
+    const editorLineFor = (snapshotLine) => {
+      let offset = 0;
+      for (const position of insertionPositions) {
+        if (position <= snapshotLine) {
+          offset += 1;
+        }
+      }
+      return snapshotLine + offset;
+    };
+
     for (let line = startLine; line <= endLine; line += 1) {
       const lineText = String(lines[line] || "");
       const taskStatus = getTaskStatusForLine(lineText, line);
@@ -5983,12 +6368,27 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           continue;
         }
 
-        const wrote =
-          line === startLine
-            ? this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol)
-            : this.setCheckboxStatusLocalForLine(editor, taskStatus, nextSymbol);
+        let wrote;
+        if (line === startLine) {
+          const lineCountBeforeWrite = this.getEditorLineCount(editor);
+          wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
+          const addedLines = Math.max(
+            0,
+            this.getEditorLineCount(editor) - lineCountBeforeWrite,
+          );
+          for (let extra = 0; extra < addedLines; extra += 1) {
+            insertionPositions.push(startLine + 1);
+          }
+        } else {
+          const mappedTaskStatus = { ...taskStatus, line: editorLineFor(line) };
+          wrote = this.setCheckboxStatusLocalForLine(editor, mappedTaskStatus, nextSymbol);
+        }
+
         if (wrote) {
           changed = true;
+          if (taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
+            this.applyBlockedStatusRetirementInEditor(editor, editorLineFor(line));
+          }
         }
         continue;
       }
@@ -6000,7 +6400,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       const target = getTranscludedTaskTargetFromLine(
         lineText,
         activePath,
-        line,
+        editorLineFor(line),
         line === startLine ? cursor.ch : null,
       );
       if (!target) {
@@ -6040,10 +6440,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     if (typeof editor.setCursor === "function") {
+      const mappedStartLine = editorLineFor(startLine);
       const cursorLineText =
-        typeof editor.getLine === "function" ? editor.getLine(startLine) || "" : "";
+        typeof editor.getLine === "function" ? editor.getLine(mappedStartLine) || "" : "";
       editor.setCursor({
-        line: startLine,
+        line: mappedStartLine,
         ch: Math.max(0, Math.min(cursor.ch || 0, cursorLineText.length)),
       });
     }
@@ -6489,20 +6890,94 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return false;
     }
 
-    const nextSymbol = this.getAdjacentSymbol(
-      resolvedTarget.taskStatus.symbol,
-      direction,
-    );
+    const sourceSymbol = resolvedTarget.taskStatus.symbol;
+    const nextSymbol = this.getAdjacentSymbol(sourceSymbol, direction);
     if (!nextSymbol) {
       return false;
     }
 
-    return this.replaceResolvedTranscludedTaskLine(
+    const wrote = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,
       context,
       nextSymbol,
       { allowAnyStatus: true },
     );
+
+    if (wrote && sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL) {
+      await this.applyBlockedStatusRetirementToTranscludedTarget(resolvedTarget, context);
+    }
+
+    return wrote;
+  }
+
+  // Blocked-retirement for a resolved transcluded target: write through the
+  // editor when it lives in the active note, else through the vault. Two
+  // sequential writes to the same file (the status write, then this one) are
+  // acceptable; each re-reads live content, so both are independently
+  // idempotent.
+  async applyBlockedStatusRetirementToTranscludedTarget(resolvedTarget, context) {
+    if (this.fileMatchesPath(resolvedTarget.file, context && context.activePath)) {
+      if (
+        this.applyBlockedStatusRetirementInEditor(
+          context && context.editor,
+          resolvedTarget.line,
+        )
+      ) {
+        return true;
+      }
+    }
+
+    return this.applyBlockedStatusRetirementInVault(
+      resolvedTarget.file,
+      resolvedTarget.line,
+    );
+  }
+
+  async applyBlockedStatusRetirementInVault(file, taskLine) {
+    if (!this.app.vault) {
+      return false;
+    }
+
+    const todayDateString = this.getScheduleLogDateString();
+    let changed = false;
+    const updateSourceText = (sourceText) => {
+      const applied = applyBlockedStatusRetirementToSourceText(
+        sourceText,
+        taskLine,
+        todayDateString,
+      );
+      if (!applied) {
+        return sourceText;
+      }
+
+      changed = true;
+      return applied.text;
+    };
+
+    try {
+      if (typeof this.app.vault.process === "function") {
+        await this.app.vault.process(file, updateSourceText);
+        return changed;
+      }
+
+      if (
+        typeof this.app.vault.read !== "function" ||
+        typeof this.app.vault.modify !== "function"
+      ) {
+        return false;
+      }
+
+      const sourceText = await this.app.vault.read(file);
+      const nextSourceText = updateSourceText(sourceText);
+      if (!changed) {
+        return false;
+      }
+
+      await this.app.vault.modify(file, nextSourceText);
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   // Direct Pomodoro sub-bullet path: when the active line is an embedded
@@ -7668,6 +8143,32 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return true;
   }
 
+  // Re-derives Blocked-status retirement from the live editor buffer (never
+  // from stale coordinates): re-reads `taskLine`, re-runs the single-future-
+  // field search, and only then removes the span and, when the task already
+  // owns a Schedule Log, inserts the roll-forward entry.
+  applyBlockedStatusRetirementInEditor(editor, taskLine) {
+    if (!editor) {
+      return false;
+    }
+
+    const lines = this.getEditorLineTexts(editor);
+    const plan = planBlockedStatusRetirement(
+      lines,
+      taskLine,
+      this.getScheduleLogDateString(),
+    );
+    if (!plan) {
+      return false;
+    }
+
+    this.replaceEditorLine(taskLine, plan.lineText, editor);
+    if (plan.insertion) {
+      this.insertEditorLines(plan.insertion.line, [plan.insertion.text], editor);
+    }
+    return true;
+  }
+
   getActiveLineTranscludedTaskTarget(editor, sourcePath) {
     if (
       !sourcePath ||
@@ -8076,6 +8577,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return formatLocalDate();
   }
 
+  getScheduleLogDateString() {
+    return formatLocalDate();
+  }
+
   isOpenDoneTaskStatus(taskStatus) {
     return isOpenDoneTaskStatus(taskStatus);
   }
@@ -8152,19 +8657,33 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
   }
 
   getAdjacentSymbol(currentSymbol, direction) {
-    const cycle = this.getStatusCycle();
+    const cycle = this.getSourceStatusCycle();
     const currentIndex = cycle.indexOf(currentSymbol);
 
     if (currentIndex === -1 || cycle.length < 2) {
       return null;
     }
 
-    const nextIndex = (currentIndex + direction + cycle.length) % cycle.length;
-    return cycle[nextIndex];
+    // Step through the source ring, skipping a landing on Blocked (`?`): it
+    // is a readable source but never a writable destination.
+    let nextIndex = currentIndex;
+    for (let step = 0; step < cycle.length; step += 1) {
+      nextIndex = (nextIndex + direction + cycle.length) % cycle.length;
+      if (cycle[nextIndex] !== BLOCKED_TASK_STATUS_SYMBOL) {
+        break;
+      }
+    }
+
+    const nextSymbol = cycle[nextIndex];
+    return FIXED_SYMBOLS.includes(nextSymbol) ? nextSymbol : null;
   }
 
   getStatusCycle() {
     return FIXED_SYMBOLS;
+  }
+
+  getSourceStatusCycle() {
+    return SOURCE_STATUS_CYCLE;
   }
 
   getHalfPageLineCount(cm) {
@@ -8347,6 +8866,7 @@ module.exports.helpers = {
   addOrReplaceCompletionField,
   addCreatedFieldToObsidianTaskLine,
   applyBlockedDependentRecoveryEdits,
+  applyBlockedStatusRetirementToSourceText,
   buildBlockedDependentRecoveryPlan,
   buildPomodoroCompletionPlan,
   buildPomodoroMoveOnlyTogglePlan,
@@ -8365,11 +8885,19 @@ module.exports.helpers = {
   findBlockLineInSourceText,
   findMarkdownHeadings,
   findNamedMarkdownSection,
+  findNearestParentListItemLine,
   findNextMarkdownSection,
   findNextPomodoroLine,
   findPomodorosSectionInLines,
+  findScheduleLogEntryIndent,
+  findScheduleLogMarker,
+  findSingleFutureScheduledField,
+  findScheduledFieldMatches,
+  findTaskChildBlockEndLine,
   findTaskRoutingSections,
+  formatCalendarDate,
   formatLocalDate,
+  formatScheduleLogEntry,
   getDailyNoteDateFromPath,
   getBlockLineFromCache,
   getBlockLinkTargetKey,
@@ -8390,6 +8918,12 @@ module.exports.helpers = {
   getLineArrayReplacement,
   getLineTextFromSourceText,
   getListItemBlockRange,
+  insertLineInSourceText,
+  parseListItemPrefix,
+  parseScheduleLogMarkerLine,
+  parseStrictCalendarDate,
+  planBlockedStatusRetirement,
+  removeSpanWithSpaceCollapse,
   getNextOpenDoneSymbol,
   getOptionBracketTaskCycleDirection,
   getNextSectionBulletInsertion,

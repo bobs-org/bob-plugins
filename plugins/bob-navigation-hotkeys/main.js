@@ -81,6 +81,8 @@ const PROJECT_SOURCE_TASK_LINE_RE =
   /^(\s*)(?:[-*+]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
+const PROJECT_LIFECYCLE_TAG_GLOBAL_RE =
+  /(^|[\s([{])#(?:prj|hide)(?=$|[\s)\]},.;:!?])/g;
 const PROJECT_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const PROJECT_TASKS_HEADER = "## Tasks";
 const PROJECT_TASKS_PLACEHOLDER = "(REPLACE WITH TASK DESCRIPTION)";
@@ -3644,6 +3646,223 @@ function normalizeProjectScheduleLogLine(lineText, markerIndent) {
   return `${SCHEDULE_LOG_INDENT_UNIT}${relativeIndent}${content}`;
 }
 
+// Re-indent a line for the restored parent-task subtree. Blank lines collapse
+// to "". Each nonblank line keeps the indent it had relative to `baseIndent`
+// (the shallowest indent in its block) and is then prefixed with `depth` tabs.
+// An indent that does not extend `baseIndent` falls back to one tab, matching
+// normalizeProjectScheduleLogLine().
+function indentProjectReversalLine(lineText, baseIndent, depth) {
+  const text = String(lineText || "");
+  if (text.trim() === "") {
+    return "";
+  }
+
+  const leadingMatch = /^(\s*)/.exec(text);
+  const leading = leadingMatch ? leadingMatch[1] : "";
+  const content = text.slice(leading.length);
+  const base = String(baseIndent || "");
+  let relativeIndent;
+  if (leading.startsWith(base)) {
+    relativeIndent = leading.slice(base.length);
+  } else {
+    relativeIndent = "\t";
+  }
+
+  const numericDepth = Math.max(0, Math.floor(numericOrDefault(depth, 0)));
+  return `${"\t".repeat(numericDepth)}${relativeIndent}${content}`;
+}
+
+function getProjectReversalShallowestIndent(lines) {
+  let base = null;
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const text = String(line === null || line === undefined ? "" : line);
+    if (text.trim() === "") {
+      continue;
+    }
+    const leadingMatch = /^(\s*)/.exec(text);
+    const indent = leadingMatch ? leadingMatch[1] : "";
+    if (base === null || indent.length < base.length) {
+      base = indent;
+    }
+  }
+  return base === null ? "" : base;
+}
+
+function indentProjectReversalLines(lines, depth) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const baseIndent = getProjectReversalShallowestIndent(sourceLines);
+  const indented = [];
+  for (const line of sourceLines) {
+    const next = indentProjectReversalLine(line, baseIndent, depth);
+    if (next) {
+      indented.push(next);
+    }
+  }
+  return indented;
+}
+
+// Inverse of getProjectBasenameFromTaskBlockId(): strip a leading
+// `<parentBasename>_` when present, then turn `_` back into `-`. Block IDs
+// cannot contain `_` or spaces, so a renamed note yields null.
+function getProjectReversalBlockId(noteBasename, parentBasename) {
+  const note = String(noteBasename || "").trim();
+  if (!note) {
+    return null;
+  }
+
+  const parent = String(parentBasename || "").trim();
+  const prefix = parent ? `${parent}_` : "";
+  const suffix =
+    prefix && note.startsWith(prefix) ? note.slice(prefix.length) : note;
+  if (!suffix) {
+    return null;
+  }
+
+  const blockId = suffix.replace(/_/g, "-");
+  return PROJECT_BLOCK_ID_RE.test(blockId) ? blockId : null;
+}
+
+function formatProjectReversalSectionTitle(headerText) {
+  const title = String(headerText || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+  if (!PROJECT_SECTION_TITLE_RE.test(title) || !/[A-Z]/.test(title)) {
+    return null;
+  }
+
+  return title;
+}
+
+function parseProjectLifecycleTaskBody(lineText) {
+  const text = String(lineText || "");
+  if (!isProjectLifecycleTaskLine(text)) {
+    return null;
+  }
+
+  const match = OBSIDIAN_TASK_LINE_RE.exec(text);
+  const status = match[1];
+  let description = match[2] || "";
+  const blockIdSpan = getTrailingBlockIdSpan(description);
+  if (blockIdSpan) {
+    description =
+      description.slice(0, blockIdSpan.start) +
+      description.slice(blockIdSpan.end);
+  }
+
+  description = collapseProjectTaskDescription(
+    description
+      .replace(PROJECT_TASK_TAG_GLOBAL_RE, "$1")
+      .replace(PROJECT_LIFECYCLE_TAG_GLOBAL_RE, "$1"),
+  );
+
+  return Object.freeze({ status, description });
+}
+
+function getProjectFrontmatterCreatedDate(lines, closingLine) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const end = Math.floor(numericOrDefault(closingLine, Number.NaN));
+  if (!Number.isFinite(end)) {
+    return "";
+  }
+
+  for (
+    let lineIndex = 1;
+    lineIndex < end && lineIndex < sourceLines.length;
+    lineIndex += 1
+  ) {
+    const match = /^created[ \t]*:(.*)$/.exec(
+      String(sourceLines[lineIndex] || ""),
+    );
+    if (match) {
+      const raw = getYamlScalarText(match[1]);
+      const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(raw);
+      return dateMatch ? dateMatch[1] : "";
+    }
+  }
+
+  return "";
+}
+
+function appendProjectReversalTaskField(taskBody, fieldText) {
+  const appendIndex = getBulletPropertyAppendIndex(taskBody);
+  const before = taskBody.slice(0, appendIndex).replace(/[ \t]+$/, "");
+  const after = taskBody.slice(appendIndex).replace(/^[ \t]+/, " ");
+  return `${before} ${fieldText}${after}`;
+}
+
+function buildTaskLineFromProjectNote(fields) {
+  const input = fields && typeof fields === "object" ? fields : {};
+  const status =
+    input.status === null || input.status === undefined ? " " : input.status;
+  const description = collapseProjectTaskDescription(input.description);
+  let taskBody = description ? `#task ${description}` : "#task";
+
+  const scheduled = String(input.scheduled || "").trim();
+  if (scheduled && !findBulletPropertyField(taskBody, "scheduled")) {
+    taskBody = appendProjectReversalTaskField(
+      taskBody,
+      `[scheduled::${scheduled}]`,
+    );
+  }
+
+  const created = String(input.created || "").trim();
+  if (created && !findBulletPropertyField(taskBody, "created")) {
+    taskBody = appendProjectReversalTaskField(taskBody, `[created::${created}]`);
+  }
+
+  const blockId = String(input.blockId || "").trim();
+  if (blockId) {
+    const appendIndex = getBulletPropertyAppendIndex(taskBody);
+    const before = taskBody.slice(0, appendIndex).replace(/[ \t]+$/, "");
+    taskBody = `${before} ^${blockId}`;
+  }
+
+  return `- [${status}] ${taskBody}`;
+}
+
+function getProjectParentBasenameFromLink(value) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  if (!text) {
+    return "";
+  }
+
+  const wikiMatch = /\[\[([^\]|#\n]+)(?:[#|][^\]]*)?\]\]/.exec(text);
+  if (wikiMatch) {
+    const target = wikiMatch[1].trim().replace(/\\/g, "/");
+    const base = target.split("/").pop() || "";
+    return base.replace(MARKDOWN_EXTENSION_RE, "");
+  }
+
+  const markdownMatch = /\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/.exec(text);
+  if (markdownMatch) {
+    const target = String(markdownMatch[1] || "")
+      .split("#")[0]
+      .replace(/\\/g, "/");
+    const base = target.split("/").pop() || "";
+    return base.replace(MARKDOWN_EXTENSION_RE, "");
+  }
+
+  return "";
+}
+
+function isProjectFrontmatterParentLink(value) {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  const text = String(value).trim();
+  if (!text) {
+    return false;
+  }
+
+  if (text.includes("[[") && text.includes("]]")) {
+    return true;
+  }
+
+  return /\[[^\]]*\]\([^)\s]+\)/.test(text);
+}
+
 // Lowercase the whole body, uppercase the first character of every maximal
 // run of letters/digits, and collapse internal whitespace runs to a single
 // space. Acronyms are not special-cased: "API DESIGN" becomes "Api Design".
@@ -4515,6 +4734,42 @@ function getProjectFromTaskNoticeText(
   return `Created project${projectSuffix} from task "${taskText}" (${details.join("; ")})`;
 }
 
+function getProjectNoteToTaskNoticeText(
+  noteBasename,
+  parentBasename,
+  taskCount,
+  sectionCount,
+  updatedLinkCount,
+) {
+  const note = String(noteBasename || "").trim() || "note";
+  const parent = String(parentBasename || "").trim() || "parent";
+  const details = [];
+  const numericTaskCount = numericOrDefault(taskCount, 0);
+  if (numericTaskCount > 0) {
+    details.push(
+      `${numericTaskCount} ${numericTaskCount === 1 ? "task" : "tasks"}`,
+    );
+  }
+  const numericSectionCount = numericOrDefault(sectionCount, 0);
+  if (numericSectionCount > 0) {
+    details.push(
+      `${numericSectionCount} ${
+        numericSectionCount === 1 ? "section" : "sections"
+      }`,
+    );
+  }
+  const numericLinkCount = numericOrDefault(updatedLinkCount, 0);
+  if (numericLinkCount > 0) {
+    details.push(
+      `${numericLinkCount} ${numericLinkCount === 1 ? "link" : "links"} updated`,
+    );
+  }
+
+  const detailText =
+    details.length > 0 ? details.join("; ") : "no child content";
+  return `Converted ${note} into a task in ${parent} (${detailText})`;
+}
+
 function backlinkTextReferencesBlockId(text, blockId) {
   const id = String(blockId || "");
   if (!PROJECT_BLOCK_ID_RE.test(id)) {
@@ -4701,9 +4956,95 @@ function collectBlockIdBacklinkRewrites(backlinksData, blockId) {
     .map((rewrite) => Object.freeze(rewrite));
 }
 
-function rewriteBlockIdLinkOriginal(original, newBasename) {
+function collectBacklinkOriginalStrings(value, originals, depth = 0) {
+  if (depth > 5 || value === null || value === undefined) {
+    return;
+  }
+
+  if (
+    typeof value === "object" &&
+    !(value instanceof Map) &&
+    !Array.isArray(value) &&
+    typeof value.original === "string" &&
+    value.original
+  ) {
+    originals.add(value.original);
+  }
+
+  if (value instanceof Map) {
+    for (const entryValue of value.values()) {
+      collectBacklinkOriginalStrings(entryValue, originals, depth + 1);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((entryValue) =>
+      collectBacklinkOriginalStrings(entryValue, originals, depth + 1),
+    );
+    return;
+  }
+
+  if (typeof value === "object") {
+    Object.values(value).forEach((entryValue) =>
+      collectBacklinkOriginalStrings(entryValue, originals, depth + 1),
+    );
+  }
+}
+
+function collectProjectNoteBacklinkClassification(backlinksData, excludePath) {
+  const blockRewrites = collectBlockIdBacklinkRewrites(backlinksData, "prj");
+  const prjOriginalsByPath = new Map();
+  for (const rewrite of blockRewrites) {
+    prjOriginalsByPath.set(rewrite.path, new Set(rewrite.originals));
+  }
+
+  const excluded = new Set();
+  const excludeText = String(excludePath || "").trim();
+  if (excludeText) {
+    excluded.add(excludeText);
+    excluded.add(normalizeVaultRelativePath(excludeText));
+  }
+
+  const entries =
+    backlinksData instanceof Map
+      ? Array.from(backlinksData.entries())
+      : backlinksData && typeof backlinksData === "object"
+        ? Object.entries(backlinksData)
+        : [];
+
+  const otherPaths = [];
+  for (const [path, value] of entries) {
+    const entryPath = String(path || "");
+    if (
+      !entryPath ||
+      excluded.has(entryPath) ||
+      excluded.has(normalizeVaultRelativePath(entryPath))
+    ) {
+      continue;
+    }
+
+    const allOriginals = new Set();
+    collectBacklinkOriginalStrings(value, allOriginals);
+    const prjOriginals = prjOriginalsByPath.get(entryPath) || new Set();
+    const hasOther = Array.from(allOriginals).some(
+      (original) => !prjOriginals.has(original),
+    );
+    if (hasOther) {
+      otherPaths.push(entryPath);
+    }
+  }
+
+  return Object.freeze({
+    blockRewrites: Object.freeze(blockRewrites),
+    otherPaths: Object.freeze(otherPaths),
+  });
+}
+
+function rewriteBlockIdLinkOriginal(original, newBasename, blockId = "prj") {
   const text = String(original || "");
   const targetBasename = String(newBasename || "").trim();
+  const id = String(blockId || "").trim() || "prj";
   if (!text || !targetBasename) {
     return null;
   }
@@ -4712,7 +5053,7 @@ function rewriteBlockIdLinkOriginal(original, newBasename) {
     text,
   );
   if (wikiMatch) {
-    return `${wikiMatch[1]}[[${targetBasename}#^prj${wikiMatch[3] || ""}]]`;
+    return `${wikiMatch[1]}[[${targetBasename}#^${id}${wikiMatch[3] || ""}]]`;
   }
 
   const markdownMatch =
@@ -4720,7 +5061,7 @@ function rewriteBlockIdLinkOriginal(original, newBasename) {
       text,
     );
   if (markdownMatch) {
-    return `${markdownMatch[1]}(${targetBasename}.md#^prj)`;
+    return `${markdownMatch[1]}(${targetBasename}.md#^${id})`;
   }
 
   return null;
@@ -9697,6 +10038,320 @@ function parseProjectNoteFrontmatter(content, options = {}) {
     scheduledDefined,
     scheduledValue,
     scheduledLine: scheduledDefined ? scheduledLines[0].line : null,
+  });
+}
+
+function emptyProjectNoteReversalSplit(error, extra = {}) {
+  return Object.freeze({
+    valid: false,
+    error,
+    status: extra.status === undefined ? null : extra.status,
+    description:
+      extra.description === undefined ? null : extra.description,
+    lifecycleChildLines: Object.freeze(
+      Array.isArray(extra.lifecycleChildLines)
+        ? extra.lifecycleChildLines.slice()
+        : [],
+    ),
+    taskLines: Object.freeze([]),
+    sections: Object.freeze([]),
+  });
+}
+
+function getProjectReversalChildLines(lines, startIndex) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const parentLine = String(sourceLines[startIndex] || "");
+  const parentMatch = PROJECT_LIST_ITEM_RE.exec(parentLine);
+  if (!parentMatch) {
+    return [];
+  }
+
+  const parentIndentLength = parentMatch[1].length;
+  const collected = [];
+  let lastContentOffset = -1;
+  for (let index = startIndex + 1; index < sourceLines.length; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (lineText.trim() === "") {
+      collected.push(lineText);
+      continue;
+    }
+
+    const indentMatch = /^(\s*)/.exec(lineText);
+    const indentLength = indentMatch ? indentMatch[1].length : 0;
+    if (indentLength > parentIndentLength) {
+      collected.push(lineText);
+      lastContentOffset = collected.length - 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return lastContentOffset === -1
+    ? []
+    : collected.slice(0, lastContentOffset + 1);
+}
+
+function formatProjectReversalSnippet(lineText) {
+  return truncateProjectTaskDescription(String(lineText || "").trim());
+}
+
+function formatProjectReversalSectionLabel(headerText) {
+  return String(headerText || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function splitProjectNoteForReversal(content) {
+  const { lines } = splitMarkdownContent(content);
+  const contexts = getMarkdownLineContexts(content);
+  const prjIndexes = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const context = contexts[index];
+    if (!context || context.inFrontmatter || context.inFence) {
+      continue;
+    }
+    if (isProjectLifecycleTaskLine(lines[index])) {
+      prjIndexes.push(index);
+    }
+  }
+
+  if (prjIndexes.length === 0) {
+    return emptyProjectNoteReversalSplit("Project note has no ^prj task");
+  }
+  if (prjIndexes.length > 1) {
+    return emptyProjectNoteReversalSplit(
+      "Project note has multiple ^prj tasks",
+    );
+  }
+
+  const prjIndex = prjIndexes[0];
+  const parsed = parseProjectLifecycleTaskBody(lines[prjIndex]);
+  const status = parsed ? parsed.status : null;
+  const description = parsed ? parsed.description : "";
+  const lifecycleChildLines = getProjectReversalChildLines(lines, prjIndex);
+  const prjBlockEnd = prjIndex + lifecycleChildLines.length;
+  const splitExtra = { status, description, lifecycleChildLines };
+
+  const taskLines = [];
+  const sections = [];
+  let index = 0;
+  while (index < lines.length) {
+    const context = contexts[index];
+    if (!context || context.inFrontmatter) {
+      index += 1;
+      continue;
+    }
+
+    if (index === prjIndex) {
+      index = prjBlockEnd + 1;
+      continue;
+    }
+
+    const line = String(lines[index] || "");
+    if (
+      context.valid &&
+      !context.inFence &&
+      PROJECT_SECTION_HEADER_RE.test(line)
+    ) {
+      const headerMatch = PROJECT_SECTION_HEADER_RE.exec(line);
+      const headerText = headerMatch && headerMatch[1] ? headerMatch[1] : "";
+      const sectionLabel = formatProjectReversalSectionLabel(headerText);
+      const bodyLines = [];
+      let bodyIndex = index + 1;
+      for (; bodyIndex < lines.length; bodyIndex += 1) {
+        const bodyContext = contexts[bodyIndex];
+        const bodyLine = String(lines[bodyIndex] || "");
+        if (
+          bodyContext &&
+          bodyContext.valid &&
+          !bodyContext.inFrontmatter &&
+          !bodyContext.inFence &&
+          PROJECT_SECTION_BOUNDARY_HEADER_RE.test(bodyLine)
+        ) {
+          break;
+        }
+        if (bodyLine.trim() === "") {
+          continue;
+        }
+        if (
+          bodyContext &&
+          bodyContext.valid &&
+          !bodyContext.inFence &&
+          PROJECT_LIST_ITEM_RE.test(bodyLine)
+        ) {
+          bodyLines.push(bodyLine);
+          continue;
+        }
+
+        return emptyProjectNoteReversalSplit(
+          `Section "${sectionLabel}" has content that is not a list item: "${formatProjectReversalSnippet(bodyLine)}"`,
+          splitExtra,
+        );
+      }
+
+      if (normalizeProjectSectionTitle(headerText) === "tasks") {
+        for (const item of bodyLines) {
+          if (!item.includes(PROJECT_TASKS_PLACEHOLDER)) {
+            taskLines.push(item);
+          }
+        }
+      } else if (bodyLines.length > 0) {
+        const title = formatProjectReversalSectionTitle(headerText);
+        if (!title) {
+          return emptyProjectNoteReversalSplit(
+            `Section "${sectionLabel}" cannot be converted into a task bullet`,
+            splitExtra,
+          );
+        }
+        sections.push(
+          Object.freeze({
+            title,
+            noteLines: Object.freeze(bodyLines.slice()),
+          }),
+        );
+      }
+
+      index = bodyIndex;
+      continue;
+    }
+
+    if (line.trim() === "") {
+      index += 1;
+      continue;
+    }
+
+    return emptyProjectNoteReversalSplit(
+      `Project note has content outside the ^prj task and its sections: "${formatProjectReversalSnippet(line)}"`,
+      splitExtra,
+    );
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    status,
+    description,
+    lifecycleChildLines: Object.freeze(lifecycleChildLines.slice()),
+    taskLines: Object.freeze(taskLines),
+    sections: Object.freeze(sections),
+  });
+}
+
+function emptyProjectNoteReversalBlock(error, extra = {}) {
+  return Object.freeze({
+    valid: false,
+    error,
+    lines: Object.freeze([]),
+    taskCount: 0,
+    sectionCount: 0,
+    blockId: extra.blockId === undefined ? null : extra.blockId,
+    scheduled: extra.scheduled || "",
+    created: extra.created || "",
+    parentLink: extra.parentLink === undefined ? null : extra.parentLink,
+  });
+}
+
+function buildTaskBlockFromProjectNote(content, options = {}) {
+  const frontmatter = parseProjectNoteFrontmatter(content, options);
+  if (!frontmatter.valid) {
+    return emptyProjectNoteReversalBlock(frontmatter.error);
+  }
+
+  const split = splitProjectNoteForReversal(content);
+  if (
+    split.error === "Project note has multiple ^prj tasks" ||
+    split.error === "Project note has no ^prj task"
+  ) {
+    return emptyProjectNoteReversalBlock(split.error, {
+      parentLink: frontmatter.data && frontmatter.data.parent,
+    });
+  }
+
+  if (split.status === null || split.status === undefined) {
+    return emptyProjectNoteReversalBlock(
+      split.error || "Project note has no ^prj task",
+      { parentLink: frontmatter.data && frontmatter.data.parent },
+    );
+  }
+
+  if (!PROJECT_OPEN_TASK_STATUSES.has(split.status)) {
+    return emptyProjectNoteReversalBlock(
+      "Only open projects can be converted back to a task",
+      { parentLink: frontmatter.data && frontmatter.data.parent },
+    );
+  }
+  if (
+    String(split.description || "").includes(PROJECT_COMPLETION_PLACEHOLDER)
+  ) {
+    return emptyProjectNoteReversalBlock(
+      "Project completion criteria is still the template placeholder",
+      { parentLink: frontmatter.data && frontmatter.data.parent },
+    );
+  }
+  if (!split.description) {
+    return emptyProjectNoteReversalBlock(
+      "Project completion criteria is empty",
+      { parentLink: frontmatter.data && frontmatter.data.parent },
+    );
+  }
+  if (!split.valid) {
+    return emptyProjectNoteReversalBlock(split.error, {
+      parentLink: frontmatter.data && frontmatter.data.parent,
+    });
+  }
+
+  const noteBasename = String(options.noteBasename || "").trim();
+  const parentBasename =
+    options.parentBasename === undefined
+      ? getProjectParentBasenameFromLink(
+          frontmatter.data && frontmatter.data.parent,
+        )
+      : String(options.parentBasename || "").trim();
+  const blockId = getProjectReversalBlockId(noteBasename, parentBasename);
+  const scheduled = frontmatter.scheduledValue || "";
+  const createdRaw = getProjectFrontmatterCreatedDate(
+    frontmatter.lines,
+    frontmatter.closingLine,
+  );
+  const now = options.now instanceof Date ? options.now : new Date();
+  const created = createdRaw || formatProjectTaskCreatedDate(now);
+  const taskLine = buildTaskLineFromProjectNote({
+    status: split.status,
+    description: split.description,
+    scheduled,
+    created,
+    blockId,
+  });
+
+  const indentedTasks = indentProjectReversalLines(split.taskLines, 1);
+  const lines = [taskLine, ...indentedTasks];
+  let sectionCount = 0;
+  for (const section of split.sections) {
+    lines.push(`\t- ${section.title}`);
+    lines.push(...indentProjectReversalLines(section.noteLines, 2));
+    sectionCount += 1;
+  }
+  lines.push(...indentProjectReversalLines(split.lifecycleChildLines, 1));
+
+  let taskCount = 0;
+  for (const line of indentedTasks) {
+    const parsedChild = parseProjectChildListItem(line, 0);
+    if (parsedChild && parsedChild.indent === "\t") {
+      taskCount += 1;
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    lines: Object.freeze(lines),
+    taskCount,
+    sectionCount,
+    blockId,
+    scheduled,
+    created,
+    parentLink: frontmatter.data && frontmatter.data.parent,
   });
 }
 
@@ -20514,6 +21169,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    if (
+      isProjectLifecycleTaskLine(lineText) &&
+      isProjectLifecycleTaskAtLine(editor.getValue(), cursor.line)
+    ) {
+      return this.convertProjectNoteToTask(editor, view, cursor, lineText);
+    }
+
     const parsedTask = parseProjectSourceTaskLine(lineText);
     if (!parsedTask) {
       new Notice(getProjectSourceTaskLineNoticeText(lineText));
@@ -20719,6 +21381,210 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
+  async convertProjectNoteToTask(editor, view, cursor, lineText) {
+    const vault = this.app && this.app.vault;
+    if (
+      !vault ||
+      typeof vault.process !== "function" ||
+      typeof vault.read !== "function"
+    ) {
+      new Notice("Vault content updates are unavailable");
+      return false;
+    }
+
+    if (!view || typeof view.save !== "function") {
+      new Notice("Could not save project note");
+      return false;
+    }
+
+    try {
+      await view.save();
+    } catch (error) {
+      new Notice("Could not save project note");
+      return false;
+    }
+
+    const sourceFile = view.file;
+    const content = editor.getValue();
+    const noteBasename =
+      (sourceFile && sourceFile.basename) ||
+      getVaultPathBasenameWithoutExtension(sourceFile && sourceFile.path);
+    const built = buildTaskBlockFromProjectNote(content, { noteBasename });
+    if (!built.valid) {
+      new Notice(built.error);
+      return false;
+    }
+
+    if (!isProjectFrontmatterParentLink(built.parentLink)) {
+      new Notice("Project note has no parent link");
+      return false;
+    }
+
+    const parentTarget = this.extractLinkTarget(built.parentLink);
+    if (!parentTarget) {
+      new Notice("Project note has no parent link");
+      return false;
+    }
+
+    const parentFile = this.resolveLinkTargetFile(
+      parentTarget,
+      sourceFile && sourceFile.path,
+    );
+    const parentDisplay = this.basenameForRenderedWikiLink(parentTarget);
+    if (!this.isMarkdownFile(parentFile)) {
+      new Notice(`Parent note "${parentDisplay}" not found`);
+      return false;
+    }
+
+    if (parentFile.path === sourceFile.path) {
+      new Notice("Project note parent points at itself");
+      return false;
+    }
+
+    const children = this.collectChildNotes(sourceFile);
+    if (children.length > 0) {
+      new Notice(
+        `Project has ${children.length} child notes; move them before converting`,
+      );
+      return false;
+    }
+
+    const parentBasename =
+      parentFile.basename ||
+      getVaultPathBasenameWithoutExtension(parentFile.path);
+    const restored = buildTaskBlockFromProjectNote(content, {
+      noteBasename,
+      parentBasename,
+    });
+    if (!restored.valid) {
+      new Notice(restored.error);
+      return false;
+    }
+
+    let parentContent;
+    try {
+      parentContent = await vault.read(parentFile);
+    } catch (error) {
+      new Notice(`Parent note "${parentBasename}" not found`);
+      return false;
+    }
+
+    const destination = parseTaskMoveDestinationFrontmatter(parentContent);
+    if (!destination.valid) {
+      new Notice(
+        `Parent note "${parentBasename}" must be an area or open project`,
+      );
+      return false;
+    }
+
+    if (restored.blockId) {
+      const existingIds = collectTaskMoveBlockIds(parentContent);
+      if (existingIds.has(restored.blockId)) {
+        new Notice(
+          `Parent note already contains block ID: ${restored.blockId}`,
+        );
+        return false;
+      }
+    }
+
+    const insertion = insertTaskMoveBlocks(
+      parentContent,
+      [restored.lines],
+      destination.kind,
+    );
+    if (!insertion.valid) {
+      new Notice(
+        `Parent note "${parentBasename}" has no ## Tasks section`,
+      );
+      return false;
+    }
+
+    const classification = this.getProjectNoteBacklinkClassification(
+      sourceFile,
+      parentFile.path,
+    );
+    if (classification.otherPaths.length > 0) {
+      new Notice(
+        `${classification.otherPaths.length} notes link to "${noteBasename}"; update them before converting (first: ${classification.otherPaths[0]})`,
+      );
+      return false;
+    }
+    if (classification.blockRewrites.length > 0 && !restored.blockId) {
+      new Notice(
+        "Could not derive a task block ID for the links that point at ^prj",
+      );
+      return false;
+    }
+
+    let wroteParent = false;
+    try {
+      await vault.process(parentFile, (current) => {
+        if (current !== parentContent) {
+          return current;
+        }
+        wroteParent = true;
+        return insertion.content;
+      });
+    } catch (error) {
+      new Notice("Could not update the parent note");
+      return false;
+    }
+
+    if (!wroteParent) {
+      new Notice("Parent note changed; nothing was converted");
+      return false;
+    }
+
+    let updatedLinkCount = 0;
+    if (classification.blockRewrites.length > 0) {
+      const rewriteResult = await this.applyBlockIdLinkRewrites(
+        classification.blockRewrites,
+        parentBasename,
+        restored.blockId,
+      );
+      updatedLinkCount = rewriteResult.updatedLinkCount;
+      if (rewriteResult.failed) {
+        const failed = rewriteResult.failedLinkCount;
+        new Notice(
+          `Restored the task in ${parentBasename}, but ${failed} links could not be updated; "${noteBasename}" was kept`,
+        );
+        return true;
+      }
+    }
+
+    await this.focusTaskMoveDestination(parentFile, {
+      line: insertion.insertedLine,
+      text: restored.lines[0],
+      blockId: restored.blockId,
+    });
+
+    try {
+      if (
+        !this.app.fileManager ||
+        typeof this.app.fileManager.trashFile !== "function"
+      ) {
+        throw new Error("trash unavailable");
+      }
+      await this.app.fileManager.trashFile(sourceFile);
+    } catch (error) {
+      new Notice(
+        `Restored the task in ${parentBasename}, but could not delete "${noteBasename}"`,
+      );
+      return true;
+    }
+
+    new Notice(
+      getProjectNoteToTaskNoticeText(
+        noteBasename,
+        parentBasename,
+        restored.taskCount,
+        restored.sectionCount,
+        updatedLinkCount,
+      ),
+    );
+    return true;
+  }
+
   async createProjectNoteFile(creatingFile, basename, scheduled = null) {
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
@@ -20896,7 +21762,38 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
   }
 
-  async applyBlockIdLinkRewrites(rewrites, newBasename) {
+  getProjectNoteBacklinkClassification(file, parentPath) {
+    const empty = Object.freeze({
+      blockRewrites: Object.freeze([]),
+      otherPaths: Object.freeze([]),
+    });
+    const metadataCache = this.app.metadataCache;
+    if (
+      !metadataCache ||
+      typeof metadataCache.getBacklinksForFile !== "function"
+    ) {
+      return empty;
+    }
+
+    try {
+      const backlinks = metadataCache.getBacklinksForFile(file);
+      const classified = collectProjectNoteBacklinkClassification(
+        backlinks && backlinks.data,
+        parentPath,
+      );
+      const filePath = normalizeVaultRelativePath(file && file.path);
+      return Object.freeze({
+        blockRewrites: classified.blockRewrites,
+        otherPaths: Object.freeze(
+          classified.otherPaths.filter((path) => path !== filePath),
+        ),
+      });
+    } catch (error) {
+      return empty;
+    }
+  }
+
+  async applyBlockIdLinkRewrites(rewrites, newBasename, blockId = "prj") {
     let updatedLinkCount = 0;
     let failedLinkCount = 0;
     const vault = this.app.vault;
@@ -20919,7 +21816,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
       const replacements = [];
       originals.forEach((original) => {
-        const replacement = rewriteBlockIdLinkOriginal(original, newBasename);
+        const replacement = rewriteBlockIdLinkOriginal(
+          original,
+          newBasename,
+          blockId,
+        );
         if (!replacement) {
           failedLinkCount += 1;
           return;
@@ -22022,6 +22923,15 @@ module.exports.helpers = {
   buildProjectTaskLineFromChildBullet,
   normalizeProjectSectionNoteLine,
   normalizeProjectScheduleLogLine,
+  indentProjectReversalLine,
+  getProjectReversalBlockId,
+  formatProjectReversalSectionTitle,
+  parseProjectLifecycleTaskBody,
+  getProjectFrontmatterCreatedDate,
+  buildTaskLineFromProjectNote,
+  splitProjectNoteForReversal,
+  buildTaskBlockFromProjectNote,
+  getProjectNoteToTaskNoticeText,
   formatProjectSectionTitle,
   parseProjectSectionBulletTitle,
   normalizeProjectSectionTitle,
@@ -22039,6 +22949,7 @@ module.exports.helpers = {
   getProjectBasenameSuffixForIndex,
   getNextDefaultProjectBasename,
   collectBlockIdBacklinkRewrites,
+  collectProjectNoteBacklinkClassification,
   rewriteBlockIdLinkOriginal,
   replaceLinkOriginalsInContent,
   getProjectFromTaskNoticeText,

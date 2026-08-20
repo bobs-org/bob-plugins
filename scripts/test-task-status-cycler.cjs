@@ -4107,13 +4107,17 @@ test("duplicate heading identities stay distinct and route to the chosen occurre
   assert.equal(toSecond.cursorLine, 8);
 });
 
-test("untouched Enter creates or reuses Requirements and typed names resolve correctly", () => {
+test("demotion picker defaults and typed names resolve without synthetic duplicates", () => {
   const none = noteLines();
   const nonePrompt = helpers.getObsidianTaskToggleDocumentPlan(none, 2, 0, "2026-08-20");
   const blankState = helpers.createDemotionSectionPickerState(nonePrompt.headings);
   const blankModel = helpers.getDemotionSectionPickerModel(blankState);
+  assert.equal(blankModel.rows.length, 1);
   assert.equal(blankModel.primary.kind, "create");
   assert.equal(blankModel.primary.title, "Requirements");
+  assert.equal(blankModel.selectedIndex, 0);
+  assert.equal(blankModel.selectedRow.title, "Requirements");
+  assert.equal(blankModel.inputPlaceholder, "Requirements");
   const created = helpers.resolveObsidianTaskDemotionDestination(
     nonePrompt,
     helpers.getDemotionDestinationFromSelectedRow(blankModel),
@@ -4130,8 +4134,36 @@ test("untouched Enter creates or reuses Requirements and typed names resolve cor
   const whitespaceModel = helpers.getDemotionSectionPickerModel(
     helpers.setDemotionPickerQuery(blankState, "   "),
   );
+  assert.equal(whitespaceModel.rows.length, 1);
   assert.equal(whitespaceModel.primary.kind, "create");
   assert.equal(whitespaceModel.primary.title, "Requirements");
+
+  const oneOther = noteLines({ extraLines: ["", "## Notes", "", "- already"] });
+  const oneOtherPrompt = helpers.getObsidianTaskToggleDocumentPlan(
+    oneOther,
+    2,
+    0,
+    "2026-08-20",
+  );
+  const oneOtherModel = helpers.getDemotionSectionPickerModel(
+    helpers.createDemotionSectionPickerState(oneOtherPrompt.headings),
+  );
+  assert.equal(oneOtherModel.primary, null);
+  assert.equal(oneOtherModel.rows.length, 1);
+  assert.equal(oneOtherModel.rows[0].type, "existing");
+  assert.equal(oneOtherModel.rows[0].title, "Notes");
+  assert.equal(oneOtherModel.inputPlaceholder, "Filter or type a new section");
+  assert.equal(oneOtherModel.statusText, "Move to existing Notes");
+  const movedToOnlyOther = helpers.resolveObsidianTaskDemotionDestination(
+    oneOtherPrompt,
+    helpers.getDemotionDestinationFromSelectedRow(oneOtherModel),
+  );
+  assert.deepEqual(movedToOnlyOther.nextLines.slice(-3), [
+    "",
+    "- already",
+    "- Ship it",
+  ]);
+  assert.equal(movedToOnlyOther.nextLines.at(-1), "- Ship it");
 
   const existing = noteLines({
     extraLines: ["", "##   requirements  ##", "", "- already"],
@@ -4145,8 +4177,9 @@ test("untouched Enter creates or reuses Requirements and typed names resolve cor
   const existingModel = helpers.getDemotionSectionPickerModel(
     helpers.createDemotionSectionPickerState(existingPrompt.headings),
   );
-  assert.equal(existingModel.primary.kind, "existing");
-  assert.equal(existingModel.primary.title, "requirements");
+  assert.equal(existingModel.primary, null);
+  assert.equal(existingModel.rows.length, 1);
+  assert.equal(existingModel.rows[0].title, "requirements");
   const reused = helpers.resolveObsidianTaskDemotionDestination(
     existingPrompt,
     helpers.getDemotionDestinationFromSelectedRow(existingModel),
@@ -4156,6 +4189,24 @@ test("untouched Enter creates or reuses Requirements and typed names resolve cor
     1,
   );
   assert.deepEqual(reused.nextLines.slice(-2), ["- already", "- Ship it"]);
+
+  const requirementsAndOther = noteLines({
+    extraLines: ["", "## Requirements", "", "### Notes", "", "# Later"],
+  });
+  const mixedModel = helpers.getDemotionSectionPickerModel(
+    helpers.createDemotionSectionPickerState(
+      helpers.getObsidianTaskToggleDocumentPlan(
+        requirementsAndOther,
+        2,
+        0,
+        "2026-08-20",
+      ).headings,
+    ),
+  );
+  assert.deepEqual(
+    mixedModel.rows.map((row) => row.title),
+    ["Requirements", "Notes", "Later"],
+  );
 
   const typedCreate = helpers.getDemotionSectionPickerModel(
     helpers.setDemotionPickerQuery(blankState, "  Future Work  "),
@@ -4172,15 +4223,72 @@ test("untouched Enter creates or reuses Requirements and typed names resolve cor
     "- Ship it",
   ]);
 
+  const typedCreateWithFuzzy = helpers.getDemotionSectionPickerModel(
+    helpers.setDemotionPickerQuery(
+      helpers.createDemotionSectionPickerState(oneOtherPrompt.headings),
+      "Nte",
+    ),
+  );
+  assert.equal(typedCreateWithFuzzy.primary.kind, "create");
+  assert.equal(typedCreateWithFuzzy.primary.title, "Nte");
+  assert.deepEqual(
+    typedCreateWithFuzzy.rows.map((row) => [row.type, row.title]),
+    [
+      ["primary", "Nte"],
+      ["existing", "Notes"],
+    ],
+  );
+
   const reuseTyped = helpers.getDemotionSectionPickerModel(
     helpers.setDemotionPickerQuery(
       helpers.createDemotionSectionPickerState(existingPrompt.headings),
       "REQUIREMENTS",
     ),
   );
-  assert.equal(reuseTyped.primary.kind, "existing");
-  assert.equal(reuseTyped.primary.title, "requirements");
+  assert.equal(reuseTyped.primary, null);
+  assert.deepEqual(
+    reuseTyped.rows.map((row) => row.title),
+    ["requirements"],
+  );
 
+  const duplicateRequirements = noteLines({
+    extraLines: [
+      "",
+      "## Requirements",
+      "",
+      "## Readable Requirements",
+      "",
+      "### Requirements",
+    ],
+  });
+  const duplicateTyped = helpers.getDemotionSectionPickerModel(
+    helpers.setDemotionPickerQuery(
+      helpers.createDemotionSectionPickerState(
+        helpers.getObsidianTaskToggleDocumentPlan(
+          duplicateRequirements,
+          2,
+          0,
+          "2026-08-20",
+        ).headings,
+      ),
+      " requirements ",
+    ),
+  );
+  assert.equal(duplicateTyped.primary, null);
+  assert.deepEqual(
+    duplicateTyped.rows.map((row) => [row.title, row.heading.line]),
+    [
+      ["Requirements", 4],
+      ["Requirements", 8],
+      ["Readable Requirements", 6],
+    ],
+  );
+
+  assert.equal(helpers.getDemotionPrimaryAction("", oneOtherPrompt.headings), null);
+  assert.equal(
+    helpers.getDemotionPrimaryAction("REQUIREMENTS", existingPrompt.headings),
+    null,
+  );
   const rejected = helpers.getDemotionPrimaryAction("Tasks", nonePrompt.headings);
   assert.equal(rejected.kind, "invalid");
   assert.match(rejected.statusText, /Tasks is not a valid destination/);
@@ -4208,27 +4316,28 @@ test("picker keyboard state wraps, clamps, and refuses invalid Enter", () => {
   let state = helpers.createDemotionSectionPickerState(headings);
   let model = helpers.getDemotionSectionPickerModel(state);
   assert.equal(model.selectedIndex, 0);
-  assert.equal(model.rows.length, 3);
+  assert.equal(model.rows.length, 2);
   assert.equal(model.canSubmit, true);
   assert.deepEqual(
     helpers.getDemotionSectionPickerRowClasses(model.rows[0], true),
-    ["tsc-sdp-row", "is-selected", "is-primary", "is-create"],
+    ["tsc-sdp-row", "is-selected", "is-existing"],
   );
+  assert.equal(model.selectedRow.heading.title, "Notes");
 
   state = helpers.moveDemotionPickerSelection(state, 1);
   model = helpers.getDemotionSectionPickerModel(state);
   assert.equal(model.selectedIndex, 1);
-  assert.equal(model.selectedRow.heading.title, "Notes");
+  assert.equal(model.selectedRow.heading.title, "Details");
   assert.equal(
     helpers.getDemotionDestinationFromSelectedRow(model).heading.line,
-    0,
+    8,
   );
 
   state = helpers.moveDemotionPickerSelection(state, -1);
   assert.equal(helpers.getDemotionSectionPickerModel(state).selectedIndex, 0);
   state = helpers.moveDemotionPickerSelection(state, -1);
   model = helpers.getDemotionSectionPickerModel(state);
-  assert.equal(model.selectedIndex, 2);
+  assert.equal(model.selectedIndex, 1);
   assert.equal(model.selectedRow.heading.title, "Details");
 
   state = helpers.setDemotionPickerQuery(state, "Tasks");
@@ -4366,6 +4475,8 @@ test("command opens one picker, writes only on accept, and restores cursor plus 
   assert.ok(picker);
   assert.equal(picker.inputEl.focused, true);
   assert.equal(picker.inputEl.getAttribute("aria-label"), "Section name or filter");
+  assert.equal(picker.inputEl.getAttribute("placeholder"), "Requirements");
+  assert.equal(picker.statusEl.textContent, "Create ## Requirements");
   assert.equal(picker.resultsEl.getAttribute("role"), "listbox");
   assert.ok(picker.rowEls[0].classes.includes("tsc-sdp-row"));
   assert.ok(picker.rowEls[0].classes.includes("is-selected"));
@@ -4397,8 +4508,11 @@ test("pointer activation, Escape, and double-submit protection leave a consisten
   const { editor, view, plugin } = openDemotionPicker(source, { line: 2, ch: 0 });
   assert.equal(plugin.handleToggleObsidianTaskCommand(false, editor, view), true);
   const picker = plugin.demotionSectionPicker;
-  picker.rowEls[1].dispatchEvent("mousedown", { preventDefault() {} });
-  picker.rowEls[1].dispatchEvent("click");
+  assert.equal(picker.inputEl.getAttribute("placeholder"), "Filter or type a new section");
+  assert.equal(picker.statusEl.textContent, "Move to existing Notes");
+  assert.equal(picker.rowEls.length, 1);
+  picker.rowEls[0].dispatchEvent("mousedown", { preventDefault() {} });
+  picker.rowEls[0].dispatchEvent("click");
   assert.match(editor.getValue(), /## Notes\n\n- Ship it/);
   assert.equal(plugin.demotionSectionPicker, null);
   assert.equal(picker.acceptSelected(), false);

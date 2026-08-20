@@ -1,7 +1,7 @@
 {
   "id": "task-status-cycler",
   "name": "Task Status Cycler",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "minAppVersion": "1.8.7",
   "description": "Complete Pomodoros, toggle empty Pomodoro placeholders/sub-bullets with Ctrl+Alt+], toggle Obsidian tasks with Ctrl+Shift+] — prompting for a destination section when demoting from Tasks — cycle Blocked tasks out with option+[/option+], recover affected Blocked dependents, propagate Ctrl+Enter to embedded task transclusions, and preserve embedded-task behavior.",
   "author": "Bryan",

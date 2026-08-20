@@ -1041,6 +1041,8 @@ const DEMOTION_PICKER_TITLE = "Move bullet to section";
 const DEMOTION_PICKER_SUBTITLE =
   "Choose an existing section or type a new heading name.";
 const DEMOTION_PICKER_INPUT_LABEL = "Section name or filter";
+const DEMOTION_PICKER_TASKS_ONLY_PLACEHOLDER = "Requirements";
+const DEMOTION_PICKER_EXISTING_PLACEHOLDER = "Filter or type a new section";
 const DEMOTION_PICKER_RESULTS_LABEL = "Destination sections";
 const DEMOTION_STALE_NOTICE =
   "The note changed. Retry Toggle Obsidian task to move the bullet.";
@@ -1579,25 +1581,32 @@ function getDemotionEffectiveTitle(query) {
 }
 
 function getDemotionPrimaryAction(query, headings) {
-  const title = getDemotionEffectiveTitle(query);
-  const normalized = normalizeHeadingTitle(title);
+  const trimmed = String(query || "").trim();
   const selectable = Array.isArray(headings) ? headings : [];
-  const existing = selectable.find(
-    (heading) => normalizeHeadingTitle(heading.title) === normalized,
-  );
-  if (existing) {
+  if (!trimmed) {
+    if (selectable.length > 0) {
+      return null;
+    }
     return {
-      kind: "existing",
-      title: existing.title,
-      heading: existing,
-      statusText: `Use existing ${existing.title}`,
+      kind: "create",
+      title: TASK_ROUTING_SECTION_TITLES.requirements,
+      heading: null,
+      statusText: `Create ## ${TASK_ROUTING_SECTION_TITLES.requirements}`,
     };
   }
 
-  if (isTasksHeadingTitle(title)) {
+  const normalized = normalizeHeadingTitle(trimmed);
+  const hasExactMatch = selectable.some(
+    (heading) => normalizeHeadingTitle(heading.title) === normalized,
+  );
+  if (hasExactMatch) {
+    return null;
+  }
+
+  if (isTasksHeadingTitle(trimmed)) {
     return {
       kind: "invalid",
-      title,
+      title: trimmed,
       heading: null,
       statusText: TASKS_DESTINATION_REJECTION,
     };
@@ -1605,9 +1614,9 @@ function getDemotionPrimaryAction(query, headings) {
 
   return {
     kind: "create",
-    title,
+    title: trimmed,
     heading: null,
-    statusText: `Create ## ${title}`,
+    statusText: `Create ## ${trimmed}`,
   };
 }
 
@@ -1619,6 +1628,92 @@ function filterSelectableDemotionHeadings(headings, query) {
   }
 
   return selectable.filter((heading) => fuzzyMatchesText(heading.title, needle));
+}
+
+function demotionHeadingRow(heading) {
+  return {
+    type: "existing",
+    heading,
+    title: heading.title,
+    meta: getDemotionHeadingMeta(heading),
+    badge: "Existing section",
+  };
+}
+
+function demotionCreateRow(title) {
+  return {
+    type: "primary",
+    primary: {
+      kind: "create",
+      title,
+      heading: null,
+      statusText: `Create ## ${title}`,
+    },
+    title,
+    meta: "New H2 at the bottom of the note",
+    badge: "Create section",
+  };
+}
+
+function demotionInvalidRow(title) {
+  return {
+    type: "primary",
+    primary: {
+      kind: "invalid",
+      title,
+      heading: null,
+      statusText: TASKS_DESTINATION_REJECTION,
+    },
+    title,
+    meta: TASKS_DESTINATION_REJECTION,
+    badge: "Invalid",
+  };
+}
+
+function getDemotionSectionPickerRows(headings, query) {
+  const selectable = Array.isArray(headings) ? headings : [];
+  const trimmed = String(query || "").trim();
+  if (!trimmed) {
+    if (selectable.length > 0) {
+      return selectable.map(demotionHeadingRow);
+    }
+    return [demotionCreateRow(TASK_ROUTING_SECTION_TITLES.requirements)];
+  }
+
+  const normalized = normalizeHeadingTitle(trimmed);
+  const exactHeadings = selectable.filter(
+    (heading) => normalizeHeadingTitle(heading.title) === normalized,
+  );
+  const fuzzyHeadings = selectable.filter(
+    (heading) =>
+      normalizeHeadingTitle(heading.title) !== normalized &&
+      fuzzyMatchesText(heading.title, trimmed),
+  );
+
+  if (exactHeadings.length > 0) {
+    return [
+      ...exactHeadings.map(demotionHeadingRow),
+      ...fuzzyHeadings.map(demotionHeadingRow),
+    ];
+  }
+
+  const actionRow = isTasksHeadingTitle(trimmed)
+    ? demotionInvalidRow(trimmed)
+    : demotionCreateRow(trimmed);
+  return [actionRow, ...fuzzyHeadings.map(demotionHeadingRow)];
+}
+
+function getDemotionSectionPickerStatusText(row) {
+  if (!row) {
+    return "Type a new section name.";
+  }
+  if (row.type === "primary" && row.primary && row.primary.statusText) {
+    return row.primary.statusText;
+  }
+  if (row.type === "existing" && row.title) {
+    return `Move to existing ${row.title}`;
+  }
+  return "";
 }
 
 function clampDemotionPickerSelectedIndex(index, length) {
@@ -1673,60 +1768,42 @@ function getDemotionHeadingMeta(heading) {
 function getDemotionSectionPickerModel(state) {
   const headings = state && Array.isArray(state.headings) ? state.headings : [];
   const query = state ? String(state.query || "") : "";
-  const primary = getDemotionPrimaryAction(query, headings);
-  const filteredHeadings = filterSelectableDemotionHeadings(headings, query);
-  const rows = [
-    {
-      type: "primary",
-      primary,
-      title: primary.title,
-      meta:
-        primary.kind === "existing"
-          ? getDemotionHeadingMeta(primary.heading)
-          : primary.kind === "create"
-            ? "New H2 at the bottom of the note"
-            : TASKS_DESTINATION_REJECTION,
-      badge:
-        primary.kind === "existing"
-          ? "Existing section"
-          : primary.kind === "create"
-            ? "Create section"
-            : "Invalid",
-    },
-    ...filteredHeadings.map((heading) => ({
-      type: "existing",
-      heading,
-      title: heading.title,
-      meta: getDemotionHeadingMeta(heading),
-      badge: "Existing section",
-    })),
-  ];
+  const trimmedQuery = query.trim();
+  const rows = getDemotionSectionPickerRows(headings, query);
+  const filteredHeadings = rows
+    .filter((row) => row && row.type === "existing" && row.heading)
+    .map((row) => row.heading);
   const selectedIndex = clampDemotionPickerSelectedIndex(
     state && state.selectedIndex,
     rows.length,
   );
   const selectedRow = rows[selectedIndex] || null;
-  const canSubmit = !(
-    selectedRow &&
-    selectedRow.type === "primary" &&
-    selectedRow.primary &&
-    selectedRow.primary.kind === "invalid"
-  );
+  const selectedDestination = getDemotionDestinationFromRow(selectedRow);
+  const canSubmit = Boolean(selectedDestination);
+  const primary =
+    rows.find((row) => row && row.type === "primary" && row.primary) || null;
+  const selectedPrimary =
+    selectedRow && selectedRow.type === "primary" ? selectedRow.primary : null;
+  const tasksOnlyDefault = !trimmedQuery && headings.length === 0;
 
   return {
     query,
-    primary,
+    primary: primary ? primary.primary : null,
     filteredHeadings,
     rows,
     selectedIndex,
     selectedRow,
     canSubmit,
-    statusText: primary.statusText,
-    emptyExisting: filteredHeadings.length === 0,
+    statusText: getDemotionSectionPickerStatusText(selectedRow),
+    emptyExisting: trimmedQuery && filteredHeadings.length === 0,
     emptyText:
-      headings.length === 0
+      !trimmedQuery && headings.length === 0
         ? "No other sections in this note"
         : "No matching sections",
+    inputPlaceholder: tasksOnlyDefault
+      ? DEMOTION_PICKER_TASKS_ONLY_PLACEHOLDER
+      : DEMOTION_PICKER_EXISTING_PLACEHOLDER,
+    selectedPrimary,
   };
 }
 
@@ -4714,7 +4791,7 @@ class DemotionSectionPickerModal extends Modal {
         "aria-autocomplete": "list",
         "aria-expanded": "true",
         "aria-controls": "tsc-sdp-results",
-        placeholder: TASK_ROUTING_SECTION_TITLES.requirements,
+        placeholder: DEMOTION_PICKER_TASKS_ONLY_PLACEHOLDER,
       },
     });
     this.inputEl.addEventListener("input", () => {
@@ -4807,7 +4884,7 @@ class DemotionSectionPickerModal extends Modal {
 
     if (this.statusEl) {
       this.statusEl.textContent = model.statusText || "";
-      if (model.primary && model.primary.kind === "invalid") {
+      if (model.selectedPrimary && model.selectedPrimary.kind === "invalid") {
         if (typeof this.statusEl.addClass === "function") {
           this.statusEl.addClass("is-invalid");
         }
@@ -4818,12 +4895,18 @@ class DemotionSectionPickerModal extends Modal {
 
     if (this.inputEl && typeof this.inputEl.setAttribute === "function") {
       this.inputEl.setAttribute(
+        "placeholder",
+        model.inputPlaceholder || DEMOTION_PICKER_EXISTING_PLACEHOLDER,
+      );
+      this.inputEl.setAttribute(
         "aria-activedescendant",
         `tsc-sdp-option-${model.selectedIndex}`,
       );
       this.inputEl.setAttribute(
         "aria-invalid",
-        model.primary && model.primary.kind === "invalid" ? "true" : "false",
+        model.selectedPrimary && model.selectedPrimary.kind === "invalid"
+          ? "true"
+          : "false",
       );
     }
 

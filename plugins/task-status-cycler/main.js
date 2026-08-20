@@ -1,4 +1,4 @@
-const { MarkdownView, Notice, Plugin } = require("obsidian");
+const { MarkdownView, Modal, Notice, Plugin, setIcon } = require("obsidian");
 const { EditorView } = require("@codemirror/view");
 
 const TASKS_COMMAND_PREFIX = "obsidian-tasks-plugin:set-status-symbol-to-";
@@ -1037,73 +1037,22 @@ const TASK_ROUTING_SECTION_TITLES = {
   futureWork: "Future Work",
   requirements: "Requirements",
 };
-const PROJECT_TYPE_FRONTMATTER_LINE_RE =
-  /^type[ \t]*:[ \t]*(?:"\[\[project\]\]"|'\[\[project\]\]'|\[\[project\]\])[ \t]*(?:#.*)?$/;
-const YAML_TYPE_KEY_LINE_RE = /^type[ \t]*:/;
-
-function yamlDocumentLineText(lineText) {
-  return String(lineText || "").replace(/\r$/, "");
-}
-
-function getClosedYamlFrontmatterBodyLines(lines) {
-  if (!Array.isArray(lines) || lines.length < 2) {
-    return null;
-  }
-
-  if (!YAML_FRONTMATTER_FENCE_RE.test(yamlDocumentLineText(lines[0]))) {
-    return null;
-  }
-
-  for (let line = 1; line < lines.length; line += 1) {
-    if (YAML_FRONTMATTER_END_RE.test(yamlDocumentLineText(lines[line]))) {
-      return lines.slice(1, line);
-    }
-  }
-
-  return null;
-}
-
-function isProjectNoteDocument(lines) {
-  const frontmatterLines = getClosedYamlFrontmatterBodyLines(lines);
-  if (!frontmatterLines) {
-    return false;
-  }
-
-  let isProject = false;
-  for (const rawLine of frontmatterLines) {
-    const lineText = yamlDocumentLineText(rawLine);
-    if (!lineText || /^[ \t]*(?:#|$)/.test(lineText) || /^[ \t]/.test(lineText)) {
-      continue;
-    }
-    if (YAML_TYPE_KEY_LINE_RE.test(lineText)) {
-      isProject = PROJECT_TYPE_FRONTMATTER_LINE_RE.test(lineText);
-    }
-  }
-
-  return isProject;
-}
-
-function documentHasOnlyTasksSection(lines) {
-  const headings = findMarkdownHeadings(lines);
-  return (
-    headings.length === 1 &&
-    headings[0].depth === 2 &&
-    headings[0].title === TASK_ROUTING_SECTION_TITLES.tasks
-  );
-}
-
-function isCreatedRequirementsSectionDemotion(lines, activeLine, sourceLineText) {
-  if (!isProjectNoteDocument(lines) || !isTopLevelDashListToggleLine(sourceLineText)) {
-    return false;
-  }
-  if (!documentHasOnlyTasksSection(lines)) {
-    return false;
-  }
-
-  const headings = findMarkdownHeadings(lines);
-  const tasksSection = getMarkdownSectionFromHeadingIndex(lines, headings, 0);
-  return isLineInMarkdownSectionDirectBody(tasksSection, activeLine);
-}
+const DEMOTION_PICKER_TITLE = "Move bullet to section";
+const DEMOTION_PICKER_SUBTITLE =
+  "Choose an existing section or type a new heading name.";
+const DEMOTION_PICKER_INPUT_LABEL = "Section name or filter";
+const DEMOTION_PICKER_RESULTS_LABEL = "Destination sections";
+const DEMOTION_STALE_NOTICE =
+  "The note changed. Retry Toggle Obsidian task to move the bullet.";
+const DEMOTION_MISSING_SECTION_NOTICE =
+  "That section is no longer available. Retry Toggle Obsidian task to move the bullet.";
+const TASKS_DESTINATION_REJECTION = "Tasks is not a valid destination.";
+const DEMOTION_PICKER_HINTS = [
+  { keys: ["↑", "↓"], label: "Navigate" },
+  { keys: ["^N", "^P"], label: "Move" },
+  { keys: ["↵"], label: "Move" },
+  { keys: ["esc"], label: "Cancel" },
+];
 
 function countTrailingBlankLines(lines) {
   if (!Array.isArray(lines) || lines.length === 0) {
@@ -1124,23 +1073,24 @@ function documentHasFinalNewline(lines) {
   return Array.isArray(lines) && lines.length > 0 && String(lines[lines.length - 1] || "") === "";
 }
 
-function getCreatedRequirementsSectionMovePlan(
+function getCreatedSectionMovePlan(
   remaining,
   movedBlock,
   originalLines,
   sourceLineText,
-  toggle,
+  lineText,
   finalCursorCh,
+  title,
 ) {
+  const headingTitle = String(title || "").trim();
+  if (!headingTitle) {
+    return null;
+  }
+
   const contentLength = remaining.length - countTrailingBlankLines(remaining);
   const nextLines = remaining
     .slice(0, contentLength)
-    .concat(
-      "",
-      `## ${TASK_ROUTING_SECTION_TITLES.requirements}`,
-      "",
-      ...movedBlock,
-    );
+    .concat("", `## ${headingTitle}`, "", ...movedBlock);
 
   if (documentHasFinalNewline(originalLines)) {
     nextLines.push("");
@@ -1159,8 +1109,8 @@ function getCreatedRequirementsSectionMovePlan(
     cursorLine,
     cursorCh: cursorColumn,
     sourceLineText,
-    lineText: toggle.lineText,
-    targetSection: "nextSection",
+    lineText,
+    targetSection: "createdSection",
   };
 }
 
@@ -1371,6 +1321,467 @@ function getNextSectionBulletInsertion(lines, section) {
   return { insertLine: section.headingLine + 1, leadingBlank: true };
 }
 
+function normalizeHeadingTitle(title) {
+  return String(title || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isTasksHeadingTitle(title) {
+  return normalizeHeadingTitle(title) === normalizeHeadingTitle(
+    TASK_ROUTING_SECTION_TITLES.tasks,
+  );
+}
+
+function getHeadingIdentity(heading) {
+  if (!heading || !Number.isInteger(heading.line)) {
+    return null;
+  }
+
+  return {
+    line: heading.line,
+    depth: heading.depth,
+    title: heading.title,
+  };
+}
+
+function headingIdentitiesEqual(left, right) {
+  return (
+    !!left &&
+    !!right &&
+    left.line === right.line &&
+    left.depth === right.depth &&
+    left.title === right.title
+  );
+}
+
+function findHeadingIndexByIdentity(headings, identity) {
+  if (!Array.isArray(headings) || !identity) {
+    return -1;
+  }
+
+  return headings.findIndex((heading) => headingIdentitiesEqual(heading, identity));
+}
+
+function collectSelectableDemotionHeadings(lines) {
+  return findMarkdownHeadings(lines)
+    .filter((heading) => heading.title && heading.title !== TASK_ROUTING_SECTION_TITLES.tasks)
+    .map((heading) => getHeadingIdentity(heading));
+}
+
+function isEligibleTasksSectionDemotion(lines, activeLine, sourceLineText) {
+  if (!isTopLevelDashListToggleLine(sourceLineText) || !isProperObsidianTaskLine(sourceLineText)) {
+    return false;
+  }
+
+  const tasksSection = findNamedMarkdownSection(
+    lines,
+    TASK_ROUTING_SECTION_TITLES.tasks,
+  );
+  return isLineInMarkdownSectionDirectBody(tasksSection, activeLine);
+}
+
+function removeSourceListItemBlock(lines, block) {
+  const remaining = lines
+    .slice(0, block.startLine)
+    .concat(lines.slice(block.endLine + 1));
+  let splicedSeam = false;
+  const seam = block.startLine;
+  if (
+    seam > 0 &&
+    seam < remaining.length &&
+    String(remaining[seam - 1] || "").trim() === "" &&
+    String(remaining[seam] || "").trim() === ""
+  ) {
+    remaining.splice(seam, 1);
+    splicedSeam = true;
+  }
+
+  return { remaining, splicedSeam };
+}
+
+function mapOriginalLineToRemaining(originalLine, block, splicedSeam) {
+  if (!Number.isInteger(originalLine) || !block) {
+    return null;
+  }
+
+  if (originalLine < block.startLine) {
+    return originalLine;
+  }
+
+  if (originalLine <= block.endLine) {
+    return null;
+  }
+
+  let mapped = originalLine - (block.endLine - block.startLine + 1);
+  if (splicedSeam && mapped >= block.startLine) {
+    mapped -= 1;
+  }
+
+  return mapped;
+}
+
+function buildObsidianTaskSectionMovePlan(
+  remaining,
+  insertion,
+  movedBlock,
+  sourceLineText,
+  lineText,
+  finalCursorCh,
+  targetSection,
+) {
+  if (!insertion) {
+    return null;
+  }
+
+  const insertLines = insertion.leadingBlank
+    ? ["", ...movedBlock]
+    : movedBlock.slice();
+  const nextLines = remaining
+    .slice(0, insertion.insertLine)
+    .concat(insertLines, remaining.slice(insertion.insertLine));
+  const cursorLine = insertion.insertLine + (insertion.leadingBlank ? 1 : 0);
+  const convertedFirstLine = String(nextLines[cursorLine] || "");
+  const cursorColumn = Math.max(
+    0,
+    Math.min(convertedFirstLine.length, finalCursorCh),
+  );
+
+  return {
+    mode: "move",
+    nextLines,
+    cursorLine,
+    cursorCh: cursorColumn,
+    sourceLineText,
+    lineText,
+    targetSection,
+  };
+}
+
+function resolveExistingDemotionHeading(prompt, headingIdentity) {
+  if (!prompt || !headingIdentity) {
+    return null;
+  }
+
+  if (headingIdentity.title === TASK_ROUTING_SECTION_TITLES.tasks) {
+    return null;
+  }
+
+  const sourceLines = prompt.sourceLines;
+  const originalHeadings = findMarkdownHeadings(sourceLines);
+  if (findHeadingIndexByIdentity(originalHeadings, headingIdentity) < 0) {
+    return null;
+  }
+
+  const { remaining, splicedSeam } = removeSourceListItemBlock(
+    sourceLines,
+    prompt.sourceBlock,
+  );
+  const mappedLine = mapOriginalLineToRemaining(
+    headingIdentity.line,
+    prompt.sourceBlock,
+    splicedSeam,
+  );
+  const remainingHeadings = findMarkdownHeadings(remaining);
+  const remainingIndex = remainingHeadings.findIndex(
+    (heading) =>
+      heading.line === mappedLine &&
+      heading.depth === headingIdentity.depth &&
+      heading.title === headingIdentity.title,
+  );
+  if (remainingIndex < 0) {
+    return null;
+  }
+
+  const section = getMarkdownSectionFromHeadingIndex(
+    remaining,
+    remainingHeadings,
+    remainingIndex,
+  );
+  return buildObsidianTaskSectionMovePlan(
+    remaining,
+    getNextSectionBulletInsertion(remaining, section),
+    prompt.movedBlock,
+    prompt.sourceLineText,
+    prompt.lineText,
+    prompt.cursorCh,
+    "existingSection",
+  );
+}
+
+function resolveObsidianTaskDemotionDestination(prompt, destination) {
+  if (!prompt || prompt.mode !== "prompt" || !destination) {
+    return null;
+  }
+
+  if (destination.kind === "existing") {
+    return resolveExistingDemotionHeading(prompt, destination.heading);
+  }
+
+  if (destination.kind !== "create") {
+    return null;
+  }
+
+  const title = String(destination.title || "").trim();
+  if (!title) {
+    return null;
+  }
+
+  const headings = Array.isArray(prompt.headings)
+    ? prompt.headings
+    : collectSelectableDemotionHeadings(prompt.sourceLines);
+  const existing = headings.find(
+    (heading) => normalizeHeadingTitle(heading.title) === normalizeHeadingTitle(title),
+  );
+  if (existing) {
+    return resolveExistingDemotionHeading(prompt, existing);
+  }
+
+  if (isTasksHeadingTitle(title)) {
+    return null;
+  }
+
+  const { remaining } = removeSourceListItemBlock(
+    prompt.sourceLines,
+    prompt.sourceBlock,
+  );
+  return getCreatedSectionMovePlan(
+    remaining,
+    prompt.movedBlock,
+    prompt.sourceLines,
+    prompt.sourceLineText,
+    prompt.lineText,
+    prompt.cursorCh,
+    title,
+  );
+}
+
+function fuzzyMatchesText(source, query) {
+  const haystack = String(source || "").toLowerCase();
+  const needle = String(query || "").toLowerCase();
+  if (!needle) {
+    return true;
+  }
+
+  let haystackIndex = 0;
+  for (let needleIndex = 0; needleIndex < needle.length; needleIndex += 1) {
+    haystackIndex = haystack.indexOf(needle[needleIndex], haystackIndex);
+    if (haystackIndex === -1) {
+      return false;
+    }
+    haystackIndex += 1;
+  }
+
+  return true;
+}
+
+function getDemotionEffectiveTitle(query) {
+  const trimmed = String(query || "").trim();
+  return trimmed || TASK_ROUTING_SECTION_TITLES.requirements;
+}
+
+function getDemotionPrimaryAction(query, headings) {
+  const title = getDemotionEffectiveTitle(query);
+  const normalized = normalizeHeadingTitle(title);
+  const selectable = Array.isArray(headings) ? headings : [];
+  const existing = selectable.find(
+    (heading) => normalizeHeadingTitle(heading.title) === normalized,
+  );
+  if (existing) {
+    return {
+      kind: "existing",
+      title: existing.title,
+      heading: existing,
+      statusText: `Use existing ${existing.title}`,
+    };
+  }
+
+  if (isTasksHeadingTitle(title)) {
+    return {
+      kind: "invalid",
+      title,
+      heading: null,
+      statusText: TASKS_DESTINATION_REJECTION,
+    };
+  }
+
+  return {
+    kind: "create",
+    title,
+    heading: null,
+    statusText: `Create ## ${title}`,
+  };
+}
+
+function filterSelectableDemotionHeadings(headings, query) {
+  const needle = String(query || "").trim();
+  const selectable = Array.isArray(headings) ? headings : [];
+  if (!needle) {
+    return selectable.slice();
+  }
+
+  return selectable.filter((heading) => fuzzyMatchesText(heading.title, needle));
+}
+
+function clampDemotionPickerSelectedIndex(index, length) {
+  if (!Number.isInteger(length) || length <= 0) {
+    return 0;
+  }
+
+  const selected = Number.isInteger(index) ? index : 0;
+  return Math.min(Math.max(selected, 0), length - 1);
+}
+
+function createDemotionSectionPickerState(headings, query = "") {
+  return {
+    headings: Array.isArray(headings) ? headings.slice() : [],
+    query: String(query || ""),
+    selectedIndex: 0,
+  };
+}
+
+function setDemotionPickerQuery(state, query) {
+  return {
+    headings: state && Array.isArray(state.headings) ? state.headings.slice() : [],
+    query: String(query || ""),
+    selectedIndex: 0,
+  };
+}
+
+function getDemotionSectionPickerRowClasses(row, isSelected) {
+  const classes = ["tsc-sdp-row"];
+  if (isSelected) {
+    classes.push("is-selected");
+  }
+  if (row && row.type === "primary") {
+    classes.push("is-primary");
+    if (row.primary && row.primary.kind) {
+      classes.push(`is-${row.primary.kind}`);
+    }
+  } else {
+    classes.push("is-existing");
+  }
+  return classes;
+}
+
+function getDemotionHeadingMeta(heading) {
+  if (!heading || !Number.isInteger(heading.line) || !Number.isInteger(heading.depth)) {
+    return "";
+  }
+
+  return `H${heading.depth} · line ${heading.line + 1}`;
+}
+
+function getDemotionSectionPickerModel(state) {
+  const headings = state && Array.isArray(state.headings) ? state.headings : [];
+  const query = state ? String(state.query || "") : "";
+  const primary = getDemotionPrimaryAction(query, headings);
+  const filteredHeadings = filterSelectableDemotionHeadings(headings, query);
+  const rows = [
+    {
+      type: "primary",
+      primary,
+      title: primary.title,
+      meta:
+        primary.kind === "existing"
+          ? getDemotionHeadingMeta(primary.heading)
+          : primary.kind === "create"
+            ? "New H2 at the bottom of the note"
+            : TASKS_DESTINATION_REJECTION,
+      badge:
+        primary.kind === "existing"
+          ? "Existing section"
+          : primary.kind === "create"
+            ? "Create section"
+            : "Invalid",
+    },
+    ...filteredHeadings.map((heading) => ({
+      type: "existing",
+      heading,
+      title: heading.title,
+      meta: getDemotionHeadingMeta(heading),
+      badge: "Existing section",
+    })),
+  ];
+  const selectedIndex = clampDemotionPickerSelectedIndex(
+    state && state.selectedIndex,
+    rows.length,
+  );
+  const selectedRow = rows[selectedIndex] || null;
+  const canSubmit = !(
+    selectedRow &&
+    selectedRow.type === "primary" &&
+    selectedRow.primary &&
+    selectedRow.primary.kind === "invalid"
+  );
+
+  return {
+    query,
+    primary,
+    filteredHeadings,
+    rows,
+    selectedIndex,
+    selectedRow,
+    canSubmit,
+    statusText: primary.statusText,
+    emptyExisting: filteredHeadings.length === 0,
+    emptyText:
+      headings.length === 0
+        ? "No other sections in this note"
+        : "No matching sections",
+  };
+}
+
+function moveDemotionPickerSelection(state, delta) {
+  const current = state || createDemotionSectionPickerState([]);
+  const model = getDemotionSectionPickerModel(current);
+  const length = model.rows.length;
+  if (length === 0) {
+    return {
+      headings: current.headings.slice(),
+      query: current.query,
+      selectedIndex: 0,
+    };
+  }
+
+  const step = Number.isInteger(delta) ? delta : 0;
+  const nextIndex = (model.selectedIndex + step % length + length) % length;
+  return {
+    headings: current.headings.slice(),
+    query: current.query,
+    selectedIndex: nextIndex,
+  };
+}
+
+function getDemotionDestinationFromRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  if (row.type === "primary") {
+    const primary = row.primary;
+    if (!primary || primary.kind === "invalid") {
+      return null;
+    }
+    if (primary.kind === "existing") {
+      return { kind: "existing", heading: primary.heading };
+    }
+    return { kind: "create", title: primary.title };
+  }
+
+  if (row.type === "existing" && row.heading) {
+    return { kind: "existing", heading: row.heading };
+  }
+
+  return null;
+}
+
+function getDemotionDestinationFromSelectedRow(model) {
+  if (!model || !model.canSubmit) {
+    return null;
+  }
+
+  return getDemotionDestinationFromRow(model.selectedRow);
+}
+
 function getListItemBlockRange(lines, activeLine) {
   if (
     !Array.isArray(lines) ||
@@ -1498,9 +1909,36 @@ function getObsidianTaskToggleDocumentPlan(
     return inPlacePlan;
   }
 
+  const block = getListItemBlockRange(lines, activeLine);
+  if (!block) {
+    return inPlacePlan;
+  }
+
+  const movedBlock = [
+    toggle.lineText,
+    ...lines.slice(activeLine + 1, block.endLine + 1),
+  ];
+
+  if (demoting && isEligibleTasksSectionDemotion(lines, activeLine, sourceLineText)) {
+    return {
+      mode: "prompt",
+      sourceLines: lines.slice(),
+      sourceLine: activeLine,
+      sourceLineText,
+      lineText: toggle.lineText,
+      cursorLine: activeLine,
+      cursorCh: finalCursorCh,
+      sourceBlock: { startLine: block.startLine, endLine: block.endLine },
+      movedBlock,
+      headings: collectSelectableDemotionHeadings(lines),
+      previewText: toggle.lineText,
+      targetSection: null,
+    };
+  }
+
   // Promotion moves a converted bullet into the Tasks section when one exists
-  // and the source line is not already in the direct Tasks body; demotion now
-  // routes to the next section by document order and needs no named sections.
+  // and the source line is not already in the direct Tasks body. Demotion
+  // outside the Tasks body still routes to the next section by document order.
   if (!demoting) {
     const tasksSection = findNamedMarkdownSection(
       lines,
@@ -1514,43 +1952,13 @@ function getObsidianTaskToggleDocumentPlan(
     }
   }
 
-  const block = getListItemBlockRange(lines, activeLine);
-  const movedBlock = [
-    toggle.lineText,
-    ...lines.slice(activeLine + 1, block.endLine + 1),
-  ];
-
-  const remaining = lines
-    .slice(0, block.startLine)
-    .concat(lines.slice(block.endLine + 1));
-
-  const seam = block.startLine;
-  if (
-    seam > 0 &&
-    seam < remaining.length &&
-    String(remaining[seam - 1] || "").trim() === "" &&
-    String(remaining[seam] || "").trim() === ""
-  ) {
-    remaining.splice(seam, 1);
-  }
+  const { remaining } = removeSourceListItemBlock(lines, block);
 
   let targetSection;
   let insertion;
   if (demoting) {
     const nextSection = findNextMarkdownSection(remaining, block.startLine);
     if (!nextSection) {
-      if (
-        isCreatedRequirementsSectionDemotion(lines, activeLine, sourceLineText)
-      ) {
-        return getCreatedRequirementsSectionMovePlan(
-          remaining,
-          movedBlock,
-          lines,
-          sourceLineText,
-          toggle,
-          finalCursorCh,
-        );
-      }
       return inPlacePlan;
     }
     targetSection = "nextSection";
@@ -1569,33 +1977,17 @@ function getObsidianTaskToggleDocumentPlan(
     });
   }
 
-  if (!insertion) {
-    return inPlacePlan;
-  }
-
-  const insertLines = insertion.leadingBlank
-    ? ["", ...movedBlock]
-    : movedBlock.slice();
-  const nextLines = remaining
-    .slice(0, insertion.insertLine)
-    .concat(insertLines, remaining.slice(insertion.insertLine));
-
-  const cursorLine = insertion.insertLine + (insertion.leadingBlank ? 1 : 0);
-  const convertedFirstLine = String(nextLines[cursorLine] || "");
-  const cursorColumn = Math.max(
-    0,
-    Math.min(convertedFirstLine.length, finalCursorCh),
+  return (
+    buildObsidianTaskSectionMovePlan(
+      remaining,
+      insertion,
+      movedBlock,
+      sourceLineText,
+      toggle.lineText,
+      finalCursorCh,
+      targetSection,
+    ) || inPlacePlan
   );
-
-  return {
-    mode: "move",
-    nextLines,
-    cursorLine,
-    cursorCh: cursorColumn,
-    sourceLineText,
-    lineText: toggle.lineText,
-    targetSection,
-  };
 }
 
 function addOrReplaceCompletionField(lineText, completionDateString) {
@@ -4171,6 +4563,369 @@ function cancelDeferred(deferred) {
   }
 }
 
+function isCtrlKey(event, key) {
+  return (
+    !!event &&
+    event.ctrlKey === true &&
+    event.altKey !== true &&
+    event.metaKey !== true &&
+    typeof event.key === "string" &&
+    event.key.toLowerCase() === key
+  );
+}
+
+function applyIcon(el, iconName) {
+  if (!el || typeof setIcon !== "function") {
+    return;
+  }
+
+  try {
+    setIcon(el, iconName);
+  } catch (error) {
+    // Icons are decorative; rendering should continue without them.
+  }
+}
+
+function appendHighlighted(el, text, query) {
+  const source = String(text === null || text === undefined ? "" : text);
+  if (!el) {
+    return;
+  }
+
+  if (!query || typeof el.createSpan !== "function") {
+    if (typeof el.appendText === "function") {
+      el.appendText(source);
+    } else {
+      el.textContent = source;
+    }
+    return;
+  }
+
+  const lowerSource = source.toLowerCase();
+  const lowerQuery = String(query).toLowerCase();
+  let index = 0;
+  let matchIndex = lowerSource.indexOf(lowerQuery);
+  if (matchIndex === -1) {
+    el.appendText(source);
+    return;
+  }
+
+  while (matchIndex !== -1) {
+    if (matchIndex > index) {
+      el.appendText(source.slice(index, matchIndex));
+    }
+    el.createSpan({
+      cls: "tsc-sdp-hl",
+      text: source.slice(matchIndex, matchIndex + lowerQuery.length),
+    });
+    index = matchIndex + lowerQuery.length;
+    matchIndex = lowerSource.indexOf(lowerQuery, index);
+  }
+
+  if (index < source.length) {
+    el.appendText(source.slice(index));
+  }
+}
+
+function focusElementSoon(el) {
+  if (!el || typeof el.focus !== "function") {
+    return;
+  }
+
+  el.focus();
+  const schedule =
+    typeof window !== "undefined" && typeof window.setTimeout === "function"
+      ? window.setTimeout.bind(window)
+      : typeof setTimeout === "function"
+        ? setTimeout
+        : null;
+  if (!schedule) {
+    return;
+  }
+
+  schedule(() => {
+    if (el && typeof el.focus === "function") {
+      el.focus();
+    }
+  }, 0);
+}
+
+class DemotionSectionPickerModal extends Modal {
+  constructor(app, plugin, snapshot) {
+    super(app);
+    this.plugin = plugin;
+    this.snapshot = snapshot;
+    this.state = createDemotionSectionPickerState(
+      snapshot && snapshot.plan && snapshot.plan.headings,
+    );
+    this.completed = false;
+    this.submitting = false;
+    this.inputEl = null;
+    this.resultsEl = null;
+    this.statusEl = null;
+    this.previewEl = null;
+    this.rowEls = [];
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    if (contentEl && typeof contentEl.empty === "function") {
+      contentEl.empty();
+    }
+    if (this.modalEl && typeof this.modalEl.addClass === "function") {
+      this.modalEl.addClass("tsc-sdp-modal");
+    }
+    if (contentEl && typeof contentEl.addClass === "function") {
+      contentEl.addClass("tsc-sdp");
+    }
+
+    const header = contentEl.createDiv({ cls: "tsc-sdp-header" });
+    const headerIcon = header.createDiv({ cls: "tsc-sdp-header-icon" });
+    applyIcon(headerIcon, "list-tree");
+    const headerText = header.createDiv({ cls: "tsc-sdp-header-text" });
+    headerText.createDiv({
+      cls: "tsc-sdp-title",
+      text: DEMOTION_PICKER_TITLE,
+    });
+    headerText.createDiv({
+      cls: "tsc-sdp-subtitle",
+      text: DEMOTION_PICKER_SUBTITLE,
+    });
+
+    const preview = contentEl.createDiv({ cls: "tsc-sdp-preview" });
+    preview.createDiv({
+      cls: "tsc-sdp-preview-label",
+      text: "Moving",
+    });
+    this.previewEl = preview.createDiv({ cls: "tsc-sdp-preview-text" });
+    this.previewEl.textContent =
+      (this.snapshot && this.snapshot.plan && this.snapshot.plan.previewText) ||
+      "";
+
+    const searchEl = contentEl.createDiv({ cls: "tsc-sdp-search" });
+    const searchIcon = searchEl.createDiv({ cls: "tsc-sdp-search-icon" });
+    applyIcon(searchIcon, "search");
+    this.inputEl = searchEl.createEl("input", {
+      cls: "tsc-sdp-input",
+      attr: {
+        type: "text",
+        role: "combobox",
+        "aria-label": DEMOTION_PICKER_INPUT_LABEL,
+        "aria-autocomplete": "list",
+        "aria-expanded": "true",
+        "aria-controls": "tsc-sdp-results",
+        placeholder: TASK_ROUTING_SECTION_TITLES.requirements,
+      },
+    });
+    this.inputEl.addEventListener("input", () => {
+      this.state = setDemotionPickerQuery(this.state, this.inputEl.value);
+      this.renderResults();
+    });
+    this.inputEl.addEventListener("keydown", (event) => this.handleKeydown(event));
+
+    this.statusEl = contentEl.createDiv({
+      cls: "tsc-sdp-status",
+      attr: {
+        role: "status",
+        "aria-live": "polite",
+      },
+    });
+
+    this.resultsEl = contentEl.createDiv({
+      cls: "tsc-sdp-results",
+      attr: {
+        id: "tsc-sdp-results",
+        role: "listbox",
+        "aria-label": DEMOTION_PICKER_RESULTS_LABEL,
+      },
+    });
+
+    this.renderFooter(contentEl);
+    this.renderResults();
+    focusElementSoon(this.inputEl);
+  }
+
+  renderFooter(contentEl) {
+    const footerEl = contentEl.createDiv({ cls: "tsc-sdp-footer" });
+    DEMOTION_PICKER_HINTS.forEach((hint) => {
+      const group = footerEl.createDiv({ cls: "tsc-sdp-hint" });
+      hint.keys.forEach((key) =>
+        group.createEl("kbd", { cls: "tsc-sdp-kbd", text: key }),
+      );
+      group.createEl("span", { cls: "tsc-sdp-hint-label", text: hint.label });
+    });
+  }
+
+  onClose() {
+    if (this.modalEl && typeof this.modalEl.removeClass === "function") {
+      this.modalEl.removeClass("tsc-sdp-modal");
+    }
+    if (this.contentEl && typeof this.contentEl.empty === "function") {
+      this.contentEl.empty();
+    }
+    if (this.plugin && typeof this.plugin.clearDemotionSectionPicker === "function") {
+      this.plugin.clearDemotionSectionPicker(this);
+    }
+  }
+
+  handleKeydown(event) {
+    if (!event) {
+      return;
+    }
+
+    if (event.key === "ArrowDown" || isCtrlKey(event, "n")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.state = moveDemotionPickerSelection(this.state, 1);
+      this.renderResults();
+      return;
+    }
+
+    if (event.key === "ArrowUp" || isCtrlKey(event, "p")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.state = moveDemotionPickerSelection(this.state, -1);
+      this.renderResults();
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.acceptSelected();
+    }
+  }
+
+  renderResults() {
+    if (!this.resultsEl) {
+      return;
+    }
+
+    const model = getDemotionSectionPickerModel(this.state);
+    this.resultsEl.empty();
+    this.rowEls = [];
+
+    if (this.statusEl) {
+      this.statusEl.textContent = model.statusText || "";
+      if (model.primary && model.primary.kind === "invalid") {
+        if (typeof this.statusEl.addClass === "function") {
+          this.statusEl.addClass("is-invalid");
+        }
+      } else if (typeof this.statusEl.removeClass === "function") {
+        this.statusEl.removeClass("is-invalid");
+      }
+    }
+
+    if (this.inputEl && typeof this.inputEl.setAttribute === "function") {
+      this.inputEl.setAttribute(
+        "aria-activedescendant",
+        `tsc-sdp-option-${model.selectedIndex}`,
+      );
+      this.inputEl.setAttribute(
+        "aria-invalid",
+        model.primary && model.primary.kind === "invalid" ? "true" : "false",
+      );
+    }
+
+    const query = String(model.query || "").trim();
+    model.rows.forEach((row, index) => {
+      const isSelected = index === model.selectedIndex;
+      const rowEl = this.resultsEl.createDiv({
+        cls: getDemotionSectionPickerRowClasses(row, isSelected).join(" "),
+        attr: {
+          id: `tsc-sdp-option-${index}`,
+          role: "option",
+          "aria-selected": isSelected ? "true" : "false",
+        },
+      });
+
+      const textEl = rowEl.createDiv({ cls: "tsc-sdp-row-text" });
+      const titleEl = textEl.createDiv({ cls: "tsc-sdp-row-title" });
+      appendHighlighted(titleEl, row.title, query);
+      if (row.meta) {
+        textEl.createDiv({ cls: "tsc-sdp-row-meta", text: row.meta });
+      }
+
+      rowEl.createDiv({
+        cls: [
+          "tsc-sdp-badge",
+          row.type === "primary" && row.primary && row.primary.kind === "create"
+            ? "is-create"
+            : "",
+          row.type === "primary" && row.primary && row.primary.kind === "invalid"
+            ? "is-invalid"
+            : "",
+          row.type === "existing" ||
+          (row.type === "primary" && row.primary && row.primary.kind === "existing")
+            ? "is-existing"
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        text: row.badge,
+      });
+
+      rowEl.addEventListener("mousedown", (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+      });
+      rowEl.addEventListener("click", () => this.acceptIndex(index));
+      this.rowEls.push(rowEl);
+
+      if (isSelected) {
+        this.scrollRowIntoView(rowEl);
+      }
+    });
+
+    if (model.emptyExisting) {
+      const emptyEl = this.resultsEl.createDiv({ cls: "tsc-sdp-empty" });
+      const emptyIcon = emptyEl.createDiv({ cls: "tsc-sdp-empty-icon" });
+      applyIcon(emptyIcon, "file-question");
+      emptyEl.createDiv({
+        cls: "tsc-sdp-empty-text",
+        text: model.emptyText,
+      });
+    }
+  }
+
+  scrollRowIntoView(rowEl) {
+    if (!rowEl || typeof rowEl.scrollIntoView !== "function") {
+      return;
+    }
+
+    try {
+      rowEl.scrollIntoView({ block: "nearest" });
+    } catch (error) {
+      try {
+        rowEl.scrollIntoView(false);
+      } catch (ignoredError) {
+        // Scrolling is a nicety; never let it break rendering.
+      }
+    }
+  }
+
+  acceptSelected() {
+    const model = getDemotionSectionPickerModel(this.state);
+    return this.acceptIndex(model.selectedIndex);
+  }
+
+  acceptIndex(index) {
+    if (this.submitting || this.completed) {
+      return false;
+    }
+
+    const model = getDemotionSectionPickerModel(this.state);
+    const row = model.rows[index];
+    const destination = getDemotionDestinationFromRow(row);
+    if (!destination || !this.plugin) {
+      return false;
+    }
+
+    return this.plugin.submitDemotionSectionPicker(this, destination);
+  }
+}
+
 module.exports = class TaskStatusCyclerPlugin extends Plugin {
   onload() {
     // Handle for a deferred `zz`-style center of the newly created Pomodoro
@@ -4179,6 +4934,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     this.pendingPomodoroCenterDeferred = null;
     this.pendingRenderedTasksScrollDeferred = null;
     this.referenceMutationQueue = Promise.resolve();
+    this.demotionSectionPicker = null;
 
     this.addCommand({
       id: "cycle-task-status-forward",
@@ -4309,6 +5065,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         window.clearTimeout(timer);
       }
       this.renamedDependencyTimers.clear();
+    }
+    if (this.demotionSectionPicker) {
+      this.demotionSectionPicker.close();
+      this.demotionSectionPicker = null;
     }
   }
 
@@ -7623,11 +8383,119 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return false;
     }
 
+    if (plan.mode === "prompt") {
+      return this.openDemotionSectionPicker(editor, view, plan);
+    }
+
     if (plan.mode === "move") {
       return this.applyObsidianTaskMovePlan(editor, plan, view);
     }
 
     return this.applyObsidianTaskReplacePlan(editor, plan);
+  }
+
+  getEditorSnapshotText(editor) {
+    if (editor && typeof editor.getValue === "function") {
+      return editor.getValue();
+    }
+
+    return this.getEditorLineArray(editor).join("\n");
+  }
+
+  captureDemotionPickerSnapshot(editor, view, plan) {
+    const file = (view && view.file) || null;
+    return {
+      editor,
+      view,
+      file,
+      filePath: file && file.path ? file.path : null,
+      documentText: this.getEditorSnapshotText(editor),
+      plan,
+    };
+  }
+
+  isDemotionPickerSnapshotFresh(snapshot) {
+    if (!snapshot || !snapshot.editor) {
+      return false;
+    }
+
+    const { editor, view, file, filePath, documentText } = snapshot;
+    if (view) {
+      if (view.editor && view.editor !== editor) {
+        return false;
+      }
+      const viewFile = view.file;
+      if (file && viewFile && viewFile !== file) {
+        return false;
+      }
+      const viewPath = viewFile && viewFile.path;
+      if (filePath && viewPath && viewPath !== filePath) {
+        return false;
+      }
+    }
+
+    return this.getEditorSnapshotText(editor) === documentText;
+  }
+
+  openDemotionSectionPicker(editor, view, plan) {
+    if (this.demotionSectionPicker) {
+      return true;
+    }
+
+    if (!editor || !plan || plan.mode !== "prompt") {
+      return false;
+    }
+
+    const snapshot = this.captureDemotionPickerSnapshot(editor, view, plan);
+    const modal = new DemotionSectionPickerModal(this.app, this, snapshot);
+    this.demotionSectionPicker = modal;
+    modal.open();
+    return true;
+  }
+
+  clearDemotionSectionPicker(modal) {
+    if (!modal || this.demotionSectionPicker === modal) {
+      this.demotionSectionPicker = null;
+    }
+  }
+
+  submitDemotionSectionPicker(modal, destination) {
+    if (!modal || modal.completed || modal.submitting) {
+      return false;
+    }
+
+    modal.submitting = true;
+    try {
+      const snapshot = modal.snapshot;
+      if (!this.isDemotionPickerSnapshotFresh(snapshot)) {
+        new Notice(DEMOTION_STALE_NOTICE);
+        modal.close();
+        return false;
+      }
+
+      const movePlan = resolveObsidianTaskDemotionDestination(
+        snapshot.plan,
+        destination,
+      );
+      if (!movePlan || movePlan.mode !== "move") {
+        new Notice(DEMOTION_MISSING_SECTION_NOTICE);
+        modal.close();
+        return false;
+      }
+
+      const applied = this.applyObsidianTaskMovePlan(
+        snapshot.editor,
+        movePlan,
+        snapshot.view,
+      );
+      if (applied) {
+        modal.completed = true;
+        modal.close();
+      }
+      return applied;
+    } finally {
+      modal.submitting = false;
+    }
   }
 
   applyObsidianTaskReplacePlan(editor, plan) {
@@ -9018,6 +9886,10 @@ module.exports.helpers = {
   collectObsidianTaskTokenRanges,
   collapseWhitespaceOutsideBracketSpans,
   closedTaskIdentity,
+  collectSelectableDemotionHeadings,
+  createDemotionSectionPickerState,
+  clampDemotionPickerSelectedIndex,
+  DemotionSectionPickerModal,
   demoteObsidianTaskLine,
   dependencyId,
   editorViewPositionFromLineCh,
@@ -9033,7 +9905,9 @@ module.exports.helpers = {
   findSingleFutureScheduledField,
   findScheduledFieldMatches,
   findTaskChildBlockEndLine,
+  filterSelectableDemotionHeadings,
   findTaskRoutingSections,
+  fuzzyMatchesText,
   formatCalendarDate,
   formatLocalDate,
   formatScheduleLogEntry,
@@ -9066,6 +9940,15 @@ module.exports.helpers = {
   getNextOpenDoneSymbol,
   getOptionBracketTaskCycleDirection,
   getNextSectionBulletInsertion,
+  getDemotionDestinationFromRow,
+  getDemotionDestinationFromSelectedRow,
+  getDemotionEffectiveTitle,
+  getDemotionHeadingMeta,
+  getDemotionPrimaryAction,
+  getDemotionSectionPickerModel,
+  getDemotionSectionPickerRowClasses,
+  getHeadingIdentity,
+  headingIdentitiesEqual,
   getObsidianTaskToggle,
   getObsidianTaskToggleCursorCh,
   getObsidianTaskToggleDocumentPlan,
@@ -9078,6 +9961,7 @@ module.exports.helpers = {
   getStandaloneBlockIdRegex,
   getTrailingBlockId,
   isTasksGeneratedId,
+  normalizeHeadingTitle,
   normalizeTaskDependencyBlockIds,
   normalizeClosedTaskIdentities,
   rewriteDependsOnBlockIdsInText,
@@ -9091,12 +9975,14 @@ module.exports.helpers = {
   getVimRepeat,
   getPomodoroMoveOnlyAdditionalLines,
   getPendingVimRepeat,
+  resolveObsidianTaskDemotionDestination,
   resetPendingVimInputState,
   isDailyNotePath,
   isPomodoroTaskLine,
+  isEligibleTasksSectionDemotion,
   isLineInMarkdownSectionDirectBody,
-  isProjectNoteDocument,
   isProperObsidianTaskLine,
+  isTasksHeadingTitle,
   isCyclableTaskStatus,
   isOpenDoneTaskStatus,
   isNonTranscludedStartResolvableStatus,
@@ -9110,6 +9996,8 @@ module.exports.helpers = {
   getLineIndentation,
   getOpenLineBelowPrefix,
   getChildBulletOpenLinePrefix,
+  mapOriginalLineToRemaining,
+  moveDemotionPickerSelection,
   lineContainsStandaloneBlockId,
   lineHasCreatedField,
   lineMatchesTasksGlobalFilterText,
@@ -9138,5 +10026,6 @@ module.exports.helpers = {
   rewriteTaskCheckboxMarker,
   rewriteTaskLineForLocalFallback,
   rewriteTaskLineForTranscludedSource,
+  setDemotionPickerQuery,
   splitTextByLineEndings,
 };

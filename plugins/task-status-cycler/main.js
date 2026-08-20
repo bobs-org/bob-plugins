@@ -1397,7 +1397,14 @@ function collectSelectableDemotionHeadings(lines) {
 function collectSelectablePromotionHeadings(lines, sourceHeadingIdentity = null) {
   const headings = findMarkdownHeadings(lines)
     .filter((heading) => heading.title)
-    .filter((heading) => !headingIdentitiesEqual(heading, sourceHeadingIdentity));
+    .filter((heading) => {
+      if (!headingIdentitiesEqual(heading, sourceHeadingIdentity)) {
+        return true;
+      }
+      // Keep the source heading when it is exact Tasks so in-place promotion
+      // can be the default. Other source headings stay excluded.
+      return heading.title === TASK_ROUTING_SECTION_TITLES.tasks;
+    });
   const tasks = headings.filter(
     (heading) => heading.title === TASK_ROUTING_SECTION_TITLES.tasks,
   );
@@ -1405,12 +1412,6 @@ function collectSelectablePromotionHeadings(lines, sourceHeadingIdentity = null)
     (heading) => heading.title !== TASK_ROUTING_SECTION_TITLES.tasks,
   );
   return [...tasks, ...nonTasks].map((heading) => getHeadingIdentity(heading));
-}
-
-function hasRealMarkdownHeadingBesidesTasks(lines) {
-  return findMarkdownHeadings(lines).some(
-    (heading) => heading.title && heading.title !== TASK_ROUTING_SECTION_TITLES.tasks,
-  );
 }
 
 function isEligibleTasksSectionDemotion(lines, activeLine, sourceLineText) {
@@ -1726,7 +1727,7 @@ function isTaskSectionPromptExistingHeadingAllowed(prompt, headingIdentity) {
     kind === TASK_SECTION_PROMPT_KIND.promotion &&
     headingIdentitiesEqual(headingIdentity, prompt.sourceHeading)
   ) {
-    return false;
+    return headingIdentity.title === TASK_ROUTING_SECTION_TITLES.tasks;
   }
 
   return true;
@@ -1783,6 +1784,39 @@ function getTaskSectionPromptCursorCh(prompt, destinationHeadingIdentity = null)
   return prompt.cursorCh;
 }
 
+function resolveSameSourceTasksPromotion(prompt) {
+  if (
+    !prompt ||
+    !Array.isArray(prompt.sourceLines) ||
+    !Number.isInteger(prompt.sourceLine) ||
+    prompt.sourceLine < 0 ||
+    prompt.sourceLine >= prompt.sourceLines.length
+  ) {
+    return null;
+  }
+
+  const nextLines = prompt.sourceLines.slice();
+  nextLines[prompt.sourceLine] = prompt.lineText;
+  const convertedFirstLine = String(nextLines[prompt.sourceLine] || "");
+  const cursorLine = Number.isInteger(prompt.cursorLine)
+    ? prompt.cursorLine
+    : prompt.sourceLine;
+  const cursorColumn = Math.max(
+    0,
+    Math.min(convertedFirstLine.length, prompt.cursorCh),
+  );
+
+  return {
+    mode: "move",
+    nextLines,
+    cursorLine,
+    cursorCh: cursorColumn,
+    sourceLineText: prompt.sourceLineText,
+    lineText: prompt.lineText,
+    targetSection: "tasks",
+  };
+}
+
 function resolveExistingTaskSectionPromptHeading(prompt, headingIdentity) {
   if (!prompt || !headingIdentity) {
     return null;
@@ -1796,6 +1830,14 @@ function resolveExistingTaskSectionPromptHeading(prompt, headingIdentity) {
   const originalHeadings = findMarkdownHeadings(sourceLines);
   if (findHeadingIndexByIdentity(originalHeadings, headingIdentity) < 0) {
     return null;
+  }
+
+  if (
+    getTaskSectionPromptKind(prompt) === TASK_SECTION_PROMPT_KIND.promotion &&
+    headingIdentitiesEqual(headingIdentity, prompt.sourceHeading) &&
+    headingIdentity.title === TASK_ROUTING_SECTION_TITLES.tasks
+  ) {
+    return resolveSameSourceTasksPromotion(prompt);
   }
 
   const removal = removeSourceBlockForTaskPrompt(prompt, headingIdentity);
@@ -2407,96 +2449,54 @@ function getObsidianTaskToggleDocumentPlan(
     };
   }
 
-  // Promotion moves a converted bullet into the Tasks section when one exists
-  // and the source line is not already in the direct Tasks body. Demotion
-  // outside the Tasks body still routes to the next section by document order.
-  let tasksSection = null;
+  // Promotion always prompts when an exact Tasks section exists, including
+  // preamble / Tasks-only notes and bullets already in the Tasks body.
+  // Demotion outside the Tasks body still routes to the next section.
   if (!demoting) {
-    tasksSection = findNamedMarkdownSection(lines, TASK_ROUTING_SECTION_TITLES.tasks);
-    if (!tasksSection) {
-      return inPlacePlan;
-    }
-    if (isLineInMarkdownSectionDirectBody(tasksSection, activeLine)) {
+    if (!findNamedMarkdownSection(lines, TASK_ROUTING_SECTION_TITLES.tasks)) {
       return inPlacePlan;
     }
 
-    if (hasRealMarkdownHeadingBesidesTasks(lines)) {
-      return {
-        mode: "prompt",
-        promptKind: TASK_SECTION_PROMPT_KIND.promotion,
-        sourceLines: lines.slice(),
-        sourceLine: activeLine,
-        sourceLineText,
-        lineText: toggle.lineText,
-        cursorLine: activeLine,
-        cursorCh: finalCursorCh,
-        originalCursorCh: cursorCh,
-        sourceBlock,
-        sourceHeading,
-        movedBlock,
-        originalMovedBlock,
-        headings: collectSelectablePromotionHeadings(lines, sourceHeading),
-        previewText: sourceLineText,
-        targetSection: null,
-      };
-    }
+    return {
+      mode: "prompt",
+      promptKind: TASK_SECTION_PROMPT_KIND.promotion,
+      sourceLines: lines.slice(),
+      sourceLine: activeLine,
+      sourceLineText,
+      lineText: toggle.lineText,
+      cursorLine: activeLine,
+      cursorCh: finalCursorCh,
+      originalCursorCh: cursorCh,
+      sourceBlock,
+      sourceHeading,
+      movedBlock,
+      originalMovedBlock,
+      headings: collectSelectablePromotionHeadings(lines, sourceHeading),
+      previewText: sourceLineText,
+      targetSection: null,
+    };
   }
 
-  const removal = demoting
-    ? removeSourceListItemBlock(lines, block)
-    : removeSourceBlockForTaskPrompt(
-        {
-          promptKind: TASK_SECTION_PROMPT_KIND.promotion,
-          sourceLines: lines.slice(),
-          sourceBlock,
-          sourceHeading,
-        },
-        tasksSection
-          ? {
-              line: tasksSection.headingLine,
-              depth: tasksSection.depth,
-              title: tasksSection.title,
-            }
-          : null,
-      );
+  const removal = removeSourceListItemBlock(lines, block);
   if (!removal) {
     return inPlacePlan;
   }
 
   const { remaining } = removal;
-
-  let targetSection;
-  let insertion;
-  if (demoting) {
-    const nextSection = findNextMarkdownSection(remaining, block.startLine);
-    if (!nextSection) {
-      return inPlacePlan;
-    }
-    targetSection = "nextSection";
-    insertion = getNextSectionBulletInsertion(remaining, nextSection);
-  } else {
-    const postTarget = findNamedMarkdownSection(
-      remaining,
-      TASK_ROUTING_SECTION_TITLES.tasks,
-    );
-    if (!postTarget) {
-      return inPlacePlan;
-    }
-    targetSection = "tasks";
-    insertion = getSectionInsertionLine(remaining, postTarget, {
-      stopAtChildHeadings: true,
-    });
+  const nextSection = findNextMarkdownSection(remaining, block.startLine);
+  if (!nextSection) {
+    return inPlacePlan;
   }
 
   return (
     buildObsidianTaskSectionMovePlan(
       remaining,
-      insertion,
+      getNextSectionBulletInsertion(remaining, nextSection),
       movedBlock,
       sourceLineText,
       toggle.lineText,
       finalCursorCh,
-      targetSection,
+      "nextSection",
       documentHasFinalNewline(lines),
     ) || inPlacePlan
   );

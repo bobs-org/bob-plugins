@@ -4879,13 +4879,30 @@ test("promotions, out-of-Tasks demotions, and ineligible shapes keep prior routi
     0,
     created,
   );
-  assert.equal(promotePlan.mode, "move");
-  assert.equal(promotePlan.targetSection, "tasks");
-  assert.equal(promotePlan.nextLines.includes("## Requirements"), false);
+  assert.equal(promotePlan.mode, "prompt");
+  assert.equal(promotePlan.promptKind, "promotion");
+  assert.equal(promotePlan.nextLines, undefined);
+  const promoteMoved = helpers.resolveObsidianTaskPromptDestination(promotePlan, {
+    kind: "existing",
+    heading: findPromptHeading(promotePlan, "Tasks"),
+  });
+  assert.equal(promoteMoved.mode, "move");
+  assert.equal(promoteMoved.targetSection, "tasks");
+  assert.equal(promoteMoved.nextLines.includes("## Requirements"), false);
   assert.match(
-    promotePlan.nextLines.join("\n"),
+    promoteMoved.nextLines.join("\n"),
     /## Tasks\n\n- \[ \] #task Ship it \[created::2026-08-20\]/,
   );
+
+  const noTasks = ["## Ideas", "", "- Ship it"];
+  const noTasksPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    noTasks,
+    2,
+    0,
+    created,
+  );
+  assert.equal(noTasksPlan.mode, "replace");
+  assert.equal(noTasksPlan.line, 2);
 
   const outside = [
     "## Notes",
@@ -4937,4 +4954,542 @@ test("promotions, out-of-Tasks demotions, and ineligible shapes keep prior routi
   const star = noteLines({ taskLine: "* [ ] #task Ship it" });
   const starPlan = helpers.getObsidianTaskToggleDocumentPlan(star, 2, 0, created);
   assert.equal(starPlan.mode, "replace");
+
+  const starPromote = ["* Ship it", "## Tasks"];
+  const starPromotePlan = helpers.getObsidianTaskToggleDocumentPlan(
+    starPromote,
+    0,
+    0,
+    created,
+  );
+  assert.equal(starPromotePlan.mode, "replace");
+
+  const indentedPromote = ["## Tasks", "", "- parent", "\t- child"];
+  const indentedPromotePlan = helpers.getObsidianTaskToggleDocumentPlan(
+    indentedPromote,
+    3,
+    0,
+    created,
+  );
+  assert.equal(indentedPromotePlan.mode, "replace");
+  assert.equal(indentedPromotePlan.line, 3);
+});
+
+test("Tasks-only preamble promotions prompt and blank Enter moves into Tasks", () => {
+  const lines = ["- Ship it", "\t- child", "## Tasks"];
+  const prompt = getSectionPrompt(lines, 0, 2);
+  assert.equal(prompt.promptKind, "promotion");
+  assert.deepEqual(
+    prompt.headings.map((heading) => heading.title),
+    ["Tasks"],
+  );
+  assert.equal(prompt.previewText, "- Ship it");
+
+  const blankState = helpers.createDemotionSectionPickerState(
+    prompt.headings,
+    "",
+    prompt.promptKind,
+  );
+  const blankModel = helpers.getDemotionSectionPickerModel(blankState);
+  assert.equal(blankModel.selectedRow.title, "Tasks");
+  assert.equal(blankModel.statusText, "Move to existing Tasks");
+  assert.equal(blankModel.inputPlaceholder, "Filter or type a new section");
+
+  const moved = helpers.resolveObsidianTaskPromptDestination(
+    prompt,
+    helpers.getDemotionDestinationFromSelectedRow(blankModel),
+  );
+  assert.deepEqual(moved.nextLines, [
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it [created::2026-08-20]",
+    "\t- child",
+  ]);
+  assert.equal(moved.nextLines.join("\n").match(/#task/g).length, 1);
+  assert.equal(moved.cursorLine, 2);
+  assert.equal(moved.cursorCh, 12);
+  assert.equal(moved.targetSection, "tasks");
+
+  const source = lines.join("\n");
+  const { editor, view, plugin, centered } = openDemotionPicker(source, {
+    line: 0,
+    ch: 2,
+  });
+  plugin.getCreatedDateString = () => "2026-08-20";
+  assert.equal(plugin.handleToggleObsidianTaskCommand(true, editor, view), true);
+  assert.equal(editor.getValue(), source);
+  assert.equal(plugin.handleToggleObsidianTaskCommand(false, editor, view), true);
+  assert.equal(editor.getValue(), source);
+  assert.equal(acceptSelectedPickerRow(plugin), true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Tasks",
+      "",
+      "- [ ] #task Ship it [created::2026-08-20]",
+      "\t- child",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.getCursor(), { line: 2, ch: 12 });
+  assert.deepEqual(centered, [{ line: 2, ch: 12, sameEditor: true }]);
+});
+
+test("plain bullets already in Tasks prompt and blank Enter promotes in place", () => {
+  const lines = [
+    "## Tasks",
+    "",
+    "- Keep first",
+    "- Ship it",
+    "\t- child",
+    "  continued",
+    "- Keep last",
+    "",
+    "## Notes",
+  ];
+  const prompt = getSectionPrompt(lines, 3, 2);
+  assert.equal(prompt.promptKind, "promotion");
+  assert.deepEqual(
+    prompt.headings.map((heading) => [heading.title, heading.line]),
+    [
+      ["Tasks", 0],
+      ["Notes", 8],
+    ],
+  );
+  assert.equal(prompt.sourceHeading.title, "Tasks");
+
+  const blankModel = helpers.getDemotionSectionPickerModel(
+    helpers.createDemotionSectionPickerState(
+      prompt.headings,
+      "",
+      prompt.promptKind,
+    ),
+  );
+  assert.equal(blankModel.selectedRow.title, "Tasks");
+  assert.equal(blankModel.selectedRow.heading.line, 0);
+
+  const inPlace = helpers.resolveObsidianTaskPromptDestination(
+    prompt,
+    helpers.getDemotionDestinationFromSelectedRow(blankModel),
+  );
+  assert.deepEqual(inPlace.nextLines, [
+    "## Tasks",
+    "",
+    "- Keep first",
+    "- [ ] #task Ship it [created::2026-08-20]",
+    "\t- child",
+    "  continued",
+    "- Keep last",
+    "",
+    "## Notes",
+  ]);
+  assert.equal(inPlace.nextLines.join("\n").match(/#task/g).length, 1);
+  assert.equal(inPlace.cursorLine, 3);
+  assert.equal(inPlace.cursorCh, 12);
+  assert.equal(inPlace.targetSection, "tasks");
+
+  const tasksOnly = ["## Tasks", "", "- Keep first", "- Ship it", "- Keep last"];
+  const tasksOnlyPrompt = getSectionPrompt(tasksOnly, 3, 2);
+  assert.deepEqual(
+    tasksOnlyPrompt.headings.map((heading) => heading.title),
+    ["Tasks"],
+  );
+  const tasksOnlyInPlace = helpers.resolveObsidianTaskPromptDestination(
+    tasksOnlyPrompt,
+    { kind: "existing", heading: findPromptHeading(tasksOnlyPrompt, "Tasks") },
+  );
+  assert.deepEqual(tasksOnlyInPlace.nextLines, [
+    "## Tasks",
+    "",
+    "- Keep first",
+    "- [ ] #task Ship it [created::2026-08-20]",
+    "- Keep last",
+  ]);
+
+  const source = lines.join("\n");
+  const { editor, view, plugin, centered } = openDemotionPicker(source, {
+    line: 3,
+    ch: 2,
+  });
+  plugin.getCreatedDateString = () => "2026-08-20";
+  assert.equal(plugin.handleToggleObsidianTaskCommand(false, editor, view), true);
+  assert.equal(editor.getValue(), source);
+  assert.equal(acceptSelectedPickerRow(plugin), true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Tasks",
+      "",
+      "- Keep first",
+      "- [ ] #task Ship it [created::2026-08-20]",
+      "\t- child",
+      "  continued",
+      "- Keep last",
+      "",
+      "## Notes",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.getCursor(), { line: 3, ch: 12 });
+  assert.deepEqual(centered, [{ line: 3, ch: 12, sameEditor: true }]);
+});
+
+test("promotion from Tasks-only or Tasks body can choose existing or typed non-Tasks sections", () => {
+  const preamble = ["- Ship it", "\t- child", "## Tasks", "", "## Notes", "", "- already"];
+  const preamblePrompt = getSectionPrompt(preamble, 0, 2);
+  assert.deepEqual(
+    preamblePrompt.headings.map((heading) => heading.title),
+    ["Tasks", "Notes"],
+  );
+
+  const toNotes = helpers.resolveObsidianTaskPromptDestination(preamblePrompt, {
+    kind: "existing",
+    heading: findPromptHeading(preamblePrompt, "Notes"),
+  });
+  assert.deepEqual(toNotes.nextLines, [
+    "## Tasks",
+    "",
+    "## Notes",
+    "",
+    "- already",
+    "- Ship it",
+    "\t- child",
+  ]);
+  assert.equal(toNotes.nextLines.join("\n").includes("#task"), false);
+
+  const createFromPreambleState = helpers.setDemotionPickerQuery(
+    helpers.createDemotionSectionPickerState(
+      preamblePrompt.headings,
+      "",
+      preamblePrompt.promptKind,
+    ),
+    "Future Work",
+  );
+  const createFromPreambleModel = helpers.getDemotionSectionPickerModel(
+    createFromPreambleState,
+  );
+  assert.equal(createFromPreambleModel.primary.kind, "create");
+  assert.equal(createFromPreambleModel.selectedRow.title, "Future Work");
+  const createdFromPreamble = helpers.resolveObsidianTaskPromptDestination(
+    preamblePrompt,
+    helpers.getDemotionDestinationFromSelectedRow(createFromPreambleModel),
+  );
+  assert.deepEqual(createdFromPreamble.nextLines, [
+    "## Tasks",
+    "",
+    "## Notes",
+    "",
+    "- already",
+    "",
+    "## Future Work",
+    "",
+    "- Ship it",
+    "\t- child",
+  ]);
+  assert.equal(createdFromPreamble.nextLines.join("\n").includes("#task"), false);
+  assert.equal(
+    createdFromPreamble.nextLines.filter((line) => line === "## Future Work").length,
+    1,
+  );
+
+  const tasksOnly = ["- Ship it", "\t- child", "## Tasks"];
+  const tasksOnlyPrompt = getSectionPrompt(tasksOnly, 0);
+  const createdFromTasksOnly = helpers.resolveObsidianTaskPromptDestination(
+    tasksOnlyPrompt,
+    { kind: "create", title: "Inbox" },
+  );
+  assert.deepEqual(createdFromTasksOnly.nextLines, [
+    "## Tasks",
+    "",
+    "## Inbox",
+    "",
+    "- Ship it",
+    "\t- child",
+  ]);
+  assert.equal(createdFromTasksOnly.nextLines.join("\n").includes("#task"), false);
+
+  const insideTasks = [
+    "## Tasks",
+    "",
+    "- Keep",
+    "- Ship it",
+    "\t- child",
+    "## Notes",
+    "",
+    "- already",
+  ];
+  const insidePrompt = getSectionPrompt(insideTasks, 3, 2);
+  assert.deepEqual(
+    insidePrompt.headings.map((heading) => heading.title),
+    ["Tasks", "Notes"],
+  );
+
+  const insideToNotes = helpers.resolveObsidianTaskPromptDestination(insidePrompt, {
+    kind: "existing",
+    heading: findPromptHeading(insidePrompt, "Notes"),
+  });
+  assert.deepEqual(insideToNotes.nextLines, [
+    "## Tasks",
+    "",
+    "- Keep",
+    "## Notes",
+    "",
+    "- already",
+    "- Ship it",
+    "\t- child",
+  ]);
+  assert.equal(insideToNotes.nextLines.join("\n").includes("#task"), false);
+  assert.ok(insideToNotes.nextLines.includes("## Tasks"));
+
+  const createdFromInside = helpers.resolveObsidianTaskPromptDestination(
+    insidePrompt,
+    { kind: "create", title: "Future Work" },
+  );
+  assert.deepEqual(createdFromInside.nextLines, [
+    "## Tasks",
+    "",
+    "- Keep",
+    "## Notes",
+    "",
+    "- already",
+    "",
+    "## Future Work",
+    "",
+    "- Ship it",
+    "\t- child",
+  ]);
+  assert.equal(createdFromInside.nextLines.join("\n").includes("#task"), false);
+  assert.ok(createdFromInside.nextLines.includes("## Tasks"));
+});
+
+test("always-prompt promotions keep reuse, duplicates, cleanup, CRLF, and cancellation", () => {
+  const reuseLines = [
+    "## Tasks",
+    "",
+    "- Ship it",
+    "\t- child",
+    "##   notes  ##",
+    "",
+    "- already",
+  ];
+  const reusePrompt = getSectionPrompt(reuseLines, 2);
+  const reuseState = helpers.setDemotionPickerQuery(
+    helpers.createDemotionSectionPickerState(
+      reusePrompt.headings,
+      "",
+      reusePrompt.promptKind,
+    ),
+    " NOTES ",
+  );
+  const reuseModel = helpers.getDemotionSectionPickerModel(reuseState);
+  assert.equal(reuseModel.primary, null);
+  assert.equal(reuseModel.selectedRow.title, "notes");
+  const reused = helpers.resolveObsidianTaskPromptDestination(
+    reusePrompt,
+    helpers.getDemotionDestinationFromSelectedRow(reuseModel),
+  );
+  assert.equal(
+    reused.nextLines.filter(
+      (line) => /^##\s+notes\s+##$/i.test(line) || line === "## Notes",
+    ).length,
+    1,
+  );
+  assert.deepEqual(reused.nextLines.slice(-3), [
+    "- already",
+    "- Ship it",
+    "\t- child",
+  ]);
+  assert.equal(reused.nextLines.join("\n").includes("#task"), false);
+
+  const duplicates = [
+    "## Notes",
+    "",
+    "- already top",
+    "## Tasks",
+    "",
+    "- Keep",
+    "- Ship it",
+    "\t- child",
+    "## Notes",
+    "",
+    "- already bottom",
+    "## Tasks",
+    "",
+    "- other tasks",
+  ];
+  const duplicatePrompt = getSectionPrompt(duplicates, 6);
+  assert.deepEqual(
+    duplicatePrompt.headings.map((heading) => [heading.title, heading.line]),
+    [
+      ["Tasks", 3],
+      ["Tasks", 11],
+      ["Notes", 0],
+      ["Notes", 8],
+    ],
+  );
+  const sameTasks = helpers.resolveObsidianTaskPromptDestination(duplicatePrompt, {
+    kind: "existing",
+    heading: findPromptHeading(duplicatePrompt, "Tasks", 0),
+  });
+  assert.equal(sameTasks.nextLines[5], "- Keep");
+  assert.equal(
+    sameTasks.nextLines[6],
+    "- [ ] #task Ship it [created::2026-08-20]",
+  );
+  assert.equal(sameTasks.nextLines[7], "\t- child");
+  assert.ok(sameTasks.nextLines.includes("- other tasks"));
+
+  const otherTasks = helpers.resolveObsidianTaskPromptDestination(duplicatePrompt, {
+    kind: "existing",
+    heading: findPromptHeading(duplicatePrompt, "Tasks", 1),
+  });
+  assert.deepEqual(otherTasks.nextLines.slice(-5), [
+    "## Tasks",
+    "",
+    "- other tasks",
+    "- [ ] #task Ship it [created::2026-08-20]",
+    "\t- child",
+  ]);
+  assert.ok(otherTasks.nextLines.includes("- Keep"));
+
+  const sourceBefore = resolveSectionPrompt(
+    ["## Ideas", "", "- Ship it", "", "## Tasks"],
+    2,
+    { kind: "existing", heading: { line: 4, depth: 2, title: "Tasks" } },
+  );
+  assert.deepEqual(sourceBefore.nextLines, [
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it [created::2026-08-20]",
+  ]);
+
+  const sourceAfter = resolveSectionPrompt(
+    ["## Tasks", "", "## Ideas", "", "- Ship it"],
+    4,
+    { kind: "existing", heading: { line: 0, depth: 2, title: "Tasks" } },
+  );
+  assert.deepEqual(sourceAfter.nextLines, [
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it [created::2026-08-20]",
+  ]);
+
+  const withFinalNewline = resolveSectionPrompt(
+    ["## Tasks", "", "- Ship it", ""],
+    2,
+    { kind: "existing", heading: { line: 0, depth: 2, title: "Tasks" } },
+  );
+  assert.deepEqual(withFinalNewline.nextLines, [
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it [created::2026-08-20]",
+    "",
+  ]);
+
+  const withoutFinalNewline = resolveSectionPrompt(
+    ["## Tasks", "", "- Ship it"],
+    2,
+    { kind: "existing", heading: { line: 0, depth: 2, title: "Tasks" } },
+  );
+  assert.deepEqual(withoutFinalNewline.nextLines, [
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it [created::2026-08-20]",
+  ]);
+
+  const retained = resolveSectionPrompt(
+    ["## Ideas", "", "- Ship it", "- Keep", "", "## Tasks"],
+    2,
+    { kind: "existing", heading: { line: 5, depth: 2, title: "Tasks" } },
+  );
+  assert.ok(retained.nextLines.includes("## Ideas"));
+  assert.ok(retained.nextLines.includes("- Keep"));
+
+  const crlfSource = [
+    "## Tasks",
+    "",
+    "- Keep first",
+    "- Ship it",
+    "\t- child",
+    "- Keep last",
+  ].join("\r\n");
+  const crlf = openDemotionPicker(crlfSource, { line: 3, ch: 2 });
+  crlf.plugin.getCreatedDateString = () => "2026-08-20";
+  assert.equal(
+    crlf.plugin.handleToggleObsidianTaskCommand(false, crlf.editor, crlf.view),
+    true,
+  );
+  assert.equal(crlf.editor.getValue(), crlfSource);
+  assert.equal(acceptSelectedPickerRow(crlf.plugin), true);
+  assert.match(
+    crlf.editor.getValue(),
+    /- Keep first\r?\n- \[ \] #task Ship it \[created::2026-08-20\]\r?\n\t- child\r?\n- Keep last/,
+  );
+  assert.deepEqual(crlf.editor.getCursor(), { line: 3, ch: 12 });
+
+  notices.length = 0;
+  const cancelledSource = ["- Ship it", "## Tasks"].join("\n");
+  const cancelled = openDemotionPicker(cancelledSource, { line: 0, ch: 0 });
+  assert.equal(
+    cancelled.plugin.handleToggleObsidianTaskCommand(
+      false,
+      cancelled.editor,
+      cancelled.view,
+    ),
+    true,
+  );
+  cancelled.plugin.demotionSectionPicker.close();
+  assert.equal(cancelled.editor.getValue(), cancelledSource);
+  assert.equal(cancelled.plugin.demotionSectionPicker, null);
+
+  const repeated = openDemotionPicker(cancelledSource, { line: 0, ch: 0 });
+  assert.equal(
+    repeated.plugin.handleToggleObsidianTaskCommand(
+      false,
+      repeated.editor,
+      repeated.view,
+    ),
+    true,
+  );
+  const firstPicker = repeated.plugin.demotionSectionPicker;
+  assert.equal(
+    repeated.plugin.handleToggleObsidianTaskCommand(
+      false,
+      repeated.editor,
+      repeated.view,
+    ),
+    true,
+  );
+  assert.equal(repeated.plugin.demotionSectionPicker, firstPicker);
+  assert.equal(repeated.editor.getValue(), cancelledSource);
+
+  notices.length = 0;
+  const stale = openDemotionPicker(cancelledSource, { line: 0, ch: 0 });
+  assert.equal(
+    stale.plugin.handleToggleObsidianTaskCommand(false, stale.editor, stale.view),
+    true,
+  );
+  stale.editor.replaceRange("x", { line: 0, ch: 0 });
+  const changedValue = stale.editor.getValue();
+  assert.equal(acceptSelectedPickerRow(stale.plugin), false);
+  assert.equal(stale.editor.getValue(), changedValue);
+  assert.match(notices.at(-1), /note changed/i);
+
+  notices.length = 0;
+  const missing = openDemotionPicker(cancelledSource, { line: 0, ch: 0 });
+  assert.equal(
+    missing.plugin.handleToggleObsidianTaskCommand(
+      false,
+      missing.editor,
+      missing.view,
+    ),
+    true,
+  );
+  assert.equal(
+    acceptPickerDestination(missing.plugin, {
+      kind: "existing",
+      heading: { line: 99, depth: 2, title: "Ghost" },
+    }),
+    false,
+  );
+  assert.equal(missing.editor.getValue(), cancelledSource);
+  assert.match(notices.at(-1), /no longer available/i);
 });

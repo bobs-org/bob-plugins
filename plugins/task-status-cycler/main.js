@@ -1035,7 +1035,134 @@ const CODE_FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const TASK_ROUTING_SECTION_TITLES = {
   tasks: "Tasks",
   futureWork: "Future Work",
+  requirements: "Requirements",
 };
+const PROJECT_TYPE_FRONTMATTER_LINE_RE =
+  /^type[ \t]*:[ \t]*(?:"\[\[project\]\]"|'\[\[project\]\]'|\[\[project\]\])[ \t]*(?:#.*)?$/;
+const YAML_TYPE_KEY_LINE_RE = /^type[ \t]*:/;
+
+function yamlDocumentLineText(lineText) {
+  return String(lineText || "").replace(/\r$/, "");
+}
+
+function getClosedYamlFrontmatterBodyLines(lines) {
+  if (!Array.isArray(lines) || lines.length < 2) {
+    return null;
+  }
+
+  if (!YAML_FRONTMATTER_FENCE_RE.test(yamlDocumentLineText(lines[0]))) {
+    return null;
+  }
+
+  for (let line = 1; line < lines.length; line += 1) {
+    if (YAML_FRONTMATTER_END_RE.test(yamlDocumentLineText(lines[line]))) {
+      return lines.slice(1, line);
+    }
+  }
+
+  return null;
+}
+
+function isProjectNoteDocument(lines) {
+  const frontmatterLines = getClosedYamlFrontmatterBodyLines(lines);
+  if (!frontmatterLines) {
+    return false;
+  }
+
+  let isProject = false;
+  for (const rawLine of frontmatterLines) {
+    const lineText = yamlDocumentLineText(rawLine);
+    if (!lineText || /^[ \t]*(?:#|$)/.test(lineText) || /^[ \t]/.test(lineText)) {
+      continue;
+    }
+    if (YAML_TYPE_KEY_LINE_RE.test(lineText)) {
+      isProject = PROJECT_TYPE_FRONTMATTER_LINE_RE.test(lineText);
+    }
+  }
+
+  return isProject;
+}
+
+function documentHasOnlyTasksSection(lines) {
+  const headings = findMarkdownHeadings(lines);
+  return (
+    headings.length === 1 &&
+    headings[0].depth === 2 &&
+    headings[0].title === TASK_ROUTING_SECTION_TITLES.tasks
+  );
+}
+
+function isCreatedRequirementsSectionDemotion(lines, activeLine, sourceLineText) {
+  if (!isProjectNoteDocument(lines) || !isTopLevelDashListToggleLine(sourceLineText)) {
+    return false;
+  }
+  if (!documentHasOnlyTasksSection(lines)) {
+    return false;
+  }
+
+  const headings = findMarkdownHeadings(lines);
+  const tasksSection = getMarkdownSectionFromHeadingIndex(lines, headings, 0);
+  return isLineInMarkdownSectionDirectBody(tasksSection, activeLine);
+}
+
+function countTrailingBlankLines(lines) {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return 0;
+  }
+
+  let count = 0;
+  for (let line = lines.length - 1; line >= 0; line -= 1) {
+    if (String(lines[line] || "").trim() !== "") {
+      break;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function documentHasFinalNewline(lines) {
+  return Array.isArray(lines) && lines.length > 0 && String(lines[lines.length - 1] || "") === "";
+}
+
+function getCreatedRequirementsSectionMovePlan(
+  remaining,
+  movedBlock,
+  originalLines,
+  sourceLineText,
+  toggle,
+  finalCursorCh,
+) {
+  const contentLength = remaining.length - countTrailingBlankLines(remaining);
+  const nextLines = remaining
+    .slice(0, contentLength)
+    .concat(
+      "",
+      `## ${TASK_ROUTING_SECTION_TITLES.requirements}`,
+      "",
+      ...movedBlock,
+    );
+
+  if (documentHasFinalNewline(originalLines)) {
+    nextLines.push("");
+  }
+
+  const cursorLine = contentLength + 3;
+  const convertedFirstLine = String(nextLines[cursorLine] || "");
+  const cursorColumn = Math.max(
+    0,
+    Math.min(convertedFirstLine.length, finalCursorCh),
+  );
+
+  return {
+    mode: "move",
+    nextLines,
+    cursorLine,
+    cursorCh: cursorColumn,
+    sourceLineText,
+    lineText: toggle.lineText,
+    targetSection: "nextSection",
+  };
+}
 
 function parseMarkdownHeadingLine(lineText) {
   const line = String(lineText || "");
@@ -1412,6 +1539,18 @@ function getObsidianTaskToggleDocumentPlan(
   if (demoting) {
     const nextSection = findNextMarkdownSection(remaining, block.startLine);
     if (!nextSection) {
+      if (
+        isCreatedRequirementsSectionDemotion(lines, activeLine, sourceLineText)
+      ) {
+        return getCreatedRequirementsSectionMovePlan(
+          remaining,
+          movedBlock,
+          lines,
+          sourceLineText,
+          toggle,
+          finalCursorCh,
+        );
+      }
       return inPlacePlan;
     }
     targetSection = "nextSection";
@@ -8956,6 +9095,7 @@ module.exports.helpers = {
   isDailyNotePath,
   isPomodoroTaskLine,
   isLineInMarkdownSectionDirectBody,
+  isProjectNoteDocument,
   isProperObsidianTaskLine,
   isCyclableTaskStatus,
   isOpenDoneTaskStatus,

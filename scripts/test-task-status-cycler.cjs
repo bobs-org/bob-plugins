@@ -3755,3 +3755,447 @@ test("pressing again after Blocked retirement performs an ordinary transition wi
     ].join("\n"),
   );
 });
+
+function projectNoteLines(options = {}) {
+  const typeLine = options.typeLine || "type: [[project]]";
+  const taskLines = Array.isArray(options.taskLines)
+    ? options.taskLines
+    : [options.taskLine || "- [ ] #task Ship it"];
+  return [
+    "---",
+    ...(Array.isArray(options.frontmatterLines)
+      ? options.frontmatterLines
+      : [typeLine]),
+    "---",
+    ...(options.preSectionLines || ["", "## Tasks", ""]),
+    ...taskLines,
+    ...(options.extraLines || []),
+  ];
+}
+
+test("project frontmatter predicate accepts unquoted and quoted type markers", () => {
+  assert.equal(
+    helpers.isProjectNoteDocument(projectNoteLines({ typeLine: "type: [[project]]" })),
+    true,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({ typeLine: 'type: "[[project]]"' }),
+    ),
+    true,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({ typeLine: "type: '[[project]]'" }),
+    ),
+    true,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({ typeLine: "type: [[project]] # keep" }),
+    ),
+    true,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({
+        frontmatterLines: ["type: [[area]]", "type: [[project]]"],
+      }),
+    ),
+    true,
+  );
+});
+
+test("project frontmatter predicate ignores nested keys, comments, body text, and malformed YAML", () => {
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({
+        frontmatterLines: ["meta:", "  type: [[project]]"],
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({
+        frontmatterLines: ["# type: [[project]]", "type: note"],
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({
+        frontmatterLines: ["type: [[project]]", "type: [[area]]"],
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument([
+      "## Tasks",
+      "",
+      "- [ ] #task Ship it",
+      "type: [[project]]",
+    ]),
+    false,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument([
+      "---",
+      "type: [[project]]",
+      "## Tasks",
+      "",
+      "- [ ] #task Ship it",
+    ]),
+    false,
+  );
+  assert.equal(
+    helpers.isProjectNoteDocument(
+      projectNoteLines({ typeLine: "type: [[note]]" }),
+    ),
+    false,
+  );
+});
+
+test("demoting the only project Tasks bullet creates a Requirements section", () => {
+  const created = "2026-08-20";
+  for (const typeLine of ["type: [[project]]", 'type: "[[project]]"']) {
+    const lines = projectNoteLines({ typeLine });
+    const plan = helpers.getObsidianTaskToggleDocumentPlan(lines, 6, 8, created);
+    assert.equal(plan.mode, "move");
+    assert.deepEqual(plan.nextLines, [
+      "---",
+      typeLine,
+      "---",
+      "",
+      "## Tasks",
+      "",
+      "## Requirements",
+      "",
+      "- Ship it",
+    ]);
+    assert.equal(plan.cursorLine, 8);
+    assert.equal(plan.lineText, "- Ship it");
+    assert.equal(plan.nextLines[plan.cursorLine], "- Ship it");
+    assert.equal(plan.nextLines[5], "");
+    assert.equal(plan.nextLines[7], "");
+  }
+});
+
+test("created Requirements move keeps nested children, cursor, and newline variants", () => {
+  const nested = projectNoteLines({
+    taskLines: ["- [ ] #task Parent", "\t- child", "\t\t- grand"],
+  });
+  const nestedPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    nested,
+    6,
+    4,
+    "2026-08-20",
+  );
+  assert.equal(nestedPlan.mode, "move");
+  assert.deepEqual(nestedPlan.nextLines, [
+    "---",
+    "type: [[project]]",
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "## Requirements",
+    "",
+    "- Parent",
+    "\t- child",
+    "\t\t- grand",
+  ]);
+  assert.equal(nestedPlan.cursorLine, 8);
+  assert.equal(nestedPlan.nextLines[nestedPlan.cursorLine], "- Parent");
+
+  const withFinalNewline = projectNoteLines({
+    extraLines: [""],
+  });
+  const finalNewlinePlan = helpers.getObsidianTaskToggleDocumentPlan(
+    withFinalNewline,
+    6,
+    0,
+    "2026-08-20",
+  );
+  assert.equal(finalNewlinePlan.nextLines.at(-1), "");
+  assert.equal(finalNewlinePlan.nextLines.at(-2), "- Ship it");
+
+  const extraTrailing = projectNoteLines({
+    extraLines: ["", "", ""],
+  });
+  const trailingPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    extraTrailing,
+    6,
+    0,
+    "2026-08-20",
+  );
+  assert.deepEqual(trailingPlan.nextLines, [
+    "---",
+    "type: [[project]]",
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "## Requirements",
+    "",
+    "- Ship it",
+    "",
+  ]);
+});
+
+test("existing next sections still receive demoted bullets without creating Requirements", () => {
+  const requirements = projectNoteLines({
+    extraLines: ["", "## Requirements", "", "- already"],
+  });
+  const requirementsPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    requirements,
+    6,
+    0,
+    "2026-08-20",
+  );
+  assert.equal(requirementsPlan.mode, "move");
+  assert.equal(
+    requirementsPlan.nextLines.filter((line) => line === "## Requirements").length,
+    1,
+  );
+  assert.deepEqual(requirementsPlan.nextLines, [
+    "---",
+    "type: [[project]]",
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "## Requirements",
+    "",
+    "- already",
+    "- Ship it",
+  ]);
+
+  const futureWork = projectNoteLines({
+    extraLines: ["", "## Future Work"],
+  });
+  const futurePlan = helpers.getObsidianTaskToggleDocumentPlan(
+    futureWork,
+    6,
+    0,
+    "2026-08-20",
+  );
+  assert.equal(futurePlan.nextLines.includes("## Requirements"), false);
+  assert.deepEqual(futurePlan.nextLines.slice(-3), [
+    "## Future Work",
+    "",
+    "- Ship it",
+  ]);
+});
+
+test("fenced headings and body type markers are not real metadata or sections", () => {
+  const fenced = projectNoteLines({
+    extraLines: ["", "```md", "## Requirements", "```"],
+  });
+  const fencedPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    fenced,
+    6,
+    0,
+    "2026-08-20",
+  );
+  assert.equal(fencedPlan.mode, "move");
+  assert.deepEqual(fencedPlan.nextLines, [
+    "---",
+    "type: [[project]]",
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "```md",
+    "## Requirements",
+    "```",
+    "",
+    "## Requirements",
+    "",
+    "- Ship it",
+  ]);
+
+  const bodyType = [
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it",
+    "type: [[project]]",
+  ];
+  const bodyPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    bodyType,
+    2,
+    0,
+    "2026-08-20",
+  );
+  assert.equal(bodyPlan.mode, "replace");
+  assert.equal(bodyPlan.line, 2);
+});
+
+test("non-project, malformed, extra-section, and ineligible shapes keep prior toggle routing", () => {
+  const created = "2026-08-20";
+
+  const nonProject = projectNoteLines({ typeLine: "type: [[note]]" });
+  const nonProjectPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    nonProject,
+    6,
+    0,
+    created,
+  );
+  assert.equal(nonProjectPlan.mode, "replace");
+  assert.equal(nonProjectPlan.lineText, "- Ship it");
+
+  const malformed = [
+    "---",
+    "type: [[project]]",
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it",
+  ];
+  const malformedPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    malformed,
+    4,
+    0,
+    created,
+  );
+  assert.equal(malformedPlan.mode, "replace");
+
+  const extraSection = projectNoteLines({
+    preSectionLines: ["", "## Intro", "", "## Tasks", ""],
+  });
+  const extraPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    extraSection,
+    8,
+    0,
+    created,
+  );
+  assert.equal(extraPlan.mode, "replace");
+  assert.equal(extraPlan.nextLines, undefined);
+
+  const wrongSection = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "",
+    "## Notes",
+    "",
+    "- [ ] #task Ship it",
+  ];
+  const wrongPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    wrongSection,
+    6,
+    0,
+    created,
+  );
+  assert.equal(wrongPlan.mode, "replace");
+
+  const indented = projectNoteLines({
+    taskLines: ["- parent", "\t- [ ] #task child"],
+  });
+  const indentedPlan = helpers.getObsidianTaskToggleDocumentPlan(
+    indented,
+    7,
+    0,
+    created,
+  );
+  assert.equal(indentedPlan.mode, "replace");
+  assert.equal(indentedPlan.line, 7);
+
+  const star = projectNoteLines({ taskLine: "* [ ] #task Ship it" });
+  const starPlan = helpers.getObsidianTaskToggleDocumentPlan(star, 6, 0, created);
+  assert.equal(starPlan.mode, "replace");
+
+  const promoteLines = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- Ship it",
+    "",
+    "## Tasks",
+  ];
+  const promotePlan = helpers.getObsidianTaskToggleDocumentPlan(
+    promoteLines,
+    3,
+    0,
+    created,
+  );
+  assert.equal(promotePlan.mode, "move");
+  assert.equal(promotePlan.targetSection, "tasks");
+  assert.equal(
+    promotePlan.nextLines.includes("## Requirements"),
+    false,
+  );
+  assert.match(
+    promotePlan.nextLines.join("\n"),
+    /## Tasks\n\n- \[ \] #task Ship it \[created::2026-08-20\]/,
+  );
+});
+
+test("Toggle Obsidian task command creates Requirements and centers the moved bullet", () => {
+  const source = projectNoteLines({
+    taskLines: ["- [ ] #task Ship it", "\t- child"],
+  }).join("\n");
+  const editor = createTextEditor(source, { line: 6, ch: 8 });
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "projects/Widget.md" },
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  const centered = [];
+  plugin.centerEditorLineInView = (activeEditor, line, ch) => {
+    centered.push({ line, ch, sameEditor: activeEditor === editor });
+    return true;
+  };
+
+  assert.equal(plugin.handleToggleObsidianTaskCommand(true, editor, view), true);
+  assert.equal(plugin.handleToggleObsidianTaskCommand(false, editor, view), true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "---",
+      "type: [[project]]",
+      "---",
+      "",
+      "## Tasks",
+      "",
+      "## Requirements",
+      "",
+      "- Ship it",
+      "\t- child",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.getCursor(), { line: 8, ch: 2 });
+  assert.deepEqual(centered, [{ line: 8, ch: 2, sameEditor: true }]);
+});
+
+test("Toggle Obsidian task command still demotes into an existing next section", () => {
+  const source = projectNoteLines({
+    extraLines: ["", "## Requirements", "", "- already"],
+  }).join("\n");
+  const editor = createTextEditor(source, { line: 6, ch: 0 });
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "projects/Widget.md" },
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+
+  assert.equal(plugin.handleToggleObsidianTaskCommand(false, editor, view), true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "---",
+      "type: [[project]]",
+      "---",
+      "",
+      "## Tasks",
+      "",
+      "## Requirements",
+      "",
+      "- already",
+      "- Ship it",
+    ].join("\n"),
+  );
+  assert.equal(editor.getCursor().line, 9);
+  assert.equal(editor.getValue().includes("## Requirements\n\n## Requirements"), false);
+});

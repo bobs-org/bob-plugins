@@ -7639,6 +7639,53 @@ function replaceEditorLine(cm, line, oldLineText, newLineText) {
   return true;
 }
 
+function positionsEqual(left, right) {
+  const normalizedLeft = normalizePosition(left);
+  const normalizedRight = normalizePosition(right);
+  return Boolean(
+    normalizedLeft &&
+      normalizedRight &&
+      normalizedLeft.line === normalizedRight.line &&
+      normalizedLeft.ch === normalizedRight.ch,
+  );
+}
+
+function normalizeTransclusionCommitCursorOptions(options) {
+  const directCursor = normalizePosition(options);
+  if (directCursor) {
+    return {
+      invocationCursor: null,
+      finalCursor: directCursor,
+    };
+  }
+
+  if (!options || typeof options !== "object") {
+    return {
+      invocationCursor: null,
+      finalCursor: null,
+    };
+  }
+
+  return {
+    invocationCursor: normalizePosition(options.invocationCursor),
+    finalCursor: normalizePosition(options.finalCursor),
+  };
+}
+
+function getTransclusionCommitFinalCursor(cm, options) {
+  if (!options || !options.finalCursor) {
+    return null;
+  }
+
+  if (!options.invocationCursor) {
+    return options.finalCursor;
+  }
+
+  return positionsEqual(getEditorCursor(cm), options.invocationCursor)
+    ? options.finalCursor
+    : null;
+}
+
 function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null) {
   if (
     !cm ||
@@ -16013,11 +16060,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   async applyDependencyAwareTransclusionChanges(
     cm,
     changesByLine,
-    finalCursor = null,
+    cursorOptions = null,
   ) {
     if (!cm || typeof cm.getValue !== "function") {
       return false;
     }
+    const commitCursorOptions =
+      normalizeTransclusionCommitCursorOptions(cursorOptions);
     const originalContent = String(cm.getValue() || "");
     const newline = originalContent.includes("\r\n") ? "\r\n" : "\n";
     const originalLines = originalContent.split(/\r?\n/);
@@ -16303,7 +16352,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (String(cm.getValue() || "") !== originalContent) {
       return false;
     }
-    return applyEditorLineChanges(cm, originalLines, nextLines, finalCursor);
+    return applyEditorLineChanges(
+      cm,
+      originalLines,
+      nextLines,
+      getTransclusionCommitFinalCursor(cm, commitCursorOptions),
+    );
   }
 
   async propagateDependencyIdReplacements(replacements, excludedPaths = new Set()) {
@@ -16526,7 +16580,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const applied = await this.applyDependencyAwareTransclusionChanges(
       cm,
       [{ line: cursor.line, nextLineText: result.line }],
-      { line: cursor.line, ch: nextCh },
+      {
+        invocationCursor: cursor,
+        finalCursor: { line: cursor.line, ch: nextCh },
+      },
     );
     if (!applied) {
       return false;
@@ -16583,7 +16640,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       !(await this.applyDependencyAwareTransclusionChanges(
         editor,
         result.changesByLine,
-        { line: startLine, ch: nextCh },
+        {
+          invocationCursor: normalizedCursor,
+          finalCursor: { line: startLine, ch: nextCh },
+        },
       ))
     ) {
       return false;
@@ -18898,6 +18958,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   handleCountedTransclusionTogglePhysicalKeydown(event) {
+    if (event && event.repeat) {
+      return false;
+    }
     if (!this.isCountedTransclusionToggleKeydown(event)) {
       return false;
     }
@@ -18916,9 +18979,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
-    if (!pendingRepeat.explicit) {
-      return false;
-    }
 
     const cursor = getEditorCursor(view.editor);
     if (!cursor) {
@@ -18943,12 +19003,19 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       event.stopImmediatePropagation();
     }
 
-    resetPendingVimInputState(cm, "counted-transclusion-toggle");
-    return this.toggleCountedLineTransclusions(
-      view.editor,
-      cursor,
-      pendingRepeat.repeat,
+    resetPendingVimInputState(
+      cm,
+      pendingRepeat.explicit
+        ? "counted-transclusion-toggle"
+        : "transclusion-toggle",
     );
+    return pendingRepeat.explicit
+      ? this.toggleCountedLineTransclusions(
+          view.editor,
+          cursor,
+          pendingRepeat.repeat,
+        )
+      : this.toggleCurrentLineTransclusions(view.editor);
   }
 
   isCountedTransclusionToggleKeydown(event) {

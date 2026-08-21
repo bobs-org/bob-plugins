@@ -2309,6 +2309,63 @@ test("same-file runtime dependency add and removal use focused transactions", as
   assert.equal(editor.getScrollInfo().top, originalScrollTop);
 });
 
+test("async dependency toggle does not restore a cursor moved during sync", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const targetFile = { path: "Other.md", extension: "md" };
+  const lines = [
+    "- [/] #task Parent ^parent",
+    "  - [[Other#^target]]",
+    "after",
+  ];
+  const editor = new TransactionEditor(lines.join("\n"), {
+    line: 1,
+    ch: 12,
+  });
+  let targetContent = "- [ ] #task Target ^target";
+  let resolveTargetRead;
+  let markTargetReadStarted;
+  const targetReadStarted = new Promise((resolve) => {
+    markTargetReadStarted = resolve;
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    metadataCache: {
+      getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
+    },
+    vault: {
+      cachedRead: async () => {
+        markTargetReadStarted();
+        return await new Promise((resolve) => {
+          resolveTargetRead = () => resolve(targetContent);
+        });
+      },
+      getAbstractFileByPath: (filePath) =>
+        filePath === activeFile.path ? activeFile : null,
+      process: async (_file, transform) => {
+        targetContent = transform(targetContent);
+      },
+    },
+  };
+  const originalScrollTop = editor.getScrollInfo().top;
+
+  const toggle = plugin.toggleCurrentLineTransclusions(editor);
+  await targetReadStarted;
+  editor.setCursor({ line: 2, ch: 0 });
+  resolveTargetRead();
+
+  assert.equal(await toggle, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assertLineBoundedTransaction(editor.transactions[0], lines, [0, 1]);
+  assert.equal(editor.transactions[0].selection, undefined);
+  assert.deepEqual(editor.getCursor(), { line: 2, ch: 0 });
+  assert.equal(editor.getScrollInfo().top, originalScrollTop);
+  assert.match(editor.getLine(0), /- \[\?\] #task Parent \[dependsOn:: Other__target\] \^parent/);
+  assert.equal(editor.getLine(1), "  - ![[Other#^target]]");
+  assert.match(targetContent, /- \[\/\] #task Target \[id:: Other__target\] \^target/);
+});
+
 test("counted runtime transclusion toggle preserves viewport and caret", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = Array.from({ length: 22 }, (_, index) => `context ${index}`);
@@ -5876,6 +5933,143 @@ test("physical task move chord declines auto-repeat and consumes Vim normal inpu
     assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(event), false);
     assert.equal(event.calls.prevent, 0);
   }
+});
+
+test("physical transclusion toggle owns bare and counted Vim normal input", () => {
+  const makeEvent = (overrides = {}) => {
+    const calls = { prevent: 0, stop: 0, immediate: 0 };
+    return {
+      key: "!",
+      code: "Digit1",
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+      metaKey: false,
+      repeat: false,
+      preventDefault: () => {
+        calls.prevent += 1;
+      },
+      stopPropagation: () => {
+        calls.stop += 1;
+      },
+      stopImmediatePropagation: () => {
+        calls.immediate += 1;
+      },
+      calls,
+      ...overrides,
+    };
+  };
+  const inputState = {
+    keyBuffer: [],
+    repeat: null,
+    reason: "",
+    getRepeat: () => null,
+  };
+  const cm = {
+    state: { vim: { mode: "normal", inputState } },
+    getCursor: () => ({ line: 0, ch: 4 }),
+  };
+  const editor = {
+    cm: { cm },
+    getCursor: () => ({ line: 0, ch: 4 }),
+    getLine: () => "- [[Target]]",
+  };
+  const view = { editor };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.handledCountedTransclusionToggleEvents = new WeakSet();
+  let focusedViewReads = 0;
+  plugin.getFocusedMarkdownEditorView = () => {
+    focusedViewReads += 1;
+    return view;
+  };
+  const singles = [];
+  const counteds = [];
+  plugin.toggleCurrentLineTransclusions = (receivedEditor) => {
+    singles.push(receivedEditor);
+    return true;
+  };
+  plugin.toggleCountedLineTransclusions = (receivedEditor, cursor, repeat) => {
+    counteds.push({ editor: receivedEditor, cursor, repeat });
+    return true;
+  };
+
+  inputState.keyBuffer = ["g"];
+  const bare = makeEvent();
+  assert.equal(plugin.handleCountedTransclusionTogglePhysicalKeydown(bare), true);
+  assert.deepEqual(bare.calls, { prevent: 1, stop: 1, immediate: 1 });
+  assert.deepEqual(inputState.keyBuffer, []);
+  assert.equal(inputState.repeat, null);
+  assert.equal(inputState.reason, "transclusion-toggle");
+  assert.deepEqual(singles, [editor]);
+  assert.deepEqual(counteds, []);
+
+  assert.equal(plugin.handleCountedTransclusionTogglePhysicalKeydown(bare), false);
+  assert.equal(singles.length, 1);
+
+  inputState.keyBuffer = ["3"];
+  inputState.repeat = 3;
+  inputState.reason = "";
+  inputState.getRepeat = () => 3;
+  const counted = makeEvent();
+  assert.equal(
+    plugin.handleCountedTransclusionTogglePhysicalKeydown(counted),
+    true,
+  );
+  assert.deepEqual(counted.calls, { prevent: 1, stop: 1, immediate: 1 });
+  assert.equal(inputState.repeat, null);
+  assert.equal(inputState.reason, "counted-transclusion-toggle");
+  assert.deepEqual(counteds, [
+    { editor, cursor: { line: 0, ch: 4 }, repeat: 3 },
+  ]);
+  assert.equal(singles.length, 1);
+
+  const repeated = makeEvent({ repeat: true });
+  const focusedBeforeRepeat = focusedViewReads;
+  assert.equal(
+    plugin.handleCountedTransclusionTogglePhysicalKeydown(repeated),
+    false,
+  );
+  assert.deepEqual(repeated.calls, { prevent: 0, stop: 0, immediate: 0 });
+  assert.equal(focusedViewReads, focusedBeforeRepeat);
+
+  for (const mode of ["insert", "visual", "visual-line", "replace"]) {
+    cm.state.vim.mode = mode;
+    const event = makeEvent();
+    assert.equal(plugin.handleCountedTransclusionTogglePhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+
+  cm.state.vim.mode = "normal";
+  for (const overrides of [
+    { ctrlKey: true },
+    { altKey: true },
+    { metaKey: true },
+    { key: "1", shiftKey: false },
+  ]) {
+    const event = makeEvent(overrides);
+    assert.equal(plugin.handleCountedTransclusionTogglePhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+
+  editor.getLine = () => "- no links";
+  const noLink = makeEvent();
+  assert.equal(plugin.handleCountedTransclusionTogglePhysicalKeydown(noLink), false);
+  assert.deepEqual(noLink.calls, { prevent: 0, stop: 0, immediate: 0 });
+
+  editor.getLine = () => "- [[Target]]";
+  delete cm.state.vim;
+  const unavailable = makeEvent();
+  assert.equal(
+    plugin.handleCountedTransclusionTogglePhysicalKeydown(unavailable),
+    false,
+  );
+  assert.equal(unavailable.calls.prevent, 0);
+
+  cm.state.vim = { mode: "normal", inputState };
+  plugin.getFocusedMarkdownEditorView = () => null;
+  const unfocused = makeEvent();
+  assert.equal(plugin.handleCountedTransclusionTogglePhysicalKeydown(unfocused), false);
+  assert.equal(unfocused.calls.prevent, 0);
 });
 
 test("runtime task move writes destination before source and rolls back source failures", async () => {

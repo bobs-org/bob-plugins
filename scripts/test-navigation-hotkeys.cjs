@@ -5316,7 +5316,7 @@ test("Pomodoro bullet move picker opens sessions and clears the shared move pick
   assert.equal(plugin.activeTaskMoveDestinationPicker, null);
 });
 
-test("Ctrl+Shift+M dispatcher preserves task moves and routes Pomodoro sub-bullets", () => {
+test("Ctrl+Shift+M dispatcher preserves task moves and routes Pomodoro sub-bullets and entries", () => {
   const plugin = new NavigationHotkeysPlugin();
   const calls = [];
   plugin.openTaskMoveDestinationPicker = () => {
@@ -5326,6 +5326,10 @@ test("Ctrl+Shift+M dispatcher preserves task moves and routes Pomodoro sub-bulle
   plugin.openPomodoroBulletMovePicker = () => {
     calls.push("pomodoro");
     return "pomodoro";
+  };
+  plugin.openPomodoroEntryMovePicker = () => {
+    calls.push("pomodoro-entry");
+    return "pomodoro-entry";
   };
 
   const taskEditor = new TransactionEditor("- [ ] #task Outside ^outside", {
@@ -5351,7 +5355,19 @@ test("Ctrl+Shift+M dispatcher preserves task moves and routes Pomodoro sub-bulle
     }),
     "pomodoro",
   );
-  assert.deepEqual(calls, ["task", "pomodoro"]);
+
+  const entryEditor = new TransactionEditor(
+    pomodoroFixtureLines().join("\n"),
+    { line: 9, ch: 0 },
+  );
+  assert.equal(
+    plugin.openTaskMoveOrPomodoroBulletPicker(entryEditor, {
+      editor: entryEditor,
+      file: { path: "Daily/2026-08-26.md", extension: "md" },
+    }),
+    "pomodoro-entry",
+  );
+  assert.deepEqual(calls, ["task", "pomodoro", "pomodoro-entry"]);
 });
 
 test("move task command keeps Ctrl+Shift+M binding and calls the combined dispatcher", () => {
@@ -5436,6 +5452,177 @@ test("commitPomodoroBulletMoveSession applies one guarded same-file transaction"
     ch: expectedPlan.after.split("\n")[expectedPlan.firstMovedLine].length,
   });
   assert.equal(notices.at(-1), "Moved 1 bullet to VERIFY");
+});
+
+function createPomodoroEntryMoveSession(harness, cursorLine, overrides = {}) {
+  const { editor, sourceFile, view } = harness;
+  const sourceContent = editor.getValue();
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(
+    sourceContent,
+    cursorLine,
+  );
+  return {
+    discovery,
+    session: Object.freeze({
+      sourceFile,
+      sourcePath: sourceFile.path,
+      sourceView: view,
+      editor,
+      sourceContent,
+      cursor: Object.freeze({ line: cursorLine, ch: 0 }),
+      scroll: null,
+      countExplicit: false,
+      ignoredCount: 0,
+      discovery,
+      entries: discovery.context.entries,
+      sourceEntry: discovery.context.entry,
+      ...overrides,
+    }),
+  };
+}
+
+test("Pomodoro entry move picker opens sessions, ignores counts, and clears the shared move picker slot", () => {
+  const harness = createPomodoroMovePickerHarness({
+    cursor: { line: 9, ch: 0 },
+  });
+  const { editor, plugin, view } = harness;
+  assert.equal(
+    plugin.openPomodoroEntryMovePicker(editor, view, {
+      countExplicit: true,
+      additionalTaskCount: 3,
+    }),
+    true,
+  );
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  assert.equal(picker instanceof helpers.PomodoroEntryMovePickerModal, true);
+  assert.equal(picker.isOpen, true);
+  assert.equal(picker.session.countExplicit, true);
+  assert.equal(picker.session.ignoredCount, 3);
+  assert.deepEqual(
+    picker.session.discovery.targets.map((target) => target.line),
+    [10],
+  );
+  assert.match(picker.getSubtitle(), /count ignored on a Pomodoro entry/);
+
+  picker.close();
+  assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+});
+
+test("commitPomodoroEntryMoveSession on an existing row applies one guarded move transaction", async () => {
+  notices.length = 0;
+  const harness = createPomodoroMovePickerHarness({
+    cursor: { line: 9, ch: 999 },
+  });
+  const { editor } = harness;
+  const { discovery, session } = createPomodoroEntryMoveSession(harness, 9, {
+    cursor: Object.freeze({ line: 9, ch: 999 }),
+  });
+  const rows = helpers.createPomodoroBulletMovePickerRows(
+    discovery.context.entries,
+    discovery.entryLine,
+    "verify",
+    { mode: "entry" },
+  );
+  const row = rows.find((item) => item.kind === "existing");
+  const expectedPlan = helpers.planPomodoroBulletMove(session.sourceContent, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: row.entry.entryLine },
+  });
+
+  assert.equal(expectedPlan.sourcePomodoroDeleted, true);
+  assert.equal(
+    await harness.plugin.commitPomodoroEntryMoveSession(session, row),
+    true,
+  );
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.cursor, {
+    line: expectedPlan.firstMovedLine,
+    ch: expectedPlan.after.split("\n")[expectedPlan.firstMovedLine].length,
+  });
+  assert.equal(notices.at(-1), "Moved 1 bullet from Pomodoro #4 to VERIFY");
+});
+
+test("commitPomodoroEntryMoveSession on a rename row applies one guarded transaction; unchanged writes nothing", async () => {
+  notices.length = 0;
+  const harness = createPomodoroMovePickerHarness({
+    cursor: { line: 9, ch: 2 },
+  });
+  const { editor, plugin } = harness;
+  const { session } = createPomodoroEntryMoveSession(harness, 9, {
+    cursor: Object.freeze({ line: 9, ch: 2 }),
+  });
+
+  const row = { kind: "rename", name: "renamed body" };
+  assert.equal(await plugin.commitPomodoroEntryMoveSession(session, row), true);
+  const afterLines = editor.getValue().split("\n");
+  assert.equal(afterLines[9], "- [ ] () — RENAMED BODY");
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.cursor, { line: 9, ch: 2 });
+  assert.equal(notices.at(-1), "Renamed Pomodoro #4 to RENAMED BODY");
+
+  const { session: unchangedSession } = createPomodoroEntryMoveSession(
+    harness,
+    9,
+    { cursor: Object.freeze({ line: 9, ch: 2 }) },
+  );
+  assert.equal(
+    await plugin.commitPomodoroEntryMoveSession(unchangedSession, row),
+    false,
+  );
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(notices.at(-1), "Pomodoro #4 is already named RENAMED BODY");
+});
+
+test("commitPomodoroEntryMoveSession on an empty-source move emits the deleted-Pomodoro notice", async () => {
+  notices.length = 0;
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — EMPTY",
+    "- [ ] () — OTHER",
+    "\t- [[x#^y]]",
+  ].join("\n");
+  const harness = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 1, ch: 0 },
+  });
+  const { editor, plugin } = harness;
+  const { discovery, session } = createPomodoroEntryMoveSession(harness, 1);
+  assert.equal(discovery.bulletCount, 0);
+  const row = {
+    kind: "existing",
+    entry: discovery.context.entries.find((entry) => entry.entryLine === 2),
+  };
+
+  assert.equal(await plugin.commitPomodoroEntryMoveSession(session, row), true);
+  assert.equal(
+    editor.getValue(),
+    ["## Pomodoros", "- [ ] () — OTHER", "\t- [[x#^y]]"].join("\n"),
+  );
+  assert.equal(notices.at(-1), "Deleted empty Pomodoro #1");
+});
+
+test("commitPomodoroEntryMoveSession rejects a session whose editor content drifted or whose active view changed", async () => {
+  notices.length = 0;
+  const harness = createPomodoroMovePickerHarness({
+    cursor: { line: 9, ch: 0 },
+  });
+  const { editor, plugin } = harness;
+  const { session } = createPomodoroEntryMoveSession(harness, 9);
+  const row = { kind: "rename", name: "won't apply" };
+
+  editor.content = `${editor.content}\nExtra line`;
+  assert.equal(await plugin.commitPomodoroEntryMoveSession(session, row), false);
+  assert.equal(notices.at(-1), "Source note is no longer active; nothing was moved");
+
+  editor.content = session.sourceContent;
+  plugin.getActiveMarkdownView = () => null;
+  assert.equal(await plugin.commitPomodoroEntryMoveSession(session, row), false);
 });
 
 test("task move picker closes before commit while other pickers retain delayed close", async () => {
@@ -8807,6 +8994,129 @@ test("buildPomodoroBulletMoveNotice formats counts, destinations, and suffixes",
   );
 });
 
+test("buildPomodoroEntryMoveNotice formats moved/merged counts and the deleted-empty case", () => {
+  assert.equal(
+    helpers.buildPomodoroEntryMoveNotice(
+      { movedCount: 3, skippedDuplicateCount: 0 },
+      { entry: { position: 2 } },
+      "DEEP WORK",
+    ),
+    "Moved 3 bullets from Pomodoro #2 to DEEP WORK",
+  );
+  assert.equal(
+    helpers.buildPomodoroEntryMoveNotice(
+      { movedCount: 1, skippedDuplicateCount: 1 },
+      { entry: { position: 2 } },
+      "DEEP WORK",
+    ),
+    "Moved 1 bullet from Pomodoro #2 to DEEP WORK (merged 1 duplicate)",
+  );
+  assert.equal(
+    helpers.buildPomodoroEntryMoveNotice(
+      { movedCount: 0, skippedDuplicateCount: 0 },
+      { entry: { position: 2 } },
+      "DEEP WORK",
+    ),
+    "Deleted empty Pomodoro #2",
+  );
+});
+
+test("createPomodoroBulletMovePickerRows 'entry' mode emits rename rows for novel/self names and existing-destination rows for other names", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const { entries } = helpers.collectPomodoroEntries(content);
+  const sourceEntryLine = 9; // BODY
+
+  const novel = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "brand new",
+    { mode: "entry" },
+  );
+  assert.deepEqual(novel, [
+    {
+      kind: "rename",
+      name: "BRAND NEW",
+      title: "Rename to BRAND NEW",
+      meta: "Renames the current Pomodoro",
+      badge: "Rename",
+    },
+  ]);
+
+  const otherExisting = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "verify",
+    { mode: "entry" },
+  );
+  assert.equal(otherExisting.some((row) => row.kind === "rename"), false);
+  assert.deepEqual(
+    otherExisting.map((row) => row.kind),
+    ["existing"],
+  );
+  assert.equal(otherExisting[0].title, "VERIFY");
+
+  const ownName = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "body",
+    { mode: "entry" },
+  );
+  assert.deepEqual(
+    ownName.map((row) => row.kind),
+    ["rename"],
+  );
+  assert.equal(ownName[0].name, "BODY");
+});
+
+test("createPomodoroBulletMovePickerRows 'bullets' mode is unchanged by the new options argument", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const { entries } = helpers.collectPomodoroEntries(content);
+  const threeArg = helpers.createPomodoroBulletMovePickerRows(entries, 9, "verify");
+  const explicitBullets = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    9,
+    "verify",
+    { mode: "bullets" },
+  );
+  assert.deepEqual(threeArg, explicitBullets);
+
+  const threeArgNovel = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    9,
+    "brand new",
+  );
+  assert.deepEqual(threeArgNovel.map((row) => row.kind), ["new"]);
+});
+
+test("createPomodoroBulletMovePickerRows excludes the source and closed entries from destination rows in both modes, sharing the invalid row", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const { entries } = helpers.collectPomodoroEntries(content);
+
+  for (const mode of ["bullets", "entry"]) {
+    const rows = helpers.createPomodoroBulletMovePickerRows(entries, 9, "", {
+      mode,
+    });
+    const destinationRows = rows.filter((row) => row.kind === "existing");
+    assert.equal(
+      destinationRows.some((row) => row.entry.entryLine === 9),
+      false,
+    );
+    assert.equal(
+      destinationRows.some((row) => row.entry.open === false),
+      false,
+    );
+
+    const invalidRows = helpers.createPomodoroBulletMovePickerRows(
+      entries,
+      9,
+      "——",
+      { mode },
+    );
+    assert.equal(invalidRows[0].kind, "invalid");
+    assert.match(invalidRows[0].statusText, /empty/);
+  }
+});
+
 test("collectPomodoroEntries reports positions, open/name, child ranges, previews, and skips fenced/absent sections", () => {
   const content = pomodoroFixtureLines().join("\n");
   const { section, entries } = helpers.collectPomodoroEntries(content);
@@ -8904,6 +9214,96 @@ test("discoverMovablePomodoroBulletTargets collects bare/counted siblings, clamp
   assert.match(
     helpers.discoverMovablePomodoroBulletTargets(content, 1, 0).error,
     /Pomodoro sub-bullet/,
+  );
+});
+
+test("findPomodoroEntryContext resolves entry lines and rejects sub-bullet/heading/blank/outside-section lines", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const closed = helpers.findPomodoroEntryContext(content, 1);
+  assert.equal(closed.entry.entryLine, 1);
+  assert.equal(closed.entry.open, false);
+
+  const named = helpers.findPomodoroEntryContext(content, 9);
+  assert.equal(named.entry.entryLine, 9);
+  assert.equal(named.entry.name, "BODY");
+  assert.equal(named.entryLine, 9);
+
+  // Sub-bullets, the heading itself, and any line outside the section
+  // return null; the two Pomodoro contexts are disjoint.
+  assert.equal(helpers.findPomodoroEntryContext(content, 2), null);
+  assert.equal(helpers.findPomodoroEntryContext(content, 5), null);
+  assert.equal(helpers.findPomodoroEntryContext(content, 0), null);
+  assert.equal(helpers.findPomodoroEntryContext(content, 13), null);
+  assert.equal(helpers.findPomodoroBulletContext(content, 9), null);
+
+  const withBlankAndInvalid = [
+    "## Pomodoros",
+    "- [ ] () — A",
+    "",
+    "- [ ] not a valid entry",
+    "- [ ] () — B",
+  ].join("\n");
+  assert.equal(helpers.findPomodoroEntryContext(withBlankAndInvalid, 2), null);
+  assert.equal(helpers.findPomodoroEntryContext(withBlankAndInvalid, 3), null);
+  assert.notEqual(helpers.findPomodoroEntryContext(withBlankAndInvalid, 1), null);
+  assert.notEqual(helpers.findPomodoroEntryContext(withBlankAndInvalid, 4), null);
+});
+
+test("discoverPomodoroEntryMoveTargets collects top-level children, drops empty placeholders, and allows a childless entry", () => {
+  const content = pomodoroFixtureLines().join("\n");
+
+  // Closed entry with a struck link and a tomato-marked link: both are
+  // top-level movable children; descendants are not listed separately.
+  const closed = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+  assert.equal(closed.valid, true);
+  assert.deepEqual(closed.targets.map((target) => target.line), [2, 3]);
+  assert.equal(closed.droppedLines.length, 0);
+  assert.equal(closed.bulletCount, 2);
+  assert.equal(closed.rawEntryLine, "- [x] (**0855-0920** [t:: 25m])");
+
+  // A nested grandchild travels with its top-level parent; it is never
+  // listed as its own target.
+  const nested = helpers.discoverPomodoroEntryMoveTargets(content, 6);
+  assert.deepEqual(nested.targets.map((target) => target.line), [7]);
+  assert.equal(nested.bulletCount, 1);
+
+  // A childless entry is valid with zero movable targets — the "delete this
+  // empty Pomodoro" case.
+  const childlessContent = [
+    "## Pomodoros",
+    "- [ ] () — EMPTY",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const childless = helpers.discoverPomodoroEntryMoveTargets(
+    childlessContent,
+    1,
+  );
+  assert.equal(childless.valid, true);
+  assert.deepEqual(childless.targets, []);
+  assert.equal(childless.bulletCount, 0);
+
+  // A lone empty placeholder bullet is droppable, not movable.
+  const placeholderContent = [
+    "## Pomodoros",
+    "- [ ] () — EMPTY",
+    "\t- ",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const placeholder = helpers.discoverPomodoroEntryMoveTargets(
+    placeholderContent,
+    1,
+  );
+  assert.deepEqual(placeholder.targets, []);
+  assert.deepEqual(
+    placeholder.droppedLines.map((dropped) => dropped.line),
+    [2],
+  );
+  assert.equal(placeholder.bulletCount, 0);
+
+  // Rejects a non-entry line.
+  assert.match(
+    helpers.discoverPomodoroEntryMoveTargets(content, 5).error,
+    /Place the cursor on a Pomodoro entry/,
   );
 });
 
@@ -9417,6 +9817,509 @@ test("planPomodoroBulletMove preserves trailing-newline state and CRLF line endi
     "\t- [[x#^one]]",
     "## Not Pomodoros",
   ].join("\r\n"));
+});
+
+test("planPomodoroBulletMove scope 'entry' appends every bullet in source order after a later destination's last child, deleting the source", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SRC",
+    "\t- [[x#^one]]",
+    "\t- [[x#^two]]",
+    "- [ ] () — DEST",
+    "\t- [[x#^existing]]",
+  ].join("\n");
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+  const plan = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 4 },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.sourcePomodoroDeleted, true);
+  assert.equal(plan.createdPomodoro, false);
+  assert.equal(plan.createdPomodoroName, null);
+  assert.equal(plan.movedCount, 2);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] () — DEST",
+    "\t- [[x#^existing]]",
+    "\t- [[x#^one]]",
+    "\t- [[x#^two]]",
+  ].join("\n"));
+});
+
+test("planPomodoroBulletMove scope 'entry' re-resolves an earlier destination after the source is removed", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — DEST",
+    "\t- [[x#^existing]]",
+    "- [ ] () — SRC",
+    "\t- [[x#^one]]",
+    "\t- [[x#^two]]",
+  ].join("\n");
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 3);
+  const plan = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 1 },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.sourcePomodoroDeleted, true);
+  assert.equal(plan.destinationEntryLine, 1);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] () — DEST",
+    "\t- [[x#^existing]]",
+    "\t- [[x#^one]]",
+    "\t- [[x#^two]]",
+  ].join("\n"));
+});
+
+test("planPomodoroBulletMove scope 'entry' carries a bullet's descendants and rebases them onto the destination's child indent", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 6);
+  const plan = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 11 },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.sourcePomodoroDeleted, true);
+  const afterLines = plan.after.split("\n");
+  const destStart = afterLines.indexOf("- [ ] () — VERIFY");
+  assert.equal(afterLines[destStart + 1], "\t- [[sase_better_config#^no-focus-xprompts]]");
+  assert.equal(afterLines[destStart + 2], "\t- [[sase#^pager]]");
+  assert.equal(afterLines[destStart + 3], "\t\t- [[sase-tj#^nested]]");
+});
+
+test("planPomodoroBulletMove scope 'entry' merges an exact duplicate and keeps a near-match distinct", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SRC",
+    "\t- [[x#^one]]",
+    "\t- [[x#^one]] extra",
+    "- [ ] () — DEST",
+    "\t- [[x#^one]]",
+  ].join("\n");
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+  const plan = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 4 },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.sourcePomodoroDeleted, true);
+  assert.equal(plan.movedCount, 1);
+  assert.equal(plan.skippedDuplicateCount, 1);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] () — DEST",
+    "\t- [[x#^one]]",
+    "\t- [[x#^one]] extra",
+  ].join("\n"));
+});
+
+test("planPomodoroBulletMove scope 'entry' replaces a destination's lone empty placeholder when something is inserted", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SRC",
+    "\t- [[x#^one]]",
+    "- [ ] () — DEST",
+    "\t- ",
+  ].join("\n");
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+  const plan = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 3 },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] () — DEST",
+    "\t- [[x#^one]]",
+  ].join("\n"));
+});
+
+test("planPomodoroBulletMove scope 'entry' leaves a destination's lone placeholder intact when a forced target merges away", () => {
+  // A source bullet shaped like an empty placeholder would normally be
+  // classified as droppable by discovery rather than selected as a target;
+  // this directly forces it into `targets` to exercise the shared
+  // insertion path's "everything merged away" branch, which is reused
+  // verbatim from the sub-bullet move.
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SRC",
+    "\t- ",
+    "- [ ] () — DEST",
+    "\t- ",
+  ].join("\n");
+  const plan = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: [{ line: 2, rawLine: "\t- " }],
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] () — SRC",
+    destination: { kind: "existing", entryLine: 3 },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.sourcePomodoroDeleted, true);
+  assert.equal(plan.movedCount, 0);
+  assert.equal(plan.skippedDuplicateCount, 1);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] () — DEST",
+    "\t- ",
+  ].join("\n"));
+});
+
+test("planPomodoroBulletMove scope 'entry' plans a pure deletion for a childless entry and a placeholder-only entry", () => {
+  for (const sourceLines of [[], ["\t- "]]) {
+    const content = [
+      "## Pomodoros",
+      "- [ ] () — SRC",
+      ...sourceLines,
+      "- [ ] () — DEST",
+      "\t- [[x#^existing]]",
+    ].join("\n");
+    const destEntryLine = 2 + sourceLines.length;
+    const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+    assert.deepEqual(discovery.targets, []);
+    const plan = helpers.planPomodoroBulletMove(content, {
+      scope: "entry",
+      targets: discovery.targets,
+      sourceEntryLine: discovery.entryLine,
+      sourceRawLine: discovery.rawEntryLine,
+      destination: { kind: "existing", entryLine: destEntryLine },
+    });
+    assert.equal(plan.valid, true);
+    assert.equal(plan.movedCount, 0);
+    assert.equal(plan.sourcePomodoroDeleted, true);
+    assert.equal(plan.after, [
+      "## Pomodoros",
+      "- [ ] () — DEST",
+      "\t- [[x#^existing]]",
+    ].join("\n"));
+    assert.equal(plan.firstMovedLine, plan.destinationEntryLine);
+  }
+});
+
+test("planPomodoroBulletMove scope 'entry' rejects an unmoved non-blank line with the no-silent-loss guard", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SRC",
+    "\tStray note with no bullet marker",
+    "- [ ] () — DEST",
+  ].join("\n");
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+  assert.deepEqual(discovery.targets, []);
+  const plan = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 3 },
+  });
+  assert.equal(plan.valid, false);
+  assert.match(plan.error, /content that cannot be moved/);
+  assert.equal(plan.after, content);
+});
+
+test("planPomodoroBulletMove scope 'entry' rejects stale source/target lines, a same-entry destination, an unresolvable destination, and a 'new' destination", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 6);
+
+  const staleSource = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: "- [ ] () — CHANGED",
+    destination: { kind: "existing", entryLine: 11 },
+  });
+  assert.equal(staleSource.valid, false);
+  assert.match(staleSource.error, /changed before it could be moved/);
+
+  const staleTarget = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: [{ line: 7, rawLine: "stale text" }],
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 11 },
+  });
+  assert.equal(staleTarget.valid, false);
+  assert.match(staleTarget.error, /changed before it could be moved/);
+
+  const sameEntry = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: discovery.entryLine },
+  });
+  assert.equal(sameEntry.valid, false);
+  assert.match(sameEntry.error, /Choose a different Pomodoro/);
+
+  const missingEntry = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "existing", entryLine: 999 },
+  });
+  assert.equal(missingEntry.valid, false);
+  assert.match(missingEntry.error, /could not be found/);
+
+  const newDestination = helpers.planPomodoroBulletMove(content, {
+    scope: "entry",
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: discovery.rawEntryLine,
+    destination: { kind: "new", name: "SOMETHING" },
+  });
+  assert.equal(newDestination.valid, false);
+  assert.match(newDestination.error, /Choose a Pomodoro destination/);
+});
+
+test("planPomodoroBulletMove scope 'entry' deletes the first, a middle, and the last entry, preserving structure across LF/CRLF and trailing-newline state", () => {
+  const buildContent = (eol, trailingNewline) => {
+    const lines = [
+      "## Pomodoros",
+      "- [ ] () — A",
+      "\t- [[x#^a]]",
+      "- [ ] () — B",
+      "\t- [[x#^b]]",
+      "- [ ] () — C",
+      "\t- [[x#^c]]",
+      "## Not Pomodoros",
+    ];
+    return lines.join(eol) + (trailingNewline ? eol : "");
+  };
+
+  for (const eol of ["\n", "\r\n"]) {
+    for (const trailingNewline of [false, true]) {
+      const content = buildContent(eol, trailingNewline);
+
+      const firstDiscovery = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+      const firstPlan = helpers.planPomodoroBulletMove(content, {
+        scope: "entry",
+        targets: firstDiscovery.targets,
+        sourceEntryLine: firstDiscovery.entryLine,
+        sourceRawLine: firstDiscovery.rawEntryLine,
+        destination: { kind: "existing", entryLine: 3 },
+      });
+      assert.equal(firstPlan.valid, true);
+      assert.equal(firstPlan.sourcePomodoroDeleted, true);
+      assert.equal(
+        firstPlan.after,
+        [
+          "## Pomodoros",
+          "- [ ] () — B",
+          "\t- [[x#^b]]",
+          "\t- [[x#^a]]",
+          "- [ ] () — C",
+          "\t- [[x#^c]]",
+          "## Not Pomodoros",
+        ].join(eol) + (trailingNewline ? eol : ""),
+      );
+
+      const middleDiscovery = helpers.discoverPomodoroEntryMoveTargets(content, 3);
+      const middlePlan = helpers.planPomodoroBulletMove(content, {
+        scope: "entry",
+        targets: middleDiscovery.targets,
+        sourceEntryLine: middleDiscovery.entryLine,
+        sourceRawLine: middleDiscovery.rawEntryLine,
+        destination: { kind: "existing", entryLine: 5 },
+      });
+      assert.equal(middlePlan.valid, true);
+      assert.equal(middlePlan.sourcePomodoroDeleted, true);
+      assert.equal(
+        middlePlan.after,
+        [
+          "## Pomodoros",
+          "- [ ] () — A",
+          "\t- [[x#^a]]",
+          "- [ ] () — C",
+          "\t- [[x#^c]]",
+          "\t- [[x#^b]]",
+          "## Not Pomodoros",
+        ].join(eol) + (trailingNewline ? eol : ""),
+      );
+
+      const lastDiscovery = helpers.discoverPomodoroEntryMoveTargets(content, 5);
+      const lastPlan = helpers.planPomodoroBulletMove(content, {
+        scope: "entry",
+        targets: lastDiscovery.targets,
+        sourceEntryLine: lastDiscovery.entryLine,
+        sourceRawLine: lastDiscovery.rawEntryLine,
+        destination: { kind: "existing", entryLine: 1 },
+      });
+      assert.equal(lastPlan.valid, true);
+      assert.equal(lastPlan.sourcePomodoroDeleted, true);
+      assert.equal(
+        lastPlan.after,
+        [
+          "## Pomodoros",
+          "- [ ] () — A",
+          "\t- [[x#^a]]",
+          "\t- [[x#^c]]",
+          "- [ ] () — B",
+          "\t- [[x#^b]]",
+          "## Not Pomodoros",
+        ].join(eol) + (trailingNewline ? eol : ""),
+      );
+    }
+  }
+});
+
+test("planPomodoroBulletMove scope 'entry' deletes closed and cancelled source entries the same way as open ones", () => {
+  for (const status of [" ", "x", "-"]) {
+    const content = [
+      "## Pomodoros",
+      `- [${status}] () — SOURCE`,
+      "\t- [[x#^one]]",
+      "- [ ] () — DEST",
+      "\t- [[x#^existing]]",
+    ].join("\n");
+    const discovery = helpers.discoverPomodoroEntryMoveTargets(content, 1);
+    const plan = helpers.planPomodoroBulletMove(content, {
+      scope: "entry",
+      targets: discovery.targets,
+      sourceEntryLine: discovery.entryLine,
+      sourceRawLine: discovery.rawEntryLine,
+      destination: { kind: "existing", entryLine: 3 },
+    });
+    assert.equal(plan.valid, true);
+    assert.equal(plan.sourcePomodoroDeleted, true);
+    assert.equal(plan.after, [
+      "## Pomodoros",
+      "- [ ] () — DEST",
+      "\t- [[x#^existing]]",
+      "\t- [[x#^one]]",
+    ].join("\n"));
+  }
+});
+
+test("planPomodoroEntryRename renames a named entry and names unnamed placeholder/timespan entries", () => {
+  const content = pomodoroFixtureLines().join("\n");
+
+  const renamedNamed = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 9,
+    sourceRawLine: "- [ ] () — BODY",
+    name: "renamed body",
+  });
+  assert.equal(renamedNamed.valid, true);
+  assert.equal(renamedNamed.after.split("\n")[9], "- [ ] () — RENAMED BODY");
+  assert.equal(renamedNamed.previousName, "BODY");
+  const namedLines = content.split("\n");
+  const afterNamedLines = renamedNamed.after.split("\n");
+  for (let i = 0; i < namedLines.length; i += 1) {
+    if (i !== 9) {
+      assert.equal(afterNamedLines[i], namedLines[i]);
+    }
+  }
+
+  const namedPlaceholder = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 6,
+    sourceRawLine: "- [ ] ()",
+    name: "fresh",
+  });
+  assert.equal(namedPlaceholder.valid, true);
+  assert.equal(namedPlaceholder.after.split("\n")[6], "- [ ] () — FRESH");
+  assert.equal(namedPlaceholder.previousName, "");
+
+  const namedTimespan = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 4,
+    sourceRawLine: "- [ ] (**0920-0950** [t:: 30m])",
+    name: "focus",
+  });
+  assert.equal(namedTimespan.valid, true);
+  assert.equal(
+    namedTimespan.after.split("\n")[4],
+    "- [ ] (**0920-0950** [t:: 30m]) — FOCUS",
+  );
+  assert.equal(namedTimespan.previousName, "");
+});
+
+test("planPomodoroEntryRename normalizes the typed name and rejects empty/over-length names", () => {
+  const content = "## Pomodoros\n- [ ] () — OLD";
+  const plan = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] () — OLD",
+    name: "  new — name  ",
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.name, "NEW NAME");
+
+  const empty = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] () — OLD",
+    name: "   ",
+  });
+  assert.equal(empty.valid, false);
+  assert.match(empty.error, /empty/);
+
+  const overLength = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] () — OLD",
+    name: "X".repeat(helpers.POMODORO_NAME_MAX_LENGTH + 1),
+  });
+  assert.equal(overLength.valid, false);
+  assert.match(overLength.error, /exceed/);
+});
+
+test("planPomodoroEntryRename reports unchanged when the normalized name matches the current name", () => {
+  const content = "## Pomodoros\n- [ ] () — BODY";
+  const plan = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] () — BODY",
+    name: "  body ",
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.unchanged, true);
+  assert.equal(plan.after, content);
+  assert.equal(plan.name, "BODY");
+  assert.equal(plan.previousName, "BODY");
+});
+
+test("planPomodoroEntryRename rejects unsupported trailing content and a stale source line", () => {
+  const content = "## Pomodoros\n- [ ] () extra text no dash";
+  const unsupported = helpers.planPomodoroEntryRename(content, {
+    sourceEntryLine: 1,
+    name: "NEW",
+  });
+  assert.equal(unsupported.valid, false);
+  assert.match(unsupported.error, /unsupported trailing content/);
+
+  const staleContent = "## Pomodoros\n- [ ] () — OLD";
+  const stale = helpers.planPomodoroEntryRename(staleContent, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] () — DIFFERENT",
+    name: "NEW",
+  });
+  assert.equal(stale.valid, false);
+  assert.match(stale.error, /changed before it could be moved/);
+});
+
+test("planPomodoroEntryRename renames closed and cancelled entries the same way as open ones", () => {
+  for (const status of [" ", "x", "-"]) {
+    const content = `## Pomodoros\n- [${status}] () — OLD`;
+    const plan = helpers.planPomodoroEntryRename(content, {
+      sourceEntryLine: 1,
+      sourceRawLine: `- [${status}] () — OLD`,
+      name: "NEW",
+    });
+    assert.equal(plan.valid, true);
+    assert.equal(plan.after, `## Pomodoros\n- [${status}] () — NEW`);
+  }
 });
 
 test("planCountedBulletPropertyBatch reports futureScheduledTaskLines for a mixed priority-roll batch", () => {

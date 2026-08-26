@@ -193,7 +193,9 @@
 }
 
 .bob-cnp-pomodoro-row.is-new .bob-cnp-row-icon,
-.bob-cnp-pomodoro-row.is-new.is-selected .bob-cnp-row-icon {
+.bob-cnp-pomodoro-row.is-new.is-selected .bob-cnp-row-icon,
+.bob-cnp-pomodoro-row.is-rename .bob-cnp-row-icon,
+.bob-cnp-pomodoro-row.is-rename.is-selected .bob-cnp-row-icon {
   color: var(--interactive-accent);
 }
 

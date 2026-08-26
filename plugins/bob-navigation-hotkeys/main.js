@@ -6656,6 +6656,106 @@ function findPomodoroBulletContext(content, line) {
   });
 }
 
+// The Pomodoro ledger entry whose own entry line is exactly `line`, or null
+// otherwise. Disjoint from findPomodoroBulletContext: an entry's child block
+// starts at entryLine + 1, so an entry line never resolves as a sub-bullet.
+function findPomodoroEntryContext(content, line) {
+  const text = String(content || "");
+  const { entries, section } = collectPomodoroEntries(text);
+  const lineIndex = Math.floor(numericOrDefault(line, Number.NaN));
+  if (!section || !Number.isFinite(lineIndex) || lineIndex < 0) {
+    return null;
+  }
+  const entryIndex = entries.findIndex(
+    (entry) => entry.entryLine === lineIndex,
+  );
+  if (entryIndex === -1) {
+    return null;
+  }
+  return Object.freeze({
+    entries,
+    section,
+    entry: entries[entryIndex],
+    entryIndex,
+    entryLine: lineIndex,
+  });
+}
+
+// Every top-level child bullet a Pomodoro entry owns, classified as movable
+// or droppable ahead of a whole-entry move-and-delete. A bullet is droppable
+// when it is an empty placeholder line (no body, no descendants); everything
+// else is movable. Zero movable targets is valid: it is the "delete this
+// empty Pomodoro" case. Mirrors the frozen shape of
+// discoverMovablePomodoroBulletTargets.
+function discoverPomodoroEntryMoveTargets(content, line) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const context = findPomodoroEntryContext(text, line);
+
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      entryLine: null,
+      rawEntryLine: null,
+      targets: Object.freeze([]),
+      droppedLines: Object.freeze([]),
+      bulletCount: 0,
+      entry: null,
+      entries: Object.freeze([]),
+      context: null,
+    });
+
+  if (!context) {
+    return invalid("Place the cursor on a Pomodoro entry");
+  }
+
+  const { entry } = context;
+  const childIndentWidth = getBulletIndentWidth(entry.childIndent);
+  const targets = [];
+  const droppedLines = [];
+  for (
+    let lineIndex = entry.childStartLine;
+    lineIndex < entry.childEndLineExclusive;
+    lineIndex += 1
+  ) {
+    const lineText = String(lines[lineIndex] || "");
+    if (
+      !PROJECT_LIST_ITEM_RE.test(lineText) ||
+      getBulletIndentWidth(lineText) !== childIndentWidth
+    ) {
+      continue;
+    }
+    const subtree = capturePomodoroBulletSubtree(
+      lines,
+      lineIndex,
+      entry.childEndLineExclusive,
+    );
+    const isDroppable =
+      pomodoroBulletBodyBounds(lineText) === null &&
+      subtree.endLineExclusive - subtree.startLine === 1;
+    const record = Object.freeze({ line: lineIndex, rawLine: lineText });
+    if (isDroppable) {
+      droppedLines.push(record);
+    } else {
+      targets.push(record);
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    entryLine: entry.entryLine,
+    rawEntryLine: String(lines[entry.entryLine] || ""),
+    targets: Object.freeze(targets),
+    droppedLines: Object.freeze(droppedLines),
+    bulletCount: targets.length,
+    entry,
+    entries: context.entries,
+    context,
+  });
+}
+
 // Sibling targets for a Pomodoro bullet move: the bullet at `startLine` plus
 // the next `additionalBulletCount` siblings at its own indent depth, inside
 // the same Pomodoro entry's child block. Mirrors the frozen shape of
@@ -6800,6 +6900,7 @@ function rebasePomodoroBulletBlock(block, destinationChildIndent) {
 function planPomodoroBulletMove(content, options = {}) {
   const text = String(content || "");
   const { lines: originalLines, lineEnding } = splitMarkdownContent(text);
+  const scope = options.scope === "entry" ? "entry" : "bullets";
   const targets = Array.isArray(options.targets) ? options.targets : [];
   const sourceEntryLine = Number.isInteger(options.sourceEntryLine)
     ? options.sourceEntryLine
@@ -6823,13 +6924,20 @@ function planPomodoroBulletMove(content, options = {}) {
       sourcePomodoroDeleted: false,
     });
 
-  if (targets.length === 0) {
+  if (targets.length === 0 && scope !== "entry") {
     return invalid("No Pomodoro bullets were selected");
   }
   for (const target of targets) {
     if (String(originalLines[target.line] || "") !== target.rawLine) {
       return invalid("A selected bullet changed before it could be moved");
     }
+  }
+  if (
+    scope === "entry" &&
+    typeof options.sourceRawLine === "string" &&
+    String(originalLines[sourceEntryLine] || "") !== options.sourceRawLine
+  ) {
+    return invalid("The Pomodoro entry changed before it could be moved");
   }
 
   const { entries } = collectPomodoroEntries(text);
@@ -6851,7 +6959,7 @@ function planPomodoroBulletMove(content, options = {}) {
     if (!destinationExists) {
       return invalid("Destination Pomodoro entry could not be found");
     }
-  } else if (destination.kind === "new") {
+  } else if (destination.kind === "new" && scope !== "entry") {
     const nameResult = normalizePomodoroName(destination.name);
     if (!nameResult.valid) {
       return invalid(nameResult.error);
@@ -6893,10 +7001,52 @@ function planPomodoroBulletMove(content, options = {}) {
       break;
     }
   }
+  if (scope === "entry") {
+    // No-silent-loss guard: every non-blank line in the source entry's
+    // original child block must be covered by a captured target subtree or
+    // be one of the discovery's dropped placeholder lines. Anything else
+    // (an indented continuation, a stray note, a nested list under no
+    // bullet) blocks the force-delete rather than destroying unmoved
+    // content.
+    const coveredLines = new Set();
+    for (const block of capturedBlocks) {
+      for (
+        let index = block.startLine;
+        index < block.endLineExclusive;
+        index += 1
+      ) {
+        coveredLines.add(index);
+      }
+    }
+    const entryDiscovery = discoverPomodoroEntryMoveTargets(
+      text,
+      sourceEntry.entryLine,
+    );
+    if (entryDiscovery.valid) {
+      for (const dropped of entryDiscovery.droppedLines) {
+        coveredLines.add(dropped.line);
+      }
+    }
+    for (
+      let index = sourceEntry.childStartLine;
+      index < sourceEntry.childEndLineExclusive;
+      index += 1
+    ) {
+      if (coveredLines.has(index)) {
+        continue;
+      }
+      if (String(originalLines[index] || "").trim() !== "") {
+        return invalid(
+          "Pomodoro has content that cannot be moved; nothing was moved",
+        );
+      }
+    }
+  }
+
   let workingLines = afterRemovalLines;
   let sourcePomodoroDeleted = false;
   let sourceAnchorLine = null;
-  if (sourceChildIsBlank) {
+  if (scope === "entry" || sourceChildIsBlank) {
     workingLines = removePomodoroBulletRanges(afterRemovalLines, [
       {
         startLine: sourceEntry.entryLine,
@@ -7051,6 +7201,83 @@ function planPomodoroBulletMove(content, options = {}) {
   });
 }
 
+// Plan a pure rename of a Pomodoro entry's name suffix in place. Never
+// touches the checkbox status or the parenthetical body; only the text after
+// the parenthetical changes. Returns a frozen
+// `{ valid, error, after, entryLine, name, previousName, unchanged }`.
+function planPomodoroEntryRename(content, options = {}) {
+  const text = String(content || "");
+  const { lines: originalLines, lineEnding } = splitMarkdownContent(text);
+  const sourceEntryLine = Number.isInteger(options.sourceEntryLine)
+    ? options.sourceEntryLine
+    : -1;
+
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      after: text,
+      entryLine: sourceEntryLine,
+      name: null,
+      previousName: null,
+      unchanged: false,
+    });
+
+  const nameResult = normalizePomodoroName(options.name);
+  if (!nameResult.valid) {
+    return invalid(nameResult.error);
+  }
+
+  const rawLine = String(originalLines[sourceEntryLine] || "");
+  if (
+    typeof options.sourceRawLine === "string" &&
+    rawLine !== options.sourceRawLine
+  ) {
+    return invalid("The Pomodoro entry changed before it could be moved");
+  }
+
+  const parsed = parsePomodoroEntryLine(rawLine);
+  if (!parsed) {
+    return invalid("Source Pomodoro entry could not be found");
+  }
+
+  if (parsed.name === null && rawLine.slice(parsed.rangeEnd).trim() !== "") {
+    return invalid(
+      "Pomodoro entry has unsupported trailing content; rename it by hand",
+    );
+  }
+
+  const previousName = getNormalizedPomodoroEntryName(parsed);
+  if (nameResult.name === previousName) {
+    return Object.freeze({
+      valid: true,
+      error: null,
+      after: text,
+      entryLine: sourceEntryLine,
+      name: nameResult.name,
+      previousName,
+      unchanged: true,
+    });
+  }
+
+  const renamedLine =
+    rawLine.slice(0, parsed.rangeEnd) +
+    ` ${POMODORO_NAME_SEPARATOR} ` +
+    nameResult.name;
+  const nextLines = originalLines.slice();
+  nextLines[sourceEntryLine] = renamedLine;
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    after: nextLines.join(lineEnding),
+    entryLine: sourceEntryLine,
+    name: nameResult.name,
+    previousName,
+    unchanged: false,
+  });
+}
+
 function getPomodoroEntryRangeLabel(entry) {
   const rangeText = String((entry && entry.rangeText) || "");
   if (!rangeText || POMODORO_PLACEHOLDER_RE.test(rangeText)) {
@@ -7136,14 +7363,20 @@ function createPomodoroBulletMovePickerRows(
   entries,
   sourceEntryLine,
   rawQuery,
+  options = {},
 ) {
+  const mode = options && options.mode === "entry" ? "entry" : "bullets";
   const openEntries = (Array.isArray(entries) ? entries : []).filter(
     (entry) => entry && entry.open,
   );
   const queryText = String(rawQuery || "").trim();
   const query = queryText.toLowerCase();
+  const existingNameEntries =
+    mode === "entry"
+      ? openEntries.filter((entry) => entry.entryLine !== sourceEntryLine)
+      : openEntries;
   const existingNames = new Set(
-    openEntries
+    existingNameEntries
       .map((entry) => getNormalizedPomodoroEntryName(entry))
       .filter(Boolean),
   );
@@ -7156,6 +7389,16 @@ function createPomodoroBulletMovePickerRows(
         Object.freeze({
           kind: "invalid",
           statusText: normalized.error,
+        }),
+      );
+    } else if (!existingNames.has(normalized.name) && mode === "entry") {
+      rows.push(
+        Object.freeze({
+          kind: "rename",
+          name: normalized.name,
+          title: `Rename to ${normalized.name}`,
+          meta: "Renames the current Pomodoro",
+          badge: "Rename",
         }),
       );
     } else if (!existingNames.has(normalized.name)) {
@@ -7220,6 +7463,36 @@ function buildPomodoroBulletMoveNotice(plan = {}, discovery = {}, destinationLab
   }
   if (discovery && discovery.clamped) {
     text += ` (requested ${discovery.requestedCount}; reached end of Pomodoro)`;
+  }
+  return text;
+}
+
+// Notice text for a whole-entry Pomodoro move-and-delete: "Moved N bullets
+// from Pomodoro #P to LABEL", with a merged-duplicate suffix, or "Deleted
+// empty Pomodoro #P" when nothing moved and nothing merged.
+function buildPomodoroEntryMoveNotice(plan = {}, discovery = {}, destinationLabel) {
+  const movedCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(plan.movedCount, 0)),
+  );
+  const duplicateCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(plan.skippedDuplicateCount, 0)),
+  );
+  const sourcePosition =
+    discovery && discovery.entry && discovery.entry.position
+      ? discovery.entry.position
+      : "?";
+
+  if (movedCount === 0 && duplicateCount === 0) {
+    return `Deleted empty Pomodoro #${sourcePosition}`;
+  }
+
+  const bulletText = movedCount === 1 ? "bullet" : "bullets";
+  const label = String(destinationLabel || "").trim() || "Pomodoro destination";
+  let text = `Moved ${movedCount} ${bulletText} from Pomodoro #${sourcePosition} to ${label}`;
+  if (duplicateCount > 0) {
+    text += ` (merged ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"})`;
   }
   return text;
 }
@@ -10261,7 +10534,13 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
   const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
   applyIcon(
     rowIcon,
-    kind === "new" ? "plus" : kind === "invalid" ? "circle-alert" : "timer",
+    kind === "new"
+      ? "plus"
+      : kind === "rename"
+        ? "pencil"
+        : kind === "invalid"
+          ? "circle-alert"
+          : "timer",
   );
 
   const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
@@ -10279,11 +10558,11 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
   );
 
   const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
-  if (kind === "new") {
+  if (kind === "new" || kind === "rename") {
     const statusEl = badgesEl.createDiv({
       cls: "bob-cnp-row-status is-create",
     });
-    appendHighlighted(statusEl, "New", query);
+    appendHighlighted(statusEl, row.badge || "New", query);
     return;
   }
   if (kind === "invalid") {
@@ -10465,6 +10744,76 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
         ? this.session.sourceEntry.entryLine
         : null,
       this.getRawQuery(),
+    );
+  }
+
+  onClose() {
+    if (
+      this.plugin &&
+      this.plugin.activeTaskMoveDestinationPicker === this
+    ) {
+      this.plugin.activeTaskMoveDestinationPicker = null;
+    }
+    super.onClose();
+  }
+}
+
+class PomodoroEntryMovePickerModal extends FilteredPickerModal {
+  constructor(app, plugin, session) {
+    const discovery = session && session.discovery ? session.discovery : {};
+    const sourceEntry = session && session.sourceEntry ? session.sourceEntry : null;
+    const destinationCount = (session && Array.isArray(session.entries)
+      ? session.entries
+      : []
+    ).filter(
+      (entry) =>
+        entry &&
+        entry.open &&
+        (!sourceEntry || entry.entryLine !== sourceEntry.entryLine),
+    ).length;
+    const bulletCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(discovery.bulletCount, 0)),
+    );
+    const sourcePosition =
+      sourceEntry && sourceEntry.position ? sourceEntry.position : "?";
+    const ignoredCountText =
+      session && session.countExplicit && session.ignoredCount > 0
+        ? " · count ignored on a Pomodoro entry"
+        : "";
+
+    super(app, {
+      items: [],
+      title: "Move or rename Pomodoro",
+      headerIcon: "timer",
+      inputLabel: "Filter Pomodoro destinations",
+      placeholder: "Filter open Pomodoros or type a new name",
+      resultsLabel: "Pomodoro destinations",
+      emptyText: "Type a name to rename this Pomodoro",
+      getSubtitle: () =>
+        `Pomodoro #${sourcePosition} (${bulletCount} bullet${bulletCount === 1 ? "" : "s"}) · ${destinationCount} destination${destinationCount === 1 ? "" : "s"}${ignoredCountText}`,
+      renderItem: (row, rowEl, query) =>
+        renderPomodoroBulletMovePickerRow(row, rowEl, query),
+      closeBeforeOpenItem: true,
+      openItem: (row) => {
+        if (!row || row.kind === "invalid") {
+          return false;
+        }
+        return plugin.commitPomodoroEntryMoveSession(session, row);
+      },
+    });
+    this.plugin = plugin;
+    this.session = session;
+  }
+
+  getFilteredItems() {
+    return createPomodoroBulletMovePickerRows(
+      this.session && this.session.entries,
+      this.session && this.session.sourceEntry
+        ? this.session.sourceEntry.entryLine
+        : null,
+      this.getRawQuery(),
+      { mode: "entry" },
     );
   }
 
@@ -21663,6 +22012,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (findPomodoroBulletContext(sourceContent, cursor.line)) {
         return this.openPomodoroBulletMovePicker(editor, view, options);
       }
+      if (findPomodoroEntryContext(sourceContent, cursor.line)) {
+        return this.openPomodoroEntryMovePicker(editor, view, options);
+      }
     }
 
     return this.openTaskMoveDestinationPicker(editor, view, options);
@@ -21732,6 +22084,81 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       this,
       session,
     );
+    this.activeTaskMoveDestinationPicker = picker;
+    try {
+      picker.open();
+    } catch (error) {
+      if (this.activeTaskMoveDestinationPicker === picker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      throw error;
+    }
+    return true;
+  }
+
+  openPomodoroEntryMovePicker(editor, view, options = {}) {
+    const activePicker = this.activeTaskMoveDestinationPicker;
+    if (activePicker) {
+      const incomingCountExplicit = options.countExplicit === true;
+      const activeCountExplicit = Boolean(
+        activePicker.session && activePicker.session.countExplicit,
+      );
+      if (!incomingCountExplicit || activeCountExplicit) {
+        return true;
+      }
+      activePicker.close();
+    }
+
+    const sourceView = view || this.getActiveMarkdownView();
+    const sourceFile = sourceView && sourceView.file;
+    if (
+      !editor ||
+      typeof editor.getValue !== "function" ||
+      !this.isMarkdownFile(sourceFile)
+    ) {
+      new Notice("Open a Markdown Pomodoro note before moving bullets");
+      return false;
+    }
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("Place the cursor on a Pomodoro entry");
+      return false;
+    }
+    const sourceContent = String(editor.getValue() || "");
+    const discovery = discoverPomodoroEntryMoveTargets(
+      sourceContent,
+      cursor.line,
+    );
+    if (!discovery.valid) {
+      new Notice(discovery.error);
+      return false;
+    }
+
+    const scroll =
+      typeof editor.getScrollInfo === "function"
+        ? editor.getScrollInfo()
+        : null;
+    const session = Object.freeze({
+      sourceFile,
+      sourcePath: sourceFile.path,
+      sourceView,
+      editor,
+      sourceContent,
+      cursor: Object.freeze({ ...cursor }),
+      scroll:
+        scroll && typeof scroll === "object"
+          ? Object.freeze({ left: scroll.left, top: scroll.top })
+          : null,
+      countExplicit: options.countExplicit === true,
+      ignoredCount: Math.max(
+        0,
+        Math.floor(numericOrDefault(options.additionalTaskCount, 0)),
+      ),
+      discovery,
+      entries: discovery.context.entries,
+      sourceEntry: discovery.context.entry,
+    });
+    const picker = new PomodoroEntryMovePickerModal(this.app, this, session);
     this.activeTaskMoveDestinationPicker = picker;
     try {
       picker.open();
@@ -22078,6 +22505,125 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         session.discovery,
         destinationLabel,
       ),
+    );
+    return true;
+  }
+
+  async commitPomodoroEntryMoveSession(session, row) {
+    const activeView = this.getActiveMarkdownView();
+    if (
+      !session ||
+      !session.editor ||
+      typeof session.editor.getValue !== "function" ||
+      !activeView ||
+      !activeView.file ||
+      activeView.file.path !== session.sourcePath ||
+      activeView.editor !== session.editor ||
+      String(session.editor.getValue() || "") !== session.sourceContent
+    ) {
+      new Notice("Source note is no longer active; nothing was moved");
+      return false;
+    }
+
+    const isRename = Boolean(row && row.kind === "rename");
+    const isMove = Boolean(row && row.kind === "existing");
+    if (!isRename && !isMove) {
+      return false;
+    }
+
+    const sourceEntryLine = session.discovery.entryLine;
+    const sourceRawLine = session.discovery.rawEntryLine;
+    const destinationLabel = isMove
+      ? getPomodoroBulletMoveDestinationLabel(row.entry)
+      : null;
+    const plan = isMove
+      ? planPomodoroBulletMove(session.sourceContent, {
+          scope: "entry",
+          targets: session.discovery.targets,
+          sourceEntryLine,
+          sourceRawLine,
+          destination: {
+            kind: "existing",
+            entryLine: row.entry && row.entry.entryLine,
+          },
+        })
+      : planPomodoroEntryRename(session.sourceContent, {
+          sourceEntryLine,
+          sourceRawLine,
+          name: row.name,
+        });
+
+    if (!plan.valid) {
+      new Notice(`${plan.error}; nothing was moved`);
+      return false;
+    }
+    if (isRename && plan.unchanged) {
+      new Notice(
+        `Pomodoro #${session.sourceEntry.position} is already named ${plan.name}`,
+      );
+      return false;
+    }
+
+    const afterLines = splitMarkdownContent(plan.after).lines;
+    let finalCursor;
+    if (isMove) {
+      const firstMovedLine = Math.min(
+        Math.max(
+          Number.isInteger(plan.firstMovedLine) ? plan.firstMovedLine : 0,
+          0,
+        ),
+        Math.max(afterLines.length - 1, 0),
+      );
+      const sourceCursor = normalizePosition(session.cursor) || {
+        line: firstMovedLine,
+        ch: 0,
+      };
+      finalCursor = {
+        line: firstMovedLine,
+        ch: Math.min(
+          sourceCursor.ch,
+          String(afterLines[firstMovedLine] || "").length,
+        ),
+      };
+    } else {
+      const sourceCursor = normalizePosition(session.cursor) || {
+        line: sourceEntryLine,
+        ch: 0,
+      };
+      finalCursor = {
+        line: sourceEntryLine,
+        ch: Math.min(
+          sourceCursor.ch,
+          String(afterLines[sourceEntryLine] || "").length,
+        ),
+      };
+    }
+
+    let applied = false;
+    try {
+      applied = applyEditorContentTransaction(
+        session.editor,
+        session.sourceContent,
+        plan.after,
+        finalCursor,
+      );
+    } catch (error) {
+      applied = String(session.editor.getValue() || "") === plan.after;
+    }
+    if (!applied || String(session.editor.getValue() || "") !== plan.after) {
+      new Notice(
+        isRename
+          ? "Pomodoro rename failed; nothing was changed"
+          : "Pomodoro entry move failed; nothing was moved",
+      );
+      return false;
+    }
+
+    this.restoreTaskMoveSourceContext(session);
+    new Notice(
+      isRename
+        ? `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name}`
+        : buildPomodoroEntryMoveNotice(plan, session.discovery, destinationLabel),
     );
     return true;
   }
@@ -24037,6 +24583,7 @@ module.exports.helpers = {
   FilteredPickerModal,
   TaskMoveDestinationPickerModal,
   PomodoroBulletMovePickerModal,
+  PomodoroEntryMovePickerModal,
   BulletPropertyPickerModal,
   finiteNumberOrNull,
   clampNumber,
@@ -24187,13 +24734,17 @@ module.exports.helpers = {
   formatPomodoroEntryLine,
   collectPomodoroEntries,
   findPomodoroBulletContext,
+  findPomodoroEntryContext,
   discoverMovablePomodoroBulletTargets,
+  discoverPomodoroEntryMoveTargets,
   capturePomodoroBulletSubtree,
   removePomodoroBulletRanges,
   rebasePomodoroBulletBlock,
   planPomodoroBulletMove,
+  planPomodoroEntryRename,
   createPomodoroBulletMovePickerRows,
   buildPomodoroBulletMoveNotice,
+  buildPomodoroEntryMoveNotice,
   deferredPomodoroTargetsFromLines,
   planDeferredPomodoroLinkCleanup,
   getOpenObsidianTaskLines,

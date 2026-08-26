@@ -57,6 +57,13 @@ const POMODORO_COLON_TIME_RANGE_RE =
   /\((\*\*)?(\d\d):(\d\d)\s*-\s*(\d\d):(\d\d)(\*\*)?(\s+[^)]*)?\)/;
 const POMODORO_COMPACT_TIME_RANGE_RE =
   /\((\*\*)?(\d\d)(\d\d)\s*-\s*(\d\d)(\d\d)(\*\*)?(\s+[^)]*)?\)/;
+// Named Pomodoros: a ledger entry's parenthetical body may be followed by an
+// em dash and an ALL-CAPS name (e.g. `() — BODY`). The tail is matched only
+// against the text after the parenthetical's closing `)`, so an em dash
+// embedded in `[t:: ]` metadata is never mistaken for the name separator.
+const POMODORO_NAME_SEPARATOR = "—";
+const POMODORO_NAME_MAX_LENGTH = 48;
+const POMODORO_NAME_TAIL_RE = /^[ \t]*—[ \t]*(.*)$/;
 const NOTE_TEMPLATE_PATHS = Object.freeze({
   daily: "_templates/daily.md",
   monthly: "_templates/monthly.md",
@@ -6434,6 +6441,603 @@ function isDedicatedPomodoroLinkLine(lineText, occurrences) {
     }
   }
   return true;
+}
+
+// Parse a column-0 Pomodoro ledger entry line into its grammar parts, or null
+// when the line is not a well-formed entry (wrong shape, indented, or a body
+// that is not an empty `()` placeholder / time range). The name suffix, when
+// present, is parsed only from the text after the parenthetical's closing
+// `)`, so metadata such as `[t:: 30m]` can never be mistaken for it.
+function parsePomodoroEntryLine(lineText) {
+  const line = String(lineText || "");
+  const match = POMODORO_LEDGER_TOP_LEVEL_LINE_RE.exec(line);
+  if (!match) {
+    return null;
+  }
+  const status = match[1];
+  const body = match[2] || "";
+  const bodyStart = line.length - body.length;
+
+  let rangeMatch = POMODORO_PLACEHOLDER_RE.exec(body);
+  let placeholder = Boolean(rangeMatch && rangeMatch.index === 0);
+  if (!placeholder) {
+    rangeMatch = POMODORO_COLON_TIME_RANGE_RE.exec(body);
+    if (!rangeMatch || rangeMatch.index !== 0) {
+      rangeMatch = POMODORO_COMPACT_TIME_RANGE_RE.exec(body);
+    }
+  }
+  if (!rangeMatch || rangeMatch.index !== 0) {
+    return null;
+  }
+
+  const rangeStart = bodyStart;
+  const rangeEnd = bodyStart + rangeMatch[0].length;
+  const rangeText = line.slice(rangeStart, rangeEnd);
+
+  let name = null;
+  let nameStart = null;
+  let nameEnd = null;
+  const tail = body.slice(rangeMatch[0].length);
+  const tailMatch = POMODORO_NAME_TAIL_RE.exec(tail);
+  if (tailMatch) {
+    const rawName = tailMatch[1];
+    const trimmedName = rawName.trim();
+    const leadingTrimLength = rawName.length - rawName.replace(/^\s+/, "").length;
+    const groupOffsetInTail = tailMatch[0].length - rawName.length;
+    name = trimmedName;
+    nameStart = rangeEnd + groupOffsetInTail + leadingTrimLength;
+    nameEnd = nameStart + trimmedName.length;
+  }
+
+  return Object.freeze({
+    indent: "",
+    status,
+    open: !POMODORO_LEDGER_CLOSED_STATUSES.has(status),
+    bodyStart,
+    rangeText,
+    rangeStart,
+    rangeEnd,
+    placeholder,
+    name,
+    nameStart,
+    nameEnd,
+  });
+}
+
+// Normalize a raw typed or parsed Pomodoro name: strip every em dash,
+// collapse whitespace runs to one space, trim, then uppercase. Invalid when
+// the result is empty or longer than POMODORO_NAME_MAX_LENGTH.
+function normalizePomodoroName(raw) {
+  const stripped = String(raw || "").split(POMODORO_NAME_SEPARATOR).join("");
+  const name = stripped.replace(/\s+/g, " ").trim().toUpperCase();
+  if (!name) {
+    return Object.freeze({
+      valid: false,
+      name: "",
+      error: "Pomodoro name cannot be empty",
+    });
+  }
+  if (name.length > POMODORO_NAME_MAX_LENGTH) {
+    return Object.freeze({
+      valid: false,
+      name: "",
+      error: `Pomodoro name cannot exceed ${POMODORO_NAME_MAX_LENGTH} characters`,
+    });
+  }
+  return Object.freeze({ valid: true, name, error: null });
+}
+
+// Format a brand-new Pomodoro ledger entry line. `name` is expected to
+// already be normalized (see normalizePomodoroName); an empty name yields an
+// unnamed placeholder entry.
+function formatPomodoroEntryLine(name) {
+  const trimmed = String(name || "").trim();
+  return trimmed
+    ? `- [ ] () ${POMODORO_NAME_SEPARATOR} ${trimmed}`
+    : "- [ ] ()";
+}
+
+// Every Pomodoro ledger entry inside the note's `## Pomodoros` section (open
+// and closed), each with its child sub-bullet range and picker-facing
+// preview fields. Returns `{ section: null, entries: [] }` when the note has
+// no such section.
+function collectPomodoroEntries(content) {
+  const text = String(content || "");
+  const section = findPomodorosSectionRange(text);
+  if (!section) {
+    return Object.freeze({ section: null, entries: Object.freeze([]) });
+  }
+
+  const { lines } = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const entries = [];
+  let position = 0;
+
+  for (let line = section.startLine + 1; line <= section.endLine; line += 1) {
+    if (contexts[line] && contexts[line].inFence) {
+      continue;
+    }
+    const parsed = parsePomodoroEntryLine(lines[line]);
+    if (!parsed) {
+      continue;
+    }
+    position += 1;
+
+    const block = findCurrentBulletChildBlock(lines, line);
+    const childStartLine = block.startLine;
+    const childEndLineExclusive = Math.min(
+      block.endLineExclusive,
+      section.endLine + 1,
+    );
+
+    const childListIndexes = [];
+    for (
+      let childLine = childStartLine;
+      childLine < childEndLineExclusive;
+      childLine += 1
+    ) {
+      if (PROJECT_LIST_ITEM_RE.test(String(lines[childLine] || ""))) {
+        childListIndexes.push(childLine);
+      }
+    }
+    const childIndent =
+      childListIndexes.length > 0
+        ? getBulletIndent(String(lines[childListIndexes[0]] || ""))
+        : "\t";
+    const childIndentWidth = getBulletIndentWidth(childIndent);
+    const bulletLines = Object.freeze(
+      childListIndexes
+        .filter(
+          (childLine) =>
+            getBulletIndentWidth(String(lines[childLine] || "")) ===
+            childIndentWidth,
+        )
+        .map((childLine) => String(lines[childLine] || "")),
+    );
+    const firstBounds =
+      bulletLines.length > 0 ? pomodoroBulletBodyBounds(bulletLines[0]) : null;
+    const previewText = firstBounds
+      ? bulletLines[0].slice(firstBounds.start, firstBounds.end)
+      : "";
+    const moreCount = bulletLines.length > 0 ? bulletLines.length - 1 : 0;
+
+    entries.push(
+      Object.freeze({
+        index: entries.length,
+        position,
+        entryLine: line,
+        status: parsed.status,
+        open: parsed.open,
+        name: parsed.name,
+        rangeText: parsed.rangeText,
+        placeholder: parsed.placeholder,
+        childStartLine,
+        childEndLineExclusive,
+        childIndent,
+        bulletLines,
+        previewText,
+        moreCount,
+      }),
+    );
+  }
+
+  return Object.freeze({ section, entries: Object.freeze(entries) });
+}
+
+// The Pomodoro ledger entry that owns the sub-bullet at `line`, or null when
+// `line` is not a list item inside any entry's child block.
+function findPomodoroBulletContext(content, line) {
+  const text = String(content || "");
+  const { entries, section } = collectPomodoroEntries(text);
+  const lineIndex = Math.floor(numericOrDefault(line, Number.NaN));
+  if (!section || !Number.isFinite(lineIndex) || lineIndex < 0) {
+    return null;
+  }
+  const { lines } = splitMarkdownContent(text);
+  const lineText = String(lines[lineIndex] || "");
+  if (!PROJECT_LIST_ITEM_RE.test(lineText)) {
+    return null;
+  }
+  const entryIndex = entries.findIndex(
+    (entry) =>
+      lineIndex >= entry.childStartLine &&
+      lineIndex < entry.childEndLineExclusive,
+  );
+  if (entryIndex === -1) {
+    return null;
+  }
+  return Object.freeze({
+    entries,
+    section,
+    entry: entries[entryIndex],
+    entryIndex,
+    line: lineIndex,
+    depth: getBulletIndentWidth(lineText),
+  });
+}
+
+// Sibling targets for a Pomodoro bullet move: the bullet at `startLine` plus
+// the next `additionalBulletCount` siblings at its own indent depth, inside
+// the same Pomodoro entry's child block. Mirrors the frozen shape of
+// discoverMovableObsidianTaskTargets.
+function discoverMovablePomodoroBulletTargets(
+  content,
+  startLine,
+  additionalBulletCount,
+) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const line = Math.floor(numericOrDefault(startLine, Number.NaN));
+  const additional = Math.max(
+    0,
+    Math.floor(numericOrDefault(additionalBulletCount, 0)),
+  );
+  const requestedCount = additional + 1;
+  const context = findPomodoroBulletContext(text, line);
+
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      explicit: additional > 0,
+      startLine: Number.isFinite(line) ? line : null,
+      requestedAdditionalCount: additional,
+      requestedCount,
+      actualCount: 0,
+      clamped: false,
+      targets: Object.freeze([]),
+      entryLine: null,
+      context: null,
+    });
+
+  if (!context) {
+    return invalid("Place the cursor on a Pomodoro sub-bullet");
+  }
+
+  const { entry, depth } = context;
+  const targets = [];
+  for (
+    let lineIndex = line;
+    lineIndex < entry.childEndLineExclusive && targets.length < requestedCount;
+    lineIndex += 1
+  ) {
+    const lineText = String(lines[lineIndex] || "");
+    if (
+      PROJECT_LIST_ITEM_RE.test(lineText) &&
+      getBulletIndentWidth(lineText) === depth
+    ) {
+      targets.push(Object.freeze({ line: lineIndex, rawLine: lineText }));
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    explicit: additional > 0,
+    startLine: line,
+    requestedAdditionalCount: additional,
+    requestedCount,
+    actualCount: targets.length,
+    clamped: targets.length < requestedCount,
+    targets: Object.freeze(targets),
+    entryLine: entry.entryLine,
+    context,
+  });
+}
+
+// Capture one Pomodoro bullet's subtree: the target line plus every
+// following line whose indent display width exceeds the target's, bounded by
+// `boundExclusive`. Blank lines are retained only when deeper content
+// follows, mirroring captureTaskMoveSubtree's pendingBlankEnd rule. `root` is
+// shaped for rebaseTaskMoveBlock.
+function capturePomodoroBulletSubtree(lines, targetLine, boundExclusive) {
+  const rootWidth = getBulletIndentWidth(String(lines[targetLine] || ""));
+  let endLineExclusive = targetLine + 1;
+  let pendingBlankEnd = endLineExclusive;
+  for (let index = targetLine + 1; index < boundExclusive; index += 1) {
+    const candidate = String(lines[index] || "");
+    if (candidate.trim() === "") {
+      pendingBlankEnd = index + 1;
+      continue;
+    }
+    if (getBulletIndentWidth(candidate) <= rootWidth) {
+      break;
+    }
+    endLineExclusive = index + 1;
+    pendingBlankEnd = endLineExclusive;
+  }
+  return Object.freeze({
+    startLine: targetLine,
+    endLineExclusive,
+    lines: Object.freeze(lines.slice(targetLine, endLineExclusive)),
+    root: parseTaskMoveListItem(String(lines[targetLine] || "")),
+  });
+}
+
+// Remove a set of non-overlapping captured Pomodoro bullet ranges from
+// `lines`, collapsing a doubled blank seam exactly as removeTaskMoveRanges
+// does. Returns a new line array.
+function removePomodoroBulletRanges(lines, ranges) {
+  const nextLines = lines.slice();
+  const ordered = (Array.isArray(ranges) ? ranges : [])
+    .slice()
+    .sort((left, right) => right.startLine - left.startLine);
+  for (const range of ordered) {
+    let deleteCount = range.endLineExclusive - range.startLine;
+    const before = nextLines[range.startLine - 1];
+    const after = nextLines[range.endLineExclusive];
+    if (
+      before !== undefined &&
+      after !== undefined &&
+      String(before).trim() === "" &&
+      String(after).trim() === ""
+    ) {
+      deleteCount += 1;
+    }
+    nextLines.splice(range.startLine, deleteCount);
+  }
+  return nextLines;
+}
+
+// Rebase a captured Pomodoro bullet block onto a destination child indent:
+// reuse rebaseTaskMoveBlock's column-0 stripping, then re-prefix every
+// non-blank line with the destination's child indent instead of column 0.
+function rebasePomodoroBulletBlock(block, destinationChildIndent) {
+  const indent =
+    typeof destinationChildIndent === "string" ? destinationChildIndent : "";
+  return Object.freeze(
+    rebaseTaskMoveBlock(block).map((line) => (line === "" ? "" : `${indent}${line}`)),
+  );
+}
+
+// Plan a pure, same-file move of one or more Pomodoro sub-bullets (plus their
+// descendants) from `options.sourceEntryLine`'s child block into another
+// entry, or into a brand-new named entry created just below the source. See
+// the epic plan's "Insertion", "Source repair", and "Duplicate merging"
+// design decisions for the algorithm this mirrors.
+function planPomodoroBulletMove(content, options = {}) {
+  const text = String(content || "");
+  const { lines: originalLines, lineEnding } = splitMarkdownContent(text);
+  const targets = Array.isArray(options.targets) ? options.targets : [];
+  const sourceEntryLine = Number.isInteger(options.sourceEntryLine)
+    ? options.sourceEntryLine
+    : -1;
+  const destination =
+    options.destination && typeof options.destination === "object"
+      ? options.destination
+      : {};
+
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      after: text,
+      destinationEntryLine: null,
+      firstMovedLine: null,
+      movedCount: 0,
+      skippedDuplicateCount: 0,
+      createdPomodoro: false,
+      createdPomodoroName: null,
+      sourcePlaceholderInserted: false,
+    });
+
+  if (targets.length === 0) {
+    return invalid("No Pomodoro bullets were selected");
+  }
+  for (const target of targets) {
+    if (String(originalLines[target.line] || "") !== target.rawLine) {
+      return invalid("A selected bullet changed before it could be moved");
+    }
+  }
+
+  const { entries } = collectPomodoroEntries(text);
+  const sourceEntry = entries.find(
+    (entry) => entry.entryLine === sourceEntryLine,
+  );
+  if (!sourceEntry) {
+    return invalid("Source Pomodoro entry could not be found");
+  }
+
+  let createdPomodoroName = null;
+  if (destination.kind === "existing") {
+    if (destination.entryLine === sourceEntryLine) {
+      return invalid("Choose a different Pomodoro to move into");
+    }
+    const destinationExists = entries.some(
+      (entry) => entry.entryLine === destination.entryLine,
+    );
+    if (!destinationExists) {
+      return invalid("Destination Pomodoro entry could not be found");
+    }
+  } else if (destination.kind === "new") {
+    const nameResult = normalizePomodoroName(destination.name);
+    if (!nameResult.valid) {
+      return invalid(nameResult.error);
+    }
+    createdPomodoroName = nameResult.name;
+  } else {
+    return invalid("Choose a Pomodoro destination");
+  }
+
+  // Capture each target's subtree against the source entry's original child
+  // bounds, then remove the captured ranges from the document.
+  const orderedTargets = targets.slice().sort((left, right) => left.line - right.line);
+  const capturedBlocks = orderedTargets.map((target) =>
+    capturePomodoroBulletSubtree(
+      originalLines,
+      target.line,
+      sourceEntry.childEndLineExclusive,
+    ),
+  );
+  const afterRemovalLines = removePomodoroBulletRanges(
+    originalLines,
+    capturedBlocks,
+  );
+
+  // Repair an emptied source child block.
+  const sourceBlockAfterRemoval = findCurrentBulletChildBlock(
+    afterRemovalLines,
+    sourceEntry.entryLine,
+  );
+  let workingLines = afterRemovalLines;
+  let sourcePlaceholderInserted = false;
+  let sourceChildIsBlank = true;
+  for (
+    let index = sourceBlockAfterRemoval.startLine;
+    index < sourceBlockAfterRemoval.endLineExclusive;
+    index += 1
+  ) {
+    if (String(workingLines[index] || "").trim() !== "") {
+      sourceChildIsBlank = false;
+      break;
+    }
+  }
+  if (sourceChildIsBlank) {
+    const placeholderLine = `${sourceEntry.childIndent}- `;
+    workingLines = workingLines
+      .slice(0, sourceBlockAfterRemoval.startLine)
+      .concat(
+        [placeholderLine],
+        workingLines.slice(sourceBlockAfterRemoval.startLine),
+      );
+    sourcePlaceholderInserted = true;
+  }
+
+  // Re-locate the destination (and, for an existing destination, the source)
+  // against the repaired content: mutations so far are confined to the
+  // source entry's own child block, so any entry at or before the source
+  // entry's line is unaffected, and any entry after it shifts by the net
+  // line-count delta.
+  const repairedContent = workingLines.join(lineEnding);
+  const { entries: repairedEntries } = collectPomodoroEntries(repairedContent);
+  const lineDelta = workingLines.length - originalLines.length;
+  const shiftLine = (originalLine) =>
+    originalLine > sourceEntry.entryLine ? originalLine + lineDelta : originalLine;
+
+  let destEntry = null;
+  if (destination.kind === "existing") {
+    const shiftedDestinationEntryLine = shiftLine(destination.entryLine);
+    destEntry = repairedEntries.find(
+      (entry) => entry.entryLine === shiftedDestinationEntryLine,
+    );
+    if (!destEntry) {
+      return invalid("Destination Pomodoro entry could not be found");
+    }
+  }
+  const destinationChildIndent = destEntry ? destEntry.childIndent : "\t";
+
+  // Rebase every captured block onto the destination child indent.
+  const rebasedBlocks = capturedBlocks.map((block) => ({
+    block,
+    rebasedLines: rebasePomodoroBulletBlock(block, destinationChildIndent),
+  }));
+
+  // Drop exact-duplicate single-line blocks against the destination's
+  // existing (pre-insertion) child lines.
+  const existingChildTrimmed = new Set();
+  if (destEntry) {
+    for (
+      let index = destEntry.childStartLine;
+      index < destEntry.childEndLineExclusive;
+      index += 1
+    ) {
+      const trimmed = String(workingLines[index] || "").trim();
+      if (trimmed !== "") {
+        existingChildTrimmed.add(trimmed);
+      }
+    }
+  }
+
+  let skippedDuplicateCount = 0;
+  const insertedBlocks = [];
+  for (const { block, rebasedLines } of rebasedBlocks) {
+    const isSingleLine = block.endLineExclusive - block.startLine === 1;
+    const trimmed = rebasedLines.length > 0 ? rebasedLines[0].trim() : "";
+    if (isSingleLine && existingChildTrimmed.has(trimmed)) {
+      skippedDuplicateCount += 1;
+      continue;
+    }
+    insertedBlocks.push(rebasedLines);
+  }
+  const flatInserted = insertedBlocks.flat();
+
+  // Insert the surviving blocks: into the existing destination's child
+  // block, or below a brand-new entry created after the source's block.
+  let finalLines;
+  let destinationEntryLineFinal;
+  let firstMovedLine = null;
+  let createdPomodoro = false;
+
+  if (destEntry) {
+    const isLonePlaceholder =
+      destEntry.childEndLineExclusive - destEntry.childStartLine === 1 &&
+      PROJECT_LIST_ITEM_RE.test(
+        String(workingLines[destEntry.childStartLine] || ""),
+      ) &&
+      !pomodoroBulletBodyBounds(
+        String(workingLines[destEntry.childStartLine] || ""),
+      );
+
+    if (isLonePlaceholder && flatInserted.length > 0) {
+      finalLines = workingLines
+        .slice(0, destEntry.childStartLine)
+        .concat(flatInserted, workingLines.slice(destEntry.childStartLine + 1));
+      firstMovedLine = destEntry.childStartLine;
+    } else if (isLonePlaceholder) {
+      // Every moved block merged away as an exact duplicate of the
+      // placeholder itself; leave the destination's placeholder in place
+      // rather than deleting its only child line.
+      finalLines = workingLines;
+    } else {
+      let insertAt = destEntry.childStartLine;
+      for (
+        let index = destEntry.childEndLineExclusive - 1;
+        index >= destEntry.childStartLine;
+        index -= 1
+      ) {
+        if (String(workingLines[index] || "").trim() !== "") {
+          insertAt = index + 1;
+          break;
+        }
+      }
+      finalLines = workingLines
+        .slice(0, insertAt)
+        .concat(flatInserted, workingLines.slice(insertAt));
+      if (flatInserted.length > 0) {
+        firstMovedLine = insertAt;
+      }
+    }
+    destinationEntryLineFinal = destEntry.entryLine;
+  } else {
+    const repairedSourceEntry = repairedEntries.find(
+      (entry) => entry.entryLine === sourceEntry.entryLine,
+    );
+    const insertAt = repairedSourceEntry.childEndLineExclusive;
+    const insertion = [formatPomodoroEntryLine(createdPomodoroName), ...flatInserted];
+    finalLines = workingLines
+      .slice(0, insertAt)
+      .concat(insertion, workingLines.slice(insertAt));
+    destinationEntryLineFinal = insertAt;
+    firstMovedLine = insertAt + 1;
+    createdPomodoro = true;
+  }
+
+  if (firstMovedLine === null) {
+    firstMovedLine = destinationEntryLineFinal;
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    after: finalLines.join(lineEnding),
+    destinationEntryLine: destinationEntryLineFinal,
+    firstMovedLine,
+    movedCount: insertedBlocks.length,
+    skippedDuplicateCount,
+    createdPomodoro,
+    createdPomodoroName,
+    sourcePlaceholderInserted,
+  });
 }
 
 // Resolve `{ path, blockId }` deferred-pomodoro targets from a set of task
@@ -23073,6 +23677,17 @@ module.exports.helpers = {
   collectPomodoroBlockLinkOccurrences,
   pomodoroBulletBodyBounds,
   isDedicatedPomodoroLinkLine,
+  POMODORO_NAME_MAX_LENGTH,
+  parsePomodoroEntryLine,
+  normalizePomodoroName,
+  formatPomodoroEntryLine,
+  collectPomodoroEntries,
+  findPomodoroBulletContext,
+  discoverMovablePomodoroBulletTargets,
+  capturePomodoroBulletSubtree,
+  removePomodoroBulletRanges,
+  rebasePomodoroBulletBlock,
+  planPomodoroBulletMove,
   deferredPomodoroTargetsFromLines,
   planDeferredPomodoroLinkCleanup,
   getOpenObsidianTaskLines,

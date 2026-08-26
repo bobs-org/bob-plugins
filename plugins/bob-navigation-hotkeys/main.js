@@ -6792,9 +6792,11 @@ function rebasePomodoroBulletBlock(block, destinationChildIndent) {
 
 // Plan a pure, same-file move of one or more Pomodoro sub-bullets (plus their
 // descendants) from `options.sourceEntryLine`'s child block into another
-// entry, or into a brand-new named entry created just below the source. See
-// the epic plan's "Insertion", "Source repair", and "Duplicate merging"
-// design decisions for the algorithm this mirrors.
+// entry, or into a brand-new named entry. The new entry lands just below the
+// source when the source survives, or at the source's former position when
+// moving out its last owned content deletes the source entry. See the epic
+// plan's "Insertion", "Source deletion", and "Duplicate merging" design
+// decisions for the algorithm this mirrors.
 function planPomodoroBulletMove(content, options = {}) {
   const text = String(content || "");
   const { lines: originalLines, lineEnding } = splitMarkdownContent(text);
@@ -6818,7 +6820,7 @@ function planPomodoroBulletMove(content, options = {}) {
       skippedDuplicateCount: 0,
       createdPomodoro: false,
       createdPomodoroName: null,
-      sourcePlaceholderInserted: false,
+      sourcePomodoroDeleted: false,
     });
 
   if (targets.length === 0) {
@@ -6874,33 +6876,35 @@ function planPomodoroBulletMove(content, options = {}) {
     capturedBlocks,
   );
 
-  // Repair an emptied source child block.
+  // Delete the source entry entirely when nothing it owns survives the
+  // removal; otherwise leave it untouched.
   const sourceBlockAfterRemoval = findCurrentBulletChildBlock(
     afterRemovalLines,
     sourceEntry.entryLine,
   );
-  let workingLines = afterRemovalLines;
-  let sourcePlaceholderInserted = false;
   let sourceChildIsBlank = true;
   for (
     let index = sourceBlockAfterRemoval.startLine;
     index < sourceBlockAfterRemoval.endLineExclusive;
     index += 1
   ) {
-    if (String(workingLines[index] || "").trim() !== "") {
+    if (String(afterRemovalLines[index] || "").trim() !== "") {
       sourceChildIsBlank = false;
       break;
     }
   }
+  let workingLines = afterRemovalLines;
+  let sourcePomodoroDeleted = false;
+  let sourceAnchorLine = null;
   if (sourceChildIsBlank) {
-    const placeholderLine = `${sourceEntry.childIndent}- `;
-    workingLines = workingLines
-      .slice(0, sourceBlockAfterRemoval.startLine)
-      .concat(
-        [placeholderLine],
-        workingLines.slice(sourceBlockAfterRemoval.startLine),
-      );
-    sourcePlaceholderInserted = true;
+    workingLines = removePomodoroBulletRanges(afterRemovalLines, [
+      {
+        startLine: sourceEntry.entryLine,
+        endLineExclusive: sourceBlockAfterRemoval.endLineExclusive,
+      },
+    ]);
+    sourcePomodoroDeleted = true;
+    sourceAnchorLine = sourceEntry.entryLine;
   }
 
   // Re-locate the destination (and, for an existing destination, the source)
@@ -7009,10 +7013,17 @@ function planPomodoroBulletMove(content, options = {}) {
     }
     destinationEntryLineFinal = destEntry.entryLine;
   } else {
-    const repairedSourceEntry = repairedEntries.find(
-      (entry) => entry.entryLine === sourceEntry.entryLine,
-    );
-    const insertAt = repairedSourceEntry.childEndLineExclusive;
+    // A deleted source has no surviving entry to anchor against: insert the
+    // new entry at the deleted source's former position instead of below it.
+    let insertAt;
+    if (sourcePomodoroDeleted) {
+      insertAt = sourceAnchorLine;
+    } else {
+      const repairedSourceEntry = repairedEntries.find(
+        (entry) => entry.entryLine === sourceEntry.entryLine,
+      );
+      insertAt = repairedSourceEntry.childEndLineExclusive;
+    }
     const insertion = [formatPomodoroEntryLine(createdPomodoroName), ...flatInserted];
     finalLines = workingLines
       .slice(0, insertAt)
@@ -7036,7 +7047,7 @@ function planPomodoroBulletMove(content, options = {}) {
     skippedDuplicateCount,
     createdPomodoro,
     createdPomodoroName,
-    sourcePlaceholderInserted,
+    sourcePomodoroDeleted,
   });
 }
 

@@ -264,40 +264,47 @@ test("parseEmDashTrigger parses exact `--` at column zero and after prose with e
   assert.equal(helpers.parseEmDashTrigger("left---"), null);
 });
 
-test("computeSnippetExpansion computes exactly one U+2014 replacement for emDash triggers", () => {
+test("computeSnippetExpansion computes exactly one U+2014 plus trailing U+0020 replacement for emDash triggers", () => {
   const expansion = helpers.computeSnippetExpansion({
     kind: "emDash",
     trigger: "--",
   });
-  assert.equal(expansion.replacement, "—");
-  assert.equal(expansion.replacement, "—");
-  assert.equal(expansion.replacement.length, 1);
+  assert.equal(expansion.replacement, "— ");
+  assert.equal(expansion.replacement, "— ");
+  assert.equal(expansion.replacement.length, 2);
 });
 
 test("findExpansion/expandLineAtCursor expand `--` in whole-line and inline positions, preserving prefix/suffix", () => {
   // Whole line, cursor at end.
   const wholeLine = helpers.expandLineAtCursor("--", 2);
   assert.notEqual(wholeLine, null);
-  assert.equal(wholeLine.line, "—");
-  assert.equal(wholeLine.cursorCh, 1);
+  assert.equal(wholeLine.line, "— ");
+  assert.equal(wholeLine.cursorCh, 2);
 
-  // Inline: left--|right -> left—|right
+  // Inline: left--|right -> left— |right
   const inline = helpers.expandLineAtCursor("left--right", 6);
   assert.notEqual(inline, null);
-  assert.equal(inline.line, "left—right");
-  assert.equal(inline.cursorCh, 5);
+  assert.equal(inline.line, "left— right");
+  assert.equal(inline.cursorCh, 6);
 
   // Prefix only: preceded by other text, cursor at end of line.
   const prefixOnly = helpers.expandLineAtCursor("prose --", 8);
   assert.notEqual(prefixOnly, null);
-  assert.equal(prefixOnly.line, "prose —");
-  assert.equal(prefixOnly.cursorCh, 7);
+  assert.equal(prefixOnly.line, "prose — ");
+  assert.equal(prefixOnly.cursorCh, 8);
 
   // Suffix only: `--` at column zero followed by more prose.
   const suffixOnly = helpers.expandLineAtCursor("--suffix", 2);
   assert.notEqual(suffixOnly, null);
-  assert.equal(suffixOnly.line, "—suffix");
-  assert.equal(suffixOnly.cursorCh, 1);
+  assert.equal(suffixOnly.line, "— suffix");
+  assert.equal(suffixOnly.cursorCh, 2);
+
+  // Pre-existing suffix whitespace is not consumed or deduplicated: the
+  // authored space after `--` remains, alongside the newly added one.
+  const suffixWithSpace = helpers.expandLineAtCursor("-- suffix", 2);
+  assert.notEqual(suffixWithSpace, null);
+  assert.equal(suffixWithSpace.line, "—  suffix");
+  assert.equal(suffixWithSpace.cursorCh, 2);
 });
 
 test("findExpansion refuses `---` and longer hyphen runs at the end or between hyphens", () => {
@@ -341,10 +348,10 @@ test("expandFromEditor replaces exactly the `--` trigger, sets cursor after it, 
   assert.equal(replacedRange.from.ch, 4); // "--" starts at index 4
   assert.equal(replacedRange.to.line, 0);
   assert.equal(replacedRange.to.ch, 6); // "--" ends at index 6
-  assert.equal(replacedRange.replacement, "—");
+  assert.equal(replacedRange.replacement, "— ");
   assert.notEqual(cursorPosition, null);
   assert.equal(cursorPosition.line, 0);
-  assert.equal(cursorPosition.ch, 5); // immediately after the single em dash
+  assert.equal(cursorPosition.ch, 6); // immediately after the added trailing space
 });
 
 test("regression: existing snippet triggers still parse/expand unchanged alongside the new emDash trigger", () => {

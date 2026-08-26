@@ -240,6 +240,130 @@ test("compatibility: existing snippets remain unchanged and uppercase T/DT remai
   assert.equal(helpers.parseTrigger("SE"), null);
 });
 
+test("parseEmDashTrigger parses exact `--` at column zero and after prose with exact spans", () => {
+  assert.deepEqual(helpers.parseEmDashTrigger("--"), {
+    kind: "emDash",
+    trigger: "--",
+    startCh: 0,
+    endCh: 2,
+  });
+
+  assert.deepEqual(helpers.parseEmDashTrigger("left--"), {
+    kind: "emDash",
+    trigger: "--",
+    startCh: 4,
+    endCh: 6,
+  });
+
+  // A single hyphen never matches.
+  assert.equal(helpers.parseEmDashTrigger("-"), null);
+  assert.equal(helpers.parseEmDashTrigger(""), null);
+
+  // A third hyphen immediately before the pair rejects the match.
+  assert.equal(helpers.parseEmDashTrigger("---"), null);
+  assert.equal(helpers.parseEmDashTrigger("left---"), null);
+});
+
+test("computeSnippetExpansion computes exactly one U+2014 replacement for emDash triggers", () => {
+  const expansion = helpers.computeSnippetExpansion({
+    kind: "emDash",
+    trigger: "--",
+  });
+  assert.equal(expansion.replacement, "—");
+  assert.equal(expansion.replacement, "—");
+  assert.equal(expansion.replacement.length, 1);
+});
+
+test("findExpansion/expandLineAtCursor expand `--` in whole-line and inline positions, preserving prefix/suffix", () => {
+  // Whole line, cursor at end.
+  const wholeLine = helpers.expandLineAtCursor("--", 2);
+  assert.notEqual(wholeLine, null);
+  assert.equal(wholeLine.line, "—");
+  assert.equal(wholeLine.cursorCh, 1);
+
+  // Inline: left--|right -> left—|right
+  const inline = helpers.expandLineAtCursor("left--right", 6);
+  assert.notEqual(inline, null);
+  assert.equal(inline.line, "left—right");
+  assert.equal(inline.cursorCh, 5);
+
+  // Prefix only: preceded by other text, cursor at end of line.
+  const prefixOnly = helpers.expandLineAtCursor("prose --", 8);
+  assert.notEqual(prefixOnly, null);
+  assert.equal(prefixOnly.line, "prose —");
+  assert.equal(prefixOnly.cursorCh, 7);
+
+  // Suffix only: `--` at column zero followed by more prose.
+  const suffixOnly = helpers.expandLineAtCursor("--suffix", 2);
+  assert.notEqual(suffixOnly, null);
+  assert.equal(suffixOnly.line, "—suffix");
+  assert.equal(suffixOnly.cursorCh, 1);
+});
+
+test("findExpansion refuses `---` and longer hyphen runs at the end or between hyphens", () => {
+  // Cursor at the end of a bare three-hyphen thematic-break run.
+  assert.equal(helpers.findExpansion("---", 3), null);
+
+  // Cursor between the second and third hyphen of a three-hyphen run: the
+  // preceding two hyphens would match, but the following hyphen must block it.
+  assert.equal(helpers.findExpansion("---", 2), null);
+
+  // Longer runs are rejected the same way.
+  assert.equal(helpers.findExpansion("----", 4), null);
+  assert.equal(helpers.findExpansion("----", 2), null);
+
+  // YAML frontmatter delimiter and Markdown thematic break lines stay inert.
+  assert.equal(helpers.findExpansion("---", 3, FIXED_DATE), null);
+  assert.equal(helpers.findExpansion("left---right", 7), null);
+});
+
+test("expandFromEditor replaces exactly the `--` trigger, sets cursor after it, and returns true", () => {
+  const plugin = new LedgerToolsPlugin();
+  let replacedRange = null;
+  let cursorPosition = null;
+
+  const mockEditor = {
+    getCursor: () => ({ line: 0, ch: 6 }), // cursor is right after "left--"
+    getLine: (line) => (line === 0 ? "left--right" : ""),
+    listSelections: () => [{ anchor: { line: 0, ch: 6 }, head: { line: 0, ch: 6 } }],
+    replaceRange: (replacement, from, to) => {
+      replacedRange = { replacement, from, to };
+    },
+    setCursor: (pos) => {
+      cursorPosition = pos;
+    },
+  };
+
+  const success = plugin.expandFromEditor(mockEditor);
+  assert.equal(success, true);
+  assert.notEqual(replacedRange, null);
+  assert.equal(replacedRange.from.line, 0);
+  assert.equal(replacedRange.from.ch, 4); // "--" starts at index 4
+  assert.equal(replacedRange.to.line, 0);
+  assert.equal(replacedRange.to.ch, 6); // "--" ends at index 6
+  assert.equal(replacedRange.replacement, "—");
+  assert.notEqual(cursorPosition, null);
+  assert.equal(cursorPosition.line, 0);
+  assert.equal(cursorPosition.ch, 5); // immediately after the single em dash
+});
+
+test("regression: existing snippet triggers still parse/expand unchanged alongside the new emDash trigger", () => {
+  assert.equal(helpers.parseTrigger("ta").kind, "task");
+  assert.equal(helpers.parseTrigger("se").kind, "ledgerRange");
+  assert.equal(helpers.parseTrigger("d0").kind, "date");
+  assert.equal(helpers.parseTrigger("t0").kind, "time");
+  assert.equal(helpers.parseTrigger("dt0").kind, "datetime");
+  assert.equal(helpers.parseTrigger("D0").kind, "datedEntry");
+
+  const taskExpansion = helpers.expandLineAtCursor("ta", 2, FIXED_DATE);
+  assert.notEqual(taskExpansion, null);
+  assert.equal(taskExpansion.line, "#task  [created::2026-08-16]");
+
+  // Ordinary non-matching text remains unhandled.
+  assert.equal(helpers.findExpansion("hello", 5, FIXED_DATE), null);
+  assert.equal(helpers.findExpansion("-", 1, FIXED_DATE), null);
+});
+
 test("expandFromEditor replaces D0 trigger in editor and sets cursor to trailing position", () => {
   const plugin = new LedgerToolsPlugin();
   let replacedRange = null;

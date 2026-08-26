@@ -16,6 +16,7 @@ const TRIGGER_RE = /(^|[^A-Za-z0-9_])((?:dt|[dtD])-?\d+|se\d*(?:-\d*)?|ta)$/;
 const LEDGER_TRIGGER_RE = /^se(\d*)(?:-(\d*))?$/;
 const DATE_TIME_TRIGGER_RE = /^(dt|[dtD])(-?\d+)$/;
 const WORD_CHAR_RE = /[A-Za-z0-9_]/;
+const EM_DASH_REPLACEMENT = "—";
 const POMODOROS_HEADING_RE = /^##\s+Pomodoros(?:\s.*)?$/;
 const LEVEL_TWO_HEADING_RE = /^##\s+/;
 const LEDGER_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[([ /xX-])\]\s+)/;
@@ -31,12 +32,30 @@ const LEGACY_STOPWATCH_DURATION_RE =
 const LEGACY_STOPWATCH_DURATION_GLOBAL_RE =
   /\u23f1\ufe0f?\s*((?:(?:\d+\s*h)\s*)?(?:\d+\s*m)|(?:\d+\s*h))/gi;
 
+function parseEmDashTrigger(text) {
+  if (!text.endsWith("--")) {
+    return null;
+  }
+
+  const precedingChar = text.length > 2 ? text[text.length - 3] : "";
+  if (precedingChar === "-") {
+    return null;
+  }
+
+  return {
+    kind: "emDash",
+    trigger: "--",
+    startCh: text.length - 2,
+    endCh: text.length,
+  };
+}
+
 function parseTrigger(textBeforeCursor) {
   const text = String(textBeforeCursor || "");
   const match = TRIGGER_RE.exec(text);
 
   if (!match) {
-    return null;
+    return parseEmDashTrigger(text);
   }
 
   const trigger = match[2];
@@ -828,6 +847,10 @@ function computeSnippetExpansion(trigger, now = new Date()) {
     return null;
   }
 
+  if (trigger.kind === "emDash") {
+    return { replacement: EM_DASH_REPLACEMENT };
+  }
+
   if (trigger.kind === "task") {
     const createdDate = formatLocalDate(now);
     return {
@@ -892,6 +915,14 @@ function isWordChar(value) {
   return typeof value === "string" && WORD_CHAR_RE.test(value);
 }
 
+function isTriggerBoundaryBlocked(trigger, nextChar) {
+  if (trigger.kind === "emDash") {
+    return nextChar === "-";
+  }
+
+  return isWordChar(nextChar);
+}
+
 function findExpansion(line, cursorCh, now = new Date()) {
   if (typeof line !== "string" || !Number.isInteger(cursorCh)) {
     return null;
@@ -902,7 +933,7 @@ function findExpansion(line, cursorCh, now = new Date()) {
   }
 
   const trigger = parseTrigger(line.slice(0, cursorCh));
-  if (!trigger || isWordChar(line[cursorCh])) {
+  if (!trigger || isTriggerBoundaryBlocked(trigger, line[cursorCh])) {
     return null;
   }
 
@@ -2506,6 +2537,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
 module.exports.helpers = {
   parseTrigger,
+  parseEmDashTrigger,
   computeRange,
   computeSnippetExpansion,
   normalizeMinutes,

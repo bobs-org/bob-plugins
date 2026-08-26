@@ -7040,6 +7040,179 @@ function planPomodoroBulletMove(content, options = {}) {
   });
 }
 
+function getPomodoroEntryRangeLabel(entry) {
+  const rangeText = String((entry && entry.rangeText) || "");
+  if (!rangeText || POMODORO_PLACEHOLDER_RE.test(rangeText)) {
+    return "Unscheduled";
+  }
+
+  let match = POMODORO_COLON_TIME_RANGE_RE.exec(rangeText);
+  if (match && match.index === 0) {
+    return `${match[2]}:${match[3]}-${match[4]}:${match[5]}`;
+  }
+  match = POMODORO_COMPACT_TIME_RANGE_RE.exec(rangeText);
+  if (match && match.index === 0) {
+    return `${match[2]}${match[3]}-${match[4]}${match[5]}`;
+  }
+  return rangeText;
+}
+
+function getNormalizedPomodoroEntryName(entry) {
+  if (!entry || !entry.name) {
+    return "";
+  }
+  const normalized = normalizePomodoroName(entry.name);
+  return normalized.valid ? normalized.name : String(entry.name).trim();
+}
+
+function getPomodoroBulletMoveDestinationLabel(entry) {
+  const name = getNormalizedPomodoroEntryName(entry);
+  return name || `Pomodoro #${entry && entry.position}`;
+}
+
+function getPomodoroBulletMovePickerTitle(entry) {
+  const name = getNormalizedPomodoroEntryName(entry);
+  if (name) {
+    return name;
+  }
+  const rangeLabel = getPomodoroEntryRangeLabel(entry);
+  return rangeLabel === "Unscheduled"
+    ? `Pomodoro #${entry && entry.position}`
+    : rangeLabel;
+}
+
+function getPomodoroBulletMovePickerStatusLabel(entry) {
+  const name = getNormalizedPomodoroEntryName(entry);
+  const rangeLabel = getPomodoroEntryRangeLabel(entry);
+  if (name) {
+    return rangeLabel;
+  }
+  return rangeLabel === "Unscheduled" ? "Unscheduled" : "";
+}
+
+function getPomodoroBulletMovePickerMeta(entry) {
+  const previewText = String((entry && entry.previewText) || "").trim();
+  if (!previewText) {
+    return "No sub-bullets yet";
+  }
+  const moreCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(entry && entry.moreCount, 0)),
+  );
+  return moreCount > 0 ? `${previewText} +${moreCount} more` : previewText;
+}
+
+function pomodoroBulletMoveEntryMatchesQuery(entry, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+  const parts = [
+    getNormalizedPomodoroEntryName(entry),
+    entry && entry.name,
+    entry && entry.rangeText,
+    getPomodoroEntryRangeLabel(entry),
+    entry && entry.position ? `#${entry.position}` : "",
+    entry && entry.position ? String(entry.position) : "",
+    entry && entry.previewText,
+  ];
+  return parts.some((part) =>
+    String(part || "").toLowerCase().includes(normalizedQuery),
+  );
+}
+
+function createPomodoroBulletMovePickerRows(
+  entries,
+  sourceEntryLine,
+  rawQuery,
+) {
+  const openEntries = (Array.isArray(entries) ? entries : []).filter(
+    (entry) => entry && entry.open,
+  );
+  const queryText = String(rawQuery || "").trim();
+  const query = queryText.toLowerCase();
+  const existingNames = new Set(
+    openEntries
+      .map((entry) => getNormalizedPomodoroEntryName(entry))
+      .filter(Boolean),
+  );
+  const rows = [];
+
+  if (queryText) {
+    const normalized = normalizePomodoroName(queryText);
+    if (!normalized.valid) {
+      rows.push(
+        Object.freeze({
+          kind: "invalid",
+          statusText: normalized.error,
+        }),
+      );
+    } else if (!existingNames.has(normalized.name)) {
+      rows.push(
+        Object.freeze({
+          kind: "new",
+          name: normalized.name,
+          title: `New Pomodoro ${normalized.name}`,
+          meta: "Created below the current Pomodoro",
+        }),
+      );
+    }
+  }
+
+  for (const entry of openEntries) {
+    if (entry.entryLine === sourceEntryLine) {
+      continue;
+    }
+    if (!pomodoroBulletMoveEntryMatchesQuery(entry, query)) {
+      continue;
+    }
+    rows.push(
+      Object.freeze({
+        kind: "existing",
+        entry,
+        title: getPomodoroBulletMovePickerTitle(entry),
+        meta: getPomodoroBulletMovePickerMeta(entry),
+        statusEmoji: "",
+        statusLabel: getPomodoroBulletMovePickerStatusLabel(entry),
+      }),
+    );
+  }
+
+  return Object.freeze(rows);
+}
+
+function buildPomodoroBulletMoveNotice(plan = {}, discovery = {}, destinationLabel) {
+  const fallbackCount =
+    Math.max(0, Math.floor(numericOrDefault(plan.movedCount, 0))) +
+    Math.max(0, Math.floor(numericOrDefault(plan.skippedDuplicateCount, 0)));
+  const count = Math.max(
+    0,
+    Math.floor(numericOrDefault(discovery.actualCount, fallbackCount)),
+  );
+  const bulletText = count === 1 ? "bullet" : "bullets";
+  let label = String(destinationLabel || "").trim();
+  if (plan.createdPomodoro) {
+    const name = String(plan.createdPomodoroName || label).trim();
+    label = name ? `new Pomodoro ${name}` : "new Pomodoro";
+  }
+  if (!label) {
+    label = "Pomodoro destination";
+  }
+
+  let text = `Moved ${count} ${bulletText} to ${label}`;
+  const duplicateCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(plan.skippedDuplicateCount, 0)),
+  );
+  if (duplicateCount > 0) {
+    text += ` (merged ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"})`;
+  }
+  if (discovery && discovery.clamped) {
+    text += ` (requested ${discovery.requestedCount}; reached end of Pomodoro)`;
+  }
+  return text;
+}
+
 // Resolve `{ path, blockId }` deferred-pomodoro targets from a set of task
 // line numbers (as produced by the writers below). A line with no trailing
 // `^block-id` cannot be linked from a Pomodoro sub-bullet, so it contributes
@@ -10059,6 +10232,76 @@ function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {
   appendHighlighted(statusEl, statusText, query);
 }
 
+function addPickerRowClasses(rowEl, classes) {
+  const list = Array.isArray(classes) ? classes : [classes];
+  if (rowEl && rowEl.classList && typeof rowEl.classList.add === "function") {
+    rowEl.classList.add(...list.filter(Boolean));
+    return;
+  }
+  if (rowEl && typeof rowEl.addClass === "function") {
+    list.filter(Boolean).forEach((cls) => rowEl.addClass(cls));
+  }
+}
+
+function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
+  const kind = row && row.kind ? row.kind : "invalid";
+  addPickerRowClasses(rowEl, ["bob-cnp-pomodoro-row", `is-${kind}`]);
+
+  const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+  applyIcon(
+    rowIcon,
+    kind === "new" ? "plus" : kind === "invalid" ? "circle-alert" : "timer",
+  );
+
+  const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+  const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+  appendHighlighted(
+    titleEl,
+    kind === "invalid" ? row.statusText : row.title,
+    query,
+  );
+  const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+  appendHighlighted(
+    pathEl,
+    kind === "invalid" ? "Type a valid Pomodoro name" : row.meta,
+    query,
+  );
+
+  const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
+  if (kind === "new") {
+    const statusEl = badgesEl.createDiv({
+      cls: "bob-cnp-row-status is-create",
+    });
+    appendHighlighted(statusEl, "New", query);
+    return;
+  }
+  if (kind === "invalid") {
+    const statusEl = badgesEl.createDiv({
+      cls: "bob-cnp-row-status is-unavailable",
+    });
+    appendHighlighted(statusEl, "Not selectable", query);
+    return;
+  }
+  if (!row.statusLabel) {
+    return;
+  }
+
+  const statusClass =
+    row.statusLabel === "Unscheduled" ? " is-status-unscheduled" : "";
+  const statusEl = badgesEl.createDiv({
+    cls: `bob-cnp-row-status${statusClass}`,
+    attr: {
+      "aria-label": row.statusLabel,
+      title: row.statusLabel,
+    },
+  });
+  appendHighlighted(
+    statusEl,
+    [row.statusEmoji, row.statusLabel].filter(Boolean).join(" "),
+    query,
+  );
+}
+
 class ChildNotePickerModal extends FilteredPickerModal {
   constructor(app, plugin, childFiles, parentFile) {
     const now = new Date();
@@ -10140,6 +10383,78 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
     });
     this.plugin = plugin;
     this.session = session;
+  }
+
+  onClose() {
+    if (
+      this.plugin &&
+      this.plugin.activeTaskMoveDestinationPicker === this
+    ) {
+      this.plugin.activeTaskMoveDestinationPicker = null;
+    }
+    super.onClose();
+  }
+}
+
+class PomodoroBulletMovePickerModal extends FilteredPickerModal {
+  constructor(app, plugin, session) {
+    const discovery = session && session.discovery ? session.discovery : {};
+    const sourceEntry = session && session.sourceEntry ? session.sourceEntry : null;
+    const destinationCount = (session && Array.isArray(session.entries)
+      ? session.entries
+      : []
+    ).filter(
+      (entry) =>
+        entry &&
+        entry.open &&
+        (!sourceEntry || entry.entryLine !== sourceEntry.entryLine),
+    ).length;
+    const selectedCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(discovery.actualCount, 0)),
+    );
+    const requestedCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(discovery.requestedCount, selectedCount)),
+    );
+    const sourcePosition =
+      sourceEntry && sourceEntry.position ? sourceEntry.position : "?";
+    const clampedText = discovery.clamped
+      ? ` · requested ${requestedCount}; reached end of Pomodoro`
+      : "";
+
+    super(app, {
+      items: [],
+      title: "Move Pomodoro bullets",
+      headerIcon: "timer",
+      inputLabel: "Filter Pomodoro destinations",
+      placeholder: "Filter open Pomodoros or type a new name",
+      resultsLabel: "Pomodoro destinations",
+      emptyText: "Type a name to create a new Pomodoro",
+      getSubtitle: () =>
+        `${selectedCount} bullet${selectedCount === 1 ? "" : "s"} from Pomodoro #${sourcePosition} · ${destinationCount} destination${destinationCount === 1 ? "" : "s"}${clampedText}`,
+      renderItem: (row, rowEl, query) =>
+        renderPomodoroBulletMovePickerRow(row, rowEl, query),
+      closeBeforeOpenItem: true,
+      openItem: (row) => {
+        if (!row || row.kind === "invalid") {
+          return false;
+        }
+        return plugin.commitPomodoroBulletMoveSession(session, row);
+      },
+    });
+    this.plugin = plugin;
+    this.session = session;
+  }
+
+  getFilteredItems() {
+    return createPomodoroBulletMovePickerRows(
+      this.session && this.session.entries,
+      this.session && this.session.sourceEntry
+        ? this.session.sourceEntry.entryLine
+        : null,
+      this.getRawQuery(),
+    );
   }
 
   onClose() {
@@ -16413,6 +16728,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.isRestoringDashLocation = false;
     this.pendingOpenTaskJumpCenterDeferred = null;
     this.vimMappingsRegistered = false;
+    // Shared guard for Ctrl+Shift+M task-note and Pomodoro-bullet pickers.
     this.activeTaskMoveDestinationPicker = null;
     this.activeBulletPropertyPicker = null;
     this.pendingTaskMoveJumpDeferred = null;
@@ -16466,7 +16782,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       name: "Move tasks to note",
       hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "M" }],
       editorCallback: (editor, view) =>
-        this.openTaskMoveDestinationPicker(editor, view),
+        this.openTaskMoveOrPomodoroBulletPicker(editor, view),
     });
 
     this.addCommand({
@@ -19493,7 +19809,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       event.stopImmediatePropagation();
     }
     resetPendingVimInputState(cm, "counted-task-move");
-    this.openTaskMoveDestinationPicker(view.editor, view, {
+    this.openTaskMoveOrPomodoroBulletPicker(view.editor, view, {
       countExplicit: pendingRepeat.explicit,
       additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
     });
@@ -21329,6 +21645,94 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
+  openTaskMoveOrPomodoroBulletPicker(editor, view, options = {}) {
+    const cursor = getEditorCursor(editor);
+    if (editor && typeof editor.getValue === "function" && cursor) {
+      const sourceContent = String(editor.getValue() || "");
+      if (findPomodoroBulletContext(sourceContent, cursor.line)) {
+        return this.openPomodoroBulletMovePicker(editor, view, options);
+      }
+    }
+
+    return this.openTaskMoveDestinationPicker(editor, view, options);
+  }
+
+  openPomodoroBulletMovePicker(editor, view, options = {}) {
+    const activePicker = this.activeTaskMoveDestinationPicker;
+    if (activePicker) {
+      const incomingCountExplicit = options.countExplicit === true;
+      const activeCountExplicit = Boolean(
+        activePicker.session && activePicker.session.countExplicit,
+      );
+      if (!incomingCountExplicit || activeCountExplicit) {
+        return true;
+      }
+      activePicker.close();
+    }
+
+    const sourceView = view || this.getActiveMarkdownView();
+    const sourceFile = sourceView && sourceView.file;
+    if (
+      !editor ||
+      typeof editor.getValue !== "function" ||
+      !this.isMarkdownFile(sourceFile)
+    ) {
+      new Notice("Open a Markdown Pomodoro note before moving bullets");
+      return false;
+    }
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("Place the cursor on a Pomodoro sub-bullet");
+      return false;
+    }
+    const sourceContent = String(editor.getValue() || "");
+    const discovery = discoverMovablePomodoroBulletTargets(
+      sourceContent,
+      cursor.line,
+      options.additionalTaskCount || 0,
+    );
+    if (!discovery.valid) {
+      new Notice(discovery.error);
+      return false;
+    }
+
+    const scroll =
+      typeof editor.getScrollInfo === "function"
+        ? editor.getScrollInfo()
+        : null;
+    const session = Object.freeze({
+      sourceFile,
+      sourcePath: sourceFile.path,
+      sourceView,
+      editor,
+      sourceContent,
+      cursor: Object.freeze({ ...cursor }),
+      scroll:
+        scroll && typeof scroll === "object"
+          ? Object.freeze({ left: scroll.left, top: scroll.top })
+          : null,
+      countExplicit: options.countExplicit === true,
+      discovery,
+      entries: discovery.context.entries,
+      sourceEntry: discovery.context.entry,
+    });
+    const picker = new PomodoroBulletMovePickerModal(
+      this.app,
+      this,
+      session,
+    );
+    this.activeTaskMoveDestinationPicker = picker;
+    try {
+      picker.open();
+    } catch (error) {
+      if (this.activeTaskMoveDestinationPicker === picker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      throw error;
+    }
+    return true;
+  }
+
   openTaskMoveDestinationPicker(editor, view, options = {}) {
     const activePicker = this.activeTaskMoveDestinationPicker;
     if (activePicker) {
@@ -21577,6 +21981,94 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         // The source leaf is already active; focus is a final nicety.
       }
     }
+  }
+
+  async commitPomodoroBulletMoveSession(session, row) {
+    const activeView = this.getActiveMarkdownView();
+    if (
+      !session ||
+      !session.editor ||
+      typeof session.editor.getValue !== "function" ||
+      !activeView ||
+      !activeView.file ||
+      activeView.file.path !== session.sourcePath ||
+      activeView.editor !== session.editor ||
+      String(session.editor.getValue() || "") !== session.sourceContent
+    ) {
+      new Notice("Source note is no longer active; nothing was moved");
+      return false;
+    }
+
+    let destination;
+    let destinationLabel;
+    if (row && row.kind === "existing") {
+      destination = {
+        kind: "existing",
+        entryLine: row.entry && row.entry.entryLine,
+      };
+      destinationLabel = getPomodoroBulletMoveDestinationLabel(row.entry);
+    } else if (row && row.kind === "new") {
+      destination = { kind: "new", name: row.name };
+      destinationLabel = row.name;
+    } else {
+      return false;
+    }
+
+    const plan = planPomodoroBulletMove(session.sourceContent, {
+      targets: session.discovery.targets,
+      sourceEntryLine: session.discovery.entryLine,
+      destination,
+    });
+    if (!plan.valid) {
+      new Notice(`${plan.error}; nothing was moved`);
+      return false;
+    }
+
+    const afterLines = splitMarkdownContent(plan.after).lines;
+    const firstMovedLine = Math.min(
+      Math.max(
+        Number.isInteger(plan.firstMovedLine) ? plan.firstMovedLine : 0,
+        0,
+      ),
+      Math.max(afterLines.length - 1, 0),
+    );
+    const sourceCursor = normalizePosition(session.cursor) || {
+      line: firstMovedLine,
+      ch: 0,
+    };
+    const finalCursor = {
+      line: firstMovedLine,
+      ch: Math.min(
+        sourceCursor.ch,
+        String(afterLines[firstMovedLine] || "").length,
+      ),
+    };
+
+    let applied = false;
+    try {
+      applied = applyEditorContentTransaction(
+        session.editor,
+        session.sourceContent,
+        plan.after,
+        finalCursor,
+      );
+    } catch (error) {
+      applied = String(session.editor.getValue() || "") === plan.after;
+    }
+    if (!applied || String(session.editor.getValue() || "") !== plan.after) {
+      new Notice("Pomodoro bullet move failed; nothing was moved");
+      return false;
+    }
+
+    this.restoreTaskMoveSourceContext(session);
+    new Notice(
+      buildPomodoroBulletMoveNotice(
+        plan,
+        session.discovery,
+        destinationLabel,
+      ),
+    );
+    return true;
   }
 
   async commitTaskMoveSession(session, destinationEntry) {
@@ -23533,6 +24025,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 module.exports.helpers = {
   FilteredPickerModal,
   TaskMoveDestinationPickerModal,
+  PomodoroBulletMovePickerModal,
   BulletPropertyPickerModal,
   finiteNumberOrNull,
   clampNumber,
@@ -23688,6 +24181,8 @@ module.exports.helpers = {
   removePomodoroBulletRanges,
   rebasePomodoroBulletBlock,
   planPomodoroBulletMove,
+  createPomodoroBulletMovePickerRows,
+  buildPomodoroBulletMoveNotice,
   deferredPomodoroTargetsFromLines,
   planDeferredPomodoroLinkCleanup,
   getOpenObsidianTaskLines,

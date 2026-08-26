@@ -192,6 +192,11 @@
   color: var(--interactive-accent);
 }
 
+.bob-cnp-pomodoro-row.is-new .bob-cnp-row-icon,
+.bob-cnp-pomodoro-row.is-new.is-selected .bob-cnp-row-icon {
+  color: var(--interactive-accent);
+}
+
 .bob-cnp-row-text {
   display: flex;
   flex-direction: column;
@@ -324,6 +329,12 @@
 }
 
 .bob-cnp-row-status.is-status-muted {
+  color: var(--text-muted);
+  border-color: var(--background-modifier-border);
+  background-color: var(--background-secondary);
+}
+
+.bob-cnp-row-status.is-status-unscheduled {
   color: var(--text-muted);
   border-color: var(--background-modifier-border);
   background-color: var(--background-secondary);

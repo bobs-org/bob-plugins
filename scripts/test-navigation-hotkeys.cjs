@@ -3770,6 +3770,23 @@ function createTaskMovePickerHarness() {
   return { editor, plugin, view };
 }
 
+function createPomodoroMovePickerHarness(harnessOptions = {}) {
+  const sourceFile = {
+    path: "Daily/2026-08-26.md",
+    basename: "2026-08-26",
+    extension: "md",
+  };
+  const editor = new TransactionEditor(
+    harnessOptions.content || pomodoroFixtureLines().join("\n"),
+    harnessOptions.cursor || { line: 5, ch: 0 },
+  );
+  const view = { editor, file: sourceFile };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => view;
+  return { editor, plugin, sourceFile, view };
+}
+
 function createTaskMoveDestinationFocusHarness(options = {}) {
   const plugin = new NavigationHotkeysPlugin();
   const captureCalls = [];
@@ -5273,6 +5290,151 @@ test("task move picker close lifecycle clears tracking for fresh sessions", asyn
   assert.notEqual(thirdPicker.session, secondPicker.session);
   assert.deepEqual(thirdPicker.session.cursor, { line: 2, ch: 0 });
   assert.equal(thirdPicker.isOpen, true);
+});
+
+test("Pomodoro bullet move picker opens sessions and clears the shared move picker slot", () => {
+  const { editor, plugin, view } = createPomodoroMovePickerHarness({
+    cursor: { line: 2, ch: 0 },
+  });
+  assert.equal(
+    plugin.openPomodoroBulletMovePicker(editor, view, {
+      countExplicit: true,
+      additionalTaskCount: 1,
+    }),
+    true,
+  );
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  assert.equal(picker instanceof helpers.PomodoroBulletMovePickerModal, true);
+  assert.equal(picker.isOpen, true);
+  assert.equal(picker.session.countExplicit, true);
+  assert.deepEqual(
+    picker.session.discovery.targets.map((target) => target.line),
+    [2, 3],
+  );
+
+  picker.close();
+  assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+});
+
+test("Ctrl+Shift+M dispatcher preserves task moves and routes Pomodoro sub-bullets", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const calls = [];
+  plugin.openTaskMoveDestinationPicker = () => {
+    calls.push("task");
+    return "task";
+  };
+  plugin.openPomodoroBulletMovePicker = () => {
+    calls.push("pomodoro");
+    return "pomodoro";
+  };
+
+  const taskEditor = new TransactionEditor("- [ ] #task Outside ^outside", {
+    line: 0,
+    ch: 0,
+  });
+  assert.equal(
+    plugin.openTaskMoveOrPomodoroBulletPicker(taskEditor, {
+      editor: taskEditor,
+      file: { path: "Tasks.md", extension: "md" },
+    }),
+    "task",
+  );
+
+  const pomodoroEditor = new TransactionEditor(
+    pomodoroFixtureLines().join("\n"),
+    { line: 5, ch: 0 },
+  );
+  assert.equal(
+    plugin.openTaskMoveOrPomodoroBulletPicker(pomodoroEditor, {
+      editor: pomodoroEditor,
+      file: { path: "Daily/2026-08-26.md", extension: "md" },
+    }),
+    "pomodoro",
+  );
+  assert.deepEqual(calls, ["task", "pomodoro"]);
+});
+
+test("move task command keeps Ctrl+Shift+M binding and calls the combined dispatcher", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const commands = [];
+  let routed = null;
+  plugin.app = {
+    workspace: {
+      getActiveFile: () => null,
+      on: () => ({}),
+      onLayoutReady: () => {},
+    },
+  };
+  plugin.addCommand = (command) => commands.push(command);
+  plugin.register = () => {};
+  plugin.registerEvent = () => {};
+  plugin.registerVimMappingsWhenReady = () => {};
+  plugin.registerOpenTaskJumpInputListeners = () => {};
+  plugin.registerCountedTransclusionToggleInputListeners = () => {};
+  plugin.registerCountedBulletPropertyInputListeners = () => {};
+  plugin.registerCountedTaskMoveInputListeners = () => {};
+  plugin.registerClearSearchHighlightInputListeners = () => {};
+  plugin.openTaskMoveOrPomodoroBulletPicker = (editor, view) => {
+    routed = { editor, view };
+    return true;
+  };
+
+  plugin.onload();
+  const command = commands.find((item) => item.id === "move-tasks-to-note");
+  assert.ok(command);
+  assert.deepEqual(command.hotkeys, [{ modifiers: ["Ctrl", "Shift"], key: "M" }]);
+
+  const editor = {};
+  const view = {};
+  assert.equal(command.editorCallback(editor, view), true);
+  assert.deepEqual(routed, { editor, view });
+});
+
+test("commitPomodoroBulletMoveSession applies one guarded same-file transaction", async () => {
+  notices.length = 0;
+  const { editor, plugin, sourceFile, view } = createPomodoroMovePickerHarness({
+    cursor: { line: 5, ch: 999 },
+  });
+  const sourceContent = editor.getValue();
+  const discovery = helpers.discoverMovablePomodoroBulletTargets(
+    sourceContent,
+    5,
+    0,
+  );
+  const rows = helpers.createPomodoroBulletMovePickerRows(
+    discovery.context.entries,
+    discovery.entryLine,
+    "verify",
+  );
+  const row = rows.find((item) => item.kind === "existing");
+  const expectedPlan = helpers.planPomodoroBulletMove(sourceContent, {
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    destination: { kind: "existing", entryLine: row.entry.entryLine },
+  });
+  const session = Object.freeze({
+    sourceFile,
+    sourcePath: sourceFile.path,
+    sourceView: view,
+    editor,
+    sourceContent,
+    cursor: Object.freeze({ line: 5, ch: 999 }),
+    scroll: null,
+    countExplicit: false,
+    discovery,
+    entries: discovery.context.entries,
+    sourceEntry: discovery.context.entry,
+  });
+
+  assert.equal(await plugin.commitPomodoroBulletMoveSession(session, row), true);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.cursor, {
+    line: expectedPlan.firstMovedLine,
+    ch: expectedPlan.after.split("\n")[expectedPlan.firstMovedLine].length,
+  });
+  assert.equal(notices.at(-1), "Moved 1 bullet to VERIFY");
 });
 
 test("task move picker closes before commit while other pickers retain delayed close", async () => {
@@ -8455,6 +8617,195 @@ test("formatPomodoroEntryLine emits a placeholder entry with or without a name",
   assert.equal(helpers.formatPomodoroEntryLine("BODY"), "- [ ] () — BODY");
 });
 
+test("createPomodoroBulletMovePickerRows excludes ineligible entries and handles create/invalid rows", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const { entries } = helpers.collectPomodoroEntries(content);
+  const sourceEntryLine = entries[1].entryLine;
+  const emptyRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "",
+  );
+  assert.deepEqual(
+    emptyRows.map((row) => [row.kind, row.title]),
+    [
+      ["existing", "Pomodoro #3"],
+      ["existing", "BODY"],
+      ["existing", "VERIFY"],
+    ],
+  );
+  assert.equal(emptyRows.some((row) => row.entry && row.entry.open === false), false);
+  assert.equal(emptyRows.some((row) => row.entry && row.entry.entryLine === sourceEntryLine), false);
+
+  const createRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "deep",
+  );
+  assert.deepEqual(createRows, [
+    {
+      kind: "new",
+      name: "DEEP",
+      title: "New Pomodoro DEEP",
+      meta: "Created below the current Pomodoro",
+    },
+  ]);
+
+  const collisionRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "body",
+  );
+  assert.equal(collisionRows.some((row) => row.kind === "new"), false);
+  assert.deepEqual(
+    collisionRows.map((row) => row.title),
+    ["BODY"],
+  );
+
+  const strippedEmptyRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "——",
+  );
+  assert.equal(strippedEmptyRows[0].kind, "invalid");
+  assert.match(strippedEmptyRows[0].statusText, /empty/);
+
+  const overLengthRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "X".repeat(helpers.POMODORO_NAME_MAX_LENGTH + 1),
+  );
+  assert.equal(overLengthRows[0].kind, "invalid");
+  assert.match(overLengthRows[0].statusText, /exceed/);
+});
+
+test("createPomodoroBulletMovePickerRows formats titles, metadata, and query matches", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m])",
+    "\t- [[range#^one]]",
+    "\t- [[range#^two]]",
+    "- [ ] ()",
+    "\t- [[plain#^one]]",
+    "- [ ] () — BODY",
+    "\t- [[body#^one]]",
+    "- [ ] () — EMPTY",
+  ].join("\n");
+  const { entries } = helpers.collectPomodoroEntries(content);
+  const rows = helpers
+    .createPomodoroBulletMovePickerRows(entries, -1, "")
+    .filter((row) => row.kind === "existing");
+
+  assert.deepEqual(
+    rows.map((row) => ({
+      title: row.title,
+      statusLabel: row.statusLabel,
+      meta: row.meta,
+    })),
+    [
+      {
+        title: "0920-0950",
+        statusLabel: "",
+        meta: "[[range#^one]] +1 more",
+      },
+      {
+        title: "Pomodoro #2",
+        statusLabel: "Unscheduled",
+        meta: "[[plain#^one]]",
+      },
+      {
+        title: "BODY",
+        statusLabel: "Unscheduled",
+        meta: "[[body#^one]]",
+      },
+      {
+        title: "EMPTY",
+        statusLabel: "Unscheduled",
+        meta: "No sub-bullets yet",
+      },
+    ],
+  );
+
+  const existingTitlesFor = (query) =>
+    helpers
+      .createPomodoroBulletMovePickerRows(entries, -1, query)
+      .filter((row) => row.kind === "existing")
+      .map((row) => row.title);
+  assert.deepEqual(existingTitlesFor("body"), ["BODY"]);
+  assert.deepEqual(existingTitlesFor("0920"), ["0920-0950"]);
+  assert.deepEqual(existingTitlesFor("#2"), ["Pomodoro #2"]);
+  assert.deepEqual(existingTitlesFor("2"), ["0920-0950", "Pomodoro #2"]);
+  assert.deepEqual(existingTitlesFor("plain"), ["Pomodoro #2"]);
+
+  const onlySourceContent = [
+    "## Pomodoros",
+    "- [ ] () — ONLY",
+    "\t- [[x#^one]]",
+  ].join("\n");
+  const { entries: onlyEntries } =
+    helpers.collectPomodoroEntries(onlySourceContent);
+  assert.deepEqual(
+    helpers.createPomodoroBulletMovePickerRows(
+      onlyEntries,
+      onlyEntries[0].entryLine,
+      "next",
+    ),
+    [
+      {
+        kind: "new",
+        name: "NEXT",
+        title: "New Pomodoro NEXT",
+        meta: "Created below the current Pomodoro",
+      },
+    ],
+  );
+});
+
+test("buildPomodoroBulletMoveNotice formats counts, destinations, and suffixes", () => {
+  assert.equal(
+    helpers.buildPomodoroBulletMoveNotice(
+      { createdPomodoro: false, skippedDuplicateCount: 0, movedCount: 3 },
+      { actualCount: 3, clamped: false },
+      "VERIFY",
+    ),
+    "Moved 3 bullets to VERIFY",
+  );
+  assert.equal(
+    helpers.buildPomodoroBulletMoveNotice(
+      { createdPomodoro: false, skippedDuplicateCount: 0, movedCount: 1 },
+      { actualCount: 1, clamped: false },
+      "Pomodoro #6",
+    ),
+    "Moved 1 bullet to Pomodoro #6",
+  );
+  assert.equal(
+    helpers.buildPomodoroBulletMoveNotice(
+      {
+        createdPomodoro: true,
+        createdPomodoroName: "BODY",
+        skippedDuplicateCount: 0,
+        movedCount: 3,
+      },
+      { actualCount: 3, clamped: false },
+      "BODY",
+    ),
+    "Moved 3 bullets to new Pomodoro BODY",
+  );
+  assert.equal(
+    helpers.buildPomodoroBulletMoveNotice(
+      {
+        createdPomodoro: true,
+        createdPomodoroName: "BODY",
+        skippedDuplicateCount: 1,
+        movedCount: 2,
+      },
+      { actualCount: 3, requestedCount: 5, clamped: true },
+      "BODY",
+    ),
+    "Moved 3 bullets to new Pomodoro BODY (merged 1 duplicate) (requested 5; reached end of Pomodoro)",
+  );
+});
+
 test("collectPomodoroEntries reports positions, open/name, child ranges, previews, and skips fenced/absent sections", () => {
   const content = pomodoroFixtureLines().join("\n");
   const { section, entries } = helpers.collectPomodoroEntries(content);
@@ -8510,6 +8861,16 @@ test("findPomodoroBulletContext resolves owning entries and rejects entry/blank/
   assert.equal(helpers.findPomodoroBulletContext(content, 1), null);
   assert.equal(helpers.findPomodoroBulletContext(content, 0), null);
   assert.equal(helpers.findPomodoroBulletContext(content, 13), null);
+});
+
+test("findPomodoroBulletContext leaves plain #task lines on the task-move route", () => {
+  const content = [
+    "- [ ] #task Plain outside Pomodoros ^plain",
+    "",
+    ...pomodoroFixtureLines(),
+  ].join("\n");
+  assert.equal(helpers.findPomodoroBulletContext(content, 0), null);
+  assert.notEqual(helpers.findPomodoroBulletContext(content, 7), null);
 });
 
 test("discoverMovablePomodoroBulletTargets collects bare/counted siblings, clamps, and isolates subtree and grandchild depths", () => {

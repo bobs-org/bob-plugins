@@ -755,6 +755,90 @@ test("daily-note paths follow the canonical YYYY/YYYYMMDD.md layout", () => {
   }
 });
 
+test("parsePomodoroEntryLineParts reads placeholder and range names conservatively", () => {
+  const cases = [
+    [
+      "- [ ] ()",
+      { placeholder: true, rangeText: "()", name: null, trailingText: "" },
+    ],
+    [
+      "- [ ] ( )",
+      { placeholder: true, rangeText: "( )", name: null, trailingText: "" },
+    ],
+    [
+      "- [x] (**1540-1615** [t:: 35m])  — PAGER",
+      {
+        placeholder: false,
+        rangeText: "(**1540-1615** [t:: 35m])",
+        name: "PAGER",
+        trailingText: "",
+      },
+    ],
+    [
+      "- [ ] (**09:20-09:50**) — DEEP WORK",
+      {
+        placeholder: false,
+        rangeText: "(**09:20-09:50**)",
+        name: "DEEP WORK",
+        trailingText: "",
+      },
+    ],
+    [
+      "- [ ] () — deep work",
+      {
+        placeholder: true,
+        rangeText: "()",
+        name: "deep work",
+        trailingText: "",
+      },
+    ],
+    [
+      "- [ ] () —",
+      { placeholder: true, rangeText: "()", name: null, trailingText: "" },
+    ],
+    [
+      "- [ ] () note — X",
+      {
+        placeholder: true,
+        rangeText: "()",
+        name: null,
+        trailingText: " note — X",
+      },
+    ],
+    [
+      "- [x] (**0920-0950** [t:: 30m — ish])",
+      {
+        placeholder: false,
+        rangeText: "(**0920-0950** [t:: 30m — ish])",
+        name: null,
+        trailingText: "",
+      },
+    ],
+  ];
+
+  for (const [lineText, expected] of cases) {
+    assert.deepEqual(helpers.parsePomodoroEntryLineParts(lineText), expected);
+  }
+
+  assert.equal(helpers.parsePomodoroEntryLineParts("- [ ] Focus — X"), null);
+  assert.equal(helpers.parsePomodoroEntryLineParts("plain text () — X"), null);
+});
+
+test("formatPomodoroPlaceholderLine keeps unnamed placeholders canonical", () => {
+  for (const name of [null, "", "   \t "]) {
+    assert.equal(helpers.formatPomodoroPlaceholderLine(name), "- [ ] ()");
+  }
+
+  assert.equal(
+    helpers.formatPomodoroPlaceholderLine("RELEASE"),
+    "- [ ] () — RELEASE",
+  );
+  assert.equal(
+    helpers.formatPomodoroPlaceholderLine("   release prep   "),
+    "- [ ] () — release prep",
+  );
+});
+
 test("Pomodoro bullet toggle accepts empty indented list items", () => {
   for (const sourceLineText of [
     "\t- ",
@@ -858,6 +942,22 @@ test("Pomodoro bullet toggle reverses only empty open childless placeholders", (
       2,
     ),
     null,
+  );
+});
+
+test("Pomodoro bullet toggle reverses named empty open childless placeholders", () => {
+  assert.deepEqual(
+    helpers.getPomodoroBulletToggle(
+      ["## Pomodoros", "- [ ] () — RELEASE", "## Notes"],
+      1,
+    ),
+    {
+      line: 1,
+      direction: "to-bullet",
+      sourceLineText: "- [ ] () — RELEASE",
+      lineText: "\t- ",
+      cursorCh: 3,
+    },
   );
 });
 
@@ -1820,6 +1920,33 @@ test("Pomodoro completion groups worked-on links before deferred marked links be
   assert.equal((editor.getValue().match(/- \[ \] \(\)/g) || []).length, 1);
   assert.equal(editor.getValue().includes("]]#"), false);
   assert.equal(editor.getValue().includes("🍅 [[Projects/Focus#^move-one"), false);
+});
+
+test("Pomodoro completion carries the closed Pomodoro name onto created entries", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (**1815-1905** [t:: 50m])   — RELEASE",
+    "\t- [[Tasks#^ordinary-one|Ordinary one]]",
+    "\t- [[Projects/Focus#^move-one|Move one]]#",
+    "\t- keep this note",
+    "\t- [[#^move-two]]#",
+    "\t- [[Tasks#^ordinary-two|Ordinary two]]",
+    "- [ ] Later",
+    "\t- [[Tasks#^later|Keep later]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  const insert = plan.edits.find((edit) => edit.type === "insertLines");
+
+  assert.ok(insert);
+  assert.equal(insert.lines[0], "- [ ] () — RELEASE");
+  assert.equal(plan.createdPomodoroName, "RELEASE");
+  assert.deepEqual(plan.copiedBulletLines, [
+    "\t- [[Tasks#^ordinary-one|Ordinary one]]",
+    "\t- [[Tasks#^ordinary-two|Ordinary two]]",
+    "\t- [[Projects/Focus#^move-one|Move one]]",
+    "\t- [[#^move-two]]",
+  ]);
 });
 
 test("buildPomodoroCompletionPlan groups a #-marked bullet above several unmarked bullets", () => {

@@ -64,6 +64,14 @@ const TOP_LEVEL_LIST_ITEM_LINE_RE = /^(?:[-+*]|\d+[.)])(?:[ \t]+|$)/;
 const WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 const POMODORO_PLACEHOLDER_RE = /\(\s*\)/;
 const POMODORO_PLACEHOLDER_LINE = "- [ ] ()";
+// Duplicated from bob-navigation-hotkeys intentionally: deployed plugins must
+// not import one another.
+const POMODORO_NAME_SEPARATOR = "—";
+const POMODORO_NAME_TAIL_RE = /^[ \t]*—[ \t]*(.*)$/;
+const POMODORO_COLON_TIME_RANGE_RE =
+  /\((\*\*)?(\d\d):(\d\d)\s*-\s*(\d\d):(\d\d)(\*\*)?(\s+[^)]*)?\)/;
+const POMODORO_COMPACT_TIME_RANGE_RE =
+  /\((\*\*)?(\d\d)(\d\d)\s*-\s*(\d\d)(\d\d)(\*\*)?(\s+[^)]*)?\)/;
 const EMPTY_POMODORO_SUB_BULLET_LINE = "\t- ";
 const EMPTY_TASK_CHECKBOX_MARKER = "[ ] ";
 const POMODORO_MARKER = "🍅";
@@ -2890,6 +2898,59 @@ function isPomodoroTaskLine(lines, section, line) {
   );
 }
 
+function parsePomodoroEntryLineParts(lineText) {
+  const line = String(lineText || "");
+  if (!isTopLevelTaskLine(line)) {
+    return null;
+  }
+
+  const taskMatch = line.match(TASK_LINE_RE);
+  const body = taskMatch ? line.slice(taskMatch[0].length).trim() : "";
+  const placeholderMatch = body.match(POMODORO_PLACEHOLDER_RE);
+  let rangeMatch = null;
+  let placeholder = false;
+
+  if (placeholderMatch && placeholderMatch.index === 0) {
+    rangeMatch = placeholderMatch;
+    placeholder = true;
+  } else {
+    rangeMatch =
+      body.match(POMODORO_COLON_TIME_RANGE_RE) ||
+      body.match(POMODORO_COMPACT_TIME_RANGE_RE);
+    if (!rangeMatch || rangeMatch.index !== 0) {
+      return null;
+    }
+  }
+
+  const rangeText = rangeMatch[0];
+  const remainingBody = body.slice(rangeText.length);
+  const tailMatch = remainingBody.match(POMODORO_NAME_TAIL_RE);
+  let name = null;
+  let trailingText = remainingBody;
+  if (tailMatch) {
+    const trimmedName = tailMatch[1].trim();
+    if (trimmedName) {
+      name = trimmedName;
+    }
+    trailingText = "";
+  }
+
+  return Object.freeze({
+    placeholder,
+    rangeText,
+    name,
+    trailingText,
+  });
+}
+
+function formatPomodoroPlaceholderLine(name) {
+  const trimmedName = name == null ? "" : String(name).trim();
+  if (!trimmedName) {
+    return POMODORO_PLACEHOLDER_LINE;
+  }
+  return `${POMODORO_PLACEHOLDER_LINE} ${POMODORO_NAME_SEPARATOR} ${trimmedName}`;
+}
+
 function getSubBulletBlockRange(lines, pomodoroLine, section = null) {
   if (!Array.isArray(lines) || !Number.isInteger(pomodoroLine)) {
     return null;
@@ -2931,11 +2992,7 @@ function getPomodoroBulletToggle(lines, activeLine) {
   const sourceLineText = String(lines[activeLine] || "");
   if (isTopLevelTaskLine(sourceLineText)) {
     const taskStatus = getTaskStatusForLine(sourceLineText, activeLine);
-    const taskMatch = sourceLineText.match(TASK_LINE_RE);
-    const body = taskMatch
-      ? sourceLineText.slice(taskMatch[0].length).trim()
-      : "";
-    const placeholderMatch = body.match(POMODORO_PLACEHOLDER_RE);
+    const parsedPomodoro = parsePomodoroEntryLineParts(sourceLineText);
     const subBulletRange = getSubBulletBlockRange(
       lines,
       activeLine,
@@ -2944,9 +3001,9 @@ function getPomodoroBulletToggle(lines, activeLine) {
     if (
       taskStatus &&
       taskStatus.symbol === " " &&
-      placeholderMatch &&
-      placeholderMatch.index === 0 &&
-      placeholderMatch[0].length === body.length &&
+      parsedPomodoro &&
+      parsedPomodoro.placeholder &&
+      parsedPomodoro.trailingText === "" &&
       subBulletRange &&
       subBulletRange.startLine === subBulletRange.endLine
     ) {
@@ -3291,6 +3348,10 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
     return null;
   }
 
+  const parsedPomodoro = parsePomodoroEntryLineParts(lines[pomodoroLine]);
+  const createdPomodoroName = parsedPomodoro && parsedPomodoro.name
+    ? parsedPomodoro.name
+    : null;
   const sourceRange = getSubBulletBlockRange(lines, pomodoroLine, section);
   const sourceBullets = classifyPomodoroSubBullets(lines, sourceRange);
   const nextPomodoroLine = findNextPomodoroLine(lines, section, pomodoroLine);
@@ -3356,6 +3417,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
     [...movedSourceLines].filter((removedLine) => removedLine < line).length;
 
   let createdPomodoro = false;
+  let plannedCreatedPomodoroName = null;
   let copiedBulletLines = [];
   let cursorTargetLine = Number.isInteger(nextPomodoroLine)
     ? nextPomodoroLine - removedLineCountBefore(nextPomodoroLine)
@@ -3363,12 +3425,13 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
 
   if (shouldCreatePomodoro) {
     createdPomodoro = true;
+    plannedCreatedPomodoroName = createdPomodoroName;
     copiedBulletLines = copyableBulletLines;
     edits.push({
       type: "insertLines",
       line: sourceRange.endLine,
       lines: [
-        POMODORO_PLACEHOLDER_LINE,
+        formatPomodoroPlaceholderLine(createdPomodoroName),
         ...(copiedBulletLines.length > 0
           ? copiedBulletLines
           : [EMPTY_POMODORO_SUB_BULLET_LINE]),
@@ -3384,6 +3447,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
     sourceBullets,
     nextPomodoroLine,
     createdPomodoro,
+    createdPomodoroName: plannedCreatedPomodoroName,
     cursorTargetLine,
     copiedBulletLines,
     edits,
@@ -10432,6 +10496,7 @@ module.exports.helpers = {
   fuzzyMatchesText,
   formatCalendarDate,
   formatLocalDate,
+  formatPomodoroPlaceholderLine,
   formatScheduleLogEntry,
   getDailyNoteDateFromPath,
   getBlockLineFromCache,
@@ -10455,6 +10520,7 @@ module.exports.helpers = {
   getListItemBlockRange,
   insertLineInSourceText,
   parseListItemPrefix,
+  parsePomodoroEntryLineParts,
   parseScheduleLogMarkerLine,
   parseStrictCalendarDate,
   planBlockedStatusRetirement,

@@ -240,26 +240,25 @@ test("compatibility: existing snippets remain unchanged and uppercase T/DT remai
   assert.equal(helpers.parseTrigger("SE"), null);
 });
 
-test("parseEmDashTrigger parses exact `--` at column zero and after prose with exact spans", () => {
-  assert.deepEqual(helpers.parseEmDashTrigger("--"), {
+test("parseEmDashTrigger parses exact `-` at column zero and after prose with exact spans", () => {
+  assert.deepEqual(helpers.parseEmDashTrigger("-"), {
     kind: "emDash",
-    trigger: "--",
+    trigger: "-",
     startCh: 0,
-    endCh: 2,
+    endCh: 1,
   });
 
-  assert.deepEqual(helpers.parseEmDashTrigger("left--"), {
+  assert.deepEqual(helpers.parseEmDashTrigger("left-"), {
     kind: "emDash",
-    trigger: "--",
+    trigger: "-",
     startCh: 4,
-    endCh: 6,
+    endCh: 5,
   });
 
-  // A single hyphen never matches.
-  assert.equal(helpers.parseEmDashTrigger("-"), null);
   assert.equal(helpers.parseEmDashTrigger(""), null);
 
-  // A third hyphen immediately before the pair rejects the match.
+  // Any preceding hyphen rejects the match.
+  assert.equal(helpers.parseEmDashTrigger("--"), null);
   assert.equal(helpers.parseEmDashTrigger("---"), null);
   assert.equal(helpers.parseEmDashTrigger("left---"), null);
 });
@@ -267,47 +266,51 @@ test("parseEmDashTrigger parses exact `--` at column zero and after prose with e
 test("computeSnippetExpansion computes exactly one U+2014 plus trailing U+0020 replacement for emDash triggers", () => {
   const expansion = helpers.computeSnippetExpansion({
     kind: "emDash",
-    trigger: "--",
+    trigger: "-",
   });
   assert.equal(expansion.replacement, "— ");
   assert.equal(expansion.replacement, "— ");
   assert.equal(expansion.replacement.length, 2);
 });
 
-test("findExpansion/expandLineAtCursor expand `--` in whole-line and inline positions, preserving prefix/suffix", () => {
+test("findExpansion/expandLineAtCursor expand `-` in whole-line and inline positions, preserving prefix/suffix", () => {
   // Whole line, cursor at end.
-  const wholeLine = helpers.expandLineAtCursor("--", 2);
+  const wholeLine = helpers.expandLineAtCursor("-", 1);
   assert.notEqual(wholeLine, null);
   assert.equal(wholeLine.line, "— ");
   assert.equal(wholeLine.cursorCh, 2);
 
-  // Inline: left--|right -> left— |right
-  const inline = helpers.expandLineAtCursor("left--right", 6);
+  // Inline: left-|right -> left— |right
+  const inline = helpers.expandLineAtCursor("left-right", 5);
   assert.notEqual(inline, null);
   assert.equal(inline.line, "left— right");
   assert.equal(inline.cursorCh, 6);
 
   // Prefix only: preceded by other text, cursor at end of line.
-  const prefixOnly = helpers.expandLineAtCursor("prose --", 8);
+  const prefixOnly = helpers.expandLineAtCursor("prose -", 7);
   assert.notEqual(prefixOnly, null);
   assert.equal(prefixOnly.line, "prose — ");
   assert.equal(prefixOnly.cursorCh, 8);
 
-  // Suffix only: `--` at column zero followed by more prose.
-  const suffixOnly = helpers.expandLineAtCursor("--suffix", 2);
+  // Suffix only: `-` at column zero followed by more prose.
+  const suffixOnly = helpers.expandLineAtCursor("-suffix", 1);
   assert.notEqual(suffixOnly, null);
   assert.equal(suffixOnly.line, "— suffix");
   assert.equal(suffixOnly.cursorCh, 2);
 
   // Pre-existing suffix whitespace is not consumed or deduplicated: the
-  // authored space after `--` remains, alongside the newly added one.
-  const suffixWithSpace = helpers.expandLineAtCursor("-- suffix", 2);
+  // authored space after `-` remains, alongside the newly added one.
+  const suffixWithSpace = helpers.expandLineAtCursor("- suffix", 1);
   assert.notEqual(suffixWithSpace, null);
   assert.equal(suffixWithSpace.line, "—  suffix");
   assert.equal(suffixWithSpace.cursorCh, 2);
 });
 
-test("findExpansion refuses `---` and longer hyphen runs at the end or between hyphens", () => {
+test("findExpansion refuses `--`, `---`, and longer hyphen runs at the end or between hyphens", () => {
+  // Former two-hyphen trigger is unhandled at both cursor positions.
+  assert.equal(helpers.findExpansion("--", 2), null);
+  assert.equal(helpers.findExpansion("--", 1), null);
+
   // Cursor at the end of a bare three-hyphen thematic-break run.
   assert.equal(helpers.findExpansion("---", 3), null);
 
@@ -324,15 +327,15 @@ test("findExpansion refuses `---` and longer hyphen runs at the end or between h
   assert.equal(helpers.findExpansion("left---right", 7), null);
 });
 
-test("expandFromEditor replaces exactly the `--` trigger, sets cursor after it, and returns true", () => {
+test("expandFromEditor replaces exactly the `-` trigger, sets cursor after it, and returns true", () => {
   const plugin = new LedgerToolsPlugin();
   let replacedRange = null;
   let cursorPosition = null;
 
   const mockEditor = {
-    getCursor: () => ({ line: 0, ch: 6 }), // cursor is right after "left--"
-    getLine: (line) => (line === 0 ? "left--right" : ""),
-    listSelections: () => [{ anchor: { line: 0, ch: 6 }, head: { line: 0, ch: 6 } }],
+    getCursor: () => ({ line: 0, ch: 5 }), // cursor is right after "left-"
+    getLine: (line) => (line === 0 ? "left-right" : ""),
+    listSelections: () => [{ anchor: { line: 0, ch: 5 }, head: { line: 0, ch: 5 } }],
     replaceRange: (replacement, from, to) => {
       replacedRange = { replacement, from, to };
     },
@@ -345,9 +348,9 @@ test("expandFromEditor replaces exactly the `--` trigger, sets cursor after it, 
   assert.equal(success, true);
   assert.notEqual(replacedRange, null);
   assert.equal(replacedRange.from.line, 0);
-  assert.equal(replacedRange.from.ch, 4); // "--" starts at index 4
+  assert.equal(replacedRange.from.ch, 4); // "-" starts at index 4
   assert.equal(replacedRange.to.line, 0);
-  assert.equal(replacedRange.to.ch, 6); // "--" ends at index 6
+  assert.equal(replacedRange.to.ch, 5); // "-" ends at index 5
   assert.equal(replacedRange.replacement, "— ");
   assert.notEqual(cursorPosition, null);
   assert.equal(cursorPosition.line, 0);
@@ -361,6 +364,13 @@ test("regression: existing snippet triggers still parse/expand unchanged alongsi
   assert.equal(helpers.parseTrigger("t0").kind, "time");
   assert.equal(helpers.parseTrigger("dt0").kind, "datetime");
   assert.equal(helpers.parseTrigger("D0").kind, "datedEntry");
+  assert.equal(helpers.parseTrigger("se-").kind, "ledgerRange");
+
+  assert.equal(helpers.findExpansion("d-", 2, FIXED_DATE), null);
+  assert.equal(helpers.findExpansion("D-", 2, FIXED_DATE), null);
+  assert.equal(helpers.findExpansion("t-", 2, FIXED_DATE), null);
+  assert.equal(helpers.findExpansion("dt-", 3, FIXED_DATE), null);
+  assert.notEqual(helpers.findExpansion("se-", 3, FIXED_DATE), null);
 
   const taskExpansion = helpers.expandLineAtCursor("ta", 2, FIXED_DATE);
   assert.notEqual(taskExpansion, null);
@@ -368,7 +378,7 @@ test("regression: existing snippet triggers still parse/expand unchanged alongsi
 
   // Ordinary non-matching text remains unhandled.
   assert.equal(helpers.findExpansion("hello", 5, FIXED_DATE), null);
-  assert.equal(helpers.findExpansion("-", 1, FIXED_DATE), null);
+  assert.equal(helpers.findExpansion("hello.", 5, FIXED_DATE), null);
 });
 
 test("expandFromEditor replaces D0 trigger in editor and sets cursor to trailing position", () => {

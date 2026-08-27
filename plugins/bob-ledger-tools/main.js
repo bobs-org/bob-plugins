@@ -15,6 +15,7 @@ const DAILY_LOCATION_RESTORE_ASSERT_FRAMES = 2;
 const TRIGGER_RE = /(^|[^A-Za-z0-9_])((?:dt|[dtD])-?\d+|se\d*(?:-\d*)?|ta)$/;
 const LEDGER_TRIGGER_RE = /^se(\d*)(?:-(\d*))?$/;
 const DATE_TIME_TRIGGER_RE = /^(dt|[dtD])(-?\d+)$/;
+const INCOMPLETE_NEGATIVE_OFFSET_TRIGGER_RE = /(^|[^A-Za-z0-9_])(?:dt|[dtD])-$/;
 const WORD_CHAR_RE = /[A-Za-z0-9_]/;
 const EM_DASH_REPLACEMENT = "— ";
 const POMODOROS_HEADING_RE = /^##\s+Pomodoros(?:\s.*)?$/;
@@ -33,19 +34,19 @@ const LEGACY_STOPWATCH_DURATION_GLOBAL_RE =
   /\u23f1\ufe0f?\s*((?:(?:\d+\s*h)\s*)?(?:\d+\s*m)|(?:\d+\s*h))/gi;
 
 function parseEmDashTrigger(text) {
-  if (!text.endsWith("--")) {
+  if (!text.endsWith("-")) {
     return null;
   }
 
-  const precedingChar = text.length > 2 ? text[text.length - 3] : "";
+  const precedingChar = text.length > 1 ? text[text.length - 2] : "";
   if (precedingChar === "-") {
     return null;
   }
 
   return {
     kind: "emDash",
-    trigger: "--",
-    startCh: text.length - 2,
+    trigger: "-",
+    startCh: text.length - 1,
     endCh: text.length,
   };
 }
@@ -55,6 +56,9 @@ function parseTrigger(textBeforeCursor) {
   const match = TRIGGER_RE.exec(text);
 
   if (!match) {
+    if (INCOMPLETE_NEGATIVE_OFFSET_TRIGGER_RE.test(text)) {
+      return null;
+    }
     return parseEmDashTrigger(text);
   }
 

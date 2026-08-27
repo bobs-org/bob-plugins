@@ -1,9 +1,9 @@
 {
   "id": "task-status-cycler",
   "name": "Task Status Cycler",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "minAppVersion": "1.8.7",
-  "description": "Complete Pomodoros while carrying worked-on/deferred links and copying a closed named Pomodoro's name onto the created one, toggle empty Pomodoro placeholders/sub-bullets with Ctrl+Alt+] including named placeholders, toggle Obsidian tasks with Ctrl+Shift+] — always prompting for promotion destinations when exact Tasks exists (Enter defaults to Tasks conversion, including in place when already there; typing creates a new section; non-Tasks stays plain; empty non-Tasks source sections are removed) and for demotions from Tasks — cycle Blocked tasks out with option+[/option+], recover affected Blocked dependents, propagate Ctrl+Enter to embedded task transclusions, and preserve embedded-task behavior.",
+  "description": "Complete Pomodoros while carrying worked-on/deferred links, copying a closed named Pomodoro's name onto the created one, and copying each Task Link sub-bullet's sub-sub-bullets into the linked task's Work Log, toggle empty Pomodoro placeholders/sub-bullets with Ctrl+Alt+] including named placeholders, toggle Obsidian tasks with Ctrl+Shift+] — always prompting for promotion destinations when exact Tasks exists (Enter defaults to Tasks conversion, including in place when already there; typing creates a new section; non-Tasks stays plain; empty non-Tasks source sections are removed) and for demotions from Tasks — cycle Blocked tasks out with option+[/option+], recover affected Blocked dependents, propagate Ctrl+Enter to embedded task transclusions, and preserve embedded-task behavior.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

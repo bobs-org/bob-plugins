@@ -577,6 +577,210 @@ function formatScheduleLogEntry(removedDate, todayDate) {
   return `${SCHEDULE_LOG_ENTRY_EMPHASIS}${removedDate}${SCHEDULE_LOG_TRANSITION}${todayDate}${SCHEDULE_LOG_ENTRY_EMPHASIS}${SCHEDULE_LOG_SEPARATOR}${SCHEDULE_LOG_UNBLOCKED_REASON}`;
 }
 
+// Managed "work log" child bullet grammar: `- 🛠️ **WORK LOG**` and the legacy
+// `- **Work log:**` spelling. Mirrors plugins/block-id-prompt/main.js's
+// WORK_LOG_PARENT_RE and must stay byte-compatible, since bob-cli's
+// src/native/capture.rs is a third implementation reading and writing the
+// same logs; kept as an independent copy since plugins are deployed
+// separately and must not import each other's main.js.
+const WORK_LOG_EMOJI = "🛠️";
+const WORK_LOG_LABEL = "WORK LOG";
+const LEGACY_WORK_LOG_LABEL = "Work log";
+const WORK_LOG_PARENT_RE = new RegExp(
+  `^([ \\t]*)([-*+]|\\d+[.)])[ \\t]+(?:${WORK_LOG_EMOJI}[ \\t]+)?\\*\\*(?:${WORK_LOG_LABEL}|${LEGACY_WORK_LOG_LABEL}):?\\*\\*[ \\t]*$`,
+);
+const WORK_LOG_ENTRY_EMPHASIS = "*";
+const WORK_LOG_ENTRY_SEPARATOR = " — ";
+
+function parseWorkLogMarkerLine(lineText) {
+  const match = WORK_LOG_PARENT_RE.exec(String(lineText || ""));
+  return match ? { indent: match[1], marker: match[2] } : null;
+}
+
+// The managed Work Log marker among `taskLine`'s direct children, or null. A
+// marker belonging to a nested child task is ignored.
+function findWorkLogMarker(lines, taskLine) {
+  if (
+    !Array.isArray(lines) ||
+    !Number.isInteger(taskLine) ||
+    taskLine < 0 ||
+    taskLine >= lines.length
+  ) {
+    return null;
+  }
+
+  const endLine = findTaskChildBlockEndLine(lines, taskLine);
+  for (let line = taskLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const parsed = parseWorkLogMarkerLine(lineText);
+    if (parsed && findNearestParentListItemLine(lines, line) === taskLine) {
+      return { line, indent: parsed.indent, marker: parsed.marker };
+    }
+  }
+
+  return null;
+}
+
+// The list-item prefix (indent and marker) of `parentLine`'s first direct
+// child list item, or null when it has none yet. Shared by both Work Log
+// insertion sites: finding an existing entry's style under a marker, and
+// finding a task's own child-bullet style when creating a fresh marker.
+function findFirstDirectChildPrefix(lines, parentLine) {
+  if (!Array.isArray(lines) || !Number.isInteger(parentLine)) {
+    return null;
+  }
+
+  const endLine = findTaskChildBlockEndLine(lines, parentLine);
+  for (let line = parentLine + 1; line <= endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+
+    const parsed = parseListItemPrefix(lineText);
+    if (parsed && findNearestParentListItemLine(lines, line) === parentLine) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+// One Obsidian Tab-indent level below `parentIndent`. A literal tab is what
+// Obsidian inserts for Tab (the vault leaves `useTab` at its default); a
+// space-only parent indent is a legacy note style, reused as the unit so the
+// child stays space-indented instead of becoming a tab/space mix. Duplicated
+// from block-id-prompt's childIndentUnitForIndent (worklog-indent phase).
+function childIndentUnitForIndent(parentIndent) {
+  const indent = String(parentIndent || "");
+  return indent && !indent.includes("\t") ? indent : CHILD_BULLET_INDENT_UNIT;
+}
+
+function formatWorkLogEntryBody(summary, dateString) {
+  return `${WORK_LOG_ENTRY_EMPHASIS}${dateString}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${summary}`;
+}
+
+// Renders a Task Link sub-bullet's collected descendant tree (see
+// collectPomodoroWorkLogDescendantTree) as Work Log entry lines: each depth-1
+// node becomes a dated `*<date>* — <body>` entry at `entryIndent`, and its
+// deeper descendants are carried beneath it, keeping their relative depth,
+// re-indented one childIndentUnitForIndent step per level. A node whose body
+// is empty after trimming is dropped along with its whole subtree, since a
+// deeper node without a dated parent has nothing to hang beneath.
+function buildWorkLogEntryLines(descendantRoots, entryIndent, entryMarker, dateString) {
+  const lines = [];
+  for (const node of descendantRoots || []) {
+    if (!node.bodyText) {
+      continue;
+    }
+    lines.push(
+      `${entryIndent}${entryMarker} ${formatWorkLogEntryBody(node.bodyText, dateString)}`,
+    );
+    appendWorkLogChildLines(node.children, entryIndent, lines);
+  }
+  return lines;
+}
+
+function appendWorkLogChildLines(children, parentIndent, lines) {
+  if (!children || children.length === 0) {
+    return;
+  }
+
+  const childIndent = `${parentIndent}${childIndentUnitForIndent(parentIndent)}`;
+  for (const node of children) {
+    if (!node.bodyText) {
+      continue;
+    }
+    lines.push(`${childIndent}${node.marker} ${node.bodyText}`);
+    appendWorkLogChildLines(node.children, childIndent, lines);
+  }
+}
+
+// Where and what to insert for one Task Link's collected notes against
+// `taskLine`'s resolved target lines: prepend under an existing direct-child
+// Work Log marker (inheriting its first entry's indent/marker, or deriving
+// one when the marker has no entries yet), or append a fresh marker plus
+// entries at the end of the task's child block, inheriting the task's own
+// first direct child's indent/marker (or deriving one when the task has no
+// children yet). Returns null when there is nothing to insert, either
+// because `taskLine` is out of range or every descendant was dropped as
+// empty.
+//
+// `priorInsertion`, when given, is the `nextInsertion` a previous call
+// returned for this exact same target within the same Pomodoro close (see
+// writePomodoroWorkLogNoteGroups): two Task Link sub-bullets can resolve to
+// the same task, and both note sets must appear in source order rather than
+// each independently prepending above the other. When present it skips
+// marker detection and appends immediately after the prior group's entries,
+// reusing their indent and marker style.
+function planPomodoroWorkLogGroupInsertion(lines, taskLine, descendantRoots, dateString, priorInsertion = null) {
+  let insertLine;
+  let entryIndent;
+  let entryMarker;
+  let markerLineText = null;
+
+  if (priorInsertion) {
+    insertLine = priorInsertion.insertLine;
+    entryIndent = priorInsertion.entryIndent;
+    entryMarker = priorInsertion.entryMarker;
+  } else {
+    if (
+      !Array.isArray(lines) ||
+      !Number.isInteger(taskLine) ||
+      taskLine < 0 ||
+      taskLine >= lines.length
+    ) {
+      return null;
+    }
+
+    const marker = findWorkLogMarker(lines, taskLine);
+    if (marker) {
+      const entryPrefix = findFirstDirectChildPrefix(lines, marker.line);
+      insertLine = marker.line + 1;
+      entryIndent = entryPrefix
+        ? entryPrefix.indent
+        : `${marker.indent}${childIndentUnitForIndent(marker.indent)}`;
+      entryMarker = entryPrefix ? entryPrefix.marker : "-";
+    } else {
+      const taskIndent = getLineIndentation(lines[taskLine] || "");
+      const directChildPrefix = findFirstDirectChildPrefix(lines, taskLine);
+      const parentIndent = directChildPrefix
+        ? directChildPrefix.indent
+        : `${taskIndent}${childIndentUnitForIndent(taskIndent)}`;
+      const parentMarker = directChildPrefix ? directChildPrefix.marker : "-";
+      insertLine = findTaskChildBlockEndLine(lines, taskLine) + 1;
+      entryIndent = `${parentIndent}${childIndentUnitForIndent(parentIndent)}`;
+      entryMarker = "-";
+      markerLineText = `${parentIndent}${parentMarker} ${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`;
+    }
+  }
+
+  const entryLines = buildWorkLogEntryLines(
+    descendantRoots,
+    entryIndent,
+    entryMarker,
+    dateString,
+  );
+  if (entryLines.length === 0) {
+    return null;
+  }
+
+  const insertedLines = markerLineText ? [markerLineText, ...entryLines] : entryLines;
+  return {
+    insertLine,
+    insertedLines,
+    nextInsertion: {
+      insertLine: insertLine + insertedLines.length,
+      entryIndent,
+      entryMarker,
+    },
+  };
+}
+
 // Composes Blocked-status retirement for one task line: when (and only when)
 // it carries exactly one syntactically valid, strictly future `scheduled`
 // field, remove that field and, only if the task already owns a direct-child
@@ -637,7 +841,17 @@ function planBlockedStatusRetirement(lines, taskLine, todayDateString) {
 // `insertLine` (or, when it equals the line count, as the new final line),
 // giving it `inheritedEnding` and fixing up the now-former-last line's ending
 // so the file's trailing-newline state is preserved.
-function insertLineInSourceText(sourceText, insertLine, newLineText, inheritedEnding) {
+// Insert `newLineTexts` as new lines immediately before line index
+// `insertLine` (or, when it equals the line count, as the new final lines),
+// giving interior lines a real separator ending and the last inserted line
+// `inheritedEnding`, and fixing up the now-former-last line's ending so the
+// file's trailing-newline state is preserved.
+function insertLinesInSourceText(sourceText, insertLine, newLineTexts, inheritedEnding) {
+  const texts = Array.isArray(newLineTexts) ? newLineTexts : [newLineTexts];
+  if (texts.length === 0) {
+    return String(sourceText || "");
+  }
+
   const sourceLines = splitTextByLineEndings(sourceText);
   const index = Math.max(
     0,
@@ -654,12 +868,28 @@ function insertLineInSourceText(sourceText, insertLine, newLineText, inheritedEn
     };
   }
 
-  nextLines.splice(index, 0, {
-    text: String(newLineText || ""),
-    ending: inheritedEnding || "",
-  });
+  const insertedLines = texts.map((text, position) => ({
+    text: String(text || ""),
+    ending:
+      position < texts.length - 1
+        ? inheritedEnding || "\n"
+        : inheritedEnding || "",
+  }));
+  nextLines.splice(index, 0, ...insertedLines);
 
   return nextLines.map((line) => `${line.text}${line.ending}`).join("");
+}
+
+function insertLineInSourceText(sourceText, insertLine, newLineText, inheritedEnding) {
+  return insertLinesInSourceText(sourceText, insertLine, [newLineText], inheritedEnding);
+}
+
+// The dominant line ending across already-split `sourceLines`: CRLF when any
+// line uses it, else LF. Used to pick the ending for a freshly inserted Work
+// Log block written through the vault, where (unlike an editor buffer) the
+// file's own CRLF-vs-LF convention must be preserved.
+function sourceTextLineEnding(sourceLines) {
+  return (sourceLines || []).some((line) => line.ending === "\r\n") ? "\r\n" : "\n";
 }
 
 // Text-level wrapper for the vault write path: re-derives the retirement plan
@@ -3295,6 +3525,149 @@ function classifyPomodoroSubBullets(lines, range) {
     startableNonTranscludedTaskLinkBullets,
     noteBullets,
   };
+}
+
+// A Pomodoro sub-bullet is a "Task Link" for Work Log purposes when, after
+// stripping Pomodoro markers and unwrapping one enclosing `~~ ~~` pair and an
+// immediate trailing `#` deferral marker, its body is exactly one block link
+// (embedded or not) and nothing else. This is deliberately not
+// classifyPomodoroSubBullets: that function filters out struck links (they
+// are carry-forward noise there), but for Work Log purposes a struck link is
+// the most important case — a task finished this session. Aliased links
+// qualify; two links, a link plus prose, or a bare note do not.
+function getPomodoroWorkLogTaskLinkTarget(lineText) {
+  const stripped = stripPomodoroMarkersFromLine(lineText);
+  const listMatch = stripped.match(LIST_ITEM_MARKER_RE);
+  if (!listMatch) {
+    return null;
+  }
+
+  let start = listMatch[1].length;
+  let end = stripped.length;
+  const isWhitespace = (index) => /[ \t]/.test(stripped[index]);
+  while (end > start && isWhitespace(end - 1)) {
+    end -= 1;
+  }
+  while (start < end && isWhitespace(start)) {
+    start += 1;
+  }
+  if (start >= end) {
+    return null;
+  }
+
+  if (stripped[end - 1] === "#") {
+    end -= 1;
+    while (end > start && isWhitespace(end - 1)) {
+      end -= 1;
+    }
+  }
+  if (start >= end) {
+    return null;
+  }
+
+  if (
+    end - start >= 4 &&
+    stripped[start] === "~" &&
+    stripped[start + 1] === "~" &&
+    stripped[end - 1] === "~" &&
+    stripped[end - 2] === "~"
+  ) {
+    start += 2;
+    end -= 2;
+    while (end > start && isWhitespace(end - 1)) {
+      end -= 1;
+    }
+    while (start < end && isWhitespace(start)) {
+      start += 1;
+    }
+  }
+  if (start >= end) {
+    return null;
+  }
+
+  const candidates = getBlockLinkTokenCandidates(stripped);
+  if (candidates.length !== 1) {
+    return null;
+  }
+
+  const candidate = candidates[0];
+  return candidate.startIndex === start && candidate.endIndex === end
+    ? candidate
+    : null;
+}
+
+// Collects `subBulletLine`'s descendant lines (indented deeper than it, up to
+// findTaskChildBlockEndLine) as a tree: each node is `{ marker, bodyText,
+// children }`, nested by relative indentation width. Blank lines are dropped
+// before depth is computed, so they neither participate in nor break the
+// nesting structure.
+function collectPomodoroWorkLogDescendantTree(lines, subBulletLine, endLine) {
+  const rootIndentWidth = getLineIndentation(lines[subBulletLine] || "").length;
+  const roots = [];
+  const stack = [{ indentWidth: rootIndentWidth, children: roots }];
+
+  for (let line = subBulletLine + 1; line <= endLine; line += 1) {
+    const rawText = String(lines[line] || "");
+    if (!rawText.trim()) {
+      continue;
+    }
+
+    const indentWidth = getLineIndentation(rawText).length;
+    while (stack.length > 1 && stack[stack.length - 1].indentWidth >= indentWidth) {
+      stack.pop();
+    }
+    if (indentWidth <= stack[0].indentWidth) {
+      continue;
+    }
+
+    const prefix = parseListItemPrefix(rawText);
+    const marker = prefix ? prefix.marker : "-";
+    const bodyText = prefix
+      ? rawText.slice(prefix.indent.length + prefix.marker.length).trim()
+      : rawText.trim();
+    const node = { marker, bodyText, children: [] };
+    stack[stack.length - 1].children.push(node);
+    stack.push({ indentWidth, children: node.children });
+  }
+
+  return roots;
+}
+
+// The note groups eligible for Work Log copying when `pomodoroLine` closes: a
+// direct child of `pomodoroLine` (findNearestParentListItemLine(lines, line)
+// === pomodoroLine) that is a Task Link and has at least one nonblank
+// descendant line. Two sub-bullets may resolve to the same task; both are
+// returned, deliberately not deduplicated.
+function collectPomodoroWorkLogNoteGroups(lines, pomodoroLine, range) {
+  const groups = [];
+  if (!Array.isArray(lines) || !range) {
+    return groups;
+  }
+
+  const fenced = getFencedLineNumbers(lines);
+  for (let line = range.startLine; line < range.endLine; line += 1) {
+    if (fenced.has(line) || !String(lines[line] || "").trim()) {
+      continue;
+    }
+    if (findNearestParentListItemLine(lines, line) !== pomodoroLine) {
+      continue;
+    }
+
+    const target = getPomodoroWorkLogTaskLinkTarget(lines[line]);
+    if (!target) {
+      continue;
+    }
+
+    const endLine = findTaskChildBlockEndLine(lines, line);
+    const descendantRoots = collectPomodoroWorkLogDescendantTree(lines, line, endLine);
+    if (descendantRoots.length === 0) {
+      continue;
+    }
+
+    groups.push({ sourceLine: line, target, descendantRoots });
+  }
+
+  return groups;
 }
 
 function findNextPomodoroLine(lines, section, afterLine) {
@@ -8463,6 +8836,217 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
   }
 
+  // Resolves and writes every collected Task Link note group from a Pomodoro
+  // close. Runs after applyPomodoroCompletionPlan has succeeded: resolution
+  // re-reads live content (self-healing any line shift the plan caused) and
+  // each group is resolved and written sequentially so a same-target second
+  // group always sees the first group's insertion. Two sub-bullets can
+  // resolve to the very same task; `priorInsertionsByTarget` threads that
+  // first group's insertion point through so the second group's notes are
+  // appended after it (source order) instead of independently prepending
+  // above it (which would reverse them). Best effort per group — a broken
+  // link, an unreadable file, or a failed write is logged and must not block
+  // the other groups or undo the completion that already applied.
+  async writePomodoroWorkLogNoteGroups(groups, context) {
+    const dateString = this.getPomodoroWorkLogDateString(context.activePath);
+    const activeNoteInsertions = [];
+    const priorInsertionsByTarget = new Map();
+
+    for (const group of groups) {
+      let resolvedTarget;
+      try {
+        resolvedTarget = await this.resolveTranscludedBlockTarget(
+          group.target,
+          context,
+          {
+            linePredicate: isProperObsidianTaskLine,
+            taskStatusPredicate: () => true,
+          },
+        );
+      } catch (error) {
+        console.error("Could not resolve Pomodoro Work Log target", error);
+        continue;
+      }
+      if (!resolvedTarget || !resolvedTarget.file) {
+        continue;
+      }
+
+      const targetKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
+      try {
+        const result = await this.writePomodoroWorkLogEntriesToTarget(
+          resolvedTarget,
+          group.descendantRoots,
+          dateString,
+          context,
+          priorInsertionsByTarget.get(targetKey) || null,
+        );
+        if (!result) {
+          continue;
+        }
+        priorInsertionsByTarget.set(targetKey, result.nextInsertion);
+        if (this.fileMatchesPath(resolvedTarget.file, context.activePath)) {
+          activeNoteInsertions.push({ line: result.line, count: result.count });
+        }
+      } catch (error) {
+        console.error("Could not write Pomodoro Work Log entry", error);
+      }
+    }
+
+    if (activeNoteInsertions.length > 0) {
+      this.adjustCursorAfterActiveNoteInsertions(
+        context.editor,
+        context.cursorTargetLine,
+        activeNoteInsertions,
+        context.markdownView,
+      );
+    }
+  }
+
+  async writePomodoroWorkLogEntriesToTarget(
+    resolvedTarget,
+    descendantRoots,
+    dateString,
+    context,
+    priorInsertion,
+  ) {
+    if (this.fileMatchesPath(resolvedTarget.file, context.activePath) && context.editor) {
+      return this.writePomodoroWorkLogEntriesInEditor(
+        context.editor,
+        resolvedTarget.line,
+        descendantRoots,
+        dateString,
+        priorInsertion,
+      );
+    }
+
+    return this.writePomodoroWorkLogEntriesInVault(
+      resolvedTarget.file,
+      resolvedTarget.blockId,
+      descendantRoots,
+      dateString,
+      priorInsertion,
+    );
+  }
+
+  writePomodoroWorkLogEntriesInEditor(editor, taskLine, descendantRoots, dateString, priorInsertion) {
+    const lines = this.getEditorLineTexts(editor);
+    const plan = planPomodoroWorkLogGroupInsertion(
+      lines,
+      taskLine,
+      descendantRoots,
+      dateString,
+      priorInsertion,
+    );
+    if (!plan) {
+      return null;
+    }
+
+    this.insertEditorLines(plan.insertLine, plan.insertedLines, editor);
+    return {
+      line: plan.insertLine,
+      count: plan.insertedLines.length,
+      nextInsertion: plan.nextInsertion,
+    };
+  }
+
+  async writePomodoroWorkLogEntriesInVault(file, blockId, descendantRoots, dateString, priorInsertion) {
+    if (!this.app.vault) {
+      return null;
+    }
+
+    let result = null;
+    const updateSourceText = (sourceText) => {
+      const text = String(sourceText || "");
+      const sourceLines = splitTextByLineEndings(text);
+      const lines = sourceLines.map((line) => line.text);
+      const taskLine = priorInsertion ? null : findBlockLineInSourceText(text, blockId);
+      if (!priorInsertion && taskLine === null) {
+        return text;
+      }
+
+      const plan = planPomodoroWorkLogGroupInsertion(
+        lines,
+        taskLine,
+        descendantRoots,
+        dateString,
+        priorInsertion,
+      );
+      if (!plan) {
+        return text;
+      }
+
+      result = {
+        line: plan.insertLine,
+        count: plan.insertedLines.length,
+        nextInsertion: plan.nextInsertion,
+      };
+      return insertLinesInSourceText(
+        text,
+        plan.insertLine,
+        plan.insertedLines,
+        sourceTextLineEnding(sourceLines),
+      );
+    };
+
+    try {
+      if (typeof this.app.vault.process === "function") {
+        await this.app.vault.process(file, updateSourceText);
+        return result;
+      }
+
+      if (
+        typeof this.app.vault.read !== "function" ||
+        typeof this.app.vault.modify !== "function"
+      ) {
+        return null;
+      }
+
+      const sourceText = await this.app.vault.read(file);
+      const nextSourceText = updateSourceText(sourceText);
+      if (!result) {
+        return null;
+      }
+
+      await this.app.vault.modify(file, nextSourceText);
+      return result;
+    } catch (error) {
+      console.error("Could not write Pomodoro Work Log entries", error);
+      return null;
+    }
+  }
+
+  // applyPomodoroCompletionPlan already set and centered the cursor on
+  // `cursorTargetLine` before these Work Log entries were inserted. An
+  // insertion above that line in the active note shifts it; recompute from
+  // every recorded active-note insertion, applied in the order they ran
+  // (required for correctness when insertions shift each other), and only
+  // re-set/re-center when the line actually moved.
+  adjustCursorAfterActiveNoteInsertions(editor, cursorTargetLine, insertions, markdownView) {
+    if (
+      !editor ||
+      typeof editor.setCursor !== "function" ||
+      !Number.isInteger(cursorTargetLine)
+    ) {
+      return;
+    }
+
+    let nextCursorLine = cursorTargetLine;
+    for (const { line, count } of insertions) {
+      if (line <= nextCursorLine) {
+        nextCursorLine += count;
+      }
+    }
+    if (nextCursorLine === cursorTargetLine) {
+      return;
+    }
+
+    const lineText =
+      typeof editor.getLine === "function" ? editor.getLine(nextCursorLine) || "" : "";
+    const targetCh = Math.min(Math.max(getPomodoroCursorTargetCh(lineText), 0), lineText.length);
+    editor.setCursor({ line: nextCursorLine, ch: targetCh });
+    this.scheduleCenterEditorLineInView(editor, nextCursorLine, targetCh, markdownView);
+  }
+
   // Direct Pomodoro sub-bullet path: when the active line is an embedded
   // transcluded task link under a Pomodoro task, recursively force that selected
   // target tree to done, mirroring Pomodoro completion semantics (Todo, Next,
@@ -8551,6 +9135,14 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       section,
     );
     const subBullets = classifyPomodoroSubBullets(lines, subBulletRange);
+    // Captured from this same pre-edit `lines` snapshot: the plan's marker
+    // rewriting below can alter a descendant line that happens to contain a
+    // link, so the note payload must be taken before any edits happen.
+    const workLogNoteGroups = collectPomodoroWorkLogNoteGroups(
+      lines,
+      context.pomodoroLine,
+      subBulletRange,
+    );
     const closed = await this.completePomodoroTranscludedTaskBullets(
       subBullets.transcludedTaskLinkBullets,
       {
@@ -8594,6 +9186,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     );
     if (!applied) {
       return false;
+    }
+    if (workLogNoteGroups.length > 0) {
+      await this.writePomodoroWorkLogNoteGroups(workLogNoteGroups, {
+        editor,
+        activePath: sourcePath,
+        originPath: sourcePath,
+        cursorTargetLine: plan.cursorTargetLine,
+        markdownView,
+      });
     }
     await this.finalizeClosedTasks(closed, {
       editor,
@@ -10172,6 +10773,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return formatLocalDate();
   }
 
+  // The date stamped on Pomodoro Work Log entries: the daily note's own date
+  // when `activePath` is one, else today. Closing yesterday's Pomodoro must
+  // not stamp today's date.
+  getPomodoroWorkLogDateString(activePath) {
+    return getDailyNoteDateFromPath(activePath) || formatLocalDate();
+  }
+
   isOpenDoneTaskStatus(taskStatus) {
     return isOpenDoneTaskStatus(taskStatus);
   }
@@ -10462,10 +11070,14 @@ module.exports.helpers = {
   buildPomodoroCompletionPlan,
   buildPomodoroMoveOnlyTogglePlan,
   buildPomodoroReopenMarkerEdits,
+  buildWorkLogEntryLines,
   centerEditorViewOnPosition,
+  childIndentUnitForIndent,
   classifyPomodoroSubBullets,
   cleanObsidianTaskBody,
   collectEmbeddedTranscludedTaskTargetsInListItemBlock,
+  collectPomodoroWorkLogDescendantTree,
+  collectPomodoroWorkLogNoteGroups,
   collectTaskBlockLinkTargetsInLineRange,
   collectObsidianTaskTokenRanges,
   collectSelectablePromotionHeadings,
@@ -10486,11 +11098,13 @@ module.exports.helpers = {
   findOwningMarkdownHeadingIdentity,
   findNextPomodoroLine,
   findPomodorosSectionInLines,
+  findFirstDirectChildPrefix,
   findScheduleLogEntryIndent,
   findScheduleLogMarker,
   findSingleFutureScheduledField,
   findScheduledFieldMatches,
   findTaskChildBlockEndLine,
+  findWorkLogMarker,
   filterSelectableDemotionHeadings,
   findTaskRoutingSections,
   fuzzyMatchesText,
@@ -10498,7 +11112,9 @@ module.exports.helpers = {
   formatLocalDate,
   formatPomodoroPlaceholderLine,
   formatScheduleLogEntry,
+  formatWorkLogEntryBody,
   getDailyNoteDateFromPath,
+  getPomodoroWorkLogTaskLinkTarget,
   getBlockLineFromCache,
   getBlockLinkTargetKey,
   getBlockLinkTargetKeysFromLine,
@@ -10519,11 +11135,14 @@ module.exports.helpers = {
   getLineTextFromSourceText,
   getListItemBlockRange,
   insertLineInSourceText,
+  insertLinesInSourceText,
   parseListItemPrefix,
   parsePomodoroEntryLineParts,
   parseScheduleLogMarkerLine,
   parseStrictCalendarDate,
+  parseWorkLogMarkerLine,
   planBlockedStatusRetirement,
+  planPomodoroWorkLogGroupInsertion,
   removeSpanWithSpaceCollapse,
   removeSourceBlockForTaskPrompt,
   getNextOpenDoneSymbol,
@@ -10617,5 +11236,6 @@ module.exports.helpers = {
   rewriteTaskLineForLocalFallback,
   rewriteTaskLineForTranscludedSource,
   setDemotionPickerQuery,
+  sourceTextLineEnding,
   splitTextByLineEndings,
 };

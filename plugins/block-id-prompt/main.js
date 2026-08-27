@@ -89,10 +89,16 @@ const WORK_LOG_ENTRY_SEPARATOR = " — ";
 const DAILY_NOTES_COMMAND_ID = "daily-notes";
 const DEFAULT_DAILY_NOTES_FORMAT = "YYYY/YYYYMMDD";
 const DAILY_FORMAT_TOKENS = ["YYYY", "YY", "MM", "DD", "M", "D"];
-// The canonical fallback indentation for a new Pomodoro sub-bullet when
-// neither the target entry nor the rest of the section has an existing child
-// bullet to copy indentation from. Mirrors bob-cli's `bob capture` default.
-const CANONICAL_POMODORO_CHILD_INDENT = "  ";
+// One Obsidian Tab-indent level below a parent. A literal tab matches how
+// Obsidian indents list items via Tab and the vault's dominant nested-list
+// source style. Legacy space-only parents keep using that space prefix as the
+// next-level unit so new output does not create tab/space sibling mixes.
+const CANONICAL_CHILD_INDENT_UNIT = "\t";
+
+function childIndentUnitForIndent(parentIndent) {
+  const indent = String(parentIndent || "");
+  return indent && !indent.includes("\t") ? indent : CANONICAL_CHILD_INDENT_UNIT;
+}
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1671,7 +1677,8 @@ function findTaskDirectChildPrefix(lines, taskLine) {
 
 function canonicalTaskChildIndent(lines, taskLine) {
   const taskPrefix = parseListItemPrefix(lines[taskLine] || "");
-  return `${taskPrefix ? taskPrefix.indent : ""}${CANONICAL_POMODORO_CHILD_INDENT}`;
+  const taskIndent = taskPrefix ? taskPrefix.indent : "";
+  return `${taskIndent}${childIndentUnitForIndent(taskIndent)}`;
 }
 
 function findWorkLogEntryPrefix(lines, markerLine) {
@@ -1761,7 +1768,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
   if (marker) {
     const entryPrefix =
       findWorkLogEntryPrefix(lines, marker.line) || {
-        indent: `${marker.indent}${CANONICAL_POMODORO_CHILD_INDENT}`,
+        indent: `${marker.indent}${childIndentUnitForIndent(marker.indent)}`,
         marker: marker.marker,
       };
     const entryLineText = `${entryPrefix.indent}${entryPrefix.marker} ${workLogFormattedEntry}`;
@@ -1779,7 +1786,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
         indent: canonicalTaskChildIndent(lines, taskLine),
         marker: "-",
       };
-    const entryIndent = `${directChildPrefix.indent}${CANONICAL_POMODORO_CHILD_INDENT}`;
+    const entryIndent = `${directChildPrefix.indent}${childIndentUnitForIndent(directChildPrefix.indent)}`;
     const markerLineText = `${directChildPrefix.indent}${directChildPrefix.marker} ${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`;
     const entryLineText = `${entryIndent}- ${workLogFormattedEntry}`;
     workLogInsertLine = findChildBlockEndLine(lines, taskLine) + 1;
@@ -2761,7 +2768,7 @@ function unorderedChildIndentation(lineText) {
 // The indentation for a new sub-bullet under the selected Pomodoro entry:
 // reuse an existing direct child's indentation when the entry already has
 // one, else the section's own established child indentation anywhere else in
-// the Pomodoros section, else the canonical two-space fallback. Mirrors
+// the Pomodoros section, else the canonical tab fallback. Mirrors
 // bob-cli's `bob capture` (child_bullet_indentation /
 // nearby_child_bullet_indentation) exactly.
 function findPomodoroChildIndentation(lines, entryLine, entryEndLine, section) {
@@ -2779,7 +2786,7 @@ function findPomodoroChildIndentation(lines, entryLine, entryEndLine, section) {
     }
   }
 
-  return CANONICAL_POMODORO_CHILD_INDENT;
+  return CANONICAL_CHILD_INDENT_UNIT;
 }
 
 // Selects the destination Pomodoro entry the same way `bob capture` does:

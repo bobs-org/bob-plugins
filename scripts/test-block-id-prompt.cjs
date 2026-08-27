@@ -1989,7 +1989,7 @@ test("selectPomodoroInsertionTarget ignores fenced and nested entries and picks 
   });
 });
 
-test("findPomodoroChildIndentation reuses an existing child bullet, then the section's, then falls back to two spaces", () => {
+test("findPomodoroChildIndentation reuses existing child indentation before falling back to a tab", () => {
   const withOwnChild = ["## Pomodoros", "- [ ] Current ()", "\t- existing child"];
   assert.equal(
     helpers.findPomodoroChildIndentation(withOwnChild, 1, 2, { startLine: 1, endLine: 2 }),
@@ -2005,7 +2005,7 @@ test("findPomodoroChildIndentation reuses an existing child bullet, then the sec
   const withNoChild = ["## Pomodoros", "- [ ] Current ()"];
   assert.equal(
     helpers.findPomodoroChildIndentation(withNoChild, 1, 1, { startLine: 1, endLine: 1 }),
-    "  ",
+    "\t",
   );
 });
 
@@ -2231,7 +2231,24 @@ test("work log date helpers use local calendar components", () => {
   assert.equal(helpers.formatWorkLogEntry("Added guarded cleanup", localParts), "*2026-08-15* — Added guarded cleanup");
 });
 
-test("planWorkLogInsertion creates the canonical marker as the final direct-child subtree", () => {
+test("planWorkLogInsertion creates tab-indented Work Log children for column-0 tasks without children", () => {
+  const content = ["- [ ] #task Ship it ^ship", "- [ ] #task Sibling"].join("\n");
+  const plan = helpers.planWorkLogInsertion(content, 0, "Added guarded cleanup", {
+    date: WORK_LOG_DATE,
+  });
+
+  assert.equal(
+    plan.content,
+    [
+      "- [ ] #task Ship it ^ship",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Added guarded cleanup",
+      "- [ ] #task Sibling",
+    ].join("\n"),
+  );
+});
+
+test("planWorkLogInsertion inherits an existing space-indented child prefix", () => {
   const content = [
     "- [ ] #task Ship it ^ship",
     "  - Keep this child",
@@ -2251,6 +2268,29 @@ test("planWorkLogInsertion creates the canonical marker as the final direct-chil
       "  - Keep this child",
       "  - 🛠️ **WORK LOG**",
       "    - *2026-08-15* — Added guarded cleanup",
+      "- [ ] #task Sibling",
+    ].join("\n"),
+  );
+  assert.doesNotMatch(plan.content, /  \t/);
+});
+
+test("planWorkLogInsertion inherits an existing tab-indented child prefix", () => {
+  const content = [
+    "- [ ] #task Ship it ^ship",
+    "\t- Keep this child",
+    "- [ ] #task Sibling",
+  ].join("\n");
+  const plan = helpers.planWorkLogInsertion(content, 0, "Added guarded cleanup", {
+    date: WORK_LOG_DATE,
+  });
+
+  assert.equal(
+    plan.content,
+    [
+      "- [ ] #task Ship it ^ship",
+      "\t- Keep this child",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Added guarded cleanup",
       "- [ ] #task Sibling",
     ].join("\n"),
   );
@@ -2282,6 +2322,20 @@ test("planWorkLogInsertion prepends newest-first entries into existing marker sp
       "- [ ] #task Ship it ^ship",
       "  + **Work log:**",
       "    + *2026-08-15* — Legacy marker",
+    ].join("\n"),
+  );
+  assert.doesNotMatch(helpers.planWorkLogInsertion(legacy, 0, "Legacy marker", { date: WORK_LOG_DATE }).content, /  \t/);
+
+  const tabMarkerWithoutEntries = [
+    "- [ ] #task Ship it ^ship",
+    "\t- 🛠️ **WORK LOG**",
+  ].join("\n");
+  assert.equal(
+    helpers.planWorkLogInsertion(tabMarkerWithoutEntries, 0, "First tab entry", { date: WORK_LOG_DATE }).content,
+    [
+      "- [ ] #task Ship it ^ship",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — First tab entry",
     ].join("\n"),
   );
 
@@ -2532,7 +2586,7 @@ test("existing-ID Pomodoro link runtime: cross-note guarded write, canonical lin
   assert.equal(written.path, "Daily.md");
   assert.equal(
     written.content,
-    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^ship]]"].join("\n"),
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "\t- [[Tasks#^ship]]"].join("\n"),
   );
   assert.equal(lastNotice(), "Linked task to Pomodoro · removed future schedule · set Next");
 });
@@ -2568,7 +2622,7 @@ test("new-ID Pomodoro link runtime: cross-note guarded write, appended ID stays 
   assert.ok(written);
   assert.equal(
     written.content,
-    ["## Pomodoros", "- [ ] Later ()", "  - [[Tasks#^ship]]"].join("\n"),
+    ["## Pomodoros", "- [ ] Later ()", "\t- [[Tasks#^ship]]"].join("\n"),
   );
   assert.equal(lastNotice(), "Added block ID and linked task to Pomodoro · set Next");
 });
@@ -2632,7 +2686,7 @@ test("same-note Pomodoro link runtime: task and ledger edits merge into one tran
       "  \t- _2026-08-20 → 2026-08-15_ — 🍅 pulled into today's Pomodoro",
       "## Pomodoros",
       "- [ ] Current (10:00-10:25)",
-      "  - [[#^ship]]",
+      "\t- [[#^ship]]",
     ].join("\n"),
   );
   assert.equal(
@@ -2898,8 +2952,8 @@ test("In Progress pause removes cross-note Pomodoro links before setting Open an
     editor.getValue(),
     [
       "- [ ] #task Ship it ^ship",
-      "  - 🛠️ **WORK LOG**",
-      "    - *2026-08-15* — Finished cleanup",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Finished cleanup",
     ].join("\n"),
   );
   assert.equal(lastNotice(), "Task set Open · logged work · removed 1 current/future Pomodoro link");
@@ -2980,8 +3034,8 @@ test("same-note In Progress pause merges cleanup, status, and Work Log in the ac
     editor.getValue(),
     [
       "- [ ] #task Ship it ^ship",
-      "  - 🛠️ **WORK LOG**",
-      "    - *2026-08-15* — Paused after tests",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Paused after tests",
       "## Pomodoros",
       "- [ ] Current (10:00-10:25)",
       "- [x] Done (09:00-09:25)",

@@ -7278,6 +7278,107 @@ function planPomodoroEntryRename(content, options = {}) {
   });
 }
 
+// True when a findPomodoroEntryContext() context sits on a movable Pomodoro
+// entry: open, with no time range yet. Ctrl+Shift+J/K route to a reorder
+// only for this shape; every other context keeps its jump behavior.
+function isMovablePomodoroEntryContext(context) {
+  return Boolean(context && context.entry && context.entry.open && context.entry.placeholder);
+}
+
+// Plan reordering a movable (open, placeholder) Pomodoro entry by one
+// position among its planned siblings. A move is only allowed when the
+// adjacent entry in that direction is itself open and placeholder, so a
+// planned Pomodoro can never cross a current, closed, or cancelled one.
+// Returns a frozen
+// `{ valid, error, after, entryLine, movedEntryLine, entry, neighborEntry, direction }`.
+function planPomodoroEntryReorder(content, options = {}) {
+  const text = String(content || "");
+  const direction = numericOrDefault(options.direction, 1) < 0 ? -1 : 1;
+  const sourceEntryLine = Number.isInteger(options.sourceEntryLine)
+    ? options.sourceEntryLine
+    : -1;
+
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      after: text,
+      entryLine: sourceEntryLine,
+      movedEntryLine: null,
+      entry: null,
+      neighborEntry: null,
+      direction,
+    });
+
+  const context = findPomodoroEntryContext(text, sourceEntryLine);
+  if (!context) {
+    return invalid("Place the cursor on a Pomodoro entry");
+  }
+
+  const { entries, entry, entryIndex } = context;
+  const { lines, lineEnding } = splitMarkdownContent(text);
+  const rawLine = String(lines[sourceEntryLine] || "");
+  if (
+    typeof options.sourceRawLine === "string" &&
+    rawLine !== options.sourceRawLine
+  ) {
+    return invalid("The Pomodoro entry changed before it could be moved");
+  }
+
+  if (!entry.open || !entry.placeholder) {
+    return invalid("Only an open Pomodoro without a time range can be moved");
+  }
+
+  const neighborEntry = entries[entryIndex + direction];
+  const label = getPomodoroBulletMoveDestinationLabel(entry);
+  if (!neighborEntry || !neighborEntry.open || !neighborEntry.placeholder) {
+    return invalid(
+      `${label} is already the ${direction < 0 ? "first" : "last"} planned Pomodoro`,
+    );
+  }
+
+  const [upperEntry, lowerEntry] =
+    entry.entryLine < neighborEntry.entryLine
+      ? [entry, neighborEntry]
+      : [neighborEntry, entry];
+  const upperBlock = lines.slice(
+    upperEntry.entryLine,
+    upperEntry.childEndLineExclusive,
+  );
+  const between = lines.slice(
+    upperEntry.childEndLineExclusive,
+    lowerEntry.entryLine,
+  );
+  const lowerBlock = lines.slice(
+    lowerEntry.entryLine,
+    lowerEntry.childEndLineExclusive,
+  );
+
+  const nextLines = [
+    ...lines.slice(0, upperEntry.entryLine),
+    ...lowerBlock,
+    ...between,
+    ...upperBlock,
+    ...lines.slice(lowerEntry.childEndLineExclusive),
+  ];
+
+  const movedEntryLine =
+    entry === upperEntry
+      ? upperEntry.entryLine + lowerBlock.length + between.length
+      : upperEntry.entryLine;
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    after: nextLines.join(lineEnding),
+    entryLine: sourceEntryLine,
+    movedEntryLine,
+    entry,
+    neighborEntry,
+    direction,
+  });
+}
+
 function getPomodoroEntryRangeLabel(entry) {
   const rangeText = String((entry && entry.rangeText) || "");
   if (!rangeText || POMODORO_PLACEHOLDER_RE.test(rangeText)) {
@@ -17202,13 +17303,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-open-task",
-      name: "Jump to next open task",
+      name: "Jump to next open task or move a planned Pomodoro down",
       editorCallback: (editor) => this.jumpToOpenObsidianTask(editor, 1),
     });
 
     this.addCommand({
       id: "jump-to-prev-open-task",
-      name: "Jump to previous open task",
+      name: "Jump to previous open task or move a planned Pomodoro up",
       editorCallback: (editor) => this.jumpToOpenObsidianTask(editor, -1),
     });
 
@@ -19925,6 +20026,65 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
+  // Reorder a movable (open, placeholder) Pomodoro entry under the cursor by
+  // one position among its planned siblings, in place of a jump. Returns
+  // `false` when the cursor is not on a movable entry, so the caller falls
+  // through to the jump; returns `true` when handled (moved, or refused with
+  // a notice) so the caller must not jump.
+  movePlannedPomodoroEntry(editor, direction) {
+    if (!editor || typeof editor.getValue !== "function") {
+      return false;
+    }
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      return false;
+    }
+
+    const sourceContent = String(editor.getValue() || "");
+    const context = findPomodoroEntryContext(sourceContent, cursor.line);
+    if (!isMovablePomodoroEntryContext(context)) {
+      return false;
+    }
+
+    const sourceRawLine = splitMarkdownContent(sourceContent).lines[cursor.line];
+    const plan = planPomodoroEntryReorder(sourceContent, {
+      sourceEntryLine: cursor.line,
+      sourceRawLine,
+      direction,
+    });
+
+    if (!plan.valid) {
+      new Notice(plan.error);
+      return true;
+    }
+
+    const afterLines = splitMarkdownContent(plan.after).lines;
+    const finalCursor = {
+      line: plan.movedEntryLine,
+      ch: Math.min(cursor.ch, String(afterLines[plan.movedEntryLine] || "").length),
+    };
+
+    let applied = false;
+    try {
+      applied = applyEditorContentTransaction(
+        editor,
+        sourceContent,
+        plan.after,
+        finalCursor,
+      );
+    } catch (error) {
+      applied = String(editor.getValue() || "") === plan.after;
+    }
+    if (!applied || String(editor.getValue() || "") !== plan.after) {
+      new Notice("Pomodoro move failed; nothing was moved");
+      return true;
+    }
+
+    const label = getPomodoroBulletMoveDestinationLabel(plan.entry);
+    new Notice(`Moved ${label} ${direction < 0 ? "up" : "down"}`);
+    return true;
+  }
+
   jumpToOpenObsidianTask(editor, direction) {
     const cursor = getEditorCursor(editor);
     if (!cursor || !editor || typeof editor.getValue !== "function") {
@@ -19935,13 +20095,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // A single physical Ctrl+Shift+J/K can reach this method twice in the same
     // dispatch turn: once via the Obsidian hotkeys.json command and once via the
     // Vim-normal capture fallback. Suppress the duplicate so a no-target press
-    // shows only one notice (and a successful jump never moves twice). The mark
-    // clears on the next macrotask so deliberate repeats and key repeat still
-    // work.
+    // shows only one notice or move (a successful jump never moves twice, and a
+    // planned-Pomodoro reorder never reorders twice). The mark clears on the
+    // next macrotask so deliberate repeats and key repeat still work.
     if (this.isOpenTaskJumpDispatchPending(editor, direction)) {
       return false;
     }
     this.markOpenTaskJumpDispatch(editor, direction);
+
+    if (this.movePlannedPomodoroEntry(editor, direction)) {
+      return true;
+    }
 
     const targetLine = getOpenObsidianTaskJumpLine(
       String(editor.getValue()).split(/\r?\n/),
@@ -24742,6 +24906,9 @@ module.exports.helpers = {
   rebasePomodoroBulletBlock,
   planPomodoroBulletMove,
   planPomodoroEntryRename,
+  isMovablePomodoroEntryContext,
+  planPomodoroEntryReorder,
+  getPomodoroBulletMoveDestinationLabel,
   createPomodoroBulletMovePickerRows,
   buildPomodoroBulletMoveNotice,
   buildPomodoroEntryMoveNotice,

@@ -6646,6 +6646,122 @@ test("open-task dispatch timeout is registered for plugin cleanup", () => {
   cleanups[0]();
 });
 
+test("jumpToOpenObsidianTask moves a placeholder Pomodoro entry in one undo group and reports the destination", () => {
+  const lines = pomodoroFixtureLines();
+  const editor = new TransactionEditor(lines.join("\n"), { line: 9, ch: 50 }, 512);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 9,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+  });
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.deepEqual(editor.getCursor(), {
+    line: expectedPlan.movedEntryLine,
+    ch: "- [ ] () — BODY".length,
+  });
+  assert.equal(notices.at(-1), "Moved BODY down");
+});
+
+test("jumpToOpenObsidianTask refuses to move a planned Pomodoro across a current, closed, or cancelled entry", () => {
+  const lines = pomodoroFixtureLines();
+  const editor = new TransactionEditor(lines.join("\n"), { line: 6, ch: 3 }, 512);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, -1);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 0);
+  assert.deepEqual(editor.getCursor(), { line: 6, ch: 3 });
+  assert.equal(editor.getValue(), lines.join("\n"));
+  assert.equal(
+    notices.at(-1),
+    "Pomodoro #3 is already the first planned Pomodoro",
+  );
+});
+
+test("jumpToOpenObsidianTask still jumps normally off the current Pomodoro entry, a sub-bullet, and a plain task line", () => {
+  const lines = pomodoroFixtureLines();
+  const pomodoroEditor = new TransactionEditor(
+    lines.join("\n"),
+    { line: 4, ch: 2 },
+    512,
+  );
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+
+  const expectedFromCurrent = helpers.getOpenObsidianTaskJumpLine(lines, 4, 1);
+  assert.equal(plugin.jumpToOpenObsidianTask(pomodoroEditor, 1), true);
+  assert.equal(pomodoroEditor.transactions.length, 0);
+  assert.deepEqual(pomodoroEditor.getCursor(), {
+    line: expectedFromCurrent,
+    ch: 0,
+  });
+  assert.equal(pomodoroEditor.getValue(), lines.join("\n"));
+
+  const subBulletEditor = new TransactionEditor(
+    lines.join("\n"),
+    { line: 7, ch: 1 },
+    512,
+  );
+  const subBulletPlugin = new NavigationHotkeysPlugin();
+  subBulletPlugin.register = () => {};
+  subBulletPlugin.app = {};
+  const expectedFromSubBullet = helpers.getOpenObsidianTaskJumpLine(lines, 7, 1);
+  assert.equal(subBulletPlugin.jumpToOpenObsidianTask(subBulletEditor, 1), true);
+  assert.equal(subBulletEditor.transactions.length, 0);
+  assert.deepEqual(subBulletEditor.getCursor(), {
+    line: expectedFromSubBullet,
+    ch: 0,
+  });
+
+  const taskLines = ["- [ ] #task A", "- [ ] #task B"];
+  const taskEditor = new TransactionEditor(taskLines.join("\n"), {
+    line: 0,
+    ch: 0,
+  });
+  const taskPlugin = new NavigationHotkeysPlugin();
+  taskPlugin.register = () => {};
+  taskPlugin.app = {};
+  const expectedFromTask = helpers.getOpenObsidianTaskJumpLine(taskLines, 0, 1);
+  assert.equal(taskPlugin.jumpToOpenObsidianTask(taskEditor, 1), true);
+  assert.equal(taskEditor.transactions.length, 0);
+  assert.deepEqual(taskEditor.getCursor(), { line: expectedFromTask, ch: 0 });
+});
+
+test("Ctrl+Shift+J/K dispatch guard performs exactly one Pomodoro move per physical press", () => {
+  const lines = pomodoroFixtureLines();
+  const editor = new TransactionEditor(lines.join("\n"), { line: 9, ch: 0 }, 512);
+  const plugin = new NavigationHotkeysPlugin();
+  const cleanups = [];
+  plugin.register = (cleanup) => cleanups.push(cleanup);
+  plugin.app = {};
+  notices.length = 0;
+
+  const first = plugin.jumpToOpenObsidianTask(editor, 1);
+  const second = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(first, true);
+  assert.equal(second, false);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  cleanups.forEach((cleanup) => cleanup());
+});
+
 test("physical counted property chord consumes only explicit normal-mode Vim counts", () => {
   const makeEvent = (overrides = {}) => {
     const calls = { prevent: 0, stop: 0, immediate: 0 };
@@ -10320,6 +10436,245 @@ test("planPomodoroEntryRename renames closed and cancelled entries the same way 
     assert.equal(plan.valid, true);
     assert.equal(plan.after, `## Pomodoros\n- [${status}] () — NEW`);
   }
+});
+
+test("isMovablePomodoroEntryContext matches only open, placeholder Pomodoro entries", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  assert.equal(
+    helpers.isMovablePomodoroEntryContext(
+      helpers.findPomodoroEntryContext(content, 1),
+    ),
+    false,
+  );
+  assert.equal(
+    helpers.isMovablePomodoroEntryContext(
+      helpers.findPomodoroEntryContext(content, 4),
+    ),
+    false,
+  );
+  assert.equal(
+    helpers.isMovablePomodoroEntryContext(
+      helpers.findPomodoroEntryContext(content, 6),
+    ),
+    true,
+  );
+  assert.equal(helpers.isMovablePomodoroEntryContext(null), false);
+});
+
+test("planPomodoroEntryReorder moves a named placeholder down, swapping with the next placeholder", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const beforeLines = content.split("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 9,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+  });
+
+  assert.equal(plan.valid, true);
+  const afterLines = plan.after.split("\n");
+  assert.equal(afterLines.length, beforeLines.length);
+  assert.equal(afterLines[9], "- [ ] () — VERIFY");
+  assert.equal(
+    afterLines[10],
+    "\t- [[sase_better_config#^no-focus-xprompts]]",
+  );
+  assert.equal(afterLines[11], "- [ ] () — BODY");
+  assert.equal(afterLines[12], "\t- [[body#^email-jenika]]");
+  assert.equal(plan.movedEntryLine, 11);
+  assert.equal(plan.entry.entryLine, 9);
+  assert.equal(plan.neighborEntry.entryLine, 11);
+  assert.equal(plan.direction, 1);
+});
+
+test("planPomodoroEntryReorder moves a placeholder up, swapping with the previous placeholder", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 11,
+    sourceRawLine: "- [ ] () — VERIFY",
+    direction: -1,
+  });
+
+  assert.equal(plan.valid, true);
+  const afterLines = plan.after.split("\n");
+  assert.equal(afterLines[9], "- [ ] () — VERIFY");
+  assert.equal(afterLines[11], "- [ ] () — BODY");
+  assert.equal(plan.movedEntryLine, 9);
+  assert.equal(plan.direction, -1);
+});
+
+test("planPomodoroEntryReorder round-trips unequal-size blocks: down then up restores the original content", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const down = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 6,
+    sourceRawLine: "- [ ] ()",
+    direction: 1,
+  });
+  assert.equal(down.valid, true);
+  assert.equal(down.movedEntryLine, 8);
+  assert.equal(down.after.split("\n").length, content.split("\n").length);
+
+  const backUp = helpers.planPomodoroEntryReorder(down.after, {
+    sourceEntryLine: down.movedEntryLine,
+    sourceRawLine: "- [ ] ()",
+    direction: -1,
+  });
+  assert.equal(backUp.valid, true);
+  assert.equal(backUp.movedEntryLine, 6);
+  assert.equal(backUp.after, content);
+});
+
+test("planPomodoroEntryReorder refuses moving up past the current open entry", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 6,
+    sourceRawLine: "- [ ] ()",
+    direction: -1,
+  });
+  assert.equal(plan.valid, false);
+  assert.match(plan.error, /first planned Pomodoro/);
+  assert.equal(plan.after, content);
+});
+
+test("planPomodoroEntryReorder refuses moving up past a closed or cancelled entry", () => {
+  const closedAbove = ["## Pomodoros", "- [x] (**0900-0930**)", "- [ ] ()"].join(
+    "\n",
+  );
+  const closedPlan = helpers.planPomodoroEntryReorder(closedAbove, {
+    sourceEntryLine: 2,
+    sourceRawLine: "- [ ] ()",
+    direction: -1,
+  });
+  assert.equal(closedPlan.valid, false);
+  assert.match(closedPlan.error, /first planned Pomodoro/);
+  assert.equal(closedPlan.after, closedAbove);
+
+  const cancelledAbove = ["## Pomodoros", "- [-] ()", "- [ ] ()"].join("\n");
+  const cancelledPlan = helpers.planPomodoroEntryReorder(cancelledAbove, {
+    sourceEntryLine: 2,
+    sourceRawLine: "- [ ] ()",
+    direction: -1,
+  });
+  assert.equal(cancelledPlan.valid, false);
+  assert.match(cancelledPlan.error, /first planned Pomodoro/);
+  assert.equal(cancelledPlan.after, cancelledAbove);
+});
+
+test("planPomodoroEntryReorder refuses moving down past the last placeholder in the section", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 11,
+    sourceRawLine: "- [ ] () — VERIFY",
+    direction: 1,
+  });
+  assert.equal(plan.valid, false);
+  assert.match(plan.error, /last planned Pomodoro/);
+  assert.equal(plan.after, content);
+});
+
+test("planPomodoroEntryReorder refuses both directions for a lone placeholder", () => {
+  const content = "## Pomodoros\n- [ ] ()";
+  const down = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] ()",
+    direction: 1,
+  });
+  assert.equal(down.valid, false);
+  assert.match(down.error, /last planned Pomodoro/);
+
+  const up = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] ()",
+    direction: -1,
+  });
+  assert.equal(up.valid, false);
+  assert.match(up.error, /first planned Pomodoro/);
+});
+
+test("planPomodoroEntryReorder keeps a blank separator between two placeholders after the swap", () => {
+  const content = ["## Pomodoros", "- [ ] () — A", "", "- [ ] () — B"].join(
+    "\n",
+  );
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] () — A",
+    direction: 1,
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(
+    plan.after,
+    ["## Pomodoros", "- [ ] () — B", "", "- [ ] () — A"].join("\n"),
+  );
+  assert.equal(plan.movedEntryLine, 3);
+});
+
+test("planPomodoroEntryReorder refuses a non-placeholder entry and a cancelled placeholder", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const timespanPlan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 4,
+    direction: 1,
+  });
+  assert.equal(timespanPlan.valid, false);
+  assert.equal(
+    timespanPlan.error,
+    "Only an open Pomodoro without a time range can be moved",
+  );
+
+  const cancelledPlan = helpers.planPomodoroEntryReorder(
+    "## Pomodoros\n- [-] ()",
+    { sourceEntryLine: 1, direction: 1 },
+  );
+  assert.equal(cancelledPlan.valid, false);
+  assert.equal(
+    cancelledPlan.error,
+    "Only an open Pomodoro without a time range can be moved",
+  );
+});
+
+test("planPomodoroEntryReorder rejects a stale source line", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 6,
+    sourceRawLine: "- [ ] () — WRONG",
+    direction: 1,
+  });
+  assert.equal(plan.valid, false);
+  assert.match(plan.error, /changed before it could be moved/);
+});
+
+test("planPomodoroEntryReorder round-trips CRLF content", () => {
+  const lfContent = pomodoroFixtureLines().join("\n");
+  const crlfContent = pomodoroFixtureLines().join("\r\n");
+  const lfPlan = helpers.planPomodoroEntryReorder(lfContent, {
+    sourceEntryLine: 9,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+  });
+  const crlfPlan = helpers.planPomodoroEntryReorder(crlfContent, {
+    sourceEntryLine: 9,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+  });
+
+  assert.equal(crlfPlan.valid, true);
+  assert.equal(crlfPlan.after, lfPlan.after.split("\n").join("\r\n"));
+  assert.equal(crlfPlan.movedEntryLine, lfPlan.movedEntryLine);
+});
+
+test("planPomodoroEntryReorder leaves content outside the two swapped blocks untouched", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const beforeLines = content.split("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 6,
+    sourceRawLine: "- [ ] ()",
+    direction: 1,
+  });
+  assert.equal(plan.valid, true);
+  const afterLines = plan.after.split("\n");
+  for (let i = 0; i <= 5; i += 1) {
+    assert.equal(afterLines[i], beforeLines[i]);
+  }
+  assert.equal(afterLines[13], "## Not Pomodoros");
+  assert.equal(afterLines[13], beforeLines[13]);
 });
 
 test("planCountedBulletPropertyBatch reports futureScheduledTaskLines for a mixed priority-roll batch", () => {

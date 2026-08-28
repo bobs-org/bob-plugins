@@ -7285,15 +7285,19 @@ function isMovablePomodoroEntryContext(context) {
   return Boolean(context && context.entry && context.entry.open && context.entry.placeholder);
 }
 
-// Plan reordering a movable (open, placeholder) Pomodoro entry by one
-// position among its planned siblings. A move is only allowed when the
-// adjacent entry in that direction is itself open and placeholder, so a
-// planned Pomodoro can never cross a current, closed, or cancelled one.
-// Returns a frozen
-// `{ valid, error, after, entryLine, movedEntryLine, entry, neighborEntry, direction }`.
+// Plan reordering a movable (open, placeholder) Pomodoro entry among its
+// planned siblings. `options.repeat` (Vim count, default 1) is an exact
+// distance: the source block moves N positions in `direction` only when every
+// crossed sibling, including the destination, is itself an open placeholder.
+// A current, closed, cancelled, or missing neighbor refuses the whole request
+// with no partial rewrite, so planned Pomodoros never cross non-planned
+// entries. `neighborEntry` is the entry originally occupying the destination
+// slot (the adjacent sibling when repeat is 1). Returns a frozen
+// `{ valid, error, after, entryLine, movedEntryLine, entry, neighborEntry, direction, repeat }`.
 function planPomodoroEntryReorder(content, options = {}) {
   const text = String(content || "");
   const direction = numericOrDefault(options.direction, 1) < 0 ? -1 : 1;
+  const repeat = normalizeVimRepeat(options.repeat);
   const sourceEntryLine = Number.isInteger(options.sourceEntryLine)
     ? options.sourceEntryLine
     : -1;
@@ -7308,6 +7312,7 @@ function planPomodoroEntryReorder(content, options = {}) {
       entry: null,
       neighborEntry: null,
       direction,
+      repeat,
     });
 
   const context = findPomodoroEntryContext(text, sourceEntryLine);
@@ -7329,43 +7334,83 @@ function planPomodoroEntryReorder(content, options = {}) {
     return invalid("Only an open Pomodoro without a time range can be moved");
   }
 
-  const neighborEntry = entries[entryIndex + direction];
   const label = getPomodoroBulletMoveDestinationLabel(entry);
-  if (!neighborEntry || !neighborEntry.open || !neighborEntry.placeholder) {
-    return invalid(
-      `${label} is already the ${direction < 0 ? "first" : "last"} planned Pomodoro`,
+  const boundaryError =
+    repeat > 1
+      ? `${label} cannot move ${
+          direction < 0 ? "up" : "down"
+        } ${repeat} positions without crossing the ${
+          direction < 0 ? "first" : "last"
+        } planned Pomodoro`
+      : `${label} is already the ${
+          direction < 0 ? "first" : "last"
+        } planned Pomodoro`;
+  const targetEntryIndex = entryIndex + direction * repeat;
+  if (targetEntryIndex < 0 || targetEntryIndex >= entries.length) {
+    return invalid(boundaryError);
+  }
+
+  const step = direction;
+  for (
+    let index = entryIndex + step;
+    index !== targetEntryIndex + step;
+    index += step
+  ) {
+    if (!isMovablePomodoroEntryContext({ entry: entries[index] })) {
+      return invalid(boundaryError);
+    }
+  }
+
+  const neighborEntry = entries[targetEntryIndex];
+  const startIndex = Math.min(entryIndex, targetEntryIndex);
+  const endIndex = Math.max(entryIndex, targetEntryIndex);
+  const spanEntries = entries.slice(startIndex, endIndex + 1);
+  const blocks = spanEntries.map((spanEntry) =>
+    Object.freeze({
+      lines: lines.slice(spanEntry.entryLine, spanEntry.childEndLineExclusive),
+      isSource: spanEntry.entryLine === entry.entryLine,
+    }),
+  );
+  const gaps = [];
+  for (let index = 0; index < spanEntries.length - 1; index += 1) {
+    gaps.push(
+      lines.slice(
+        spanEntries[index].childEndLineExclusive,
+        spanEntries[index + 1].entryLine,
+      ),
     );
   }
 
-  const [upperEntry, lowerEntry] =
-    entry.entryLine < neighborEntry.entryLine
-      ? [entry, neighborEntry]
-      : [neighborEntry, entry];
-  const upperBlock = lines.slice(
-    upperEntry.entryLine,
-    upperEntry.childEndLineExclusive,
-  );
-  const between = lines.slice(
-    upperEntry.childEndLineExclusive,
-    lowerEntry.entryLine,
-  );
-  const lowerBlock = lines.slice(
-    lowerEntry.entryLine,
-    lowerEntry.childEndLineExclusive,
-  );
+  // Down rotates [source, next1, ..., nextN] left; up rotates
+  // [prevN, ..., prev1, source] right. Gaps stay in their physical slots.
+  const rotated =
+    direction > 0
+      ? blocks.slice(1).concat(blocks[0])
+      : [blocks[blocks.length - 1], ...blocks.slice(0, -1)];
+
+  const spanStartLine = spanEntries[0].entryLine;
+  const spanEndLineExclusive =
+    spanEntries[spanEntries.length - 1].childEndLineExclusive;
+  const rendered = [];
+  let movedEntryLine = null;
+  let currentLine = spanStartLine;
+  for (let index = 0; index < rotated.length; index += 1) {
+    if (rotated[index].isSource) {
+      movedEntryLine = currentLine;
+    }
+    rendered.push(...rotated[index].lines);
+    currentLine += rotated[index].lines.length;
+    if (index < gaps.length) {
+      rendered.push(...gaps[index]);
+      currentLine += gaps[index].length;
+    }
+  }
 
   const nextLines = [
-    ...lines.slice(0, upperEntry.entryLine),
-    ...lowerBlock,
-    ...between,
-    ...upperBlock,
-    ...lines.slice(lowerEntry.childEndLineExclusive),
+    ...lines.slice(0, spanStartLine),
+    ...rendered,
+    ...lines.slice(spanEndLineExclusive),
   ];
-
-  const movedEntryLine =
-    entry === upperEntry
-      ? upperEntry.entryLine + lowerBlock.length + between.length
-      : upperEntry.entryLine;
 
   return Object.freeze({
     valid: true,
@@ -7376,6 +7421,7 @@ function planPomodoroEntryReorder(content, options = {}) {
     entry,
     neighborEntry,
     direction,
+    repeat,
   });
 }
 
@@ -7971,10 +8017,18 @@ function getOpenTaskNavigationLines(lines) {
 // Circular open-task navigation: jump to the nearest navigation target
 // (Ready/In Progress/Next `#task` line or open/done Pomodoro ledger line) in
 // the given direction, wrapping across the file boundary when there is no
-// strict neighbour. Returns null only when there are no matching targets, or
-// when the sole matching target is already on the cursor line (so the caller
-// can show its no-target notice and leave the editor untouched).
-function getOpenObsidianTaskJumpLine(lines, cursorLine, direction) {
+// strict neighbour. An optional `repeat` (Vim count, default 1) then advances
+// another `repeat - 1` eligible targets in the same direction, modulo the
+// target list, so a count can wrap once or many times without rescanning.
+// Returns null only when there are no matching targets, or when the sole
+// matching target is already on the cursor line (so the caller can show its
+// no-target notice and leave the editor untouched).
+function getOpenObsidianTaskJumpLine(
+  lines,
+  cursorLine,
+  direction,
+  repeat = 1,
+) {
   const currentLine = Math.floor(numericOrDefault(cursorLine, Number.NaN));
   if (!Number.isFinite(currentLine)) {
     return null;
@@ -8012,12 +8066,23 @@ function getOpenObsidianTaskJumpLine(lines, cursorLine, direction) {
 
   // The only matching open task is already on the cursor line; with multiple
   // tasks the resolved target is always a different line, so this leaves the
-  // single-task/current-line case as the lone no-target outcome.
+  // single-task/current-line case as the lone no-target outcome. Counted
+  // repeats keep that same refusal rather than spinning in place.
   if (targetLine === currentLine) {
     return null;
   }
 
-  return targetLine;
+  const firstIndex = taskLines.indexOf(targetLine);
+  if (firstIndex < 0) {
+    return targetLine;
+  }
+
+  const step =
+    (normalizeVimRepeat(repeat) - 1) % taskLines.length;
+  const signedStep = direction < 0 ? -step : step;
+  const finalIndex =
+    (firstIndex + signedStep + taskLines.length) % taskLines.length;
+  return taskLines[finalIndex];
 }
 
 function getDashTasksHeaderLine(lines) {
@@ -20026,12 +20091,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  // Reorder a movable (open, placeholder) Pomodoro entry under the cursor by
-  // one position among its planned siblings, in place of a jump. Returns
-  // `false` when the cursor is not on a movable entry, so the caller falls
-  // through to the jump; returns `true` when handled (moved, or refused with
-  // a notice) so the caller must not jump.
-  movePlannedPomodoroEntry(editor, direction) {
+  // Reorder a movable (open, placeholder) Pomodoro entry under the cursor
+  // among its planned siblings, in place of a jump. `repeat` is an exact
+  // Vim count (default 1): N positions in one transaction, or a refusal with
+  // no mutation. Returns `false` when the cursor is not on a movable entry,
+  // so the caller falls through to the jump; returns `true` when handled
+  // (moved, or refused with a notice) so the caller must not jump.
+  movePlannedPomodoroEntry(editor, direction, repeat = 1) {
     if (!editor || typeof editor.getValue !== "function") {
       return false;
     }
@@ -20051,6 +20117,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       sourceEntryLine: cursor.line,
       sourceRawLine,
       direction,
+      repeat: normalizeVimRepeat(repeat),
     });
 
     if (!plan.valid) {
@@ -20081,29 +20148,38 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     const label = getPomodoroBulletMoveDestinationLabel(plan.entry);
-    new Notice(`Moved ${label} ${direction < 0 ? "up" : "down"}`);
+    const directionWord = direction < 0 ? "up" : "down";
+    new Notice(
+      plan.repeat > 1
+        ? `Moved ${label} ${directionWord} ${plan.repeat} positions`
+        : `Moved ${label} ${directionWord}`,
+    );
     return true;
   }
 
-  jumpToOpenObsidianTask(editor, direction) {
+  jumpToOpenObsidianTask(editor, direction, repeat = 1) {
     const cursor = getEditorCursor(editor);
     if (!cursor || !editor || typeof editor.getValue !== "function") {
       new Notice("No active markdown editor");
       return false;
     }
 
+    const normalizedRepeat = normalizeVimRepeat(repeat);
+
     // A single physical Ctrl+Shift+J/K can reach this method twice in the same
     // dispatch turn: once via the Obsidian hotkeys.json command and once via the
     // Vim-normal capture fallback. Suppress the duplicate so a no-target press
     // shows only one notice or move (a successful jump never moves twice, and a
-    // planned-Pomodoro reorder never reorders twice). The mark clears on the
-    // next macrotask so deliberate repeats and key repeat still work.
+    // planned-Pomodoro reorder never reorders twice), including when the capture
+    // route carries a count and the command callback would default to one. The
+    // mark is keyed by editor and direction, not repeat, and clears on the next
+    // macrotask so deliberate repeats and key repeat still work.
     if (this.isOpenTaskJumpDispatchPending(editor, direction)) {
       return false;
     }
     this.markOpenTaskJumpDispatch(editor, direction);
 
-    if (this.movePlannedPomodoroEntry(editor, direction)) {
+    if (this.movePlannedPomodoroEntry(editor, direction, normalizedRepeat)) {
       return true;
     }
 
@@ -20111,6 +20187,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       String(editor.getValue()).split(/\r?\n/),
       cursor.line,
       direction,
+      normalizedRepeat,
     );
 
     if (targetLine === null) {
@@ -20173,12 +20250,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.register(() => clearTimeout(timeoutId));
   }
 
-  // Capture-phase fallback so Ctrl+Shift+J/K reach the open-task jump commands
-  // while Vim normal mode is active. CodeMirror Vim swallows these chords before
-  // Obsidian's hotkey dispatcher runs, so the hotkeys.json bindings only cover
-  // insert mode and non-Vim editing. This mirrors task-status-cycler's
-  // Ctrl+Shift+O handling and intentionally avoids a `<C-S-j>`/`<C-S-k>` vim
-  // nmap, which could collapse onto and overwrite the existing `<C-j>`/`<C-k>`
+  // Capture-phase fallback so Ctrl+Shift+J/K reach the counted open-task jump
+  // / planned-Pomodoro move route while Vim normal mode is active. CodeMirror
+  // Vim swallows these chords before Obsidian's hotkey dispatcher runs, so the
+  // hotkeys.json bindings only cover insert mode and non-Vim editing. A pending
+  // numeric Vim prefix is an ordinary repeat (N positions / Nth target), not
+  // "N additional items". This mirrors task-status-cycler's Ctrl+Shift+O
+  // handling and intentionally avoids a `<C-S-j>`/`<C-S-k>` vim nmap, which
+  // could collapse onto and overwrite the existing `<C-j>`/`<C-k>`
   // section-header maps.
   registerOpenTaskJumpInputListeners() {
     // Tracks events already dispatched so the window + document capture
@@ -20526,10 +20605,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     // Only intercept in Vim normal mode. Insert/visual/replace mode and a
     // disabled Vim setting fall through so Obsidian's hotkeys.json bindings
-    // handle the chord instead.
+    // handle the chord instead, without consuming a pending Vim count.
     if (!this.isVimNormalModeEditor(view.editor, view)) {
       return false;
     }
+
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const pendingRepeat = getPendingVimRepeat(cm);
 
     if (this.handledOpenTaskJumpEvents) {
       this.handledOpenTaskJumpEvents.add(event);
@@ -20541,7 +20623,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       event.stopImmediatePropagation();
     }
 
-    this.jumpToOpenObsidianTask(view.editor, direction);
+    resetPendingVimInputState(
+      cm,
+      pendingRepeat.explicit ? "counted-open-task-jump" : "open-task-jump",
+    );
+    this.jumpToOpenObsidianTask(
+      view.editor,
+      direction,
+      pendingRepeat.repeat,
+    );
     return true;
   }
 

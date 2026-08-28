@@ -394,6 +394,64 @@ test("blocked-only notes and a sole current allowed task have no jump target", (
   assert.equal(helpers.getOpenObsidianTaskJumpLine(singleAllowed, 0, -1), null);
 });
 
+test("counted open-task jumps select the Nth eligible target and wrap modulo the list", () => {
+  const lines = [
+    "- [ ] #task A",
+    "plain between",
+    "- [/] #task B",
+    "- [?] #task Blocked",
+    "- [*] #task C",
+    "- [ ] #task D",
+  ];
+  assert.deepEqual(helpers.getOpenTaskNavigationLines(lines), [0, 2, 4, 5]);
+
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, 1, 2), 4);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, 1, 3), 5);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, -1, 2), 4);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, -1, 3), 2);
+
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 1, 1, 2), 4);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 1, 1, 3), 5);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 1, -1, 2), 5);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 1, -1, 3), 4);
+
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 5, 1, 2), 2);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 5, -1, 2), 2);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 3, 1, 3), 0);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, 1, 6), 4);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, -1, 5), 5);
+});
+
+test("counted open-task jumps keep sole-target and invalid-repeat behavior", () => {
+  const lines = [
+    "- [ ] #task A",
+    "plain between",
+    "- [/] #task B",
+    "- [?] #task Blocked",
+    "- [*] #task C",
+    "- [ ] #task D",
+  ];
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, 1, 4), 0);
+  assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, -1, 4), 0);
+
+  const singleCurrent = ["- [ ] #task Only"];
+  for (const repeat of [1, 2, 9, 100]) {
+    assert.equal(helpers.getOpenObsidianTaskJumpLine(singleCurrent, 0, 1, repeat), null);
+    assert.equal(helpers.getOpenObsidianTaskJumpLine(singleCurrent, 0, -1, repeat), null);
+  }
+
+  const singleAway = ["plain", "- [ ] #task Only"];
+  for (const repeat of [1, 2, 7]) {
+    assert.equal(helpers.getOpenObsidianTaskJumpLine(singleAway, 0, 1, repeat), 1);
+    assert.equal(helpers.getOpenObsidianTaskJumpLine(singleAway, 0, -1, repeat), 1);
+  }
+
+  const omitted = helpers.getOpenObsidianTaskJumpLine(lines, 0, 1);
+  for (const repeat of [0, -3, null, undefined, "nope", 1.8]) {
+    assert.equal(helpers.getOpenObsidianTaskJumpLine(lines, 0, 1, repeat), omitted);
+  }
+});
+
 test("project schedule validation accepts only real YYYY-MM-DD dates", () => {
   assert.equal(helpers.validateProjectScheduledDate("2028-02-29").valid, true);
   assert.equal(helpers.validateProjectScheduledDate("2026-02-29").valid, false);
@@ -6762,6 +6820,327 @@ test("Ctrl+Shift+J/K dispatch guard performs exactly one Pomodoro move per physi
   cleanups.forEach((cleanup) => cleanup());
 });
 
+test("counted jumpToOpenObsidianTask moves a planned Pomodoro N positions in one undo group", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = new TransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, 512);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1, 3);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.deepEqual(editor.getCursor(), {
+    line: expectedPlan.movedEntryLine,
+    ch: "- [ ] () — BODY".length,
+  });
+  assert.equal(notices.at(-1), "Moved BODY down 3 positions");
+  assert.ok(!plugin.pendingOpenTaskJumpCenterDeferred);
+});
+
+test("an impossible counted Pomodoro move refuses without jumping or mutating", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = new TransactionEditor(lines.join("\n"), { line: 5, ch: 3 }, 512);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1, 4);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 0);
+  assert.deepEqual(editor.getCursor(), { line: 5, ch: 3 });
+  assert.equal(editor.getValue(), lines.join("\n"));
+  assert.equal(
+    notices.at(-1),
+    "BODY cannot move down 4 positions without crossing the last planned Pomodoro",
+  );
+  assert.ok(!plugin.pendingOpenTaskJumpCenterDeferred);
+});
+
+test("counted jumpToOpenObsidianTask still jumps off non-movable cursor contexts", () => {
+  const lines = pomodoroFixtureLines();
+  const expectedFromCurrent = helpers.getOpenObsidianTaskJumpLine(lines, 4, 1, 3);
+  const pomodoroEditor = new TransactionEditor(
+    lines.join("\n"),
+    { line: 4, ch: 2 },
+    512,
+  );
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+
+  assert.equal(plugin.jumpToOpenObsidianTask(pomodoroEditor, 1, 3), true);
+  assert.equal(pomodoroEditor.transactions.length, 0);
+  assert.deepEqual(pomodoroEditor.getCursor(), {
+    line: expectedFromCurrent,
+    ch: 0,
+  });
+  assert.equal(pomodoroEditor.getValue(), lines.join("\n"));
+  assert.ok(plugin.pendingOpenTaskJumpCenterDeferred);
+
+  const subBulletEditor = new TransactionEditor(
+    lines.join("\n"),
+    { line: 7, ch: 1 },
+    512,
+  );
+  const subBulletPlugin = new NavigationHotkeysPlugin();
+  subBulletPlugin.register = () => {};
+  subBulletPlugin.app = {};
+  const expectedFromSubBullet = helpers.getOpenObsidianTaskJumpLine(lines, 7, 1, 3);
+  assert.equal(subBulletPlugin.jumpToOpenObsidianTask(subBulletEditor, 1, 3), true);
+  assert.equal(subBulletEditor.transactions.length, 0);
+  assert.deepEqual(subBulletEditor.getCursor(), {
+    line: expectedFromSubBullet,
+    ch: 0,
+  });
+  assert.ok(subBulletPlugin.pendingOpenTaskJumpCenterDeferred);
+
+  const taskLines = [
+    "- [ ] #task A",
+    "- [ ] #task B",
+    "- [ ] #task C",
+    "- [ ] #task D",
+  ];
+  const taskEditor = new TransactionEditor(taskLines.join("\n"), {
+    line: 0,
+    ch: 0,
+  });
+  const taskPlugin = new NavigationHotkeysPlugin();
+  taskPlugin.register = () => {};
+  taskPlugin.app = {};
+  const expectedFromTask = helpers.getOpenObsidianTaskJumpLine(taskLines, 0, 1, 3);
+  assert.equal(taskPlugin.jumpToOpenObsidianTask(taskEditor, 1, 3), true);
+  assert.equal(taskEditor.transactions.length, 0);
+  assert.deepEqual(taskEditor.getCursor(), { line: expectedFromTask, ch: 0 });
+  assert.ok(taskPlugin.pendingOpenTaskJumpCenterDeferred);
+
+  const plainLines = ["plain", "- [ ] #task A", "- [ ] #task B", "- [ ] #task C"];
+  const plainEditor = new TransactionEditor(plainLines.join("\n"), {
+    line: 0,
+    ch: 0,
+  });
+  const plainPlugin = new NavigationHotkeysPlugin();
+  plainPlugin.register = () => {};
+  plainPlugin.app = {};
+  const expectedFromPlain = helpers.getOpenObsidianTaskJumpLine(
+    plainLines,
+    0,
+    1,
+    3,
+  );
+  assert.equal(plainPlugin.jumpToOpenObsidianTask(plainEditor, 1, 3), true);
+  assert.equal(plainEditor.transactions.length, 0);
+  assert.deepEqual(plainEditor.getCursor(), { line: expectedFromPlain, ch: 0 });
+  assert.ok(plainPlugin.pendingOpenTaskJumpCenterDeferred);
+});
+
+test("counted open-task jump on a sole current target keeps the existing notice", () => {
+  const editor = new TransactionEditor("- [ ] #task Only", { line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  assert.equal(plugin.jumpToOpenObsidianTask(editor, 1, 9), false);
+  assert.equal(plugin.jumpToOpenObsidianTask(editor, -1, 9), false);
+  assert.deepEqual(editor.getCursor(), { line: 0, ch: 0 });
+  assert.equal(notices.at(-2), "No next open task");
+  assert.equal(notices.at(-1), "No previous open task");
+});
+
+test("dispatch guard allows exactly one counted Pomodoro move when the command route also fires", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = new TransactionEditor(lines.join("\n"), { line: 5, ch: 0 }, 512);
+  const plugin = new NavigationHotkeysPlugin();
+  const cleanups = [];
+  plugin.register = (cleanup) => cleanups.push(cleanup);
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  const first = plugin.jumpToOpenObsidianTask(editor, 1, 3);
+  const second = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(first, true);
+  assert.equal(second, false);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(notices.filter((message) => message.startsWith("Moved ")).length, 1);
+  cleanups.forEach((cleanup) => cleanup());
+});
+
+test("physical Ctrl+Shift+J/K consume a Vim count once and pass it to the shared route", () => {
+  const makeEvent = (overrides = {}) => {
+    const calls = { prevent: 0, stop: 0, immediate: 0 };
+    return {
+      key: "J",
+      code: "KeyJ",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      metaKey: false,
+      preventDefault: () => {
+        calls.prevent += 1;
+      },
+      stopPropagation: () => {
+        calls.stop += 1;
+      },
+      stopImmediatePropagation: () => {
+        calls.immediate += 1;
+      },
+      calls,
+      ...overrides,
+    };
+  };
+  const inputState = {
+    keyBuffer: [],
+    repeat: null,
+    reason: "",
+    getRepeat: () => null,
+  };
+  const cm = {
+    state: { vim: { mode: "normal", inputState } },
+    getCursor: () => ({ line: 0, ch: 0 }),
+  };
+  const editor = { cm: { cm } };
+  const view = { editor };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.handledOpenTaskJumpEvents = new WeakSet();
+  plugin.getFocusedMarkdownEditorView = () => view;
+  const jumps = [];
+  plugin.jumpToOpenObsidianTask = (receivedEditor, direction, repeat) => {
+    jumps.push({ editor: receivedEditor, direction, repeat });
+    return true;
+  };
+
+  const bare = makeEvent();
+  assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(bare), true);
+  assert.deepEqual(bare.calls, { prevent: 1, stop: 1, immediate: 1 });
+  assert.deepEqual(inputState.keyBuffer, []);
+  assert.equal(inputState.repeat, null);
+  assert.equal(inputState.reason, "open-task-jump");
+  assert.deepEqual(jumps, [{ editor, direction: 1, repeat: 1 }]);
+  assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(bare), false);
+  assert.equal(jumps.length, 1);
+
+  inputState.keyBuffer = ["3"];
+  inputState.repeat = 3;
+  inputState.reason = "";
+  inputState.getRepeat = () => 3;
+  const counted = makeEvent();
+  assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(counted), true);
+  assert.deepEqual(counted.calls, { prevent: 1, stop: 1, immediate: 1 });
+  assert.deepEqual(inputState.keyBuffer, []);
+  assert.equal(inputState.repeat, null);
+  assert.equal(inputState.reason, "counted-open-task-jump");
+  assert.deepEqual(jumps[1], { editor, direction: 1, repeat: 3 });
+
+  inputState.keyBuffer = ["3"];
+  inputState.repeat = 3;
+  inputState.reason = "";
+  inputState.getRepeat = () => 3;
+  const countedUp = makeEvent({ key: "K", code: "KeyK" });
+  assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(countedUp), true);
+  assert.equal(inputState.reason, "counted-open-task-jump");
+  assert.deepEqual(jumps[2], { editor, direction: -1, repeat: 3 });
+
+  inputState.keyBuffer = ["3"];
+  inputState.repeat = 3;
+  inputState.reason = "";
+  inputState.getRepeat = () => 3;
+  for (const mode of ["insert", "visual", "visual-line", "replace"]) {
+    cm.state.vim.mode = mode;
+    const event = makeEvent();
+    assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+    assert.deepEqual(inputState.keyBuffer, ["3"]);
+  }
+  cm.state.vim.mode = "normal";
+
+  for (const overrides of [
+    { ctrlKey: false },
+    { shiftKey: false },
+    { altKey: true },
+    { metaKey: true },
+    { code: "KeyM", key: "M" },
+  ]) {
+    const event = makeEvent(overrides);
+    assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+    assert.deepEqual(inputState.keyBuffer, ["3"]);
+  }
+
+  delete cm.state.vim;
+  const disabled = makeEvent();
+  assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(disabled), false);
+  assert.equal(disabled.calls.prevent, 0);
+
+  cm.state.vim = { mode: "normal", inputState };
+  plugin.getFocusedMarkdownEditorView = () => null;
+  const unfocused = makeEvent();
+  assert.equal(plugin.handleOpenTaskJumpPhysicalKeydown(unfocused), false);
+  assert.equal(unfocused.calls.prevent, 0);
+  assert.deepEqual(inputState.keyBuffer, ["3"]);
+});
+
+test("open-task command ids keep uncounted editor callbacks", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const commands = [];
+  plugin.app = {
+    workspace: {
+      getActiveFile: () => null,
+      on: () => ({}),
+      onLayoutReady: () => {},
+    },
+  };
+  plugin.addCommand = (command) => commands.push(command);
+  plugin.register = () => {};
+  plugin.registerEvent = () => {};
+  plugin.registerVimMappingsWhenReady = () => {};
+  plugin.registerOpenTaskJumpInputListeners = () => {};
+  plugin.registerCountedTransclusionToggleInputListeners = () => {};
+  plugin.registerCountedBulletPropertyInputListeners = () => {};
+  plugin.registerCountedTaskMoveInputListeners = () => {};
+  plugin.registerClearSearchHighlightInputListeners = () => {};
+  const calls = [];
+  plugin.jumpToOpenObsidianTask = (editor, direction, repeat) => {
+    calls.push({ editor, direction, repeat });
+    return true;
+  };
+
+  plugin.onload();
+  const next = commands.find((item) => item.id === "jump-to-next-open-task");
+  const prev = commands.find((item) => item.id === "jump-to-prev-open-task");
+  assert.ok(next);
+  assert.ok(prev);
+  const editor = {};
+  next.editorCallback(editor);
+  prev.editorCallback(editor);
+  assert.deepEqual(calls, [
+    { editor, direction: 1, repeat: undefined },
+    { editor, direction: -1, repeat: undefined },
+  ]);
+});
+
 test("physical counted property chord consumes only explicit normal-mode Vim counts", () => {
   const makeEvent = (overrides = {}) => {
     const calls = { prevent: 0, stop: 0, immediate: 0 };
@@ -8844,6 +9223,33 @@ function pomodoroFixtureLines() {
   ];
 }
 
+function countedPomodoroReorderLines() {
+  return [
+    "# Daily",
+    "Intro prose stays put",
+    "## Pomodoros",
+    "- [x] (**0800-0830** [t:: 30m])",
+    "\t- closed child",
+    "- [ ] () — BODY",
+    "\t- [[body#^one]]",
+    "\t- [[body#^two]]",
+    "\t\t- nested under two",
+    "",
+    "- [ ] () — NEXT",
+    "\t- [[next#^only]]",
+    "stray prose between NEXT and THEN",
+    "- [ ] () — THEN",
+    "- [ ] () — LAST",
+    "\t- [[last#^a]]",
+    "\t- [[last#^b]]",
+    "\t- [[last#^c]]",
+    "## Tasks",
+    "- [ ] #task After section",
+    "## Pomodoros",
+    "- [ ] () — OTHER SECTION",
+  ];
+}
+
 test("parsePomodoroEntryLine parses named/unnamed, placeholder/range, and open/closed shapes", () => {
   assert.deepEqual(
     helpers.parsePomodoroEntryLine("- [ ] () — BODY"),
@@ -10675,6 +11081,241 @@ test("planPomodoroEntryReorder leaves content outside the two swapped blocks unt
   }
   assert.equal(afterLines[13], "## Not Pomodoros");
   assert.equal(afterLines[13], beforeLines[13]);
+});
+
+test("planPomodoroEntryReorder moves a named placeholder down three positions with its subtree", () => {
+  const beforeLines = countedPomodoroReorderLines();
+  const content = beforeLines.join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+
+  assert.equal(plan.valid, true);
+  assert.equal(plan.repeat, 3);
+  assert.equal(plan.direction, 1);
+  assert.equal(plan.entry.entryLine, 5);
+  assert.equal(plan.neighborEntry.entryLine, 14);
+  assert.equal(plan.movedEntryLine, 14);
+  assert.equal(plan.after.split("\n").length, beforeLines.length);
+
+  const afterLines = plan.after.split("\n");
+  assert.equal(afterLines[5], "- [ ] () — NEXT");
+  assert.equal(afterLines[6], "\t- [[next#^only]]");
+  assert.equal(afterLines[7], "");
+  assert.equal(afterLines[8], "- [ ] () — THEN");
+  assert.equal(afterLines[9], "stray prose between NEXT and THEN");
+  assert.equal(afterLines[10], "- [ ] () — LAST");
+  assert.equal(afterLines[11], "\t- [[last#^a]]");
+  assert.equal(afterLines[12], "\t- [[last#^b]]");
+  assert.equal(afterLines[13], "\t- [[last#^c]]");
+  assert.equal(afterLines[14], "- [ ] () — BODY");
+  assert.equal(afterLines[15], "\t- [[body#^one]]");
+  assert.equal(afterLines[16], "\t- [[body#^two]]");
+  assert.equal(afterLines[17], "\t\t- nested under two");
+  assert.equal(afterLines[0], "# Daily");
+  assert.equal(afterLines[1], "Intro prose stays put");
+  assert.equal(afterLines[3], "- [x] (**0800-0830** [t:: 30m])");
+  assert.equal(afterLines[18], "## Tasks");
+  assert.equal(afterLines[21], "- [ ] () — OTHER SECTION");
+});
+
+test("planPomodoroEntryReorder moves a placeholder up three positions and round-trips", () => {
+  const content = countedPomodoroReorderLines().join("\n");
+  const down = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  assert.equal(down.valid, true);
+
+  const up = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 14,
+    sourceRawLine: "- [ ] () — LAST",
+    direction: -1,
+    repeat: 3,
+  });
+  assert.equal(up.valid, true);
+  assert.equal(up.repeat, 3);
+  assert.equal(up.direction, -1);
+  assert.equal(up.movedEntryLine, 5);
+  assert.equal(up.neighborEntry.entryLine, 5);
+  assert.equal(up.after.split("\n")[5], "- [ ] () — LAST");
+  assert.equal(up.after.split("\n")[10], "- [ ] () — BODY");
+
+  const backUp = helpers.planPomodoroEntryReorder(down.after, {
+    sourceEntryLine: down.movedEntryLine,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: -1,
+    repeat: 3,
+  });
+  assert.equal(backUp.valid, true);
+  assert.equal(backUp.after, content);
+});
+
+test("planPomodoroEntryReorder keeps unequal gaps in their slots during a counted rotate", () => {
+  const content = countedPomodoroReorderLines().join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  const afterLines = plan.after.split("\n");
+  assert.equal(afterLines[7], "");
+  assert.equal(afterLines[9], "stray prose between NEXT and THEN");
+  assert.equal(afterLines[13], "\t- [[last#^c]]");
+  assert.equal(afterLines[14], "- [ ] () — BODY");
+});
+
+test("planPomodoroEntryReorder refuses a counted move atomically at the planned-run boundary", () => {
+  const content = countedPomodoroReorderLines().join("\n");
+  const offEnd = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 4,
+  });
+  assert.equal(offEnd.valid, false);
+  assert.equal(offEnd.after, content);
+  assert.equal(offEnd.movedEntryLine, null);
+  assert.equal(offEnd.repeat, 4);
+  assert.equal(
+    offEnd.error,
+    "BODY cannot move down 4 positions without crossing the last planned Pomodoro",
+  );
+
+  const offStart = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 14,
+    sourceRawLine: "- [ ] () — LAST",
+    direction: -1,
+    repeat: 4,
+  });
+  assert.equal(offStart.valid, false);
+  assert.equal(offStart.after, content);
+  assert.equal(offStart.movedEntryLine, null);
+  assert.equal(
+    offStart.error,
+    "LAST cannot move up 4 positions without crossing the first planned Pomodoro",
+  );
+
+  const blockedLines = countedPomodoroReorderLines().slice();
+  blockedLines[13] = "- [ ] (**0920-0950** [t:: 30m])";
+  const blockedContent = blockedLines.join("\n");
+  const blocked = helpers.planPomodoroEntryReorder(blockedContent, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  assert.equal(blocked.valid, false);
+  assert.equal(blocked.after, blockedContent);
+  assert.equal(blocked.movedEntryLine, null);
+  assert.equal(
+    blocked.error,
+    "BODY cannot move down 3 positions without crossing the last planned Pomodoro",
+  );
+
+  const closedLines = countedPomodoroReorderLines().slice();
+  closedLines[13] = "- [x] (**0920-0950** [t:: 30m])";
+  const closedContent = closedLines.join("\n");
+  const closed = helpers.planPomodoroEntryReorder(closedContent, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  assert.equal(closed.valid, false);
+  assert.equal(closed.after, closedContent);
+
+  const cancelledLines = countedPomodoroReorderLines().slice();
+  cancelledLines[13] = "- [-] () — THEN";
+  const cancelledContent = cancelledLines.join("\n");
+  const cancelled = helpers.planPomodoroEntryReorder(cancelledContent, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  assert.equal(cancelled.valid, false);
+  assert.equal(cancelled.after, cancelledContent);
+});
+
+test("planPomodoroEntryReorder repeat 1 matches the uncounted plan and normalizes invalid counts", () => {
+  const content = pomodoroFixtureLines().join("\n");
+  const uncounted = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 9,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+  });
+  const explicitOne = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 9,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 1,
+  });
+  assert.equal(uncounted.valid, true);
+  assert.equal(uncounted.repeat, 1);
+  assert.equal(explicitOne.after, uncounted.after);
+  assert.equal(explicitOne.movedEntryLine, uncounted.movedEntryLine);
+  assert.equal(explicitOne.neighborEntry.entryLine, uncounted.neighborEntry.entryLine);
+  assert.equal(explicitOne.repeat, 1);
+
+  for (const repeat of [0, -4, null, "nope", 1.2]) {
+    const plan = helpers.planPomodoroEntryReorder(content, {
+      sourceEntryLine: 9,
+      sourceRawLine: "- [ ] () — BODY",
+      direction: 1,
+      repeat,
+    });
+    assert.equal(plan.after, uncounted.after);
+    assert.equal(plan.repeat, 1);
+    assert.equal(plan.movedEntryLine, uncounted.movedEntryLine);
+  }
+
+  const last = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 11,
+    sourceRawLine: "- [ ] () — VERIFY",
+    direction: 1,
+    repeat: 1,
+  });
+  assert.equal(last.valid, false);
+  assert.match(last.error, /last planned Pomodoro/);
+  assert.doesNotMatch(last.error, /positions/);
+});
+
+test("planPomodoroEntryReorder counted plans preserve CRLF, line count, and outside bytes", () => {
+  const lfLines = countedPomodoroReorderLines();
+  const lfContent = lfLines.join("\n");
+  const crlfContent = lfLines.join("\r\n");
+  const lfPlan = helpers.planPomodoroEntryReorder(lfContent, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  const crlfPlan = helpers.planPomodoroEntryReorder(crlfContent, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+
+  assert.equal(crlfPlan.valid, true);
+  assert.equal(crlfPlan.after, lfPlan.after.split("\n").join("\r\n"));
+  assert.equal(crlfPlan.movedEntryLine, lfPlan.movedEntryLine);
+  assert.equal(lfPlan.after.split("\n").length, lfLines.length);
+
+  const afterLines = lfPlan.after.split("\n");
+  for (let index = 0; index <= 4; index += 1) {
+    assert.equal(afterLines[index], lfLines[index]);
+  }
+  for (let index = 18; index < lfLines.length; index += 1) {
+    assert.equal(afterLines[index], lfLines[index]);
+  }
 });
 
 test("planCountedBulletPropertyBatch reports futureScheduledTaskLines for a mixed priority-roll batch", () => {

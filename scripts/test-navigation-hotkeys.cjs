@@ -164,6 +164,30 @@ class TransactionEditor extends TestEditor {
   }
 }
 
+function vimTransactionEditor(content, cursor, options = {}) {
+  const editor = new TransactionEditor(content, cursor, 512);
+  const inputState = {
+    keyBuffer: [],
+    prefixRepeat: [],
+    motionRepeat: [],
+    reason: "",
+    getRepeat: () => null,
+    ...(options.inputState || {}),
+  };
+  const cm = {
+    state: {
+      vim: {
+        mode: options.mode || "normal",
+        inputState,
+      },
+    },
+    getCursor: () => editor.getCursor(),
+  };
+  editor.cm = { cm };
+  editor.vimInputState = inputState;
+  return editor;
+}
+
 class RecordingFallbackEditor extends TestEditor {
   constructor(content, cursor) {
     super(content);
@@ -7102,7 +7126,10 @@ test("physical Ctrl+Shift+J/K consume a Vim count once and pass it to the shared
   assert.deepEqual(inputState.keyBuffer, ["3"]);
 });
 
-test("open-task command ids keep uncounted editor callbacks", () => {
+test("open-task command ids omit repeat so the shared route resolves the pending Vim count", () => {
+  // The omitted third argument is load-bearing: undefined means "resolve the
+  // pending Vim count", whereas an explicit 1 would drop a typed count when
+  // the Obsidian command route wins the dual-dispatch race.
   const plugin = new NavigationHotkeysPlugin();
   const commands = [];
   plugin.app = {
@@ -7139,6 +7166,298 @@ test("open-task command ids keep uncounted editor callbacks", () => {
     { editor, direction: 1, repeat: undefined },
     { editor, direction: -1, repeat: undefined },
   ]);
+});
+
+test("command-route jumpToOpenObsidianTask consumes a pending Vim count for a planned Pomodoro move", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, {
+    inputState: { keyBuffer: ["3"] },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.deepEqual(editor.getCursor(), {
+    line: expectedPlan.movedEntryLine,
+    ch: "- [ ] () — BODY".length,
+  });
+  assert.equal(notices.at(-1), "Moved BODY down 3 positions");
+  assert.deepEqual(editor.vimInputState.keyBuffer, []);
+  assert.equal(editor.vimInputState.reason, "counted-open-task-jump");
+});
+
+test("command-route jumpToOpenObsidianTask consumes a pending Vim count for a circular jump", () => {
+  const lines = pomodoroFixtureLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 4, ch: 2 }, {
+    inputState: { keyBuffer: ["3"] },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+
+  const expectedLine = helpers.getOpenObsidianTaskJumpLine(lines, 4, 1, 3);
+  assert.equal(plugin.jumpToOpenObsidianTask(editor, 1), true);
+  assert.equal(editor.transactions.length, 0);
+  assert.equal(editor.getValue(), lines.join("\n"));
+  assert.deepEqual(editor.getCursor(), { line: expectedLine, ch: 0 });
+  assert.ok(plugin.pendingOpenTaskJumpCenterDeferred);
+  assert.deepEqual(editor.vimInputState.keyBuffer, []);
+  assert.equal(editor.vimInputState.reason, "counted-open-task-jump");
+});
+
+test("dispatch guard applies a command-route Vim count when the capture route fires second", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 0 }, {
+    inputState: { keyBuffer: ["3"] },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  const cleanups = [];
+  plugin.register = (cleanup) => cleanups.push(cleanup);
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  const first = plugin.jumpToOpenObsidianTask(editor, 1);
+  const second = plugin.jumpToOpenObsidianTask(editor, 1, 1);
+
+  assert.equal(first, true);
+  assert.equal(second, false);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(notices.filter((message) => message.startsWith("Moved ")).length, 1);
+  assert.equal(notices.at(-1), "Moved BODY down 3 positions");
+  cleanups.forEach((cleanup) => cleanup());
+});
+
+test("dispatch guard leaves pending Vim state untouched when the capture route already consumed the count", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 0 }, {
+    inputState: { keyBuffer: ["9"] },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  const cleanups = [];
+  plugin.register = (cleanup) => cleanups.push(cleanup);
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+  const first = plugin.jumpToOpenObsidianTask(editor, 1, 3);
+  const pendingBeforeSuppressed = [...editor.vimInputState.keyBuffer];
+  const reasonBeforeSuppressed = editor.vimInputState.reason;
+  const second = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(first, true);
+  assert.equal(second, false);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(notices.filter((message) => message.startsWith("Moved ")).length, 1);
+  assert.deepEqual(editor.vimInputState.keyBuffer, pendingBeforeSuppressed);
+  assert.equal(editor.vimInputState.reason, reasonBeforeSuppressed);
+  assert.deepEqual(editor.vimInputState.keyBuffer, ["9"]);
+  cleanups.forEach((cleanup) => cleanup());
+});
+
+test("command-route jumpToOpenObsidianTask without a pending count moves one step and does not reset Vim state", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, {
+    inputState: { keyBuffer: [], getRepeat: () => null },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+  });
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(notices.at(-1), "Moved BODY down");
+  assert.deepEqual(editor.vimInputState.keyBuffer, []);
+  assert.equal(editor.vimInputState.reason, "");
+});
+
+test("command-route jumpToOpenObsidianTask keeps repeat 1 for non-Vim and wrong-mode editors", () => {
+  const lines = countedPomodoroReorderLines();
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+  });
+
+  const runUncountedMove = (editor, app) => {
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.register = () => {};
+    plugin.app = app;
+    notices.length = 0;
+    const handled = plugin.jumpToOpenObsidianTask(editor, 1);
+    assert.equal(handled, true);
+    assert.equal(editor.transactions.length, 1);
+    assert.equal(editor.undoGroups, 1);
+    assert.equal(editor.getValue(), expectedPlan.after);
+    assert.equal(notices.at(-1), "Moved BODY down");
+  };
+
+  const plainEditor = new TransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, 512);
+  runUncountedMove(plainEditor, {});
+
+  for (const mode of ["insert", "visual", "visual-line", "replace"]) {
+    const editor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, {
+      mode,
+      inputState: { keyBuffer: ["3"] },
+    });
+    runUncountedMove(editor, {});
+    assert.deepEqual(editor.vimInputState.keyBuffer, ["3"]);
+    assert.equal(editor.vimInputState.reason, "");
+  }
+});
+
+test("command-route jumpToOpenObsidianTask resolves the count from the passed editor, not a foreign pane", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, {
+    inputState: { keyBuffer: ["3"] },
+  });
+  const foreignEditor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, {
+    inputState: { keyBuffer: ["9"] },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {
+    workspace: {
+      getActiveViewOfType: () => ({
+        file: { extension: "md", path: "other.md" },
+        editor: foreignEditor,
+      }),
+    },
+  };
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 3,
+  });
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(handled, true);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(notices.at(-1), "Moved BODY down 3 positions");
+  assert.deepEqual(editor.vimInputState.keyBuffer, []);
+  assert.equal(editor.vimInputState.reason, "counted-open-task-jump");
+  assert.deepEqual(foreignEditor.vimInputState.keyBuffer, ["9"]);
+  assert.equal(foreignEditor.vimInputState.reason, "");
+});
+
+test("explicit jumpToOpenObsidianTask repeat wins over a different pending Vim count", () => {
+  const lines = countedPomodoroReorderLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 5, ch: 50 }, {
+    inputState: { keyBuffer: ["3"] },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const expectedPlan = helpers.planPomodoroEntryReorder(lines.join("\n"), {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BODY",
+    direction: 1,
+    repeat: 2,
+  });
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1, 2);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.getValue(), expectedPlan.after);
+  assert.equal(notices.at(-1), "Moved BODY down 2 positions");
+  assert.deepEqual(editor.vimInputState.keyBuffer, ["3"]);
+  assert.equal(editor.vimInputState.reason, "");
+});
+
+test("getPendingVimRepeat falls back to prefixRepeat and motionRepeat when getRepeat is absent", () => {
+  const cmWithoutRepeat = {
+    state: {
+      vim: {
+        inputState: {
+          keyBuffer: [],
+          prefixRepeat: ["1", "2"],
+          motionRepeat: [],
+        },
+      },
+    },
+  };
+  assert.deepEqual(helpers.getPendingVimRepeat(cmWithoutRepeat), {
+    repeat: 12,
+    explicit: true,
+  });
+
+  const cmProduct = {
+    state: {
+      vim: {
+        inputState: {
+          keyBuffer: [],
+          prefixRepeat: ["2"],
+          motionRepeat: ["3"],
+        },
+      },
+    },
+  };
+  assert.deepEqual(helpers.getPendingVimRepeat(cmProduct), {
+    repeat: 6,
+    explicit: true,
+  });
+
+  const cmEmpty = {
+    state: {
+      vim: {
+        inputState: {
+          keyBuffer: [],
+          prefixRepeat: [],
+          motionRepeat: [],
+        },
+      },
+    },
+  };
+  assert.deepEqual(helpers.getPendingVimRepeat(cmEmpty), {
+    repeat: 1,
+    explicit: false,
+  });
 });
 
 test("physical counted property chord consumes only explicit normal-mode Vim counts", () => {

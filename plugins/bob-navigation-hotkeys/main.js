@@ -2778,6 +2778,35 @@ function getPendingVimRepeat(cm) {
     }
   }
 
+  // Between keyBuffer digits and getRepeat(), join prefixRepeat and
+  // motionRepeat (each an array of digit strings in CodeMirror Vim) and
+  // multiply them, matching Vim's own getRepeat() semantics. This covers
+  // adapters that expose the arrays but not the method. task-status-cycler's
+  // copy of this helper is intentionally left without this fallback — its
+  // own chords work today.
+  const digits = (value) =>
+    Array.isArray(value)
+      ? value.join("")
+      : typeof value === "string"
+        ? value
+        : "";
+  const prefixText = digits(inputState && inputState.prefixRepeat);
+  const motionText = digits(inputState && inputState.motionRepeat);
+  const prefixOk = /^[1-9]\d*$/.test(prefixText);
+  const motionOk = /^[1-9]\d*$/.test(motionText);
+  if (prefixOk || motionOk) {
+    const prefix = prefixOk
+      ? Math.floor(numericOrDefault(prefixText, 1))
+      : 1;
+    const motion = motionOk
+      ? Math.floor(numericOrDefault(motionText, 1))
+      : 1;
+    const product = prefix * motion;
+    if (Number.isFinite(product) && product > 0) {
+      return { repeat: product, explicit: true };
+    }
+  }
+
   const rawRepeat =
     inputState && typeof inputState.getRepeat === "function"
       ? inputState.getRepeat()
@@ -17369,12 +17398,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.addCommand({
       id: "jump-to-next-open-task",
       name: "Jump to next open task or move a planned Pomodoro down",
+      // Omitting repeat means "resolve the pending Vim count" in the shared
+      // route; an explicit 1 would drop a typed count when this command wins
+      // the dual-dispatch race.
       editorCallback: (editor) => this.jumpToOpenObsidianTask(editor, 1),
     });
 
     this.addCommand({
       id: "jump-to-prev-open-task",
       name: "Jump to previous open task or move a planned Pomodoro up",
+      // Omitting repeat means "resolve the pending Vim count" in the shared
+      // route; an explicit 1 would drop a typed count when this command wins
+      // the dual-dispatch race.
       editorCallback: (editor) => this.jumpToOpenObsidianTask(editor, -1),
     });
 
@@ -20157,27 +20192,30 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  jumpToOpenObsidianTask(editor, direction, repeat = 1) {
+  jumpToOpenObsidianTask(editor, direction, repeat) {
     const cursor = getEditorCursor(editor);
     if (!cursor || !editor || typeof editor.getValue !== "function") {
       new Notice("No active markdown editor");
       return false;
     }
 
-    const normalizedRepeat = normalizeVimRepeat(repeat);
-
     // A single physical Ctrl+Shift+J/K can reach this method twice in the same
     // dispatch turn: once via the Obsidian hotkeys.json command and once via the
     // Vim-normal capture fallback. Suppress the duplicate so a no-target press
     // shows only one notice or move (a successful jump never moves twice, and a
-    // planned-Pomodoro reorder never reorders twice), including when the capture
-    // route carries a count and the command callback would default to one. The
-    // mark is keyed by editor and direction, not repeat, and clears on the next
-    // macrotask so deliberate repeats and key repeat still work.
+    // planned-Pomodoro reorder never reorders twice). Count resolution happens
+    // after this mark so a suppressed duplicate never consumes Vim input state.
+    // The mark is keyed by editor and direction, not repeat, and clears on the
+    // next macrotask so deliberate repeats and key repeat still work.
     if (this.isOpenTaskJumpDispatchPending(editor, direction)) {
       return false;
     }
     this.markOpenTaskJumpDispatch(editor, direction);
+
+    const normalizedRepeat =
+      repeat === undefined || repeat === null
+        ? this.consumePendingOpenTaskJumpRepeat(editor)
+        : normalizeVimRepeat(repeat);
 
     if (this.movePlannedPomodoroEntry(editor, direction, normalizedRepeat)) {
       return true;
@@ -20205,6 +20243,33 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // scroll in the same keydown turn.
     scheduleOpenTaskJumpCenter(this, editor, targetLine, 0);
     return true;
+  }
+
+  // The Obsidian hotkeys.json command route reaches jumpToOpenObsidianTask
+  // without a repeat and, in the live app, wins the race against the
+  // capture-phase fallback, so reading the count only in the fallback loses
+  // it. Resolve and consume it here so whichever route arrives first sees the
+  // still-pending count.
+  consumePendingOpenTaskJumpRepeat(editor) {
+    const activeView =
+      this.app &&
+      this.app.workspace &&
+      typeof this.app.workspace.getActiveViewOfType === "function"
+        ? this.getActiveMarkdownView()
+        : null;
+    const view = activeView && activeView.editor === editor ? activeView : null;
+
+    if (!this.isVimNormalModeEditor(editor, view)) {
+      return 1;
+    }
+
+    const cm = this.resolveVimCodeMirror(editor, view);
+    const pending = getPendingVimRepeat(cm);
+    if (!pending.explicit) {
+      return 1;
+    }
+    resetPendingVimInputState(cm, "counted-open-task-jump");
+    return normalizeVimRepeat(pending.repeat);
   }
 
   // Lazily-created WeakMap from editor object to the set of jump directions
@@ -20255,10 +20320,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // Vim swallows these chords before Obsidian's hotkey dispatcher runs, so the
   // hotkeys.json bindings only cover insert mode and non-Vim editing. A pending
   // numeric Vim prefix is an ordinary repeat (N positions / Nth target), not
-  // "N additional items". This mirrors task-status-cycler's Ctrl+Shift+O
-  // handling and intentionally avoids a `<C-S-j>`/`<C-S-k>` vim nmap, which
-  // could collapse onto and overwrite the existing `<C-j>`/`<C-k>`
-  // section-header maps.
+  // "N additional items". The shared jump route also resolves a count when the
+  // Obsidian command path arrives with no repeat (and in the live app wins this
+  // race), so this fallback's reset is sometimes redundant and still correct
+  // when it wins or when Obsidian's binding is absent. This mirrors
+  // task-status-cycler's Ctrl+Shift+O handling and intentionally avoids a
+  // `<C-S-j>`/`<C-S-k>` vim nmap, which could collapse onto and overwrite the
+  // existing `<C-j>`/`<C-k>` section-header maps.
   registerOpenTaskJumpInputListeners() {
     // Tracks events already dispatched so the window + document capture
     // listeners cannot double-fire when both run for the same keydown.
@@ -20611,6 +20679,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     const cm = this.resolveVimCodeMirror(view.editor, view);
+    // Still read, reset, and pass an explicit repeat. The shared route also
+    // resolves a count for the command path; this reset is then a no-op on
+    // already-cleared state, and is still required when this fallback wins.
     const pendingRepeat = getPendingVimRepeat(cm);
 
     if (this.handledOpenTaskJumpEvents) {

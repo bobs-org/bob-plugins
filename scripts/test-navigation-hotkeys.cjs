@@ -12243,7 +12243,7 @@ test("buildProjectSeedFromChildBullets moves a direct-child schedule log under t
   assert.equal(result.lossless, true);
   assert.deepEqual(result.taskLines, []);
   assert.deepEqual(result.sections, []);
-  assert.deepEqual(result.scheduleLogLines, [
+  assert.deepEqual(result.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
     "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
     "\t\t- *2026-08-05* — waiting on the vendor quote",
@@ -12264,7 +12264,7 @@ test("buildProjectSeedFromChildBullets preserves schedule-log marker spellings a
   assert.equal(result.lossless, true);
   assert.deepEqual(result.taskLines, []);
   assert.deepEqual(result.sections, []);
-  assert.deepEqual(result.scheduleLogLines, [
+  assert.deepEqual(result.managedLogLines, [
     "\t- **SCHEDULE LOG**",
     "\t  - *2026-08-05* — first",
     "\t- 🗓️ **Schedule log:**",
@@ -12277,7 +12277,7 @@ test("buildProjectSeedFromChildBullets keeps schedule-log boundary cases on the 
     ["  - [ ] 🗓️ **SCHEDULE LOG**", "    - Child note"],
     "2026-08-12",
   );
-  assert.deepEqual(checkbox.scheduleLogLines, []);
+  assert.deepEqual(checkbox.managedLogLines, []);
   assert.deepEqual(checkbox.sections, []);
   assert.deepEqual(checkbox.taskLines, [
     "- [ ] #task 🗓️ **SCHEDULE LOG** [created::2026-08-12]",
@@ -12288,7 +12288,7 @@ test("buildProjectSeedFromChildBullets keeps schedule-log boundary cases on the 
     ["  - SCHEDULE LOG", "    - Preserve as a section note"],
     "2026-08-12",
   );
-  assert.deepEqual(plainSection.scheduleLogLines, []);
+  assert.deepEqual(plainSection.managedLogLines, []);
   assert.deepEqual(plainSection.taskLines, []);
   assert.deepEqual(plainSection.sections, [
     { title: "Schedule Log", noteLines: ["- Preserve as a section note"] },
@@ -12306,7 +12306,7 @@ test("buildProjectSeedFromChildBullets leaves a nested schedule log under the co
   );
 
   assert.equal(result.lossless, true);
-  assert.deepEqual(result.scheduleLogLines, []);
+  assert.deepEqual(result.managedLogLines, []);
   assert.deepEqual(result.sections, []);
   assert.deepEqual(result.taskLines, [
     "- [ ] #task Draft the API [created::2026-08-12]",
@@ -12323,7 +12323,7 @@ test("buildProjectSeedFromChildBullets moves empty and deeply nested schedule lo
   assert.equal(empty.lossless, true);
   assert.deepEqual(empty.taskLines, []);
   assert.deepEqual(empty.sections, []);
-  assert.deepEqual(empty.scheduleLogLines, ["\t- 🗓️ **SCHEDULE LOG**"]);
+  assert.deepEqual(empty.managedLogLines, ["\t- 🗓️ **SCHEDULE LOG**"]);
 
   const deep = helpers.buildProjectSeedFromChildBullets(
     [
@@ -12333,7 +12333,7 @@ test("buildProjectSeedFromChildBullets moves empty and deeply nested schedule lo
     ],
     "2026-08-12",
   );
-  assert.deepEqual(deep.scheduleLogLines, [
+  assert.deepEqual(deep.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
     "\t\t- *2026-08-05* — reason",
     "\t\t\t- nested context",
@@ -12361,15 +12361,259 @@ test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, secti
   assert.deepEqual(result.sections, [
     { title: "Requirements", noteLines: ["- Must work offline"] },
   ]);
-  assert.deepEqual(result.scheduleLogLines, [
+  assert.deepEqual(result.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
     "\t  - *2026-08-05* — waiting on the vendor quote",
   ]);
 });
 
-test("normalizeProjectScheduleLogLine falls back to one extra tab for mixed indentation", () => {
+test("buildProjectSeedFromChildBullets moves a direct-child work log under the project task", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Added coverage for the parser",
+      "\t\t- *2026-08-11* — Sketched the migration",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, []);
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.managedLogLines, [
+    "\t- 🛠️ **WORK LOG**",
+    "\t\t- *2026-08-15* — Added coverage for the parser",
+    "\t\t- *2026-08-11* — Sketched the migration",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets preserves work-log marker spellings byte-for-byte", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - **WORK LOG**",
+      "    - *2026-08-15* — first",
+      "  - 🛠️ **Work log:**",
+      "    - *2026-08-11* — second",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, []);
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.managedLogLines, [
+    "\t- **WORK LOG**",
+    "\t  - *2026-08-15* — first",
+    "\t- 🛠️ **Work log:**",
+    "\t  - *2026-08-11* — second",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets keeps work-log boundary cases on the existing paths", () => {
+  const checkbox = helpers.buildProjectSeedFromChildBullets(
+    ["  - [ ] 🛠️ **WORK LOG**", "    - Child note"],
+    "2026-08-12",
+  );
+  assert.deepEqual(checkbox.managedLogLines, []);
+  assert.deepEqual(checkbox.sections, []);
+  assert.deepEqual(checkbox.taskLines, [
+    "- [ ] #task 🛠️ **WORK LOG** [created::2026-08-12]",
+    "  - Child note",
+  ]);
+
+  const plainSection = helpers.buildProjectSeedFromChildBullets(
+    ["  - WORK LOG", "    - Preserve as a section note"],
+    "2026-08-12",
+  );
+  assert.deepEqual(plainSection.managedLogLines, []);
+  assert.deepEqual(plainSection.taskLines, []);
+  assert.deepEqual(plainSection.sections, [
+    { title: "Work Log", noteLines: ["- Preserve as a section note"] },
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets leaves a nested work log under the converted child task", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - Draft the API",
+      "    - 🛠️ **WORK LOG**",
+      "      - *2026-08-15* — reason",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.managedLogLines, []);
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Draft the API [created::2026-08-12]",
+    "  - 🛠️ **WORK LOG**",
+    "    - *2026-08-15* — reason",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets moves an empty work log without forcing task output", () => {
+  const empty = helpers.buildProjectSeedFromChildBullets(
+    ["\t- 🛠️ **WORK LOG**"],
+    "2026-08-12",
+  );
+  assert.equal(empty.lossless, true);
+  assert.deepEqual(empty.taskLines, []);
+  assert.deepEqual(empty.sections, []);
+  assert.deepEqual(empty.managedLogLines, ["\t- 🛠️ **WORK LOG**"]);
+});
+
+test("buildProjectSeedFromChildBullets moves both logs in source order without sorting by kind", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Added coverage for the parser",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, []);
+  assert.deepEqual(result.sections, []);
+  assert.deepEqual(result.managedLogLines, [
+    "\t- 🛠️ **WORK LOG**",
+    "\t\t- *2026-08-15* — Added coverage for the parser",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+  ]);
+});
+
+test("buildProjectSeedFromChildBullets routes mixed child blocks to tasks, sections, and both logs", () => {
+  const result = helpers.buildProjectSeedFromChildBullets(
+    [
+      "  - Draft the API",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "    - *2026-08-05* — waiting on the vendor quote",
+      "  - REQUIREMENTS",
+      "    - Must work offline",
+      "  - 🛠️ **WORK LOG**",
+      "    - *2026-08-15* — Added coverage for the parser",
+      "  - Write the migration",
+    ],
+    "2026-08-12",
+  );
+
+  assert.equal(result.lossless, true);
+  assert.deepEqual(result.taskLines, [
+    "- [ ] #task Draft the API [created::2026-08-12]",
+    "- [ ] #task Write the migration [created::2026-08-12]",
+  ]);
+  assert.deepEqual(result.sections, [
+    { title: "Requirements", noteLines: ["- Must work offline"] },
+  ]);
+  assert.deepEqual(result.managedLogLines, [
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t  - *2026-08-05* — waiting on the vendor quote",
+    "\t- 🛠️ **WORK LOG**",
+    "\t  - *2026-08-15* — Added coverage for the parser",
+  ]);
+});
+
+test("parseManagedTaskLogParentBullet accepts sixteen spellings, blockquotes, and rejects trailing text", () => {
+  const scheduleSpellings = [
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t- 🗓️ **SCHEDULE LOG:**",
+    "\t- **SCHEDULE LOG**",
+    "\t- **SCHEDULE LOG:**",
+    "\t- 🗓️ **Schedule log**",
+    "\t- 🗓️ **Schedule log:**",
+    "\t- **Schedule log**",
+    "\t- **Schedule log:**",
+  ];
+  for (const line of scheduleSpellings) {
+    const parsed = helpers.parseManagedTaskLogParentBullet(line);
+    assert.deepEqual(
+      { indent: parsed.indent, marker: parsed.marker, kind: parsed.kind },
+      { indent: "\t", marker: "-", kind: helpers.MANAGED_TASK_LOG_KIND_SCHEDULE },
+      line,
+    );
+  }
+
+  const workSpellings = [
+    "\t- 🛠️ **WORK LOG**",
+    "\t- 🛠️ **WORK LOG:**",
+    "\t- **WORK LOG**",
+    "\t- **WORK LOG:**",
+    "\t- 🛠️ **Work log**",
+    "\t- 🛠️ **Work log:**",
+    "\t- **Work log**",
+    "\t- **Work log:**",
+  ];
+  for (const line of workSpellings) {
+    const parsed = helpers.parseManagedTaskLogParentBullet(line);
+    assert.deepEqual(
+      { indent: parsed.indent, marker: parsed.marker, kind: parsed.kind },
+      { indent: "\t", marker: "-", kind: helpers.MANAGED_TASK_LOG_KIND_WORK },
+      line,
+    );
+  }
+
+  assert.deepEqual(
+    helpers.parseManagedTaskLogParentBullet("> - 🛠️ **WORK LOG**"),
+    {
+      indent: "> ",
+      marker: "-",
+      hasEmoji: true,
+      kind: helpers.MANAGED_TASK_LOG_KIND_WORK,
+    },
+  );
   assert.equal(
-    helpers.normalizeProjectScheduleLogLine("  - *2026-08-05* — reason", "\t"),
+    helpers.parseManagedTaskLogParentBullet("\t- 🛠️ **WORK LOG** trailing"),
+    null,
+  );
+});
+
+test("parseManagedTaskLogParentBullet rejects emoji/label mismatches like parse_managed_task_log_marker", () => {
+  assert.equal(
+    helpers.parseManagedTaskLogParentBullet("\t- 🗓️ **WORK LOG**"),
+    null,
+  );
+  assert.equal(
+    helpers.parseManagedTaskLogParentBullet("\t- 🛠️ **SCHEDULE LOG**"),
+    null,
+  );
+
+  const mismatched = helpers.buildProjectSeedFromChildBullets(
+    ["  - 🗓️ **WORK LOG**", "  - 🛠️ **SCHEDULE LOG**"],
+    "2026-08-12",
+  );
+  assert.deepEqual(mismatched.managedLogLines, []);
+  assert.deepEqual(mismatched.taskLines, [
+    "- [ ] #task 🗓️ **WORK LOG** [created::2026-08-12]",
+    "- [ ] #task 🛠️ **SCHEDULE LOG** [created::2026-08-12]",
+  ]);
+});
+
+test("parseScheduleLogParentBullet ignores a work-log marker so Ctrl+Shift+P cannot write into it", () => {
+  assert.equal(
+    helpers.parseScheduleLogParentBullet("\t- 🛠️ **WORK LOG**"),
+    null,
+  );
+
+  const both = [
+    "- [ ] #task Parent ^parent",
+    "  - 🛠️ **WORK LOG**",
+    "    - *2026-08-15* — Added coverage",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-08-05* — reason",
+  ].join("\n");
+  assert.deepEqual(helpers.findScheduleLogParent(both, 0), {
+    line: 3,
+    indent: "  ",
+    marker: "-",
+  });
+});
+
+test("normalizeProjectManagedLogLine falls back to one extra tab for mixed indentation", () => {
+  assert.equal(
+    helpers.normalizeProjectManagedLogLine("  - *2026-08-05* — reason", "\t"),
     "\t\t- *2026-08-05* — reason",
   );
 });
@@ -12664,7 +12908,7 @@ test("buildProjectContentFromTask inserts schedule-log lines directly under the 
     content,
     { description: "Ship the widget", priority: null },
     {
-      scheduleLogLines: [
+      managedLogLines: [
         "\t- 🗓️ **SCHEDULE LOG**",
         "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
       ],
@@ -12674,7 +12918,7 @@ test("buildProjectContentFromTask inserts schedule-log lines directly under the 
   );
 
   assert.equal(result.seeded, true);
-  assert.equal(result.scheduleLogInserted, true);
+  assert.equal(result.managedLogsInserted, true);
   assert.equal(result.tasksInserted, true);
   assert.equal(result.sectionsInserted, 1);
   assert.equal(result.sectionsCreated, 0);
@@ -12698,7 +12942,64 @@ test("buildProjectContentFromTask inserts schedule-log lines directly under the 
   );
 });
 
-test("buildProjectContentFromTask reports schedule-log insertion failure without blocking other seeding", () => {
+test("buildProjectContentFromTask inserts both managed logs directly under the project lifecycle task", () => {
+  const content = [
+    "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+    "",
+    "## Future Work",
+    "",
+    "## Requirements",
+  ].join("\n");
+
+  const result = helpers.buildProjectContentFromTask(
+    content,
+    { description: "Ship the widget", priority: null },
+    {
+      managedLogLines: [
+        "\t- 🗓️ **SCHEDULE LOG**",
+        "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-08-15* — Added coverage for the parser",
+        "\t\t- *2026-08-11* — Sketched the migration",
+      ],
+      childTaskLines: ["- [ ] #task Draft the API [created::2026-08-12]"],
+      sections: [{ title: "Requirements", noteLines: ["- Must work offline"] }],
+    },
+  );
+
+  assert.equal(result.seeded, true);
+  assert.equal(result.managedLogsInserted, true);
+  assert.equal(result.tasksInserted, true);
+  assert.equal(result.sectionsInserted, 1);
+  assert.equal(result.sectionsCreated, 0);
+  assert.equal(
+    result.content,
+    [
+      "- [ ] #task #prj Ship the widget #hide ^prj",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Added coverage for the parser",
+      "\t\t- *2026-08-11* — Sketched the migration",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] #task Draft the API [created::2026-08-12]",
+      "",
+      "## Future Work",
+      "",
+      "## Requirements",
+      "",
+      "- Must work offline",
+    ].join("\n"),
+  );
+});
+
+test("buildProjectContentFromTask reports managed-log insertion failure without blocking other seeding", () => {
   const content = [
     "- [ ] #task (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^notprj",
     "",
@@ -12711,13 +13012,16 @@ test("buildProjectContentFromTask reports schedule-log insertion failure without
     content,
     { description: "Ship the widget", priority: null },
     {
-      scheduleLogLines: ["\t- 🗓️ **SCHEDULE LOG**"],
+      managedLogLines: [
+        "\t- 🗓️ **SCHEDULE LOG**",
+        "\t- 🛠️ **WORK LOG**",
+      ],
       childTaskLines: ["- [ ] #task Draft the API [created::2026-08-12]"],
     },
   );
 
   assert.equal(result.seeded, true);
-  assert.equal(result.scheduleLogInserted, false);
+  assert.equal(result.managedLogsInserted, false);
   assert.equal(result.tasksInserted, true);
   assert.equal(
     result.content,
@@ -12731,8 +13035,8 @@ test("buildProjectContentFromTask reports schedule-log insertion failure without
   );
 });
 
-test("insertProjectScheduleLogLines preserves CRLF line endings", () => {
-  const result = helpers.insertProjectScheduleLogLines(
+test("insertProjectManagedLogLines preserves CRLF line endings", () => {
+  const result = helpers.insertProjectManagedLogLines(
     [
       "---",
       "type: project",
@@ -12794,9 +13098,56 @@ test("getProjectFromTaskNoticeText reports a singular/plural section count like 
       "Ship_widget",
       0,
       1,
-      true,
+      ["schedule"],
     ),
     'Created project Ship_widget from task "Ship the widget" (task removed from Area; 1 section seeded; schedule log moved)',
+  );
+});
+
+test("getProjectFromTaskNoticeText reports moved log kinds in a fixed order", () => {
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText(
+      "Ship the widget",
+      "Area",
+      "Ship_widget",
+      0,
+      0,
+      ["schedule"],
+    ),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area; schedule log moved)',
+  );
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText(
+      "Ship the widget",
+      "Area",
+      "Ship_widget",
+      0,
+      0,
+      ["work"],
+    ),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area; work log moved)',
+  );
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText(
+      "Ship the widget",
+      "Area",
+      "Ship_widget",
+      0,
+      0,
+      ["work", "schedule", "work", "unknown"],
+    ),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area; schedule log moved; work log moved)',
+  );
+  assert.equal(
+    helpers.getProjectFromTaskNoticeText(
+      "Ship the widget",
+      "Area",
+      "Ship_widget",
+      0,
+      0,
+      [],
+    ),
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area)',
   );
 });
 
@@ -13081,7 +13432,7 @@ test("buildTaskBlockFromProjectNote restores the worked example and round-trips"
       noteLines: ["- Morning or evening?"],
     },
   ]);
-  assert.deepEqual(seed.scheduleLogLines, [
+  assert.deepEqual(seed.managedLogLines, [
     "\t- 🗓️ **SCHEDULE LOG**",
     "\t\t- _2026-08-05 — 2026-08-01 → 2026-09-01 — 🎲 auto_",
   ]);

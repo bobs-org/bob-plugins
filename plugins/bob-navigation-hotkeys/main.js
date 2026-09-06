@@ -7604,7 +7604,8 @@ function createPomodoroBulletMovePickerRows(
   options = {},
 ) {
   const mode = options && options.mode === "entry" ? "entry" : "bullets";
-  const openEntries = (Array.isArray(entries) ? entries : []).filter(
+  const allEntries = Array.isArray(entries) ? entries : [];
+  const openEntries = allEntries.filter(
     (entry) => entry && entry.open,
   );
   const queryText = String(rawQuery || "").trim();
@@ -7619,6 +7620,47 @@ function createPomodoroBulletMovePickerRows(
       .filter(Boolean),
   );
   const rows = [];
+
+  if (mode === "bullets" && queryText === "+") {
+    const sourceEntry = allEntries.find(
+      (entry) => entry && entry.entryLine === sourceEntryLine,
+    );
+    if (!sourceEntry) {
+      return Object.freeze([
+        Object.freeze({
+          kind: "invalid",
+          statusText:
+            "Source Pomodoro entry could not be found; + needs a named source",
+        }),
+      ]);
+    }
+    if (!sourceEntry.name) {
+      return Object.freeze([
+        Object.freeze({
+          kind: "invalid",
+          statusText:
+            "+ needs a named source Pomodoro; type a new name instead",
+        }),
+      ]);
+    }
+    const normalized = normalizePomodoroName(sourceEntry.name);
+    if (!normalized.valid) {
+      return Object.freeze([
+        Object.freeze({
+          kind: "invalid",
+          statusText: `Source Pomodoro name is invalid: ${normalized.error}`,
+        }),
+      ]);
+    }
+    return Object.freeze([
+      Object.freeze({
+        kind: "new",
+        name: normalized.name,
+        title: `New Pomodoro ${normalized.name}`,
+        meta: "Created below the current Pomodoro",
+      }),
+    ]);
+  }
 
   if (queryText) {
     const normalized = normalizePomodoroName(queryText);
@@ -10975,7 +11017,7 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
       title: "Move Pomodoro bullets",
       headerIcon: "timer",
       inputLabel: "Filter Pomodoro destinations",
-      placeholder: "Filter open Pomodoros or type a new name",
+      placeholder: "Filter open Pomodoros, type a new name, or + for same name",
       resultsLabel: "Pomodoro destinations",
       emptyText: "Type a name to create a new Pomodoro",
       getSubtitle: () =>

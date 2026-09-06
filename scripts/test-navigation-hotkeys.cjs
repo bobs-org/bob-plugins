@@ -5388,6 +5388,10 @@ test("Pomodoro bullet move picker opens sessions and clears the shared move pick
   const picker = plugin.activeTaskMoveDestinationPicker;
   assert.equal(picker instanceof helpers.PomodoroBulletMovePickerModal, true);
   assert.equal(picker.isOpen, true);
+  assert.equal(
+    picker.placeholder,
+    "Filter open Pomodoros, type a new name, or + for same name",
+  );
   assert.equal(picker.session.countExplicit, true);
   assert.deepEqual(
     picker.session.discovery.targets.map((target) => target.line),
@@ -5534,6 +5538,114 @@ test("commitPomodoroBulletMoveSession applies one guarded same-file transaction"
     ch: expectedPlan.after.split("\n")[expectedPlan.firstMovedLine].length,
   });
   assert.equal(notices.at(-1), "Moved 1 bullet to VERIFY");
+});
+
+test("Pomodoro bullet move picker confirms + through the actual picker callback", async () => {
+  notices.length = 0;
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — FOCUS",
+    "\t- keep",
+    "\t- move",
+    "- [ ] () — FOCUS",
+    "\t- existing",
+  ].join("\n");
+  const { editor, plugin, view } = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 3, ch: 999 },
+  });
+
+  assert.equal(plugin.openPomodoroBulletMovePicker(editor, view), true);
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  picker.inputEl = { value: "+" };
+  picker.visibleItems = picker.getFilteredItems();
+  assert.deepEqual(picker.visibleItems, [
+    {
+      kind: "new",
+      name: "FOCUS",
+      title: "New Pomodoro FOCUS",
+      meta: "Created below the current Pomodoro",
+    },
+  ]);
+
+  await picker.openItemAtIndex(0);
+
+  const expected = [
+    "## Pomodoros",
+    "- [ ] () — FOCUS",
+    "\t- keep",
+    "- [ ] () — FOCUS",
+    "\t- move",
+    "- [ ] () — FOCUS",
+    "\t- existing",
+  ].join("\n");
+  assert.equal(editor.getValue(), expected);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.cursor, { line: 4, ch: "\t- move".length });
+  assert.equal(notices.at(-1), "Moved 1 bullet to new Pomodoro FOCUS");
+});
+
+test("Pomodoro bullet move picker + cancellation, invalid rows, and stale-content guards do not write", async () => {
+  notices.length = 0;
+  const unnamedContent = [
+    "## Pomodoros",
+    "- [ ] ()",
+    "\t- move",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const harness = createPomodoroMovePickerHarness({
+    content: unnamedContent,
+    cursor: { line: 2, ch: 0 },
+  });
+  assert.equal(
+    harness.plugin.openPomodoroBulletMovePicker(harness.editor, harness.view),
+    true,
+  );
+  const picker = harness.plugin.activeTaskMoveDestinationPicker;
+  picker.close();
+  assert.equal(harness.editor.getValue(), unnamedContent);
+  assert.equal(harness.editor.transactions.length, 0);
+
+  const invalidPicker = new helpers.PomodoroBulletMovePickerModal(
+    {},
+    harness.plugin,
+    picker.session,
+  );
+  assert.equal(
+    await invalidPicker.openItem({
+      kind: "invalid",
+      statusText: "+ needs a named source Pomodoro; type a new name instead",
+    }),
+    false,
+  );
+  assert.equal(harness.editor.getValue(), unnamedContent);
+  assert.equal(harness.editor.transactions.length, 0);
+
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — FOCUS",
+    "\t- move",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const staleHarness = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 2, ch: 0 },
+  });
+  assert.equal(
+    staleHarness.plugin.openPomodoroBulletMovePicker(
+      staleHarness.editor,
+      staleHarness.view,
+    ),
+    true,
+  );
+  const stalePicker = staleHarness.plugin.activeTaskMoveDestinationPicker;
+  stalePicker.inputEl = { value: "+" };
+  const [row] = stalePicker.getFilteredItems();
+  staleHarness.editor.replaceRange("changed", { line: 2, ch: 0 }, { line: 2, ch: 0 });
+  assert.equal(await stalePicker.openItem(row), false);
+  assert.equal(staleHarness.editor.transactions.length, 0);
+  assert.equal(notices.at(-1), "Source note is no longer active; nothing was moved");
 });
 
 function createPomodoroEntryMoveSession(harness, cursorLine, overrides = {}) {
@@ -9708,6 +9820,140 @@ test("createPomodoroBulletMovePickerRows excludes ineligible entries and handles
   assert.match(overLengthRows[0].statusText, /exceed/);
 });
 
+test("createPomodoroBulletMovePickerRows maps + to a fresh source-name Pomodoro in bullet mode only", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — focus",
+    "\t- move",
+    "- [ ] () — FOCUS",
+    "\t- existing",
+    "- [ ] () — PLUS",
+    "\t- preview mentions + directly",
+  ].join("\n");
+  const { entries } = helpers.collectPomodoroEntries(content);
+  const sourceEntryLine = entries[0].entryLine;
+
+  for (const query of ["+", "  +  "]) {
+    assert.deepEqual(
+      helpers.createPomodoroBulletMovePickerRows(
+        entries,
+        sourceEntryLine,
+        query,
+      ),
+      [
+        {
+          kind: "new",
+          name: "FOCUS",
+          title: "New Pomodoro FOCUS",
+          meta: "Created below the current Pomodoro",
+        },
+      ],
+    );
+  }
+
+  const ordinaryNameRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "C++",
+  );
+  assert.deepEqual(ordinaryNameRows.map((row) => row.kind), ["new"]);
+  assert.equal(ordinaryNameRows[0].name, "C++");
+
+  const doublePlusRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "++",
+  );
+  assert.deepEqual(doublePlusRows.map((row) => row.kind), ["new"]);
+  assert.equal(doublePlusRows[0].name, "++");
+
+  const existingNameRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "focus",
+  );
+  assert.equal(existingNameRows.some((row) => row.kind === "new"), false);
+  assert.deepEqual(existingNameRows.map((row) => row.title), ["FOCUS"]);
+
+  const entryModeRows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "+",
+    { mode: "entry" },
+  );
+  assert.equal(entryModeRows[0].kind, "rename");
+  assert.equal(entryModeRows[0].name, "+");
+  assert.equal(
+    entryModeRows.some((row) => row.kind === "existing" && row.title === "PLUS"),
+    true,
+  );
+});
+
+test("createPomodoroBulletMovePickerRows + shortcut resolves named closed sources and rejects unnamed, missing, and invalid sources", () => {
+  const namedClosedContent = [
+    "## Pomodoros",
+    "- [x] (**0900-0930**) — closed — focus",
+    "\t- moved",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const { entries: namedClosedEntries } =
+    helpers.collectPomodoroEntries(namedClosedContent);
+  const namedClosedRows = helpers.createPomodoroBulletMovePickerRows(
+    namedClosedEntries,
+    namedClosedEntries[0].entryLine,
+    "+",
+  );
+  assert.deepEqual(namedClosedRows, [
+    {
+      kind: "new",
+      name: "CLOSED FOCUS",
+      title: "New Pomodoro CLOSED FOCUS",
+      meta: "Created below the current Pomodoro",
+    },
+  ]);
+
+  const unnamedContent = [
+    "## Pomodoros",
+    "- [ ] ()",
+    "\t- moved",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const { entries: unnamedEntries } =
+    helpers.collectPomodoroEntries(unnamedContent);
+  const unnamedRows = helpers.createPomodoroBulletMovePickerRows(
+    unnamedEntries,
+    unnamedEntries[0].entryLine,
+    "+",
+  );
+  assert.equal(unnamedRows[0].kind, "invalid");
+  assert.match(unnamedRows[0].statusText, /named source/);
+  assert.match(unnamedRows[0].statusText, /type a new name/);
+
+  const missingRows = helpers.createPomodoroBulletMovePickerRows(
+    unnamedEntries,
+    999,
+    "+",
+  );
+  assert.equal(missingRows[0].kind, "invalid");
+  assert.match(missingRows[0].statusText, /could not be found/);
+
+  const invalidNameContent = [
+    "## Pomodoros",
+    `- [ ] () — ${"X".repeat(helpers.POMODORO_NAME_MAX_LENGTH + 1)}`,
+    "\t- moved",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const { entries: invalidNameEntries } =
+    helpers.collectPomodoroEntries(invalidNameContent);
+  const invalidNameRows = helpers.createPomodoroBulletMovePickerRows(
+    invalidNameEntries,
+    invalidNameEntries[0].entryLine,
+    "+",
+  );
+  assert.equal(invalidNameRows[0].kind, "invalid");
+  assert.match(invalidNameRows[0].statusText, /exceed/);
+});
+
 test("createPomodoroBulletMovePickerRows formats titles, metadata, and query matches", () => {
   const content = [
     "## Pomodoros",
@@ -10284,6 +10530,47 @@ test("planPomodoroBulletMove creates a new named Pomodoro at the deleted source'
   assert.equal(afterLines[6], "- [ ] ()");
   assert.equal(plan.destinationEntryLine, 4);
   assert.equal(plan.firstMovedLine, 5);
+});
+
+test("planPomodoroBulletMove creates a fresh same-name destination from the + row without merging same-name entries", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — FOCUS",
+    "\t- one",
+    "\t- two",
+    "\t\t- nested under two",
+    "- [ ] () — FOCUS",
+    "\t- existing",
+  ].join("\r\n");
+  const discovery = helpers.discoverMovablePomodoroBulletTargets(content, 2, 1);
+  const row = helpers.createPomodoroBulletMovePickerRows(
+    discovery.context.entries,
+    discovery.entryLine,
+    "+",
+  )[0];
+  const plan = helpers.planPomodoroBulletMove(content, {
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    destination: { kind: "new", name: row.name },
+  });
+
+  assert.equal(row.kind, "new");
+  assert.equal(row.name, "FOCUS");
+  assert.equal(plan.valid, true);
+  assert.equal(plan.createdPomodoro, true);
+  assert.equal(plan.createdPomodoroName, "FOCUS");
+  assert.equal(plan.movedCount, 2);
+  assert.equal(plan.sourcePomodoroDeleted, true);
+  assert.equal(/[^\r]\n/.test(plan.after), false);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] () — FOCUS",
+    "\t- one",
+    "\t- two",
+    "\t\t- nested under two",
+    "- [ ] () — FOCUS",
+    "\t- existing",
+  ].join("\r\n"));
 });
 
 test("planPomodoroBulletMove creates a new named Pomodoro at the deleted source's former position (only Pomodoro in section)", () => {

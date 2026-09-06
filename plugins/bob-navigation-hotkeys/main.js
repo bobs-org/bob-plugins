@@ -6701,6 +6701,8 @@ function collectPomodoroEntries(content) {
         open: parsed.open,
         name: parsed.name,
         rangeText: parsed.rangeText,
+        rangeStart: parsed.rangeStart,
+        rangeEnd: parsed.rangeEnd,
         placeholder: parsed.placeholder,
         childStartLine,
         childEndLineExclusive,
@@ -7369,21 +7371,142 @@ function planPomodoroEntryRename(content, options = {}) {
   });
 }
 
-// True when a findPomodoroEntryContext() context sits on a movable Pomodoro
-// entry: open, with no time range yet. Ctrl+Shift+J/K route to a reorder
-// only for this shape; every other context keeps its jump behavior.
-function isMovablePomodoroEntryContext(context) {
-  return Boolean(context && context.entry && context.entry.open && context.entry.placeholder);
+function isOpenPlaceholderPomodoroEntry(entry) {
+  return Boolean(entry && entry.open && entry.placeholder);
 }
 
-// Plan reordering a movable (open, placeholder) Pomodoro entry among its
-// planned siblings. `options.repeat` (Vim count, default 1) is an exact
-// distance: the source block moves N positions in `direction` only when every
-// crossed sibling, including the destination, is itself an open placeholder.
-// A current, closed, cancelled, or missing neighbor refuses the whole request
-// with no partial rewrite, so planned Pomodoros never cross non-planned
-// entries. `neighborEntry` is the entry originally occupying the destination
-// slot (the adjacent sibling when repeat is 1). Returns a frozen
+function isOpenTimedPomodoroEntry(entry) {
+  return Boolean(
+    entry &&
+      entry.open &&
+      !entry.placeholder &&
+      hasPomodoroTimeRange(entry.rangeText),
+  );
+}
+
+function isReorderablePomodoroEntry(entry) {
+  return isOpenPlaceholderPomodoroEntry(entry) || isOpenTimedPomodoroEntry(entry);
+}
+
+// True when a findPomodoroEntryContext() context sits on a Pomodoro entry that
+// should be handled by the reorder route: an open future placeholder or the
+// open timed current entry. The planner enforces direction and span legality.
+function isMovablePomodoroEntryContext(context) {
+  return Boolean(context && isReorderablePomodoroEntry(context.entry));
+}
+
+function getPomodoroEntryReorderBoundaryError(entry, entries, direction, repeat) {
+  const label = getPomodoroBulletMoveDestinationLabel(entry);
+  const directionWord = direction < 0 ? "up" : "down";
+  const hasCurrentEntry = Array.isArray(entries)
+    ? entries.some((candidate) => isOpenTimedPomodoroEntry(candidate))
+    : false;
+
+  if (hasCurrentEntry) {
+    const boundary =
+      direction < 0
+        ? "the current/history boundary"
+        : "the available future Pomodoros";
+    return repeat > 1
+      ? `${label} cannot move ${directionWord} ${repeat} positions beyond ${boundary}`
+      : `${label} cannot move ${directionWord} beyond ${boundary}`;
+  }
+
+  return repeat > 1
+    ? `${label} cannot move ${directionWord} ${repeat} positions without crossing the ${
+        direction < 0 ? "first" : "last"
+      } planned Pomodoro`
+    : `${label} is already the ${
+        direction < 0 ? "first" : "last"
+      } planned Pomodoro`;
+}
+
+function getPomodoroEntryReorderCrossingError(entry, direction, repeat) {
+  const label = getPomodoroBulletMoveDestinationLabel(entry);
+  const directionWord = direction < 0 ? "up" : "down";
+  return repeat > 1
+    ? `${label} cannot move ${directionWord} ${repeat} positions across the current/history boundary`
+    : `${label} cannot move ${directionWord} across the current/history boundary`;
+}
+
+function replacePomodoroEntryRangeText(lineText, entry, rangeText) {
+  const line = String(lineText || "");
+  if (
+    !entry ||
+    !Number.isInteger(entry.rangeStart) ||
+    !Number.isInteger(entry.rangeEnd) ||
+    entry.rangeStart < 0 ||
+    entry.rangeEnd < entry.rangeStart
+  ) {
+    return line;
+  }
+  return (
+    line.slice(0, entry.rangeStart) +
+    String(rangeText || "") +
+    line.slice(entry.rangeEnd)
+  );
+}
+
+function getPomodoroEntryReorderRangeSwap(spanEntries, entry, direction) {
+  const timedEntries = spanEntries.filter((spanEntry) =>
+    isOpenTimedPomodoroEntry(spanEntry),
+  );
+  if (timedEntries.length !== 1) {
+    return null;
+  }
+  const timedEntry = timedEntries[0];
+  const placeholderEntry =
+    direction > 0
+      ? spanEntries[1]
+      : spanEntries.find((spanEntry) => spanEntry.entryLine === entry.entryLine);
+  if (
+    !placeholderEntry ||
+    !isOpenPlaceholderPomodoroEntry(placeholderEntry) ||
+    !isOpenTimedPomodoroEntry(timedEntry)
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    timedEntryLine: timedEntry.entryLine,
+    placeholderEntryLine: placeholderEntry.entryLine,
+    timedRangeText: timedEntry.rangeText,
+    placeholderRangeText: placeholderEntry.rangeText,
+  });
+}
+
+function renderPomodoroEntryReorderBlock(block, rangeSwap) {
+  if (!rangeSwap || !block || !block.entry) {
+    return block && Array.isArray(block.lines) ? block.lines : [];
+  }
+  const renderedLines = Array.isArray(block.lines) ? block.lines.slice() : [];
+  if (renderedLines.length === 0) {
+    return renderedLines;
+  }
+  if (block.entry.entryLine === rangeSwap.timedEntryLine) {
+    renderedLines[0] = replacePomodoroEntryRangeText(
+      renderedLines[0],
+      block.entry,
+      rangeSwap.placeholderRangeText,
+    );
+  } else if (block.entry.entryLine === rangeSwap.placeholderEntryLine) {
+    renderedLines[0] = replacePomodoroEntryRangeText(
+      renderedLines[0],
+      block.entry,
+      rangeSwap.timedRangeText,
+    );
+  }
+  return renderedLines;
+}
+
+// Plan reordering an open future placeholder or the open timed current
+// Pomodoro entry. `options.repeat` (Vim count, default 1) is an exact
+// distance: the source block moves N positions in `direction` only when the
+// requested span is either all open placeholders, or the earliest slot is the
+// single open timed entry and every later slot is a placeholder. In the timed
+// case, the first slot's exact parenthetical range remains in the first slot
+// by exchanging it with the incoming placeholder's exact parenthetical bytes.
+// `neighborEntry` is the entry originally occupying the destination slot (the
+// adjacent sibling when repeat is 1). Returns a frozen
 // `{ valid, error, after, entryLine, movedEntryLine, entry, neighborEntry, direction, repeat }`.
 function planPomodoroEntryReorder(content, options = {}) {
   const text = String(content || "");
@@ -7421,43 +7544,52 @@ function planPomodoroEntryReorder(content, options = {}) {
     return invalid("The Pomodoro entry changed before it could be moved");
   }
 
-  if (!entry.open || !entry.placeholder) {
-    return invalid("Only an open Pomodoro without a time range can be moved");
+  if (!isReorderablePomodoroEntry(entry)) {
+    return invalid("Only open current or future Pomodoros can be moved");
   }
 
-  const label = getPomodoroBulletMoveDestinationLabel(entry);
-  const boundaryError =
-    repeat > 1
-      ? `${label} cannot move ${
-          direction < 0 ? "up" : "down"
-        } ${repeat} positions without crossing the ${
-          direction < 0 ? "first" : "last"
-        } planned Pomodoro`
-      : `${label} is already the ${
-          direction < 0 ? "first" : "last"
-        } planned Pomodoro`;
+  const boundaryError = getPomodoroEntryReorderBoundaryError(
+    entry,
+    entries,
+    direction,
+    repeat,
+  );
+  const crossingError = getPomodoroEntryReorderCrossingError(
+    entry,
+    direction,
+    repeat,
+  );
   const targetEntryIndex = entryIndex + direction * repeat;
   if (targetEntryIndex < 0 || targetEntryIndex >= entries.length) {
     return invalid(boundaryError);
-  }
-
-  const step = direction;
-  for (
-    let index = entryIndex + step;
-    index !== targetEntryIndex + step;
-    index += step
-  ) {
-    if (!isMovablePomodoroEntryContext({ entry: entries[index] })) {
-      return invalid(boundaryError);
-    }
   }
 
   const neighborEntry = entries[targetEntryIndex];
   const startIndex = Math.min(entryIndex, targetEntryIndex);
   const endIndex = Math.max(entryIndex, targetEntryIndex);
   const spanEntries = entries.slice(startIndex, endIndex + 1);
+  const timedEntryIndexes = [];
+  for (let index = 0; index < spanEntries.length; index += 1) {
+    const spanEntry = spanEntries[index];
+    if (isOpenTimedPomodoroEntry(spanEntry)) {
+      timedEntryIndexes.push(index);
+    } else if (!isOpenPlaceholderPomodoroEntry(spanEntry)) {
+      return invalid(crossingError);
+    }
+  }
+  const hasTimedEntry = timedEntryIndexes.length > 0;
+  const timedSpanIsLegal =
+    timedEntryIndexes.length === 1 &&
+    timedEntryIndexes[0] === 0 &&
+    ((direction > 0 && spanEntries[0].entryLine === entry.entryLine) ||
+      (direction < 0 && neighborEntry.entryLine === spanEntries[0].entryLine));
+  if (hasTimedEntry && !timedSpanIsLegal) {
+    return invalid(crossingError);
+  }
+
   const blocks = spanEntries.map((spanEntry) =>
     Object.freeze({
+      entry: spanEntry,
       lines: lines.slice(spanEntry.entryLine, spanEntry.childEndLineExclusive),
       isSource: spanEntry.entryLine === entry.entryLine,
     }),
@@ -7478,6 +7610,9 @@ function planPomodoroEntryReorder(content, options = {}) {
     direction > 0
       ? blocks.slice(1).concat(blocks[0])
       : [blocks[blocks.length - 1], ...blocks.slice(0, -1)];
+  const rangeSwap = timedSpanIsLegal
+    ? getPomodoroEntryReorderRangeSwap(spanEntries, entry, direction)
+    : null;
 
   const spanStartLine = spanEntries[0].entryLine;
   const spanEndLineExclusive =
@@ -7489,8 +7624,9 @@ function planPomodoroEntryReorder(content, options = {}) {
     if (rotated[index].isSource) {
       movedEntryLine = currentLine;
     }
-    rendered.push(...rotated[index].lines);
-    currentLine += rotated[index].lines.length;
+    const blockLines = renderPomodoroEntryReorderBlock(rotated[index], rangeSwap);
+    rendered.push(...blockLines);
+    currentLine += blockLines.length;
     if (index < gaps.length) {
       rendered.push(...gaps[index]);
       currentLine += gaps[index].length;
@@ -17501,7 +17637,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-open-task",
-      name: "Jump to next open task or move a planned Pomodoro down",
+      name: "Jump to next open task or move a Pomodoro down",
       // Omitting repeat means "resolve the pending Vim count" in the shared
       // route; an explicit 1 would drop a typed count when this command wins
       // the dual-dispatch race.
@@ -17510,7 +17646,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-prev-open-task",
-      name: "Jump to previous open task or move a planned Pomodoro up",
+      name: "Jump to previous open task or move a Pomodoro up",
       // Omitting repeat means "resolve the pending Vim count" in the shared
       // route; an explicit 1 would drop a typed count when this command wins
       // the dual-dispatch race.
@@ -20230,13 +20366,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  // Reorder a movable (open, placeholder) Pomodoro entry under the cursor
-  // among its planned siblings, in place of a jump. `repeat` is an exact
-  // Vim count (default 1): N positions in one transaction, or a refusal with
-  // no mutation. Returns `false` when the cursor is not on a movable entry,
-  // so the caller falls through to the jump; returns `true` when handled
-  // (moved, or refused with a notice) so the caller must not jump.
-  movePlannedPomodoroEntry(editor, direction, repeat = 1) {
+  // Reorder an open Pomodoro entry under the cursor in place of a jump. Future
+  // placeholders can reorder among one another, and the current timed entry can
+  // swap with future placeholders while keeping the time range in the current
+  // slot. `repeat` is an exact Vim count (default 1): N positions in one
+  // transaction, or a refusal with no mutation. Returns `false` when the cursor
+  // is not on a reorderable entry, so the caller falls through to the jump;
+  // returns `true` when handled (moved, or refused with a notice) so the caller
+  // must not jump.
+  movePomodoroEntry(editor, direction, repeat = 1) {
     if (!editor || typeof editor.getValue !== "function") {
       return false;
     }
@@ -20307,7 +20445,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // dispatch turn: once via the Obsidian hotkeys.json command and once via the
     // Vim-normal capture fallback. Suppress the duplicate so a no-target press
     // shows only one notice or move (a successful jump never moves twice, and a
-    // planned-Pomodoro reorder never reorders twice). Count resolution happens
+    // Pomodoro entry reorder never reorders twice). Count resolution happens
     // after this mark so a suppressed duplicate never consumes Vim input state.
     // The mark is keyed by editor and direction, not repeat, and clears on the
     // next macrotask so deliberate repeats and key repeat still work.
@@ -20321,7 +20459,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         ? this.consumePendingOpenTaskJumpRepeat(editor)
         : normalizeVimRepeat(repeat);
 
-    if (this.movePlannedPomodoroEntry(editor, direction, normalizedRepeat)) {
+    if (this.movePomodoroEntry(editor, direction, normalizedRepeat)) {
       return true;
     }
 
@@ -20420,7 +20558,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   // Capture-phase fallback so Ctrl+Shift+J/K reach the counted open-task jump
-  // / planned-Pomodoro move route while Vim normal mode is active. CodeMirror
+  // / Pomodoro entry move route while Vim normal mode is active. CodeMirror
   // Vim swallows these chords before Obsidian's hotkey dispatcher runs, so the
   // hotkeys.json bindings only cover insert mode and non-Vim editing. A pending
   // numeric Vim prefix is an ordinary repeat (N positions / Nth target), not

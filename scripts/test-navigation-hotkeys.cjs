@@ -6867,9 +6867,67 @@ test("jumpToOpenObsidianTask moves a placeholder Pomodoro entry in one undo grou
   assert.equal(notices.at(-1), "Moved BODY down");
 });
 
-test("jumpToOpenObsidianTask refuses to move a planned Pomodoro across a current, closed, or cancelled entry", () => {
+test("jumpToOpenObsidianTask swaps current and future Pomodoros in one undo group", () => {
+  const lines = currentPomodoroSwapLines();
+  const expected = currentPomodoroSwappedLines().join("\n");
+
+  for (const [cursorLine, direction, notice, expectedCursorLine] of [
+    [3, 1, "Moved ALPHA down", 5],
+    [5, -1, "Moved BETA up", 3],
+  ]) {
+    const editor = new TransactionEditor(lines.join("\n"), {
+      line: cursorLine,
+      ch: 80,
+    });
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.register = () => {};
+    plugin.app = {};
+    notices.length = 0;
+
+    const handled = plugin.jumpToOpenObsidianTask(editor, direction);
+
+    assert.equal(handled, true);
+    assert.equal(editor.transactions.length, 1);
+    assert.equal(editor.undoGroups, 1);
+    assert.equal(editor.getValue(), expected);
+    assert.deepEqual(editor.getCursor(), {
+      line: expectedCursorLine,
+      ch: String(expected.split("\n")[expectedCursorLine]).length,
+    });
+    assert.equal(notices.at(-1), notice);
+  }
+});
+
+test("jumpToOpenObsidianTask keeps current-swap transaction failures local", () => {
+  class IgnoredTransactionEditor extends TransactionEditor {
+    transaction(transaction) {
+      this.transactions.push(JSON.parse(JSON.stringify(transaction)));
+    }
+  }
+
+  const lines = currentPomodoroSwapLines();
+  const editor = new IgnoredTransactionEditor(lines.join("\n"), {
+    line: 3,
+    ch: 0,
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.deepEqual(editor.getCursor(), { line: 3, ch: 0 });
+  assert.equal(editor.getValue(), lines.join("\n"));
+  assert.equal(notices.at(-1), "Pomodoro move failed; nothing was moved");
+  assert.ok(!plugin.pendingOpenTaskJumpCenterDeferred);
+});
+
+test("jumpToOpenObsidianTask refuses current-up without jumping or mutating", () => {
   const lines = pomodoroFixtureLines();
-  const editor = new TransactionEditor(lines.join("\n"), { line: 6, ch: 3 }, 512);
+  const editor = new TransactionEditor(lines.join("\n"), { line: 4, ch: 3 }, 512);
   const plugin = new NavigationHotkeysPlugin();
   plugin.register = () => {};
   plugin.app = {};
@@ -6879,33 +6937,59 @@ test("jumpToOpenObsidianTask refuses to move a planned Pomodoro across a current
 
   assert.equal(handled, true);
   assert.equal(editor.transactions.length, 0);
-  assert.deepEqual(editor.getCursor(), { line: 6, ch: 3 });
+  assert.deepEqual(editor.getCursor(), { line: 4, ch: 3 });
   assert.equal(editor.getValue(), lines.join("\n"));
   assert.equal(
     notices.at(-1),
-    "Pomodoro #3 is already the first planned Pomodoro",
+    "Pomodoro #2 cannot move up across the current/history boundary",
   );
 });
 
-test("jumpToOpenObsidianTask still jumps normally off the current Pomodoro entry, a sub-bullet, and a plain task line", () => {
+test("jumpToOpenObsidianTask still jumps normally off past/cancelled Pomodoro entries, a sub-bullet, and a plain task line", () => {
   const lines = pomodoroFixtureLines();
-  const pomodoroEditor = new TransactionEditor(
+  const pastPomodoroEditor = new TransactionEditor(
     lines.join("\n"),
-    { line: 4, ch: 2 },
+    { line: 1, ch: 2 },
     512,
   );
   const plugin = new NavigationHotkeysPlugin();
   plugin.register = () => {};
   plugin.app = {};
 
-  const expectedFromCurrent = helpers.getOpenObsidianTaskJumpLine(lines, 4, 1);
-  assert.equal(plugin.jumpToOpenObsidianTask(pomodoroEditor, 1), true);
-  assert.equal(pomodoroEditor.transactions.length, 0);
-  assert.deepEqual(pomodoroEditor.getCursor(), {
-    line: expectedFromCurrent,
+  const expectedFromPast = helpers.getOpenObsidianTaskJumpLine(lines, 1, 1);
+  assert.equal(plugin.jumpToOpenObsidianTask(pastPomodoroEditor, 1), true);
+  assert.equal(pastPomodoroEditor.transactions.length, 0);
+  assert.deepEqual(pastPomodoroEditor.getCursor(), {
+    line: expectedFromPast,
     ch: 0,
   });
-  assert.equal(pomodoroEditor.getValue(), lines.join("\n"));
+  assert.equal(pastPomodoroEditor.getValue(), lines.join("\n"));
+
+  const cancelledLines = pomodoroFixtureLines();
+  cancelledLines[6] = "- [-] ()";
+  const cancelledEditor = new TransactionEditor(
+    cancelledLines.join("\n"),
+    { line: 6, ch: 2 },
+    512,
+  );
+  const cancelledPlugin = new NavigationHotkeysPlugin();
+  cancelledPlugin.register = () => {};
+  cancelledPlugin.app = {};
+  const expectedFromCancelled = helpers.getOpenObsidianTaskJumpLine(
+    cancelledLines,
+    6,
+    1,
+  );
+  assert.equal(
+    cancelledPlugin.jumpToOpenObsidianTask(cancelledEditor, 1),
+    true,
+  );
+  assert.equal(cancelledEditor.transactions.length, 0);
+  assert.deepEqual(cancelledEditor.getCursor(), {
+    line: expectedFromCancelled,
+    ch: 0,
+  });
+  assert.equal(cancelledEditor.getValue(), cancelledLines.join("\n"));
 
   const subBulletEditor = new TransactionEditor(
     lines.join("\n"),
@@ -6953,6 +7037,27 @@ test("Ctrl+Shift+J/K dispatch guard performs exactly one Pomodoro move per physi
   assert.equal(second, false);
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.undoGroups, 1);
+  cleanups.forEach((cleanup) => cleanup());
+});
+
+test("Ctrl+Shift+J/K dispatch guard performs exactly one current Pomodoro swap per physical press", () => {
+  const lines = currentPomodoroSwapLines();
+  const editor = new TransactionEditor(lines.join("\n"), { line: 3, ch: 0 }, 512);
+  const plugin = new NavigationHotkeysPlugin();
+  const cleanups = [];
+  plugin.register = (cleanup) => cleanups.push(cleanup);
+  plugin.app = {};
+  notices.length = 0;
+
+  const first = plugin.jumpToOpenObsidianTask(editor, 1);
+  const second = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(first, true);
+  assert.equal(second, false);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), currentPomodoroSwappedLines().join("\n"));
+  assert.equal(notices.filter((message) => message.startsWith("Moved ")).length, 1);
   cleanups.forEach((cleanup) => cleanup());
 });
 
@@ -7008,23 +7113,23 @@ test("an impossible counted Pomodoro move refuses without jumping or mutating", 
 
 test("counted jumpToOpenObsidianTask still jumps off non-movable cursor contexts", () => {
   const lines = pomodoroFixtureLines();
-  const expectedFromCurrent = helpers.getOpenObsidianTaskJumpLine(lines, 4, 1, 3);
-  const pomodoroEditor = new TransactionEditor(
+  const expectedFromPast = helpers.getOpenObsidianTaskJumpLine(lines, 1, 1, 3);
+  const pastPomodoroEditor = new TransactionEditor(
     lines.join("\n"),
-    { line: 4, ch: 2 },
+    { line: 1, ch: 2 },
     512,
   );
   const plugin = new NavigationHotkeysPlugin();
   plugin.register = () => {};
   plugin.app = {};
 
-  assert.equal(plugin.jumpToOpenObsidianTask(pomodoroEditor, 1, 3), true);
-  assert.equal(pomodoroEditor.transactions.length, 0);
-  assert.deepEqual(pomodoroEditor.getCursor(), {
-    line: expectedFromCurrent,
+  assert.equal(plugin.jumpToOpenObsidianTask(pastPomodoroEditor, 1, 3), true);
+  assert.equal(pastPomodoroEditor.transactions.length, 0);
+  assert.deepEqual(pastPomodoroEditor.getCursor(), {
+    line: expectedFromPast,
     ch: 0,
   });
-  assert.equal(pomodoroEditor.getValue(), lines.join("\n"));
+  assert.equal(pastPomodoroEditor.getValue(), lines.join("\n"));
   assert.ok(plugin.pendingOpenTaskJumpCenterDeferred);
 
   const subBulletEditor = new TransactionEditor(
@@ -7312,16 +7417,49 @@ test("command-route jumpToOpenObsidianTask consumes a pending Vim count for a pl
   assert.equal(editor.vimInputState.reason, "counted-open-task-jump");
 });
 
+test("command-route jumpToOpenObsidianTask consumes a pending Vim count for a current Pomodoro swap", () => {
+  const lines = countedCurrentPomodoroSwapLines();
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 1, ch: 80 }, {
+    inputState: { keyBuffer: ["2"] },
+  });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  plugin.app = {};
+  notices.length = 0;
+
+  const handled = plugin.jumpToOpenObsidianTask(editor, 1);
+
+  assert.equal(handled, true);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [ ] (**0900-0930** [t:: 30m]) — B",
+      "- [ ] () — C",
+      "- [ ] (  ) — A",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.getCursor(), {
+    line: 3,
+    ch: "- [ ] (  ) — A".length,
+  });
+  assert.equal(notices.at(-1), "Moved A down 2 positions");
+  assert.deepEqual(editor.vimInputState.keyBuffer, []);
+  assert.equal(editor.vimInputState.reason, "counted-open-task-jump");
+});
+
 test("command-route jumpToOpenObsidianTask consumes a pending Vim count for a circular jump", () => {
   const lines = pomodoroFixtureLines();
-  const editor = vimTransactionEditor(lines.join("\n"), { line: 4, ch: 2 }, {
+  const editor = vimTransactionEditor(lines.join("\n"), { line: 1, ch: 2 }, {
     inputState: { keyBuffer: ["3"] },
   });
   const plugin = new NavigationHotkeysPlugin();
   plugin.register = () => {};
   plugin.app = {};
 
-  const expectedLine = helpers.getOpenObsidianTaskJumpLine(lines, 4, 1, 3);
+  const expectedLine = helpers.getOpenObsidianTaskJumpLine(lines, 1, 1, 3);
   assert.equal(plugin.jumpToOpenObsidianTask(editor, 1), true);
   assert.equal(editor.transactions.length, 0);
   assert.equal(editor.getValue(), lines.join("\n"));
@@ -9681,6 +9819,39 @@ function countedPomodoroReorderLines() {
   ];
 }
 
+function currentPomodoroSwapLines() {
+  return [
+    "## Pomodoros",
+    "- [x] (**0850-0920** [t:: 30m]) — FINISHED",
+    "  - completed work",
+    "- [ ] (**0920-0950** [t:: 30m]) — ALPHA",
+    "  - [[Tasks#^alpha]]",
+    "- [ ] () — BETA",
+    "  - [[Tasks#^beta]]",
+  ];
+}
+
+function currentPomodoroSwappedLines() {
+  return [
+    "## Pomodoros",
+    "- [x] (**0850-0920** [t:: 30m]) — FINISHED",
+    "  - completed work",
+    "- [ ] (**0920-0950** [t:: 30m]) — BETA",
+    "  - [[Tasks#^beta]]",
+    "- [ ] () — ALPHA",
+    "  - [[Tasks#^alpha]]",
+  ];
+}
+
+function countedCurrentPomodoroSwapLines() {
+  return [
+    "## Pomodoros",
+    "- [ ] (**0900-0930** [t:: 30m]) — A",
+    "- [ ] (  ) — B",
+    "- [ ] () — C",
+  ];
+}
+
 test("parsePomodoroEntryLine parses named/unnamed, placeholder/range, and open/closed shapes", () => {
   assert.deepEqual(
     helpers.parsePomodoroEntryLine("- [ ] () — BODY"),
@@ -11450,7 +11621,7 @@ test("planPomodoroEntryRename renames closed and cancelled entries the same way 
   }
 });
 
-test("isMovablePomodoroEntryContext matches only open, placeholder Pomodoro entries", () => {
+test("isMovablePomodoroEntryContext matches open current and future Pomodoro entries", () => {
   const content = pomodoroFixtureLines().join("\n");
   assert.equal(
     helpers.isMovablePomodoroEntryContext(
@@ -11462,7 +11633,7 @@ test("isMovablePomodoroEntryContext matches only open, placeholder Pomodoro entr
     helpers.isMovablePomodoroEntryContext(
       helpers.findPomodoroEntryContext(content, 4),
     ),
-    false,
+    true,
   );
   assert.equal(
     helpers.isMovablePomodoroEntryContext(
@@ -11471,6 +11642,172 @@ test("isMovablePomodoroEntryContext matches only open, placeholder Pomodoro entr
     true,
   );
   assert.equal(helpers.isMovablePomodoroEntryContext(null), false);
+});
+
+test("planPomodoroEntryReorder swaps the current Pomodoro down with the next future placeholder", () => {
+  const content = currentPomodoroSwapLines().join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 3,
+    sourceRawLine: "- [ ] (**0920-0950** [t:: 30m]) — ALPHA",
+    direction: 1,
+  });
+
+  assert.equal(plan.valid, true);
+  assert.equal(plan.after, currentPomodoroSwappedLines().join("\n"));
+  assert.equal(plan.movedEntryLine, 5);
+  assert.equal(plan.entry.entryLine, 3);
+  assert.equal(plan.neighborEntry.entryLine, 5);
+});
+
+test("planPomodoroEntryReorder promotes a future Pomodoro up into the current slot", () => {
+  const content = currentPomodoroSwapLines().join("\n");
+  const plan = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 5,
+    sourceRawLine: "- [ ] () — BETA",
+    direction: -1,
+  });
+
+  assert.equal(plan.valid, true);
+  assert.equal(plan.after, currentPomodoroSwappedLines().join("\n"));
+  assert.equal(plan.movedEntryLine, 3);
+  assert.equal(plan.entry.entryLine, 5);
+  assert.equal(plan.neighborEntry.entryLine, 3);
+});
+
+test("planPomodoroEntryReorder preserves exact range text, status prefixes, and subtree ownership across current swaps", () => {
+  const content = [
+    "# Daily",
+    "## Pomodoros",
+    "- [/] (**10:00-10:25** [t:: 25m]) — CUR",
+    "\t- first",
+    "\t\t- nested",
+    "\t- second",
+    "- [/] (  ) — HALF",
+    "- [ ] () — EMPTY",
+    "## Tasks",
+    "- [ ] #task outside",
+  ].join("\n");
+  const down = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 2,
+    sourceRawLine: "- [/] (**10:00-10:25** [t:: 25m]) — CUR",
+    direction: 1,
+    repeat: 2,
+  });
+
+  assert.equal(down.valid, true);
+  assert.equal(
+    down.after,
+    [
+      "# Daily",
+      "## Pomodoros",
+      "- [/] (**10:00-10:25** [t:: 25m]) — HALF",
+      "- [ ] () — EMPTY",
+      "- [/] (  ) — CUR",
+      "\t- first",
+      "\t\t- nested",
+      "\t- second",
+      "## Tasks",
+      "- [ ] #task outside",
+    ].join("\n"),
+  );
+  assert.equal(down.movedEntryLine, 4);
+
+  const backUp = helpers.planPomodoroEntryReorder(down.after, {
+    sourceEntryLine: down.movedEntryLine,
+    sourceRawLine: "- [/] (  ) — CUR",
+    direction: -1,
+    repeat: 2,
+  });
+  assert.equal(backUp.valid, true);
+  assert.equal(backUp.after, content);
+});
+
+test("planPomodoroEntryReorder preserves compact ranges, embedded metadata dashes, and placeholder whitespace", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] (0920-0950 [t:: 30m — extra]) — ALPHA",
+    "- [ ] ( \t ) — BETA",
+  ].join("\n");
+  const down = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] (0920-0950 [t:: 30m — extra]) — ALPHA",
+    direction: 1,
+  });
+
+  assert.equal(down.valid, true);
+  assert.equal(
+    down.after,
+    [
+      "## Pomodoros",
+      "- [ ] (0920-0950 [t:: 30m — extra]) — BETA",
+      "- [ ] ( \t ) — ALPHA",
+    ].join("\n"),
+  );
+
+  const backUp = helpers.planPomodoroEntryReorder(down.after, {
+    sourceEntryLine: 2,
+    sourceRawLine: "- [ ] ( \t ) — ALPHA",
+    direction: -1,
+  });
+  assert.equal(backUp.valid, true);
+  assert.equal(backUp.after, content);
+});
+
+test("planPomodoroEntryReorder handles counted current swaps and their inverses", () => {
+  const content = countedCurrentPomodoroSwapLines().join("\n");
+  const down = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 1,
+    sourceRawLine: "- [ ] (**0900-0930** [t:: 30m]) — A",
+    direction: 1,
+    repeat: 2,
+  });
+  assert.equal(down.valid, true);
+  assert.equal(
+    down.after,
+    [
+      "## Pomodoros",
+      "- [ ] (**0900-0930** [t:: 30m]) — B",
+      "- [ ] () — C",
+      "- [ ] (  ) — A",
+    ].join("\n"),
+  );
+  assert.equal(down.movedEntryLine, 3);
+
+  const downInverse = helpers.planPomodoroEntryReorder(down.after, {
+    sourceEntryLine: down.movedEntryLine,
+    sourceRawLine: "- [ ] (  ) — A",
+    direction: -1,
+    repeat: 2,
+  });
+  assert.equal(downInverse.valid, true);
+  assert.equal(downInverse.after, content);
+
+  const up = helpers.planPomodoroEntryReorder(content, {
+    sourceEntryLine: 3,
+    sourceRawLine: "- [ ] () — C",
+    direction: -1,
+    repeat: 2,
+  });
+  assert.equal(up.valid, true);
+  assert.equal(
+    up.after,
+    [
+      "## Pomodoros",
+      "- [ ] (**0900-0930** [t:: 30m]) — C",
+      "- [ ] () — A",
+      "- [ ] (  ) — B",
+    ].join("\n"),
+  );
+  assert.equal(up.movedEntryLine, 1);
+
+  const upInverse = helpers.planPomodoroEntryReorder(up.after, {
+    sourceEntryLine: up.movedEntryLine,
+    sourceRawLine: "- [ ] (**0900-0930** [t:: 30m]) — C",
+    direction: 1,
+    repeat: 2,
+  });
+  assert.equal(upInverse.valid, true);
+  assert.equal(upInverse.after, content);
 });
 
 test("planPomodoroEntryReorder moves a named placeholder down, swapping with the next placeholder", () => {
@@ -11535,16 +11872,25 @@ test("planPomodoroEntryReorder round-trips unequal-size blocks: down then up res
   assert.equal(backUp.after, content);
 });
 
-test("planPomodoroEntryReorder refuses moving up past the current open entry", () => {
+test("planPomodoroEntryReorder round-trips a future-up swap across the current open entry", () => {
   const content = pomodoroFixtureLines().join("\n");
   const plan = helpers.planPomodoroEntryReorder(content, {
     sourceEntryLine: 6,
     sourceRawLine: "- [ ] ()",
     direction: -1,
   });
-  assert.equal(plan.valid, false);
-  assert.match(plan.error, /first planned Pomodoro/);
-  assert.equal(plan.after, content);
+  assert.equal(plan.valid, true);
+  assert.equal(plan.movedEntryLine, 4);
+  assert.equal(plan.after.split("\n")[4], "- [ ] (**0920-0950** [t:: 30m])");
+  assert.equal(plan.after.split("\n")[7], "- [ ] ()");
+
+  const backDown = helpers.planPomodoroEntryReorder(plan.after, {
+    sourceEntryLine: plan.movedEntryLine,
+    sourceRawLine: "- [ ] (**0920-0950** [t:: 30m])",
+    direction: 1,
+  });
+  assert.equal(backDown.valid, true);
+  assert.equal(backDown.after, content);
 });
 
 test("planPomodoroEntryReorder refuses moving up past a closed or cancelled entry", () => {
@@ -11557,7 +11903,7 @@ test("planPomodoroEntryReorder refuses moving up past a closed or cancelled entr
     direction: -1,
   });
   assert.equal(closedPlan.valid, false);
-  assert.match(closedPlan.error, /first planned Pomodoro/);
+  assert.match(closedPlan.error, /current\/history boundary/);
   assert.equal(closedPlan.after, closedAbove);
 
   const cancelledAbove = ["## Pomodoros", "- [-] ()", "- [ ] ()"].join("\n");
@@ -11567,7 +11913,7 @@ test("planPomodoroEntryReorder refuses moving up past a closed or cancelled entr
     direction: -1,
   });
   assert.equal(cancelledPlan.valid, false);
-  assert.match(cancelledPlan.error, /first planned Pomodoro/);
+  assert.match(cancelledPlan.error, /current\/history boundary/);
   assert.equal(cancelledPlan.after, cancelledAbove);
 });
 
@@ -11579,7 +11925,7 @@ test("planPomodoroEntryReorder refuses moving down past the last placeholder in 
     direction: 1,
   });
   assert.equal(plan.valid, false);
-  assert.match(plan.error, /last planned Pomodoro/);
+  assert.match(plan.error, /available future Pomodoros/);
   assert.equal(plan.after, content);
 });
 
@@ -11619,16 +11965,23 @@ test("planPomodoroEntryReorder keeps a blank separator between two placeholders 
   assert.equal(plan.movedEntryLine, 3);
 });
 
-test("planPomodoroEntryReorder refuses a non-placeholder entry and a cancelled placeholder", () => {
+test("planPomodoroEntryReorder accepts the current timed entry but refuses closed or cancelled sources", () => {
   const content = pomodoroFixtureLines().join("\n");
   const timespanPlan = helpers.planPomodoroEntryReorder(content, {
     sourceEntryLine: 4,
     direction: 1,
   });
-  assert.equal(timespanPlan.valid, false);
+  assert.equal(timespanPlan.valid, true);
+  assert.equal(timespanPlan.movedEntryLine, 7);
+
+  const closedPlan = helpers.planPomodoroEntryReorder(
+    "## Pomodoros\n- [x] (**0900-0930**)",
+    { sourceEntryLine: 1, direction: 1 },
+  );
+  assert.equal(closedPlan.valid, false);
   assert.equal(
-    timespanPlan.error,
-    "Only an open Pomodoro without a time range can be moved",
+    closedPlan.error,
+    "Only open current or future Pomodoros can be moved",
   );
 
   const cancelledPlan = helpers.planPomodoroEntryReorder(
@@ -11638,8 +11991,146 @@ test("planPomodoroEntryReorder refuses a non-placeholder entry and a cancelled p
   assert.equal(cancelledPlan.valid, false);
   assert.equal(
     cancelledPlan.error,
-    "Only an open Pomodoro without a time range can be moved",
+    "Only open current or future Pomodoros can be moved",
   );
+});
+
+test("planPomodoroEntryReorder refuses illegal current/future spans atomically", () => {
+  const cases = [
+    {
+      name: "current up",
+      content: currentPomodoroSwapLines().join("\n"),
+      options: {
+        sourceEntryLine: 3,
+        sourceRawLine: "- [ ] (**0920-0950** [t:: 30m]) — ALPHA",
+        direction: -1,
+      },
+      error: /current\/history boundary/,
+    },
+    {
+      name: "lone current down",
+      content: "## Pomodoros\n- [ ] (**0900-0930**) — SOLO",
+      options: {
+        sourceEntryLine: 1,
+        sourceRawLine: "- [ ] (**0900-0930**) — SOLO",
+        direction: 1,
+      },
+      error: /available future Pomodoros/,
+    },
+    {
+      name: "insufficient future entries",
+      content: currentPomodoroSwapLines().join("\n"),
+      options: {
+        sourceEntryLine: 3,
+        sourceRawLine: "- [ ] (**0920-0950** [t:: 30m]) — ALPHA",
+        direction: 1,
+        repeat: 2,
+      },
+      error: /available future Pomodoros/,
+    },
+    {
+      name: "placeholder above current moving down",
+      content: [
+        "## Pomodoros",
+        "- [ ] () — FUTURE ABOVE",
+        "- [ ] (**0900-0930**) — CURRENT",
+      ].join("\n"),
+      options: {
+        sourceEntryLine: 1,
+        sourceRawLine: "- [ ] () — FUTURE ABOVE",
+        direction: 1,
+      },
+      error: /current\/history boundary/,
+    },
+    {
+      name: "interior timed entry",
+      content: [
+        "## Pomodoros",
+        "- [ ] () — A",
+        "- [ ] (**0900-0930**) — CURRENT",
+        "- [ ] () — C",
+      ].join("\n"),
+      options: {
+        sourceEntryLine: 1,
+        sourceRawLine: "- [ ] () — A",
+        direction: 1,
+        repeat: 2,
+      },
+      error: /current\/history boundary/,
+    },
+    {
+      name: "multiple timed entries",
+      content: [
+        "## Pomodoros",
+        "- [ ] (**0900-0930**) — A",
+        "- [ ] (**0930-1000**) — B",
+        "- [ ] () — C",
+      ].join("\n"),
+      options: {
+        sourceEntryLine: 1,
+        sourceRawLine: "- [ ] (**0900-0930**) — A",
+        direction: 1,
+        repeat: 2,
+      },
+      error: /current\/history boundary/,
+    },
+    {
+      name: "counted move that could swap once but not twice",
+      content: [
+        "## Pomodoros",
+        "- [ ] (**0900-0930**) — A",
+        "- [ ] () — B",
+        "- [ ] (**0930-1000**) — C",
+      ].join("\n"),
+      options: {
+        sourceEntryLine: 1,
+        sourceRawLine: "- [ ] (**0900-0930**) — A",
+        direction: 1,
+        repeat: 2,
+      },
+      error: /current\/history boundary/,
+    },
+    {
+      name: "closed crossed entry",
+      content: [
+        "## Pomodoros",
+        "- [ ] (**0900-0930**) — CURRENT",
+        "- [x] (**0930-1000**) — DONE",
+        "- [ ] () — NEXT",
+      ].join("\n"),
+      options: {
+        sourceEntryLine: 1,
+        sourceRawLine: "- [ ] (**0900-0930**) — CURRENT",
+        direction: 1,
+        repeat: 2,
+      },
+      error: /current\/history boundary/,
+    },
+    {
+      name: "cancelled crossed entry",
+      content: [
+        "## Pomodoros",
+        "- [ ] (**0900-0930**) — CURRENT",
+        "- [-] () — CANCELLED",
+        "- [ ] () — NEXT",
+      ].join("\n"),
+      options: {
+        sourceEntryLine: 1,
+        sourceRawLine: "- [ ] (**0900-0930**) — CURRENT",
+        direction: 1,
+        repeat: 2,
+      },
+      error: /current\/history boundary/,
+    },
+  ];
+
+  for (const item of cases) {
+    const plan = helpers.planPomodoroEntryReorder(item.content, item.options);
+    assert.equal(plan.valid, false, item.name);
+    assert.equal(plan.after, item.content, item.name);
+    assert.equal(plan.movedEntryLine, null, item.name);
+    assert.match(plan.error, item.error, item.name);
+  }
 });
 
 test("planPomodoroEntryReorder rejects a stale source line", () => {
@@ -11805,7 +12296,7 @@ test("planPomodoroEntryReorder refuses a counted move atomically at the planned-
   assert.equal(offStart.movedEntryLine, null);
   assert.equal(
     offStart.error,
-    "LAST cannot move up 4 positions without crossing the first planned Pomodoro",
+    "LAST cannot move up 4 positions across the current/history boundary",
   );
 
   const blockedLines = countedPomodoroReorderLines().slice();
@@ -11822,7 +12313,7 @@ test("planPomodoroEntryReorder refuses a counted move atomically at the planned-
   assert.equal(blocked.movedEntryLine, null);
   assert.equal(
     blocked.error,
-    "BODY cannot move down 3 positions without crossing the last planned Pomodoro",
+    "BODY cannot move down 3 positions across the current/history boundary",
   );
 
   const closedLines = countedPomodoroReorderLines().slice();
@@ -11836,6 +12327,10 @@ test("planPomodoroEntryReorder refuses a counted move atomically at the planned-
   });
   assert.equal(closed.valid, false);
   assert.equal(closed.after, closedContent);
+  assert.equal(
+    closed.error,
+    "BODY cannot move down 3 positions across the current/history boundary",
+  );
 
   const cancelledLines = countedPomodoroReorderLines().slice();
   cancelledLines[13] = "- [-] () — THEN";
@@ -11848,6 +12343,10 @@ test("planPomodoroEntryReorder refuses a counted move atomically at the planned-
   });
   assert.equal(cancelled.valid, false);
   assert.equal(cancelled.after, cancelledContent);
+  assert.equal(
+    cancelled.error,
+    "BODY cannot move down 3 positions across the current/history boundary",
+  );
 });
 
 test("planPomodoroEntryReorder repeat 1 matches the uncounted plan and normalizes invalid counts", () => {
@@ -11889,7 +12388,7 @@ test("planPomodoroEntryReorder repeat 1 matches the uncounted plan and normalize
     repeat: 1,
   });
   assert.equal(last.valid, false);
-  assert.match(last.error, /last planned Pomodoro/);
+  assert.match(last.error, /available future Pomodoros/);
   assert.doesNotMatch(last.error, /positions/);
 });
 

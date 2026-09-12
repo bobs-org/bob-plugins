@@ -6618,6 +6618,41 @@ function normalizePomodoroName(raw) {
   return Object.freeze({ valid: true, name, error: null });
 }
 
+function decomposePomodoroMergedName(raw) {
+  const normalized = normalizePomodoroName(raw);
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      sourceName: normalized.valid ? normalized.name : "",
+      remainingName: "",
+      splitName: "",
+    });
+
+  if (!normalized.valid) {
+    return invalid(`Source Pomodoro name is invalid: ${normalized.error}`);
+  }
+
+  const boundary = normalized.name.lastIndexOf(" + ");
+  if (boundary === -1) {
+    return invalid("Source Pomodoro has no final merged Pomodoro to split");
+  }
+
+  const remaining = normalizePomodoroName(normalized.name.slice(0, boundary));
+  const split = normalizePomodoroName(normalized.name.slice(boundary + 3));
+  if (!remaining.valid || !split.valid) {
+    return invalid("Source Pomodoro has no final merged Pomodoro to split");
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    sourceName: normalized.name,
+    remainingName: remaining.name,
+    splitName: split.name,
+  });
+}
+
 // Format a brand-new Pomodoro ledger entry line. `name` is expected to
 // already be normalized (see normalizePomodoroName); an empty name yields an
 // unnamed placeholder entry.
@@ -6999,6 +7034,7 @@ function planPomodoroBulletMove(content, options = {}) {
     ? options.sourceEntryLine
     : -1;
   const preserveDuplicates = options.preserveDuplicates === true;
+  const preserveSourceEntry = options.preserveSourceEntry === true;
   const destination =
     options.destination && typeof options.destination === "object"
       ? options.destination
@@ -7140,7 +7176,7 @@ function planPomodoroBulletMove(content, options = {}) {
   let workingLines = afterRemovalLines;
   let sourcePomodoroDeleted = false;
   let sourceAnchorLine = null;
-  if (scope === "entry" || sourceChildIsBlank) {
+  if (!preserveSourceEntry && (scope === "entry" || sourceChildIsBlank)) {
     workingLines = removePomodoroBulletRanges(afterRemovalLines, [
       {
         startLine: sourceEntry.entryLine,
@@ -7369,6 +7405,106 @@ function planPomodoroEntryRename(content, options = {}) {
     name: nameResult.name,
     previousName,
     unchanged: false,
+  });
+}
+
+function planPomodoroBulletSplit(content, options = {}) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const targets = Array.isArray(options.targets) ? options.targets : [];
+  const sourceEntryLine = Number.isInteger(options.sourceEntryLine)
+    ? options.sourceEntryLine
+    : -1;
+
+  const invalid = (error) =>
+    Object.freeze({
+      valid: false,
+      error,
+      after: text,
+      sourceEntryLine,
+      sourceEntryLineFinal: null,
+      splitEntryLine: null,
+      firstMovedLine: null,
+      movedCount: 0,
+      sourcePosition: null,
+      sourceName: null,
+      remainingName: null,
+      splitName: null,
+      sourcePomodoroPreserved: false,
+    });
+
+  if (targets.length === 0) {
+    return invalid("No Pomodoro bullets were selected");
+  }
+  for (const target of targets) {
+    if (String(lines[target.line] || "") !== target.rawLine) {
+      return invalid("A selected bullet changed before it could be split");
+    }
+  }
+  const rawLine = String(lines[sourceEntryLine] || "");
+  if (
+    typeof options.sourceRawLine === "string" &&
+    rawLine !== options.sourceRawLine
+  ) {
+    return invalid("The source Pomodoro entry changed before it could be split");
+  }
+
+  const context = findPomodoroEntryContext(text, sourceEntryLine);
+  if (!context) {
+    return invalid("Source Pomodoro entry could not be found");
+  }
+
+  const parsed = parsePomodoroEntryLine(rawLine);
+  if (!parsed) {
+    return invalid("Source Pomodoro entry could not be found");
+  }
+  if (parsed.name === null && rawLine.slice(parsed.rangeEnd).trim() !== "") {
+    return invalid(
+      "Source Pomodoro entry has unsupported trailing content",
+    );
+  }
+
+  const decomposition = decomposePomodoroMergedName(parsed.name || "");
+  if (!decomposition.valid) {
+    return invalid(decomposition.error);
+  }
+
+  const renamePlan = planPomodoroEntryRename(text, {
+    sourceEntryLine,
+    sourceRawLine: rawLine,
+    name: decomposition.remainingName,
+  });
+  if (!renamePlan.valid) {
+    return invalid(renamePlan.error);
+  }
+
+  const renamedLines = splitMarkdownContent(renamePlan.after).lines;
+  const movePlan = planPomodoroBulletMove(renamePlan.after, {
+    targets,
+    sourceEntryLine,
+    sourceRawLine: String(renamedLines[sourceEntryLine] || ""),
+    destination: { kind: "new", name: decomposition.splitName },
+    preserveDuplicates: true,
+    preserveSourceEntry: true,
+  });
+  if (!movePlan.valid) {
+    return invalid(movePlan.error);
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    after: movePlan.after,
+    sourceEntryLine,
+    sourceEntryLineFinal: sourceEntryLine,
+    splitEntryLine: movePlan.destinationEntryLine,
+    firstMovedLine: movePlan.firstMovedLine,
+    movedCount: movePlan.movedCount,
+    sourcePosition: context.entry.position,
+    sourceName: decomposition.sourceName,
+    remainingName: decomposition.remainingName,
+    splitName: decomposition.splitName,
+    sourcePomodoroPreserved: !movePlan.sourcePomodoroDeleted,
   });
 }
 
@@ -7972,6 +8108,40 @@ function createPomodoroBulletMovePickerRows(
   );
   const rows = [];
 
+  if (mode === "bullets" && queryText === "++") {
+    const sourceEntry = allEntries.find(
+      (entry) => entry && entry.entryLine === sourceEntryLine,
+    );
+    if (!sourceEntry) {
+      return Object.freeze([
+        Object.freeze({
+          kind: "invalid",
+          statusText:
+            "Source Pomodoro entry could not be found; ++ needs a merged source",
+        }),
+      ]);
+    }
+    const decomposition = decomposePomodoroMergedName(sourceEntry.name || "");
+    if (!decomposition.valid) {
+      return Object.freeze([
+        Object.freeze({
+          kind: "invalid",
+          statusText: decomposition.error,
+        }),
+      ]);
+    }
+    return Object.freeze([
+      Object.freeze({
+        kind: "split",
+        name: decomposition.splitName,
+        remainingName: decomposition.remainingName,
+        title: `Split off ${decomposition.splitName}`,
+        meta: `Creates a new Pomodoro below; source becomes ${decomposition.remainingName}`,
+        badge: "Split",
+      }),
+    ]);
+  }
+
   if (mode === "bullets" && queryText === "+") {
     const sourceEntry = allEntries.find(
       (entry) => entry && entry.entryLine === sourceEntryLine,
@@ -8136,6 +8306,26 @@ function buildPomodoroEntryMergeNotice(plan = {}) {
     String(plan.finalName || plan.survivorName || "").trim() ||
     `Pomodoro #${plan.survivorPosition || "?"}`;
   return `Merged ${absorbedLabel} into ${survivorLabel}`;
+}
+
+function buildPomodoroBulletSplitNotice(plan = {}, discovery = {}) {
+  const fallbackCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(plan.movedCount, 0)),
+  );
+  const count = Math.max(
+    0,
+    Math.floor(numericOrDefault(discovery.actualCount, fallbackCount)),
+  );
+  const bulletText = count === 1 ? "bullet" : "bullets";
+  const splitName = String(plan.splitName || "").trim() || "Pomodoro";
+  const remainingName =
+    String(plan.remainingName || "").trim() || "unnamed Pomodoro";
+  let text = `Split ${count} ${bulletText} into new Pomodoro ${splitName}; source is now ${remainingName}`;
+  if (discovery && discovery.clamped) {
+    text += ` (requested ${discovery.requestedCount}; reached end of Pomodoro)`;
+  }
+  return text;
 }
 
 // Resolve `{ path, blockId }` deferred-pomodoro targets from a set of task
@@ -11206,6 +11396,8 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
       ? "plus"
       : kind === "rename"
         ? "pencil"
+        : kind === "split"
+          ? "split"
         : kind === "invalid"
           ? "circle-alert"
           : "timer",
@@ -11226,7 +11418,7 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
   );
 
   const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
-  if (kind === "new" || kind === "rename") {
+  if (kind === "new" || kind === "rename" || kind === "split") {
     const statusEl = badgesEl.createDiv({
       cls: "bob-cnp-row-status is-create",
     });
@@ -11386,17 +11578,20 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
       title: "Move Pomodoro bullets",
       headerIcon: "timer",
       inputLabel: "Filter Pomodoro destinations",
-      placeholder: "Filter open Pomodoros, type a new name, or + for same name",
+      placeholder: "Filter open Pomodoros, type a name, + same, or ++ split",
       resultsLabel: "Pomodoro destinations",
       emptyText: "Type a name to create a new Pomodoro",
       getSubtitle: () =>
-        `${selectedCount} bullet${selectedCount === 1 ? "" : "s"} from Pomodoro #${sourcePosition} · ${destinationCount} destination${destinationCount === 1 ? "" : "s"}${clampedText}`,
+        `${selectedCount} bullet${selectedCount === 1 ? "" : "s"} from Pomodoro #${sourcePosition} · ${destinationCount} destination${destinationCount === 1 ? "" : "s"} · + same name · ++ split last merged${clampedText}`,
       renderItem: (row, rowEl, query) =>
         renderPomodoroBulletMovePickerRow(row, rowEl, query),
       closeBeforeOpenItem: true,
       openItem: (row) => {
         if (!row || row.kind === "invalid") {
           return false;
+        }
+        if (row.kind === "split") {
+          return plugin.commitPomodoroBulletSplitSession(session, row);
         }
         return plugin.commitPomodoroBulletMoveSession(session, row);
       },
@@ -23360,6 +23555,79 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
+  async commitPomodoroBulletSplitSession(session, row) {
+    const activeView = this.getActiveMarkdownView();
+    if (
+      !session ||
+      !session.editor ||
+      typeof session.editor.getValue !== "function" ||
+      !activeView ||
+      !activeView.file ||
+      activeView.file.path !== session.sourcePath ||
+      activeView.editor !== session.editor ||
+      String(session.editor.getValue() || "") !== session.sourceContent
+    ) {
+      new Notice("Source note is no longer active; nothing was split");
+      return false;
+    }
+    if (!row || row.kind !== "split") {
+      new Notice("Select the split row to split a merged Pomodoro; nothing was split");
+      return false;
+    }
+
+    const sourceLines = splitMarkdownContent(session.sourceContent).lines;
+    const sourceEntryLine = session.discovery.entryLine;
+    const plan = planPomodoroBulletSplit(session.sourceContent, {
+      targets: session.discovery.targets,
+      sourceEntryLine,
+      sourceRawLine: String(sourceLines[sourceEntryLine] || ""),
+    });
+    if (!plan.valid) {
+      new Notice(`${plan.error}; nothing was split`);
+      return false;
+    }
+
+    const afterLines = splitMarkdownContent(plan.after).lines;
+    const firstMovedLine = Math.min(
+      Math.max(
+        Number.isInteger(plan.firstMovedLine) ? plan.firstMovedLine : 0,
+        0,
+      ),
+      Math.max(afterLines.length - 1, 0),
+    );
+    const sourceCursor = normalizePosition(session.cursor) || {
+      line: firstMovedLine,
+      ch: 0,
+    };
+    const finalCursor = {
+      line: firstMovedLine,
+      ch: Math.min(
+        sourceCursor.ch,
+        String(afterLines[firstMovedLine] || "").length,
+      ),
+    };
+
+    let applied = false;
+    try {
+      applied = applyEditorContentTransaction(
+        session.editor,
+        session.sourceContent,
+        plan.after,
+        finalCursor,
+      );
+    } catch (error) {
+      applied = String(session.editor.getValue() || "") === plan.after;
+    }
+    if (!applied || String(session.editor.getValue() || "") !== plan.after) {
+      new Notice("Pomodoro split failed; nothing was split");
+      return false;
+    }
+
+    this.restoreTaskMoveSourceContext(session);
+    new Notice(buildPomodoroBulletSplitNotice(plan, session.discovery));
+    return true;
+  }
+
   async commitPomodoroEntryMoveSession(session, row) {
     const activeView = this.getActiveMarkdownView();
     if (
@@ -25657,6 +25925,7 @@ module.exports.helpers = {
   POMODORO_NAME_MAX_LENGTH,
   parsePomodoroEntryLine,
   normalizePomodoroName,
+  decomposePomodoroMergedName,
   formatPomodoroEntryLine,
   collectPomodoroEntries,
   findPomodoroBulletContext,
@@ -25668,12 +25937,14 @@ module.exports.helpers = {
   rebasePomodoroBulletBlock,
   planPomodoroBulletMove,
   planPomodoroEntryRename,
+  planPomodoroBulletSplit,
   planPomodoroEntryMerge,
   isMovablePomodoroEntryContext,
   planPomodoroEntryReorder,
   getPomodoroBulletMoveDestinationLabel,
   createPomodoroBulletMovePickerRows,
   buildPomodoroBulletMoveNotice,
+  buildPomodoroBulletSplitNotice,
   buildPomodoroEntryMoveNotice,
   buildPomodoroEntryMergeNotice,
   deferredPomodoroTargetsFromLines,

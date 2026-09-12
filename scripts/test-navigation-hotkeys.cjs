@@ -5390,7 +5390,7 @@ test("Pomodoro bullet move picker opens sessions and clears the shared move pick
   assert.equal(picker.isOpen, true);
   assert.equal(
     picker.placeholder,
-    "Filter open Pomodoros, type a new name, or + for same name",
+    "Filter open Pomodoros, type a name, + same, or ++ split",
   );
   assert.equal(picker.session.countExplicit, true);
   assert.deepEqual(
@@ -5584,6 +5584,159 @@ test("Pomodoro bullet move picker confirms + through the actual picker callback"
   assert.equal(editor.undoGroups, 1);
   assert.deepEqual(editor.cursor, { line: 4, ch: "\t- move".length });
   assert.equal(notices.at(-1), "Moved 1 bullet to new Pomodoro FOCUS");
+});
+
+test("Pomodoro bullet move picker reserves ++ for splitting the last merged name", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — BUILD + REVIEW + EMAIL",
+    "\t- build",
+    "\t- email",
+    "- [ ] () — OTHER",
+  ].join("\n");
+  const discovery = helpers.discoverMovablePomodoroBulletTargets(content, 3, 0);
+  const splitRows = helpers.createPomodoroBulletMovePickerRows(
+    discovery.context.entries,
+    discovery.entryLine,
+    "++",
+  );
+  assert.deepEqual(splitRows, [
+    {
+      kind: "split",
+      name: "EMAIL",
+      remainingName: "BUILD + REVIEW",
+      title: "Split off EMAIL",
+      meta: "Creates a new Pomodoro below; source becomes BUILD + REVIEW",
+      badge: "Split",
+    },
+  ]);
+
+  const sameNameRows = helpers.createPomodoroBulletMovePickerRows(
+    discovery.context.entries,
+    discovery.entryLine,
+    "+",
+  );
+  assert.equal(sameNameRows[0].kind, "new");
+  assert.equal(sameNameRows[0].name, "BUILD + REVIEW + EMAIL");
+
+  const cPlusPlusRows = helpers.createPomodoroBulletMovePickerRows(
+    discovery.context.entries,
+    discovery.entryLine,
+    "C++",
+  );
+  assert.equal(cPlusPlusRows[0].kind, "new");
+  assert.equal(cPlusPlusRows[0].name, "C++");
+
+  const entryRows = helpers.createPomodoroBulletMovePickerRows(
+    discovery.context.entries,
+    discovery.entryLine,
+    "++",
+    { mode: "entry" },
+  );
+  assert.equal(entryRows[0].kind, "rename");
+  assert.equal(entryRows[0].name, "++");
+
+  const invalidContent = [
+    "## Pomodoros",
+    "- [ ] () — C++",
+    "\t- work",
+  ].join("\n");
+  const invalidDiscovery = helpers.discoverMovablePomodoroBulletTargets(
+    invalidContent,
+    2,
+    0,
+  );
+  const invalidRows = helpers.createPomodoroBulletMovePickerRows(
+    invalidDiscovery.context.entries,
+    invalidDiscovery.entryLine,
+    "++",
+  );
+  assert.deepEqual(invalidRows, [
+    {
+      kind: "invalid",
+      statusText: "Source Pomodoro has no final merged Pomodoro to split",
+    },
+  ]);
+});
+
+test("Pomodoro bullet move picker confirms ++ through the actual picker callback", async () => {
+  notices.length = 0;
+  const content = [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m]) — BUILD + REVIEW + EMAIL",
+    "\t- build work",
+    "\t- review work",
+    "\t- email one",
+    "\t\t- follow-up",
+    "\t- email two",
+  ].join("\n");
+  const { editor, plugin, view } = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 4, ch: 999 },
+  });
+
+  assert.equal(
+    plugin.openPomodoroBulletMovePicker(editor, view, {
+      countExplicit: true,
+      additionalTaskCount: 1,
+    }),
+    true,
+  );
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  picker.inputEl = { value: "++" };
+  picker.visibleItems = picker.getFilteredItems();
+  assert.deepEqual(
+    picker.visibleItems.map((row) => row.kind),
+    ["split"],
+  );
+
+  await picker.openItemAtIndex(0);
+
+  const expected = [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m]) — BUILD + REVIEW",
+    "\t- build work",
+    "\t- review work",
+    "- [ ] () — EMAIL",
+    "\t- email one",
+    "\t\t- follow-up",
+    "\t- email two",
+  ].join("\n");
+  assert.equal(editor.getValue(), expected);
+  assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.deepEqual(editor.cursor, { line: 5, ch: "\t- email one".length });
+  assert.equal(
+    notices.at(-1),
+    "Split 2 bullets into new Pomodoro EMAIL; source is now BUILD + REVIEW",
+  );
+});
+
+test("Pomodoro bullet split stale-content guard does not write", async () => {
+  notices.length = 0;
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — BUILD + REVIEW",
+    "\t- review work",
+  ].join("\n");
+  const { editor, plugin, view } = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 2, ch: 0 },
+  });
+
+  assert.equal(plugin.openPomodoroBulletMovePicker(editor, view), true);
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  picker.inputEl = { value: "++" };
+  const [row] = picker.getFilteredItems();
+  editor.replaceRange("changed", { line: 2, ch: 0 }, { line: 2, ch: 0 });
+
+  assert.equal(await picker.openItem(row), false);
+  assert.equal(editor.transactions.length, 0);
+  assert.equal(
+    notices.at(-1),
+    "Source note is no longer active; nothing was split",
+  );
 });
 
 test("Pomodoro bullet move picker + cancellation, invalid rows, and stale-content guards do not write", async () => {
@@ -10234,8 +10387,8 @@ test("createPomodoroBulletMovePickerRows maps + to a fresh source-name Pomodoro 
     sourceEntryLine,
     "++",
   );
-  assert.deepEqual(doublePlusRows.map((row) => row.kind), ["new"]);
-  assert.equal(doublePlusRows[0].name, "++");
+  assert.deepEqual(doublePlusRows.map((row) => row.kind), ["invalid"]);
+  assert.match(doublePlusRows[0].statusText, /no final merged Pomodoro/);
 
   const existingNameRows = helpers.createPomodoroBulletMovePickerRows(
     entries,
@@ -11703,6 +11856,232 @@ test("planPomodoroBulletMove scope 'entry' deletes closed and cancelled source e
       "\t- [[x#^existing]]",
       "\t- [[x#^one]]",
     ].join("\n"));
+  }
+});
+
+test("decomposePomodoroMergedName splits only the final canonical plus boundary", () => {
+  const cases = [
+    ["BUILD + REVIEW", "BUILD", "REVIEW"],
+    [" build   +   review + email ", "BUILD + REVIEW", "EMAIL"],
+    ["C++ + review", "C++", "REVIEW"],
+    ["ALPHA + ALPHA", "ALPHA", "ALPHA"],
+  ];
+  for (const [raw, remainingName, splitName] of cases) {
+    const result = helpers.decomposePomodoroMergedName(raw);
+    assert.equal(result.valid, true, raw);
+    assert.equal(result.remainingName, remainingName, raw);
+    assert.equal(result.splitName, splitName, raw);
+  }
+
+  for (const raw of ["C++", "A+B", "SINGLE", ""]) {
+    const result = helpers.decomposePomodoroMergedName(raw);
+    assert.equal(result.valid, false, raw);
+    assert.match(result.error, /no final merged Pomodoro|cannot be empty/, raw);
+  }
+});
+
+test("planPomodoroBulletSplit peels selected bullets into a new placeholder and preserves the source", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m]) — BUILD + REVIEW + EMAIL",
+    "\t- build work",
+    "\t- review work",
+    "\t- email one",
+    "\t\t- follow-up",
+    "\t- email two",
+  ].join("\n");
+  const discovery = helpers.discoverMovablePomodoroBulletTargets(content, 4, 1);
+  const plan = helpers.planPomodoroBulletSplit(content, {
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+    sourceRawLine: "- [ ] (**0920-0950** [t:: 30m]) — BUILD + REVIEW + EMAIL",
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.sourcePomodoroPreserved, true);
+  assert.equal(plan.remainingName, "BUILD + REVIEW");
+  assert.equal(plan.splitName, "EMAIL");
+  assert.equal(plan.movedCount, 2);
+  assert.equal(plan.firstMovedLine, 5);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m]) — BUILD + REVIEW",
+    "\t- build work",
+    "\t- review work",
+    "- [ ] () — EMAIL",
+    "\t- email one",
+    "\t\t- follow-up",
+    "\t- email two",
+  ].join("\n"));
+
+  const reviewDiscovery = helpers.discoverMovablePomodoroBulletTargets(
+    plan.after,
+    3,
+    0,
+  );
+  const reviewPlan = helpers.planPomodoroBulletSplit(plan.after, {
+    targets: reviewDiscovery.targets,
+    sourceEntryLine: reviewDiscovery.entryLine,
+  });
+  assert.equal(reviewPlan.valid, true);
+  assert.equal(reviewPlan.remainingName, "BUILD");
+  assert.equal(reviewPlan.splitName, "REVIEW");
+  assert.equal(reviewPlan.after, [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m]) — BUILD",
+    "\t- build work",
+    "- [ ] () — REVIEW",
+    "\t- review work",
+    "- [ ] () — EMAIL",
+    "\t- email one",
+    "\t\t- follow-up",
+    "\t- email two",
+  ].join("\n"));
+});
+
+test("planPomodoroBulletSplit trusts non-trailing selections, keeps duplicates, and rebases nested siblings", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — C++ + REVIEW",
+    "\t- keep before",
+    "\t- duplicate",
+    "\t- move middle",
+    "\t\t- detail",
+    "\t- duplicate",
+    "\t- keep after",
+  ].join("\n");
+  const discovery = helpers.discoverMovablePomodoroBulletTargets(content, 4, 1);
+  const plan = helpers.planPomodoroBulletSplit(content, {
+    targets: discovery.targets,
+    sourceEntryLine: discovery.entryLine,
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.remainingName, "C++");
+  assert.equal(plan.splitName, "REVIEW");
+  assert.equal(plan.movedCount, 2);
+  assert.equal(plan.after, [
+    "## Pomodoros",
+    "- [ ] () — C++",
+    "\t- keep before",
+    "\t- duplicate",
+    "\t- keep after",
+    "- [ ] () — REVIEW",
+    "\t- move middle",
+    "\t\t- detail",
+    "\t- duplicate",
+  ].join("\n"));
+
+  const nestedSource = [
+    "## Pomodoros",
+    "- [ ] () — BUILD + DETAIL",
+    "\t- parent",
+    "\t\t- nested detail",
+  ].join("\n");
+  const nestedDiscovery = helpers.discoverMovablePomodoroBulletTargets(
+    nestedSource,
+    3,
+    0,
+  );
+  const nestedPlan = helpers.planPomodoroBulletSplit(nestedSource, {
+    targets: nestedDiscovery.targets,
+    sourceEntryLine: nestedDiscovery.entryLine,
+  });
+  assert.equal(nestedPlan.valid, true);
+  assert.equal(
+    nestedPlan.after,
+    [
+      "## Pomodoros",
+      "- [ ] () — BUILD",
+      "\t- parent",
+      "- [ ] () — DETAIL",
+      "\t- nested detail",
+    ].join("\n"),
+  );
+});
+
+test("planPomodoroBulletSplit preserves closed source status, CRLF, trailing newline, and empty source entries", () => {
+  for (const status of ["x", "-"]) {
+    const content = [
+      "## Pomodoros",
+      `- [${status}] () — BUILD + REVIEW`,
+      "\t- only review",
+      "",
+    ].join("\r\n");
+    const discovery = helpers.discoverMovablePomodoroBulletTargets(content, 2, 0);
+    const plan = helpers.planPomodoroBulletSplit(content, {
+      targets: discovery.targets,
+      sourceEntryLine: discovery.entryLine,
+    });
+    assert.equal(plan.valid, true, status);
+    assert.equal(/[^\r]\n/.test(plan.after), false, status);
+    assert.equal(plan.after.endsWith("\r\n"), true, status);
+    assert.equal(plan.after, [
+      "## Pomodoros",
+      `- [${status}] () — BUILD`,
+      "- [ ] () — REVIEW",
+      "\t- only review",
+      "",
+    ].join("\r\n"), status);
+  }
+});
+
+test("planPomodoroBulletSplit refuses invalid, stale, unsupported, and no-boundary sources without mutation", () => {
+  const cases = [
+    {
+      label: "no boundary",
+      content: "## Pomodoros\n- [ ] () — C++\n\t- work",
+      cursorLine: 2,
+      options: {},
+      pattern: /no final merged Pomodoro/,
+    },
+    {
+      label: "adjacent plus",
+      content: "## Pomodoros\n- [ ] () — A+B\n\t- work",
+      cursorLine: 2,
+      options: {},
+      pattern: /no final merged Pomodoro/,
+    },
+    {
+      label: "unsupported tail",
+      content: "## Pomodoros\n- [ ] () trailing\n\t- work",
+      cursorLine: 2,
+      options: {},
+      pattern: /unsupported trailing content/,
+    },
+    {
+      label: "stale source",
+      content: "## Pomodoros\n- [ ] () — A + B\n\t- work",
+      cursorLine: 2,
+      options: { sourceRawLine: "- [ ] () — OLD + B" },
+      pattern: /changed before it could be split/,
+    },
+    {
+      label: "stale target",
+      content: "## Pomodoros\n- [ ] () — A + B\n\t- work",
+      cursorLine: 2,
+      options: { targets: [{ line: 2, rawLine: "\t- stale" }] },
+      pattern: /selected bullet changed/,
+    },
+  ];
+
+  for (const item of cases) {
+    const discovery = helpers.discoverMovablePomodoroBulletTargets(
+      item.content,
+      item.cursorLine,
+      0,
+    );
+    const plan = helpers.planPomodoroBulletSplit(item.content, {
+      targets: item.options.targets || discovery.targets,
+      sourceEntryLine: discovery.entryLine,
+      sourceRawLine:
+        item.options.sourceRawLine === undefined
+          ? discovery.context
+            ? item.content.split("\n")[discovery.entryLine]
+            : undefined
+          : item.options.sourceRawLine,
+    });
+    assert.equal(plan.valid, false, item.label);
+    assert.match(plan.error, item.pattern, item.label);
+    assert.equal(plan.after, item.content, item.label);
   }
 });
 

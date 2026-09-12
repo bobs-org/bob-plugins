@@ -5819,6 +5819,205 @@ test("commitPomodoroEntryMoveSession rejects a session whose editor content drif
   assert.equal(await plugin.commitPomodoroEntryMoveSession(session, row), false);
 });
 
+test("Pomodoro entry picker Ctrl+X merges the highlighted existing row and closes before committing", async () => {
+  notices.length = 0;
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- source bullet",
+    "- [ ] () — REVIEW",
+    "\t- review work detail",
+  ].join("\n");
+  const { editor, plugin, view } = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 1, ch: 999 },
+  });
+  assert.equal(plugin.openPomodoroEntryMovePicker(editor, view), true);
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  picker.inputEl = { value: "review work" };
+  picker.visibleItems = picker.getFilteredItems();
+  picker.renderResults = function stubbedRenderResults() {
+    this.visibleItems = this.getFilteredItems();
+    this.selectedIndex = this.clampSelectedIndex(
+      this.selectedIndex,
+      this.visibleItems.length,
+    );
+  };
+  assert.deepEqual(
+    picker.visibleItems.map((row) => row.kind),
+    ["rename", "existing"],
+  );
+
+  const originalCommit = plugin.commitPomodoroEntryMergeSession.bind(plugin);
+  let isOpenDuringCommit = null;
+  let activePickerDuringCommit = undefined;
+  plugin.commitPomodoroEntryMergeSession = async (session, row) => {
+    isOpenDuringCommit = picker.isOpen;
+    activePickerDuringCommit = plugin.activeTaskMoveDestinationPicker;
+    return originalCommit(session, row);
+  };
+
+  const navEvent = {
+    key: "n",
+    ctrlKey: true,
+    altKey: false,
+    metaKey: false,
+    prevented: false,
+    stopped: false,
+    preventDefault() {
+      this.prevented = true;
+    },
+    stopPropagation() {
+      this.stopped = true;
+    },
+  };
+  picker.handleKeydown(navEvent);
+  assert.equal(navEvent.prevented, true);
+  assert.equal(navEvent.stopped, true);
+  assert.equal(picker.selectedIndex, 1);
+
+  const mergeEvent = {
+    key: "x",
+    ctrlKey: true,
+    altKey: false,
+    metaKey: false,
+    prevented: false,
+    stopped: false,
+    preventDefault() {
+      this.prevented = true;
+    },
+    stopPropagation() {
+      this.stopped = true;
+    },
+  };
+  picker.handleKeydown(mergeEvent);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(mergeEvent.prevented, true);
+  assert.equal(mergeEvent.stopped, true);
+  assert.equal(picker.inputEl.value, "review work");
+  assert.equal(isOpenDuringCommit, false);
+  assert.equal(activePickerDuringCommit, null);
+  assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.getValue(), [
+    "## Pomodoros",
+    "- [ ] () — REVIEW + SOURCE",
+    "\t- review work detail",
+    "\t- source bullet",
+  ].join("\n"));
+  assert.deepEqual(editor.cursor, {
+    line: 1,
+    ch: "- [ ] () — REVIEW + SOURCE".length,
+  });
+  assert.equal(notices.at(-1), "Merged SOURCE into REVIEW + SOURCE");
+});
+
+test("Pomodoro entry picker Ctrl+X refuses rename and empty selections without closing or writing", async () => {
+  notices.length = 0;
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- source bullet",
+    "- [ ] () — DEST",
+    "\t- dest bullet",
+  ].join("\n");
+  const harness = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 1, ch: 0 },
+  });
+  assert.equal(
+    harness.plugin.openPomodoroEntryMovePicker(harness.editor, harness.view),
+    true,
+  );
+  const picker = harness.plugin.activeTaskMoveDestinationPicker;
+  picker.inputEl = { value: "novel name" };
+  picker.visibleItems = picker.getFilteredItems();
+  assert.deepEqual(picker.visibleItems.map((row) => row.kind), ["rename"]);
+
+  await picker.mergeSelectedItem();
+  assert.equal(picker.isOpen, true);
+  assert.equal(harness.plugin.activeTaskMoveDestinationPicker, picker);
+  assert.equal(harness.editor.getValue(), content);
+  assert.equal(harness.editor.transactions.length, 0);
+  assert.match(notices.at(-1), /press Enter to rename instead/);
+
+  picker.visibleItems = [];
+  await picker.mergeSelectedItem();
+  assert.equal(picker.isOpen, true);
+  assert.equal(harness.editor.getValue(), content);
+  assert.equal(harness.editor.transactions.length, 0);
+  assert.match(notices.at(-1), /Select an existing Pomodoro to merge/);
+});
+
+test("Pomodoro entry picker Ctrl+X uses the shared opening latch against reentrant merges", async () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- source bullet",
+    "- [ ] () — DEST",
+    "\t- dest bullet",
+  ].join("\n");
+  const { editor, plugin, view } = createPomodoroMovePickerHarness({
+    content,
+    cursor: { line: 1, ch: 0 },
+  });
+  assert.equal(plugin.openPomodoroEntryMovePicker(editor, view), true);
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  picker.inputEl = { value: "dest" };
+  picker.visibleItems = picker.getFilteredItems();
+
+  let commitCalls = 0;
+  let resolveCommit;
+  plugin.commitPomodoroEntryMergeSession = async () => {
+    commitCalls += 1;
+    await new Promise((resolve) => {
+      resolveCommit = resolve;
+    });
+    return true;
+  };
+
+  const first = picker.mergeSelectedItem();
+  const second = picker.mergeSelectedItem();
+  assert.equal(commitCalls, 1);
+  resolveCommit();
+  await first;
+  await second;
+  assert.equal(commitCalls, 1);
+});
+
+test("Ctrl+X remains entry-specific and does not run from the Pomodoro bullet picker", () => {
+  notices.length = 0;
+  const { editor, plugin, view } = createPomodoroMovePickerHarness({
+    cursor: { line: 5, ch: 0 },
+  });
+  assert.equal(plugin.openPomodoroBulletMovePicker(editor, view), true);
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  const event = {
+    key: "x",
+    ctrlKey: true,
+    altKey: false,
+    metaKey: false,
+    prevented: false,
+    stopped: false,
+    preventDefault() {
+      this.prevented = true;
+    },
+    stopPropagation() {
+      this.stopped = true;
+    },
+  };
+
+  picker.handleKeydown(event);
+
+  assert.equal(event.prevented, false);
+  assert.equal(event.stopped, false);
+  assert.equal(picker.isOpen, true);
+  assert.equal(editor.transactions.length, 0);
+  assert.deepEqual(notices, []);
+});
+
 test("task move picker closes before commit while other pickers retain delayed close", async () => {
   const destinations = [
     { file: { path: "Area.md", basename: "Area" }, noteInfo: {} },
@@ -11618,6 +11817,226 @@ test("planPomodoroEntryRename renames closed and cancelled entries the same way 
     });
     assert.equal(plan.valid, true);
     assert.equal(plan.after, `## Pomodoros\n- [${status}] () — NEW`);
+  }
+});
+
+test("planPomodoroEntryMerge resolves all direction-table cases with survivor-first bullets and names", () => {
+  {
+    const content = [
+      "## Pomodoros",
+      "- [ ] () — BUILD",
+      "\t- build existing",
+      "\t- duplicate",
+      "- [ ] () — REVIEW",
+      "\t- review first",
+      "\t\t- review detail",
+      "\t- duplicate",
+      "- [ ] () — WRAP",
+      "\t- wrap stays put",
+    ].join("\n");
+    const plan = helpers.planPomodoroEntryMerge(content, {
+      invokedEntryLine: 1,
+      invokedRawLine: "- [ ] () — BUILD",
+      selectedEntryLine: 4,
+      selectedRawLine: "- [ ] () — REVIEW",
+    });
+    assert.equal(plan.valid, true);
+    assert.equal(plan.survivorOriginalEntryLine, 4);
+    assert.equal(plan.absorbedOriginalEntryLine, 1);
+    assert.equal(plan.finalName, "REVIEW + BUILD");
+    assert.equal(plan.transferredBulletCount, 2);
+    assert.equal(plan.after, [
+      "## Pomodoros",
+      "- [ ] () — REVIEW + BUILD",
+      "\t- review first",
+      "\t\t- review detail",
+      "\t- duplicate",
+      "\t- build existing",
+      "\t- duplicate",
+      "- [ ] () — WRAP",
+      "\t- wrap stays put",
+    ].join("\n"));
+  }
+
+  for (const [label, invokedEntryLine, selectedEntryLine] of [
+    ["future invokes current", 5, 1],
+    ["current invokes future", 1, 5],
+  ]) {
+    const content = [
+      "## Pomodoros",
+      "- [ ] (**0920-0950** [t:: 30m]) — BUILD",
+      "\t- existing build bullet",
+      "- [ ] () — HOLD",
+      "\t- untouched",
+      "- [ ] () — REVIEW",
+      "\t- first review bullet",
+      "\t\t- review detail",
+      "\t- second review bullet",
+    ].join("\n");
+    const plan = helpers.planPomodoroEntryMerge(content, {
+      invokedEntryLine,
+      invokedRawLine:
+        invokedEntryLine === 1
+          ? "- [ ] (**0920-0950** [t:: 30m]) — BUILD"
+          : "- [ ] () — REVIEW",
+      selectedEntryLine,
+      selectedRawLine:
+        selectedEntryLine === 1
+          ? "- [ ] (**0920-0950** [t:: 30m]) — BUILD"
+          : "- [ ] () — REVIEW",
+    });
+    assert.equal(plan.valid, true, label);
+    assert.equal(plan.survivorOriginalEntryLine, 1, label);
+    assert.equal(plan.absorbedOriginalEntryLine, 5, label);
+    assert.equal(plan.finalName, "BUILD + REVIEW", label);
+    assert.equal(plan.after, [
+      "## Pomodoros",
+      "- [ ] (**0920-0950** [t:: 30m]) — BUILD + REVIEW",
+      "\t- existing build bullet",
+      "\t- first review bullet",
+      "\t\t- review detail",
+      "\t- second review bullet",
+      "- [ ] () — HOLD",
+      "\t- untouched",
+    ].join("\n"), label);
+  }
+});
+
+test("planPomodoroEntryMerge handles empty placeholders, unnamed entries, equal names, plus names, and the name limit", () => {
+  const emptyAbsorbed = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- ",
+    "- [ ] () — DEST",
+    "\t- keep",
+  ].join("\n");
+  const emptyPlan = helpers.planPomodoroEntryMerge(emptyAbsorbed, {
+    invokedEntryLine: 1,
+    selectedEntryLine: 3,
+  });
+  assert.equal(emptyPlan.valid, true);
+  assert.equal(emptyPlan.transferredBulletCount, 0);
+  assert.equal(emptyPlan.finalName, "DEST + SOURCE");
+  assert.equal(emptyPlan.after, [
+    "## Pomodoros",
+    "- [ ] () — DEST + SOURCE",
+    "\t- keep",
+  ].join("\n"));
+
+  const unnamed = [
+    "## Pomodoros",
+    "- [ ] ()",
+    "\t- source",
+    "- [ ] () — FOCUS + REVIEW",
+    "\t- dest",
+  ].join("\n");
+  const unnamedPlan = helpers.planPomodoroEntryMerge(unnamed, {
+    invokedEntryLine: 1,
+    selectedEntryLine: 3,
+  });
+  assert.equal(unnamedPlan.valid, true);
+  assert.equal(unnamedPlan.finalName, "FOCUS + REVIEW");
+  assert.equal(unnamedPlan.after, [
+    "## Pomodoros",
+    "- [ ] () — FOCUS + REVIEW",
+    "\t- dest",
+    "\t- source",
+  ].join("\n"));
+
+  const equalNames = [
+    "## Pomodoros",
+    "- [ ] () — SAME",
+    "\t- source",
+    "- [ ] () — SAME",
+    "\t- dest",
+  ].join("\n");
+  const equalPlan = helpers.planPomodoroEntryMerge(equalNames, {
+    invokedEntryLine: 1,
+    selectedEntryLine: 3,
+  });
+  assert.equal(equalPlan.valid, true);
+  assert.equal(equalPlan.finalName, "SAME + SAME");
+
+  const exact = helpers.planPomodoroEntryMerge(
+    [
+      "## Pomodoros",
+      "- [ ] () — " + "A".repeat(20),
+      "\t- source",
+      "- [ ] () — " + "B".repeat(25),
+      "\t- dest",
+    ].join("\n"),
+    { invokedEntryLine: 1, selectedEntryLine: 3 },
+  );
+  assert.equal(exact.valid, true);
+  assert.equal(exact.finalName.length, helpers.POMODORO_NAME_MAX_LENGTH);
+
+  const over = helpers.planPomodoroEntryMerge(
+    [
+      "## Pomodoros",
+      "- [ ] () — " + "A".repeat(21),
+      "\t- source",
+      "- [ ] () — " + "B".repeat(25),
+      "\t- dest",
+    ].join("\n"),
+    { invokedEntryLine: 1, selectedEntryLine: 3 },
+  );
+  assert.equal(over.valid, false);
+  assert.match(over.error, /shorten a name/);
+});
+
+test("planPomodoroEntryMerge refuses stale, ineligible, two-timed, unsupported, and lossy merges without mutation", () => {
+  const cases = [
+    {
+      label: "self",
+      content: "## Pomodoros\n- [ ] () — A\n\t- one",
+      options: { invokedEntryLine: 1, selectedEntryLine: 1 },
+      pattern: /different Pomodoro/,
+    },
+    {
+      label: "stale invoked",
+      content: "## Pomodoros\n- [ ] () — A\n- [ ] () — B",
+      options: {
+        invokedEntryLine: 1,
+        invokedRawLine: "- [ ] () — OLD",
+        selectedEntryLine: 2,
+      },
+      pattern: /changed before it could be merged/,
+    },
+    {
+      label: "closed",
+      content: "## Pomodoros\n- [x] () — A\n\t- one\n- [ ] () — B",
+      options: { invokedEntryLine: 1, selectedEntryLine: 3 },
+      pattern: /Only open current or future/,
+    },
+    {
+      label: "two timed",
+      content: [
+        "## Pomodoros",
+        "- [ ] (**0900-0930** [t:: 30m]) — A",
+        "- [ ] (09:30-10:00 [t:: 30m]) — B",
+      ].join("\n"),
+      options: { invokedEntryLine: 1, selectedEntryLine: 2 },
+      pattern: /Two timed Pomodoros/,
+    },
+    {
+      label: "unsupported tail",
+      content: "## Pomodoros\n- [ ] () extra\n- [ ] () — B",
+      options: { invokedEntryLine: 1, selectedEntryLine: 2 },
+      pattern: /unsupported trailing content/,
+    },
+    {
+      label: "lossy child",
+      content: "## Pomodoros\n- [ ] () — A\n\tstray note\n- [ ] () — B",
+      options: { invokedEntryLine: 1, selectedEntryLine: 3 },
+      pattern: /content that cannot be moved/,
+    },
+  ];
+
+  for (const { label, content, options, pattern } of cases) {
+    const plan = helpers.planPomodoroEntryMerge(content, options);
+    assert.equal(plan.valid, false, label);
+    assert.match(plan.error, pattern, label);
+    assert.equal(plan.after, content, label);
   }
 });
 

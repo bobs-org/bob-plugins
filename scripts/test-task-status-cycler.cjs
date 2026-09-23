@@ -2989,12 +2989,12 @@ test("selected Done Pomodoro transclusion reopens only its cross-file root", asy
   const plugin = new TaskStatusCyclerPlugin();
   plugin.app = harness.app;
 
-  assert.equal(
+  assert.deepEqual(
     await plugin.handleActiveTaskBlockLinkOpenDone(
       editor,
       harness.app.vault.getAbstractFileByPath("Daily.md"),
     ),
-    true,
+    { resolved: true, changed: true },
   );
   assert.equal(
     harness.getSource("Tree.md"),
@@ -3024,12 +3024,12 @@ test("selected same-file Done target reopens root-only in the live editor", asyn
   const plugin = new TaskStatusCyclerPlugin();
   plugin.app = harness.app;
 
-  assert.equal(
+  assert.deepEqual(
     await plugin.handleActiveTaskBlockLinkOpenDone(
       editor,
       harness.app.vault.getAbstractFileByPath("Daily.md"),
     ),
-    true,
+    { resolved: true, changed: true },
   );
   assert.match(editor.getValue(), /^- \[ \] #task Root \^root/m);
   assert.match(editor.getValue(), /^- \[x\] #task Child \[completion:: stale\] \^child/m);
@@ -3050,12 +3050,12 @@ test("selected retired link reopens its root and restores the historical occurre
   const plugin = new TaskStatusCyclerPlugin();
   plugin.app = harness.app;
 
-  assert.equal(
+  assert.deepEqual(
     await plugin.handleActiveTaskBlockLinkOpenDone(
       editor,
       harness.app.vault.getAbstractFileByPath("Daily.md"),
     ),
-    true,
+    { resolved: true, changed: true },
   );
   assert.equal(harness.getSource("Tasks.md"), "- [ ] #task Done ^done");
   assert.equal(
@@ -3080,12 +3080,12 @@ test("incomplete selected Pomodoro transclusion still closes recursively", async
   plugin.getCompletionDateString = () => "2026-07-12";
   plugin.finalizeClosedTasks = async () => ({ reopened: 0, retired: 0 });
 
-  assert.equal(
+  assert.deepEqual(
     await plugin.handleActiveTaskBlockLinkOpenDone(
       editor,
       harness.app.vault.getAbstractFileByPath("Daily.md"),
     ),
-    true,
+    { resolved: true, changed: true },
   );
   assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Root/m);
   assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Child/m);
@@ -3341,7 +3341,7 @@ test("registered Ctrl+Enter immediately recovers a cross-file dependent", async 
 
   assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task Root/m);
   assert.match(harness.getSource("Dependent.md"), /^- \[ \] #task Dependent/m);
-  assert.equal(editor.getValue(), daily);
+  assert.equal(editor.getValue(), "- ~~[[Tasks#^root|Root]]~~");
 });
 
 test("child-line Ctrl+Enter produces the same rollover and cursor target as parent completion", async () => {
@@ -3459,9 +3459,14 @@ test("selected embedded Pomodoro children keep recursive close and root-only reo
 
     action({});
     await flushAsyncActions();
+    await plugin.referenceMutationQueue;
 
     assert.equal(parentCompletions, 0, `selected [${symbol}] root`);
-    assert.equal(editor.getValue(), daily, `selected [${symbol}] root`);
+    assert.equal(
+      editor.getValue(),
+      "## Pomodoros\n- [ ] Focus\n\t- ~~[[Tree#^root]]~~",
+      `selected [${symbol}] root`,
+    );
     assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Root/m);
     assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Child/m);
   }
@@ -3568,8 +3573,33 @@ test("Ctrl+Enter behavior stays generic outside open Pomodoro child ranges", asy
     attachActiveMarkdownView(plugin, harness, editor);
     registerTaskToggleVimAction(plugin)({});
     await flushAsyncActions();
+    await plugin.referenceMutationQueue;
     assert.equal(editor.getLine(0), "- [x] Linked task ^target");
+    assert.equal(editor.getLine(1), "- ~~[[#^target]]~~");
     assert.equal(editor.getLine(3), "- [ ] Focus");
+  }
+
+  {
+    const daily = "- ![[Tasks#^a]]";
+    const harness = createInMemoryObsidianApp({
+      "Daily.md": daily,
+      "Tasks.md": "- [ ] #task A ^a",
+    });
+    const editor = createTextEditor(daily, { line: 0, ch: 3 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.getCompletionDateString = () => "2026-07-16";
+    attachActiveMarkdownView(plugin, harness, editor);
+    const toggle = registerTaskToggleVimAction(plugin);
+    toggle({});
+    await flushAsyncActions();
+    await plugin.referenceMutationQueue;
+    assert.equal(editor.getLine(0), "- ~~[[Tasks#^a]]~~");
+    assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task A/m);
+    toggle({});
+    await flushAsyncActions();
+    await plugin.referenceMutationQueue;
+    assert.equal(editor.getLine(0), "- [[Tasks#^a]]");
+    assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task A \^a/m);
   }
 
   {
@@ -6016,4 +6046,255 @@ test("always-prompt promotions keep reuse, duplicates, cleanup, CRLF, and cancel
   );
   assert.equal(missing.editor.getValue(), cancelledSource);
   assert.match(notices.at(-1), /no longer available/i);
+});
+
+test("plain Task Link in an open Pomodoro closes the task root-only and strikes the link", async () => {
+  for (const symbol of [" ", "*", "/"]) {
+    const daily = [
+      "## Pomodoros",
+      "- [ ] (**0920-0950** [t:: 30m])",
+      "\t- [[Tasks#^a]]",
+    ].join("\n");
+    const harness = createInMemoryObsidianApp({
+      "Daily.md": daily,
+      "Tasks.md": `- [${symbol}] #task A ^a`,
+    });
+    const editor = createTextEditor(daily, { line: 2, ch: 5 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.getCompletionDateString = () => "2026-07-16";
+    plugin.scheduleCenterEditorLineInView = () => {};
+    attachActiveMarkdownView(plugin, harness, editor);
+    const action = registerTaskToggleVimAction(plugin);
+
+    action({});
+    await flushAsyncActions();
+    await plugin.referenceMutationQueue;
+
+    assert.equal(editor.getLine(1), "- [ ] (**0920-0950** [t:: 30m])", `symbol [${symbol}]`);
+    assert.equal(editor.getLine(2), "\t- ~~[[Tasks#^a]]~~", `symbol [${symbol}]`);
+    assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task A .*\[completion:: 2026-07-16\] \^a/m);
+    assert.equal(editor.getValue().includes("- [ ] ()"), false, `symbol [${symbol}]`);
+  }
+});
+
+test("marked plain Task Link drops its marker when struck under Pomodoro ancestry", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m])",
+    "\t- 🍅 [[Tasks#^a|A]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": "- [ ] #task A ^a",
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 6 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.equal(editor.getLine(1), "- [ ] (**0920-0950** [t:: 30m])");
+  assert.equal(editor.getLine(2), "\t- ~~[[Tasks#^a|A]]~~");
+  assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task A/m);
+});
+
+test("plain Pomodoro Task Link closes root-only while embedded closes recursively", async () => {
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- [[Tree#^root]]";
+  const tree = [
+    "- [ ] #task Root ^root",
+    "\t- ![[#^child]]",
+    "- [ ] #task Child ^child",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tree.md": tree,
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.equal(editor.getLine(1), "- [ ] Focus");
+  assert.equal(editor.getLine(2), "\t- ~~[[Tree#^root]]~~");
+  assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Root/m);
+  assert.match(harness.getSource("Tree.md"), /^- \[ \] #task Child \^child/m);
+});
+
+test("embedded Pomodoro Task Link still closes recursively and retires to struck form", async () => {
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Tree#^root]]";
+  const tree = [
+    "- [ ] #task Root ^root",
+    "\t- ![[#^child]]",
+    "- [ ] #task Child ^child",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tree.md": tree,
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.equal(editor.getLine(1), "- [ ] Focus");
+  assert.equal(editor.getLine(2), "\t- ~~[[Tree#^root]]~~");
+  assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Root/m);
+  assert.match(harness.getSource("Tree.md"), /^- \[x\] #task Child/m);
+});
+
+test("Ctrl+Enter toggles a struck plain Pomodoro link back to open", async () => {
+  const daily = "## Pomodoros\n- [ ] Focus\n\t- ~~[[Tasks#^a]]~~";
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": "- [x] #task A [completion:: 2026-07-16] ^a",
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 6 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task A \^a/m);
+  assert.equal(editor.getLine(2), "\t- [[Tasks#^a]]");
+  assert.equal(editor.getLine(1), "- [ ] Focus");
+});
+
+test("same-file plain Task Link closes and strikes the correct line", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- [[#^a]]",
+    "- [ ] #task Same-file ^a",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const editor = createTextEditor(daily, { line: 2, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.equal(editor.getLine(1), "- [ ] Focus");
+  assert.equal(editor.getLine(2), "\t- ~~[[#^a]]~~");
+  assert.match(editor.getValue(), /^- \[x\] #task Same-file .*\[completion:: 2026-07-16\] \^a/m);
+});
+
+test("cursor selects which of several Task Links closes and strikes", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] Focus",
+    "\t- [[Tasks#^a|A]] and [[Tasks#^b|B]]",
+  ].join("\n");
+  const tasks = [
+    "- [ ] #task A ^a",
+    "- [ ] #task B ^b",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": tasks,
+  });
+  const line = "\t- [[Tasks#^a|A]] and [[Tasks#^b|B]]";
+  const secondStart = line.indexOf("[[Tasks#^b");
+  const editor = createTextEditor(daily, { line: 2, ch: secondStart + 3 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.equal(editor.getLine(1), "- [ ] Focus");
+  assert.equal(editor.getLine(2), "\t- [[Tasks#^a|A]] and ~~[[Tasks#^b|B]]~~");
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task A \^a/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[x\] #task B/m);
+});
+
+test("plain links to Blocked or non-task blocks still complete the Pomodoro", async () => {
+  for (const targetSource of [
+    "- [?] #task Blocked ^blocked",
+    "- Just a bullet ^plain",
+  ]) {
+    const daily = [
+      "## Pomodoros",
+      "- [ ] Focus",
+      targetSource.includes("#task")
+        ? "\t- [[Tasks#^blocked|Blocked]]"
+        : "\t- [[Tasks#^plain|Plain]]",
+    ].join("\n");
+    const blockId = targetSource.includes("#task") ? "blocked" : "plain";
+    const harness = createInMemoryObsidianApp({
+      "Daily.md": daily,
+      "Tasks.md": targetSource,
+    });
+    const editor = createTextEditor(daily, { line: 2, ch: 5 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.scheduleCenterEditorLineInView = () => {};
+    attachActiveMarkdownView(plugin, harness, editor);
+    const action = registerTaskToggleVimAction(plugin);
+
+    action({});
+    await flushAsyncActions();
+    await plugin.referenceMutationQueue;
+
+    assert.equal(editor.getLine(1), "- [x] Focus", targetSource);
+    assert.equal(harness.getSource("Tasks.md"), targetSource, targetSource);
+  }
+});
+
+test("strike and unstrike helpers are idempotent, alias-preserving, and marker-aware", () => {
+  const selection = { pathPart: "Tasks", blockId: "a", startIndex: 3, embedded: false };
+  assert.equal(
+    helpers.strikeSelectedTaskBlockLinkInLine("\t- ~~[[Tasks#^a]]~~", selection, { pomodoro: true }),
+    null,
+  );
+  assert.equal(
+    helpers.unstrikeSelectedTaskBlockLinkInLine("\t- ~~before [[Tasks#^a]] after~~", selection),
+    null,
+  );
+  assert.equal(
+    helpers.strikeSelectedTaskBlockLinkInLine("\t- [[Tasks#^a|Alias]]", selection, { pomodoro: true }),
+    "\t- ~~[[Tasks#^a|Alias]]~~",
+  );
+  assert.equal(
+    helpers.strikeSelectedTaskBlockLinkInLine("\t- 🍅 [[Tasks#^a]]", selection, { pomodoro: false }),
+    "\t- 🍅 ~~[[Tasks#^a]]~~",
+  );
+  assert.equal(
+    helpers.strikeSelectedTaskBlockLinkInLine("\t- 🍅 [[Tasks#^a]]", selection, { pomodoro: true }),
+    "\t- ~~[[Tasks#^a]]~~",
+  );
+  const struck = helpers.strikeSelectedTaskBlockLinkInLine("\t- [[Tasks#^a|A]]", selection, { pomodoro: true });
+  assert.equal(struck, "\t- ~~[[Tasks#^a|A]]~~");
+  assert.equal(
+    helpers.unstrikeSelectedTaskBlockLinkInLine(struck, selection),
+    "\t- [[Tasks#^a|A]]",
+  );
 });

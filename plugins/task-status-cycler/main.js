@@ -3873,9 +3873,13 @@ function getTranscludedTaskTargetFromLine(
 
 // Ctrl+Enter selection is intentionally broader than recursive Pomodoro
 // completion: a selected task block link may be embedded, plain, marked, or
-// canonically retired inside strikethrough. The cursor disambiguates lines with
-// multiple candidates; a line with one valid candidate remains selectable from
-// anywhere on that line.
+// canonically retired inside strikethrough. Inside an open Pomodoro, a selected
+// link that resolves to an Open/Next/In Progress/Done task is handled as a Task
+// Link and never completes the Pomodoro; a plain link that does not resolve
+// falls back to Pomodoro completion, while an unresolved embedded link keeps
+// the keypress consumed. The cursor disambiguates lines with multiple
+// candidates; a line with one valid candidate remains selectable from anywhere
+// on that line.
 function getTaskBlockLinkTargetFromLine(
   lineText,
   sourcePath,
@@ -4073,6 +4077,152 @@ function getStrikethroughSpans(lineText) {
 
 function rangeIsStruck(start, end, spans) {
   return (spans || []).some((span) => start >= span.start && end <= span.end);
+}
+
+// Shared per-candidate retired-link edit used by vault-wide retirement and by
+// the single-line Ctrl+Enter strike path. For an embedded candidate
+// (`candidate.embedded === true`, or a `parseEmbeddedBlockTransclusions`
+// candidate whose `startIndex` is on the `!`) the wikilink text drops the `!`;
+// for a plain candidate it is the token itself. Returns `{ start, end, text }`,
+// or `null` when a plain token is already inside a strike span and there is
+// nothing to do. An already-struck embedded token still emits a rewrite so the
+// `!` is dropped, preserving today's retirement output byte-for-byte.
+function buildRetiredBlockLinkEdit(lineText, candidate, strikeSpans, pomodoro) {
+  const line = String(lineText || "");
+  const startIndex = candidate && Number.isInteger(candidate.startIndex)
+    ? candidate.startIndex
+    : null;
+  const endIndex = candidate && Number.isInteger(candidate.endIndex)
+    ? candidate.endIndex
+    : null;
+  if (startIndex === null || endIndex === null) {
+    return null;
+  }
+  const embedded = candidate.embedded !== false;
+  const spans = Array.isArray(strikeSpans)
+    ? strikeSpans
+    : getStrikethroughSpans(line);
+  if (!embedded && rangeIsStruck(startIndex, endIndex, spans)) {
+    return null;
+  }
+  const wikilink = embedded
+    ? line.slice(startIndex + 1, endIndex)
+    : line.slice(startIndex, endIndex);
+  const exactStrike = spans.find(
+    (span) => startIndex === span.start && endIndex === span.end,
+  );
+  const alreadyStruck = rangeIsStruck(startIndex, endIndex, spans);
+  const needsLeadingSpace =
+    !alreadyStruck && line.slice(Math.max(0, startIndex - 2), startIndex) === "~~";
+  const needsTrailingSpace =
+    !alreadyStruck && line.slice(endIndex, endIndex + 2) === "~~";
+  const retiredText = exactStrike
+    ? `~~${wikilink}~~`
+    : alreadyStruck
+      ? wikilink
+      : `${needsLeadingSpace ? " " : ""}~~${wikilink}~~${needsTrailingSpace ? " " : ""}`;
+  const displayStart = exactStrike
+    ? exactStrike.start - 2
+    : startIndex;
+  const displayEnd = exactStrike
+    ? exactStrike.end + 2
+    : endIndex;
+  const prefix = getPomodoroMarkerPrefix(line, displayStart);
+  return {
+    start: pomodoro ? prefix.start : startIndex,
+    end: pomodoro ? displayEnd : endIndex,
+    text: retiredText,
+  };
+}
+
+function findSelectedBlockLinkCandidate(lineText, selection) {
+  const line = String(lineText || "");
+  if (!selection || typeof selection.blockId !== "string") {
+    return null;
+  }
+  const matching = getBlockLinkTokenCandidates(line).filter(
+    (candidate) =>
+      candidate.pathPart === selection.pathPart &&
+      candidate.blockId === selection.blockId,
+  );
+  if (matching.length === 0) {
+    return null;
+  }
+  const sameKind = matching.filter(
+    (candidate) => !!candidate.embedded === !!selection.embedded,
+  );
+  const pool = sameKind.length > 0 ? sameKind : matching;
+  const anchor = Number.isInteger(selection.startIndex)
+    ? selection.startIndex
+    : null;
+  let best = pool[0];
+  if (anchor !== null) {
+    let bestDistance = Math.abs(best.startIndex - anchor);
+    for (const candidate of pool.slice(1)) {
+      const distance = Math.abs(candidate.startIndex - anchor);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+  }
+  return best;
+}
+
+function strikeSelectedTaskBlockLinkInLine(lineText, selection, options = {}) {
+  const line = String(lineText || "");
+  const candidate = findSelectedBlockLinkCandidate(line, selection);
+  if (!candidate) {
+    return null;
+  }
+  const strikeSpans = getStrikethroughSpans(line);
+  const pomodoro = !!(options && options.pomodoro);
+  const edit = buildRetiredBlockLinkEdit(line, candidate, strikeSpans, pomodoro);
+  if (!edit) {
+    return null;
+  }
+  const nextLine = `${line.slice(0, edit.start)}${edit.text}${line.slice(edit.end)}`;
+  return nextLine === line ? null : nextLine;
+}
+
+function unstrikeSelectedTaskBlockLinkInLine(lineText, selection) {
+  const line = String(lineText || "");
+  if (!selection || typeof selection.blockId !== "string") {
+    return null;
+  }
+  const matching = getBlockLinkTokenCandidates(line).filter(
+    (candidate) =>
+      candidate.embedded === false &&
+      candidate.pathPart === selection.pathPart &&
+      candidate.blockId === selection.blockId,
+  );
+  if (matching.length === 0) {
+    return null;
+  }
+  const anchor = Number.isInteger(selection.startIndex)
+    ? selection.startIndex
+    : null;
+  let best = matching[0];
+  if (anchor !== null) {
+    let bestDistance = Math.abs(best.startIndex - anchor);
+    for (const candidate of matching.slice(1)) {
+      const distance = Math.abs(candidate.startIndex - anchor);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+  }
+  const strikeSpans = getStrikethroughSpans(line);
+  const exactStrike = strikeSpans.find(
+    (span) => best.startIndex === span.start && best.endIndex === span.end,
+  );
+  if (!exactStrike) {
+    return null;
+  }
+  const wikilink = line.slice(best.startIndex, best.endIndex);
+  const nextLine = `${line.slice(0, exactStrike.start - 2)}${wikilink}${line.slice(exactStrike.end + 2)}`;
+  return nextLine === line ? null : nextLine;
 }
 
 function parseRetirementListLine(lineText) {
@@ -4445,37 +4595,15 @@ function retireClosedTaskReferencesInText(
       ) {
         continue;
       }
-      const wikilink = line.slice(candidate.startIndex + 1, candidate.endIndex);
-      const exactStrike = strikeSpans.find(
-        (span) =>
-          candidate.startIndex === span.start && candidate.endIndex === span.end,
-      );
-      const alreadyStruck = rangeIsStruck(
-        candidate.startIndex,
-        candidate.endIndex,
+      const edit = buildRetiredBlockLinkEdit(
+        line,
+        { ...candidate, embedded: true },
         strikeSpans,
+        ancestry.pomodoro,
       );
-      const needsLeadingSpace =
-        !alreadyStruck && line.slice(Math.max(0, candidate.startIndex - 2), candidate.startIndex) === "~~";
-      const needsTrailingSpace =
-        !alreadyStruck && line.slice(candidate.endIndex, candidate.endIndex + 2) === "~~";
-      const retiredText = exactStrike
-        ? `~~${wikilink}~~`
-        : alreadyStruck
-          ? wikilink
-          : `${needsLeadingSpace ? " " : ""}~~${wikilink}~~${needsTrailingSpace ? " " : ""}`;
-      const displayStart = exactStrike
-        ? exactStrike.start - 2
-        : candidate.startIndex;
-      const displayEnd = exactStrike
-        ? exactStrike.end + 2
-        : candidate.endIndex;
-      const prefix = getPomodoroMarkerPrefix(line, displayStart);
-      edits.push({
-        start: ancestry.pomodoro ? prefix.start : candidate.startIndex,
-        end: ancestry.pomodoro ? displayEnd : candidate.endIndex,
-        text: retiredText,
-      });
+      if (edit) {
+        edits.push(edit);
+      }
     }
     if (edits.length === 0) {
       continue;
@@ -6852,6 +6980,220 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return { restored: result.count, failures: result.failures };
   }
 
+  lineHasSelectedTaskBlockLink(lineText, selection) {
+    if (!selection || typeof selection.blockId !== "string") {
+      return false;
+    }
+    return getBlockLinkTokenCandidates(String(lineText || "")).some(
+      (candidate) =>
+        candidate.pathPart === selection.pathPart &&
+        candidate.blockId === selection.blockId,
+    );
+  }
+
+  findActiveSelectedTaskBlockLinkLine(editor, candidate) {
+    const lines = this.getEditorLineTexts(editor);
+    if (!candidate || !Number.isInteger(candidate.activeLine)) {
+      return { lines, targetLine: null };
+    }
+    if (
+      candidate.activeLine >= 0 &&
+      candidate.activeLine < lines.length &&
+      this.lineHasSelectedTaskBlockLink(lines[candidate.activeLine], candidate)
+    ) {
+      return { lines, targetLine: candidate.activeLine };
+    }
+    const exactMatches = [];
+    for (let line = 0; line < lines.length; line += 1) {
+      if (
+        lines[line] === candidate.activeLineText &&
+        this.lineHasSelectedTaskBlockLink(lines[line], candidate)
+      ) {
+        exactMatches.push(line);
+      }
+    }
+    if (exactMatches.length === 1) {
+      return { lines, targetLine: exactMatches[0] };
+    }
+    return { lines, targetLine: null };
+  }
+
+  async strikeActiveSelectedTaskBlockLink(editor, activePath, candidate) {
+    if (
+      !editor ||
+      typeof editor.getLine !== "function" ||
+      typeof editor.replaceRange !== "function" ||
+      !candidate
+    ) {
+      return false;
+    }
+    return this.enqueueTaskReferenceMutation(async () => {
+      const located = this.findActiveSelectedTaskBlockLinkLine(editor, candidate);
+      let targetLine = located.targetLine;
+      let lines = located.lines;
+      if (targetLine === null) {
+        const retiredForms = new Set();
+        for (const pomodoro of [true, false]) {
+          try {
+            const retired = strikeSelectedTaskBlockLinkInLine(
+              candidate.activeLineText,
+              candidate,
+              { pomodoro },
+            );
+            if (retired && retired !== candidate.activeLineText) {
+              retiredForms.add(retired);
+            }
+          } catch (error) {
+            // Best effort: one pomodoro variant failing must not block the other.
+          }
+        }
+        if (retiredForms.size > 0) {
+          lines = this.getEditorLineTexts(editor);
+          const retiredMatches = [];
+          for (let line = 0; line < lines.length; line += 1) {
+            if (
+              retiredForms.has(lines[line]) &&
+              this.lineHasSelectedTaskBlockLink(lines[line], candidate)
+            ) {
+              retiredMatches.push(line);
+            }
+          }
+          if (retiredMatches.length === 1) {
+            return false;
+          }
+        }
+        return false;
+      }
+      lines = this.getEditorLineTexts(editor);
+      if (targetLine < 0 || targetLine >= lines.length) {
+        return false;
+      }
+      const fenced = getFencedLineNumbers(lines);
+      if (fenced.has(targetLine)) {
+        return false;
+      }
+      const pomodoros = findPomodorosSectionInLines(lines);
+      const ancestry = hasEligibleRetirementAncestor(
+        lines,
+        targetLine,
+        fenced,
+        pomodoros,
+      );
+      const currentLineText = typeof editor.getLine === "function"
+        ? editor.getLine(targetLine) || ""
+        : lines[targetLine] || "";
+      if (!this.lineHasSelectedTaskBlockLink(currentLineText, candidate)) {
+        return false;
+      }
+      const nextLineText = strikeSelectedTaskBlockLinkInLine(
+        currentLineText,
+        candidate,
+        { pomodoro: ancestry.pomodoro },
+      );
+      if (!nextLineText || nextLineText === currentLineText) {
+        return false;
+      }
+      const cursor = typeof editor.getCursor === "function"
+        ? editor.getCursor()
+        : null;
+      editor.replaceRange(
+        nextLineText,
+        { line: targetLine, ch: 0 },
+        { line: targetLine, ch: currentLineText.length },
+      );
+      if (cursor && typeof editor.setCursor === "function") {
+        const lineText = typeof editor.getLine === "function"
+          ? editor.getLine(cursor.line) || ""
+          : "";
+        editor.setCursor({
+          line: cursor.line,
+          ch: Math.min(cursor.ch, lineText.length),
+        });
+      }
+      return true;
+    });
+  }
+
+  async unstrikeActiveSelectedTaskBlockLink(editor, activePath, candidate) {
+    if (
+      !editor ||
+      typeof editor.getLine !== "function" ||
+      typeof editor.replaceRange !== "function" ||
+      !candidate
+    ) {
+      return false;
+    }
+    return this.enqueueTaskReferenceMutation(async () => {
+      const located = this.findActiveSelectedTaskBlockLinkLine(editor, candidate);
+      let targetLine = located.targetLine;
+      if (targetLine === null) {
+        let restoredForm = null;
+        try {
+          restoredForm = unstrikeSelectedTaskBlockLinkInLine(
+            candidate.activeLineText,
+            candidate,
+          );
+        } catch (error) {
+          restoredForm = null;
+        }
+        if (restoredForm && restoredForm !== candidate.activeLineText) {
+          const lines = this.getEditorLineTexts(editor);
+          const restoredMatches = [];
+          for (let line = 0; line < lines.length; line += 1) {
+            if (
+              lines[line] === restoredForm &&
+              this.lineHasSelectedTaskBlockLink(lines[line], candidate)
+            ) {
+              restoredMatches.push(line);
+            }
+          }
+          if (restoredMatches.length === 1) {
+            return false;
+          }
+        }
+        return false;
+      }
+      const lines = this.getEditorLineTexts(editor);
+      if (targetLine < 0 || targetLine >= lines.length) {
+        return false;
+      }
+      if (getFencedLineNumbers(lines).has(targetLine)) {
+        return false;
+      }
+      const currentLineText = typeof editor.getLine === "function"
+        ? editor.getLine(targetLine) || ""
+        : lines[targetLine] || "";
+      if (!this.lineHasSelectedTaskBlockLink(currentLineText, candidate)) {
+        return false;
+      }
+      const nextLineText = unstrikeSelectedTaskBlockLinkInLine(
+        currentLineText,
+        candidate,
+      );
+      if (!nextLineText || nextLineText === currentLineText) {
+        return false;
+      }
+      const cursor = typeof editor.getCursor === "function"
+        ? editor.getCursor()
+        : null;
+      editor.replaceRange(
+        nextLineText,
+        { line: targetLine, ch: 0 },
+        { line: targetLine, ch: currentLineText.length },
+      );
+      if (cursor && typeof editor.setCursor === "function") {
+        const lineText = typeof editor.getLine === "function"
+          ? editor.getLine(cursor.line) || ""
+          : "";
+        editor.setCursor({
+          line: cursor.line,
+          ch: Math.min(cursor.ch, lineText.length),
+        });
+      }
+      return true;
+    });
+  }
+
   async mutateTaskReferencesNow(identities, context, mutation) {
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.getMarkdownFiles !== "function") {
@@ -7150,14 +7492,23 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         view.editor,
         activeFile.path,
       );
-      if (selectedBlockLink && selectedBlockLink.embedded) {
-        // A selected embedded task keeps its existing recursive close or
-        // root-only reopen behavior. The keypress remains consumed even when
-        // the selected target is stale, excluded, or otherwise unresolved.
-        void this.handleActiveTaskBlockLinkOpenDone(
-          view.editor,
-          activeFile,
-        ).catch(() => false);
+      if (selectedBlockLink) {
+        // A selected Task Link that resolves to an Open/Next/In Progress/Done
+        // task is handled as a Task Link and never completes the owning
+        // Pomodoro: embedded targets close recursively, plain targets close
+        // root-only, and Done targets reopen root-only. A plain link that does
+        // not resolve to a task falls back to Pomodoro completion; an embedded
+        // link that does not resolve keeps the keypress consumed as a no-op.
+        void this.handleActiveTaskBlockLinkOpenDone(view.editor, activeFile)
+          .then((result) => {
+            if (result && result.resolved) return true;
+            if (selectedBlockLink.embedded) return false;
+            const context = this.getActivePomodoroChildContext(view.editor);
+            return context && context.taskStatus.symbol === " "
+              ? this.completeActivePomodoroTask(view.editor, activeFile, context, view)
+              : false;
+          })
+          .catch(() => false);
         return;
       }
 
@@ -7184,7 +7535,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     void this.handleActiveTaskBlockLinkOpenDone(
       view.editor,
       activeFile,
-    ).catch(() => false);
+    ).then(() => false).catch(() => false);
   }
 
   handleVimToggleCheckboxMarker() {
@@ -8608,7 +8959,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     const activePath = activeFile && activeFile.path;
     const candidate = this.getActiveLineTaskBlockLinkTarget(editor, activePath);
     if (!candidate) {
-      return false;
+      return { resolved: false, changed: false };
     }
 
     const context = {
@@ -8624,17 +8975,31 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         { taskStatusPredicate: isOpenDoneTaskStatus },
       );
     } catch (error) {
-      return false;
+      return { resolved: false, changed: false };
     }
     if (!resolvedTarget || !resolvedTarget.file) {
-      return false;
+      return { resolved: false, changed: false };
     }
 
     // Reopen always wins after resolution and is deliberately root-only, even
     // for an embedded child beneath a Pomodoro.
     if (isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
-      await this.reopenResolvedTranscludedTaskTarget(resolvedTarget, context);
-      return true;
+      const reopenResult = await this.reopenResolvedTranscludedTaskTarget(
+        resolvedTarget,
+        context,
+      );
+      if (reopenResult.changed) {
+        try {
+          await this.unstrikeActiveSelectedTaskBlockLink(
+            editor,
+            activePath,
+            candidate,
+          );
+        } catch (error) {
+          // Best effort: the reopen already landed; a missed unstrike is cosmetic.
+        }
+      }
+      return { resolved: true, changed: reopenResult.changed };
     }
 
     const pomodoroTransclusion = candidate.embedded
@@ -8648,11 +9013,29 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
           new Set(),
         );
         await this.finalizeClosedTasks(result.closed, context);
+        const rootKey = `${resolvedTarget.file.path}#^${resolvedTarget.blockId}`;
+        const rootClosed = Array.isArray(result.closed) && result.closed.some(
+          (identity) =>
+            identity &&
+            `${identity.path}#^${identity.blockId}` === rootKey,
+        );
+        if (rootClosed) {
+          try {
+            await this.strikeActiveSelectedTaskBlockLink(
+              editor,
+              activePath,
+              candidate,
+            );
+          } catch (error) {
+            // Best effort: the close already landed; a missed strike is cosmetic.
+          }
+        }
+        return { resolved: true, changed: !!result.changed };
       } catch (error) {
         // Once the eligible root resolved, a partial recursive close remains a
         // handled best-effort action.
+        return { resolved: true, changed: false };
       }
-      return true;
     }
 
     const closing = isTranscludedCompletionClosableStatus(
@@ -8668,8 +9051,17 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         resolvedTarget.taskStatus.lineText,
       ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
       await this.finalizeClosedTasks([identity], context);
+      try {
+        await this.strikeActiveSelectedTaskBlockLink(
+          editor,
+          activePath,
+          candidate,
+        );
+      } catch (error) {
+        // Best effort: the close already landed; a missed strike is cosmetic.
+      }
     }
-    return wrote;
+    return { resolved: true, changed: !!wrote };
   }
 
   async reopenTranscludedTaskTarget(candidate, context) {
@@ -11223,6 +11615,9 @@ module.exports.helpers = {
   rewritePomodoroMarkersInLine,
   rewritePomodoroMarkersInText,
   stripPomodoroMarkersFromLine,
+  buildRetiredBlockLinkEdit,
+  strikeSelectedTaskBlockLinkInLine,
+  unstrikeSelectedTaskBlockLinkInLine,
   retireClosedTaskReferencesInText,
   restoreReopenedTaskReferencesInText,
   parseTranscludedBlockTarget,

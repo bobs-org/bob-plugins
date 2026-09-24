@@ -44,6 +44,23 @@ const LEVEL_TWO_HEADING_RE = /^##\s+/;
 const LEDGER_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[([ /xX-])\]\s+)/;
 const LIST_ITEM_RE = /^([ \t]*)(?:[-*+]|\d+[.)])\s+/;
 const LIST_ITEM_PREFIX_RE = /^([ \t]*)(?:[-*+]|\d+[.)])[ \t]+/;
+// A bullet is a dedicated Task Link bullet when, around the link token, the
+// body holds only an optional checkbox, a run of `🍅 ` markers, an optional
+// `~~` strike opener, and an optional `!` before it (with a matching `~~`
+// closer and an optional trailing `#` move-only directive after it).
+const DEDICATED_TASK_LINK_PREFIX_RE = /^(?:\[[^\]\n]\][ \t]+)?(?:🍅[ \t]+)*(~~)?!?$/u;
+const DEDICATED_TASK_LINK_SUFFIX_RE = /^(~~)?(?:[ \t]*#)?$/;
+const POMODORO_MARKER_PREFIX_RE = /(?:🍅[ \t]+)+$/u;
+const NO_OPEN_TASK_NOTICE = "No open task under cursor";
+const TASK_LINK_AMBIGUOUS_NOTICE =
+  "Multiple task links on this line; place the cursor on one";
+const TASK_LINK_DEPENDENCY_NOTICE =
+  "Task link is a sub-task dependency; edit dependencies instead";
+const TASK_LINK_CLOSED_NOTICE =
+  "Task link target is closed; use Ctrl+Enter to reopen it";
+const TASK_LINK_NOT_A_TASK_NOTICE = "Task link does not point to a task";
+const TASK_LINK_NOT_FOUND_NOTICE = "Task link target could not be found";
+const TASK_LINK_OPEN_SOURCE_KIND = "task-link-open";
 const PLACEHOLDER_RE = /\(\s*\)/;
 const COLON_TIME_RANGE_RE =
   /\((\*\*)?(\d\d):(\d\d)\s*-\s*(\d\d):(\d\d)(\*\*)?(\s+[^)]*)?\)/;
@@ -2563,7 +2580,11 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     return { edits: [], removedCount: 0 };
   }
 
-  return { edits, removedCount: matches.length };
+  return {
+    edits,
+    removedCount: matches.length,
+    references: matches.map(({ reference }) => reference),
+  };
 }
 
 // `options.ownerLine` (paired with `options.section`) lets a caller that
@@ -2598,6 +2619,7 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
       ranges: [],
       edits: [],
       removedCount: 0,
+      references: [],
       content: snapshot,
       hasChanges: false,
     };
@@ -2610,9 +2632,251 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
     ranges,
     edits: cleanup.edits,
     removedCount: cleanup.removedCount,
+    references: cleanup.references || [],
     content: cleanup.edits.length > 0 ? applyTextEdits(snapshot, cleanup.edits) : snapshot,
     hasChanges: cleanup.edits.length > 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Ctrl+Shift+Enter on a selected Task Link: link selection and deletion
+// planning. Mirrors task-status-cycler's definition of a "selected Task Link"
+// (plain, embedded, 🍅-marked, `#` move-only-marked, or struck) but is kept
+// self-contained because plugins are deployed separately.
+// ---------------------------------------------------------------------------
+
+// Remove `[start, end)` from `lineText` and collapse the whitespace it exposed,
+// returning the minimal `{ start, end, replacement }` line-relative edit.
+// Applying it yields exactly removeSpanWithSpaceCollapse's output, but as a
+// narrow edit so it can merge with other edits that touch the same line.
+function spanRemovalEdit(lineText, start, end) {
+  const before = lineText.slice(0, start);
+  const after = lineText.slice(end);
+  const trailing = before.length - before.replace(/[ \t]+$/g, "").length;
+  const leading = after.length - after.replace(/^[ \t]+/g, "").length;
+
+  return {
+    start: start - trailing,
+    end: end + leading,
+    replacement: before.trim() && after.trim() ? " " : "",
+  };
+}
+
+// The span deleted when a Task Link token is removed inline: the `[[…]]`
+// token, its `!` embed marker, a wrapping `~~…~~`, and any directly preceding
+// run of `🍅 ` markers. Line-relative `{ start, end }`.
+function taskLinkRemovalRange(lineText, startCh, endCh) {
+  const range = referenceRemovalRange(lineText, { start: startCh, end: endCh });
+  const marker = POMODORO_MARKER_PREFIX_RE.exec(lineText.slice(0, range.start));
+  if (marker) {
+    range.start -= marker[0].length;
+  }
+
+  return range;
+}
+
+function collectTaskLinkCandidates(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  const candidates = [];
+  let match;
+
+  WIKI_LINK_RE.lastIndex = 0;
+  while ((match = WIKI_LINK_RE.exec(line)) !== null) {
+    const raw = match[0];
+    const endCh = match.index + raw.length;
+    if (
+      parseTrailingTaskPickerMarker(match) ||
+      parseRapidTaskPickerMarker(match, line) ||
+      hasSingleTrailingMarker(line, endCh, "@") ||
+      hasSingleTrailingMarker(line, endCh, "^")
+    ) {
+      continue;
+    }
+
+    const { destination, aliasSuffix } = splitWikiLinkBody(match[1]);
+    if (destination.includes("#^^")) {
+      continue;
+    }
+
+    const parsedDestination = parseBlockReferenceDestination(destination, {
+      allowPathBareBlock: true,
+    });
+    if (!parsedDestination) {
+      continue;
+    }
+
+    const removal = taskLinkRemovalRange(line, match.index, endCh);
+    candidates.push({
+      raw,
+      ...parsedDestination,
+      aliasSuffix,
+      startCh: match.index,
+      endCh,
+      embedded: match.index > 0 && line[match.index - 1] === "!",
+      spanStartCh: removal.start,
+      spanEndCh: removal.end,
+    });
+  }
+
+  return candidates;
+}
+
+// Pick the Task Link a command should act on. One candidate on the line is
+// selectable from anywhere on it; with several, the cursor (widened to cover
+// the `!`, `~~…~~`, and `🍅` decoration) chooses. Returns `{ link, ambiguous }`:
+// `link` is null when there is no candidate or the cursor is inside none of
+// several, and `ambiguous` is true only for the latter.
+function findSelectedTaskLinkOnLine(lineText, cursorCh) {
+  const candidates = collectTaskLinkCandidates(lineText);
+  if (candidates.length === 0) {
+    return { link: null, ambiguous: false };
+  }
+
+  if (candidates.length === 1) {
+    return { link: candidates[0], ambiguous: false };
+  }
+
+  let containing = candidates.filter(
+    (candidate) =>
+      cursorCh >= candidate.spanStartCh && cursorCh <= candidate.spanEndCh,
+  );
+  if (containing.length > 1) {
+    containing = containing.filter((candidate) => cursorCh < candidate.spanEndCh);
+  }
+
+  return containing.length === 1
+    ? { link: containing[0], ambiguous: false }
+    : { link: null, ambiguous: true };
+}
+
+// Whether the list item holding `link` exists only to hold that link, so the
+// whole bullet (and its children) can be deleted with it.
+function isDedicatedTaskLinkBullet(lineText, link) {
+  const line = normalizeMarkdownLine(lineText);
+  const bounds = listItemBodyBounds(line);
+  if (!bounds || link.startCh < bounds.start || link.endCh > bounds.end) {
+    return false;
+  }
+
+  const before = DEDICATED_TASK_LINK_PREFIX_RE.exec(
+    line.slice(bounds.start, link.startCh),
+  );
+  const after = DEDICATED_TASK_LINK_SUFFIX_RE.exec(line.slice(link.endCh, bounds.end));
+  return Boolean(before && after && Boolean(before[1]) === Boolean(after[1]));
+}
+
+// The last line of the Pomodoro entry that owns `lineNumber` as a sub-bullet,
+// or null when the line is not inside a Pomodoro entry's children.
+function findOwningPomodoroEndLine(lines, lineNumber) {
+  const section = findPomodorosSectionRange(lines);
+  if (!section || lineNumber < section.startLine || lineNumber > section.endLine) {
+    return null;
+  }
+
+  const fencedLines = computeFencedLineFlags(lines);
+  for (let line = section.startLine; line <= section.endLine; line += 1) {
+    if (fencedLines[line] || !isPomodoroEntryLine(lines[line])) {
+      continue;
+    }
+
+    const endLine = pomodoroEntryEndLine(lines, line, section.endLine);
+    if (lineNumber <= endLine) {
+      return lineNumber > line ? endLine : null;
+    }
+
+    line = endLine;
+  }
+
+  return null;
+}
+
+// Plan deleting the selected Task Link from `content`: the whole list item and
+// its subtree for a dedicated link bullet (bounded by the owning Pomodoro, else
+// the end of the note), otherwise just the token with its decoration. Returns
+// `{ edit, kind, reference }` (absolute offsets; `reference` is the bare token)
+// or null when `link` is no longer at `lineNumber`.
+function planTaskLinkDeletion(content, lineNumber, link) {
+  const snapshot = String(content || "");
+  const lines = snapshot.split("\n");
+  if (!link || !Number.isInteger(lineNumber) || lineNumber < 0 || lineNumber >= lines.length) {
+    return null;
+  }
+
+  const lineText = normalizeMarkdownLine(lines[lineNumber]);
+  if (lineText.slice(link.startCh, link.endCh) !== link.raw) {
+    return null;
+  }
+
+  const lineStart = lineStartIndexFromLines(lines, lineNumber);
+  const reference = { start: lineStart + link.startCh, end: lineStart + link.endCh };
+  if (isDedicatedTaskLinkBullet(lineText, link)) {
+    const rangeEndLine = findOwningPomodoroEndLine(lines, lineNumber);
+    return {
+      edit: listItemSubtreeEdit(
+        snapshot,
+        lines,
+        lineNumber,
+        rangeEndLine === null ? lines.length - 1 : rangeEndLine,
+      ),
+      kind: "subtree",
+      reference,
+    };
+  }
+
+  const removal = taskLinkRemovalRange(lineText, link.startCh, link.endCh);
+  const edit = spanRemovalEdit(lineText, removal.start, removal.end);
+  return {
+    edit: {
+      start: lineStart + edit.start,
+      end: lineStart + edit.end,
+      replacement: edit.replacement,
+    },
+    kind: "token",
+    reference,
+  };
+}
+
+// Drop every edit that another edit strictly covers (or duplicates, keeping
+// the earlier one) so a subtree deletion can absorb the token deletions inside
+// it. Only for link-deletion edits: status edits must never be absorbed.
+function mergeCoveringEdits(edits) {
+  return edits.filter(
+    (edit, index) =>
+      !edits.some((other, otherIndex) => {
+        if (otherIndex === index || other.start > edit.start || other.end < edit.end) {
+          return false;
+        }
+
+        return other.start < edit.start || other.end > edit.end || otherIndex < index;
+      }),
+  );
+}
+
+// An embedded link that is the sole content of a direct child bullet of a
+// `#task` line is that task's rendered dependency transclusion. Deleting it
+// alone would leave `[dependsOn:: …]` and the parent's Blocked state stale.
+function isDependencyTransclusionLink(lines, lineNumber, link) {
+  if (!link.embedded || !Array.isArray(lines) || !Number.isInteger(lineNumber)) {
+    return false;
+  }
+
+  const lineText = normalizeMarkdownLine(lines[lineNumber]);
+  if (!isSoleContentLinkBullet(lineText, link.startCh, link.endCh)) {
+    return false;
+  }
+
+  const indent = lineIndentWidth(lineText);
+  for (let line = lineNumber - 1; line >= 0; line -= 1) {
+    const parentText = normalizeMarkdownLine(lines[line]);
+    if (!parentText.trim() || lineIndentWidth(parentText) >= indent) {
+      continue;
+    }
+
+    const parent = getObsidianTaskLineMatch(parentText);
+    return Boolean(parent && PROJECT_TASK_TAG_RE.test(parent[2] || ""));
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -3945,7 +4209,10 @@ class WorkSummaryPromptModal extends Modal {
     headerText.createDiv({ cls: "bid-wlp-title", text: "Pause task" });
     headerText.createDiv({
       cls: "bid-wlp-subtitle",
-      text: "Sets the task Open and removes it from current/future Pomodoros.",
+      text:
+        this.source.kind === TASK_LINK_OPEN_SOURCE_KIND
+          ? "Sets the linked task Open and deletes the selected task link."
+          : "Sets the task Open and removes it from current/future Pomodoros.",
     });
 
     const contextEl = contentEl.createDiv({
@@ -3960,7 +4227,7 @@ class WorkSummaryPromptModal extends Modal {
     });
     contextEl.createDiv({
       cls: "bid-wlp-context-source",
-      text: this.source.sourcePath || "Current note",
+      text: this.source.contextPath || this.source.sourcePath || "Current note",
     });
 
     const fieldEl = contentEl.createDiv({ cls: "bid-wlp-field" });
@@ -4771,6 +5038,12 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
   // become Next; Next tasks become Open and lose current/future Pomodoro links.
   // Unlike the `^^` task-picker flow, this command already knows the task (the
   // cursor's own line) and has no marker text to complete or revert.
+  //
+  // When the cursor is not on an open `#task` line but the line holds a selected
+  // Task Link (a wiki block link to a task, plain or embedded), the command
+  // instead runs task-link mode: it deletes that link and sets the linked task
+  // Open (see startTaskLinkOpen). Any `#task` line, open or closed, keeps the
+  // task-line behavior above, so a task whose text contains links is unchanged.
   async openPomodoroTaskLink(editor, view) {
     if (this.promptOpen) {
       return;
@@ -4793,6 +5066,11 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 
     const resolved = this.resolvePomodoroLinkTaskFromEditor(editor);
     if (resolved.error) {
+      if (resolved.error === NO_OPEN_TASK_NOTICE) {
+        await this.startTaskLinkOpen(editor, file);
+        return;
+      }
+
       new Notice(resolved.error);
       return;
     }
@@ -4833,7 +5111,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     if (task.status !== " " && task.status !== BLOCKED_OBSIDIAN_TASK_STATUS) {
-      new Notice("No open task under cursor");
+      new Notice(NO_OPEN_TASK_NOTICE);
       return;
     }
 
@@ -4867,7 +5145,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     const lineText = editor.getLine(cursor.line) || "";
     const task = findDirectPomodoroLinkTask(lineText, cursor.line);
     if (!task) {
-      return { error: "No open task under cursor" };
+      return { error: NO_OPEN_TASK_NOTICE };
     }
 
     if (task.existingId) {
@@ -4878,6 +5156,148 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     return { task };
+  }
+
+  // The cursor half of task-link mode, split out like
+  // resolvePomodoroLinkTaskFromEditor so it is testable without a MarkdownView:
+  // single cursor, not fenced, not on a `#task` line of any status (those keep
+  // the task-line behavior and its "No open task" notice), and exactly one
+  // selectable Task Link. Returns `{ link, lineNumber, lineText }` or `{ error }`.
+  resolveSelectedTaskLinkFromEditor(editor) {
+    if (!this.hasSingleCursor(editor)) {
+      return { error: "No active Markdown task selected" };
+    }
+
+    const selection = getSingleEditorSelection(editor);
+    const cursor = selection && selection.head;
+    if (!isEditorPosition(cursor)) {
+      return { error: "No active Markdown task selected" };
+    }
+
+    if (lineIsInsideCodeFence(editor, cursor.line)) {
+      return { error: "Cannot link a task inside a code block" };
+    }
+
+    const lineText = editor.getLine(cursor.line) || "";
+    const taskMatch = getObsidianTaskLineMatch(lineText);
+    if (taskMatch && PROJECT_TASK_TAG_RE.test(taskMatch[2] || "")) {
+      return { error: NO_OPEN_TASK_NOTICE };
+    }
+
+    const selected = findSelectedTaskLinkOnLine(lineText, cursor.ch);
+    if (selected.ambiguous) {
+      return { error: TASK_LINK_AMBIGUOUS_NOTICE };
+    }
+
+    if (!selected.link) {
+      return { error: NO_OPEN_TASK_NOTICE };
+    }
+
+    return { link: selected.link, lineNumber: cursor.line, lineText };
+  }
+
+  // Resolve the task a Task Link points at: the file, its current snapshot, and
+  // the unique `#task` line carrying the block ID. Returns `{ error }` (a
+  // ready-to-show notice) or the target with its parsed status.
+  async resolveTaskLinkTarget(link, activePath, source) {
+    const file = this.resolveReferenceDestination(link, activePath);
+    if (!file) {
+      return { error: TASK_LINK_NOT_FOUND_NOTICE };
+    }
+
+    const content = await this.readFileSnapshot(file, source);
+    if (content === null) {
+      return { error: `Task link blocked: ${file.path} could not be read` };
+    }
+
+    const id = link.oldId;
+    const matches = blockTokenMatches(content, id);
+    if (matches.length !== 1) {
+      return {
+        error: `Task link target ^${id} is missing or duplicated in ${file.path}`,
+      };
+    }
+
+    const lineIndex = content.slice(0, matches[0].start).split("\n").length - 1;
+    const rawLine = content.split("\n")[lineIndex];
+    const taskMatch = getObsidianTaskLineMatch(rawLine);
+    const status = taskMatch ? taskMatch[1] : null;
+    if (
+      !taskMatch ||
+      !PROJECT_TASK_TAG_RE.test(taskMatch[2] || "") ||
+      getTrailingBlockId(rawLine) !== id ||
+      !(OPEN_OBSIDIAN_TASK_STATUSES.has(status) || DONE_OBSIDIAN_TASK_STATUSES.has(status))
+    ) {
+      return { error: TASK_LINK_NOT_A_TASK_NOTICE };
+    }
+
+    if (DONE_OBSIDIAN_TASK_STATUSES.has(status)) {
+      return { error: TASK_LINK_CLOSED_NOTICE };
+    }
+
+    return {
+      file,
+      path: file.path,
+      content,
+      line: lineIndex,
+      rawLine,
+      status,
+      id,
+      displayText: cleanTaskDisplayText(rawLine),
+    };
+  }
+
+  // Task-link mode entry: pick the link under the cursor, resolve and vet its
+  // target, then either apply immediately or, for an In Progress target, open
+  // the work-summary prompt (which applies on submit). The reentrancy guard is
+  // held while resolving/applying and handed to the modal for the prompt.
+  async startTaskLinkOpen(editor, file) {
+    const selection = this.resolveSelectedTaskLinkFromEditor(editor);
+    if (selection.error) {
+      new Notice(selection.error);
+      return;
+    }
+
+    let promptSource = null;
+    this.promptOpen = true;
+    try {
+      const { link, lineNumber, lineText } = selection;
+      if (
+        isDependencyTransclusionLink(editor.getValue().split("\n"), lineNumber, link)
+      ) {
+        new Notice(TASK_LINK_DEPENDENCY_NOTICE);
+        return;
+      }
+
+      const source = { editor, file, sourcePath: file.path };
+      const target = await this.resolveTaskLinkTarget(link, file.path, source);
+      if (target.error) {
+        new Notice(target.error);
+        return;
+      }
+
+      const linkSource = {
+        ...source,
+        kind: TASK_LINK_OPEN_SOURCE_KIND,
+        line: lineNumber,
+        lineText,
+        link,
+        contextPath: target.path,
+        task: { displayText: target.displayText },
+        target: { path: target.path, rawLine: target.rawLine, status: target.status },
+      };
+      if (target.status === "/") {
+        promptSource = linkSource;
+      } else {
+        await this.applyTaskLinkOpen(linkSource);
+      }
+    } finally {
+      this.promptOpen = false;
+    }
+
+    if (promptSource) {
+      this.openWorkSummaryPrompt(promptSource);
+    }
   }
 
   resolveTodayDailyFile() {
@@ -4952,6 +5372,13 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     const workLogDate = normalizedSummary
       ? options.workLogDate || localTodayParts(this.now())
       : null;
+    if (source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
+      return this.applyTaskLinkOpen(source, {
+        workSummary: normalizedSummary,
+        workLogDate,
+      });
+    }
+
     return this.applyPomodoroTaskUnlink(source, {
       expectedStatus: "/",
       workSummary: normalizedSummary,
@@ -5205,6 +5632,217 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     setEditorCursorIfPossible(source.editor, originalCursor);
     this.reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan);
     return true;
+  }
+
+  // Delete the selected Task Link and set its target task Open. Everything is
+  // re-validated first (link line, dependency shape, target line and status);
+  // then edits are planned per file — the target's status edit, today's daily
+  // note cleanup of the task's other current/future Pomodoro links, and the
+  // selected-link deletion — and written target note first, so a partial
+  // failure leaves an Open task with its link still in place and retryable.
+  async applyTaskLinkOpen(source, options = {}) {
+    const editor = source.editor;
+    const link = source.link;
+    const normalizedSummary = normalizeWorkSummary(options.workSummary || "");
+
+    if ((editor.getLine(source.line) || "") !== source.lineText) {
+      new Notice(`Task link blocked: selected link changed in ${source.sourcePath}`);
+      return false;
+    }
+
+    const activeContent = editor.getValue();
+    if (isDependencyTransclusionLink(activeContent.split("\n"), source.line, link)) {
+      new Notice(TASK_LINK_DEPENDENCY_NOTICE);
+      return false;
+    }
+
+    const activeFile = source.file || this.resolveTaskFile(source.sourcePath);
+    if (!activeFile) {
+      new Notice("Task link blocked: active note could not be resolved");
+      return false;
+    }
+
+    const target = await this.resolveTaskLinkTarget(link, source.sourcePath, source);
+    if (target.error) {
+      new Notice(target.error);
+      return false;
+    }
+
+    if (target.path !== source.target.path || target.rawLine !== source.target.rawLine) {
+      new Notice(`Task link stopped: linked task changed in ${target.path}`);
+      return false;
+    }
+
+    // Read every snapshot up front, keyed by path, so all edits below are
+    // planned against one consistent view before anything is written.
+    const files = new Map([
+      [target.path, target.file],
+      [source.sourcePath, activeFile],
+    ]);
+    const snapshots = new Map([
+      [target.path, target.content],
+      [source.sourcePath, activeContent],
+    ]);
+    const dailyFile = this.resolveTodayDailyFile();
+    if (dailyFile && !snapshots.has(dailyFile.path)) {
+      const dailyContent = await this.readFileSnapshot(dailyFile, source);
+      if (dailyContent === null) {
+        new Notice(`Task link blocked: ${dailyFile.path} could not be read`);
+        return false;
+      }
+
+      files.set(dailyFile.path, dailyFile);
+      snapshots.set(dailyFile.path, dailyContent);
+    }
+
+    if (editor.getValue() !== activeContent) {
+      new Notice(`Task link stopped: ${source.sourcePath} changed before update`);
+      return false;
+    }
+
+    const resetsStatus = target.status === "*" || target.status === "/";
+    const statusPlan = resetsStatus
+      ? planTargetTaskOpenUpdate(target.content, target.line, {
+          expectedStatus: target.status,
+          workSummary: target.status === "/" ? normalizedSummary : "",
+          workLogDate: options.workLogDate || null,
+        })
+      : null;
+    if (resetsStatus && !statusPlan) {
+      new Notice(`Task link stopped: linked task changed in ${target.path}`);
+      return false;
+    }
+
+    const deletion = planTaskLinkDeletion(activeContent, source.line, link);
+    if (!deletion) {
+      new Notice(`Task link stopped: selected link changed in ${source.sourcePath}`);
+      return false;
+    }
+
+    let cleanup = { edits: [], references: [], removedCount: 0 };
+    if (dailyFile) {
+      cleanup = planAllOpenPomodoroLinkCleanup(snapshots.get(dailyFile.path), {
+        sourcePath: dailyFile.path,
+        targetPath: target.path,
+        targetBlockId: target.id,
+        resolveTarget: (reference, referrerPath) =>
+          this.resolveReferenceDestination(reference, referrerPath),
+      });
+    }
+
+    // Per file: link-deletion edits (a subtree deletion may absorb the token
+    // deletions inside it, and the selected edit wins ties by going first) and
+    // status edits (which are never absorbed, only checked for overlap).
+    const groups = new Map();
+    const groupFor = (path) => {
+      if (!groups.has(path)) {
+        groups.set(path, {
+          file: files.get(path),
+          content: snapshots.get(path),
+          linkEdits: [],
+          statusEdits: [],
+        });
+      }
+
+      return groups.get(path);
+    };
+    groupFor(source.sourcePath).linkEdits.push(deletion.edit);
+    if (dailyFile) {
+      groupFor(dailyFile.path).linkEdits.push(...cleanup.edits);
+    }
+    if (statusPlan) {
+      groupFor(target.path).statusEdits.push(...statusPlan.edits);
+    }
+
+    for (const group of groups.values()) {
+      group.edits = [...mergeCoveringEdits(group.linkEdits), ...group.statusEdits];
+      if (!validateNonOverlappingEdits(group.edits)) {
+        new Notice(`Task link stopped: overlapping edits in ${group.file.path}`);
+        return false;
+      }
+    }
+
+    // Cleanup links that the selected deletion already removes are not "extra".
+    const extraCleanupCount = cleanup.references.filter(
+      (reference) =>
+        !(
+          dailyFile &&
+          dailyFile.path === source.sourcePath &&
+          reference.start >= deletion.edit.start &&
+          reference.end <= deletion.edit.end
+        ),
+    ).length;
+
+    const originalCursor =
+      typeof editor.getCursor === "function" ? editor.getCursor() : null;
+    const writeOrder = [
+      ...new Set([
+        target.path,
+        ...(dailyFile ? [dailyFile.path] : []),
+        source.sourcePath,
+      ]),
+    ];
+    let wroteAny = false;
+    for (const path of writeOrder) {
+      const group = groups.get(path);
+      if (!group || group.edits.length === 0) {
+        continue;
+      }
+
+      const applied = await this.applyTargetTaskPlan(
+        group.file,
+        source,
+        { edits: group.edits, content: applyTextEdits(group.content, group.edits) },
+        group.content,
+        { noticePrefix: "Task link stopped", quiet: wroteAny },
+      );
+      if (!applied) {
+        if (wroteAny) {
+          this.reportTaskLinkPartialFailure(statusPlan, path);
+        }
+        return false;
+      }
+
+      wroteAny = true;
+      if (path === source.sourcePath) {
+        this.restoreCursorClampedToContent(editor, originalCursor);
+      }
+    }
+
+    this.reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount);
+    return true;
+  }
+
+  // Put the cursor back where it was, clamped to the (possibly shorter) note.
+  restoreCursorClampedToContent(editor, cursor) {
+    if (!cursor) {
+      return;
+    }
+
+    const lines = editor.getValue().split("\n");
+    const line = Math.min(cursor.line, lines.length - 1);
+    setEditorCursorIfPossible(editor, {
+      line,
+      ch: Math.min(cursor.ch, lines[line].length),
+    });
+  }
+
+  reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount) {
+    const base = statusPlan
+      ? "Task set Open"
+      : target.status === BLOCKED_OBSIDIAN_TASK_STATUS
+        ? "Task remains Blocked"
+        : "Task already Open";
+    const logged = statusPlan && statusPlan.workLogEntryAdded ? " · logged work" : "";
+    new Notice(
+      `${base} · removed task link${logged}${this.currentFutureLinkCleanupNoticeSuffix(extraCleanupCount)}`,
+    );
+  }
+
+  reportTaskLinkPartialFailure(statusPlan, failedPath) {
+    new Notice(
+      `${statusPlan ? "Task set Open" : "Task link removal incomplete"}, but ${failedPath} could not be updated; press Ctrl+Shift+Enter on the link again`,
+    );
   }
 
   pomodoroPlanErrorNotice(error, dailyPath) {
@@ -5963,6 +6601,7 @@ module.exports.helpers = {
   buildTaskDependencyIndex,
   collectAllOpenPomodoroRanges,
   collectTaskPickerItems,
+  collectTaskLinkCandidates,
   computeFencedLineFlags,
   countBlockedTasks,
   findDirectPomodoroLinkTask,
@@ -5972,6 +6611,7 @@ module.exports.helpers = {
   findScheduledFieldMatches,
   findScheduleLogEntryIndent,
   findScheduleLogMarker,
+  findSelectedTaskLinkOnLine,
   findSingleFutureScheduledField,
   findTaskPickerMarkerNearCursor,
   findWorkLogEntryPrefix,
@@ -5981,10 +6621,13 @@ module.exports.helpers = {
   formatWorkLogEntry,
   getCaretCompletionDestination,
   getDailyNotesOptions,
+  isDedicatedTaskLinkBullet,
+  isDependencyTransclusionLink,
   isSoleContentLinkBullet,
   lineIsInsideCodeFence,
   listItemBodyBounds,
   localTodayParts,
+  mergeCoveringEdits,
   normalizeWorkSummary,
   parseDependsOnIds,
   parseInlineIdField,
@@ -5995,10 +6638,12 @@ module.exports.helpers = {
   planPomodoroLinkInsertion,
   planTargetTaskOpenUpdate,
   planTargetTaskUpdate,
+  planTaskLinkDeletion,
   planWorkLogInsertion,
   resolveTaskDependencyState,
   selectPomodoroInsertionTarget,
   sourceQualifiesForPomodoroActivation,
+  spanRemovalEdit,
   taskBlockedState,
   taskIdKeysFromLine,
   taskPickerRevertCursorCh,

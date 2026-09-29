@@ -1,4 +1,11 @@
-const { MarkdownView, Notice, Plugin, normalizePath } = require("obsidian");
+const {
+  MarkdownView,
+  Notice,
+  Platform,
+  Plugin,
+  normalizePath,
+  parseYaml,
+} = require("obsidian");
 const { Prec } = require("@codemirror/state");
 const { EditorView, keymap } = require("@codemirror/view");
 
@@ -1787,6 +1794,712 @@ function replaceEditorLine(cm, line, oldLineText, newLineText) {
   return true;
 }
 
+// --- Plan budget ----------------------------------------------------------
+// JavaScript mirror of docs/plan.md (bob-cli), the authoritative definition.
+// The Rust engine (src/native/plan_budget/) implements the same rules; both
+// test against the same conformance examples. Field names are camelCase here.
+
+const PLAN_UNNAMED_THEME = "(unnamed)";
+const PLAN_CONFIG_RELATIVE_PATH = "bob/config.yml";
+const PLAN_TASKS_PLUGIN_ID = "obsidian-tasks-plugin";
+const PLAN_LINT_THEME_CAP = "plan_theme_cap_exceeded";
+const PLAN_LINT_LINK_CAP = "plan_link_cap_exceeded";
+const PLAN_LINT_DUPLICATE_NAME = "duplicate_open_pomodoro_name";
+const PLAN_LINT_INVENTORY_LABEL = "inventory_label_open";
+const PLAN_LINT_SUBHEADING = "subheading_in_pomodoros";
+const PLAN_LINT_NOW_CAP = "now_cap_exceeded";
+const PLAN_DAILY_PATH_RE = /(^|\/)\d{4}\/\d{8}\.md$/;
+const PLAN_ENTRY_RE = /^-\s+\[([^\]]*)\]/;
+const PLAN_PLACEHOLDER_RE = /^\([ \t]*\)/;
+const PLAN_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
+const PLAN_ATX_RE = /^(?: {0,3})(#{1,6})(?:\s|$)/;
+const PLAN_NOW_TAG_RE = /(?:^|\s)#now(?:\s|$)/;
+
+function defaultPlanCaps() {
+  return {
+    maxThemes: 3,
+    maxLinks: 10,
+    maxNow: 15,
+    strict: false,
+    exempt: ["GTD"],
+    inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
+  };
+}
+
+function planCapOrDefault(value, fallback) {
+  return Number.isInteger(value) && value >= 1 ? value : fallback;
+}
+
+function planStringListOrDefault(value, fallback) {
+  if (!Array.isArray(value)) {
+    return [...fallback];
+  }
+  const out = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) {
+      return [...fallback];
+    }
+    out.push(item.trim());
+  }
+  return out;
+}
+
+// Whole-token, case-sensitive `#now`: preceded by the line start or
+// whitespace, followed by the end or whitespace. `#nowadays` and `#now/x`
+// never match.
+function hasNowTag(text) {
+  return PLAN_NOW_TAG_RE.test(String(text || ""));
+}
+
+// Case-insensitive component key: collapsed whitespace, lowercased.
+function normalizePlanComponent(value) {
+  return String(value || "")
+    .split(/\s+/)
+    .filter((part) => part.length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+function splitPlanComponents(name) {
+  return String(name || "")
+    .split("+")
+    .map((component) => component.trim())
+    .filter((component) => component.length > 0);
+}
+
+// Normalize a camelCase caps object, substituting defaults for anything
+// missing or invalid. Never throws.
+function effectivePlanCaps(caps) {
+  const defaults = defaultPlanCaps();
+  const raw =
+    caps && typeof caps === "object" && !Array.isArray(caps) ? caps : {};
+  return {
+    maxThemes: planCapOrDefault(raw.maxThemes, defaults.maxThemes),
+    maxLinks: planCapOrDefault(raw.maxLinks, defaults.maxLinks),
+    maxNow: planCapOrDefault(raw.maxNow, defaults.maxNow),
+    strict:
+      typeof raw.strict === "boolean" ? raw.strict : defaults.strict,
+    exempt: planStringListOrDefault(raw.exempt, defaults.exempt),
+    inventoryLabels: planStringListOrDefault(
+      raw.inventoryLabels,
+      defaults.inventoryLabels,
+    ),
+  };
+}
+
+// Read the `plan:` block out of a parsed config file (snake_case keys, with
+// camelCase tolerated). Unknown keys stay ignored. Anything missing or
+// invalid falls back to the defaults, mirroring the tolerant surfaces in
+// docs/plan.md; use coercePlanCaps when the invalid flag matters.
+function parsePlanCaps(yamlObject) {
+  return coercePlanCaps(planCapsBlock(yamlObject)).caps;
+}
+
+function planCapsBlock(yamlObject) {
+  if (
+    !yamlObject ||
+    typeof yamlObject !== "object" ||
+    Array.isArray(yamlObject)
+  ) {
+    return {};
+  }
+  const block = yamlObject.plan;
+  if (!block || typeof block !== "object" || Array.isArray(block)) {
+    return {};
+  }
+  return block;
+}
+
+function coercePlanCaps(block) {
+  const defaults = defaultPlanCaps();
+  const raw =
+    block && typeof block === "object" && !Array.isArray(block) ? block : {};
+  const pick = (snake, camel) =>
+    raw[snake] !== undefined ? raw[snake] : raw[camel];
+  let invalid = false;
+  const cap = (snake, camel, fallback) => {
+    const value = pick(snake, camel);
+    if (value === undefined) {
+      return fallback;
+    }
+    if (!Number.isInteger(value) || value < 1) {
+      invalid = true;
+      return fallback;
+    }
+    return value;
+  };
+  const list = (snake, camel, fallback) => {
+    const value = pick(snake, camel);
+    if (value === undefined) {
+      return [...fallback];
+    }
+    if (!Array.isArray(value)) {
+      invalid = true;
+      return [...fallback];
+    }
+    const out = [];
+    for (const item of value) {
+      if (typeof item !== "string" || !item.trim()) {
+        invalid = true;
+        return [...fallback];
+      }
+      out.push(item.trim());
+    }
+    return out;
+  };
+  const strictValue = pick("strict", "strict");
+  let strict = defaults.strict;
+  if (strictValue !== undefined) {
+    if (typeof strictValue !== "boolean") {
+      invalid = true;
+    } else {
+      strict = strictValue;
+    }
+  }
+  return {
+    caps: {
+      maxThemes: cap("max_themes", "maxThemes", defaults.maxThemes),
+      maxLinks: cap("max_links", "maxLinks", defaults.maxLinks),
+      maxNow: cap("max_now", "maxNow", defaults.maxNow),
+      strict,
+      exempt: list("exempt", "exempt", defaults.exempt),
+      inventoryLabels: list(
+        "inventory_labels",
+        "inventoryLabels",
+        defaults.inventoryLabels,
+      ),
+    },
+    invalid,
+  };
+}
+
+function emptyPlanBudget(caps) {
+  const effective = effectivePlanCaps(caps);
+  return {
+    hasSection: false,
+    themes: { count: 0, cap: effective.maxThemes, over: false },
+    links: { count: 0, cap: effective.maxLinks, over: false },
+    status: "ok",
+    themeNames: [],
+    entries: [],
+    warnings: [],
+  };
+}
+
+function planFenceMarker(line) {
+  const text = String(line || "");
+  let indent = 0;
+  while (text[indent] === " ") {
+    indent += 1;
+  }
+  if (indent > 3) {
+    return null;
+  }
+  const rest = text.slice(indent);
+  const char = rest[0];
+  if (char !== "`" && char !== "~") {
+    return null;
+  }
+  let length = 0;
+  while (rest[length] === char) {
+    length += 1;
+  }
+  return length >= 3 ? { char, length } : null;
+}
+
+function planClosesFence(line, open) {
+  const marker = planFenceMarker(line);
+  if (!marker) {
+    return false;
+  }
+  const trimmed = String(line || "").trimStart();
+  return (
+    marker.char === open.char &&
+    marker.length >= open.length &&
+    trimmed.slice(marker.length).trim() === ""
+  );
+}
+
+function planFencedLines(lines, start, end) {
+  const fenced = new Set();
+  let open = null;
+  for (let index = start; index <= end; index += 1) {
+    const line = lines[index];
+    if (open) {
+      fenced.add(index);
+      if (planClosesFence(line, open)) {
+        open = null;
+      }
+    } else {
+      const marker = planFenceMarker(line);
+      if (marker) {
+        fenced.add(index);
+        open = marker;
+      }
+    }
+  }
+  return fenced;
+}
+
+function planAtxLevel(line) {
+  const match = PLAN_ATX_RE.exec(String(line || ""));
+  return match ? match[1].length : null;
+}
+
+// Ledger lines: from the `## Pomodoros` heading up to the next `## `
+// heading. Frontmatter and fenced code blocks are skipped. Returns
+// `{ start, end }` 0-based inclusive, or null.
+function planSectionRange(lines) {
+  if (!Array.isArray(lines)) {
+    return null;
+  }
+  let frontmatterEnd = -1;
+  if (String(lines[0] || "").trimEnd() === "---") {
+    for (let index = 1; index < lines.length; index += 1) {
+      if (String(lines[index] || "").trimEnd() === "---") {
+        frontmatterEnd = index;
+        break;
+      }
+    }
+  }
+  let sectionStart = -1;
+  let fence = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (index <= frontmatterEnd) {
+      continue;
+    }
+    const line = String(lines[index] || "");
+    if (fence) {
+      if (planClosesFence(line, fence)) {
+        fence = null;
+      }
+      continue;
+    }
+    const marker = planFenceMarker(line);
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    if (sectionStart === -1) {
+      if (/^##\s+Pomodoros(?:\s|$)/.test(line)) {
+        sectionStart = index + 1;
+      }
+    } else if (/^##\s/.test(line)) {
+      return { start: sectionStart, end: index - 1 };
+    }
+  }
+  return sectionStart === -1
+    ? null
+    : { start: sectionStart, end: lines.length - 1 };
+}
+
+function planNormalizeHhmm(value) {
+  const digits = String(value || "").replace(/:/g, "");
+  if (!/^\d{4}$/.test(digits)) {
+    return null;
+  }
+  const hours = Number.parseInt(digits.slice(0, 2), 10);
+  const minutes = Number.parseInt(digits.slice(2), 10);
+  if (hours > 23 || minutes > 59) {
+    return null;
+  }
+  return digits;
+}
+
+function planParseParentheticalTime(inside) {
+  const dash = String(inside || "").indexOf("-");
+  if (dash === -1) {
+    return null;
+  }
+  let rawStart = String(inside).slice(0, dash).trim();
+  let bold = false;
+  if (rawStart.startsWith("**")) {
+    bold = true;
+    rawStart = rawStart.slice(2).trim();
+  }
+  const start = planNormalizeHhmm(rawStart);
+  if (!start) {
+    return null;
+  }
+  const rawEnd = String(inside).slice(dash + 1).trimStart();
+  const endMatch = /^[0-9:]+/.exec(rawEnd);
+  if (!endMatch) {
+    return null;
+  }
+  const end = planNormalizeHhmm(endMatch[0]);
+  if (!end) {
+    return null;
+  }
+  let rest = rawEnd.slice(endMatch[0].length);
+  if (bold) {
+    if (!rest.startsWith("**")) {
+      return null;
+    }
+    rest = rest.slice(2);
+  } else if (rest.startsWith("**")) {
+    return null;
+  }
+  if (rest !== "" && !/^\s/.test(rest)) {
+    return null;
+  }
+  return { start, end };
+}
+
+// Leading `()` placeholder or `(time-range)` of an entry body, mirroring
+// capture_pomodoros::parse_entry_body. A name only exists after one of these.
+function planLeadingRange(body) {
+  const text = String(body || "");
+  const placeholder = PLAN_PLACEHOLDER_RE.exec(text);
+  if (placeholder) {
+    return {
+      length: placeholder[0].length,
+      timeRange: null,
+      placeholder: true,
+    };
+  }
+  if (!text.startsWith("(")) {
+    return { length: null, timeRange: null, placeholder: false };
+  }
+  const close = text.indexOf(")", 1);
+  if (close === -1) {
+    return { length: null, timeRange: null, placeholder: false };
+  }
+  const parsed = planParseParentheticalTime(text.slice(1, close));
+  if (!parsed) {
+    return { length: null, timeRange: null, placeholder: false };
+  }
+  return {
+    length: close + 1,
+    timeRange: `${parsed.start}-${parsed.end}`,
+    placeholder: false,
+  };
+}
+
+// The text after `—` (em dash) that follows the leading placeholder or time
+// range. A merged name (`BOB + DECKS`) is split by the caller.
+function planParseNameTail(remaining) {
+  const trimmed = String(remaining || "").replace(/^[ \t]+/, "");
+  if (!trimmed.startsWith("—")) {
+    return null;
+  }
+  const name = trimmed.slice(1).replace(/^[ \t]+/, "").trim();
+  return name ? name : null;
+}
+
+function planParseEntry(line) {
+  const text = String(line || "");
+  const match = PLAN_ENTRY_RE.exec(text);
+  if (!match) {
+    return null;
+  }
+  const afterBracket = text.slice(match[0].length);
+  if (!/^\s/.test(afterBracket)) {
+    return null;
+  }
+  const body = afterBracket.trim();
+  const checkbox = String(match[1] || "").trim();
+  if (/^x$/i.test(checkbox)) {
+    return { state: "completed", body };
+  }
+  if (checkbox === "-") {
+    return { state: "cancelled", body };
+  }
+  return { state: "open", body };
+}
+
+// Inner spans of `~~…~~` struck pairs on one line.
+function planStruckInnerSpans(line) {
+  const text = String(line || "");
+  const marks = [];
+  let base = 0;
+  let rest = text;
+  for (;;) {
+    const found = rest.indexOf("~~");
+    if (found === -1) {
+      break;
+    }
+    marks.push(base + found);
+    base += found + 2;
+    rest = text.slice(base);
+  }
+  const spans = [];
+  for (let index = 0; index + 1 < marks.length; index += 2) {
+    spans.push([marks[index] + 2, marks[index + 1]]);
+  }
+  return spans;
+}
+
+// Block links `[[target#^id]]` (also `![[…]]` and `[[…|alias]]`, with or
+// without a trailing `#` move-only marker) outside `~~…~~` struck spans.
+function planBlockLinks(line) {
+  const text = String(line || "");
+  const struck = planStruckInnerSpans(text);
+  const links = [];
+  let base = 0;
+  let rest = text;
+  for (;;) {
+    const open = rest.indexOf("[[");
+    if (open === -1) {
+      break;
+    }
+    const absoluteOpen = base + open;
+    const afterOpen = rest.slice(open + 2);
+    const close = afterOpen.indexOf("]]");
+    if (close === -1) {
+      break;
+    }
+    let inside = afterOpen.slice(0, close);
+    let linkEnd = absoluteOpen + 2 + close + 2;
+    if (rest.slice(open + 2 + close + 2).startsWith("#")) {
+      linkEnd += 1;
+    }
+    if (inside.endsWith("#")) {
+      inside = inside.slice(0, -1);
+    }
+    const pipe = inside.indexOf("|");
+    const target = pipe === -1 ? inside : inside.slice(0, pipe);
+    const caret = target.indexOf("#^");
+    if (caret !== -1) {
+      const blockId = target.slice(caret + 2).trim();
+      if (
+        blockId &&
+        PLAN_BLOCK_ID_RE.test(blockId) &&
+        !struck.some(
+          ([start, end]) => absoluteOpen >= start && linkEnd <= end,
+        )
+      ) {
+        let name = target.slice(0, caret).trim();
+        if (name.endsWith(".md")) {
+          name = name.slice(0, -3);
+        }
+        links.push([name, blockId]);
+      }
+    }
+    base = linkEnd;
+    rest = text.slice(base);
+  }
+  return links;
+}
+
+function planMeter(count, cap) {
+  return { count, cap, over: count > cap };
+}
+
+// Pure ledger budget and lint engine implementing docs/plan.md rules 1–9.
+function computePlanBudget(content, caps) {
+  const effective = effectivePlanCaps(caps);
+  const lines = String(content || "").split("\n");
+  const section = planSectionRange(lines);
+  if (!section) {
+    return emptyPlanBudget(effective);
+  }
+  const fenced = planFencedLines(lines, section.start, section.end);
+  const warnings = [];
+  for (let index = section.start; index <= section.end; index += 1) {
+    if (fenced.has(index)) {
+      continue;
+    }
+    const level = planAtxLevel(lines[index]);
+    if (level !== null && level >= 3) {
+      warnings.push({
+        code: PLAN_LINT_SUBHEADING,
+        message:
+          "subheading inside the Pomodoros section splits time totals",
+        line: index + 1,
+      });
+    }
+  }
+
+  const scanned = [];
+  for (let index = section.start; index <= section.end; index += 1) {
+    if (fenced.has(index)) {
+      continue;
+    }
+    const line = String(lines[index] || "");
+    if (line.startsWith(" ") || line.startsWith("\t")) {
+      continue;
+    }
+    const parsed = planParseEntry(line);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.state === "cancelled") {
+      continue;
+    }
+    const leading = planLeadingRange(parsed.body);
+    const name =
+      leading.length === null
+        ? null
+        : planParseNameTail(parsed.body.slice(leading.length));
+    scanned.push({
+      line: index + 1,
+      state: parsed.state,
+      name,
+      timeRange: leading.timeRange,
+      placeholder: leading.placeholder,
+      isCurrent: false,
+    });
+  }
+
+  const timedOpen = scanned.filter(
+    (entry) => entry.state === "open" && entry.timeRange !== null,
+  );
+  if (timedOpen.length === 1) {
+    timedOpen[0].isCurrent = true;
+  }
+
+  const exempt = new Set(
+    effective.exempt.map((value) => normalizePlanComponent(value)),
+  );
+  const inventory = new Set(
+    effective.inventoryLabels.map((value) => normalizePlanComponent(value)),
+  );
+  const entryLines = new Set(scanned.map((entry) => entry.line));
+
+  const entries = [];
+  const themeNames = [];
+  const themeKeys = new Set();
+  const seenThemes = new Map();
+  const inventoryWarned = new Set();
+  const seenLinks = new Set();
+  let unnamedCounted = false;
+
+  for (const entry of scanned) {
+    if (entry.state !== "open") {
+      continue;
+    }
+    const components = entry.name ? splitPlanComponents(entry.name) : [];
+    const keys = components.map((component) =>
+      normalizePlanComponent(component),
+    );
+    const exemptEntry =
+      keys.length > 0 && keys.every((key) => exempt.has(key));
+    let entryLinks = [];
+    if (!exemptEntry) {
+      for (
+        let offset = 0;
+        entry.line + offset <= section.end;
+        offset += 1
+      ) {
+        const index = entry.line + offset;
+        if (entryLines.has(index + 1)) {
+          break;
+        }
+        if (fenced.has(index)) {
+          continue;
+        }
+        const line = String(lines[index] || "");
+        if (line !== "" && !line.startsWith(" ") && !line.startsWith("\t")) {
+          break;
+        }
+        for (const link of planBlockLinks(line)) {
+          entryLinks.push(link);
+        }
+      }
+    }
+    if (components.length === 0 && entryLinks.length === 0) {
+      // An empty `()` placeholder never counts.
+      continue;
+    }
+
+    const distinctLinks = new Set();
+    if (!exemptEntry) {
+      for (const [target, blockId] of entryLinks) {
+        const key = `${target} ${blockId}`;
+        distinctLinks.add(key);
+        seenLinks.add(key);
+      }
+    }
+
+    for (let index = 0; index < components.length; index += 1) {
+      const component = components[index];
+      const key = keys[index];
+      if (exempt.has(key)) {
+        continue;
+      }
+      if (seenThemes.has(key)) {
+        warnings.push({
+          code: PLAN_LINT_DUPLICATE_NAME,
+          message:
+            `${component} is open in more than one Pomodoro ` +
+            `(lines ${seenThemes.get(key)} and ${entry.line})`,
+          line: entry.line,
+        });
+      } else {
+        seenThemes.set(key, entry.line);
+      }
+      if (inventory.has(key) && !inventoryWarned.has(key)) {
+        inventoryWarned.add(key);
+        warnings.push({
+          code: PLAN_LINT_INVENTORY_LABEL,
+          message: `${component} is an inventory label, not a theme`,
+          line: entry.line,
+        });
+      }
+    }
+
+    if (components.length === 0 && !unnamedCounted) {
+      unnamedCounted = true;
+      themeKeys.add(PLAN_UNNAMED_THEME);
+      themeNames.push(PLAN_UNNAMED_THEME);
+    }
+    for (let index = 0; index < components.length; index += 1) {
+      const component = components[index];
+      const key = keys[index];
+      if (exempt.has(key) || themeKeys.has(key)) {
+        continue;
+      }
+      themeKeys.add(key);
+      themeNames.push(component);
+    }
+
+    const row = {
+      line: entry.line,
+      name: entry.name === null ? PLAN_UNNAMED_THEME : entry.name,
+      components,
+      exempt: exemptEntry,
+      running: entry.isCurrent,
+      highlight: false,
+      links: distinctLinks.size,
+    };
+    if (entry.timeRange !== null) {
+      row.timeRange = entry.timeRange;
+    }
+    entries.push(row);
+  }
+
+  const highlightIndex = entries.findIndex((entry) => !entry.exempt);
+  if (highlightIndex !== -1) {
+    entries[highlightIndex].highlight = true;
+  }
+
+  const themes = planMeter(themeNames.length, effective.maxThemes);
+  const links = planMeter(seenLinks.size, effective.maxLinks);
+  const status = themes.over || links.over ? "over" : "ok";
+  if (themes.over) {
+    warnings.push({
+      code: PLAN_LINT_THEME_CAP,
+      message: `today's plan has ${themes.count}/${themes.cap} themes`,
+    });
+  }
+  if (links.over) {
+    warnings.push({
+      code: PLAN_LINT_LINK_CAP,
+      message: `today's plan has ${links.count}/${links.cap} links`,
+    });
+  }
+
+  return {
+    hasSection: true,
+    themes,
+    links,
+    status,
+    themeNames,
+    entries,
+    warnings,
+  };
+}
+
 module.exports = class BobLedgerToolsPlugin extends Plugin {
   onload() {
     this.vimMappingsRegistered = false;
@@ -1873,6 +2586,45 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       );
     }
 
+    // Live plan budget: a ```bob-plan block plus the versioned `api` the dash
+    // and the other plugins call instead of re-implementing docs/plan.md.
+    this.planBlockViews = new Set();
+    this.planBlockRerenderTimer = null;
+    this.api = {
+      version: 1,
+      caps: () => loadPlanCaps().caps,
+      planBudget: (options = {}) => this.planBudgetForCallers(options),
+      nowBudget: () => {
+        const { caps } = loadPlanCaps();
+        return nowBudgetFromTasks(
+          planBlockTasks(this.app) || [],
+          new Date(),
+          caps,
+        );
+      },
+    };
+    if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
+      this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
+        this.renderPlanBlock(el, ctx),
+      );
+    }
+    const metadataCache = this.app && this.app.metadataCache;
+    if (metadataCache && typeof metadataCache.on === "function") {
+      this.registerEvent(
+        metadataCache.on("changed", () => this.schedulePlanBlockRerender()),
+      );
+    }
+    if (
+      typeof this.registerInterval === "function" &&
+      typeof window !== "undefined" &&
+      typeof window.setInterval === "function"
+    ) {
+      // The Tasks plugin exposes no usable cache event, so poll it cheaply.
+      this.registerInterval(
+        window.setInterval(() => this.rerenderPlanBlocks(), 5000),
+      );
+    }
+
     this.app.workspace.onLayoutReady(() => {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
@@ -1890,6 +2642,17 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   }
 
   onunload() {
+    if (
+      this.planBlockRerenderTimer !== null &&
+      this.planBlockRerenderTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.planBlockRerenderTimer);
+    }
+    this.planBlockRerenderTimer = null;
+    if (this.planBlockViews) {
+      this.planBlockViews.clear();
+    }
     cancelDeferred(this.pendingCenterDeferred);
     this.pendingCenterDeferred = null;
     this.dailyNavigationActionId += 1;
@@ -1903,6 +2666,189 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
   currentDailyPath() {
     return todayDailyPath(new Date(), getDailyNotesOptions(this.app));
+  }
+
+  // Supported `api.planBudget` input: `{ path?, content? }`. The `content`
+  // option lets callers budget post-write text synchronously; otherwise the
+  // target note is read and a Promise is returned. Never rejects: missing
+  // notes degrade to `–` placeholders.
+  planBudgetForCallers(options = {}) {
+    const { caps } = loadPlanCaps();
+    if (options && typeof options.content === "string") {
+      return computePlanBudget(options.content, caps);
+    }
+    return (async () => {
+      try {
+        const sourcePath =
+          options && typeof options.path === "string" ? options.path : null;
+        const targetPath = planBlockTargetPath(this.app, sourcePath);
+        const content = await this.readPlanBlockContent(targetPath);
+        return computePlanBudget(
+          typeof content === "string" ? content : "",
+          caps,
+        );
+      } catch (error) {
+        return emptyPlanBudget(caps);
+      }
+    })();
+  }
+
+  readPlanBlockContent(targetPath) {
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.getAbstractFileByPath !== "function") {
+        return Promise.resolve(null);
+      }
+      const file = vault.getAbstractFileByPath(targetPath);
+      if (!file) {
+        return Promise.resolve(null);
+      }
+      if (typeof vault.cachedRead === "function") {
+        return vault.cachedRead(file).catch(() => null);
+      }
+      if (typeof vault.read === "function") {
+        return vault.read(file).catch(() => null);
+      }
+    } catch (error) {
+      // Fall through to null below.
+    }
+    return Promise.resolve(null);
+  }
+
+  schedulePlanBlockRerender() {
+    if (
+      this.planBlockRerenderTimer !== null &&
+      this.planBlockRerenderTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" &&
+      typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.planBlockRerenderTimer = schedule(() => {
+      this.planBlockRerenderTimer = null;
+      this.rerenderPlanBlocks();
+    }, 150);
+  }
+
+  rerenderPlanBlocks() {
+    if (!this.planBlockViews) {
+      return;
+    }
+    for (const view of Array.from(this.planBlockViews)) {
+      try {
+        this.paintPlanBlock(view.el, view.sourcePath);
+      } catch (error) {
+        // One stale block never breaks the others.
+      }
+    }
+  }
+
+  renderPlanBlock(el, ctx) {
+    if (!el) {
+      return;
+    }
+    const sourcePath = ctx && ctx.sourcePath;
+    if (!this.planBlockViews) {
+      this.planBlockViews = new Set();
+    }
+    const view = { el, sourcePath };
+    this.planBlockViews.add(view);
+    if (ctx && typeof ctx.addChild === "function") {
+      // Unregister the view when the markdown preview drops the block.
+      const holder = {
+        unload: () => {
+          if (this.planBlockViews) {
+            this.planBlockViews.delete(view);
+          }
+        },
+      };
+      try {
+        ctx.addChild(holder);
+      } catch (error) {
+        // Older hosts may reject the child; the Set is cleared on unload.
+      }
+    }
+    this.paintPlanBlock(el, sourcePath);
+  }
+
+  paintPlanBlock(el, sourcePath) {
+    const targetPath = planBlockTargetPath(this.app, sourcePath);
+    const { caps, invalid } = loadPlanCaps();
+    const tasks = planBlockTasks(this.app);
+    Promise.resolve(this.readPlanBlockContent(targetPath))
+      .then((content) => {
+        if (!el || typeof el.empty !== "function") {
+          return;
+        }
+        el.empty();
+        const model = planBlockModel({
+          content,
+          tasks,
+          today: new Date(),
+          caps,
+          sourcePath,
+          app: this.app,
+        });
+        const container = el.createDiv({ cls: "bob-plan" });
+        container.setAttribute("role", "status");
+        container.setAttribute(
+          "aria-label",
+          `${model.planText}, ${model.nowText}${model.over ? ", over plan" : ""}`,
+        );
+        const planChip = container.createEl("span", {
+          cls: `bob-plan-chip bob-plan-plan${
+            model.budget.status === "over" ? " bob-plan-over" : ""
+          }`,
+          text: model.planText,
+          title: model.planTitle,
+        });
+        planChip.setAttribute("aria-label", `Plan budget: ${model.planTitle}`);
+        const nowChip = container.createEl("a", {
+          cls: `bob-plan-chip bob-plan-now${
+            model.hasTasks && model.now.over ? " bob-plan-over" : ""
+          }`,
+          text: model.nowText,
+          title: "Open NOW tasks in dash",
+          href: "dash#NOW Tasks",
+        });
+        nowChip.setAttribute("aria-label", "Open NOW tasks in dash");
+        nowChip.addEventListener("click", (event) => {
+          event.preventDefault();
+          try {
+            const workspace = this.app && this.app.workspace;
+            if (workspace && typeof workspace.openLinkText === "function") {
+              workspace.openLinkText("dash#NOW Tasks", "", false);
+            }
+          } catch (error) {
+            // The chip still shows the count without the navigation.
+          }
+        });
+        if (model.themesText) {
+          container.createEl("span", {
+            cls: "bob-plan-themes",
+            text: model.themesText,
+          });
+        }
+        for (const lint of model.lints) {
+          container.createEl("div", {
+            cls: "bob-plan-lint",
+            text: lint,
+          });
+        }
+        if (invalid) {
+          container.createEl("div", {
+            cls: "bob-plan-lint",
+            text: "plan config invalid, using defaults",
+          });
+        }
+      })
+      .catch(() => {
+        // The block shows `–` values, never an error; a failed paint keeps
+        // the previous render.
+      });
   }
 
   dailyLocationMap() {
@@ -2539,6 +3485,385 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   }
 };
 
+// --- Plan NOW counter -----------------------------------------------------
+// A NOW task is a `#task` line the native Tasks engine matches with the NOW
+// query in docs/plan.md. This mirrors that predicate over Tasks-plugin task
+// objects (tolerant of the shapes Tasks and dataview expose).
+
+function planTaskDescription(task) {
+  if (!task || typeof task !== "object") {
+    return null;
+  }
+  for (const key of ["description", "text"]) {
+    if (typeof task[key] === "string") {
+      return task[key];
+    }
+  }
+  return null;
+}
+
+function planTaskIsDone(task) {
+  if (!task || typeof task !== "object") {
+    return true;
+  }
+  if (task.done === true) {
+    return true;
+  }
+  const type = task.status && task.status.type;
+  if (type === "DONE" || type === "CANCELLED") {
+    return true;
+  }
+  const name = task.status && task.status.name;
+  if (typeof name === "string" && /^(done|cancelled?)\s*$/i.test(name.trim())) {
+    return true;
+  }
+  return false;
+}
+
+function planTaskIsBlocked(task, all) {
+  if (!task || typeof task !== "object") {
+    return false;
+  }
+  if (typeof task.isBlocked === "function") {
+    try {
+      return Boolean(task.isBlocked(all));
+    } catch (error) {
+      return false;
+    }
+  }
+  return task.isBlocked === true || task.blocked === true;
+}
+
+function planTaskPath(task) {
+  if (!task || typeof task !== "object") {
+    return "";
+  }
+  if (typeof task.path === "string") {
+    return task.path;
+  }
+  if (task.file && typeof task.file.path === "string") {
+    return task.file.path;
+  }
+  return "";
+}
+
+function planDayNumber(value) {
+  const date = planCoerceDate(value);
+  if (!date) {
+    return null;
+  }
+  return (
+    date.getFullYear() * 10000 +
+    (date.getMonth() + 1) * 100 +
+    date.getDate()
+  );
+}
+
+function planCoerceDate(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "object") {
+    if (typeof value.isSameOrBefore === "function") {
+      // A moment-like object.
+      if (typeof value.year === "function") {
+        const date = new Date(
+          value.year(),
+          (typeof value.month === "function" ? value.month() : 0) || 0,
+          (typeof value.date === "function" ? value.date() : 1) || 1,
+        );
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+      if (typeof value.toDate === "function") {
+        try {
+          return planCoerceDate(value.toDate());
+        } catch (error) {
+          return null;
+        }
+      }
+      if (typeof value.format === "function") {
+        try {
+          return planCoerceDate(value.format("YYYY-MM-DD"));
+        } catch (error) {
+          return null;
+        }
+      }
+      return null;
+    }
+    if ("moment" in value) {
+      return planCoerceDate(value.moment);
+    }
+    if (value instanceof Date) {
+      return planCoerceDate(value);
+    }
+  }
+  return null;
+}
+
+function planTaskScheduledDay(task) {
+  if (!task || typeof task !== "object") {
+    return null;
+  }
+  for (const key of ["scheduledDate", "scheduled", "scheduledDay"]) {
+    if (task[key] !== undefined && task[key] !== null) {
+      const day = planDayNumber(task[key]);
+      if (day !== null) {
+        return day;
+      }
+    }
+  }
+  return null;
+}
+
+function planTaskTags(task) {
+  if (!task || typeof task !== "object" || !Array.isArray(task.tags)) {
+    return [];
+  }
+  return task.tags.filter((tag) => typeof tag === "string");
+}
+
+// The dash's NOW predicate over Tasks-plugin task objects: visible (no
+// `_templates`/`_conflicts`, no `#hide`), scheduled today or earlier (or
+// unscheduled), not dependency-blocked, and carrying a whole `#now` token.
+function nowBudgetFromTasks(tasks, today, caps) {
+  const effective = effectivePlanCaps(caps);
+  const list = Array.isArray(tasks) ? tasks : [];
+  const todayDay = planDayNumber(today === undefined ? new Date() : today);
+  let count = 0;
+  for (const task of list) {
+    if (planTaskIsDone(task)) {
+      continue;
+    }
+    if (planTaskIsBlocked(task, list)) {
+      continue;
+    }
+    const tags = planTaskTags(task);
+    const description = planTaskDescription(task);
+    if (description !== null) {
+      if (!hasNowTag(description)) {
+        continue;
+      }
+    } else if (!tags.includes("#now")) {
+      continue;
+    }
+    if (tags.includes("#hide")) {
+      continue;
+    }
+    const path = planTaskPath(task);
+    if (path.includes("_templates") || path.includes("_conflicts")) {
+      continue;
+    }
+    if (todayDay !== null) {
+      const scheduled = planTaskScheduledDay(task);
+      if (scheduled !== null && scheduled > todayDay) {
+        continue;
+      }
+    }
+    count += 1;
+  }
+  const cap = effective.maxNow;
+  return { count, cap, over: count > cap };
+}
+
+// --- Plan config ----------------------------------------------------------
+
+function planRequireOptionalNodeModule(name) {
+  try {
+    if (typeof require !== "function") {
+      return null;
+    }
+    return require(name);
+  } catch (error) {
+    return null;
+  }
+}
+
+function planJoinPathSegments(firstSegment, ...restSegments) {
+  const trim = (text, side) => {
+    const value = String(text || "");
+    if (side === "left") {
+      return value.replace(/^\/+/, "");
+    }
+    if (side === "right") {
+      return value.replace(/\/+$/, "");
+    }
+    return value.replace(/^\/+|\/+$/g, "");
+  };
+  const first = trim(firstSegment, "right");
+  const rest = restSegments
+    .map((segment) => trim(segment, "both"))
+    .filter((segment) => segment.length > 0);
+  return [first, ...rest].filter((segment) => segment.length > 0).join("/");
+}
+
+function planConfigHomeDir(osModule, env) {
+  if (osModule && typeof osModule.homedir === "function") {
+    try {
+      const home = osModule.homedir();
+      if (typeof home === "string" && home.trim()) {
+        return home;
+      }
+    } catch (error) {
+      // Fall through to $HOME below.
+    }
+  }
+  if (env && typeof env.HOME === "string" && env.HOME.trim()) {
+    return env.HOME;
+  }
+  return "~";
+}
+
+function planConfigPath(options = {}) {
+  const env =
+    options.env ||
+    (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule =
+    options.osModule === undefined
+      ? planRequireOptionalNodeModule("os")
+      : options.osModule;
+  const xdgConfigHome =
+    typeof env.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME.trim()
+      ? env.XDG_CONFIG_HOME
+      : null;
+  const configHome =
+    xdgConfigHome ||
+    planJoinPathSegments(planConfigHomeDir(osModule, env), ".config");
+  return planJoinPathSegments(configHome, PLAN_CONFIG_RELATIVE_PATH);
+}
+
+// Read `plan:` from `~/.config/bob/config.yml` (honoring XDG_CONFIG_HOME).
+// Mobile (no desktop `fs`) and read errors fall back to the defaults.
+// Returns `{ caps, invalid, configPath }`; `invalid` is true only when the
+// file was read but held a present-but-bad value.
+function loadPlanCaps(options = {}) {
+  const defaults = defaultPlanCaps();
+  const configPath = options.configPath || planConfigPath(options);
+  const platform = options.Platform === undefined ? Platform : options.Platform;
+  if (platform && platform.isDesktopApp === false) {
+    return { caps: defaults, invalid: false, configPath };
+  }
+  const fsModule =
+    options.fsModule === undefined
+      ? planRequireOptionalNodeModule("fs")
+      : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") {
+    return { caps: defaults, invalid: false, configPath };
+  }
+  let rawConfig;
+  try {
+    rawConfig = fsModule.readFileSync(configPath, "utf8");
+  } catch (error) {
+    return {
+      caps: defaults,
+      invalid: Boolean(error && error.code && error.code !== "ENOENT"),
+      configPath,
+    };
+  }
+  const yamlParser =
+    options.parseYaml === undefined ? parseYaml : options.parseYaml;
+  if (typeof yamlParser !== "function") {
+    return { caps: defaults, invalid: false, configPath };
+  }
+  let parsed;
+  try {
+    parsed = yamlParser(rawConfig);
+  } catch (error) {
+    return { caps: defaults, invalid: true, configPath };
+  }
+  const coerced = coercePlanCaps(planCapsBlock(parsed));
+  return { caps: coerced.caps, invalid: coerced.invalid, configPath };
+}
+
+// --- Plan block model -----------------------------------------------------
+
+function planBlockTargetPath(app, sourcePath) {
+  if (sourcePath && PLAN_DAILY_PATH_RE.test(String(sourcePath))) {
+    return String(sourcePath);
+  }
+  return todayDailyPath(new Date(), getDailyNotesOptions(app));
+}
+
+function planBlockTasks(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const tasks = plugins && plugins[PLAN_TASKS_PLUGIN_ID];
+    if (tasks && typeof tasks.getTasks === "function") {
+      const all = tasks.getTasks();
+      return Array.isArray(all) ? all : null;
+    }
+  } catch (error) {
+    // The Tasks plugin is optional; the block shows `–` without it.
+  }
+  return null;
+}
+
+// Synchronous view-model for the ```bob-plan block. Never throws: missing
+// content, caps, or Tasks all degrade to `–` placeholders, never an error.
+function planBlockModel({ content, tasks, today, caps, sourcePath, app }) {
+  const effective = effectivePlanCaps(caps);
+  const targetPath = planBlockTargetPath(app, sourcePath);
+  let budget;
+  try {
+    budget =
+      typeof content === "string"
+        ? computePlanBudget(content, effective)
+        : emptyPlanBudget(effective);
+  } catch (error) {
+    budget = emptyPlanBudget(effective);
+  }
+  const hasTasks = Array.isArray(tasks);
+  let now;
+  try {
+    now = hasTasks
+      ? nowBudgetFromTasks(tasks, today === undefined ? new Date() : today, effective)
+      : { count: 0, cap: effective.maxNow, over: false };
+  } catch (error) {
+    now = { count: 0, cap: effective.maxNow, over: false };
+  }
+  const over = budget.status === "over" || (hasTasks && now.over);
+  const lintWarnings = budget.warnings.slice();
+  if (hasTasks && now.over) {
+    lintWarnings.push({
+      code: "now_cap_exceeded",
+      message: `this week's NOW has ${now.count}/${now.cap} tasks`,
+    });
+  }
+  const themeCounts = budget.entries
+    .filter((entry) => !entry.exempt)
+    .map((entry) => `${entry.name} ${entry.links}`);
+  return {
+    targetPath,
+    hasContent: typeof content === "string",
+    hasTasks,
+    planText: budget.hasSection
+      ? `PLAN ${budget.themes.count}/${budget.themes.cap} · ${budget.links.count}/${budget.links.cap}`
+      : "PLAN –",
+    planTitle: budget.hasSection
+      ? themeCounts.join(" · ") || "no themes"
+      : "no Pomodoros section",
+    nowText: hasTasks ? `NOW ${now.count}/${now.cap}` : "NOW –",
+    themesText:
+      budget.themeNames.length > 0
+        ? `★ ${budget.themeNames.join(" · ")}`
+        : "",
+    lints: lintWarnings.map((warning) =>
+      warning.line === undefined || warning.line === null
+        ? `${warning.message}  ${warning.code}`
+        : `${warning.message} (line ${warning.line})  ${warning.code}`,
+    ),
+    over,
+    budget,
+    now,
+  };
+}
+
 module.exports.helpers = {
   parseTrigger,
   parseEmDashTrigger,
@@ -2599,4 +3924,19 @@ module.exports.helpers = {
   findExpansion,
   expandLineAtCursor,
   expansionCursorCh,
+  defaultPlanCaps,
+  effectivePlanCaps,
+  parsePlanCaps,
+  coercePlanCaps,
+  hasNowTag,
+  normalizePlanComponent,
+  splitPlanComponents,
+  computePlanBudget,
+  emptyPlanBudget,
+  nowBudgetFromTasks,
+  loadPlanCaps,
+  planConfigPath,
+  planBlockTargetPath,
+  planBlockModel,
+  planSectionRange,
 };

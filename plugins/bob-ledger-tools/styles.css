@@ -1,0 +1,68 @@
+/* Bob Ledger Tools — live ```bob-plan block.
+   Speaks the dash's chip language: small-caps label, tabular-nums value, a
+   2px accent start border, and a 14% accent background. Theme-native in
+   light/dark and any community theme. */
+
+.bob-plan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.55rem 0 1rem;
+  font-family: var(--font-interface);
+  line-height: 1.3;
+}
+
+.bob-plan-chip {
+  --bob-plan-accent: var(--interactive-accent);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.38em;
+  padding: 0.28em 0.65em 0.3em 0.6em;
+  border: 1px solid color-mix(in srgb, var(--bob-plan-accent) 28%, transparent);
+  border-inline-start: 2px solid var(--bob-plan-accent);
+  border-radius: 7px;
+  background-color: color-mix(in srgb, var(--bob-plan-accent) 14%, transparent);
+  color: var(--text-normal);
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+a.bob-plan-chip:hover {
+  border-color: color-mix(in srgb, var(--bob-plan-accent) 50%, transparent);
+  background-color: color-mix(in srgb, var(--bob-plan-accent) 18%, transparent);
+  color: var(--text-normal);
+  text-decoration: none;
+}
+
+a.bob-plan-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--bob-plan-accent) 65%, transparent);
+  outline-offset: 2px;
+}
+
+.bob-plan-plan {
+  --bob-plan-accent: var(--task-status-next, var(--color-green, #3f8f5f));
+}
+
+.bob-plan-now {
+  --bob-plan-accent: var(--color-purple);
+}
+
+.bob-plan-chip.bob-plan-over {
+  --bob-plan-accent: var(--task-status-blocked, var(--color-red, #c65367));
+}
+
+.bob-plan-themes {
+  color: var(--text-muted);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.bob-plan-lint {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 0.8em;
+}

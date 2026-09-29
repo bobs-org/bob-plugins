@@ -13192,6 +13192,299 @@ function getLinkPickerSessionSubtitle(session) {
   return formatCountLabel(session.actualCount, "link");
 }
 
+// ---------------------------------------------------------------------------
+// now-toggle: Toggle #now from task lines and Task Links.
+//
+// Whole-token, case-sensitive `#now`: preceded by the line start or
+// whitespace, followed by the end or whitespace. `#nowadays` and `#now/x`
+// never match, mirroring docs/plan.md and bob-ledger-tools.
+const NOW_TOGGLE_TAG = "#now";
+const NOW_TOGGLE_TAG_RE = /(?:^|\s)#now(?:\s|$)/;
+
+function hasNowTag(text) {
+  return NOW_TOGGLE_TAG_RE.test(String(text || ""));
+}
+
+// Spans of the `#now` token itself (without surrounding whitespace) whose
+// boundaries satisfy the whole-token rule. Used for removal so `#task`,
+// inline fields, and block IDs are never touched.
+function getNowTagTokenSpans(lineText) {
+  const text = String(lineText || "");
+  const spans = [];
+  let offset = 0;
+  while (offset < text.length) {
+    const index = text.indexOf(NOW_TOGGLE_TAG, offset);
+    if (index === -1) {
+      break;
+    }
+    const end = index + NOW_TOGGLE_TAG.length;
+    const leftOk = index === 0 || /\s/.test(text[index - 1]);
+    const rightOk = end >= text.length || /\s/.test(text[end]);
+    if (leftOk && rightOk) {
+      spans.push(Object.freeze({ start: index, end }));
+      offset = end;
+    } else {
+      offset = index + 1;
+    }
+  }
+  return Object.freeze(spans);
+}
+
+// Insert ` #now` at the end of the description: immediately before the first
+// trailing inline field `[k:: v]`, else before the trailing ` ^id`, else at
+// the line's end. Trailing fields are the contiguous run of `[k:: v]` fields
+// ending at the block ID (or end of line); a field followed by prose is not
+// trailing. Spacing is normalized to single spaces around the tag.
+function addNowTagToLine(lineText) {
+  const text = String(lineText || "");
+  if (hasNowTag(text)) {
+    return text;
+  }
+  const blockSpan = getTrailingBlockIdSpan(text);
+  const bodyEnd = blockSpan ? blockSpan.start : text.length;
+  const prefix = text.slice(0, bodyEnd);
+  const fields = parseBulletPropertyFields(text).filter(
+    (field) => field.span.end <= bodyEnd,
+  );
+  let insertion = bodyEnd;
+  if (fields.length > 0) {
+    const last = fields[fields.length - 1];
+    if (/^[ \t]*$/.test(prefix.slice(last.span.end, bodyEnd))) {
+      let runStart = last.span.start;
+      for (let index = fields.length - 2; index >= 0; index -= 1) {
+        const between = prefix.slice(
+          fields[index].span.end,
+          fields[index + 1].span.start,
+        );
+        if (/^[ \t]*$/.test(between)) {
+          runStart = fields[index].span.start;
+        } else {
+          break;
+        }
+      }
+      insertion = runStart;
+    }
+  }
+  const beforeRaw = text.slice(0, insertion);
+  const afterRaw = text.slice(insertion);
+  const before = beforeRaw.replace(/[ \t]+$/, "");
+  const afterTrimmed = afterRaw.replace(/^[ \t]+/, "");
+  if (!before) {
+    return afterTrimmed
+      ? `${NOW_TOGGLE_TAG} ${afterTrimmed}`
+      : NOW_TOGGLE_TAG;
+  }
+  return afterTrimmed
+    ? `${before} ${NOW_TOGGLE_TAG} ${afterTrimmed}`
+    : `${before} ${NOW_TOGGLE_TAG}`;
+}
+
+// Remove every whole-token `#now`, then collapse doubled spaces. Spacing is
+// removed via removeBulletPropertyFieldSpan (one adjacent space per token)
+// and any leftover doubles are collapsed outside the leading indent so
+// `  - ` style indentation is never damaged. Trailing whitespace is trimmed.
+function removeNowTagFromLine(lineText) {
+  const text = String(lineText || "");
+  const spans = getNowTagTokenSpans(text);
+  if (spans.length === 0) {
+    return text;
+  }
+  let next = text;
+  const ordered = spans.slice().sort((left, right) => right.start - left.start);
+  for (const span of ordered) {
+    next = removeBulletPropertyFieldSpan(next, span);
+  }
+  const leadingMatch = /^([ \t]*)/.exec(next);
+  const leading = leadingMatch ? leadingMatch[1] : "";
+  let rest = next.slice(leading.length);
+  rest = rest.replace(/[ \t]{2,}/g, " ");
+  rest = rest.replace(/[ \t]+$/, "");
+  return leading + rest;
+}
+
+// Plan a #now toggle across the task lines of one note's content. When any
+// target lacks `#now`, every target gains it; otherwise every target loses
+// it. Pass `options.added` to force one direction so cross-note batches (Task
+// Links in several notes) share a single global decision. Returns the joined
+// content plus whether tags were added and how many lines actually changed.
+// Stale preimages (a line changed or stopped being a task) refuse the whole
+// batch.
+function planNowToggleBatch(content, session, options = {}) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const targets =
+    session && Array.isArray(session.targets) ? session.targets : [];
+  const invalid = (error, stale = false) =>
+    Object.freeze({
+      valid: false,
+      error,
+      stale,
+      added: false,
+      changedTaskCount: 0,
+      content: text,
+    });
+  if (targets.length === 0) {
+    return invalid("No tasks to update");
+  }
+  for (const target of targets) {
+    const live =
+      Number.isInteger(target.line) &&
+      target.line >= 0 &&
+      target.line < source.lines.length
+        ? source.lines[target.line]
+        : undefined;
+    if (
+      live !== target.rawLine ||
+      !isObsidianTaskAtLine(text, target.line, contexts, source.lines)
+    ) {
+      return invalid("A task changed while the picker was open", true);
+    }
+  }
+  const shouldAdd =
+    options && typeof options.added === "boolean"
+      ? Boolean(options.added)
+      : targets.some((target) => !hasNowTag(target.rawLine));
+  const nextLines = source.lines.slice();
+  let changedTaskCount = 0;
+  for (const target of targets) {
+    const oldLine = String(source.lines[target.line] || "");
+    const nextLine = shouldAdd
+      ? addNowTagToLine(oldLine)
+      : removeNowTagFromLine(oldLine);
+    if (nextLine !== oldLine) {
+      changedTaskCount += 1;
+    }
+    nextLines[target.line] = nextLine;
+  }
+  return Object.freeze({
+    valid: true,
+    error: null,
+    stale: false,
+    added: shouldAdd,
+    changedTaskCount,
+    content: nextLines.join(source.lineEnding),
+  });
+}
+
+// Build the toggle Notice. The NOW suffix comes from the ledger-tools API
+// read before the write, adjusted by the number of tasks that changed,
+// because the Tasks cache lags behind the write. It is omitted when the API
+// is unavailable. Over-cap counts gain 🔴 plus the weekly-review hint.
+function buildNowToggleNotice(details = {}) {
+  const added = Boolean(details.added);
+  const changed = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.changedTaskCount, 0)),
+  );
+  const action = added ? "added" : "removed";
+  let text = `#now ${action} · ${formatCountLabel(changed, "task")}`;
+  const budget = details.nowBudget;
+  if (
+    budget &&
+    Number.isFinite(Math.floor(Number(budget.count))) &&
+    Number.isFinite(Math.floor(Number(budget.cap)))
+  ) {
+    const beforeCount = Math.floor(Number(budget.count));
+    const cap = Math.floor(Number(budget.cap));
+    const after = Math.max(0, beforeCount + (added ? changed : -changed));
+    text += ` · NOW ${after}/${cap}`;
+    if (after > cap) {
+      text += " 🔴 · prune at the weekly review";
+    }
+  }
+  return text;
+}
+
+// Read the ledger-tools NOW budget for the Notice, or null when the API is
+// missing or unusable. May return a Promise when a future API is async; the
+// caller awaits it.
+function readNowBudgetValue(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const api =
+      plugins &&
+      plugins["bob-ledger-tools"] &&
+      plugins["bob-ledger-tools"].api;
+    if (!api || typeof api.nowBudget !== "function") {
+      return null;
+    }
+    const value = api.nowBudget();
+    if (value && typeof value.then === "function") {
+      return value;
+    }
+    if (
+      value &&
+      Number.isFinite(Math.floor(Number(value.count))) &&
+      Number.isFinite(Math.floor(Number(value.cap)))
+    ) {
+      return Object.freeze({
+        count: Math.floor(Number(value.count)),
+        cap: Math.floor(Number(value.cap)),
+        over: Boolean(value.over),
+      });
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Describe the pinned `#now` picker row for the current property stage: null
+// when the cursor is not on a task or Task Link, otherwise whether choosing
+// the row would add or remove plus how many tasks it covers.
+function describeNowToggleRow(content, options = {}) {
+  const text = String(content || "");
+  const cursorLine = Math.floor(numericOrDefault(options.cursorLine, NaN));
+  const taskSession = options.taskSession || null;
+  const linkResolved = Array.isArray(options.linkResolved)
+    ? options.linkResolved
+    : null;
+  if (linkResolved) {
+    if (linkResolved.length === 0) {
+      return null;
+    }
+    const shouldAdd = linkResolved.some(
+      (target) => !hasNowTag(target.rawLine || ""),
+    );
+    return Object.freeze({
+      kind: "link",
+      count: linkResolved.length,
+      added: shouldAdd,
+      detail: shouldAdd ? "this week · add" : "this week · remove",
+    });
+  }
+  if (
+    taskSession &&
+    taskSession.explicit &&
+    Array.isArray(taskSession.targets) &&
+    taskSession.targets.length > 0
+  ) {
+    const shouldAdd = taskSession.targets.some(
+      (target) => !hasNowTag(target.rawLine || ""),
+    );
+    return Object.freeze({
+      kind: "task",
+      count: taskSession.targets.length,
+      added: shouldAdd,
+      detail: shouldAdd ? "this week · add" : "this week · remove",
+    });
+  }
+  if (
+    Number.isFinite(cursorLine) &&
+    isObsidianTaskLine(String(text.split(/\r?\n/)[cursorLine] || ""))
+  ) {
+    const line = String(text.split(/\r?\n/)[cursorLine] || "");
+    return Object.freeze({
+      kind: "task",
+      count: 1,
+      added: !hasNowTag(line),
+      detail: !hasNowTag(line) ? "this week · add" : "this week · remove",
+    });
+  }
+  return null;
+}
+
 // A task move uses the same count convention as counted property editing, but
 // project lifecycle tasks are structural controls and therefore never become
 // move targets. The first line must itself be movable; later ^prj tasks are
@@ -16586,8 +16879,31 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.propertyContext,
       );
     }
+    const nowToggleDescription = this.isLinkSession()
+      ? describeNowToggleRow("", {
+          linkResolved: this.linkSession.resolved,
+        })
+      : this.isCountedSession()
+        ? describeNowToggleRow(this.getEditorContent(), {
+            taskSession: this.taskSession,
+          })
+        : describeNowToggleRow(this.getEditorContent(), {
+            cursorLine: this.cursor ? this.cursor.line : NaN,
+          });
+    let propertyItems = Array.isArray(items) ? items : [];
+    if (nowToggleDescription) {
+      const nowToggleItem = Object.freeze({
+        kind: "now-toggle",
+        property: Object.freeze({ name: "#now" }),
+        detail: nowToggleDescription.detail,
+        added: nowToggleDescription.added,
+        targetCount: nowToggleDescription.count,
+        order: -1,
+      });
+      propertyItems = [nowToggleItem, ...propertyItems];
+    }
     this.applyOptions({
-      items,
+      items: propertyItems,
       title: "Set bullet property",
       headerIcon: "tags",
       inputLabel: "Filter bullet properties",
@@ -16602,8 +16918,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             : `Showing ${visibleItems.length} of ${allItems.length} · `;
         return `${countText}${this.getTaskSessionSubtitle()}`;
       },
-      filterItem: (item, query) =>
-        fuzzyMatchesText(
+      filterItem: (item, query) => {
+        if (item && item.kind === "now-toggle") {
+          return fuzzyMatchesText(
+            `#now now this week ${item.detail || ""} ${item.added ? "add" : "remove"}`,
+            query,
+          );
+        }
+        return fuzzyMatchesText(
           `${item.property.name} ${item.currentLabel || ""} ${
             item.currentValue || ""
           } ${
@@ -16612,10 +16934,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             item.currentValues ? item.currentValues.join(" ") : ""
           } ${item.valueState || ""}`,
           query,
-        ),
-      renderItem: (item, rowEl, query) =>
-        this.renderPropertyItem(item, rowEl, query),
-      openItem: (item) => {
+        );
+      },
+      renderItem: (item, rowEl, query) => {
+        if (item && item.kind === "now-toggle") {
+          this.renderNowToggleItem(item, rowEl, query);
+          return;
+        }
+        this.renderPropertyItem(item, rowEl, query);
+      },
+      openItem: async (item) => {
+        if (item && item.kind === "now-toggle") {
+          const applied = await this.plugin.applyNowToggleFromPicker(this);
+          return applied === true;
+        }
         this.showValueStage(item);
         return false;
       },
@@ -16636,6 +16968,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   showValueStage(propertyItem) {
+    if (propertyItem && propertyItem.kind === "now-toggle") {
+      void this.plugin
+        .applyNowToggleFromPicker(this)
+        .then((applied) => {
+          if (applied !== true) {
+            this.showPropertyStage({ clearQuery: false });
+          }
+        })
+        .catch(() => {
+          this.showPropertyStage({ clearQuery: false });
+        });
+      return;
+    }
     this.stage = "value";
     this.selectedPropertyItem = propertyItem;
     this.pendingTask = null;
@@ -17359,6 +17704,25 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       });
       this.renderFooter();
     }
+  }
+
+  renderNowToggleItem(item, rowEl, query) {
+    addElementClasses(rowEl, "bob-cnp-property-row", "is-undefined");
+
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(rowIcon, "star");
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    appendHighlighted(titleEl, "#now", query);
+
+    const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+    appendHighlighted(pathEl, item.detail || "this week", query);
+
+    rowEl.createDiv({
+      cls: "bob-cnp-pill bob-cnp-property-pill",
+      text: item.added ? "this week · add" : "this week · remove",
+    });
   }
 
   renderPropertyItem(item, rowEl, query) {
@@ -18523,6 +18887,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "toggle-now-tag",
+      name: "Toggle #now (this week's bet)",
+      hotkeys: [{ modifiers: ["Alt"], key: "N" }],
+      editorCallback: (editor) => this.toggleNowTag(editor),
+    });
+
+    this.addCommand({
       id: "consolidate-dependency-navigation-links",
       name: "Rewrite dependency navigation links (current note)",
       editorCallback: (editor) =>
@@ -18682,6 +19053,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedTransclusionToggleInputListeners();
     this.registerCountedBulletPropertyInputListeners();
     this.registerCountedTaskMoveInputListeners();
+    this.registerCountedNowToggleInputListeners();
     this.registerClearSearchHighlightInputListeners();
 
     this.register(() => {
@@ -20032,6 +20404,420 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         : "";
     new Notice(
       `${notice.header} · ${taskNoun} ${viaLinks}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${pomodoroPruneSuffix}`,
+    );
+    return true;
+  }
+
+  // now-toggle: Toggle #now on task lines and Task Link lines. On a #task
+  // line the current task plus the next N real tasks are toggled; on a
+  // dedicated Task Link the resolved task plus the next N sibling links are
+  // toggled in their own notes. The tag is placed before trailing fields and
+  // the block ID, and the Notice reports the NOW count. Writes follow
+  // link-picker's cross-note rules: any stale preimage refuses the whole
+  // operation.
+  async toggleNowTag(cm, options = {}) {
+    const cursor = getEditorCursor(cm);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const lineText = getEditorLine(cm, cursor.line);
+    if (lineText === null) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content =
+      cm && typeof cm.getValue === "function"
+        ? String(cm.getValue() || "")
+        : "";
+    let countExplicit = options.countExplicit === true;
+    let additionalTaskCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(options.additionalTaskCount, 0)),
+    );
+    if (!countExplicit) {
+      const view = this.getActiveMarkdownView();
+      const editorForVim =
+        view && view.editor === cm ? view.editor : cm;
+      if (this.isVimNormalModeEditor(editorForVim, view)) {
+        const vimCm = this.resolveVimCodeMirror(editorForVim, view);
+        const pending = getPendingVimRepeat(vimCm);
+        if (pending.explicit) {
+          countExplicit = true;
+          additionalTaskCount = Math.max(
+            0,
+            Math.floor(numericOrDefault(pending.repeat, 0)),
+          );
+          resetPendingVimInputState(vimCm, "counted-now-toggle");
+        }
+      }
+    }
+    const onTask = isObsidianTaskAtLine(content, cursor.line);
+    if (onTask) {
+      return await this.toggleNowTagOnTasks(cm, cursor, content, {
+        countExplicit,
+        additionalTaskCount,
+      });
+    }
+    if (parseLinkPickerTaskLink(lineText)) {
+      return await this.toggleNowTagOnLinks(cm, cursor, content, {
+        countExplicit,
+        additionalTaskCount,
+        linkDiscovery: options.linkDiscovery || null,
+      });
+    }
+    new Notice("Cursor is not on a task or Task Link");
+    return false;
+  }
+
+  async toggleNowTagOnTasks(cm, cursor, content, options = {}) {
+    const session = discoverCountedObsidianTaskTargets(
+      content,
+      cursor.line,
+      options.countExplicit ? options.additionalTaskCount : 0,
+    );
+    if (!session.valid) {
+      new Notice(session.error);
+      return false;
+    }
+    let nowBudget = readNowBudgetValue(this.app);
+    if (nowBudget && typeof nowBudget.then === "function") {
+      try {
+        nowBudget = await nowBudget;
+      } catch (error) {
+        nowBudget = null;
+      }
+    }
+    const plan = planNowToggleBatch(content, session);
+    if (!plan.valid) {
+      new Notice(
+        plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+      );
+      return false;
+    }
+    if (
+      cm &&
+      typeof cm.getValue === "function" &&
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+    const lines = splitMarkdownContent(plan.content).lines;
+    const finalLine = String(lines[cursor.line] || "");
+    const applied = applyEditorContentTransaction(cm, content, plan.content, {
+      line: cursor.line,
+      ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+    });
+    if (!applied) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    new Notice(
+      buildNowToggleNotice({
+        added: plan.added,
+        changedTaskCount: plan.changedTaskCount,
+        nowBudget,
+      }),
+    );
+    return true;
+  }
+
+  async toggleNowTagOnLinks(cm, cursor, content, options = {}) {
+    const discovery =
+      options.linkDiscovery ||
+      discoverLinkPickerTargets(
+        content,
+        cursor.line,
+        options.countExplicit ? options.additionalTaskCount : 0,
+      );
+    if (!discovery.valid) {
+      new Notice(
+        discovery.notLink
+          ? "Cursor is not on a task or Task Link"
+          : discovery.error,
+      );
+      return false;
+    }
+    const activeView = this.getActiveMarkdownView();
+    if (!activeView || activeView.editor !== cm || !activeView.file) {
+      new Notice("No active markdown note");
+      return false;
+    }
+    const filePath = activeView.file.path;
+    const resolution = await this.resolveLinkPickerTargets(
+      filePath,
+      discovery,
+    );
+    if (resolution.error) {
+      new Notice(resolution.error);
+      return false;
+    }
+    if (
+      cm &&
+      typeof cm.getValue === "function" &&
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+    let nowBudget = readNowBudgetValue(this.app);
+    if (nowBudget && typeof nowBudget.then === "function") {
+      try {
+        nowBudget = await nowBudget;
+      } catch (error) {
+        nowBudget = null;
+      }
+    }
+    const globalAdded = resolution.targets.some(
+      (target) => !hasNowTag(target.rawLine || ""),
+    );
+    const groups = groupLinkPickerTargetsByNote(resolution.targets);
+    if (groups.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    const planned = [];
+    for (const group of groups) {
+      const plan = planNowToggleBatch(group.content, group.session, {
+        added: globalAdded,
+      });
+      if (!plan.valid) {
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+      planned.push({ group, plan });
+    }
+    for (const { group } of planned) {
+      const live = await this.readLinkPickerNoteContent(
+        group.path,
+        group.file,
+      );
+      if (live !== group.content) {
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+    }
+    const written = [];
+    let changedTaskCount = 0;
+    try {
+      for (const { group, plan } of planned) {
+        changedTaskCount += plan.changedTaskCount;
+        if (plan.content !== group.content) {
+          await this.writeLinkPickerNoteChange(
+            group.path,
+            group.file,
+            group.content,
+            plan.content,
+          );
+          written.push({
+            path: group.path,
+            file: group.file,
+            before: group.content,
+            after: plan.content,
+          });
+        }
+      }
+    } catch (error) {
+      for (const entry of written.slice().reverse()) {
+        try {
+          await this.writeLinkPickerNoteChange(
+            entry.path,
+            entry.file,
+            entry.after,
+            entry.before,
+          );
+        } catch (rollbackError) {
+          // Best effort: the original error stays authoritative.
+        }
+      }
+      new Notice("A linked note changed; no tasks were updated");
+      return false;
+    }
+    new Notice(
+      buildNowToggleNotice({
+        added: globalAdded,
+        changedTaskCount,
+        nowBudget,
+      }),
+    );
+    return true;
+  }
+
+  // Apply the picker's pinned `#now` row: toggle immediately with no value
+  // stage, then close the modal on success. Task sessions (single and
+  // counted) write through the open editor; link sessions write through the
+  // cross-note path with the same preimage guards as the Alt+N command.
+  async applyNowToggleFromPicker(picker) {
+    if (!picker) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    if (picker.linkSession) {
+      const resolved = Array.isArray(picker.linkSession.resolved)
+        ? picker.linkSession.resolved
+        : [];
+      if (resolved.length === 0) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      let nowBudget = readNowBudgetValue(this.app);
+      if (nowBudget && typeof nowBudget.then === "function") {
+        try {
+          nowBudget = await nowBudget;
+        } catch (error) {
+          nowBudget = null;
+        }
+      }
+      const globalAdded = resolved.some(
+        (target) => !hasNowTag(target.rawLine || ""),
+      );
+      const groups = groupLinkPickerTargetsByNote(resolved);
+      const planned = [];
+      for (const group of groups) {
+        const plan = planNowToggleBatch(group.content, group.session, {
+          added: globalAdded,
+        });
+        if (!plan.valid) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+        planned.push({ group, plan });
+      }
+      for (const { group } of planned) {
+        const live = await this.readLinkPickerNoteContent(
+          group.path,
+          group.file,
+        );
+        if (live !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+      }
+      const written = [];
+      let changedTaskCount = 0;
+      try {
+        for (const { group, plan } of planned) {
+          changedTaskCount += plan.changedTaskCount;
+          if (plan.content !== group.content) {
+            await this.writeLinkPickerNoteChange(
+              group.path,
+              group.file,
+              group.content,
+              plan.content,
+            );
+            written.push({
+              path: group.path,
+              file: group.file,
+              before: group.content,
+              after: plan.content,
+            });
+          }
+        }
+      } catch (error) {
+        for (const entry of written.slice().reverse()) {
+          try {
+            await this.writeLinkPickerNoteChange(
+              entry.path,
+              entry.file,
+              entry.after,
+              entry.before,
+            );
+          } catch (rollbackError) {
+            // Best effort.
+          }
+        }
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+      new Notice(
+        buildNowToggleNotice({
+          added: globalAdded,
+          changedTaskCount,
+          nowBudget,
+        }),
+      );
+      return true;
+    }
+    const editor = picker.editor;
+    const cursor = picker.cursor;
+    const filePath = picker.filePath;
+    if (!editor || typeof editor.getValue !== "function" || !cursor) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    let session = null;
+    if (
+      picker.taskSession &&
+      picker.taskSession.explicit &&
+      Array.isArray(picker.taskSession.targets) &&
+      picker.taskSession.targets.length > 0
+    ) {
+      session = picker.taskSession;
+    } else {
+      const content = String(editor.getValue() || "");
+      if (!isObsidianTaskAtLine(content, cursor.line)) {
+        new Notice("Cursor is not on a task or Task Link");
+        return false;
+      }
+      const line = getEditorLine(editor, cursor.line);
+      session = Object.freeze({
+        valid: true,
+        error: null,
+        explicit: false,
+        startLine: cursor.line,
+        requestedAdditionalCount: 0,
+        requestedCount: 1,
+        actualCount: 1,
+        clamped: false,
+        targets: Object.freeze([{ line: cursor.line, rawLine: line }]),
+      });
+    }
+    const writeContext = this.getCountedTaskWriteContext(
+      editor,
+      filePath,
+      session.explicit ? session : session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+    let nowBudget = readNowBudgetValue(this.app);
+    if (nowBudget && typeof nowBudget.then === "function") {
+      try {
+        nowBudget = await nowBudget;
+      } catch (error) {
+        nowBudget = null;
+      }
+    }
+    const plan = planNowToggleBatch(writeContext.content, session);
+    if (!plan.valid) {
+      new Notice(
+        plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+      );
+      return false;
+    }
+    const lines = splitMarkdownContent(plan.content).lines;
+    const finalLine = String(lines[cursor.line] || "");
+    const applied = applyEditorContentTransaction(
+      editor,
+      writeContext.content,
+      plan.content,
+      {
+        line: cursor.line,
+        ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+      },
+    );
+    if (!applied) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    new Notice(
+      buildNowToggleNotice({
+        added: plan.added,
+        changedTaskCount: plan.changedTaskCount,
+        nowBudget,
+      }),
     );
     return true;
   }
@@ -22408,6 +23194,80 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       !event.altKey &&
       !event.metaKey &&
       (event.code === "KeyP" || event.key === "p" || event.key === "P"),
+    );
+  }
+
+  // Capture-phase fallback so counted N<Alt+N> reaches the #now toggle while
+  // Vim normal mode is active. CodeMirror Vim swallows Alt chords before
+  // Obsidian's hotkey dispatcher runs, so the hotkeys.json binding only
+  // covers insert mode and non-Vim editing. Follows the Ctrl+Shift+M pattern:
+  // a pending numeric prefix becomes N additional tasks, and the Vim input
+  // state is reset before toggling.
+  registerCountedNowToggleInputListeners() {
+    this.handledCountedNowToggleEvents = new WeakSet();
+    const keydownHandler = (event) =>
+      this.handleCountedNowTogglePhysicalKeydown(event);
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleCountedNowTogglePhysicalKeydown(event) {
+    if (event && event.repeat) {
+      return false;
+    }
+    if (!this.isCountedNowToggleKeydown(event)) {
+      return false;
+    }
+    if (
+      this.handledCountedNowToggleEvents &&
+      this.handledCountedNowToggleEvents.has(event)
+    ) {
+      return false;
+    }
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
+      return false;
+    }
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const pendingRepeat = getPendingVimRepeat(cm);
+    if (this.handledCountedNowToggleEvents) {
+      this.handledCountedNowToggleEvents.add(event);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+    resetPendingVimInputState(cm, "counted-now-toggle");
+    void this.toggleNowTag(view.editor, {
+      countExplicit: pendingRepeat.explicit,
+      additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
+    }).catch(() => false);
+    return true;
+  }
+
+  isCountedNowToggleKeydown(event) {
+    return Boolean(
+      event &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      event.altKey &&
+      !event.metaKey &&
+      (event.code === "KeyN" || event.key === "n" || event.key === "N"),
     );
   }
 
@@ -27141,6 +28001,14 @@ module.exports.helpers = {
   createLinkPickerPropertyItems,
   groupLinkPickerTargetsByNote,
   getLinkPickerSessionSubtitle,
+  hasNowTag,
+  getNowTagTokenSpans,
+  addNowTagToLine,
+  removeNowTagFromLine,
+  planNowToggleBatch,
+  buildNowToggleNotice,
+  readNowBudgetValue,
+  describeNowToggleRow,
   discoverMovableObsidianTaskTargets,
   validateCountedTaskSession,
   parseTaskMoveContainerPrefix,

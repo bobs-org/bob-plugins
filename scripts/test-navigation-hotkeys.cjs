@@ -5282,7 +5282,11 @@ test("bullet property picker close lifecycle clears tracking for fresh sessions"
     [1],
   );
 
-  await secondPicker.openItemAtIndex(0);
+  const propertyIndex = secondPicker.visibleItems.findIndex(
+    (item) => item.property && item.property.name === "p",
+  );
+  assert.notEqual(propertyIndex, -1);
+  await secondPicker.openItemAtIndex(propertyIndex);
   assert.equal(plugin.activeBulletPropertyPicker, secondPicker);
   await secondPicker.openItemAtIndex(0);
   assert.equal(plugin.activeBulletPropertyPicker, null);
@@ -16776,4 +16780,386 @@ test("bare Ctrl+Shift+P on a #task line keeps the existing task behavior", () =>
   );
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
+});
+
+// now-toggle: Toggle #now from task lines and Task Links.
+// ---------------------------------------------------------------------------
+
+test("hasNowTag matches whole-token #now only", () => {
+  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #now"), true);
+  assert.equal(helpers.hasNowTag("#now"), true);
+  assert.equal(helpers.hasNowTag("task #now [a:: 1]"), true);
+  assert.equal(helpers.hasNowTag("- [ ] #task Ship it"), false);
+  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #nowadays"), false);
+  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #now/x"), false);
+  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #NOW"), false);
+});
+
+test("addNowTagToLine places the tag before fields and the block ID", () => {
+  assert.equal(
+    helpers.addNowTagToLine("- [ ] #task Ship it"),
+    "- [ ] #task Ship it #now",
+  );
+  assert.equal(
+    helpers.addNowTagToLine("- [ ] #task Ship it ^a1"),
+    "- [ ] #task Ship it #now ^a1",
+  );
+  assert.equal(
+    helpers.addNowTagToLine("- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1"),
+    "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^a1",
+  );
+  assert.equal(
+    helpers.addNowTagToLine("- [ ] #task Ship it [a:: 1] [b:: 2] ^a1"),
+    "- [ ] #task Ship it #now [a:: 1] [b:: 2] ^a1",
+  );
+  assert.equal(
+    helpers.addNowTagToLine("- [ ] #task Ship it #hide ^a1"),
+    "- [ ] #task Ship it #hide #now ^a1",
+  );
+  assert.equal(
+    helpers.addNowTagToLine("- [ ] #task Ship it #now ^a1"),
+    "- [ ] #task Ship it #now ^a1",
+  );
+  assert.equal(
+    helpers.addNowTagToLine("- [ ] #task Foo [a:: 1] bar [b:: 2] ^x"),
+    "- [ ] #task Foo [a:: 1] bar #now [b:: 2] ^x",
+  );
+});
+
+test("removeNowTagFromLine removes every token and collapses spaces", () => {
+  assert.equal(
+    helpers.removeNowTagFromLine("- [ ] #task Ship it #now"),
+    "- [ ] #task Ship it",
+  );
+  assert.equal(
+    helpers.removeNowTagFromLine("- [ ] #task Ship it #now ^a1"),
+    "- [ ] #task Ship it ^a1",
+  );
+  assert.equal(
+    helpers.removeNowTagFromLine(
+      "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^a1",
+    ),
+    "- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1",
+  );
+  assert.equal(
+    helpers.removeNowTagFromLine("- [ ] #task Ship it #now #now"),
+    "- [ ] #task Ship it",
+  );
+  assert.equal(
+    helpers.removeNowTagFromLine("- [ ] #task Ship it #hide #now ^a1"),
+    "- [ ] #task Ship it #hide ^a1",
+  );
+  assert.equal(
+    helpers.removeNowTagFromLine("- [ ] #task Ship it #nowadays ^a1"),
+    "- [ ] #task Ship it #nowadays ^a1",
+  );
+  assert.equal(
+    helpers.removeNowTagFromLine("- [ ] #task #task #now"),
+    "- [ ] #task #task",
+  );
+});
+
+test("planNowToggleBatch adds when any target lacks #now, else removes", () => {
+  const content = [
+    "- [ ] #task One ^a1",
+    "- [ ] #task Two #now ^b1",
+    "- [ ] #task Three ^c1",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 2);
+  assert.equal(session.valid, true);
+  assert.deepEqual(
+    session.targets.map((target) => target.line),
+    [0, 1, 2],
+  );
+  const added = helpers.planNowToggleBatch(content, session);
+  assert.equal(added.valid, true);
+  assert.equal(added.added, true);
+  assert.equal(added.changedTaskCount, 2);
+  assert.deepEqual(added.content.split("\n"), [
+    "- [ ] #task One #now ^a1",
+    "- [ ] #task Two #now ^b1",
+    "- [ ] #task Three #now ^c1",
+  ]);
+
+  const removeSession = helpers.discoverCountedObsidianTaskTargets(
+    added.content,
+    0,
+    2,
+  );
+  const removed = helpers.planNowToggleBatch(added.content, removeSession);
+  assert.equal(removed.valid, true);
+  assert.equal(removed.added, false);
+  assert.equal(removed.changedTaskCount, 3);
+  assert.deepEqual(removed.content.split("\n"), [
+    "- [ ] #task One ^a1",
+    "- [ ] #task Two ^b1",
+    "- [ ] #task Three ^c1",
+  ]);
+});
+
+test("planNowToggleBatch refuses stale preimages and honors a forced direction", () => {
+  const content = "- [ ] #task One ^a1\n- [ ] #task Two ^b1";
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
+  const staleSession = {
+    ...session,
+    targets: [{ line: 0, rawLine: "- [ ] #task One, edited ^a1" }],
+  };
+  const stale = helpers.planNowToggleBatch(content, staleSession);
+  assert.equal(stale.valid, false);
+  assert.equal(stale.stale, true);
+
+  const mixed = "- [ ] #task One #now ^a1\n- [ ] #task Two ^b1";
+  const mixedSession = helpers.discoverCountedObsidianTaskTargets(mixed, 0, 1);
+  const forcedRemove = helpers.planNowToggleBatch(mixed, mixedSession, {
+    added: false,
+  });
+  assert.equal(forcedRemove.valid, true);
+  assert.equal(forcedRemove.added, false);
+  assert.deepEqual(forcedRemove.content.split("\n"), [
+    "- [ ] #task One ^a1",
+    "- [ ] #task Two ^b1",
+  ]);
+});
+
+test("buildNowToggleNotice reports counts with and without the API", () => {
+  assert.equal(
+    helpers.buildNowToggleNotice({ added: true, changedTaskCount: 3 }),
+    "#now added · 3 tasks",
+  );
+  assert.equal(
+    helpers.buildNowToggleNotice({
+      added: true,
+      changedTaskCount: 1,
+      nowBudget: { count: 12, cap: 15 },
+    }),
+    "#now added · 1 task · NOW 13/15",
+  );
+  assert.equal(
+    helpers.buildNowToggleNotice({
+      added: true,
+      changedTaskCount: 3,
+      nowBudget: { count: 14, cap: 15 },
+    }),
+    "#now added · 3 tasks · NOW 17/15 🔴 · prune at the weekly review",
+  );
+  assert.equal(
+    helpers.buildNowToggleNotice({
+      added: false,
+      changedTaskCount: 2,
+      nowBudget: { count: 16, cap: 15 },
+    }),
+    "#now removed · 2 tasks · NOW 14/15",
+  );
+});
+
+test("describeNowToggleRow covers task, counted, and link sessions", () => {
+  const single = helpers.describeNowToggleRow("- [ ] #task Ship it ^a1", {
+    cursorLine: 0,
+  });
+  assert.deepEqual(single, {
+    kind: "task",
+    count: 1,
+    added: true,
+    detail: "this week · add",
+  });
+  const singleTagged = helpers.describeNowToggleRow(
+    "- [ ] #task Ship it #now ^a1",
+    { cursorLine: 0 },
+  );
+  assert.equal(singleTagged.detail, "this week · remove");
+  assert.equal(
+    helpers.describeNowToggleRow("- just a bullet", { cursorLine: 0 }),
+    null,
+  );
+  const content = "- [ ] #task One ^a1\n- [ ] #task Two #now ^b1";
+  const counted = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
+  const countedRow = helpers.describeNowToggleRow(content, {
+    taskSession: counted,
+  });
+  assert.equal(countedRow.detail, "this week · add");
+  assert.equal(countedRow.count, 2);
+  const linkRow = helpers.describeNowToggleRow("", {
+    linkResolved: [
+      { rawLine: "- [ ] #task One #now ^a1" },
+      { rawLine: "- [ ] #task Two #now ^b1" },
+    ],
+  });
+  assert.equal(linkRow.detail, "this week · remove");
+  assert.equal(linkRow.kind, "link");
+});
+
+test("toggleNowTag on a task line adds before fields and reports NOW", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor(
+    "- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1",
+    { line: 0, ch: 5 },
+  );
+  const files = new Map([
+    ["Plan.md", { path: "Plan.md", basename: "Plan.md", extension: "md" }],
+  ]);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": { api: { nowBudget: () => ({ count: 12, cap: 15, over: false }) } },
+      },
+    },
+    vault: {},
+    workspace: { getLeavesOfType: () => [] },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
+  assert.equal(await plugin.toggleNowTag(editor), true);
+  assert.equal(
+    editor.content,
+    "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^a1",
+  );
+  assert.match(notices.at(-1), /#now added · 1 task · NOW 13\/15/);
+  notices.length = 0;
+  assert.equal(await plugin.toggleNowTag(editor), true);
+  assert.equal(
+    editor.content,
+    "- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1",
+  );
+  assert.match(notices.at(-1), /#now removed · 1 task · NOW 11\/15/);
+});
+
+test("counted toggleNowTag covers the current task plus the next N tasks", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor(
+    [
+      "- [ ] #task One ^a1",
+      "- [ ] #task Two ^b1",
+      "- plain bullet",
+      "- [ ] #task Three ^c1",
+    ].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const files = new Map([
+    ["Plan.md", { path: "Plan.md", basename: "Plan.md", extension: "md" }],
+  ]);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    plugins: { plugins: {} },
+    vault: {},
+    workspace: { getLeavesOfType: () => [] },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
+  assert.equal(
+    await plugin.toggleNowTag(editor, {
+      countExplicit: true,
+      additionalTaskCount: 1,
+    }),
+    true,
+  );
+  assert.deepEqual(editor.content.split("\n"), [
+    "- [ ] #task One #now ^a1",
+    "- [ ] #task Two #now ^b1",
+    "- plain bullet",
+    "- [ ] #task Three ^c1",
+  ]);
+  assert.match(notices.at(-1), /#now added · 2 tasks/);
+  assert.doesNotMatch(notices.at(-1), /NOW/);
+});
+
+test("toggleNowTag on a Task Link writes through the open buffer", async () => {
+  notices.length = 0;
+  const taskEditor = new TransactionEditor("- [ ] #task Ship it ^a1", {
+    line: 0,
+    ch: 0,
+  });
+  const harness = createLinkPickerHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: { "Tasks.md": "- [ ] #task Ship it ^a1" },
+    openEditors: { "Tasks.md": taskEditor },
+  });
+  harness.plugin.app.plugins = { plugins: {} };
+  assert.equal(await harness.plugin.toggleNowTag(harness.linkEditor), true);
+  assert.equal(taskEditor.content, "- [ ] #task Ship it #now ^a1");
+  assert.equal(harness.linkEditor.content, "- [[Tasks#^a1]]");
+  assert.match(notices.at(-1), /#now added · 1 task/);
+  assert.doesNotMatch(notices.at(-1), /NOW/);
+});
+
+test("toggleNowTag on Task Links shares one global add across notes", async () => {
+  notices.length = 0;
+  const taggedEditor = new TransactionEditor(
+    "- [ ] #task Tagged #now ^a1",
+    { line: 0, ch: 0 },
+  );
+  const harness = createLinkPickerHarness({
+    linkContent: ["- [[Tasks#^a1]]", "- [[Other#^b1]]"].join("\n"),
+    notes: {
+      "Tasks.md": "- [ ] #task Tagged #now ^a1",
+      "Other.md": "- [ ] #task Untagged ^b1",
+    },
+    openEditors: { "Tasks.md": taggedEditor },
+  });
+  harness.plugin.app.plugins = {
+    plugins: {
+      "bob-ledger-tools": { api: { nowBudget: () => ({ count: 10, cap: 15, over: false }) } },
+    },
+  };
+  assert.equal(
+    await harness.plugin.toggleNowTag(harness.linkEditor, {
+      countExplicit: true,
+      additionalTaskCount: 5,
+    }),
+    true,
+  );
+  assert.equal(taggedEditor.content, "- [ ] #task Tagged #now ^a1");
+  assert.equal(
+    harness.notes["Other.md"],
+    "- [ ] #task Untagged #now ^b1",
+  );
+  assert.match(notices.at(-1), /#now added · 1 task · NOW 11\/15/);
+});
+
+test("Ctrl+Shift+P shows a pinned #now row that toggles immediately", async () => {
+  notices.length = 0;
+  const harness = createLinkPickerHarness({
+    linkContent: "- [ ] #task Ship it [scheduled:: 2026-09-30] ^me",
+    notes: { "Tasks.md": "- [ ] #task Ship it ^a1" },
+  });
+  assert.equal(
+    harness.plugin.openBulletPropertyPicker(harness.linkEditor, {
+      config: harness.config,
+    }),
+    true,
+  );
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.ok(picker.visibleItems.length > 0);
+  assert.equal(picker.visibleItems[0].kind, "now-toggle");
+  assert.equal(picker.visibleItems[0].property.name, "#now");
+  assert.equal(picker.visibleItems[0].detail, "this week · add");
+  harness.plugin.app.plugins = { plugins: {} };
+  await picker.openItemAtIndex(0);
+  assert.equal(
+    harness.linkEditor.content,
+    "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^me",
+  );
+  assert.match(notices.at(-1), /#now added · 1 task/);
+  picker.close();
+  harness.plugin.activeBulletPropertyPicker = null;
+});
+
+test("Ctrl+Shift+P link mode shows the #now row with link detail", async () => {
+  notices.length = 0;
+  const taskEditor = new TransactionEditor("- [ ] #task Ship it ^a1", {
+    line: 0,
+    ch: 0,
+  });
+  const harness = createLinkPickerHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: { "Tasks.md": "- [ ] #task Ship it ^a1" },
+    openEditors: { "Tasks.md": taskEditor },
+  });
+  assert.equal(await harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.isLinkSession(), true);
+  assert.equal(picker.visibleItems[0].kind, "now-toggle");
+  assert.equal(picker.visibleItems[0].detail, "this week · add");
+  harness.plugin.app.plugins = { plugins: {} };
+  await picker.openItemAtIndex(0);
+  assert.equal(taskEditor.content, "- [ ] #task Ship it #now ^a1");
+  assert.match(notices.at(-1), /#now added · 1 task/);
 });

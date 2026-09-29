@@ -12850,6 +12850,348 @@ function validateCountedTaskSession(content, session) {
   return Object.freeze({ valid: true, error: null, staleTarget: null });
 }
 
+// ---------------------------------------------------------------------------
+// link-picker: Ctrl+Shift+P edits the task behind a Task Link bullet.
+//
+// A dedicated Task Link bullet is a bullet whose body, after an optional
+// checkbox, optional 🍅 markers, an optional wrapping ~~…~~, and an optional
+// trailing `#` move-only marker, is exactly one block link `[[T#^id]]` or
+// `![[T#^id]]` with an optional alias. This mirrors block-id-prompt's
+// dedicated-link grammar so both plugins agree on what a Task Link bullet is,
+// but stays self-contained because plugins deploy separately.
+// ---------------------------------------------------------------------------
+const LINK_PICKER_DEDICATED_BODY_RE =
+  /^(?:\[[^\]\n]\][ \t]+)?(?:🍅[ \t]+)*(~~)?(!)?\[\[([^\]\n]*?)#\^([A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\](~~)?(?:[ \t]*#)?[ \t]*$/u;
+
+// Parse a dedicated Task Link bullet line into its link parts, or null when
+// the line is not one. The body must hold exactly one block link; a
+// strikethrough marker must wrap both sides or neither.
+function parseLinkPickerTaskLink(lineText) {
+  const line = String(lineText || "");
+  const bounds = pomodoroBulletBodyBounds(line);
+  if (!bounds) {
+    return null;
+  }
+  const body = line.slice(bounds.start, bounds.end);
+  const match = LINK_PICKER_DEDICATED_BODY_RE.exec(body);
+  if (!match) {
+    return null;
+  }
+  const strikeOpen = match[1] || null;
+  const strikeClose = match[5] || null;
+  if (Boolean(strikeOpen) !== Boolean(strikeClose)) {
+    return null;
+  }
+  return Object.freeze({
+    target: String(match[3] || "").trim(),
+    blockId: match[4],
+    embedded: Boolean(match[2]),
+    struck: Boolean(strikeOpen),
+  });
+}
+
+// Discover the Task Links a counted Ctrl+Shift+P covers: the dedicated link
+// under the cursor plus the next N dedicated Task Link siblings — same indent
+// depth, same parent block (for ledger links, the same Pomodoro entry), in
+// document order, skipping non-link siblings. The scan stops when the parent
+// block ends and clamps there. On a #task line the existing task behavior is
+// unchanged, so a non-link line reports `notLink` instead of an error and the
+// caller falls through to the regular picker path.
+function discoverLinkPickerTargets(content, startLine, additionalTaskCount) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const line = Math.floor(numericOrDefault(startLine, Number.NaN));
+  const additional = Math.max(
+    0,
+    Math.floor(numericOrDefault(additionalTaskCount, 0)),
+  );
+  const requestedCount = additional + 1;
+  const contexts = getMarkdownLineContexts(text);
+  const invalid = (error, notLink = false) =>
+    Object.freeze({
+      valid: false,
+      error,
+      notLink,
+      explicit: additional > 0,
+      kind: "task-link",
+      startLine: Number.isFinite(line) ? line : null,
+      requestedAdditionalCount: additional,
+      requestedCount,
+      actualCount: 0,
+      clamped: false,
+      targets: Object.freeze([]),
+    });
+  if (
+    !Number.isFinite(line) ||
+    line < 0 ||
+    line >= source.lines.length ||
+    (contexts[line] && contexts[line].inFence)
+  ) {
+    return invalid("Cursor is not on a Task Link", true);
+  }
+  if (isObsidianTaskAtLine(text, line, contexts, source.lines)) {
+    return invalid("Cursor is not on a Task Link", true);
+  }
+  const firstLink = parseLinkPickerTaskLink(source.lines[line]);
+  if (!firstLink) {
+    return invalid("Cursor is not on a Task Link", true);
+  }
+
+  const cursorIndent = getBulletIndentWidth(String(source.lines[line] || ""));
+  const targets = [
+    Object.freeze({
+      line,
+      rawLine: String(source.lines[line] || ""),
+      link: firstLink,
+    }),
+  ];
+  let clamped = false;
+  for (
+    let lineIndex = line + 1;
+    lineIndex < source.lines.length && targets.length < requestedCount;
+    lineIndex += 1
+  ) {
+    const lineText = String(source.lines[lineIndex] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+    if (contexts[lineIndex] && contexts[lineIndex].inFence) {
+      continue;
+    }
+    const indent = getBulletIndentWidth(lineText);
+    if (indent < cursorIndent) {
+      clamped = targets.length < requestedCount;
+      break;
+    }
+    if (
+      cursorIndent === 0 &&
+      !PROJECT_LIST_ITEM_RE.test(lineText)
+    ) {
+      clamped = targets.length < requestedCount;
+      break;
+    }
+    if (indent !== cursorIndent) {
+      continue;
+    }
+    const link = parseLinkPickerTaskLink(lineText);
+    if (!link) {
+      continue;
+    }
+    targets.push(
+      Object.freeze({ line: lineIndex, rawLine: lineText, link }),
+    );
+  }
+  if (targets.length < requestedCount) {
+    clamped = true;
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    notLink: false,
+    explicit: additional > 0,
+    kind: "task-link",
+    startLine: line,
+    requestedAdditionalCount: additional,
+    requestedCount,
+    actualCount: targets.length,
+    clamped,
+    targets: Object.freeze(targets),
+  });
+}
+
+// Resolve a block ID to its task line inside one note's content. The ID must
+// be unique and must sit on an open #task line; anything else reports an
+// error the caller surfaces as a Notice without changing anything.
+function findUniqueLinkPickerTargetLine(noteContent, blockId) {
+  const id = normalizeBulletPropertyValue(blockId);
+  const text = String(noteContent || "");
+  if (!id) {
+    return Object.freeze({ valid: false, error: "missing", line: null });
+  }
+  const source = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const matches = [];
+  for (let index = 0; index < source.lines.length; index += 1) {
+    if (
+      getTrailingBlockId(String(source.lines[index] || "")) === id
+    ) {
+      matches.push(index);
+    }
+  }
+  if (matches.length === 0) {
+    return Object.freeze({ valid: false, error: "missing", line: null });
+  }
+  if (matches.length !== 1) {
+    return Object.freeze({ valid: false, error: "duplicated", line: null });
+  }
+  const line = matches[0];
+  const rawLine = String(source.lines[line] || "");
+  if (!isObsidianTaskAtLine(text, line, contexts, source.lines)) {
+    return Object.freeze({ valid: false, error: "not-task", line: null });
+  }
+  if (!isOpenObsidianTaskLine(rawLine)) {
+    return Object.freeze({ valid: false, error: "closed", line: null });
+  }
+  return Object.freeze({ valid: true, error: null, line, rawLine });
+}
+
+// Aggregate one property row across link-picker targets that live in different
+// notes. Mirrors createCountedBulletPropertyItems (common only when every
+// target defines the same value, otherwise mixed) but reads each target from
+// its own note content. The dependsOn row stays hidden in link mode: remote
+// tasks are edited through their own notes, never via dependency transclusion.
+function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
+  const targets = Array.isArray(resolvedTargets) ? resolvedTargets : [];
+  if (targets.length === 0) {
+    return Object.freeze({ valid: false, error: "No linked tasks", items: [] });
+  }
+  const properties = (config && Array.isArray(config.properties)
+    ? config.properties
+    : []
+  ).filter(
+    (property) =>
+      normalizeBulletPropertyName(property && property.name) !==
+        "dependsOn" &&
+      (!property || property.values !== "local_task_id"),
+  );
+  const items = [];
+  for (let order = 0; order < properties.length; order += 1) {
+    const property = properties[order];
+    const states = [];
+    for (const target of targets) {
+      const state = getCountedPropertyTargetState(
+        target.content,
+        { line: target.line, rawLine: target.rawLine },
+        property,
+        options,
+      );
+      if (!state.valid) {
+        return Object.freeze({ valid: false, error: state.error, items: [] });
+      }
+      states.push(state);
+    }
+
+    const definedStates = states.filter((state) => state.defined);
+    const values = Array.from(
+      new Set(definedStates.map((state) => state.value)),
+    );
+    const allDefined = definedStates.length === states.length;
+    const valueState =
+      definedStates.length === 0
+        ? "absent"
+        : allDefined && values.length === 1
+          ? "common"
+          : "mixed";
+    const currentLabels = Object.freeze(
+      values.map((value) => getBulletPropertyCurrentLabel(property, value)),
+    );
+    items.push({
+      kind: "property",
+      property,
+      target: Object.freeze({ kind: "link-picker-batch" }),
+      order,
+      defined: definedStates.length > 0,
+      definedCount: definedStates.length,
+      targetCount: states.length,
+      currentValue: valueState === "common" ? values[0] : "",
+      currentLabel: valueState === "common" ? currentLabels[0] : "",
+      currentValues: Object.freeze(values),
+      currentLabels,
+      valueState,
+      mixed: valueState === "mixed",
+      dependencyEligible: false,
+      sourceStates: Object.freeze(states),
+    });
+  }
+
+  items.sort((first, second) => {
+    if (first.defined !== second.defined) {
+      return first.defined ? -1 : 1;
+    }
+    return first.order - second.order;
+  });
+  return Object.freeze({
+    valid: true,
+    error: null,
+    items: Object.freeze(items),
+  });
+}
+
+// Group resolved link-picker targets by note so each note is planned with the
+// pure counted-batch planner and written with one guarded transaction.
+function groupLinkPickerTargetsByNote(resolvedTargets) {
+  const groups = new Map();
+  for (const target of Array.isArray(resolvedTargets)
+    ? resolvedTargets
+    : []) {
+    if (!target || !target.path) {
+      continue;
+    }
+    if (!groups.has(target.path)) {
+      groups.set(
+        target.path,
+        Object.freeze({
+          path: target.path,
+          file: target.file || null,
+          content: target.content,
+          targets: [],
+        }),
+      );
+    }
+    groups.get(target.path).targets.push(
+      Object.freeze({ line: target.line, rawLine: target.rawLine }),
+    );
+  }
+  return Array.from(groups.values()).map((group) =>
+    Object.freeze({
+      path: group.path,
+      file: group.file,
+      content: group.content,
+      session: Object.freeze({
+        valid: true,
+        error: null,
+        explicit: true,
+        kind: "task-link",
+        startLine: group.targets[0] ? group.targets[0].line : null,
+        requestedAdditionalCount: group.targets.length - 1,
+        requestedCount: group.targets.length,
+        actualCount: group.targets.length,
+        clamped: false,
+        targets: Object.freeze(group.targets),
+      }),
+    }),
+  );
+}
+
+// Picker subtitle for a link session: `↗ <note> · <task text>` for one link,
+// a link count for a batch, and the clamp notice at the parent's end.
+function getLinkPickerSessionSubtitle(session) {
+  if (!session || !Array.isArray(session.targets)) {
+    return "";
+  }
+  if (session.actualCount <= 1) {
+    const first =
+      session.resolved && session.resolved.length > 0
+        ? session.resolved[0]
+        : null;
+    if (!first) {
+      return "Task Link";
+    }
+    const note = getVaultPathBasenameWithoutExtension(first.path || "");
+    const task = truncateBulletPropertySubtitle(
+      cleanTaskDisplayText(first.rawLine || ""),
+    );
+    return `↗ ${note} · ${task}`;
+  }
+  if (session.clamped) {
+    return `${formatCountLabel(session.actualCount, "link")} of ${
+      session.requestedCount
+    } requested · end of Pomodoro`;
+  }
+  return formatCountLabel(session.actualCount, "link");
+}
+
 // A task move uses the same count convention as counted property editing, but
 // project lifecycle tasks are structural controls and therefore never become
 // move targets. The first line must itself be movable; later ^prj tasks are
@@ -16148,6 +16490,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.propertyContext = context.propertyContext || {};
     this.filePath = context.filePath || "";
     this.taskSession = context.taskSession || null;
+    this.linkSession = context.linkSession || null;
     this.bulletSubtitle = truncateBulletPropertySubtitle(lineText);
     this.stage = "properties";
     this.selectedPropertyItem = null;
@@ -16180,7 +16523,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
   }
 
+  isLinkSession() {
+    return Boolean(
+      this.linkSession &&
+        this.linkSession.kind === "task-link" &&
+        Array.isArray(this.linkSession.targets) &&
+        this.linkSession.targets.length > 0,
+    );
+  }
+
   getTaskSessionSubtitle() {
+    if (this.isLinkSession()) {
+      return getLinkPickerSessionSubtitle(this.linkSession);
+    }
     if (!this.isCountedSession()) {
       return this.bulletSubtitle;
     }
@@ -16201,7 +16556,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
     let items;
-    if (this.isCountedSession()) {
+    if (this.isLinkSession()) {
+      const aggregate = createLinkPickerPropertyItems(
+        this.config,
+        this.linkSession.resolved,
+      );
+      if (!aggregate.valid) {
+        new Notice(aggregate.error);
+        items = [];
+      } else {
+        items = aggregate.items;
+      }
+    } else if (this.isCountedSession()) {
       const aggregate = createCountedBulletPropertyItems(
         this.config,
         this.getEditorContent(),
@@ -16278,6 +16644,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.selectedIndex = 0;
     const property = propertyItem.property;
     if (property.values === "local_task_id") {
+      if (this.isLinkSession()) {
+        new Notice("Dependencies cannot be set through a Task Link");
+        this.showPropertyStage({ clearQuery: false });
+        return;
+      }
       const validation = this.isCountedSession()
         ? validateCountedTaskSession(
             this.getEditorContent(),
@@ -16387,7 +16758,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // own previous value is resolved by the counted planner instead.
   getPendingScheduleFrom() {
     const propertyItem = this.selectedPropertyItem;
-    if (!propertyItem || this.isCountedSession()) {
+    if (
+      !propertyItem ||
+      this.isCountedSession() ||
+      this.isLinkSession()
+    ) {
       return "";
     }
 
@@ -16409,6 +16784,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     return (
       this.isCountedSession() ||
+      this.isLinkSession() ||
       Boolean(findScheduleLogParent(this.getEditorContent(), this.cursor.line))
     );
   }
@@ -16585,6 +16961,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
   getPriorityRollLevel(dateProperty) {
     if (!dateProperty || dateProperty.values !== "date") {
+      return null;
+    }
+    if (this.isLinkSession()) {
       return null;
     }
 
@@ -17931,6 +18310,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
+    if (this.isLinkSession()) {
+      return await this.plugin.applyLinkPickerPropertyValue(
+        this,
+        item,
+        options,
+      );
+    }
+
     if (this.isCountedSession()) {
       if (this.selectedPropertyItem.property.values === "priority") {
         return await this.plugin.setCountedBulletPriorityValue(
@@ -18956,6 +19343,699 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return consolidatedTasks > 0;
   }
 
+  // Read one note's current content for link-picker resolution and planning:
+  // the live open editor first, then any open buffer, then the vault. Null
+  // when the note cannot be read (including ambiguous open buffers, mirroring
+  // readDeferredPomodoroSnapshot).
+  async readLinkPickerNoteContent(path, file) {
+    const normalized = normalizeVaultRelativePath(path);
+    const editor = this.getOpenMarkdownEditorForPath(normalized);
+    if (editor && typeof editor.getValue === "function") {
+      return String(editor.getValue() || "");
+    }
+    const buffers = getOpenMarkdownBufferContents(this.app);
+    if (buffers.ambiguous) {
+      return null;
+    }
+    if (buffers.has(normalized)) {
+      return String(buffers.get(normalized) || "");
+    }
+    const vault = this.app && this.app.vault;
+    const vaultFile =
+      file ||
+      (vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(normalized)
+        : null);
+    if (!vault || !vaultFile) {
+      return null;
+    }
+    try {
+      if (typeof vault.cachedRead === "function") {
+        return String((await vault.cachedRead(vaultFile)) || "");
+      }
+      if (typeof vault.read === "function") {
+        return String((await vault.read(vaultFile)) || "");
+      }
+    } catch (error) {
+      return null;
+    }
+    return null;
+  }
+
+  // Resolve every discovered Task Link to the open #task line behind it,
+  // reading the target's live editor buffer when it is open. Either every
+  // link resolves or the whole result is an error: a missing, duplicated,
+  // non-task, or closed target changes nothing.
+  async resolveLinkPickerTargets(sourcePath, discovery) {
+    const targets = [];
+    const seen = new Set();
+    for (const entry of discovery.targets || []) {
+      const linkTarget = `${entry.link.target}#^${entry.link.blockId}`;
+      const file = this.resolveLinkTargetFile(linkTarget, sourcePath);
+      if (!file || !this.isMarkdownFile(file)) {
+        return Object.freeze({
+          error: `Task link target not found: ${
+            entry.link.target || "(this note)"
+          }#^${entry.link.blockId}`,
+          targets: null,
+        });
+      }
+      const path = normalizeVaultRelativePath(file.path);
+      const content = await this.readLinkPickerNoteContent(path, file);
+      if (content === null) {
+        return Object.freeze({
+          error: `Task link blocked: ${path} could not be read`,
+          targets: null,
+        });
+      }
+      const found = findUniqueLinkPickerTargetLine(
+        content,
+        entry.link.blockId,
+      );
+      if (!found.valid) {
+        if (found.error === "missing" || found.error === "duplicated") {
+          return Object.freeze({
+            error: `Task link target ^${entry.link.blockId} is missing or duplicated in ${path}`,
+            targets: null,
+          });
+        }
+        return Object.freeze({
+          error: `Task link target ^${entry.link.blockId} is not an open task in ${path}`,
+          targets: null,
+        });
+      }
+      const key = `${path} ${entry.link.blockId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      targets.push(
+        Object.freeze({
+          path,
+          file,
+          content,
+          line: found.line,
+          rawLine: found.rawLine,
+          blockId: entry.link.blockId,
+          displayText: cleanTaskDisplayText(found.rawLine),
+        }),
+      );
+    }
+    return Object.freeze({ error: null, targets: Object.freeze(targets) });
+  }
+
+  // Open the bullet-property picker in link mode against the tasks behind the
+  // dedicated Task Links under the cursor. Async because target notes are read
+  // from the vault when they have no open buffer; the synchronous
+  // openBulletPropertyPicker detects the link bullet and hands off here.
+  async openLinkPicker(cm, options = {}) {
+    const activePicker = this.activeBulletPropertyPicker;
+    const incomingCountExplicit = options.countExplicit === true;
+    if (activePicker) {
+      const activeCountExplicit = Boolean(
+        activePicker.taskSession && activePicker.taskSession.explicit,
+      );
+      if (!incomingCountExplicit || activeCountExplicit) {
+        return true;
+      }
+      activePicker.close();
+    }
+
+    const cursor = getEditorCursor(cm);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const lineText = getEditorLine(cm, cursor.line);
+    if (lineText === null) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content =
+      cm && typeof cm.getValue === "function"
+        ? String(cm.getValue() || "")
+        : "";
+    const discovery =
+      options.linkDiscovery ||
+      discoverLinkPickerTargets(
+        content,
+        cursor.line,
+        incomingCountExplicit ? options.additionalTaskCount : 0,
+      );
+    if (!discovery.valid) {
+      new Notice(
+        discovery.notLink ? "Cursor is not on a Task Link" : discovery.error,
+      );
+      return false;
+    }
+
+    const activeView = this.getActiveMarkdownView();
+    if (!activeView || activeView.editor !== cm || !activeView.file) {
+      new Notice("No active markdown note");
+      return false;
+    }
+    const filePath = activeView.file.path;
+    const resolution = await this.resolveLinkPickerTargets(
+      filePath,
+      discovery,
+    );
+    if (resolution.error) {
+      new Notice(resolution.error);
+      return false;
+    }
+    if (
+      cm &&
+      typeof cm.getValue === "function" &&
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+
+    const config = options.config || loadBulletPropertyConfig();
+    if (!config) {
+      return false;
+    }
+    const linkSession = Object.freeze({
+      ...discovery,
+      resolved: resolution.targets,
+    });
+    const aggregate = createLinkPickerPropertyItems(
+      config,
+      linkSession.resolved,
+    );
+    if (!aggregate.valid) {
+      new Notice(aggregate.error);
+      return false;
+    }
+    const basePropertyContext = getProjectNotePropertyContext(
+      content,
+      cursor.line,
+    );
+    if (!basePropertyContext.valid) {
+      new Notice(basePropertyContext.error);
+      return false;
+    }
+
+    const picker = new BulletPropertyPickerModal(
+      this.app,
+      this,
+      cm,
+      cursor,
+      lineText,
+      config,
+      {
+        filePath,
+        propertyContext: { ...basePropertyContext, isObsidianTask: false },
+        linkSession,
+        random: options.random,
+        baseDate: options.baseDate,
+      },
+    );
+    this.activeBulletPropertyPicker = picker;
+    try {
+      picker.open();
+    } catch (error) {
+      if (this.activeBulletPropertyPicker === picker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      throw error;
+    }
+    return true;
+  }
+
+  // Write one planned link-picker note change: through the open editor when
+  // one exists, otherwise through vault.process with a preimage guard, as
+  // writeTaskMoveChange does. Throws when the preimage changed.
+  async writeLinkPickerNoteChange(path, file, before, after) {
+    const editor = this.getOpenMarkdownEditorForPath(path);
+    if (editor && typeof editor.getValue === "function") {
+      if (String(editor.getValue() || "") !== before) {
+        throw new Error(`Task Link preimage changed: ${path}`);
+      }
+      const applied = applyEditorContentTransaction(editor, before, after);
+      if (!applied || String(editor.getValue() || "") !== after) {
+        throw new Error(`Task Link editor transaction failed: ${path}`);
+      }
+      return;
+    }
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.process !== "function" || !file) {
+      throw new Error("Vault content updates are unavailable");
+    }
+    let transformed = false;
+    await vault.process(file, (content) => {
+      if (String(content || "") !== before) {
+        throw new Error(`Task Link preimage changed: ${path}`);
+      }
+      transformed = true;
+      return after;
+    });
+    if (!transformed) {
+      throw new Error(`Task Link file transaction failed: ${path}`);
+    }
+  }
+
+  // Apply one picked property value to every task behind the picker's Task
+  // Links. Targets are grouped by note and each note is planned with the pure
+  // counted-batch planner; tasks given a strictly future scheduled date are
+  // marked Blocked by that planner and pruned from today's open Pomodoros
+  // afterwards. Write order is targets, then the daily note. The whole
+  // operation is refused when any preimage changed.
+  async applyLinkPickerPropertyValue(picker, item, options = {}) {
+    const linkSession = picker.linkSession;
+    const property = picker.selectedPropertyItem &&
+      picker.selectedPropertyItem.property;
+    if (!linkSession || !property || !item) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    if (property.values === "priority") {
+      return await this.applyLinkPickerPriorityValue(picker, item, options);
+    }
+    const name = normalizeBulletPropertyName(property.name);
+    const value = item.value;
+    const baseDate = picker.valueBaseDate instanceof Date
+      ? picker.valueBaseDate
+      : getLocalDateStart(new Date());
+    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    if (groups.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+
+    const planned = [];
+    for (const group of groups) {
+      let recoveryByLine = null;
+      if (
+        name === "scheduled" &&
+        isDueInlineScheduledValue(value, baseDate)
+      ) {
+        recoveryByLine = await buildTargetScheduledRecoveryByLine(
+          this.app,
+          group.path,
+          group.content,
+          group.session.targets.map((target) => target.line),
+          baseDate,
+        );
+        const guarded = await this.readLinkPickerNoteContent(
+          group.path,
+          group.file,
+        );
+        if (guarded !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+      }
+      const plan = planCountedBulletPropertyBatch(
+        group.content,
+        group.session,
+        name,
+        value,
+        {
+          operation: "set",
+          today: baseDate,
+          recoveryByLine,
+          scheduleLog: options.scheduleLog,
+        },
+      );
+      if (!plan.valid) {
+        new Notice(
+          plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+        );
+        return false;
+      }
+      planned.push({ group, plan });
+    }
+
+    return await this.commitLinkPickerPlans(
+      picker,
+      linkSession,
+      planned,
+      baseDate,
+      {
+        header: `${name} → ${normalizeBulletPropertyValue(value)}`,
+        scheduleLog: options.scheduleLog,
+      },
+    );
+  }
+
+  // Apply one picked priority level to every task behind the picker's Task
+  // Links, rolling an independent scheduled date per target exactly as the
+  // counted priority writer does.
+  async applyLinkPickerPriorityValue(picker, item, options = {}) {
+    const linkSession = picker.linkSession;
+    const property = picker.selectedPropertyItem &&
+      picker.selectedPropertyItem.property;
+    const level = item && item.priorityLevel;
+    if (!linkSession || !property || property.values !== "priority" || !level) {
+      new Notice("Could not update priority: invalid configured level");
+      return false;
+    }
+    const baseDate = picker.valueBaseDate instanceof Date
+      ? picker.valueBaseDate
+      : getLocalDateStart(new Date());
+    const random = typeof picker.priorityRandom === "function"
+      ? picker.priorityRandom
+      : Math.random;
+    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    if (groups.length === 0) {
+      new Notice("Could not update priority: invalid configured level");
+      return false;
+    }
+
+    const planned = [];
+    const rolledDates = [];
+    for (const group of groups) {
+      const rollByLine = new Map(
+        group.session.targets.map((target) => [
+          target.line,
+          rollPriorityScheduledDateWithOffset(level, baseDate, random),
+        ]),
+      );
+      const scheduledValueByLine = new Map(
+        Array.from(rollByLine, ([line, roll]) => [
+          line,
+          formatBulletPropertyDate(roll.date),
+        ]),
+      );
+      for (const date of scheduledValueByLine.values()) {
+        rolledDates.push(date);
+      }
+      let recoveryByLine = null;
+      if (
+        Array.from(scheduledValueByLine.values()).some((scheduledValue) =>
+          isDueInlineScheduledValue(scheduledValue, baseDate)
+        )
+      ) {
+        recoveryByLine = await buildTargetScheduledRecoveryByLine(
+          this.app,
+          group.path,
+          group.content,
+          group.session.targets.map((target) => target.line),
+          baseDate,
+        );
+        const guarded = await this.readLinkPickerNoteContent(
+          group.path,
+          group.file,
+        );
+        if (guarded !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+      }
+      const scheduleLogReasonByLine = new Map(
+        group.session.targets.map((target) => [
+          target.line,
+          formatPriorityRollScheduleReason({
+            source: "priority",
+            level,
+            rolledDays: (rollByLine.get(target.line) || {}).offset,
+            fromLevelLabel: getPriorityRollFromLevelLabel(
+              property,
+              (findBulletPropertyField(target.rawLine, property.name) || {})
+                .value || "",
+            ),
+          }),
+        ]),
+      );
+      const plan = planCountedBulletPropertyBatch(
+        group.content,
+        group.session,
+        property.name,
+        null,
+        {
+          operation: "set-priority",
+          priorityValue: level.value,
+          scheduledPropertyName: property.schedules,
+          scheduledValueByLine,
+          today: baseDate,
+          recoveryByLine,
+          scheduleLog: {
+            automatic: true,
+            reasonByLine: scheduleLogReasonByLine,
+          },
+        },
+      );
+      if (!plan.valid) {
+        new Notice(
+          plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+        );
+        return false;
+      }
+      planned.push({ group, plan });
+    }
+
+    return await this.commitLinkPickerPlans(
+      picker,
+      linkSession,
+      planned,
+      baseDate,
+      {
+        header: null,
+        priority: { property, level },
+        rolledDates,
+      },
+    );
+  }
+
+  // Commit planned link-picker note writes plus the deferred-Pomodoro prune.
+  // Every preimage is re-verified before the first write; any mismatch refuses
+  // the whole operation. Write order is targets, then the daily note. A prune
+  // failure after durable target writes is reported and dropped — like
+  // writeDeferredPomodoroCleanup — never rolled back. On success the priority
+  // notice card reports the cross-note outcome with a via-Task-Links count.
+  async commitLinkPickerPlans(
+    picker,
+    linkSession,
+    planned,
+    baseDate,
+    notice = {},
+  ) {
+    const pruneTargets = [];
+    for (const { group, plan } of planned) {
+      if (plan.futureScheduledTaskLines.length === 0) {
+        continue;
+      }
+      const lines = splitMarkdownContent(group.content).lines;
+      for (const target of deferredPomodoroTargetsFromLines(
+        group.path,
+        lines,
+        plan.futureScheduledTaskLines,
+      )) {
+        pruneTargets.push(target);
+      }
+    }
+
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    let foldedDailyPath = null;
+    if (pruneTargets.length > 0) {
+      const sourcePaths = planned.map(({ group }) => group.path);
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: sourcePaths.length === 1 ? sourcePaths[0] : "",
+        sourceContent: planned.length === 1 ? planned[0].plan.content : "",
+        today: baseDate,
+      });
+      if (pomodoroSnapshot) {
+        // When the daily note is one of the edited target notes, the prune
+        // folds into that note's own write instead of racing it.
+        const folded = planned.find(
+          ({ group }) => group.path === pomodoroSnapshot.dailyPath,
+        );
+        const dailyBase = folded
+          ? folded.plan.content
+          : pomodoroSnapshot.content;
+        if (dailyBase !== null) {
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            dailyBase,
+            pruneTargets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
+          );
+          if (folded && dailyCleanupPlan.changed) {
+            foldedDailyPath = folded.group.path;
+          }
+        }
+      }
+    }
+
+    // Re-verify every preimage before writing anything.
+    for (const { group } of planned) {
+      const live = await this.readLinkPickerNoteContent(
+        group.path,
+        group.file,
+      );
+      if (live !== group.content) {
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+    }
+    if (
+      pomodoroSnapshot &&
+      !foldedDailyPath &&
+      dailyCleanupPlan &&
+      dailyCleanupPlan.changed
+    ) {
+      const liveDaily = await this.readLinkPickerNoteContent(
+        pomodoroSnapshot.dailyPath,
+        pomodoroSnapshot.file,
+      );
+      if (liveDaily !== pomodoroSnapshot.content) {
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+    }
+
+    // Write order is targets, then the daily note.
+    const written = [];
+    try {
+      for (const { group, plan } of planned) {
+        let after = plan.content;
+        if (
+          foldedDailyPath &&
+          group.path === foldedDailyPath &&
+          dailyCleanupPlan &&
+          dailyCleanupPlan.changed
+        ) {
+          after = dailyCleanupPlan.content;
+        }
+        if (after !== group.content) {
+          await this.writeLinkPickerNoteChange(
+            group.path,
+            group.file,
+            group.content,
+            after,
+          );
+          written.push({ path: group.path, file: group.file, before: group.content, after });
+        }
+      }
+    } catch (error) {
+      for (const entry of written.slice().reverse()) {
+        try {
+          await this.writeLinkPickerNoteChange(
+            entry.path,
+            entry.file,
+            entry.after,
+            entry.before,
+          );
+        } catch (rollbackError) {
+          // Best effort: the original error stays authoritative.
+        }
+      }
+      new Notice("A linked note changed; no tasks were updated");
+      return false;
+    }
+
+    let pomodoroPruneFailed = false;
+    if (
+      pomodoroSnapshot &&
+      !foldedDailyPath &&
+      dailyCleanupPlan &&
+      dailyCleanupPlan.changed
+    ) {
+      const applied = await this.writeDeferredPomodoroCleanup(
+        pomodoroSnapshot,
+        dailyCleanupPlan,
+      );
+      pomodoroPruneFailed = !applied;
+    }
+
+    const totals = {
+      changedTaskCount: 0,
+      unchangedTaskCount: 0,
+      propagatedScheduleTaskCount: 0,
+      removedHideTaskCount: 0,
+      ambiguousProjectTaskCount: 0,
+      blockedTaskCount: 0,
+      recoveredReadyTaskCount: 0,
+      recoveredNextTaskCount: 0,
+      recoveredInProgressTaskCount: 0,
+      stillBlockedTaskCount: 0,
+      deferredRecoveryTaskCount: 0,
+      scheduleLoggedTaskCount: 0,
+    };
+    for (const { plan } of planned) {
+      totals.changedTaskCount += plan.changedTaskCount;
+      totals.unchangedTaskCount += plan.unchangedTaskCount;
+      totals.propagatedScheduleTaskCount += plan.propagatedScheduleTaskCount;
+      totals.removedHideTaskCount += plan.removedHideTaskCount;
+      totals.ambiguousProjectTaskCount += plan.ambiguousProjectTaskCount;
+      totals.blockedTaskCount += plan.blockedTaskCount;
+      totals.recoveredReadyTaskCount += plan.recoveredReadyTaskCount;
+      totals.recoveredNextTaskCount += plan.recoveredNextTaskCount;
+      totals.recoveredInProgressTaskCount += plan.recoveredInProgressTaskCount;
+      totals.stillBlockedTaskCount += plan.stillBlockedTaskCount;
+      totals.deferredRecoveryTaskCount += plan.deferredRecoveryTaskCount;
+      totals.scheduleLoggedTaskCount += plan.scheduleLoggedTaskCount;
+    }
+    const removedPomodoroLinkCount = dailyCleanupPlan && dailyCleanupPlan.changed && !pomodoroPruneFailed
+      ? dailyCleanupPlan.removedLinkCount
+      : 0;
+    const taskNoun = formatCountLabel(totals.changedTaskCount, "task");
+    const viaLinks = totals.changedTaskCount === 1
+      ? "via Task Link"
+      : "via Task Links";
+
+    if (notice.priority) {
+      const model = buildPriorityNoticeModel({
+        property: notice.priority.property,
+        level: notice.priority.level,
+        levelIndex: normalizePriorityLevelIndex(
+          notice.priority.property,
+          notice.priority.level,
+        ),
+        baseDate,
+        scheduledValues: notice.rolledDates || [],
+        taskCount: Math.max(1, totals.changedTaskCount),
+        scope: "counted",
+        outcome: {
+          ...totals,
+          removedPomodoroLinkCount,
+          pomodoroPruneFailed,
+        },
+      });
+      showPriorityNotice(
+        { ...model, text: `${model.text} · ${viaLinks}` },
+      );
+      return true;
+    }
+
+    const propagationSuffix = totals.propagatedScheduleTaskCount > 0
+      ? `; scheduled ${formatCountLabel(totals.propagatedScheduleTaskCount, "task")}`
+      : "";
+    const hideSuffix = totals.removedHideTaskCount > 0
+      ? `; removed #hide from ${formatCountLabel(totals.removedHideTaskCount, "task")}`
+      : "";
+    const blockedSuffix = totals.blockedTaskCount > 0
+      ? `; marked ${formatCountLabel(totals.blockedTaskCount, "task")} Blocked`
+      : "";
+    const ambiguitySuffix = totals.ambiguousProjectTaskCount > 0
+      ? `; ${formatCountLabel(totals.ambiguousProjectTaskCount, "task")} with multiple scheduled fields unchanged`
+      : "";
+    const recoverySuffix = scheduledRecoveryNoticeSuffix({
+      ready: totals.recoveredReadyTaskCount,
+      next: totals.recoveredNextTaskCount,
+      inProgress: totals.recoveredInProgressTaskCount,
+      stillBlocked: totals.stillBlockedTaskCount,
+      deferred: totals.deferredRecoveryTaskCount,
+    });
+    const scheduleLogSuffix = totals.scheduleLoggedTaskCount > 0
+      ? `; logged reason on ${formatCountLabel(totals.scheduleLoggedTaskCount, "task")}`
+      : "";
+    const pomodoroPruneSuffix = removedPomodoroLinkCount > 0
+      ? `; removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`
+      : pomodoroPruneFailed
+        ? "; Pomodoro links not removed"
+        : "";
+    new Notice(
+      `${notice.header} · ${taskNoun} ${viaLinks}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${pomodoroPruneSuffix}`,
+    );
+    return true;
+  }
+
   openBulletPropertyPicker(cm, options = {}) {
     const activePicker = this.activeBulletPropertyPicker;
     if (activePicker) {
@@ -18988,6 +20068,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
+    // On a dedicated Task Link bullet, the picker targets the linked task in
+    // its own note. On a #task line the existing behavior is unchanged.
+    if (
+      !options.taskSession &&
+      !isObsidianTaskAtLine(content, cursor.line) &&
+      parseLinkPickerTaskLink(lineText)
+    ) {
+      void this.openLinkPicker(cm, options).catch(() => false);
+      return true;
+    }
     let taskSession = options.taskSession || null;
     if (options.countExplicit && !taskSession) {
       taskSession = discoverCountedObsidianTaskTargets(
@@ -26045,6 +27135,12 @@ module.exports.helpers = {
   getBulletPropertyCurrentLabel,
   createBulletPropertyItems,
   discoverCountedObsidianTaskTargets,
+  parseLinkPickerTaskLink,
+  discoverLinkPickerTargets,
+  findUniqueLinkPickerTargetLine,
+  createLinkPickerPropertyItems,
+  groupLinkPickerTargetsByNote,
+  getLinkPickerSessionSubtitle,
   discoverMovableObsidianTaskTargets,
   validateCountedTaskSession,
   parseTaskMoveContainerPrefix,

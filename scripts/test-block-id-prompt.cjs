@@ -4130,3 +4130,137 @@ test("Task Link deletion never absorbs the target task's own status edit", async
   assert.equal(h.editor.getValue(), content);
   assert.deepEqual(h.writes, []);
 });
+
+function stubPlanBudgetApi(plugin, budget) {
+  const seen = [];
+  plugin.app.plugins = {
+    plugins: {
+      "bob-ledger-tools": {
+        api: {
+          planBudget: (options) => {
+            seen.push(options && options.content);
+            return budget;
+          },
+        },
+      },
+    },
+  };
+  return seen;
+}
+
+const PLAN_BUDGET_OK = {
+  status: "ok",
+  themes: { count: 1, cap: 3, over: false },
+  links: { count: 2, cap: 10, over: false },
+};
+
+const PLAN_BUDGET_OVER = {
+  status: "over",
+  themes: { count: 4, cap: 3, over: true },
+  links: { count: 11, cap: 10, over: true },
+};
+
+test("plan budget suffix: link Notice appends the meter computed on post-write daily content", async () => {
+  const h = createTaskLinkHarness({
+    files: {
+      "Daily.md": "## Pomodoros\n- [ ] Current ()",
+      "Tasks.md": "- [ ] #task Ship it ^ship",
+    },
+    activePath: "Tasks.md",
+    cursor: { line: 0, ch: 4 },
+  });
+  h.plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  const seen = stubPlanBudgetApi(h.plugin, PLAN_BUDGET_OK);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.deepEqual(noticeMessages, ["Linked task to Pomodoro · set Next · plan 1/3 · 2/10"]);
+  assert.equal(seen.length, 1);
+  assert.ok(
+    seen[0].includes("[[Tasks#^ship]]"),
+    "budget runs on the post-write daily content",
+  );
+});
+
+test("plan budget suffix: link Notice omits the meter when the ledger-tools API is missing", async () => {
+  const h = createTaskLinkHarness({
+    files: {
+      "Daily.md": "## Pomodoros\n- [ ] Current ()",
+      "Tasks.md": "- [ ] #task Ship it ^ship",
+    },
+    activePath: "Tasks.md",
+    cursor: { line: 0, ch: 4 },
+  });
+  h.plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.deepEqual(noticeMessages, ["Linked task to Pomodoro · set Next"]);
+});
+
+test("plan budget suffix: unlink Notice marks an over-cap plan with 🔴", async () => {
+  const h = createTaskLinkHarness({
+    files: {
+      "Daily.md": "## Pomodoros\n- [ ] Current ()",
+      "Tasks.md": NEXT_TASK,
+    },
+    activePath: "Tasks.md",
+    cursor: { line: 0, ch: 4 },
+  });
+  h.plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  stubPlanBudgetApi(h.plugin, PLAN_BUDGET_OVER);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.deepEqual(noticeMessages, [
+    "Task set Open · no current/future Pomodoro links removed · plan 4/3 · 11/10 🔴",
+  ]);
+});
+
+test("plan budget suffix: unlink without a daily note omits the meter", async () => {
+  const h = createTaskLinkHarness({
+    files: { "Tasks.md": "- [*] #task Ship it" },
+    activePath: "Tasks.md",
+    cursor: { line: 0, ch: 4 },
+  });
+  const seen = stubPlanBudgetApi(h.plugin, PLAN_BUDGET_OK);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.deepEqual(noticeMessages, ["Task set Open · no current/future Pomodoro links removed"]);
+  assert.deepEqual(seen, []);
+});
+
+test("plan budget suffix: Task Link Notice appends the meter from post-write daily content", async () => {
+  const h = createTaskLinkHarness({
+    files: { "Daily.md": DAILY_WITH_LINKS, "Tasks.md": NEXT_TASK },
+    activePath: "Daily.md",
+    cursor: { line: 2, ch: 6 },
+  });
+  const seen = stubPlanBudgetApi(h.plugin, PLAN_BUDGET_OK);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.deepEqual(noticeMessages, [
+    "Task set Open · removed task link · removed 1 current/future Pomodoro link · plan 1/3 · 2/10",
+  ]);
+  assert.equal(seen.length, 1);
+  assert.ok(seen[0].includes("## Pomodoros"), "budget runs on daily content");
+  assert.ok(!seen[0].includes("nested note"), "budget runs after the link deletion");
+});
+
+test("plan budget suffix: Task Link Notice omits the meter when no daily note takes part", async () => {
+  const active = "# Notes\n- see [[Tasks#^ship]] now";
+  const h = createTaskLinkHarness({
+    files: { "Notes.md": active, "Tasks.md": NEXT_TASK },
+    activePath: "Notes.md",
+    cursor: { line: 1, ch: 3 },
+    dailyPath: null,
+  });
+  const seen = stubPlanBudgetApi(h.plugin, PLAN_BUDGET_OK);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.deepEqual(noticeMessages, ["Task set Open · removed task link"]);
+  assert.deepEqual(seen, []);
+});

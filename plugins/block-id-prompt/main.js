@@ -5545,7 +5545,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     let cleanupPlan = {
       edits: [],
       removedCount: 0,
-      content: "",
+      content: null,
       hasChanges: false,
     };
     let dailyFile = null;
@@ -5809,7 +5809,19 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       }
     }
 
-    this.reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount);
+    let dailyPostContent = null;
+    if (dailyFile) {
+      const dailyGroup = groups.get(dailyFile.path);
+      dailyPostContent =
+        dailyGroup !== undefined && dailyGroup !== null
+          ? applyTextEdits(dailyGroup.content, dailyGroup.edits)
+          : snapshots.get(dailyFile.path);
+      if (typeof dailyPostContent !== "string") {
+        dailyPostContent = null;
+      }
+    }
+
+    this.reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount, dailyPostContent);
     return true;
   }
 
@@ -5827,7 +5839,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     });
   }
 
-  reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount) {
+  reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount, dailyContent = null) {
     const base = statusPlan
       ? "Task set Open"
       : target.status === BLOCKED_OBSIDIAN_TASK_STATUS
@@ -5835,7 +5847,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
         : "Task already Open";
     const logged = statusPlan && statusPlan.workLogEntryAdded ? " · logged work" : "";
     new Notice(
-      `${base} · removed task link${logged}${this.currentFutureLinkCleanupNoticeSuffix(extraCleanupCount)}`,
+      `${base} · removed task link${logged}${this.currentFutureLinkCleanupNoticeSuffix(extraCleanupCount)}${this.planBudgetNoticeSuffix(dailyContent)}`,
     );
   }
 
@@ -5866,14 +5878,14 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
         : "Linked task to Pomodoro";
 
     new Notice(
-      `${base}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}`,
+      `${base}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}`,
     );
   }
 
   reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan = {}) {
     const logged = taskPlan.workLogEntryAdded ? " · logged work" : "";
     new Notice(
-      `Task set Open${logged}${this.currentFutureLinkCleanupNoticeSuffix(cleanupPlan.removedCount, { includeNoop: true })}`,
+      `Task set Open${logged}${this.currentFutureLinkCleanupNoticeSuffix(cleanupPlan.removedCount, { includeNoop: true })}${this.planBudgetNoticeSuffix(cleanupPlan && cleanupPlan.content)}`,
     );
   }
 
@@ -5917,6 +5929,55 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     return options.includeNoop ? " · no current/future Pomodoro links removed" : "";
+  }
+
+  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan T/Tc · L/Lc`,
+  // with a trailing ` 🔴` when over the cap. Computed synchronously from the
+  // post-write daily content through bob-ledger-tools' public API. Returns ""
+  // (no suffix) when the API is missing, the budget shape is unexpected, or
+  // the daily note wasn't part of the operation (non-string content). Warns
+  // only, never refuses: failures degrade to no suffix.
+  planBudgetNoticeSuffix(dailyContent) {
+    if (typeof dailyContent !== "string") {
+      return "";
+    }
+    try {
+      const plugins = this.app && this.app.plugins;
+      const byId =
+        plugins && plugins.plugins
+          ? plugins.plugins["bob-ledger-tools"]
+          : null;
+      const holder =
+        byId ||
+        (plugins && typeof plugins.getPlugin === "function"
+          ? plugins.getPlugin("bob-ledger-tools")
+          : null);
+      const api = holder && holder.api;
+      if (!api || typeof api.planBudget !== "function") {
+        return "";
+      }
+      const budget = api.planBudget({ content: dailyContent });
+      if (!budget || typeof budget !== "object" || typeof budget.then === "function") {
+        return "";
+      }
+      const themes = budget.themes;
+      const links = budget.links;
+      if (
+        !themes ||
+        !links ||
+        !Number.isInteger(themes.count) ||
+        !Number.isInteger(themes.cap) ||
+        !Number.isInteger(links.count) ||
+        !Number.isInteger(links.cap)
+      ) {
+        return "";
+      }
+      const over =
+        budget.status === "over" || themes.over === true || links.over === true;
+      return ` · plan ${themes.count}/${themes.cap} · ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
+    } catch (error) {
+      return "";
+    }
   }
 
   sourceMarkerStillPresent(source, options = {}) {

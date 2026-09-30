@@ -929,6 +929,14 @@ function isOpenDoneTaskStatus(taskStatus) {
   return !!taskStatus && OPEN_DONE_TASK_SYMBOLS.has(taskStatus.symbol);
 }
 
+// A Task Link whose target is a Cancelled `[-]` task: Ctrl+Enter must consume
+// the key with a notice instead of falling back to completing the owning
+// Pomodoro. Checked only after the normal open/done resolution fails, so
+// links that resolve to no task keep their current fallback.
+function isCancelledTaskStatus(taskStatus) {
+  return !!taskStatus && taskStatus.symbol === "-";
+}
+
 function isCyclableTaskStatus(taskStatus) {
   return !!taskStatus && SOURCE_STATUS_CYCLE.includes(taskStatus.symbol);
 }
@@ -4411,7 +4419,19 @@ function normalizeClosedTaskIdentities(identities) {
   return normalized;
 }
 
-function buildBlockedDependentRecoveryPlan(documents, closedIdentities) {
+function buildBlockedDependentRecoveryPlan(
+  documents,
+  closedIdentities,
+  options = {},
+) {
+  // A Blocked dependent that still carries a strictly future `scheduled` date
+  // stays Blocked: reopening it would fight `bob task-status-hooks`, which
+  // re-blocks future-scheduled tasks. Callers that close tasks through the
+  // vault pass their own date via `options.today`; it defaults to today.
+  const today =
+    options && typeof options.today === "string" && options.today
+      ? options.today
+      : formatLocalDate();
   const parsedDocuments = Array.from(documents || []).map((document) => ({
     ...document,
     path: String((document && document.path) || ""),
@@ -4460,7 +4480,8 @@ function buildBlockedDependentRecoveryPlan(documents, closedIdentities) {
       if (
         task.status !== "?" ||
         !task.dependsOn.some((id) => closedIds.has(id)) ||
-        task.dependsOn.some((id) => openIds.has(id))
+        task.dependsOn.some((id) => openIds.has(id)) ||
+        findSingleFutureScheduledField(task.lineText, today)
       ) {
         continue;
       }
@@ -6020,6 +6041,13 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     this.pendingRenderedTasksScrollDeferred = null;
     this.referenceMutationQueue = Promise.resolve();
     this.demotionSectionPicker = null;
+    // Cross-plugin surface (plugins never import one another's `main.js`).
+    // Keep the shape additive: bump `version` whenever a method is added.
+    this.api = Object.freeze({
+      version: 1,
+      recoverBlockedDependents: (closedIdentities, context) =>
+        this.recoverBlockedDependents(closedIdentities, context),
+    });
 
     this.addCommand({
       id: "cycle-task-status-forward",
@@ -6723,6 +6751,28 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     return this.enqueueTaskReferenceMutation(run);
   }
 
+  // Versioned cross-plugin API for keymaps that close tasks through their own
+  // writes (e.g. the Ctrl+Shift+P cancel picker): recover Blocked dependents
+  // of `closedIdentities` without retiring references. Resolves to
+  // `{ reopened, failures }` and never throws; failures are returned, not
+  // raised. Each identity is `{ path, blockId, taskId }` with at least one
+  // of `blockId`/`taskId`. Exposed frozen as `this.api` (see `onload`).
+  recoverBlockedDependents(closedIdentities, context) {
+    const closed = normalizeClosedTaskIdentities(closedIdentities);
+    if (closed.length === 0) {
+      return Promise.resolve({ reopened: 0, failures: [] });
+    }
+    const run = async () => {
+      try {
+        return await this.recoverBlockedDependentsNow(closed, context || {});
+      } catch (error) {
+        const message = error && error.message ? error.message : String(error);
+        return { reopened: 0, failures: [message] };
+      }
+    };
+    return this.enqueueTaskReferenceMutation(run);
+  }
+
   restoreReopenedTaskReferences(reopenedIdentities, context) {
     const reopened = normalizeTaskReferenceIdentities(reopenedIdentities);
     if (reopened.length === 0) {
@@ -6852,10 +6902,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       }
     }
 
-    const plan = buildBlockedDependentRecoveryPlan(
-      documents,
-      closedIdentities,
-    );
+    const recoveryToday =
+      context && typeof context.today === "string" && context.today
+        ? context.today
+        : typeof this.getScheduleLogDateString === "function"
+          ? this.getScheduleLogDateString()
+          : formatLocalDate();
+    const plan = buildBlockedDependentRecoveryPlan(documents, closedIdentities, {
+      today: recoveryToday,
+    });
     const editsByPath = new Map();
     for (const edit of plan.edits) {
       if (!editsByPath.has(edit.path)) {
@@ -8967,7 +9022,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       activePath,
       originPath: activePath,
     };
-    let resolvedTarget;
+    let resolvedTarget = null;
     try {
       resolvedTarget = await this.resolveTranscludedBlockTarget(
         candidate,
@@ -8975,9 +9030,26 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         { taskStatusPredicate: isOpenDoneTaskStatus },
       );
     } catch (error) {
-      return { resolved: false, changed: false };
+      resolvedTarget = null;
     }
     if (!resolvedTarget || !resolvedTarget.file) {
+      // A Task Link to a Cancelled task consumes the key with a notice: it
+      // must never fall back to completing the owning Pomodoro. Links that
+      // resolve to no task at all keep their current fallback.
+      let cancelledTarget = null;
+      try {
+        cancelledTarget = await this.resolveTranscludedBlockTarget(
+          candidate,
+          context,
+          { taskStatusPredicate: isCancelledTaskStatus },
+        );
+      } catch (error) {
+        cancelledTarget = null;
+      }
+      if (cancelledTarget && cancelledTarget.file) {
+        new Notice("Task is cancelled; reopen it with ⌥] first");
+        return { resolved: true, changed: false };
+      }
       return { resolved: false, changed: false };
     }
 
@@ -11584,6 +11656,7 @@ module.exports.helpers = {
   isLineInMarkdownSectionDirectBody,
   isProperObsidianTaskLine,
   isTasksHeadingTitle,
+  isCancelledTaskStatus,
   isCyclableTaskStatus,
   isOpenDoneTaskStatus,
   isNonTranscludedStartResolvableStatus,

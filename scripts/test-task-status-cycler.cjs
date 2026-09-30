@@ -6298,3 +6298,165 @@ test("strike and unstrike helpers are idempotent, alias-preserving, and marker-a
     "\t- [[Tasks#^a|A]]",
   );
 });
+
+test("recovery api is frozen at version 1 and recovers without striking references", async () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.addCommand = () => {};
+  plugin.registerEvent = () => {};
+  plugin.registerChildBulletInputListeners = () => {};
+  plugin.registerPomodoroBulletToggleInputListeners = () => {};
+  plugin.registerCountedTaskCycleInputListeners = () => {};
+  plugin.app = {
+    workspace: { on: () => ({}), onLayoutReady: () => {} },
+    vault: { on: () => ({}) },
+  };
+  plugin.onload();
+
+  assert.equal(plugin.api.version, 1);
+  assert.equal(Object.isFrozen(plugin.api), true);
+  assert.equal(typeof plugin.api.recoverBlockedDependents, "function");
+
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": "## Pomodoros\n- [ ] Focus\n\t- ![[Tasks#^root]]",
+    "Tasks.md": [
+      "- [-] #task Root [id:: root] ^root",
+      "- [?] #task Dependent [dependsOn:: root] ^dependent",
+    ].join("\n"),
+  });
+  plugin.app = harness.app;
+
+  assert.deepEqual(
+    await plugin.api.recoverBlockedDependents([], {}),
+    { reopened: 0, failures: [] },
+  );
+
+  const result = await plugin.api.recoverBlockedDependents(
+    [{ path: "Tasks.md", blockId: "root" }],
+    {},
+  );
+  assert.deepEqual(result, { reopened: 1, failures: [] });
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task Dependent .* \^dependent/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[-\] #task Root \[id:: root\] \^root/m);
+  assert.equal(
+    harness.getSource("Daily.md"),
+    "## Pomodoros\n- [ ] Focus\n\t- ![[Tasks#^root]]",
+  );
+});
+
+test("recovery api never throws and reports failures", async () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.referenceMutationQueue = Promise.resolve();
+  plugin.recoverBlockedDependentsNow = async () => {
+    throw new Error("vault unavailable");
+  };
+  const result = await plugin.recoverBlockedDependents(
+    [{ path: "Tasks.md", blockId: "root" }],
+    {},
+  );
+  assert.deepEqual(result, { reopened: 0, failures: ["vault unavailable"] });
+});
+
+test("future-scheduled dependents stay Blocked on the planner, api, and close paths", async () => {
+  const documents = [
+    {
+      path: "Tasks.md",
+      text: [
+        "- [x] #task Root [id:: root] ^root",
+        "- [?] #task Future bracket [dependsOn:: root] [scheduled:: 2026-10-05] ^future-bracket",
+        "- [?] #task Future paren [dependsOn:: root] (scheduled:: 2026-10-05) ^future-paren",
+        "- [?] #task Today [dependsOn:: root] [scheduled:: 2026-09-30] ^today",
+        "- [?] #task Past [dependsOn:: root] [scheduled:: 2026-09-01] ^past",
+        "- [?] #task Plain [dependsOn:: root] ^plain",
+      ].join("\n"),
+    },
+  ];
+  const plan = helpers.buildBlockedDependentRecoveryPlan(
+    documents,
+    [{ path: "Tasks.md", blockId: "root" }],
+    { today: "2026-09-30" },
+  );
+  assert.deepEqual(
+    plan.edits.map((edit) => edit.sourceLineText.match(/\^([^ ]+)$/)[1]).sort(),
+    ["past", "plain", "today"],
+  );
+
+  const defaulted = helpers.buildBlockedDependentRecoveryPlan(documents, [
+    { path: "Tasks.md", blockId: "root" },
+  ]);
+  assert.ok(Array.isArray(defaulted.edits));
+
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": [
+      "- [x] #task Root [id:: root] ^root",
+      "- [?] #task Future [dependsOn:: root] [scheduled:: 2026-10-05] ^future",
+      "- [?] #task Plain [dependsOn:: root] ^plain",
+    ].join("\n"),
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  plugin.getScheduleLogDateString = () => "2026-09-30";
+
+  const apiResult = await plugin.recoverBlockedDependentsNow(
+    [{ path: "Tasks.md", blockId: "root" }],
+    {},
+  );
+  assert.equal(apiResult.reopened, 1);
+  assert.match(harness.getSource("Tasks.md"), /^- \[\?\] #task Future/m);
+  assert.match(harness.getSource("Tasks.md"), /^- \[ \] #task Plain .* \^plain/m);
+
+  const closeHarness = createInMemoryObsidianApp({
+    "Tasks.md": [
+      "- [x] #task Root [id:: root] ^root",
+      "- [?] #task Future [dependsOn:: root] [scheduled:: 2026-10-05] ^future",
+      "- [?] #task Plain [dependsOn:: root] ^plain",
+    ].join("\n"),
+  });
+  const closePlugin = new TaskStatusCyclerPlugin();
+  closePlugin.app = closeHarness.app;
+  closePlugin.getScheduleLogDateString = () => "2026-09-30";
+  const finalized = await closePlugin.finalizeClosedTasks(
+    [{ path: "Tasks.md", blockId: "root" }],
+    {},
+  );
+  assert.equal(finalized.reopened, 1);
+  assert.match(closeHarness.getSource("Tasks.md"), /^- \[\?\] #task Future/m);
+  assert.match(closeHarness.getSource("Tasks.md"), /^- \[ \] #task Plain .* \^plain/m);
+});
+
+test("Ctrl+Enter on a Task Link to a Cancelled task leaves the Pomodoro open", async () => {
+  notices.length = 0;
+  const daily = [
+    "## Pomodoros",
+    "- [ ] (**0920-0950** [t:: 30m])",
+    "\t- [[Tasks#^a]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": daily,
+    "Tasks.md": "- [-] #task A ^a",
+  });
+  const editor = createTextEditor(daily, { line: 2, ch: 5 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getCompletionDateString = () => "2026-07-16";
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+
+  assert.equal(editor.getLine(1), "- [ ] (**0920-0950** [t:: 30m])");
+  assert.equal(editor.getLine(2), "\t- [[Tasks#^a]]");
+  assert.equal(editor.getValue(), daily);
+  assert.equal(harness.getSource("Tasks.md"), "- [-] #task A ^a");
+  assert.match(notices.at(-1), /Task is cancelled; reopen it with ⌥\] first/);
+
+  assert.deepEqual(
+    await plugin.handleActiveTaskBlockLinkOpenDone(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+    ),
+    { resolved: true, changed: false },
+  );
+  assert.equal(editor.getValue(), daily);
+});

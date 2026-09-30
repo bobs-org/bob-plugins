@@ -1808,19 +1808,25 @@ const PLAN_LINT_LINK_CAP = "plan_link_cap_exceeded";
 const PLAN_LINT_DUPLICATE_NAME = "duplicate_open_pomodoro_name";
 const PLAN_LINT_INVENTORY_LABEL = "inventory_label_open";
 const PLAN_LINT_SUBHEADING = "subheading_in_pomodoros";
-const PLAN_LINT_NOW_CAP = "now_cap_exceeded";
+const PLAN_LINT_NEXT_CAP = "next_cap_exceeded";
+const PLAN_LINT_PENDING_CAP = "pending_cap_exceeded";
 const PLAN_DAILY_PATH_RE = /(^|\/)\d{4}\/\d{8}\.md$/;
 const PLAN_ENTRY_RE = /^- \[([^\]])\]/;
 const PLAN_PLACEHOLDER_RE = /^\([ \t]*\)/;
 const PLAN_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const PLAN_ATX_RE = /^(?: {0,3})(#{1,6})(?:\s|$)/;
-const PLAN_NOW_TAG_RE = /(?:^|\s)#now(?:\s|$)/;
+// This string must stay identical to the Tasks plugin's own event: the
+// installed bundle (`~/bob/.obsidian/plugins/obsidian-tasks-plugin/main.js`,
+// `TasksEvents.onReloadOpenSearchResults`) subscribes under exactly this
+// name, and every open Tasks query re-reads only when it fires.
+const TODAY_RELOAD_EVENT = "obsidian-tasks-plugin:reload-open-search-results";
 
 function defaultPlanCaps() {
   return {
     maxThemes: 3,
     maxLinks: 10,
-    maxNow: 15,
+    maxNext: 15,
+    maxPending: 10,
     strict: false,
     exempt: ["GTD"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
@@ -1843,13 +1849,6 @@ function planStringListOrDefault(value, fallback) {
     out.push(item.trim());
   }
   return out;
-}
-
-// Whole-token, case-sensitive `#now`: preceded by the line start or
-// whitespace, followed by the end or whitespace. `#nowadays` and `#now/x`
-// never match.
-function hasNowTag(text) {
-  return PLAN_NOW_TAG_RE.test(String(text || ""));
 }
 
 // Case-insensitive component key: collapsed whitespace, lowercased.
@@ -1877,7 +1876,8 @@ function effectivePlanCaps(caps) {
   return {
     maxThemes: planCapOrDefault(raw.maxThemes, defaults.maxThemes),
     maxLinks: planCapOrDefault(raw.maxLinks, defaults.maxLinks),
-    maxNow: planCapOrDefault(raw.maxNow, defaults.maxNow),
+    maxNext: planCapOrDefault(raw.maxNext, defaults.maxNext),
+    maxPending: planCapOrDefault(raw.maxPending, defaults.maxPending),
     strict:
       typeof raw.strict === "boolean" ? raw.strict : defaults.strict,
     exempt: planStringListOrDefault(raw.exempt, defaults.exempt),
@@ -1957,10 +1957,13 @@ function coercePlanCaps(block) {
       strict = strictValue;
     }
   }
+  // Unknown keys (including a legacy `max_now`) stay ignored, so an old
+  // config loads without error.
   const caps = {
     maxThemes: cap("max_themes", "maxThemes", defaults.maxThemes),
     maxLinks: cap("max_links", "maxLinks", defaults.maxLinks),
-    maxNow: cap("max_now", "maxNow", defaults.maxNow),
+    maxNext: cap("max_next", "maxNext", defaults.maxNext),
+    maxPending: cap("max_pending", "maxPending", defaults.maxPending),
     strict,
     exempt: list("exempt", "exempt", defaults.exempt),
     inventoryLabels: list(
@@ -2521,6 +2524,409 @@ function computePlanBudget(content, caps, dailyPath) {
   };
 }
 
+// --- Today (ledger-derived) -------------------------------------------------
+// JavaScript mirror of `today_links` in `src/native/plan_budget/today.rs`,
+// which is exactly the `=x` / start lineup rule
+// (`list_queued_links` in `src/native/capture_pomodoro_start.rs`):
+// a direct child bullet at an open entry's first child indentation whose
+// body, after stripping Pomodoro markers, is exactly one plain
+// `[[target#^id]]` or embedded `![[target#^id]]` block link — not struck
+// through and not fenced. `docs/plan.md` ("Today conformance examples")
+// is the shared test vector source for both implementations.
+
+function todayIndentLen(line) {
+  const text = String(line || "");
+  let indent = 0;
+  while (text[indent] === " " || text[indent] === "\t") {
+    indent += 1;
+  }
+  return indent;
+}
+
+function todayMarkerLen(afterIndent) {
+  const text = String(afterIndent || "");
+  const first = text[0];
+  if (first === "-" || first === "*" || first === "+") {
+    return 1;
+  }
+  if (first >= "0" && first <= "9") {
+    let digits = 0;
+    while (
+      digits < text.length &&
+      text[digits] >= "0" &&
+      text[digits] <= "9"
+    ) {
+      digits += 1;
+    }
+    const closer = text[digits];
+    if (closer === "." || closer === ")") {
+      return digits + 1;
+    }
+  }
+  return null;
+}
+
+// An indented list line (a possible sub-bullet): indented, with a valid
+// marker followed by nothing or whitespace.
+function todayIsSubBulletLine(line) {
+  const text = String(line || "");
+  if (text.trim() === "") {
+    return false;
+  }
+  const indent = todayIndentLen(text);
+  if (indent === 0) {
+    return false;
+  }
+  const markerLen = todayMarkerLen(text.slice(indent));
+  if (markerLen === null) {
+    return false;
+  }
+  const rest = text.slice(indent + markerLen);
+  return rest === "" || rest[0] === " " || rest[0] === "\t";
+}
+
+// The bullet body with trailing whitespace trimmed, or null when the line
+// is not a well-formed bullet.
+function todayBulletBody(line) {
+  const text = String(line || "");
+  const indent = todayIndentLen(text);
+  const markerLen = todayMarkerLen(text.slice(indent));
+  if (markerLen === null) {
+    return null;
+  }
+  const afterMarker = text.slice(indent + markerLen);
+  if (afterMarker !== "" && afterMarker[0] !== " " && afterMarker[0] !== "\t") {
+    return null;
+  }
+  const bodyStart = indent + markerLen + (afterMarker === "" ? 0 : 1);
+  const trimmed = text.slice(bodyStart).replace(/[ \t]+$/, "");
+  if (trimmed === "") {
+    return null;
+  }
+  return { bodyStart, bodyEnd: bodyStart + trimmed.length, body: trimmed };
+}
+
+function todayStripWrappingQuotes(value) {
+  const text = String(value || "");
+  if (text.length >= 2) {
+    const first = text[0];
+    const last = text[text.length - 1];
+    if (
+      (first === '"' && last === '"') ||
+      (first === "'" && last === "'")
+    ) {
+      return text.slice(1, -1).trim();
+    }
+  }
+  return text;
+}
+
+function todayIsUriScheme(path) {
+  const colon = String(path || "").indexOf(":");
+  if (colon === -1) {
+    return false;
+  }
+  const scheme = String(path).slice(0, colon);
+  if (!scheme || !/[A-Za-z]/.test(scheme[0])) {
+    return false;
+  }
+  return /^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme);
+}
+
+// One `[[target#^id]]` token on a line, mirroring
+// `wikilink_tokens`/`parse_block_target`: the alias (`|…`) is ignored,
+// the block ID must match `PLAN_BLOCK_ID_RE`, and paths holding `#`, `^`,
+// or a URI scheme never parse.
+function todayWikilinkTokens(line) {
+  const text = String(line || "");
+  const tokens = [];
+  let cursor = 0;
+  for (;;) {
+    const open = text.indexOf("[[", cursor);
+    if (open === -1) {
+      break;
+    }
+    const innerStart = open + 2;
+    const relativeClose = text.slice(innerStart).indexOf("]]");
+    if (relativeClose === -1) {
+      break;
+    }
+    const close = innerStart + relativeClose + 2;
+    const inner = text.slice(innerStart, innerStart + relativeClose);
+    const rawTarget = todayStripWrappingQuotes(
+      inner.split("|")[0] || "",
+    ).trim();
+    const caret = rawTarget.indexOf("#^");
+    if (caret !== -1) {
+      const rawPath = rawTarget.slice(0, caret).trim();
+      const blockId = rawTarget.slice(caret + 2).trim();
+      if (
+        blockId &&
+        PLAN_BLOCK_ID_RE.test(blockId) &&
+        !rawPath.includes("#") &&
+        !rawPath.includes("^") &&
+        !todayIsUriScheme(rawPath)
+      ) {
+        let pathPart = rawPath;
+        if (/\.md$/i.test(pathPart)) {
+          pathPart = pathPart.slice(0, -3);
+        }
+        const embedded = open > 0 && text[open - 1] === "!";
+        tokens.push({
+          start: embedded ? open - 1 : open,
+          end: close,
+          embedded,
+          pathPart,
+          blockId,
+        });
+      }
+    }
+    cursor = close;
+  }
+  return tokens;
+}
+
+// The trimmed body is exactly one plain or embedded block link, mirroring
+// `bare_plain_link`/`bare_embedded_link` (a trailing `#` move-only marker
+// disqualifies, exactly as in Rust).
+function todayBareLink(body) {
+  const text = String(body || "");
+  const tokens = todayWikilinkTokens(text);
+  if (tokens.length !== 1) {
+    return null;
+  }
+  const token = tokens[0];
+  return token.start === 0 && token.end === text.length ? token : null;
+}
+
+// A dedicated Task Link: strip leading Pomodoro markers (the Strip policy
+// only removes markers directly before the link), then require a bare link
+// outside `~~…~~` struck spans.
+function todayLinkFromBody(body) {
+  const stripped = String(body || "").replace(/^(?:🍅\s*)+/, "");
+  if (stripped === "") {
+    return null;
+  }
+  const token = todayBareLink(stripped);
+  if (!token) {
+    return null;
+  }
+  const struck = planStruckInnerSpans(stripped);
+  if (
+    struck.some(([start, end]) => token.start >= start && token.end <= end)
+  ) {
+    return null;
+  }
+  return token;
+}
+
+// Every dedicated Task Link under today's open entries, in ledger order.
+// `dailyPath` canonicalizes empty targets only for key building in
+// `resolveTodayKeys`; the recorded `target` is the written path part.
+function computeTodayLinks(content, dailyPath) {
+  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+  const section = planSectionRange(lines);
+  if (!section) {
+    return [];
+  }
+  const fenced = planFencedLines(lines, section.start, section.end);
+  const links = [];
+  for (let index = section.start; index <= section.end; index += 1) {
+    if (fenced.has(index)) {
+      continue;
+    }
+    const line = String(lines[index] || "");
+    if (line.startsWith(" ") || line.startsWith("\t")) {
+      continue;
+    }
+    const parsed = planParseEntry(line);
+    if (!parsed || parsed.state !== "open") {
+      continue;
+    }
+    // The entry's sub-bullet range: following non-empty indented list
+    // lines (a blank line, a column-0 line, or the section end stops it).
+    const range = [];
+    for (let sub = index + 1; sub <= section.end; sub += 1) {
+      if (fenced.has(sub)) {
+        continue;
+      }
+      if (!todayIsSubBulletLine(lines[sub])) {
+        break;
+      }
+      range.push(sub);
+    }
+    if (range.length === 0) {
+      continue;
+    }
+    const childIndent = todayIndentLen(lines[range[0]]);
+    const entryName = (() => {
+      const leading = planLeadingRange(parsed.body);
+      if (leading.length === null) {
+        return null;
+      }
+      return planParseNameTail(parsed.body.slice(leading.length));
+    })();
+    for (const sub of range) {
+      if (todayIndentLen(lines[sub]) !== childIndent) {
+        continue;
+      }
+      const bullet = todayBulletBody(lines[sub]);
+      if (!bullet) {
+        continue;
+      }
+      const token = todayLinkFromBody(bullet.body);
+      if (!token) {
+        continue;
+      }
+      links.push({
+        entryLine: index + 1,
+        entryName,
+        ledgerLine: sub + 1,
+        target: token.pathPart,
+        blockId: token.blockId,
+        embedded: token.embedded,
+      });
+    }
+  }
+  return links;
+}
+
+// Ordered, unique Today keys (`"<vault path with .md>#<block id>"`).
+// `resolve(target, dailyPath)` wraps
+// `app.metadataCache.getFirstLinkpathDest`; an empty target is the daily
+// note itself. Unresolved targets are skipped.
+function resolveTodayKeys(links, dailyPath, resolve) {
+  const seen = new Set();
+  const keys = [];
+  const list = Array.isArray(links) ? links : [];
+  for (const link of list) {
+    if (!link || typeof link.blockId !== "string" || !link.blockId) {
+      continue;
+    }
+    let resolved = null;
+    const target = typeof link.target === "string" ? link.target : "";
+    if (target === "") {
+      resolved = typeof dailyPath === "string" ? dailyPath : null;
+    } else if (typeof resolve === "function") {
+      try {
+        const file = resolve(target, dailyPath);
+        resolved =
+          file && typeof file.path === "string" ? file.path : null;
+      } catch (error) {
+        resolved = null;
+      }
+    }
+    if (typeof resolved !== "string" || !resolved) {
+      continue;
+    }
+    const withExtension = /\.md$/i.test(resolved)
+      ? resolved
+      : `${resolved}.md`;
+    const key = `${withExtension}#${link.blockId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+function planTaskBlockId(task) {
+  if (!task || typeof task !== "object") {
+    return null;
+  }
+  for (const key of ["blockLink", "blockId"]) {
+    const value = task[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    // Tasks 8.4.0 keeps the block ID in `blockLink` as ` ^id` (see its
+    // `blockLinkRegex`: `/ \^<id>$/`); the ID itself matches
+    // `PLAN_BLOCK_ID_RE`.
+    const trimmed = value.trim().replace(/^\^/, "");
+    if (trimmed && PLAN_BLOCK_ID_RE.test(trimmed)) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+function planTaskStatusSymbol(task) {
+  if (!task || typeof task !== "object") {
+    return "";
+  }
+  const status =
+    task.status && typeof task.status === "object" ? task.status : {};
+  for (const value of [status.symbol, task.statusSymbol, task.symbol]) {
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function planLaneVisible(task, list, todayDay) {
+  if (planTaskIsDone(task)) {
+    return false;
+  }
+  if (planTaskIsBlocked(task, list)) {
+    return false;
+  }
+  const tags = planTaskTags(task);
+  if (
+    tags.some(
+      (tag) => typeof tag === "string" && tag.toLowerCase().includes("#hide"),
+    )
+  ) {
+    return false;
+  }
+  const loweredPath = String(planTaskPath(task) || "").toLowerCase();
+  if (loweredPath.includes("_templates") || loweredPath.includes("_conflicts")) {
+    return false;
+  }
+  if (todayDay !== null) {
+    const scheduled = planTaskScheduledDay(task);
+    if (scheduled !== null && scheduled > todayDay) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// A lane budget over Tasks-plugin task objects: `"next"` is symbol `*`,
+// `"pending"` is type IN_PROGRESS. Visibility matches the dash defaults
+// (`docs/plan.md`, "Lanes"), counting the whole lane, Today included.
+function laneBudgetFromTasks(tasks, today, caps, lane) {
+  const effective = effectivePlanCaps(caps);
+  const list = Array.isArray(tasks) ? tasks : [];
+  const todayDay = planDayNumber(today === undefined ? new Date() : today);
+  let count = 0;
+  for (const task of list) {
+    if (!planLaneVisible(task, list, todayDay)) {
+      continue;
+    }
+    if (lane === "next") {
+      if (planTaskStatusSymbol(task) !== "*") {
+        continue;
+      }
+    } else if (lane === "pending") {
+      const type =
+        task && task.status && typeof task.status === "object"
+          ? task.status.type
+          : null;
+      if (type !== "IN_PROGRESS") {
+        continue;
+      }
+    } else {
+      continue;
+    }
+    count += 1;
+  }
+  const cap = lane === "pending" ? effective.maxPending : effective.maxNext;
+  return { count, cap, over: count > cap };
+}
+
 module.exports = class BobLedgerToolsPlugin extends Plugin {
   onload() {
     this.vimMappingsRegistered = false;
@@ -2611,19 +3017,36 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     // and the other plugins call instead of re-implementing docs/plan.md.
     this.planBlockViews = new Set();
     this.planBlockRerenderTimer = null;
-    this.api = {
-      version: 1,
+    // Synchronous Today cache: `{ date, dailyPath, keys, rank }`. Built
+    // from the daily note's text (never awaited inside the api); before
+    // the first build `isToday` returns false for every task.
+    this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
+    this.api = Object.freeze({
+      version: 2,
       caps: () => loadPlanCaps().caps,
       planBudget: (options = {}) => this.planBudgetForCallers(options),
-      nowBudget: () => {
+      todayKeys: () => this.todayKeys(),
+      isToday: (task) => this.isTodayTask(task),
+      todayRank: (task) => this.todayRankOfTask(task),
+      nextBudget: () => {
         const { caps } = loadPlanCaps();
-        return nowBudgetFromTasks(
+        return laneBudgetFromTasks(
           planBlockTasks(this.app) || [],
           new Date(),
           caps,
+          "next",
         );
       },
-    };
+      pendingBudget: () => {
+        const { caps } = loadPlanCaps();
+        return laneBudgetFromTasks(
+          planBlockTasks(this.app) || [],
+          new Date(),
+          caps,
+          "pending",
+        );
+      },
+    });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
         this.renderPlanBlock(el, ctx),
@@ -2632,9 +3055,31 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     const metadataCache = this.app && this.app.metadataCache;
     if (metadataCache && typeof metadataCache.on === "function") {
       this.registerEvent(
-        metadataCache.on("changed", (file) =>
-          this.schedulePlanBlockRerenderForFile(file),
-        ),
+        metadataCache.on("changed", (file, data) => {
+          this.schedulePlanBlockRerenderForFile(file);
+          this.refreshTodayCacheForChangedFile(file, data);
+        }),
+      );
+      this.registerEvent(
+        metadataCache.on("resolved", () => this.refreshTodayCacheFromDaily()),
+      );
+    }
+    const vault = this.app && this.app.vault;
+    if (vault && typeof vault.on === "function") {
+      for (const event of ["create", "delete", "rename"]) {
+        this.registerEvent(
+          vault.on(event, (file) => this.refreshTodayCacheForVaultEvent(file)),
+        );
+      }
+    }
+    if (
+      typeof this.registerInterval === "function" &&
+      typeof window !== "undefined" &&
+      typeof window.setInterval === "function"
+    ) {
+      // Local-midnight rollover: rebuild once the daily path changes.
+      this.registerInterval(
+        window.setInterval(() => this.refreshTodayCacheForRollover(), 60 * 1000),
       );
     }
     const planWorkspace = this.app && this.app.workspace;
@@ -2668,6 +3113,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
+      this.refreshTodayCacheFromDaily();
       if (this.registerVimMappings()) {
         return;
       }
@@ -2693,6 +3139,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     if (this.planBlockViews) {
       this.planBlockViews.clear();
     }
+    this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
     cancelDeferred(this.pendingCenterDeferred);
     this.pendingCenterDeferred = null;
     this.dailyNavigationActionId += 1;
@@ -2755,6 +3202,186 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // Fall through to null below.
     }
     return Promise.resolve(null);
+  }
+
+  // --- Synchronous Today cache -----------------------------------------
+
+  todayLocalDate(now = new Date()) {
+    const date = now instanceof Date ? now : new Date();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${date.getFullYear()}-${month}-${day}`;
+  }
+
+  todayCacheKey(task) {
+    if (!task || typeof task !== "object") {
+      return null;
+    }
+    const rawPath = planTaskPath(task);
+    if (typeof rawPath !== "string" || !rawPath) {
+      return null;
+    }
+    const blockId = planTaskBlockId(task);
+    if (!blockId) {
+      return null;
+    }
+    const path = /\.md$/i.test(rawPath) ? rawPath : `${rawPath}.md`;
+    return `${path}#${blockId}`;
+  }
+
+  todayKeys() {
+    const keys = (this.todayCache && this.todayCache.keys) || [];
+    return [...keys];
+  }
+
+  isTodayTask(task) {
+    const key = this.todayCacheKey(task);
+    if (!key || !this.todayCache || !(this.todayCache.rank instanceof Map)) {
+      return false;
+    }
+    return this.todayCache.rank.has(key);
+  }
+
+  todayRankOfTask(task) {
+    const key = this.todayCacheKey(task);
+    if (!key || !this.todayCache || !(this.todayCache.rank instanceof Map)) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    const rank = this.todayCache.rank.get(key);
+    return typeof rank === "number" ? rank : Number.MAX_SAFE_INTEGER;
+  }
+
+  resolveTodayLink(target, dailyPath) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        !metadataCache ||
+        typeof metadataCache.getFirstLinkpathDest !== "function"
+      ) {
+        return null;
+      }
+      return metadataCache.getFirstLinkpathDest(target, dailyPath);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Rebuild the cache from daily-note text. When the key set changes,
+  // every open Tasks query re-reads via TODAY_RELOAD_EVENT and the
+  // bob-plan blocks re-render (debounced, like the existing re-render).
+  // Returns true when the keys changed.
+  rebuildTodayCache(content, dailyPath, now = new Date()) {
+    if (!this.todayCache || !(this.todayCache.rank instanceof Map)) {
+      this.todayCache = {
+        date: null,
+        dailyPath: null,
+        keys: [],
+        rank: new Map(),
+      };
+    }
+    const links = computeTodayLinks(content, dailyPath);
+    const keys = resolveTodayKeys(links, dailyPath, (target, daily) =>
+      this.resolveTodayLink(target, daily),
+    );
+    const previous = this.todayCache.keys || [];
+    const changed =
+      previous.length !== keys.length ||
+      previous.some((key, index) => key !== keys[index]);
+    this.todayCache = {
+      date: this.todayLocalDate(now),
+      dailyPath,
+      keys,
+      rank: new Map(keys.map((key, index) => [key, index])),
+    };
+    if (changed) {
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // The cache is still correct; only the live refresh is skipped.
+      }
+      this.schedulePlanBlockRerender();
+    }
+    return changed;
+  }
+
+  currentTodayDailyPath(now = new Date()) {
+    try {
+      return todayDailyPath(now, getDailyNotesOptions(this.app));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshTodayCacheFromDaily(now = new Date()) {
+    const dailyPath = this.currentTodayDailyPath(now);
+    if (!dailyPath) {
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(this.readPlanBlockContent(dailyPath)).then(
+      (content) => {
+        // A missing daily note means an empty Today, not an error.
+        if (typeof content !== "string") {
+          return this.rebuildTodayCache("", dailyPath, now);
+        }
+        return this.rebuildTodayCache(content, dailyPath, now);
+      },
+    );
+  }
+
+  refreshTodayCacheForChangedFile(file, data, now = new Date()) {
+    const changedPath =
+      file && typeof file.path === "string" ? file.path : null;
+    if (!changedPath) {
+      return false;
+    }
+    if (!sameVaultPath(changedPath, this.currentTodayDailyPath(now))) {
+      return false;
+    }
+    if (typeof data === "string") {
+      this.rebuildTodayCache(data, changedPath, now);
+      return true;
+    }
+    this.refreshTodayCacheFromDaily(now);
+    return true;
+  }
+
+  refreshTodayCacheForVaultEvent(file, now = new Date()) {
+    const changedPath =
+      file && typeof file.path === "string" ? file.path : null;
+    if (!changedPath) {
+      return false;
+    }
+    const candidates = [this.currentTodayDailyPath(now)];
+    if (
+      this.todayCache &&
+      typeof this.todayCache.dailyPath === "string" &&
+      this.todayCache.dailyPath
+    ) {
+      candidates.push(this.todayCache.dailyPath);
+    }
+    if (!candidates.some((candidate) => sameVaultPath(changedPath, candidate))) {
+      return false;
+    }
+    this.refreshTodayCacheFromDaily(now);
+    return true;
+  }
+
+  refreshTodayCacheForRollover(now = new Date()) {
+    const dailyPath = this.currentTodayDailyPath(now);
+    if (!dailyPath) {
+      return false;
+    }
+    if (
+      this.todayCache &&
+      sameVaultPath(this.todayCache.dailyPath || "", dailyPath)
+    ) {
+      return false;
+    }
+    this.refreshTodayCacheFromDaily(now);
+    return true;
   }
 
   schedulePlanBlockRerenderForFile(file) {
@@ -2865,12 +3492,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           caps,
           sourcePath,
           app: this.app,
+          isToday: (task) => this.isTodayTask(task),
         });
         const container = el.createDiv({ cls: "bob-plan" });
         container.setAttribute("role", "status");
         container.setAttribute(
           "aria-label",
-          `${model.planText}, ${model.nowText}${model.over ? ", over plan" : ""}`,
+          `${model.planText}, ${model.todayText}, ${model.pendingText}, ${model.nextText}${model.over ? ", over plan" : ""}`,
         );
         const planChip = container.createEl("span", {
           cls: `bob-plan-chip bob-plan-plan${
@@ -2880,26 +3508,49 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           title: model.planTitle,
         });
         planChip.setAttribute("aria-label", `Plan budget: ${model.planTitle}`);
-        const nowChip = container.createEl("a", {
-          cls: `bob-plan-chip bob-plan-now${
-            model.hasTasks && model.now.over ? " bob-plan-over" : ""
-          }`,
-          text: model.nowText,
-          title: "Open NOW tasks in dash",
-          href: "dash#NOW Tasks",
-        });
-        nowChip.setAttribute("aria-label", "Open NOW tasks in dash");
-        nowChip.addEventListener("click", (event) => {
-          event.preventDefault();
-          try {
-            const workspace = this.app && this.app.workspace;
-            if (workspace && typeof workspace.openLinkText === "function") {
-              workspace.openLinkText("dash#NOW Tasks", "", false);
+        const laneChips = [
+          {
+            cls: "bob-plan-today",
+            text: model.todayText,
+            title: "Open TODAY tasks in dash",
+            href: "dash#TODAY Tasks",
+            over: false,
+          },
+          {
+            cls: "bob-plan-pending",
+            text: model.pendingText,
+            title: "Open PENDING tasks in dash",
+            href: "dash#PENDING Tasks",
+            over: model.hasTasks && model.pending.over,
+          },
+          {
+            cls: "bob-plan-next",
+            text: model.nextText,
+            title: "Open NEXT tasks in dash",
+            href: "dash#NEXT Tasks",
+            over: model.hasTasks && model.next.over,
+          },
+        ];
+        for (const chip of laneChips) {
+          const laneChip = container.createEl("a", {
+            cls: `bob-plan-chip ${chip.cls}${chip.over ? " bob-plan-over" : ""}`,
+            text: chip.text,
+            title: chip.title,
+            href: chip.href,
+          });
+          laneChip.setAttribute("aria-label", chip.title);
+          laneChip.addEventListener("click", (event) => {
+            event.preventDefault();
+            try {
+              const workspace = this.app && this.app.workspace;
+              if (workspace && typeof workspace.openLinkText === "function") {
+                workspace.openLinkText(chip.href, "", false);
+              }
+            } catch (error) {
+              // The chip still shows the count without the navigation.
             }
-          } catch (error) {
-            // The chip still shows the count without the navigation.
-          }
-        });
+          });
+        }
         if (model.themesText) {
           container.createEl("span", {
             cls: "bob-plan-themes",
@@ -3559,10 +4210,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   }
 };
 
-// --- Plan NOW counter -----------------------------------------------------
-// A NOW task is a `#task` line the native Tasks engine matches with the NOW
-// query in docs/plan.md. This mirrors that predicate over Tasks-plugin task
-// objects (tolerant of the shapes Tasks and dataview expose).
+// --- Plan lane counter ----------------------------------------------------
+// A lane task is a `#task` line the native Tasks engine matches with the
+// NEXT or PENDING query in docs/plan.md. This mirrors that predicate over
+// Tasks-plugin task objects (tolerant of the shapes Tasks and dataview
+// expose).
 
 function planTaskDescription(task) {
   if (!task || typeof task !== "object") {
@@ -3703,58 +4355,6 @@ function planTaskTags(task) {
   return task.tags.filter((tag) => typeof tag === "string");
 }
 
-// The dash's NOW predicate over Tasks-plugin task objects: visible (no
-// `_templates`/`_conflicts`, no `#hide`), scheduled today or earlier (or
-// unscheduled), not dependency-blocked, and carrying a whole `#now` token.
-function nowBudgetFromTasks(tasks, today, caps) {
-  const effective = effectivePlanCaps(caps);
-  const list = Array.isArray(tasks) ? tasks : [];
-  const todayDay = planDayNumber(today === undefined ? new Date() : today);
-  let count = 0;
-  for (const task of list) {
-    if (planTaskIsDone(task)) {
-      continue;
-    }
-    if (planTaskIsBlocked(task, list)) {
-      continue;
-    }
-    const tags = planTaskTags(task);
-    const description = planTaskDescription(task);
-    if (description !== null) {
-      if (!hasNowTag(description)) {
-        continue;
-      }
-    } else if (!tags.includes("#now")) {
-      continue;
-    }
-    if (
-      tags.some(
-        (tag) =>
-          typeof tag === "string" && tag.toLowerCase().includes("#hide"),
-      )
-    ) {
-      continue;
-    }
-    const path = planTaskPath(task);
-    const loweredPath = String(path || "").toLowerCase();
-    if (
-      loweredPath.includes("_templates") ||
-      loweredPath.includes("_conflicts")
-    ) {
-      continue;
-    }
-    if (todayDay !== null) {
-      const scheduled = planTaskScheduledDay(task);
-      if (scheduled !== null && scheduled > todayDay) {
-        continue;
-      }
-    }
-    count += 1;
-  }
-  const cap = effective.maxNow;
-  return { count, cap, over: count > cap };
-}
-
 // --- Plan config ----------------------------------------------------------
 
 function planRequireOptionalNodeModule(name) {
@@ -3889,7 +4489,17 @@ function planBlockTasks(app) {
 
 // Synchronous view-model for the ```bob-plan block. Never throws: missing
 // content, caps, or Tasks all degrade to `–` placeholders, never an error.
-function planBlockModel({ content, tasks, today, caps, sourcePath, app }) {
+// `isToday` is the caller's Today predicate over cached Tasks tasks
+// (the plugin passes its synchronous cache); without it TODAY shows `–`.
+function planBlockModel({
+  content,
+  tasks,
+  today,
+  caps,
+  sourcePath,
+  app,
+  isToday,
+}) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
   let budget;
@@ -3902,20 +4512,46 @@ function planBlockModel({ content, tasks, today, caps, sourcePath, app }) {
     budget = emptyPlanBudget(effective);
   }
   const hasTasks = Array.isArray(tasks);
-  let now;
+  const isTodayPredicate =
+    typeof isToday === "function" ? isToday : () => false;
+  const taskList = hasTasks ? tasks : [];
+  const day = today === undefined ? new Date() : today;
+  let next;
+  let pending;
   try {
-    now = hasTasks
-      ? nowBudgetFromTasks(tasks, today === undefined ? new Date() : today, effective)
-      : { count: 0, cap: effective.maxNow, over: false };
+    next = laneBudgetFromTasks(taskList, day, effective, "next");
   } catch (error) {
-    now = { count: 0, cap: effective.maxNow, over: false };
+    next = { count: 0, cap: effective.maxNext, over: false };
   }
-  const over = budget.status === "over" || (hasTasks && now.over);
+  try {
+    pending = laneBudgetFromTasks(taskList, day, effective, "pending");
+  } catch (error) {
+    pending = { count: 0, cap: effective.maxPending, over: false };
+  }
+  let todayCount = null;
+  if (hasTasks) {
+    try {
+      todayCount = taskList.filter(
+        (task) => !planTaskIsDone(task) && isTodayPredicate(task),
+      ).length;
+    } catch (error) {
+      todayCount = null;
+    }
+  }
+  const over =
+    budget.status === "over" ||
+    (hasTasks && (next.over || pending.over));
   const lintWarnings = budget.warnings.slice();
-  if (hasTasks && now.over) {
+  if (hasTasks && next.over) {
     lintWarnings.push({
-      code: "now_cap_exceeded",
-      message: `this week's NOW has ${now.count}/${now.cap} tasks`,
+      code: PLAN_LINT_NEXT_CAP,
+      message: `NEXT has ${next.count}/${next.cap} tasks; release some with Alt+N`,
+    });
+  }
+  if (hasTasks && pending.over) {
+    lintWarnings.push({
+      code: PLAN_LINT_PENDING_CAP,
+      message: `PENDING has ${pending.count}/${pending.cap} tasks; release some with Alt+N`,
     });
   }
   const themeCounts = budget.entries
@@ -3931,7 +4567,11 @@ function planBlockModel({ content, tasks, today, caps, sourcePath, app }) {
     planTitle: budget.hasSection
       ? themeCounts.join(" · ") || "no themes"
       : "no Pomodoros section",
-    nowText: hasTasks ? `NOW ${now.count}/${now.cap}` : "NOW –",
+    todayText: todayCount === null ? "TODAY –" : `TODAY ${todayCount}`,
+    nextText: hasTasks ? `NEXT ${next.count}/${next.cap}` : "NEXT –",
+    pendingText: hasTasks
+      ? `PENDING ${pending.count}/${pending.cap}`
+      : "PENDING –",
     themesText:
       budget.themeNames.length > 0
         ? `★ ${budget.themeNames.join(" · ")}`
@@ -3943,7 +4583,9 @@ function planBlockModel({ content, tasks, today, caps, sourcePath, app }) {
     ),
     over,
     budget,
-    now,
+    todayCount,
+    next,
+    pending,
   };
 }
 
@@ -4011,15 +4653,17 @@ module.exports.helpers = {
   effectivePlanCaps,
   parsePlanCaps,
   coercePlanCaps,
-  hasNowTag,
   normalizePlanComponent,
   splitPlanComponents,
   computePlanBudget,
   emptyPlanBudget,
-  nowBudgetFromTasks,
+  computeTodayLinks,
+  resolveTodayKeys,
+  laneBudgetFromTasks,
   loadPlanCaps,
   planConfigPath,
   planBlockTargetPath,
   planBlockModel,
   planSectionRange,
+  TODAY_RELOAD_EVENT,
 };

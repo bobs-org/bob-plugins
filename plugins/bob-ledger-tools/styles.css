@@ -47,8 +47,16 @@ a.bob-plan-chip:focus-visible {
   --bob-plan-accent: var(--task-status-next, var(--color-green, #3f8f5f));
 }
 
-.bob-plan-now {
+.bob-plan-today {
   --bob-plan-accent: var(--color-purple);
+}
+
+.bob-plan-pending {
+  --bob-plan-accent: var(--task-status-in-progress, var(--color-orange, #d9822b));
+}
+
+.bob-plan-next {
+  --bob-plan-accent: var(--task-status-next, var(--color-green, #3f8f5f));
 }
 
 .bob-plan-chip.bob-plan-over {

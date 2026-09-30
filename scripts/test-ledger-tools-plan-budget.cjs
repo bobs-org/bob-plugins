@@ -78,9 +78,8 @@ const {
   coercePlanCaps,
   computePlanBudget,
   defaultPlanCaps,
-  hasNowTag,
+  laneBudgetFromTasks,
   loadPlanCaps,
-  nowBudgetFromTasks,
   parsePlanCaps,
   planBlockModel,
   planBlockTargetPath,
@@ -278,14 +277,11 @@ test("highlight is the first open non-exempt entry; running is the timed one", (
   assert.equal(budget.entries[2].running, false);
 });
 
-test("hasNowTag matches only whole tokens", () => {
-  assert.equal(hasNowTag("#now"), true);
-  assert.equal(hasNowTag("fix it #now today"), true);
-  assert.equal(hasNowTag("#nowadays"), false);
-  assert.equal(hasNowTag("#now/x"), false);
-  assert.equal(hasNowTag("x#now"), false);
-  assert.equal(hasNowTag("#now!"), false);
-  assert.equal(hasNowTag(""), false);
+test("coercePlanCaps ignores a legacy max_now instead of failing", () => {
+  const { caps, invalid } = coercePlanCaps({ max_now: 20, maxNext: 7 });
+  assert.equal(invalid, false);
+  assert.equal(caps.maxNext, 7);
+  assert.equal(caps.maxPending, 10);
 });
 
 test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
@@ -295,7 +291,8 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
     plan: {
       max_themes: 5,
       max_links: 12,
-      max_now: 20,
+      max_next: 20,
+      max_pending: 12,
       strict: true,
       exempt: ["GTD", "ADMIN"],
       inventory_labels: ["LATER"],
@@ -304,7 +301,8 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
   assert.deepEqual(caps, {
     maxThemes: 5,
     maxLinks: 12,
-    maxNow: 20,
+    maxNext: 20,
+    maxPending: 12,
     strict: true,
     exempt: ["GTD", "ADMIN"],
     inventoryLabels: ["LATER"],
@@ -314,7 +312,8 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
       plan: {
         max_themes: 0,
         max_links: 2.5,
-        max_now: "many",
+        max_next: "many",
+        max_pending: 0,
         strict: "yes",
         exempt: [""],
         inventory_labels: "LATER",
@@ -324,68 +323,14 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
   );
 });
 
-function nowTask(overrides = {}) {
+function laneTask(overrides = {}) {
   return {
-    status: { type: "TODO", name: "Task" },
+    status: { type: "TODO", name: "Todo", symbol: " " },
     tags: [],
     path: "notes/a.md",
     ...overrides,
   };
 }
-
-test("nowBudgetFromTasks mirrors the NOW query", () => {
-  const today = new Date(2026, 8, 30);
-  const tasks = [
-    nowTask({ description: "open #now", tags: ["#now", "#task"] }),
-    nowTask({
-      description: "done #now",
-      tags: ["#now"],
-      status: { type: "DONE", name: "Done" },
-    }),
-    nowTask({
-      description: "cancelled #now",
-      tags: ["#now"],
-      status: { type: "CANCELLED", name: "Cancelled" },
-    }),
-    nowTask({ description: "hidden #now", tags: ["#now", "#hide"] }),
-    nowTask({ description: "tmpl #now", tags: ["#now"], path: "_templates/x.md" }),
-    nowTask({
-      description: "conflict #now",
-      tags: ["#now"],
-      path: "notes/_conflicts/a.md",
-    }),
-    nowTask({
-      description: "future #now",
-      tags: ["#now"],
-      scheduledDate: new Date(2026, 9, 1),
-    }),
-    nowTask({
-      description: "today #now",
-      tags: ["#now"],
-      scheduledDate: new Date(2026, 8, 30),
-    }),
-    nowTask({
-      description: "blocked #now",
-      tags: ["#now"],
-      isBlocked: () => true,
-    }),
-    nowTask({ description: "#nowadays", tags: ["#task"] }),
-    nowTask({ description: "subtag", tags: ["#now/x"] }),
-  ];
-  const budget = nowBudgetFromTasks(tasks, today);
-  assert.equal(budget.count, 2);
-  assert.equal(budget.cap, 15);
-  assert.equal(budget.over, false);
-});
-
-test("nowBudgetFromTasks flags the over-cap week", () => {
-  const tasks = Array.from({ length: 16 }, (_, index) =>
-    nowTask({ description: `bet ${index} #now`, tags: ["#now"] }),
-  );
-  const budget = nowBudgetFromTasks(tasks, new Date(2026, 8, 30));
-  assert.equal(budget.count, 16);
-  assert.equal(budget.over, true);
-});
 
 test("loadPlanCaps falls back to defaults without fs", () => {
   const loaded = loadPlanCaps({
@@ -459,7 +404,9 @@ test("planBlockTargetPath prefers the containing daily note", () => {
 test("planBlockModel degrades to placeholders, never an error", () => {
   const model = planBlockModel({ content: null, tasks: null, today: new Date() });
   assert.equal(model.planText, "PLAN –");
-  assert.equal(model.nowText, "NOW –");
+  assert.equal(model.todayText, "TODAY –");
+  assert.equal(model.nextText, "NEXT –");
+  assert.equal(model.pendingText, "PENDING –");
   assert.equal(model.themesText, "");
   assert.deepEqual(model.lints, []);
   assert.equal(model.over, false);
@@ -467,7 +414,18 @@ test("planBlockModel degrades to placeholders, never an error", () => {
 
 test("planBlockModel renders chips, themes, and lints", () => {
   const tasks = [
-    nowTask({ description: "open #now", tags: ["#now", "#task"] }),
+    laneTask({
+      description: "nexted",
+      status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+      blockLink: " ^aaa",
+      path: "a.md",
+    }),
+    laneTask({
+      description: "pending",
+      status: { type: "IN_PROGRESS", name: "In Progress", symbol: "/" },
+      blockLink: " ^bbb",
+      path: "a.md",
+    }),
   ];
   const model = planBlockModel({
     content: "## Pomodoros\n\n- [ ] () — GOALS\n    - [[a#^aaa]]\n",
@@ -476,16 +434,22 @@ test("planBlockModel renders chips, themes, and lints", () => {
     caps: defaultPlanCaps(),
     sourcePath: "2026/20260930.md",
     app: {},
+    isToday: (task) => task.blockLink === " ^aaa",
   });
   assert.equal(model.planText, "PLAN 1/3 · 1/10");
-  assert.equal(model.nowText, "NOW 1/15");
+  assert.equal(model.todayText, "TODAY 1");
+  assert.equal(model.nextText, "NEXT 1/15");
+  assert.equal(model.pendingText, "PENDING 1/10");
   assert.equal(model.themesText, "★ GOALS");
   assert.equal(model.over, false);
 });
 
-test("planBlockModel adds now_cap_exceeded when the week is over", () => {
+test("planBlockModel adds lane cap lints when a lane is over", () => {
   const tasks = Array.from({ length: 16 }, (_, index) =>
-    nowTask({ description: `bet ${index} #now`, tags: ["#now"] }),
+    laneTask({
+      description: `next ${index}`,
+      status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+    }),
   );
   const model = planBlockModel({
     content: "## Pomodoros\n\n- [ ] () — GOALS\n",
@@ -495,8 +459,8 @@ test("planBlockModel adds now_cap_exceeded when the week is over", () => {
   });
   assert.equal(model.over, true);
   assert.ok(
-    model.lints.some((lint) => lint.endsWith("now_cap_exceeded")),
-    `expected a now_cap_exceeded lint, got ${JSON.stringify(model.lints)}`,
+    model.lints.some((lint) => lint.endsWith("next_cap_exceeded")),
+    `expected a next_cap_exceeded lint, got ${JSON.stringify(model.lints)}`,
   );
 });
 
@@ -514,7 +478,10 @@ test("plugin exposes the versioned api and registers the bob-plan block", async 
       plugins: {
         "obsidian-tasks-plugin": {
           getTasks: () => [
-            nowTask({ description: "open #now", tags: ["#now", "#task"] }),
+            laneTask({
+              description: "nexted",
+              status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+            }),
           ],
         },
       },
@@ -525,7 +492,8 @@ test("plugin exposes the versioned api and registers the bob-plan block", async 
   process.env.XDG_CONFIG_HOME = "/definitely/missing/bob-plan-test";
   try {
     plugin.onload();
-    assert.equal(plugin.api.version, 1);
+    assert.equal(plugin.api.version, 2);
+    assert.equal(plugin.api.nowBudget, undefined);
     assert.deepEqual(plugin.api.caps(), defaultPlanCaps());
     assert.equal(typeof plugin.codeBlocks["bob-plan"], "function");
 
@@ -537,8 +505,9 @@ test("plugin exposes the versioned api and registers the bob-plan block", async 
     });
     assert.equal(asyncBudget.themeNames.join(","), "GOALS");
 
-    const now = plugin.api.nowBudget();
-    assert.equal(now.count, 1);
+    assert.equal(plugin.api.nextBudget().count, 1);
+    assert.equal(plugin.api.pendingBudget().count, 0);
+    assert.deepEqual(plugin.api.todayKeys(), []);
 
     plugin.onunload();
     assert.equal(plugin.planBlockViews.size, 0);
@@ -593,24 +562,24 @@ test("conformance: empty target means the daily note", () => {
   assert.equal(budget.entries[0].links, 1);
 });
 
-test("now predicate matches hide subtags, case, and non-task", () => {
+test("lane predicate matches hide subtags, case, and non-task", () => {
   const today = new Date(2026, 8, 30);
   const base = (overrides = {}) => ({
-    description: "bet #now",
-    tags: ["#now"],
+    description: "lane task",
+    tags: ["#task"],
     path: "notes/a.md",
-    status: { type: "TODO", name: "Todo" },
+    status: { type: "ON_HOLD", name: "Next", symbol: "*" },
     isBlocked: () => false,
     ...overrides,
   });
   const tasks = [
-    base({ tags: ["#now", "#hide/x"] }),
-    base({ tags: ["#now", "#Hide"] }),
+    base({ tags: ["#task", "#hide/x"] }),
+    base({ tags: ["#task", "#Hide"] }),
     base({ path: "Notes/_TEMPLATES/x.md" }),
     base({ path: "notes/_CONFLICTS/a.md" }),
     base({ status: { type: "NON_TASK", name: "Note" } }),
     base(),
   ];
-  const budget = nowBudgetFromTasks(tasks, today);
+  const budget = laneBudgetFromTasks(tasks, today, undefined, "next");
   assert.equal(budget.count, 1);
 });

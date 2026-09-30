@@ -272,6 +272,9 @@ const DEPENDENCY_TRANSCLUSION_BULLET_RE =
 // emoji must agree with the label, so `🗓️ **WORK LOG**` is not a marker. A
 // marker written by hand without the emoji, and the legacy spellings, are
 // still recognized so an existing log is never orphaned or silently rewritten.
+// The Cancel Log below is plugin-only: bob-cli deliberately has no
+// `❌ **CANCEL LOG**` anchor so new captured notes land below a first-child
+// Cancel Log, and emoji-led bullets are never task sections.
 function buildManagedTaskLogParentRe(emoji, labels) {
   return new RegExp(
     `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emoji>${emoji}[ \\t]+)?\\*\\*(?<label>${labels
@@ -283,6 +286,7 @@ function buildManagedTaskLogParentRe(emoji, labels) {
 const MANAGED_TASK_LOG_INDENT_UNIT = "\t";
 const MANAGED_TASK_LOG_KIND_SCHEDULE = "schedule";
 const MANAGED_TASK_LOG_KIND_WORK = "work";
+const MANAGED_TASK_LOG_KIND_CANCEL = "cancel";
 
 // Managed "schedule log" child bullet, e.g. `  - 🗓️ **SCHEDULE LOG**`, with a
 // newest-first list of `*<from> → <to>* — <reason>` entries nested one level
@@ -331,6 +335,19 @@ const WORK_LOG_PARENT_RE = buildManagedTaskLogParentRe(WORK_LOG_EMOJI, [
   WORK_LOG_LABEL,
   ...LEGACY_WORK_LOG_LABELS,
 ]);
+// Managed "cancel log" child bullet, e.g. `  - ❌ **CANCEL LOG**`, with a
+// newest-first list of `*YYYY-MM-DD* — <reason>` entries nested one level
+// under it. The emoji is U+274C, written without a variation selector; the
+// parser also accepts an optional U+FE0F after it. There are no legacy
+// labels. The verdict reads first, so a new log is inserted as the task's
+// first direct child (unlike Schedule/Work Logs, which append last).
+const CANCEL_LOG_EMOJI = "❌";
+const CANCEL_LOG_LABEL = "CANCEL LOG";
+const CANCEL_LOG_MARKER_TEXT = `${CANCEL_LOG_EMOJI} **${CANCEL_LOG_LABEL}**`;
+const CANCEL_LOG_PARENT_RE = buildManagedTaskLogParentRe(
+  `${CANCEL_LOG_EMOJI}\uFE0F?`,
+  [CANCEL_LOG_LABEL],
+);
 const SCHEDULE_LOG_ENTRY_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emphasis>\\*\\*?)(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\k<emphasis>${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,
 );
@@ -1535,9 +1552,9 @@ function formatScheduleLogEntryBullet(indent, marker, fields) {
   return `${indent}${marker} ${formatScheduleLogEntryText(fields)}`;
 }
 
-// Parse a managed task-log marker bullet of either kind. Mirrors bob-cli's
+// Parse a managed task-log marker bullet of any kind. Mirrors bob-cli's
 // parse_managed_task_log_marker(): a present emoji must agree with the label,
-// so `🗓️ **WORK LOG**` is not a marker.
+// so `🗓️ **WORK LOG**` is not a marker. The Cancel Log is plugin-only.
 function parseManagedTaskLogParentBullet(line) {
   const text = String(line || "");
   const scheduleMatch = SCHEDULE_LOG_PARENT_RE.exec(text);
@@ -1559,6 +1576,17 @@ function parseManagedTaskLogParentBullet(line) {
       marker,
       hasEmoji: Boolean(emoji),
       kind: MANAGED_TASK_LOG_KIND_WORK,
+    });
+  }
+
+  const cancelMatch = CANCEL_LOG_PARENT_RE.exec(text);
+  if (cancelMatch) {
+    const { indent, marker, emoji } = cancelMatch.groups;
+    return Object.freeze({
+      indent,
+      marker,
+      hasEmoji: Boolean(emoji),
+      kind: MANAGED_TASK_LOG_KIND_CANCEL,
     });
   }
 
@@ -1754,6 +1782,193 @@ function planScheduleLogEntry(content, taskLine, details = {}) {
     changed: true,
     createdParent: true,
     insertLine: block.endLineExclusive,
+    lineTexts,
+    lineText: lineTexts.join("\n"),
+  });
+}
+
+// Render the managed cancel-log marker bullet, e.g. `  - ❌ **CANCEL LOG**`,
+// reusing an existing marker's own indent/marker character.
+function formatCancelLogParentBullet(indent, marker) {
+  return `${indent}${marker} ${CANCEL_LOG_MARKER_TEXT}`;
+}
+
+// The text of one cancel-log entry without its indentation or list marker:
+// `*YYYY-MM-DD* — <reason>`. Split out from formatCancelLogEntryBullet so the
+// modal preview renders the exact text the writers insert instead of
+// duplicating the format inline.
+function formatCancelLogEntryText({ date, reason }) {
+  const emphasis = SCHEDULE_LOG_ENTRY_EMPHASIS;
+  const dateText = normalizeBulletPropertyValue(date);
+  return `${emphasis}${dateText}${emphasis}${SCHEDULE_LOG_SEPARATOR}${reason}`;
+}
+
+function formatCancelLogEntryBullet(indent, marker, fields) {
+  return `${indent}${marker} ${formatCancelLogEntryText(fields)}`;
+}
+
+function parseCancelLogParentBullet(line) {
+  const parsed = parseManagedTaskLogParentBullet(line);
+  return parsed && parsed.kind === MANAGED_TASK_LOG_KIND_CANCEL
+    ? Object.freeze({
+        indent: parsed.indent,
+        marker: parsed.marker,
+        hasEmoji: parsed.hasEmoji,
+      })
+    : null;
+}
+
+// Find the managed `❌ **CANCEL LOG**` marker among `taskLine`'s direct
+// children, ignoring a marker that belongs to a nested grandchild bullet.
+// Returns the first match (a second marker under the same task is left alone).
+function findCancelLogParent(lines, taskLine) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  if (!Number.isFinite(taskIndex) || taskIndex < 0) {
+    return null;
+  }
+
+  const block = findCurrentBulletChildBlock(sourceLines, taskIndex);
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+
+    const parsed = parseCancelLogParentBullet(lineText);
+    if (parsed && findNearestParentListItem(sourceLines, index) === taskIndex) {
+      return Object.freeze({
+        line: index,
+        indent: parsed.indent,
+        marker: parsed.marker,
+      });
+    }
+  }
+
+  return null;
+}
+
+// Pick the indentation for a new cancel-log entry: reuse an existing
+// entry's indentation when the marker already has entries, otherwise the
+// marker's own indent plus one tab (mirrors getDependencyChildIndent).
+function getCancelLogEntryIndent(lines, parentLine) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const markerIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  const markerIndent = Number.isFinite(markerIndex)
+    ? getBulletIndent(String(sourceLines[markerIndex] || ""))
+    : "";
+  const block = findCurrentBulletChildBlock(sourceLines, markerIndex);
+
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+
+    if (
+      BULLET_PROPERTY_LIST_ITEM_RE.test(lineText) &&
+      findNearestParentListItem(sourceLines, index) === markerIndex
+    ) {
+      return getBulletIndent(lineText);
+    }
+  }
+
+  return `${markerIndent}${MANAGED_TASK_LOG_INDENT_UNIT}`;
+}
+
+// Plan the cancel-log write for one task: either prepend a new entry above
+// an existing marker's entries, or insert a fresh marker + entry as the
+// task's first direct child, directly below the task line. Guards (never
+// throws) on an out-of-range line, a non-list-item line, a missing date, or
+// an empty/whitespace-only reason.
+function planCancelLogEntry(content, taskLine, details = {}) {
+  const lines = String(content || "").split(/\r?\n/);
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  const guard = (reason) =>
+    Object.freeze({
+      valid: false,
+      reason,
+      changed: false,
+      createdParent: false,
+      usedFallback: false,
+      insertLine: null,
+      lineTexts: Object.freeze([]),
+      lineText: null,
+    });
+
+  if (!Number.isFinite(taskIndex) || taskIndex < 0 || taskIndex >= lines.length) {
+    return guard("task-out-of-range");
+  }
+
+  if (!isBulletLine(String(lines[taskIndex] || ""))) {
+    return guard("not-list-item");
+  }
+
+  const dateText = normalizeBulletPropertyValue(details.date);
+  if (!dateText) {
+    return guard("missing-date");
+  }
+
+  const normalized = normalizeScheduleReasonText(details.reason);
+  const fallback = normalizeScheduleReasonText(details.fallbackReason);
+  // An empty reason falls back only on a task that already keeps a log; a task
+  // with no marker is still left completely untouched, which is the documented
+  // escape hatch for "I do not want a log on this one".
+  const usedFallback = normalized.empty && !fallback.empty;
+  const reasonText = usedFallback ? fallback.reason : normalized.reason;
+  if (!reasonText) {
+    return guard("empty-reason");
+  }
+
+  const entryFields = {
+    date: dateText,
+    reason: reasonText,
+  };
+
+  const existingParent = findCancelLogParent(lines, taskIndex);
+  if (usedFallback && !existingParent) {
+    return guard("no-cancel-log");
+  }
+  if (existingParent) {
+    const entryIndent = getCancelLogEntryIndent(lines, existingParent.line);
+    const lineText = formatCancelLogEntryBullet(
+      entryIndent,
+      existingParent.marker,
+      entryFields,
+    );
+    return Object.freeze({
+      valid: true,
+      reason: null,
+      changed: true,
+      createdParent: false,
+      usedFallback,
+      insertLine: existingParent.line + 1,
+      lineTexts: Object.freeze([lineText]),
+      lineText,
+    });
+  }
+
+  const markerIndent = getDependencyChildIndent(lines, taskIndex);
+  // The verdict reads first: the marker goes directly below the task line as
+  // its first direct child, and the entry nests one Tab deeper than that,
+  // matching getCancelLogEntryIndent's fallback for a marker that exists but
+  // has no entries yet.
+  const entryIndent = `${markerIndent}${MANAGED_TASK_LOG_INDENT_UNIT}`;
+  const lineTexts = Object.freeze([
+    formatCancelLogParentBullet(markerIndent, "-"),
+    formatCancelLogEntryBullet(entryIndent, "-", entryFields),
+  ]);
+  return Object.freeze({
+    valid: true,
+    reason: null,
+    changed: true,
+    createdParent: true,
+    usedFallback,
+    insertLine: taskIndex + 1,
     lineTexts,
     lineText: lineTexts.join("\n"),
   });
@@ -4827,6 +5042,9 @@ function getProjectFromTaskNoticeText(
   }
   if (kindSet.has(MANAGED_TASK_LOG_KIND_WORK)) {
     details.push("work log moved");
+  }
+  if (kindSet.has(MANAGED_TASK_LOG_KIND_CANCEL)) {
+    details.push("cancel log moved");
   }
 
   return `Created project${projectSuffix} from task "${taskText}" (${details.join("; ")})`;
@@ -13442,6 +13660,36 @@ function readNowBudgetValue(app) {
   }
 }
 
+// True when a task line is recurring: it carries a Tasks `repeat` field in
+// either the bracket `[repeat:: …]` or parenthetical `(repeat:: …)` shape, or
+// the 🔁 emoji. Such tasks are refused by the cancel planner so Obsidian
+// Tasks can create the next occurrence.
+function isRecurringTaskLine(lineText) {
+  const text = String(lineText || "");
+  return (
+    /\[repeat\s*::/i.test(text) ||
+    /\(repeat\s*::/i.test(text) ||
+    text.includes("🔁")
+  );
+}
+
+// Status name for the cancel row detail: Ready (` `), Next (`*`),
+// In Progress (`/`) or Blocked (`?`). Null for any other symbol.
+function getTaskCancelStatusLabel(symbol) {
+  switch (String(symbol ?? "")) {
+    case " ":
+      return "Ready";
+    case "*":
+      return "Next";
+    case "/":
+      return "In Progress";
+    case "?":
+      return "Blocked";
+    default:
+      return null;
+  }
+}
+
 // Describe the pinned `#now` picker row for the current property stage: null
 // when the cursor is not on a task or Task Link, otherwise whether choosing
 // the row would add or remove plus how many tasks it covers.
@@ -13495,6 +13743,377 @@ function describeNowToggleRow(content, options = {}) {
     });
   }
   return null;
+}
+
+// Describe the pinned Cancel picker row: null when no open `#task` target
+// exists (closed tasks, plain bullets, or no task under the cursor), otherwise
+// the counts, recurring flag, and detail line the picker renders. `^prj`
+// lifecycle tasks are allowed. In counted and link sessions a single recurring
+// open target refuses the whole batch, so the detail reports the recurring
+// refusal.
+function describeCancelTaskRow(content, options = {}) {
+  const text = String(content || "");
+  const cursorLine = Math.floor(numericOrDefault(options.cursorLine, NaN));
+  const taskSession = options.taskSession || null;
+  const linkResolved = Array.isArray(options.linkResolved)
+    ? options.linkResolved
+    : null;
+
+  const statusOf = (lineText) => getObsidianTaskCheckboxStatus(lineText);
+  const isOpenStatus = (status) =>
+    status !== null && OPEN_OBSIDIAN_TASK_STATUSES.has(status);
+
+  if (linkResolved) {
+    if (linkResolved.length === 0) {
+      return null;
+    }
+    let openCount = 0;
+    let closedCount = 0;
+    let recurring = false;
+    for (const target of linkResolved) {
+      const rawLine = String((target && target.rawLine) || "");
+      const status = statusOf(rawLine);
+      if (isObsidianTaskLine(rawLine) && isOpenStatus(status)) {
+        openCount += 1;
+        if (isRecurringTaskLine(rawLine)) {
+          recurring = true;
+        }
+      } else {
+        closedCount += 1;
+      }
+    }
+    if (openCount === 0) {
+      return null;
+    }
+    if (recurring) {
+      return Object.freeze({
+        kind: "link",
+        count: linkResolved.length,
+        openCount,
+        closedCount,
+        recurring: true,
+        fromStatus: null,
+        detail: "recurring · use Obsidian Tasks",
+      });
+    }
+    const sessionLike = {
+      targets: linkResolved,
+      resolved: linkResolved,
+      actualCount: linkResolved.length,
+      requestedCount: linkResolved.length,
+      clamped: false,
+    };
+    const subtitle = getLinkPickerSessionSubtitle(sessionLike);
+    const detail =
+      closedCount > 0
+        ? `${subtitle} → Cancelled · ${closedCount} already closed`
+        : `${subtitle} → Cancelled`;
+    return Object.freeze({
+      kind: "link",
+      count: linkResolved.length,
+      openCount,
+      closedCount,
+      recurring: false,
+      fromStatus: null,
+      detail,
+    });
+  }
+
+  if (
+    taskSession &&
+    Array.isArray(taskSession.targets) &&
+    taskSession.targets.length > 0
+  ) {
+    let openCount = 0;
+    let closedCount = 0;
+    let recurring = false;
+    for (const target of taskSession.targets) {
+      const rawLine = String((target && target.rawLine) || "");
+      const status = statusOf(rawLine);
+      if (isObsidianTaskLine(rawLine) && isOpenStatus(status)) {
+        openCount += 1;
+        if (isRecurringTaskLine(rawLine)) {
+          recurring = true;
+        }
+      } else {
+        closedCount += 1;
+      }
+    }
+    if (openCount === 0) {
+      return null;
+    }
+    if (recurring) {
+      return Object.freeze({
+        kind: "task",
+        count: taskSession.targets.length,
+        openCount,
+        closedCount,
+        recurring: true,
+        fromStatus: null,
+        detail: "recurring · use Obsidian Tasks",
+      });
+    }
+    const taskWord = openCount === 1 ? "task" : "tasks";
+    const detail =
+      closedCount > 0
+        ? `${openCount} ${taskWord} → Cancelled · ${closedCount} already closed`
+        : `${openCount} ${taskWord} → Cancelled · asks why`;
+    return Object.freeze({
+      kind: "task",
+      count: taskSession.targets.length,
+      openCount,
+      closedCount,
+      recurring: false,
+      fromStatus: null,
+      detail,
+    });
+  }
+
+  if (Number.isFinite(cursorLine)) {
+    const lines = text.split(/\r?\n/);
+    const line = String(lines[cursorLine] || "");
+    if (!isObsidianTaskLine(line)) {
+      return null;
+    }
+    const status = statusOf(line);
+    if (!isOpenStatus(status)) {
+      return null;
+    }
+    const fromStatus = getTaskCancelStatusLabel(status);
+    if (isRecurringTaskLine(line)) {
+      return Object.freeze({
+        kind: "task",
+        count: 1,
+        openCount: 1,
+        closedCount: 0,
+        recurring: true,
+        fromStatus,
+        detail: "recurring · use Obsidian Tasks",
+      });
+    }
+    return Object.freeze({
+      kind: "task",
+      count: 1,
+      openCount: 1,
+      closedCount: 0,
+      recurring: false,
+      fromStatus,
+      detail: `${fromStatus} → Cancelled · asks why`,
+    });
+  }
+
+  return null;
+}
+
+// Plan a pure batch cancel across one note's content: set `[-]`, upsert
+// `[cancelled:: date]`, and write the Cancel Log first-child/prepend/fallback
+// entry for every open target. Closed targets are skipped. A single recurring
+// open target refuses the whole batch. Targets are processed bottom-up so
+// insertions never shift pending lines. Pure and CRLF-preserving.
+function planTaskCancelBatch(content, session, details = {}) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const targets =
+    session && Array.isArray(session.targets) ? session.targets : [];
+
+  const invalid = (error, extra = {}) =>
+    Object.freeze({
+      valid: false,
+      error,
+      recurring: Boolean(extra.recurring),
+      stale: Boolean(extra.stale),
+      content: text,
+      cancelledCount: 0,
+      skippedClosedCount: 0,
+      loggedCount: 0,
+      createdLogCount: 0,
+      fallbackLoggedCount: 0,
+      nowTaggedCount: 0,
+      cancelled: Object.freeze([]),
+      cursorLineShift: (line) => line,
+    });
+
+  if (!session || session.valid === false || targets.length === 0) {
+    return invalid("Counted task session is unavailable");
+  }
+
+  for (const target of targets) {
+    const liveLine =
+      Number.isInteger(target.line) &&
+      target.line >= 0 &&
+      target.line < source.lines.length
+        ? source.lines[target.line]
+        : undefined;
+    if (
+      liveLine !== target.rawLine ||
+      !isObsidianTaskAtLine(text, target.line, contexts, source.lines)
+    ) {
+      return invalid("A counted task changed while the picker was open", {
+        stale: true,
+      });
+    }
+  }
+
+  const dateText = normalizeBulletPropertyValue(details.date);
+  if (!dateText) {
+    return invalid("Cancel date is required");
+  }
+  const reasonInput = String(details.reason ?? "");
+  const fallbackInput = String(details.fallbackReason ?? "");
+
+  let skippedClosedCount = 0;
+  const openTargets = [];
+  for (const target of targets) {
+    const status = getObsidianTaskCheckboxStatus(target.rawLine || "");
+    if (
+      !isObsidianTaskLine(target.rawLine || "") ||
+      !OPEN_OBSIDIAN_TASK_STATUSES.has(status)
+    ) {
+      skippedClosedCount += 1;
+      continue;
+    }
+    openTargets.push(target);
+  }
+
+  if (openTargets.length === 0) {
+    const finalOriginsEmpty = source.lines.map((_, index) => index);
+    return Object.freeze({
+      valid: true,
+      error: null,
+      recurring: false,
+      stale: false,
+      content: text,
+      cancelledCount: 0,
+      skippedClosedCount,
+      loggedCount: 0,
+      createdLogCount: 0,
+      fallbackLoggedCount: 0,
+      nowTaggedCount: 0,
+      cancelled: Object.freeze([]),
+      cursorLineShift: (line) => {
+        const numeric = Math.floor(numericOrDefault(line, NaN));
+        if (!Number.isFinite(numeric)) {
+          return line;
+        }
+        const found = finalOriginsEmpty.indexOf(numeric);
+        return found === -1 ? line : found;
+      },
+    });
+  }
+
+  for (const target of openTargets) {
+    if (isRecurringTaskLine(target.rawLine || "")) {
+      return invalid(
+        "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+        { recurring: true },
+      );
+    }
+  }
+
+  const workingLines = source.lines.slice();
+  const lineOrigins = source.lines.map((_, index) => index);
+  let loggedCount = 0;
+  let createdLogCount = 0;
+  let fallbackLoggedCount = 0;
+  let nowTaggedCount = 0;
+  const cancelled = [];
+
+  const ordered = openTargets.slice().sort((a, b) => b.line - a.line);
+  for (const target of ordered) {
+    const oldLine = String(workingLines[target.line] || "");
+    const status = getObsidianTaskCheckboxStatus(oldLine);
+    const fromStatus = getTaskCancelStatusLabel(status);
+    const blockId = getTrailingBlockId(oldLine);
+    const idField = findBulletPropertyField(oldLine, "id");
+    const normalizedId = idField
+      ? normalizeBulletPropertyValue(idField.value)
+      : "";
+    const taskId = normalizedId || blockId || null;
+    if (hasNowTag(oldLine)) {
+      nowTaggedCount += 1;
+    }
+
+    const replaced = replaceObsidianTaskCheckboxStatus(oldLine, "-");
+    const upserted = upsertBulletProperty(replaced, "cancelled", dateText);
+    const nextTaskLine = upserted.line;
+    workingLines[target.line] = nextTaskLine;
+
+    const plan = planCancelLogEntry(
+      workingLines.join(source.lineEnding),
+      target.line,
+      { date: dateText, reason: reasonInput, fallbackReason: fallbackInput },
+    );
+    let logApplied = false;
+    if (plan.valid && plan.changed) {
+      const insertAt = Math.floor(numericOrDefault(plan.insertLine, NaN));
+      if (Number.isFinite(insertAt) && insertAt >= 0) {
+        const insertTexts = Array.isArray(plan.lineTexts)
+          ? plan.lineTexts.slice()
+          : [];
+        workingLines.splice(insertAt, 0, ...insertTexts);
+        lineOrigins.splice(
+          insertAt,
+          0,
+          ...insertTexts.map(() => null),
+        );
+        logApplied = true;
+        loggedCount += 1;
+        if (plan.createdParent) {
+          createdLogCount += 1;
+        }
+        if (plan.usedFallback) {
+          fallbackLoggedCount += 1;
+        }
+      }
+    } else if (
+      !plan.valid &&
+      plan.reason !== "empty-reason" &&
+      plan.reason !== "no-cancel-log"
+    ) {
+      // Any other guard (out-of-range, non-bullet) cannot happen after the
+      // staleness check above; treat it as a batch failure rather than a
+      // silent skip so callers never report success on a half-written task.
+      return invalid(plan.reason || "Cancel log could not be planned");
+    }
+
+    cancelled.push(
+      Object.freeze({
+        originalLine: target.line,
+        blockId,
+        taskId,
+        fromStatus,
+        logged: logApplied,
+      }),
+    );
+  }
+
+  cancelled.sort((a, b) => a.originalLine - b.originalLine);
+  const finalOrigins = lineOrigins.slice();
+  const cursorLineShift = (line) => {
+    const numeric = Math.floor(numericOrDefault(line, NaN));
+    if (!Number.isFinite(numeric)) {
+      return line;
+    }
+    const found = finalOrigins.indexOf(numeric);
+    return found === -1 ? line : found;
+  };
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    recurring: false,
+    stale: false,
+    content: workingLines.join(source.lineEnding),
+    cancelledCount: openTargets.length,
+    skippedClosedCount,
+    loggedCount,
+    createdLogCount,
+    fallbackLoggedCount,
+    nowTaggedCount,
+    cancelled: Object.freeze(cancelled),
+    cursorLineShift,
+  });
 }
 
 // A task move uses the same count convention as counted property editing, but
@@ -28112,8 +28731,13 @@ module.exports.helpers = {
   getDependencyChildIndent,
   MANAGED_TASK_LOG_KIND_SCHEDULE,
   MANAGED_TASK_LOG_KIND_WORK,
+  MANAGED_TASK_LOG_KIND_CANCEL,
   SCHEDULE_LOG_EMOJI,
   SCHEDULE_LOG_LABEL,
+  CANCEL_LOG_EMOJI,
+  CANCEL_LOG_LABEL,
+  CANCEL_LOG_MARKER_TEXT,
+  CANCEL_LOG_PARENT_RE,
   formatScheduleLogParentBullet,
   formatScheduleLogEntryText,
   formatScheduleLogEntryBullet,
@@ -28124,6 +28748,17 @@ module.exports.helpers = {
   findScheduleLogParent,
   getScheduleLogEntryIndent,
   planScheduleLogEntry,
+  formatCancelLogParentBullet,
+  formatCancelLogEntryText,
+  formatCancelLogEntryBullet,
+  parseCancelLogParentBullet,
+  findCancelLogParent,
+  getCancelLogEntryIndent,
+  planCancelLogEntry,
+  isRecurringTaskLine,
+  getTaskCancelStatusLabel,
+  describeCancelTaskRow,
+  planTaskCancelBatch,
   applyScheduleLogEntryToLines,
   hasScheduleLogReasonInput,
   getScheduleLogWriteOutcome,

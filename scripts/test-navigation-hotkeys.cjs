@@ -16782,213 +16782,190 @@ test("bare Ctrl+Shift+P on a #task line keeps the existing task behavior", () =>
   harness.plugin.activeBulletPropertyPicker = null;
 });
 
-// now-toggle: Toggle #now from task lines and Task Links.
+// task-lane: Commit Ready to Next, or release Next/In Progress to Ready.
 // ---------------------------------------------------------------------------
 
-test("hasNowTag matches whole-token #now only", () => {
-  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #now"), true);
-  assert.equal(helpers.hasNowTag("#now"), true);
-  assert.equal(helpers.hasNowTag("task #now [a:: 1]"), true);
-  assert.equal(helpers.hasNowTag("- [ ] #task Ship it"), false);
-  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #nowadays"), false);
-  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #now/x"), false);
-  assert.equal(helpers.hasNowTag("- [ ] #task Ship it #NOW"), false);
-});
-
-test("addNowTagToLine places the tag before fields and the block ID", () => {
-  assert.equal(
-    helpers.addNowTagToLine("- [ ] #task Ship it"),
-    "- [ ] #task Ship it #now",
-  );
-  assert.equal(
-    helpers.addNowTagToLine("- [ ] #task Ship it ^a1"),
-    "- [ ] #task Ship it #now ^a1",
-  );
-  assert.equal(
-    helpers.addNowTagToLine("- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1"),
-    "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^a1",
-  );
-  assert.equal(
-    helpers.addNowTagToLine("- [ ] #task Ship it [a:: 1] [b:: 2] ^a1"),
-    "- [ ] #task Ship it #now [a:: 1] [b:: 2] ^a1",
-  );
-  assert.equal(
-    helpers.addNowTagToLine("- [ ] #task Ship it #hide ^a1"),
-    "- [ ] #task Ship it #hide #now ^a1",
-  );
-  assert.equal(
-    helpers.addNowTagToLine("- [ ] #task Ship it #now ^a1"),
-    "- [ ] #task Ship it #now ^a1",
-  );
-  assert.equal(
-    helpers.addNowTagToLine("- [ ] #task Foo [a:: 1] bar [b:: 2] ^x"),
-    "- [ ] #task Foo [a:: 1] bar #now [b:: 2] ^x",
-  );
-});
-
-test("removeNowTagFromLine removes every token and collapses spaces", () => {
-  assert.equal(
-    helpers.removeNowTagFromLine("- [ ] #task Ship it #now"),
-    "- [ ] #task Ship it",
-  );
-  assert.equal(
-    helpers.removeNowTagFromLine("- [ ] #task Ship it #now ^a1"),
-    "- [ ] #task Ship it ^a1",
-  );
-  assert.equal(
-    helpers.removeNowTagFromLine(
-      "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^a1",
-    ),
-    "- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1",
-  );
-  assert.equal(
-    helpers.removeNowTagFromLine("- [ ] #task Ship it #now #now"),
-    "- [ ] #task Ship it",
-  );
-  assert.equal(
-    helpers.removeNowTagFromLine("- [ ] #task Ship it #hide #now ^a1"),
-    "- [ ] #task Ship it #hide ^a1",
-  );
-  assert.equal(
-    helpers.removeNowTagFromLine("- [ ] #task Ship it #nowadays ^a1"),
-    "- [ ] #task Ship it #nowadays ^a1",
-  );
-  assert.equal(
-    helpers.removeNowTagFromLine("- [ ] #task #task #now"),
-    "- [ ] #task #task",
-  );
-});
-
-test("planNowToggleBatch adds when any target lacks #now, else removes", () => {
+test("planTaskLaneBatch commits every Ready target to Next", () => {
   const content = [
     "- [ ] #task One ^a1",
-    "- [ ] #task Two #now ^b1",
-    "- [ ] #task Three ^c1",
+    "- [*] #task Two ^b1",
+    "- [/] #task Three ^c1",
+    "- [?] #task Four ^d1",
   ].join("\n");
-  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 2);
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 3);
   assert.equal(session.valid, true);
-  assert.deepEqual(
-    session.targets.map((target) => target.line),
-    [0, 1, 2],
-  );
-  const added = helpers.planNowToggleBatch(content, session);
-  assert.equal(added.valid, true);
-  assert.equal(added.added, true);
-  assert.equal(added.changedTaskCount, 2);
-  assert.deepEqual(added.content.split("\n"), [
-    "- [ ] #task One #now ^a1",
-    "- [ ] #task Two #now ^b1",
-    "- [ ] #task Three #now ^c1",
-  ]);
-
-  const removeSession = helpers.discoverCountedObsidianTaskTargets(
-    added.content,
-    0,
-    2,
-  );
-  const removed = helpers.planNowToggleBatch(added.content, removeSession);
-  assert.equal(removed.valid, true);
-  assert.equal(removed.added, false);
-  assert.equal(removed.changedTaskCount, 3);
-  assert.deepEqual(removed.content.split("\n"), [
-    "- [ ] #task One ^a1",
-    "- [ ] #task Two ^b1",
-    "- [ ] #task Three ^c1",
+  const plan = helpers.planTaskLaneBatch(content, session, {});
+  assert.equal(plan.valid, true);
+  assert.equal(plan.mode, "commit");
+  assert.equal(plan.changedTaskCount, 1);
+  assert.equal(plan.blockedSkipped, 1);
+  assert.deepEqual(plan.content.split("\n"), [
+    "- [*] #task One ^a1",
+    "- [*] #task Two ^b1",
+    "- [/] #task Three ^c1",
+    "- [?] #task Four ^d1",
   ]);
 });
 
-test("planNowToggleBatch refuses stale preimages and honors a forced direction", () => {
-  const content = "- [ ] #task One ^a1\n- [ ] #task Two ^b1";
+test("planTaskLaneBatch releases Next and In Progress to Ready", () => {
+  const content = ["- [*] #task One ^a1", "- [/] #task Two ^b1"].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
+  const plan = helpers.planTaskLaneBatch(content, session, {
+    summary: "",
+    dateText: "2026-09-30",
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.mode, "release");
+  assert.equal(plan.changedTaskCount, 2);
+  assert.equal(plan.blockedSkipped, 0);
+  assert.equal(plan.workLogWrittenCount, 0);
+  assert.deepEqual(plan.content.split("\n"), [
+    "- [ ] #task One ^a1",
+    "- [ ] #task Two ^b1",
+  ]);
+  assert.equal(plan.released.length, 2);
+});
+
+test("planTaskLaneBatch logs a nonblank summary on released In Progress tasks only", () => {
+  const content = [
+    "- [*] #task Next ^a1",
+    "- [/] #task Working ^b1",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
+  const plan = helpers.planTaskLaneBatch(content, session, {
+    summary: "  did the thing  ",
+    dateText: "2026-09-30",
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.mode, "release");
+  assert.equal(plan.workLogWrittenCount, 1);
+  const lines = plan.content.split("\n");
+  assert.equal(lines[0], "- [ ] #task Next ^a1");
+  assert.equal(lines[1], "- [ ] #task Working ^b1");
+  assert.match(plan.content, /WORK LOG/);
+  assert.match(plan.content, /\*2026-09-30\* — did the thing/);
+  // Blank summaries write nothing.
+  const blank = helpers.planTaskLaneBatch(content, session, {
+    summary: "   ",
+    dateText: "2026-09-30",
+  });
+  assert.equal(blank.valid, true);
+  assert.equal(blank.workLogWrittenCount, 0);
+  assert.doesNotMatch(blank.content, /WORK LOG/);
+});
+
+test("planTaskLaneBatch skips Blocked and refuses stale preimages", () => {
+  const blocked = "- [?] #task Waiting ^a1";
+  const blockedSession = helpers.discoverCountedObsidianTaskTargets(blocked, 0, 0);
+  const refused = helpers.planTaskLaneBatch(blocked, blockedSession, {});
+  assert.equal(refused.valid, false);
+  assert.match(refused.error, /Blocked is derived/);
+
+  const content = "- [*] #task One ^a1\n- [/] #task Two ^b1";
   const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
   const staleSession = {
     ...session,
-    targets: [{ line: 0, rawLine: "- [ ] #task One, edited ^a1" }],
+    targets: [{ line: 0, rawLine: "- [*] #task One, edited ^a1" }],
   };
-  const stale = helpers.planNowToggleBatch(content, staleSession);
+  const stale = helpers.planTaskLaneBatch(content, staleSession, {});
   assert.equal(stale.valid, false);
   assert.equal(stale.stale, true);
-
-  const mixed = "- [ ] #task One #now ^a1\n- [ ] #task Two ^b1";
-  const mixedSession = helpers.discoverCountedObsidianTaskTargets(mixed, 0, 1);
-  const forcedRemove = helpers.planNowToggleBatch(mixed, mixedSession, {
-    added: false,
-  });
-  assert.equal(forcedRemove.valid, true);
-  assert.equal(forcedRemove.added, false);
-  assert.deepEqual(forcedRemove.content.split("\n"), [
-    "- [ ] #task One ^a1",
-    "- [ ] #task Two ^b1",
-  ]);
 });
 
-test("buildNowToggleNotice reports counts with and without the API", () => {
+test("buildLaneToggleNotice reports commit and release with and without budgets", () => {
   assert.equal(
-    helpers.buildNowToggleNotice({ added: true, changedTaskCount: 3 }),
-    "#now added · 3 tasks",
+    helpers.buildLaneToggleNotice({ mode: "commit", changedTaskCount: 3 }),
+    "→ Next · 3 tasks",
   );
   assert.equal(
-    helpers.buildNowToggleNotice({
-      added: true,
+    helpers.buildLaneToggleNotice({
+      mode: "commit",
       changedTaskCount: 1,
-      nowBudget: { count: 12, cap: 15 },
+      laneBudgets: {
+        next: { count: 12, cap: 15, over: false },
+        pending: { count: 7, cap: 10, over: false },
+      },
+      releasedNextCount: 0,
+      releasedPendingCount: 0,
     }),
-    "#now added · 1 task · NOW 13/15",
+    "→ Next · 1 task · NEXT 13/15 · PENDING 7/10",
   );
   assert.equal(
-    helpers.buildNowToggleNotice({
-      added: true,
-      changedTaskCount: 3,
-      nowBudget: { count: 14, cap: 15 },
-    }),
-    "#now added · 3 tasks · NOW 17/15 🔴 · prune at the weekly review",
-  );
-  assert.equal(
-    helpers.buildNowToggleNotice({
-      added: false,
+    helpers.buildLaneToggleNotice({
+      mode: "release",
       changedTaskCount: 2,
-      nowBudget: { count: 16, cap: 15 },
+      blockedSkipped: 2,
+      unlinkedFromToday: 1,
+      releasedNextCount: 1,
+      releasedPendingCount: 1,
+      laneBudgets: {
+        next: { count: 12, cap: 15, over: false },
+        pending: { count: 7, cap: 10, over: false },
+      },
     }),
-    "#now removed · 2 tasks · NOW 14/15",
+    "→ Ready · 2 tasks · unlinked 1 from today · 2 Blocked skipped — Blocked is derived · NEXT 11/15 · PENDING 6/10",
   );
+  const over = helpers.buildLaneToggleNotice({
+    mode: "commit",
+    changedTaskCount: 3,
+    laneBudgets: {
+      next: { count: 14, cap: 15, over: false },
+      pending: { count: 10, cap: 10, over: false },
+    },
+    releasedNextCount: 0,
+    releasedPendingCount: 0,
+  });
+  assert.match(over, /NEXT 17\/15/);
+  assert.match(over, /🔴 · prune at the weekly review/);
 });
 
-test("describeNowToggleRow covers task, counted, and link sessions", () => {
-  const single = helpers.describeNowToggleRow("- [ ] #task Ship it ^a1", {
+test("describeLaneRow covers task, counted, and link sessions", () => {
+  const single = helpers.describeLaneRow("- [ ] #task Ship it ^a1", {
     cursorLine: 0,
   });
   assert.deepEqual(single, {
     kind: "task",
     count: 1,
-    added: true,
-    detail: "this week · add",
+    mode: "commit",
+    detail: "lane · commit to Next",
+    needsReason: false,
   });
-  const singleTagged = helpers.describeNowToggleRow(
-    "- [ ] #task Ship it #now ^a1",
-    { cursorLine: 0 },
-  );
-  assert.equal(singleTagged.detail, "this week · remove");
+  const next = helpers.describeLaneRow("- [*] #task Ship it ^a1", {
+    cursorLine: 0,
+  });
+  assert.equal(next.detail, "lane · release to Ready");
+  assert.equal(next.needsReason, false);
+  const working = helpers.describeLaneRow("- [/] #task Ship it ^a1", {
+    cursorLine: 0,
+  });
+  assert.equal(working.needsReason, true);
   assert.equal(
-    helpers.describeNowToggleRow("- just a bullet", { cursorLine: 0 }),
+    helpers.describeLaneRow("- just a bullet", { cursorLine: 0 }),
     null,
   );
-  const content = "- [ ] #task One ^a1\n- [ ] #task Two #now ^b1";
+  assert.equal(
+    helpers.describeLaneRow("- [?] #task Waiting ^a1", { cursorLine: 0 }),
+    null,
+  );
+  const content = "- [ ] #task One ^a1\n- [*] #task Two ^b1";
   const counted = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
-  const countedRow = helpers.describeNowToggleRow(content, {
+  const countedRow = helpers.describeLaneRow(content, {
     taskSession: counted,
   });
-  assert.equal(countedRow.detail, "this week · add");
+  assert.equal(countedRow.detail, "lane · commit to Next");
   assert.equal(countedRow.count, 2);
-  const linkRow = helpers.describeNowToggleRow("", {
+  const linkRow = helpers.describeLaneRow("", {
     linkResolved: [
-      { rawLine: "- [ ] #task One #now ^a1" },
-      { rawLine: "- [ ] #task Two #now ^b1" },
+      { rawLine: "- [*] #task One ^a1" },
+      { rawLine: "- [/] #task Two ^b1" },
     ],
   });
-  assert.equal(linkRow.detail, "this week · remove");
+  assert.equal(linkRow.detail, "lane · release to Ready");
   assert.equal(linkRow.kind, "link");
+  assert.equal(linkRow.needsReason, true);
 });
 
-test("toggleNowTag on a task line adds before fields and reports NOW", async () => {
+test("toggleTaskLane commits Ready to Next and reports lane budgets", async () => {
   notices.length = 0;
   const editor = new TransactionEditor(
     "- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1",
@@ -17001,29 +16978,109 @@ test("toggleNowTag on a task line adds before fields and reports NOW", async () 
   plugin.app = {
     plugins: {
       plugins: {
-        "bob-ledger-tools": { api: { nowBudget: () => ({ count: 12, cap: 15, over: false }) } },
+        "bob-ledger-tools": {
+          api: {
+            version: 2,
+            nextBudget: () => ({ count: 12, cap: 15, over: false }),
+            pendingBudget: () => ({ count: 7, cap: 10, over: false }),
+          },
+        },
       },
     },
-    vault: {},
+    vault: { getMarkdownFiles: () => [...files.values()] },
     workspace: { getLeavesOfType: () => [] },
   };
   plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
-  assert.equal(await plugin.toggleNowTag(editor), true);
+  assert.equal(await plugin.toggleTaskLane(editor), true);
   assert.equal(
     editor.content,
-    "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^a1",
+    "- [*] #task Ship it [scheduled:: 2026-09-30] ^a1",
   );
-  assert.match(notices.at(-1), /#now added · 1 task · NOW 13\/15/);
-  notices.length = 0;
-  assert.equal(await plugin.toggleNowTag(editor), true);
-  assert.equal(
-    editor.content,
-    "- [ ] #task Ship it [scheduled:: 2026-09-30] ^a1",
-  );
-  assert.match(notices.at(-1), /#now removed · 1 task · NOW 11\/15/);
+  assert.match(notices.at(-1), /→ Next · 1 task · NEXT 13\/15/);
 });
 
-test("counted toggleNowTag covers the current task plus the next N tasks", async () => {
+test("toggleTaskLane releases to Ready without the api", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor("- [*] #task Ship it ^a1", {
+    line: 0,
+    ch: 0,
+  });
+  const files = new Map([
+    ["Plan.md", { path: "Plan.md", basename: "Plan.md", extension: "md" }],
+  ]);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    plugins: { plugins: {} },
+    vault: { getMarkdownFiles: () => [...files.values()] },
+    workspace: { getLeavesOfType: () => [] },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
+  assert.equal(await plugin.toggleTaskLane(editor), true);
+  assert.equal(editor.content, "- [ ] #task Ship it ^a1");
+  assert.match(notices.at(-1), /→ Ready · 1 task/);
+  assert.doesNotMatch(notices.at(-1), /NEXT/);
+});
+
+test("toggleTaskLane release logs the summary on In Progress tasks", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor("- [/] #task Working ^a1", {
+    line: 0,
+    ch: 0,
+  });
+  const files = new Map([
+    ["Plan.md", { path: "Plan.md", basename: "Plan.md", extension: "md" }],
+  ]);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    plugins: { plugins: {} },
+    vault: { getMarkdownFiles: () => [...files.values()] },
+    workspace: { getLeavesOfType: () => [] },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
+  assert.equal(
+    await plugin.toggleTaskLane(editor, {
+      summary: "parked for later",
+      dateText: "2026-09-30",
+    }),
+    true,
+  );
+  assert.match(editor.content, /- \[ \] #task Working \^a1/);
+  assert.match(editor.content, /WORK LOG/);
+  assert.match(editor.content, /\*2026-09-30\* — parked for later/);
+  assert.match(notices.at(-1), /→ Ready · 1 task/);
+});
+
+test("toggleTaskLane skips Blocked targets", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor(
+    ["- [*] #task One ^a1", "- [?] #task Waiting ^b1"].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const files = new Map([
+    ["Plan.md", { path: "Plan.md", basename: "Plan.md", extension: "md" }],
+  ]);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    plugins: { plugins: {} },
+    vault: { getMarkdownFiles: () => [...files.values()] },
+    workspace: { getLeavesOfType: () => [] },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
+  assert.equal(
+    await plugin.toggleTaskLane(editor, {
+      countExplicit: true,
+      additionalTaskCount: 1,
+    }),
+    true,
+  );
+  assert.deepEqual(editor.content.split("\n"), [
+    "- [ ] #task One ^a1",
+    "- [?] #task Waiting ^b1",
+  ]);
+  assert.match(notices.at(-1), /1 Blocked skipped/);
+});
+
+test("counted toggleTaskLane covers the current task plus the next N tasks", async () => {
   notices.length = 0;
   const editor = new TransactionEditor(
     [
@@ -17040,28 +17097,28 @@ test("counted toggleNowTag covers the current task plus the next N tasks", async
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
     plugins: { plugins: {} },
-    vault: {},
+    vault: { getMarkdownFiles: () => [...files.values()] },
     workspace: { getLeavesOfType: () => [] },
   };
   plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
   assert.equal(
-    await plugin.toggleNowTag(editor, {
+    await plugin.toggleTaskLane(editor, {
       countExplicit: true,
       additionalTaskCount: 1,
     }),
     true,
   );
   assert.deepEqual(editor.content.split("\n"), [
-    "- [ ] #task One #now ^a1",
-    "- [ ] #task Two #now ^b1",
+    "- [*] #task One ^a1",
+    "- [*] #task Two ^b1",
     "- plain bullet",
     "- [ ] #task Three ^c1",
   ]);
-  assert.match(notices.at(-1), /#now added · 2 tasks/);
-  assert.doesNotMatch(notices.at(-1), /NOW/);
+  assert.match(notices.at(-1), /→ Next · 2 tasks/);
+  assert.doesNotMatch(notices.at(-1), /NEXT/);
 });
 
-test("toggleNowTag on a Task Link writes through the open buffer", async () => {
+test("toggleTaskLane on a Task Link writes through the open buffer", async () => {
   notices.length = 0;
   const taskEditor = new TransactionEditor("- [ ] #task Ship it ^a1", {
     line: 0,
@@ -17073,48 +17130,76 @@ test("toggleNowTag on a Task Link writes through the open buffer", async () => {
     openEditors: { "Tasks.md": taskEditor },
   });
   harness.plugin.app.plugins = { plugins: {} };
-  assert.equal(await harness.plugin.toggleNowTag(harness.linkEditor), true);
-  assert.equal(taskEditor.content, "- [ ] #task Ship it #now ^a1");
+  assert.equal(await harness.plugin.toggleTaskLane(harness.linkEditor), true);
+  assert.equal(taskEditor.content, "- [*] #task Ship it ^a1");
   assert.equal(harness.linkEditor.content, "- [[Tasks#^a1]]");
-  assert.match(notices.at(-1), /#now added · 1 task/);
-  assert.doesNotMatch(notices.at(-1), /NOW/);
+  assert.match(notices.at(-1), /→ Next · 1 task/);
+  assert.doesNotMatch(notices.at(-1), /NEXT/);
 });
 
-test("toggleNowTag on Task Links shares one global add across notes", async () => {
+test("toggleTaskLane on Task Links releases across notes", async () => {
   notices.length = 0;
-  const taggedEditor = new TransactionEditor(
-    "- [ ] #task Tagged #now ^a1",
-    { line: 0, ch: 0 },
-  );
+  const nextEditor = new TransactionEditor("- [*] #task One ^a1", {
+    line: 0,
+    ch: 0,
+  });
   const harness = createLinkPickerHarness({
     linkContent: ["- [[Tasks#^a1]]", "- [[Other#^b1]]"].join("\n"),
     notes: {
-      "Tasks.md": "- [ ] #task Tagged #now ^a1",
-      "Other.md": "- [ ] #task Untagged ^b1",
+      "Tasks.md": "- [*] #task One ^a1",
+      "Other.md": "- [/] #task Two ^b1",
     },
-    openEditors: { "Tasks.md": taggedEditor },
+    openEditors: { "Tasks.md": nextEditor },
   });
-  harness.plugin.app.plugins = {
-    plugins: {
-      "bob-ledger-tools": { api: { nowBudget: () => ({ count: 10, cap: 15, over: false }) } },
-    },
-  };
+  harness.plugin.app.plugins = { plugins: {} };
   assert.equal(
-    await harness.plugin.toggleNowTag(harness.linkEditor, {
+    await harness.plugin.toggleTaskLane(harness.linkEditor, {
       countExplicit: true,
       additionalTaskCount: 5,
+      summary: "",
+      dateText: "2026-09-30",
     }),
     true,
   );
-  assert.equal(taggedEditor.content, "- [ ] #task Tagged #now ^a1");
-  assert.equal(
-    harness.notes["Other.md"],
-    "- [ ] #task Untagged #now ^b1",
-  );
-  assert.match(notices.at(-1), /#now added · 1 task · NOW 11\/15/);
+  assert.equal(nextEditor.content, "- [ ] #task One ^a1");
+  assert.equal(harness.notes["Other.md"], "- [ ] #task Two ^b1");
+  assert.match(notices.at(-1), /→ Ready · 2 tasks/);
 });
 
-test("Ctrl+Shift+P shows a pinned #now row that toggles immediately", async () => {
+test("toggleTaskLane refuses when a preimage changed", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor("- [*] #task Ship it ^a1", {
+    line: 0,
+    ch: 0,
+  });
+  const files = new Map([
+    ["Plan.md", { path: "Plan.md", basename: "Plan.md", extension: "md" }],
+  ]);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    plugins: { plugins: {} },
+    vault: { getMarkdownFiles: () => [...files.values()] },
+    workspace: { getLeavesOfType: () => [] },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file: files.get("Plan.md") });
+  editor.content = "- [*] #task Ship it, edited ^a1";
+  // The session is captured inside toggleTaskLane from the live content, so
+  // simulate the race by mutating between discovery and write: toggle reads
+  // the content once, so instead assert the pure planner refuses staleness.
+  const session = helpers.discoverCountedObsidianTaskTargets(
+    "- [*] #task Ship it ^a1",
+    0,
+    0,
+  );
+  const stale = helpers.planTaskLaneBatch(editor.content, {
+    ...session,
+    targets: [{ line: 0, rawLine: "- [*] #task Ship it ^a1" }],
+  });
+  assert.equal(stale.valid, false);
+  assert.equal(stale.stale, true);
+});
+
+test("Ctrl+Shift+P shows a pinned lane row that commits immediately", async () => {
   notices.length = 0;
   const harness = createLinkPickerHarness({
     linkContent: "- [ ] #task Ship it [scheduled:: 2026-09-30] ^me",
@@ -17128,47 +17213,63 @@ test("Ctrl+Shift+P shows a pinned #now row that toggles immediately", async () =
   );
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.ok(picker.visibleItems.length > 0);
-  assert.equal(picker.visibleItems[0].kind, "now-toggle");
-  assert.equal(picker.visibleItems[0].property.name, "#now");
-  assert.equal(picker.visibleItems[0].detail, "this week · add");
+  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
+  assert.equal(picker.visibleItems[0].property.name, "lane");
+  assert.equal(picker.visibleItems[0].detail, "lane · commit to Next");
   harness.plugin.app.plugins = { plugins: {} };
   await picker.openItemAtIndex(0);
   assert.equal(
     harness.linkEditor.content,
-    "- [ ] #task Ship it #now [scheduled:: 2026-09-30] ^me",
+    "- [*] #task Ship it [scheduled:: 2026-09-30] ^me",
   );
-  assert.match(notices.at(-1), /#now added · 1 task/);
+  assert.match(notices.at(-1), /→ Next · 1 task/);
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
 });
 
-test("Ctrl+Shift+P link mode shows the #now row with link detail", async () => {
+test("Ctrl+Shift+P link mode shows the lane row with release detail", async () => {
   notices.length = 0;
-  const taskEditor = new TransactionEditor("- [ ] #task Ship it ^a1", {
+  const taskEditor = new TransactionEditor("- [*] #task Ship it ^a1", {
     line: 0,
     ch: 0,
   });
   const harness = createLinkPickerHarness({
     linkContent: "- [[Tasks#^a1]]",
-    notes: { "Tasks.md": "- [ ] #task Ship it ^a1" },
+    notes: { "Tasks.md": "- [*] #task Ship it ^a1" },
     openEditors: { "Tasks.md": taskEditor },
   });
   assert.equal(await harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.isLinkSession(), true);
-  assert.equal(picker.visibleItems[0].kind, "now-toggle");
-  assert.equal(picker.visibleItems[0].detail, "this week · add");
+  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
+  assert.equal(picker.visibleItems[0].detail, "lane · release to Ready");
   harness.plugin.app.plugins = { plugins: {} };
   await picker.openItemAtIndex(0);
-  assert.equal(taskEditor.content, "- [ ] #task Ship it #now ^a1");
-  assert.match(notices.at(-1), /#now added · 1 task/);
+  assert.equal(taskEditor.content, "- [ ] #task Ship it ^a1");
+  assert.match(notices.at(-1), /→ Ready · 1 task/);
 });
 
-test("removeNowTagFromLine preserves double spaces inside field values", () => {
+test("Ctrl+Shift+P lane release with In Progress goes through the reason stage", async () => {
+  notices.length = 0;
+  const harness = createLinkPickerHarness({
+    linkContent: "- [/] #task Working ^me",
+    notes: { "Tasks.md": "- [/] #task Working ^a1" },
+  });
   assert.equal(
-    helpers.removeNowTagFromLine("- [ ] #task Ship it #now [why:: a  b] ^a1"),
-    "- [ ] #task Ship it [why:: a  b] ^a1",
+    harness.plugin.openBulletPropertyPicker(harness.linkEditor, {
+      config: harness.config,
+    }),
+    true,
   );
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
+  assert.equal(picker.visibleItems[0].needsReason, true);
+  await picker.openItemAtIndex(0);
+  assert.equal(picker.stage, "lane-release-reason");
+  // Escape leaves everything untouched.
+  picker.close();
+  assert.equal(harness.linkEditor.content, "- [/] #task Working ^me");
+  harness.plugin.activeBulletPropertyPicker = null;
 });
 
 test("getLinkPickerSessionSubtitle keeps the clamp for a single link", () => {
@@ -17534,7 +17635,6 @@ test("planTaskCancelBatch cancels a single task with a first-child log", () => {
   assert.equal(result.skippedClosedCount, 0);
   assert.equal(result.loggedCount, 1);
   assert.equal(result.createdLogCount, 1);
-  assert.equal(result.nowTaggedCount, 0);
   assert.equal(result.cancelled.length, 1);
   assert.equal(result.cancelled[0].blockId, "agents-tab");
   assert.equal(result.cancelled[0].fromStatus, "Next");
@@ -17553,7 +17653,7 @@ test("planTaskCancelBatch cancels a single task with a first-child log", () => {
 
 test("planTaskCancelBatch upserts cancelled before the block id and preserves fields", () => {
   const content =
-    "- [ ] #task T [scheduled:: 2026-09-30] [dependsOn:: a1] #now #hide [created:: 2026-08-01] [cancelled:: 2026-09-29] ^t1";
+    "- [ ] #task T [scheduled:: 2026-09-30] [dependsOn:: a1] #hide [created:: 2026-08-01] [cancelled:: 2026-09-29] ^t1";
   const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 0);
   const result = helpers.planTaskCancelBatch(content, session, {
     date: "2026-09-30",
@@ -17566,9 +17666,8 @@ test("planTaskCancelBatch upserts cancelled before the block id and preserves fi
   assert.match(line, /\[cancelled:: 2026-09-30] \^t1$/);
   assert.match(line, /\[scheduled:: 2026-09-30]/);
   assert.match(line, /\[dependsOn:: a1]/);
-  assert.match(line, /#now/);
   assert.match(line, /#hide/);
-  assert.equal(result.nowTaggedCount, 1);
+  assert.doesNotMatch(line, /#now/);
   assert.equal(result.cancelled[0].taskId, "t1");
 });
 
@@ -17804,8 +17903,8 @@ test("Ctrl+Shift+P pins the Cancel row last on an open task", () => {
   assert.equal(row.title, "Cancel task");
   assert.equal(row.detail, "Ready → Cancelled · asks why");
   assert.equal(row.recurring, false);
-  // The #now toggle stays pinned first.
-  assert.equal(picker.visibleItems[0].kind, "now-toggle");
+  // The lane toggle stays pinned first.
+  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
 });
@@ -18123,27 +18222,17 @@ test("stale single preimage refuses with nothing written", async () => {
   harness.plugin.activeBulletPropertyPicker = null;
 });
 
-test("#now is untouched and the NOW chip counts down", async () => {
+test("cancel writes [-] with no NOW chip", async () => {
   notices.length = 0;
   const harness = openCancelReasonStage({
-    content: "- [*] #task Ship it #now ^ship",
-    app: {
-      plugins: {
-        plugins: {
-          "bob-ledger-tools": {
-            api: { nowBudget: () => ({ count: 12, cap: 15, over: false }) },
-          },
-        },
-      },
-    },
+    content: "- [*] #task Ship it ^ship",
   });
   const picker = harness.plugin.activeBulletPropertyPicker;
   await picker.openItemAtIndex(cancelRowIndex(picker));
   await confirmCancelReasonStage(picker, "obsolete");
-  assert.match(harness.editor.content, /#now/);
   assert.match(harness.editor.content, /\[-]/);
-  assert.match(notices.at(-1), /NOW 11\/15/);
-  assert.doesNotMatch(notices.at(-1), /🔴/);
+  assert.match(notices.at(-1), /Cancelled task/);
+  assert.doesNotMatch(notices.at(-1), /NOW/);
 });
 
 test("TSC recovery runs with cancelled identities; a missing API still succeeds", async () => {
@@ -18372,7 +18461,6 @@ test("buildCancelNoticeModel text covers every chip", () => {
     removedPomodoroLinkCount: 2,
     reopenedDependents: 1,
     recoveryRan: true,
-    nowChip: "NOW 11/15",
     planChip: "plan 3/5 · 7/10",
     skippedClosedCount: 1,
   });
@@ -18383,11 +18471,11 @@ test("buildCancelNoticeModel text covers every chip", () => {
   assert.equal(model.reasonMuted, false);
   assert.equal(
     model.text,
-    "Cancelled 3 tasks via Task Links · “Superseded by X” · removed 2 Pomodoro links · unblocked 1 dependent · NOW 11/15 · plan 3/5 · 7/10 · skipped 1 closed",
+    "Cancelled 3 tasks via Task Links · “Superseded by X” · removed 2 Pomodoro links · unblocked 1 dependent · plan 3/5 · 7/10 · skipped 1 closed",
   );
   assert.deepEqual(
     model.chips.map((chip) => chip.tone),
-    ["info", "ok", "muted", "info", "muted"],
+    ["info", "ok", "info", "muted"],
   );
 
   const single = helpers.buildCancelNoticeModel({

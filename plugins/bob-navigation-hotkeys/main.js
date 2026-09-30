@@ -11314,6 +11314,96 @@ function childNoteMatchesQuery(file, noteInfo, query) {
   return getChildNoteSearchText(file, noteInfo).includes(query);
 }
 
+// Release-task summary modal for Alt+N: asks once for an optional Work Log
+// summary when releasing an In Progress task. Worded like block-id-prompt's
+// "Unlink task" prompt but titled "Release task". Escape cancels the whole
+// gesture; a blank submit releases without a log.
+class LaneReleaseSummaryModal extends Modal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+    this.completed = false;
+    this.inputEl = null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createDiv({ cls: "bob-lane-release-title", text: "Release task" });
+    contentEl.createDiv({
+      cls: "bob-lane-release-subtitle",
+      text: "Optional: why is this pending? Saved to the Work Log.",
+    });
+    this.inputEl = contentEl.createEl("input", {
+      attr: {
+        placeholder: "What did you get done?",
+        type: "text",
+      },
+    });
+    const row = contentEl.createDiv({ cls: "bob-lane-release-actions" });
+    const cancelBtn = row.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => this.close());
+    const releaseBtn = row.createEl("button", { text: "Release" });
+    releaseBtn.addEventListener("click", () => this.submit());
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.submit();
+      }
+    });
+    window.setTimeout(() => {
+      if (this.inputEl) {
+        this.inputEl.focus();
+      }
+    }, 0);
+  }
+
+  submit() {
+    this.completed = true;
+    const value = this.inputEl ? this.inputEl.value : "";
+    try {
+      if (typeof this.onDone === "function") {
+        this.onDone(String(value || ""));
+      }
+    } finally {
+      this.close();
+    }
+  }
+
+  onClose() {
+    contentElCleanup(this.contentEl);
+    if (!this.completed && typeof this.onDone === "function") {
+      try {
+        this.onDone(null);
+      } catch (error) {
+        // Best effort.
+      }
+    }
+    this.onDone = null;
+  }
+}
+
+function contentElCleanup(contentEl) {
+  try {
+    if (contentEl && typeof contentEl.empty === "function") {
+      contentEl.empty();
+    }
+  } catch (error) {
+    // Best effort.
+  }
+}
+
+// Footer hints for the lane-release reason stage: Enter confirms (releasing
+// plus a Work Log entry when a summary was typed), Esc cancels the release.
+function getLaneReleaseReasonHints(options = {}) {
+  const enter = options.empty ? "Release without a summary" : "Release & log summary";
+  return [
+    { keys: ["↵"], label: enter },
+    { keys: ["esc"], label: "Cancel" },
+  ];
+}
+
 class FilteredPickerModal extends Modal {
   constructor(app, options) {
     super(app);
@@ -13449,131 +13539,143 @@ function getLinkPickerSessionSubtitle(session) {
 }
 
 // ---------------------------------------------------------------------------
-// now-toggle: Toggle #now from task lines and Task Links.
+// task-lane: Commit Ready to Next, or release Next/In Progress to Ready.
 //
-// Whole-token, case-sensitive `#now`: preceded by the line start or
-// whitespace, followed by the end or whitespace. `#nowadays` and `#now/x`
-// never match, mirroring docs/plan.md and bob-ledger-tools.
-const NOW_TOGGLE_TAG = "#now";
-const NOW_TOGGLE_TAG_RE = /(?:^|\s)#now(?:\s|$)/;
-
-function hasNowTag(text) {
-  return NOW_TOGGLE_TAG_RE.test(String(text || ""));
+// - Commit: if any target is Ready (` `), every Ready target becomes Next
+//   (`*`). Other targets are untouched and no link is written.
+// - Release: otherwise, every Next (`*`) and In Progress (`/`) target
+//   becomes Ready (` `), and each released task's live links under today's
+//   open Pomodoros are removed by the caller. Blocked (`?`) targets are
+//   skipped and counted in the Notice ("Blocked is derived").
+// - Done, cancelled and non-task targets keep the existing session refusals.
+// - `summary` (optional) is prepended to each released In Progress task's
+//   Work Log; a blank summary writes nothing. `dateText` is `YYYY-MM-DD`.
+//   Work Log planning mirrors block-id-prompt's pure `planWorkLogInsertion`
+//   (see `plugins/block-id-prompt/main.js`): prepend under the existing
+//   marker when one is a direct child, else append a new marker plus entry
+//   at the end of the task's child block. Copied as an independent
+//   implementation since plugins deploy separately and never import each
+//   other's `main.js`.
+function normalizeLaneWorkSummary(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
-// Spans of the `#now` token itself (without surrounding whitespace) whose
-// boundaries satisfy the whole-token rule. Used for removal so `#task`,
-// inline fields, and block IDs are never touched.
-function getNowTagTokenSpans(lineText) {
-  const text = String(lineText || "");
-  const spans = [];
-  let offset = 0;
-  while (offset < text.length) {
-    const index = text.indexOf(NOW_TOGGLE_TAG, offset);
-    if (index === -1) {
-      break;
-    }
-    const end = index + NOW_TOGGLE_TAG.length;
-    const leftOk = index === 0 || /\s/.test(text[index - 1]);
-    const rightOk = end >= text.length || /\s/.test(text[end]);
-    if (leftOk && rightOk) {
-      spans.push(Object.freeze({ start: index, end }));
-      offset = end;
-    } else {
-      offset = index + 1;
-    }
+function formatLaneWorkLogEntry(summary, dateText) {
+  const normalized = normalizeLaneWorkSummary(summary);
+  if (!normalized) {
+    return "";
   }
-  return Object.freeze(spans);
+  return `*${String(dateText || "")}* — ${normalized}`;
 }
 
-// Insert ` #now` at the end of the description: immediately before the first
-// trailing inline field `[k:: v]`, else before the trailing ` ^id`, else at
-// the line's end. Trailing fields are the contiguous run of `[k:: v]` fields
-// ending at the block ID (or end of line); a field followed by prose is not
-// trailing. Spacing is normalized to single spaces around the tag.
-function addNowTagToLine(lineText) {
-  const text = String(lineText || "");
-  if (hasNowTag(text)) {
-    return text;
+function findLaneWorkLogParent(lines, taskLine) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  if (!Number.isFinite(taskIndex) || taskIndex < 0 || taskIndex >= sourceLines.length) {
+    return null;
   }
-  const blockSpan = getTrailingBlockIdSpan(text);
-  const bodyEnd = blockSpan ? blockSpan.start : text.length;
-  const prefix = text.slice(0, bodyEnd);
-  const fields = parseBulletPropertyFields(text).filter(
-    (field) => field.span.end <= bodyEnd,
-  );
-  let insertion = bodyEnd;
-  if (fields.length > 0) {
-    const last = fields[fields.length - 1];
-    if (/^[ \t]*$/.test(prefix.slice(last.span.end, bodyEnd))) {
-      let runStart = last.span.start;
-      for (let index = fields.length - 2; index >= 0; index -= 1) {
-        const between = prefix.slice(
-          fields[index].span.end,
-          fields[index + 1].span.start,
-        );
-        if (/^[ \t]*$/.test(between)) {
-          runStart = fields[index].span.start;
-        } else {
-          break;
-        }
+  const block = findCurrentBulletChildBlock(sourceLines, taskIndex);
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+    if (!WORK_LOG_PARENT_RE.exec(lineText)) {
+      continue;
+    }
+    if (findNearestParentListItem(sourceLines, index) === taskIndex) {
+      const indentMatch = /^([ \t]*)/.exec(lineText);
+      const markerMatch = /^[ \t]*(?:>\s*)*([-*+]|\d+[.)])/.exec(lineText);
+      return {
+        line: index,
+        indent: indentMatch ? indentMatch[1] : "",
+        marker: markerMatch ? markerMatch[1] : "-",
+      };
+    }
+  }
+  return null;
+}
+
+function getLaneTaskChildIndent(lines, taskLine) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  const parentIndent = Number.isFinite(taskIndex)
+    ? getBulletIndent(String(sourceLines[taskIndex] || ""))
+    : "";
+  const block = findCurrentBulletChildBlock(sourceLines, taskIndex);
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(sourceLines[index] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+    if (
+      BULLET_PROPERTY_LIST_ITEM_RE.test(lineText) &&
+      findNearestParentListItem(sourceLines, index) === taskIndex
+    ) {
+      return getBulletIndent(lineText);
+    }
+  }
+  const unit = parentIndent && !parentIndent.includes("\t") ? parentIndent : "\t";
+  return `${parentIndent}${unit}`;
+}
+
+// Insert one Work Log entry into `workingLines` (mutated in place) for the
+// task at `taskLine`. Returns true when an entry was added.
+function insertLaneWorkLogEntry(workingLines, taskLine, summary, dateText) {
+  const normalized = normalizeLaneWorkSummary(summary);
+  if (!normalized) {
+    return false;
+  }
+  const entryText = formatLaneWorkLogEntry(normalized, dateText);
+  if (!entryText) {
+    return false;
+  }
+  const marker = findLaneWorkLogParent(workingLines, taskLine);
+  if (marker) {
+    const markerBlock = findCurrentBulletChildBlock(workingLines, marker.line);
+    let entryIndent = `${marker.indent}\t`;
+    let entryMarker = "-";
+    for (let index = marker.line + 1; index < markerBlock.endLineExclusive; index += 1) {
+      const lineText = String(workingLines[index] || "");
+      if (!lineText.trim()) {
+        continue;
       }
-      insertion = runStart;
+      if (
+        BULLET_PROPERTY_LIST_ITEM_RE.test(lineText) &&
+        findNearestParentListItem(workingLines, index) === marker.line
+      ) {
+        entryIndent = getBulletIndent(lineText);
+        const markerMatch = /^[ \t]*(?:>\s*)*([-*+]|\d+[.)])/.exec(lineText);
+        entryMarker = markerMatch ? markerMatch[1] : "-";
+        break;
+      }
     }
+    workingLines.splice(marker.line + 1, 0, `${entryIndent}${entryMarker} ${entryText}`);
+    return true;
   }
-  const beforeRaw = text.slice(0, insertion);
-  const afterRaw = text.slice(insertion);
-  const before = beforeRaw.replace(/[ \t]+$/, "");
-  const afterTrimmed = afterRaw.replace(/^[ \t]+/, "");
-  if (!before) {
-    return afterTrimmed
-      ? `${NOW_TOGGLE_TAG} ${afterTrimmed}`
-      : NOW_TOGGLE_TAG;
-  }
-  return afterTrimmed
-    ? `${before} ${NOW_TOGGLE_TAG} ${afterTrimmed}`
-    : `${before} ${NOW_TOGGLE_TAG}`;
-}
-
-// Remove every whole-token `#now`, then collapse doubled spaces. Spacing is
-// removed via removeBulletPropertyFieldSpan (one adjacent space per token)
-// and any leftover doubles are collapsed outside the leading indent so
-// `  - ` style indentation is never damaged. Trailing whitespace is trimmed.
-function removeNowTagFromLine(lineText) {
-  const text = String(lineText || "");
-  const spans = getNowTagTokenSpans(text);
-  if (spans.length === 0) {
-    return text;
-  }
-  let next = text;
-  const ordered = spans.slice().sort((left, right) => right.start - left.start);
-  for (const span of ordered) {
-    next = removeBulletPropertyFieldSpan(next, span);
-  }
-  const leadingMatch = /^([ \t]*)/.exec(next);
-  const leading = leadingMatch ? leadingMatch[1] : "";
-  let rest = next.slice(leading.length);
-  const protected = [];
-  const masked = rest.replace(/\[[^\]]*\]/g, (match) => {
-    protected.push(match);
-    return `\u0000${protected.length - 1}\u0000`;
-  });
-  const collapsed = masked.replace(/[ \t]{2,}/g, " ");
-  rest = collapsed.replace(/\u0000(\d+)\u0000/g, (_, index) =>
-    protected[Number(index)],
+  const childIndent = getLaneTaskChildIndent(workingLines, taskLine);
+  const taskIndent = getBulletIndent(String(workingLines[taskLine] || ""));
+  const taskMarkerMatch = /^[ \t]*(?:>\s*)*([-*+]|\d+[.)])/.exec(
+    String(workingLines[taskLine] || ""),
   );
-  rest = rest.replace(/[ \t]+$/, "");
-  return leading + rest;
+  const taskMarker = taskMarkerMatch ? taskMarkerMatch[1] : "-";
+  void taskMarker;
+  const block = findCurrentBulletChildBlock(workingLines, taskLine);
+  const markerLine = `${childIndent}- ${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`;
+  const entryLine = `${childIndent}\t- ${entryText}`;
+  void taskIndent;
+  workingLines.splice(block.endLineExclusive, 0, markerLine, entryLine);
+  return true;
 }
 
-// Plan a #now toggle across the task lines of one note's content. When any
-// target lacks `#now`, every target gains it; otherwise every target loses
-// it. Pass `options.added` to force one direction so cross-note batches (Task
-// Links in several notes) share a single global decision. Returns the joined
-// content plus whether tags were added and how many lines actually changed.
-// Stale preimages (a line changed or stopped being a task) refuse the whole
-// batch.
-function planNowToggleBatch(content, session, options = {}) {
+// Plan a lane commit/release across the task lines of one note's content.
+// Commit wins when any target is Ready; otherwise release. Pass `summary`
+// plus `dateText` to log an optional Work Log entry on each released In
+// Progress task (blank writes nothing). Stale preimages (a line changed or
+// stopped being a task) refuse the whole batch.
+function planTaskLaneBatch(content, session, options = {}) {
   const text = String(content || "");
   const source = splitMarkdownContent(text);
   const contexts = getMarkdownLineContexts(text);
@@ -13584,8 +13686,12 @@ function planNowToggleBatch(content, session, options = {}) {
       valid: false,
       error,
       stale,
-      added: false,
+      mode: null,
       changedTaskCount: 0,
+      blockedSkipped: 0,
+      skippedClosedCount: 0,
+      workLogWrittenCount: 0,
+      released: Object.freeze([]),
       content: text,
     });
   if (targets.length === 0) {
@@ -13605,93 +13711,326 @@ function planNowToggleBatch(content, session, options = {}) {
       return invalid("A task changed while the picker was open", true);
     }
   }
-  const shouldAdd =
-    options && typeof options.added === "boolean"
-      ? Boolean(options.added)
-      : targets.some((target) => !hasNowTag(target.rawLine));
-  const nextLines = source.lines.slice();
+  const statuses = targets.map((target) =>
+    getObsidianTaskCheckboxStatus(target.rawLine || ""),
+  );
+  const hasReady = statuses.some((status) => status === " ");
+  const mode = hasReady ? "commit" : "release";
+  const summary = normalizeLaneWorkSummary(options.summary);
+  const dateText = String(options.dateText || "");
+  const workingLines = source.lines.slice();
   let changedTaskCount = 0;
-  for (const target of targets) {
-    const oldLine = String(source.lines[target.line] || "");
-    const nextLine = shouldAdd
-      ? addNowTagToLine(oldLine)
-      : removeNowTagFromLine(oldLine);
-    if (nextLine !== oldLine) {
-      changedTaskCount += 1;
+  let blockedSkipped = 0;
+  let skippedClosedCount = 0;
+  let workLogWrittenCount = 0;
+  const released = [];
+  // Work Log insertions shift later lines, so apply bottom-up.
+  const ordered = targets
+    .map((target, index) => ({ target, status: statuses[index] }))
+    .sort((a, b) => b.target.line - a.target.line);
+  for (const { target, status } of ordered) {
+    const oldLine = String(workingLines[target.line] || "");
+    if (mode === "commit") {
+      if (status === " ") {
+        const nextLine = replaceObsidianTaskCheckboxStatus(oldLine, "*");
+        if (nextLine !== oldLine) {
+          changedTaskCount += 1;
+        }
+        workingLines[target.line] = nextLine;
+      } else if (status === "?") {
+        blockedSkipped += 1;
+      } else if (status === "x" || status === "X" || status === "-") {
+        skippedClosedCount += 1;
+      }
+      continue;
     }
-    nextLines[target.line] = nextLine;
+    if (status === "*" || status === "/") {
+      const nextLine = replaceObsidianTaskCheckboxStatus(oldLine, " ");
+      if (nextLine !== oldLine) {
+        changedTaskCount += 1;
+      }
+      workingLines[target.line] = nextLine;
+      const blockId = getTrailingBlockId(nextLine);
+      released.push(
+        Object.freeze({
+          line: target.line,
+          blockId: blockId || null,
+          fromStatus: status,
+        }),
+      );
+      if (status === "/" && summary) {
+        if (insertLaneWorkLogEntry(workingLines, target.line, summary, dateText)) {
+          workLogWrittenCount += 1;
+        }
+      }
+    } else if (status === "?") {
+      blockedSkipped += 1;
+    } else if (status === "x" || status === "X" || status === "-") {
+      skippedClosedCount += 1;
+    }
   }
+  if (changedTaskCount === 0) {
+    if (blockedSkipped > 0 && skippedClosedCount === 0) {
+      return invalid("Blocked is derived; no tasks were updated");
+    }
+    return invalid("No tasks to update");
+  }
+  released.sort((a, b) => a.line - b.line);
   return Object.freeze({
     valid: true,
     error: null,
     stale: false,
-    added: shouldAdd,
+    mode,
     changedTaskCount,
-    content: nextLines.join(source.lineEnding),
+    blockedSkipped,
+    skippedClosedCount,
+    workLogWrittenCount,
+    released: Object.freeze(released),
+    content: workingLines.join(source.lineEnding),
   });
 }
 
-// Build the toggle Notice. The NOW suffix comes from the ledger-tools API
+// Build the lane Notice. Budget suffixes come from the ledger-tools api v2
 // read before the write, adjusted by the number of tasks that changed,
-// because the Tasks cache lags behind the write. It is omitted when the API
-// is unavailable. Over-cap counts gain 🔴 plus the weekly-review hint.
-function buildNowToggleNotice(details = {}) {
-  const added = Boolean(details.added);
+// because the Tasks cache lags behind the write. They are omitted when the
+// api is unavailable. Over-cap counts gain a red dot plus the weekly-review
+// hint.
+function buildLaneToggleNotice(details = {}) {
+  const mode = details.mode === "release" ? "release" : "commit";
   const changed = Math.max(
     0,
     Math.floor(numericOrDefault(details.changedTaskCount, 0)),
   );
-  const action = added ? "added" : "removed";
-  let text = `#now ${action} · ${formatCountLabel(changed, "task")}`;
-  const budget = details.nowBudget;
+  const arrow = "→";
+  const dest = mode === "release" ? "Ready" : "Next";
+  let text = `${arrow} ${dest} · ${formatCountLabel(changed, "task")}`;
+  const unlinked = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.unlinkedFromToday, 0)),
+  );
+  if (mode === "release" && unlinked > 0) {
+    text += ` · unlinked ${unlinked} from today`;
+  }
+  const blocked = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.blockedSkipped, 0)),
+  );
+  if (blocked > 0) {
+    text += ` · ${blocked} Blocked skipped — Blocked is derived`;
+  }
+  const budgets = details.laneBudgets || null;
+  const parts = [];
   if (
-    budget &&
-    Number.isFinite(Math.floor(Number(budget.count))) &&
-    Number.isFinite(Math.floor(Number(budget.cap)))
+    budgets &&
+    budgets.next &&
+    Number.isFinite(Math.floor(Number(budgets.next.count))) &&
+    Number.isFinite(Math.floor(Number(budgets.next.cap)))
   ) {
-    const beforeCount = Math.floor(Number(budget.count));
-    const cap = Math.floor(Number(budget.cap));
-    const after = Math.max(0, beforeCount + (added ? changed : -changed));
-    text += ` · NOW ${after}/${cap}`;
-    if (after > cap) {
-      text += " 🔴 · prune at the weekly review";
+    const delta =
+      mode === "release"
+        ? -Math.max(
+            0,
+            Math.floor(numericOrDefault(details.releasedNextCount, changed)),
+          )
+        : changed;
+    void delta;
+    const nextAfter = Math.max(
+      0,
+      Math.floor(Number(budgets.next.count)) +
+        (mode === "release"
+          ? -Math.floor(numericOrDefault(details.releasedNextCount, 0))
+          : changed),
+    );
+    const nextCap = Math.floor(Number(budgets.next.cap));
+    parts.push(`NEXT ${nextAfter}/${nextCap}`);
+    if (nextAfter > nextCap) {
+      parts.push("🔴 · prune at the weekly review");
     }
+  }
+  if (
+    budgets &&
+    budgets.pending &&
+    Number.isFinite(Math.floor(Number(budgets.pending.count))) &&
+    Number.isFinite(Math.floor(Number(budgets.pending.cap)))
+  ) {
+    const pendingAfter = Math.max(
+      0,
+      Math.floor(Number(budgets.pending.count)) +
+        (mode === "release"
+          ? -Math.floor(numericOrDefault(details.releasedPendingCount, 0))
+          : 0),
+    );
+    const pendingCap = Math.floor(Number(budgets.pending.cap));
+    parts.push(`PENDING ${pendingAfter}/${pendingCap}`);
+    if (pendingAfter > pendingCap) {
+      parts.push("🔴 · prune at the weekly review");
+    }
+  }
+  // Deduplicate the prune hint when both lanes are over.
+  const deduped = [];
+  let hintSeen = false;
+  for (const part of parts) {
+    if (part.includes("prune at the weekly review")) {
+      if (hintSeen) {
+        continue;
+      }
+      hintSeen = true;
+    }
+    deduped.push(part);
+  }
+  if (deduped.length > 0) {
+    text += ` · ${deduped.join(" · ")}`;
   }
   return text;
 }
 
-// Read the ledger-tools NOW budget for the Notice, or null when the API is
-// missing or unusable. May return a Promise when a future API is async; the
-// caller awaits it.
-function readNowBudgetValue(app) {
+// Read the ledger-tools lane budgets for the Notice, or null when the api
+// is missing, older than v2, or unusable. Never throws and never awaits:
+// callers read synchronously before the write.
+function readLaneBudgets(app) {
   try {
     const plugins = app && app.plugins && app.plugins.plugins;
-    const api =
-      plugins &&
-      plugins["bob-ledger-tools"] &&
-      plugins["bob-ledger-tools"].api;
-    if (!api || typeof api.nowBudget !== "function") {
+    const holder = plugins && plugins["bob-ledger-tools"];
+    const api = holder && holder.api;
+    if (!api || Number(api.version) < 2) {
       return null;
     }
-    const value = api.nowBudget();
-    if (value && typeof value.then === "function") {
-      return value;
-    }
     if (
-      value &&
-      Number.isFinite(Math.floor(Number(value.count))) &&
-      Number.isFinite(Math.floor(Number(value.cap)))
+      typeof api.nextBudget !== "function" ||
+      typeof api.pendingBudget !== "function"
     ) {
+      return null;
+    }
+    const next = api.nextBudget();
+    const pending = api.pendingBudget();
+    if (next && typeof next.then === "function") {
+      return null;
+    }
+    if (pending && typeof pending.then === "function") {
+      return null;
+    }
+    const clean = (value) => {
+      if (
+        !value ||
+        !Number.isFinite(Math.floor(Number(value.count))) ||
+        !Number.isFinite(Math.floor(Number(value.cap)))
+      ) {
+        return null;
+      }
       return Object.freeze({
         count: Math.floor(Number(value.count)),
         cap: Math.floor(Number(value.cap)),
         over: Boolean(value.over),
       });
+    };
+    const cleanNext = clean(next);
+    const cleanPending = clean(pending);
+    if (!cleanNext && !cleanPending) {
+      return null;
     }
-    return null;
+    return Object.freeze({ next: cleanNext, pending: cleanPending });
   } catch (error) {
     return null;
   }
+}
+
+// Describe the pinned lane picker row: null when no committable or
+// releasable target exists, otherwise whether choosing the row would commit
+// or release, how many tasks it covers, and whether a Work Log reason stage
+// applies (release with an In Progress target).
+function describeLaneRow(content, options = {}) {
+  const text = String(content || "");
+  const cursorLine = Math.floor(numericOrDefault(options.cursorLine, NaN));
+  const taskSession = options.taskSession || null;
+  const linkResolved = Array.isArray(options.linkResolved)
+    ? options.linkResolved
+    : null;
+  const statusOf = (lineText) => getObsidianTaskCheckboxStatus(lineText);
+  const summarize = (statuses) => {
+    const hasReady = statuses.some((status) => status === " ");
+    if (hasReady) {
+      return Object.freeze({
+        mode: "commit",
+        detail: "lane · commit to Next",
+        needsReason: false,
+      });
+    }
+    const releasable = statuses.filter(
+      (status) => status === "*" || status === "/",
+    );
+    if (releasable.length > 0) {
+      return Object.freeze({
+        mode: "release",
+        detail: "lane · release to Ready",
+        needsReason: releasable.some((status) => status === "/"),
+      });
+    }
+    return null;
+  };
+  if (linkResolved) {
+    if (linkResolved.length === 0) {
+      return null;
+    }
+    const resolved = summarize(
+      linkResolved.map((target) => statusOf(target.rawLine || "")),
+    );
+    if (!resolved) {
+      return null;
+    }
+    return Object.freeze({
+      kind: "link",
+      count: linkResolved.length,
+      mode: resolved.mode,
+      detail: resolved.detail,
+      needsReason: resolved.needsReason,
+    });
+  }
+  if (
+    taskSession &&
+    taskSession.explicit &&
+    Array.isArray(taskSession.targets) &&
+    taskSession.targets.length > 0
+  ) {
+    const resolved = summarize(
+      taskSession.targets.map((target) => statusOf(target.rawLine || "")),
+    );
+    if (!resolved) {
+      return null;
+    }
+    return Object.freeze({
+      kind: "task",
+      count: taskSession.targets.length,
+      mode: resolved.mode,
+      detail: resolved.detail,
+      needsReason: resolved.needsReason,
+    });
+  }
+  if (
+    Number.isFinite(cursorLine) &&
+    isObsidianTaskLine(String(text.split(/\r?\n/)[cursorLine] || ""))
+  ) {
+    const line = String(text.split(/\r?\n/)[cursorLine] || "");
+    const status = statusOf(line);
+    if (status === " ") {
+      return Object.freeze({
+        kind: "task",
+        count: 1,
+        mode: "commit",
+        detail: "lane · commit to Next",
+        needsReason: false,
+      });
+    }
+    if (status === "*" || status === "/") {
+      return Object.freeze({
+        kind: "task",
+        count: 1,
+        mode: "release",
+        detail: "lane · release to Ready",
+        needsReason: status === "/",
+      });
+    }
+  }
+  return null;
 }
 
 // True when a task line is recurring: it carries a Tasks `repeat` field in
@@ -13722,61 +14061,6 @@ function getTaskCancelStatusLabel(symbol) {
     default:
       return null;
   }
-}
-
-// Describe the pinned `#now` picker row for the current property stage: null
-// when the cursor is not on a task or Task Link, otherwise whether choosing
-// the row would add or remove plus how many tasks it covers.
-function describeNowToggleRow(content, options = {}) {
-  const text = String(content || "");
-  const cursorLine = Math.floor(numericOrDefault(options.cursorLine, NaN));
-  const taskSession = options.taskSession || null;
-  const linkResolved = Array.isArray(options.linkResolved)
-    ? options.linkResolved
-    : null;
-  if (linkResolved) {
-    if (linkResolved.length === 0) {
-      return null;
-    }
-    const shouldAdd = linkResolved.some(
-      (target) => !hasNowTag(target.rawLine || ""),
-    );
-    return Object.freeze({
-      kind: "link",
-      count: linkResolved.length,
-      added: shouldAdd,
-      detail: shouldAdd ? "this week · add" : "this week · remove",
-    });
-  }
-  if (
-    taskSession &&
-    taskSession.explicit &&
-    Array.isArray(taskSession.targets) &&
-    taskSession.targets.length > 0
-  ) {
-    const shouldAdd = taskSession.targets.some(
-      (target) => !hasNowTag(target.rawLine || ""),
-    );
-    return Object.freeze({
-      kind: "task",
-      count: taskSession.targets.length,
-      added: shouldAdd,
-      detail: shouldAdd ? "this week · add" : "this week · remove",
-    });
-  }
-  if (
-    Number.isFinite(cursorLine) &&
-    isObsidianTaskLine(String(text.split(/\r?\n/)[cursorLine] || ""))
-  ) {
-    const line = String(text.split(/\r?\n/)[cursorLine] || "");
-    return Object.freeze({
-      kind: "task",
-      count: 1,
-      added: !hasNowTag(line),
-      detail: !hasNowTag(line) ? "this week · add" : "this week · remove",
-    });
-  }
-  return null;
 }
 
 // Describe the pinned Cancel picker row: null when no open `#task` target
@@ -13963,7 +14247,6 @@ function planTaskCancelBatch(content, session, details = {}) {
       loggedCount: 0,
       createdLogCount: 0,
       fallbackLoggedCount: 0,
-      nowTaggedCount: 0,
       cancelled: Object.freeze([]),
       cursorLineShift: (line) => line,
     });
@@ -14023,7 +14306,6 @@ function planTaskCancelBatch(content, session, details = {}) {
       loggedCount: 0,
       createdLogCount: 0,
       fallbackLoggedCount: 0,
-      nowTaggedCount: 0,
       cancelled: Object.freeze([]),
       cursorLineShift: (line) => {
         const numeric = Math.floor(numericOrDefault(line, NaN));
@@ -14050,7 +14332,6 @@ function planTaskCancelBatch(content, session, details = {}) {
   let loggedCount = 0;
   let createdLogCount = 0;
   let fallbackLoggedCount = 0;
-  let nowTaggedCount = 0;
   const cancelled = [];
 
   const ordered = openTargets.slice().sort((a, b) => b.line - a.line);
@@ -14064,9 +14345,6 @@ function planTaskCancelBatch(content, session, details = {}) {
       ? normalizeBulletPropertyValue(idField.value)
       : "";
     const taskId = normalizedId || blockId || null;
-    if (hasNowTag(oldLine)) {
-      nowTaggedCount += 1;
-    }
 
     const replaced = replaceObsidianTaskCheckboxStatus(oldLine, "-");
     const upserted = upsertBulletProperty(replaced, "cancelled", dateText);
@@ -14144,7 +14422,6 @@ function planTaskCancelBatch(content, session, details = {}) {
     loggedCount,
     createdLogCount,
     fallbackLoggedCount,
-    nowTaggedCount,
     cancelled: Object.freeze(cancelled),
     cursorLineShift,
   });
@@ -17253,10 +17530,6 @@ function buildCancelNoticeModel(options = {}) {
       }),
     );
   }
-  const nowChip = String(options.nowChip || "");
-  if (nowChip) {
-    chips.push(Object.freeze({ text: nowChip, tone: "muted" }));
-  }
   const planChip = String(options.planChip || "");
   if (planChip) {
     chips.push(Object.freeze({ text: planChip, tone: "info" }));
@@ -17670,6 +17943,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
     this.pendingCancel = null;
+    this.pendingLaneRelease = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     this.showPropertyStage({ clearQuery: false });
   }
@@ -17746,28 +18020,31 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.propertyContext,
       );
     }
-    const nowToggleDescription = this.isLinkSession()
-      ? describeNowToggleRow("", {
+    const laneDescription = this.isLinkSession()
+      ? describeLaneRow("", {
           linkResolved: this.linkSession.resolved,
         })
       : this.isCountedSession()
-        ? describeNowToggleRow(this.getEditorContent(), {
+        ? describeLaneRow(this.getEditorContent(), {
             taskSession: this.taskSession,
           })
-        : describeNowToggleRow(this.getEditorContent(), {
+        : describeLaneRow(this.getEditorContent(), {
             cursorLine: this.cursor ? this.cursor.line : NaN,
           });
     let propertyItems = Array.isArray(items) ? items : [];
-    if (nowToggleDescription) {
-      const nowToggleItem = Object.freeze({
-        kind: "now-toggle",
-        property: Object.freeze({ name: "#now" }),
-        detail: nowToggleDescription.detail,
-        added: nowToggleDescription.added,
-        targetCount: nowToggleDescription.count,
+    if (laneDescription) {
+      const laneItem = Object.freeze({
+        kind: "lane-toggle",
+        property: Object.freeze({ name: "lane" }),
+        title: laneDescription.mode === "release" ? "Release to Ready" : "Commit to Next",
+        detail: laneDescription.detail,
+        mode: laneDescription.mode,
+        needsReason: laneDescription.needsReason,
+        targetCount: laneDescription.count,
+        laneKind: laneDescription.kind,
         order: -1,
       });
-      propertyItems = [nowToggleItem, ...propertyItems];
+      propertyItems = [laneItem, ...propertyItems];
     }
     const cancelDescription = this.isLinkSession()
       ? describeCancelTaskRow("", {
@@ -17813,9 +18090,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return `${countText}${this.getTaskSessionSubtitle()}`;
       },
       filterItem: (item, query) => {
-        if (item && item.kind === "now-toggle") {
+        if (item && item.kind === "lane-toggle") {
           return fuzzyMatchesText(
-            `#now now this week ${item.detail || ""} ${item.added ? "add" : "remove"}`,
+            `lane commit release next ready ${item.detail || ""} ${item.title || ""} ${item.mode || ""}`,
             query,
           );
         }
@@ -17834,8 +18111,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         );
       },
       renderItem: (item, rowEl, query) => {
-        if (item && item.kind === "now-toggle") {
-          this.renderNowToggleItem(item, rowEl, query);
+        if (item && item.kind === "lane-toggle") {
+          this.renderLaneToggleItem(item, rowEl, query);
           return;
         }
         if (item && item.kind === "cancel-task") {
@@ -17845,8 +18122,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.renderPropertyItem(item, rowEl, query);
       },
       openItem: async (item) => {
-        if (item && item.kind === "now-toggle") {
-          const applied = await this.plugin.applyNowToggleFromPicker(this);
+        if (item && item.kind === "lane-toggle") {
+          if (item.needsReason) {
+            this.showLaneReleaseReasonStage(item);
+            return false;
+          }
+          const applied = await this.plugin.applyLaneToggleFromPicker(this);
           return applied === true;
         }
         if (item && item.kind === "cancel-task") {
@@ -17889,9 +18170,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.showCancelReasonStage(propertyItem);
       return;
     }
-    if (propertyItem && propertyItem.kind === "now-toggle") {
+    if (propertyItem && propertyItem.kind === "lane-toggle") {
+      if (propertyItem.needsReason) {
+        this.showLaneReleaseReasonStage(propertyItem);
+        return;
+      }
       void this.plugin
-        .applyNowToggleFromPicker(this)
+        .applyLaneToggleFromPicker(this)
         .then((applied) => {
           if (applied !== true) {
             this.showPropertyStage({ clearQuery: false });
@@ -18278,11 +18563,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   // Cheap synchronous facts for the cancel preview's effects line: whether
-  // any target has a block ID (prune applies), whether any target already
-  // keeps a Cancel Log (empty reasons fall back), and whether any target
-  // carries #now (kept, and reported on the notice card).
+  // any target has a block ID (prune applies) and whether any target already
+  // keeps a Cancel Log (empty reasons fall back).
   getCancelReasonFacts() {
-    const facts = { anyLog: false, hasBlockId: false, anyNow: false };
+    const facts = { anyLog: false, hasBlockId: false };
     if (this.isLinkSession()) {
       const resolved = Array.isArray(this.linkSession.resolved)
         ? this.linkSession.resolved
@@ -18295,9 +18579,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         const rawLine = String((target && target.rawLine) || "");
         if (target && target.blockId) {
           facts.hasBlockId = true;
-        }
-        if (hasNowTag(rawLine)) {
-          facts.anyNow = true;
         }
         const content = contentByPath.get(target && target.path);
         if (
@@ -18332,9 +18613,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     for (const rawLine of rawLines) {
       if (getTrailingBlockId(rawLine)) {
         facts.hasBlockId = true;
-      }
-      if (hasNowTag(rawLine)) {
-        facts.anyNow = true;
       }
     }
     return facts;
@@ -18413,9 +18691,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       effects.push("Removes its links from today's open Pomodoros");
     }
     effects.push("unblocks dependents");
-    if (item.anyNow) {
-      effects.push("keeps #now");
-    }
     textEl.createDiv({
       cls: "bob-cnp-cancel-reason-effects",
       text: effects.join(" · "),
@@ -18436,6 +18711,173 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
     });
   }
+
+  showLaneReleaseReasonStage(laneItem) {
+    this.stage = "lane-release-reason";
+    this.valueBaseDate =
+      this.fixedValueBaseDate || getLocalDateStart(new Date());
+    const openCount = Math.max(
+      1,
+      Math.floor(numericOrDefault(laneItem && laneItem.targetCount, 1)),
+    );
+    this.pendingLaneRelease = Object.freeze({
+      title: "Release task",
+      laneKind: (laneItem && laneItem.laneKind) || "task",
+      openCount,
+      dateText: formatBulletPropertyDate(this.valueBaseDate),
+    });
+    this.clearLocalTaskMarks();
+    this.selectedIndex = 0;
+    this.applyOptions({
+      items: [],
+      title: this.pendingLaneRelease.title,
+      headerIcon: "arrow-down-to-line",
+      inputLabel: "Release summary",
+      placeholder: "Why is this pending? (optional · ↵ to skip)",
+      resultsLabel: "Release summary preview",
+      emptyText: "Type a summary",
+      footerHints: getLaneReleaseReasonHints({ empty: true }),
+      getSubtitle: () => this.getLaneReleaseReasonSubtitle(),
+      filterItem: () => true,
+      renderItem: (item, rowEl, query) =>
+        this.renderLaneReleaseReasonPreviewItem(item, rowEl, query),
+      openItem: (item) => this.confirmLaneReleaseReason(item),
+    });
+
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+  }
+
+  getLaneReleaseReasonSubtitle() {
+    const pending = this.pendingLaneRelease;
+    if (!pending) {
+      return "";
+    }
+    const summary =
+      pending.laneKind === "link" && this.linkSession
+        ? `${getLinkPickerSessionSubtitle(this.linkSession)} → Ready`
+        : pending.openCount > 1
+          ? `${formatCountLabel(pending.openCount, "task")} → Ready`
+          : "Task → Ready";
+    const parts = [
+      summary,
+      `${getBulletPropertyDateWeekday(this.valueBaseDate)} ${pending.dateText}`,
+      "nothing written yet",
+    ];
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  getLaneReleaseReasonFacts() {
+    const facts = { anyLog: false, hasBlockId: false };
+    if (this.isLinkSession()) {
+      const resolved = Array.isArray(this.linkSession.resolved)
+        ? this.linkSession.resolved
+        : [];
+      const contentByPath = new Map();
+      for (const group of groupLinkPickerTargetsByNote(resolved)) {
+        contentByPath.set(group.path, group.content);
+      }
+      for (const target of resolved) {
+        if (target && target.blockId) {
+          facts.hasBlockId = true;
+        }
+        const content = contentByPath.get(target && target.path);
+        if (
+          content !== undefined &&
+          Number.isInteger(target && target.line) &&
+          findLaneWorkLogParent(
+            String(content || "").split(/\r?\n/),
+            target.line,
+          )
+        ) {
+          facts.anyLog = true;
+        }
+      }
+      return facts;
+    }
+    const content = this.getEditorContent();
+    const lines =
+      this.isCountedSession() && this.taskSession
+        ? this.taskSession.targets.map((target) => target.line)
+        : [this.cursor ? this.cursor.line : NaN];
+    for (const line of lines) {
+      if (!Number.isInteger(line)) {
+        continue;
+      }
+      if (
+        findLaneWorkLogParent(String(content || "").split(/\r?\n/), line)
+      ) {
+        facts.anyLog = true;
+      }
+    }
+    const rawLines =
+      this.isCountedSession() && this.taskSession
+        ? this.taskSession.targets.map((target) =>
+            String((target && target.rawLine) || ""),
+          )
+        : [String(getEditorLine(this.editor, this.cursor.line) || "")];
+    for (const rawLine of rawLines) {
+      if (getTrailingBlockId(rawLine)) {
+        facts.hasBlockId = true;
+      }
+    }
+    return facts;
+  }
+
+  renderLaneReleaseReasonPreviewItem(item, rowEl, query) {
+    const pending = this.pendingLaneRelease;
+    const dateText = pending ? pending.dateText : "";
+    addElementClasses(rowEl, "bob-cnp-lane-release-reason-row", "is-valid");
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(rowIcon, "arrow-down-to-line");
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    if (item.empty) {
+      appendHighlighted(titleEl, "No summary", query);
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: "Release to Ready only; no Work Log",
+      });
+    } else {
+      appendHighlighted(
+        titleEl,
+        formatLaneWorkLogEntry(item.reason, dateText),
+        query,
+      );
+      if (item.hasInlineField) {
+        textEl.createDiv({
+          cls: "bob-cnp-row-meta",
+          text: '"::" creates a Dataview inline field on this bullet',
+        });
+      }
+      textEl.createDiv({
+        cls: "bob-cnp-cancel-reason-preview",
+        text: "Prepends to the Work Log of each released In Progress task",
+      });
+    }
+    const effects = [];
+    if (item.hasBlockId) {
+      effects.push("Removes its links from today's open Pomodoros");
+    }
+    effects.push("releases Next and In Progress to Ready");
+    textEl.createDiv({
+      cls: "bob-cnp-cancel-reason-effects",
+      text: effects.join(" · "),
+    });
+  }
+
+  confirmLaneReleaseReason(item) {
+    const pending = this.pendingLaneRelease;
+    if (!pending || !item) {
+      return false;
+    }
+    return this.plugin.applyLaneToggleFromPicker(this, {
+      summary: item.empty ? "" : item.reason,
+      dateText: pending.dateText,
+    });
+  }
+
 
   getEditorContent() {
     if (this.editor && typeof this.editor.getValue === "function") {
@@ -18548,6 +18990,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
     this.pendingCancel = null;
+    this.pendingLaneRelease = null;
   }
 
   // Dismissing the modal mid-prompt is a clean cancel: no writes happen until
@@ -18785,6 +19228,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getFilteredItems() {
+    if (this.stage === "lane-release-reason") {
+      const normalized = normalizeScheduleReasonText(this.getRawQuery());
+      const facts = this.getLaneReleaseReasonFacts();
+      return [
+        Object.freeze({
+          kind: "lane-release-reason-preview",
+          ...normalized,
+          ...facts,
+          counted: this.isCountedSession() || this.isLinkSession(),
+          searchText: normalized.reason,
+        }),
+      ];
+    }
+
     if (this.stage === "cancel-reason") {
       const normalized = normalizeScheduleReasonText(this.getRawQuery());
       const facts = this.getCancelReasonFacts();
@@ -18880,24 +19337,31 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       });
       this.renderFooter();
     }
+    if (this.stage === "lane-release-reason") {
+      const item = (this.visibleItems || [])[0];
+      this.footerHints = getLaneReleaseReasonHints({
+        empty: Boolean(item && item.empty),
+      });
+      this.renderFooter();
+    }
   }
 
-  renderNowToggleItem(item, rowEl, query) {
+  renderLaneToggleItem(item, rowEl, query) {
     addElementClasses(rowEl, "bob-cnp-property-row", "is-undefined");
 
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-    applyIcon(rowIcon, "star");
+    applyIcon(rowIcon, item.mode === "release" ? "arrow-down-to-line" : "arrow-up-to-line");
 
     const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-    appendHighlighted(titleEl, "#now", query);
+    appendHighlighted(titleEl, item.title || "Lane", query);
 
     const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    appendHighlighted(pathEl, item.detail || "this week", query);
+    appendHighlighted(pathEl, item.detail || "lane", query);
 
     rowEl.createDiv({
       cls: "bob-cnp-pill bob-cnp-property-pill",
-      text: item.added ? "add" : "remove",
+      text: item.mode === "release" ? "release" : "commit",
     });
   }
 
@@ -20087,10 +20551,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "toggle-now-tag",
-      name: "Toggle #now (this week's bet)",
+      id: "toggle-task-lane",
+      name: "Commit to Next / release to Ready",
       hotkeys: [{ modifiers: ["Alt"], key: "N" }],
-      editorCallback: (editor) => this.toggleNowTag(editor),
+      editorCallback: (editor) => this.toggleTaskLane(editor),
     });
 
     this.addCommand({
@@ -20253,7 +20717,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedTransclusionToggleInputListeners();
     this.registerCountedBulletPropertyInputListeners();
     this.registerCountedTaskMoveInputListeners();
-    this.registerCountedNowToggleInputListeners();
+    this.registerCountedLaneToggleInputListeners();
     this.registerClearSearchHighlightInputListeners();
 
     this.register(() => {
@@ -21647,14 +22111,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  // now-toggle: Toggle #now on task lines and Task Link lines. On a #task
-  // line the current task plus the next N real tasks are toggled; on a
-  // dedicated Task Link the resolved task plus the next N sibling links are
-  // toggled in their own notes. The tag is placed before trailing fields and
-  // the block ID, and the Notice reports the NOW count. Writes follow
+  // task-lane: Commit Ready to Next, or release Next/In Progress to Ready.
+  // On a #task line the current task plus the next N real tasks are covered;
+  // on a dedicated Task Link the resolved task plus the next N sibling links
+  // are covered in their own notes. reusing the counted task and
+  // Task Link target discovery. Commit writes no link; release also removes each released
+  // task's live links under today's open Pomodoros. Writes follow
   // link-picker's cross-note rules: any stale preimage refuses the whole
-  // operation.
-  async toggleNowTag(cm, options = {}) {
+  // operation, targets write first, then the daily note.
+  async toggleTaskLane(cm, options = {}) {
     const cursor = getEditorCursor(cm);
     if (!cursor) {
       new Notice("No active markdown editor");
@@ -21687,29 +22152,65 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             0,
             Math.floor(numericOrDefault(pending.repeat, 0)),
           );
-          resetPendingVimInputState(vimCm, "counted-now-toggle");
+          resetPendingVimInputState(vimCm, "counted-lane-toggle");
         }
       }
     }
     const onTask = isObsidianTaskAtLine(content, cursor.line);
     if (onTask) {
-      return await this.toggleNowTagOnTasks(cm, cursor, content, {
+      return await this.toggleTaskLaneOnTasks(cm, cursor, content, {
         countExplicit,
         additionalTaskCount,
+        summary: options.summary,
+        dateText: options.dateText,
+        skipReleasePrompt: options.skipReleasePrompt,
       });
     }
     if (parseLinkPickerTaskLink(lineText)) {
-      return await this.toggleNowTagOnLinks(cm, cursor, content, {
+      return await this.toggleTaskLaneOnLinks(cm, cursor, content, {
         countExplicit,
         additionalTaskCount,
         linkDiscovery: options.linkDiscovery || null,
+        summary: options.summary,
+        dateText: options.dateText,
+        skipReleasePrompt: options.skipReleasePrompt,
       });
     }
     new Notice("Cursor is not on a task or Task Link");
     return false;
   }
 
-  async toggleNowTagOnTasks(cm, cursor, content, options = {}) {
+  async requestLaneReleaseSummary(options = {}) {
+    if (options.skipReleasePrompt === true) {
+      return { cancelled: false, summary: "" };
+    }
+    if (typeof options.summary === "string") {
+      return { cancelled: false, summary: options.summary };
+    }
+    return await new Promise((resolve) => {
+      const modal = new LaneReleaseSummaryModal(this.app, (result) => {
+        if (result === null) {
+          resolve({ cancelled: true, summary: "" });
+        } else {
+          resolve({ cancelled: false, summary: String(result || "") });
+        }
+      });
+      try {
+        modal.open();
+      } catch (error) {
+        resolve({ cancelled: false, summary: "" });
+      }
+    });
+  }
+
+  laneReleaseDateText(options = {}) {
+    if (typeof options.dateText === "string" && options.dateText) {
+      return String(options.dateText);
+    }
+    return formatBulletPropertyDate(getLocalDateStart(new Date()));
+  }
+
+  async toggleTaskLaneOnTasks(cm, cursor, content, options = {}) {
     const session = discoverCountedObsidianTaskTargets(
       content,
       cursor.line,
@@ -21719,15 +22220,33 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(session.error);
       return false;
     }
-    let nowBudget = readNowBudgetValue(this.app);
-    if (nowBudget && typeof nowBudget.then === "function") {
-      try {
-        nowBudget = await nowBudget;
-      } catch (error) {
-        nowBudget = null;
+    const activeView = this.getActiveMarkdownView();
+    const filePath =
+      activeView && activeView.file ? activeView.file.path : null;
+    const laneBudgets = readLaneBudgets(this.app);
+    // Decide commit vs release from statuses before any prompt.
+    const probe = planTaskLaneBatch(content, session, {});
+    if (!probe.valid) {
+      new Notice(
+        probe.stale ? `${probe.error}; no tasks were updated` : probe.error,
+      );
+      return false;
+    }
+    let summary = "";
+    const dateText = this.laneReleaseDateText(options);
+    if (probe.mode === "release") {
+      const needsReason = probe.released.some(
+        (entry) => entry.fromStatus === "/",
+      );
+      if (needsReason) {
+        const answer = await this.requestLaneReleaseSummary(options);
+        if (answer.cancelled) {
+          return false;
+        }
+        summary = answer.summary;
       }
     }
-    const plan = planNowToggleBatch(content, session);
+    const plan = planTaskLaneBatch(content, session, { summary, dateText });
     if (!plan.valid) {
       new Notice(
         plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
@@ -21742,27 +22261,117 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice("Current note changed; no tasks were updated");
       return false;
     }
-    const lines = splitMarkdownContent(plan.content).lines;
-    const finalLine = String(lines[cursor.line] || "");
-    const applied = applyEditorContentTransaction(cm, content, plan.content, {
-      line: cursor.line,
+    let finalContent = plan.content;
+    let finalCursorLine = cursor.line;
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    if (plan.mode === "release") {
+      const pruneTargets = plan.released
+        .filter((entry) => entry.blockId)
+        .map((entry) =>
+          Object.freeze({ path: filePath, blockId: entry.blockId }),
+        )
+        .filter((entry) => entry.path);
+      if (pruneTargets.length > 0 && filePath) {
+        pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+          sourcePath: filePath,
+          sourceContent: content,
+          today: new Date(),
+        });
+        const guarded = this.getCountedTaskWriteContext(cm, filePath, session);
+        if (!guarded.valid || guarded.content !== content) {
+          new Notice(
+            guarded.valid
+              ? "Active note changed; no tasks were updated"
+              : guarded.error,
+          );
+          return false;
+        }
+        if (pomodoroSnapshot) {
+          if (pomodoroSnapshot.sameFile) {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              finalContent,
+              pruneTargets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+            if (dailyCleanupPlan.changed) {
+              const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
+                (total, range) =>
+                  range.endLineExclusive <= finalCursorLine
+                    ? total + (range.endLineExclusive - range.startLine)
+                    : total,
+                0,
+              );
+              finalContent = dailyCleanupPlan.content;
+              finalCursorLine = finalCursorLine - removedBefore;
+            }
+          } else {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              pomodoroSnapshot.content,
+              pruneTargets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+          }
+        }
+      }
+    }
+    const lines = splitMarkdownContent(finalContent).lines;
+    const finalLine = String(lines[finalCursorLine] || "");
+    const applied = applyEditorContentTransaction(cm, content, finalContent, {
+      line: finalCursorLine,
       ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
     });
     if (!applied) {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+    let removedPomodoroLinkCount = 0;
+    let pomodoroPruneFailed = false;
+    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
+      if (pomodoroSnapshot.sameFile) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        const written = await this.writeDeferredPomodoroCleanup(
+          pomodoroSnapshot,
+          dailyCleanupPlan,
+        );
+        if (written) {
+          removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+        } else {
+          pomodoroPruneFailed = true;
+        }
+      }
+    }
+    if (pomodoroPruneFailed) {
+      new Notice("Lane updated; Pomodoro links not removed");
+    }
+    const releasedNextCount = plan.released.filter(
+      (entry) => entry.fromStatus === "*",
+    ).length;
+    const releasedPendingCount = plan.released.filter(
+      (entry) => entry.fromStatus === "/",
+    ).length;
     new Notice(
-      buildNowToggleNotice({
-        added: plan.added,
+      buildLaneToggleNotice({
+        mode: plan.mode,
         changedTaskCount: plan.changedTaskCount,
-        nowBudget,
+        blockedSkipped: plan.blockedSkipped,
+        unlinkedFromToday: removedPomodoroLinkCount,
+        releasedNextCount,
+        releasedPendingCount,
+        laneBudgets,
       }),
     );
     return true;
   }
 
-  async toggleNowTagOnLinks(cm, cursor, content, options = {}) {
+  async toggleTaskLaneOnLinks(cm, cursor, content, options = {}) {
     const discovery =
       options.linkDiscovery ||
       discoverLinkPickerTargets(
@@ -21783,9 +22392,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice("No active markdown note");
       return false;
     }
-    const filePath = activeView.file.path;
     const resolution = await this.resolveLinkPickerTargets(
-      filePath,
+      activeView.file.path,
       discovery,
     );
     if (resolution.error) {
@@ -21800,98 +22408,174 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice("Current note changed; no tasks were updated");
       return false;
     }
-    let nowBudget = readNowBudgetValue(this.app);
-    if (nowBudget && typeof nowBudget.then === "function") {
-      try {
-        nowBudget = await nowBudget;
-      } catch (error) {
-        nowBudget = null;
-      }
-    }
-    const globalAdded = resolution.targets.some(
-      (target) => !hasNowTag(target.rawLine || ""),
-    );
+    const laneBudgets = readLaneBudgets(this.app);
     const groups = groupLinkPickerTargetsByNote(resolution.targets);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+    // Probe the mode across all groups: commit when any target is Ready.
+    let probeMode = "release";
+    for (const group of groups) {
+      const probe = planTaskLaneBatch(group.content, group.session, {});
+      if (!probe.valid) {
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+      if (probe.mode === "commit") {
+        probeMode = "commit";
+      }
+    }
+    void probeMode;
+    let summary = "";
+    const dateText = this.laneReleaseDateText(options);
+    // A release with an In Progress target asks once for an optional summary.
+    let needsReason = false;
+    for (const group of groups) {
+      const probe = planTaskLaneBatch(group.content, group.session, {});
+      if (
+        probe.valid &&
+        probe.mode === "release" &&
+        probe.released.some((entry) => entry.fromStatus === "/")
+      ) {
+        needsReason = true;
+      }
+    }
+    if (needsReason) {
+      const answer = await this.requestLaneReleaseSummary(options);
+      if (answer.cancelled) {
+        return false;
+      }
+      summary = answer.summary;
+    }
     const planned = [];
     for (const group of groups) {
-      const plan = planNowToggleBatch(group.content, group.session, {
-        added: globalAdded,
+      const plan = planTaskLaneBatch(group.content, group.session, {
+        summary,
+        dateText,
       });
       if (!plan.valid) {
-        new Notice("A linked note changed; no tasks were updated");
+        new Notice(
+          plan.stale
+            ? "A linked note changed; no tasks were updated"
+            : plan.error,
+        );
         return false;
       }
       planned.push({ group, plan });
     }
-    for (const { group } of planned) {
-      const live = await this.readLinkPickerNoteContent(
-        group.path,
-        group.file,
-      );
-      if (live !== group.content) {
-        new Notice("A linked note changed; no tasks were updated");
-        return false;
+    // Collect prune targets for releases.
+    const pruneTargets = [];
+    for (const { group, plan } of planned) {
+      if (plan.mode !== "release") {
+        continue;
+      }
+      for (const entry of plan.released) {
+        if (entry.blockId) {
+          pruneTargets.push(
+            Object.freeze({ path: group.path, blockId: entry.blockId }),
+          );
+        }
       }
     }
-    const written = [];
-    let changedTaskCount = 0;
-    try {
-      for (const { group, plan } of planned) {
-        changedTaskCount += plan.changedTaskCount;
-        if (plan.content !== group.content) {
-          await this.writeLinkPickerNoteChange(
-            group.path,
-            group.file,
-            group.content,
-            plan.content,
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    let foldedDailyPath = null;
+    if (pruneTargets.length > 0) {
+      const sourcePaths = planned.map(({ group }) => group.path);
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: sourcePaths.length === 1 ? sourcePaths[0] : "",
+        sourceContent: planned.length === 1 ? planned[0].plan.content : "",
+        today: new Date(),
+      });
+      if (pomodoroSnapshot) {
+        const folded = planned.find(
+          ({ group }) => group.path === pomodoroSnapshot.dailyPath,
+        );
+        const dailyBase = folded
+          ? folded.plan.content
+          : pomodoroSnapshot.content;
+        if (dailyBase !== null) {
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            dailyBase,
+            pruneTargets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
           );
-          written.push({
-            path: group.path,
-            file: group.file,
-            before: group.content,
-            after: plan.content,
-          });
+          if (folded && dailyCleanupPlan.changed) {
+            foldedDailyPath = folded.group.path;
+          }
         }
       }
-    } catch (error) {
-      for (const entry of written.slice().reverse()) {
-        try {
-          await this.writeLinkPickerNoteChange(
-            entry.path,
-            entry.file,
-            entry.after,
-            entry.before,
-          );
-        } catch (rollbackError) {
-          // Best effort: the original error stays authoritative.
-        }
-      }
+    }
+    const commit = await this.commitLinkPickerNoteWrites(planned, {
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      foldedDailyPath,
+    });
+    if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
       return false;
     }
+    let changedTaskCount = 0;
+    let blockedSkipped = 0;
+    let releasedNextCount = 0;
+    let releasedPendingCount = 0;
+    let mode = "commit";
+    for (const { plan } of planned) {
+      changedTaskCount += plan.changedTaskCount;
+      blockedSkipped += plan.blockedSkipped;
+      if (plan.mode === "release") {
+        mode = "release";
+      }
+      for (const entry of plan.released || []) {
+        if (entry.fromStatus === "*") {
+          releasedNextCount += 1;
+        } else if (entry.fromStatus === "/") {
+          releasedPendingCount += 1;
+        }
+      }
+    }
+    const removedPomodoroLinkCount =
+      dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
+        ? dailyCleanupPlan.removedLinkCount
+        : 0;
+    if (commit.pomodoroPruneFailed) {
+      new Notice("Lane updated; Pomodoro links not removed");
+    }
     new Notice(
-      buildNowToggleNotice({
-        added: globalAdded,
+      buildLaneToggleNotice({
+        mode,
         changedTaskCount,
-        nowBudget,
+        blockedSkipped,
+        unlinkedFromToday: removedPomodoroLinkCount,
+        releasedNextCount,
+        releasedPendingCount,
+        laneBudgets,
       }),
     );
     return true;
   }
 
-  // Apply the picker's pinned `#now` row: toggle immediately with no value
-  // stage, then close the modal on success. Task sessions (single and
-  // counted) write through the open editor; link sessions write through the
+  // Apply the picker's pinned lane row. Task sessions (single and counted)
+  // write through the open editor; link sessions write through the
   // cross-note path with the same preimage guards as the Alt+N command.
-  async applyNowToggleFromPicker(picker) {
+  // `options.summary`/`options.dateText` carry the reason-stage input; when
+  // a release needs a reason and no summary was supplied, the caller routes
+  // through the reason stage instead of calling this directly.
+  async applyLaneToggleFromPicker(picker, options = {}) {
     if (!picker) {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+    const summary =
+      typeof options.summary === "string" ? options.summary : "";
+    const dateText =
+      typeof options.dateText === "string" && options.dateText
+        ? String(options.dateText)
+        : formatBulletPropertyDate(getLocalDateStart(new Date()));
     if (picker.linkSession) {
       const resolved = Array.isArray(picker.linkSession.resolved)
         ? picker.linkSession.resolved
@@ -21900,22 +22584,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
-      let nowBudget = readNowBudgetValue(this.app);
-      if (nowBudget && typeof nowBudget.then === "function") {
-        try {
-          nowBudget = await nowBudget;
-        } catch (error) {
-          nowBudget = null;
-        }
-      }
-      const globalAdded = resolved.some(
-        (target) => !hasNowTag(target.rawLine || ""),
-      );
+      const laneBudgets = readLaneBudgets(this.app);
       const groups = groupLinkPickerTargetsByNote(resolved);
       const planned = [];
       for (const group of groups) {
-        const plan = planNowToggleBatch(group.content, group.session, {
-          added: globalAdded,
+        const plan = planTaskLaneBatch(group.content, group.session, {
+          summary,
+          dateText,
         });
         if (!plan.valid) {
           new Notice("A linked note changed; no tasks were updated");
@@ -21923,57 +22598,94 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         }
         planned.push({ group, plan });
       }
-      for (const { group } of planned) {
-        const live = await this.readLinkPickerNoteContent(
-          group.path,
-          group.file,
-        );
-        if (live !== group.content) {
-          new Notice("A linked note changed; no tasks were updated");
-          return false;
+      const pruneTargets = [];
+      for (const { group, plan } of planned) {
+        if (plan.mode !== "release") {
+          continue;
+        }
+        for (const entry of plan.released) {
+          if (entry.blockId) {
+            pruneTargets.push(
+              Object.freeze({ path: group.path, blockId: entry.blockId }),
+            );
+          }
         }
       }
-      const written = [];
-      let changedTaskCount = 0;
-      try {
-        for (const { group, plan } of planned) {
-          changedTaskCount += plan.changedTaskCount;
-          if (plan.content !== group.content) {
-            await this.writeLinkPickerNoteChange(
-              group.path,
-              group.file,
-              group.content,
-              plan.content,
+      let pomodoroSnapshot = null;
+      let dailyCleanupPlan = null;
+      let foldedDailyPath = null;
+      if (pruneTargets.length > 0) {
+        const sourcePaths = planned.map(({ group }) => group.path);
+        pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+          sourcePath: sourcePaths.length === 1 ? sourcePaths[0] : "",
+          sourceContent: planned.length === 1 ? planned[0].plan.content : "",
+          today: new Date(),
+        });
+        if (pomodoroSnapshot) {
+          const folded = planned.find(
+            ({ group }) => group.path === pomodoroSnapshot.dailyPath,
+          );
+          const dailyBase = folded
+            ? folded.plan.content
+            : pomodoroSnapshot.content;
+          if (dailyBase !== null) {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              dailyBase,
+              pruneTargets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
             );
-            written.push({
-              path: group.path,
-              file: group.file,
-              before: group.content,
-              after: plan.content,
-            });
+            if (folded && dailyCleanupPlan.changed) {
+              foldedDailyPath = folded.group.path;
+            }
           }
         }
-      } catch (error) {
-        for (const entry of written.slice().reverse()) {
-          try {
-            await this.writeLinkPickerNoteChange(
-              entry.path,
-              entry.file,
-              entry.after,
-              entry.before,
-            );
-          } catch (rollbackError) {
-            // Best effort.
-          }
-        }
+      }
+      const commit = await this.commitLinkPickerNoteWrites(planned, {
+        pomodoroSnapshot,
+        dailyCleanupPlan,
+        foldedDailyPath,
+      });
+      if (!commit.ok) {
         new Notice("A linked note changed; no tasks were updated");
         return false;
       }
+      let changedTaskCount = 0;
+      let blockedSkipped = 0;
+      let releasedNextCount = 0;
+      let releasedPendingCount = 0;
+      let mode = "commit";
+      for (const { plan } of planned) {
+        changedTaskCount += plan.changedTaskCount;
+        blockedSkipped += plan.blockedSkipped;
+        if (plan.mode === "release") {
+          mode = "release";
+        }
+        for (const entry of plan.released || []) {
+          if (entry.fromStatus === "*") {
+            releasedNextCount += 1;
+          } else if (entry.fromStatus === "/") {
+            releasedPendingCount += 1;
+          }
+        }
+      }
+      const removedPomodoroLinkCount =
+        dailyCleanupPlan &&
+        dailyCleanupPlan.changed &&
+        !commit.pomodoroPruneFailed
+          ? dailyCleanupPlan.removedLinkCount
+          : 0;
       new Notice(
-        buildNowToggleNotice({
-          added: globalAdded,
+        buildLaneToggleNotice({
+          mode,
           changedTaskCount,
-          nowBudget,
+          blockedSkipped,
+          unlinkedFromToday: removedPomodoroLinkCount,
+          releasedNextCount,
+          releasedPendingCount,
+          laneBudgets,
         }),
       );
       return true;
@@ -22021,29 +22733,85 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(writeContext.error);
       return false;
     }
-    let nowBudget = readNowBudgetValue(this.app);
-    if (nowBudget && typeof nowBudget.then === "function") {
-      try {
-        nowBudget = await nowBudget;
-      } catch (error) {
-        nowBudget = null;
-      }
-    }
-    const plan = planNowToggleBatch(writeContext.content, session);
+    const laneBudgets = readLaneBudgets(this.app);
+    const plan = planTaskLaneBatch(writeContext.content, session, {
+      summary,
+      dateText,
+    });
     if (!plan.valid) {
       new Notice(
         plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
       );
       return false;
     }
-    const lines = splitMarkdownContent(plan.content).lines;
-    const finalLine = String(lines[cursor.line] || "");
+    let finalContent = plan.content;
+    let finalCursorLine = cursor.line;
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    if (plan.mode === "release") {
+      const pruneTargets = plan.released
+        .filter((entry) => entry.blockId)
+        .map((entry) =>
+          Object.freeze({ path: filePath, blockId: entry.blockId }),
+        )
+        .filter((entry) => entry.path);
+      if (pruneTargets.length > 0) {
+        pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+          sourcePath: filePath,
+          sourceContent: writeContext.content,
+          today: new Date(),
+        });
+        const guarded = this.getCountedTaskWriteContext(editor, filePath, session);
+        if (!guarded.valid || guarded.content !== writeContext.content) {
+          new Notice(
+            guarded.valid
+              ? "Active note changed; no tasks were updated"
+              : guarded.error,
+          );
+          return false;
+        }
+        if (pomodoroSnapshot) {
+          if (pomodoroSnapshot.sameFile) {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              finalContent,
+              pruneTargets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+            if (dailyCleanupPlan.changed) {
+              const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
+                (total, range) =>
+                  range.endLineExclusive <= finalCursorLine
+                    ? total + (range.endLineExclusive - range.startLine)
+                    : total,
+                0,
+              );
+              finalContent = dailyCleanupPlan.content;
+              finalCursorLine = finalCursorLine - removedBefore;
+            }
+          } else {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              pomodoroSnapshot.content,
+              pruneTargets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+          }
+        }
+      }
+    }
+    const lines = splitMarkdownContent(finalContent).lines;
+    const finalLine = String(lines[finalCursorLine] || "");
     const applied = applyEditorContentTransaction(
       editor,
       writeContext.content,
-      plan.content,
+      finalContent,
       {
-        line: cursor.line,
+        line: finalCursorLine,
         ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
       },
     );
@@ -22051,11 +22819,35 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+    let removedPomodoroLinkCount = 0;
+    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
+      if (pomodoroSnapshot.sameFile) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        const written = await this.writeDeferredPomodoroCleanup(
+          pomodoroSnapshot,
+          dailyCleanupPlan,
+        );
+        removedPomodoroLinkCount = written
+          ? dailyCleanupPlan.removedLinkCount
+          : 0;
+      }
+    }
+    const releasedNextCount = plan.released.filter(
+      (entry) => entry.fromStatus === "*",
+    ).length;
+    const releasedPendingCount = plan.released.filter(
+      (entry) => entry.fromStatus === "/",
+    ).length;
     new Notice(
-      buildNowToggleNotice({
-        added: plan.added,
+      buildLaneToggleNotice({
+        mode: plan.mode,
         changedTaskCount: plan.changedTaskCount,
-        nowBudget,
+        blockedSkipped: plan.blockedSkipped,
+        unlinkedFromToday: removedPomodoroLinkCount,
+        releasedNextCount,
+        releasedPendingCount,
+        laneBudgets,
       }),
     );
     return true;
@@ -22067,7 +22859,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // open Pomodoros, recover Blocked dependents through Task Status Cycler's
   // versioned API, and show one Cancelled notice card. Nothing is written
   // until this runs; every refusal ends with `…; no tasks were updated`.
-  // `#now` is user-owned and therefore never added or stripped here.
   async applyTaskCancelFromPicker(picker, options = {}) {
     if (!picker) {
       new Notice("Could not update task; no tasks were updated");
@@ -22080,15 +22871,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         ? picker.valueBaseDate
         : getLocalDateStart(new Date());
     const dateText = formatBulletPropertyDate(baseDate);
-    let nowBudget = readNowBudgetValue(this.app);
-    if (nowBudget && typeof nowBudget.then === "function") {
-      try {
-        nowBudget = await nowBudget;
-      } catch (error) {
-        nowBudget = null;
-      }
-    }
-    const cancel = { reason, fallbackReason, baseDate, dateText, nowBudget };
+    const cancel = { reason, fallbackReason, baseDate, dateText };
     if (
       picker.linkSession &&
       picker.linkSession.kind === "task-link" &&
@@ -22294,8 +23077,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       dateText: cancel.dateText,
       reason: cancel.reason,
       fallbackUsed: plan.fallbackLoggedCount > 0,
-      nowBudget: cancel.nowBudget,
-      nowTaggedCount: plan.nowTaggedCount,
       skippedClosedCount: plan.skippedClosedCount,
       removedPomodoroLinkCount,
       pomodoroPruneFailed,
@@ -22402,12 +23183,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     let cancelledCount = 0;
     let skippedClosedCount = 0;
     let fallbackLoggedCount = 0;
-    let nowTaggedCount = 0;
     for (const { group, plan } of planned) {
       cancelledCount += plan.cancelledCount;
       skippedClosedCount += plan.skippedClosedCount;
       fallbackLoggedCount += plan.fallbackLoggedCount;
-      nowTaggedCount += plan.nowTaggedCount;
       for (const entry of plan.cancelled) {
         identities.push(
           Object.freeze({
@@ -22431,8 +23210,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       dateText: cancel.dateText,
       reason: cancel.reason,
       fallbackUsed: fallbackLoggedCount > 0,
-      nowBudget: cancel.nowBudget,
-      nowTaggedCount,
       skippedClosedCount,
       removedPomodoroLinkCount,
       pomodoroPruneFailed: commit.pomodoroPruneFailed,
@@ -22483,25 +23260,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         reopened = 0;
       }
     }
-    const nowTaggedCount = Math.max(
-      0,
-      Math.floor(numericOrDefault(details.nowTaggedCount, 0)),
-    );
-    let nowChip = "";
-    const budget = details.nowBudget;
-    if (
-      nowTaggedCount > 0 &&
-      budget &&
-      Number.isFinite(Math.floor(Number(budget.count))) &&
-      Number.isFinite(Math.floor(Number(budget.cap)))
-    ) {
-      const after = Math.max(
-        0,
-        Math.floor(Number(budget.count)) - nowTaggedCount,
-      );
-      const cap = Math.floor(Number(budget.cap));
-      nowChip = `NOW ${after}/${cap}${after > cap ? " 🔴" : ""}`;
-    }
     // The plan chip covers the prune only: it needs the post-prune daily
     // note text, and is omitted when nothing was pruned or the API is
     // unavailable.
@@ -22520,7 +23278,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         removedPomodoroLinkCount: details.removedPomodoroLinkCount,
         reopenedDependents: reopened,
         recoveryRan,
-        nowChip,
         planChip,
         skippedClosedCount: details.skippedClosedCount,
         pomodoroPruneFailed: details.pomodoroPruneFailed,
@@ -24904,16 +25661,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     );
   }
 
-  // Capture-phase fallback so counted N<Alt+N> reaches the #now toggle while
+  // Capture-phase fallback so counted N<Alt+N> reaches the lane toggle while
   // Vim normal mode is active. CodeMirror Vim swallows Alt chords before
   // Obsidian's hotkey dispatcher runs, so the hotkeys.json binding only
   // covers insert mode and non-Vim editing. Follows the Ctrl+Shift+M pattern:
   // a pending numeric prefix becomes N additional tasks, and the Vim input
   // state is reset before toggling.
-  registerCountedNowToggleInputListeners() {
-    this.handledCountedNowToggleEvents = new WeakSet();
+  registerCountedLaneToggleInputListeners() {
+    this.handledCountedLaneToggleEvents = new WeakSet();
     const keydownHandler = (event) =>
-      this.handleCountedNowTogglePhysicalKeydown(event);
+      this.handleCountedLaneTogglePhysicalKeydown(event);
     const targets = [];
     if (typeof window !== "undefined") {
       targets.push(window);
@@ -24932,16 +25689,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
   }
 
-  handleCountedNowTogglePhysicalKeydown(event) {
+  handleCountedLaneTogglePhysicalKeydown(event) {
     if (event && event.repeat) {
       return false;
     }
-    if (!this.isCountedNowToggleKeydown(event)) {
+    if (!this.isCountedLaneToggleKeydown(event)) {
       return false;
     }
     if (
-      this.handledCountedNowToggleEvents &&
-      this.handledCountedNowToggleEvents.has(event)
+      this.handledCountedLaneToggleEvents &&
+      this.handledCountedLaneToggleEvents.has(event)
     ) {
       return false;
     }
@@ -24951,23 +25708,23 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     const cm = this.resolveVimCodeMirror(view.editor, view);
     const pendingRepeat = getPendingVimRepeat(cm);
-    if (this.handledCountedNowToggleEvents) {
-      this.handledCountedNowToggleEvents.add(event);
+    if (this.handledCountedLaneToggleEvents) {
+      this.handledCountedLaneToggleEvents.add(event);
     }
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") {
       event.stopImmediatePropagation();
     }
-    resetPendingVimInputState(cm, "counted-now-toggle");
-    void this.toggleNowTag(view.editor, {
+    resetPendingVimInputState(cm, "counted-lane-toggle");
+    void this.toggleTaskLane(view.editor, {
       countExplicit: pendingRepeat.explicit,
       additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
     }).catch(() => false);
     return true;
   }
 
-  isCountedNowToggleKeydown(event) {
+  isCountedLaneToggleKeydown(event) {
     return Boolean(
       event &&
       !event.ctrlKey &&
@@ -29708,14 +30465,14 @@ module.exports.helpers = {
   createLinkPickerPropertyItems,
   groupLinkPickerTargetsByNote,
   getLinkPickerSessionSubtitle,
-  hasNowTag,
-  getNowTagTokenSpans,
-  addNowTagToLine,
-  removeNowTagFromLine,
-  planNowToggleBatch,
-  buildNowToggleNotice,
-  readNowBudgetValue,
-  describeNowToggleRow,
+  normalizeLaneWorkSummary,
+  formatLaneWorkLogEntry,
+  findLaneWorkLogParent,
+  planTaskLaneBatch,
+  buildLaneToggleNotice,
+  readLaneBudgets,
+  describeLaneRow,
+  getLaneReleaseReasonHints,
   discoverMovableObsidianTaskTargets,
   validateCountedTaskSession,
   parseTaskMoveContainerPrefix,

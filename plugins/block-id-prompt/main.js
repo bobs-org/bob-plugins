@@ -1573,7 +1573,7 @@ function workSummaryPromptState(value, options = {}) {
     formattedEntry,
     isBlank: summary.length === 0,
     hasDataviewWarning: summary.includes("::"),
-    primaryButtonText: summary ? "Set Open & log" : "Set Open",
+    primaryButtonText: summary ? "Unlink & log" : "Unlink",
   };
 }
 
@@ -2640,7 +2640,8 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
 
 // ---------------------------------------------------------------------------
 // Ctrl+Shift+Enter on a selected Task Link: link selection and deletion
-// planning. Mirrors task-status-cycler's definition of a "selected Task Link"
+// planning (the lane never changes). Mirrors task-status-cycler's definition
+// of a "selected Task Link"
 // (plain, embedded, 🍅-marked, `#` move-only-marked, or struck) but is kept
 // self-contained because plugins are deployed separately.
 // ---------------------------------------------------------------------------
@@ -3231,11 +3232,12 @@ function planPomodoroLinkInsertion(content, options = {}) {
 //   - future-schedule removal (whenever `activationEligible` or `forceNext`,
 //     and the task carries exactly one valid, strictly future `scheduled`
 //     field);
-//   - the resulting checkbox status: with `forceNext`, every eligible open
-//     status becomes Next unconditionally (the Ctrl+Shift+Enter mode); with
-//     plain `activationEligible`, only Ready/Blocked are promoted to Next,
-//     and only when a future schedule was actually removed for Blocked (the
-//     `^^` task-picker's original, more conservative mode);
+//   - the resulting checkbox status: with `forceNext`, only Ready/Blocked
+//     become Next while Next and In Progress stay unchanged (linking never
+//     lowers a lane); with plain `activationEligible`, only Ready/Blocked
+//     are promoted to Next, and only when a future schedule was actually
+//     removed for Blocked (the `^^` task-picker's original, more
+//     conservative mode);
 //   - an optional trailing block ID append, kept as the final task token; and
 //   - a Schedule Log entry, only when the task already owns a direct-child
 //     marker.
@@ -3280,7 +3282,10 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
 
   let newStatus = currentStatus;
   if (forceNext) {
-    newStatus = "*";
+    // Linking never lowers a lane: only Ready and Blocked rise to Next.
+    if (currentStatus === " " || currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS) {
+      newStatus = "*";
+    }
   } else if (activationEligible) {
     if (removedFutureSchedule) {
       if (currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS || currentStatus === " ") {
@@ -3360,71 +3365,6 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
     logInsertLine,
     blockIdAppended: Boolean(newBlockId),
     hasChanges: removedFutureSchedule || statusChanged || logEntryAdded || Boolean(newBlockId),
-  };
-}
-
-function planTargetTaskOpenUpdate(preimageContent, taskLine, options = {}) {
-  const expectedStatus = Object.prototype.hasOwnProperty.call(options, "expectedStatus")
-    ? options.expectedStatus
-    : "*";
-  const workSummary = Object.prototype.hasOwnProperty.call(options, "workSummary")
-    ? options.workSummary
-    : "";
-  const normalizedWorkSummary = normalizeWorkSummary(workSummary);
-  const workLogDate = normalizedWorkSummary
-    ? options.workLogDate || localTodayParts(options.now)
-    : null;
-  const content = String(preimageContent === null || preimageContent === undefined ? "" : preimageContent);
-  const lines = content.split("\n");
-
-  if (!Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
-    return null;
-  }
-
-  const rawLine = lines[taskLine];
-  const hasCR = rawLine.endsWith("\r");
-  const lineText = hasCR ? rawLine.slice(0, -1) : rawLine;
-  const taskMatch = getObsidianTaskLineMatch(lineText);
-  const checkboxMatch = TASK_CHECKBOX_STATUS_RE.exec(lineText);
-  if (!taskMatch || !checkboxMatch || taskMatch[1] !== expectedStatus) {
-    return null;
-  }
-
-  const statusStart = lineStartIndexFromLines(lines, taskLine) + checkboxMatch[1].length;
-  const edits = [
-    {
-      start: statusStart,
-      end: statusStart + 1,
-      replacement: " ",
-    },
-  ];
-  let nextContent = applyTextEdits(content, edits);
-  const workLogPlan = planWorkLogInsertion(nextContent, taskLine, workSummary, {
-    date: workLogDate,
-  });
-  if (!workLogPlan) {
-    return null;
-  }
-  if (workLogPlan.edits.length > 0) {
-    edits.push(...workLogPlan.edits);
-    nextContent = applyTextEdits(content, edits);
-  }
-
-  return {
-    content: nextContent,
-    edits,
-    oldStatus: expectedStatus,
-    newStatus: " ",
-    statusChanged: true,
-    removedFutureSchedule: false,
-    logEntryAdded: false,
-    workLogEntryAdded: workLogPlan.workLogEntryAdded,
-    workLogSummary: workLogPlan.summary,
-    workLogDate: workLogPlan.workLogDate,
-    workLogFormattedEntry: workLogPlan.workLogFormattedEntry,
-    workLogInsertLine: workLogPlan.workLogInsertLine,
-    blockIdAppended: false,
-    hasChanges: true,
   };
 }
 
@@ -3592,6 +3532,27 @@ function appendHighlighted(el, text, query) {
 
 function taskStatusLabel(status) {
   return `[${status || " "}]`;
+}
+
+// Lane name for a checkbox status, for "stays <lane>" Notices.
+function laneStatusName(status) {
+  if (status === "*") {
+    return "Next";
+  }
+
+  if (status === "/") {
+    return "In Progress";
+  }
+
+  if (status === BLOCKED_OBSIDIAN_TASK_STATUS) {
+    return "Blocked";
+  }
+
+  if (status === " ") {
+    return "Ready";
+  }
+
+  return "Open";
 }
 
 function taskStatusClass(status) {
@@ -4206,13 +4167,10 @@ class WorkSummaryPromptModal extends Modal {
     const headerIcon = header.createDiv({ cls: "bid-wlp-header-icon" });
     applyIcon(headerIcon, "pause-circle");
     const headerText = header.createDiv({ cls: "bid-wlp-header-text" });
-    headerText.createDiv({ cls: "bid-wlp-title", text: "Pause task" });
+    headerText.createDiv({ cls: "bid-wlp-title", text: "Unlink task" });
     headerText.createDiv({
       cls: "bid-wlp-subtitle",
-      text:
-        this.source.kind === TASK_LINK_OPEN_SOURCE_KIND
-          ? "Sets the linked task Open and deletes the selected task link."
-          : "Sets the task Open and removes it from current/future Pomodoros.",
+      text: "Optional: why is this pending? Saved to the Work Log.",
     });
 
     const contextEl = contentEl.createDiv({
@@ -4275,7 +4233,7 @@ class WorkSummaryPromptModal extends Modal {
       .addButton((button) => {
         this.primaryButton = button;
         button
-          .setButtonText("Set Open")
+          .setButtonText("Unlink")
           .setCta()
           .onClick(() => this.submit());
       });
@@ -5085,19 +5043,29 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       task: { ...task },
     };
 
-    if (task.status === "*") {
-      this.promptOpen = true;
-      try {
-        await this.applyPomodoroTaskUnlink(source);
-      } finally {
-        this.promptOpen = false;
+    // Lane-preserving toggle: link presence decides, never the checkbox. A
+    // task without a block ID is never linked; a task linked only under a
+    // completed Pomodoro counts as unlinked and gets linked again.
+    if (task.existingId) {
+      const linked = await this.pomodoroTaskLinkPresence(source, task.existingId);
+      if (linked === "blocked") {
+        return;
       }
-      return;
-    }
 
-    if (task.status === "/") {
-      this.openWorkSummaryPrompt(source);
-      return;
+      if (linked) {
+        if (task.status === "/") {
+          this.openWorkSummaryPrompt(source);
+          return;
+        }
+
+        this.promptOpen = true;
+        try {
+          await this.applyPomodoroTaskUnlink(source);
+        } finally {
+          this.promptOpen = false;
+        }
+        return;
+      }
     }
 
     if (task.existingId) {
@@ -5110,16 +5078,44 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return;
     }
 
-    if (task.status !== " " && task.status !== BLOCKED_OBSIDIAN_TASK_STATUS) {
-      new Notice(NO_OPEN_TASK_NOTICE);
-      return;
-    }
-
+    // A task without a block ID is never linked: prompt for one, then link.
+    // Ready and Blocked become Next; Next and In Progress stay unchanged.
     this.openBlockIdPrompt({
       ...source,
       previewText: task.displayText,
       prefillId: false,
     });
+  }
+
+  // Whether the task's block ID currently has a live link under any open
+  // Pomodoro of today's daily note: the same set
+  // planAllOpenPomodoroLinkCleanup would remove. Returns true/false, or
+  // "blocked" (with a Notice) when today's note cannot be read and null when
+  // there is no daily note (the link path reports that itself).
+  async pomodoroTaskLinkPresence(source, blockId) {
+    const taskFile = this.resolveTaskFile(source.sourcePath);
+    const dailyFile = this.resolveTodayDailyFile();
+    if (!dailyFile) {
+      return false;
+    }
+
+    const dailyContent =
+      taskFile && dailyFile.path === taskFile.path
+        ? source.editor.getValue()
+        : await this.readFileSnapshot(dailyFile, source);
+    if (dailyContent === null) {
+      new Notice(`Task toggle blocked: ${dailyFile.path} could not be read`);
+      return "blocked";
+    }
+
+    const cleanup = planAllOpenPomodoroLinkCleanup(dailyContent, {
+      sourcePath: dailyFile.path,
+      targetPath: taskFile ? taskFile.path : source.sourcePath,
+      targetBlockId: blockId,
+      resolveTarget: (reference, referrerPath) =>
+        this.resolveReferenceDestination(reference, referrerPath),
+    });
+    return cleanup.removedCount > 0;
   }
 
   // The cursor/task-eligibility half of openPomodoroTaskLink, split out so it
@@ -5367,6 +5363,10 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     // Cancellation intentionally leaves the selected task and daily note untouched.
   }
 
+  // Work Log prompt submit for an In Progress unlink: a blank summary
+  // unlinks without a log, a nonblank one is prepended to the task's Work
+  // Log, and the lane never changes. Escape cancels via
+  // cancelWorkSummaryPrompt, leaving everything untouched.
   async submitPomodoroWorkSummary(source, rawSummary, options = {}) {
     const normalizedSummary = normalizeWorkSummary(rawSummary);
     const workLogDate = normalizedSummary
@@ -5380,7 +5380,6 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     return this.applyPomodoroTaskUnlink(source, {
-      expectedStatus: "/",
       workSummary: normalizedSummary,
       workLogDate,
     });
@@ -5498,21 +5497,18 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     return true;
   }
 
+  // Lane-preserving unlink: remove the task's links under today's open
+  // Pomodoros and never write the checkbox. A nonblank work summary is
+  // prepended to the task's Work Log; a blank one writes nothing.
   async applyPomodoroTaskUnlink(source, options = {}) {
-    const expectedStatus = Object.prototype.hasOwnProperty.call(options, "expectedStatus")
-      ? options.expectedStatus
-      : "*";
     const normalizedSummary = normalizeWorkSummary(options.workSummary || "");
-    const isPause = expectedStatus === "/";
-    const noticeNoun = isPause ? "pause" : "toggle";
-    const noticePrefix = `Task ${noticeNoun}`;
     const currentLine = source.editor.getLine(source.line) || "";
     if (currentLine !== source.task.rawLine) {
-      new Notice(`Task ${noticeNoun} blocked: selected task changed in ${source.sourcePath}`);
+      new Notice(`Unlink blocked: selected task changed in ${source.sourcePath}`);
       return false;
     }
 
-    if (isPause && source.task.existingId) {
+    if (source.task.existingId) {
       const duplicateMatches = blockTokenMatches(
         source.editor.getValue(),
         source.task.existingId,
@@ -5525,21 +5521,25 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 
     const taskFile = source.file || this.resolveTaskFile(source.sourcePath);
     if (!taskFile) {
-      new Notice(`Task ${noticeNoun} blocked: active note could not be resolved`);
+      new Notice("Unlink blocked: active note could not be resolved");
       return false;
     }
 
     const taskContent = source.editor.getValue();
     const originalCursor =
       typeof source.editor.getCursor === "function" ? source.editor.getCursor() : null;
-    const taskPlan = planTargetTaskOpenUpdate(taskContent, source.line, {
-      expectedStatus,
-      workSummary: normalizedSummary,
-      workLogDate: options.workLogDate || null,
-    });
-    if (!taskPlan) {
-      new Notice(`Task ${noticeNoun} stopped: selected task changed in ${source.sourcePath}`);
-      return false;
+    const taskMatch = getObsidianTaskLineMatch(currentLine);
+    const status = taskMatch ? taskMatch[1] : source.task.status;
+
+    let workLogPlan = null;
+    if (normalizedSummary) {
+      workLogPlan = planWorkLogInsertion(taskContent, source.line, normalizedSummary, {
+        date: options.workLogDate || localTodayParts(this.now()),
+      });
+      if (!workLogPlan) {
+        new Notice(`Unlink stopped: selected task changed in ${source.sourcePath}`);
+        return false;
+      }
     }
 
     let cleanupPlan = {
@@ -5559,7 +5559,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
           ? taskContent
           : await this.readFileSnapshot(dailyFile, source);
         if (dailyContent === null) {
-          new Notice(`Task ${noticeNoun} blocked: ${dailyFile.path} could not be read`);
+          new Notice(`Unlink blocked: ${dailyFile.path} could not be read`);
           return false;
         }
 
@@ -5572,12 +5572,13 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
         });
 
         if (sameNote) {
-          const allEdits = [...taskPlan.edits, ...cleanupPlan.edits];
+          const taskEdits = workLogPlan ? workLogPlan.edits : [];
+          const allEdits = [...taskEdits, ...cleanupPlan.edits];
           if (
             !validateNonOverlappingEdits(allEdits) ||
             source.editor.getValue() !== taskContent
           ) {
-            new Notice(`Task ${noticeNoun} stopped: ${source.sourcePath} changed before update`);
+            new Notice(`Unlink stopped: ${source.sourcePath} changed before update`);
             return false;
           }
 
@@ -5592,7 +5593,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
           }
 
           setEditorCursorIfPossible(source.editor, originalCursor);
-          this.reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan);
+          this.reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan || {}, status);
           return true;
         }
       }
@@ -5605,41 +5606,45 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
           source,
           cleanupPlan,
           dailyContent,
-          { noticePrefix: `${noticePrefix} stopped` },
+          { noticePrefix: "Unlink stopped" },
         ))
       ) {
         return false;
       }
     }
 
-    const statusApplied = await this.applyTargetTaskPlan(
-      taskFile,
-      source,
-      taskPlan,
-      taskContent,
-      {
-        noticePrefix: `${noticePrefix} stopped`,
-        quiet: cleanupPlan.removedCount > 0,
-      },
-    );
-    if (!statusApplied) {
-      if (cleanupPlan.removedCount > 0) {
-        this.reportPomodoroUnlinkPartialFailure(cleanupPlan, taskPlan);
+    if (workLogPlan && workLogPlan.hasChanges) {
+      const workLogApplied = await this.applyTargetTaskPlan(
+        taskFile,
+        source,
+        workLogPlan,
+        taskContent,
+        {
+          noticePrefix: "Unlink stopped",
+          quiet: cleanupPlan.removedCount > 0,
+        },
+      );
+      if (!workLogApplied) {
+        if (cleanupPlan.removedCount > 0) {
+          this.reportPomodoroUnlinkPartialFailure(cleanupPlan, status, normalizedSummary);
+        }
+        return false;
       }
-      return false;
     }
 
     setEditorCursorIfPossible(source.editor, originalCursor);
-    this.reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan);
+    this.reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan || {}, status);
     return true;
   }
 
-  // Delete the selected Task Link and set its target task Open. Everything is
-  // re-validated first (link line, dependency shape, target line and status);
-  // then edits are planned per file — the target's status edit, today's daily
-  // note cleanup of the task's other current/future Pomodoro links, and the
+  // Delete the selected Task Link and today's open-Pomodoro duplicates,
+  // never writing the checkbox. Everything is re-validated first (link line,
+  // dependency shape, target line and status); then edits are planned per
+  // file — the target's Work Log insertion for an In Progress target, today's
+  // daily-note cleanup of the task's other open Pomodoro links, and the
   // selected-link deletion — and written target note first, so a partial
-  // failure leaves an Open task with its link still in place and retryable.
+  // failure leaves the lane unchanged with its link still in place and
+  // retryable.
   async applyTaskLinkOpen(source, options = {}) {
     const editor = source.editor;
     const link = source.link;
@@ -5700,17 +5705,17 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       return false;
     }
 
-    const resetsStatus = target.status === "*" || target.status === "/";
-    const statusPlan = resetsStatus
-      ? planTargetTaskOpenUpdate(target.content, target.line, {
-          expectedStatus: target.status,
-          workSummary: target.status === "/" ? normalizedSummary : "",
-          workLogDate: options.workLogDate || null,
-        })
-      : null;
-    if (resetsStatus && !statusPlan) {
-      new Notice(`Task link stopped: linked task changed in ${target.path}`);
-      return false;
+    // The lane never changes here: only an In Progress target plans a Work
+    // Log insertion, from the prompt's submitted summary (blank for none).
+    let workLogPlan = null;
+    if (target.status === "/" && normalizedSummary) {
+      workLogPlan = planWorkLogInsertion(target.content, target.line, normalizedSummary, {
+        date: options.workLogDate || localTodayParts(this.now()),
+      });
+      if (!workLogPlan) {
+        new Notice(`Task link stopped: linked task changed in ${target.path}`);
+        return false;
+      }
     }
 
     const deletion = planTaskLinkDeletion(activeContent, source.line, link);
@@ -5732,7 +5737,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
 
     // Per file: link-deletion edits (a subtree deletion may absorb the token
     // deletions inside it, and the selected edit wins ties by going first) and
-    // status edits (which are never absorbed, only checked for overlap).
+    // Work Log edits (which are never absorbed, only checked for overlap).
     const groups = new Map();
     const groupFor = (path) => {
       if (!groups.has(path)) {
@@ -5740,7 +5745,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
           file: files.get(path),
           content: snapshots.get(path),
           linkEdits: [],
-          statusEdits: [],
+          taskEdits: [],
         });
       }
 
@@ -5750,28 +5755,33 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     if (dailyFile) {
       groupFor(dailyFile.path).linkEdits.push(...cleanup.edits);
     }
-    if (statusPlan) {
-      groupFor(target.path).statusEdits.push(...statusPlan.edits);
+    if (workLogPlan) {
+      groupFor(target.path).taskEdits.push(...workLogPlan.edits);
     }
 
     for (const group of groups.values()) {
-      group.edits = [...mergeCoveringEdits(group.linkEdits), ...group.statusEdits];
+      group.edits = [...mergeCoveringEdits(group.linkEdits), ...group.taskEdits];
       if (!validateNonOverlappingEdits(group.edits)) {
         new Notice(`Task link stopped: overlapping edits in ${group.file.path}`);
         return false;
       }
     }
 
-    // Cleanup links that the selected deletion already removes are not "extra".
-    const extraCleanupCount = cleanup.references.filter(
-      (reference) =>
-        !(
-          dailyFile &&
-          dailyFile.path === source.sourcePath &&
-          reference.start >= deletion.edit.start &&
-          reference.end <= deletion.edit.end
-        ),
-    ).length;
+    // The target note may have no planned write (the lane never changes),
+    // so re-read it explicitly: never delete links for a task that changed
+    // since it was resolved.
+    if (target.path !== source.sourcePath) {
+      const freshTargetContent = await this.readFileSnapshot(target.file, source);
+      if (freshTargetContent === null) {
+        new Notice(`Task link blocked: ${target.path} could not be read`);
+        return false;
+      }
+
+      if (freshTargetContent !== snapshots.get(target.path)) {
+        new Notice(`Task link stopped: linked task changed in ${target.path}`);
+        return false;
+      }
+    }
 
     const originalCursor =
       typeof editor.getCursor === "function" ? editor.getCursor() : null;
@@ -5798,7 +5808,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       );
       if (!applied) {
         if (wroteAny) {
-          this.reportTaskLinkPartialFailure(statusPlan, path);
+          this.reportTaskLinkPartialFailure(path);
         }
         return false;
       }
@@ -5821,7 +5831,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       }
     }
 
-    this.reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount, dailyPostContent);
+    this.reportTaskLinkOpenOutcome(target, workLogPlan, dailyPostContent);
     return true;
   }
 
@@ -5839,21 +5849,16 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     });
   }
 
-  reportTaskLinkOpenOutcome(target, statusPlan, extraCleanupCount, dailyContent = null) {
-    const base = statusPlan
-      ? "Task set Open"
-      : target.status === BLOCKED_OBSIDIAN_TASK_STATUS
-        ? "Task remains Blocked"
-        : "Task already Open";
-    const logged = statusPlan && statusPlan.workLogEntryAdded ? " · logged work" : "";
+  reportTaskLinkOpenOutcome(target, workLogPlan, dailyContent = null) {
+    const logged = workLogPlan && workLogPlan.workLogEntryAdded ? " · Work Log updated" : "";
     new Notice(
-      `${base} · removed task link${logged}${this.currentFutureLinkCleanupNoticeSuffix(extraCleanupCount)}${this.planBudgetNoticeSuffix(dailyContent)}`,
+      `Task Link removed · stays ${laneStatusName(target.status)}${logged}${this.planBudgetNoticeSuffix(dailyContent)}`,
     );
   }
 
-  reportTaskLinkPartialFailure(statusPlan, failedPath) {
+  reportTaskLinkPartialFailure(failedPath) {
     new Notice(
-      `${statusPlan ? "Task set Open" : "Task link removal incomplete"}, but ${failedPath} could not be updated; press Ctrl+Shift+Enter on the link again`,
+      `Task link removal incomplete, but ${failedPath} could not be updated; press Ctrl+Shift+Enter on the link again`,
     );
   }
 
@@ -5870,38 +5875,40 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
   }
 
-  reportPomodoroLinkOutcome(plan, pomodoroPlan, isNewId) {
-    const base = pomodoroPlan.alreadyLinked
-      ? "Task already linked to Pomodoro"
-      : isNewId
-        ? "Added block ID and linked task to Pomodoro"
-        : "Linked task to Pomodoro";
+  reportPomodoroLinkOutcome(plan, pomodoroPlan) {
+    const base = plan.statusChanged
+      ? "Linked · Next"
+      : `Linked · stays ${laneStatusName(plan.newStatus)}`;
+    const chips = [];
+    if (plan.removedFutureSchedule) {
+      chips.push("removed future schedule");
+    }
+    if (plan.logEntryAdded) {
+      chips.push("logged schedule change");
+    }
+    const suffix = chips.length ? ` · ${chips.join(" · ")}` : "";
 
     new Notice(
-      `${base}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}`,
+      `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}`,
     );
   }
 
-  reportPomodoroUnlinkOutcome(cleanupPlan, taskPlan = {}) {
-    const logged = taskPlan.workLogEntryAdded ? " · logged work" : "";
+  reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {
+    const logged = workLogPlan.workLogEntryAdded ? " · Work Log updated" : "";
     new Notice(
-      `Task set Open${logged}${this.currentFutureLinkCleanupNoticeSuffix(cleanupPlan.removedCount, { includeNoop: true })}${this.planBudgetNoticeSuffix(cleanupPlan && cleanupPlan.content)}`,
+      `Unlinked · stays ${laneStatusName(status)}${logged}${this.planBudgetNoticeSuffix(cleanupPlan && cleanupPlan.content)}`,
     );
   }
 
-  reportPomodoroUnlinkPartialFailure(cleanupPlan, taskPlan = {}) {
+  reportPomodoroUnlinkPartialFailure(cleanupPlan, status, workLogSummary) {
     const removedCount = cleanupPlan.removedCount;
-    const statusName = taskPlan.oldStatus === "/" ? "In Progress" : "Next";
-    const summarySuffix =
-      taskPlan.oldStatus === "/" && taskPlan.workLogSummary
-        ? " and work summary was not logged"
-        : "";
+    const summarySuffix = workLogSummary ? " and work summary was not logged" : "";
     new Notice(
-      `Removed ${removedCount} current/future Pomodoro ${pluralize(
+      `Removed ${removedCount} open Pomodoro ${pluralize(
         removedCount,
         "link",
         "links",
-      )}, but task remains ${statusName}${summarySuffix}`,
+      )}, but task stays ${laneStatusName(status)}${summarySuffix}`,
     );
   }
 
@@ -6697,7 +6704,6 @@ module.exports.helpers = {
   planAllOpenPomodoroLinkCleanup,
   planFuturePomodoroLinkCleanup,
   planPomodoroLinkInsertion,
-  planTargetTaskOpenUpdate,
   planTargetTaskUpdate,
   planTaskLinkDeletion,
   planWorkLogInsertion,

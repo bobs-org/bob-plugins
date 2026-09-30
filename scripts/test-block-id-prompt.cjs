@@ -1831,15 +1831,24 @@ test("a source marker edited after a successful new-ID target write reports an a
 // Ctrl+Shift+Enter direct Pomodoro link.
 // ---------------------------------------------------------------------------
 
-test("planTargetTaskUpdate forceNext promotes every open status to Next, unlike plain activationEligible", () => {
+test("planTargetTaskUpdate forceNext raises Ready/Blocked to Next and never lowers Next or In Progress", () => {
   const now = localDate(2026, 8, 15);
-  for (const status of [" ", "/", "*", "?"]) {
+  for (const status of [" ", "?"]) {
     const plan = helpers.planTargetTaskUpdate(`- [${status}] #task Do it`, 0, {
       forceNext: true,
       now,
     });
     assert.equal(plan.newStatus, "*");
-    assert.equal(plan.statusChanged, status !== "*");
+    assert.equal(plan.statusChanged, true);
+  }
+  for (const status of ["*", "/"]) {
+    const plan = helpers.planTargetTaskUpdate(`- [${status}] #task Do it`, 0, {
+      forceNext: true,
+      now,
+    });
+    assert.equal(plan.newStatus, status);
+    assert.equal(plan.statusChanged, false);
+    assert.equal(plan.hasChanges, false);
   }
 });
 
@@ -2195,7 +2204,7 @@ test("work summary normalization trims, collapses whitespace, preserves Markdown
     formattedEntry: "",
     isBlank: true,
     hasDataviewWarning: false,
-    primaryButtonText: "Set Open",
+    primaryButtonText: "Unlink",
   });
   assert.deepEqual(helpers.workSummaryPromptState("progress:: shipped", { date: WORK_LOG_DATE }), {
     summary: "progress:: shipped",
@@ -2203,7 +2212,7 @@ test("work summary normalization trims, collapses whitespace, preserves Markdown
     formattedEntry: "*2026-08-15* — progress:: shipped",
     isBlank: false,
     hasDataviewWarning: true,
-    primaryButtonText: "Set Open & log",
+    primaryButtonText: "Unlink & log",
   });
 });
 
@@ -2383,53 +2392,30 @@ test("planWorkLogInsertion treats blank summaries as no-op structural edits", ()
   assert.equal(plan.content, content);
 });
 
-test("planTargetTaskOpenUpdate changes only an original Next checkbox to Open", () => {
-  const content = [
-    "- [*] #task Ship it [scheduled:: 2026-08-20] [priority:: high] ^ship",
-    "  - 🗓️ **SCHEDULE LOG**",
-    "  \t- _2026-08-10 → 2026-08-15_ — already logged",
-    "",
-  ].join("\r\n");
-  const plan = helpers.planTargetTaskOpenUpdate(content, 0);
-  const result = applyPlannedEdits(content, plan.edits);
+test("the Open-reset planner is removed: unlink plans only a Work Log insertion", () => {
+  assert.equal(helpers.planTargetTaskOpenUpdate, undefined);
 
-  assert.equal(plan.oldStatus, "*");
-  assert.equal(plan.newStatus, " ");
-  assert.equal(plan.statusChanged, true);
-  assert.equal(plan.removedFutureSchedule, false);
-  assert.equal(plan.logEntryAdded, false);
-  assert.equal(plan.workLogEntryAdded, false);
-  assert.equal(plan.blockIdAppended, false);
-  assert.equal(plan.edits.length, 1);
-  assert.equal(result, content.replace("- [*]", "- [ ]"));
-  assert.equal(plan.content, result);
-  assert.doesNotMatch(result, /(^|[^\r])\n/);
-  assert.equal(helpers.planTargetTaskOpenUpdate("- [ ] #task Ship it ^ship", 0), null);
+  const blank = helpers.planWorkLogInsertion("- [*] #task Ship it ^ship", 0, " \n\t ");
+  assert.equal(blank.workLogEntryAdded, false);
+  assert.deepEqual(blank.edits, []);
+  assert.equal(blank.content, "- [*] #task Ship it ^ship");
 });
 
-test("planTargetTaskOpenUpdate can pause only an In Progress task and append one Work Log entry", () => {
+test("unlink Work Log plan keeps the In Progress checkbox and appends one entry", () => {
   const content = ["- [/] #task Ship it ^ship", "  - Keep detail"].join("\n");
-  const plan = helpers.planTargetTaskOpenUpdate(content, 0, {
-    expectedStatus: "/",
-    workSummary: "  Added\ncoverage  ",
-    workLogDate: WORK_LOG_DATE,
+  const plan = helpers.planWorkLogInsertion(content, 0, "  Added\ncoverage  ", {
+    date: WORK_LOG_DATE,
   });
 
-  assert.equal(plan.oldStatus, "/");
-  assert.equal(plan.newStatus, " ");
   assert.equal(plan.workLogEntryAdded, true);
   assert.equal(
     plan.content,
     [
-      "- [ ] #task Ship it ^ship",
+      "- [/] #task Ship it ^ship",
       "  - Keep detail",
       "  - 🛠️ **WORK LOG**",
       "    - *2026-08-15* — Added coverage",
     ].join("\n"),
-  );
-  assert.equal(
-    helpers.planTargetTaskOpenUpdate("- [*] #task Ship it", 0, { expectedStatus: "/" }),
-    null,
   );
 });
 
@@ -2521,36 +2507,154 @@ test("resolvePomodoroLinkTaskFromEditor rejects a block ID duplicated elsewhere 
   });
 });
 
-test("In Progress Ctrl+Shift+Enter opens the work-summary prompt without early daily-note I/O", async () => {
+function createTaskModeHarness({ taskContent, dailyContent, taskPath = "Tasks.md", dailyPath = "Daily.md" }) {
   resetNotices();
-  const editor = createEditor("- [/] #task Ship it ^ship");
+  const editor = createEditor(taskContent);
   editor.setCursor({ line: 0, ch: 4 });
-  const file = createTFile("Tasks.md");
+  const file = createTFile(taskPath);
   const view = createMarkdownView(file);
+  const writes = [];
   const plugin = new Plugin();
-  let openedSource = null;
-  let dailyResolved = false;
   plugin.app = {
-    workspace: {
-      getActiveViewOfType: () => view,
-      getActiveFile: () => file,
+    workspace: { getActiveViewOfType: () => view, getActiveFile: () => file },
+    vault: {
+      read: async (target) => (target.path === dailyPath ? dailyContent : null),
+      modify: async (target, content) => {
+        writes.push({ path: target.path, content });
+      },
+    },
+    metadataCache: {
+      fileToLinktext: (entry) => entry.path.replace(/\.md$/, ""),
     },
   };
-  plugin.openWorkSummaryPrompt = (source) => {
+  plugin.resolveTaskFile = (path) => (path === taskPath ? { path: taskPath } : null);
+  plugin.resolveTodayDailyFile = () => (dailyPath ? { path: dailyPath } : null);
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
+  plugin.suppressEditorScans = () => {};
+  plugin.now = () => localDate(2026, 8, 15);
+  return { plugin, editor, file, view, writes };
+}
+
+const LINKED_DAILY = [
+  "## Pomodoros",
+  "- [ ] Current (10:00-10:25)",
+  "  - [[Tasks#^ship]]",
+].join("\n");
+
+const UNLINKED_DAILY = ["## Pomodoros", "- [ ] Current (10:00-10:25)"].join("\n");
+
+test("task-mode toggle decides on link presence: linked In Progress prompts, unlinked links and stays In Progress", async () => {
+  const linked = createTaskModeHarness({
+    taskContent: "- [/] #task Ship it ^ship",
+    dailyContent: LINKED_DAILY,
+  });
+  let openedSource = null;
+  linked.plugin.openWorkSummaryPrompt = (source) => {
     openedSource = source;
   };
-  plugin.resolveTodayDailyFile = () => {
-    dailyResolved = true;
-    return null;
-  };
 
-  await plugin.openPomodoroTaskLink(editor, view);
+  await linked.plugin.openPomodoroTaskLink(linked.editor, linked.view);
 
   assert.ok(openedSource);
   assert.equal(openedSource.task.status, "/");
   assert.equal(openedSource.task.existingId, "ship");
-  assert.equal(dailyResolved, false);
-  assert.equal(editor.getValue(), "- [/] #task Ship it ^ship");
+  assert.equal(linked.editor.getValue(), "- [/] #task Ship it ^ship");
+  assert.deepEqual(linked.writes, []);
+  assert.equal(noticeMessages.length, 0);
+
+  const unlinked = createTaskModeHarness({
+    taskContent: "- [/] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  let prompted = false;
+  unlinked.plugin.openWorkSummaryPrompt = () => {
+    prompted = true;
+  };
+
+  await unlinked.plugin.openPomodoroTaskLink(unlinked.editor, unlinked.view);
+
+  assert.equal(prompted, false);
+  assert.equal(unlinked.editor.getValue(), "- [/] #task Ship it ^ship");
+  assert.equal(unlinked.writes.length, 1);
+  assert.ok(unlinked.writes[0].content.includes("[[Tasks#^ship]]"));
+  assert.equal(lastNotice(), "Linked · stays In Progress");
+});
+
+test("task-mode toggle: linked Next unlinks and stays Next; unlinked Next links and stays Next", async () => {
+  const linked = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: LINKED_DAILY,
+  });
+  let prompted = false;
+  linked.plugin.openWorkSummaryPrompt = () => {
+    prompted = true;
+  };
+
+  await linked.plugin.openPomodoroTaskLink(linked.editor, linked.view);
+
+  assert.equal(prompted, false);
+  assert.equal(linked.editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.deepEqual(linked.writes, [{ path: "Daily.md", content: `${UNLINKED_DAILY}\n` }]);
+  assert.equal(lastNotice(), "Unlinked · stays Next");
+
+  const unlinked = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+
+  await unlinked.plugin.openPomodoroTaskLink(unlinked.editor, unlinked.view);
+
+  assert.equal(unlinked.editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(unlinked.writes.length, 1);
+  assert.ok(unlinked.writes[0].content.includes("[[Tasks#^ship]]"));
+  assert.equal(lastNotice(), "Linked · stays Next");
+});
+
+test("task-mode toggle: linked only under a completed Pomodoro links again", async () => {
+  const historyOnly = [
+    "## Pomodoros",
+    "- [ ] Current (10:00-10:25)",
+    "- [x] Done (09:00-09:25)",
+    "  - [[Tasks#^ship]]",
+  ].join("\n");
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: historyOnly,
+  });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(h.writes.length, 1);
+  assert.ok(h.writes[0].content.includes("- [ ] Current (10:00-10:25)\n  - [[Tasks#^ship]]"));
+  assert.ok(h.writes[0].content.includes("- [x] Done (09:00-09:25)\n  - [[Tasks#^ship]]"));
+  assert.equal(lastNotice(), "Linked · stays Next");
+});
+
+test("task-mode toggle: a task without a block ID is never linked and prompts for one", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it",
+    dailyContent: LINKED_DAILY,
+  });
+  let promptedWith = null;
+  h.plugin.openBlockIdPrompt = (source) => {
+    promptedWith = source;
+  };
+  let dailyRead = false;
+  const originalRead = h.plugin.app.vault.read;
+  h.plugin.app.vault.read = async (target) => {
+    dailyRead = true;
+    return originalRead(target);
+  };
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.ok(promptedWith);
+  assert.equal(promptedWith.task.status, "*");
+  assert.equal(dailyRead, false);
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it");
+  assert.deepEqual(h.writes, []);
   assert.equal(noticeMessages.length, 0);
 });
 
@@ -2588,7 +2692,7 @@ test("existing-ID Pomodoro link runtime: cross-note guarded write, canonical lin
     written.content,
     ["## Pomodoros", "- [ ] Current (10:00-10:25)", "\t- [[Tasks#^ship]]"].join("\n"),
   );
-  assert.equal(lastNotice(), "Linked task to Pomodoro · removed future schedule · set Next");
+  assert.equal(lastNotice(), "Linked · Next · removed future schedule");
 });
 
 test("new-ID Pomodoro link runtime: cross-note guarded write, appended ID stays final, forced Next for a Ready task", async () => {
@@ -2624,7 +2728,7 @@ test("new-ID Pomodoro link runtime: cross-note guarded write, appended ID stays 
     written.content,
     ["## Pomodoros", "- [ ] Later ()", "\t- [[Tasks#^ship]]"].join("\n"),
   );
-  assert.equal(lastNotice(), "Added block ID and linked task to Pomodoro · set Next");
+  assert.equal(lastNotice(), "Linked · Next");
 });
 
 test("submitPomodoroTaskLinkBlockId rejects a newly duplicated ID discovered at submit time", async () => {
@@ -2691,11 +2795,11 @@ test("same-note Pomodoro link runtime: task and ledger edits merge into one tran
   );
   assert.equal(
     lastNotice(),
-    "Linked task to Pomodoro · removed future schedule · set Next · logged schedule change",
+    "Linked · Next · removed future schedule · logged schedule change",
   );
 });
 
-test("non-Next Pomodoro link command does not duplicate an existing current link", async () => {
+test("linking an already-linked Ready task raises it to Next without duplicating the link", async () => {
   resetNotices();
   const editor = createEditor("- [ ] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -2727,10 +2831,10 @@ test("non-Next Pomodoro link command does not duplicate an existing current link
   assert.equal(result, true);
   assert.equal(modifyCalled, false);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
-  assert.equal(lastNotice(), "Task already linked to Pomodoro · set Next");
+  assert.equal(lastNotice(), "Linked · Next");
 });
 
-test("Next task without a block ID toggles Open without prompting or resolving today's note", async () => {
+test("Next task without a block ID prompts for one instead of toggling", async () => {
   resetNotices();
   const editor = createEditor("- [*] #task Ship it [scheduled:: 2026-08-20]");
   editor.setCursor({ line: 0, ch: 4 });
@@ -2756,15 +2860,15 @@ test("Next task without a block ID toggles Open without prompting or resolving t
 
   await plugin.openPomodoroTaskLink(editor, view);
 
-  assert.equal(prompted, false);
+  assert.equal(prompted, true);
   assert.equal(dailyResolved, false);
-  assert.equal(plugin.promptOpen, false);
-  assert.equal(editor.getValue(), "- [ ] #task Ship it [scheduled:: 2026-08-20]");
+  assert.notEqual(plugin.promptOpen, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it [scheduled:: 2026-08-20]");
   assert.deepEqual(editor.cursor, { line: 0, ch: 4 });
-  assert.equal(lastNotice(), "Task set Open · no current/future Pomodoro links removed");
+  assert.equal(noticeMessages.length, 0);
 });
 
-test("Next task with a block ID still becomes Open when today's daily note is missing", async () => {
+test("direct unlink without a daily note keeps the Next lane and reports it", async () => {
   resetNotices();
   const editor = createEditor("- [*] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -2776,11 +2880,11 @@ test("Next task with a block ID still becomes Open when today's daily note is mi
   const result = await plugin.applyPomodoroTaskUnlink(source);
 
   assert.equal(result, true);
-  assert.equal(editor.getValue(), "- [ ] #task Ship it ^ship");
-  assert.equal(lastNotice(), "Task set Open · no current/future Pomodoro links removed");
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(lastNotice(), "Unlinked · stays Next");
 });
 
-test("In Progress pause with blank summary sets Open without a Work Log or daily-note lookup when no block ID exists", async () => {
+test("In Progress unlink with blank summary keeps the lane without a Work Log or daily-note lookup when no block ID exists", async () => {
   resetNotices();
   const editor = createEditor("- [/] #task Ship it");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -2797,11 +2901,11 @@ test("In Progress pause with blank summary sets Open without a Work Log or daily
 
   assert.equal(result, true);
   assert.equal(dailyResolved, false);
-  assert.equal(editor.getValue(), "- [ ] #task Ship it");
-  assert.equal(lastNotice(), "Task set Open · no current/future Pomodoro links removed");
+  assert.equal(editor.getValue(), "- [/] #task Ship it");
+  assert.equal(lastNotice(), "Unlinked · stays In Progress");
 });
 
-test("In Progress pause with a summary sets Open and creates a Work Log", async () => {
+test("In Progress unlink with a summary keeps the lane and creates a Work Log", async () => {
   resetNotices();
   const editor = createEditor(["- [/] #task Ship it", "  - Keep detail"].join("\n"));
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -2816,16 +2920,16 @@ test("In Progress pause with a summary sets Open and creates a Work Log", async 
   assert.equal(
     editor.getValue(),
     [
-      "- [ ] #task Ship it",
+      "- [/] #task Ship it",
       "  - Keep detail",
       "  - 🛠️ **WORK LOG**",
       "    - *2026-08-15* — Added coverage",
     ].join("\n"),
   );
-  assert.equal(lastNotice(), "Task set Open · logged work · no current/future Pomodoro links removed");
+  assert.equal(lastNotice(), "Unlinked · stays In Progress · Work Log updated");
 });
 
-test("In Progress pause revalidates task text and block-ID uniqueness at confirmation", async () => {
+test("In Progress unlink revalidates task text and block-ID uniqueness at confirmation", async () => {
   resetNotices();
   const changedEditor = createEditor("- [/] #task Ship it ^ship");
   const changedSource = sourceForPomodoroLink(changedEditor, "Tasks.md", 0);
@@ -2843,7 +2947,7 @@ test("In Progress pause revalidates task text and block-ID uniqueness at confirm
 
   assert.equal(await changedPlugin.submitPomodoroWorkSummary(changedSource, "Worked"), false);
   assert.equal(dailyResolved, false);
-  assert.equal(lastNotice(), "Task pause blocked: selected task changed in Tasks.md");
+  assert.equal(lastNotice(), "Unlink blocked: selected task changed in Tasks.md");
 
   resetNotices();
   const duplicateEditor = createEditor("- [/] #task Ship it ^ship");
@@ -2858,7 +2962,7 @@ test("In Progress pause revalidates task text and block-ID uniqueness at confirm
   assert.equal(lastNotice(), "Block ID 'ship' is duplicated in this note");
 });
 
-test("Next task unlink removes current and future links before changing cross-note task status", async () => {
+test("Next task unlink removes current and future links and keeps the Next lane", async () => {
   resetNotices();
   const editor = createEditor("- [*] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -2892,7 +2996,7 @@ test("Next task unlink removes current and future links before changing cross-no
   const result = await plugin.applyPomodoroTaskUnlink(source);
 
   assert.equal(result, true);
-  assert.equal(editor.getValue(), "- [ ] #task Ship it ^ship");
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
   assert.deepEqual(written, {
     path: "Daily.md",
     content: [
@@ -2904,10 +3008,10 @@ test("Next task unlink removes current and future links before changing cross-no
       "  - [[Tasks#^ship]]",
     ].join("\n"),
   });
-  assert.equal(lastNotice(), "Task set Open · removed 2 current/future Pomodoro links");
+  assert.equal(lastNotice(), "Unlinked · stays Next");
 });
 
-test("In Progress pause removes cross-note Pomodoro links before setting Open and logging work", async () => {
+test("In Progress unlink removes cross-note Pomodoro links and logs work without changing the lane", async () => {
   resetNotices();
   const editor = createEditor("- [/] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -2951,15 +3055,15 @@ test("In Progress pause removes cross-note Pomodoro links before setting Open an
   assert.equal(
     editor.getValue(),
     [
-      "- [ ] #task Ship it ^ship",
+      "- [/] #task Ship it ^ship",
       "\t- 🛠️ **WORK LOG**",
       "\t\t- *2026-08-15* — Finished cleanup",
     ].join("\n"),
   );
-  assert.equal(lastNotice(), "Task set Open · logged work · removed 1 current/future Pomodoro link");
+  assert.equal(lastNotice(), "Unlinked · stays In Progress · Work Log updated");
 });
 
-test("same-note Next unlink merges status and all-open cleanup in the active editor", async () => {
+test("same-note Next unlink merges the Work Log and all-open cleanup in the active editor", async () => {
   resetNotices();
   const editor = createEditor(
     [
@@ -2990,7 +3094,7 @@ test("same-note Next unlink merges status and all-open cleanup in the active edi
   assert.equal(
     editor.getValue(),
     [
-      "- [ ] #task Ship it ^ship",
+      "- [*] #task Ship it ^ship",
       "## Pomodoros",
       "- [ ] Current (10:00-10:25)",
       "- [ ] Later ()",
@@ -3000,10 +3104,10 @@ test("same-note Next unlink merges status and all-open cleanup in the active edi
     ].join("\n"),
   );
   assert.deepEqual(editor.cursor, { line: 0, ch: 9 });
-  assert.equal(lastNotice(), "Task set Open · removed 2 current/future Pomodoro links");
+  assert.equal(lastNotice(), "Unlinked · stays Next");
 });
 
-test("same-note In Progress pause merges cleanup, status, and Work Log in the active editor", async () => {
+test("same-note In Progress unlink merges cleanup and Work Log in the active editor", async () => {
   resetNotices();
   const editor = createEditor(
     [
@@ -3033,7 +3137,7 @@ test("same-note In Progress pause merges cleanup, status, and Work Log in the ac
   assert.equal(
     editor.getValue(),
     [
-      "- [ ] #task Ship it ^ship",
+      "- [/] #task Ship it ^ship",
       "\t- 🛠️ **WORK LOG**",
       "\t\t- *2026-08-15* — Paused after tests",
       "## Pomodoros",
@@ -3043,10 +3147,10 @@ test("same-note In Progress pause merges cleanup, status, and Work Log in the ac
     ].join("\n"),
   );
   assert.deepEqual(editor.cursor, { line: 0, ch: 9 });
-  assert.equal(lastNotice(), "Task set Open · logged work · removed 1 current/future Pomodoro link");
+  assert.equal(lastNotice(), "Unlinked · stays In Progress · Work Log updated");
 });
 
-test("Next unlink stops before status when daily cleanup write is stale", async () => {
+test("Next unlink stops before any write when daily cleanup write is stale", async () => {
   resetNotices();
   const editor = createEditor("- [*] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -3076,10 +3180,10 @@ test("Next unlink stops before status when daily cleanup write is stale", async 
   assert.equal(result, false);
   assert.equal(modifyCalled, false);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
-  assert.equal(lastNotice(), "Task toggle stopped: Daily.md changed before update");
+  assert.equal(lastNotice(), "Unlink stopped: Daily.md changed before update");
 });
 
-test("Next unlink reports retryable partial failure when cleanup succeeds but task status is stale", async () => {
+test("Next unlink reports retryable partial failure when cleanup succeeds but the Work Log write is stale", async () => {
   resetNotices();
   const editor = createEditor("- [*] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -3104,7 +3208,10 @@ test("Next unlink reports retryable partial failure when cleanup succeeds but ta
   plugin.resolveReferenceDestination = () => ({ path: "Tasks.md" });
   plugin.suppressEditorScans = () => {};
 
-  const result = await plugin.applyPomodoroTaskUnlink(source);
+  const result = await plugin.applyPomodoroTaskUnlink(source, {
+    workSummary: "Logged locally",
+    workLogDate: WORK_LOG_DATE,
+  });
 
   assert.equal(result, false);
   assert.deepEqual(written, {
@@ -3112,10 +3219,10 @@ test("Next unlink reports retryable partial failure when cleanup succeeds but ta
     content: ["## Pomodoros", "- [ ] Current ()", ""].join("\n"),
   });
   assert.equal(editor.getValue(), "- [*] #task Ship it NOW ^ship");
-  assert.equal(lastNotice(), "Removed 1 current/future Pomodoro link, but task remains Next");
+  assert.equal(lastNotice(), "Removed 1 open Pomodoro link, but task stays Next and work summary was not logged");
 });
 
-test("In Progress pause reports retryable partial failure when cleanup succeeds but status/logging is stale", async () => {
+test("In Progress unlink reports retryable partial failure when cleanup succeeds but logging is stale", async () => {
   resetNotices();
   const editor = createEditor("- [/] #task Ship it ^ship");
   const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
@@ -3150,7 +3257,7 @@ test("In Progress pause reports retryable partial failure when cleanup succeeds 
   assert.equal(editor.getValue(), "- [/] #task Ship it NOW ^ship");
   assert.equal(
     lastNotice(),
-    "Removed 1 current/future Pomodoro link, but task remains In Progress and work summary was not logged",
+    "Removed 1 open Pomodoro link, but task stays In Progress and work summary was not logged",
   );
 });
 
@@ -3305,7 +3412,7 @@ test("canceling the Pomodoro block-ID modal leaves the note untouched", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ctrl+Shift+Enter on a selected Task Link: delete the link, set the task Open.
+// Ctrl+Shift+Enter on a selected Task Link: delete the link, keep the lane.
 // ---------------------------------------------------------------------------
 
 function selectTaskLink(lineText, cursorCh = 0) {
@@ -3581,19 +3688,17 @@ const DAILY_WITH_LINKS = [
   "  - [[Tasks#^ship]]",
 ].join("\n");
 
-test("Task Link on a Next target: sets it Open, deletes the link subtree, cleans other open Pomodoro links", async () => {
+test("Task Link on a Next target: keeps Next, deletes the link subtree, cleans other open Pomodoro links", async () => {
   const h = createTaskLinkHarness({
     files: { "Daily.md": DAILY_WITH_LINKS, "Tasks.md": NEXT_TASK },
     activePath: "Daily.md",
     cursor: { line: 2, ch: 6 },
   });
-  h.state.modifyHook = () => {
-    assert.equal(h.editor.getValue(), DAILY_WITH_LINKS, "target note is written before the active note");
-  };
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(h.writes, [{ path: "Tasks.md", content: "- [ ] #task Ship it ^ship" }]);
+  assert.deepEqual(h.writes, []);
+  assert.equal(h.store["Tasks.md"], NEXT_TASK);
   assert.equal(
     h.editor.getValue(),
     [
@@ -3607,9 +3712,7 @@ test("Task Link on a Next target: sets it Open, deletes the link subtree, cleans
   );
   assert.deepEqual(h.editor.cursor, { line: 2, ch: 6 });
   assert.equal(h.plugin.promptOpen, false);
-  assert.deepEqual(noticeMessages, [
-    "Task set Open · removed task link · removed 1 current/future Pomodoro link",
-  ]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
 });
 
 test("Task Link on a Next target works from an embedded aliased link outside any Pomodoro", async () => {
@@ -3626,13 +3729,11 @@ test("Task Link on a Next target works from an embedded aliased link outside any
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.equal(h.editor.getValue(), "# Notes\n- see now");
+  assert.equal(h.store["Tasks.md"], NEXT_TASK);
   assert.deepEqual(h.writes, [
-    { path: "Tasks.md", content: "- [ ] #task Ship it ^ship" },
     { path: "Daily.md", content: "## Pomodoros\n- [ ] Current ()\n  - Working on  soon" },
   ]);
-  assert.deepEqual(noticeMessages, [
-    "Task set Open · removed task link · removed 1 current/future Pomodoro link",
-  ]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
 });
 
 test("same-note Task Link: one merged editor write, overlapping edits deduped, cursor restored", async () => {
@@ -3659,7 +3760,7 @@ test("same-note Task Link: one merged editor write, overlapping edits deduped, c
   assert.equal(
     h.editor.getValue(),
     [
-      "- [ ] #task Ship it ^ship",
+      "- [*] #task Ship it ^ship",
       "## Pomodoros",
       "- [ ] Current (10:00-10:25)",
       "- [ ] Later ()",
@@ -3669,13 +3770,11 @@ test("same-note Task Link: one merged editor write, overlapping edits deduped, c
     ].join("\n"),
   );
   assert.deepEqual(h.writes, []);
-  assert.equal(h.replaceCalls.length, 3, "status, deduped subtree, and one token edit");
+  assert.equal(h.replaceCalls.length, 2, "deduped subtree and one token edit, no status write");
   const starts = h.replaceCalls.map((call) => call.from.line * 1000 + call.from.ch);
   assert.deepEqual(starts, [...starts].sort((left, right) => right - left));
   assert.deepEqual(h.editor.cursor, { line: 3, ch: 6 });
-  assert.deepEqual(noticeMessages, [
-    "Task set Open · removed task link · removed 1 current/future Pomodoro link",
-  ]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
 });
 
 test("same-note Task Link deletion clamps the restored cursor to the shortened note", async () => {
@@ -3697,7 +3796,7 @@ test("same-note Task Link deletion clamps the restored cursor to the shortened n
 
   assert.equal(
     h.editor.getValue(),
-    ["- [ ] #task Ship it ^ship", "## Pomodoros", "- [ ] Current ()", ""].join("\n"),
+    ["- [*] #task Ship it ^ship", "## Pomodoros", "- [ ] Current ()", ""].join("\n"),
   );
   assert.deepEqual(h.editor.cursor, { line: 3, ch: 0 });
 });
@@ -3725,13 +3824,11 @@ test("a cleanup subtree that covers a nested selected link wins and links are no
     h.editor.getValue(),
     ["- [ ] #task Ship it ^ship", "## Pomodoros", "- [ ] Current ()", "- [ ] Later ()", ""].join("\n"),
   );
-  // Three links matched; the selected one is not counted as "extra".
-  assert.deepEqual(noticeMessages, [
-    "Task already Open · removed task link · removed 2 current/future Pomodoro links",
-  ]);
+  // Three links matched; the lane never changes.
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Ready"]);
 });
 
-test("Task Link on an In Progress target prompts, then sets Open with a Work Log entry on submit", async () => {
+test("Task Link on an In Progress target prompts, then keeps the lane with a Work Log entry on submit", async () => {
   const daily = ["## Pomodoros", "- [ ] Current ()", "  - [[Tasks#^ship]]", "  - keep"].join("\n");
   const h = createTaskLinkHarness({
     files: { "Daily.md": daily, "Tasks.md": "- [/] #task Ship it ^ship" },
@@ -3762,14 +3859,14 @@ test("Task Link on an In Progress target prompts, then sets Open with a Work Log
     {
       path: "Tasks.md",
       content: [
-        "- [ ] #task Ship it ^ship",
+        "- [/] #task Ship it ^ship",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-08-15* — Finished cleanup",
       ].join("\n"),
     },
   ]);
   assert.equal(h.editor.getValue(), ["## Pomodoros", "- [ ] Current ()", "  - keep"].join("\n"));
-  assert.deepEqual(noticeMessages, ["Task set Open · removed task link · logged work"]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays In Progress · Work Log updated"]);
 });
 
 test("Task Link on an In Progress target with a blank summary logs nothing", async () => {
@@ -3787,9 +3884,10 @@ test("Task Link on an In Progress target with a blank summary logs nothing", asy
 
   assert.equal(await h.plugin.submitPomodoroWorkSummary(prompted, " \n\t "), true);
 
-  assert.deepEqual(h.writes, [{ path: "Tasks.md", content: "- [ ] #task Ship it ^ship" }]);
+  assert.deepEqual(h.writes, []);
+  assert.equal(h.store["Tasks.md"], "- [/] #task Ship it ^ship");
   assert.equal(h.editor.getValue(), "## Pomodoros\n- [ ] Current ()\n");
-  assert.deepEqual(noticeMessages, ["Task set Open · removed task link"]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays In Progress"]);
 });
 
 test("canceling the In Progress Task Link prompt leaves everything untouched", async () => {
@@ -3808,6 +3906,25 @@ test("canceling the In Progress Task Link prompt leaves everything untouched", a
   h.plugin.cancelWorkSummaryPrompt(prompted);
 
   assert.equal(h.editor.getValue(), daily);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(noticeMessages, []);
+});
+
+test("canceling the In Progress unlink prompt in task mode leaves everything untouched", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [/] #task Ship it ^ship",
+    dailyContent: LINKED_DAILY,
+  });
+  let prompted = null;
+  h.plugin.openWorkSummaryPrompt = (source) => {
+    prompted = source;
+  };
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.ok(prompted);
+
+  h.plugin.cancelWorkSummaryPrompt(prompted);
+
+  assert.equal(h.editor.getValue(), "- [/] #task Ship it ^ship");
   assert.deepEqual(h.writes, []);
   assert.deepEqual(noticeMessages, []);
 });
@@ -3848,7 +3965,7 @@ test("In Progress Task Link submit revalidates the link line and the target task
   assert.equal(statusChanged.h.editor.getValue(), daily);
 });
 
-test("Task Link on an Open target keeps it Open, and on a Blocked target keeps it Blocked", async () => {
+test("Task Link on an Open target keeps it Ready, and on a Blocked target keeps it Blocked", async () => {
   const active = "# Notes\n- see [[Tasks#^ship]] now";
   const daily = "## Pomodoros\n- [ ] Current ()\n  - [[Tasks#^ship]]\n- [ ] Later ()";
 
@@ -3863,9 +3980,7 @@ test("Task Link on an Open target keeps it Open, and on a Blocked target keeps i
     { path: "Daily.md", content: "## Pomodoros\n- [ ] Current ()\n- [ ] Later ()" },
   ]);
   assert.equal(open.store["Tasks.md"], "- [ ] #task Ship it ^ship");
-  assert.deepEqual(noticeMessages, [
-    "Task already Open · removed task link · removed 1 current/future Pomodoro link",
-  ]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Ready"]);
 
   const blocked = createTaskLinkHarness({
     files: {
@@ -3880,7 +3995,7 @@ test("Task Link on an Open target keeps it Open, and on a Blocked target keeps i
   assert.equal(blocked.editor.getValue(), "# Notes\n- see now");
   assert.deepEqual(blocked.writes, []);
   assert.equal(blocked.store["Tasks.md"], "- [?] #task Ship it [dependsOn:: x] ^ship");
-  assert.deepEqual(noticeMessages, ["Task remains Blocked · removed task link"]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Blocked"]);
 });
 
 test("Task Link on a Done or Cancelled target is refused without edits", async () => {
@@ -3935,7 +4050,7 @@ test("Task Link with an unresolvable, missing, duplicated, or non-task target is
 test("precedence: any #task line keeps the task-line behavior; other lines fall to task-link mode or the notice", async () => {
   const openTask = "- [ ] #task Ship [[Tasks#^other]] ^ship";
   const open = createTaskLinkHarness({
-    files: { "Notes.md": openTask },
+    files: { "Notes.md": openTask, "Daily.md": "## Pomodoros\n- [ ] Current ()" },
     activePath: "Notes.md",
     cursor: { line: 0, ch: 20 },
   });
@@ -4033,44 +4148,35 @@ test("Task Link that is a sub-task dependency transclusion is refused without ed
   assert.equal(h.plugin.promptOpen, false);
 });
 
-test("Task Link partial failure after the status write is retryable", async () => {
+test("Task Link partial failure after the daily write is retryable", async () => {
   const h = createTaskLinkHarness({
-    files: { "Daily.md": DAILY_WITH_LINKS, "Tasks.md": NEXT_TASK },
-    activePath: "Daily.md",
-    cursor: { line: 2, ch: 6 },
+    files: {
+      "Notes.md": "# Notes\n- see [[Tasks#^ship]] now",
+      "Daily.md": DAILY_WITH_LINKS,
+      "Tasks.md": NEXT_TASK,
+    },
+    activePath: "Notes.md",
+    cursor: { line: 1, ch: 3 },
   });
   h.state.modifyHook = () => {
-    h.editor.replaceRange("\nextra line", { line: 8, ch: 20 });
+    h.editor.replaceRange("\nextra line", { line: 1, ch: 999 });
   };
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.deepEqual(noticeMessages, [
-    "Task set Open, but Daily.md could not be updated; press Ctrl+Shift+Enter on the link again",
+    "Task link removal incomplete, but Notes.md could not be updated; press Ctrl+Shift+Enter on the link again",
   ]);
-  assert.equal(h.store["Tasks.md"], "- [ ] #task Ship it ^ship");
-  assert.equal(h.editor.getValue(), `${DAILY_WITH_LINKS}\nextra line`);
+  assert.equal(h.store["Tasks.md"], NEXT_TASK);
+  assert.equal(h.editor.getValue(), "# Notes\n- see [[Tasks#^ship]] now\nextra line");
 
   h.state.modifyHook = null;
-  h.editor.setCursor({ line: 2, ch: 6 });
+  h.editor.setCursor({ line: 1, ch: 3 });
   resetNotices();
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, [
-    "Task already Open · removed task link · removed 1 current/future Pomodoro link",
-  ]);
-  assert.equal(
-    h.editor.getValue(),
-    [
-      "## Pomodoros",
-      "- [ ] Current (10:00-10:25)",
-      "  - keep",
-      "- [ ] Later ()",
-      "- [x] Done (09:00-09:25)",
-      "  - [[Tasks#^ship]]",
-      "extra line",
-    ].join("\n"),
-  );
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
+  assert.equal(h.editor.getValue(), "# Notes\n- see now\nextra line");
 });
 
 test("Task Link stops before any write when the target note changes after planning", async () => {
@@ -4087,7 +4193,7 @@ test("Task Link stops before any write when the target note changes after planni
 
   assert.deepEqual(h.writes, []);
   assert.equal(h.editor.getValue(), DAILY_WITH_LINKS);
-  assert.deepEqual(noticeMessages, ["Task link stopped: Tasks.md changed before update"]);
+  assert.deepEqual(noticeMessages, ["Task link stopped: linked task changed in Tasks.md"]);
   assert.equal(h.plugin.promptOpen, false);
 });
 
@@ -4101,8 +4207,9 @@ test("Task Link with a missing daily note skips cleanup, and an unreadable daily
   });
   await missing.plugin.openPomodoroTaskLink(missing.editor, missing.view);
   assert.equal(missing.editor.getValue(), "# Notes\n- see now");
-  assert.deepEqual(missing.writes, [{ path: "Tasks.md", content: "- [ ] #task Ship it ^ship" }]);
-  assert.deepEqual(noticeMessages, ["Task set Open · removed task link"]);
+  assert.equal(missing.store["Tasks.md"], NEXT_TASK);
+  assert.deepEqual(missing.writes, []);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
 
   const unreadable = createTaskLinkHarness({
     files: { "Notes.md": active, "Tasks.md": NEXT_TASK },
@@ -4115,7 +4222,7 @@ test("Task Link with a missing daily note skips cleanup, and an unreadable daily
   assert.deepEqual(noticeMessages, ["Task link blocked: Daily.md could not be read"]);
 });
 
-test("Task Link deletion never absorbs the target task's own status edit", async () => {
+test("Task Link subtree deletion removes a nested target task without any status write", async () => {
   const content = ["- [[#^ship]]", "  - [*] #task Ship it ^ship"].join("\n");
   const h = createTaskLinkHarness({
     files: { "Daily.md": content },
@@ -4126,8 +4233,8 @@ test("Task Link deletion never absorbs the target task's own status edit", async
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Task link stopped: overlapping edits in Daily.md"]);
-  assert.equal(h.editor.getValue(), content);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
+  assert.equal(h.editor.getValue(), "");
   assert.deepEqual(h.writes, []);
 });
 
@@ -4174,7 +4281,7 @@ test("plan budget suffix: link Notice appends the meter computed on post-write d
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Linked task to Pomodoro · set Next · plan 1/3 · 2/10"]);
+  assert.deepEqual(noticeMessages, ["Linked · Next · plan 1/3 · 2/10"]);
   assert.equal(seen.length, 1);
   assert.ok(
     seen[0].includes("[[Tasks#^ship]]"),
@@ -4195,13 +4302,13 @@ test("plan budget suffix: link Notice omits the meter when the ledger-tools API 
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Linked task to Pomodoro · set Next"]);
+  assert.deepEqual(noticeMessages, ["Linked · Next"]);
 });
 
 test("plan budget suffix: unlink Notice marks an over-cap plan with 🔴", async () => {
   const h = createTaskLinkHarness({
     files: {
-      "Daily.md": "## Pomodoros\n- [ ] Current ()",
+      "Daily.md": "## Pomodoros\n- [ ] Current ()\n  - [[Tasks#^ship]]",
       "Tasks.md": NEXT_TASK,
     },
     activePath: "Tasks.md",
@@ -4213,21 +4320,26 @@ test("plan budget suffix: unlink Notice marks an over-cap plan with 🔴", async
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.deepEqual(noticeMessages, [
-    "Task set Open · no current/future Pomodoro links removed · plan 4/3 · 11/10 🔴",
+    "Unlinked · stays Next · plan 4/3 · 11/10 🔴",
   ]);
 });
 
-test("plan budget suffix: unlink without a daily note omits the meter", async () => {
+test("plan budget suffix: Next task without a block ID prompts for one and omits the meter", async () => {
   const h = createTaskLinkHarness({
     files: { "Tasks.md": "- [*] #task Ship it" },
     activePath: "Tasks.md",
     cursor: { line: 0, ch: 4 },
   });
   const seen = stubPlanBudgetApi(h.plugin, PLAN_BUDGET_OK);
+  let prompted = false;
+  h.plugin.openBlockIdPrompt = () => {
+    prompted = true;
+  };
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Task set Open · no current/future Pomodoro links removed"]);
+  assert.equal(prompted, true);
+  assert.deepEqual(noticeMessages, []);
   assert.deepEqual(seen, []);
 });
 
@@ -4242,7 +4354,7 @@ test("plan budget suffix: Task Link Notice appends the meter from post-write dai
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.deepEqual(noticeMessages, [
-    "Task set Open · removed task link · removed 1 current/future Pomodoro link · plan 1/3 · 2/10",
+    "Task Link removed · stays Next · plan 1/3 · 2/10",
   ]);
   assert.equal(seen.length, 1);
   assert.ok(seen[0].includes("## Pomodoros"), "budget runs on daily content");
@@ -4261,6 +4373,6 @@ test("plan budget suffix: Task Link Notice omits the meter when no daily note ta
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Task set Open · removed task link"]);
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
   assert.deepEqual(seen, []);
 });

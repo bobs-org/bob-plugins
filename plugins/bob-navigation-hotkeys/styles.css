@@ -603,6 +603,105 @@
   background-color: color-mix(in srgb, var(--text-error) 10%, transparent);
 }
 
+/* Pinned Cancel row: last in the property list, separated by a hairline,
+   with danger styling on the icon and pill. A selected row gets a
+   red-tinted left border like the schedule-reason warning row. */
+.bob-cnp-cancel-row {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.bob-cnp-cancel-row .bob-cnp-row-icon,
+.bob-cnp-cancel-row .bob-cnp-pill {
+  color: var(--text-error);
+}
+
+.bob-cnp-cancel-row.is-muted .bob-cnp-row-icon,
+.bob-cnp-cancel-row.is-muted .bob-cnp-row-path,
+.bob-cnp-cancel-row.is-muted .bob-cnp-pill {
+  color: var(--text-muted);
+}
+
+.bob-cnp-cancel-row.is-selected {
+  border-left-color: var(--text-error);
+  background-color: color-mix(in srgb, var(--text-error) 10%, transparent);
+}
+
+.bob-cnp-cancel-row.is-muted.is-selected {
+  border-left-color: var(--text-muted);
+  background-color: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+/* Cancel reason-stage preview row: mirrors the schedule-reason states. */
+.bob-cnp-cancel-reason-row.is-valid .bob-cnp-row-icon {
+  color: var(--color-green);
+}
+
+.bob-cnp-cancel-reason-row.is-warning .bob-cnp-row-icon {
+  color: var(--text-error);
+}
+
+.bob-cnp-cancel-reason-row.is-empty .bob-cnp-row-icon,
+.bob-cnp-cancel-reason-row.is-empty .bob-cnp-row-title {
+  color: var(--text-muted);
+}
+
+.bob-cnp-cancel-reason-row.is-fallback .bob-cnp-row-icon,
+.bob-cnp-cancel-reason-row.is-fallback .bob-cnp-row-title {
+  color: var(--text-muted);
+}
+
+.bob-cnp-cancel-reason-row.is-fallback.is-selected {
+  border-left-color: var(--text-muted);
+  background-color: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+.bob-cnp-cancel-reason-row.is-fallback .bob-cnp-cancel-reason-preview {
+  border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
+}
+
+.bob-cnp-cancel-reason-row.is-valid.is-selected {
+  border-left-color: var(--color-green);
+  background-color: color-mix(in srgb, var(--color-green) 12%, transparent);
+}
+
+.bob-cnp-cancel-reason-row.is-warning.is-selected {
+  border-left-color: var(--text-error);
+  background-color: color-mix(in srgb, var(--text-error) 10%, transparent);
+}
+
+.bob-cnp-cancel-reason-preview {
+  margin-top: var(--size-2-1);
+  padding: var(--size-2-2) var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  background-color: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-cnp-cancel-reason-row.is-valid .bob-cnp-cancel-reason-preview {
+  border-color: color-mix(in srgb, var(--color-green) 35%, transparent);
+}
+
+.bob-cnp-cancel-reason-row.is-warning .bob-cnp-cancel-reason-preview {
+  border-color: color-mix(in srgb, var(--text-error) 35%, transparent);
+}
+
+.bob-cnp-cancel-reason-effects {
+  margin-top: var(--size-2-1);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .bob-cnp-schedule-reason-preview {
   margin-top: var(--size-2-1);
   padding: var(--size-2-2) var(--size-4-2);
@@ -1140,4 +1239,32 @@
 
 .bob-nh-notice .bob-nh-notice-chip.is-info {
   --bob-nh-tone: var(--text-accent);
+}
+
+/* Cancelled notice card: the level color is the error tone, and the reason
+   reads as a quote block with a left rule. Without a recorded reason the
+   block is muted. */
+.bob-nh-notice.is-cancel {
+  --bob-nh-level-color: var(--text-error);
+}
+
+.bob-nh-notice .bob-nh-notice-reason {
+  padding-inline-start: 8px;
+  border-inline-start: 2px solid
+    color-mix(in srgb, var(--bob-nh-level-color) 55%, transparent);
+  color: var(--text-normal);
+  font-style: italic;
+  font-size: var(--font-ui-small);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.bob-nh-notice .bob-nh-notice-reason.is-muted {
+  color: var(--text-muted);
+  font-style: normal;
+}
+
+.bob-nh-notice .bob-nh-notice-chip.is-muted {
+  --bob-nh-tone: var(--text-muted);
 }

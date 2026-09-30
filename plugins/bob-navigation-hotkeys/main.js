@@ -10873,6 +10873,40 @@ function getBulletPropertyBlockIdHints(options = {}) {
   ];
 }
 
+// Title for the pinned Cancel row: `Cancel task` for one target, otherwise
+// the open count. Link sessions say "linked task(s)".
+function getCancelTaskRowTitle(description) {
+  const open = Math.max(
+    1,
+    Math.floor(
+      numericOrDefault(
+        description && description.openCount,
+        (description && description.count) || 1,
+      ),
+    ),
+  );
+  if (description && description.kind === "link") {
+    return open <= 1 ? "Cancel linked task" : `Cancel ${open} linked tasks`;
+  }
+  return open <= 1 ? "Cancel task" : `Cancel ${open} tasks`;
+}
+
+// Footer hints for the cancel-reason prompt: Enter always confirms the stage
+// (writing `[-]` + `[cancelled::]`, plus a log entry when a reason was typed
+// or a fallback when the task already keeps a log), while Esc keeps the task
+// open — hence "Keep open" instead of "Cancel".
+function getCancelReasonHints(options = {}) {
+  const count = Math.max(1, Math.floor(numericOrDefault(options.count, 1)));
+  const plain = count === 1 ? "Cancel task" : "Cancel tasks";
+  const enter = options.empty
+    ? (options.fallback ? "Cancel & log 🤷" : plain)
+    : "Cancel & log reason";
+  return [
+    { keys: ["↵"], label: enter },
+    { keys: ["esc"], label: "Keep open" },
+  ];
+}
+
 // Footer hints for the schedule-log reason prompt: Enter always confirms the
 // stage (writing the date, plus a log entry when a reason was typed), while
 // Esc cancels the date write too.
@@ -17121,6 +17155,207 @@ function showPriorityNotice(model, options = {}) {
   }
 }
 
+// Read the ledger-tools plan budget for a cancel notice chip, or "" when the
+// API is missing or unusable. `dailyContent` is the post-prune daily note
+// text, the same input block-id-prompt's unlink notices use.
+function getCancelPlanBudgetChip(app, dailyContent) {
+  if (typeof dailyContent !== "string") {
+    return "";
+  }
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const api =
+      plugins &&
+      plugins["bob-ledger-tools"] &&
+      plugins["bob-ledger-tools"].api;
+    if (!api || typeof api.planBudget !== "function") {
+      return "";
+    }
+    const budget = api.planBudget({ content: dailyContent });
+    if (
+      !budget ||
+      typeof budget !== "object" ||
+      typeof budget.then === "function"
+    ) {
+      return "";
+    }
+    const themes = budget.themes;
+    const links = budget.links;
+    if (
+      !themes ||
+      !links ||
+      !Number.isInteger(themes.count) ||
+      !Number.isInteger(themes.cap) ||
+      !Number.isInteger(links.count) ||
+      !Number.isInteger(links.cap)
+    ) {
+      return "";
+    }
+    const over =
+      budget.status === "over" || themes.over === true || links.over === true;
+    return `plan ${themes.count}/${themes.cap} · ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
+  } catch (error) {
+    return "";
+  }
+}
+
+// Pure model for the Cancelled notice card: header (ban icon, `Cancelled`
+// level pill, count pill, `[cancelled:: date]` receipt), an italic
+// `❌ <reason>` quote (or the muted no-reason/fallback text), and one chip
+// per side effect. `model.text` is the aria-label and plain-text fallback.
+function buildCancelNoticeModel(options = {}) {
+  const count = Math.max(
+    1,
+    Math.floor(numericOrDefault(options.count, 1)),
+  );
+  const viaLinks = Boolean(options.viaLinks);
+  const dateText = normalizeBulletPropertyValue(options.date);
+  const reason = String(options.reason || "");
+  const fallbackUsed = Boolean(options.fallbackUsed);
+  const scopeText =
+    viaLinks && count === 1
+      ? "task via Task Link"
+      : viaLinks
+        ? `${formatCountLabel(count, "task")} via Task Links`
+        : count === 1
+          ? "task"
+          : formatCountLabel(count, "task");
+  const countPill =
+    viaLinks && count === 1
+      ? "via Task Link"
+      : !viaLinks && count === 1
+        ? ""
+        : viaLinks
+          ? `${formatCountLabel(count, "task")} via Task Links`
+          : formatCountLabel(count, "task");
+  const chips = [];
+  const removedPomodoroLinkCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(options.removedPomodoroLinkCount, 0)),
+  );
+  if (removedPomodoroLinkCount > 0) {
+    chips.push(
+      Object.freeze({
+        text: `removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`,
+        tone: "info",
+      }),
+    );
+  }
+  const reopened = Math.max(
+    0,
+    Math.floor(numericOrDefault(options.reopenedDependents, 0)),
+  );
+  if (options.recoveryRan === true && reopened > 0) {
+    chips.push(
+      Object.freeze({
+        text: `unblocked ${formatCountLabel(reopened, "dependent")}`,
+        tone: "ok",
+      }),
+    );
+  }
+  const nowChip = String(options.nowChip || "");
+  if (nowChip) {
+    chips.push(Object.freeze({ text: nowChip, tone: "muted" }));
+  }
+  const planChip = String(options.planChip || "");
+  if (planChip) {
+    chips.push(Object.freeze({ text: planChip, tone: "info" }));
+  }
+  const skippedClosedCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(options.skippedClosedCount, 0)),
+  );
+  if (skippedClosedCount > 0) {
+    chips.push(
+      Object.freeze({
+        text: `skipped ${formatCountLabel(skippedClosedCount, "closed")}`,
+        tone: "muted",
+      }),
+    );
+  }
+  if (options.pomodoroPruneFailed === true) {
+    chips.push(
+      Object.freeze({ text: "Pomodoro links not removed", tone: "warn" }),
+    );
+  }
+  const parts = [`Cancelled ${scopeText}`];
+  if (reason) {
+    parts.push(`\u201c${reason}\u201d`);
+  } else if (fallbackUsed) {
+    parts.push(`\u201c${SCHEDULE_LOG_SKIPPED_REASON_TEXT} · logged\u201d`);
+  }
+  for (const chip of chips) {
+    parts.push(chip.text);
+  }
+  const reasonBody = reason
+    ? `${CANCEL_LOG_EMOJI} ${reason}`
+    : fallbackUsed
+      ? `${SCHEDULE_LOG_SKIPPED_REASON_TEXT} · logged`
+      : "No reason recorded";
+  return Object.freeze({
+    iconName: "ban",
+    level: "Cancelled",
+    countPill,
+    receipt: `[cancelled:: ${dateText}]`,
+    reasonBody,
+    reasonMuted: !reason,
+    chips: Object.freeze(chips),
+    text: parts.join(" · "),
+  });
+}
+
+function renderCancelNoticeFragment(model, root) {
+  const card = root.createDiv({
+    cls: "bob-nh-notice is-cancel",
+    attr: { "aria-label": model.text },
+  });
+  const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
+  const iconEl = headerEl.createSpan({ cls: "bob-nh-notice-icon" });
+  applyIcon(iconEl, model.iconName || "ban");
+  headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.level });
+  if (model.countPill) {
+    headerEl.createSpan({ cls: "bob-nh-notice-count", text: model.countPill });
+  }
+  headerEl.createSpan({ cls: "bob-nh-notice-receipt", text: model.receipt });
+
+  const reasonEl = card.createDiv({
+    cls: `bob-nh-notice-reason${model.reasonMuted ? " is-muted" : ""}`,
+  });
+  reasonEl.createSpan({ cls: "bob-nh-notice-reason-text", text: model.reasonBody });
+
+  if (model.chips.length > 0) {
+    const chipsEl = card.createDiv({ cls: "bob-nh-notice-chips" });
+    model.chips.forEach((chip) => {
+      chipsEl.createSpan({
+        cls: `bob-nh-notice-chip is-${chip.tone}`,
+        text: chip.text,
+      });
+    });
+  }
+
+  return card;
+}
+
+function showCancelNotice(model, options = {}) {
+  const fallbackText =
+    model && typeof model.text === "string" ? model.text : String(model || "");
+  try {
+    if (typeof document === "undefined") {
+      showBulletPropertyNotice(fallbackText, options);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    if (!fragment || typeof fragment.createDiv !== "function") {
+      showBulletPropertyNotice(fallbackText, options);
+      return;
+    }
+    renderCancelNoticeFragment(model, fragment);
+    showBulletPropertyNotice(fragment, options);
+  } catch (error) {
+    showBulletPropertyNotice(fallbackText, options);
+  }
+}
+
 function parseBulletPropertyTypedDate(query, baseDate) {
   const text = String(query || "").trim();
   if (!text) {
@@ -17434,6 +17669,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
+    this.pendingCancel = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     this.showPropertyStage({ clearQuery: false });
   }
@@ -17533,6 +17769,33 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       });
       propertyItems = [nowToggleItem, ...propertyItems];
     }
+    const cancelDescription = this.isLinkSession()
+      ? describeCancelTaskRow("", {
+          linkResolved: this.linkSession.resolved,
+        })
+      : this.isCountedSession()
+        ? describeCancelTaskRow(this.getEditorContent(), {
+            taskSession: this.taskSession,
+          })
+        : describeCancelTaskRow(this.getEditorContent(), {
+            cursorLine: this.cursor ? this.cursor.line : NaN,
+          });
+    if (cancelDescription) {
+      const cancelTitle = getCancelTaskRowTitle(cancelDescription);
+      const cancelItem = Object.freeze({
+        kind: "cancel-task",
+        property: Object.freeze({ name: "cancel" }),
+        title: cancelTitle,
+        detail: cancelDescription.detail,
+        recurring: cancelDescription.recurring === true,
+        cancelKind: cancelDescription.kind,
+        openCount: cancelDescription.openCount,
+        closedCount: cancelDescription.closedCount,
+        fromStatus: cancelDescription.fromStatus,
+        searchText: `cancel cancelled canceled abandon drop obsolete wontfix won't do close ❌ ${cancelTitle} ${cancelDescription.detail || ""}`,
+      });
+      propertyItems = [...propertyItems, cancelItem];
+    }
     this.applyOptions({
       items: propertyItems,
       title: "Set bullet property",
@@ -17556,6 +17819,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             query,
           );
         }
+        if (item && item.kind === "cancel-task") {
+          return fuzzyMatchesText(item.searchText || "", query);
+        }
         return fuzzyMatchesText(
           `${item.property.name} ${item.currentLabel || ""} ${
             item.currentValue || ""
@@ -17572,12 +17838,26 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           this.renderNowToggleItem(item, rowEl, query);
           return;
         }
+        if (item && item.kind === "cancel-task") {
+          this.renderCancelTaskItem(item, rowEl, query);
+          return;
+        }
         this.renderPropertyItem(item, rowEl, query);
       },
       openItem: async (item) => {
         if (item && item.kind === "now-toggle") {
           const applied = await this.plugin.applyNowToggleFromPicker(this);
           return applied === true;
+        }
+        if (item && item.kind === "cancel-task") {
+          if (item.recurring) {
+            new Notice(
+              "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+            );
+            return false;
+          }
+          this.showCancelReasonStage(item);
+          return false;
         }
         this.showValueStage(item);
         return false;
@@ -17599,6 +17879,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   showValueStage(propertyItem) {
+    if (propertyItem && propertyItem.kind === "cancel-task") {
+      if (propertyItem.recurring) {
+        new Notice(
+          "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+        );
+        return;
+      }
+      this.showCancelReasonStage(propertyItem);
+      return;
+    }
     if (propertyItem && propertyItem.kind === "now-toggle") {
       void this.plugin
         .applyNowToggleFromPicker(this)
@@ -17918,6 +18208,235 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
   }
 
+  // Free-text prompt shown after the pinned Cancel row is chosen, mirroring
+  // the schedule-reason stage: nothing is written until this prompt is
+  // confirmed (Enter, empty or not) or the modal is dismissed (Esc, a clean
+  // cancel — see onClose's contract).
+  showCancelReasonStage(cancelItem) {
+    this.stage = "cancel-reason";
+    this.valueBaseDate =
+      this.fixedValueBaseDate || getLocalDateStart(new Date());
+    const openCount = Math.max(
+      1,
+      Math.floor(numericOrDefault(cancelItem && cancelItem.openCount, 1)),
+    );
+    this.pendingCancel = Object.freeze({
+      title:
+        (cancelItem && cancelItem.title) ||
+        getCancelTaskRowTitle({
+          kind: (cancelItem && cancelItem.cancelKind) || "task",
+          openCount,
+        }),
+      cancelKind: (cancelItem && cancelItem.cancelKind) || "task",
+      openCount,
+      fromStatus: (cancelItem && cancelItem.fromStatus) || null,
+      dateText: formatBulletPropertyDate(this.valueBaseDate),
+    });
+    this.clearLocalTaskMarks();
+    this.selectedIndex = 0;
+    this.applyOptions({
+      items: [],
+      title: this.pendingCancel.title,
+      headerIcon: "ban",
+      inputLabel: "Cancel reason",
+      placeholder: "Why cancel it? (optional · ↵ to skip)",
+      resultsLabel: "Cancel reason preview",
+      emptyText: "Type a reason",
+      footerHints: getCancelReasonHints({ empty: true, count: openCount }),
+      getSubtitle: () => this.getCancelReasonSubtitle(),
+      filterItem: () => true,
+      renderItem: (item, rowEl, query) =>
+        this.renderCancelReasonPreviewItem(item, rowEl, query),
+      openItem: (item) => this.confirmCancelReason(item),
+    });
+
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+  }
+
+  getCancelReasonSubtitle() {
+    const pending = this.pendingCancel;
+    if (!pending) {
+      return "";
+    }
+
+    let summary;
+    if (pending.cancelKind === "link" && this.linkSession) {
+      summary = `${getLinkPickerSessionSubtitle(this.linkSession)} → Cancelled`;
+    } else if (pending.openCount > 1) {
+      summary = `${formatCountLabel(pending.openCount, "task")} → Cancelled`;
+    } else {
+      summary = `${pending.fromStatus || "Task"} → Cancelled`;
+    }
+    const parts = [
+      summary,
+      `${getBulletPropertyDateWeekday(this.valueBaseDate)} ${pending.dateText}`,
+      "nothing written yet",
+    ];
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  // Cheap synchronous facts for the cancel preview's effects line: whether
+  // any target has a block ID (prune applies), whether any target already
+  // keeps a Cancel Log (empty reasons fall back), and whether any target
+  // carries #now (kept, and reported on the notice card).
+  getCancelReasonFacts() {
+    const facts = { anyLog: false, hasBlockId: false, anyNow: false };
+    if (this.isLinkSession()) {
+      const resolved = Array.isArray(this.linkSession.resolved)
+        ? this.linkSession.resolved
+        : [];
+      const contentByPath = new Map();
+      for (const group of groupLinkPickerTargetsByNote(resolved)) {
+        contentByPath.set(group.path, group.content);
+      }
+      for (const target of resolved) {
+        const rawLine = String((target && target.rawLine) || "");
+        if (target && target.blockId) {
+          facts.hasBlockId = true;
+        }
+        if (hasNowTag(rawLine)) {
+          facts.anyNow = true;
+        }
+        const content = contentByPath.get(target && target.path);
+        if (
+          content !== undefined &&
+          Number.isInteger(target && target.line) &&
+          findCancelLogParent(content, target.line)
+        ) {
+          facts.anyLog = true;
+        }
+      }
+      return facts;
+    }
+    const content = this.getEditorContent();
+    const lines =
+      this.isCountedSession() && this.taskSession
+        ? this.taskSession.targets.map((target) => target.line)
+        : [this.cursor ? this.cursor.line : NaN];
+    for (const line of lines) {
+      if (!Number.isInteger(line)) {
+        continue;
+      }
+      if (findCancelLogParent(content, line)) {
+        facts.anyLog = true;
+      }
+    }
+    const rawLines =
+      this.isCountedSession() && this.taskSession
+        ? this.taskSession.targets.map((target) =>
+            String((target && target.rawLine) || ""),
+          )
+        : [String(getEditorLine(this.editor, this.cursor.line) || "")];
+    for (const rawLine of rawLines) {
+      if (getTrailingBlockId(rawLine)) {
+        facts.hasBlockId = true;
+      }
+      if (hasNowTag(rawLine)) {
+        facts.anyNow = true;
+      }
+    }
+    return facts;
+  }
+
+  renderCancelReasonPreviewItem(item, rowEl, query) {
+    const pending = this.pendingCancel;
+    const dateText = pending ? pending.dateText : "";
+    const state = item.empty
+      ? (item.fallback ? "fallback" : "empty")
+      : item.hasInlineField
+        ? "warning"
+        : "valid";
+    addElementClasses(rowEl, "bob-cnp-cancel-reason-row", `is-${state}`);
+
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(
+      rowIcon,
+      item.empty
+        ? "minus-circle"
+        : item.hasInlineField
+          ? "alert-triangle"
+          : "check-circle-2",
+    );
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+
+    if (item.empty && !item.fallback) {
+      appendHighlighted(titleEl, "No reason", query);
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: `[-] + [cancelled:: ${dateText}] only; no Cancel Log`,
+      });
+    } else {
+      appendHighlighted(
+        titleEl,
+        formatCancelLogEntryText({
+          date: dateText,
+          reason: item.empty
+            ? SCHEDULE_LOG_SKIPPED_REASON_TEXT
+            : item.reason,
+        }),
+        query,
+      );
+
+      if (item.hasInlineField) {
+        textEl.createDiv({
+          cls: "bob-cnp-row-meta",
+          text: '"::" creates a Dataview inline field on this bullet',
+        });
+      }
+
+      textEl.createDiv({
+        cls: "bob-cnp-cancel-reason-preview",
+        text: item.counted
+          ? item.empty
+            ? `Logged on tasks that already keep a ${CANCEL_LOG_MARKER_TEXT}`
+            : `Adds or prepends a ${CANCEL_LOG_MARKER_TEXT} entry on each task`
+          : item.fallback
+            ? `Logged because this task already keeps a ${CANCEL_LOG_LABEL}`
+            : item.empty
+              ? `[-] + [cancelled:: ${dateText}] only; no Cancel Log`
+              : findCancelLogParent(
+                    this.getEditorContent(),
+                    this.cursor.line,
+                  ) ||
+                  (this.isLinkSession() && item.anyLog)
+                ? `Prepends to the existing ${CANCEL_LOG_MARKER_TEXT}`
+                : `Adds ${CANCEL_LOG_MARKER_TEXT} as the first child`,
+      });
+    }
+
+    const effects = [];
+    if (item.hasBlockId) {
+      effects.push("Removes its links from today's open Pomodoros");
+    }
+    effects.push("unblocks dependents");
+    if (item.anyNow) {
+      effects.push("keeps #now");
+    }
+    textEl.createDiv({
+      cls: "bob-cnp-cancel-reason-effects",
+      text: effects.join(" · "),
+    });
+  }
+
+  confirmCancelReason(item) {
+    const pending = this.pendingCancel;
+    if (!pending || !item) {
+      return false;
+    }
+
+    // The payload is supplied even for an empty input: a task that already
+    // keeps a log records the fallback entry, and planTaskCancelBatch is what
+    // decides that per task (per target, in counted and link sessions).
+    return this.plugin.applyTaskCancelFromPicker(this, {
+      reason: item.empty ? "" : item.reason,
+      fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
+    });
+  }
+
   getEditorContent() {
     if (this.editor && typeof this.editor.getValue === "function") {
       return String(this.editor.getValue() || "");
@@ -18028,6 +18547,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
+    this.pendingCancel = null;
   }
 
   // Dismissing the modal mid-prompt is a clean cancel: no writes happen until
@@ -18265,6 +18785,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getFilteredItems() {
+    if (this.stage === "cancel-reason") {
+      const normalized = normalizeScheduleReasonText(this.getRawQuery());
+      const facts = this.getCancelReasonFacts();
+      return [
+        Object.freeze({
+          kind: "cancel-reason-preview",
+          ...normalized,
+          ...facts,
+          counted: this.isCountedSession() || this.isLinkSession(),
+          fallback: normalized.empty && facts.anyLog,
+          searchText: normalized.reason,
+        }),
+      ];
+    }
+
     if (this.stage === "reason") {
       const normalized = normalizeScheduleReasonText(this.getRawQuery());
       const parentExists = Boolean(
@@ -18335,6 +18870,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       });
       this.renderFooter();
     }
+    if (this.stage === "cancel-reason") {
+      const item = (this.visibleItems || [])[0];
+      const pending = this.pendingCancel;
+      this.footerHints = getCancelReasonHints({
+        empty: Boolean(item && item.empty),
+        fallback: Boolean(item && item.fallback),
+        count: pending ? pending.openCount : 1,
+      });
+      this.renderFooter();
+    }
   }
 
   renderNowToggleItem(item, rowEl, query) {
@@ -18353,6 +18898,30 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     rowEl.createDiv({
       cls: "bob-cnp-pill bob-cnp-property-pill",
       text: item.added ? "add" : "remove",
+    });
+  }
+
+  renderCancelTaskItem(item, rowEl, query) {
+    addElementClasses(
+      rowEl,
+      "bob-cnp-property-row",
+      "bob-cnp-cancel-row",
+      item.recurring ? "is-muted" : "is-danger",
+    );
+
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(rowIcon, "ban");
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    appendHighlighted(titleEl, item.title || "Cancel task", query);
+
+    const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+    appendHighlighted(pathEl, item.detail || "", query);
+
+    rowEl.createDiv({
+      cls: `bob-cnp-pill bob-cnp-property-pill${item.recurring ? " is-muted" : ""}`,
+      text: "cancel",
     });
   }
 
@@ -20802,6 +21371,109 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     );
   }
 
+  // Shared preimage, write, rollback and prune core for link-picker commits.
+  // Every preimage is re-verified before the first write; any mismatch refuses
+  // the whole operation with `{ ok: false }`. Write order is targets, then
+  // the daily note; target writes roll back when one fails. A prune failure
+  // after durable target writes is reported via `pomodoroPruneFailed` and
+  // dropped — like writeDeferredPomodoroCleanup — never rolled back. Callers
+  // own the notices. `planned` entries carry `{ group, plan }` where `plan`
+  // has the postimage in `plan.content`.
+  async commitLinkPickerNoteWrites(
+    planned,
+    options = {},
+  ) {
+    const pomodoroSnapshot = options.pomodoroSnapshot || null;
+    const dailyCleanupPlan = options.dailyCleanupPlan || null;
+    const foldedDailyPath = options.foldedDailyPath || null;
+    const failed = (reason) =>
+      Object.freeze({ ok: false, reason, pomodoroPruneFailed: false });
+
+    // Re-verify every preimage before writing anything.
+    for (const { group } of planned) {
+      const live = await this.readLinkPickerNoteContent(
+        group.path,
+        group.file,
+      );
+      if (live !== group.content) {
+        return failed("preimage");
+      }
+    }
+    if (
+      pomodoroSnapshot &&
+      !foldedDailyPath &&
+      dailyCleanupPlan &&
+      dailyCleanupPlan.changed
+    ) {
+      const liveDaily = await this.readLinkPickerNoteContent(
+        pomodoroSnapshot.dailyPath,
+        pomodoroSnapshot.file,
+      );
+      if (liveDaily !== pomodoroSnapshot.content) {
+        return failed("preimage");
+      }
+    }
+
+    // Write order is targets, then the daily note.
+    const written = [];
+    try {
+      for (const { group, plan } of planned) {
+        let after = plan.content;
+        if (
+          foldedDailyPath &&
+          group.path === foldedDailyPath &&
+          dailyCleanupPlan &&
+          dailyCleanupPlan.changed
+        ) {
+          after = dailyCleanupPlan.content;
+        }
+        if (after !== group.content) {
+          await this.writeLinkPickerNoteChange(
+            group.path,
+            group.file,
+            group.content,
+            after,
+          );
+          written.push({
+            path: group.path,
+            file: group.file,
+            before: group.content,
+            after,
+          });
+        }
+      }
+    } catch (error) {
+      for (const entry of written.slice().reverse()) {
+        try {
+          await this.writeLinkPickerNoteChange(
+            entry.path,
+            entry.file,
+            entry.after,
+            entry.before,
+          );
+        } catch (rollbackError) {
+          // Best effort: the original error stays authoritative.
+        }
+      }
+      return failed("write");
+    }
+
+    let pomodoroPruneFailed = false;
+    if (
+      pomodoroSnapshot &&
+      !foldedDailyPath &&
+      dailyCleanupPlan &&
+      dailyCleanupPlan.changed
+    ) {
+      const applied = await this.writeDeferredPomodoroCleanup(
+        pomodoroSnapshot,
+        dailyCleanupPlan,
+      );
+      pomodoroPruneFailed = !applied;
+    }
+    return Object.freeze({ ok: true, reason: null, pomodoroPruneFailed });
+  }
+
   // Commit planned link-picker note writes plus the deferred-Pomodoro prune.
   // Every preimage is re-verified before the first write; any mismatch refuses
   // the whole operation. Write order is targets, then the daily note. A prune
@@ -20865,86 +21537,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     }
 
-    // Re-verify every preimage before writing anything.
-    for (const { group } of planned) {
-      const live = await this.readLinkPickerNoteContent(
-        group.path,
-        group.file,
-      );
-      if (live !== group.content) {
-        new Notice("A linked note changed; no tasks were updated");
-        return false;
-      }
-    }
-    if (
-      pomodoroSnapshot &&
-      !foldedDailyPath &&
-      dailyCleanupPlan &&
-      dailyCleanupPlan.changed
-    ) {
-      const liveDaily = await this.readLinkPickerNoteContent(
-        pomodoroSnapshot.dailyPath,
-        pomodoroSnapshot.file,
-      );
-      if (liveDaily !== pomodoroSnapshot.content) {
-        new Notice("A linked note changed; no tasks were updated");
-        return false;
-      }
-    }
-
-    // Write order is targets, then the daily note.
-    const written = [];
-    try {
-      for (const { group, plan } of planned) {
-        let after = plan.content;
-        if (
-          foldedDailyPath &&
-          group.path === foldedDailyPath &&
-          dailyCleanupPlan &&
-          dailyCleanupPlan.changed
-        ) {
-          after = dailyCleanupPlan.content;
-        }
-        if (after !== group.content) {
-          await this.writeLinkPickerNoteChange(
-            group.path,
-            group.file,
-            group.content,
-            after,
-          );
-          written.push({ path: group.path, file: group.file, before: group.content, after });
-        }
-      }
-    } catch (error) {
-      for (const entry of written.slice().reverse()) {
-        try {
-          await this.writeLinkPickerNoteChange(
-            entry.path,
-            entry.file,
-            entry.after,
-            entry.before,
-          );
-        } catch (rollbackError) {
-          // Best effort: the original error stays authoritative.
-        }
-      }
+    // Shared preimage, write, rollback and prune core below, so scheduled,
+    // priority and cancel commits share one implementation.
+    const commit = await this.commitLinkPickerNoteWrites(planned, {
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      foldedDailyPath,
+    });
+    if (!commit.ok) {
       new Notice("A linked note changed; no tasks were updated");
       return false;
     }
-
-    let pomodoroPruneFailed = false;
-    if (
-      pomodoroSnapshot &&
-      !foldedDailyPath &&
-      dailyCleanupPlan &&
-      dailyCleanupPlan.changed
-    ) {
-      const applied = await this.writeDeferredPomodoroCleanup(
-        pomodoroSnapshot,
-        dailyCleanupPlan,
-      );
-      pomodoroPruneFailed = !applied;
-    }
+    const pomodoroPruneFailed = commit.pomodoroPruneFailed;
 
     const totals = {
       changedTaskCount: 0,
@@ -21452,6 +22056,474 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         added: plan.added,
         changedTaskCount: plan.changedTaskCount,
         nowBudget,
+      }),
+    );
+    return true;
+  }
+
+  // Apply the picker's pinned Cancel row: write `[-]`, upsert
+  // `[cancelled:: date]`, and record the reason in a first-child
+  // `❌ **CANCEL LOG**`, then prune the cancelled tasks' links from today's
+  // open Pomodoros, recover Blocked dependents through Task Status Cycler's
+  // versioned API, and show one Cancelled notice card. Nothing is written
+  // until this runs; every refusal ends with `…; no tasks were updated`.
+  // `#now` is user-owned and therefore never added or stripped here.
+  async applyTaskCancelFromPicker(picker, options = {}) {
+    if (!picker) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    const reason = String(options.reason || "");
+    const fallbackReason = String(options.fallbackReason || "");
+    const baseDate =
+      picker.valueBaseDate instanceof Date
+        ? picker.valueBaseDate
+        : getLocalDateStart(new Date());
+    const dateText = formatBulletPropertyDate(baseDate);
+    let nowBudget = readNowBudgetValue(this.app);
+    if (nowBudget && typeof nowBudget.then === "function") {
+      try {
+        nowBudget = await nowBudget;
+      } catch (error) {
+        nowBudget = null;
+      }
+    }
+    const cancel = { reason, fallbackReason, baseDate, dateText, nowBudget };
+    if (
+      picker.linkSession &&
+      picker.linkSession.kind === "task-link" &&
+      Array.isArray(picker.linkSession.targets) &&
+      picker.linkSession.targets.length > 0
+    ) {
+      return await this.applyTaskCancelFromLinkPicker(picker, cancel);
+    }
+    return await this.applyTaskCancelFromEditor(picker, cancel);
+  }
+
+  // Single and counted cancel sessions write through the open editor in one
+  // `applyEditorContentTransaction` (one undo step, cursor clamped onto the
+  // post-image line). When today's daily note is the active note the prune
+  // folds into the same transaction; otherwise the daily note is pruned
+  // afterwards through the deferred snapshot, and a failed prune is reported
+  // but never rolled back.
+  async applyTaskCancelFromEditor(picker, cancel) {
+    const editor = picker.editor;
+    const cursor = picker.cursor;
+    const filePath = picker.filePath;
+    if (!editor || typeof editor.getValue !== "function" || !cursor) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    let session = null;
+    if (
+      picker.taskSession &&
+      picker.taskSession.explicit &&
+      Array.isArray(picker.taskSession.targets) &&
+      picker.taskSession.targets.length > 0
+    ) {
+      session = picker.taskSession;
+    } else {
+      const content = String(editor.getValue() || "");
+      const liveLine = getEditorLine(editor, cursor.line);
+      if (liveLine === null || liveLine !== picker.lineText) {
+        new Notice("Current task changed while the picker was open; no tasks were updated");
+        return false;
+      }
+      if (!isObsidianTaskAtLine(content, cursor.line)) {
+        new Notice("Task is no longer open; no tasks were updated");
+        return false;
+      }
+      const status = getObsidianTaskCheckboxStatus(liveLine);
+      if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+        new Notice("Task is no longer open; no tasks were updated");
+        return false;
+      }
+      if (isRecurringTaskLine(liveLine)) {
+        new Notice(
+          "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+        );
+        return false;
+      }
+      session = Object.freeze({
+        valid: true,
+        error: null,
+        explicit: false,
+        startLine: cursor.line,
+        requestedAdditionalCount: 0,
+        requestedCount: 1,
+        actualCount: 1,
+        clamped: false,
+        targets: Object.freeze([{ line: cursor.line, rawLine: liveLine }]),
+      });
+    }
+    const writeContext = this.getCountedTaskWriteContext(
+      editor,
+      filePath,
+      session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+    const plan = planTaskCancelBatch(writeContext.content, session, {
+      date: cancel.dateText,
+      reason: cancel.reason,
+      fallbackReason: cancel.fallbackReason,
+    });
+    if (!plan.valid) {
+      new Notice(
+        plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+      );
+      return false;
+    }
+
+    let finalContent = plan.content;
+    let finalCursorLine = plan.cursorLineShift(cursor.line);
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    const pruneTargets = [];
+    for (const entry of plan.cancelled) {
+      if (entry.blockId) {
+        pruneTargets.push(
+          Object.freeze({ path: filePath, blockId: entry.blockId }),
+        );
+      }
+    }
+    if (pruneTargets.length > 0) {
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: filePath,
+        sourceContent: writeContext.content,
+        today: cancel.baseDate,
+      });
+      const guarded = this.getCountedTaskWriteContext(editor, filePath, session);
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return false;
+      }
+      if (pomodoroSnapshot) {
+        if (pomodoroSnapshot.sameFile) {
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            finalContent,
+            pruneTargets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
+          );
+          if (dailyCleanupPlan.changed) {
+            const linesRemovedBeforeCursor =
+              dailyCleanupPlan.removedLineRanges.reduce(
+                (total, range) =>
+                  range.endLineExclusive <= finalCursorLine
+                    ? total + (range.endLineExclusive - range.startLine)
+                    : total,
+                0,
+              );
+            finalContent = dailyCleanupPlan.content;
+            finalCursorLine = finalCursorLine - linesRemovedBeforeCursor;
+          }
+        } else {
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            pomodoroSnapshot.content,
+            pruneTargets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
+          );
+        }
+      }
+    }
+
+    const finalLine =
+      splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
+    try {
+      if (
+        finalContent !== writeContext.content &&
+        !applyEditorContentTransaction(editor, writeContext.content, finalContent, {
+          line: finalCursorLine,
+          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+        })
+      ) {
+        throw new Error("Editor cannot apply a cancel transaction");
+      }
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+
+    let removedPomodoroLinkCount = 0;
+    let pomodoroPruneFailed = false;
+    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
+      if (pomodoroSnapshot.sameFile) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        const written = await this.writeDeferredPomodoroCleanup(
+          pomodoroSnapshot,
+          dailyCleanupPlan,
+        );
+        if (written) {
+          removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+        } else {
+          pomodoroPruneFailed = true;
+        }
+      }
+    }
+
+    const identities = plan.cancelled.map((entry) =>
+      Object.freeze({
+        path: filePath,
+        blockId: entry.blockId,
+        taskId: entry.taskId,
+      }),
+    );
+    const postPruneDailyContent =
+      dailyCleanupPlan && dailyCleanupPlan.changed
+        ? dailyCleanupPlan.content
+        : null;
+    return await this.finishTaskCancelNotice(picker, {
+      identities,
+      activePath: filePath,
+      editor,
+      count: Math.max(1, plan.cancelledCount),
+      viaLinks: false,
+      dateText: cancel.dateText,
+      reason: cancel.reason,
+      fallbackUsed: plan.fallbackLoggedCount > 0,
+      nowBudget: cancel.nowBudget,
+      nowTaggedCount: plan.nowTaggedCount,
+      skippedClosedCount: plan.skippedClosedCount,
+      removedPomodoroLinkCount,
+      pomodoroPruneFailed,
+      postPruneDailyContent,
+    });
+  }
+
+  // Link-session cancels plan every target note with the pure planner and
+  // commit through the shared `commitLinkPickerNoteWrites` core: every
+  // preimage is re-verified before the first write, targets write first, the
+  // daily-note prune folds into the daily note's own write when it is a
+  // target note, target writes roll back when one fails, and a failed prune
+  // is reported but never rolled back.
+  async applyTaskCancelFromLinkPicker(picker, cancel) {
+    const linkSession = picker.linkSession;
+    const resolved = Array.isArray(linkSession.resolved)
+      ? linkSession.resolved
+      : [];
+    if (resolved.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    const groups = groupLinkPickerTargetsByNote(resolved);
+    if (groups.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    const planned = [];
+    for (const group of groups) {
+      const plan = planTaskCancelBatch(group.content, group.session, {
+        date: cancel.dateText,
+        reason: cancel.reason,
+        fallbackReason: cancel.fallbackReason,
+      });
+      if (!plan.valid) {
+        new Notice(
+          plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+        );
+        return false;
+      }
+      planned.push({ group, plan });
+    }
+
+    const pruneTargets = [];
+    for (const { group, plan } of planned) {
+      for (const entry of plan.cancelled) {
+        if (entry.blockId) {
+          pruneTargets.push(
+            Object.freeze({ path: group.path, blockId: entry.blockId }),
+          );
+        }
+      }
+    }
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    let foldedDailyPath = null;
+    if (pruneTargets.length > 0) {
+      const sourcePaths = planned.map(({ group }) => group.path);
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: sourcePaths.length === 1 ? sourcePaths[0] : "",
+        sourceContent: planned.length === 1 ? planned[0].plan.content : "",
+        today: cancel.baseDate,
+      });
+      if (pomodoroSnapshot) {
+        // When the daily note is one of the edited target notes, the prune
+        // folds into that note's own write instead of racing it.
+        const folded = planned.find(
+          ({ group }) => group.path === pomodoroSnapshot.dailyPath,
+        );
+        const dailyBase = folded
+          ? folded.plan.content
+          : pomodoroSnapshot.content;
+        if (dailyBase !== null) {
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            dailyBase,
+            pruneTargets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
+          );
+          if (folded && dailyCleanupPlan.changed) {
+            foldedDailyPath = folded.group.path;
+          }
+        }
+      }
+    }
+
+    const commit = await this.commitLinkPickerNoteWrites(planned, {
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      foldedDailyPath,
+    });
+    if (!commit.ok) {
+      new Notice("A linked note changed; no tasks were updated");
+      return false;
+    }
+
+    const removedPomodoroLinkCount =
+      dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
+        ? dailyCleanupPlan.removedLinkCount
+        : 0;
+    const identities = [];
+    let cancelledCount = 0;
+    let skippedClosedCount = 0;
+    let fallbackLoggedCount = 0;
+    let nowTaggedCount = 0;
+    for (const { group, plan } of planned) {
+      cancelledCount += plan.cancelledCount;
+      skippedClosedCount += plan.skippedClosedCount;
+      fallbackLoggedCount += plan.fallbackLoggedCount;
+      nowTaggedCount += plan.nowTaggedCount;
+      for (const entry of plan.cancelled) {
+        identities.push(
+          Object.freeze({
+            path: group.path,
+            blockId: entry.blockId,
+            taskId: entry.taskId,
+          }),
+        );
+      }
+    }
+    const postPruneDailyContent =
+      dailyCleanupPlan && dailyCleanupPlan.changed
+        ? dailyCleanupPlan.content
+        : null;
+    return await this.finishTaskCancelNotice(picker, {
+      identities,
+      activePath: picker.filePath,
+      editor: picker.editor,
+      count: Math.max(1, cancelledCount),
+      viaLinks: true,
+      dateText: cancel.dateText,
+      reason: cancel.reason,
+      fallbackUsed: fallbackLoggedCount > 0,
+      nowBudget: cancel.nowBudget,
+      nowTaggedCount,
+      skippedClosedCount,
+      removedPomodoroLinkCount,
+      pomodoroPruneFailed: commit.pomodoroPruneFailed,
+      postPruneDailyContent,
+    });
+  }
+
+  // Shared cancel completion: close the modal as soon as the writes land,
+  // recover Blocked dependents through Task Status Cycler's versioned API
+  // (skipped silently when missing, throwing, or rejecting — the hooks
+  // recover them later), then show exactly one Cancelled notice card after
+  // recovery settles.
+  async finishTaskCancelNotice(picker, details = {}) {
+    if (picker && typeof picker.close === "function") {
+      try {
+        picker.close();
+      } catch (error) {
+        // The outer openItemAtIndex closes the modal anyway.
+      }
+    }
+    const identities = Array.isArray(details.identities)
+      ? details.identities
+      : [];
+    let reopened = 0;
+    let recoveryRan = false;
+    if (identities.length > 0) {
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["task-status-cycler"];
+        const api = holder && holder.api;
+        if (
+          api &&
+          typeof api.recoverBlockedDependents === "function" &&
+          Number(api.version) >= 1
+        ) {
+          recoveryRan = true;
+          const result = await api.recoverBlockedDependents(identities, {
+            activePath: details.activePath,
+            editor: details.editor,
+          });
+          reopened = Math.max(
+            0,
+            Math.floor(numericOrDefault(result && result.reopened, 0)),
+          );
+        }
+      } catch (error) {
+        recoveryRan = false;
+        reopened = 0;
+      }
+    }
+    const nowTaggedCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(details.nowTaggedCount, 0)),
+    );
+    let nowChip = "";
+    const budget = details.nowBudget;
+    if (
+      nowTaggedCount > 0 &&
+      budget &&
+      Number.isFinite(Math.floor(Number(budget.count))) &&
+      Number.isFinite(Math.floor(Number(budget.cap)))
+    ) {
+      const after = Math.max(
+        0,
+        Math.floor(Number(budget.count)) - nowTaggedCount,
+      );
+      const cap = Math.floor(Number(budget.cap));
+      nowChip = `NOW ${after}/${cap}${after > cap ? " 🔴" : ""}`;
+    }
+    // The plan chip covers the prune only: it needs the post-prune daily
+    // note text, and is omitted when nothing was pruned or the API is
+    // unavailable.
+    const planChip =
+      details.postPruneDailyContent !== null &&
+      details.postPruneDailyContent !== undefined
+        ? getCancelPlanBudgetChip(this.app, details.postPruneDailyContent)
+        : "";
+    showCancelNotice(
+      buildCancelNoticeModel({
+        count: details.count,
+        viaLinks: details.viaLinks,
+        date: details.dateText,
+        reason: details.reason,
+        fallbackUsed: details.fallbackUsed,
+        removedPomodoroLinkCount: details.removedPomodoroLinkCount,
+        reopenedDependents: reopened,
+        recoveryRan,
+        nowChip,
+        planChip,
+        skippedClosedCount: details.skippedClosedCount,
+        pomodoroPruneFailed: details.pomodoroPruneFailed,
       }),
     );
     return true;
@@ -28768,6 +29840,12 @@ module.exports.helpers = {
   shouldWriteAutomaticScheduleLog,
   buildPriorityRollScheduleLog,
   getBulletPropertyScheduleReasonHints,
+  getCancelTaskRowTitle,
+  getCancelReasonHints,
+  getCancelPlanBudgetChip,
+  buildCancelNoticeModel,
+  renderCancelNoticeFragment,
+  showCancelNotice,
   collectDependencyNavigationBullets,
   computeFinalDependencyLinkOrder,
   planDependencyNavigationBulletSync,

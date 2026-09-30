@@ -1,4 +1,5 @@
 const {
+  MarkdownRenderChild,
   MarkdownView,
   Notice,
   Platform,
@@ -1809,7 +1810,7 @@ const PLAN_LINT_INVENTORY_LABEL = "inventory_label_open";
 const PLAN_LINT_SUBHEADING = "subheading_in_pomodoros";
 const PLAN_LINT_NOW_CAP = "now_cap_exceeded";
 const PLAN_DAILY_PATH_RE = /(^|\/)\d{4}\/\d{8}\.md$/;
-const PLAN_ENTRY_RE = /^-\s+\[([^\]]*)\]/;
+const PLAN_ENTRY_RE = /^- \[([^\]])\]/;
 const PLAN_PLACEHOLDER_RE = /^\([ \t]*\)/;
 const PLAN_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const PLAN_ATX_RE = /^(?: {0,3})(#{1,6})(?:\s|$)/;
@@ -1888,9 +1889,9 @@ function effectivePlanCaps(caps) {
 }
 
 // Read the `plan:` block out of a parsed config file (snake_case keys, with
-// camelCase tolerated). Unknown keys stay ignored. Anything missing or
-// invalid falls back to the defaults, mirroring the tolerant surfaces in
-// docs/plan.md; use coercePlanCaps when the invalid flag matters.
+// camelCase tolerated). Unknown keys stay ignored. A missing block means the
+// defaults; any invalid value falls back to the full default block, as Rust
+// does. Use coercePlanCaps when the invalid flag matters.
 function parsePlanCaps(yamlObject) {
   return coercePlanCaps(planCapsBlock(yamlObject)).caps;
 }
@@ -1956,21 +1957,23 @@ function coercePlanCaps(block) {
       strict = strictValue;
     }
   }
-  return {
-    caps: {
-      maxThemes: cap("max_themes", "maxThemes", defaults.maxThemes),
-      maxLinks: cap("max_links", "maxLinks", defaults.maxLinks),
-      maxNow: cap("max_now", "maxNow", defaults.maxNow),
-      strict,
-      exempt: list("exempt", "exempt", defaults.exempt),
-      inventoryLabels: list(
-        "inventory_labels",
-        "inventoryLabels",
-        defaults.inventoryLabels,
-      ),
-    },
-    invalid,
+  const caps = {
+    maxThemes: cap("max_themes", "maxThemes", defaults.maxThemes),
+    maxLinks: cap("max_links", "maxLinks", defaults.maxLinks),
+    maxNow: cap("max_now", "maxNow", defaults.maxNow),
+    strict,
+    exempt: list("exempt", "exempt", defaults.exempt),
+    inventoryLabels: list(
+      "inventory_labels",
+      "inventoryLabels",
+      defaults.inventoryLabels,
+    ),
   };
+  // Like Rust, any invalid value falls back to the full default block.
+  if (invalid) {
+    return { caps: { ...defaults }, invalid: true };
+  }
+  return { caps, invalid: false };
 }
 
 function emptyPlanBudget(caps) {
@@ -2231,7 +2234,25 @@ function planStruckInnerSpans(line) {
 
 // Block links `[[target#^id]]` (also `![[…]]` and `[[…|alias]]`, with or
 // without a trailing `#` move-only marker) outside `~~…~~` struck spans.
-function planBlockLinks(line) {
+// An empty target, the daily note's vault-relative path without `.md`, and
+// its basename all canonicalize to the daily path itself (rule 6).
+function planCanonicalTarget(target, dailyPath) {
+  const name = String(target || "");
+  if (!dailyPath) {
+    return name;
+  }
+  const daily = String(dailyPath).replace(/\.md$/, "");
+  if (!daily) {
+    return name;
+  }
+  const basename = daily.split("/").pop();
+  if (name === "" || name === daily || name === basename) {
+    return daily;
+  }
+  return name;
+}
+
+function planBlockLinks(line, dailyPath) {
   const text = String(line || "");
   const struck = planStruckInnerSpans(text);
   const links = [];
@@ -2272,7 +2293,7 @@ function planBlockLinks(line) {
         if (name.endsWith(".md")) {
           name = name.slice(0, -3);
         }
-        links.push([name, blockId]);
+        links.push([planCanonicalTarget(name, dailyPath), blockId]);
       }
     }
     base = linkEnd;
@@ -2286,9 +2307,9 @@ function planMeter(count, cap) {
 }
 
 // Pure ledger budget and lint engine implementing docs/plan.md rules 1–9.
-function computePlanBudget(content, caps) {
+function computePlanBudget(content, caps, dailyPath) {
   const effective = effectivePlanCaps(caps);
-  const lines = String(content || "").split("\n");
+  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
   const section = planSectionRange(lines);
   if (!section) {
     return emptyPlanBudget(effective);
@@ -2392,7 +2413,7 @@ function computePlanBudget(content, caps) {
         if (line !== "" && !line.startsWith(" ") && !line.startsWith("\t")) {
           break;
         }
-        for (const link of planBlockLinks(line)) {
+        for (const link of planBlockLinks(line, dailyPath)) {
           entryLinks.push(link);
         }
       }
@@ -2405,7 +2426,7 @@ function computePlanBudget(content, caps) {
     const distinctLinks = new Set();
     if (!exemptEntry) {
       for (const [target, blockId] of entryLinks) {
-        const key = `${target} ${blockId}`;
+        const key = `${target}\u0000${blockId}`;
         distinctLinks.add(key);
         seenLinks.add(key);
       }
@@ -2611,15 +2632,34 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     const metadataCache = this.app && this.app.metadataCache;
     if (metadataCache && typeof metadataCache.on === "function") {
       this.registerEvent(
-        metadataCache.on("changed", () => this.schedulePlanBlockRerender()),
+        metadataCache.on("changed", (file) =>
+          this.schedulePlanBlockRerenderForFile(file),
+        ),
       );
     }
+    const planWorkspace = this.app && this.app.workspace;
+    if (planWorkspace && typeof planWorkspace.on === "function") {
+      // The vault runs Tasks 8.4.0, which fires this on every cache update.
+      this.registerEvent(
+        planWorkspace.on("obsidian-tasks-plugin:cache-update", () =>
+          this.schedulePlanBlockRerender(),
+        ),
+      );
+    }
+    const tasksPluginLoaded = Boolean(
+      this.app &&
+        this.app.plugins &&
+        this.app.plugins.plugins &&
+        this.app.plugins.plugins["obsidian-tasks-plugin"],
+    );
     if (
+      !tasksPluginLoaded &&
       typeof this.registerInterval === "function" &&
       typeof window !== "undefined" &&
       typeof window.setInterval === "function"
     ) {
-      // The Tasks plugin exposes no usable cache event, so poll it cheaply.
+      // Poll only when the Tasks plugin is not loaded; otherwise the
+      // cache-update event above keeps the blocks fresh.
       this.registerInterval(
         window.setInterval(() => this.rerenderPlanBlocks(), 5000),
       );
@@ -2675,7 +2715,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   planBudgetForCallers(options = {}) {
     const { caps } = loadPlanCaps();
     if (options && typeof options.content === "string") {
-      return computePlanBudget(options.content, caps);
+      const daily = typeof options.path === "string" ? options.path : null;
+      return computePlanBudget(options.content, caps, daily);
     }
     return (async () => {
       try {
@@ -2686,6 +2727,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         return computePlanBudget(
           typeof content === "string" ? content : "",
           caps,
+          targetPath,
         );
       } catch (error) {
         return emptyPlanBudget(caps);
@@ -2713,6 +2755,21 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // Fall through to null below.
     }
     return Promise.resolve(null);
+  }
+
+  schedulePlanBlockRerenderForFile(file) {
+    const changedPath =
+      file && typeof file.path === "string" ? file.path : null;
+    if (!changedPath || !this.planBlockViews) {
+      return;
+    }
+    for (const view of this.planBlockViews) {
+      const target = planBlockTargetPath(this.app, view.sourcePath);
+      if (target === changedPath) {
+        this.schedulePlanBlockRerender();
+        return;
+      }
+    }
   }
 
   schedulePlanBlockRerender() {
@@ -2758,15 +2815,32 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.planBlockViews.add(view);
     if (ctx && typeof ctx.addChild === "function") {
       // Unregister the view when the markdown preview drops the block.
-      const holder = {
-        unload: () => {
-          if (this.planBlockViews) {
-            this.planBlockViews.delete(view);
-          }
-        },
-      };
+      // Obsidian calls child.load() on the added child, so use a real
+      // MarkdownRenderChild with a guarded fallback for test harnesses.
+      let child = null;
       try {
-        ctx.addChild(holder);
+        if (typeof MarkdownRenderChild === "function") {
+          child = new MarkdownRenderChild(el);
+          child.onunload = () => {
+            if (this.planBlockViews) {
+              this.planBlockViews.delete(view);
+            }
+          };
+        }
+      } catch (error) {
+        child = null;
+      }
+      if (!child) {
+        child = {
+          unload: () => {
+            if (this.planBlockViews) {
+              this.planBlockViews.delete(view);
+            }
+          },
+        };
+      }
+      try {
+        ctx.addChild(child);
       } catch (error) {
         // Older hosts may reject the child; the Set is cleared on unload.
       }
@@ -3510,7 +3584,7 @@ function planTaskIsDone(task) {
     return true;
   }
   const type = task.status && task.status.type;
-  if (type === "DONE" || type === "CANCELLED") {
+  if (type === "DONE" || type === "CANCELLED" || type === "NON_TASK") {
     return true;
   }
   const name = task.status && task.status.name;
@@ -3653,11 +3727,20 @@ function nowBudgetFromTasks(tasks, today, caps) {
     } else if (!tags.includes("#now")) {
       continue;
     }
-    if (tags.includes("#hide")) {
+    if (
+      tags.some(
+        (tag) =>
+          typeof tag === "string" && tag.toLowerCase().includes("#hide"),
+      )
+    ) {
       continue;
     }
     const path = planTaskPath(task);
-    if (path.includes("_templates") || path.includes("_conflicts")) {
+    const loweredPath = String(path || "").toLowerCase();
+    if (
+      loweredPath.includes("_templates") ||
+      loweredPath.includes("_conflicts")
+    ) {
       continue;
     }
     if (todayDay !== null) {
@@ -3813,7 +3896,7 @@ function planBlockModel({ content, tasks, today, caps, sourcePath, app }) {
   try {
     budget =
       typeof content === "string"
-        ? computePlanBudget(content, effective)
+        ? computePlanBudget(content, effective, targetPath)
         : emptyPlanBudget(effective);
   } catch (error) {
     budget = emptyPlanBudget(effective);

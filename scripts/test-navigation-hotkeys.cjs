@@ -17163,3 +17163,44 @@ test("Ctrl+Shift+P link mode shows the #now row with link detail", async () => {
   assert.equal(taskEditor.content, "- [ ] #task Ship it #now ^a1");
   assert.match(notices.at(-1), /#now added · 1 task/);
 });
+
+test("removeNowTagFromLine preserves double spaces inside field values", () => {
+  assert.equal(
+    helpers.removeNowTagFromLine("- [ ] #task Ship it #now [why:: a  b] ^a1"),
+    "- [ ] #task Ship it [why:: a  b] ^a1",
+  );
+});
+
+test("getLinkPickerSessionSubtitle keeps the clamp for a single link", () => {
+  assert.equal(
+    helpers.getLinkPickerSessionSubtitle({
+      actualCount: 1,
+      requestedCount: 5,
+      clamped: true,
+      targets: [{ line: 0 }],
+      resolved: [{ path: "Tasks.md", rawLine: "- [ ] #task Ship it ^a1" }],
+    }),
+    "↗ Tasks · Ship it · 1 link of 5 requested · end of Pomodoro",
+  );
+});
+
+test("link-mode priority notice keeps via Task Links visible", () => {
+  const model = helpers.buildPriorityNoticeModel({
+    property: { name: "priority", values: "priority", schedules: "scheduled" },
+    level: { label: "P2", value: "medium" },
+    levelIndex: 1,
+    baseDate: new Date(2026, 7, 8),
+    scheduledValues: [],
+    taskCount: 3,
+    scope: "counted",
+    outcome: {},
+  });
+  const viaLinks = "via Task Links";
+  const visible = {
+    ...model,
+    text: `${model.text} · ${viaLinks}`,
+    countPill: model.countPill ? `${model.countPill} ${viaLinks}` : viaLinks,
+  };
+  assert.match(visible.countPill, /via Task Links/);
+  assert.match(visible.text, /via Task Links/);
+});

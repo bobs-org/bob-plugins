@@ -75,6 +75,7 @@ const { helpers } = LedgerToolsPlugin;
 Module._load = originalLoad;
 
 const {
+  coercePlanCaps,
   computePlanBudget,
   defaultPlanCaps,
   hasNowTag,
@@ -548,4 +549,68 @@ test("plugin exposes the versioned api and registers the bob-plan block", async 
       process.env.XDG_CONFIG_HOME = savedXdg;
     }
   }
+});
+
+test("invalid plan block falls back to full defaults", () => {
+  for (const block of [
+    { max_themes: "many" },
+    { strict: "yes" },
+    { exempt: "GTD" },
+    { max_themes: 5, exempt: ["GTD", 7] },
+  ]) {
+    const { caps, invalid } = coercePlanCaps(block);
+    assert.equal(invalid, true);
+    assert.deepEqual(caps, defaultPlanCaps());
+  }
+});
+
+test("entries require column-0 dash-space with one status char", () => {
+  for (const content of [
+    "## Pomodoros\n\n- [] — GOALS\n    - [[a#^one]]\n",
+    "## Pomodoros\n\n-\t[ ] — GOALS\n    - [[a#^one]]\n",
+    "## Pomodoros\n\n- [ab] — GOALS\n    - [[a#^one]]\n",
+  ]) {
+    const budget = computePlanBudget(content);
+    assert.equal(budget.links.count, 0, content);
+    assert.equal(budget.themes.count, 0, content);
+  }
+});
+
+test("crlf line endings split like lf", () => {
+  const lf = computePlanBudget("## Pomodoros\n\n- [ ] () — GOALS\n    - [[a#^one]]\n");
+  const crlf = computePlanBudget("## Pomodoros\r\n\r\n- [ ] () — GOALS\r\n    - [[a#^one]]\r\n");
+  assert.deepEqual(crlf, lf);
+});
+
+test("conformance: empty target means the daily note", () => {
+  const content =
+    "## Pomodoros\n\n- [ ] () — GOALS\n" +
+    "    - [[#^aaa]]\n" +
+    "    - [[2026/20260930#^aaa]]\n" +
+    "    - [[20260930#^aaa]]\n";
+  const budget = computePlanBudget(content, undefined, "2026/20260930.md");
+  assert.equal(budget.links.count, 1);
+  assert.equal(budget.entries[0].links, 1);
+});
+
+test("now predicate matches hide subtags, case, and non-task", () => {
+  const today = new Date(2026, 8, 30);
+  const base = (overrides = {}) => ({
+    description: "bet #now",
+    tags: ["#now"],
+    path: "notes/a.md",
+    status: { type: "TODO", name: "Todo" },
+    isBlocked: () => false,
+    ...overrides,
+  });
+  const tasks = [
+    base({ tags: ["#now", "#hide/x"] }),
+    base({ tags: ["#now", "#Hide"] }),
+    base({ path: "Notes/_TEMPLATES/x.md" }),
+    base({ path: "notes/_CONFLICTS/a.md" }),
+    base({ status: { type: "NON_TASK", name: "Note" } }),
+    base(),
+  ];
+  const budget = nowBudgetFromTasks(tasks, today);
+  assert.equal(budget.count, 1);
 });

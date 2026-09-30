@@ -13182,7 +13182,11 @@ function getLinkPickerSessionSubtitle(session) {
     const task = truncateBulletPropertySubtitle(
       cleanTaskDisplayText(first.rawLine || ""),
     );
-    return `↗ ${note} · ${task}`;
+    const single = `↗ ${note} · ${task}`;
+    if (session.clamped) {
+      return `${single} · ${formatCountLabel(session.actualCount, "link")} of ${session.requestedCount} requested · end of Pomodoro`;
+    }
+    return single;
   }
   if (session.clamped) {
     return `${formatCountLabel(session.actualCount, "link")} of ${
@@ -13297,7 +13301,15 @@ function removeNowTagFromLine(lineText) {
   const leadingMatch = /^([ \t]*)/.exec(next);
   const leading = leadingMatch ? leadingMatch[1] : "";
   let rest = next.slice(leading.length);
-  rest = rest.replace(/[ \t]{2,}/g, " ");
+  const protected = [];
+  const masked = rest.replace(/\[[^\]]*\]/g, (match) => {
+    protected.push(match);
+    return `\u0000${protected.length - 1}\u0000`;
+  });
+  const collapsed = masked.replace(/[ \t]{2,}/g, " ");
+  rest = collapsed.replace(/\u0000(\d+)\u0000/g, (_, index) =>
+    protected[Number(index)],
+  );
   rest = rest.replace(/[ \t]+$/, "");
   return leading + rest;
 }
@@ -17721,7 +17733,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     rowEl.createDiv({
       cls: "bob-cnp-pill bob-cnp-property-pill",
-      text: item.added ? "this week · add" : "this week · remove",
+      text: item.added ? "add" : "remove",
     });
   }
 
@@ -20369,9 +20381,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           pomodoroPruneFailed,
         },
       });
-      showPriorityNotice(
-        { ...model, text: `${model.text} · ${viaLinks}` },
-      );
+      showPriorityNotice({
+        ...model,
+        text: `${model.text} · ${viaLinks}`,
+        countPill: model.countPill
+          ? `${model.countPill} ${viaLinks}`
+          : viaLinks,
+      });
       return true;
     }
 

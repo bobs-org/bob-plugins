@@ -282,6 +282,7 @@ test("coercePlanCaps ignores a legacy max_now instead of failing", () => {
   assert.equal(invalid, false);
   assert.equal(caps.maxNext, 7);
   assert.equal(caps.maxPending, 10);
+  assert.equal(caps.maxReady, 100);
 });
 
 test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
@@ -303,6 +304,7 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
     maxLinks: 12,
     maxNext: 20,
     maxPending: 12,
+    maxReady: 100,
     strict: true,
     exempt: ["GTD", "ADMIN"],
     inventoryLabels: ["LATER"],

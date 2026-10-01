@@ -59,8 +59,22 @@ a.bob-plan-chip:focus-visible {
   --bob-plan-accent: var(--task-status-next, var(--color-green, #3f8f5f));
 }
 
+.bob-plan-ready {
+  --bob-plan-accent: var(--color-blue, var(--interactive-accent));
+}
+
 .bob-plan-chip.bob-plan-over {
   --bob-plan-accent: var(--task-status-blocked, var(--color-red, #c65367));
+}
+
+.bob-plan-chip.bob-plan-unavailable {
+  opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  a.bob-plan-chip {
+    transition: none;
+  }
 }
 
 .bob-plan-themes {

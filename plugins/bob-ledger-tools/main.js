@@ -1827,14 +1827,23 @@ function defaultPlanCaps() {
     maxLinks: 10,
     maxNext: 15,
     maxPending: 10,
+    maxReady: 100,
     strict: false,
     exempt: ["GTD"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
   };
 }
 
+const PLAN_U32_MAX = 4294967295;
+
 function planCapOrDefault(value, fallback) {
   return Number.isInteger(value) && value >= 1 ? value : fallback;
+}
+
+function planReadyCapOrDefault(value, fallback) {
+  return Number.isInteger(value) && value >= 1 && value <= PLAN_U32_MAX
+    ? value
+    : fallback;
 }
 
 function planStringListOrDefault(value, fallback) {
@@ -1878,6 +1887,7 @@ function effectivePlanCaps(caps) {
     maxLinks: planCapOrDefault(raw.maxLinks, defaults.maxLinks),
     maxNext: planCapOrDefault(raw.maxNext, defaults.maxNext),
     maxPending: planCapOrDefault(raw.maxPending, defaults.maxPending),
+    maxReady: planReadyCapOrDefault(raw.maxReady, defaults.maxReady),
     strict:
       typeof raw.strict === "boolean" ? raw.strict : defaults.strict,
     exempt: planStringListOrDefault(raw.exempt, defaults.exempt),
@@ -1920,10 +1930,21 @@ function coercePlanCaps(block) {
   let invalid = false;
   const cap = (snake, camel, fallback) => {
     const value = pick(snake, camel);
-    if (value === undefined) {
+    if (value === undefined || value === null) {
       return fallback;
     }
     if (!Number.isInteger(value) || value < 1) {
+      invalid = true;
+      return fallback;
+    }
+    return value;
+  };
+  const readyCap = (snake, camel, fallback) => {
+    const value = pick(snake, camel);
+    if (value === undefined || value === null) {
+      return fallback;
+    }
+    if (!Number.isInteger(value) || value < 1 || value > PLAN_U32_MAX) {
       invalid = true;
       return fallback;
     }
@@ -1964,6 +1985,7 @@ function coercePlanCaps(block) {
     maxLinks: cap("max_links", "maxLinks", defaults.maxLinks),
     maxNext: cap("max_next", "maxNext", defaults.maxNext),
     maxPending: cap("max_pending", "maxPending", defaults.maxPending),
+    maxReady: readyCap("max_ready", "maxReady", defaults.maxReady),
     strict,
     exempt: list("exempt", "exempt", defaults.exempt),
     inventoryLabels: list(
@@ -2925,6 +2947,162 @@ function laneBudgetFromTasks(tasks, today, caps, lane) {
   }
   const cap = lane === "pending" ? effective.maxPending : effective.maxNext;
   return { count, cap, over: count > cap };
+}
+
+// --- READY backlog ----------------------------------------------------------
+// The shared READY backlog (`docs/plan.md`, "READY backlog"): the global
+// dashboard backlog, regardless of which daily file hosts the badge.
+//
+// The predicate matches the dashboard READY section's effective filters:
+// TODO type (including custom TODO symbols), dashboard visibility
+// (template exclusion, dash.md self-exclusion, exact `#hide` match, and
+// the Tasks global query's `_conflicts` exclusion applied explicitly
+// because `getTasks()` returns the raw cache), not dependency-blocked
+// (against the full Tasks list), scheduled on or before the current
+// local day, and not Today. Self-exclusion always refers to `dash.md`,
+// never the hosting daily note.
+//
+// This deliberately does NOT reuse `planLaneVisible`: that helper's
+// hide-subtag (`#hide/x`, case-insensitive) and lowercased path checks
+// are broader than the dashboard's current explicit
+// `!task.tags.includes("#hide")` rule. The distinction is pinned in
+// fixtures.
+const READY_DASH_PATH = "dash.md";
+const READY_FALLBACK_CAP = 100;
+
+function readyTaskStatusIsTodo(task) {
+  if (!task || typeof task !== "object") {
+    return false;
+  }
+  const status =
+    task.status && typeof task.status === "object" ? task.status : null;
+  if (status && typeof status.type === "string") {
+    return status.type === "TODO";
+  }
+  return false;
+}
+
+function readyTaskVisible(task, todayDay) {
+  if (!task || typeof task !== "object") {
+    return false;
+  }
+  if (planTaskIsDone(task)) {
+    return false;
+  }
+  if (!readyTaskStatusIsTodo(task)) {
+    return false;
+  }
+  const path = String(planTaskPath(task) || "");
+  if (!path) {
+    return false;
+  }
+  if (path.includes("_templates")) {
+    return false;
+  }
+  if (path.includes("_conflicts")) {
+    return false;
+  }
+  if (path === READY_DASH_PATH) {
+    return false;
+  }
+  const tags = planTaskTags(task);
+  if (tags.includes("#hide")) {
+    return false;
+  }
+  if (todayDay !== null && todayDay !== undefined) {
+    const scheduled = planTaskScheduledDay(task);
+    if (scheduled !== null && scheduled > todayDay) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Pure, testable READY count over Tasks-plugin task objects. `isToday`
+// is the caller's Today predicate. Throws when `isToday` or `isBlocked`
+// throws, so callers can degrade to an unavailable badge rather than a
+// partial count.
+function readyCountFromTasks(tasks, today, isToday) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const todayDay = planDayNumber(today === undefined ? new Date() : today);
+  const isTodayPredicate =
+    typeof isToday === "function" ? isToday : () => false;
+  let count = 0;
+  for (const task of list) {
+    if (!readyTaskVisible(task, todayDay)) {
+      continue;
+    }
+    if (planTaskIsBlocked(task, list)) {
+      continue;
+    }
+    let todayFlag = false;
+    try {
+      todayFlag = Boolean(isTodayPredicate(task));
+    } catch (error) {
+      throw error;
+    }
+    if (todayFlag) {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function readyBudgetFromTasks(tasks, today, caps, isToday) {
+  const effective = effectivePlanCaps(caps);
+  const cap = planReadyCapOrDefault(effective.maxReady, READY_FALLBACK_CAP);
+  const count = readyCountFromTasks(tasks, today, isToday);
+  return { count, cap, over: count > cap };
+}
+
+// Shared READY badge view-model. `budget` is `{ count, cap, over }` with
+// `count === null` for unavailable. Never throws.
+function readyBadgeModel(budget, options = {}) {
+  const invalid = Boolean(options.invalid);
+  const cap =
+    budget && Number.isInteger(budget.cap) && budget.cap >= 1
+      ? budget.cap
+      : READY_FALLBACK_CAP;
+  const count =
+    budget && (typeof budget.count === "number" || budget.count === null)
+      ? budget.count
+      : null;
+  if (count === null || !Number.isInteger(count) || count < 0) {
+    return {
+      text: "READY –",
+      tooltip:
+        `READY backlog unavailable; limit ${cap}. ` +
+        `Live current backlog excluding Today. Open READY Tasks in dash.` +
+        (invalid ? " Plan config invalid, using defaults." : ""),
+      aria: `READY: unavailable (limit ${cap}). Open READY Tasks in dash.`,
+      over: false,
+      placeholder: true,
+      count: null,
+      cap,
+    };
+  }
+  const over = count > cap;
+  const excess = count - cap;
+  const tooltip = over
+    ? `${count} ready tasks; limit ${cap}; ${excess} over the limit. ` +
+      `Live current backlog excluding Today. Open READY Tasks in dash.` +
+      (invalid ? " Plan config invalid, using defaults." : "")
+    : `${count} ready tasks; limit ${cap}. ` +
+      `Live current backlog excluding Today. Open READY Tasks in dash.` +
+      (invalid ? " Plan config invalid, using defaults." : "");
+  const aria = over
+    ? `READY: ${count} of ${cap} tasks, ${excess} over the limit. Open READY Tasks in dash.`
+    : `READY: ${count} of ${cap} tasks. Open READY Tasks in dash.`;
+  return {
+    text: `READY ${count}/${cap}`,
+    tooltip,
+    aria,
+    over,
+    placeholder: false,
+    count,
+    cap,
+  };
 }
 
 // --- Task freshness: placement ----------------------------------------------
@@ -4257,6 +4435,15 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     // and the other plugins call instead of re-implementing docs/plan.md.
     this.planBlockViews = new Set();
     this.planBlockRerenderTimer = null;
+    // Shared READY backlog widgets (daily `bob-plan` chips and dashboard
+    // `renderReadyBadge` anchors). Reuses one batch state so reopening a
+    // note never accumulates widgets, listeners, or timers.
+    this.readyWidgets = new Set();
+    this.readyRefreshTimer = null;
+    this.readyLastCapsKey = null;
+    this.readyLastDay = null;
+    this.planPaintGen = 0;
+    this.planPaintGens = new Map();
     // Synchronous Today cache: `{ date, dailyPath, keys, rank }`. Built
     // from the daily note's text (never awaited inside the api); before
     // the first build `isToday` returns false for every task.
@@ -4286,6 +4473,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           "pending",
         );
       },
+      readyBudget: () => this.readyBudget(),
+      renderReadyBadge: (parent, options = {}) =>
+        this.renderReadyBadge(parent, options),
       // Task freshness (api v3, additive: every v2 member above is
       // unchanged). `freshness` mirrors `docs/freshness.md` in bob-cli.
       // Every member is synchronous, never awaits and never throws.
@@ -4338,19 +4528,34 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       typeof window.setInterval === "function"
     ) {
       // Local-midnight rollover: rebuild once the daily path changes.
+      // The same minute tick picks up a changed `max_ready` (or day)
+      // within 60 seconds without a plugin reload or a per-badge poller,
+      // and refreshes READY even when no daily note exists and the Today
+      // key set remains empty.
       this.registerInterval(
         window.setInterval(() => {
-          this.refreshTodayCacheForRollover();
+          const rolled = this.refreshTodayCacheForRollover();
           this.refreshFreshnessForRollover();
+          const capsChanged = this.checkReadyCapsAndDay(new Date());
+          if (!rolled && !capsChanged) {
+            try {
+              this.refreshReadyBadges(new Date());
+            } catch (error) {
+              // Best-effort refresh only.
+            }
+          }
         }, 60 * 1000),
       );
     }
     const planWorkspace = this.app && this.app.workspace;
     if (planWorkspace && typeof planWorkspace.on === "function") {
       // The vault runs Tasks 8.4.0, which fires this on every cache update.
+      // A Ready task being linked or unlinked from Today refreshes both
+      // badges even if its checkbox has not yet reconciled.
       this.registerEvent(
         planWorkspace.on("obsidian-tasks-plugin:cache-update", () => {
           this.schedulePlanBlockRerender();
+          this.scheduleReadyRefresh();
           this.scheduleFreshnessStatusBar();
         }),
       );
@@ -4405,6 +4610,22 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.planBlockRerenderTimer = null;
     if (this.planBlockViews) {
       this.planBlockViews.clear();
+    }
+    if (
+      this.readyRefreshTimer !== null &&
+      this.readyRefreshTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.readyRefreshTimer);
+    }
+    this.readyRefreshTimer = null;
+    if (this.readyWidgets) {
+      this.readyWidgets.clear();
+    }
+    this.readyLastCapsKey = null;
+    this.readyLastDay = null;
+    if (this.planPaintGens) {
+      this.planPaintGens.clear();
     }
     this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
     if (
@@ -4529,6 +4750,362 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
     const rank = this.todayCache.rank.get(key);
     return typeof rank === "number" ? rank : Number.MAX_SAFE_INTEGER;
+  }
+
+  // --- READY backlog (api v3, additive) ----------------------------------
+  // Synchronous, guarded `{ count, cap, over }`. `count` is `null` when
+  // unavailable (no Tasks data, a non-Warm cache, no initial Today build,
+  // or a failed evaluation) and `over` is false in that case. Zero is
+  // reserved for a successfully evaluated empty queue.
+  tasksCacheState() {
+    try {
+      const plugins =
+        this.app && this.app.plugins && this.app.plugins.plugins;
+      const tasks = plugins && plugins[PLAN_TASKS_PLUGIN_ID];
+      if (tasks && typeof tasks.getState === "function") {
+        return tasks.getState();
+      }
+    } catch (error) {
+      return null;
+    }
+    return null;
+  }
+
+  isTodayCacheReady(now = new Date()) {
+    try {
+      const expectedDate = this.todayLocalDate(now);
+      const expectedPath = this.currentTodayDailyPath(now);
+      if (!expectedPath) {
+        return false;
+      }
+      const cache = this.todayCache;
+      if (!cache || !(cache.rank instanceof Map)) {
+        return false;
+      }
+      if (cache.date !== expectedDate) {
+        return false;
+      }
+      if (!sameVaultPath(cache.dailyPath || "", expectedPath)) {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  readyBudget(now = new Date()) {
+    try {
+      const loaded = loadPlanCaps();
+      const caps = loaded.caps;
+      const effective = effectivePlanCaps(caps);
+      const cap = planReadyCapOrDefault(
+        effective.maxReady,
+        READY_FALLBACK_CAP,
+      );
+      const unavailable = { count: null, cap, over: false };
+      const tasks = planBlockTasks(this.app);
+      if (!Array.isArray(tasks)) {
+        return unavailable;
+      }
+      const state = this.tasksCacheState();
+      if (typeof state === "string" && state !== "Warm") {
+        return unavailable;
+      }
+      if (!this.isTodayCacheReady(now)) {
+        return unavailable;
+      }
+      let count;
+      try {
+        count = readyCountFromTasks(tasks, now, (task) =>
+          this.isTodayTask(task),
+        );
+      } catch (error) {
+        return unavailable;
+      }
+      if (!Number.isInteger(count) || count < 0) {
+        return unavailable;
+      }
+      return { count, cap, over: count > cap };
+    } catch (error) {
+      return {
+        count: null,
+        cap: READY_FALLBACK_CAP,
+        over: false,
+      };
+    }
+  }
+
+  // Shared READY element renderer used by both the daily `bob-plan`
+  // block and the dashboard. Returns the anchor element or null. The
+  // element structure, classes, fraction, over state, tooltip, and
+  // destination are identical on both surfaces.
+  paintReadyElement(host, budget, options = {}) {
+    try {
+      if (!host || typeof host.createEl !== "function") {
+        return null;
+      }
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const invalid = Boolean(options.invalid);
+      const model = readyBadgeModel(budget, { invalid });
+      const anchor = host.createEl("a", {
+        cls: `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        text: model.text,
+        title: model.tooltip,
+        href: "dash#READY Tasks",
+      });
+      if (anchor && typeof anchor.setAttribute === "function") {
+        anchor.setAttribute("aria-label", model.aria);
+        anchor.setAttribute("role", "link");
+        if (!anchor.hasAttribute("tabindex")) {
+          anchor.setAttribute("tabindex", "0");
+        }
+      }
+      const open = (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (
+            workspace &&
+            typeof workspace.openLinkText === "function"
+          ) {
+            const newLeaf = Boolean(
+              event && (event.ctrlKey || event.metaKey),
+            );
+            workspace.openLinkText("dash#READY Tasks", sourcePath, newLeaf);
+          }
+        } catch (error) {
+          // The badge still shows the count without the navigation.
+        }
+      };
+      if (anchor && typeof anchor.addEventListener === "function") {
+        anchor.addEventListener("click", open);
+        anchor.addEventListener("keydown", (event) => {
+          if (
+            event &&
+            (event.key === "Enter" || event.key === " ")
+          ) {
+            open(event);
+          }
+        });
+        anchor.addEventListener("mouseover", (event) => {
+          try {
+            const workspace = this.app && this.app.workspace;
+            if (workspace && typeof workspace.trigger === "function") {
+              workspace.trigger("hover-link", {
+                event,
+                source: "bob-plan",
+                hoverParent: host,
+                targetEl: anchor,
+                linktext: "dash#READY Tasks",
+                sourcePath,
+              });
+            }
+          } catch (error) {
+            // Hover preview is best-effort only.
+          }
+        });
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Dashboard entry point: `api.renderReadyBadge(parent, { sourcePath,
+  // component })`. Uses the shared element renderer and registers
+  // lifecycle-owned live updates. Replaces a component's old widget on
+  // Dataview rerender and prunes detached nodes.
+  renderReadyBadge(parent, options = {}) {
+    try {
+      if (!parent || typeof parent.createEl !== "function") {
+        return null;
+      }
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const component = options.component || null;
+      if (!this.readyWidgets) {
+        this.readyWidgets = new Set();
+      }
+      // Replace this component's old widget on Dataview rerender.
+      if (component) {
+        for (const widget of Array.from(this.readyWidgets)) {
+          if (widget.component === component) {
+            try {
+              if (widget.el && widget.el.parentNode) {
+                widget.el.parentNode.removeChild(widget.el);
+              } else if (
+                widget.el &&
+                typeof widget.el.remove === "function"
+              ) {
+                widget.el.remove();
+              }
+            } catch (error) {
+              // Best-effort removal only.
+            }
+            this.readyWidgets.delete(widget);
+          }
+        }
+      }
+      // Prune detached nodes before adding.
+      for (const widget of Array.from(this.readyWidgets)) {
+        try {
+          const el = widget.el;
+          const detached =
+            !el ||
+            (typeof el.isConnected === "boolean" &&
+              el.isConnected === false &&
+              (!el.parentNode || el.parentNode === null));
+          if (detached && (!el.parentNode || el.parentNode === null)) {
+            // Only prune nodes that are truly detached and parentless;
+            // freshly created anchors not yet attached are kept by the
+            // caller adding them below.
+            if (!parent.contains || !parent.contains(el)) {
+              this.readyWidgets.delete(widget);
+            }
+          }
+        } catch (error) {
+          // Keep the widget on inspection failure.
+        }
+      }
+      const loaded = loadPlanCaps();
+      const budget = this.readyBudget(new Date());
+      const anchor = this.paintReadyElement(parent, budget, {
+        sourcePath,
+        invalid: loaded.invalid,
+      });
+      if (!anchor) {
+        return null;
+      }
+      const widget = { el: anchor, sourcePath, component };
+      this.readyWidgets.add(widget);
+      if (
+        component &&
+        typeof component.register === "function"
+      ) {
+        try {
+          component.register(() => {
+            this.readyWidgets.delete(widget);
+          });
+        } catch (error) {
+          // The widget still refreshes with the batch; only the
+          // component-owned unregister is skipped.
+        }
+      }
+      this.rememberReadyCaps(new Date());
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  rememberReadyCaps(now = new Date()) {
+    try {
+      const { caps } = loadPlanCaps();
+      const effective = effectivePlanCaps(caps);
+      this.readyLastCapsKey = JSON.stringify(effective);
+      this.readyLastDay = this.todayLocalDate(now);
+    } catch (error) {
+      // Best-effort snapshot only.
+    }
+  }
+
+  refreshReadyBadges(now = new Date()) {
+    if (!this.readyWidgets || this.readyWidgets.size === 0) {
+      return false;
+    }
+    let refreshed = false;
+    const loaded = loadPlanCaps();
+    const budget = this.readyBudget(now);
+    for (const widget of Array.from(this.readyWidgets)) {
+      try {
+        const el = widget.el;
+        if (!el || typeof el.empty === "function") {
+          // Dataview container anchors are replaced in place.
+        }
+        const parent = el && el.parentNode ? el.parentNode : null;
+        if (!parent || typeof parent.createEl !== "function") {
+          // Prune widgets whose host is gone.
+          if (!el || !el.isConnected) {
+            this.readyWidgets.delete(widget);
+          }
+          continue;
+        }
+        const model = readyBadgeModel(budget, {
+          invalid: loaded.invalid,
+        });
+        if (typeof el.setText === "function") {
+          el.setText(model.text);
+        } else if ("textContent" in el) {
+          el.textContent = model.text;
+        }
+        if (typeof el.setAttribute === "function") {
+          el.setAttribute("title", model.tooltip);
+          el.setAttribute("aria-label", model.aria);
+          const cls =
+            `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+          el.setAttribute("class", cls);
+        }
+        refreshed = true;
+      } catch (error) {
+        // One stale widget never breaks the others.
+      }
+    }
+    this.rememberReadyCaps(now);
+    return refreshed;
+  }
+
+  scheduleReadyRefresh() {
+    if (
+      this.readyRefreshTimer !== null &&
+      this.readyRefreshTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" &&
+      typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.readyRefreshTimer = schedule(() => {
+      this.readyRefreshTimer = null;
+      try {
+        this.refreshReadyBadges(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+      try {
+        this.rerenderPlanBlocks();
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+    }, 150);
+  }
+
+  checkReadyCapsAndDay(now = new Date()) {
+    try {
+      const { caps } = loadPlanCaps();
+      const key = JSON.stringify(effectivePlanCaps(caps));
+      const day = this.todayLocalDate(now);
+      if (this.readyLastCapsKey === null || this.readyLastDay === null) {
+        this.readyLastCapsKey = key;
+        this.readyLastDay = day;
+        return false;
+      }
+      if (key !== this.readyLastCapsKey || day !== this.readyLastDay) {
+        this.readyLastCapsKey = key;
+        this.readyLastDay = day;
+        this.refreshReadyBadges(now);
+        this.schedulePlanBlockRerender();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
   }
 
   // --- Task freshness (api v3) ------------------------------------------
@@ -5288,6 +5865,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       this.planBlockRerenderTimer !== null &&
       this.planBlockRerenderTimer !== undefined
     ) {
+      this.scheduleReadyRefresh();
       return;
     }
     const schedule =
@@ -5299,10 +5877,16 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       this.planBlockRerenderTimer = null;
       this.rerenderPlanBlocks();
     }, 150);
+    this.scheduleReadyRefresh();
   }
 
   rerenderPlanBlocks() {
     if (!this.planBlockViews) {
+      try {
+        this.refreshReadyBadges(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
       return;
     }
     for (const view of Array.from(this.planBlockViews)) {
@@ -5311,6 +5895,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       } catch (error) {
         // One stale block never breaks the others.
       }
+    }
+    try {
+      this.refreshReadyBadges(new Date());
+    } catch (error) {
+      // Best-effort refresh only.
     }
   }
 
@@ -5336,6 +5925,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
             if (this.planBlockViews) {
               this.planBlockViews.delete(view);
             }
+            if (this.planPaintGens) {
+              this.planPaintGens.delete(el);
+            }
           };
         }
       } catch (error) {
@@ -5346,6 +5938,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           unload: () => {
             if (this.planBlockViews) {
               this.planBlockViews.delete(view);
+            }
+            if (this.planPaintGens) {
+              this.planPaintGens.delete(el);
             }
           },
         };
@@ -5363,8 +5958,16 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     const targetPath = planBlockTargetPath(this.app, sourcePath);
     const { caps, invalid } = loadPlanCaps();
     const tasks = planBlockTasks(this.app);
+    if (!this.planPaintGens) {
+      this.planPaintGens = new Map();
+    }
+    const paintGen = (this.planPaintGens.get(el) || 0) + 1;
+    this.planPaintGens.set(el, paintGen);
     Promise.resolve(this.readPlanBlockContent(targetPath))
       .then((content) => {
+        if (this.planPaintGens.get(el) !== paintGen) {
+          return;
+        }
         if (!el || typeof el.empty !== "function") {
           return;
         }
@@ -5382,7 +5985,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         container.setAttribute("role", "status");
         container.setAttribute(
           "aria-label",
-          `${model.planText}, ${model.todayText}, ${model.pendingText}, ${model.nextText}${model.over ? ", over plan" : ""}`,
+          `${model.planText}, ${model.todayText}, ${model.pendingText}, ${model.nextText}, ${model.readyText}${model.over ? ", over plan" : ""}`,
         );
         const planChip = container.createEl("span", {
           cls: `bob-plan-chip bob-plan-plan${
@@ -5434,6 +6037,14 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               // The chip still shows the count without the navigation.
             }
           });
+        }
+        try {
+          this.paintReadyElement(container, model.ready ? { count: model.ready.count, cap: model.ready.cap, over: model.ready.over } : { count: null, cap: effectivePlanCaps(caps).maxReady }, {
+            sourcePath: typeof sourcePath === "string" ? sourcePath : "",
+            invalid,
+          });
+        } catch (error) {
+          // The READY badge degrades to a placeholder; other chips stay.
         }
         if (model.themesText) {
           container.createEl("span", {
@@ -6375,6 +6986,8 @@ function planBlockTasks(app) {
 // content, caps, or Tasks all degrade to `–` placeholders, never an error.
 // `isToday` is the caller's Today predicate over cached Tasks tasks
 // (the plugin passes its synchronous cache); without it TODAY shows `–`.
+// READY is the shared live current backlog (Today excluded); it never
+// changes what the ledger's PLAN status means.
 function planBlockModel({
   content,
   tasks,
@@ -6412,6 +7025,14 @@ function planBlockModel({
   } catch (error) {
     pending = { count: 0, cap: effective.maxPending, over: false };
   }
+  let ready = null;
+  if (hasTasks) {
+    try {
+      ready = readyBudgetFromTasks(taskList, day, effective, isTodayPredicate);
+    } catch (error) {
+      ready = null;
+    }
+  }
   let todayCount = null;
   if (hasTasks) {
     try {
@@ -6441,6 +7062,12 @@ function planBlockModel({
   const themeCounts = budget.entries
     .filter((entry) => !entry.exempt)
     .map((entry) => `${entry.name} ${entry.links}`);
+  const readyModel = readyBadgeModel(
+    ready
+      ? { count: ready.count, cap: ready.cap, over: ready.over }
+      : { count: null, cap: effective.maxReady },
+    {},
+  );
   return {
     targetPath,
     hasContent: typeof content === "string",
@@ -6456,6 +7083,8 @@ function planBlockModel({
     pendingText: hasTasks
       ? `PENDING ${pending.count}/${pending.cap}`
       : "PENDING –",
+    readyText: hasTasks ? readyModel.text : "READY –",
+    readyModel,
     themesText:
       budget.themeNames.length > 0
         ? `★ ${budget.themeNames.join(" · ")}`
@@ -6470,6 +7099,7 @@ function planBlockModel({
     todayCount,
     next,
     pending,
+    ready,
   };
 }
 
@@ -6544,6 +7174,11 @@ module.exports.helpers = {
   computeTodayLinks,
   resolveTodayKeys,
   laneBudgetFromTasks,
+  readyCountFromTasks,
+  readyBudgetFromTasks,
+  readyBadgeModel,
+  readyTaskVisible,
+  readyTaskStatusIsTodo,
   loadPlanCaps,
   planConfigPath,
   planBlockTargetPath,

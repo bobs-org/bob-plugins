@@ -4,6 +4,30 @@ const test = require("node:test");
 
 const notices = [];
 
+function parseTestYaml(text) {
+  const result = {};
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (!line.trim() || line.trimStart().startsWith("#") || /^\s/.test(line)) {
+      continue;
+    }
+    const match = /^([^:]+):(.*)$/.exec(line);
+    if (!match) {
+      throw new Error("malformed yaml");
+    }
+    const key = match[1].trim();
+    let value = match[2].trim().replace(/\s+#.*$/, "");
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value || null;
+  }
+  return result;
+}
+
 const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
@@ -40,9 +64,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       Modal: TestModal,
       Notice: TestNotice,
       Plugin: EmptyClass,
-      parseYaml: (text) => {
-        throw new Error(`unexpected parseYaml in ${text}`);
-      },
+      parseYaml: parseTestYaml,
     };
   }
   if (request === "@codemirror/view") {
@@ -1033,7 +1055,7 @@ test("picker-single notice cards name the roll, decay and next press", () => {
   ]);
   assert.match(
     decayNotice.text,
-    /priority → P2 → P3 \(low\) · decayed from P2/,
+    /priority → P3 \(low\) · decayed from P2/,
   );
 
   const offNotice = helpers.buildPriorityNoticeModel({
@@ -1974,4 +1996,560 @@ test("picker-links prunes today's open Pomodoro links", async () => {
     ["## Pomodoros", "", "- [ ] Current (0900-0930)", "  - keep me"].join("\n"),
   );
   assert.match(notices.at(-1), /removed 1 Pomodoro link/);
+});
+
+// picker-single / picker-counted end-to-end: drive BulletPropertyPickerModal
+// through handleKeydown with an editor that records undo groups. The
+// recommendation is previewed once at open (base date 2026-09-30,
+// random () => 0), Ctrl+Enter writes it, and the write is async so tests
+// flush timers before asserting.
+
+class RollTestEditor {
+  constructor(content) {
+    this.content = content;
+  }
+  getValue() {
+    return this.content;
+  }
+  getLine(line) {
+    return this.content.split(/\r?\n/)[line] ?? null;
+  }
+  replaceRange(text, from, to = from) {
+    const newline = this.content.includes("\r\n") ? "\r\n" : "\n";
+    const lines = this.content.split(/\r?\n/);
+    const offset = (position) =>
+      lines
+        .slice(0, position.line)
+        .reduce((sum, line) => sum + line.length + newline.length, 0) +
+      position.ch;
+    const start = offset(from);
+    const end = offset(to);
+    this.content = this.content.slice(0, start) + text + this.content.slice(end);
+  }
+}
+
+class RollTransactionEditor extends RollTestEditor {
+  constructor(content, cursor) {
+    super(content);
+    this.cursor = { ...cursor };
+    this.transactions = [];
+    this.undoGroups = 0;
+  }
+  getCursor() {
+    return { ...this.cursor };
+  }
+  getScrollInfo() {
+    return { left: 0, top: 0 };
+  }
+  setCursor(lineOrPosition, ch) {
+    this.cursor = {
+      ...(typeof lineOrPosition === "object"
+        ? lineOrPosition
+        : { line: lineOrPosition, ch }),
+    };
+  }
+  transaction(transaction) {
+    this.transactions.push(JSON.parse(JSON.stringify(transaction)));
+    if (transaction.changes && transaction.changes.length > 0) {
+      this.undoGroups += 1;
+    }
+    const changes = [...(transaction.changes || [])].sort(
+      (left, right) =>
+        right.from.line - left.from.line || right.from.ch - left.from.ch,
+    );
+    for (const change of changes) {
+      super.replaceRange(change.text, change.from, change.to || change.from);
+    }
+    if (transaction.selection) {
+      this.cursor = {
+        ...(transaction.selection.to || transaction.selection.from),
+      };
+    }
+  }
+}
+
+function createRollPickerHarness(harnessOptions = {}) {
+  const editor = new RollTransactionEditor(
+    harnessOptions.content ?? "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+    harnessOptions.cursor || { line: 0, ch: 0 },
+  );
+  const file = harnessOptions.file || {
+    path: "Tasks.md",
+    basename: "Tasks",
+    extension: "md",
+  };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = harnessOptions.app || {};
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  const config = harnessOptions.config || buildDecayConfig();
+  const open = (options = {}) =>
+    plugin.openBulletPropertyPicker(editor, {
+      config,
+      baseDate: new Date(2026, 8, 30),
+      random: () => 0,
+      ...options,
+    });
+  return { config, editor, file, open, plugin };
+}
+
+function rollCtrlEnter() {
+  return { key: "Enter", ctrlKey: true, preventDefault() {}, stopPropagation() {} };
+}
+
+function rollPlainEnter() {
+  return { key: "Enter", preventDefault() {}, stopPropagation() {} };
+}
+
+async function flushRollWrites(plugin, beforeNoticeCount) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    if (notices.length !== beforeNoticeCount) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
+      return;
+    }
+    if (!plugin.activeBulletPropertyPicker) {
+      return;
+    }
+  }
+}
+
+function selectRollPropertyRow(picker, name) {
+  const index = picker.visibleItems.findIndex(
+    (item) => item && item.kind === "property" && item.property.name === name,
+  );
+  assert.notEqual(index, -1, `missing ${name} row`);
+  picker.selectedIndex = index;
+  return index;
+}
+
+test("picker-single Ctrl+Enter rolls a P2 task in one undo group", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.kind, "roll");
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(harness.editor.undoGroups, 1);
+  assert.equal(
+    harness.editor.content,
+    [
+      "- [?] #task A [priority:: medium] [scheduled:: 2026-10-08] ^a",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01 → 2026-10-08* — 🎲 P2 roll · in **8** (8–30) days",
+    ].join("\n"),
+  );
+});
+
+test("picker-single Ctrl+Enter decays a P2 task in one undo group", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: [
+      "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01] ^b",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01* — 🎲 P2 roll · in **17** (8–30) days",
+    ].join("\n"),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.kind, "decay");
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(harness.editor.undoGroups, 1);
+  assert.equal(
+    harness.editor.content,
+    [
+      "- [?] #task B [priority:: low] [scheduled:: 2026-10-31] ^b",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01 → 2026-10-31* — 🎲 P2 → P3 decay · in **31** (31–90) days",
+      "\t\t- *2026-10-01* — 🎲 P2 roll · in **17** (8–30) days",
+    ].join("\n"),
+  );
+  assert.match(notices.at(-1), /priority → P3 \(low\) · decayed from P2/);
+});
+
+test("picker-single Ctrl+Enter cancels a P4 task in one undo group", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: [
+      "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] ^c",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01* — 🎲 P4 roll · in **200** (91–365) days",
+    ].join("\n"),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.kind, "cancel");
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(harness.editor.undoGroups, 1);
+  assert.equal(
+    harness.editor.content,
+    [
+      "- [-] #task C [priority:: lowest] [scheduled:: 2026-10-01] [cancelled:: 2026-09-30] ^c",
+      "\t- ❌ **CANCEL LOG**",
+      "\t\t- *2026-09-30* — 🍂 decayed past P4 after 1 roll",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01* — 🎲 P4 roll · in **200** (91–365) days",
+    ].join("\n"),
+  );
+});
+
+test("picker-single Ctrl+Enter in stage two writes the recommended roll", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+  });
+  assert.equal(harness.open(), true);
+  let picker = harness.plugin.activeBulletPropertyPicker;
+  const propertyIndex = picker.visibleItems.findIndex(
+    (item) => item && item.kind === "property" && item.property.name === "scheduled",
+  );
+  assert.notEqual(propertyIndex, -1);
+  await picker.openItemAtIndex(propertyIndex);
+  picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.stage, "value");
+  const pinned = picker.items.find((item) => item && item.priorityRoll);
+  assert.ok(pinned);
+  assert.equal(pinned.value, picker.priorityRollRecommendation.date);
+  assert.equal(pinned.value, "2026-10-08");
+  const presetIndex = picker.visibleItems.findIndex(
+    (item) => item && !item.priorityRoll,
+  );
+  assert.notEqual(presetIndex, -1);
+  picker.selectedIndex = presetIndex;
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(harness.editor.undoGroups, 1);
+  assert.match(
+    harness.editor.content,
+    /\[scheduled:: 2026-10-08\]/,
+  );
+  assert.match(harness.editor.content, /🎲 P2 roll · in \*\*8\*\* \(8–30\) days/);
+});
+
+test("picker-single Enter opens the date list and Ctrl+Enter on priority acts like Enter", async () => {
+  const content = "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a";
+  const harness = createRollPickerHarness({ content });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  selectRollPropertyRow(picker, "scheduled");
+  picker.handleKeydown(rollPlainEnter());
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.equal(picker.stage, "value");
+  assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
+  assert.equal(harness.editor.content, content);
+
+  const second = createRollPickerHarness({ content });
+  assert.equal(second.open(), true);
+  const secondPicker = second.plugin.activeBulletPropertyPicker;
+  selectRollPropertyRow(secondPicker, "priority");
+  secondPicker.handleKeydown(rollCtrlEnter());
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.equal(secondPicker.stage, "value");
+  assert.equal(second.plugin.activeBulletPropertyPicker, secondPicker);
+  assert.equal(second.editor.content, content);
+  assert.equal(second.editor.undoGroups, 0);
+});
+
+test("picker-single P0 and closed tasks have no preview and Ctrl+Enter acts like Enter", async () => {
+  for (const content of [
+    "- [ ] #task D [scheduled:: 2026-10-01] ^d",
+    "- [x] #task E [priority:: medium] [scheduled:: 2026-10-01] ^e",
+  ]) {
+    const harness = createRollPickerHarness({ content });
+    assert.equal(harness.open(), true);
+    const picker = harness.plugin.activeBulletPropertyPicker;
+    assert.equal(picker.priorityRollRecommendation, null);
+    assert.equal(picker.getStageOneRollPreview(), null);
+    selectRollPropertyRow(picker, "scheduled");
+    picker.handleKeydown(rollCtrlEnter());
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    assert.equal(picker.stage, "value", content);
+    assert.equal(harness.plugin.activeBulletPropertyPicker, picker, content);
+    assert.equal(harness.editor.content, content, content);
+  }
+});
+
+test("picker-single recurring P4 past the limit refuses and keeps the picker open", async () => {
+  notices.length = 0;
+  const content = [
+    "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] 🔁 ^c",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t\t- *2026-10-01* — 🎲 P4 roll · in **200** (91–365) days",
+  ].join("\n");
+  const harness = createRollPickerHarness({ content });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.kind, "unavailable");
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.match(notices.at(-1), /Recurring tasks are cancelled/);
+  assert.equal(harness.editor.content, content);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
+  assert.equal(harness.editor.undoGroups, 0);
+});
+
+test("picker-single stale tasks refuse and re-render the decay preview", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.kind, "roll");
+  harness.editor.content = [
+    "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "\t\t- *2026-10-01* — 🎲 P2 roll · in **17** (8–30) days",
+  ].join("\n");
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.match(notices.at(-1), /Task changed while the picker was open; nothing was written/);
+  assert.equal(
+    harness.editor.content,
+    [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01* — 🎲 P2 roll · in **17** (8–30) days",
+    ].join("\n"),
+  );
+  assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
+  assert.equal(picker.stage, "properties");
+  assert.equal(picker.priorityRollRecommendation.kind, "decay");
+});
+
+test("picker-single Ctrl+R in stage one re-rolls the recommendation date", async () => {
+  const values = [0, 0.5];
+  let index = 0;
+  const harness = createRollPickerHarness({
+    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+  });
+  assert.equal(
+    harness.open({ random: () => values[index++ % values.length] }),
+    true,
+  );
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.date, "2026-10-08");
+  selectRollPropertyRow(picker, "scheduled");
+  picker.handleKeydown({
+    key: "r",
+    ctrlKey: true,
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(picker.priorityRollRecommendation.date, "2026-10-19");
+});
+
+test("picker-single Ctrl+R in stage two keeps the pinned row and recommendation together", async () => {
+  const values = [0, 0.5];
+  let index = 0;
+  const harness = createRollPickerHarness({
+    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+  });
+  assert.equal(
+    harness.open({ random: () => values[index++ % values.length] }),
+    true,
+  );
+  let picker = harness.plugin.activeBulletPropertyPicker;
+  const propertyIndex = picker.visibleItems.findIndex(
+    (item) => item && item.kind === "property" && item.property.name === "scheduled",
+  );
+  await picker.openItemAtIndex(propertyIndex);
+  picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.date, "2026-10-08");
+  assert.equal(
+    picker.items.find((item) => item && item.priorityRoll).value,
+    "2026-10-08",
+  );
+  picker.handleKeydown({
+    key: "r",
+    ctrlKey: true,
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(picker.priorityRollRecommendation.date, "2026-10-19");
+  assert.equal(
+    picker.items.find((item) => item && item.priorityRoll).value,
+    "2026-10-19",
+  );
+});
+
+test("picker-single Ctrl+Enter rolls a ^prj task through frontmatter in one undo group", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: [
+      "---",
+      "type: [[project]]",
+      "scheduled: 2026-10-01",
+      "---",
+      "- [ ] #task Ship [priority:: medium] ^prj",
+    ].join("\n"),
+    cursor: { line: 4, ch: 0 },
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.kind, "roll");
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(harness.editor.undoGroups, 1);
+  assert.match(harness.editor.content, /scheduled: 2026-10-08/);
+  assert.match(harness.editor.content, /🎲 P2 roll · in \*\*8\*\* \(8–30\) days/);
+});
+
+test("picker-single Ctrl+Enter decays a ^prj task through frontmatter in one undo group", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: [
+      "---",
+      "type: [[project]]",
+      "scheduled: 2026-10-01",
+      "---",
+      "- [ ] #task Ship [priority:: medium] ^prj",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01* — 🎲 P2 roll · in **17** (8–30) days",
+    ].join("\n"),
+    cursor: { line: 4, ch: 0 },
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.priorityRollRecommendation.kind, "decay");
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(harness.editor.undoGroups, 1);
+  assert.match(harness.editor.content, /scheduled: 2026-10-31/);
+  assert.match(harness.editor.content, /\[priority:: low\]/);
+  assert.match(harness.editor.content, /🎲 P2 → P3 decay · in \*\*31\*\* \(31–90\) days/);
+});
+
+test("picker-counted Ctrl+Enter applies a mixed roll/decay/cancel batch in one undo group", async () => {
+  notices.length = 0;
+  const rollP2 = "🎲 P2 roll · in **17** (8–30) days";
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const harness = createRollPickerHarness({
+    content: [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+      "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01] ^b",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP2}`,
+      "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] ^c",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP4}`,
+      "- [x] #task D [priority:: medium] [scheduled:: 2026-10-01] ^d",
+    ].join("\n"),
+  });
+  assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 3 }), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.isCountedSession(), true);
+  assert.deepEqual(picker.countedRollBatch.counts, { roll: 1, decay: 1, cancel: 1, unavailable: 0 });
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(harness.editor.undoGroups, 1);
+  assert.equal(
+    harness.editor.content,
+    [
+      "- [?] #task A [priority:: medium] [scheduled:: 2026-10-08] ^a",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01 → 2026-10-08* — 🎲 P2 roll · in **8** (8–30) days",
+      "- [?] #task B [priority:: low] [scheduled:: 2026-10-31] ^b",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- *2026-10-01 → 2026-10-31* — 🎲 P2 → P3 decay · in **31** (31–90) days",
+      `\t\t- *2026-10-01* — ${rollP2}`,
+      "- [-] #task C [priority:: lowest] [scheduled:: 2026-10-01] [cancelled:: 2026-09-30] ^c",
+      "\t- ❌ **CANCEL LOG**",
+      "\t\t- *2026-09-30* — 🍂 decayed past P4 after 1 roll",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP4}`,
+      "- [x] #task D [priority:: medium] [scheduled:: 2026-10-01] ^d",
+    ].join("\n"),
+  );
+  assert.match(notices.at(-1), /Rolled 3 tasks/);
+  assert.match(notices.at(-1), /1 rolled/);
+  assert.match(notices.at(-1), /1 decayed/);
+  assert.match(notices.at(-1), /1 cancelled/);
+  assert.match(notices.at(-1), /1 task skipped/);
+});
+
+test("picker-counted Ctrl+Enter refuses when a target line changed", async () => {
+  notices.length = 0;
+  const harness = createRollPickerHarness({
+    content: [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+      "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01] ^b",
+    ].join("\n"),
+  });
+  assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 1 }), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const edited = [
+    "- [ ] #task A edited elsewhere [priority:: medium] [scheduled:: 2026-10-01] ^a",
+    "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01] ^b",
+  ].join("\n");
+  harness.editor.content = edited;
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.match(notices.at(-1), /changed while the picker was open/);
+  assert.equal(harness.editor.content, edited);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
+  assert.equal(harness.editor.undoGroups, 0);
+});
+
+test("picker-counted Ctrl+Enter refuses a recurring cancel batch", async () => {
+  notices.length = 0;
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const content = [
+    "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+    "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] 🔁 ^c",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    `\t\t- *2026-10-01* — ${rollP4}`,
+  ].join("\n");
+  const harness = createRollPickerHarness({ content });
+  assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 1 }), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.ok(picker.countedRollBatch.unavailableReason);
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.match(notices.at(-1), /Recurring tasks are cancelled/);
+  assert.equal(harness.editor.content, content);
+  assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
+  assert.equal(harness.editor.undoGroups, 0);
 });

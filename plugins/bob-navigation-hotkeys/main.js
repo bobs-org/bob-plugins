@@ -11747,6 +11747,72 @@ function insertEditorLine(cm, line, lineText) {
   return true;
 }
 
+// Apply a task-line replacement plus its Schedule Log insertion as one editor
+// change set, so one Ctrl+Z reverts date, priority, Blocked mark, stamp and
+// log together. Coordinates are in the original document: the line count is
+// unchanged by the task-line edit, so the planned insertLine stays valid.
+// Falls back (returns false) when the editor has no `transaction`.
+function applyInlinePropertyAndScheduleLogTransaction(
+  cm,
+  cursorLine,
+  oldLineText,
+  nextLine,
+  scheduleLogPlan,
+  finalCursor = null,
+) {
+  if (!cm || typeof cm.transaction !== "function") {
+    return false;
+  }
+  const changes = [];
+  if (String(nextLine) !== String(oldLineText)) {
+    changes.push({
+      from: { line: cursorLine, ch: 0 },
+      to: { line: cursorLine, ch: String(oldLineText).length },
+      text: String(nextLine),
+    });
+  }
+  if (scheduleLogPlan && scheduleLogPlan.valid) {
+    const text = String(
+      scheduleLogPlan.lineText === null || scheduleLogPlan.lineText === undefined
+        ? ""
+        : scheduleLogPlan.lineText,
+    );
+    const lastLine = getEditorLastLine(cm);
+    if (lastLine !== null && scheduleLogPlan.insertLine > lastLine) {
+      const lastLineText = getEditorLineText(cm, lastLine);
+      const lastLineLength = lastLineText === null ? 0 : lastLineText.length;
+      changes.push({
+        from: { line: lastLine, ch: lastLineLength },
+        to: { line: lastLine, ch: lastLineLength },
+        text: `\n${text}`,
+      });
+    } else {
+      const atLine = Math.max(
+        0,
+        Math.floor(numericOrDefault(scheduleLogPlan.insertLine, Number.NaN)),
+      );
+      if (!Number.isFinite(atLine)) {
+        return false;
+      }
+      changes.push({
+        from: { line: atLine, ch: 0 },
+        to: { line: atLine, ch: 0 },
+        text: `${text}\n`,
+      });
+    }
+  }
+  if (changes.length === 0) {
+    return true;
+  }
+  const cursor = normalizePosition(finalCursor);
+  const transaction = { changes };
+  if (cursor) {
+    transaction.selection = { from: cursor, to: cursor };
+  }
+  cm.transaction(transaction);
+  return true;
+}
+
 function deleteEditorLine(cm, line) {
   if (!cm || typeof cm.replaceRange !== "function") {
     return false;
@@ -19380,7 +19446,7 @@ function buildPriorityNoticeModel(options = {}) {
     rollKind === "roll"
       ? `${scheduledName} → ${pill}`
       : rollKind === "decay"
-        ? `${propertyName} → ${pill} (${levelValue}) · decayed from ${rollFromLevel}`
+        ? `${propertyName} → ${normalizeBulletPropertyValue(level.label)} (${levelValue}) · decayed from ${rollFromLevel}`
         : scope === "counted"
           ? `${propertyName} → ${pill} (${levelValue}) on ${formatCountLabel(
               taskCount,
@@ -30420,6 +30486,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     }
 
+    // Plan the Schedule Log entry against the postimage before touching the
+    // editor, so the task-line edit, any folded same-file Pomodoro prune and
+    // the log entry land in one editor change set (one undo step).
+    const hasTaskLineChange = nextLine !== lineText;
+    const wantsScheduleLog = hasScheduleLogReasonInput(options.scheduleLog);
+    let preplannedScheduleLog = null;
     if (foldedDailyContent !== null) {
       const linesRemovedBeforeCursor = dailyCleanupPlan.removedLineRanges.reduce(
         (total, range) =>
@@ -30429,21 +30501,96 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         0,
       );
       effectiveCursorLine = cursor.line - linesRemovedBeforeCursor;
+      if (wantsScheduleLog) {
+        preplannedScheduleLog = planScheduleLogEntry(
+          foldedDailyContent,
+          effectiveCursorLine,
+          options.scheduleLog,
+        );
+      }
+    } else if (wantsScheduleLog) {
+      const original = splitMarkdownContent(writeContext.content);
+      const postLines = original.lines.slice();
+      if (hasTaskLineChange) {
+        postLines[cursor.line] = nextLine;
+      }
+      preplannedScheduleLog = planScheduleLogEntry(
+        postLines.join(original.lineEnding),
+        effectiveCursorLine,
+        options.scheduleLog,
+      );
+    }
+    const finalCursor = {
+      line: effectiveCursorLine,
+      ch: Math.min(Math.max(cursor.ch, 0), nextLine.length),
+    };
+
+    let scheduleLogOutcome = null;
+    if (foldedDailyContent !== null) {
+      let finalContent = foldedDailyContent;
+      if (preplannedScheduleLog && preplannedScheduleLog.valid) {
+        const folded = splitMarkdownContent(foldedDailyContent);
+        const mutable = folded.lines.slice();
+        applyScheduleLogEntryToLines(mutable, preplannedScheduleLog);
+        finalContent = mutable.join(folded.lineEnding);
+      }
       if (
-        !applyEditorContentTransaction(cm, writeContext.content, foldedDailyContent, {
-          line: effectiveCursorLine,
-          ch: Math.min(Math.max(cursor.ch, 0), nextLine.length),
-        })
+        !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
       ) {
         new Notice("Could not update bullet property");
         return false;
       }
-    } else if (
-      nextLine !== lineText &&
-      !replaceEditorLine(cm, cursor.line, lineText, nextLine)
-    ) {
-      new Notice("Could not update bullet property");
-      return false;
+      if (preplannedScheduleLog) {
+        scheduleLogOutcome = getScheduleLogWriteOutcome(
+          preplannedScheduleLog,
+          preplannedScheduleLog.valid,
+        );
+      }
+    } else {
+      const wantsWrite =
+        hasTaskLineChange ||
+        (preplannedScheduleLog && preplannedScheduleLog.valid);
+      if (wantsWrite) {
+        if (
+          typeof cm.transaction === "function" &&
+          preplannedScheduleLog &&
+          preplannedScheduleLog.valid
+        ) {
+          if (
+            !applyInlinePropertyAndScheduleLogTransaction(
+              cm,
+              cursor.line,
+              lineText,
+              nextLine,
+              preplannedScheduleLog,
+              finalCursor,
+            )
+          ) {
+            new Notice("Could not update bullet property");
+            return false;
+          }
+          scheduleLogOutcome = getScheduleLogWriteOutcome(
+            preplannedScheduleLog,
+            preplannedScheduleLog.valid,
+          );
+        } else if (
+          hasTaskLineChange &&
+          !replaceEditorLine(cm, cursor.line, lineText, nextLine)
+        ) {
+          new Notice("Could not update bullet property");
+          return false;
+        } else if (preplannedScheduleLog) {
+          scheduleLogOutcome = getScheduleLogWriteOutcome(
+            preplannedScheduleLog,
+            preplannedScheduleLog.valid &&
+              insertEditorLine(cm, preplannedScheduleLog.insertLine, preplannedScheduleLog.lineText),
+          );
+        } else {
+          scheduleLogOutcome = null;
+        }
+      } else if (preplannedScheduleLog) {
+        scheduleLogOutcome = getScheduleLogWriteOutcome(preplannedScheduleLog, false);
+      }
     }
 
     let removedPomodoroLinkCount = 0;
@@ -30460,19 +30607,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     } else if (foldedDailyContent !== null) {
       removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
-    }
-
-    let scheduleLogOutcome = null;
-    if (hasScheduleLogReasonInput(options.scheduleLog)) {
-      const scheduleLogPlan = planScheduleLogEntry(
-        String(cm.getValue() || ""),
-        effectiveCursorLine,
-        options.scheduleLog,
-      );
-      scheduleLogOutcome = getScheduleLogWriteOutcome(
-        scheduleLogPlan,
-        scheduleLogPlan.valid && insertEditorLine(cm, scheduleLogPlan.insertLine, scheduleLogPlan.lineText),
-      );
     }
 
     setEditorCursorSafely(
@@ -36804,6 +36938,7 @@ module.exports.helpers = {
   buildLocalTaskDependencyNotice,
   buildMultiDependencyNotice,
   applyEditorContentTransaction,
+  applyInlinePropertyAndScheduleLogTransaction,
   insertEditorLine,
   deleteEditorLine,
 };

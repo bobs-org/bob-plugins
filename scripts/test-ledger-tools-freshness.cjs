@@ -83,6 +83,10 @@ const {
   freshnessBlock,
   freshnessCounts,
   freshnessIntervalFor,
+  freshnessIntervalForLine,
+  freshnessLaneForRow,
+  freshnessLaneIntervalDays,
+  freshnessTierLabel,
   freshnessQueue,
   freshnessState,
   freshnessStatusView,
@@ -94,7 +98,13 @@ const {
 } = helpers;
 
 const D = "2026-10-08";
-const CFG = { interval: 7, intervalFromConfig: false, rottenDailyBudget: null };
+const CFG = {
+  interval: 7,
+  intervalFromConfig: false,
+  pendingInterval: 1,
+  nextInterval: 1,
+  rottenDailyBudget: null,
+};
 
 // docs/freshness.md §9: input line, expected line, `changed`.
 const PLACEMENT_VECTORS = [
@@ -256,16 +266,38 @@ function sRow(overrides = {}) {
   return {
     path: "a.md",
     line: 1,
+    statusSymbol: undefined,
     isTodo: true,
     recurring: false,
     laneVisible: true,
     isDailyNote: false,
     isToday: false,
     scheduled: null,
+    created: null,
     rawLine: "- [ ] #task T",
     noteRefreshRaw: undefined,
     ...overrides,
   };
+}
+
+function laneRow(path, line, symbol, fresh, created) {
+  const isTodo = symbol === " ";
+  const rawLine =
+    fresh === null || fresh === undefined
+      ? `- [${symbol}] #task Walk`
+      : `- [${symbol}] #task Walk [fresh:: ${fresh}]`;
+  return sRow({
+    path,
+    line,
+    statusSymbol: symbol,
+    isTodo,
+    rawLine,
+    created: created === undefined ? null : created,
+  });
+}
+
+function readyRow(path, line, fresh, created) {
+  return laneRow(path, line, " ", fresh, created);
 }
 
 test("S1 new through S4 overdue", () => {
@@ -407,7 +439,7 @@ test("S13 out-of-scope rows read null", () => {
   }
 });
 
-test("S14 queue order is NEW by path then DUE by due date", () => {
+test("S14 queue order (rewritten): NEW then RETURNED beats ROTTEN", () => {
   const rows = [
     sRow({ path: "b.md", line: 3 }),
     sRow({ path: "a.md", line: 9 }),
@@ -431,7 +463,7 @@ test("S14 queue order is NEW by path then DUE by due date", () => {
   const queue = freshnessQueue(rows, D, CFG);
   assert.deepEqual(
     queue.map((entry) => `${entry.path}:${entry.line}`),
-    ["a.md:9", "b.md:3", "c.md:2", "a.md:2", "a.md:4"],
+    ["a.md:9", "b.md:3", "a.md:4", "c.md:2", "a.md:2"],
   );
   assert.deepEqual(
     queue.map((entry) => entry.rank),
@@ -439,22 +471,40 @@ test("S14 queue order is NEW by path then DUE by due date", () => {
   );
   assert.deepEqual(
     queue.map((entry) => entry.tier),
-    ["1 · NEW", "1 · NEW", "2 · DUE", "2 · DUE", "2 · DUE"],
+    ["new", "new", "returned", "rotten", "rotten"],
+  );
+  assert.deepEqual(
+    queue.map((entry) => entry.tierLabel),
+    ["NEW", "NEW", "RETURNED", "ROTTEN", "ROTTEN"],
+  );
+  assert.deepEqual(
+    queue.map((entry) => entry.lane),
+    ["ready", "ready", "ready", "ready", "ready"],
+  );
+  assert.deepEqual(
+    queue.map((entry) => entry.tierRank),
+    [1, 2, 1, 1, 2],
+  );
+  assert.deepEqual(
+    queue.map((entry) => entry.tierTotal),
+    [2, 2, 1, 2, 2],
   );
 });
 
-test("S15 refreshed_today spans lanes and the budget needs zero new", () => {
+test("S15 counts (updated): upkeep outside the lanes drives the budget", () => {
   const rows = [
     sRow({
       path: "a.md",
       line: 1,
+      statusSymbol: "*",
       isTodo: false,
-      laneVisible: false,
+      laneVisible: true,
       rawLine: "- [*] #task Next [fresh:: 2026-10-08]",
     }),
     sRow({
       path: "a.md",
       line: 2,
+      statusSymbol: "x",
       isTodo: false,
       laneVisible: false,
       rawLine: "- [x] #task Done [fresh:: 2026-10-08]",
@@ -465,19 +515,44 @@ test("S15 refreshed_today spans lanes and the budget needs zero new", () => {
       rawLine: "- [ ] #task Old [fresh:: 2026-10-07]",
     }),
   ];
-  const counts = freshnessCounts(rows, D, {
+  const cfg = {
     interval: 7,
     intervalFromConfig: false,
-    rottenDailyBudget: 2,
-  });
+    pendingInterval: 1,
+    nextInterval: 1,
+    rottenDailyBudget: 15,
+  };
+  const counts = freshnessCounts(rows, D, cfg);
   assert.equal(counts.refreshedToday, 2);
+  assert.equal(counts.upkeepToday, 1);
   assert.equal(counts.new, 0);
-  assert.equal(counts.budgetMet, true);
+  assert.equal(counts.budgetMet, false);
+
+  const met = freshnessCounts(
+    [
+      ...rows,
+      ...Array.from({ length: 14 }, (_, i) =>
+        sRow({
+          path: "u.md",
+          line: 10 + i,
+          statusSymbol: "x",
+          isTodo: false,
+          laneVisible: false,
+          rawLine: `- [x] #task Done ${i} [fresh:: 2026-10-08]`,
+        }),
+      ),
+    ],
+    D,
+    cfg,
+  );
+  assert.equal(met.refreshedToday, 16);
+  assert.equal(met.upkeepToday, 15);
+  assert.equal(met.budgetMet, true);
 
   const withNew = freshnessCounts(
     [...rows, sRow({ path: "b.md", line: 1 })],
     D,
-    { interval: 7, intervalFromConfig: false, rottenDailyBudget: 2 },
+    { ...cfg, rottenDailyBudget: 2 },
   );
   assert.equal(withNew.new, 1);
   assert.equal(withNew.budgetMet, false);
@@ -486,6 +561,8 @@ test("S15 refreshed_today spans lanes and the budget needs zero new", () => {
 test("config coercion keeps defaults, flags invalid, ignores unknown keys", () => {
   assert.deepEqual(defaultFreshnessConfig(), {
     interval: 7,
+    pendingInterval: 1,
+    nextInterval: 1,
     rottenDailyBudget: null,
   });
   assert.equal(freshnessBlock({}), undefined);
@@ -537,15 +614,37 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     { rotten_daily_budget: "soon" },
     { stale_daily_budget: 0 },
     { stale_daily_budget: "soon" },
+    { pending_interval: 0 },
+    { pending_interval: 366 },
+    { pending_interval: "soon" },
+    { pending_interval: true },
+    { pending_interval: 7.5 },
+    { next_interval: 0 },
+    { next_interval: true },
     [1, 2],
   ]) {
     const coerced = coerceFreshnessConfig(block);
     assert.equal(coerced.invalid, true, JSON.stringify(block));
     assert.deepEqual(
-      { interval: coerced.config.interval, rottenDailyBudget: coerced.config.rottenDailyBudget },
-      { interval: 7, rottenDailyBudget: null },
+      {
+        interval: coerced.config.interval,
+        pendingInterval: coerced.config.pendingInterval,
+        nextInterval: coerced.config.nextInterval,
+        rottenDailyBudget: coerced.config.rottenDailyBudget,
+      },
+      { interval: 7, pendingInterval: 1, nextInterval: 1, rottenDailyBudget: null },
     );
   }
+  // Lane intervals: absent or null mean the default 1, false turns
+  // the lane off, integers set it, camelCase is tolerated.
+  assert.deepEqual(coerceFreshnessConfig({}).config.pendingInterval, 1);
+  assert.deepEqual(coerceFreshnessConfig({ pending_interval: null }).config.pendingInterval, 1);
+  assert.deepEqual(coerceFreshnessConfig({ pending_interval: false }).config.pendingInterval, null);
+  assert.deepEqual(coerceFreshnessConfig({ pending_interval: 3 }).config.pendingInterval, 3);
+  assert.deepEqual(coerceFreshnessConfig({ pendingInterval: 3 }).config.pendingInterval, 3);
+  assert.deepEqual(coerceFreshnessConfig({ next_interval: false }).config.nextInterval, null);
+  assert.deepEqual(coerceFreshnessConfig({ next_interval: null }).config.nextInterval, 1);
+  assert.deepEqual(coerceFreshnessConfig({ nextInterval: 2 }).config.nextInterval, 2);
 });
 
 test("loadFreshnessConfig reads the block with plan-style injectables", () => {
@@ -614,6 +713,85 @@ test("interval precedence is task, note, config, default", () => {
     days: 7,
     source: "default",
   });
+  // Lane intervals override the whole Ready chain when walked.
+  assert.deepEqual(freshnessIntervalFor(30, 3, CFG, "pending"), {
+    days: 1,
+    source: "pending",
+  });
+  assert.deepEqual(freshnessIntervalFor(null, null, CFG, "next"), {
+    days: 1,
+    source: "next",
+  });
+  assert.deepEqual(
+    freshnessIntervalFor(null, null, { ...CFG, nextInterval: null }, "next"),
+    { days: 7, source: "default" },
+  );
+  assert.deepEqual(
+    freshnessIntervalFor(null, null, { ...CFG, pendingInterval: 3 }, "pending"),
+    { days: 3, source: "pending" },
+  );
+});
+
+test("intervalForLine covers every source with its Ready fallback", () => {
+  const line = (text) => text;
+  // Ready task interval.
+  assert.deepEqual(
+    freshnessIntervalForLine("- [ ] #task T [refresh:: 14]", null, CFG),
+    { days: 14, source: "task", ready: { days: 14, source: "task" } },
+  );
+  assert.deepEqual(
+    freshnessIntervalForLine("- [ ] #task T", 3, CFG),
+    { days: 3, source: "note", ready: { days: 3, source: "note" } },
+  );
+  assert.deepEqual(
+    freshnessIntervalForLine(
+      "- [ ] #task T",
+      null,
+      { ...CFG, interval: 10, intervalFromConfig: true },
+    ),
+    { days: 10, source: "config", ready: { days: 10, source: "config" } },
+  );
+  assert.deepEqual(freshnessIntervalForLine("- [ ] #task T", null, CFG), {
+    days: 7,
+    source: "default",
+    ready: { days: 7, source: "default" },
+  });
+  // Lane task: lane interval with the Ready chain as `ready`.
+  assert.deepEqual(
+    freshnessIntervalForLine("- [*] #task N [refresh:: 14]", null, CFG),
+    { days: 1, source: "next", ready: { days: 14, source: "task" } },
+  );
+  assert.deepEqual(
+    freshnessIntervalForLine("- [/] #task P", null, CFG),
+    { days: 1, source: "pending", ready: { days: 7, source: "default" } },
+  );
+  // Unwalked lane falls back to the Ready chain.
+  assert.deepEqual(
+    freshnessIntervalForLine(
+      "- [*] #task N",
+      null,
+      { ...CFG, nextInterval: null },
+    ),
+    { days: 7, source: "default", ready: { days: 7, source: "default" } },
+  );
+  // Never throws on bad input.
+  assert.deepEqual(freshnessIntervalForLine(null, null, null), {
+    days: 7,
+    source: "default",
+    ready: { days: 7, source: "default" },
+  });
+  assert.equal(freshnessLaneForRow("/", false), "pending");
+  assert.equal(freshnessLaneForRow("*", false), "next");
+  assert.equal(freshnessLaneForRow(" ", true), "ready");
+  assert.equal(freshnessLaneForRow("?", false), null);
+  assert.equal(freshnessLaneIntervalDays(CFG, "pending"), 1);
+  assert.equal(
+    freshnessLaneIntervalDays({ ...CFG, nextInterval: null }, "next"),
+    null,
+  );
+  assert.equal(freshnessTierLabel("new"), "NEW");
+  assert.equal(freshnessTierLabel("returned"), "RETURNED");
+  assert.equal(freshnessTierLabel("bogus"), "");
 });
 
 // --- Plugin behaviour -------------------------------------------------------
@@ -694,7 +872,7 @@ function withMissingConfig(run) {
   }
 }
 
-test("freshness namespace v3 keeps every member on rotten vocabulary", () => {
+test("freshness namespace v4 keeps every member on rotten vocabulary", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -714,7 +892,7 @@ test("freshness namespace v3 keeps every member on rotten vocabulary", () => {
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 3);
+      assert.equal(freshness.version, 4);
       for (const key of [
         "config",
         "stampLine",
@@ -726,6 +904,7 @@ test("freshness namespace v3 keeps every member on rotten vocabulary", () => {
         "tier",
         "rank",
         "intervalFor",
+        "intervalForLine",
         "queue",
         "counts",
         "lints",
@@ -734,26 +913,106 @@ test("freshness namespace v3 keeps every member on rotten vocabulary", () => {
       }
       assert.deepEqual(freshness.config(), {
         interval: 7,
+        pendingInterval: 1,
+        nextInterval: 1,
         rottenDailyBudget: null,
+        intervalFromConfig: false,
         invalid: false,
         deprecatedStaleBudget: false,
       });
       assert.equal(freshness.state(tasks[0]), "new");
       assert.equal(freshness.bucket(tasks[0]), "new");
       assert.equal(freshness.isDue(tasks[0]), true);
-      assert.equal(freshness.tier(tasks[0]), "1 · NEW");
+      assert.equal(freshness.tier(tasks[0]), "new");
       assert.equal(freshness.rank(tasks[0]), 0);
       assert.deepEqual(freshness.intervalFor(tasks[0]), {
         days: 7,
         source: "default",
       });
+      assert.deepEqual(
+        freshness.intervalForLine("- [*] #task N [refresh:: 14]", null),
+        { days: 1, source: "next", ready: { days: 14, source: "task" } },
+      );
       assert.equal(freshness.queue().length, 1);
+      assert.equal(freshness.queue()[0].tier, "new");
+      assert.equal(freshness.queue()[0].tierLabel, "NEW");
+      assert.equal(freshness.queue()[0].lane, "ready");
       assert.equal(freshness.counts().due, 1);
+      assert.equal(freshness.counts().walk, 1);
       assert.deepEqual(freshness.lints(), []);
       assert.equal(
         freshness.stampLine("- [ ] #task Buy milk", "2026-10-08"),
         "- [ ] #task Buy milk [fresh:: 2026-10-08]",
       );
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("tier, isDue, and rank cover lane rows", () => {
+  withMissingConfig(() => {
+    const todayText = formatLocalDate(new Date());
+    const yesterday = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      return formatLocalDate(d);
+    })();
+    const nextTask = makeFreshnessTask({
+      status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+      path: "notes/n.md",
+      lineNumber: 0,
+      description: "Next",
+      originalMarkdown: `- [*] #task Next [fresh:: ${yesterday}]`,
+    });
+    const readyTask = makeFreshnessTask({
+      path: "notes/a.md",
+      lineNumber: 1,
+      description: "Ready",
+      originalMarkdown: "- [ ] #task Ready [fresh:: 2026-09-20]",
+    });
+    const tasks = [readyTask, nextTask];
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
+    plugin.onload();
+    try {
+      const freshness = plugin.api.freshness;
+      assert.equal(freshness.state(nextTask), null);
+      assert.equal(freshness.bucket(nextTask), null);
+      assert.equal(freshness.tier(nextTask), "next");
+      assert.equal(freshness.isDue(nextTask), true);
+      assert.equal(freshness.tier(readyTask), "rotten");
+      assert.equal(freshness.isDue(readyTask), true);
+      const queue = freshness.queue();
+      assert.deepEqual(
+        queue.map((entry) => entry.tier),
+        ["next", "rotten"],
+      );
+      // Rank covers lane rows: the lane row sorts before ROTTEN.
+      assert.equal(freshness.rank(nextTask), 0);
+      assert.equal(freshness.rank(readyTask), 1);
+      assert.deepEqual(freshness.intervalFor(nextTask), {
+        days: 1,
+        source: "next",
+      });
+      // A lane task stamped today leaves the walk but keeps its mark.
+      const todayTask = makeFreshnessTask({
+        status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+        path: "notes/t.md",
+        lineNumber: 0,
+        description: "Today",
+        originalMarkdown: `- [*] #task Today [fresh:: ${todayText}]`,
+      });
+      const plugin2 = new LedgerToolsPlugin(
+        makeFreshnessApp({ tasks: [todayTask] }),
+        {},
+      );
+      plugin2.onload();
+      try {
+        assert.equal(plugin2.api.freshness.tier(todayTask), null);
+        assert.equal(plugin2.api.freshness.isDue(todayTask), false);
+      } finally {
+        plugin2.onunload();
+      }
     } finally {
       plugin.onunload();
     }
@@ -854,12 +1113,26 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
     { text: "⟳ –", tooltip: "Tasks unavailable", mode: "unavailable" },
   );
   const status = freshnessStatusView(
-    { due: 23, new: 3, resurfaced: 2, rotten: 18, refreshedToday: 12 },
+    {
+      due: 23,
+      new: 3,
+      resurfaced: 2,
+      rotten: 18,
+      pendingDue: 10,
+      nextDue: 15,
+      walk: 48,
+      refreshedToday: 20,
+      upkeepToday: 12,
+    },
     { mostOverdue: 11 },
   );
-  assert.equal(status.text, "⟳ 3 new · 20 rotten · ✓ 12 today");
+  assert.equal(
+    status.text,
+    "⟳ 3 new · 10 pending · 15 next · 20 rotten · ✓ 12 today",
+  );
   assert.equal(status.mode, "new");
-  assert.match(status.tooltip, /NEW 3 · RETURNED 2 · ROTTEN 18/);
+  assert.match(status.tooltip, /Walk 48 · NEW 3 · PENDING 10 · NEXT 15/);
+  assert.match(status.tooltip, /RETURNED 2 · ROTTEN 18/);
   assert.match(status.tooltip, /oldest 11d overdue/);
   assert.match(status.tooltip, /✓ 12 today/);
   const budgeted = freshnessStatusView(
@@ -868,18 +1141,91 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
       new: 0,
       resurfaced: 1,
       rotten: 4,
-      refreshedToday: 12,
+      pendingDue: 0,
+      nextDue: 0,
+      walk: 5,
+      refreshedToday: 20,
+      upkeepToday: 12,
       budget: 15,
       budgetMet: false,
     },
     { mostOverdue: 4 },
   );
-  assert.equal(budgeted.text, "⟳ 0 new · 5 rotten · ✓ 12/15 today");
+  assert.equal(
+    budgeted.text,
+    "⟳ 0 new · 0 pending · 0 next · 5 rotten · ✓ 12/15 today",
+  );
   assert.equal(budgeted.mode, "due");
   assert.match(budgeted.tooltip, /RETURNED 1 · ROTTEN 4/);
+  // Mode table: new, then due while commitments remain, then
+  // budget, then clear, else due.
+  const modes = [
+    [{ new: 1, pendingDue: 0, nextDue: 0, resurfaced: 0, walk: 5 }, "new"],
+    [{ new: 0, pendingDue: 2, nextDue: 0, resurfaced: 0, walk: 5 }, "due"],
+    [{ new: 0, pendingDue: 0, nextDue: 1, resurfaced: 0, walk: 5 }, "due"],
+    [{ new: 0, pendingDue: 0, nextDue: 0, resurfaced: 1, walk: 5 }, "due"],
+    [
+      {
+        new: 0,
+        pendingDue: 0,
+        nextDue: 0,
+        resurfaced: 0,
+        rotten: 3,
+        walk: 3,
+        upkeepToday: 15,
+        budget: 15,
+        budgetMet: true,
+      },
+      "budget",
+    ],
+    [
+      {
+        new: 0,
+        pendingDue: 0,
+        nextDue: 0,
+        resurfaced: 0,
+        rotten: 0,
+        walk: 0,
+        upkeepToday: 0,
+      },
+      "clear",
+    ],
+    [
+      {
+        new: 0,
+        pendingDue: 0,
+        nextDue: 0,
+        resurfaced: 0,
+        rotten: 4,
+        walk: 4,
+        upkeepToday: 2,
+      },
+      "due",
+    ],
+  ];
+  for (const [counts, mode] of modes) {
+    assert.equal(
+      freshnessStatusView(
+        { due: 0, rotten: 0, refreshedToday: 0, upkeepToday: 0, ...counts },
+        {},
+      ).mode,
+      mode,
+      JSON.stringify(counts),
+    );
+  }
   assert.equal(
     freshnessStatusView(
-      { due: 0, new: 0, resurfaced: 0, rotten: 0, refreshedToday: 12 },
+      {
+        due: 0,
+        new: 0,
+        resurfaced: 0,
+        rotten: 0,
+        pendingDue: 0,
+        nextDue: 0,
+        walk: 0,
+        refreshedToday: 12,
+        upkeepToday: 12,
+      },
       {},
     ).mode,
     "clear",
@@ -891,7 +1237,11 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
         new: 0,
         resurfaced: 0,
         rotten: 0,
+        pendingDue: 0,
+        nextDue: 0,
+        walk: 0,
         refreshedToday: 15,
+        upkeepToday: 15,
         budget: 15,
         budgetMet: true,
       },
@@ -959,7 +1309,7 @@ test("status bar clicks through, falling back to rotten", () => {
     try {
       assert.equal(plugin.freshnessStatusEl, el);
       plugin.updateFreshnessStatusBar();
-      assert.equal(el.text, "⟳ 1 new · 0 rotten · ✓ 0 today");
+      assert.equal(el.text, "⟳ 1 new · 0 pending · 0 next · 0 rotten · ✓ 0 today");
       el.handlers.click();
       assert.deepEqual(executed, [
         "bob-navigation-hotkeys:jump-to-next-due-task",
@@ -979,7 +1329,7 @@ test("status bar clicks through, falling back to rotten", () => {
     fallback.onload();
     try {
       fallback.updateFreshnessStatusBar();
-      assert.equal(fallbackEl.text, "⟳ 0 new · 0 rotten · ✓ 0 today");
+      assert.equal(fallbackEl.text, "⟳ 0 new · 0 pending · 0 next · 0 rotten · ✓ 0 today");
       fallbackEl.handlers.click();
       assert.deepEqual(fallbackOpened, ["rotten"]);
     } finally {
@@ -996,7 +1346,7 @@ test("every freshness api member is synchronous and never throws", () => {
       const freshness = plugin.api.freshness;
       assert.equal(freshness.state(null), null);
       assert.equal(freshness.isDue(undefined), false);
-      assert.equal(freshness.tier(42), "");
+      assert.equal(freshness.tier(42), null);
       assert.equal(
         freshness.rank(null),
         Number.MAX_SAFE_INTEGER,
@@ -1005,8 +1355,15 @@ test("every freshness api member is synchronous and never throws", () => {
         days: 7,
         source: "default",
       });
+      assert.deepEqual(freshness.intervalForLine(null, null), {
+        days: 7,
+        source: "default",
+        ready: { days: 7, source: "default" },
+      });
       assert.deepEqual(freshness.queue(), []);
       assert.equal(freshness.counts().due, 0);
+      assert.equal(freshness.counts().walk, 0);
+      assert.equal(freshness.counts().upkeepToday, 0);
       assert.deepEqual(freshness.lints(), []);
       assert.equal(freshness.stampLine(null), "");
       assert.equal(typeof freshness.stampLine("x"), "string");
@@ -1239,6 +1596,8 @@ test("config snapshot caches the parse and invalidates explicitly", () => {
       assert.deepEqual(first, {
         config: {
           interval: 7,
+          pendingInterval: 1,
+          nextInterval: 1,
           rottenDailyBudget: null,
           intervalFromConfig: false,
         },
@@ -1638,6 +1997,261 @@ test("interval lookup serves the cached interval with one memo acquisition", () 
       plugin.onunload();
     }
   });
+});
+
+test("Q1 Bryan's example orders A, D, C, B by interval, lateness, newest created", () => {
+  const d = readyRow("d.md", 1, "2026-10-07", "2026-09-01");
+  d.rawLine = "- [ ] #task A [fresh:: 2026-10-07] [refresh:: 1]";
+  const c = readyRow("c.md", 1, "2026-09-28", "2026-09-04");
+  const b = readyRow("b.md", 1, "2026-09-28", "2026-09-01");
+  const a = readyRow("a.md", 1, "2026-09-30", "2026-09-01");
+  const ordered = freshnessQueue([d, c, b, a], D, CFG);
+  assert.deepEqual(
+    ordered.map((entry) => `${entry.path}:${entry.line}`),
+    ["d.md:1", "c.md:1", "b.md:1", "a.md:1"],
+  );
+  assert.deepEqual(
+    ordered.map((entry) => entry.tier),
+    ["rotten", "rotten", "rotten", "rotten"],
+  );
+  assert.equal(ordered[0].interval, 1);
+  assert.equal(ordered[0].dueOn, "2026-10-08");
+});
+
+test("Q2 tier order beats path order", () => {
+  const fresh = readyRow("e.md", 1, null, null);
+  const pending = laneRow("d.md", 1, "/", "2026-10-07", null);
+  const next = laneRow("c.md", 1, "*", "2026-10-07", null);
+  const returned = readyRow("b.md", 1, "2026-10-05", null);
+  returned.scheduled = "2026-10-07";
+  returned.rawLine =
+    "- [ ] #task R [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
+  const rotten = readyRow("a.md", 1, "2026-09-20", null);
+  const ordered = freshnessQueue([rotten, returned, next, pending, fresh], D, CFG);
+  assert.deepEqual(
+    ordered.map((entry) => `${entry.path}:${entry.line}`),
+    ["e.md:1", "d.md:1", "c.md:1", "b.md:1", "a.md:1"],
+  );
+  assert.deepEqual(
+    ordered.map((entry) => entry.tier),
+    ["new", "pending", "next", "returned", "rotten"],
+  );
+  assert.deepEqual(
+    ordered.map((entry) => entry.tierLabel),
+    ["NEW", "PENDING", "NEXT", "RETURNED", "ROTTEN"],
+  );
+});
+
+test("L1 lane due and stamped today", () => {
+  const todayRow = laneRow("a.md", 1, "*", "2026-10-08", null);
+  const evaluatedToday = helpers.freshnessEvaluate(todayRow, D, CFG);
+  assert.equal(evaluatedToday.state, null);
+  assert.equal(evaluatedToday.tier, null);
+  assert.equal(evaluatedToday.lane, "next");
+  const due = laneRow("a.md", 2, "*", "2026-10-07", null);
+  const evaluated = helpers.freshnessEvaluate(due, D, CFG);
+  assert.equal(evaluated.state, null);
+  assert.equal(evaluated.tier, "next");
+  assert.equal(evaluated.lane, "next");
+  assert.equal(evaluated.dueOn, "2026-10-08");
+  assert.equal(evaluated.daysOverdue, 0);
+  assert.equal(evaluated.intervalDays, 1);
+  assert.equal(evaluated.intervalSource, "next");
+});
+
+test("L2 lane overrides refresh", () => {
+  const input = laneRow("a.md", 1, "/", "2026-10-07", null);
+  input.rawLine = "- [/] #task Lane [fresh:: 2026-10-07] [refresh:: 30]";
+  const evaluated = helpers.freshnessEvaluate(input, D, CFG);
+  assert.equal(evaluated.tier, "pending");
+  assert.equal(evaluated.intervalDays, 1);
+  assert.equal(evaluated.intervalSource, "pending");
+});
+
+test("L3 lane exclusions have no tier", () => {
+  const fresh = "2026-10-07";
+  const recurring = laneRow("a.md", 1, "*", fresh, null);
+  recurring.recurring = true;
+  const todayMember = laneRow("a.md", 2, "*", fresh, null);
+  todayMember.isToday = true;
+  const daily = laneRow("2026/20261008.md", 1, "*", fresh, null);
+  daily.isDailyNote = true;
+  const hidden = laneRow("a.md", 3, "*", fresh, null);
+  hidden.laneVisible = false;
+  for (const [name, candidate] of [
+    ["recurring", recurring],
+    ["today", todayMember],
+    ["daily", daily],
+    ["hidden", hidden],
+  ]) {
+    const evaluated = helpers.freshnessEvaluate(candidate, D, CFG);
+    assert.equal(evaluated.tier, null, `${name} must be in no tier`);
+    assert.equal(evaluated.state, null, `${name} keeps a null state`);
+  }
+});
+
+test("L4 lane off switch and null default", () => {
+  const off = { ...CFG, nextInterval: null };
+  const never = laneRow("a.md", 1, "*", null, null);
+  const evaluated = helpers.freshnessEvaluate(never, D, off);
+  assert.equal(evaluated.tier, null);
+  assert.equal(evaluated.intervalDays, 7);
+  assert.equal(evaluated.intervalSource, "default");
+  const evaluatedOn = helpers.freshnessEvaluate(never, D, CFG);
+  assert.equal(evaluatedOn.tier, "next");
+  assert.equal(evaluatedOn.intervalDays, 1);
+});
+
+test("L5 lane order never stamped first", () => {
+  const z = laneRow("z.md", 9, "/", null, "2026-09-01");
+  const b = laneRow("b.md", 1, "/", "2026-10-01", "2026-09-15");
+  const a5 = laneRow("a.md", 5, "/", "2026-10-07", "2026-09-10");
+  const a2 = laneRow("a.md", 2, "/", "2026-10-07", "2026-09-20");
+  const a1 = laneRow("a.md", 1, "/", "2026-10-07", null);
+  const ordered = freshnessQueue([a1, a2, a5, b, z], D, CFG);
+  assert.deepEqual(
+    ordered.map((entry) => `${entry.path}:${entry.line}`),
+    ["z.md:9", "b.md:1", "a.md:5", "a.md:2", "a.md:1"],
+  );
+  assert.deepEqual(
+    ordered.map((entry) => entry.tier),
+    ["pending", "pending", "pending", "pending", "pending"],
+  );
+});
+
+test("R1 RETURNED beats older ROTTEN", () => {
+  const returned = readyRow("b.md", 1, "2026-10-05", null);
+  returned.scheduled = "2026-10-07";
+  returned.rawLine =
+    "- [ ] #task R [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
+  const rotten = readyRow("a.md", 1, "2026-09-20", null);
+  const ordered = freshnessQueue([rotten, returned], D, CFG);
+  assert.deepEqual(
+    ordered.map((entry) => `${entry.path}:${entry.line}`),
+    ["b.md:1", "a.md:1"],
+  );
+  assert.deepEqual(
+    ordered.map((entry) => entry.tier),
+    ["returned", "rotten"],
+  );
+});
+
+test("R2 returned orders by schedule then newest created", () => {
+  const x = readyRow("x.md", 1, "2026-10-05", "2026-09-01");
+  x.scheduled = "2026-10-06";
+  x.rawLine = "- [ ] #task X [fresh:: 2026-10-05] [scheduled:: 2026-10-06]";
+  const w = readyRow("w.md", 1, "2026-10-05", "2026-09-05");
+  w.scheduled = "2026-10-07";
+  w.rawLine = "- [ ] #task W [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
+  const y = readyRow("y.md", 1, "2026-10-05", "2026-09-01");
+  y.scheduled = "2026-10-07";
+  y.rawLine = "- [ ] #task Y [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
+  const ordered = freshnessQueue([y, w, x], D, CFG);
+  assert.deepEqual(
+    ordered.map((entry) => `${entry.path}:${entry.line}`),
+    ["x.md:1", "w.md:1", "y.md:1"],
+  );
+});
+
+test("missing created sorts after dated peers", () => {
+  const dated = laneRow("a.md", 1, "/", "2026-10-07", "2026-09-01");
+  const missing = laneRow("a.md", 2, "/", "2026-10-07", null);
+  const ordered = freshnessQueue([missing, dated], D, CFG);
+  assert.deepEqual(
+    ordered.map((entry) => `${entry.path}:${entry.line}`),
+    ["a.md:1", "a.md:2"],
+  );
+  const old = readyRow("a.md", 3, "2026-09-28", "2026-09-01");
+  const fresh = readyRow("a.md", 4, "2026-09-28", "2026-09-04");
+  const missingRotten = readyRow("a.md", 5, "2026-09-28", null);
+  const orderedRotten = freshnessQueue([missingRotten, old, fresh], D, CFG);
+  assert.deepEqual(
+    orderedRotten.map((entry) => `${entry.path}:${entry.line}`),
+    ["a.md:4", "a.md:3", "a.md:5"],
+  );
+});
+
+test("B1 upkeep counts outside the lanes", () => {
+  const rows = [];
+  for (let i = 0; i < 10; i += 1) {
+    rows.push({
+      ...laneRow("lane.md", i + 1, "/", null, null),
+      rawLine: `- [/] #task Lane ${i} [fresh:: 2026-10-08]`,
+    });
+    const evaluated = helpers.freshnessEvaluate(rows[rows.length - 1], D, CFG);
+    assert.equal(evaluated.fresh, "2026-10-08");
+  }
+  // Re-stamp the lane rows with today so refreshedToday counts them.
+  const stamped = rows.map((row) => ({
+    ...row,
+    rawLine: row.rawLine.includes("[fresh::")
+      ? row.rawLine
+      : row.rawLine + " [fresh:: 2026-10-08]",
+  }));
+  for (let i = 0; i < 10; i += 1) {
+    stamped.push({
+      ...laneRow("lane.md", 11 + i, "*", null, null),
+      rawLine: `- [*] #task Lane ${10 + i} [fresh:: 2026-10-08]`,
+    });
+  }
+  for (let i = 0; i < 5; i += 1) {
+    stamped.push(
+      sRow({
+        path: "a.md",
+        line: i + 1,
+        rawLine: `- [ ] #task Ready ${i} [fresh:: 2026-10-08]`,
+      }),
+    );
+  }
+  const budget = { ...CFG, rottenDailyBudget: 15 };
+  const report = freshnessCounts(stamped, D, budget);
+  assert.equal(report.refreshedToday, 25);
+  assert.equal(report.upkeepToday, 5);
+  assert.equal(report.budgetMet, false);
+  const more = [
+    ...stamped,
+    sRow({
+      path: "b.md",
+      line: 1,
+      statusSymbol: "?",
+      isTodo: false,
+      laneVisible: false,
+      rawLine: "- [?] #task Blocked [fresh:: 2026-10-08]",
+    }),
+    sRow({
+      path: "c.md",
+      line: 1,
+      statusSymbol: "x",
+      isTodo: false,
+      laneVisible: false,
+      rawLine: "- [x] #task Done [fresh:: 2026-10-08]",
+    }),
+  ];
+  const report2 = freshnessCounts(more, D, budget);
+  assert.equal(report2.refreshedToday, 27);
+  assert.equal(report2.upkeepToday, 7);
+});
+
+test("review model meter uses upkeep and exposes refreshed", () => {
+  const { freshnessReviewModel } = helpers;
+  const model = freshnessReviewModel(
+    {
+      due: 1,
+      new: 0,
+      resurfaced: 0,
+      rotten: 1,
+      fresh: 0,
+      refreshedToday: 25,
+      upkeepToday: 5,
+      budget: 15,
+      budgetMet: false,
+    },
+    [{ state: "rotten", daysOverdue: 2, interval: 7 }],
+  );
+  assert.equal(model.meter, "✓ 5/15");
+  assert.equal(model.upkeepToday, 5);
+  assert.equal(model.refreshedToday, 25);
+  assert.equal(model.rottenText, "ROTTEN 1 · ✓ 5/15");
 });
 
 // __FRESHNESS_TEST_END__

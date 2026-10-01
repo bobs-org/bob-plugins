@@ -88,7 +88,13 @@ const {
 } = helpers;
 
 const D = "2026-10-08";
-const CFG = { interval: 7, intervalFromConfig: false, rottenDailyBudget: null };
+const CFG = {
+  interval: 7,
+  intervalFromConfig: false,
+  pendingInterval: 1,
+  nextInterval: 1,
+  rottenDailyBudget: null,
+};
 const DEFAULT_INTERVAL = { days: 7, source: "default" };
 
 // docs/freshness.md §12: a Ready, visible, non-recurring task in `a.md`
@@ -97,12 +103,14 @@ function sRow(overrides = {}) {
   return {
     path: "a.md",
     line: 1,
+    statusSymbol: undefined,
     isTodo: true,
     recurring: false,
     laneVisible: true,
     isDailyNote: false,
     isToday: false,
     scheduled: null,
+    created: null,
     rawLine: "- [ ] #task T",
     noteRefreshRaw: undefined,
     ...overrides,
@@ -253,25 +261,84 @@ test("M8 resurfaced: due tone on the scheduled return", () => {
   );
 });
 
-test("M9 resting Next and M10 Next stamped today", () => {
-  const resting = markModel("- [*] #task Ship it [fresh:: 2026-09-20]", {
-    laneVisible: false,
+test("M9 due NEXT lane with keep/release/today keys", () => {
+  const model = markModel("- [*] #task Ship it [fresh:: 2026-09-20]", {
+    statusSymbol: "*",
+    isTodo: false,
+    laneVisible: true,
   });
-  assert.equal(resting.tone, "resting");
-  assert.equal(resting.glyph, "ring");
-  assert.equal(resting.label, "18d");
-  assert.equal(resting.remaining, 0);
+  assert.equal(model.tone, "due");
+  assert.equal(model.glyph, "refresh");
+  assert.equal(model.label, "18d");
+  assert.equal(model.remaining, 0);
+  assert.equal(model.intervalDays, 1);
+  assert.equal(model.intervalSource, "next");
+  assert.equal(model.intervalLabel, null);
   assert.equal(
-    resting.tooltip,
+    model.tooltip,
+    "Confirmed Sun, Sep 20 · 18 days ago\nDaily NEXT review due since Mon, Sep 21 · every 1 day (next lane)\nAlt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+  );
+});
+
+test("M10 NEXT lane stamped today", () => {
+  const model = markModel("- [*] #task Ship it [fresh:: 2026-10-08]", {
+    statusSymbol: "*",
+    isTodo: false,
+    laneVisible: true,
+  });
+  assert.equal(model.tone, "today");
+  assert.equal(model.glyph, "check");
+  assert.equal(model.label, "today");
+  assert.equal(
+    model.tooltip,
+    "Confirmed today\nNext review Fri, Oct 9 · every 1 day (next lane)",
+  );
+});
+
+test("M19 disabled Next lane rests", () => {
+  const line = "- [*] #task Ship it [fresh:: 2026-09-20]";
+  const source = freshnessMarkSource(line, D);
+  assert.ok(source !== null);
+  const row = sRow({
+    statusSymbol: "*",
+    isTodo: false,
+    laneVisible: true,
+    rawLine: line,
+  });
+  const off = { ...CFG, nextInterval: null };
+  const resolution = freshnessMarkResolution(row, D, off);
+  const model = freshnessMarkModel({
+    source,
+    today: D,
+    interval: { days: 7, source: "default" },
+    status: freshnessTaskStatus(line),
+    resolution,
+  });
+  assert.equal(model.tone, "resting");
+  assert.equal(
+    model.tooltip,
     "Confirmed Sun, Sep 20 · 18 days ago\nNot in the review queue: Next",
   );
-  const today = markModel("- [*] #task Ship it [fresh:: 2026-10-08]", {
-    laneVisible: false,
+});
+
+test("M20 PENDING lane folds refresh without the suffix", () => {
+  const line = "- [/] #task Land it [fresh:: 2026-10-07] [refresh:: 30]";
+  const source = freshnessMarkSource(line, D);
+  assert.equal(source.text, "[fresh:: 2026-10-07] [refresh:: 30]");
+  assert.equal(source.refresh, 30);
+  const model = markModel(line, {
+    statusSymbol: "/",
+    isTodo: false,
+    laneVisible: true,
   });
-  assert.equal(today.tone, "today");
+  assert.equal(model.tone, "due");
+  assert.equal(model.label, "1d");
+  assert.equal(model.intervalDays, 1);
+  assert.equal(model.intervalSource, "pending");
+  assert.equal(model.intervalLabel, null);
   assert.equal(
-    today.tooltip,
-    "Confirmed today\nNot in the review queue: Next",
+    model.tooltip,
+    "Confirmed Wed, Oct 7 · yesterday\nDaily PENDING review due since Thu, Oct 8 · every 1 day (pending lane)\nAlt+F keep · Alt+N release · Ctrl+Shift+Enter today",
   );
 });
 

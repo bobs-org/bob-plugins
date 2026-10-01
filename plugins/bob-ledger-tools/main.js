@@ -4394,12 +4394,19 @@ function readFreshness(line, todayText) {
 
 // --- Task freshness: config -------------------------------------------------
 // Beside `planCapsBlock` / `coercePlanCaps`: the `freshness:` block in
-// `~/.config/bob/config.yml` (`interval`, `rotten_daily_budget`).
+// `~/.config/bob/config.yml` (`interval`, `pending_interval`,
+// `next_interval`, `rotten_daily_budget`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
+// Mirrors `docs/freshness.md` §2 in bob-cli (freshness namespace v4).
 
 function defaultFreshnessConfig() {
-  return { interval: 7, rottenDailyBudget: null };
+  return {
+    interval: 7,
+    pendingInterval: 1,
+    nextInterval: 1,
+    rottenDailyBudget: null,
+  };
 }
 
 // The raw `freshness:` block out of a parsed config file, or undefined
@@ -4493,6 +4500,38 @@ function coerceFreshnessConfig(block) {
       }
     }
   }
+  // Lane intervals: absent or null means the default 1, `false`
+  // turns that lane's walk off, an integer 1-365 sets it. Anything
+  // else (including `true`, 0, 366, strings, floats) is a config
+  // error shaped like `interval`'s. Mirrors `parse_lane_interval`
+  // in `src/native/config/freshness.rs`.
+  const coerceLaneInterval = (raw) => {
+    if (raw === undefined || raw === null) {
+      return { days: 1, invalid: false };
+    }
+    if (raw === false) {
+      return { days: null, invalid: false };
+    }
+    if (
+      typeof raw === "number" &&
+      Number.isInteger(raw) &&
+      raw >= 1 &&
+      raw <= 365
+    ) {
+      return { days: raw, invalid: false };
+    }
+    return { days: 1, invalid: true };
+  };
+  const rawPending = pick("pending_interval", "pendingInterval");
+  const pendingCoerced = coerceLaneInterval(rawPending);
+  if (pendingCoerced.invalid) {
+    invalid = true;
+  }
+  const rawNext = pick("next_interval", "nextInterval");
+  const nextCoerced = coerceLaneInterval(rawNext);
+  if (nextCoerced.invalid) {
+    invalid = true;
+  }
   // Like Rust, any invalid value falls back to the full default block.
   if (invalid) {
     return {
@@ -4503,6 +4542,8 @@ function coerceFreshnessConfig(block) {
   return {
     config: {
       interval,
+      pendingInterval: pendingCoerced.days,
+      nextInterval: nextCoerced.days,
       rottenDailyBudget: budget,
       intervalFromConfig,
       deprecatedStaleBudget,
@@ -4584,9 +4625,59 @@ function freshnessParseNoteRefresh(raw) {
   return { days: number, lint: null };
 }
 
-// Effective interval and where it came from: the task's `[refresh:: N]`,
-// then the note's `task_refresh`, then `freshness.interval`, then 7.
-function freshnessIntervalFor(taskDays, noteDays, config) {
+// Lane for one row: pending for `/`, next for `*`, ready for the
+// Tasks status type TODO, none otherwise. Mirrors `lane_for_row` in
+// `src/native/freshness/state.rs`.
+function freshnessLaneForRow(statusSymbol, isTodo) {
+  if (statusSymbol === "/") {
+    return "pending";
+  }
+  if (statusSymbol === "*") {
+    return "next";
+  }
+  if (isTodo) {
+    return "ready";
+  }
+  return null;
+}
+
+// Lane interval for one lane: the configured `pendingInterval` /
+// `nextInterval` (absent means the default 1); null means that lane is
+// not walked (`false` off-switch).
+function freshnessLaneIntervalDays(config, lane) {
+  if (lane === "pending") {
+    const raw =
+      config && config.pendingInterval !== undefined
+        ? config.pendingInterval
+        : 1;
+    return raw === null ? null : raw;
+  }
+  if (lane === "next") {
+    const raw =
+      config && config.nextInterval !== undefined ? config.nextInterval : 1;
+    return raw === null ? null : raw;
+  }
+  return null;
+}
+
+// Effective interval and where it came from. A lane task in a walked
+// lane uses that lane's interval (source `pending` | `next`),
+// overriding the whole Ready chain below. Otherwise the task's
+// `[refresh:: N]`, then the note's `task_refresh`, then
+// `freshness.interval`, then 7. Mirrors `evaluate` + `interval_for`
+// in `src/native/freshness/state.rs`.
+function freshnessIntervalFor(taskDays, noteDays, config, lane) {
+  if (lane === "pending") {
+    const days = freshnessLaneIntervalDays(config, "pending");
+    if (days !== null) {
+      return { days, source: "pending" };
+    }
+  } else if (lane === "next") {
+    const days = freshnessLaneIntervalDays(config, "next");
+    if (days !== null) {
+      return { days, source: "next" };
+    }
+  }
   if (taskDays !== null && taskDays !== undefined) {
     return { days: taskDays, source: "task" };
   }
@@ -4603,6 +4694,36 @@ function freshnessIntervalFor(taskDays, noteDays, config) {
   return { days: 7, source: "default" };
 }
 
+// Pure, never-throwing line interval for nav's refresh row:
+// `{ days, source, ready: { days, source } }`. Reads the status from
+// the line (quote-aware) and the lane intervals from `config`.
+// `ready` is the Ready-chain interval the task returns to after
+// release. Mirrors `docs/freshness.md` §4.
+function freshnessIntervalForLine(line, noteRefreshRaw, config) {
+  try {
+    const text = typeof line === "string" ? line : "";
+    const read = readFreshness(text, freshnessTodayFallback());
+    const note = freshnessParseNoteRefresh(noteRefreshRaw);
+    const ready = freshnessIntervalFor(read.refresh, note.days, config, null);
+    const symbol = freshnessTaskStatus(text);
+    const lane =
+      symbol === "/" ? "pending" : symbol === "*" ? "next" : null;
+    if (lane !== null) {
+      const days = freshnessLaneIntervalDays(config, lane);
+      if (days !== null) {
+        return { days, source: lane, ready: { ...ready } };
+      }
+    }
+    return { days: ready.days, source: ready.source, ready: { ...ready } };
+  } catch (error) {
+    return {
+      days: 7,
+      source: "default",
+      ready: { days: 7, source: "default" },
+    };
+  }
+}
+
 function freshnessEvaluateValidScheduled(value) {
   if (value === null || value === undefined) {
     return null;
@@ -4616,38 +4737,147 @@ function freshnessEvaluateValidScheduled(value) {
 // Evaluate one row for `todayText` under `config`. A row carries the
 // caller-precomputed scope inputs:
 //
-//   { path, line (1-based), isTodo (Tasks status type TODO), recurring,
-//     laneVisible (the NEXT/PENDING lane predicate), isDailyNote
-//     (canonical YYYY/YYYYMMDD.md), isToday (Task Link under today's open
-//     Pomodoros), scheduled (canonical date or null), rawLine (the task's
-//     originalMarkdown), noteRefreshRaw (the note's raw `task_refresh`) }
+//   { path, line (1-based), statusSymbol ("/", "*", or the line's
+//     status; absent derives from rawLine), isTodo (Tasks status type
+//     TODO), recurring, laneVisible (the NEXT/PENDING lane predicate),
+//     isDailyNote (canonical YYYY/YYYYMMDD.md), isToday (Task Link
+//     under today's open Pomodoros), scheduled (canonical date or
+//     null), created (canonical date or null, for queue order only),
+//     rawLine (the task's originalMarkdown), noteRefreshRaw (the note's
+//     raw `task_refresh`) }
 //
-// Returns `{ state ("new"|"resurfaced"|"rotten"|"fresh"|null; null is out
-// of scope, see S13), fresh, intervalDays, intervalSource, dueOn,
-// daysOverdue, lints }`.
+// Returns `{ state ("new"|"resurfaced"|"rotten"|"fresh"|null; null is
+// out of scope, see S13; lane rows keep a null state), tier
+// ("new"|"pending"|"next"|"returned"|"rotten"|null), lane
+// ("ready"|"pending"|"next"|null), fresh, intervalDays,
+// intervalSource, dueOn, daysOverdue, lints }`.
+// Mirrors `evaluate` in `src/native/freshness/state.rs`; `state` stays
+// exactly as before so buckets never move.
 function freshnessEvaluate(row, todayText, config) {
+  const safe = row && typeof row === "object" ? row : {};
   const today = freshnessNormalizeDateText(todayText);
-  const read = readFreshness(row.rawLine || "", today);
+  const read = readFreshness(safe.rawLine || "", today);
   const lints = [...read.lints];
 
-  const note = freshnessParseNoteRefresh(row.noteRefreshRaw);
+  const note = freshnessParseNoteRefresh(safe.noteRefreshRaw);
   if (note.lint) {
     freshnessPushLint(lints, note.lint);
   }
 
-  const interval = freshnessIntervalFor(read.refresh, note.days, config);
+  let symbol = null;
+  try {
+    if (
+      safe.statusSymbol !== undefined &&
+      safe.statusSymbol !== null &&
+      String(safe.statusSymbol) !== ""
+    ) {
+      symbol = String(safe.statusSymbol)[0];
+    } else {
+      symbol = freshnessTaskStatus(safe.rawLine || "");
+    }
+  } catch (error) {
+    symbol = null;
+  }
+  if (symbol === null || symbol === undefined || symbol === "") {
+    symbol = safe.isTodo ? " " : "?";
+  } else {
+    symbol = String(symbol)[0];
+  }
+  const lane = freshnessLaneForRow(symbol, Boolean(safe.isTodo));
+  const laneDays =
+    lane === "pending" || lane === "next"
+      ? freshnessLaneIntervalDays(config, lane)
+      : null;
+
+  const interval = freshnessIntervalFor(read.refresh, note.days, config, lane);
   const fresh = read.fresh;
 
-  const inScope =
-    Boolean(row.isTodo) &&
-    Boolean(row.laneVisible) &&
-    !row.recurring &&
-    !row.isDailyNote &&
-    !row.isToday;
+  const walkScope =
+    lane !== null &&
+    Boolean(safe.laneVisible) &&
+    !safe.recurring &&
+    !safe.isDailyNote &&
+    !safe.isToday;
 
-  if (!inScope) {
+  let laneDueOn = null;
+  let laneDue = false;
+  let laneDaysOverdue = null;
+  if ((lane === "pending" || lane === "next") && laneDays !== null) {
+    if (fresh === null) {
+      laneDue = true;
+    } else {
+      const due = freshDateAddDays(fresh, laneDays);
+      laneDueOn = due;
+      if (today >= due) {
+        laneDue = true;
+        laneDaysOverdue = freshDateDiffDays(due, today);
+      }
+    }
+  }
+
+  const inScope =
+    Boolean(safe.isTodo) &&
+    Boolean(safe.laneVisible) &&
+    !safe.recurring &&
+    !safe.isDailyNote &&
+    !safe.isToday;
+
+  // Ready state is unchanged: lane rows keep a null state.
+  let state = null;
+  if (inScope) {
+    if (fresh === null) {
+      state = "new";
+    } else {
+      const scheduled = freshnessEvaluateValidScheduled(safe.scheduled);
+      if (scheduled !== null && fresh < scheduled && scheduled <= today) {
+        state = "resurfaced";
+      } else {
+        const due = freshDateAddDays(fresh, interval.days);
+        state = today >= due ? "rotten" : "fresh";
+      }
+    }
+  }
+
+  let tier = null;
+  if (lane === "ready" && state === "new") {
+    tier = "new";
+  } else if (lane === "pending" && walkScope && laneDue) {
+    tier = "pending";
+  } else if (lane === "next" && walkScope && laneDue) {
+    tier = "next";
+  } else if (state === "resurfaced") {
+    tier = "returned";
+  } else if (state === "rotten") {
+    tier = "rotten";
+  }
+
+  // Lane rows use the lane due date; an unwalked lane falls back to
+  // the Ready-chain interval with no due date (L4).
+  if (lane === "pending" || lane === "next") {
+    let dueOn = fresh === null ? null : laneDueOn;
+    let daysOverdue = fresh === null ? null : laneDaysOverdue;
+    if (laneDays === null) {
+      dueOn = null;
+      daysOverdue = null;
+    }
     return {
       state: null,
+      tier,
+      lane,
+      fresh,
+      intervalDays: interval.days,
+      intervalSource: interval.source,
+      dueOn,
+      daysOverdue,
+      lints,
+    };
+  }
+
+  if (state === null) {
+    return {
+      state: null,
+      tier: null,
+      lane,
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
@@ -4657,9 +4887,11 @@ function freshnessEvaluate(row, todayText, config) {
     };
   }
 
-  if (fresh === null) {
+  if (state === "new") {
     return {
-      state: "new",
+      state,
+      tier,
+      lane,
       fresh: null,
       intervalDays: interval.days,
       intervalSource: interval.source,
@@ -4669,12 +4901,12 @@ function freshnessEvaluate(row, todayText, config) {
     };
   }
 
-  // RESURFACED beats ROTTEN: a deferral that returned is due as soon as
-  // it returns, however old the stamp is.
-  const scheduled = freshnessEvaluateValidScheduled(row.scheduled);
-  if (scheduled !== null && fresh < scheduled && scheduled <= today) {
+  if (state === "resurfaced") {
+    const scheduled = freshnessEvaluateValidScheduled(safe.scheduled);
     return {
-      state: "resurfaced",
+      state,
+      tier,
+      lane,
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
@@ -4684,10 +4916,12 @@ function freshnessEvaluate(row, todayText, config) {
     };
   }
 
-  const dueOn = freshDateAddDays(fresh, interval.days);
-  if (today >= dueOn) {
+  if (state === "rotten") {
+    const dueOn = freshDateAddDays(fresh, interval.days);
     return {
-      state: "rotten",
+      state,
+      tier,
+      lane,
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
@@ -4697,8 +4931,11 @@ function freshnessEvaluate(row, todayText, config) {
     };
   }
 
+  const dueOn = freshDateAddDays(fresh, interval.days);
   return {
-    state: "fresh",
+    state,
+    tier,
+    lane,
     fresh,
     intervalDays: interval.days,
     intervalSource: interval.source,
@@ -4755,33 +4992,95 @@ function freshnessRowKey(row) {
   return path + ":" + row.line;
 }
 
-function freshnessTierForState(state) {
-  if (state === "new") {
-    return "1 · NEW";
+// Walk tier order: NEW → PENDING → NEXT → RETURNED → ROTTEN.
+// Mirrors the `Tier` ordering in `src/native/freshness/state.rs`.
+const FRESHNESS_TIER_ORDER = {
+  new: 0,
+  pending: 1,
+  next: 2,
+  returned: 3,
+  rotten: 4,
+};
+
+function freshnessTierLabel(tier) {
+  if (tier === "new") {
+    return "NEW";
   }
-  if (state === "resurfaced" || state === "rotten") {
-    return "2 · DUE";
+  if (tier === "pending") {
+    return "PENDING";
+  }
+  if (tier === "next") {
+    return "NEXT";
+  }
+  if (tier === "returned") {
+    return "RETURNED";
+  }
+  if (tier === "rotten") {
+    return "ROTTEN";
   }
   return "";
 }
 
-// The review queue: NEW by (path, line), then DUE by (dueOn, path,
-// line). Entries carry `{ key, path, line, lineNumber, text,
-// originalMarkdown, blockId, state, tier, fresh, dueOn, daysOverdue,
-// interval }` with 1-based `line` (Tasks' `lineNumber` is 0-based).
+// Compare `created` with missing dates always last, in both ascending
+// and descending keys. Mirrors `compare_created` in `state.rs`.
+function freshnessCompareCreated(a, b, descending) {
+  if (a === null || a === undefined) {
+    return b === null || b === undefined ? 0 : 1;
+  }
+  if (b === null || b === undefined) {
+    return -1;
+  }
+  if (a === b) {
+    return 0;
+  }
+  if (descending) {
+    return a < b ? 1 : -1;
+  }
+  return a < b ? -1 : 1;
+}
+
+function freshnessCompareDueOn(a, b) {
+  if (a === null || a === undefined) {
+    return b === null || b === undefined ? 0 : -1;
+  }
+  if (b === null || b === undefined) {
+    return 1;
+  }
+  if (a === b) {
+    return 0;
+  }
+  return a < b ? -1 : 1;
+}
+
+function freshnessComparePathLine(a, b) {
+  if (a.path !== b.path) {
+    return a.path < b.path ? -1 : 1;
+  }
+  return a.line - b.line;
+}
+
+// The tiered review queue NEW → PENDING → NEXT → RETURNED → ROTTEN,
+// with each tier's comparator from `docs/freshness.md` §4. Entries
+// carry `{ key, path, line, lineNumber, text, originalMarkdown,
+// blockId, state (null for lane rows), bucket, tier (machine),
+// tierLabel, lane, created, fresh, dueOn, daysOverdue, interval,
+// intervalSource, rank, tierRank, tierTotal }` with 1-based `line`
+// (Tasks' `lineNumber` is 0-based).
 function freshnessQueue(rows, todayText, config) {
   const list = Array.isArray(rows) ? rows : [];
-  const freshEntries = [];
-  const dueEntries = [];
+  const entries = [];
   for (const row of list) {
     if (!row || typeof row !== "object") {
       continue;
     }
     const evaluated = freshnessEvaluate(row, todayText, config);
-    if (evaluated.state === null || evaluated.state === "fresh") {
+    if (evaluated.tier === null || evaluated.tier === undefined) {
       continue;
     }
-    const entry = {
+    if (evaluated.lane === null || evaluated.lane === undefined) {
+      continue;
+    }
+    entries.push({
       key: freshnessRowKey(row),
       path: String(row.path || ""),
       line: row.line,
@@ -4792,36 +5091,70 @@ function freshnessQueue(rows, todayText, config) {
         typeof row.originalMarkdown === "string" ? row.originalMarkdown : "",
       blockId: row.blockId || null,
       state: evaluated.state,
-      tier: freshnessTierForState(evaluated.state),
+      bucket: freshnessBucketForState(evaluated.state),
+      tier: evaluated.tier,
+      tierLabel: freshnessTierLabel(evaluated.tier),
+      lane: evaluated.lane,
+      created:
+        row.created === undefined || row.created === null
+          ? null
+          : String(row.created),
       fresh: evaluated.fresh,
       dueOn: evaluated.dueOn,
       daysOverdue: evaluated.daysOverdue,
       interval: evaluated.intervalDays,
-    };
-    if (evaluated.state === "new") {
-      freshEntries.push(entry);
-    } else {
-      dueEntries.push(entry);
+      intervalSource: evaluated.intervalSource,
+      rank: 0,
+      tierRank: 0,
+      tierTotal: 0,
+    });
+  }
+
+  entries.sort((left, right) => {
+    const tierOrder =
+      (FRESHNESS_TIER_ORDER[left.tier] ?? 99) -
+      (FRESHNESS_TIER_ORDER[right.tier] ?? 99);
+    if (tierOrder !== 0) {
+      return tierOrder;
     }
-  }
+    if (left.tier === "new") {
+      return freshnessComparePathLine(left, right);
+    }
+    if (left.tier === "pending" || left.tier === "next") {
+      return (
+        freshnessCompareDueOn(left.dueOn, right.dueOn) ||
+        freshnessCompareCreated(left.created, right.created, false) ||
+        freshnessComparePathLine(left, right)
+      );
+    }
+    if (left.tier === "returned") {
+      return (
+        freshnessCompareDueOn(left.dueOn, right.dueOn) ||
+        freshnessCompareCreated(left.created, right.created, true) ||
+        freshnessComparePathLine(left, right)
+      );
+    }
+    return (
+      left.interval - right.interval ||
+      freshnessCompareDueOn(left.dueOn, right.dueOn) ||
+      freshnessCompareCreated(left.created, right.created, true) ||
+      freshnessComparePathLine(left, right)
+    );
+  });
 
-  freshEntries.sort(
-    (left, right) =>
-      (left.path < right.path ? -1 : left.path > right.path ? 1 : 0) ||
-      left.line - right.line,
-  );
-  dueEntries.sort(
-    (left, right) =>
-      (left.dueOn < right.dueOn ? -1 : left.dueOn > right.dueOn ? 1 : 0) ||
-      (left.path < right.path ? -1 : left.path > right.path ? 1 : 0) ||
-      left.line - right.line,
-  );
-
-  const ordered = [...freshEntries, ...dueEntries];
-  for (let index = 0; index < ordered.length; index += 1) {
-    ordered[index].rank = index + 1;
+  const totals = {};
+  for (const entry of entries) {
+    totals[entry.tier] = (totals[entry.tier] || 0) + 1;
   }
-  return ordered;
+  const seen = {};
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    entry.rank = index + 1;
+    seen[entry.tier] = (seen[entry.tier] || 0) + 1;
+    entry.tierRank = seen[entry.tier];
+    entry.tierTotal = totals[entry.tier] || 0;
+  }
+  return entries;
 }
 
 function freshnessIsExcludedCountPath(path) {
@@ -4831,9 +5164,13 @@ function freshnessIsExcludedCountPath(path) {
 }
 
 // Whole-vault counts: `{ due, new, resurfaced, rotten, fresh,
-// refreshedToday, budget, budgetMet }`. `refreshedToday` counts tasks of
-// any status outside `_templates` / `_conflicts` whose `fresh` equals
-// today.
+// pendingDue, nextDue, walk, refreshedToday, upkeepToday, budget,
+// budgetMet }`. `due` stays Ready-only; `walk` is the full queue
+// length. `refreshedToday` counts tasks of any status outside
+// `_templates` / `_conflicts` whose `fresh` equals today;
+// `upkeepToday` counts those whose status symbol is neither `/` nor
+// `*`. `budgetMet` compares the budget against upkeep, with zero NEW.
+// Mirrors `counts` in `src/native/freshness/state.rs`.
 function freshnessCounts(rows, todayText, config) {
   const today = freshnessNormalizeDateText(todayText);
   const list = Array.isArray(rows) ? rows : [];
@@ -4842,7 +5179,11 @@ function freshnessCounts(rows, todayText, config) {
   let resurfaced = 0;
   let rotten = 0;
   let fresh = 0;
+  let pendingDue = 0;
+  let nextDue = 0;
+  let walk = 0;
   let refreshedToday = 0;
+  let upkeepToday = 0;
 
   for (const row of list) {
     if (!row || typeof row !== "object") {
@@ -4854,16 +5195,42 @@ function freshnessCounts(rows, todayText, config) {
       evaluated.fresh === today
     ) {
       refreshedToday += 1;
+      let symbol = null;
+      try {
+        if (
+          row.statusSymbol !== undefined &&
+          row.statusSymbol !== null &&
+          String(row.statusSymbol) !== ""
+        ) {
+          symbol = String(row.statusSymbol)[0];
+        } else {
+          symbol = freshnessTaskStatus(row.rawLine || "");
+        }
+      } catch (error) {
+        symbol = null;
+      }
+      if (symbol !== "/" && symbol !== "*") {
+        upkeepToday += 1;
+      }
     }
-    if (evaluated.state === "new") {
+    if (evaluated.tier === "new") {
       freshNew += 1;
       due += 1;
-    } else if (evaluated.state === "resurfaced") {
+      walk += 1;
+    } else if (evaluated.tier === "pending") {
+      pendingDue += 1;
+      walk += 1;
+    } else if (evaluated.tier === "next") {
+      nextDue += 1;
+      walk += 1;
+    } else if (evaluated.tier === "returned") {
       resurfaced += 1;
       due += 1;
-    } else if (evaluated.state === "rotten") {
+      walk += 1;
+    } else if (evaluated.tier === "rotten") {
       rotten += 1;
       due += 1;
+      walk += 1;
     } else if (evaluated.state === "fresh") {
       fresh += 1;
     }
@@ -4876,7 +5243,7 @@ function freshnessCounts(rows, todayText, config) {
   const budget =
     Number.isInteger(rawBudget) && rawBudget >= 1 ? rawBudget : null;
   const budgetMet =
-    budget !== null && refreshedToday >= budget && freshNew === 0;
+    budget !== null && upkeepToday >= budget && freshNew === 0;
 
   return {
     due,
@@ -4884,7 +5251,11 @@ function freshnessCounts(rows, todayText, config) {
     resurfaced,
     rotten,
     fresh,
+    pendingDue,
+    nextDue,
+    walk,
     refreshedToday,
+    upkeepToday,
     budget,
     budgetMet,
   };
@@ -4926,7 +5297,9 @@ function freshnessCollectLints(rows, todayText, config) {
 
 // Pure view-model for the status bar counter. `counts` is a
 // `freshnessCounts` result; `mostOverdue` is the queue's largest
-// `daysOverdue` (or null when nothing is due).
+// `daysOverdue` (or null when nothing is due). The meter shows
+// upkeep (`upkeepToday`); ROTTEN includes RETURNED, as on the chip.
+// Mirrors `docs/freshness.md` §4 (freshness namespace v4).
 function freshnessStatusView(counts, options = {}) {
   const tasksAvailable = options.tasksAvailable !== false;
   if (!tasksAvailable) {
@@ -4937,19 +5310,42 @@ function freshnessStatusView(counts, options = {}) {
     };
   }
   const safe = counts || {};
-  const due = safe.due || 0;
-  const freshNew = safe.new || 0;
-  const resurfaced = safe.resurfaced || 0;
-  const ageExpired = safe.rotten || 0;
+  const freshNew =
+    Number.isInteger(safe.new) && safe.new >= 0 ? safe.new : 0;
+  const resurfaced =
+    Number.isInteger(safe.resurfaced) && safe.resurfaced >= 0
+      ? safe.resurfaced
+      : 0;
+  const ageExpired =
+    Number.isInteger(safe.rotten) && safe.rotten >= 0 ? safe.rotten : 0;
   const rotten = resurfaced + ageExpired;
-  const refreshed = safe.refreshedToday || 0;
+  const pendingDue =
+    Number.isInteger(safe.pendingDue) && safe.pendingDue >= 0
+      ? safe.pendingDue
+      : 0;
+  const nextDue =
+    Number.isInteger(safe.nextDue) && safe.nextDue >= 0 ? safe.nextDue : 0;
+  const walk =
+    Number.isInteger(safe.walk) && safe.walk >= 0
+      ? safe.walk
+      : freshNew + pendingDue + nextDue + rotten;
+  const upkeep =
+    Number.isInteger(safe.upkeepToday) && safe.upkeepToday >= 0
+      ? safe.upkeepToday
+      : Number.isInteger(safe.refreshedToday) && safe.refreshedToday >= 0
+        ? safe.refreshedToday
+        : 0;
   const budget =
     Number.isInteger(safe.budget) && safe.budget >= 1 ? safe.budget : null;
-  const meter = budget !== null ? refreshed + "/" + budget : String(refreshed);
+  const meter = budget !== null ? upkeep + "/" + budget : String(upkeep);
   const text =
     "⟳ " +
     freshNew +
     " new · " +
+    pendingDue +
+    " pending · " +
+    nextDue +
+    " next · " +
     rotten +
     " rotten · ✓ " +
     meter +
@@ -4959,8 +5355,14 @@ function freshnessStatusView(counts, options = {}) {
       ? options.mostOverdue
       : null;
   const tooltip =
-    "NEW " +
+    "Walk " +
+    walk +
+    " · NEW " +
     freshNew +
+    " · PENDING " +
+    pendingDue +
+    " · NEXT " +
+    nextDue +
     " · RETURNED " +
     resurfaced +
     " · ROTTEN " +
@@ -4971,13 +5373,20 @@ function freshnessStatusView(counts, options = {}) {
     " · ✓ " +
     meter +
     " today";
+  // Mode precedence: `new` (NEW > 0), then `due` while any
+  // commitment tier (NEW, PENDING, NEXT, RETURNED) remains, then
+  // `budget` (met), then `clear` (walk empty), else `due`.
   let mode = "due";
-  if (safe.budgetMet) {
-    mode = "budget";
-  } else if (due === 0) {
-    mode = "clear";
-  } else if (freshNew > 0) {
+  if (freshNew > 0) {
     mode = "new";
+  } else if (pendingDue > 0 || nextDue > 0 || resurfaced > 0) {
+    mode = "due";
+  } else if (safe.budgetMet) {
+    mode = "budget";
+  } else if (walk === 0) {
+    mode = "clear";
+  } else {
+    mode = "due";
   }
   return { text, tooltip, mode };
 }
@@ -4991,6 +5400,7 @@ function freshnessReviewUnavailable() {
     returned: null,
     rotten: null,
     refreshedToday: null,
+    upkeepToday: null,
     budget: null,
     budgetMet: false,
     meter: "✓ –",
@@ -5007,7 +5417,9 @@ function freshnessReviewUnavailable() {
 // is a `freshnessCounts` result and `queue` a `freshnessQueue` result
 // over the same rows. The ROTTEN total includes RETURNED; escalation
 // is per-row (`daysOverdue >= interval` for that row), never the
-// confirmation age or the global default. Never throws.
+// confirmation age or the global default. The meter shows upkeep
+// (`upkeepToday`); `refreshedToday` stays exposed for the census.
+// NEW/ROTTEN counts and severity are unchanged. Never throws.
 function freshnessReviewModel(counts, queue) {
   try {
     const safe = counts || {};
@@ -5024,6 +5436,10 @@ function freshnessReviewModel(counts, queue) {
       Number.isInteger(safe.refreshedToday) && safe.refreshedToday >= 0
         ? safe.refreshedToday
         : 0;
+    const upkeep =
+      Number.isInteger(safe.upkeepToday) && safe.upkeepToday >= 0
+        ? safe.upkeepToday
+        : refreshed;
     const budget =
       Number.isInteger(safe.budget) && safe.budget >= 1 ? safe.budget : null;
     const budgetMet = Boolean(safe.budgetMet);
@@ -5050,7 +5466,7 @@ function freshnessReviewModel(counts, queue) {
       }
     }
     const meter =
-      budget !== null ? refreshed + "/" + budget : String(refreshed);
+      budget !== null ? upkeep + "/" + budget : String(upkeep);
     // NEW is red above 0; ROTTEN is neutral at 0, orange above 0, red
     // once any returned or age-expired row is a full interval overdue.
     const severity =
@@ -5073,6 +5489,7 @@ function freshnessReviewModel(counts, queue) {
       returned: resurfaced,
       rotten,
       refreshedToday: refreshed,
+      upkeepToday: upkeep,
       budget,
       budgetMet,
       meter: "✓ " + meter,
@@ -5322,9 +5739,11 @@ function freshnessMarkReason(status, row, today) {
   }
 }
 
-// Wrap `freshnessEvaluate` for one memo row: `{ state, dueOn,
-// scheduled, status, reason, intervalDays, intervalSource }`, where a
-// null `state` means out of scope and `reason` is set only then. An
+// Wrap `freshnessEvaluate` for one memo row: `{ state, tier, lane,
+// dueOn, scheduled, status, reason, intervalDays, intervalSource }`.
+// A null `state` with a null `tier` and a reason means out of scope;
+// a lane `tier` (pending/next) means due in the walk; an in-walk
+// lane with a null tier and no reason is stamped today (M10). An
 // evaluator `"new"` is treated as unresolved (null). Never throws.
 function freshnessMarkResolution(row, todayText, config) {
   try {
@@ -5337,12 +5756,38 @@ function freshnessMarkResolution(row, todayText, config) {
       return null;
     }
     const status = freshnessTaskStatus(row.rawLine || "");
-    const reason =
-      evaluated.state === null
-        ? freshnessMarkReason(status, row, today)
-        : null;
+    let reason = null;
+    if (evaluated.tier === null || evaluated.tier === undefined) {
+      if (
+        (evaluated.lane === "pending" || evaluated.lane === "next") &&
+        evaluated.state === null
+      ) {
+        // In-walk lane stamped today (or otherwise not due) keeps no
+        // reason; outside the walk (Today, daily note, disabled lane,
+        // recurring, hidden) keeps the existing reason.
+        const walkScope =
+          evaluated.lane !== null &&
+          Boolean(row.laneVisible) &&
+          !row.recurring &&
+          !row.isDailyNote &&
+          !row.isToday;
+        const laneDays = freshnessLaneIntervalDays(config, evaluated.lane);
+        if (!(walkScope && laneDays !== null)) {
+          reason = freshnessMarkReason(status, row, today);
+        } else if (evaluated.fresh !== today) {
+          // A walked lane that is not due is stamped today; any other
+          // fresh date here would already be due, so treat it as out
+          // of scope rather than guessing.
+          reason = freshnessMarkReason(status, row, today);
+        }
+      } else if (evaluated.state === null) {
+        reason = freshnessMarkReason(status, row, today);
+      }
+    }
     return {
       state: evaluated.state,
+      tier: evaluated.tier || null,
+      lane: evaluated.lane || null,
       dueOn: evaluated.dueOn,
       scheduled: freshnessEvaluateValidScheduled(row.scheduled),
       status,
@@ -5365,6 +5810,12 @@ function freshnessMarkEveryPhrase(days, source) {
   }
   if (source === "config") {
     return head + " (config)";
+  }
+  if (source === "pending") {
+    return head + " (pending lane)";
+  }
+  if (source === "next") {
+    return head + " (next lane)";
   }
   return head;
 }
@@ -5422,14 +5873,21 @@ function freshnessMarkModel(input) {
     const closed =
       status === "x" || status === "X" || status === "-";
     const state = resolution ? resolution.state : null;
+    const tier = resolution ? resolution.tier || null : null;
+    const lane = resolution ? resolution.lane || null : null;
     let tone;
     if (closed) {
       tone = "resting";
-    } else if (state === "rotten" || state === "resurfaced") {
+    } else if (
+      state === "rotten" ||
+      state === "resurfaced" ||
+      tier === "pending" ||
+      tier === "next"
+    ) {
       tone = "due";
     } else if (ageDays === 0) {
       tone = "today";
-    } else if (resolution && state === null) {
+    } else if (resolution && state === null && tier === null) {
       tone = "resting";
     } else {
       tone = "aging";
@@ -5440,10 +5898,14 @@ function freshnessMarkModel(input) {
         (Math.min(Math.max((interval.days - ageDays) / interval.days, 0), 1) *
           10000),
       ) / 10000;
+    // The `/{N}d` suffix appears only when the effective interval
+    // source is `task`, and never on the `today` tone; lane intervals
+    // stay tooltip-only (M20).
     const intervalLabel =
       source.refresh !== null &&
       source.refresh !== undefined &&
-      tone !== "today"
+      tone !== "today" &&
+      interval.source === "task"
         ? "/" + source.refresh + "d"
         : null;
     const shortFresh = freshnessShortDate(fresh, today) || fresh;
@@ -5459,14 +5921,31 @@ function freshnessMarkModel(input) {
         : "Confirmed " + shortFresh + " · " + relative;
     const every = freshnessMarkEveryPhrase(interval.days, interval.source);
     let line2;
-    if (
+    const outOfScope =
       closed ||
-      (resolution && resolution.state === null)
-    ) {
+      (resolution &&
+        resolution.state === null &&
+        (resolution.tier === null || resolution.tier === undefined) &&
+        resolution.reason);
+    if (outOfScope) {
       const reason = closed
         ? FRESHNESS_MARK_CLOSED_REASONS[status] || "status [" + status + "]"
         : resolution.reason || "hidden or dependency-blocked";
       line2 = "Not in the review queue: " + reason;
+    } else if (resolution && (tier === "pending" || tier === "next")) {
+      const dueOn =
+        freshnessShortDate(resolution.dueOn, today) || resolution.dueOn;
+      const laneWord = tier === "pending" ? "PENDING" : "NEXT";
+      line2 = "Daily " + laneWord + " review due since " + dueOn + " · " + every;
+    } else if (
+      resolution &&
+      (lane === "pending" || lane === "next") &&
+      resolution.state === null &&
+      (resolution.tier === null || resolution.tier === undefined)
+    ) {
+      const next = freshDateAddDays(fresh, interval.days);
+      const shortNext = freshnessShortDate(next, today) || next;
+      line2 = "Next review " + shortNext + " · " + every;
     } else if (resolution && resolution.state === "rotten") {
       const dueOn = freshnessShortDate(resolution.dueOn, today) || resolution.dueOn;
       line2 = "Due for review since " + dueOn + " · " + every;
@@ -5484,8 +5963,16 @@ function freshnessMarkModel(input) {
           ? "Review lease ended " + shortNext + " · " + every
           : "Next review " + shortNext + " · " + every;
     }
+    let line3 = null;
+    if (tone === "due") {
+      if (tier === "pending" || tier === "next") {
+        line3 = "Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
+      } else {
+        line3 = "Alt+F to confirm";
+      }
+    }
     const tooltip =
-      tone === "due" ? line1 + "\n" + line2 + "\nAlt+F to confirm" : line1 + "\n" + line2;
+      line3 !== null ? line1 + "\n" + line2 + "\n" + line3 : line1 + "\n" + line2;
     return {
       text: source.text,
       fresh,
@@ -5716,6 +6203,9 @@ if (WidgetType && typeof WidgetType === "function") {
 
 // Adapt one Tasks-plugin task to a freshness evaluation row. `context`
 // is `{ list, todayDay, noteRefreshRawFor(path), isToday(task) }`.
+// Carries `statusSymbol` (from the task status, else the line) and
+// `created` (canonical `YYYY-MM-DD` from `createdDate`/`created`,
+// else the inline `created` field, else null) for the tiered walk.
 // Never throws: missing fields degrade to an out-of-scope row.
 function freshnessRowFromTask(task, index, context) {
   const safeContext = context || {};
@@ -5731,12 +6221,14 @@ function freshnessRowFromTask(task, index, context) {
         text: "",
         originalMarkdown: "",
         blockId: null,
+        statusSymbol: " ",
         isTodo: false,
         recurring: false,
         laneVisible: false,
         isDailyNote: false,
         isToday: false,
         scheduled: null,
+        created: null,
         rawLine: "",
         noteRefreshRaw: undefined,
       };
@@ -5821,6 +6313,56 @@ function freshnessRowFromTask(task, index, context) {
     } catch (error) {
       noteRefreshRaw = undefined;
     }
+    let statusSymbol = "";
+    try {
+      statusSymbol = planTaskStatusSymbol(task) || "";
+    } catch (error) {
+      statusSymbol = "";
+    }
+    if (!statusSymbol) {
+      try {
+        statusSymbol = freshnessTaskStatus(rawLine) || "";
+      } catch (error) {
+        statusSymbol = "";
+      }
+    }
+    if (!statusSymbol) {
+      statusSymbol = isTodo ? " " : "?";
+    } else {
+      statusSymbol = String(statusSymbol)[0];
+    }
+    let created = null;
+    try {
+      for (const key of ["createdDate", "created", "createdDay"]) {
+        if (task[key] === undefined || task[key] === null) {
+          continue;
+        }
+        const coerced = planCoerceDate(task[key]);
+        if (coerced) {
+          created = formatLocalDate(coerced);
+          break;
+        }
+        if (typeof task[key] === "string") {
+          const parsed = parseFreshDateStrict(task[key].trim());
+          if (parsed !== null) {
+            created = parsed;
+            break;
+          }
+        }
+      }
+      if (created === null) {
+        const fields = freshnessInlineFields(rawLine, "created");
+        for (const field of fields) {
+          const parsed = parseFreshDateStrict(field.value.trim());
+          if (parsed !== null) {
+            created = parsed;
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      created = null;
+    }
     return {
       path,
       line: lineNumber + 1,
@@ -5828,12 +6370,14 @@ function freshnessRowFromTask(task, index, context) {
       text: typeof description === "string" ? description : "",
       originalMarkdown: rawLine,
       blockId: planTaskBlockId(task),
+      statusSymbol,
       isTodo,
       recurring,
       laneVisible,
       isDailyNote,
       isToday,
       scheduled,
+      created,
       rawLine,
       noteRefreshRaw,
     };
@@ -5845,21 +6389,25 @@ function freshnessRowFromTask(task, index, context) {
       text: "",
       originalMarkdown: "",
       blockId: null,
+      statusSymbol: " ",
       isTodo: false,
       recurring: false,
       laneVisible: false,
       isDailyNote: false,
       isToday: false,
       scheduled: null,
+      created: null,
       rawLine: "",
       noteRefreshRaw: undefined,
     };
   }
 }
 
-// True when the review-relevant snapshot changed: queue order/keys
-// or any row's state. A bucket/state change notifies even when the due
-// key set is unchanged. Never throws.
+// True when the review-relevant snapshot changed: queue order/keys,
+// any row's state/tier, or any row's bucket. A lane task coming due at
+// midnight changes `dueKeys` (the tiered queue gains a row) and
+// triggers the existing refresh fan-out without a vault write. Never
+// throws.
 function freshnessMemoReviewChanged(
   previousDueKeys,
   previousEvaluated,
@@ -5886,7 +6434,12 @@ function freshnessMemoReviewChanged(
     }
     for (const [key, value] of current) {
       const before = previousEvaluated.get(key);
-      if (!before || before.state !== value.state) {
+      if (
+        !before ||
+        before.state !== value.state ||
+        before.tier !== value.tier ||
+        before.bucket !== value.bucket
+      ) {
         return true;
       }
     }
@@ -5912,8 +6465,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3, freshness namespace v3): memoized
-    // review queue plus status bar.
+    // Task freshness (api v3, freshness namespace v4): memoized
+    // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
     // Freshness config snapshot cache (`{ path, statKey, checkedAt,
@@ -6078,10 +6631,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Task freshness (freshness namespace v3: `state`/`counts`/
-      // `config` use the rotten vocabulary; the removed
-      // `stale_daily_budget` key still parses for one release with a
-      // deprecation lint. Top-level api stays v3).
+      // Task freshness (freshness namespace v4: tiered walk
+      // NEW → PENDING → NEXT → RETURNED → ROTTEN with daily lane
+      // review; `state`/`bucket`/`counts`/`config` keep the rotten
+      // vocabulary; the removed `stale_daily_budget` key still parses
+      // for one release with a deprecation lint. Top-level api stays
+      // v3).
       // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
       // member is synchronous, never awaits and never throws. Missing
       // or old freshness namespaces degrade vault queries to the
@@ -6089,7 +6644,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // optional chaining, since optional chaining alone does not
       // catch a throwing api.
       freshness: Object.freeze({
-        version: 3,
+        version: 4,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),
@@ -6102,6 +6657,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         tier: (task) => this.apiFreshnessTier(task),
         rank: (task) => this.apiFreshnessRank(task),
         intervalFor: (task) => this.apiFreshnessIntervalFor(task),
+        intervalForLine: (line, noteRefreshRaw) =>
+          this.apiFreshnessIntervalForLine(line, noteRefreshRaw),
         queue: () => this.apiFreshnessQueue(),
         counts: () => this.apiFreshnessCounts(),
         lints: () => this.apiFreshnessLints(),
@@ -9299,8 +9856,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  // --- NEW/ROTTEN review chips (freshness namespace v3) ----------------
-  // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
+  // --- NEW/ROTTEN review chips (freshness namespace v4) ----------------  // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
   // rotten summary): the same widget pattern as the READY badge — one
   // anchor per component, detached nodes pruned, refreshed on the same
   // debounce paths, subscriptions dropped when the component unloads.
@@ -9429,16 +9985,18 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }, 150);
   }
 
-  // --- Task freshness (freshness namespace v3) --------------------------
+  // --- Task freshness (freshness namespace v4) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
-  // `refresh` come from `originalMarkdown`; frontmatter comes from
-  // `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
-  // Visibility is `planLaneVisible` plus status type TODO,
+  // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
+  // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
+  // Ready visibility is `planLaneVisible` plus status type TODO,
   // `!task.recurrence`, not a canonical daily-note path, and
-  // `!isTodayTask`. The evaluated rows and queue are memoized on the
-  // identity of the array `getTasks()` returns, the local date, a
-  // frontmatter generation, and the config — so `rank(task)` stays O(1)
-  // inside Tasks' `sort by function`.
+  // `!isTodayTask`; lane rows (`/` pending, `*` next) walk the same
+  // predicate with their lane interval. The evaluated rows and tiered
+  // queue are memoized on the identity of the array `getTasks()`
+  // returns, the local date, a frontmatter generation, and the config
+  // (including lane intervals) — so `rank(task)` stays O(1) inside
+  // Tasks' `sort by function`.
 
   freshnessTodayText(now = new Date()) {
     try {
@@ -9667,6 +10225,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         const entry = {
           state: evaluated.state,
           bucket: freshnessBucketForState(evaluated.state),
+          tier: evaluated.tier || null,
+          lane: evaluated.lane || null,
           fresh: evaluated.fresh,
           dueOn: evaluated.dueOn,
           daysOverdue: evaluated.daysOverdue,
@@ -9819,9 +10379,20 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   apiFreshnessConfig() {
     try {
       const snapshot = this.freshnessConfigSnapshot();
+      const pendingInterval =
+        snapshot.config.pendingInterval !== undefined
+          ? snapshot.config.pendingInterval
+          : 1;
+      const nextInterval =
+        snapshot.config.nextInterval !== undefined
+          ? snapshot.config.nextInterval
+          : 1;
       return {
         interval: snapshot.config.interval,
+        pendingInterval,
+        nextInterval,
         rottenDailyBudget: snapshot.config.rottenDailyBudget,
+        intervalFromConfig: Boolean(snapshot.config.intervalFromConfig),
         invalid: snapshot.invalid,
         deprecatedStaleBudget: Boolean(
           snapshot.config.deprecatedStaleBudget,
@@ -9830,7 +10401,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     } catch (error) {
       return {
         interval: 7,
+        pendingInterval: 1,
+        nextInterval: 1,
         rottenDailyBudget: null,
+        intervalFromConfig: false,
         invalid: false,
         deprecatedStaleBudget: false,
       };
@@ -9890,10 +10464,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     );
   }
 
-  // Evaluated `{ state, bucket, ... }` for one task: a warm map hit
-  // inside the snapshot, or the per-row evaluator with the memo's
-  // config on a miss. Throws only when the memo itself is unusable, so
-  // the gated READY count can fall back to the legacy count.
+  // Evaluated `{ state, bucket, tier, lane, ... }` for one task: a
+  // warm map hit inside the snapshot, or the per-row evaluator with
+  // the memo's config on a miss. Throws only when the memo itself is
+  // unusable, so the gated READY count can fall back to the legacy
+  // count. `state`/`bucket` stay byte-for-byte; `tier` drives
+  // `isDue` and the walk.
   freshnessEvaluatedFor(task, memo) {
     const active = memo || this.freshnessEnsureMemo();
     // A task object already in the snapshot serves its own row's
@@ -9930,6 +10506,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     return {
       state: evaluated.state,
       bucket: freshnessBucketForState(evaluated.state),
+      tier: evaluated.tier || null,
+      lane: evaluated.lane || null,
       fresh: evaluated.fresh,
       dueOn: evaluated.dueOn,
       daysOverdue: evaluated.daysOverdue,
@@ -9987,8 +10565,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
   apiFreshnessIsDue(task) {
     try {
-      const state = this.apiFreshnessState(task);
-      return state === "new" || state === "resurfaced" || state === "rotten";
+      const evaluated = this.freshnessEvaluatedFor(task);
+      return (
+        evaluated !== null &&
+        evaluated !== undefined &&
+        evaluated.tier !== null &&
+        evaluated.tier !== undefined
+      );
     } catch (error) {
       return false;
     }
@@ -9996,9 +10579,14 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
   apiFreshnessTier(task) {
     try {
-      return freshnessTierForState(this.apiFreshnessState(task));
+      const evaluated = this.freshnessEvaluatedFor(task);
+      const tier =
+        evaluated !== null && evaluated !== undefined
+          ? evaluated.tier
+          : null;
+      return typeof tier === "string" ? tier : null;
     } catch (error) {
-      return "";
+      return null;
     }
   }
 
@@ -10050,6 +10638,21 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
+  apiFreshnessIntervalForLine(line, noteRefreshRaw) {
+    try {
+      const snapshot = this.freshnessConfigSnapshot();
+      const config =
+        snapshot && snapshot.config ? snapshot.config : defaultFreshnessConfig();
+      return freshnessIntervalForLine(line, noteRefreshRaw, config);
+    } catch (error) {
+      return {
+        days: 7,
+        source: "default",
+        ready: { days: 7, source: "default" },
+      };
+    }
+  }
+
   apiFreshnessCounts() {
     try {
       const memo = this.freshnessEnsureMemo();
@@ -10061,7 +10664,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         resurfaced: 0,
         rotten: 0,
         fresh: 0,
+        pendingDue: 0,
+        nextDue: 0,
+        walk: 0,
         refreshedToday: 0,
+        upkeepToday: 0,
         budget: null,
         budgetMet: false,
       };
@@ -10550,7 +11157,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  freshnessMarkUnresolvedInterval(snapshot, path, source) {
+  freshnessMarkUnresolvedInterval(snapshot, path, source, status) {
     try {
       const taskDays =
         source &&
@@ -10573,7 +11180,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         snapshot && snapshot.config
           ? snapshot.config
           : { interval: 7 };
-      return freshnessIntervalFor(taskDays, noteDays, config);
+      const symbol =
+        typeof status === "string" && status !== ""
+          ? String(status)[0]
+          : null;
+      const lane =
+        symbol === "/" ? "pending" : symbol === "*" ? "next" : null;
+      return freshnessIntervalFor(taskDays, noteDays, config, lane);
     } catch (error) {
       return { days: 7, source: "default" };
     }
@@ -10616,6 +11229,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
                   snapshot,
                   path,
                   source,
+                  status,
                 ),
                 status,
                 resolution,
@@ -10656,6 +11270,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
                 snapshot,
                 path,
                 source,
+                status,
               ),
               status,
               resolution,
@@ -10677,7 +11292,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       return freshnessMarkModel({
         source,
         today: dateText,
-        interval: this.freshnessMarkUnresolvedInterval(snapshot, path, source),
+        interval: this.freshnessMarkUnresolvedInterval(
+          snapshot,
+          path,
+          source,
+          status,
+        ),
         status,
         resolution: null,
       });
@@ -10758,6 +11378,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
                 snapshot,
                 path,
                 source,
+                status,
               ),
               status,
               resolution,
@@ -10779,7 +11400,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       return freshnessMarkModel({
         source,
         today: dateText,
-        interval: this.freshnessMarkUnresolvedInterval(snapshot, path, source),
+        interval: this.freshnessMarkUnresolvedInterval(
+          snapshot,
+          path,
+          source,
+          null,
+        ),
         status: null,
         resolution: null,
       });
@@ -13994,7 +14620,11 @@ module.exports.helpers = {
   coerceFreshnessConfig,
   loadFreshnessConfig,
   freshnessParseNoteRefresh,
+  freshnessLaneForRow,
+  freshnessLaneIntervalDays,
   freshnessIntervalFor,
+  freshnessIntervalForLine,
+  freshnessTierLabel,
   freshnessEvaluate,
   freshnessState,
   freshnessBucketForState,
@@ -14012,7 +14642,6 @@ module.exports.helpers = {
   paintReviewElement,
   setReviewAnchorContent,
   freshnessRowFromTask,
-  freshnessTierForState,
   freshnessTaskStatus,
   freshnessMarkSource,
   freshnessMarkSourceInText,

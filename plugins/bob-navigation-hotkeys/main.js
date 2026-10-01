@@ -24387,12 +24387,12 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
   let detail = state;
   if (state === "new") {
     detail = "NEW";
-  } else if (state === "stale") {
+  } else if (state === "rotten") {
     const overdue =
       entry && Number.isFinite(entry.daysOverdue)
         ? entry.daysOverdue
         : null;
-    detail = overdue === null ? "stale" : `stale ${overdue}d`;
+    detail = overdue === null ? "rotten" : `rotten ${overdue}d`;
   } else if (state === "resurfaced") {
     detail = "resurfaced";
   }

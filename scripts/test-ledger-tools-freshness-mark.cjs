@@ -88,7 +88,7 @@ const {
 } = helpers;
 
 const D = "2026-10-08";
-const CFG = { interval: 7, intervalFromConfig: false, staleDailyBudget: null };
+const CFG = { interval: 7, intervalFromConfig: false, rottenDailyBudget: null };
 const DEFAULT_INTERVAL = { days: 7, source: "default" };
 
 // docs/freshness.md §12: a Ready, visible, non-recurring task in `a.md`
@@ -172,7 +172,7 @@ test("M2 aging: ring glyph, 3d label, draining lease", () => {
   );
 });
 
-test("M3 boundary: STALE due capsule with Alt+F hint", () => {
+test("M3 boundary: ROTTEN due capsule with Alt+F hint", () => {
   const model = markModel("- [ ] #task T [fresh:: 2026-10-01]");
   assert.equal(model.tone, "due");
   assert.equal(model.glyph, "refresh");
@@ -401,8 +401,8 @@ test("N1-N6 non-canonical lines get no mark", () => {
 });
 
 test("C1-C3 consensus is exact or unresolved", () => {
-  const staleA = sRow({ rawLine: "- [ ] #task A [fresh:: 2026-10-01]" });
-  const staleB = sRow({
+  const rottenA = sRow({ rawLine: "- [ ] #task A [fresh:: 2026-10-01]" });
+  const rottenB = sRow({
     line: 2,
     rawLine: "- [ ] #task B [fresh:: 2026-10-01]",
   });
@@ -416,7 +416,7 @@ test("C1-C3 consensus is exact or unresolved", () => {
       resolution: freshnessMarkResolution(row, D, CFG),
     });
   };
-  const agreed = freshnessMarkConsensus([modelFor(staleA), modelFor(staleB)]);
+  const agreed = freshnessMarkConsensus([modelFor(rottenA), modelFor(rottenB)]);
   assert.ok(agreed !== null, "C1 agrees");
   assert.equal(agreed.tone, "due");
 
@@ -426,7 +426,7 @@ test("C1-C3 consensus is exact or unresolved", () => {
     rawLine: "- [*] #task B [fresh:: 2026-10-01]",
   });
   assert.equal(
-    freshnessMarkConsensus([modelFor(staleA), modelFor(nextB)]),
+    freshnessMarkConsensus([modelFor(rottenA), modelFor(nextB)]),
     null,
     "C2 disagrees",
   );
@@ -468,7 +468,7 @@ test("tone order: closed, then due, then age 0, then out of scope", () => {
     isTodo: false,
     laneVisible: false,
   });
-  assert.equal(closedDue.tone, "resting", "closed beats stale age");
+  assert.equal(closedDue.tone, "resting", "closed beats rotten age");
   const due = markModel("- [ ] #task T [fresh:: 2026-10-01]");
   assert.equal(due.tone, "due");
   const openToday = markModel("- [ ] #task T [fresh:: 2026-10-08]");
@@ -571,14 +571,14 @@ test("DOM builder structure, attributes, and ring geometry", () => {
   assert.equal(suffix.attrs.class, "bob-fresh-mark-interval");
   assert.equal(suffix.children[0].text, "/14d");
 
-  const stale = markModel("- [ ] #task T [fresh:: 2026-10-01]");
-  const staleEl = buildFreshnessMarkElement(doc, stale, { foldSpace: true });
-  assert.equal(staleEl.children[0].children.length, 2, "refresh paths");
+  const rotten = markModel("- [ ] #task T [fresh:: 2026-10-01]");
+  const rottenEl = buildFreshnessMarkElement(doc, rotten, { foldSpace: true });
+  assert.equal(rottenEl.children[0].children.length, 2, "refresh paths");
   assert.equal(
-    staleEl.children[0].children[0].attrs.d,
+    rottenEl.children[0].children[0].attrs.d,
     "M14 8a6 6 0 1 1-6-6c1.68 0 3.29.67 4.49 1.83L14 5.33",
   );
-  assert.equal(staleEl.children[0].children[1].attrs.d, "M14 2v3.33h-3.33");
+  assert.equal(rottenEl.children[0].children[1].attrs.d, "M14 2v3.33h-3.33");
 
   const empty = markModel("- [ ] #task T [fresh:: 2026-10-01]");
   assert.equal(empty.remaining, 0);

@@ -93,7 +93,7 @@ const {
 } = helpers;
 
 const D = "2026-10-08";
-const CFG = { interval: 7, intervalFromConfig: false, staleDailyBudget: null };
+const CFG = { interval: 7, intervalFromConfig: false, rottenDailyBudget: null };
 
 // docs/freshness.md §9: input line, expected line, `changed`.
 const PLACEMENT_VECTORS = [
@@ -280,7 +280,7 @@ test("S1 new through S4 overdue", () => {
     D,
     CFG,
   );
-  assert.equal(boundary.state, "stale");
+  assert.equal(boundary.state, "rotten");
   assert.equal(boundary.dueOn, "2026-10-08");
   assert.equal(boundary.daysOverdue, 0);
   const overdue = helpers.freshnessEvaluate(
@@ -288,7 +288,7 @@ test("S1 new through S4 overdue", () => {
     D,
     CFG,
   );
-  assert.equal(overdue.state, "stale");
+  assert.equal(overdue.state, "rotten");
   assert.equal(overdue.dueOn, "2026-09-27");
   assert.equal(overdue.daysOverdue, 11);
   const freshDue = helpers.freshnessEvaluate(
@@ -320,13 +320,13 @@ test("S5 task beats note, S6 note beats config, S7 config", () => {
     D,
     CFG,
   );
-  assert.equal(note.state, "stale");
+  assert.equal(note.state, "rotten");
   assert.equal(note.intervalSource, "note");
 
   const config = helpers.freshnessEvaluate(
     sRow({ rawLine: "- [ ] #task T [fresh:: 2026-10-01]" }),
     D,
-    { interval: 10, intervalFromConfig: true, staleDailyBudget: null },
+    { interval: 10, intervalFromConfig: true, rottenDailyBudget: null },
   );
   assert.equal(config.state, "fresh");
   assert.equal(config.intervalSource, "config");
@@ -365,7 +365,7 @@ test("S9 malformed and S10 future stamps read as new", () => {
   assert.ok(future.lints.includes("fresh_future"));
 });
 
-test("S11 resurfaced beats stale, S12 scheduled-equals-fresh stays fresh", () => {
+test("S11 resurfaced beats rotten, S12 scheduled-equals-fresh stays fresh", () => {
   const resurfaced = helpers.freshnessEvaluate(
     sRow({
       rawLine:
@@ -467,7 +467,7 @@ test("S15 refreshed_today spans lanes and the budget needs zero new", () => {
   const counts = freshnessCounts(rows, D, {
     interval: 7,
     intervalFromConfig: false,
-    staleDailyBudget: 2,
+    rottenDailyBudget: 2,
   });
   assert.equal(counts.refreshedToday, 2);
   assert.equal(counts.new, 0);
@@ -476,7 +476,7 @@ test("S15 refreshed_today spans lanes and the budget needs zero new", () => {
   const withNew = freshnessCounts(
     [...rows, sRow({ path: "b.md", line: 1 })],
     D,
-    { interval: 7, intervalFromConfig: false, staleDailyBudget: 2 },
+    { interval: 7, intervalFromConfig: false, rottenDailyBudget: 2 },
   );
   assert.equal(withNew.new, 1);
   assert.equal(withNew.budgetMet, false);
@@ -485,7 +485,7 @@ test("S15 refreshed_today spans lanes and the budget needs zero new", () => {
 test("config coercion keeps defaults, flags invalid, ignores unknown keys", () => {
   assert.deepEqual(defaultFreshnessConfig(), {
     interval: 7,
-    staleDailyBudget: null,
+    rottenDailyBudget: null,
   });
   assert.equal(freshnessBlock({}), undefined);
   assert.deepEqual(freshnessBlock({ freshness: { interval: 3 } }), {
@@ -494,12 +494,36 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
 
   const good = coerceFreshnessConfig({
     interval: 10,
-    stale_daily_budget: 15,
+    rotten_daily_budget: 15,
     unknown_key: "ignored",
   });
   assert.equal(good.invalid, false);
   assert.equal(good.config.interval, 10);
-  assert.equal(good.config.staleDailyBudget, 15);
+  assert.equal(good.config.rottenDailyBudget, 15);
+  assert.equal(good.config.deprecatedStaleBudget, false);
+
+  // The removed key still supplies the budget for one release.
+  const legacy = coerceFreshnessConfig({ stale_daily_budget: 15 });
+  assert.equal(legacy.invalid, false);
+  assert.equal(legacy.config.rottenDailyBudget, 15);
+  assert.equal(legacy.config.deprecatedStaleBudget, true);
+
+  // Canonical presence wins, including null (budget off) and equal
+  // values; the legacy value is ignored but still flagged.
+  const both = coerceFreshnessConfig({
+    rotten_daily_budget: 20,
+    stale_daily_budget: 15,
+  });
+  assert.equal(both.invalid, false);
+  assert.equal(both.config.rottenDailyBudget, 20);
+  assert.equal(both.config.deprecatedStaleBudget, true);
+  const nulled = coerceFreshnessConfig({
+    rotten_daily_budget: null,
+    stale_daily_budget: 15,
+  });
+  assert.equal(nulled.invalid, false);
+  assert.equal(nulled.config.rottenDailyBudget, null);
+  assert.equal(nulled.config.deprecatedStaleBudget, true);
 
   assert.equal(coerceFreshnessConfig(undefined).invalid, false);
   assert.equal(coerceFreshnessConfig(null).invalid, false);
@@ -508,6 +532,8 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     { interval: 366 },
     { interval: "soon" },
     { interval: 7.5 },
+    { rotten_daily_budget: 0 },
+    { rotten_daily_budget: "soon" },
     { stale_daily_budget: 0 },
     { stale_daily_budget: "soon" },
     [1, 2],
@@ -515,8 +541,8 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     const coerced = coerceFreshnessConfig(block);
     assert.equal(coerced.invalid, true, JSON.stringify(block));
     assert.deepEqual(
-      { interval: coerced.config.interval, staleDailyBudget: coerced.config.staleDailyBudget },
-      { interval: 7, staleDailyBudget: null },
+      { interval: coerced.config.interval, rottenDailyBudget: coerced.config.rottenDailyBudget },
+      { interval: 7, rottenDailyBudget: null },
     );
   }
 });
@@ -579,7 +605,7 @@ test("interval precedence is task, note, config, default", () => {
     freshnessIntervalFor(null, null, {
       interval: 10,
       intervalFromConfig: true,
-      staleDailyBudget: null,
+      rottenDailyBudget: null,
     }),
     { days: 10, source: "config" },
   );
@@ -650,7 +676,7 @@ function withMissingConfig(run) {
   }
 }
 
-test("freshness namespace v2 keeps every v1 member", () => {
+test("freshness namespace v3 keeps every member on rotten vocabulary", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -670,7 +696,7 @@ test("freshness namespace v2 keeps every v1 member", () => {
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 2);
+      assert.equal(freshness.version, 3);
       for (const key of [
         "config",
         "stampLine",
@@ -690,8 +716,9 @@ test("freshness namespace v2 keeps every v1 member", () => {
       }
       assert.deepEqual(freshness.config(), {
         interval: 7,
-        staleDailyBudget: null,
+        rottenDailyBudget: null,
         invalid: false,
+        deprecatedStaleBudget: false,
       });
       assert.equal(freshness.state(tasks[0]), "new");
       assert.equal(freshness.bucket(tasks[0]), "new");
@@ -788,7 +815,7 @@ test("the reload event fires only when the due key set changes", () => {
       plugin.freshnessEnsureMemo(new Date(2026, 9, 8));
       assert.deepEqual(triggers, []);
 
-      // A longer interval clears the STALE entry, so the due set changes.
+      // A longer interval clears the ROTTEN entry, so the due set changes.
       frontmatter["notes/a.md"] = 30;
       plugin.refreshFreshnessForChangedFile({ path: "notes/a.md" });
       assert.deepEqual(triggers, [TODAY_RELOAD_EVENT]);
@@ -809,7 +836,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
     { text: "⟳ –", tooltip: "Tasks unavailable", mode: "unavailable" },
   );
   const status = freshnessStatusView(
-    { due: 23, new: 3, resurfaced: 2, stale: 18, refreshedToday: 12 },
+    { due: 23, new: 3, resurfaced: 2, rotten: 18, refreshedToday: 12 },
     { mostOverdue: 11 },
   );
   assert.equal(status.text, "⟳ 3 new · 20 rotten · ✓ 12 today");
@@ -822,7 +849,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
       due: 5,
       new: 0,
       resurfaced: 1,
-      stale: 4,
+      rotten: 4,
       refreshedToday: 12,
       budget: 15,
       budgetMet: false,
@@ -834,7 +861,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   assert.match(budgeted.tooltip, /RETURNED 1 · ROTTEN 4/);
   assert.equal(
     freshnessStatusView(
-      { due: 0, new: 0, resurfaced: 0, stale: 0, refreshedToday: 12 },
+      { due: 0, new: 0, resurfaced: 0, rotten: 0, refreshedToday: 12 },
       {},
     ).mode,
     "clear",
@@ -845,7 +872,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
         due: 0,
         new: 0,
         resurfaced: 0,
-        stale: 0,
+        rotten: 0,
         refreshedToday: 15,
         budget: 15,
         budgetMet: true,
@@ -1024,7 +1051,7 @@ test("bucket partition vectors: S1 new, S3/S4/S11 rotten, the rest null", () => 
   assert.equal(
     bucketed(
       sRow({ rawLine: "- [ ] #task T [fresh:: 2026-10-01]" }),
-      { interval: 10, intervalFromConfig: true, staleDailyBudget: null },
+      { interval: 10, intervalFromConfig: true, rottenDailyBudget: null },
     ),
     null,
     "S7 config interval",
@@ -1076,13 +1103,13 @@ test("reviewModel shares counts, meter, tooltip, and severity", () => {
   const queue = [
     { state: "new", daysOverdue: null, interval: 7 },
     { state: "resurfaced", daysOverdue: 1, interval: 7 },
-    { state: "stale", daysOverdue: 11, interval: 7 },
+    { state: "rotten", daysOverdue: 11, interval: 7 },
   ];
   const counts = {
     due: 3,
     new: 1,
     resurfaced: 1,
-    stale: 1,
+    rotten: 1,
     fresh: 4,
     refreshedToday: 12,
     budget: null,
@@ -1106,13 +1133,13 @@ test("reviewModel shares counts, meter, tooltip, and severity", () => {
       due: 1,
       new: 0,
       resurfaced: 0,
-      stale: 1,
+      rotten: 1,
       fresh: 4,
       refreshedToday: 12,
       budget: 15,
       budgetMet: false,
     },
-    [{ state: "stale", daysOverdue: 2, interval: 7 }],
+    [{ state: "rotten", daysOverdue: 2, interval: 7 }],
   );
   assert.equal(calm.severity, "rotten");
   assert.equal(calm.meter, "✓ 12/15");
@@ -1123,7 +1150,7 @@ test("reviewModel shares counts, meter, tooltip, and severity", () => {
       due: 0,
       new: 0,
       resurfaced: 0,
-      stale: 0,
+      rotten: 0,
       fresh: 0,
       refreshedToday: 0,
       budget: null,
@@ -1138,7 +1165,7 @@ test("reviewModel shares counts, meter, tooltip, and severity", () => {
   // confirmation age or the global default.
   const mild = freshnessReviewModel(
     { ...counts, new: 0, due: 1 },
-    [{ state: "stale", daysOverdue: 6, interval: 7 }],
+    [{ state: "rotten", daysOverdue: 6, interval: 7 }],
   );
   assert.equal(mild.escalated, false);
   assert.equal(mild.severity, "rotten");
@@ -1178,7 +1205,7 @@ test("memo serves warm map hits and misses use the per-row evaluator", () => {
       });
       assert.equal(plugin.freshnessEnsureMemo(), memo);
       assert.equal(plugin.apiFreshnessBucket(outsider), "rotten");
-      assert.equal(plugin.apiFreshnessState(outsider), "stale");
+      assert.equal(plugin.apiFreshnessState(outsider), "rotten");
     } finally {
       plugin.onunload();
     }
@@ -1194,7 +1221,7 @@ test("config snapshot caches the parse and invalidates explicitly", () => {
       assert.deepEqual(first, {
         config: {
           interval: 7,
-          staleDailyBudget: null,
+          rottenDailyBudget: null,
           intervalFromConfig: false,
         },
         invalid: false,
@@ -1258,7 +1285,7 @@ test("review chips share the model with severity classes", () => {
       due: 2,
       new: 1,
       resurfaced: 1,
-      stale: 0,
+      rotten: 0,
       fresh: 0,
       refreshedToday: 5,
       budget: null,
@@ -1289,13 +1316,13 @@ test("review chips share the model with severity classes", () => {
       due: 1,
       new: 0,
       resurfaced: 0,
-      stale: 1,
+      rotten: 1,
       fresh: 0,
       refreshedToday: 5,
       budget: null,
       budgetMet: false,
     },
-    [{ state: "stale", daysOverdue: 9, interval: 7 }],
+    [{ state: "rotten", daysOverdue: 9, interval: 7 }],
   );
   const escalated = paintReviewElement(host(), "rotten", bad);
   assert.match(escalated.attrs.class, /bob-plan-over/);

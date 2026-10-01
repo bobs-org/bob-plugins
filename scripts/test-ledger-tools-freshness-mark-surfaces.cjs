@@ -176,7 +176,7 @@ const {
 } = helpers;
 
 const D = "2026-10-08";
-const CFG = { interval: 7, intervalFromConfig: false, staleDailyBudget: null };
+const CFG = { interval: 7, intervalFromConfig: false, rottenDailyBudget: null };
 
 function sRow(overrides = {}) {
   return {

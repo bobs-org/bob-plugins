@@ -66,7 +66,7 @@ function threeQueue() {
       path: "b.md",
       line: 10,
       originalMarkdown: "- [ ] #task Walk dog",
-      state: "stale",
+      state: "rotten",
       dueOn: "2026-09-30",
       daysOverdue: 4,
       fresh: "2026-09-23",
@@ -294,7 +294,7 @@ test("review jump notices name the state", () => {
   assert.equal(helpers.buildReviewJumpNotice(queue[0], 1, 3), "Review 1/3 · NEW");
   assert.equal(
     helpers.buildReviewJumpNotice(queue[1], 2, 3),
-    "Review 2/3 · stale 4d",
+    "Review 2/3 · rotten 4d",
   );
   assert.equal(
     helpers.buildReviewJumpNotice(queue[2], 3, 3),

@@ -4154,10 +4154,12 @@ function readFreshness(line, todayText) {
 
 // --- Task freshness: config -------------------------------------------------
 // Beside `planCapsBlock` / `coercePlanCaps`: the `freshness:` block in
-// `~/.config/bob/config.yml` (`interval`, `stale_daily_budget`).
+// `~/.config/bob/config.yml` (`interval`, `rotten_daily_budget`).
+// The removed `stale_daily_budget` key still supplies the budget for
+// one release with a deprecation lint.
 
 function defaultFreshnessConfig() {
-  return { interval: 7, staleDailyBudget: null };
+  return { interval: 7, rottenDailyBudget: null };
 }
 
 // The raw `freshness:` block out of a parsed config file, or undefined
@@ -4211,17 +4213,44 @@ function coerceFreshnessConfig(block) {
       invalid = true;
     }
   }
-  let budget = defaults.staleDailyBudget;
-  const rawBudget = pick("stale_daily_budget", "staleDailyBudget");
-  if (rawBudget !== undefined && rawBudget !== null) {
-    if (
-      typeof rawBudget === "number" &&
-      Number.isInteger(rawBudget) &&
-      rawBudget >= 1
-    ) {
-      budget = rawBudget;
-    } else {
-      invalid = true;
+  // The canonical `rotten_daily_budget` wins by presence, including
+  // an explicit null (budget off). The removed `stale_daily_budget`
+  // still supplies the budget for one release; when both occur the
+  // legacy value is warned about and ignored.
+  const rawCanonical =
+    block.rotten_daily_budget !== undefined
+      ? block.rotten_daily_budget
+      : block.rottenDailyBudget;
+  const rawLegacy =
+    block.stale_daily_budget !== undefined
+      ? block.stale_daily_budget
+      : block.staleDailyBudget;
+  const legacyPresent = rawLegacy !== undefined && rawLegacy !== null;
+  let budget = defaults.rottenDailyBudget;
+  let deprecatedStaleBudget = false;
+  const coerceBudget = (raw) =>
+    typeof raw === "number" && Number.isInteger(raw) && raw >= 1
+      ? raw
+      : null;
+  if (rawCanonical !== undefined) {
+    if (rawCanonical !== null) {
+      const coerced = coerceBudget(rawCanonical);
+      if (coerced === null) {
+        invalid = true;
+      } else {
+        budget = coerced;
+      }
+    }
+    deprecatedStaleBudget = legacyPresent;
+  } else if (rawLegacy !== undefined) {
+    if (rawLegacy !== null) {
+      const coerced = coerceBudget(rawLegacy);
+      if (coerced === null) {
+        invalid = true;
+      } else {
+        budget = coerced;
+        deprecatedStaleBudget = true;
+      }
     }
   }
   // Like Rust, any invalid value falls back to the full default block.
@@ -4232,7 +4261,12 @@ function coerceFreshnessConfig(block) {
     };
   }
   return {
-    config: { interval, staleDailyBudget: budget, intervalFromConfig },
+    config: {
+      interval,
+      rottenDailyBudget: budget,
+      intervalFromConfig,
+      deprecatedStaleBudget,
+    },
     invalid: false,
   };
 }
@@ -4348,7 +4382,7 @@ function freshnessEvaluateValidScheduled(value) {
 //     Pomodoros), scheduled (canonical date or null), rawLine (the task's
 //     originalMarkdown), noteRefreshRaw (the note's raw `task_refresh`) }
 //
-// Returns `{ state ("new"|"resurfaced"|"stale"|"fresh"|null; null is out
+// Returns `{ state ("new"|"resurfaced"|"rotten"|"fresh"|null; null is out
 // of scope, see S13), fresh, intervalDays, intervalSource, dueOn,
 // daysOverdue, lints }`.
 function freshnessEvaluate(row, todayText, config) {
@@ -4395,7 +4429,7 @@ function freshnessEvaluate(row, todayText, config) {
     };
   }
 
-  // RESURFACED beats STALE: a deferral that returned is due as soon as
+  // RESURFACED beats ROTTEN: a deferral that returned is due as soon as
   // it returns, however old the stamp is.
   const scheduled = freshnessEvaluateValidScheduled(row.scheduled);
   if (scheduled !== null && fresh < scheduled && scheduled <= today) {
@@ -4413,7 +4447,7 @@ function freshnessEvaluate(row, todayText, config) {
   const dueOn = freshDateAddDays(fresh, interval.days);
   if (today >= dueOn) {
     return {
-      state: "stale",
+      state: "rotten",
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
@@ -4434,7 +4468,7 @@ function freshnessEvaluate(row, todayText, config) {
   };
 }
 
-// One row's state: `"new"` | `"resurfaced"` | `"stale"` | `"fresh"` |
+// One row's state: `"new"` | `"resurfaced"` | `"rotten"` | `"fresh"` |
 // null (out of scope).
 function freshnessState(row, todayText, config) {
   return freshnessEvaluate(row, todayText, config).state;
@@ -4443,14 +4477,12 @@ function freshnessState(row, todayText, config) {
 // Stable read-time bucket for dashboard gating (`docs/freshness.md`
 // §4 in bob-cli): `"new"` surfaces in NEW, `"rotten"` (resurfaced or
 // age-expired) surfaces in ROTTEN review, anything else (fresh or
-// out of scope) has no bucket. Machine `state` names are unchanged;
-// only this mapping uses the `rotten` vocabulary until the
-// vocab-rotten migration.
+// out of scope) has no bucket.
 function freshnessBucketForState(state) {
   if (state === "new") {
     return "new";
   }
-  if (state === "resurfaced" || state === "stale") {
+  if (state === "resurfaced" || state === "rotten") {
     return "rotten";
   }
   return null;
@@ -4487,7 +4519,7 @@ function freshnessTierForState(state) {
   if (state === "new") {
     return "1 · NEW";
   }
-  if (state === "resurfaced" || state === "stale") {
+  if (state === "resurfaced" || state === "rotten") {
     return "2 · DUE";
   }
   return "";
@@ -4558,7 +4590,7 @@ function freshnessIsExcludedCountPath(path) {
     .some((segment) => segment === "_templates" || segment === "_conflicts");
 }
 
-// Whole-vault counts: `{ due, new, resurfaced, stale, fresh,
+// Whole-vault counts: `{ due, new, resurfaced, rotten, fresh,
 // refreshedToday, budget, budgetMet }`. `refreshedToday` counts tasks of
 // any status outside `_templates` / `_conflicts` whose `fresh` equals
 // today.
@@ -4568,7 +4600,7 @@ function freshnessCounts(rows, todayText, config) {
   let due = 0;
   let freshNew = 0;
   let resurfaced = 0;
-  let stale = 0;
+  let rotten = 0;
   let fresh = 0;
   let refreshedToday = 0;
 
@@ -4589,8 +4621,8 @@ function freshnessCounts(rows, todayText, config) {
     } else if (evaluated.state === "resurfaced") {
       resurfaced += 1;
       due += 1;
-    } else if (evaluated.state === "stale") {
-      stale += 1;
+    } else if (evaluated.state === "rotten") {
+      rotten += 1;
       due += 1;
     } else if (evaluated.state === "fresh") {
       fresh += 1;
@@ -4598,8 +4630,8 @@ function freshnessCounts(rows, todayText, config) {
   }
 
   const rawBudget =
-    config && config.staleDailyBudget !== undefined
-      ? config.staleDailyBudget
+    config && config.rottenDailyBudget !== undefined
+      ? config.rottenDailyBudget
       : null;
   const budget =
     Number.isInteger(rawBudget) && rawBudget >= 1 ? rawBudget : null;
@@ -4610,7 +4642,7 @@ function freshnessCounts(rows, todayText, config) {
     due,
     new: freshNew,
     resurfaced,
-    stale,
+    rotten,
     fresh,
     refreshedToday,
     budget,
@@ -4626,6 +4658,8 @@ const FRESHNESS_LINT_MESSAGES = {
     "fresh/refresh sits inside the Tasks suffix; the next stamp repairs it",
   refresh_invalid: "refresh is not an integer 1-365",
   task_refresh_invalid: "task_refresh is not an integer 1-365",
+  freshness_stale_daily_budget_deprecated:
+    "freshness.stale_daily_budget is deprecated; use freshness.rotten_daily_budget",
 };
 
 // Per-occurrence lints in row order: `{ code, path, line, message }`.
@@ -4666,8 +4700,8 @@ function freshnessStatusView(counts, options = {}) {
   const due = safe.due || 0;
   const freshNew = safe.new || 0;
   const resurfaced = safe.resurfaced || 0;
-  const stale = safe.stale || 0;
-  const rotten = resurfaced + stale;
+  const ageExpired = safe.rotten || 0;
+  const rotten = resurfaced + ageExpired;
   const refreshed = safe.refreshedToday || 0;
   const budget =
     Number.isInteger(safe.budget) && safe.budget >= 1 ? safe.budget : null;
@@ -4690,7 +4724,7 @@ function freshnessStatusView(counts, options = {}) {
     " · RETURNED " +
     resurfaced +
     " · ROTTEN " +
-    stale +
+    ageExpired +
     (mostOverdue === null
       ? " · nothing due"
       : " · oldest " + mostOverdue + "d overdue") +
@@ -4743,9 +4777,9 @@ function freshnessReviewModel(counts, queue) {
       Number.isInteger(safe.resurfaced) && safe.resurfaced >= 0
         ? safe.resurfaced
         : 0;
-    const stale =
-      Number.isInteger(safe.stale) && safe.stale >= 0 ? safe.stale : 0;
-    const rotten = resurfaced + stale;
+    const ageExpired =
+      Number.isInteger(safe.rotten) && safe.rotten >= 0 ? safe.rotten : 0;
+    const rotten = resurfaced + ageExpired;
     const refreshed =
       Number.isInteger(safe.refreshedToday) && safe.refreshedToday >= 0
         ? safe.refreshedToday
@@ -4759,7 +4793,7 @@ function freshnessReviewModel(counts, queue) {
       if (!entry || typeof entry !== "object") {
         continue;
       }
-      if (entry.state !== "resurfaced" && entry.state !== "stale") {
+      if (entry.state !== "resurfaced" && entry.state !== "rotten") {
         continue;
       }
       if (Number.isInteger(entry.daysOverdue) && entry.daysOverdue >= 0) {
@@ -4787,7 +4821,7 @@ function freshnessReviewModel(counts, queue) {
       " = " +
       resurfaced +
       " returned + " +
-      stale +
+      ageExpired +
       " rotten · oldest " +
       (oldest === null ? "–" : oldest + "d") +
       " overdue · ✓ " +
@@ -5151,7 +5185,7 @@ function freshnessMarkModel(input) {
     let tone;
     if (closed) {
       tone = "resting";
-    } else if (state === "stale" || state === "resurfaced") {
+    } else if (state === "rotten" || state === "resurfaced") {
       tone = "due";
     } else if (ageDays === 0) {
       tone = "today";
@@ -5193,7 +5227,7 @@ function freshnessMarkModel(input) {
         ? FRESHNESS_MARK_CLOSED_REASONS[status] || "status [" + status + "]"
         : resolution.reason || "hidden or dependency-blocked";
       line2 = "Not in the review queue: " + reason;
-    } else if (resolution && resolution.state === "stale") {
+    } else if (resolution && resolution.state === "rotten") {
       const dueOn = freshnessShortDate(resolution.dueOn, today) || resolution.dueOn;
       line2 = "Due for review since " + dueOn + " · " + every;
     } else if (resolution && resolution.state === "resurfaced") {
@@ -5638,7 +5672,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3, freshness namespace v2): memoized
+    // Task freshness (api v3, freshness namespace v3): memoized
     // review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
@@ -5782,8 +5816,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Task freshness (freshness namespace v2, additive: every v1
-      // member above is unchanged; top-level api stays v3).
+      // Task freshness (freshness namespace v3: `state`/`counts`/
+      // `config` use the rotten vocabulary; the removed
+      // `stale_daily_budget` key still parses for one release with a
+      // deprecation lint. Top-level api stays v3).
       // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
       // member is synchronous, never awaits and never throws. Missing
       // or old freshness namespaces degrade vault queries to the
@@ -5791,7 +5827,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // optional chaining, since optional chaining alone does not
       // catch a throwing api.
       freshness: Object.freeze({
-        version: 2,
+        version: 3,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),
@@ -6216,10 +6252,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           gateMemo.counts &&
           Number.isInteger(gateMemo.counts.new) &&
           Number.isInteger(gateMemo.counts.resurfaced) &&
-          Number.isInteger(gateMemo.counts.stale)
+          Number.isInteger(gateMemo.counts.rotten)
         ) {
           const rotten =
-            gateMemo.counts.resurfaced + gateMemo.counts.stale;
+            gateMemo.counts.resurfaced + gateMemo.counts.rotten;
           lane = {
             total: gateMemo.counts.new + rotten + count,
             new: gateMemo.counts.new,
@@ -6510,7 +6546,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  // --- NEW/ROTTEN review chips (freshness namespace v2) ----------------
+  // --- NEW/ROTTEN review chips (freshness namespace v3) ----------------
   // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
   // rotten summary): the same widget pattern as the READY badge — one
   // anchor per component, detached nodes pruned, refreshed on the same
@@ -6640,7 +6676,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }, 150);
   }
 
-  // --- Task freshness (freshness namespace v2) --------------------------
+  // --- Task freshness (freshness namespace v3) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh` come from `originalMarkdown`; frontmatter comes from
   // `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -6823,6 +6859,27 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     const queue = freshnessQueue(rows, dateText, snapshot.config);
     const counts = freshnessCounts(rows, dateText, snapshot.config);
     const lints = freshnessCollectLints(rows, dateText, snapshot.config);
+    // One deprecation diagnostic per loaded config — never one per
+    // task — when the removed `stale_daily_budget` key supplied the
+    // budget or was ignored beside the canonical key.
+    if (snapshot.config && snapshot.config.deprecatedStaleBudget) {
+      let configPath = "";
+      try {
+        configPath =
+          typeof planConfigPath === "function" ? planConfigPath() : "";
+      } catch (error) {
+        configPath = "";
+      }
+      lints.unshift({
+        code: "freshness_stale_daily_budget_deprecated",
+        path: String(configPath || ""),
+        line: null,
+        message:
+          FRESHNESS_LINT_MESSAGES[
+            "freshness_stale_daily_budget_deprecated"
+          ] || "freshness_stale_daily_budget_deprecated",
+      });
+    }
     const rank = new Map(queue.map((entry, index) => [entry.key, index]));
     // Key-to-evaluated-result map built once per snapshot, covering
     // FRESH and out-of-scope rows too — not just the review queue — so
@@ -7000,11 +7057,19 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       const snapshot = this.freshnessConfigSnapshot();
       return {
         interval: snapshot.config.interval,
-        staleDailyBudget: snapshot.config.staleDailyBudget,
+        rottenDailyBudget: snapshot.config.rottenDailyBudget,
         invalid: snapshot.invalid,
+        deprecatedStaleBudget: Boolean(
+          snapshot.config.deprecatedStaleBudget,
+        ),
       };
     } catch (error) {
-      return { interval: 7, staleDailyBudget: null, invalid: false };
+      return {
+        interval: 7,
+        rottenDailyBudget: null,
+        invalid: false,
+        deprecatedStaleBudget: false,
+      };
     }
   }
 
@@ -7143,7 +7208,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   apiFreshnessIsDue(task) {
     try {
       const state = this.apiFreshnessState(task);
-      return state === "new" || state === "resurfaced" || state === "stale";
+      return state === "new" || state === "resurfaced" || state === "rotten";
     } catch (error) {
       return false;
     }
@@ -7201,7 +7266,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         due: 0,
         new: 0,
         resurfaced: 0,
-        stale: 0,
+        rotten: 0,
         fresh: 0,
         refreshedToday: 0,
         budget: null,
@@ -8882,7 +8947,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
             planReview = {
               new: gateMemo.counts.new,
               rotten:
-                gateMemo.counts.resurfaced + gateMemo.counts.stale,
+                gateMemo.counts.resurfaced + gateMemo.counts.rotten,
             };
           }
         } catch (error) {

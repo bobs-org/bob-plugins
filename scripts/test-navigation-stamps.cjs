@@ -110,7 +110,7 @@ const refresh = (line, days, dateText) =>
 
 function freshnessApiStub(configInterval = 7) {
   return {
-    config: () => ({ interval: configInterval, staleDailyBudget: null, invalid: false }),
+    config: () => ({ interval: configInterval, rottenDailyBudget: null, invalid: false }),
     stampLine: stamp,
     setRefreshLine: refresh,
   };

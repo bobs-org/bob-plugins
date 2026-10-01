@@ -1122,3 +1122,301 @@ test("picker-single decay payload and preview-target comparison", () => {
   );
   assert.equal(helpers.isSamePriorityRollTarget(cached, null), false);
 });
+
+function countedContent() {
+  const rollP2 = "🎲 P2 roll · in **17** (8–30) days";
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const lines = [
+    "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01]",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01]",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    `\t\t- *2026-10-01* — ${rollP2}`,
+    "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01]",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    `\t\t- *2026-10-01* — ${rollP4}`,
+    "- [ ] #task D [scheduled:: 2026-10-01]",
+    "- [x] #task E [priority:: medium] [scheduled:: 2026-10-01]",
+  ];
+  return lines.join("\n");
+}
+
+function countedTargets(content, lines) {
+  const split = content.split("\n");
+  return lines.map((line) => ({ line, rawLine: split[line] }));
+}
+
+test("picker-counted plans one recommendation per target with skips", () => {
+  const property = decayProperty();
+  const content = countedContent();
+  const targets = countedTargets(content, [0, 2, 5, 8, 9]);
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    content,
+    targets,
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.deepEqual(summary.counts, { roll: 1, decay: 1, cancel: 1, unavailable: 0 });
+  assert.equal(summary.actionableCount, 3);
+  assert.equal(summary.skippedCount, 2);
+  assert.equal(summary.hasRecommendation, true);
+  assert.equal(summary.allRollSameLevel, false);
+  const kinds = summary.entries.map((entry) =>
+    entry.recommendation ? entry.recommendation.kind : null,
+  );
+  assert.deepEqual(kinds, ["roll", "decay", "cancel", null, null]);
+  assert.deepEqual(
+    summary.entries.map((entry) => entry.skipped),
+    [null, null, null, "no-priority", "closed"],
+  );
+  assert.equal(summary.dateStart, "2026-10-08");
+  assert.equal(summary.dateEnd, "2026-10-31");
+  assert.equal(summary.unavailableReason, null);
+  assert.equal(Object.isFrozen(summary), true);
+  assert.equal(Object.isFrozen(summary.entries[0].recommendation), true);
+});
+
+test("picker-counted batch preview, footer and notice copy", () => {
+  const property = decayProperty();
+  const content = countedContent();
+  const targets = countedTargets(content, [0, 2, 5, 8, 9]);
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    content,
+    targets,
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  const preview = helpers.buildBatchPriorityRollPreviewModel(summary);
+  assert.deepEqual(
+    { icon: preview.icon, tone: preview.tone, kind: preview.kind },
+    { icon: "ban", tone: "danger", kind: "cancel" },
+  );
+  assert.equal(preview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
+  assert.equal(preview.dateText, "2026-10-08 → 2026-10-31");
+  assert.equal(preview.meta, "2 skipped");
+  assert.equal(preview.footerLabel, "Apply 3 recommendations");
+  assert.equal(
+    preview.ariaLabel,
+    "Ctrl+Enter: 3 tasks · 1 roll · 1 decay · 1 cancel, 2026-10-08 → 2026-10-31, 2 skipped",
+  );
+
+  const rollsOnly = helpers.planPriorityRollRecommendationsForTargets(
+    [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01]",
+      "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01]",
+    ].join("\n"),
+    countedTargets(
+      [
+        "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01]",
+        "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01]",
+      ].join("\n"),
+      [0, 1],
+    ),
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.equal(rollsOnly.allRollSameLevel, true);
+  assert.equal(rollsOnly.sharedLevelLabel, "P2");
+  const rollsPreview = helpers.buildBatchPriorityRollPreviewModel(rollsOnly);
+  assert.equal(rollsPreview.footerLabel, "Roll 2 tasks");
+  assert.equal(rollsPreview.kind, "roll");
+
+  const notice = helpers.buildBatchPriorityRollNoticeModel(summary, {
+    baseDate: new Date(2026, 8, 30),
+    scheduledValues: ["2026-10-08", "2026-10-31"],
+    outcome: { blockedTaskCount: 2, removedPomodoroLinkCount: 1 },
+  });
+  assert.equal(notice.pill, "Rolled 3 tasks");
+  assert.equal(notice.iconName, "dices");
+  assert.deepEqual(
+    notice.chips.slice(0, 3),
+    [
+      { text: "1 rolled", tone: "info" },
+      { text: "1 decayed", tone: "warn" },
+      { text: "1 cancelled", tone: "warn" },
+    ],
+  );
+  assert.match(notice.text, /Rolled 3 tasks/);
+  assert.match(notice.text, /1 rolled/);
+  assert.equal(Object.isFrozen(preview), true);
+  assert.equal(Object.isFrozen(notice), true);
+  assert.equal(helpers.buildBatchPriorityRollPreviewModel(null), null);
+});
+
+test("picker-counted composes cancel then set-priority into one postimage", () => {
+  const property = decayProperty();
+  const content = countedContent();
+  const targets = countedTargets(content, [0, 2, 5]);
+  const session = { valid: true, explicit: true, targets };
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    content,
+    targets,
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  const byLine = new Map(
+    summary.entries
+      .filter((entry) => entry.recommendation)
+      .map((entry) => [entry.line, entry.recommendation]),
+  );
+  const plan = helpers.planRecommendedRollBatch(content, session, byLine, {
+    property,
+    dateText: "2026-09-30",
+    baseDate: new Date(2026, 8, 30),
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.rolledCount, 1);
+  assert.equal(plan.decayedCount, 1);
+  assert.equal(plan.cancelledCount, 1);
+  assert.match(
+    plan.content,
+    /\[priority:: medium\] \[scheduled:: 2026-10-08\]/,
+  );
+  assert.match(
+    plan.content,
+    /\[priority:: low\] \[scheduled:: 2026-10-31\]/,
+  );
+  assert.match(plan.content, /🎲 P2 roll · in \*\*8\*\* \(8–30\) days/);
+  assert.match(plan.content, /🎲 P2 → P3 decay · in \*\*31\*\* \(31–90\) days/);
+  assert.match(plan.content, /🍂 decayed past P4 after 1 roll/);
+  assert.match(plan.content, /\[cancelled:: 2026-09-30\]/);
+  assert.equal(plan.changed, true);
+  assert.equal(Object.isFrozen(plan), true);
+});
+
+test("picker-counted refuses a recurring cancel as one batch", () => {
+  const property = decayProperty();
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const content = [
+    "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] 🔁",
+    "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] 🔁",
+    "\t- 🗓️ **SCHEDULE LOG**",
+    `\t\t- *2026-10-01* — ${rollP4}`,
+  ].join("\n");
+  const targets = countedTargets(content, [0, 1]);
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    content,
+    targets,
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.ok(summary.unavailableReason);
+  const preview = helpers.buildBatchPriorityRollPreviewModel(summary);
+  assert.equal(preview.kind, "unavailable");
+  assert.equal(preview.action, "Cannot apply");
+  assert.equal(preview.footerLabel, "");
+  const byLine = new Map(
+    summary.entries
+      .filter((entry) => entry.recommendation)
+      .map((entry) => [entry.line, entry.recommendation]),
+  );
+  const plan = helpers.planRecommendedRollBatch(
+    content,
+    { valid: true, explicit: true, targets },
+    byLine,
+    {
+      property,
+      dateText: "2026-09-30",
+      baseDate: new Date(2026, 8, 30),
+    },
+  );
+  assert.equal(plan.valid, false);
+  assert.equal(plan.recurring, true);
+});
+
+test("picker-counted stale lines refuse and new options stay byte-identical", () => {
+  const property = decayProperty();
+  const content = countedContent();
+  const lines = content.split("\n");
+  const staleTargets = [
+    { line: 0, rawLine: "- [ ] #task changed" },
+    { line: 2, rawLine: lines[2] },
+  ];
+  const stale = helpers.planPriorityRollRecommendationsForTargets(
+    content,
+    staleTargets,
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.equal(stale.entries[0].skipped, "changed");
+
+  const single = [
+    "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01]",
+    "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01]",
+  ].join("\n");
+  const session = {
+    valid: true,
+    explicit: true,
+    targets: countedTargets(single, [0, 1]),
+  };
+  const before = helpers.planCountedBulletPropertyBatch(
+    single,
+    session,
+    "priority",
+    null,
+    {
+      operation: "set-priority",
+      priorityValue: "medium",
+      scheduledPropertyName: "scheduled",
+      scheduledValueByLine: new Map([
+        [0, "2026-10-08"],
+        [1, "2026-10-09"],
+      ]),
+      today: new Date(2026, 8, 30),
+      scheduleLog: { automatic: true, reason: "🎲 P2 roll · test" },
+    },
+  );
+  const after = helpers.planCountedBulletPropertyBatch(
+    single,
+    session,
+    "priority",
+    null,
+    {
+      operation: "set-priority",
+      priorityValue: "medium",
+      priorityValueByLine: new Map([
+        [0, "medium"],
+        [1, "medium"],
+      ]),
+      scheduledPropertyName: "scheduled",
+      scheduledValueByLine: new Map([
+        [0, "2026-10-08"],
+        [1, "2026-10-09"],
+      ]),
+      today: new Date(2026, 8, 30),
+      scheduleLog: { automatic: true, reason: "🎲 P2 roll · test" },
+    },
+  );
+  assert.equal(before.valid, true);
+  assert.equal(after.valid, true);
+  assert.equal(after.content, before.content);
+
+  const cancelContent = [
+    "- [ ] #task A [priority:: medium]",
+    "- [ ] #task B [priority:: medium]",
+  ].join("\n");
+  const cancelSession = {
+    valid: true,
+    explicit: true,
+    targets: countedTargets(cancelContent, [0, 1]),
+  };
+  const cancelBefore = helpers.planTaskCancelBatch(
+    cancelContent,
+    cancelSession,
+    { date: "2026-09-30", reason: "🍂 decayed past P4" },
+  );
+  const cancelAfter = helpers.planTaskCancelBatch(
+    cancelContent,
+    cancelSession,
+    {
+      date: "2026-09-30",
+      reason: "🍂 decayed past P4",
+      reasonByLine: new Map([
+        [0, "🍂 decayed past P4"],
+        [1, "🍂 decayed past P4"],
+      ]),
+    },
+  );
+  assert.equal(cancelBefore.valid, true);
+  assert.equal(cancelAfter.content, cancelBefore.content);
+});

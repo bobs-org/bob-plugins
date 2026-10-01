@@ -5224,9 +5224,15 @@ test("counted scheduled picker requires one shared configured priority", async (
     countExplicit: true,
     additionalTaskCount: 1,
   });
-  assert.equal(commonPicker.items.length, 11);
-  assert.equal(commonPicker.items[0].priorityRoll, true);
-  assert.equal(commonPicker.items[0].level.label, "P1");
+  // picker-counted: when every target is a same-level roll the batch
+  // recommendation replaces the shared-date pinned row (per-target dates would
+  // duplicate it), so there is no pinned row but the batch preview remains.
+  assert.equal(commonPicker.items.length, 10);
+  assert.equal(commonPicker.items.some((item) => item.priorityRoll), false);
+  const batchPreview =
+    commonPicker.getRollPreviewForDateProperty("scheduled");
+  assert.ok(batchPreview);
+  assert.equal(batchPreview.footerLabel, "Roll 2 tasks");
 });
 
 test("bullet property picker reconciles duplicate bare and counted opens", () => {

@@ -2698,6 +2698,542 @@ function buildPriorityRollPreviewModel(recommendation, baseDate) {
   return null;
 }
 
+// Plan a recommendation for every counted target from its own line and Schedule
+// Log. Each actionable target gets its own pre-rolled date, using the counted
+// priority writer's one-roll-per-target approach (one `random` draw per dated
+// target, in target order). Targets with no recommendation (closed, no priority,
+// unconfigured value) are skipped and reported. Pure and CRLF-preserving.
+function planPriorityRollRecommendationsForTargets(
+  content,
+  targets,
+  property,
+  options = {},
+) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const list = Array.isArray(targets) ? targets : [];
+  if (!property || property.values !== "priority") {
+    return Object.freeze({
+      valid: true,
+      error: null,
+      property: property || null,
+      schedulesName: "",
+      entries: Object.freeze([]),
+      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, unavailable: 0 }),
+      total: list.length,
+      actionableCount: 0,
+      skippedCount: list.length,
+      dateStart: "",
+      dateEnd: "",
+      unavailableReason: null,
+      hasRecommendation: false,
+      allRollSameLevel: false,
+      sharedLevelLabel: "",
+    });
+  }
+  const schedulesName = normalizeBulletPropertyName(property.schedules);
+  const baseDate =
+    options.baseDate instanceof Date ? options.baseDate : new Date();
+  const random =
+    typeof options.random === "function" ? options.random : Math.random;
+  const entries = [];
+  let roll = 0;
+  let decay = 0;
+  let cancel = 0;
+  let unavailable = 0;
+  const dated = [];
+  let unavailableReason = null;
+  for (const target of list) {
+    const lineIndex = target && target.line;
+    const rawLine = String((target && target.rawLine) || "");
+    const liveLine =
+      Number.isInteger(lineIndex) && lineIndex >= 0 && lineIndex < lines.length
+        ? String(lines[lineIndex] || "")
+        : undefined;
+    if (liveLine !== rawLine) {
+      entries.push(
+        Object.freeze({
+          line: lineIndex,
+          rawLine,
+          recommendation: null,
+          skipped: "changed",
+          currentValue: "",
+        }),
+      );
+      continue;
+    }
+    const status = getObsidianTaskCheckboxStatus(rawLine);
+    if (
+      !isObsidianTaskLine(rawLine) ||
+      !OPEN_OBSIDIAN_TASK_STATUSES.has(status)
+    ) {
+      entries.push(
+        Object.freeze({
+          line: lineIndex,
+          rawLine,
+          recommendation: null,
+          skipped: "closed",
+          currentValue: "",
+        }),
+      );
+      continue;
+    }
+    const field = findBulletPropertyField(rawLine, property.name);
+    const currentValue = normalizeBulletPropertyValue(
+      field && field.value,
+    );
+    if (!currentValue) {
+      entries.push(
+        Object.freeze({
+          line: lineIndex,
+          rawLine,
+          recommendation: null,
+          skipped: "no-priority",
+          currentValue: "",
+        }),
+      );
+      continue;
+    }
+    const level =
+      property.levelsByValue instanceof Map
+        ? property.levelsByValue.get(currentValue)
+        : (Array.isArray(property.levels) ? property.levels : []).find(
+            (candidate) =>
+              candidate && candidate.value === currentValue,
+          );
+    if (!level) {
+      entries.push(
+        Object.freeze({
+          line: lineIndex,
+          rawLine,
+          recommendation: null,
+          skipped: "unconfigured",
+          currentValue,
+        }),
+      );
+      continue;
+    }
+    let currentScheduled = "";
+    try {
+      const liveContext = getProjectNotePropertyContext(text, lineIndex);
+      const scheduledTarget = resolveBulletPropertyTarget(
+        schedulesName,
+        liveContext,
+      );
+      if (scheduledTarget.kind === "project-frontmatter") {
+        currentScheduled =
+          liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
+            ? liveContext.frontmatter.scheduledValue
+            : "";
+      } else {
+        const scheduledField = findBulletPropertyField(rawLine, schedulesName);
+        currentScheduled = scheduledField ? scheduledField.value : "";
+      }
+    } catch (error) {
+      currentScheduled = "";
+    }
+    const planned = planPriorityRollRecommendation({
+      property,
+      content: text,
+      taskLine: lineIndex,
+      currentScheduled,
+      baseDate,
+      random,
+    });
+    if (!planned) {
+      entries.push(
+        Object.freeze({
+          line: lineIndex,
+          rawLine,
+          recommendation: null,
+          skipped: "no-recommendation",
+          currentValue,
+        }),
+      );
+      continue;
+    }
+    const recommendation = Object.freeze({
+      ...planned,
+      priorityName: property.name,
+      schedulesName,
+      taskLine: lineIndex,
+    });
+    if (recommendation.kind === "roll") {
+      roll += 1;
+      dated.push(recommendation.date);
+    } else if (recommendation.kind === "decay") {
+      decay += 1;
+      dated.push(recommendation.date);
+    } else if (recommendation.kind === "cancel") {
+      cancel += 1;
+    } else if (recommendation.kind === "unavailable") {
+      unavailable += 1;
+      if (!unavailableReason) {
+        unavailableReason = recommendation.reason;
+      }
+    }
+    entries.push(
+      Object.freeze({
+        line: lineIndex,
+        rawLine,
+        recommendation,
+        skipped: null,
+        currentValue,
+      }),
+    );
+  }
+  const actionable = entries.filter(
+    (entry) =>
+      entry.recommendation &&
+      (entry.recommendation.kind === "roll" ||
+        entry.recommendation.kind === "decay" ||
+        entry.recommendation.kind === "cancel"),
+  );
+  const sortedDates = dated
+    .map((value) => normalizeBulletPropertyValue(value))
+    .filter(Boolean)
+    .sort();
+  const dateStart = sortedDates.length > 0 ? sortedDates[0] : "";
+  const dateEnd =
+    sortedDates.length > 0 ? sortedDates[sortedDates.length - 1] : "";
+  const skippedCount = entries.filter((entry) => !entry.recommendation).length;
+  const rollEntries = actionable.filter(
+    (entry) => entry.recommendation.kind === "roll",
+  );
+  const rollLabels = Array.from(
+    new Set(
+      rollEntries.map((entry) =>
+        normalizeBulletPropertyValue(
+          entry.recommendation.level && entry.recommendation.level.label,
+        ),
+      ),
+    ),
+  );
+  const allRollSameLevel =
+    actionable.length > 0 &&
+    rollEntries.length === actionable.length &&
+    rollLabels.length === 1;
+  return Object.freeze({
+    valid: true,
+    error: null,
+    property,
+    schedulesName,
+    entries: Object.freeze(entries),
+    counts: Object.freeze({ roll, decay, cancel, unavailable }),
+    total: list.length,
+    actionableCount: actionable.length,
+    skippedCount,
+    dateStart,
+    dateEnd,
+    unavailableReason,
+    hasRecommendation: actionable.length > 0 && !unavailableReason,
+    allRollSameLevel,
+    sharedLevelLabel: allRollSameLevel ? rollLabels[0] : "",
+  });
+}
+
+// Render the counted batch copy: one line on the `scheduled` row, for example
+// `4 tasks · 2 roll · 1 decay · 1 cancel · 2026-10-05 → 2026-12-19`, plus a
+// muted `N skipped` suffix. Tone and icon follow the most severe kind present:
+// cancel > decay > roll. The footer is `Roll N tasks` when every target is a
+// roll, otherwise `Apply N recommendations`. An unavailable batch renders the
+// muted `Cannot apply` line. Null when no target has a recommendation.
+function buildBatchPriorityRollPreviewModel(summary) {
+  if (!summary || typeof summary !== "object") {
+    return null;
+  }
+  const counts = summary.counts || {};
+  const roll = Math.max(0, Math.floor(numericOrDefault(counts.roll, 0)));
+  const decayCount = Math.max(0, Math.floor(numericOrDefault(counts.decay, 0)));
+  const cancelCount = Math.max(0, Math.floor(numericOrDefault(counts.cancel, 0)));
+  const actionable = Math.max(
+    0,
+    Math.floor(
+      numericOrDefault(
+        summary.actionableCount,
+        roll + decayCount + cancelCount,
+      ),
+    ),
+  );
+  if (summary.unavailableReason) {
+    return Object.freeze({
+      kind: "unavailable",
+      icon: "circle-slash",
+      tone: "muted",
+      action: "Cannot apply",
+      dateText: "",
+      dateValue: "",
+      meta: "a recurring task would be cancelled",
+      metaTone: "muted",
+      footerLabel: "",
+      ariaLabel:
+        "Ctrl+Enter unavailable: Cannot apply, a recurring task would be cancelled",
+      searchText: "roll cannot apply recurring",
+    });
+  }
+  if (actionable <= 0) {
+    return null;
+  }
+  const kind =
+    cancelCount > 0 ? "cancel" : decayCount > 0 ? "decay" : "roll";
+  const icon =
+    kind === "cancel" ? "ban" : kind === "decay" ? "trending-down" : "dices";
+  const tone =
+    kind === "cancel" ? "danger" : kind === "decay" ? "warn" : "accent";
+  const parts = [];
+  if (roll > 0) {
+    parts.push(`${roll} roll`);
+  }
+  if (decayCount > 0) {
+    parts.push(`${decayCount} decay`);
+  }
+  if (cancelCount > 0) {
+    parts.push(`${cancelCount} cancel`);
+  }
+  const action = `${actionable} ${actionable === 1 ? "task" : "tasks"}${
+    parts.length > 0 ? ` · ${parts.join(" · ")}` : ""
+  }`;
+  const dateStart = normalizeBulletPropertyValue(summary.dateStart);
+  const dateEnd = normalizeBulletPropertyValue(summary.dateEnd);
+  const dateText =
+    dateStart && dateEnd
+      ? dateStart === dateEnd
+        ? dateStart
+        : `${dateStart} → ${dateEnd}`
+      : dateStart || dateEnd || "";
+  const skipped = Math.max(
+    0,
+    Math.floor(numericOrDefault(summary.skippedCount, 0)),
+  );
+  const meta = skipped > 0 ? `${skipped} skipped` : "";
+  const allRoll = roll === actionable && decayCount === 0 && cancelCount === 0;
+  const footerLabel = allRoll
+    ? `Roll ${actionable} ${actionable === 1 ? "task" : "tasks"}`
+    : `Apply ${actionable} ${actionable === 1 ? "recommendation" : "recommendations"}`;
+  return Object.freeze({
+    kind,
+    icon,
+    tone,
+    action,
+    dateText,
+    dateValue: dateText,
+    meta,
+    metaTone: "muted",
+    footerLabel,
+    ariaLabel:
+      `Ctrl+Enter: ${action}` +
+      (dateText ? `, ${dateText}` : "") +
+      (meta ? `, ${meta}` : ""),
+    searchText: `roll ${action} ${meta}`.trim(),
+  });
+}
+
+// Compose the cancel and set-priority plans into one undoable editor
+// transaction: cancel first, remap the remaining lines through the cancel's
+// `cursorLineShift`, then set-priority for the roll and decay targets.
+// `recommendationsByLine` maps original line numbers to
+// `planPriorityRollRecommendation` records. Pure: recovery and freshness inputs
+// pass through `details` and are remapped, never read from the app.
+function planRecommendedRollBatch(
+  content,
+  session,
+  recommendationsByLine,
+  details = {},
+) {
+  const text = String(content || "");
+  const property = details.property || null;
+  const invalid = (error, extra = {}) =>
+    Object.freeze({
+      valid: false,
+      error,
+      stale: Boolean(extra.stale),
+      recurring: Boolean(extra.recurring),
+      content: text,
+      changed: false,
+    });
+  if (!property || property.values !== "priority") {
+    return invalid("Counted priority update is missing configured values");
+  }
+  const byLine =
+    recommendationsByLine instanceof Map ? recommendationsByLine : new Map();
+  if (byLine.size === 0) {
+    return invalid("No recommendations to apply");
+  }
+  for (const [, recommendation] of byLine) {
+    if (recommendation && recommendation.kind === "unavailable") {
+      return invalid(
+        recommendation.reason ||
+          "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+        { recurring: true },
+      );
+    }
+  }
+  const targets =
+    session && Array.isArray(session.targets) ? session.targets : [];
+  if (!session || session.valid === false || targets.length === 0) {
+    return invalid("Counted task session is unavailable", { stale: true });
+  }
+  const dateText = normalizeBulletPropertyValue(details.dateText);
+  const baseDate =
+    details.baseDate instanceof Date ? details.baseDate : new Date();
+  const cancelEntries = [];
+  const updateEntries = [];
+  for (const target of targets) {
+    if (!byLine.has(target.line)) {
+      continue;
+    }
+    const recommendation = byLine.get(target.line);
+    if (!recommendation) {
+      continue;
+    }
+    if (recommendation.kind === "cancel") {
+      cancelEntries.push({ target, recommendation });
+    } else if (
+      recommendation.kind === "roll" ||
+      recommendation.kind === "decay"
+    ) {
+      updateEntries.push({ target, recommendation });
+    }
+  }
+  if (cancelEntries.length === 0 && updateEntries.length === 0) {
+    return invalid("No recommendations to apply");
+  }
+
+  let intermediateContent = text;
+  let shift = (line) => line;
+  let cancelPlan = null;
+  if (cancelEntries.length > 0) {
+    if (!dateText) {
+      return invalid("Cancel date is required");
+    }
+    const cancelSession = Object.freeze({
+      valid: true,
+      error: null,
+      explicit: true,
+      targets: Object.freeze(
+        cancelEntries.map((entry) => entry.target),
+      ),
+    });
+    const reasonByLine = new Map(
+      cancelEntries.map((entry) => [
+        entry.target.line,
+        formatPriorityDecayCancelReason({
+          level: entry.recommendation.level,
+          streak: entry.recommendation.streak,
+        }),
+      ]),
+    );
+    cancelPlan = planTaskCancelBatch(intermediateContent, cancelSession, {
+      date: dateText,
+      reasonByLine,
+      fallbackReason: "",
+    });
+    if (!cancelPlan.valid) {
+      return invalid(cancelPlan.error, {
+        stale: cancelPlan.stale,
+        recurring: cancelPlan.recurring,
+      });
+    }
+    intermediateContent = cancelPlan.content;
+    shift = cancelPlan.cursorLineShift;
+  }
+
+  let priorityPlan = null;
+  if (updateEntries.length > 0) {
+    const shiftedTargets = updateEntries.map((entry) =>
+      Object.freeze({
+        line: shift(entry.target.line),
+        rawLine: entry.target.rawLine,
+      }),
+    );
+    const shiftedSession = Object.freeze({
+      valid: true,
+      error: null,
+      explicit: true,
+      targets: Object.freeze(shiftedTargets),
+    });
+    const priorityValueByLine = new Map();
+    const scheduledValueByLine = new Map();
+    const reasonByLine = new Map();
+    for (const entry of updateEntries) {
+      const shiftedLine = shift(entry.target.line);
+      const recommendation = entry.recommendation;
+      const priorityValue =
+        recommendation.kind === "decay" && recommendation.toLevel
+          ? recommendation.toLevel.value
+          : recommendation.level && recommendation.level.value;
+      priorityValueByLine.set(shiftedLine, priorityValue);
+      scheduledValueByLine.set(shiftedLine, recommendation.date);
+      reasonByLine.set(shiftedLine, recommendation.reason);
+    }
+    const firstPriorityValue = normalizeBulletPropertyValue(
+      priorityValueByLine.get(shiftedTargets[0].line),
+    );
+    let recoveryByLine = null;
+    if (details.recoveryByLine instanceof Map) {
+      recoveryByLine = new Map();
+      for (const [line, meta] of details.recoveryByLine) {
+        recoveryByLine.set(shift(line), meta);
+      }
+    }
+    priorityPlan = planCountedBulletPropertyBatch(
+      intermediateContent,
+      shiftedSession,
+      property.name,
+      firstPriorityValue,
+      {
+        operation: "set-priority",
+        priorityValue: firstPriorityValue,
+        priorityValueByLine,
+        scheduledPropertyName: property.schedules,
+        scheduledValueByLine,
+        today: baseDate,
+        recoveryByLine,
+        scheduleLog: { automatic: true, reasonByLine },
+        stampLine:
+          typeof details.stampLine === "function"
+            ? details.stampLine
+            : undefined,
+        freshDateText: details.freshDateText,
+      },
+    );
+    if (!priorityPlan.valid) {
+      return invalid(priorityPlan.error, { stale: priorityPlan.stale });
+    }
+    intermediateContent = priorityPlan.content;
+  }
+
+  const rolledCount = updateEntries.filter(
+    (entry) => entry.recommendation.kind === "roll",
+  ).length;
+  const decayedCount = updateEntries.filter(
+    (entry) => entry.recommendation.kind === "decay",
+  ).length;
+  const cancelledCount = cancelEntries.length;
+  const futureScheduledTaskLines = priorityPlan
+    ? Array.from(priorityPlan.futureScheduledTaskLines || [])
+    : [];
+  const cancelledEntries = cancelPlan
+    ? Array.from(cancelPlan.cancelled || [])
+    : [];
+  return Object.freeze({
+    valid: true,
+    error: null,
+    stale: false,
+    recurring: false,
+    content: intermediateContent,
+    changed: intermediateContent !== text,
+    cancelPlan,
+    priorityPlan,
+    rolledCount,
+    decayedCount,
+    cancelledCount,
+    futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
+    cancelledEntries: Object.freeze(cancelledEntries),
+    cursorLineShift: shift,
+  });
+}
+
 function createDependencyNavigationCollection(fields) {
   return Object.freeze({
     lineIndices: Object.freeze((fields.lineIndices || []).slice()),
@@ -15492,7 +16028,9 @@ function describeCancelTaskRow(content, options = {}) {
 // Plan a pure batch cancel across one note's content: set `[-]`, upsert
 // `[cancelled:: date]`, and write the Cancel Log first-child/prepend/fallback
 // entry for every open target. Closed targets are skipped. A single recurring
-// open target refuses the whole batch. Targets are processed bottom-up so
+// open target refuses the whole batch. `details.reasonByLine` (a Map from
+// original line to reason) overrides `details.reason` per target; callers that
+// omit it get byte-identical output. Targets are processed bottom-up so
 // insertions never shift pending lines. Pure and CRLF-preserving.
 function planTaskCancelBatch(content, session, details = {}) {
   const text = String(content || "");
@@ -15544,6 +16082,8 @@ function planTaskCancelBatch(content, session, details = {}) {
   }
   const reasonInput = String(details.reason ?? "");
   const fallbackInput = String(details.fallbackReason ?? "");
+  const reasonByLine =
+    details.reasonByLine instanceof Map ? details.reasonByLine : null;
 
   let skippedClosedCount = 0;
   const openTargets = [];
@@ -15617,10 +16157,14 @@ function planTaskCancelBatch(content, session, details = {}) {
     const nextTaskLine = upserted.line;
     workingLines[target.line] = nextTaskLine;
 
+    const targetReason =
+      reasonByLine && reasonByLine.has(target.line)
+        ? String(reasonByLine.get(target.line) ?? "")
+        : reasonInput;
     const plan = planCancelLogEntry(
       workingLines.join(source.lineEnding),
       target.line,
-      { date: dateText, reason: reasonInput, fallbackReason: fallbackInput },
+      { date: dateText, reason: targetReason, fallbackReason: fallbackInput },
     );
     let logApplied = false;
     if (plan.valid && plan.changed) {
@@ -17394,8 +17938,11 @@ function getCountedTaskNoticeSuffix(session, unchangedTaskCount = 0) {
 
 // Plan one counted set/delete without mutating the editor. Scheduled values on
 // ^prj sources are composed through project frontmatter and task schedules first;
-// every other source remains an inline Dataview edit. The caller can therefore
-// commit the complete result as one guarded transaction.
+// every other source remains an inline Dataview edit. `options.priorityValueByLine`
+// (a Map from original line to priority value) overrides the shared
+// `options.priorityValue` per target for `set-priority`; callers that omit it get
+// byte-identical output. The caller can therefore commit the complete result as
+// one guarded transaction.
 function planCountedBulletPropertyBatch(
   content,
   session,
@@ -17422,6 +17969,18 @@ function planCountedBulletPropertyBatch(
     isPriorityOperation && options.scheduledValueByLine instanceof Map
       ? options.scheduledValueByLine
       : null;
+  const priorityValueByLine =
+    isPriorityOperation && options.priorityValueByLine instanceof Map
+      ? options.priorityValueByLine
+      : null;
+  const getCountedPriorityValueForLine = (targetLine) => {
+    if (priorityValueByLine && priorityValueByLine.has(targetLine)) {
+      return normalizeBulletPropertyValue(
+        priorityValueByLine.get(targetLine),
+      );
+    }
+    return normalizedValue;
+  };
   const shouldBlockInlineTasks =
     operation === "set" &&
     propertyName === "scheduled" &&
@@ -17458,7 +18017,9 @@ function planCountedBulletPropertyBatch(
   }
   if (
     isPriorityOperation &&
-    (!normalizedValue || !scheduledPropertyName || !scheduledValueByLine)
+    ((!normalizedValue && !priorityValueByLine) ||
+      !scheduledPropertyName ||
+      !scheduledValueByLine)
   ) {
     return Object.freeze({
       valid: false,
@@ -17636,6 +18197,18 @@ function planCountedBulletPropertyBatch(
     let targetChanged = false;
 
     if (isPriorityOperation) {
+      const targetPriorityValue = getCountedPriorityValueForLine(target.line);
+      if (!targetPriorityValue) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: `Counted priority update has no valid priority value for line ${
+            target.line + 1
+          }`,
+          content: text,
+          changed: false,
+        });
+      }
       const priorityBaseLine = removeAllBulletProperties(
         liveLine,
         scheduledPropertyName,
@@ -17643,7 +18216,7 @@ function planCountedBulletPropertyBatch(
       const priorityResult = upsertBulletProperty(
         priorityBaseLine,
         propertyName,
-        normalizedValue,
+        targetPriorityValue,
       );
       nextLine = priorityResult.line;
       targetChanged =
@@ -18738,6 +19311,105 @@ function buildPriorityNoticeModel(options = {}) {
   return Object.freeze(model);
 }
 
+// One priority-style card for a counted recommended-roll batch: header icon
+// `dices`, pill `Rolled N tasks`, leading `N rolled` / `N decayed` /
+// `N cancelled` chips, the rolled date span, then the existing outcome chips
+// (Blocked, removed Pomodoro links, skipped, prune-failed). Pure.
+function buildBatchPriorityRollNoticeModel(batch, options = {}) {
+  const counts = (batch && batch.counts) || {};
+  const rolled = Math.max(0, Math.floor(numericOrDefault(counts.roll, 0)));
+  const decayed = Math.max(0, Math.floor(numericOrDefault(counts.decay, 0)));
+  const cancelled = Math.max(0, Math.floor(numericOrDefault(counts.cancel, 0)));
+  const actionable = Math.max(
+    0,
+    Math.floor(
+      numericOrDefault(
+        batch && batch.actionableCount,
+        rolled + decayed + cancelled,
+      ),
+    ),
+  );
+  const baseDate =
+    options.baseDate instanceof Date
+      ? getLocalDateStart(options.baseDate)
+      : getLocalDateStart(new Date());
+  const scheduledValues = Array.isArray(options.scheduledValues)
+    ? options.scheduledValues
+    : [];
+  const scheduleSummary = getPriorityNoticeScheduleSummary(
+    scheduledValues,
+    baseDate,
+  );
+  const outcome = options.outcome || {};
+  const outcomeTextParts = getPriorityNoticeOutcomeParts(outcome, "counted");
+  const leadingChips = [];
+  if (rolled > 0) {
+    leadingChips.push(
+      Object.freeze({
+        text: `${rolled} rolled`,
+        tone: "info",
+      }),
+    );
+  }
+  if (decayed > 0) {
+    leadingChips.push(
+      Object.freeze({ text: `${decayed} decayed`, tone: "warn" }),
+    );
+  }
+  if (cancelled > 0) {
+    leadingChips.push(
+      Object.freeze({ text: `${cancelled} cancelled`, tone: "warn" }),
+    );
+  }
+  const leadingTextParts = leadingChips.map((chip) => chip.text);
+  const skipped = Math.max(
+    0,
+    Math.floor(
+      numericOrDefault(
+        outcome.skippedCount ?? (batch && batch.skippedCount),
+        0,
+      ),
+    ),
+  );
+  const fullOutcomeParts = skipped > 0
+    ? Object.freeze([
+        ...outcomeTextParts,
+        `${formatCountLabel(skipped, "task")} skipped`,
+      ])
+    : outcomeTextParts;
+  const pill = `Rolled ${formatCountLabel(actionable, "task")}`;
+  const model = {
+    iconName: "dices",
+    levelIndex: null,
+    pill,
+    countPill: "",
+    receipt: "[priority]",
+    dateLabel: "scheduled",
+    textDateLabel: "scheduled",
+    exactDateText: scheduleSummary.exactDateText,
+    dateStartText: scheduleSummary.dateStartText,
+    dateEndText: scheduleSummary.dateEndText,
+    weekdayText: scheduleSummary.weekdayText,
+    textDateText: scheduleSummary.textDateText,
+    dateText: scheduleSummary.dateText,
+    relativeText: scheduleSummary.relativeText,
+    chips: Object.freeze([
+      ...leadingChips,
+      ...fullOutcomeParts.map((part) =>
+        Object.freeze({
+          text: getPriorityNoticeChipText(part),
+          tone: getPriorityNoticeChipTone(part),
+        }),
+      ),
+    ]),
+    outcomeTextParts: fullOutcomeParts,
+    leadingTextParts: Object.freeze(leadingTextParts),
+    textHeader: pill,
+  };
+  model.text = formatPriorityNoticeText(model);
+  return Object.freeze(model);
+}
+
 function renderPriorityNoticeFragment(model, root) {
   const levelClass =
     Number.isInteger(model.levelIndex) &&
@@ -19354,7 +20026,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // offset. Only Ctrl+R and the stale-write path replace it.
     this.priorityRollRecommendation = null;
     this.priorityRollRecommendationReady = false;
+    this.countedRollBatch = null;
+    this.countedRollBatchReady = false;
     this.refreshPriorityRollRecommendation();
+    this.refreshCountedRollBatch();
     this.showPropertyStage({ clearQuery: false });
   }
 
@@ -19567,10 +20242,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           item &&
           item.kind === "property" &&
           item.property.values === "date"
-            ? getPriorityRollFilterText(
-                this.getScheduledRollRecommendation(item.property.name),
-                this.valueBaseDate,
-              )
+            ? this.getRollFilterTextForDateProperty(item.property.name)
             : "";
         return fuzzyMatchesText(
           `${item.property.name} ${item.currentLabel || ""} ${
@@ -19719,7 +20391,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.valueBaseDate,
     );
     const priorityRollLevel = this.getPriorityRollLevel(property);
-    if (priorityRollLevel) {
+    // Counted batches use per-target rolls: when every target is a same-level
+    // roll at one shared level the recommendation replaces the shared-date
+    // pinned row, avoiding a duplicate. Otherwise the pinned row stays as the
+    // explicit override.
+    const countedBatchForStage =
+      this.isCountedSession() && !this.isLinkSession()
+        ? this.getCountedRollBatchForDateProperty(property.name)
+        : null;
+    const suppressCountedPinnedRoll = Boolean(
+      countedBatchForStage && countedBatchForStage.allRollSameLevel,
+    );
+    if (priorityRollLevel && !suppressCountedPinnedRoll) {
       // For a same-level recommendation the pinned row shares the previewed
       // date, so Ctrl+Enter and Enter on the pinned row write the identical
       // date. For a decay or cancel it keeps its own same-level roll as the
@@ -20602,6 +21285,112 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return this.priorityRollRecommendation;
   }
 
+  // The counted Ctrl+Enter batch, planned once when the picker opens (what you
+  // see is what you get): each target keeps its own pre-rolled date. Null in
+  // single and link sessions, and when no target has a recommendation.
+  computeCountedRollBatch() {
+    if (!this.isCountedSession() || this.isLinkSession()) {
+      return null;
+    }
+    const content = this.getEditorContent();
+    const properties =
+      this.config && Array.isArray(this.config.properties)
+        ? this.config.properties
+        : [];
+    for (const priorityProperty of properties) {
+      if (!priorityProperty || priorityProperty.values !== "priority") {
+        continue;
+      }
+      const schedulesName = normalizeBulletPropertyName(
+        priorityProperty.schedules,
+      );
+      if (!schedulesName) {
+        continue;
+      }
+      const summary = planPriorityRollRecommendationsForTargets(
+        content,
+        this.taskSession.targets,
+        priorityProperty,
+        {
+          baseDate: this.valueBaseDate,
+          random: this.priorityRandom,
+        },
+      );
+      const actionable =
+        (summary.counts.roll || 0) +
+        (summary.counts.decay || 0) +
+        (summary.counts.cancel || 0);
+      const hasAny =
+        actionable > 0 || Boolean(summary.unavailableReason);
+      if (!hasAny) {
+        continue;
+      }
+      return Object.freeze({
+        ...summary,
+        priorityName: priorityProperty.name,
+      });
+    }
+    return null;
+  }
+
+  refreshCountedRollBatch() {
+    this.countedRollBatch = this.computeCountedRollBatch();
+    this.countedRollBatchReady = true;
+    return this.countedRollBatch;
+  }
+
+  getCountedRollBatchForDateProperty(datePropertyName) {
+    const batch = this.countedRollBatch;
+    if (!batch) {
+      return null;
+    }
+    if (
+      normalizeBulletPropertyName(batch.schedulesName) !==
+      normalizeBulletPropertyName(datePropertyName)
+    ) {
+      return null;
+    }
+    return batch;
+  }
+
+  getCountedRollPreviewForDateProperty(datePropertyName) {
+    const batch = this.getCountedRollBatchForDateProperty(datePropertyName);
+    if (!batch) {
+      return null;
+    }
+    return buildBatchPriorityRollPreviewModel(batch);
+  }
+
+  getCountedStageOneRollPreview() {
+    if (!this.countedRollBatch) {
+      return null;
+    }
+    return buildBatchPriorityRollPreviewModel(this.countedRollBatch);
+  }
+
+  // Ctrl+R in stage one re-rolls every pre-rolled counted date. Only dated
+  // targets (roll and decay) have one.
+  rerollCountedRollBatch() {
+    const cached = this.countedRollBatch;
+    if (!cached || cached.actionableCount <= 0 || cached.unavailableReason) {
+      return false;
+    }
+    const fresh = this.computeCountedRollBatch();
+    if (!fresh || fresh.actionableCount <= 0 || fresh.unavailableReason) {
+      return false;
+    }
+    if (
+      fresh.counts.roll !== cached.counts.roll ||
+      fresh.counts.decay !== cached.counts.decay ||
+      fresh.counts.cancel !== cached.counts.cancel
+    ) {
+      return false;
+    }
+    this.countedRollBatch = fresh;
+    this.countedRollBatchReady = true;
+    return true;
+  }
+
   getScheduledRollRecommendation(datePropertyName) {
     const recommendation = this.priorityRollRecommendation;
     if (!recommendation) {
@@ -20617,6 +21406,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getRollPreviewForDateProperty(datePropertyName) {
+    if (this.isCountedSession()) {
+      return this.getCountedRollPreviewForDateProperty(datePropertyName);
+    }
     const recommendation = this.getScheduledRollRecommendation(datePropertyName);
     if (!recommendation) {
       return null;
@@ -20624,7 +21416,25 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return buildPriorityRollPreviewModel(recommendation, this.valueBaseDate);
   }
 
+  getRollFilterTextForDateProperty(datePropertyName) {
+    if (this.isCountedSession()) {
+      const batch = this.getCountedRollBatchForDateProperty(datePropertyName);
+      if (!batch) {
+        return "";
+      }
+      const preview = buildBatchPriorityRollPreviewModel(batch);
+      return preview && preview.searchText ? preview.searchText : "roll";
+    }
+    return getPriorityRollFilterText(
+      this.getScheduledRollRecommendation(datePropertyName),
+      this.valueBaseDate,
+    );
+  }
+
   getStageOneRollPreview() {
+    if (this.isCountedSession()) {
+      return this.getCountedStageOneRollPreview();
+    }
     if (!this.priorityRollRecommendation) {
       return null;
     }
@@ -21410,13 +22220,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     // The `scheduled` row carries the recommended roll preview: a third line
     // with the ^↵ key, the action, the date it will write, and a meta pill.
+    // Counted sessions show one batch line for all targets.
     if (
       item.kind === "property" &&
       item.property.values === "date"
     ) {
-      const rollPreview = buildPriorityRollPreviewModel(
-        this.getScheduledRollRecommendation(item.property.name),
-        this.valueBaseDate,
+      const rollPreview = this.getRollPreviewForDateProperty(
+        item.property.name,
       );
       if (rollPreview) {
         const previewEl = textEl.createDiv({
@@ -22257,10 +23067,60 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     };
   }
 
+  hasCountedRollBatchForDateProperty(datePropertyName) {
+    if (!this.isCountedSession()) {
+      return false;
+    }
+    const batch = this.getCountedRollBatchForDateProperty(datePropertyName);
+    if (!batch) {
+      return false;
+    }
+    return (
+      batch.actionableCount > 0 || Boolean(batch.unavailableReason)
+    );
+  }
+
+  async applyCountedRecommendedRoll() {
+    const cached = this.countedRollBatch;
+    if (!cached) {
+      return false;
+    }
+    if (cached.unavailableReason) {
+      new Notice(cached.unavailableReason);
+      return false;
+    }
+    if (this.opening) {
+      return false;
+    }
+    this.opening = true;
+    try {
+      const fresh = this.computeCountedRollBatch();
+      if (
+        !fresh ||
+        fresh.actionableCount !== cached.actionableCount ||
+        fresh.counts.roll !== cached.counts.roll ||
+        fresh.counts.decay !== cached.counts.decay ||
+        fresh.counts.cancel !== cached.counts.cancel ||
+        Boolean(fresh.unavailableReason) !==
+          Boolean(cached.unavailableReason)
+      ) {
+        new Notice("Task changed while the picker was open; nothing was written");
+        this.countedRollBatch = fresh;
+        this.countedRollBatchReady = true;
+        this.showPropertyStage({ clearQuery: false });
+        return false;
+      }
+      return await this.plugin.applyCountedRecommendedRoll(this);
+    } finally {
+      this.opening = false;
+    }
+  }
+
   handleKeydown(event) {
     // Ctrl+Enter (or Cmd+Enter) on `scheduled` takes the recommended roll in
     // both picker stages. Anywhere else it behaves exactly like Enter, as it
     // does today; other stages keep their existing key handling untouched.
+    // Counted sessions use the batch recommendation through the same gesture.
     if (
       isRecommendedRollKeydown(event) &&
       (this.stage === "properties" || this.stage === "value")
@@ -22281,6 +23141,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
               ? this.selectedPropertyItem.property.name
               : "";
         if (
+          rollPropertyName &&
+          this.hasCountedRollBatchForDateProperty(rollPropertyName)
+        ) {
+          void this.applyCountedRecommendedRoll()
+            .then((applied) => {
+              if (applied === true) {
+                this.close();
+              }
+            })
+            .catch(() => {
+              new Notice("Could not apply the recommended roll");
+            });
+        } else if (
           rollPropertyName &&
           this.getScheduledRollRecommendation(rollPropertyName)
         ) {
@@ -22357,7 +23230,29 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.stage === "properties" && isCtrlKey(event, "r")) {
-      if (this.rerollPriorityRollRecommendation()) {
+      if (this.isCountedSession()) {
+        if (this.rerollCountedRollBatch()) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.applyOptions({
+            footerHints: getBulletPropertyStageOneHints(
+              this.getStageOneRollPreview(),
+            ),
+          });
+          const scheduledIndex = this.visibleItems.findIndex(
+            (item) =>
+              item &&
+              item.kind === "property" &&
+              this.hasCountedRollBatchForDateProperty(item.property.name),
+          );
+          if (scheduledIndex !== -1) {
+            this.selectedIndex = scheduledIndex;
+          }
+          if (this.resultsEl) {
+            this.renderAll({ clearQuery: false });
+          }
+        }
+      } else if (this.rerollPriorityRollRecommendation()) {
         event.preventDefault();
         event.stopPropagation();
         this.applyOptions({
@@ -22382,7 +23277,32 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.stage === "value" && isCtrlKey(event, "r")) {
-      if (this.rerollPriorityDateSuggestion()) {
+      if (this.isCountedSession()) {
+        let rerolled = false;
+        if (this.rerollCountedRollBatch()) {
+          this.applyOptions({
+            footerHints: getBulletPropertyStageTwoHints(
+              Boolean(
+                this.items.some((item) => item && item.priorityRoll),
+              ),
+              this.selectedPropertyItem
+                ? this.getRollPreviewForDateProperty(
+                    this.selectedPropertyItem.property.name,
+                  )
+                : null,
+            ),
+          });
+          rerolled = true;
+        }
+        if (this.rerollPriorityDateSuggestion()) {
+          rerolled = true;
+        }
+        if (rerolled) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      } else if (this.rerollPriorityDateSuggestion()) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -27666,6 +28586,374 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }),
       options,
     );
+    return true;
+  }
+
+  // Compose the counted recommended roll into one undoable editor transaction:
+  // cancel targets first (each with its own streak reason), then roll/decay
+  // targets through set-priority, pruning today's open Pomodoro links in one
+  // pass. Mirrors setCountedBulletPriorityValue and applyTaskCancelFromEditor
+  // guards (write context, stale-session refusal) plus task-status-cycler
+  // recovery for cancelled identities.
+  async applyCountedRecommendedRoll(picker, options = {}) {
+    const editor = picker.editor;
+    const cursor = picker.cursor;
+    const filePath = picker.filePath;
+    const session = picker.taskSession;
+    const cached = picker.countedRollBatch;
+    if (
+      !editor ||
+      typeof editor.getValue !== "function" ||
+      !cursor ||
+      !session ||
+      !cached
+    ) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    if (cached.unavailableReason) {
+      new Notice(cached.unavailableReason);
+      return false;
+    }
+    const property = picker.findPriorityPropertyByName
+      ? picker.findPriorityPropertyByName(cached.priorityName)
+      : (this.config &&
+          this.config.properties &&
+          this.config.properties.find(
+            (candidate) =>
+              candidate &&
+              candidate.values === "priority" &&
+              normalizeBulletPropertyName(candidate.name) ===
+                normalizeBulletPropertyName(cached.priorityName),
+          )) ||
+        null;
+    if (!property) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      return false;
+    }
+    const writeContext = this.getCountedTaskWriteContext(
+      editor,
+      filePath,
+      session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+    const fresh = picker.computeCountedRollBatch
+      ? picker.computeCountedRollBatch()
+      : null;
+    if (
+      !fresh ||
+      fresh.actionableCount !== cached.actionableCount ||
+      fresh.counts.roll !== cached.counts.roll ||
+      fresh.counts.decay !== cached.counts.decay ||
+      fresh.counts.cancel !== cached.counts.cancel ||
+      Boolean(fresh.unavailableReason) !== Boolean(cached.unavailableReason)
+    ) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      if (picker.showPropertyStage) {
+        picker.countedRollBatch = fresh;
+        picker.countedRollBatchReady = true;
+        picker.showPropertyStage({ clearQuery: false });
+      }
+      return false;
+    }
+    const baseDate =
+      picker.valueBaseDate instanceof Date
+        ? getLocalDateStart(picker.valueBaseDate)
+        : getLocalDateStart(new Date());
+    const dateText = formatBulletPropertyDate(baseDate);
+    const recommendationsByLine = new Map(
+      fresh.entries
+        .filter((entry) => entry.recommendation)
+        .map((entry) => [entry.line, entry.recommendation]),
+    );
+    const updateLines = fresh.entries
+      .filter(
+        (entry) =>
+          entry.recommendation &&
+          (entry.recommendation.kind === "roll" ||
+            entry.recommendation.kind === "decay"),
+      )
+      .map((entry) => entry.line);
+    let recoveryByLine = null;
+    if (updateLines.length > 0) {
+      const includesProjectSchedule = session.targets.some((target) =>
+        isProjectLifecycleTaskAtLine(writeContext.content, target.line),
+      );
+      const recoveryLines = includesProjectSchedule
+        ? getProjectScheduleRecoveryTargetLines(writeContext.content)
+        : updateLines;
+      recoveryByLine = await buildTargetScheduledRecoveryByLine(
+        this.app,
+        filePath,
+        writeContext.content,
+        recoveryLines,
+        baseDate,
+      );
+      const guarded = this.getCountedTaskWriteContext(
+        editor,
+        filePath,
+        session,
+      );
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return false;
+      }
+    }
+    const plan = planRecommendedRollBatch(
+      writeContext.content,
+      session,
+      recommendationsByLine,
+      {
+        property,
+        dateText,
+        baseDate,
+        recoveryByLine,
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: this.getFreshnessDateText(),
+      },
+    );
+    if (!plan.valid) {
+      new Notice(
+        plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+      );
+      return false;
+    }
+    let finalContent = plan.content;
+    let finalCursorLine = cursor.line;
+    try {
+      const shift = plan.cursorLineShift || ((line) => line);
+      finalCursorLine = shift(cursor.line);
+    } catch (error) {
+      finalCursorLine = cursor.line;
+    }
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    const pruneTargets = [];
+    for (const entry of plan.cancelledEntries || []) {
+      if (entry.blockId) {
+        pruneTargets.push(
+          Object.freeze({ path: filePath, blockId: entry.blockId }),
+        );
+      }
+    }
+    const futureLines = Array.from(plan.futureScheduledTaskLines || []);
+    if (pruneTargets.length > 0 || futureLines.length > 0) {
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: filePath,
+        sourceContent: writeContext.content,
+        today: baseDate,
+      });
+      const guarded = this.getCountedTaskWriteContext(
+        editor,
+        filePath,
+        session,
+      );
+      if (!guarded.valid || guarded.content !== writeContext.content) {
+        new Notice(
+          guarded.valid
+            ? "Active note changed; no tasks were updated"
+            : guarded.error,
+        );
+        return false;
+      }
+      if (pomodoroSnapshot) {
+        const deferredTargets = [];
+        if (pruneTargets.length > 0) {
+          deferredTargets.push(...pruneTargets);
+        }
+        if (futureLines.length > 0) {
+          deferredTargets.push(
+            ...deferredPomodoroTargetsFromLines(
+              filePath,
+              splitMarkdownContent(writeContext.content).lines,
+              futureLines,
+            ),
+          );
+        }
+        if (deferredTargets.length > 0) {
+          if (pomodoroSnapshot.sameFile) {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              finalContent,
+              deferredTargets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+            if (dailyCleanupPlan.changed) {
+              const linesRemovedBeforeCursor =
+                dailyCleanupPlan.removedLineRanges.reduce(
+                  (total, range) =>
+                    range.endLineExclusive <= finalCursorLine
+                      ? total + (range.endLineExclusive - range.startLine)
+                      : total,
+                  0,
+                );
+              finalContent = dailyCleanupPlan.content;
+              finalCursorLine = finalCursorLine - linesRemovedBeforeCursor;
+            }
+          } else {
+            dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+              pomodoroSnapshot.content,
+              deferredTargets,
+              {
+                dailyPath: pomodoroSnapshot.dailyPath,
+                noteIndex: pomodoroSnapshot.noteIndex,
+              },
+            );
+          }
+        }
+      }
+    }
+    const finalLine =
+      splitMarkdownContent(finalContent).lines[finalCursorLine] || "";
+    try {
+      if (
+        finalContent !== writeContext.content &&
+        !applyEditorContentTransaction(editor, writeContext.content, finalContent, {
+          line: finalCursorLine,
+          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+        })
+      ) {
+        throw new Error("Editor cannot apply a counted roll transaction");
+      }
+    } catch (error) {
+      new Notice("Could not update counted task priorities; no tasks were updated");
+      return false;
+    }
+    let removedPomodoroLinkCount = 0;
+    let pomodoroPruneFailed = false;
+    let postPruneDailyContent = null;
+    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
+      if (pomodoroSnapshot.sameFile) {
+        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+      } else {
+        const written = await this.writeDeferredPomodoroCleanup(
+          pomodoroSnapshot,
+          dailyCleanupPlan,
+        );
+        if (written) {
+          removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
+        } else {
+          pomodoroPruneFailed = true;
+        }
+        postPruneDailyContent = dailyCleanupPlan.content;
+      }
+    }
+    const cancelledIdentities = (plan.cancelledEntries || []).map((entry) =>
+      Object.freeze({
+        path: filePath,
+        blockId: entry.blockId,
+        taskId: entry.taskId,
+      }),
+    );
+    let reopened = 0;
+    if (cancelledIdentities.length > 0) {
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["task-status-cycler"];
+        const api = holder && holder.api;
+        if (
+          api &&
+          typeof api.recoverBlockedDependents === "function" &&
+          Number(api.version) >= 1
+        ) {
+          const result = await api.recoverBlockedDependents(
+            cancelledIdentities,
+            { activePath: filePath, editor },
+          );
+          reopened = Math.max(
+            0,
+            Math.floor(numericOrDefault(result && result.reopened, 0)),
+          );
+        }
+      } catch (error) {
+        reopened = 0;
+      }
+    }
+    const priorityPlan = plan.priorityPlan;
+    const cancelPlan = plan.cancelPlan;
+    const scheduledValues = [];
+    if (priorityPlan && priorityPlan.content !== undefined) {
+      for (const entry of fresh.entries) {
+        if (
+          entry.recommendation &&
+          (entry.recommendation.kind === "roll" ||
+            entry.recommendation.kind === "decay")
+        ) {
+          scheduledValues.push(entry.recommendation.date);
+        }
+      }
+    }
+    scheduledValues.sort();
+    showPriorityNotice(
+      buildBatchPriorityRollNoticeModel(fresh, {
+        baseDate,
+        scheduledValues,
+        outcome: {
+          blockedTaskCount: priorityPlan ? priorityPlan.blockedTaskCount : 0,
+          propagatedScheduleTaskCount: priorityPlan
+            ? priorityPlan.propagatedScheduleTaskCount
+            : 0,
+          removedHideTaskCount: priorityPlan
+            ? priorityPlan.removedHideTaskCount
+            : 0,
+          ambiguousTaskCount: priorityPlan
+            ? priorityPlan.ambiguousProjectTaskCount
+            : 0,
+          unchangedTaskCount: priorityPlan
+            ? priorityPlan.unchangedTaskCount
+            : 0,
+          session,
+          recoveredReadyTaskCount: priorityPlan
+            ? priorityPlan.recoveredReadyTaskCount
+            : 0,
+          recoveredNextTaskCount: priorityPlan
+            ? priorityPlan.recoveredNextTaskCount
+            : 0,
+          recoveredInProgressTaskCount: priorityPlan
+            ? priorityPlan.recoveredInProgressTaskCount
+            : 0,
+          stillBlockedTaskCount: priorityPlan
+            ? priorityPlan.stillBlockedTaskCount
+            : 0,
+          deferredRecoveryTaskCount: priorityPlan
+            ? priorityPlan.deferredRecoveryTaskCount
+            : 0,
+          scheduleLoggedTaskCount:
+            (priorityPlan ? priorityPlan.scheduleLoggedTaskCount : 0) +
+            (cancelPlan ? cancelPlan.loggedCount : 0),
+          removedPomodoroLinkCount,
+          pomodoroPruneFailed,
+          skippedCount: fresh.skippedCount,
+          skippedClosedCount: cancelPlan ? cancelPlan.skippedClosedCount : 0,
+        },
+      }),
+      options,
+    );
+    if (postPruneDailyContent !== null) {
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["task-status-cycler"];
+        const api = holder && holder.api;
+        if (api && typeof api.recoverBlockedDependents === "function") {
+          await api.recoverBlockedDependents(cancelledIdentities, {
+            activePath: filePath,
+            editor,
+          });
+        }
+      } catch (error) {
+        // Recovery already attempted above; ignore a second failure.
+      }
+    }
+    void reopened;
     return true;
   }
 
@@ -34791,6 +36079,10 @@ module.exports.helpers = {
   countPriorityRollStreak,
   getPriorityRollStreak,
   planPriorityRollRecommendation,
+  planPriorityRollRecommendationsForTargets,
+  buildBatchPriorityRollPreviewModel,
+  buildBatchPriorityRollNoticeModel,
+  planRecommendedRollBatch,
   buildPriorityRollPreviewModel,
   getBulletPropertyScheduleReasonHints,
   getCancelTaskRowTitle,

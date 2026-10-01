@@ -305,6 +305,7 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
     maxNext: 20,
     maxPending: 12,
     maxReady: 100,
+    maxReadyPerNote: 5,
     strict: true,
     exempt: ["GTD", "ADMIN"],
     inventoryLabels: ["LATER"],

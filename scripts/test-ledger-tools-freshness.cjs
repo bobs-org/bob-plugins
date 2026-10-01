@@ -633,7 +633,8 @@ function makeFreshnessTask(overrides = {}) {
 function makeFreshnessApp({ tasks, frontmatter = {}, triggers = [] } = {}) {
   return {
     vault: {
-      getAbstractFileByPath: () => null,
+      getAbstractFileByPath: (filePath) =>
+        frontmatter[filePath] !== undefined ? { path: filePath } : null,
       cachedRead: () => Promise.resolve(null),
     },
     workspace: {
@@ -645,12 +646,28 @@ function makeFreshnessApp({ tasks, frontmatter = {}, triggers = [] } = {}) {
     },
     metadataCache: {
       on: () => ({}),
-      getCache: (file) => {
-        const path = file && file.path;
-        if (!path || frontmatter[path] === undefined) {
+      // Mirrors the real Obsidian API (bob-cli-3e): `getCache` accepts
+      // only path strings, `getFileCache` only file objects.
+      getCache: (key) => {
+        assert.equal(
+          typeof key,
+          "string",
+          "getCache expects a path string (bob-cli-3e)",
+        );
+        if (frontmatter[key] === undefined) {
+          return null;
+        }
+        return { frontmatter: { task_refresh: frontmatter[key] } };
+      },
+      getFileCache: (file) => {
+        assert.ok(
+          file && typeof file === "object" && typeof file.path === "string",
+          "getFileCache expects a file object (bob-cli-3e)",
+        );
+        if (frontmatter[file.path] === undefined) {
           return {};
         }
-        return { frontmatter: { task_refresh: frontmatter[path] } };
+        return { frontmatter: { task_refresh: frontmatter[file.path] } };
       },
       getFirstLinkpathDest: () => null,
     },

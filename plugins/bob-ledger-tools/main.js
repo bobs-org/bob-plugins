@@ -1884,6 +1884,7 @@ function defaultPlanCaps() {
     maxNext: 15,
     maxPending: 10,
     maxReady: 100,
+    maxReadyPerNote: 5,
     strict: false,
     exempt: ["GTD"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
@@ -1898,6 +1899,14 @@ function planCapOrDefault(value, fallback) {
 
 function planReadyCapOrDefault(value, fallback) {
   return Number.isInteger(value) && value >= 1 && value <= PLAN_U32_MAX
+    ? value
+    : fallback;
+}
+
+// Per-note Ready cap: an integer 1–999 (`docs/plan.md`, "Ready cap per
+// note"), unlike the unbounded lane caps above.
+function planPerNoteCapOrDefault(value, fallback) {
+  return Number.isInteger(value) && value >= 1 && value <= 999
     ? value
     : fallback;
 }
@@ -1944,6 +1953,10 @@ function effectivePlanCaps(caps) {
     maxNext: planCapOrDefault(raw.maxNext, defaults.maxNext),
     maxPending: planCapOrDefault(raw.maxPending, defaults.maxPending),
     maxReady: planReadyCapOrDefault(raw.maxReady, defaults.maxReady),
+    maxReadyPerNote: planPerNoteCapOrDefault(
+      raw.maxReadyPerNote,
+      defaults.maxReadyPerNote,
+    ),
     strict:
       typeof raw.strict === "boolean" ? raw.strict : defaults.strict,
     exempt: planStringListOrDefault(raw.exempt, defaults.exempt),
@@ -2006,6 +2019,17 @@ function coercePlanCaps(block) {
     }
     return value;
   };
+  const perNoteCap = (snake, camel, fallback) => {
+    const value = pick(snake, camel);
+    if (value === undefined || value === null) {
+      return fallback;
+    }
+    if (!Number.isInteger(value) || value < 1 || value > 999) {
+      invalid = true;
+      return fallback;
+    }
+    return value;
+  };
   const list = (snake, camel, fallback) => {
     const value = pick(snake, camel);
     if (value === undefined) {
@@ -2042,6 +2066,11 @@ function coercePlanCaps(block) {
     maxNext: cap("max_next", "maxNext", defaults.maxNext),
     maxPending: cap("max_pending", "maxPending", defaults.maxPending),
     maxReady: readyCap("max_ready", "maxReady", defaults.maxReady),
+    maxReadyPerNote: perNoteCap(
+      "max_ready_per_note",
+      "maxReadyPerNote",
+      defaults.maxReadyPerNote,
+    ),
     strict,
     exempt: list("exempt", "exempt", defaults.exempt),
     inventoryLabels: list(
@@ -5851,6 +5880,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     // `obsidian-tasks-plugin:cache-update`, so a cache update that
     // reuses the same array object still invalidates the memo.
     this.freshnessTasksGen = 0;
+    // Per-note Ready cap (api.noteReady v1): memoized snapshot plus the
+    // per-path eligibility fingerprints (`{ fingerprint, entry }`) and
+    // their generation. The generation bumps only when a fingerprint
+    // changes, so the snapshot rebuilds only then.
+    this.noteReadyMemo = null;
+    this.noteReadyFrontGen = 0;
+    this.noteReadyFrontByPath = new Map();
     // Shared NEW/ROTTEN review chips (dashboard and rotten summary use
     // the same live models). Mirrors `readyWidgets` below.
     this.reviewWidgets = new Set();
@@ -6016,6 +6052,19 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         counts: () => this.apiFreshnessCounts(),
         lints: () => this.apiFreshnessLints(),
       }),
+      // Per-note Ready cap (`docs/plan.md`, "Ready cap per note" in
+      // bob-cli): read-only lane counts per area/project note against
+      // the per-note cap. Top-level api stays v3 (additive). Every
+      // member is synchronous and never throws: guard calls with
+      // try/catch as well as optional chaining.
+      noteReady: Object.freeze({
+        version: 1,
+        snapshot: (now) => this.apiNoteReadySnapshot(now),
+        forNote: (path) => this.apiNoteReadyForNote(path),
+        counted: (task) => this.apiNoteReadyCounted(task),
+        inCrowdedNote: (task) => this.apiNoteReadyInCrowdedNote(task),
+        groupLabel: (task) => this.apiNoteReadyGroupLabel(task),
+      }),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -6029,6 +6078,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           this.schedulePlanBlockRerenderForFile(file);
           this.refreshTodayCacheForChangedFile(file, data);
           this.refreshFreshnessForChangedFile(file, data);
+          this.refreshNoteReadyForChangedFile(file);
+        }),
+      );
+      this.registerEvent(
+        metadataCache.on("deleted", (file) => {
+          this.refreshNoteReadyForDeletedPath(file && file.path);
         }),
       );
       this.registerEvent(
@@ -6040,6 +6095,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       for (const event of ["create", "delete", "rename"]) {
         this.registerEvent(
           vault.on(event, (file) => this.refreshTodayCacheForVaultEvent(file)),
+        );
+      }
+      for (const event of ["create", "delete", "rename"]) {
+        this.registerEvent(
+          vault.on(event, (file, oldPath) =>
+            this.refreshNoteReadyForVaultEvent(event, file, oldPath),
+          ),
         );
       }
     }
@@ -6188,6 +6250,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
     this.freshnessConfigCache = null;
     this.freshnessTasksGen = 0;
+    this.noteReadyMemo = null;
+    this.noteReadyFrontGen = 0;
+    if (this.noteReadyFrontByPath instanceof Map) {
+      this.noteReadyFrontByPath.clear();
+    }
     this.readyLastCapsKey = null;
     this.readyLastDay = null;
     if (this.planPaintGens) {
@@ -7035,11 +7102,656 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         this.refreshReadyBadges(now);
         this.refreshDashboardLaneBadges(now);
         this.schedulePlanBlockRerender();
+        try {
+          this.noteReadyEnsureSnapshot(now);
+        } catch (error) {
+          // The snapshot rebuilds on next access; only the eager
+          // query-refresh trigger is skipped.
+        }
         return true;
       }
       return false;
     } catch (error) {
       return false;
+    }
+  }
+
+  // --- Per-note Ready cap (api.noteReady v1) --------------------------
+  // One memoized O(tasks) snapshot with live invalidation. The memo key
+  // is the Tasks array identity, the Tasks generation, the local date,
+  // the eligibility fingerprint generation, the caps key, and the
+  // freshness memo identity (for make-up).
+
+  // One typed-note entry for a vault path, or null when the path is
+  // excluded, untyped, or unreadable. Frontmatter comes through the
+  // shared `noteFrontmatter` reader.
+  noteReadyEntryForPath(path, frontmatter) {
+    try {
+      const text = String(path || "");
+      if (!text || noteReadyPathExcluded(text)) {
+        return null;
+      }
+      const front =
+        frontmatter === undefined
+          ? this.noteFrontmatter(text)
+          : frontmatter;
+      if (!front || typeof front !== "object") {
+        return null;
+      }
+      const kind = noteReadyKindFromType(front.type);
+      if (!kind) {
+        return null;
+      }
+      const status = noteReadyStatusLabel(front.status);
+      let readyCapRaw;
+      const rawCap = front.ready_cap;
+      if (rawCap === undefined || rawCap === null) {
+        readyCapRaw = undefined;
+      } else if (typeof rawCap === "string") {
+        const trimmed = rawCap.trim();
+        readyCapRaw = trimmed ? trimmed : undefined;
+      } else if (typeof rawCap === "number") {
+        readyCapRaw = String(rawCap);
+      } else if (typeof rawCap === "boolean") {
+        readyCapRaw = rawCap;
+      } else {
+        readyCapRaw = rawCap;
+      }
+      const fingerprint = (() => {
+        try {
+          return JSON.stringify([
+            front.type === undefined ? null : front.type,
+            front.status === undefined ? null : front.status,
+            front.ready_cap === undefined ? null : front.ready_cap,
+          ]);
+        } catch (error) {
+          return JSON.stringify("error");
+        }
+      })();
+      return {
+        fingerprint,
+        entry: {
+          path: text,
+          name: noteReadyStemForPath(text),
+          kind,
+          status,
+          isArea: kind === "area",
+          isTerminal:
+            kind !== "area" && noteReadyStatusIsTerminal(status),
+          parent: noteReadyParentStem(front.parent),
+          ready_cap_raw: readyCapRaw,
+        },
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Rebuild the per-path eligibility fingerprints from
+  // `vault.getMarkdownFiles()`. Bumps `noteReadyFrontGen` only when the
+  // fingerprint map changes. Returns `{ entries, changed }`.
+  noteReadyRefreshEligibility() {
+    try {
+      const vault = this.app && this.app.vault;
+      const files =
+        vault && typeof vault.getMarkdownFiles === "function"
+          ? vault.getMarkdownFiles()
+          : [];
+      const next = new Map();
+      if (Array.isArray(files)) {
+        for (const file of files) {
+          const path =
+            file && typeof file.path === "string" ? file.path : "";
+          if (!path) {
+            continue;
+          }
+          const built = this.noteReadyEntryForPath(
+            path,
+            this.noteFrontmatter(file),
+          );
+          if (built) {
+            next.set(path, built);
+          }
+        }
+      }
+      const previous = this.noteReadyFrontByPath;
+      let changed = true;
+      if (previous instanceof Map && previous.size === next.size) {
+        changed = false;
+        for (const [path, built] of next) {
+          const old = previous.get(path);
+          if (!old || old.fingerprint !== built.fingerprint) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) {
+        this.noteReadyFrontByPath = next;
+        this.noteReadyFrontGen = (this.noteReadyFrontGen || 0) + 1;
+      }
+      return {
+        entries: Array.from(next.values(), (built) => built.entry),
+        changed,
+      };
+    } catch (error) {
+      return { entries: [], changed: false };
+    }
+  }
+
+  // Single-path eligibility update for a changed file. Returns true
+  // when the fingerprint changed.
+  refreshNoteReadyForChangedFile(file) {
+    try {
+      const path =
+        file && typeof file.path === "string" ? file.path : null;
+      if (!path) {
+        return false;
+      }
+      if (!(this.noteReadyFrontByPath instanceof Map)) {
+        this.noteReadyFrontByPath = new Map();
+      }
+      const built = this.noteReadyEntryForPath(
+        path,
+        this.noteFrontmatter(file),
+      );
+      const previous = this.noteReadyFrontByPath.get(path);
+      const changed =
+        (previous && previous.fingerprint) !==
+        (built && built.fingerprint);
+      if (!changed) {
+        return false;
+      }
+      if (built) {
+        this.noteReadyFrontByPath.set(path, built);
+      } else {
+        this.noteReadyFrontByPath.delete(path);
+      }
+      this.noteReadyFrontGen = (this.noteReadyFrontGen || 0) + 1;
+      try {
+        this.noteReadyEnsureSnapshot();
+      } catch (error) {
+        // The generation still counts; the memo rebuilds on next
+        // access (and the query-refresh trigger with it).
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshNoteReadyForDeletedPath(path) {
+    try {
+      const key = String(path || "");
+      if (!key) {
+        return false;
+      }
+      if (
+        !(this.noteReadyFrontByPath instanceof Map) ||
+        !this.noteReadyFrontByPath.has(key)
+      ) {
+        return false;
+      }
+      this.noteReadyFrontByPath.delete(key);
+      this.noteReadyFrontGen = (this.noteReadyFrontGen || 0) + 1;
+      try {
+        this.noteReadyEnsureSnapshot();
+      } catch (error) {
+        // The generation still counts; the memo rebuilds on next access.
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshNoteReadyForRename(file, oldPath) {
+    try {
+      let changed = false;
+      if (typeof oldPath === "string" && oldPath) {
+        changed = this.refreshNoteReadyForDeletedPath(oldPath) || changed;
+      }
+      changed = this.refreshNoteReadyForChangedFile(file) || changed;
+      return changed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshNoteReadyForVaultEvent(event, file, oldPath) {
+    try {
+      if (event === "delete") {
+        return this.refreshNoteReadyForDeletedPath(
+          file && file.path,
+        );
+      }
+      if (event === "rename") {
+        return this.refreshNoteReadyForRename(file, oldPath);
+      }
+      return this.refreshNoteReadyForChangedFile(file);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The memoized snapshot. Rebuilds in one O(tasks) pass when the memo
+  // key changes; otherwise returns the cached snapshot object.
+  noteReadyEnsureSnapshot(now = new Date()) {
+    const tasks = planBlockTasks(this.app);
+    let dateText = null;
+    try {
+      dateText = this.freshnessTodayText(now);
+    } catch (error) {
+      dateText = null;
+    }
+    if (!dateText) {
+      try {
+        dateText = formatLocalDate(new Date());
+      } catch (error) {
+        dateText = "1970-01-01";
+      }
+    }
+    const todayDay = freshnessDayNumberForDateText(dateText);
+    const loaded = loadPlanCaps();
+    const effective = effectivePlanCaps(loaded.caps);
+    const defaultCap = planPerNoteCapOrDefault(
+      effective.maxReadyPerNote,
+      NOTE_READY_DEFAULT_CAP,
+    );
+    const defaultSource =
+      loaded.defaultSource === "config" ? "config" : "default";
+    const capsKey = JSON.stringify([
+      defaultCap,
+      defaultSource,
+      Boolean(loaded.invalid),
+    ]);
+    const eligibility = this.noteReadyRefreshEligibility();
+    const frontGen = this.noteReadyFrontGen || 0;
+    const tasksGen = this.freshnessTasksGen || 0;
+    let freshnessMemo = null;
+    let freshnessAvailable = false;
+    try {
+      freshnessMemo = this.freshnessEnsureMemo(now);
+      freshnessAvailable = Boolean(
+        freshnessMemo && Array.isArray(freshnessMemo.evaluatedByIndex),
+      );
+    } catch (error) {
+      freshnessMemo = null;
+      freshnessAvailable = false;
+    }
+    const previous = this.noteReadyMemo;
+    if (
+      previous &&
+      previous.tasks === tasks &&
+      previous.tasksGen === tasksGen &&
+      previous.dateText === dateText &&
+      previous.frontGen === frontGen &&
+      previous.capsKey === capsKey &&
+      previous.freshnessMemo === freshnessMemo &&
+      previous.snapshot
+    ) {
+      return previous.snapshot;
+    }
+    const capBlock = {
+      default: defaultCap,
+      source: defaultSource,
+      invalid: Boolean(loaded.invalid),
+    };
+    const unavailable = (reason) => ({
+      available: false,
+      reason,
+      date: dateText,
+      cap: capBlock,
+      totals: noteReadyEmptyTotals(),
+      notes: [],
+      lints: [],
+    });
+    const cacheState = this.tasksCacheState();
+    if (!Array.isArray(tasks)) {
+      const snapshot = unavailable("no-tasks");
+      this.noteReadyMemo = {
+        tasks,
+        tasksGen,
+        dateText,
+        frontGen,
+        capsKey,
+        freshnessMemo,
+        crowdedKey: noteReadyCrowdedKey([], capsKey),
+        snapshot,
+        byPath: new Map(),
+        crowdedRank: new Map(),
+        countedByTask: new Map(),
+        countedByKey: new Map(),
+        tasksRef: tasks,
+      };
+      return snapshot;
+    }
+    if (typeof cacheState === "string" && cacheState !== "Warm") {
+      const snapshot = unavailable("tasks-not-warm");
+      this.noteReadyMemo = {
+        tasks,
+        tasksGen,
+        dateText,
+        frontGen,
+        capsKey,
+        freshnessMemo,
+        crowdedKey: noteReadyCrowdedKey([], capsKey),
+        snapshot,
+        byPath: new Map(),
+        crowdedRank: new Map(),
+        countedByTask: new Map(),
+        countedByKey: new Map(),
+        tasksRef: tasks,
+      };
+      return snapshot;
+    }
+    const rows = [];
+    const countedByTask = new Map();
+    const keyTallies = new Map();
+    for (const task of tasks) {
+      let path = "";
+      try {
+        path = planTaskPath(task) || "";
+      } catch (error) {
+        path = "";
+      }
+      if (!path) {
+        continue;
+      }
+      let lane = false;
+      try {
+        lane =
+          Boolean(readyTaskVisible(task, todayDay)) &&
+          !planTaskIsBlocked(task, tasks);
+      } catch (error) {
+        lane = false;
+      }
+      if (!lane) {
+        continue;
+      }
+      let blockId = null;
+      try {
+        blockId = planTaskBlockId(task);
+      } catch (error) {
+        blockId = null;
+      }
+      if (blockId === "prj") {
+        continue;
+      }
+      let recurring = false;
+      try {
+        recurring = noteReadyRecurringFor(task);
+      } catch (error) {
+        recurring = false;
+      }
+      let bucket = null;
+      if (freshnessAvailable) {
+        try {
+          const evaluated = this.freshnessEvaluatedFor(
+            task,
+            freshnessMemo,
+          );
+          bucket =
+            evaluated && typeof evaluated.bucket === "string"
+              ? evaluated.bucket
+              : null;
+        } catch (error) {
+          bucket = null;
+        }
+      }
+      rows.push({ path, recurring, blockId, bucket });
+      countedByTask.set(task, !recurring);
+      let rankKey = null;
+      try {
+        rankKey = this.freshnessMemoRankKey(task);
+      } catch (error) {
+        rankKey = null;
+      }
+      if (rankKey) {
+        const tally = keyTallies.get(rankKey) || { total: 0, counted: 0 };
+        tally.total += 1;
+        if (!recurring) {
+          tally.counted += 1;
+        }
+        keyTallies.set(rankKey, tally);
+      }
+    }
+    const evaluated = noteReadyEvaluate({
+      notes: eligibility.entries,
+      rows,
+      defaultCap,
+      defaultSource,
+      freshnessAvailable,
+    });
+    const byPath = new Map();
+    for (const entry of evaluated.notes) {
+      byPath.set(entry.path, entry);
+    }
+    const crowdedRank = new Map();
+    let rank = 0;
+    for (const entry of evaluated.notes) {
+      if (entry.state === "crowded") {
+        rank += 1;
+        crowdedRank.set(entry.path, rank);
+      }
+    }
+    const countedByKey = new Map();
+    for (const [key, tally] of keyTallies) {
+      if (tally.total === 1) {
+        countedByKey.set(key, tally.counted === 1);
+      }
+    }
+    const snapshot = {
+      available: true,
+      date: dateText,
+      cap: capBlock,
+      totals: evaluated.totals,
+      notes: evaluated.notes,
+      lints: evaluated.lints,
+    };
+    const crowdedKey = noteReadyCrowdedKey(evaluated.notes, capsKey);
+    this.noteReadyMemo = {
+      tasks,
+      tasksGen,
+      dateText,
+      frontGen,
+      capsKey,
+      freshnessMemo,
+      crowdedKey,
+      snapshot,
+      byPath,
+      crowdedRank,
+      countedByTask,
+      countedByKey,
+      tasksRef: tasks,
+    };
+    if (
+      previous &&
+      previous.snapshot &&
+      previous.snapshot.available &&
+      previous.tasks === tasks &&
+      previous.tasksGen === tasksGen &&
+      previous.crowdedKey !== crowdedKey
+    ) {
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // The memo is still correct; only the live refresh is skipped.
+      }
+    }
+    return snapshot;
+  }
+
+  // Direct lane check for one task (the `counted(task)` miss fallback).
+  noteReadyTaskCounted(task, tasks, todayDay) {
+    try {
+      if (!task || typeof task !== "object") {
+        return false;
+      }
+      const path = planTaskPath(task);
+      if (!path) {
+        return false;
+      }
+      if (!readyTaskVisible(task, todayDay)) {
+        return false;
+      }
+      if (planTaskIsBlocked(task, tasks)) {
+        return false;
+      }
+      if (planTaskBlockId(task) === "prj") {
+        return false;
+      }
+      return !noteReadyRecurringFor(task);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // --- api.noteReady members (synchronous, never throw) ---------------
+
+  apiNoteReadySnapshot(now) {
+    try {
+      return this.noteReadyEnsureSnapshot(
+        now === undefined ? new Date() : now,
+      );
+    } catch (error) {
+      return {
+        available: false,
+        reason: "error",
+        date: null,
+        cap: {
+          default: NOTE_READY_DEFAULT_CAP,
+          source: "default",
+          invalid: false,
+        },
+        totals: noteReadyEmptyTotals(),
+        notes: [],
+        lints: [],
+      };
+    }
+  }
+
+  apiNoteReadyForNote(path) {
+    try {
+      const key = typeof path === "string" ? path : "";
+      if (!key) {
+        return null;
+      }
+      this.noteReadyEnsureSnapshot();
+      const memo = this.noteReadyMemo;
+      if (!memo || !(memo.byPath instanceof Map)) {
+        return null;
+      }
+      return memo.byPath.get(key) || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  apiNoteReadyCounted(task) {
+    try {
+      const snapshot = this.noteReadyEnsureSnapshot();
+      if (!snapshot || snapshot.available !== true) {
+        return null;
+      }
+      const memo = this.noteReadyMemo;
+      if (
+        memo &&
+        memo.countedByTask instanceof Map &&
+        memo.countedByTask.has(task)
+      ) {
+        return memo.countedByTask.get(task) === true;
+      }
+      let rankKey = null;
+      try {
+        rankKey = this.freshnessMemoRankKey(task);
+      } catch (error) {
+        rankKey = null;
+      }
+      if (
+        rankKey &&
+        memo &&
+        memo.countedByKey instanceof Map &&
+        memo.countedByKey.has(rankKey)
+      ) {
+        return memo.countedByKey.get(rankKey) === true;
+      }
+      const tasks = (memo && memo.tasksRef) || [];
+      let todayDay = null;
+      try {
+        todayDay = freshnessDayNumberForDateText(
+          this.freshnessTodayText(),
+        );
+      } catch (error) {
+        todayDay = null;
+      }
+      return this.noteReadyTaskCounted(task, tasks, todayDay);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  apiNoteReadyInCrowdedNote(task) {
+    try {
+      const counted = this.apiNoteReadyCounted(task);
+      if (counted !== true) {
+        return false;
+      }
+      let path = "";
+      try {
+        path = planTaskPath(task) || "";
+      } catch (error) {
+        path = "";
+      }
+      if (!path) {
+        return false;
+      }
+      const entry = this.apiNoteReadyForNote(path);
+      return Boolean(entry && entry.state === "crowded");
+    } catch (error) {
+      return false;
+    }
+  }
+
+  apiNoteReadyGroupLabel(task) {
+    try {
+      const snapshot = this.noteReadyEnsureSnapshot();
+      if (!snapshot || snapshot.available !== true) {
+        return "–";
+      }
+      let path = "";
+      try {
+        path = planTaskPath(task) || "";
+      } catch (error) {
+        path = "";
+      }
+      const memo = this.noteReadyMemo;
+      const entry =
+        path && memo && memo.byPath instanceof Map
+          ? memo.byPath.get(path)
+          : null;
+      if (!entry) {
+        return "–";
+      }
+      if (entry.state !== "crowded") {
+        return `[[${entry.name}]] · ${entry.count}/${entry.cap}`;
+      }
+      const rank =
+        memo &&
+        memo.crowdedRank instanceof Map &&
+        memo.crowdedRank.get(entry.path);
+      const prefix = String(
+        Number.isInteger(rank) && rank > 0 ? rank : 0,
+      ).padStart(3, "0");
+      return (
+        `%%${prefix}%%[[${entry.name}]] · ` +
+        `${entry.count}/${entry.cap} · +${entry.over_by}`
+      );
+    } catch (error) {
+      return "–";
     }
   }
 
@@ -7299,6 +8011,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     return typeof value + ":" + String(value);
   }
 
+  // One shared frontmatter reader (bob-cli-3e fix): every per-note
+  // frontmatter lookup resolves through here.
+  noteFrontmatter(pathOrFile) {
+    return noteFrontmatterFor(this.app, pathOrFile);
+  }
+
   // The note's raw `task_refresh` frontmatter value, cached per path.
   noteFreshnessRawFor(path) {
     const key = String(path || "");
@@ -7313,14 +8031,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       ) {
         return this.freshnessFrontValues.get(key);
       }
-      const cache =
-        this.app &&
-        this.app.metadataCache &&
-        typeof this.app.metadataCache.getCache === "function"
-          ? this.app.metadataCache.getCache({ path: key })
-          : null;
-      const frontmatter =
-        cache && typeof cache === "object" ? cache.frontmatter : null;
+      const frontmatter = this.noteFrontmatter(key);
       const value =
         frontmatter && typeof frontmatter === "object"
           ? frontmatter.task_refresh
@@ -7842,14 +8553,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       }
       let current = undefined;
       try {
-        const cache =
-          this.app &&
-          this.app.metadataCache &&
-          typeof this.app.metadataCache.getCache === "function"
-            ? this.app.metadataCache.getCache(file)
-            : null;
-        const frontmatter =
-          cache && typeof cache === "object" ? cache.frontmatter : null;
+        const frontmatter = this.noteFrontmatter(file);
         current =
           frontmatter && typeof frontmatter === "object"
             ? frontmatter.task_refresh
@@ -10453,47 +11157,729 @@ function planConfigPath(options = {}) {
   return planJoinPathSegments(configHome, PLAN_CONFIG_RELATIVE_PATH);
 }
 
+// Stat cache for `loadPlanCaps`: `{ key, result }`, where the key is the
+// config path plus the file's mtime/size (or `"missing"` when the file
+// does not exist). The file is reparsed only when the key changes, so the
+// 13+ callers never re-read it per call. Creation, deletion, invalid
+// edits and recovery, and env path overrides all change the key, so the
+// next call re-reads. Callers without a `statSync` (including the unit
+// test stubs) read through uncached, exactly as before.
+let planCapsStatCache = { key: null, result: null };
+
+function resetPlanCapsCache() {
+  planCapsStatCache = { key: null, result: null };
+}
+
+function planCapsStatKey(fsModule, configPath) {
+  try {
+    if (!fsModule || typeof fsModule.statSync !== "function") {
+      return null;
+    }
+    const stat = fsModule.statSync(configPath);
+    const mtime =
+      stat && stat.mtimeMs !== undefined && stat.mtimeMs !== null
+        ? stat.mtimeMs
+        : stat && stat.mtime
+          ? Number(stat.mtime)
+          : "?";
+    const size =
+      stat && stat.size !== undefined && stat.size !== null ? stat.size : "?";
+    return `${mtime}:${size}`;
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return "missing";
+    }
+    return null;
+  }
+}
+
+// Where the default per-note cap came from: an explicit
+// `plan.max_ready_per_note` (`config`) or the built-in default
+// (`default`). Presence only — an invalid value still reads `config`
+// (with `invalid: true` beside it), matching the Rust contract.
+function planDefaultCapSource(block) {
+  const raw =
+    block && typeof block === "object" && !Array.isArray(block) ? block : {};
+  for (const key of ["max_ready_per_note", "maxReadyPerNote"]) {
+    if (raw[key] !== undefined && raw[key] !== null) {
+      return "config";
+    }
+  }
+  return "default";
+}
+
 // Read `plan:` from `~/.config/bob/config.yml` (honoring XDG_CONFIG_HOME).
 // Mobile (no desktop `fs`) and read errors fall back to the defaults.
-// Returns `{ caps, invalid, configPath }`; `invalid` is true only when the
-// file was read but held a present-but-bad value.
+// Returns `{ caps, invalid, defaultSource, configPath }`; `invalid` is
+// true only when the file was read but held a present-but-bad value.
 function loadPlanCaps(options = {}) {
   const defaults = defaultPlanCaps();
   const configPath = options.configPath || planConfigPath(options);
   const platform = options.Platform === undefined ? Platform : options.Platform;
   if (platform && platform.isDesktopApp === false) {
-    return { caps: defaults, invalid: false, configPath };
+    return {
+      caps: defaults,
+      invalid: false,
+      defaultSource: "default",
+      configPath,
+    };
   }
   const fsModule =
     options.fsModule === undefined
       ? planRequireOptionalNodeModule("fs")
       : options.fsModule;
   if (!fsModule || typeof fsModule.readFileSync !== "function") {
-    return { caps: defaults, invalid: false, configPath };
-  }
-  let rawConfig;
-  try {
-    rawConfig = fsModule.readFileSync(configPath, "utf8");
-  } catch (error) {
     return {
       caps: defaults,
-      invalid: Boolean(error && error.code && error.code !== "ENOENT"),
+      invalid: false,
+      defaultSource: "default",
       configPath,
     };
   }
   const yamlParser =
     options.parseYaml === undefined ? parseYaml : options.parseYaml;
   if (typeof yamlParser !== "function") {
-    return { caps: defaults, invalid: false, configPath };
+    return {
+      caps: defaults,
+      invalid: false,
+      defaultSource: "default",
+      configPath,
+    };
   }
-  let parsed;
+  const statKey = planCapsStatKey(fsModule, configPath);
+  const cacheKey =
+    statKey === null ? null : `${configPath}\n${statKey}`;
+  if (
+    cacheKey !== null &&
+    planCapsStatCache.key === cacheKey &&
+    planCapsStatCache.result
+  ) {
+    return planCapsStatCache.result;
+  }
+  const readUncached = () => {
+    let rawConfig;
+    try {
+      rawConfig = fsModule.readFileSync(configPath, "utf8");
+    } catch (error) {
+      return {
+        caps: defaults,
+        invalid: Boolean(error && error.code && error.code !== "ENOENT"),
+        defaultSource: "default",
+        configPath,
+      };
+    }
+    let parsed;
+    try {
+      parsed = yamlParser(rawConfig);
+    } catch (error) {
+      return {
+        caps: defaults,
+        invalid: true,
+        defaultSource: "default",
+        configPath,
+      };
+    }
+    const block = planCapsBlock(parsed);
+    const coerced = coercePlanCaps(block);
+    return {
+      caps: coerced.caps,
+      invalid: coerced.invalid,
+      defaultSource: planDefaultCapSource(block),
+      configPath,
+    };
+  };
+  const result = readUncached();
+  if (cacheKey !== null) {
+    planCapsStatCache = { key: cacheKey, result };
+  }
+  return result;
+}
+
+// One shared frontmatter reader for every per-note frontmatter lookup.
+// `pathOrFile` is a vault-relative path string or a TFile. It resolves a
+// TFile through `vault.getAbstractFileByPath` and reads
+// `metadataCache.getFileCache(file)` — the only call that returns a cache
+// entry in Obsidian. (Fixes bob-cli-3e: the old `getCache({path})` /
+// `getCache(file)` calls always returned null, so per-note overrides
+// never applied.) Returns the frontmatter object or null. Never throws.
+function noteFrontmatterFor(app, pathOrFile) {
   try {
-    parsed = yamlParser(rawConfig);
+    const vault = app && app.vault;
+    const metadataCache = app && app.metadataCache;
+    if (
+      !vault ||
+      !metadataCache ||
+      typeof metadataCache.getFileCache !== "function"
+    ) {
+      return null;
+    }
+    let file = null;
+    if (typeof pathOrFile === "string") {
+      if (typeof vault.getAbstractFileByPath !== "function") {
+        return null;
+      }
+      file = vault.getAbstractFileByPath(pathOrFile);
+    } else if (
+      pathOrFile &&
+      typeof pathOrFile === "object" &&
+      typeof pathOrFile.path === "string"
+    ) {
+      file = pathOrFile;
+    }
+    if (!file) {
+      return null;
+    }
+    const cache = metadataCache.getFileCache(file);
+    const frontmatter =
+      cache && typeof cache === "object" ? cache.frontmatter : null;
+    return frontmatter &&
+      typeof frontmatter === "object" &&
+      !Array.isArray(frontmatter)
+      ? frontmatter
+      : null;
   } catch (error) {
-    return { caps: defaults, invalid: true, configPath };
+    return null;
   }
-  const coerced = coercePlanCaps(planCapsBlock(parsed));
-  return { caps: coerced.caps, invalid: coerced.invalid, configPath };
+}
+
+// --- Per-note Ready cap (api.noteReady v1) --------------------------------
+// Shared read-time contract (`docs/plan.md`, "Ready cap per note" in
+// bob-cli): one implementation here serves the dash chip, crowded.md,
+// and the `## Tasks` heading chips. Field names match the CLI JSON.
+// Pure unless noted; the plugin snapshot builder below is the only
+// impure part.
+
+const NOTE_READY_DEFAULT_CAP = 5;
+const NOTE_READY_CAP_MAX = 999;
+const NOTE_READY_DASH_PATH = "dash.md";
+const LINT_NOTE_READY_CAP_INVALID = "note_ready_cap_invalid";
+const LINT_NOTE_READY_IN_TERMINAL_PROJECT =
+  "note_ready_in_terminal_project";
+
+// Directory names whose subtrees never hold per-note entries. Mirrors
+// the Rust walk (`is_excluded_directory` plus the `done/` rule); the
+// check applies to directory segments only, so `x/done.md` is fine.
+const NOTE_READY_EXCLUDED_DIRS = [
+  ".git",
+  ".obsidian",
+  "_templates",
+  "_conflicts",
+  "_generated",
+  "done",
+];
+
+function noteReadyPathExcluded(path) {
+  const text = String(path || "");
+  if (!text) {
+    return true;
+  }
+  if (text === NOTE_READY_DASH_PATH) {
+    return true;
+  }
+  const segments = text.split("/");
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (NOTE_READY_EXCLUDED_DIRS.includes(segments[index])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function noteReadyStemForPath(path) {
+  const text = String(path || "");
+  const slash = text.lastIndexOf("/");
+  const base = slash === -1 ? text : text.slice(slash + 1);
+  return base.toLowerCase().endsWith(".md")
+    ? base.slice(0, -3)
+    : base;
+}
+
+function noteReadyStripQuotes(text) {
+  const value = String(text || "").trim();
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if (
+      (first === '"' && last === '"') ||
+      (first === "'" && last === "'")
+    ) {
+      return value.slice(1, -1).trim();
+    }
+  }
+  return value;
+}
+
+// One scalar `type` value to a kind. Accepts `[[project]]` /
+// `[[area]]` exactly, plus the inner word that bare YAML wikilinks
+// parse to (`[["project"]]` arrives as a nested array; `"project"`
+// survives inside flow lists).
+function noteReadyScalarKind(value) {
+  const text = noteReadyStripQuotes(value);
+  if (!text) {
+    return null;
+  }
+  if (text === "[[project]]") {
+    return "project";
+  }
+  if (text === "[[area]]") {
+    return "area";
+  }
+  const inner = text
+    .replace(/^[[ '"\]]+|[[ '"\]]+$/g, "")
+    .trim();
+  if (inner === "project") {
+    return "project";
+  }
+  if (inner === "area") {
+    return "area";
+  }
+  return null;
+}
+
+// A parsed `type` frontmatter value (string, array, or the nested
+// `[["project"]]` array bare YAML wikilinks parse to) to
+// `area`|`project`|null. Area wins ties, as in Rust.
+function noteReadyKindFromType(value) {
+  const fromScalarList = (text) => {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.startsWith("[")) {
+      const inner = trimmed.endsWith("]")
+        ? trimmed.slice(1, -1)
+        : trimmed.slice(1);
+      let project = null;
+      for (const item of inner.split(",")) {
+        const kind = noteReadyScalarKind(item);
+        if (kind === "area") {
+          return "area";
+        }
+        if (kind === "project") {
+          project = "project";
+        }
+      }
+      return project;
+    }
+    return noteReadyScalarKind(trimmed);
+  };
+  if (typeof value === "string") {
+    return fromScalarList(value);
+  }
+  if (Array.isArray(value)) {
+    let project = null;
+    for (const item of value) {
+      if (typeof item === "string") {
+        const kind = fromScalarList(item);
+        if (kind === "area") {
+          return "area";
+        }
+        if (kind === "project") {
+          project = "project";
+        }
+      } else if (Array.isArray(item)) {
+        for (const nested of item) {
+          if (typeof nested !== "string") {
+            continue;
+          }
+          const kind = noteReadyScalarKind(nested);
+          if (kind === "area") {
+            return "area";
+          }
+          if (kind === "project") {
+            project = "project";
+          }
+        }
+      }
+    }
+    return project;
+  }
+  return null;
+}
+
+// Parsed `status` frontmatter to a label: `wip`, `waiting`, `done`,
+// `canceled`, or the lowercased value. Mirrors `ProjectStatus::parse`.
+function noteReadyStatusLabel(value) {
+  let text = "";
+  if (typeof value === "string") {
+    text = value;
+  } else if (value !== undefined && value !== null) {
+    text = String(value);
+  }
+  const normalized = noteReadyStripQuotes(text).toLowerCase();
+  if (normalized === "" || normalized === "wip") {
+    return "wip";
+  }
+  if (normalized === "waiting") {
+    return "waiting";
+  }
+  if (normalized === "done") {
+    return "done";
+  }
+  if (normalized === "canceled" || normalized === "cancelled") {
+    return "canceled";
+  }
+  return normalized;
+}
+
+function noteReadyStatusIsTerminal(statusLabel) {
+  return statusLabel === "done" || statusLabel === "canceled";
+}
+
+// Parsed `parent` frontmatter to a stem. Mirrors the Rust
+// `wikilink_target` (alias/heading stripped, last path segment, and
+// lowercased, since Rust stores the link name).
+function noteReadyParentStem(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const text = noteReadyStripQuotes(value);
+  if (!text.startsWith("[[") || !text.endsWith("]]")) {
+    return null;
+  }
+  let inner = text.slice(2, -2).trim();
+  const pipe = inner.indexOf("|");
+  if (pipe !== -1) {
+    inner = inner.slice(0, pipe);
+  }
+  const hash = inner.indexOf("#");
+  if (hash !== -1) {
+    inner = inner.slice(0, hash);
+  }
+  const slash = inner.lastIndexOf("/");
+  if (slash !== -1) {
+    inner = inner.slice(slash + 1);
+  }
+  inner = inner.trim();
+  if (!inner) {
+    return null;
+  }
+  return inner.toLowerCase();
+}
+
+// Parse a raw `ready_cap` frontmatter value (number, digit string,
+// `off` in any case, or boolean `false` for exempt). Returns
+// `{ cap, source, exempt, invalid }`: `cap` is null for exempt notes;
+// `invalid` means present-but-bad, and the caller falls back to the
+// default and emits `note_ready_cap_invalid`. Mirrors the Rust
+// `parse_ready_cap`.
+function parseNoteReadyCap(raw, defaultCap, defaultSource) {
+  const fallback = {
+    cap: defaultCap,
+    source: defaultSource,
+    exempt: false,
+    invalid: false,
+  };
+  if (raw === undefined || raw === null) {
+    return fallback;
+  }
+  if (typeof raw === "boolean") {
+    if (raw === false) {
+      return { cap: null, source: "note", exempt: true, invalid: false };
+    }
+    return { ...fallback, invalid: true };
+  }
+  if (typeof raw === "number") {
+    if (
+      Number.isInteger(raw) &&
+      raw >= 1 &&
+      raw <= NOTE_READY_CAP_MAX
+    ) {
+      return { cap: raw, source: "note", exempt: false, invalid: false };
+    }
+    return { ...fallback, invalid: true };
+  }
+  if (typeof raw === "string") {
+    const text = noteReadyStripQuotes(raw);
+    if (!text) {
+      return fallback;
+    }
+    const lowered = text.toLowerCase();
+    if (lowered === "off" || lowered === "false") {
+      return { cap: null, source: "note", exempt: true, invalid: false };
+    }
+    if (/^[+-]?\d+$/.test(text)) {
+      const number = Number(text);
+      if (
+        Number.isSafeInteger(number) &&
+        number >= 1 &&
+        number <= NOTE_READY_CAP_MAX
+      ) {
+        return {
+          cap: number,
+          source: "note",
+          exempt: false,
+          invalid: false,
+        };
+      }
+    }
+    return { ...fallback, invalid: true };
+  }
+  return { ...fallback, invalid: true };
+}
+
+function noteReadyStateRank(state) {
+  if (state === "crowded") {
+    return 0;
+  }
+  if (state === "full") {
+    return 1;
+  }
+  if (state === "room") {
+    return 2;
+  }
+  if (state === "empty") {
+    return 3;
+  }
+  return 4;
+}
+
+function noteReadyEmptyTotals() {
+  return {
+    notes: 0,
+    areas: 0,
+    projects: 0,
+    crowded: 0,
+    full: 0,
+    room: 0,
+    empty: 0,
+    exempt: 0,
+    counted: 0,
+    excess: 0,
+    recurring: 0,
+  };
+}
+
+function noteReadyRawLabel(raw) {
+  if (typeof raw === "string") {
+    return raw.trim();
+  }
+  try {
+    const encoded = JSON.stringify(raw);
+    return encoded === undefined ? String(raw) : encoded;
+  } catch (error) {
+    return String(raw);
+  }
+}
+
+// Pure per-note Ready evaluation: no I/O, unit-testable. `notes` holds
+// typed-note entries
+// `{ path, name, kind, status, isArea, isTerminal, parent, ready_cap_raw }`;
+// `rows` holds in-lane, non-`prj` rows
+// `{ path, recurring, blockId, bucket }` where `bucket` is a freshness
+// `"new"`/`"rotten"`/null. Rows whose path matches no note are ignored.
+// Terminal projects are never capped: they contribute no entry, and a
+// `note_ready_in_terminal_project` lint is emitted once when they still
+// hold counted rows. Mirrors the Rust `evaluate`.
+function noteReadyEvaluate({
+  notes,
+  rows,
+  defaultCap,
+  defaultSource,
+  freshnessAvailable,
+}) {
+  const cap = Number.isInteger(defaultCap) ? defaultCap : NOTE_READY_DEFAULT_CAP;
+  const source =
+    defaultSource === "config" || defaultSource === "preview"
+      ? defaultSource
+      : "default";
+  const noteList = Array.isArray(notes) ? notes : [];
+  const rowList = Array.isArray(rows) ? rows : [];
+  const byPath = new Map();
+  for (const row of rowList) {
+    if (!row || typeof row.path !== "string" || !row.path) {
+      continue;
+    }
+    if (!byPath.has(row.path)) {
+      byPath.set(row.path, []);
+    }
+    byPath.get(row.path).push(row);
+  }
+  const entries = [];
+  const lints = [];
+  for (const note of noteList) {
+    if (!note || typeof note.path !== "string") {
+      continue;
+    }
+    const noteRows = byPath.get(note.path) || [];
+    const countedRows = noteRows.filter((row) => !row.recurring);
+    const count = countedRows.length;
+    const recurring = noteRows.filter((row) => row.recurring).length;
+    if (!note.isArea && note.isTerminal) {
+      if (count > 0) {
+        lints.push({
+          code: LINT_NOTE_READY_IN_TERMINAL_PROJECT,
+          path: note.path,
+          message:
+            `project ${note.name} is ${note.status} but still holds ` +
+            `${count} ready ${count === 1 ? "task" : "tasks"}`,
+        });
+      }
+      continue;
+    }
+    const parsed = parseNoteReadyCap(note.ready_cap_raw, cap, source);
+    if (parsed.invalid) {
+      lints.push({
+        code: LINT_NOTE_READY_CAP_INVALID,
+        path: note.path,
+        message:
+          `ready_cap ${JSON.stringify(noteReadyRawLabel(note.ready_cap_raw))} ` +
+          `in ${note.name} is not 1–999 or off; using ${cap}`,
+      });
+    }
+    let state = "empty";
+    let overBy = 0;
+    let capValue = parsed.cap;
+    if (parsed.exempt) {
+      state = "exempt";
+      capValue = null;
+    } else {
+      const limit =
+        Number.isInteger(capValue) && capValue !== null ? capValue : cap;
+      if (count > limit) {
+        state = "crowded";
+        overBy = count - limit;
+      } else if (count === limit) {
+        state = "full";
+      } else if (count > 0) {
+        state = "room";
+      } else {
+        state = "empty";
+      }
+    }
+    let makeUp = null;
+    if (freshnessAvailable) {
+      let fresh = 0;
+      let rotten = 0;
+      for (const row of countedRows) {
+        if (row.bucket === "new") {
+          fresh += 1;
+        } else if (row.bucket === "rotten") {
+          rotten += 1;
+        }
+      }
+      makeUp = {
+        ready: Math.max(0, count - fresh - rotten),
+        new: fresh,
+        rotten,
+      };
+    }
+    entries.push({
+      path: note.path,
+      name: note.name,
+      kind: note.kind,
+      status: note.status,
+      parent: note.parent === undefined ? null : note.parent,
+      count,
+      cap: capValue,
+      cap_source: parsed.source,
+      state,
+      over_by: overBy,
+      make_up: makeUp,
+      recurring,
+    });
+  }
+  entries.sort((a, b) => {
+    const rank = noteReadyStateRank(a.state) - noteReadyStateRank(b.state);
+    if (rank !== 0) {
+      return rank;
+    }
+    if (a.over_by !== b.over_by) {
+      return b.over_by - a.over_by;
+    }
+    if (a.count !== b.count) {
+      return b.count - a.count;
+    }
+    const nameA = String(a.name || "").toLowerCase();
+    const nameB = String(b.name || "").toLowerCase();
+    if (nameA !== nameB) {
+      return nameA < nameB ? -1 : 1;
+    }
+    return String(a.path) < String(b.path)
+      ? -1
+      : String(a.path) > String(b.path)
+        ? 1
+        : 0;
+  });
+  const totals = noteReadyEmptyTotals();
+  for (const entry of entries) {
+    totals.recurring += entry.recurring;
+    if (entry.state === "exempt") {
+      totals.exempt += 1;
+      continue;
+    }
+    totals.notes += 1;
+    if (entry.kind === "area") {
+      totals.areas += 1;
+    } else {
+      totals.projects += 1;
+    }
+    totals.counted += entry.count;
+    totals.excess += entry.over_by;
+    if (entry.state === "crowded") {
+      totals.crowded += 1;
+    } else if (entry.state === "full") {
+      totals.full += 1;
+    } else if (entry.state === "room") {
+      totals.room += 1;
+    } else if (entry.state === "empty") {
+      totals.empty += 1;
+    }
+  }
+  lints.sort((a, b) => {
+    if (a.path !== b.path) {
+      return String(a.path) < String(b.path) ? -1 : 1;
+    }
+    return String(a.code) < String(b.code)
+      ? -1
+      : String(a.code) > String(b.code)
+        ? 1
+        : 0;
+  });
+  return { notes: entries, totals, lints };
+}
+
+// Recurrence under the `freshnessRowFromTask` rule: a Tasks recurrence,
+// flag, or `[repeat:: …]` inline field.
+function noteReadyRecurringFor(task) {
+  try {
+    if (!task || typeof task !== "object") {
+      return false;
+    }
+    if (Boolean(task.recurrence)) {
+      return true;
+    }
+    if (task.isRecurring === true || task.recurring === true) {
+      return true;
+    }
+    const description = planTaskDescription(task);
+    const rawLine =
+      typeof task.originalMarkdown === "string"
+        ? task.originalMarkdown
+        : typeof description === "string"
+          ? description
+          : "";
+    return freshnessHasRepeatField(rawLine);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Stable key for the crowded set plus caps: the query-refresh trigger
+// compares it to detect crowded/cap/label changes that no Tasks cache
+// change carries.
+function noteReadyCrowdedKey(notes, capsKey) {
+  try {
+    const crowded = [];
+    for (const entry of Array.isArray(notes) ? notes : []) {
+      if (entry && entry.state === "crowded") {
+        crowded.push([entry.path, entry.count, entry.cap]);
+      }
+    }
+    return JSON.stringify([crowded, capsKey || null]);
+  } catch (error) {
+    return JSON.stringify(["error", capsKey || null]);
+  }
 }
 
 // --- Plan block model -----------------------------------------------------
@@ -10732,6 +12118,11 @@ module.exports.helpers = {
   effectivePlanCaps,
   parsePlanCaps,
   coercePlanCaps,
+  planPerNoteCapOrDefault,
+  planCapsBlock,
+  planDefaultCapSource,
+  resetPlanCapsCache,
+  noteFrontmatterFor,
   normalizePlanComponent,
   splitPlanComponents,
   computePlanBudget,
@@ -10750,6 +12141,20 @@ module.exports.helpers = {
   readyTaskVisible,
   readyTaskStatusIsTodo,
   loadPlanCaps,
+  noteReadyPathExcluded,
+  noteReadyStemForPath,
+  noteReadyKindFromType,
+  noteReadyStatusLabel,
+  noteReadyStatusIsTerminal,
+  noteReadyParentStem,
+  parseNoteReadyCap,
+  noteReadyEvaluate,
+  noteReadyEmptyTotals,
+  noteReadyRecurringFor,
+  noteReadyCrowdedKey,
+  LINT_NOTE_READY_CAP_INVALID,
+  LINT_NOTE_READY_IN_TERMINAL_PROJECT,
+  NOTE_READY_DEFAULT_CAP,
   planConfigPath,
   planBlockTargetPath,
   planBlockModel,

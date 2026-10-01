@@ -10,6 +10,59 @@ const {
 const { Prec } = require("@codemirror/state");
 const { EditorView, keymap } = require("@codemirror/view");
 
+// Freshness-mark surfaces (mark-surfaces): defensive CodeMirror/Obsidian
+// imports. Every piece must exist before the Live Preview extension is
+// registered, so the existing ledger-tools tests and their stubs keep
+// passing unchanged. Never throws.
+let ViewPlugin = null;
+let Decoration = null;
+let WidgetType = null;
+try {
+  const viewMod = require("@codemirror/view");
+  ViewPlugin = viewMod.ViewPlugin || null;
+  Decoration = viewMod.Decoration || null;
+  WidgetType = viewMod.WidgetType || null;
+} catch (error) {
+  ViewPlugin = null;
+  Decoration = null;
+  WidgetType = null;
+}
+let StateEffect = null;
+let RangeSetBuilder = null;
+try {
+  const stateMod = require("@codemirror/state");
+  StateEffect = stateMod.StateEffect || null;
+  RangeSetBuilder = stateMod.RangeSetBuilder || null;
+} catch (error) {
+  StateEffect = null;
+  RangeSetBuilder = null;
+}
+let editorInfoField = null;
+let editorLivePreviewField = null;
+try {
+  const obsidianMod = require("obsidian");
+  editorInfoField = obsidianMod.editorInfoField || null;
+  editorLivePreviewField = obsidianMod.editorLivePreviewField || null;
+} catch (error) {
+  editorInfoField = null;
+  editorLivePreviewField = null;
+}
+let syntaxTree = null;
+try {
+  const languageMod = require("@codemirror/language");
+  syntaxTree = (languageMod && languageMod.syntaxTree) || null;
+} catch (error) {
+  syntaxTree = null;
+}
+let freshnessMarksRefresh = null;
+try {
+  if (StateEffect && typeof StateEffect.define === "function") {
+    freshnessMarksRefresh = StateEffect.define();
+  }
+} catch (error) {
+  freshnessMarksRefresh = null;
+}
+
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;
 const DAILY_NOTES_COMMAND_ID = "daily-notes";
@@ -4932,6 +4985,112 @@ function buildFreshnessMarkElement(doc, model, options) {
   }
 }
 
+// Whether a CodeMirror position sits inside code: the syntax node at
+// the position, or any ancestor, is a codeblock (mirroring Dataview's
+// `HyperMD-codeblock` check) or inline code. Missing trees never throw
+// and never match. Pure helper for the Live Preview decoration.
+function freshnessMarkPosInCode(tree, pos) {
+  try {
+    if (!tree || typeof tree.resolveInner !== "function") {
+      return false;
+    }
+    let node = tree.resolveInner(pos, -1);
+    while (node) {
+      const name = node.name || "";
+      if (
+        name === "HyperMD-codeblock" ||
+        name.indexOf("inline-code") !== -1
+      ) {
+        return true;
+      }
+      node = node.parent;
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Live Preview click widget for one freshness mark. `eq` compares a key
+// built from `JSON.stringify(model)` plus `foldSpace`, so an unchanged
+// mark never flickers. `toDOM` builds the listener-free element and adds
+// the reveal-on-click listener only. Defined only when `WidgetType`
+// exists; otherwise null and the extension is not registered.
+let FreshnessMarkWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  FreshnessMarkWidget = class extends WidgetType {
+    constructor(model, foldSpace) {
+      super();
+      this.model = model;
+      this.foldSpace = Boolean(foldSpace);
+      let key = "";
+      try {
+        key = JSON.stringify(model) + "|" + (this.foldSpace ? "1" : "0");
+      } catch (error) {
+        key = String(model && model.text) + "|" + (this.foldSpace ? "1" : "0");
+      }
+      this.key = key;
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof FreshnessMarkWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildFreshnessMarkElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+        { foldSpace: this.foldSpace },
+      );
+      // In tests `document` is undefined and the caller passes a fake
+      // doc via `buildFreshnessMarkElement` directly; never throw here.
+      if (!dom) {
+        const fallback =
+          typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        return fallback;
+      }
+      try {
+        const self = this;
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let anchor = null;
+            try {
+              anchor =
+                view && typeof view.posAtDOM === "function"
+                  ? view.posAtDOM(dom)
+                  : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (typeof anchor === "number") {
+              view.dispatch({
+                selection: { anchor: anchor + (self.foldSpace ? 1 : 0) },
+              });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+          } catch (error) {
+            // Reveal is best-effort; the mark itself still renders.
+          }
+        });
+      } catch (error) {
+        // A listener-free mark still renders.
+      }
+      return dom;
+    }
+  };
+}
+
 // Adapt one Tasks-plugin task to a freshness evaluation row. `context`
 // is `{ list, todayDay, noteRefreshRawFor(path), isToday(task) }`.
 // Never throws: missing fields degrade to an out-of-scope row.
@@ -5097,6 +5256,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.freshnessFrontValues = new Map();
     this.freshnessStatusTimer = null;
     this.freshnessStatusEl = null;
+    // Freshness marks (mark-surfaces): session toggle plus a
+    // filesystem-free cached snapshot refreshed on the status bar paths.
+    this.freshnessMarksEnabled = true;
+    this.freshnessMarkSnapshot = null;
+    this.freshnessMarksTimer = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -5296,6 +5460,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           this.schedulePlanBlockRerender();
           this.scheduleReadyRefresh();
           this.scheduleFreshnessStatusBar();
+          this.scheduleFreshnessMarksRefresh();
         }),
       );
     }
@@ -5336,6 +5501,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
     this.setupFreshnessStatusBar();
     this.scheduleFreshnessStatusBar();
+    this.setupFreshnessMarks();
+    this.scheduleFreshnessMarksRefresh();
   }
 
   onunload() {
@@ -5380,6 +5547,28 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       this.freshnessFrontValues.clear();
     }
     this.freshnessStatusEl = null;
+    if (
+      this.freshnessMarksTimer !== null &&
+      this.freshnessMarksTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.freshnessMarksTimer);
+    }
+    this.freshnessMarksTimer = null;
+    this.freshnessMarkSnapshot = null;
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-fresh-marks");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
     cancelDeferred(this.pendingCenterDeferred);
     this.pendingCenterDeferred = null;
     this.dailyNavigationActionId += 1;
@@ -6226,6 +6415,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         // The generation still counts; the memo rebuilds on next access.
       }
       this.scheduleFreshnessStatusBar();
+      this.scheduleFreshnessMarksRefresh();
       return true;
     } catch (error) {
       return false;
@@ -6249,6 +6439,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         // The memo rebuilds on next access.
       }
       this.scheduleFreshnessStatusBar();
+      this.scheduleFreshnessMarksRefresh();
       return true;
     } catch (error) {
       return false;
@@ -6442,6 +6633,1121 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
+  // --- Task freshness marks: Live Preview + rendered views (mark-surfaces)
+  // Display-only; nothing ever writes. The mark snapshot is a
+  // filesystem-free cache (`{ dateText, config, memo, index }`) built from
+  // one `freshnessEnsureMemo()` call and refreshed on the status bar
+  // paths. Decoration builds reuse it and never touch the filesystem.
+
+  setupFreshnessMarks() {
+    try {
+      if (typeof this.freshnessMarksEnabled !== "boolean") {
+        this.freshnessMarksEnabled = true;
+      }
+      try {
+        if (
+          typeof document !== "undefined" &&
+          document &&
+          document.body &&
+          document.body.classList &&
+          typeof document.body.classList.add === "function"
+        ) {
+          if (this.freshnessMarksEnabled) {
+            document.body.classList.add("bob-fresh-marks");
+          } else {
+            document.body.classList.remove("bob-fresh-marks");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-freshness-marks",
+            name: "Toggle task freshness marks",
+            callback: () => this.toggleFreshnessMarks(),
+          });
+        }
+      } catch (error) {
+        // The toggle is best-effort.
+      }
+      try {
+        const extension = this.createFreshnessMarkExtension();
+        if (
+          extension &&
+          typeof this.registerEditorExtension === "function"
+        ) {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview marks are best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderFreshnessMarksIn(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Rendered-view marks are best-effort.
+      }
+    } catch (error) {
+      // Marks setup never throws.
+    }
+  }
+
+  freshnessMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          FreshnessMarkWidget &&
+          freshnessMarksRefresh,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createFreshnessMarkExtension() {
+    try {
+      if (!this.freshnessMarksAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const MarkPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildFreshnessMarkDecorations(view);
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+        }
+
+        update(u) {
+          try {
+            if (plugin.freshnessMarkShouldRebuild(u)) {
+              this.decorations =
+                plugin.buildFreshnessMarkDecorations(u.view);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(MarkPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  rebuildFreshnessMarkSnapshot() {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      this.freshnessMarkSnapshot = {
+        dateText: memo.dateText,
+        config: memo.config,
+        memo,
+        index: null,
+      };
+    } catch (error) {
+      // The snapshot rebuilds on next access.
+    }
+  }
+
+  freshnessMarkEnsureSnapshot() {
+    try {
+      const current = this.freshnessMarkSnapshot;
+      if (
+        current &&
+        current.memo &&
+        typeof current.dateText === "string" &&
+        current.config
+      ) {
+        return current;
+      }
+      const memo = this.freshnessEnsureMemo();
+      this.freshnessMarkSnapshot = {
+        dateText: memo.dateText,
+        config: memo.config,
+        memo,
+        index: null,
+      };
+      return this.freshnessMarkSnapshot;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  freshnessMarkSnapshotIndex(snapshot) {
+    try {
+      if (!snapshot || !snapshot.memo) {
+        return null;
+      }
+      if (
+        snapshot.index &&
+        snapshot.index.byLine instanceof Map &&
+        snapshot.index.byPath instanceof Map
+      ) {
+        return snapshot.index;
+      }
+      const byLine = new Map();
+      const byPath = new Map();
+      const rows = (snapshot.memo && snapshot.memo.rows) || [];
+      for (const row of rows) {
+        try {
+          if (!row || typeof row !== "object") {
+            continue;
+          }
+          const path = String(row.path || "");
+          const lineNumber = row.lineNumber;
+          if (!Number.isInteger(lineNumber)) {
+            continue;
+          }
+          const key = path + "\u0000" + String(lineNumber);
+          if (!byLine.has(key)) {
+            byLine.set(key, row);
+          }
+          let list = byPath.get(path);
+          if (!list) {
+            list = [];
+            byPath.set(path, list);
+          }
+          list.push(row);
+        } catch (error) {
+          continue;
+        }
+      }
+      snapshot.index = { byLine, byPath };
+      return snapshot.index;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  freshnessMarkUnresolvedInterval(snapshot, path, source) {
+    try {
+      const taskDays =
+        source &&
+        source.refresh !== null &&
+        source.refresh !== undefined
+          ? source.refresh
+          : null;
+      let noteDays = null;
+      try {
+        const raw = this.noteFreshnessRawFor(path);
+        const parsed = freshnessParseNoteRefresh(raw);
+        noteDays =
+          parsed && parsed.days !== null && parsed.days !== undefined
+            ? parsed.days
+            : null;
+      } catch (error) {
+        noteDays = null;
+      }
+      const config =
+        snapshot && snapshot.config
+          ? snapshot.config
+          : { interval: 7 };
+      return freshnessIntervalFor(taskDays, noteDays, config);
+    } catch (error) {
+      return { days: 7, source: "default" };
+    }
+  }
+
+  freshnessMarkModelForLine(args) {
+    try {
+      const input = args && typeof args === "object" ? args : null;
+      if (!input || !input.source) {
+        return null;
+      }
+      const source = input.source;
+      const text = typeof input.text === "string" ? input.text : "";
+      const path = typeof input.path === "string" ? input.path : "";
+      const lineNumber = input.lineNumber;
+      const snapshot = this.freshnessMarkEnsureSnapshot();
+      if (!snapshot) {
+        return freshnessMarkModel({
+          source,
+          today: freshnessTodayFallback(),
+          interval: { days: 7, source: "default" },
+          status: freshnessTaskStatus(text),
+          resolution: null,
+        });
+      }
+      const dateText = snapshot.dateText;
+      const config = snapshot.config;
+      const status = freshnessTaskStatus(text);
+      try {
+        const index = this.freshnessMarkSnapshotIndex(snapshot);
+        if (index && Number.isInteger(lineNumber)) {
+          const row = index.byLine.get(path + "\u0000" + String(lineNumber));
+          if (row && row.rawLine === text) {
+            const resolution = freshnessMarkResolution(row, dateText, config);
+            if (resolution) {
+              const model = freshnessMarkModel({
+                source,
+                today: dateText,
+                interval: this.freshnessMarkUnresolvedInterval(
+                  snapshot,
+                  path,
+                  source,
+                ),
+                status,
+                resolution,
+              });
+              if (model) {
+                return model;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Fall through to consensus.
+      }
+      try {
+        const index = this.freshnessMarkSnapshotIndex(snapshot);
+        const candidates =
+          index && index.byPath ? index.byPath.get(path) || [] : [];
+        const models = [];
+        let hasCandidates = false;
+        for (const row of candidates) {
+          try {
+            if (!row || typeof row !== "object") {
+              continue;
+            }
+            const candidateSource = freshnessMarkSource(
+              row.rawLine || "",
+              dateText,
+            );
+            if (!candidateSource || candidateSource.text !== source.text) {
+              continue;
+            }
+            hasCandidates = true;
+            const resolution = freshnessMarkResolution(row, dateText, config);
+            const model = freshnessMarkModel({
+              source,
+              today: dateText,
+              interval: this.freshnessMarkUnresolvedInterval(
+                snapshot,
+                path,
+                source,
+              ),
+              status,
+              resolution,
+            });
+            models.push(model);
+          } catch (error) {
+            continue;
+          }
+        }
+        if (hasCandidates) {
+          const consensus = freshnessMarkConsensus(models);
+          if (consensus) {
+            return consensus;
+          }
+        }
+      } catch (error) {
+        // Fall through to unresolved.
+      }
+      return freshnessMarkModel({
+        source,
+        today: dateText,
+        interval: this.freshnessMarkUnresolvedInterval(snapshot, path, source),
+        status,
+        resolution: null,
+      });
+    } catch (error) {
+      try {
+        const input = args && typeof args === "object" ? args : null;
+        if (!input || !input.source) {
+          return null;
+        }
+        return freshnessMarkModel({
+          source: input.source,
+          today: freshnessTodayFallback(),
+          interval: { days: 7, source: "default" },
+          status: null,
+          resolution: null,
+        });
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  freshnessMarkModelForText(args) {
+    try {
+      const input = args && typeof args === "object" ? args : null;
+      if (!input || !input.source) {
+        return null;
+      }
+      const source = input.source;
+      const path =
+        typeof input.path === "string"
+          ? input.path
+          : input.path === null || input.path === undefined
+            ? ""
+            : String(input.path);
+      const snapshot = this.freshnessMarkEnsureSnapshot();
+      if (!snapshot) {
+        return freshnessMarkModel({
+          source,
+          today: freshnessTodayFallback(),
+          interval: { days: 7, source: "default" },
+          status: null,
+          resolution: null,
+        });
+      }
+      const dateText = snapshot.dateText;
+      const config = snapshot.config;
+      try {
+        const index = this.freshnessMarkSnapshotIndex(snapshot);
+        const candidates =
+          index && index.byPath ? index.byPath.get(path) || [] : [];
+        const models = [];
+        let hasCandidates = false;
+        for (const row of candidates) {
+          try {
+            if (!row || typeof row !== "object") {
+              continue;
+            }
+            const candidateSource = freshnessMarkSource(
+              row.rawLine || "",
+              dateText,
+            );
+            if (!candidateSource || candidateSource.text !== source.text) {
+              continue;
+            }
+            hasCandidates = true;
+            const resolution = freshnessMarkResolution(row, dateText, config);
+            const status =
+              resolution &&
+              resolution.status !== undefined &&
+              resolution.status !== null
+                ? resolution.status
+                : null;
+            const model = freshnessMarkModel({
+              source,
+              today: dateText,
+              interval: this.freshnessMarkUnresolvedInterval(
+                snapshot,
+                path,
+                source,
+              ),
+              status,
+              resolution,
+            });
+            models.push(model);
+          } catch (error) {
+            continue;
+          }
+        }
+        if (hasCandidates) {
+          const consensus = freshnessMarkConsensus(models);
+          if (consensus) {
+            return consensus;
+          }
+        }
+      } catch (error) {
+        // Fall through to unresolved.
+      }
+      return freshnessMarkModel({
+        source,
+        today: dateText,
+        interval: this.freshnessMarkUnresolvedInterval(snapshot, path, source),
+        status: null,
+        resolution: null,
+      });
+    } catch (error) {
+      try {
+        const input = args && typeof args === "object" ? args : null;
+        if (!input || !input.source) {
+          return null;
+        }
+        return freshnessMarkModel({
+          source: input.source,
+          today: freshnessTodayFallback(),
+          interval: { days: 7, source: "default" },
+          status: null,
+          resolution: null,
+        });
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  freshnessMarkShouldRebuild(u) {
+    try {
+      if (!u || typeof u !== "object") {
+        return false;
+      }
+      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        return true;
+      }
+      try {
+        const transactions = u.transactions || [];
+        for (const transaction of transactions) {
+          try {
+            const effects =
+              transaction && transaction.effects !== undefined
+                ? transaction.effects
+                : null;
+            if (!effects) {
+              continue;
+            }
+            const list = Array.isArray(effects) ? effects : [effects];
+            for (const effect of list) {
+              try {
+                if (!effect) {
+                  continue;
+                }
+                if (effect === freshnessMarksRefresh) {
+                  return true;
+                }
+                if (
+                  freshnessMarksRefresh &&
+                  typeof effect.is === "function" &&
+                  effect.is(freshnessMarksRefresh)
+                ) {
+                  return true;
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        // Effect scan is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && u.startState && u.state) {
+          let before = null;
+          let after = null;
+          try {
+            before = u.startState.field(editorLivePreviewField);
+          } catch (error) {
+            before = null;
+          }
+          try {
+            after = u.state.field(editorLivePreviewField);
+          } catch (error) {
+            after = null;
+          }
+          if (before !== after) {
+            return true;
+          }
+        }
+        if (editorInfoField && u.startState && u.state) {
+          let beforePath = null;
+          let afterPath = null;
+          try {
+            const beforeInfo = u.startState.field(editorInfoField);
+            beforePath =
+              beforeInfo && beforeInfo.file ? beforeInfo.file.path : null;
+          } catch (error) {
+            beforePath = null;
+          }
+          try {
+            const afterInfo = u.state.field(editorInfoField);
+            afterPath =
+              afterInfo && afterInfo.file ? afterInfo.file.path : null;
+          } catch (error) {
+            afterPath = null;
+          }
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildFreshnessMarkDecorations(view) {
+    try {
+      if (!this.freshnessMarksEnabled) {
+        return Decoration.none;
+      }
+      if (!Decoration || !RangeSetBuilder || !FreshnessMarkWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) {
+        return Decoration.none;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!filePath) {
+        return Decoration.none;
+      }
+      const snapshot = this.freshnessMarkEnsureSnapshot();
+      if (!snapshot) {
+        return Decoration.none;
+      }
+      const ranges =
+        (view && view.visibleRanges) || [];
+      let selectionRanges = [];
+      try {
+        selectionRanges =
+          (view.state.selection && view.state.selection.ranges) || [];
+      } catch (error) {
+        selectionRanges = [];
+      }
+      let tree = null;
+      try {
+        if (syntaxTree && typeof syntaxTree === "function" && view.state) {
+          tree = syntaxTree(view.state);
+        } else if (
+          syntaxTree &&
+          typeof syntaxTree.resolveInner === "function"
+        ) {
+          tree = syntaxTree;
+        }
+      } catch (error) {
+        tree = null;
+      }
+      const builder = new RangeSetBuilder();
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") {
+        return builder.finish();
+      }
+      const docLength =
+        typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      for (const range of ranges) {
+        try {
+          if (!range || typeof range.from !== "number") {
+            continue;
+          }
+          let pos = Math.max(0, range.from);
+          const end = Math.min(
+            typeof range.to === "number" ? range.to : docLength,
+            docLength,
+          );
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try {
+              line = doc.lineAt(pos);
+            } catch (error) {
+              break;
+            }
+            if (!line || typeof line.text !== "string") {
+              break;
+            }
+            try {
+              if (line.text.indexOf("fresh::") !== -1) {
+                const source = freshnessMarkSource(
+                  line.text,
+                  snapshot.dateText,
+                );
+                if (source) {
+                  const absFrom = line.from + source.fieldStart;
+                  const absTo = line.from + source.fieldEnd;
+                  let revealed = false;
+                  for (const selection of selectionRanges) {
+                    try {
+                      if (
+                        selection &&
+                        typeof selection.from === "number" &&
+                        typeof selection.to === "number" &&
+                        selection.from <= absTo &&
+                        selection.to >= absFrom
+                      ) {
+                        revealed = true;
+                        break;
+                      }
+                    } catch (error) {
+                      continue;
+                    }
+                  }
+                  if (!revealed) {
+                    let inCode = false;
+                    try {
+                      if (tree) {
+                        inCode = freshnessMarkPosInCode(tree, absFrom);
+                      }
+                    } catch (error) {
+                      inCode = false;
+                    }
+                    if (!inCode) {
+                      const model = this.freshnessMarkModelForLine({
+                        path: filePath,
+                        lineNumber:
+                          typeof line.number === "number"
+                            ? line.number - 1
+                            : null,
+                        text: line.text,
+                        source,
+                      });
+                      if (model) {
+                        const from =
+                          line.from +
+                          source.fieldStart -
+                          (source.foldSpace ? 1 : 0);
+                        builder.add(
+                          from,
+                          absTo,
+                          Decoration.replace({
+                            widget: new FreshnessMarkWidget(
+                              model,
+                              source.foldSpace,
+                            ),
+                          }),
+                        );
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              // One bad line never breaks the build.
+            }
+            if (typeof line.to !== "number" || line.to >= end) {
+              break;
+            }
+            if (line.to < pos) {
+              break;
+            }
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  freshnessMarkExcludedAncestor(node, root) {
+    try {
+      let current =
+        node && node.parentNode ? node.parentNode : null;
+      let guard = 0;
+      while (current && current !== root && guard < 100) {
+        guard += 1;
+        try {
+          const tag =
+            current.tagName || current.nodeName
+              ? String(current.tagName || current.nodeName)
+              : "";
+          if (tag === "CODE" || tag === "code" || tag === "PRE" || tag === "pre") {
+            return true;
+          }
+          let classText = "";
+          try {
+            if (
+              current.classList &&
+              typeof current.classList.contains === "function"
+            ) {
+              if (current.classList.contains("bob-fresh-mark")) {
+                return true;
+              }
+              if (
+                current.classList.contains("dataview") &&
+                current.classList.contains("inline-field")
+              ) {
+                return true;
+              }
+            }
+            if (typeof current.className === "string") {
+              classText = current.className;
+            } else if (typeof current.getAttribute === "function") {
+              classText = current.getAttribute("class") || "";
+            }
+          } catch (error) {
+            classText = "";
+          }
+          if (
+            classText &&
+            classText.indexOf("bob-fresh-mark") !== -1
+          ) {
+            return true;
+          }
+          if (
+            classText &&
+            classText.indexOf("dataview") !== -1 &&
+            classText.indexOf("inline-field") !== -1
+          ) {
+            return true;
+          }
+        } catch (error) {
+          // Keep walking on per-ancestor failure.
+        }
+        current = current.parentNode || null;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  renderFreshnessMarksIn(el, ctx) {
+    try {
+      if (!this.freshnessMarksEnabled) {
+        return;
+      }
+      if (!el || !ctx) {
+        return;
+      }
+      const path =
+        typeof ctx.sourcePath === "string"
+          ? ctx.sourcePath
+          : ctx.sourcePath === null || ctx.sourcePath === undefined
+            ? ""
+            : String(ctx.sourcePath);
+      const snapshot = this.freshnessMarkEnsureSnapshot();
+      if (!snapshot) {
+        return;
+      }
+      const textNodes = [];
+      try {
+        const docNode =
+          (el.ownerDocument && el.ownerDocument) ||
+          (typeof document !== "undefined" ? document : null);
+        const showText =
+          (docNode &&
+            docNode.defaultView &&
+            docNode.defaultView.NodeFilter &&
+            docNode.defaultView.NodeFilter.SHOW_TEXT) ||
+          (typeof NodeFilter !== "undefined" ? NodeFilter.SHOW_TEXT : 4);
+        let walker = null;
+        try {
+          const creator =
+            docNode && typeof docNode.createTreeWalker === "function"
+              ? docNode
+              : typeof document !== "undefined" &&
+                  typeof document.createTreeWalker === "function"
+                ? document
+                : null;
+          if (creator) {
+            walker = creator.createTreeWalker(el, showText, {
+              acceptNode: (node) => {
+                try {
+                  if (this.freshnessMarkExcludedAncestor(node, el)) {
+                    return 2;
+                  }
+                  return 1;
+                } catch (error) {
+                  return 1;
+                }
+              },
+            });
+          }
+        } catch (error) {
+          walker = null;
+        }
+        if (walker) {
+          let current = null;
+          try {
+            current = walker.nextNode();
+          } catch (error) {
+            current = null;
+          }
+          let guard = 0;
+          while (current && guard < 10000) {
+            guard += 1;
+            try {
+              const value =
+                typeof current.nodeValue === "string"
+                  ? current.nodeValue
+                  : typeof current.textContent === "string"
+                    ? current.textContent
+                    : "";
+              if (value.indexOf("fresh::") !== -1) {
+                textNodes.push(current);
+              }
+            } catch (error) {
+              // Skip unreadable nodes.
+            }
+            try {
+              current = walker.nextNode();
+            } catch (error) {
+              break;
+            }
+          }
+        } else {
+          const stack = [el];
+          let guard = 0;
+          while (stack.length > 0 && guard < 10000) {
+            guard += 1;
+            const top = stack.pop();
+            try {
+              const children =
+                (top && top.childNodes) || [];
+              for (let index = children.length - 1; index >= 0; index -= 1) {
+                const child = children[index];
+                if (!child) {
+                  continue;
+                }
+                const nodeType = child.nodeType;
+                if (nodeType === 3) {
+                  const value =
+                    typeof child.nodeValue === "string"
+                      ? child.nodeValue
+                      : typeof child.textContent === "string"
+                        ? child.textContent
+                        : "";
+                  if (
+                    value.indexOf("fresh::") !== -1 &&
+                    !this.freshnessMarkExcludedAncestor(child, el)
+                  ) {
+                    textNodes.push(child);
+                  }
+                } else if (nodeType === 1) {
+                  if (!this.freshnessMarkExcludedAncestor(child, el)) {
+                    const tag = String(child.tagName || child.nodeName || "");
+                    if (
+                      tag !== "CODE" &&
+                      tag !== "code" &&
+                      tag !== "PRE" &&
+                      tag !== "pre"
+                    ) {
+                      stack.push(child);
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        return;
+      }
+      for (const textNode of textNodes) {
+        try {
+          if (!textNode || !textNode.parentNode) {
+            continue;
+          }
+          if (this.freshnessMarkExcludedAncestor(textNode, el)) {
+            continue;
+          }
+          const value =
+            typeof textNode.nodeValue === "string"
+              ? textNode.nodeValue
+              : typeof textNode.textContent === "string"
+                ? textNode.textContent
+                : "";
+          if (!value || value.indexOf("fresh::") === -1) {
+            continue;
+          }
+          const source = freshnessMarkSourceInText(value, snapshot.dateText);
+          if (!source) {
+            continue;
+          }
+          const model = this.freshnessMarkModelForText({ path, source });
+          if (!model) {
+            continue;
+          }
+          const parent = textNode.parentNode;
+          if (!parent) {
+            continue;
+          }
+          const docNode =
+            textNode.ownerDocument ||
+            (typeof document !== "undefined" ? document : null);
+          if (!docNode) {
+            continue;
+          }
+          const beforeText = value.slice(0, source.fieldStart);
+          const afterText = value.slice(source.fieldEnd);
+          const markEl = buildFreshnessMarkElement(docNode, model, {
+            foldSpace: false,
+          });
+          if (!markEl) {
+            continue;
+          }
+          try {
+            if (beforeText) {
+              parent.insertBefore(
+                docNode.createTextNode(beforeText),
+                textNode,
+              );
+            }
+            parent.insertBefore(markEl, textNode);
+            if (afterText) {
+              parent.insertBefore(
+                docNode.createTextNode(afterText),
+                textNode,
+              );
+            }
+            parent.removeChild(textNode);
+          } catch (error) {
+            continue;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Rendered-view marks never throw.
+    }
+  }
+
+  toggleFreshnessMarks() {
+    try {
+      this.freshnessMarksEnabled = !this.freshnessMarksEnabled;
+      const enabled = this.freshnessMarksEnabled;
+      try {
+        if (
+          typeof document !== "undefined" &&
+          document &&
+          document.body &&
+          document.body.classList
+        ) {
+          if (enabled) {
+            if (typeof document.body.classList.add === "function") {
+              document.body.classList.add("bob-fresh-marks");
+            }
+          } else if (typeof document.body.classList.remove === "function") {
+            document.body.classList.remove("bob-fresh-marks");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        this.refreshFreshnessMarkEditors();
+      } catch (error) {
+        // Editor refresh is best-effort.
+      }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // Tasks re-render is best-effort.
+      }
+      try {
+        new Notice(
+          enabled ? "Freshness marks on" : "Freshness marks off",
+        );
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.freshnessMarksEnabled;
+    }
+  }
+
+  refreshFreshnessMarkEditors() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      for (const leaf of leaves) {
+        try {
+          const cm =
+            leaf && leaf.view && leaf.view.editor
+              ? leaf.view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function" && freshnessMarksRefresh) {
+            cm.dispatch({ effects: freshnessMarksRefresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  scheduleFreshnessMarksRefresh() {
+    try {
+      if (
+        this.freshnessMarksTimer !== null &&
+        this.freshnessMarksTimer !== undefined
+      ) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" &&
+        typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      const self = this;
+      this.freshnessMarksTimer = schedule(() => {
+        self.freshnessMarksTimer = null;
+        try {
+          self.rebuildFreshnessMarkSnapshot();
+        } catch (error) {
+          // Rebuild is best-effort.
+        }
+        try {
+          self.refreshFreshnessMarkEditors();
+        } catch (error) {
+          // Refresh is best-effort.
+        }
+      }, 150);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
+
   // __FRESHNESS_E1_END__
 
   resolveTodayLink(target, dailyPath) {
@@ -6497,6 +7803,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       }
       this.schedulePlanBlockRerender();
       this.scheduleFreshnessStatusBar();
+      this.scheduleFreshnessMarksRefresh();
     }
     return changed;
   }
@@ -7929,4 +9236,5 @@ module.exports.helpers = {
   freshnessMarkConsensus,
   freshnessShortDate,
   buildFreshnessMarkElement,
+  freshnessMarkPosInCode,
 };

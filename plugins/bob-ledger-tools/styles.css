@@ -233,3 +233,12 @@ a.bob-plan-ready:hover {
     transition: none;
   }
 }
+
+/* Leftover Dataview pills while marks are on are non-canonical stamps,
+   so flag them for repair (press Alt+F). Full opacity plus a dashed
+   orange border. Scoped to Live Preview under `body.bob-fresh-marks`. */
+body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> .dataview.inline-field-key:is([data-dv-norm-key="fresh"], [data-dv-norm-key="refresh"])) {
+  opacity: 1;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-orange, #d9822b) 55%, transparent);
+}

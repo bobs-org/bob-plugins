@@ -398,26 +398,145 @@ test("dashboard tooltips distinguish section pressure from whole-lane caps", () 
     { section: 1, lane: 2, count: 1, laneCount: 2, today: 1, cap: 10, over: false },
     "pending",
   );
-  assert.equal(model.text, "PENDING 1");
+  assert.equal(model.text, "PENDING 1/10");
   assert.match(model.tooltip, /1 in this section/);
   assert.match(model.tooltip, /whole lane 2\/10/);
   assert.match(model.tooltip, /1 in TODAY/);
+  assert.match(model.aria, /1 of 10 in this section/);
   assert.equal(model.over, false);
   const over = dashboardLaneBadgeModel(
     { section: 11, lane: 12, count: 11, laneCount: 12, today: 1, cap: 10, over: true },
     "next",
   );
-  assert.equal(over.text, "NEXT 11");
+  assert.equal(over.text, "NEXT 11/10");
   assert.equal(over.over, true);
   assert.match(over.tooltip, /11 in this section/);
   assert.match(over.tooltip, /whole lane 12\/10/);
   assert.match(over.tooltip, /over the limit/);
   assert.match(over.aria, /whole lane 12 of 10/);
+  assert.match(over.aria, /11 of 10 in this section/);
   // READY keeps its n/cap fraction and unavailable behavior.
   const ready = readyBadgeModel({ count: 3, cap: 100, over: false });
   assert.equal(ready.text, "READY 3/100");
   const missing = readyBadgeModel({ count: null, cap: 100, over: false });
   assert.equal(missing.placeholder, true);
+});
+
+test("dashboard lane badge shows section/cap and stays red on whole-lane excess", () => {
+  // Unavailable never renders as 0/cap.
+  const missing = dashboardLaneBadgeModel(
+    { section: null, lane: null, count: null, laneCount: null, today: null, cap: 10 },
+    "pending",
+  );
+  assert.equal(missing.text, "PENDING –");
+  assert.equal(missing.placeholder, true);
+  assert.ok(!missing.text.includes("/"));
+  // Rare edge: section <= cap < lane reads e.g. NEXT 15/15 in red with the
+  // whole-lane excess named in the tooltip.
+  const edge = dashboardLaneBadgeModel(
+    { section: 15, lane: 16, count: 15, laneCount: 16, today: 1, cap: 15, over: true },
+    "next",
+  );
+  assert.equal(edge.text, "NEXT 15/15");
+  assert.equal(edge.over, true);
+  assert.match(edge.tooltip, /15 in this section/);
+  assert.match(edge.tooltip, /whole lane 16\/15/);
+  assert.match(edge.tooltip, /1 over the limit/);
+});
+
+test("dashboard lane paint keeps section/cap across refresh without extra spans", () => {
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = "/definitely/missing/dashboard-parity-test";
+  const app = makeApp({
+    vault: {
+      getAbstractFileByPath: () => null,
+      cachedRead: () => Promise.resolve("## Pomodoros\n"),
+    },
+    plugins: {
+      plugins: {
+        "obsidian-tasks-plugin": {
+          getTasks: () => [
+            pendingTask({ path: "notes/a.md", blockLink: " ^aaa", description: "a" }),
+          ],
+          getState: () => "Warm",
+        },
+      },
+    },
+  });
+  const plugin = new LedgerToolsPlugin(app, {});
+  try {
+    plugin.onload();
+    plugin.rebuildTodayCache("## Pomodoros\n", plugin.currentTodayDailyPath(DAY) || "2026/20260930.md", DAY);
+    const host = {
+      children: [],
+      createEl(tag, options = {}) {
+        const anchor = {
+          tag,
+          cls: options.cls,
+          text: options.text,
+          title: options.title,
+          href: options.href,
+          attrs: {},
+          children: [],
+          createEl: (childTag, childOptions = {}) => {
+            const span = {
+              tag: childTag,
+              cls: childOptions.cls,
+              text: childOptions.text,
+              setText(value) {
+                this.text = String(value);
+              },
+            };
+            anchor.children.push(span);
+            return span;
+          },
+          querySelector: (selector) => {
+            const cls = String(selector).replace(/^\./, "");
+            return anchor.children.find((child) => String(child.cls || "").split(/\s+/).includes(cls)) || null;
+          },
+          querySelectorAll: (selector) => {
+            const cls = String(selector).replace(/^\./, "");
+            return anchor.children.filter((child) => String(child.cls || "").split(/\s+/).includes(cls));
+          },
+          setAttribute: (key, value) => {
+            anchor.attrs[key] = value;
+          },
+          hasAttribute: () => false,
+          addEventListener: () => {},
+        };
+        this.children.push(anchor);
+        return anchor;
+      },
+    };
+    const el = plugin.paintDashboardLaneElement(
+      host,
+      "pending",
+      { section: 1, lane: 1, count: 1, laneCount: 1, today: 0, cap: 10, over: false },
+      {},
+    );
+    assert.ok(el);
+    const valueText = () => {
+      const span = el.querySelector(".bob-plan-ready-value");
+      return span ? span.text : null;
+    };
+    assert.equal(valueText(), "1/10");
+    assert.equal(el.querySelectorAll(".bob-plan-ready-value").length, 1);
+    assert.equal(el.querySelectorAll(".bob-plan-ready-label").length, 1);
+    plugin.dashboardLaneWidgets.add({ el, lane: "pending", sourcePath: "dash.md", component: null });
+    // Detach the parent createEl so refresh takes the live-widget path.
+    const parent = { createEl: host.createEl.bind(host) };
+    Object.defineProperty(el, "parentNode", { value: parent, configurable: true });
+    assert.equal(plugin.refreshDashboardLaneBadges(DAY), true);
+    assert.equal(valueText(), "1/10");
+    assert.equal(el.querySelectorAll(".bob-plan-ready-value").length, 1);
+  } finally {
+    plugin.onunload();
+    if (savedXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = savedXdg;
+    }
+  }
 });
 
 test("dashboard lane widgets refresh together and prune on unload", () => {

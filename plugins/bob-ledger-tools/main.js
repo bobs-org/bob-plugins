@@ -3168,8 +3168,9 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
 
 // Shared dashboard lane badge view-model. `budget` is
 // `{ section, lane, cap, over, today }` with nulls for unavailable.
-// The primary number is the section count; the whole-lane cap warning
-// stays in the tooltip and accessible label.
+// The badge shows the section count over the whole-lane cap
+// (`section/cap`); the whole-lane pressure stays in the tooltip and
+// accessible label. Red uses the whole lane (`lane > cap`).
 function dashboardLaneBadgeModel(budget, lane) {
   const label = lane === "next" ? "NEXT" : "PENDING";
   const cap =
@@ -3222,10 +3223,10 @@ function dashboardLaneBadgeModel(budget, lane) {
     ? `${section} in this section; whole lane ${laneCount}/${cap}; ${todayText} in TODAY · ${laneCount - cap} over the limit. Live section excluding Today. Open ${label} Tasks in dash.`
     : `${section} in this section; whole lane ${laneCount}/${cap}; ${todayText} in TODAY. Live section excluding Today. Open ${label} Tasks in dash.`;
   const aria = over
-    ? `${label}: ${section} in this section, whole lane ${laneCount} of ${cap}, ${laneCount - cap} over the limit, ${todayText} in TODAY. Open ${label} Tasks in dash.`
-    : `${label}: ${section} in this section, whole lane ${laneCount} of ${cap}, ${todayText} in TODAY. Open ${label} Tasks in dash.`;
+    ? `${label}: ${section} of ${cap} in this section, whole lane ${laneCount} of ${cap}, ${laneCount - cap} over the limit, ${todayText} in TODAY. Open ${label} Tasks in dash.`
+    : `${label}: ${section} of ${cap} in this section, whole lane ${laneCount} of ${cap}, ${todayText} in TODAY. Open ${label} Tasks in dash.`;
   return {
-    text: `${label} ${section}`,
+    text: `${label} ${section}/${cap}`,
     tooltip,
     aria,
     over,
@@ -6554,18 +6555,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         },
       );
       // Rewrite the label span to the lane label (the shared routine
-      // writes READY); the value span already shows the section count.
+      // writes READY); the value span already shows section/cap via
+      // setReadyAnchorContent.
       try {
         const labelSpan = findReadySpan(anchor, READY_LABEL_CLS);
         if (labelSpan) {
           setReadySpanText(labelSpan, label);
-        }
-        const valueSpan = findReadySpan(anchor, READY_VALUE_CLS);
-        if (valueSpan) {
-          setReadySpanText(
-            valueSpan,
-            model.placeholder ? "–" : `${model.section}`,
-          );
         }
       } catch (error) {
         // Label rewrite is best-effort only.
@@ -6733,7 +6728,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           }
           const valueSpan = findReadySpan(el, READY_VALUE_CLS);
           if (valueSpan) {
-            setReadySpanText(valueSpan, model.placeholder ? "–" : `${model.section}`);
+            setReadySpanText(
+              valueSpan,
+              model.placeholder ? "–" : `${model.section}/${model.cap}`,
+            );
           }
         } catch (error) {
           // One stale widget never breaks the others.

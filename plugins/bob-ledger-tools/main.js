@@ -62,6 +62,26 @@ try {
 } catch (error) {
   freshnessMarksRefresh = null;
 }
+// Per-note Ready cap heading chips (ledger-views): a StateEffect the
+// consolidated live-refresh fan-out dispatches to markdown leaves so
+// Live Preview heading widgets rebuild without a doc change. Defined
+// lazily on first dispatch so requiring the module never adds a
+// second top-level `StateEffect.define()` call (the freshness-mark
+// surfaces suite asserts the single eager effect).
+let noteReadyRefresh = null;
+function ensureNoteReadyRefresh() {
+  if (noteReadyRefresh) {
+    return noteReadyRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      noteReadyRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    noteReadyRefresh = null;
+  }
+  return noteReadyRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;
@@ -3542,16 +3562,40 @@ function createReadySpan(anchor, cls, text) {
 // accessibility label, and state classes without replacing the anchor or
 // disturbing its event listeners. Repeated calls leave exactly one label
 // and one value span.
-function setReadyAnchorContent(anchor, model) {
+function setReadyAnchorContent(anchor, model, options = {}) {
   if (!anchor) {
     return;
   }
+  // bob-cli-3d fix: keep the caller's chip-kind class instead of
+  // hard-coding `bob-plan-ready`. Callers pass `{ kind: "pending" }`,
+  // `{ kind: "next" }`, or `{ kind: "crowded" }`; the default stays
+  // "ready" so existing callers are unchanged. `model.kind` is honored
+  // as a fallback for models that carry it.
+  const rawKind =
+    options && typeof options.kind === "string" && options.kind
+      ? options.kind
+      : model && typeof model.kind === "string" && model.kind
+        ? model.kind
+        : "ready";
+  const kind =
+    rawKind === "pending" ||
+    rawKind === "next" ||
+    rawKind === "crowded" ||
+    rawKind === "ready"
+      ? rawKind
+      : "ready";
+  const labelText =
+    options && typeof options.label === "string" && options.label
+      ? options.label
+      : model && typeof model.label === "string" && model.label
+        ? model.label
+        : READY_LABEL_TEXT;
   const valueText = readyBadgeValueText(model);
   let label = findReadySpan(anchor, READY_LABEL_CLS);
   if (!label) {
-    label = createReadySpan(anchor, READY_LABEL_CLS, READY_LABEL_TEXT);
+    label = createReadySpan(anchor, READY_LABEL_CLS, labelText);
   }
-  setReadySpanText(label, READY_LABEL_TEXT);
+  setReadySpanText(label, labelText);
   let value = findReadySpan(anchor, READY_VALUE_CLS);
   if (!value) {
     value = createReadySpan(anchor, READY_VALUE_CLS, valueText);
@@ -3624,7 +3668,7 @@ function setReadyAnchorContent(anchor, model) {
     anchor.setAttribute("title", model.tooltip);
     anchor.setAttribute("aria-label", model.aria);
     const cls =
-      `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+      `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
     anchor.setAttribute("class", cls);
     if (anchor.attrs && typeof anchor.attrs === "object") {
       anchor.attrs.class = cls;
@@ -3632,7 +3676,7 @@ function setReadyAnchorContent(anchor, model) {
   }
   if (anchor && typeof anchor.cls === "string") {
     anchor.cls =
-      `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+      `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
   }
   if (anchor && typeof anchor.title === "string") {
     anchor.title = model.tooltip;
@@ -5985,6 +6029,16 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.readyLastDay = null;
     this.dashboardLaneWidgets = new Set();
     this.dashboardLaneRefreshTimer = null;
+    // Per-note Ready cap views (ledger-views): dash CROWDED chips,
+    // `bob-ready-notes` blocks, and `## Tasks` heading chips (Live
+    // Preview plus Reading view).
+    this.crowdedWidgets = new Set();
+    this.crowdedRefreshTimer = null;
+    this.readyNotesViews = new Set();
+    this.readyNotesRefreshTimer = null;
+    this.noteReadyReadingWidgets = new Set();
+    this.noteReadyHeadingsRefreshTimer = null;
+    this.liveWidgetRefreshTimer = null;
     this.planPaintGen = 0;
     this.planPaintGens = new Map();
     // Synchronous Today cache: `{ date, dailyPath, keys, rank }`. Built
@@ -6064,12 +6118,39 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         counted: (task) => this.apiNoteReadyCounted(task),
         inCrowdedNote: (task) => this.apiNoteReadyInCrowdedNote(task),
         groupLabel: (task) => this.apiNoteReadyGroupLabel(task),
+        renderCrowdedChip: (host, options = {}) =>
+          this.renderCrowdedChip(host, options),
       }),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
         this.renderPlanBlock(el, ctx),
       );
+      this.registerMarkdownCodeBlockProcessor(
+        "bob-ready-notes",
+        (source, el, ctx) => this.renderReadyNotesBlock(el, ctx),
+      );
+    }
+    try {
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor(
+          (el, ctx) => this.renderNoteReadyHeadingInReading(el, ctx),
+          50,
+        );
+      }
+    } catch (error) {
+      // Reading heading chips are best-effort.
+    }
+    try {
+      const headingExtension = this.createNoteReadyHeadingExtension();
+      if (
+        headingExtension &&
+        typeof this.registerEditorExtension === "function"
+      ) {
+        this.registerEditorExtension(headingExtension);
+      }
+    } catch (error) {
+      // Live Preview heading chips are best-effort.
     }
     const metadataCache = this.app && this.app.metadataCache;
     if (metadataCache && typeof metadataCache.on === "function") {
@@ -6154,11 +6235,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           // must still rebuild on the next read.
           this.freshnessTasksGen = (this.freshnessTasksGen || 0) + 1;
           this.schedulePlanBlockRerender();
-          this.scheduleReadyRefresh();
-          this.scheduleDashboardLaneRefresh();
-          this.scheduleFreshnessStatusBar();
-          this.scheduleFreshnessMarksRefresh();
-          this.scheduleReviewChipsRefresh();
+          this.scheduleLiveWidgetRefresh();
         }),
       );
     }
@@ -6620,18 +6697,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           count: model.section,
           cap: model.cap,
         },
+        { kind: normalized, label },
       );
-      // Rewrite the label span to the lane label (the shared routine
-      // writes READY); the value span already shows section/cap via
-      // setReadyAnchorContent.
-      try {
-        const labelSpan = findReadySpan(anchor, READY_LABEL_CLS);
-        if (labelSpan) {
-          setReadySpanText(labelSpan, label);
-        }
-      } catch (error) {
-        // Label rewrite is best-effort only.
-      }
       if (anchor && typeof anchor.setAttribute === "function") {
         anchor.setAttribute("aria-label", model.aria);
         anchor.setAttribute("role", "link");
@@ -6784,9 +6851,21 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           try {
             el.setAttribute("title", tooltip);
             el.setAttribute("aria-label", model.aria);
+            el.setAttribute(
+              "class",
+              `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+            );
           } catch (error) {
             // Best-effort label refresh only.
           }
+        }
+        try {
+          if (el && typeof el.cls === "string") {
+            el.cls =
+              `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+          }
+        } catch (error) {
+          // Best-effort class refresh only.
         }
         try {
           const labelSpan = findReadySpan(el, READY_LABEL_CLS);
@@ -6856,7 +6935,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         title: model.tooltip,
         href: "dash#READY Tasks",
       });
-      setReadyAnchorContent(anchor, model);
+      setReadyAnchorContent(anchor, model, { kind: "ready", label: "READY" });
       if (anchor && typeof anchor.setAttribute === "function") {
         anchor.setAttribute("aria-label", model.aria);
         anchor.setAttribute("role", "link");
@@ -7755,6 +7834,1471 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
+  // --- Per-note Ready cap views (ledger-views) ------------------------
+  // Live `renderCrowdedChip`, the `bob-ready-notes` ranked-bar block,
+  // the `## Tasks` heading chip (Live Preview widget plus Reading
+  // view), and one consolidated live-refresh fan-out. All members are
+  // synchronous, never throw, and follow the widget-Set pattern with
+  // unload cleanup.
+
+  noteReadyHeadingEntryForPath(path) {
+    try {
+      const key = typeof path === "string" ? path : "";
+      if (!key) {
+        return null;
+      }
+      return this.apiNoteReadyForNote(key);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  noteReadyHeadingFlags() {
+    let invalid = false;
+    let mobileDefault = false;
+    try {
+      const loaded = loadPlanCaps();
+      invalid = Boolean(loaded && loaded.invalid);
+      const source =
+        loaded && loaded.defaultSource ? loaded.defaultSource : "default";
+      let isMobile = false;
+      try {
+        isMobile = Boolean(Platform && Platform.isMobile);
+      } catch (error) {
+        isMobile = false;
+      }
+      mobileDefault = Boolean(isMobile && source === "default");
+    } catch (error) {
+      invalid = false;
+      mobileDefault = false;
+    }
+    return { invalid, mobileDefault };
+  }
+
+  paintCrowdedChipElement(host, model, options = {}) {
+    try {
+      if (!host || typeof host.createEl !== "function") {
+        return null;
+      }
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const safe =
+        model && typeof model === "object"
+          ? model
+          : noteReadyCrowdedChipModel(null);
+      const anchor = host.createEl("a", {
+        cls:
+          `bob-plan-chip bob-plan-crowded` +
+          `${safe.over ? " bob-plan-over" : ""}` +
+          `${safe.placeholder ? " bob-plan-unavailable" : ""}` +
+          `${safe.calm ? " bob-plan-calm" : ""}`,
+        title: safe.tooltip,
+        href: "crowded",
+      });
+      const countModel = {
+        count: safe.placeholder ? null : safe.crowded,
+        cap: safe.placeholder ? null : safe.crowded,
+        over: Boolean(safe.over),
+        placeholder: Boolean(safe.placeholder),
+        tooltip: safe.tooltip,
+        aria: safe.aria,
+      };
+      setReadyAnchorContent(
+        anchor,
+        countModel,
+        { kind: "crowded", label: NOTE_READY_CROWDED_LABEL },
+      );
+      // Value span shows the chip value (`4`, `0 ✓`, `–`): rewrite it
+      // from the count/cap fraction the shared routine writes.
+      try {
+        const valueSpan = findReadySpan(anchor, READY_VALUE_CLS);
+        if (valueSpan) {
+          setReadySpanText(valueSpan, safe.valueText);
+        }
+      } catch (error) {
+        // Value rewrite is best-effort only.
+      }
+      // `↗` arrow span with aria-hidden, appended once and preserved
+      // across in-place refreshes.
+      try {
+        let arrow = null;
+        if (typeof anchor.querySelector === "function") {
+          arrow = anchor.querySelector(".bob-plan-crowded-arrow");
+        }
+        if (!arrow && Array.isArray(anchor.children)) {
+          arrow = anchor.children.find(
+            (child) =>
+              child &&
+              child.attrs &&
+              child.attrs.class &&
+              String(child.attrs.class).indexOf("bob-plan-crowded-arrow") !==
+                -1,
+          );
+        }
+        if (!arrow && typeof anchor.createSpan === "function") {
+          arrow = anchor.createSpan({
+            cls: "bob-plan-crowded-arrow",
+            text: NOTE_READY_CROWDED_ARROW,
+          });
+        } else if (!arrow && typeof anchor.createEl === "function") {
+          arrow = anchor.createEl("span", {
+            cls: "bob-plan-crowded-arrow",
+            text: NOTE_READY_CROWDED_ARROW,
+          });
+        }
+        if (arrow && typeof arrow.setAttribute === "function") {
+          arrow.setAttribute("aria-hidden", "true");
+        }
+      } catch (error) {
+        // Arrow is best-effort only.
+      }
+      if (anchor && typeof anchor.setAttribute === "function") {
+        anchor.setAttribute("aria-label", safe.aria);
+        anchor.setAttribute("role", "link");
+        try {
+          if (!anchor.hasAttribute("tabindex")) {
+            anchor.setAttribute("tabindex", "0");
+          }
+        } catch (error) {
+          // tabindex is best-effort only.
+        }
+      }
+      const open = (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (
+            workspace &&
+            typeof workspace.openLinkText === "function"
+          ) {
+            const newLeaf = Boolean(
+              event && (event.ctrlKey || event.metaKey),
+            );
+            workspace.openLinkText("crowded", sourcePath, newLeaf);
+          }
+        } catch (error) {
+          // The chip still shows the count without the navigation.
+        }
+      };
+      if (anchor && typeof anchor.addEventListener === "function") {
+        anchor.addEventListener("click", open);
+        anchor.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            open(event);
+          }
+        });
+        anchor.addEventListener("mouseover", (event) => {
+          try {
+            const workspace = this.app && this.app.workspace;
+            if (workspace && typeof workspace.trigger === "function") {
+              workspace.trigger("hover-link", {
+                event,
+                source: "bob-plan",
+                hoverParent: host,
+                targetEl: anchor,
+                linktext: "crowded",
+                sourcePath,
+              });
+            }
+          } catch (error) {
+            // Hover preview is best-effort only.
+          }
+        });
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  renderCrowdedChip(host, options = {}) {
+    try {
+      if (!host || typeof host.createEl !== "function") {
+        return null;
+      }
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const component = options.component || null;
+      if (!this.crowdedWidgets) {
+        this.crowdedWidgets = new Set();
+      }
+      if (component) {
+        for (const widget of Array.from(this.crowdedWidgets)) {
+          if (widget.component === component) {
+            try {
+              if (widget.el && widget.el.parentNode) {
+                widget.el.parentNode.removeChild(widget.el);
+              } else if (
+                widget.el &&
+                typeof widget.el.remove === "function"
+              ) {
+                widget.el.remove();
+              }
+            } catch (error) {
+              // Best-effort removal only.
+            }
+            this.crowdedWidgets.delete(widget);
+          }
+        }
+      }
+      for (const widget of Array.from(this.crowdedWidgets)) {
+        try {
+          const el = widget.el;
+          const detached =
+            !el ||
+            (typeof el.isConnected === "boolean" &&
+              el.isConnected === false &&
+              (!el.parentNode || el.parentNode === null));
+          if (detached && (!el.parentNode || el.parentNode === null)) {
+            if (!host.contains || !host.contains(el)) {
+              this.crowdedWidgets.delete(widget);
+            }
+          }
+        } catch (error) {
+          // Keep the widget on inspection failure.
+        }
+      }
+      let snapshot = null;
+      try {
+        snapshot = this.noteReadyEnsureSnapshot(new Date());
+      } catch (error) {
+        snapshot = null;
+      }
+      const model = noteReadyCrowdedChipModel(snapshot);
+      const anchor = this.paintCrowdedChipElement(host, model, {
+        sourcePath,
+      });
+      if (!anchor) {
+        return null;
+      }
+      const widget = { el: anchor, sourcePath, component };
+      this.crowdedWidgets.add(widget);
+      if (component && typeof component.register === "function") {
+        try {
+          component.register(() => {
+            this.crowdedWidgets.delete(widget);
+          });
+        } catch (error) {
+          // The widget still refreshes with the batch; only the
+          // component-owned unregister is skipped.
+        }
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshCrowdedChips(now = new Date()) {
+    if (!this.crowdedWidgets || this.crowdedWidgets.size === 0) {
+      return false;
+    }
+    let refreshed = false;
+    let snapshot = null;
+    try {
+      snapshot = this.noteReadyEnsureSnapshot(now);
+    } catch (error) {
+      snapshot = null;
+    }
+    const model = noteReadyCrowdedChipModel(snapshot);
+    for (const widget of Array.from(this.crowdedWidgets)) {
+      try {
+        const el = widget.el;
+        const parent = el && el.parentNode ? el.parentNode : null;
+        if (!parent || typeof parent.createEl !== "function") {
+          if (!el || !el.isConnected) {
+            this.crowdedWidgets.delete(widget);
+          }
+          continue;
+        }
+        const countModel = {
+          count: model.placeholder ? null : model.crowded,
+          cap: model.placeholder ? null : model.crowded,
+          over: Boolean(model.over),
+          placeholder: Boolean(model.placeholder),
+          tooltip: model.tooltip,
+          aria: model.aria,
+        };
+        // In-place refresh: keep the anchor (and its listeners) and
+        // rewrite spans, title, aria, and state classes without
+        // flicker. Never assigns `.text` on the live element.
+        setReadyAnchorContent(el, countModel, {
+          kind: "crowded",
+          label: NOTE_READY_CROWDED_LABEL,
+        });
+        try {
+          const valueSpan = findReadySpan(el, READY_VALUE_CLS);
+          if (valueSpan) {
+            setReadySpanText(valueSpan, model.valueText);
+          }
+        } catch (error) {
+          // One stale widget never breaks the others.
+        }
+        try {
+          if (el && typeof el.setAttribute === "function") {
+            el.setAttribute("title", model.tooltip);
+            el.setAttribute("aria-label", model.aria);
+          }
+        } catch (error) {
+          // Best-effort label refresh only.
+        }
+        refreshed = true;
+      } catch (error) {
+        // One stale widget never breaks the others.
+      }
+    }
+    return refreshed;
+  }
+
+  scheduleCrowdedRefresh() {
+    if (
+      this.crowdedRefreshTimer !== null &&
+      this.crowdedRefreshTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" &&
+      typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.crowdedRefreshTimer = schedule(() => {
+      this.crowdedRefreshTimer = null;
+      try {
+        this.refreshCrowdedChips(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+    }, 150);
+  }
+
+  renderReadyNotesBlock(el, ctx) {
+    if (!el) {
+      return;
+    }
+    const sourcePath = ctx && ctx.sourcePath;
+    if (!this.readyNotesViews) {
+      this.readyNotesViews = new Set();
+    }
+    const view = { el, sourcePath };
+    this.readyNotesViews.add(view);
+    if (ctx && typeof ctx.addChild === "function") {
+      let child = null;
+      try {
+        if (typeof MarkdownRenderChild === "function") {
+          child = new MarkdownRenderChild(el);
+          child.onunload = () => {
+            if (this.readyNotesViews) {
+              this.readyNotesViews.delete(view);
+            }
+          };
+        }
+      } catch (error) {
+        child = null;
+      }
+      if (!child) {
+        child = {
+          unload: () => {
+            if (this.readyNotesViews) {
+              this.readyNotesViews.delete(view);
+            }
+          },
+        };
+      }
+      try {
+        ctx.addChild(child);
+      } catch (error) {
+        // Older hosts may reject the child; the Set is cleared on unload.
+      }
+    }
+    this.paintReadyNotesBlock(el, sourcePath);
+  }
+
+  paintReadyNotesBlock(el, sourcePath) {
+    try {
+      if (!el || typeof el.empty !== "function") {
+        return;
+      }
+      el.empty();
+      let snapshot = null;
+      try {
+        snapshot = this.noteReadyEnsureSnapshot(new Date());
+      } catch (error) {
+        snapshot = null;
+      }
+      const container =
+        typeof el.createDiv === "function"
+          ? el.createDiv({ cls: "bob-ready-notes" })
+          : el;
+      if (container && typeof container.setAttribute === "function") {
+        try {
+          container.setAttribute("role", "status");
+          container.setAttribute(
+            "aria-label",
+            noteReadyReadyNotesSummary(snapshot),
+          );
+        } catch (error) {
+          // aria is best-effort only.
+        }
+      }
+      const summaryText = noteReadyReadyNotesSummary(snapshot);
+      if (typeof container.createDiv === "function") {
+        const summary = container.createDiv({
+          cls: "bob-ready-notes-summary",
+          text: summaryText,
+        });
+        if (summary && typeof summary.setAttribute === "function") {
+          try {
+            summary.setAttribute("aria-label", summaryText);
+          } catch (error) {
+            // Best-effort only.
+          }
+        }
+      }
+      if (!snapshot || snapshot.available !== true) {
+        return;
+      }
+      const notes = Array.isArray(snapshot.notes) ? snapshot.notes : [];
+      const crowded = notes.filter(
+        (entry) => entry && entry.state === "crowded",
+      );
+      const full = notes.filter(
+        (entry) => entry && entry.state === "full",
+      );
+      const room = notes.filter(
+        (entry) => entry && entry.state === "room",
+      );
+      const exempt = notes.filter(
+        (entry) => entry && entry.state === "exempt",
+      );
+      const emptyCount = notes.filter(
+        (entry) => entry && entry.state === "empty",
+      ).length;
+      const openNote = (path) => (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (
+            workspace &&
+            typeof workspace.openLinkText === "function"
+          ) {
+            const newLeaf = Boolean(
+              event && (event.ctrlKey || event.metaKey),
+            );
+            workspace.openLinkText(path, sourcePath || "", newLeaf);
+          }
+        } catch (error) {
+          // The row still shows the count without the navigation.
+        }
+      };
+      const paintRow = (entry) => {
+        let row = null;
+        try {
+          row =
+            typeof container.createDiv === "function"
+              ? container.createDiv({
+                  cls:
+                    "bob-ready-notes-row" +
+                    (entry.state === "crowded"
+                      ? " is-over"
+                      : entry.state === "full"
+                        ? " is-full"
+                        : ""),
+                })
+              : null;
+        } catch (error) {
+          row = null;
+        }
+        if (!row) {
+          return;
+        }
+        try {
+          const nameLink =
+            typeof row.createEl === "function"
+              ? row.createEl("a", {
+                  cls: "internal-link bob-ready-notes-name",
+                  text: entry.name,
+                  href: entry.path,
+                })
+              : null;
+          if (nameLink) {
+            if (typeof nameLink.setAttribute === "function") {
+              nameLink.setAttribute(
+                "title",
+                `${entry.name} · ${entry.count}/${entry.cap}`,
+              );
+              nameLink.setAttribute(
+                "aria-label",
+                `Open ${entry.name}, ${entry.count} of ${entry.cap} ready`,
+              );
+            }
+            if (typeof nameLink.addEventListener === "function") {
+              nameLink.addEventListener("click", openNote(entry.path));
+              nameLink.addEventListener("mouseover", (event) => {
+                try {
+                  const workspace = this.app && this.app.workspace;
+                  if (
+                    workspace &&
+                    typeof workspace.trigger === "function"
+                  ) {
+                    workspace.trigger("hover-link", {
+                      event,
+                      source: "bob-plan",
+                      hoverParent: row,
+                      targetEl: nameLink,
+                      linktext: entry.path,
+                      sourcePath: sourcePath || "",
+                    });
+                  }
+                } catch (error) {
+                  // Hover preview is best-effort only.
+                }
+              });
+            }
+          }
+        } catch (error) {
+          // Name link is best-effort only.
+        }
+        try {
+          if (typeof row.createSpan === "function") {
+            row.createSpan({
+              cls: "bob-ready-notes-fraction",
+              text: `${entry.count}/${entry.cap}`,
+            });
+          } else if (typeof row.createEl === "function") {
+            row.createEl("span", {
+              cls: "bob-ready-notes-fraction",
+              text: `${entry.count}/${entry.cap}`,
+            });
+          }
+        } catch (error) {
+          // Fraction is best-effort only.
+        }
+        try {
+          const barModel = noteReadyBarModel(entry.count, entry.cap);
+          const bar =
+            typeof row.createDiv === "function"
+              ? row.createDiv({ cls: "bob-ready-bar" })
+              : null;
+          if (bar) {
+            if (typeof bar.setAttribute === "function") {
+              bar.setAttribute(
+                "aria-hidden",
+                "true",
+              );
+            }
+            for (let index = 0; index < barModel.total; index += 1) {
+              try {
+                const cell =
+                  typeof bar.createSpan === "function"
+                    ? bar.createSpan({
+                        cls:
+                          "bob-ready-cell" +
+                          (index >= barModel.capAt ? " is-over" : "") +
+                          (index === barModel.capAt - 1 ? " is-cap" : ""),
+                      })
+                    : typeof bar.createEl === "function"
+                      ? bar.createEl("span", {
+                          cls:
+                            "bob-ready-cell" +
+                            (index >= barModel.capAt ? " is-over" : "") +
+                            (index === barModel.capAt - 1 ? " is-cap" : ""),
+                        })
+                      : null;
+                if (cell && typeof cell.setAttribute === "function") {
+                  cell.setAttribute("aria-hidden", "true");
+                }
+              } catch (error) {
+                // One cell never breaks the row.
+              }
+            }
+          }
+        } catch (error) {
+          // Bar is best-effort only.
+        }
+        try {
+          if (
+            entry.state === "crowded" &&
+            typeof row.createSpan === "function"
+          ) {
+            const pill = row.createSpan({
+              cls: "bob-ready-over-pill",
+              text: `+${entry.over_by}`,
+            });
+            if (pill && typeof pill.setAttribute === "function") {
+              pill.setAttribute(
+                "aria-label",
+                `${entry.over_by} over the cap`,
+              );
+            }
+          } else if (
+            entry.state === "crowded" &&
+            typeof row.createEl === "function"
+          ) {
+            row.createEl("span", {
+              cls: "bob-ready-over-pill",
+              text: `+${entry.over_by}`,
+            });
+          }
+        } catch (error) {
+          // Pill is best-effort only.
+        }
+        try {
+          const makeUp =
+            entry.make_up && typeof entry.make_up === "object"
+              ? entry.make_up
+              : null;
+          const meta =
+            `${entry.kind}` +
+            (entry.parent ? ` · ${entry.parent}` : "") +
+            (makeUp && Number.isInteger(makeUp.new)
+              ? ` · ${makeUp.new} new`
+              : "") +
+            (Number.isInteger(entry.recurring) && entry.recurring > 0
+              ? ` · ↻ ${entry.recurring}`
+              : "");
+          if (typeof row.createSpan === "function") {
+            row.createSpan({ cls: "bob-ready-notes-meta", text: meta });
+          } else if (typeof row.createEl === "function") {
+            row.createEl("span", {
+              cls: "bob-ready-notes-meta",
+              text: meta,
+            });
+          }
+        } catch (error) {
+          // Meta is best-effort only.
+        }
+      };
+      for (const entry of crowded.concat(full)) {
+        try {
+          paintRow(entry);
+        } catch (error) {
+          // One row never breaks the block.
+        }
+      }
+      if (room.length > 0 && typeof container.createDiv === "function") {
+        try {
+          const roomWrap = container.createDiv({
+            cls: "bob-ready-notes-room",
+          });
+          for (const entry of room) {
+            try {
+              const pill =
+                typeof roomWrap.createEl === "function"
+                  ? roomWrap.createEl("a", {
+                      cls: "internal-link bob-ready-room-pill",
+                      text: `${entry.name} ${entry.count}`,
+                      href: entry.path,
+                    })
+                  : null;
+              if (pill) {
+                if (typeof pill.setAttribute === "function") {
+                  pill.setAttribute(
+                    "title",
+                    `${entry.name} · ${entry.count}/${entry.cap} · room`,
+                  );
+                  pill.setAttribute(
+                    "aria-label",
+                    `Open ${entry.name}, ${entry.count} of ${entry.cap} ready`,
+                  );
+                }
+                if (typeof pill.addEventListener === "function") {
+                  pill.addEventListener("click", openNote(entry.path));
+                }
+              }
+            } catch (error) {
+              // One pill never breaks the block.
+            }
+          }
+        } catch (error) {
+          // Room pills are best-effort only.
+        }
+      }
+      if (exempt.length > 0 && typeof container.createDiv === "function") {
+        try {
+          const exemptWrap = container.createDiv({
+            cls: "bob-ready-notes-exempt",
+          });
+          for (const entry of exempt) {
+            try {
+              if (typeof exemptWrap.createSpan === "function") {
+                exemptWrap.createSpan({
+                  cls: "bob-ready-exempt-pill",
+                  text: `${entry.name} ${entry.count} · no cap`,
+                });
+              } else if (typeof exemptWrap.createEl === "function") {
+                exemptWrap.createEl("span", {
+                  cls: "bob-ready-exempt-pill",
+                  text: `${entry.name} ${entry.count} · no cap`,
+                });
+              }
+            } catch (error) {
+              // One pill never breaks the block.
+            }
+          }
+        } catch (error) {
+          // Exempt pills are best-effort only.
+        }
+      }
+      if (typeof container.createDiv === "function") {
+        try {
+          const totals = snapshot.totals || {};
+          const recurring = Number.isInteger(totals.recurring)
+            ? totals.recurring
+            : 0;
+          container.createDiv({
+            cls: "bob-ready-notes-footer",
+            text:
+              `${emptyCount} empty · ↻ ${recurring} recurring · ` +
+              "clear CROWDED by splitting, sequencing, deferring, or dropping work",
+          });
+        } catch (error) {
+          // Footer is best-effort only.
+        }
+      }
+    } catch (error) {
+      // Block paint never throws.
+    }
+  }
+
+  refreshReadyNotesBlocks() {
+    if (!this.readyNotesViews || this.readyNotesViews.size === 0) {
+      return false;
+    }
+    let refreshed = false;
+    for (const view of Array.from(this.readyNotesViews)) {
+      try {
+        if (!view || !view.el) {
+          this.readyNotesViews.delete(view);
+          continue;
+        }
+        this.paintReadyNotesBlock(view.el, view.sourcePath);
+        refreshed = true;
+      } catch (error) {
+        // One stale block never breaks the others.
+      }
+    }
+    return refreshed;
+  }
+
+  scheduleReadyNotesRefresh() {
+    if (
+      this.readyNotesRefreshTimer !== null &&
+      this.readyNotesRefreshTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" &&
+      typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.readyNotesRefreshTimer = schedule(() => {
+      this.readyNotesRefreshTimer = null;
+      try {
+        this.refreshReadyNotesBlocks();
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+    }, 150);
+  }
+
+  paintNoteReadyHeadingChip(chipEl, model, sourcePath) {
+    try {
+      if (!chipEl) {
+        return null;
+      }
+      const safe =
+        model && typeof model === "object"
+          ? model
+          : noteReadyHeadingChipModel(null);
+      if (typeof chipEl.setAttribute === "function") {
+        chipEl.setAttribute("title", safe.tooltip);
+        chipEl.setAttribute("aria-label", safe.aria);
+        chipEl.setAttribute(
+          "class",
+          `bob-plan-chip bob-note-ready-heading` +
+            `${safe.over ? " bob-plan-over" : ""}` +
+            `${safe.placeholder ? " bob-plan-unavailable" : ""}` +
+            `${safe.exempt ? " is-exempt" : ""}`,
+        );
+        chipEl.setAttribute("role", "link");
+        try {
+          if (!chipEl.hasAttribute("tabindex")) {
+            chipEl.setAttribute("tabindex", "0");
+          }
+        } catch (error) {
+          // tabindex is best-effort only.
+        }
+      }
+      if (chipEl && typeof chipEl.cls === "string") {
+        chipEl.cls =
+          `bob-plan-chip bob-note-ready-heading` +
+          `${safe.over ? " bob-plan-over" : ""}` +
+          `${safe.placeholder ? " bob-plan-unavailable" : ""}` +
+          `${safe.exempt ? " is-exempt" : ""}`;
+      }
+      // Rewrite text without touching listeners. Never assigns
+      // `.text` on a live element (it would wipe children); the chip
+      // carries a single text span.
+      try {
+        if (typeof chipEl.setText === "function") {
+          chipEl.setText(safe.text);
+        } else if (
+          chipEl &&
+          Object.getOwnPropertyDescriptor(chipEl, "text") &&
+          typeof chipEl.text === "string"
+        ) {
+          chipEl.text = safe.text;
+        } else if (typeof chipEl.textContent === "string") {
+          chipEl.textContent = safe.text;
+        }
+      } catch (error) {
+        // Text rewrite is best-effort only.
+      }
+      return chipEl;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  makeNoteReadyHeadingAnchor(host, model, path, sourcePath) {
+    try {
+      if (!host || typeof host.createEl !== "function") {
+        return null;
+      }
+      const safe =
+        model && typeof model === "object"
+          ? model
+          : noteReadyHeadingChipModel(null);
+      const anchor = host.createEl("a", {
+        cls:
+          `bob-plan-chip bob-note-ready-heading` +
+          `${safe.over ? " bob-plan-over" : ""}` +
+          `${safe.placeholder ? " bob-plan-unavailable" : ""}` +
+          `${safe.exempt ? " is-exempt" : ""}`,
+        title: safe.tooltip,
+        href: "crowded",
+      });
+      this.paintNoteReadyHeadingChip(anchor, safe, sourcePath);
+      if (anchor && typeof anchor.setAttribute === "function") {
+        anchor.setAttribute("aria-label", safe.aria);
+        anchor.setAttribute("role", "link");
+      }
+      const open = (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (
+            workspace &&
+            typeof workspace.openLinkText === "function"
+          ) {
+            const newLeaf = Boolean(
+              event && (event.ctrlKey || event.metaKey),
+            );
+            workspace.openLinkText("crowded", sourcePath || path, newLeaf);
+          }
+        } catch (error) {
+          // The chip still shows the count without the navigation.
+        }
+      };
+      if (anchor && typeof anchor.addEventListener === "function") {
+        // mousedown is prevented so the editor cursor doesn't jump;
+        // the chip never edits the note.
+        anchor.addEventListener("mousedown", (event) => {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+        });
+        anchor.addEventListener("click", open);
+        anchor.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            open(event);
+          }
+        });
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  renderNoteReadyHeadingInReading(el, ctx) {
+    try {
+      if (!el || !ctx) {
+        return;
+      }
+      const path =
+        typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!path) {
+        return;
+      }
+      const entry = this.noteReadyHeadingEntryForPath(path);
+      if (!entry) {
+        return;
+      }
+      const flags = this.noteReadyHeadingFlags();
+      const model = noteReadyHeadingChipModel(entry, flags);
+      let heads = [];
+      try {
+        if (typeof el.querySelectorAll === "function") {
+          heads = Array.from(el.querySelectorAll("h2"));
+        } else if (Array.isArray(el.children)) {
+          heads = el.children.filter(
+            (child) =>
+              child &&
+              (child.tagName === "H2" || child.tagName === "h2"),
+          );
+        }
+      } catch (error) {
+        heads = [];
+      }
+      let target = null;
+      for (const head of heads) {
+        try {
+          const text =
+            typeof head.textContent === "string"
+              ? head.textContent.trim()
+              : typeof head.text === "string"
+                ? head.text.trim()
+                : "";
+          if (/^Tasks(?:\s.*)?$/i.test(text)) {
+            target = head;
+            break;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      if (!target) {
+        return;
+      }
+      // Avoid doubling the chip on re-render.
+      try {
+        if (typeof target.querySelector === "function") {
+          if (target.querySelector(".bob-note-ready-heading")) {
+            return;
+          }
+        } else if (Array.isArray(target.children)) {
+          const has = target.children.some(
+            (child) =>
+              child &&
+              child.attrs &&
+              typeof child.attrs.class === "string" &&
+              child.attrs.class.indexOf("bob-note-ready-heading") !== -1,
+          );
+          if (has) {
+            return;
+          }
+        }
+      } catch (error) {
+        // Dedup is best-effort only.
+      }
+      const chip = this.makeNoteReadyHeadingAnchor(
+        target,
+        model,
+        path,
+        path,
+      );
+      if (!chip) {
+        return;
+      }
+      if (!this.noteReadyReadingWidgets) {
+        this.noteReadyReadingWidgets = new Set();
+      }
+      const widget = { el: chip, head: target, path };
+      this.noteReadyReadingWidgets.add(widget);
+      if (ctx && typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(target);
+            child.onunload = () => {
+              if (this.noteReadyReadingWidgets) {
+                this.noteReadyReadingWidgets.delete(widget);
+              }
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          child = {
+            unload: () => {
+              if (this.noteReadyReadingWidgets) {
+                this.noteReadyReadingWidgets.delete(widget);
+              }
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject the child.
+        }
+      }
+    } catch (error) {
+      // Reading chips never throw.
+    }
+  }
+
+  refreshNoteReadyReadingChips() {
+    if (
+      !this.noteReadyReadingWidgets ||
+      this.noteReadyReadingWidgets.size === 0
+    ) {
+      return false;
+    }
+    let refreshed = false;
+    const flags = this.noteReadyHeadingFlags();
+    for (const widget of Array.from(this.noteReadyReadingWidgets)) {
+      try {
+        const entry = this.noteReadyHeadingEntryForPath(widget.path);
+        if (!entry) {
+          continue;
+        }
+        const model = noteReadyHeadingChipModel(entry, flags);
+        this.paintNoteReadyHeadingChip(widget.el, model, widget.path);
+        refreshed = true;
+      } catch (error) {
+        // One stale chip never breaks the others.
+      }
+    }
+    return refreshed;
+  }
+
+  noteReadyHeadingShouldRebuild(u) {
+    try {
+      if (!u || typeof u !== "object") {
+        return false;
+      }
+      if (u.docChanged || u.viewportChanged) {
+        return true;
+      }
+      const transactions = u.transactions || [];
+      for (const transaction of transactions) {
+        try {
+          const effects =
+            transaction && transaction.effects !== undefined
+              ? transaction.effects
+              : null;
+          if (!effects) {
+            continue;
+          }
+          const list = Array.isArray(effects) ? effects : [effects];
+          for (const effect of list) {
+            try {
+              if (!effect) {
+                continue;
+              }
+              if (
+                noteReadyRefresh &&
+                typeof effect.is === "function" &&
+                effect.is(noteReadyRefresh)
+              ) {
+                return true;
+              }
+              if (effect === noteReadyRefresh) {
+                return true;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildNoteReadyHeadingDecorations(view) {
+    try {
+      if (!Decoration || !RangeSetBuilder || !WidgetType) {
+        return Decoration ? Decoration.none : null;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      // Source mode: no chip.
+      if (!live) {
+        return Decoration.none;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!filePath) {
+        return Decoration.none;
+      }
+      let docText = "";
+      try {
+        docText =
+          view.state.doc && typeof view.state.doc.toString === "function"
+            ? view.state.doc.toString()
+            : String(view.state.doc || "");
+      } catch (error) {
+        return Decoration.none;
+      }
+      const lineIndex = noteReadyFindTasksHeadingLine(docText);
+      if (lineIndex < 0) {
+        try {
+          return Decoration.none;
+        } catch (error) {
+          return null;
+        }
+      }
+      const entry = this.noteReadyHeadingEntryForPath(filePath);
+      if (!entry) {
+        return Decoration.none;
+      }
+      const flags = this.noteReadyHeadingFlags();
+      const model = noteReadyHeadingChipModel(entry, flags);
+      const plugin = this;
+      let HeadingWidget = null;
+      try {
+        HeadingWidget = class extends WidgetType {
+          constructor(chipModel, path) {
+            super();
+            this.chipModel = chipModel;
+            this.key = chipModel.key;
+            this.path = path;
+          }
+
+          eq(other) {
+            try {
+              return (
+                Boolean(other) &&
+                other instanceof HeadingWidget &&
+                other.key === this.key
+              );
+            } catch (error) {
+              return false;
+            }
+          }
+
+          toDOM() {
+            try {
+              const holder =
+                typeof document !== "undefined" &&
+                typeof document.createElement === "function"
+                  ? document.createElement("span")
+                  : null;
+              const host =
+                holder && typeof holder.createEl === "function"
+                  ? holder
+                  : {
+                      createEl: (tag, opts = {}) => {
+                        if (
+                          typeof document !== "undefined" &&
+                          typeof document.createElement === "function"
+                        ) {
+                          const node = document.createElement(tag);
+                          if (opts.cls) {
+                            node.className = opts.cls;
+                          }
+                          if (opts.text) {
+                            node.textContent = opts.text;
+                          }
+                          if (opts.title) {
+                            node.title = opts.title;
+                          }
+                          if (opts.href) {
+                            node.setAttribute("href", opts.href);
+                          }
+                          return node;
+                        }
+                        return null;
+                      },
+                    };
+              const anchor = plugin.makeNoteReadyHeadingAnchor(
+                host,
+                this.chipModel,
+                this.path,
+                this.path,
+              );
+              if (anchor) {
+                return anchor;
+              }
+              if (holder) {
+                holder.textContent = this.chipModel.text;
+                holder.className =
+                  "bob-plan-chip bob-note-ready-heading";
+                return holder;
+              }
+              return document.createElement("span");
+            } catch (error) {
+              try {
+                const fallback = document.createElement("span");
+                fallback.textContent = "ready –";
+                return fallback;
+              } catch (inner) {
+                return null;
+              }
+            }
+          }
+        };
+      } catch (error) {
+        return Decoration.none;
+      }
+      let pos = null;
+      try {
+        const doc = view.state.doc;
+        const line = doc.line(lineIndex + 1);
+        pos = line.to;
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (pos === null || pos === undefined) {
+        return Decoration.none;
+      }
+      const builder = new RangeSetBuilder();
+      try {
+        builder.add(
+          pos,
+          pos,
+          Decoration.widget({ widget: new HeadingWidget(model, filePath), side: 1 }),
+        );
+      } catch (error) {
+        return Decoration.none;
+      }
+      try {
+        return builder.finish();
+      } catch (error) {
+        return Decoration.none;
+      }
+    } catch (error) {
+      try {
+        return Decoration ? Decoration.none : null;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  createNoteReadyHeadingExtension() {
+    try {
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      if (!Decoration || !WidgetType || !StateEffect || !RangeSetBuilder) {
+        return null;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return null;
+      }
+      const plugin = this;
+      const HeadingPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations =
+              plugin.buildNoteReadyHeadingDecorations(view);
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+          try {
+            const info = view.state.field(editorInfoField);
+            this.lastPath =
+              info && info.file && typeof info.file.path === "string"
+                ? info.file.path
+                : null;
+          } catch (error) {
+            this.lastPath = null;
+          }
+          try {
+            this.lastLive = view.state.field(editorLivePreviewField);
+          } catch (error) {
+            this.lastLive = null;
+          }
+        }
+
+        update(u) {
+          try {
+            let pathChanged = false;
+            let liveChanged = false;
+            try {
+              const info = u.view.state.field(editorInfoField);
+              const nextPath =
+                info && info.file && typeof info.file.path === "string"
+                  ? info.file.path
+                  : null;
+              pathChanged = nextPath !== this.lastPath;
+              this.lastPath = nextPath;
+            } catch (error) {
+              // Path tracking is best-effort only.
+            }
+            try {
+              const nextLive = u.view.state.field(editorLivePreviewField);
+              liveChanged = nextLive !== this.lastLive;
+              this.lastLive = nextLive;
+            } catch (error) {
+              // Live tracking is best-effort only.
+            }
+            if (
+              pathChanged ||
+              liveChanged ||
+              plugin.noteReadyHeadingShouldRebuild(u)
+            ) {
+              this.decorations =
+                plugin.buildNoteReadyHeadingDecorations(u.view);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      let extension = null;
+      try {
+        extension = ViewPlugin.fromClass(HeadingPluginClass, {
+          decorations: (value) => value.decorations,
+        });
+      } catch (error) {
+        return null;
+      }
+      try {
+        return Prec.highest(extension);
+      } catch (error) {
+        return extension;
+      }
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshNoteReadyHeadingEditors() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      const refreshEffect = ensureNoteReadyRefresh();
+      for (const leaf of leaves) {
+        try {
+          const cm =
+            leaf && leaf.view && leaf.view.editor
+              ? leaf.view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function" && refreshEffect) {
+            cm.dispatch({ effects: refreshEffect.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  scheduleNoteReadyHeadingsRefresh() {
+    if (
+      this.noteReadyHeadingsRefreshTimer !== null &&
+      this.noteReadyHeadingsRefreshTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" &&
+      typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.noteReadyHeadingsRefreshTimer = schedule(() => {
+      this.noteReadyHeadingsRefreshTimer = null;
+      try {
+        this.refreshNoteReadyReadingChips();
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+      try {
+        this.refreshNoteReadyHeadingEditors();
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+    }, 150);
+  }
+
+  // One consolidated live-refresh fan-out (ledger-views): the four
+  // hand-maintained fan-out sites call this instead of scheduling
+  // each family separately, so new widget families cannot miss a
+  // site. No behavior change for existing widgets.
+  scheduleLiveWidgetRefresh() {
+    try {
+      this.scheduleReadyRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleDashboardLaneRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleFreshnessStatusBar();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleFreshnessMarksRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleReviewChipsRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleCrowdedRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleReadyNotesRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleNoteReadyHeadingsRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+  }
+
   // --- NEW/ROTTEN review chips (freshness namespace v3) ----------------
   // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
   // rotten summary): the same widget pattern as the READY badge — one
@@ -8243,18 +9787,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       } catch (error) {
         // The memo is still correct; only the live refresh is skipped.
       }
-      for (const refresh of [
-        () => this.scheduleReadyRefresh(),
-        () => this.scheduleDashboardLaneRefresh(),
-        () => this.scheduleFreshnessStatusBar(),
-        () => this.scheduleFreshnessMarksRefresh(),
-        () => this.scheduleReviewChipsRefresh(),
-      ]) {
-        try {
-          refresh();
-        } catch (error) {
-          // One missed schedule never breaks the memo.
-        }
+      try {
+        this.scheduleLiveWidgetRefresh();
+      } catch (error) {
+        // One missed schedule never breaks the memo.
       }
     }
     return next;
@@ -8583,11 +10119,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       } catch (error) {
         // The generation still counts; the memo rebuilds on next access.
       }
-      this.scheduleReadyRefresh();
-      this.scheduleDashboardLaneRefresh();
-      this.scheduleFreshnessStatusBar();
-      this.scheduleFreshnessMarksRefresh();
-      this.scheduleReviewChipsRefresh();
+      this.scheduleLiveWidgetRefresh();
       return true;
     } catch (error) {
       return false;
@@ -8610,11 +10142,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       } catch (error) {
         // The memo rebuilds on next access.
       }
-      this.scheduleReadyRefresh();
-      this.scheduleDashboardLaneRefresh();
-      this.scheduleFreshnessStatusBar();
-      this.scheduleFreshnessMarksRefresh();
-      this.scheduleReviewChipsRefresh();
+      this.scheduleLiveWidgetRefresh();
       return true;
     } catch (error) {
       return false;
@@ -11882,6 +13410,291 @@ function noteReadyCrowdedKey(notes, capsKey) {
   }
 }
 
+// --- Per-note Ready cap views (ledger-views) ---------------------------
+// Pure view models for the dash CROWDED chip, the `bob-ready-notes`
+// ranked-bar block, and the `## Tasks` heading chip. All take plain
+// snapshot/entry data so they are unit-testable without Obsidian.
+
+const NOTE_READY_CROWDED_LABEL = "CROWDED";
+const NOTE_READY_CROWDED_ARROW = "↗";
+// First `## Tasks` heading only: up to 3 leading spaces, exactly two
+// `#`, at least one space/tab, then `Tasks` case-insensitive with an
+// optional trailing run. `### Tasks` never matches (the third `#` is
+// not a space); fences are tracked by the line walker below.
+const NOTE_READY_TASKS_HEADING_RE = /^ {0,3}##[ \t]+Tasks(?:[ \t].*)?$/i;
+const NOTE_READY_FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
+const NOTE_READY_BAR_MAX = 30;
+const NOTE_READY_REMEDIES = "split, sequence, defer, or drop";
+
+function noteReadyCapSourceLabel(source) {
+  if (source === "note") {
+    return "this note";
+  }
+  if (source === "config") {
+    return "Bob config";
+  }
+  if (source === "preview") {
+    return "preview";
+  }
+  return "default";
+}
+
+function noteReadyCrowdedChipModel(snapshot) {
+  try {
+    if (!snapshot || snapshot.available !== true) {
+      return {
+        available: false,
+        crowded: 0,
+        full: 0,
+        excess: 0,
+        label: NOTE_READY_CROWDED_LABEL,
+        valueText: "–",
+        over: false,
+        calm: false,
+        placeholder: true,
+        tooltip: "CROWDED unavailable",
+        aria: "CROWDED: unavailable",
+      };
+    }
+    const totals = snapshot.totals || {};
+    const crowded = Number.isInteger(totals.crowded) ? totals.crowded : 0;
+    const full = Number.isInteger(totals.full) ? totals.full : 0;
+    const excess = Number.isInteger(totals.excess) ? totals.excess : 0;
+    const notes = Array.isArray(snapshot.notes) ? snapshot.notes : [];
+    const crowdedNotes = notes.filter(
+      (entry) => entry && entry.state === "crowded",
+    );
+    const named = crowdedNotes
+      .slice(0, 5)
+      .map((entry) => `${entry.name} ${entry.count}/${entry.cap}`);
+    const more = crowdedNotes.length > 5 ? ", …" : "";
+    const list = named.length > 0 ? `: ${named.join(", ")}${more}` : "";
+    const noun = crowded === 1 ? "note" : "notes";
+    const tooltip =
+      crowded > 0
+        ? `${crowded} ${noun} over their ready cap${list} · ${full} full · ${excess} over. Open Crowded Notes.`
+        : `No notes over their ready cap · ${full} full. Open Crowded Notes.`;
+    return {
+      available: true,
+      crowded,
+      full,
+      excess,
+      label: NOTE_READY_CROWDED_LABEL,
+      valueText: crowded > 0 ? String(crowded) : "0 ✓",
+      over: crowded > 0,
+      calm: crowded === 0,
+      placeholder: false,
+      tooltip,
+      aria: tooltip,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      crowded: 0,
+      full: 0,
+      excess: 0,
+      label: NOTE_READY_CROWDED_LABEL,
+      valueText: "–",
+      over: false,
+      calm: false,
+      placeholder: true,
+      tooltip: "CROWDED unavailable",
+      aria: "CROWDED: unavailable",
+    };
+  }
+}
+
+function noteReadyBarModel(count, cap, max = NOTE_READY_BAR_MAX) {
+  const safeMax = Number.isInteger(max) && max > 0 ? max : NOTE_READY_BAR_MAX;
+  const safeCount = Number.isInteger(count) && count >= 0 ? count : 0;
+  const safeCap =
+    Number.isInteger(cap) && cap > 0 ? cap : NOTE_READY_DEFAULT_CAP;
+  const total = Math.min(safeMax, Math.max(safeCap, safeCount));
+  return {
+    total,
+    filled: Math.min(safeCount, total),
+    capAt: Math.min(safeCap, total),
+    overflow: Math.max(0, safeCount - safeCap),
+    over: safeCount > safeCap,
+  };
+}
+
+function noteReadyFindTasksHeadingLine(text) {
+  try {
+    const lines = String(text === null || text === undefined ? "" : text).split(
+      "\n",
+    );
+    let inFence = false;
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (NOTE_READY_FENCE_RE.test(line)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) {
+        continue;
+      }
+      if (NOTE_READY_TASKS_HEADING_RE.test(line)) {
+        return index;
+      }
+    }
+    return -1;
+  } catch (error) {
+    return -1;
+  }
+}
+
+function noteReadyHeadingChipModel(entry, options = {}) {
+  try {
+    const invalid = Boolean(options.invalid);
+    const mobileDefault = Boolean(options.mobileDefault);
+    if (!entry || typeof entry !== "object") {
+      return {
+        available: false,
+        text: "ready –",
+        tooltip: "ready count unavailable",
+        aria: "ready count: unavailable",
+        over: false,
+        placeholder: true,
+        exempt: false,
+        key: "unavailable",
+      };
+    }
+    const count = Number.isInteger(entry.count) ? entry.count : 0;
+    const cap = Number.isInteger(entry.cap) ? entry.cap : null;
+    const makeUp =
+      entry.make_up && typeof entry.make_up === "object"
+        ? entry.make_up
+        : null;
+    const remedies = NOTE_READY_REMEDIES;
+    if (entry.state === "exempt") {
+      const tooltip =
+        `${count} ready-lane tasks · no cap (ready_cap: off) · ${remedies}` +
+        (mobileDefault ? " · default cap on mobile" : "");
+      return {
+        available: true,
+        text: `ready ${count} · no cap`,
+        tooltip,
+        aria: tooltip,
+        over: false,
+        placeholder: false,
+        exempt: true,
+        key: `exempt:${count}`,
+      };
+    }
+    const capText = cap === null ? "–" : String(cap);
+    const sourceLabel = noteReadyCapSourceLabel(entry.cap_source);
+    let lane = "";
+    if (makeUp) {
+      const ready = Number.isInteger(makeUp.ready) ? makeUp.ready : 0;
+      const fresh = Number.isInteger(makeUp.new) ? makeUp.new : 0;
+      const rotten = Number.isInteger(makeUp.rotten) ? makeUp.rotten : 0;
+      lane = `${count} ready-lane tasks = ${ready} ready + ${fresh} new + ${rotten} rotten`;
+    } else {
+      lane = `${count} ready-lane tasks`;
+    }
+    const overText =
+      entry.state === "crowded" && Number.isInteger(entry.over_by)
+        ? ` · ${entry.over_by} over`
+        : "";
+    let tooltip = `${lane} · cap ${capText} (${sourceLabel})${overText} · ${remedies}`;
+    if (invalid) {
+      tooltip += ` · ready_cap invalid, using ${capText}`;
+    }
+    if (mobileDefault) {
+      tooltip += " · default cap on mobile";
+    }
+    if (entry.state === "crowded") {
+      const text = `ready ${count}/${capText} · +${entry.over_by}`;
+      return {
+        available: true,
+        text,
+        tooltip,
+        aria: tooltip,
+        over: true,
+        placeholder: false,
+        exempt: false,
+        key: `crowded:${count}/${capText}`,
+      };
+    }
+    if (entry.state === "full") {
+      const text = `ready ${count}/${capText} · full`;
+      return {
+        available: true,
+        text,
+        tooltip,
+        aria: tooltip,
+        over: false,
+        placeholder: false,
+        exempt: false,
+        key: `full:${count}/${capText}`,
+      };
+    }
+    const text = `ready ${count}/${capText}`;
+    return {
+      available: true,
+      text,
+      tooltip,
+      aria: tooltip,
+      over: false,
+      placeholder: false,
+      exempt: false,
+      key: `${entry.state}:${count}/${capText}`,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      text: "ready –",
+      tooltip: "ready count unavailable",
+      aria: "ready count: unavailable",
+      over: false,
+      placeholder: true,
+      exempt: false,
+      key: "unavailable",
+    };
+  }
+}
+
+function noteReadyReadyNotesSummary(snapshot) {
+  try {
+    if (!snapshot || snapshot.available !== true) {
+      return "CROWDED –";
+    }
+    const totals = snapshot.totals || {};
+    const crowded = Number.isInteger(totals.crowded) ? totals.crowded : 0;
+    if (crowded === 0) {
+      return "CROWDED 0 ✓ · every note has room";
+    }
+    const full = Number.isInteger(totals.full) ? totals.full : 0;
+    const excess = Number.isInteger(totals.excess) ? totals.excess : 0;
+    const notes = Number.isInteger(totals.notes) ? totals.notes : 0;
+    return `CROWDED ${crowded} · ${excess} over · ${full} full · ${notes} notes`;
+  } catch (error) {
+    return "CROWDED –";
+  }
+}
+
+function noteReadyEscapeHtml(text) {
+  return String(text === null || text === undefined ? "" : text).replace(
+    /[&<>"']/g,
+    (ch) => {
+      if (ch === "&") {
+        return "&amp;";
+      }
+      if (ch === "<") {
+        return "&lt;";
+      }
+      if (ch === ">") {
+        return "&gt;";
+      }
+      if (ch === '"') {
+        return "&quot;";
+      }
+      return "&#39;";
+    },
+  );
+}
+
 // --- Plan block model -----------------------------------------------------
 
 function planBlockTargetPath(app, sourcePath) {
@@ -12152,6 +13965,14 @@ module.exports.helpers = {
   noteReadyEmptyTotals,
   noteReadyRecurringFor,
   noteReadyCrowdedKey,
+  noteReadyCrowdedChipModel,
+  noteReadyBarModel,
+  noteReadyFindTasksHeadingLine,
+  noteReadyHeadingChipModel,
+  noteReadyReadyNotesSummary,
+  noteReadyEscapeHtml,
+  setReadyAnchorContent,
+  NOTE_READY_BAR_MAX,
   LINT_NOTE_READY_CAP_INVALID,
   LINT_NOTE_READY_IN_TERMINAL_PROJECT,
   NOTE_READY_DEFAULT_CAP,

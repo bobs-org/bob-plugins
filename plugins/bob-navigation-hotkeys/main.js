@@ -2932,6 +2932,145 @@ function planPriorityRollRecommendationsForTargets(
   });
 }
 
+// Aggregate one roll recommendation per Task Link target across notes: each
+// resolved target's recommendation is read from its own note's content via
+// `groupLinkPickerTargetsByNote`, reusing
+// `planPriorityRollRecommendationsForTargets` per note group. Pure. The
+// returned summary mirrors that planner's shape (counts, dates, skips, the
+// whole-batch unavailable reason) with flattened `entries` (each carrying its
+// note `path`) plus per-note `groups` holding each group's own summary for the
+// write path.
+function planLinkRollBatchSummary(resolvedTargets, property, options = {}) {
+  const empty = () =>
+    Object.freeze({
+      valid: true,
+      error: null,
+      property: property || null,
+      schedulesName: "",
+      entries: Object.freeze([]),
+      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, unavailable: 0 }),
+      total: 0,
+      actionableCount: 0,
+      skippedCount: 0,
+      dateStart: "",
+      dateEnd: "",
+      unavailableReason: null,
+      hasRecommendation: false,
+      allRollSameLevel: false,
+      sharedLevelLabel: "",
+      groups: Object.freeze([]),
+    });
+  const groups = groupLinkPickerTargetsByNote(resolvedTargets);
+  if (
+    !property ||
+    property.values !== "priority" ||
+    groups.length === 0
+  ) {
+    return empty();
+  }
+  const perGroup = groups.map((group) => ({
+    group,
+    summary: planPriorityRollRecommendationsForTargets(
+      group.content,
+      group.session.targets,
+      property,
+      options,
+    ),
+  }));
+  const entries = [];
+  for (const { group, summary } of perGroup) {
+    for (const entry of summary.entries) {
+      entries.push(
+        Object.freeze({ path: group.path, ...entry }),
+      );
+    }
+  }
+  const counts = { roll: 0, decay: 0, cancel: 0, unavailable: 0 };
+  let actionableCount = 0;
+  let skippedCount = 0;
+  let unavailableReason = null;
+  const dated = [];
+  for (const { summary } of perGroup) {
+    counts.roll += summary.counts.roll;
+    counts.decay += summary.counts.decay;
+    counts.cancel += summary.counts.cancel;
+    counts.unavailable += summary.counts.unavailable;
+    actionableCount += summary.actionableCount;
+    skippedCount += summary.skippedCount;
+    if (!unavailableReason && summary.unavailableReason) {
+      unavailableReason = summary.unavailableReason;
+    }
+    for (const value of [summary.dateStart, summary.dateEnd]) {
+      const date = normalizeBulletPropertyValue(value);
+      if (date) {
+        dated.push(date);
+      }
+    }
+  }
+  dated.sort();
+  const rollLabels = Array.from(
+    new Set(
+      entries
+        .filter(
+          (entry) =>
+            entry.recommendation && entry.recommendation.kind === "roll",
+        )
+        .map((entry) =>
+          normalizeBulletPropertyValue(
+            entry.recommendation.level &&
+              entry.recommendation.level.label,
+          ),
+        ),
+    ),
+  );
+  const rollCount = entries.filter(
+    (entry) =>
+      entry.recommendation && entry.recommendation.kind === "roll",
+  ).length;
+  const allRollSameLevel =
+    actionableCount > 0 &&
+    rollCount === actionableCount &&
+    rollLabels.length === 1;
+  return Object.freeze({
+    valid: true,
+    error: null,
+    property,
+    schedulesName: perGroup[0].summary.schedulesName,
+    entries: Object.freeze(entries),
+    counts: Object.freeze(counts),
+    total: entries.length,
+    actionableCount,
+    skippedCount,
+    dateStart: dated.length > 0 ? dated[0] : "",
+    dateEnd: dated.length > 0 ? dated[dated.length - 1] : "",
+    unavailableReason,
+    hasRecommendation: actionableCount > 0 && !unavailableReason,
+    allRollSameLevel,
+    sharedLevelLabel: allRollSameLevel ? rollLabels[0] : "",
+    groups: Object.freeze(
+      perGroup.map(({ group, summary }) =>
+        Object.freeze({ path: group.path, file: group.file, content: group.content, session: group.session, summary }),
+      ),
+    ),
+  });
+}
+
+// The link-session preview: the single-task copy when the session holds
+// exactly one target, otherwise the batch copy. Null when nothing is
+// actionable and the batch is not unavailable.
+function buildLinkRollPreviewModel(summary, baseDate) {
+  if (!summary || typeof summary !== "object") {
+    return null;
+  }
+  if (summary.total === 1 && Array.isArray(summary.entries)) {
+    const only = summary.entries[0];
+    if (only && only.recommendation) {
+      return buildPriorityRollPreviewModel(only.recommendation, baseDate);
+    }
+  }
+  return buildBatchPriorityRollPreviewModel(summary);
+}
+
 // Render the counted batch copy: one line on the `scheduled` row, for example
 // `4 tasks · 2 roll · 1 decay · 1 cancel · 2026-10-05 → 2026-12-19`, plus a
 // muted `N skipped` suffix. Tone and icon follow the most severe kind present:
@@ -20028,8 +20167,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.priorityRollRecommendationReady = false;
     this.countedRollBatch = null;
     this.countedRollBatchReady = false;
+    this.linkRollBatch = null;
+    this.linkRollBatchReady = false;
     this.refreshPriorityRollRecommendation();
     this.refreshCountedRollBatch();
+    this.refreshLinkRollBatch();
     this.showPropertyStage({ clearQuery: false });
   }
 
@@ -21339,6 +21481,134 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return this.countedRollBatch;
   }
 
+  // The link-session Ctrl+Enter batch, planned once when the picker opens
+  // (what you see is what you get): each resolved target keeps its own
+  // pre-rolled date, read from its own note's content. Null in single and
+  // counted sessions, and when no target has a recommendation.
+  computeLinkRollBatch() {
+    if (!this.isLinkSession()) {
+      return null;
+    }
+    const resolved = Array.isArray(this.linkSession.resolved)
+      ? this.linkSession.resolved
+      : [];
+    const properties =
+      this.config && Array.isArray(this.config.properties)
+        ? this.config.properties
+        : [];
+    for (const priorityProperty of properties) {
+      if (!priorityProperty || priorityProperty.values !== "priority") {
+        continue;
+      }
+      const schedulesName = normalizeBulletPropertyName(
+        priorityProperty.schedules,
+      );
+      if (!schedulesName) {
+        continue;
+      }
+      const summary = planLinkRollBatchSummary(
+        resolved,
+        priorityProperty,
+        {
+          baseDate: this.valueBaseDate,
+          random: this.priorityRandom,
+        },
+      );
+      const actionable =
+        (summary.counts.roll || 0) +
+        (summary.counts.decay || 0) +
+        (summary.counts.cancel || 0);
+      const hasAny =
+        actionable > 0 || Boolean(summary.unavailableReason);
+      if (!hasAny) {
+        continue;
+      }
+      return Object.freeze({
+        ...summary,
+        priorityName: priorityProperty.name,
+      });
+    }
+    return null;
+  }
+
+  refreshLinkRollBatch() {
+    this.linkRollBatch = this.computeLinkRollBatch();
+    this.linkRollBatchReady = true;
+    return this.linkRollBatch;
+  }
+
+  getLinkRollBatchForDateProperty(datePropertyName) {
+    const batch = this.linkRollBatch;
+    if (!batch) {
+      return null;
+    }
+    if (
+      normalizeBulletPropertyName(batch.schedulesName) !==
+      normalizeBulletPropertyName(datePropertyName)
+    ) {
+      return null;
+    }
+    return batch;
+  }
+
+  // Link sessions use the single-task copy for exactly one target and the
+  // batch copy otherwise. They keep no pinned stage-two roll row.
+  getLinkRollPreviewForDateProperty(datePropertyName) {
+    const batch = this.getLinkRollBatchForDateProperty(datePropertyName);
+    if (!batch) {
+      return null;
+    }
+    return buildLinkRollPreviewModel(batch, this.valueBaseDate);
+  }
+
+  getLinkRollFilterTextForDateProperty(datePropertyName) {
+    const preview = this.getLinkRollPreviewForDateProperty(datePropertyName);
+    return preview && preview.searchText ? preview.searchText : "";
+  }
+
+  hasLinkRollBatchForDateProperty(datePropertyName) {
+    const batch = this.getLinkRollBatchForDateProperty(datePropertyName);
+    if (!batch) {
+      return false;
+    }
+    return (
+      batch.actionableCount > 0 || Boolean(batch.unavailableReason)
+    );
+  }
+
+  getLinkStageOneRollPreview() {
+    if (!this.linkRollBatch) {
+      return null;
+    }
+    return buildLinkRollPreviewModel(
+      this.linkRollBatch,
+      this.valueBaseDate,
+    );
+  }
+
+  // Ctrl+R in stage one re-rolls every pre-rolled link date. Only dated
+  // targets (roll and decay) have one.
+  rerollLinkRollBatch() {
+    const cached = this.linkRollBatch;
+    if (!cached || cached.actionableCount <= 0 || cached.unavailableReason) {
+      return false;
+    }
+    const fresh = this.computeLinkRollBatch();
+    if (!fresh || fresh.actionableCount <= 0 || fresh.unavailableReason) {
+      return false;
+    }
+    if (
+      fresh.counts.roll !== cached.counts.roll ||
+      fresh.counts.decay !== cached.counts.decay ||
+      fresh.counts.cancel !== cached.counts.cancel
+    ) {
+      return false;
+    }
+    this.linkRollBatch = fresh;
+    this.linkRollBatchReady = true;
+    return true;
+  }
+
   getCountedRollBatchForDateProperty(datePropertyName) {
     const batch = this.countedRollBatch;
     if (!batch) {
@@ -21406,6 +21676,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getRollPreviewForDateProperty(datePropertyName) {
+    if (this.isLinkSession()) {
+      return this.getLinkRollPreviewForDateProperty(datePropertyName);
+    }
     if (this.isCountedSession()) {
       return this.getCountedRollPreviewForDateProperty(datePropertyName);
     }
@@ -21417,6 +21690,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getRollFilterTextForDateProperty(datePropertyName) {
+    if (this.isLinkSession()) {
+      return this.getLinkRollFilterTextForDateProperty(datePropertyName);
+    }
     if (this.isCountedSession()) {
       const batch = this.getCountedRollBatchForDateProperty(datePropertyName);
       if (!batch) {
@@ -21432,6 +21708,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getStageOneRollPreview() {
+    if (this.isLinkSession()) {
+      return this.getLinkStageOneRollPreview();
+    }
     if (this.isCountedSession()) {
       return this.getCountedStageOneRollPreview();
     }
@@ -23116,11 +23395,48 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
   }
 
+  async applyLinkRecommendedRoll() {
+    const cached = this.linkRollBatch;
+    if (!cached) {
+      return false;
+    }
+    if (cached.unavailableReason) {
+      new Notice(cached.unavailableReason);
+      return false;
+    }
+    if (this.opening) {
+      return false;
+    }
+    this.opening = true;
+    try {
+      const fresh = this.computeLinkRollBatch();
+      if (
+        !fresh ||
+        fresh.actionableCount !== cached.actionableCount ||
+        fresh.counts.roll !== cached.counts.roll ||
+        fresh.counts.decay !== cached.counts.decay ||
+        fresh.counts.cancel !== cached.counts.cancel ||
+        Boolean(fresh.unavailableReason) !==
+          Boolean(cached.unavailableReason)
+      ) {
+        new Notice("Task changed while the picker was open; nothing was written");
+        this.linkRollBatch = fresh;
+        this.linkRollBatchReady = true;
+        this.showPropertyStage({ clearQuery: false });
+        return false;
+      }
+      return await this.plugin.applyLinkRecommendedRoll(this);
+    } finally {
+      this.opening = false;
+    }
+  }
+
   handleKeydown(event) {
     // Ctrl+Enter (or Cmd+Enter) on `scheduled` takes the recommended roll in
     // both picker stages. Anywhere else it behaves exactly like Enter, as it
     // does today; other stages keep their existing key handling untouched.
-    // Counted sessions use the batch recommendation through the same gesture.
+    // Counted and link sessions use their batch recommendation through the
+    // same gesture.
     if (
       isRecommendedRollKeydown(event) &&
       (this.stage === "properties" || this.stage === "value")
@@ -23145,6 +23461,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           this.hasCountedRollBatchForDateProperty(rollPropertyName)
         ) {
           void this.applyCountedRecommendedRoll()
+            .then((applied) => {
+              if (applied === true) {
+                this.close();
+              }
+            })
+            .catch(() => {
+              new Notice("Could not apply the recommended roll");
+            });
+        } else if (
+          rollPropertyName &&
+          this.hasLinkRollBatchForDateProperty(rollPropertyName)
+        ) {
+          void this.applyLinkRecommendedRoll()
             .then((applied) => {
               if (applied === true) {
                 this.close();
@@ -23230,7 +23559,29 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.stage === "properties" && isCtrlKey(event, "r")) {
-      if (this.isCountedSession()) {
+      if (this.isLinkSession()) {
+        if (this.rerollLinkRollBatch()) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.applyOptions({
+            footerHints: getBulletPropertyStageOneHints(
+              this.getStageOneRollPreview(),
+            ),
+          });
+          const scheduledIndex = this.visibleItems.findIndex(
+            (item) =>
+              item &&
+              item.kind === "property" &&
+              this.hasLinkRollBatchForDateProperty(item.property.name),
+          );
+          if (scheduledIndex !== -1) {
+            this.selectedIndex = scheduledIndex;
+          }
+          if (this.resultsEl) {
+            this.renderAll({ clearQuery: false });
+          }
+        }
+      } else if (this.isCountedSession()) {
         if (this.rerollCountedRollBatch()) {
           event.preventDefault();
           event.stopPropagation();
@@ -23277,7 +23628,27 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.stage === "value" && isCtrlKey(event, "r")) {
-      if (this.isCountedSession()) {
+      if (this.isLinkSession()) {
+        // Link sessions keep no pinned roll row: re-roll the batch so the
+        // stage-two footer preview stays in sync.
+        if (this.rerollLinkRollBatch()) {
+          this.applyOptions({
+            footerHints: getBulletPropertyStageTwoHints(
+              Boolean(
+                this.items.some((item) => item && item.priorityRoll),
+              ),
+              this.selectedPropertyItem
+                ? this.getRollPreviewForDateProperty(
+                    this.selectedPropertyItem.property.name,
+                  )
+                : null,
+            ),
+          });
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      } else if (this.isCountedSession()) {
         let rerolled = false;
         if (this.rerollCountedRollBatch()) {
           this.applyOptions({
@@ -28954,6 +29325,335 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     }
     void reopened;
+    return true;
+  }
+
+  // Commit one composed recommended-roll write across every note behind the
+  // picker's Task Links: each note group is planned with
+  // `planRecommendedRollBatch` (cancel first, then set-priority), the union
+  // of cancelled block IDs and future-scheduled lines is pruned from today's
+  // open Pomodoros in one pass, and cancelled identities run dependent
+  // recovery. Every preimage is re-verified before the first write; any
+  // mismatch refuses the whole operation.
+  async applyLinkRecommendedRoll(picker, options = {}) {
+    const linkSession = picker.linkSession;
+    const cached = picker.linkRollBatch;
+    if (!linkSession || !cached) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    if (cached.unavailableReason) {
+      new Notice(cached.unavailableReason);
+      return false;
+    }
+    const property = picker.findPriorityPropertyByName
+      ? picker.findPriorityPropertyByName(cached.priorityName)
+      : (this.config &&
+          this.config.properties &&
+          this.config.properties.find(
+            (candidate) =>
+              candidate &&
+              candidate.values === "priority" &&
+              normalizeBulletPropertyName(candidate.name) ===
+                normalizeBulletPropertyName(cached.priorityName),
+          )) ||
+        null;
+    if (!property) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      return false;
+    }
+    const fresh = picker.computeLinkRollBatch
+      ? picker.computeLinkRollBatch()
+      : null;
+    if (
+      !fresh ||
+      fresh.actionableCount !== cached.actionableCount ||
+      fresh.counts.roll !== cached.counts.roll ||
+      fresh.counts.decay !== cached.counts.decay ||
+      fresh.counts.cancel !== cached.counts.cancel ||
+      Boolean(fresh.unavailableReason) !== Boolean(cached.unavailableReason)
+    ) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      if (picker.showPropertyStage) {
+        picker.linkRollBatch = fresh;
+        picker.linkRollBatchReady = true;
+        picker.showPropertyStage({ clearQuery: false });
+      }
+      return false;
+    }
+    const baseDate =
+      picker.valueBaseDate instanceof Date
+        ? getLocalDateStart(picker.valueBaseDate)
+        : getLocalDateStart(new Date());
+    const dateText = formatBulletPropertyDate(baseDate);
+    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    if (groups.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    // Any changed preimage refuses the whole operation before planning.
+    for (const group of groups) {
+      const live = await this.readLinkPickerNoteContent(
+        group.path,
+        group.file,
+      );
+      if (live !== group.content) {
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+    }
+    const planned = [];
+    for (const group of groups) {
+      const summary = planPriorityRollRecommendationsForTargets(
+        group.content,
+        group.session.targets,
+        property,
+        {
+          baseDate: picker.valueBaseDate,
+          random:
+            typeof picker.priorityRandom === "function"
+              ? picker.priorityRandom
+              : Math.random,
+        },
+      );
+      const recommendationsByLine = new Map(
+        summary.entries
+          .filter((entry) => entry.recommendation)
+          .map((entry) => [entry.line, entry.recommendation]),
+      );
+      if (recommendationsByLine.size === 0) {
+        continue;
+      }
+      const updateEntries = summary.entries.filter(
+        (entry) =>
+          entry.recommendation &&
+          (entry.recommendation.kind === "roll" ||
+            entry.recommendation.kind === "decay"),
+      );
+      let recoveryByLine = null;
+      if (
+        updateEntries.some((entry) =>
+          isDueInlineScheduledValue(entry.recommendation.date, baseDate),
+        )
+      ) {
+        recoveryByLine = await buildTargetScheduledRecoveryByLine(
+          this.app,
+          group.path,
+          group.content,
+          updateEntries.map((entry) => entry.line),
+          baseDate,
+        );
+        const guarded = await this.readLinkPickerNoteContent(
+          group.path,
+          group.file,
+        );
+        if (guarded !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+      }
+      const plan = planRecommendedRollBatch(
+        group.content,
+        group.session,
+        recommendationsByLine,
+        {
+          property,
+          dateText,
+          baseDate,
+          recoveryByLine,
+          stampLine: this.getFreshnessStampLine(),
+          freshDateText: this.getFreshnessDateText(),
+        },
+      );
+      if (!plan.valid) {
+        new Notice(
+          plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
+        );
+        return false;
+      }
+      planned.push({ group, plan });
+    }
+    if (planned.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+
+    const pruneTargets = [];
+    for (const { group, plan } of planned) {
+      for (const entry of plan.cancelledEntries || []) {
+        if (entry.blockId) {
+          pruneTargets.push(
+            Object.freeze({ path: group.path, blockId: entry.blockId }),
+          );
+        }
+      }
+      const futureLines = Array.from(plan.futureScheduledTaskLines || []);
+      if (futureLines.length > 0) {
+        pruneTargets.push(
+          ...deferredPomodoroTargetsFromLines(
+            group.path,
+            splitMarkdownContent(group.content).lines,
+            futureLines,
+          ),
+        );
+      }
+    }
+    let pomodoroSnapshot = null;
+    let dailyCleanupPlan = null;
+    let foldedDailyPath = null;
+    if (pruneTargets.length > 0) {
+      const sourcePaths = planned.map(({ group }) => group.path);
+      pomodoroSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: sourcePaths.length === 1 ? sourcePaths[0] : "",
+        sourceContent: planned.length === 1 ? planned[0].plan.content : "",
+        today: baseDate,
+      });
+      if (pomodoroSnapshot) {
+        // When the daily note is one of the edited target notes, the prune
+        // folds into that note's own write instead of racing it.
+        const folded = planned.find(
+          ({ group }) => group.path === pomodoroSnapshot.dailyPath,
+        );
+        const dailyBase = folded
+          ? folded.plan.content
+          : pomodoroSnapshot.content;
+        if (dailyBase !== null) {
+          dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
+            dailyBase,
+            pruneTargets,
+            {
+              dailyPath: pomodoroSnapshot.dailyPath,
+              noteIndex: pomodoroSnapshot.noteIndex,
+            },
+          );
+          if (folded && dailyCleanupPlan.changed) {
+            foldedDailyPath = folded.group.path;
+          }
+        }
+      }
+      for (const group of groups) {
+        const live = await this.readLinkPickerNoteContent(
+          group.path,
+          group.file,
+        );
+        if (live !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+      }
+    }
+
+    const commit = await this.commitLinkPickerNoteWrites(planned, {
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      foldedDailyPath,
+    });
+    if (!commit.ok) {
+      new Notice("A linked note changed; no tasks were updated");
+      return false;
+    }
+    const removedPomodoroLinkCount =
+      dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
+        ? dailyCleanupPlan.removedLinkCount
+        : 0;
+
+    const cancelledIdentities = [];
+    for (const { group, plan } of planned) {
+      for (const entry of plan.cancelledEntries || []) {
+        cancelledIdentities.push(
+          Object.freeze({
+            path: group.path,
+            blockId: entry.blockId,
+            taskId: entry.taskId,
+          }),
+        );
+      }
+    }
+    if (cancelledIdentities.length > 0) {
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["task-status-cycler"];
+        const api = holder && holder.api;
+        if (
+          api &&
+          typeof api.recoverBlockedDependents === "function" &&
+          Number(api.version) >= 1
+        ) {
+          await api.recoverBlockedDependents(cancelledIdentities, {
+            activePath: picker.filePath,
+            editor: picker.editor,
+          });
+        }
+      } catch (error) {
+        // The hooks recover them later.
+      }
+    }
+
+    const scheduledValues = [];
+    for (const entry of fresh.entries) {
+      if (
+        entry.recommendation &&
+        (entry.recommendation.kind === "roll" ||
+          entry.recommendation.kind === "decay")
+      ) {
+        scheduledValues.push(entry.recommendation.date);
+      }
+    }
+    scheduledValues.sort();
+    const outcome = {
+      blockedTaskCount: 0,
+      propagatedScheduleTaskCount: 0,
+      removedHideTaskCount: 0,
+      ambiguousTaskCount: 0,
+      unchangedTaskCount: 0,
+      recoveredReadyTaskCount: 0,
+      recoveredNextTaskCount: 0,
+      recoveredInProgressTaskCount: 0,
+      stillBlockedTaskCount: 0,
+      deferredRecoveryTaskCount: 0,
+      scheduleLoggedTaskCount: 0,
+      skippedCount: fresh.skippedCount,
+      skippedClosedCount: 0,
+      removedPomodoroLinkCount,
+      pomodoroPruneFailed: commit.pomodoroPruneFailed,
+    };
+    for (const { plan } of planned) {
+      const priorityPlan = plan.priorityPlan;
+      const cancelPlan = plan.cancelPlan;
+      if (priorityPlan) {
+        outcome.blockedTaskCount += priorityPlan.blockedTaskCount || 0;
+        outcome.propagatedScheduleTaskCount +=
+          priorityPlan.propagatedScheduleTaskCount || 0;
+        outcome.removedHideTaskCount += priorityPlan.removedHideTaskCount || 0;
+        outcome.ambiguousTaskCount +=
+          priorityPlan.ambiguousProjectTaskCount || 0;
+        outcome.unchangedTaskCount += priorityPlan.unchangedTaskCount || 0;
+        outcome.recoveredReadyTaskCount +=
+          priorityPlan.recoveredReadyTaskCount || 0;
+        outcome.recoveredNextTaskCount +=
+          priorityPlan.recoveredNextTaskCount || 0;
+        outcome.recoveredInProgressTaskCount +=
+          priorityPlan.recoveredInProgressTaskCount || 0;
+        outcome.stillBlockedTaskCount +=
+          priorityPlan.stillBlockedTaskCount || 0;
+        outcome.deferredRecoveryTaskCount +=
+          priorityPlan.deferredRecoveryTaskCount || 0;
+        outcome.scheduleLoggedTaskCount +=
+          priorityPlan.scheduleLoggedTaskCount || 0;
+      }
+      if (cancelPlan) {
+        outcome.scheduleLoggedTaskCount += cancelPlan.loggedCount || 0;
+        outcome.skippedClosedCount += cancelPlan.skippedClosedCount || 0;
+      }
+    }
+    showPriorityNotice(
+      buildBatchPriorityRollNoticeModel(fresh, {
+        baseDate,
+        scheduledValues,
+        outcome,
+      }),
+      options,
+    );
     return true;
   }
 
@@ -36083,6 +36783,8 @@ module.exports.helpers = {
   buildBatchPriorityRollPreviewModel,
   buildBatchPriorityRollNoticeModel,
   planRecommendedRollBatch,
+  planLinkRollBatchSummary,
+  buildLinkRollPreviewModel,
   buildPriorityRollPreviewModel,
   getBulletPropertyScheduleReasonHints,
   getCancelTaskRowTitle,

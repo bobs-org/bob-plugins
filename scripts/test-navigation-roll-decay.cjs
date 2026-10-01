@@ -8,6 +8,28 @@ const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
+    class TestModal {
+      constructor(app) {
+        this.app = app;
+        this.isOpen = false;
+        this.modalEl = { removeClass: () => {} };
+        this.contentEl = { empty: () => {} };
+      }
+      open() {
+        this.isOpen = true;
+        return this;
+      }
+      close() {
+        if (!this.isOpen) {
+          return this;
+        }
+        this.isOpen = false;
+        if (typeof this.onClose === "function") {
+          this.onClose();
+        }
+        return this;
+      }
+    }
     class TestNotice {
       constructor(message) {
         notices.push(String(message));
@@ -15,7 +37,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
     }
     return {
       MarkdownView: EmptyClass,
-      Modal: EmptyClass,
+      Modal: TestModal,
       Notice: TestNotice,
       Plugin: EmptyClass,
       parseYaml: (text) => {
@@ -1419,4 +1441,537 @@ test("picker-counted stale lines refuse and new options stay byte-identical", ()
   );
   assert.equal(cancelBefore.valid, true);
   assert.equal(cancelAfter.content, cancelBefore.content);
+});
+
+// picker-links: Task Link session harness. Each resolved target keeps its own
+// note content, so the batch reads every streak from its own note.
+
+class LinkTestEditor {
+  constructor(content) {
+    this.content = content;
+  }
+  getValue() {
+    return this.content;
+  }
+  getLine(line) {
+    return this.content.split(/\r?\n/)[line] ?? null;
+  }
+}
+
+class LinkTransactionEditor extends LinkTestEditor {
+  constructor(content, cursor) {
+    super(content);
+    this.cursor = { ...cursor };
+  }
+  getCursor() {
+    return { ...this.cursor };
+  }
+  setCursor(lineOrPosition, ch) {
+    this.cursor = {
+      ...(typeof lineOrPosition === "object"
+        ? lineOrPosition
+        : { line: lineOrPosition, ch }),
+    };
+  }
+  getScrollInfo() {
+    return { left: 0, top: 0 };
+  }
+  transaction(transaction) {
+    const changes = [...(transaction.changes || [])].sort(
+      (left, right) =>
+        right.from.line - left.from.line || right.from.ch - left.from.ch,
+    );
+    const offset = (position) => {
+      const lines = this.content.split(/\r?\n/);
+      return (
+        lines
+          .slice(0, position.line)
+          .reduce((sum, line) => sum + line.length + 1, 0) + position.ch
+      );
+    };
+    for (const change of changes) {
+      const start = offset(change.from);
+      const end = offset(change.to || change.from);
+      this.content =
+        this.content.slice(0, start) + change.text + this.content.slice(end);
+    }
+    if (transaction.selection) {
+      this.cursor = {
+        ...(transaction.selection.to || transaction.selection.from),
+      };
+    }
+  }
+}
+
+function createLinkRollHarness(harnessOptions = {}) {
+  const notes = { ...(harnessOptions.notes || {}) };
+  const linkPath = harnessOptions.linkPath || "Plan.md";
+  const linkEditor = new LinkTransactionEditor(
+    harnessOptions.linkContent ?? "- [[Tasks#^a1]]",
+    harnessOptions.cursor || { line: 0, ch: 0 },
+  );
+  const openEditors = new Map([[linkPath, linkEditor]]);
+  for (const [path, editor] of Object.entries(
+    harnessOptions.openEditors || {},
+  )) {
+    openEditors.set(path, editor);
+  }
+  const files = new Map();
+  for (const path of new Set([linkPath, ...Object.keys(notes)])) {
+    files.set(path, {
+      path,
+      basename: path.split("/").pop(),
+      extension: "md",
+    });
+  }
+  const app = {
+    vault: {
+      getAbstractFileByPath: (path) => files.get(path) || null,
+      cachedRead: async (file) => {
+        if (!file || !(file.path in notes)) {
+          throw new Error(`missing file: ${file && file.path}`);
+        }
+        return notes[file.path];
+      },
+      read: async (file) => notes[file.path],
+      process: async (file, fn) => {
+        const before = notes[file.path];
+        const after = fn(before);
+        notes[file.path] = after;
+      },
+      getMarkdownFiles: () => [...files.values()],
+    },
+    metadataCache: {
+      getFirstLinkpathDest: (lookup) => {
+        const text = String(lookup || "").replace(/\.md$/i, "");
+        if (files.has(`${text}.md`)) {
+          return files.get(`${text}.md`);
+        }
+        if (files.has(text)) {
+          return files.get(text);
+        }
+        const base = text.split("/").pop().toLowerCase();
+        const matches = [...files.values()].filter(
+          (file) =>
+            file.basename.toLowerCase() === base ||
+            file.basename.toLowerCase() === `${base}.md`,
+        );
+        return matches.length === 1 ? matches[0] : null;
+      },
+    },
+    workspace: {
+      getLeavesOfType: (type) =>
+        type === "markdown"
+          ? [...openEditors.entries()].map(([path, editor]) => ({
+              view: { file: files.get(path), editor },
+            }))
+          : [],
+    },
+  };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = app;
+  plugin.getActiveMarkdownView = () => ({
+    editor: linkEditor,
+    file: files.get(linkPath),
+  });
+  const config = harnessOptions.config || buildDecayConfig();
+  const open = (options = {}) =>
+    plugin.openLinkPicker(linkEditor, {
+      config: typeof config === "function" ? config() : config,
+      baseDate: new Date(2026, 8, 30),
+      random: () => 0,
+      ...options,
+    });
+  return { notes, files, linkEditor, openEditors, plugin, linkPath, config, open };
+}
+
+function linkResolvedTargets(notes, specs) {
+  return specs.map(([path, line]) => {
+    const content = notes[path];
+    return {
+      path,
+      file: null,
+      content,
+      line,
+      rawLine: content.split("\n")[line],
+    };
+  });
+}
+
+async function flushLinkRollWrites() {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    if (notices.some((message) => /Rolled|no tasks were updated|Could not/.test(message))) {
+      return;
+    }
+  }
+}
+
+test("picker-links aggregates one recommendation per note", () => {
+  const property = decayProperty();
+  const rollP2 = "🎲 P2 roll · in **17** (8–30) days";
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01] ^b1",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP2}`,
+    ].join("\n"),
+    "Other.md": [
+      "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] ^c1",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP4}`,
+      "- [ ] #task D [scheduled:: 2026-10-01] ^d1",
+    ].join("\n"),
+  };
+  const resolved = linkResolvedTargets(notes, [
+    ["Tasks.md", 0],
+    ["Tasks.md", 2],
+    ["Other.md", 0],
+    ["Other.md", 3],
+  ]);
+  const summary = helpers.planLinkRollBatchSummary(resolved, property, {
+    baseDate: new Date(2026, 8, 30),
+    random: () => 0,
+  });
+  assert.deepEqual(summary.counts, { roll: 1, decay: 1, cancel: 1, unavailable: 0 });
+  assert.equal(summary.total, 4);
+  assert.equal(summary.actionableCount, 3);
+  assert.equal(summary.skippedCount, 1);
+  assert.equal(summary.hasRecommendation, true);
+  assert.equal(summary.allRollSameLevel, false);
+  assert.deepEqual(
+    summary.entries.map((entry) => entry.path),
+    ["Tasks.md", "Tasks.md", "Other.md", "Other.md"],
+  );
+  assert.deepEqual(
+    summary.entries.map((entry) =>
+      entry.recommendation ? entry.recommendation.kind : entry.skipped,
+    ),
+    ["roll", "decay", "cancel", "no-priority"],
+  );
+  assert.equal(summary.dateStart, "2026-10-08");
+  assert.equal(summary.dateEnd, "2026-10-31");
+  assert.equal(summary.groups.length, 2);
+  assert.equal(summary.groups[0].summary.actionableCount, 2);
+  assert.equal(summary.groups[1].summary.actionableCount, 1);
+  assert.equal(Object.isFrozen(summary), true);
+  assert.equal(Object.isFrozen(summary.entries[0]), true);
+
+  const batchPreview = helpers.buildBatchPriorityRollPreviewModel(summary);
+  assert.equal(batchPreview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
+
+  const single = helpers.planLinkRollBatchSummary(
+    linkResolvedTargets(notes, [["Tasks.md", 0]]),
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.equal(single.total, 1);
+  const singlePreview = helpers.buildLinkRollPreviewModel(
+    single,
+    new Date(2026, 8, 30),
+  );
+  assert.equal(singlePreview.action, "P2 roll");
+  assert.equal(singlePreview.footerLabel, "Roll P2");
+  assert.match(singlePreview.ariaLabel, /Ctrl\+Enter: P2 roll/);
+
+  const multiPreview = helpers.buildLinkRollPreviewModel(
+    summary,
+    new Date(2026, 8, 30),
+  );
+  assert.equal(multiPreview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
+  assert.equal(multiPreview.footerLabel, "Apply 3 recommendations");
+  assert.equal(helpers.buildLinkRollPreviewModel(null), null);
+  assert.equal(
+    helpers.buildLinkRollPreviewModel(
+      helpers.planLinkRollBatchSummary([], property, {}),
+      new Date(2026, 8, 30),
+    ),
+    null,
+  );
+});
+
+test("picker-links refuses a recurring cancel as one batch", () => {
+  const property = decayProperty();
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+      "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] 🔁 ^c1",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP4}`,
+    ].join("\n"),
+  };
+  const summary = helpers.planLinkRollBatchSummary(
+    linkResolvedTargets(notes, [
+      ["Tasks.md", 0],
+      ["Tasks.md", 1],
+    ]),
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.ok(summary.unavailableReason);
+  assert.equal(summary.hasRecommendation, false);
+  const preview = helpers.buildLinkRollPreviewModel(
+    summary,
+    new Date(2026, 8, 30),
+  );
+  assert.equal(preview.kind, "unavailable");
+  assert.equal(preview.action, "Cannot apply");
+});
+
+test("picker-links takes a single recommended roll with Ctrl+Enter", async () => {
+  notices.length = 0;
+  const taskEditor = new LinkTransactionEditor(
+    "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+    { line: 0, ch: 0 },
+  );
+  const harness = createLinkRollHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: {
+      "Tasks.md": "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+    },
+    openEditors: { "Tasks.md": taskEditor },
+  });
+  assert.equal(await harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.ok(picker.isLinkSession());
+  const preview = picker.getStageOneRollPreview();
+  assert.equal(preview.action, "P2 roll");
+  assert.equal(preview.footerLabel, "Roll P2");
+  assert.match(preview.ariaLabel, /Ctrl\+Enter: P2 roll/);
+
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.kind === "property" && item.property.name === "scheduled",
+  );
+  assert.notEqual(scheduledIndex, -1);
+  picker.selectedIndex = scheduledIndex;
+  picker.handleKeydown({
+    key: "Enter",
+    ctrlKey: true,
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  await flushLinkRollWrites();
+  assert.match(
+    taskEditor.content,
+    /- \[\?\] #task Ship it \[priority:: medium\] \[scheduled:: 2026-10-08\].*\^a1/,
+  );
+  assert.match(
+    taskEditor.content,
+    /🎲 P2 roll · in \*\*8\*\* \(8–30\) days/,
+  );
+  assert.match(notices.at(-1), /Rolled 1 task/);
+});
+
+test("picker-links shows no pinned roll row in stage two", async () => {
+  notices.length = 0;
+  const harness = createLinkRollHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: {
+      "Tasks.md": "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+    },
+  });
+  assert.equal(await harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledItem = picker.visibleItems.find(
+    (item) => item.kind === "property" && item.property.name === "scheduled",
+  );
+  assert.ok(scheduledItem);
+  picker.showValueStage(scheduledItem);
+  assert.equal(picker.stage, "value");
+  assert.equal(
+    picker.items.some((item) => item && item.priorityRoll),
+    false,
+  );
+  const footerLabels = picker.footerHints.map((hint) => hint.label);
+  assert.ok(footerLabels.includes("Roll P2"));
+});
+
+test("picker-links decays and cancels a single Task Link", async () => {
+  notices.length = 0;
+  const rollP2 = "🎲 P2 roll · in **17** (8–30) days";
+  const decayEditor = new LinkTransactionEditor(
+    [
+      "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP2}`,
+    ].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const decayHarness = createLinkRollHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: {
+      "Tasks.md": [
+        "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+        "\t- 🗓️ **SCHEDULE LOG**",
+        `\t\t- *2026-10-01* — ${rollP2}`,
+      ].join("\n"),
+    },
+    openEditors: { "Tasks.md": decayEditor },
+  });
+  assert.equal(await decayHarness.open(), true);
+  const decayPicker = decayHarness.plugin.activeBulletPropertyPicker;
+  assert.equal(decayPicker.getStageOneRollPreview().action, "P2 → P3");
+  assert.equal(await decayPicker.applyLinkRecommendedRoll(), true);
+  assert.match(
+    decayEditor.content,
+    /\[priority:: low\] \[scheduled:: 2026-10-31\]/,
+  );
+  assert.match(
+    decayEditor.content,
+    /🎲 P2 → P3 decay · in \*\*31\*\* \(31–90\) days/,
+  );
+  assert.match(notices.at(-1), /Rolled 1 task/);
+
+  notices.length = 0;
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const cancelHarness = createLinkRollHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: {
+      "Tasks.md": [
+        "- [ ] #task Ship it [priority:: lowest] [scheduled:: 2026-10-01] ^a1",
+        "\t- 🗓️ **SCHEDULE LOG**",
+        `\t\t- *2026-10-01* — ${rollP4}`,
+      ].join("\n"),
+    },
+  });
+  assert.equal(await cancelHarness.open(), true);
+  const cancelPicker = cancelHarness.plugin.activeBulletPropertyPicker;
+  assert.equal(cancelPicker.getStageOneRollPreview().action, "Cancel task");
+  assert.equal(await cancelPicker.applyLinkRecommendedRoll(), true);
+  assert.match(
+    cancelHarness.notes["Tasks.md"],
+    /- \[-\] #task Ship it.*\[cancelled:: 2026-09-30\]/,
+  );
+  assert.match(
+    cancelHarness.notes["Tasks.md"],
+    /🍂 decayed past P4 after 1 roll/,
+  );
+});
+
+test("picker-links applies a mixed batch across two notes", async () => {
+  notices.length = 0;
+  const rollP2 = "🎲 P2 roll · in **17** (8–30) days";
+  const rollP4 = "🎲 P4 roll · in **200** (91–365) days";
+  const tasksEditor = new LinkTransactionEditor(
+    [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01] ^b1",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      `\t\t- *2026-10-01* — ${rollP2}`,
+    ].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const harness = createLinkRollHarness({
+    linkContent: ["- [[Tasks#^a1]]", "- [[Tasks#^b1]]", "- [[Other#^c1]]"].join("\n"),
+    notes: {
+      "Tasks.md": [
+        "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+        "\t- 🗓️ **SCHEDULE LOG**",
+        "- [ ] #task B [priority:: medium] [scheduled:: 2026-10-01] ^b1",
+        "\t- 🗓️ **SCHEDULE LOG**",
+        `\t\t- *2026-10-01* — ${rollP2}`,
+      ].join("\n"),
+      "Other.md": [
+        "- [ ] #task C [priority:: lowest] [scheduled:: 2026-10-01] ^c1",
+        "\t- 🗓️ **SCHEDULE LOG**",
+        `\t\t- *2026-10-01* — ${rollP4}`,
+      ].join("\n"),
+    },
+    openEditors: { "Tasks.md": tasksEditor },
+  });
+  assert.equal(
+    await harness.open({ countExplicit: true, additionalTaskCount: 2 }),
+    true,
+  );
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const preview = picker.getStageOneRollPreview();
+  assert.equal(preview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
+  assert.equal(preview.dateText, "2026-10-08 → 2026-10-31");
+  assert.equal(preview.footerLabel, "Apply 3 recommendations");
+  assert.equal(await picker.applyLinkRecommendedRoll(), true);
+  assert.match(
+    tasksEditor.content,
+    /\[priority:: medium\] \[scheduled:: 2026-10-08\]/,
+  );
+  assert.match(
+    tasksEditor.content,
+    /\[priority:: low\] \[scheduled:: 2026-10-31\]/,
+  );
+  assert.match(
+    harness.notes["Other.md"],
+    /- \[-\] #task C.*\[cancelled:: 2026-09-30\]/,
+  );
+  assert.match(
+    harness.notes["Other.md"],
+    /🍂 decayed past P4 after 1 roll/,
+  );
+  assert.match(notices.at(-1), /Rolled 3 tasks/);
+});
+
+test("picker-links refuses the whole batch when a linked note changed", async () => {
+  notices.length = 0;
+  const taskEditor = new LinkTransactionEditor(
+    "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+    { line: 0, ch: 0 },
+  );
+  const harness = createLinkRollHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: {
+      "Tasks.md": "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+    },
+    openEditors: { "Tasks.md": taskEditor },
+  });
+  assert.equal(await harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  taskEditor.content =
+    "- [ ] #task Ship it, edited elsewhere [priority:: medium] [scheduled:: 2026-10-01] ^a1";
+  assert.equal(await picker.applyLinkRecommendedRoll(), false);
+  assert.equal(
+    taskEditor.content,
+    "- [ ] #task Ship it, edited elsewhere [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+  );
+  assert.match(notices.at(-1), /no tasks were updated/);
+});
+
+test("picker-links prunes today's open Pomodoro links", async () => {
+  notices.length = 0;
+  const dailyPath = "2026/20260930.md";
+  const taskEditor = new LinkTransactionEditor(
+    "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+    { line: 0, ch: 0 },
+  );
+  const harness = createLinkRollHarness({
+    linkPath: "Plan.md",
+    linkContent: "- [[Tasks#^a1]]",
+    notes: {
+      "Tasks.md": "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1",
+      [dailyPath]: [
+        "## Pomodoros",
+        "",
+        "- [ ] Current (0900-0930)",
+        "  - [[Tasks#^a1]]",
+        "  - keep me",
+      ].join("\n"),
+    },
+    openEditors: { "Tasks.md": taskEditor },
+  });
+  assert.equal(await harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(await picker.applyLinkRecommendedRoll(), true);
+  assert.match(
+    taskEditor.content,
+    /- \[\?\] #task Ship it \[priority:: medium\] \[scheduled:: 2026-10-08\]/,
+  );
+  assert.equal(
+    harness.notes[dailyPath],
+    ["## Pomodoros", "", "- [ ] Current (0900-0930)", "  - keep me"].join("\n"),
+  );
+  assert.match(notices.at(-1), /removed 1 Pomodoro link/);
 });

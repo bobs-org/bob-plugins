@@ -2927,6 +2927,1240 @@ function laneBudgetFromTasks(tasks, today, caps, lane) {
   return { count, cap, over: count > cap };
 }
 
+// --- Task freshness: placement ----------------------------------------------
+// Owned by `docs/freshness.md` in bob-cli; the Rust half is
+// `src/native/freshness/placement.rs`. Both sides run the placement (P)
+// conformance vectors in that doc verbatim.
+//
+// Placement is the exception to the copy-small-helpers rule: nav,
+// task-status-cycler and block-id-prompt call
+// `api?.freshness?.stampLine?.(line, dateText) ?? line` (api
+// `version >= 3`) instead of placing `fresh` themselves. A missing stamp
+// only means Bryan sees the task once more; a misplaced stamp hides
+// Tasks fields — so the risky part lives here, and when ledger-tools is
+// absent or old the gesture simply doesn't stamp.
+
+// Tasks keys recognized at the end of a Dataview task line, in the order
+// `docs/freshness.md` pins them.
+const FRESHNESS_TASKS_KEYS = [
+  "priority",
+  "start",
+  "created",
+  "scheduled",
+  "due",
+  "completion",
+  "cancelled",
+  "repeat",
+  "onCompletion",
+  "id",
+  "dependsOn",
+];
+
+// Any `[key:: value]` or `(key:: value)` field, with the key matched
+// case-sensitively and any spacing allowed around `::`. Mirrors the Rust
+// `INLINE_FIELD_RE` in `task_fields.rs`.
+const FRESHNESS_INLINE_FIELD_SOURCE =
+  "\\[([A-Za-z][A-Za-z0-9_-]*)\\s*::\\s*([^\\]\n]*)\]|\\(([A-Za-z][A-Za-z0-9_-]*)\\s*::\\s*([^)\n]*)\\)";
+
+// Every `key` field on `line`, in line order: `{ start, end, value }`
+// with UTF-16 offsets into `line`. The key match is case-sensitive and
+// the value is trimmed of spaces/tabs only, like the Rust scanner.
+function freshnessInlineFields(line, key) {
+  const text = String(line || "");
+  const pattern = new RegExp(FRESHNESS_INLINE_FIELD_SOURCE, "g");
+  const out = [];
+  let match = pattern.exec(text);
+  while (match !== null) {
+    const matchedKey = match[1] !== undefined ? match[1] : match[3];
+    const raw = match[1] !== undefined ? match[2] : match[4];
+    if (matchedKey === key) {
+      const value = raw.replace(/^[ \t]+|[ \t]+$/g, "");
+      out.push({ start: match.index, end: match.index + match[0].length, value });
+    }
+    match = pattern.exec(text);
+  }
+  return out;
+}
+
+function freshnessIsLeapYear(year) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+// A strict `YYYY-MM-DD` calendar date, else null. Anything else —
+// including out-of-range months and days — is rejected, like the Rust
+// `parse_strict_calendar_date`.
+function parseFreshDateStrict(value) {
+  const text = String(value || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return null;
+  }
+  const year = Number(text.slice(0, 4));
+  const month = Number(text.slice(5, 7));
+  const day = Number(text.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1) {
+    return null;
+  }
+  const daysInMonth = [
+    31,
+    freshnessIsLeapYear(year) ? 29 : 28,
+    31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+  ][month - 1];
+  if (day > daysInMonth) {
+    return null;
+  }
+  return text;
+}
+
+function freshDateToUtc(text) {
+  return Date.UTC(
+    Number(text.slice(0, 4)),
+    Number(text.slice(5, 7)) - 1,
+    Number(text.slice(8, 10)),
+  );
+}
+
+function freshPad2(number) {
+  return String(number).padStart(2, "0");
+}
+
+// Add `days` to a canonical date. DST-safe via UTC noon arithmetic.
+function freshDateAddDays(text, days) {
+  const shifted = new Date(freshDateToUtc(text) + days * 86400000);
+  return (
+    String(shifted.getUTCFullYear()).padStart(4, "0") +
+    "-" +
+    freshPad2(shifted.getUTCMonth() + 1) +
+    "-" +
+    freshPad2(shifted.getUTCDate())
+  );
+}
+
+// Whole days from `from` to `to` (both canonical dates).
+function freshDateDiffDays(from, to) {
+  return Math.round((freshDateToUtc(to) - freshDateToUtc(from)) / 86400000);
+}
+
+// Drop leading `>` quote markers the way the vault scanner does (up to
+// three spaces, `>`, one optional space, repeated). Quoted tasks are
+// still tasks; the `>` bytes stay in place on write.
+function freshnessStripBlockquotePrefix(line) {
+  let rest = String(line || "");
+  for (;;) {
+    const spaces = rest.match(/^ */)[0].length;
+    if (spaces > 3 || rest[spaces] !== ">") {
+      return rest;
+    }
+    rest = rest.slice(spaces + 1);
+    if (rest.startsWith(" ")) {
+      rest = rest.slice(1);
+    }
+  }
+}
+
+function freshnessAfterListMarker(line, index) {
+  if (line[index] === "-" || line[index] === "*" || line[index] === "+") {
+    return line[index + 1] !== undefined &&
+      /\s/.test(line[index + 1])
+      ? index + 1
+      : null;
+  }
+  const digits = (line.slice(index).match(/^\d+/) || [""])[0].length;
+  if (
+    digits === 0 ||
+    (line[index + digits] !== "." && line[index + digits] !== ")")
+  ) {
+    return null;
+  }
+  return line[index + digits + 1] !== undefined &&
+    /\s/.test(line[index + digits + 1])
+    ? index + digits + 1
+    : null;
+}
+
+// The checkbox status char on a task line, or null when `line` is not a
+// task line.
+function freshnessTaskStatus(line) {
+  const stripped = freshnessStripBlockquotePrefix(line);
+  let index = 0;
+  while (stripped[index] === " " || stripped[index] === "\t") {
+    index += 1;
+  }
+  const after = freshnessAfterListMarker(stripped, index);
+  if (after === null) {
+    return null;
+  }
+  index = after;
+  while (stripped[index] !== undefined && /\s/.test(stripped[index])) {
+    index += 1;
+  }
+  if (stripped[index] !== "[") {
+    return null;
+  }
+  const close = stripped.indexOf("]", index + 1);
+  if (close === -1) {
+    return null;
+  }
+  const inner = stripped.slice(index + 1, close);
+  if ([...inner].length !== 1) {
+    return null;
+  }
+  const trailing = stripped.slice(close + 1);
+  if (trailing !== "" && !/^\s/.test(trailing)) {
+    return null;
+  }
+  return inner;
+}
+
+function freshnessIsClosedStatus(status) {
+  return status === "x" || status === "X" || status === "-";
+}
+
+function freshnessHasRepeatField(line) {
+  return freshnessInlineFields(line, "repeat").length > 0;
+}
+
+// A `[refresh:: N]` value: an integer 1-365, nothing else.
+function freshnessParseRefreshValue(value) {
+  const trimmed = String(value || "").trim();
+  if (!/^[+-]?\d+$/.test(trimmed)) {
+    return null;
+  }
+  const number = Number(trimmed);
+  if (!Number.isSafeInteger(number) || number < 1 || number > 365) {
+    return null;
+  }
+  return number;
+}
+
+function freshnessFirstValidRefresh(line) {
+  const fields = freshnessInlineFields(line, "refresh");
+  for (const field of fields) {
+    const days = freshnessParseRefreshValue(field.value);
+    if (days !== null) {
+      return days;
+    }
+  }
+  return null;
+}
+
+// The scan floor: the start of the task body, or the end of a leading
+// `#task` global-filter token. The suffix scan never moves left of it.
+// Quote markers are detection-only: the floor is shifted back into the
+// original line's coordinates.
+function freshnessScanFloor(line) {
+  const text = String(line || "");
+  const stripped = freshnessStripBlockquotePrefix(text);
+  const offset = text.length - stripped.length;
+  let index = 0;
+  while (stripped[index] === " " || stripped[index] === "\t") {
+    index += 1;
+  }
+  const after = freshnessAfterListMarker(stripped, index);
+  if (after === null) {
+    return null;
+  }
+  index = after;
+  while (stripped[index] !== undefined && /\s/.test(stripped[index])) {
+    index += 1;
+  }
+  const close = stripped.indexOf("]", index);
+  if (close === -1) {
+    return null;
+  }
+  let bodyStart = close + 1;
+  while (stripped[bodyStart] === " " || stripped[bodyStart] === "\t") {
+    bodyStart += 1;
+  }
+  const body = stripped.slice(bodyStart);
+  if (
+    body === "#task" ||
+    body.startsWith("#task ") ||
+    body.startsWith("#task\t")
+  ) {
+    return offset + bodyStart + "#task".length;
+  }
+  return offset + bodyStart;
+}
+
+function freshnessTrimEndTo(text, cursor) {
+  let end = Math.min(cursor, text.length);
+  while (end > 0 && (text[end - 1] === " " || text[end - 1] === "\t")) {
+    end -= 1;
+  }
+  return end;
+}
+
+// Start of a trailing ` ^id` block link, if `text` ends with one.
+function freshnessTrailingBlockStart(text) {
+  const trimmed = text.replace(/[ \t]+$/, "");
+  const tokenStart = (() => {
+    const last = Math.max(trimmed.lastIndexOf(" "), trimmed.lastIndexOf("\t"));
+    return last === -1 ? 0 : last + 1;
+  })();
+  const token = trimmed.slice(tokenStart);
+  if (!token.startsWith("^")) {
+    return null;
+  }
+  const id = token.slice(1);
+  if (!id || !/^[A-Za-z0-9-]+$/.test(id)) {
+    return null;
+  }
+  if (tokenStart > 0) {
+    const before = trimmed[tokenStart - 1];
+    if (before !== " " && before !== "\t") {
+      return null;
+    }
+  }
+  return text.replace(/[ \t]+$/, "").length - token.length;
+}
+
+// Start of a trailing `#tag`, if `trimmed` (already right-trimmed) ends
+// with one starting at or after `floor`.
+function freshnessTrailingTagStart(trimmed, floor) {
+  const last = Math.max(trimmed.lastIndexOf(" "), trimmed.lastIndexOf("\t"));
+  const tokenStart = last === -1 ? 0 : last + 1;
+  const start = Math.max(tokenStart, floor);
+  const token = trimmed.slice(start);
+  if (!token.startsWith("#")) {
+    return null;
+  }
+  if (start > floor) {
+    const before = trimmed[start - 1];
+    if (before !== " " && before !== "\t") {
+      return null;
+    }
+  }
+  const value = token.slice(1);
+  if (!value || /[\s!@#$%^&*(),.?":{}|<>]/.test(value)) {
+    return null;
+  }
+  return start;
+}
+
+// The `(start, key)` of a trailing `[k:: v]` / `(k:: v)` field: the key
+// must equal its trim.
+function freshnessTrailingFieldKey(trimmed) {
+  let end = trimmed.length;
+  if (trimmed.endsWith(",")) {
+    end -= 1;
+    end = trimmed.slice(0, end).replace(/[ \t]+$/, "").length;
+  }
+  const head = trimmed.slice(0, end);
+  const close = head[head.length - 1];
+  const open = close === "]" ? "[" : close === ")" ? "(" : null;
+  if (open === null) {
+    return null;
+  }
+  const withoutClose = head.slice(0, -1);
+  const start = withoutClose.lastIndexOf(open);
+  if (start === -1) {
+    return null;
+  }
+  const inner = withoutClose.slice(start + 1).trim();
+  const separator = inner.indexOf("::");
+  if (separator === -1) {
+    return null;
+  }
+  const key = inner.slice(0, separator);
+  if (key !== key.trim() || !key.trim()) {
+    return null;
+  }
+  return { start, key: key.trim() };
+}
+
+// Byte offset where the trailing Tasks suffix starts. The suffix starts
+// at the leftmost Tasks element (a Tasks-key field, a trailing tag, or
+// `^id`) of the run scanned from the end of the line. `fresh` /
+// `refresh` fields extend the run but are not part of the suffix.
+// Returns the trimmed length when there is no suffix.
+function freshnessTasksSuffixStart(line) {
+  const text = String(line || "");
+  const floor = freshnessScanFloor(text);
+  if (floor === null) {
+    return text.replace(/[ \t\n\r]+$/, "").length;
+  }
+  const trimmedLen = text.replace(/[ \t\n\r]+$/, "").length;
+  let cursor = trimmedLen;
+  let leftmost = null;
+
+  const blockStart = freshnessTrailingBlockStart(text.slice(0, cursor));
+  if (blockStart !== null && blockStart >= floor) {
+    leftmost = blockStart;
+    cursor = freshnessTrimEndTo(text.slice(0, blockStart), blockStart);
+  }
+
+  for (;;) {
+    if (cursor <= floor) {
+      break;
+    }
+    const slice = text.slice(0, cursor);
+    const trimmed = slice.replace(/[ \t\n\r]+$/, "");
+    const end = trimmed.length;
+    if (end <= floor) {
+      break;
+    }
+    const tagStart = freshnessTrailingTagStart(trimmed, floor);
+    if (tagStart !== null) {
+      leftmost = tagStart;
+      cursor = freshnessTrimEndTo(text.slice(0, tagStart), tagStart);
+      continue;
+    }
+    const field = freshnessTrailingFieldKey(trimmed);
+    if (!field) {
+      break;
+    }
+    if (field.start < floor) {
+      break;
+    }
+    if (FRESHNESS_TASKS_KEYS.includes(field.key)) {
+      leftmost = field.start;
+      cursor = freshnessTrimEndTo(text.slice(0, field.start), field.start);
+      continue;
+    }
+    if (field.key === "fresh" || field.key === "refresh") {
+      cursor = freshnessTrimEndTo(text.slice(0, field.start), field.start);
+      continue;
+    }
+    break;
+  }
+
+  return leftmost === null ? trimmedLen : leftmost;
+}
+
+// Remove every `fresh` and `refresh` field from `text`, collapsing the
+// whitespace each removal leaves to a single space.
+function freshnessRemoveFields(text) {
+  const ranges = [];
+  for (const field of freshnessInlineFields(text, "fresh")) {
+    ranges.push([field.start, field.end]);
+  }
+  for (const field of freshnessInlineFields(text, "refresh")) {
+    ranges.push([field.start, field.end]);
+  }
+  if (ranges.length === 0) {
+    return text;
+  }
+  ranges.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+
+  let output = "";
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    const before = text.slice(cursor, start).replace(/[ \t]+$/, "");
+    output += before;
+    let next = end;
+    while (text[next] === " " || text[next] === "\t") {
+      next += 1;
+    }
+    if (output !== "" && next < text.length) {
+      output += " ";
+    }
+    cursor = next;
+  }
+  output += text.slice(cursor);
+  return output;
+}
+
+// Rebuild `line` with `[fresh:: dateText]` (and `[refresh:: N]` when
+// kept) immediately before the Tasks suffix. The suffix bytes themselves
+// are never changed.
+function freshnessRebuildWithoutFields(line, dateText, keptRefresh) {
+  const text = String(line || "");
+  const trimmedLen = text.replace(/[ \t\n\r]+$/, "").length;
+  const suffixStart = Math.min(freshnessTasksSuffixStart(text), trimmedLen);
+  const headClean = freshnessRemoveFields(text.slice(0, suffixStart));
+  const suffixClean = freshnessRemoveFields(text.slice(suffixStart, trimmedLen));
+  const head = headClean.replace(/[ \t\n\r]+$/, "");
+  const suffix = suffixClean.trim().replace(/^[ \t]+/, "");
+
+  let output = head + " [fresh:: " + dateText + "]";
+  if (keptRefresh !== null && keptRefresh !== undefined) {
+    output += " [refresh:: " + keptRefresh + "]";
+  }
+  if (suffix !== "") {
+    output += " " + suffix;
+  }
+  return output;
+}
+
+function freshnessTodayFallback() {
+  return formatLocalDate(new Date());
+}
+
+function freshnessNormalizeDateText(dateText) {
+  return parseFreshDateStrict(dateText) || freshnessTodayFallback();
+}
+
+// Stamp `line` with `dateText`, keeping the first valid existing
+// `[refresh:: N]` if there is one. Refusals (not a task, recurring,
+// done/cancelled) return the line unchanged with a reason. A line
+// already stamped with `dateText` in canonical position is
+// byte-identical with `changed: false`.
+function freshnessStampLine(line, dateText) {
+  const text = String(line || "");
+  const day = freshnessNormalizeDateText(dateText);
+  const status = freshnessTaskStatus(text);
+  if (status === null) {
+    return { line: text, changed: false, refused: "not_task" };
+  }
+  if (freshnessIsClosedStatus(status)) {
+    return { line: text, changed: false, refused: "closed" };
+  }
+  if (freshnessHasRepeatField(text)) {
+    return { line: text, changed: false, refused: "recurring" };
+  }
+  const output = freshnessRebuildWithoutFields(
+    text,
+    day,
+    freshnessFirstValidRefresh(text),
+  );
+  return { line: output, changed: output !== text, refused: null };
+}
+
+// Set or clear `[refresh:: N]` and stamp with `dateText`. A value
+// outside 1-365 clears the field instead of writing an invalid one,
+// like the Rust `set_refresh`.
+function freshnessSetRefreshLine(line, days, dateText) {
+  const text = String(line || "");
+  const day = freshnessNormalizeDateText(dateText);
+  let normalized = days;
+  if (typeof normalized === "string" && /^[+-]?\d+$/.test(normalized.trim())) {
+    normalized = Number(normalized.trim());
+  }
+  const edit =
+    Number.isSafeInteger(normalized) && normalized >= 1 && normalized <= 365
+      ? normalized
+      : null;
+  const status = freshnessTaskStatus(text);
+  if (status === null) {
+    return { line: text, changed: false, refused: "not_task" };
+  }
+  if (freshnessIsClosedStatus(status)) {
+    return { line: text, changed: false, refused: "closed" };
+  }
+  if (freshnessHasRepeatField(text)) {
+    return { line: text, changed: false, refused: "recurring" };
+  }
+  const output = freshnessRebuildWithoutFields(text, day, edit);
+  return { line: output, changed: output !== text, refused: null };
+}
+
+function freshnessPushLint(lints, code) {
+  if (!lints.includes(code)) {
+    lints.push(code);
+  }
+}
+
+// Read the `fresh` / `refresh` fields on `line`: the latest valid
+// `fresh` date not after `todayText` (a future date is treated as none),
+// the first valid `[refresh:: N]`, and lint codes in first-seen order.
+function readFreshness(line, todayText) {
+  const text = String(line || "");
+  const today = freshnessNormalizeDateText(todayText);
+  const freshFields = freshnessInlineFields(text, "fresh");
+  const refreshFields = freshnessInlineFields(text, "refresh");
+  const lints = [];
+
+  let best = null;
+  for (const field of freshFields) {
+    const date = parseFreshDateStrict(field.value.trim());
+    if (date === null) {
+      freshnessPushLint(lints, "fresh_malformed");
+    } else if (date > today) {
+      freshnessPushLint(lints, "fresh_future");
+    } else if (best === null || date > best) {
+      best = date;
+    }
+  }
+  if (freshFields.length > 1) {
+    freshnessPushLint(lints, "fresh_duplicate");
+  }
+
+  let refresh = null;
+  let refreshInvalidSeen = false;
+  for (const field of refreshFields) {
+    const days = freshnessParseRefreshValue(field.value);
+    if (days === null) {
+      refreshInvalidSeen = true;
+    } else if (refresh === null) {
+      refresh = days;
+    }
+  }
+  if (refreshInvalidSeen) {
+    freshnessPushLint(lints, "refresh_invalid");
+  }
+
+  const suffixStart = freshnessTasksSuffixStart(text);
+  const trimmedLen = text.replace(/[ \t\n\r]+$/, "").length;
+  if (suffixStart < trimmedLen) {
+    const misplaced = (name) =>
+      freshnessInlineFields(text, name).some(
+        (field) => field.start >= suffixStart,
+      );
+    if (misplaced("fresh") || misplaced("refresh")) {
+      freshnessPushLint(lints, "fresh_misplaced");
+    }
+  }
+
+  return { fresh: best, refresh, lints };
+}
+
+// --- Task freshness: config -------------------------------------------------
+// Beside `planCapsBlock` / `coercePlanCaps`: the `freshness:` block in
+// `~/.config/bob/config.yml` (`interval`, `stale_daily_budget`).
+
+function defaultFreshnessConfig() {
+  return { interval: 7, staleDailyBudget: null };
+}
+
+// The raw `freshness:` block out of a parsed config file, or undefined
+// when the file holds no such block. A present-but-bad block (null is
+// fine, anything else that is not a mapping is not) is returned as-is
+// so `coerceFreshnessConfig` can flag it; unknown keys stay ignored.
+function freshnessBlock(yamlObject) {
+  if (
+    !yamlObject ||
+    typeof yamlObject !== "object" ||
+    Array.isArray(yamlObject)
+  ) {
+    return undefined;
+  }
+  const block = yamlObject.freshness;
+  return block === undefined ? undefined : block;
+}
+
+function coerceFreshnessConfig(block) {
+  const defaults = defaultFreshnessConfig();
+  const fallback = () => ({
+    config: { ...defaults, intervalFromConfig: false },
+    invalid: false,
+  });
+  if (block === undefined || block === null) {
+    return fallback();
+  }
+  if (typeof block !== "object" || Array.isArray(block)) {
+    return {
+      config: { ...defaults, intervalFromConfig: false },
+      invalid: true,
+    };
+  }
+  // Snake_case keys, with camelCase tolerated like the plan caps.
+  const pick = (snake, camel) =>
+    block[snake] !== undefined ? block[snake] : block[camel];
+  let invalid = false;
+  let interval = defaults.interval;
+  let intervalFromConfig = false;
+  const rawInterval = pick("interval", "interval");
+  if (rawInterval !== undefined && rawInterval !== null) {
+    if (
+      typeof rawInterval === "number" &&
+      Number.isInteger(rawInterval) &&
+      rawInterval >= 1 &&
+      rawInterval <= 365
+    ) {
+      interval = rawInterval;
+      intervalFromConfig = true;
+    } else {
+      invalid = true;
+    }
+  }
+  let budget = defaults.staleDailyBudget;
+  const rawBudget = pick("stale_daily_budget", "staleDailyBudget");
+  if (rawBudget !== undefined && rawBudget !== null) {
+    if (
+      typeof rawBudget === "number" &&
+      Number.isInteger(rawBudget) &&
+      rawBudget >= 1
+    ) {
+      budget = rawBudget;
+    } else {
+      invalid = true;
+    }
+  }
+  // Like Rust, any invalid value falls back to the full default block.
+  if (invalid) {
+    return {
+      config: { ...defaults, intervalFromConfig: false },
+      invalid: true,
+    };
+  }
+  return {
+    config: { interval, staleDailyBudget: budget, intervalFromConfig },
+    invalid: false,
+  };
+}
+
+// Read `freshness:` from `~/.config/bob/config.yml` (honoring
+// XDG_CONFIG_HOME), with the same injectable options as `loadPlanCaps`.
+// Mobile (no desktop `fs`) and a missing file fall back to the defaults.
+// Returns `{ config, invalid, configPath }`; `invalid` is true only when
+// the file was read but held a present-but-bad value.
+function loadFreshnessConfig(options = {}) {
+  const defaults = defaultFreshnessConfig();
+  const freshDefaults = () => ({ ...defaults, intervalFromConfig: false });
+  const configPath = options.configPath || planConfigPath(options);
+  const platform = options.Platform === undefined ? Platform : options.Platform;
+  if (platform && platform.isDesktopApp === false) {
+    return { config: freshDefaults(), invalid: false, configPath };
+  }
+  const fsModule =
+    options.fsModule === undefined
+      ? planRequireOptionalNodeModule("fs")
+      : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") {
+    return { config: freshDefaults(), invalid: false, configPath };
+  }
+  let rawConfig;
+  try {
+    rawConfig = fsModule.readFileSync(configPath, "utf8");
+  } catch (error) {
+    return {
+      config: freshDefaults(),
+      invalid: Boolean(error && error.code && error.code !== "ENOENT"),
+      configPath,
+    };
+  }
+  const yamlParser =
+    options.parseYaml === undefined ? parseYaml : options.parseYaml;
+  if (typeof yamlParser !== "function") {
+    return { config: freshDefaults(), invalid: false, configPath };
+  }
+  let parsed;
+  try {
+    parsed = yamlParser(rawConfig);
+  } catch (error) {
+    return { config: freshDefaults(), invalid: true, configPath };
+  }
+  const coerced = coerceFreshnessConfig(freshnessBlock(parsed));
+  return { config: coerced.config, invalid: coerced.invalid, configPath };
+}
+
+// --- Task freshness: evaluation ---------------------------------------------
+// Computed at read time, never stored. Mirrors `state.rs`; both sides run
+// the state (S) conformance vectors in `docs/freshness.md` verbatim.
+
+// Parse a note's raw `task_refresh` frontmatter value: an integer 1-365
+// (numbers stay numbers, quoted strings are unquoted), else a
+// `task_refresh_invalid` lint that falls through to the next level.
+function freshnessParseNoteRefresh(raw) {
+  if (raw === undefined || raw === null) {
+    return { days: null, lint: null };
+  }
+  const text = String(raw)
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .trim();
+  if (text === "") {
+    return { days: null, lint: null };
+  }
+  if (!/^[+-]?\d+$/.test(text)) {
+    return { days: null, lint: "task_refresh_invalid" };
+  }
+  const number = Number(text);
+  if (!Number.isSafeInteger(number) || number < 1 || number > 365) {
+    return { days: null, lint: "task_refresh_invalid" };
+  }
+  return { days: number, lint: null };
+}
+
+// Effective interval and where it came from: the task's `[refresh:: N]`,
+// then the note's `task_refresh`, then `freshness.interval`, then 7.
+function freshnessIntervalFor(taskDays, noteDays, config) {
+  if (taskDays !== null && taskDays !== undefined) {
+    return { days: taskDays, source: "task" };
+  }
+  if (noteDays !== null && noteDays !== undefined) {
+    return { days: noteDays, source: "note" };
+  }
+  const interval =
+    config && Number.isInteger(config.interval) ? config.interval : 7;
+  const fromConfig =
+    Boolean(config && config.intervalFromConfig) || interval !== 7;
+  if (fromConfig) {
+    return { days: interval, source: "config" };
+  }
+  return { days: 7, source: "default" };
+}
+
+function freshnessEvaluateValidScheduled(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : formatLocalDate(value);
+  }
+  return parseFreshDateStrict(String(value).trim());
+}
+
+// Evaluate one row for `todayText` under `config`. A row carries the
+// caller-precomputed scope inputs:
+//
+//   { path, line (1-based), isTodo (Tasks status type TODO), recurring,
+//     laneVisible (the NEXT/PENDING lane predicate), isDailyNote
+//     (canonical YYYY/YYYYMMDD.md), isToday (Task Link under today's open
+//     Pomodoros), scheduled (canonical date or null), rawLine (the task's
+//     originalMarkdown), noteRefreshRaw (the note's raw `task_refresh`) }
+//
+// Returns `{ state ("new"|"resurfaced"|"stale"|"fresh"|null; null is out
+// of scope, see S13), fresh, intervalDays, intervalSource, dueOn,
+// daysOverdue, lints }`.
+function freshnessEvaluate(row, todayText, config) {
+  const today = freshnessNormalizeDateText(todayText);
+  const read = readFreshness(row.rawLine || "", today);
+  const lints = [...read.lints];
+
+  const note = freshnessParseNoteRefresh(row.noteRefreshRaw);
+  if (note.lint) {
+    freshnessPushLint(lints, note.lint);
+  }
+
+  const interval = freshnessIntervalFor(read.refresh, note.days, config);
+  const fresh = read.fresh;
+
+  const inScope =
+    Boolean(row.isTodo) &&
+    Boolean(row.laneVisible) &&
+    !row.recurring &&
+    !row.isDailyNote &&
+    !row.isToday;
+
+  if (!inScope) {
+    return {
+      state: null,
+      fresh,
+      intervalDays: interval.days,
+      intervalSource: interval.source,
+      dueOn: null,
+      daysOverdue: null,
+      lints,
+    };
+  }
+
+  if (fresh === null) {
+    return {
+      state: "new",
+      fresh: null,
+      intervalDays: interval.days,
+      intervalSource: interval.source,
+      dueOn: null,
+      daysOverdue: null,
+      lints,
+    };
+  }
+
+  // RESURFACED beats STALE: a deferral that returned is due as soon as
+  // it returns, however old the stamp is.
+  const scheduled = freshnessEvaluateValidScheduled(row.scheduled);
+  if (scheduled !== null && fresh < scheduled && scheduled <= today) {
+    return {
+      state: "resurfaced",
+      fresh,
+      intervalDays: interval.days,
+      intervalSource: interval.source,
+      dueOn: scheduled,
+      daysOverdue: freshDateDiffDays(scheduled, today),
+      lints,
+    };
+  }
+
+  const dueOn = freshDateAddDays(fresh, interval.days);
+  if (today >= dueOn) {
+    return {
+      state: "stale",
+      fresh,
+      intervalDays: interval.days,
+      intervalSource: interval.source,
+      dueOn,
+      daysOverdue: freshDateDiffDays(dueOn, today),
+      lints,
+    };
+  }
+
+  return {
+    state: "fresh",
+    fresh,
+    intervalDays: interval.days,
+    intervalSource: interval.source,
+    dueOn,
+    daysOverdue: null,
+    lints,
+  };
+}
+
+// One row's state: `"new"` | `"resurfaced"` | `"stale"` | `"fresh"` |
+// null (out of scope).
+function freshnessState(row, todayText, config) {
+  return freshnessEvaluate(row, todayText, config).state;
+}
+
+function freshnessRowKey(row) {
+  const path = String(row.path || "");
+  if (row.blockId) {
+    return path + "#" + row.blockId;
+  }
+  return path + ":" + row.line;
+}
+
+function freshnessTierForState(state) {
+  if (state === "new") {
+    return "1 · NEW";
+  }
+  if (state === "resurfaced" || state === "stale") {
+    return "2 · DUE";
+  }
+  return "";
+}
+
+// The review queue: NEW by (path, line), then DUE by (dueOn, path,
+// line). Entries carry `{ key, path, line, lineNumber, text,
+// originalMarkdown, blockId, state, tier, fresh, dueOn, daysOverdue,
+// interval }` with 1-based `line` (Tasks' `lineNumber` is 0-based).
+function freshnessQueue(rows, todayText, config) {
+  const list = Array.isArray(rows) ? rows : [];
+  const freshEntries = [];
+  const dueEntries = [];
+  for (const row of list) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const evaluated = freshnessEvaluate(row, todayText, config);
+    if (evaluated.state === null || evaluated.state === "fresh") {
+      continue;
+    }
+    const entry = {
+      key: freshnessRowKey(row),
+      path: String(row.path || ""),
+      line: row.line,
+      lineNumber:
+        Number.isInteger(row.lineNumber) ? row.lineNumber : row.line - 1,
+      text: typeof row.text === "string" ? row.text : "",
+      originalMarkdown:
+        typeof row.originalMarkdown === "string" ? row.originalMarkdown : "",
+      blockId: row.blockId || null,
+      state: evaluated.state,
+      tier: freshnessTierForState(evaluated.state),
+      fresh: evaluated.fresh,
+      dueOn: evaluated.dueOn,
+      daysOverdue: evaluated.daysOverdue,
+      interval: evaluated.intervalDays,
+    };
+    if (evaluated.state === "new") {
+      freshEntries.push(entry);
+    } else {
+      dueEntries.push(entry);
+    }
+  }
+
+  freshEntries.sort(
+    (left, right) =>
+      (left.path < right.path ? -1 : left.path > right.path ? 1 : 0) ||
+      left.line - right.line,
+  );
+  dueEntries.sort(
+    (left, right) =>
+      (left.dueOn < right.dueOn ? -1 : left.dueOn > right.dueOn ? 1 : 0) ||
+      (left.path < right.path ? -1 : left.path > right.path ? 1 : 0) ||
+      left.line - right.line,
+  );
+
+  const ordered = [...freshEntries, ...dueEntries];
+  for (let index = 0; index < ordered.length; index += 1) {
+    ordered[index].rank = index + 1;
+  }
+  return ordered;
+}
+
+function freshnessIsExcludedCountPath(path) {
+  return String(path || "")
+    .split("/")
+    .some((segment) => segment === "_templates" || segment === "_conflicts");
+}
+
+// Whole-vault counts: `{ due, new, resurfaced, stale, fresh,
+// refreshedToday, budget, budgetMet }`. `refreshedToday` counts tasks of
+// any status outside `_templates` / `_conflicts` whose `fresh` equals
+// today.
+function freshnessCounts(rows, todayText, config) {
+  const today = freshnessNormalizeDateText(todayText);
+  const list = Array.isArray(rows) ? rows : [];
+  let due = 0;
+  let freshNew = 0;
+  let resurfaced = 0;
+  let stale = 0;
+  let fresh = 0;
+  let refreshedToday = 0;
+
+  for (const row of list) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const evaluated = freshnessEvaluate(row, today, config);
+    if (
+      !freshnessIsExcludedCountPath(row.path) &&
+      evaluated.fresh === today
+    ) {
+      refreshedToday += 1;
+    }
+    if (evaluated.state === "new") {
+      freshNew += 1;
+      due += 1;
+    } else if (evaluated.state === "resurfaced") {
+      resurfaced += 1;
+      due += 1;
+    } else if (evaluated.state === "stale") {
+      stale += 1;
+      due += 1;
+    } else if (evaluated.state === "fresh") {
+      fresh += 1;
+    }
+  }
+
+  const rawBudget =
+    config && config.staleDailyBudget !== undefined
+      ? config.staleDailyBudget
+      : null;
+  const budget =
+    Number.isInteger(rawBudget) && rawBudget >= 1 ? rawBudget : null;
+  const budgetMet =
+    budget !== null && refreshedToday >= budget && freshNew === 0;
+
+  return {
+    due,
+    new: freshNew,
+    resurfaced,
+    stale,
+    fresh,
+    refreshedToday,
+    budget,
+    budgetMet,
+  };
+}
+
+const FRESHNESS_LINT_MESSAGES = {
+  fresh_malformed: "fresh date is not a YYYY-MM-DD calendar date",
+  fresh_future: "fresh date is in the future",
+  fresh_duplicate: "more than one fresh field; the latest valid date wins",
+  fresh_misplaced:
+    "fresh/refresh sits inside the Tasks suffix; the next stamp repairs it",
+  refresh_invalid: "refresh is not an integer 1-365",
+  task_refresh_invalid: "task_refresh is not an integer 1-365",
+};
+
+// Per-occurrence lints in row order: `{ code, path, line, message }`.
+function freshnessCollectLints(rows, todayText, config) {
+  const today = freshnessNormalizeDateText(todayText);
+  const list = Array.isArray(rows) ? rows : [];
+  const out = [];
+  for (const row of list) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const evaluated = freshnessEvaluate(row, today, config);
+    for (const code of evaluated.lints) {
+      out.push({
+        code,
+        path: String(row.path || ""),
+        line: row.line,
+        message: FRESHNESS_LINT_MESSAGES[code] || code,
+      });
+    }
+  }
+  return out;
+}
+
+// Pure view-model for the status bar counter. `counts` is a
+// `freshnessCounts` result; `mostOverdue` is the queue's largest
+// `daysOverdue` (or null when nothing is due).
+function freshnessStatusView(counts, options = {}) {
+  const tasksAvailable = options.tasksAvailable !== false;
+  if (!tasksAvailable) {
+    return {
+      text: "⟳ –",
+      tooltip: "Tasks unavailable",
+      mode: "unavailable",
+    };
+  }
+  const safe = counts || {};
+  const due = safe.due || 0;
+  const freshNew = safe.new || 0;
+  const resurfaced = safe.resurfaced || 0;
+  const stale = safe.stale || 0;
+  const refreshed = safe.refreshedToday || 0;
+  const budget =
+    Number.isInteger(safe.budget) && safe.budget >= 1 ? safe.budget : null;
+  const meter = budget !== null ? refreshed + "/" + budget : String(refreshed);
+  const text =
+    "⟳ " + due + " due · " + freshNew + " new · ✓ " + meter + " today";
+  const mostOverdue =
+    Number.isInteger(options.mostOverdue) && options.mostOverdue >= 0
+      ? options.mostOverdue
+      : null;
+  const tooltip =
+    "NEW " +
+    freshNew +
+    " · RESURFACED " +
+    resurfaced +
+    " · STALE " +
+    stale +
+    (mostOverdue === null
+      ? " · nothing due"
+      : " · most overdue " + mostOverdue + "d");
+  let mode = "due";
+  if (safe.budgetMet) {
+    mode = "budget";
+  } else if (due === 0) {
+    mode = "clear";
+  } else if (freshNew > 0) {
+    mode = "new";
+  }
+  return { text, tooltip, mode };
+}
+
+// Adapt one Tasks-plugin task to a freshness evaluation row. `context`
+// is `{ list, todayDay, noteRefreshRawFor(path), isToday(task) }`.
+// Never throws: missing fields degrade to an out-of-scope row.
+function freshnessRowFromTask(task, index, context) {
+  const safeContext = context || {};
+  const list = Array.isArray(safeContext.list) ? safeContext.list : [];
+  const fallbackLine =
+    Number.isInteger(index) && index >= 0 ? index + 1 : 1;
+  try {
+    if (!task || typeof task !== "object") {
+      return {
+        path: "",
+        line: fallbackLine,
+        lineNumber: fallbackLine - 1,
+        text: "",
+        originalMarkdown: "",
+        blockId: null,
+        isTodo: false,
+        recurring: false,
+        laneVisible: false,
+        isDailyNote: false,
+        isToday: false,
+        scheduled: null,
+        rawLine: "",
+        noteRefreshRaw: undefined,
+      };
+    }
+    const path = planTaskPath(task) || "";
+    const lineNumber = Number.isInteger(task.lineNumber)
+      ? task.lineNumber
+      : fallbackLine - 1;
+    const description = planTaskDescription(task);
+    const rawLine =
+      typeof task.originalMarkdown === "string"
+        ? task.originalMarkdown
+        : typeof description === "string"
+          ? description
+          : "";
+    const statusType =
+      task.status && typeof task.status === "object"
+        ? task.status.type
+        : undefined;
+    const isTodo =
+      typeof statusType === "string"
+        ? statusType === "TODO"
+        : planTaskStatusSymbol(task) === " ";
+    const recurring =
+      Boolean(task.recurrence) ||
+      task.isRecurring === true ||
+      task.recurring === true ||
+      freshnessHasRepeatField(rawLine);
+    let laneVisible = false;
+    try {
+      laneVisible = Boolean(
+        planLaneVisible(task, list, safeContext.todayDay ?? null),
+      );
+    } catch (error) {
+      laneVisible = false;
+    }
+    const isDailyNote = PLAN_DAILY_PATH_RE.test(path);
+    let isToday = false;
+    try {
+      isToday =
+        typeof safeContext.isToday === "function"
+          ? Boolean(safeContext.isToday(task))
+          : false;
+    } catch (error) {
+      isToday = false;
+    }
+    let scheduled = null;
+    try {
+      for (const key of ["scheduledDate", "scheduled", "scheduledDay"]) {
+        if (task[key] === undefined || task[key] === null) {
+          continue;
+        }
+        const day = planDayNumber(task[key]);
+        if (day === null) {
+          continue;
+        }
+        const coerced = planCoerceDate(task[key]);
+        if (coerced) {
+          scheduled = formatLocalDate(coerced);
+          break;
+        }
+      }
+      if (scheduled === null) {
+        const fields = freshnessInlineFields(rawLine, "scheduled");
+        for (const field of fields) {
+          const parsed = parseFreshDateStrict(field.value.trim());
+          if (parsed !== null) {
+            scheduled = parsed;
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      scheduled = null;
+    }
+    let noteRefreshRaw = undefined;
+    try {
+      noteRefreshRaw =
+        typeof safeContext.noteRefreshRawFor === "function"
+          ? safeContext.noteRefreshRawFor(path)
+          : undefined;
+    } catch (error) {
+      noteRefreshRaw = undefined;
+    }
+    return {
+      path,
+      line: lineNumber + 1,
+      lineNumber,
+      text: typeof description === "string" ? description : "",
+      originalMarkdown: rawLine,
+      blockId: planTaskBlockId(task),
+      isTodo,
+      recurring,
+      laneVisible,
+      isDailyNote,
+      isToday,
+      scheduled,
+      rawLine,
+      noteRefreshRaw,
+    };
+  } catch (error) {
+    return {
+      path: "",
+      line: fallbackLine,
+      lineNumber: fallbackLine - 1,
+      text: "",
+      originalMarkdown: "",
+      blockId: null,
+      isTodo: false,
+      recurring: false,
+      laneVisible: false,
+      isDailyNote: false,
+      isToday: false,
+      scheduled: null,
+      rawLine: "",
+      noteRefreshRaw: undefined,
+    };
+  }
+}
+
+// __FRESHNESS_A2_END__
+// __FRESHNESS_A1_END__
+
 module.exports = class BobLedgerToolsPlugin extends Plugin {
   onload() {
     this.vimMappingsRegistered = false;
@@ -2940,6 +4174,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
+    // Task freshness (api v3): memoized review queue plus status bar.
+    this.freshnessMemo = null;
+    this.freshnessFrontGen = 0;
+    this.freshnessFrontValues = new Map();
+    this.freshnessStatusTimer = null;
+    this.freshnessStatusEl = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -3022,7 +4262,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     // the first build `isToday` returns false for every task.
     this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
     this.api = Object.freeze({
-      version: 2,
+      version: 3,
       caps: () => loadPlanCaps().caps,
       planBudget: (options = {}) => this.planBudgetForCallers(options),
       todayKeys: () => this.todayKeys(),
@@ -3046,6 +4286,25 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           "pending",
         );
       },
+      // Task freshness (api v3, additive: every v2 member above is
+      // unchanged). `freshness` mirrors `docs/freshness.md` in bob-cli.
+      // Every member is synchronous, never awaits and never throws.
+      freshness: Object.freeze({
+        version: 1,
+        config: () => this.apiFreshnessConfig(),
+        stampLine: (line, dateText) =>
+          this.apiFreshnessStampLine(line, dateText),
+        setRefreshLine: (line, days, dateText) =>
+          this.apiFreshnessSetRefreshLine(line, days, dateText),
+        state: (task) => this.apiFreshnessState(task),
+        isDue: (task) => this.apiFreshnessIsDue(task),
+        tier: (task) => this.apiFreshnessTier(task),
+        rank: (task) => this.apiFreshnessRank(task),
+        intervalFor: (task) => this.apiFreshnessIntervalFor(task),
+        queue: () => this.apiFreshnessQueue(),
+        counts: () => this.apiFreshnessCounts(),
+        lints: () => this.apiFreshnessLints(),
+      }),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -3058,6 +4317,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         metadataCache.on("changed", (file, data) => {
           this.schedulePlanBlockRerenderForFile(file);
           this.refreshTodayCacheForChangedFile(file, data);
+          this.refreshFreshnessForChangedFile(file, data);
         }),
       );
       this.registerEvent(
@@ -3079,16 +4339,20 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     ) {
       // Local-midnight rollover: rebuild once the daily path changes.
       this.registerInterval(
-        window.setInterval(() => this.refreshTodayCacheForRollover(), 60 * 1000),
+        window.setInterval(() => {
+          this.refreshTodayCacheForRollover();
+          this.refreshFreshnessForRollover();
+        }, 60 * 1000),
       );
     }
     const planWorkspace = this.app && this.app.workspace;
     if (planWorkspace && typeof planWorkspace.on === "function") {
       // The vault runs Tasks 8.4.0, which fires this on every cache update.
       this.registerEvent(
-        planWorkspace.on("obsidian-tasks-plugin:cache-update", () =>
-          this.schedulePlanBlockRerender(),
-        ),
+        planWorkspace.on("obsidian-tasks-plugin:cache-update", () => {
+          this.schedulePlanBlockRerender();
+          this.scheduleFreshnessStatusBar();
+        }),
       );
     }
     const tasksPluginLoaded = Boolean(
@@ -3125,6 +4389,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       });
       this.registerEvent(ref);
     });
+
+    this.setupFreshnessStatusBar();
+    this.scheduleFreshnessStatusBar();
   }
 
   onunload() {
@@ -3140,6 +4407,19 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       this.planBlockViews.clear();
     }
     this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
+    if (
+      this.freshnessStatusTimer !== null &&
+      this.freshnessStatusTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.freshnessStatusTimer);
+    }
+    this.freshnessStatusTimer = null;
+    this.freshnessMemo = null;
+    if (this.freshnessFrontValues) {
+      this.freshnessFrontValues.clear();
+    }
+    this.freshnessStatusEl = null;
     cancelDeferred(this.pendingCenterDeferred);
     this.pendingCenterDeferred = null;
     this.dailyNavigationActionId += 1;
@@ -3251,6 +4531,609 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     return typeof rank === "number" ? rank : Number.MAX_SAFE_INTEGER;
   }
 
+  // --- Task freshness (api v3) ------------------------------------------
+  // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
+  // `refresh` come from `originalMarkdown`; frontmatter comes from
+  // `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
+  // Visibility is `planLaneVisible` plus status type TODO,
+  // `!task.recurrence`, not a canonical daily-note path, and
+  // `!isTodayTask`. The evaluated rows and queue are memoized on the
+  // identity of the array `getTasks()` returns, the local date, a
+  // frontmatter generation, and the config — so `rank(task)` stays O(1)
+  // inside Tasks' `sort by function`.
+
+  freshnessTodayText(now = new Date()) {
+    try {
+      return this.todayLocalDate(now);
+    } catch (error) {
+      return formatLocalDate(new Date());
+    }
+  }
+
+  freshnessConfigSnapshot() {
+    try {
+      const loaded = loadFreshnessConfig();
+      return {
+        config: loaded.config,
+        invalid: Boolean(loaded.invalid),
+      };
+    } catch (error) {
+      return {
+        config: { ...defaultFreshnessConfig(), intervalFromConfig: false },
+        invalid: false,
+      };
+    }
+  }
+
+  freshnessFrontValueKey(value) {
+    if (value === undefined) {
+      return "u";
+    }
+    return typeof value + ":" + String(value);
+  }
+
+  // The note's raw `task_refresh` frontmatter value, cached per path.
+  noteFreshnessRawFor(path) {
+    const key = String(path || "");
+    if (!key) {
+      return undefined;
+    }
+    try {
+      if (
+        this.freshnessFrontValues &&
+        this.freshnessFrontValues instanceof Map &&
+        this.freshnessFrontValues.has(key)
+      ) {
+        return this.freshnessFrontValues.get(key);
+      }
+      const cache =
+        this.app &&
+        this.app.metadataCache &&
+        typeof this.app.metadataCache.getCache === "function"
+          ? this.app.metadataCache.getCache({ path: key })
+          : null;
+      const frontmatter =
+        cache && typeof cache === "object" ? cache.frontmatter : null;
+      const value =
+        frontmatter && typeof frontmatter === "object"
+          ? frontmatter.task_refresh
+          : undefined;
+      if (this.freshnessFrontValues instanceof Map) {
+        this.freshnessFrontValues.set(key, value);
+      }
+      return value;
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  freshnessContextFor(list, todayText, todayDay) {
+    const self = this;
+    return {
+      list,
+      todayDay,
+      noteRefreshRawFor: (path) => self.noteFreshnessRawFor(path),
+      isToday: (task) => self.isTodayTask(task),
+    };
+  }
+
+  freshnessBuildMemo(tasks, dateText, snapshot) {
+    const list = Array.isArray(tasks) ? tasks : [];
+    let todayDay = null;
+    try {
+      todayDay = planDayNumber(new Date());
+    } catch (error) {
+      todayDay = null;
+    }
+    const context = this.freshnessContextFor(list, dateText, todayDay);
+    const rows = list.map((task, index) =>
+      freshnessRowFromTask(task, index, context),
+    );
+    const queue = freshnessQueue(rows, dateText, snapshot.config);
+    const counts = freshnessCounts(rows, dateText, snapshot.config);
+    const lints = freshnessCollectLints(rows, dateText, snapshot.config);
+    const rank = new Map(queue.map((entry, index) => [entry.key, index]));
+    return {
+      tasks,
+      dateText,
+      frontGen: this.freshnessFrontGen || 0,
+      configKey: JSON.stringify([snapshot.config, snapshot.invalid]),
+      config: snapshot.config,
+      invalid: snapshot.invalid,
+      tasksAvailable: Array.isArray(tasks),
+      rows,
+      queue,
+      counts,
+      lints,
+      rank,
+      dueKeys: queue.map((entry) => entry.key),
+    };
+  }
+
+  // Rebuild the memoized rows when the Tasks array identity, the local
+  // date, the frontmatter generation, or the config changed. When the
+  // due key set changes because of rollover, a frontmatter change or a
+  // config change (not task edits, which Tasks re-renders itself), every
+  // open Tasks query re-reads via TODAY_RELOAD_EVENT.
+  freshnessEnsureMemo(now = new Date()) {
+    const tasks = planBlockTasks(this.app);
+    const dateText = this.freshnessTodayText(now);
+    const snapshot = this.freshnessConfigSnapshot();
+    const configKey = JSON.stringify([snapshot.config, snapshot.invalid]);
+    const memo = this.freshnessMemo;
+    if (
+      memo &&
+      memo.tasks === tasks &&
+      memo.dateText === dateText &&
+      (memo.frontGen || 0) === (this.freshnessFrontGen || 0) &&
+      memo.configKey === configKey
+    ) {
+      return memo;
+    }
+    const previousDueKeys = memo && Array.isArray(memo.dueKeys)
+      ? memo.dueKeys
+      : null;
+    const tasksOnlyChange =
+      Boolean(memo) &&
+      previousDueKeys !== null &&
+      memo.tasks !== tasks &&
+      memo.dateText === dateText &&
+      (memo.frontGen || 0) === (this.freshnessFrontGen || 0) &&
+      memo.configKey === configKey;
+    const next = this.freshnessBuildMemo(tasks, dateText, snapshot);
+    this.freshnessMemo = next;
+    if (!tasksOnlyChange && previousDueKeys !== null) {
+      const changed =
+        previousDueKeys.length !== next.dueKeys.length ||
+        previousDueKeys.some((key, index) => key !== next.dueKeys[index]);
+      if (changed) {
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (workspace && typeof workspace.trigger === "function") {
+            workspace.trigger(TODAY_RELOAD_EVENT);
+          }
+        } catch (error) {
+          // The memo is still correct; only the live refresh is skipped.
+        }
+      }
+    }
+    return next;
+  }
+
+  freshnessMemoRankKey(task) {
+    try {
+      if (!task || typeof task !== "object") {
+        return null;
+      }
+      const path = planTaskPath(task) || "";
+      if (!path) {
+        return null;
+      }
+      const blockId = planTaskBlockId(task);
+      if (blockId) {
+        return path + "#" + blockId;
+      }
+      const line = Number.isInteger(task.lineNumber) ? task.lineNumber + 1 : 1;
+      return path + ":" + line;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  apiFreshnessConfig() {
+    try {
+      const snapshot = this.freshnessConfigSnapshot();
+      return {
+        interval: snapshot.config.interval,
+        staleDailyBudget: snapshot.config.staleDailyBudget,
+        invalid: snapshot.invalid,
+      };
+    } catch (error) {
+      return { interval: 7, staleDailyBudget: null, invalid: false };
+    }
+  }
+
+  apiFreshnessStampLine(line, dateText) {
+    try {
+      const day =
+        parseFreshDateStrict(dateText) || this.freshnessTodayText();
+      return freshnessStampLine(line, day).line;
+    } catch (error) {
+      return String(line || "");
+    }
+  }
+
+  apiFreshnessSetRefreshLine(line, days, dateText) {
+    try {
+      const day =
+        parseFreshDateStrict(dateText) || this.freshnessTodayText();
+      return freshnessSetRefreshLine(line, days, day).line;
+    } catch (error) {
+      return String(line || "");
+    }
+  }
+
+  apiFreshnessRowFor(task) {
+    const memo = this.freshnessEnsureMemo();
+    const tasks = memo.tasksAvailable ? memo.tasks : [];
+    const index = Array.isArray(tasks) ? tasks.indexOf(task) : -1;
+    let todayDay = null;
+    try {
+      todayDay = planDayNumber(new Date());
+    } catch (error) {
+      todayDay = null;
+    }
+    return freshnessRowFromTask(
+      task,
+      index >= 0 ? index : 0,
+      this.freshnessContextFor(
+        Array.isArray(tasks) ? tasks : [],
+        memo.dateText,
+        todayDay,
+      ),
+    );
+  }
+
+  apiFreshnessState(task) {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      return freshnessState(
+        this.apiFreshnessRowFor(task),
+        memo.dateText,
+        memo.config,
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  apiFreshnessIsDue(task) {
+    try {
+      const state = this.apiFreshnessState(task);
+      return state === "new" || state === "resurfaced" || state === "stale";
+    } catch (error) {
+      return false;
+    }
+  }
+
+  apiFreshnessTier(task) {
+    try {
+      return freshnessTierForState(this.apiFreshnessState(task));
+    } catch (error) {
+      return "";
+    }
+  }
+
+  apiFreshnessRank(task) {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      const key = this.freshnessMemoRankKey(task);
+      if (!key || !(memo.rank instanceof Map)) {
+        return Number.MAX_SAFE_INTEGER;
+      }
+      const rank = memo.rank.get(key);
+      return typeof rank === "number" ? rank : Number.MAX_SAFE_INTEGER;
+    } catch (error) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+  }
+
+  apiFreshnessIntervalFor(task) {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      const row = this.apiFreshnessRowFor(task);
+      const read = readFreshness(row.rawLine || "", memo.dateText);
+      const note = freshnessParseNoteRefresh(row.noteRefreshRaw);
+      return freshnessIntervalFor(read.refresh, note.days, memo.config);
+    } catch (error) {
+      return { days: 7, source: "default" };
+    }
+  }
+
+  apiFreshnessQueue() {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      return memo.queue.map((entry) => ({ ...entry }));
+    } catch (error) {
+      return [];
+    }
+  }
+
+  apiFreshnessCounts() {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      return { ...memo.counts };
+    } catch (error) {
+      return {
+        due: 0,
+        new: 0,
+        resurfaced: 0,
+        stale: 0,
+        fresh: 0,
+        refreshedToday: 0,
+        budget: null,
+        budgetMet: false,
+      };
+    }
+  }
+
+  apiFreshnessLints() {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      return memo.lints.map((lint) => ({ ...lint }));
+    } catch (error) {
+      return [];
+    }
+  }
+
+  // Bump the frontmatter generation when a note's `task_refresh`
+  // differs, and re-read the config on bumps and at rollover. Returns
+  // true when the generation changed.
+  refreshFreshnessForChangedFile(file, data) {
+    try {
+      const changedPath =
+        file && typeof file.path === "string" ? file.path : null;
+      if (!changedPath) {
+        return false;
+      }
+      let current = undefined;
+      try {
+        const cache =
+          this.app &&
+          this.app.metadataCache &&
+          typeof this.app.metadataCache.getCache === "function"
+            ? this.app.metadataCache.getCache(file)
+            : null;
+        const frontmatter =
+          cache && typeof cache === "object" ? cache.frontmatter : null;
+        current =
+          frontmatter && typeof frontmatter === "object"
+            ? frontmatter.task_refresh
+            : undefined;
+      } catch (error) {
+        current = undefined;
+      }
+      if (!(this.freshnessFrontValues instanceof Map)) {
+        this.freshnessFrontValues = new Map();
+      }
+      const had = this.freshnessFrontValues.has(changedPath);
+      const previous = had ? this.freshnessFrontValues.get(changedPath) : undefined;
+      if (
+        had &&
+        this.freshnessFrontValueKey(previous) ===
+          this.freshnessFrontValueKey(current)
+      ) {
+        return false;
+      }
+      if (!had && current === undefined) {
+        return false;
+      }
+      this.freshnessFrontValues.set(changedPath, current);
+      this.freshnessFrontGen = (this.freshnessFrontGen || 0) + 1;
+      try {
+        this.freshnessEnsureMemo();
+      } catch (error) {
+        // The generation still counts; the memo rebuilds on next access.
+      }
+      this.scheduleFreshnessStatusBar();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Local-midnight rollover for the review queue. Returns true when the
+  // date changed.
+  refreshFreshnessForRollover(now = new Date()) {
+    try {
+      const dateText = this.freshnessTodayText(now);
+      if (
+        this.freshnessMemo &&
+        this.freshnessMemo.dateText === dateText
+      ) {
+        return false;
+      }
+      try {
+        this.freshnessEnsureMemo(now);
+      } catch (error) {
+        // The memo rebuilds on next access.
+      }
+      this.scheduleFreshnessStatusBar();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // --- Task freshness: status bar -----------------------------------------
+  // Desktop only: `⟳ 23 due · 3 new · ✓ 12 today` (or `✓ 12/15` with a
+  // budget; `⟳ –` while Tasks is unavailable). An accent while `new > 0`,
+  // a muted "clear" style when nothing is due, a budget-met style when
+  // `budget_met` holds. Clicking runs
+  // `bob-navigation-hotkeys:jump-to-next-due-task`, falling back to
+  // opening `freshness.md`.
+
+  setupFreshnessStatusBar() {
+    try {
+      const platform =
+        typeof Platform !== "undefined" ? Platform : null;
+      if (platform && platform.isDesktopApp === false) {
+        return;
+      }
+      if (platform && platform.isMobile === true) {
+        return;
+      }
+      if (typeof this.addStatusBarItem !== "function") {
+        return;
+      }
+      if (this.freshnessStatusEl) {
+        return;
+      }
+      const el = this.addStatusBarItem();
+      if (!el) {
+        return;
+      }
+      this.freshnessStatusEl = el;
+      try {
+        if (typeof el.addClass === "function") {
+          el.addClass("bob-freshness");
+        } else if (el.classList && typeof el.classList.add === "function") {
+          el.classList.add("bob-freshness");
+        } else if (typeof el.className === "string") {
+          el.className = (el.className + " bob-freshness").trim();
+        }
+        if (typeof el.setAttribute === "function") {
+          el.setAttribute("role", "button");
+        }
+        if (el.style && typeof el.style === "object") {
+          el.style.cursor = "pointer";
+        }
+      } catch (error) {
+        // Cosmetic only; the text update below still applies.
+      }
+      const self = this;
+      try {
+        if (typeof el.addEventListener === "function") {
+          el.addEventListener("click", () => self.freshnessStatusClicked());
+        } else {
+          el.onclick = () => self.freshnessStatusClicked();
+        }
+      } catch (error) {
+        // A status bar without a click still shows the counts.
+      }
+    } catch (error) {
+      this.freshnessStatusEl = null;
+    }
+  }
+
+  scheduleFreshnessStatusBar() {
+    try {
+      if (
+        this.freshnessStatusTimer !== null &&
+        this.freshnessStatusTimer !== undefined
+      ) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" &&
+        typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      const self = this;
+      this.freshnessStatusTimer = schedule(() => {
+        self.freshnessStatusTimer = null;
+        self.updateFreshnessStatusBar();
+      }, 150);
+    } catch (error) {
+      // No timer host (or no status bar); nothing to schedule.
+    }
+  }
+
+  updateFreshnessStatusBar() {
+    const el = this.freshnessStatusEl;
+    if (!el) {
+      return;
+    }
+    try {
+      const memo = this.freshnessEnsureMemo();
+      let mostOverdue = null;
+      for (const entry of memo.queue) {
+        if (
+          Number.isInteger(entry.daysOverdue) &&
+          (mostOverdue === null || entry.daysOverdue > mostOverdue)
+        ) {
+          mostOverdue = entry.daysOverdue;
+        }
+      }
+      const view = freshnessStatusView(memo.counts, {
+        tasksAvailable: memo.tasksAvailable,
+        mostOverdue,
+      });
+      if (typeof el.setText === "function") {
+        el.setText(view.text);
+      } else if ("textContent" in el) {
+        el.textContent = view.text;
+      }
+      const label =
+        view.mode === "unavailable"
+          ? view.tooltip
+          : view.tooltip + " · click for the next due task";
+      try {
+        if (typeof el.setAttribute === "function") {
+          el.setAttribute("aria-label", label);
+          el.setAttribute("title", label);
+        } else {
+          el.title = label;
+        }
+      } catch (error) {
+        // Labels are cosmetic.
+      }
+      const modes = [
+        "bob-freshness-unavailable",
+        "bob-freshness-new",
+        "bob-freshness-due",
+        "bob-freshness-clear",
+        "bob-freshness-budget",
+      ];
+      const wanted = "bob-freshness-" + view.mode;
+      try {
+        if (el.classList && typeof el.classList.add === "function") {
+          for (const mode of modes) {
+            if (mode === wanted) {
+              el.classList.add(mode);
+            } else if (typeof el.classList.remove === "function") {
+              el.classList.remove(mode);
+            }
+          }
+        } else if (typeof el.setAttribute === "function") {
+          const current = typeof el.className === "string" ? el.className : "";
+          const rest = current
+            .split(/\s+/)
+            .filter((name) => name && !modes.includes(name));
+          rest.push("bob-freshness", wanted);
+          el.setAttribute("class", rest.join(" "));
+        }
+      } catch (error) {
+        // Classes are cosmetic.
+      }
+    } catch (error) {
+      // The status bar never throws; it keeps its previous text.
+    }
+  }
+
+  freshnessStatusClicked() {
+    try {
+      const commands = this.app && this.app.commands;
+      const commandId = "bob-navigation-hotkeys:jump-to-next-due-task";
+      let exists = false;
+      try {
+        if (commands && commands.commands && commands.commands[commandId]) {
+          exists = true;
+        } else if (commands && typeof commands.findCommand === "function") {
+          exists = Boolean(commands.findCommand(commandId));
+        }
+      } catch (error) {
+        exists = false;
+      }
+      if (exists && typeof commands.executeCommandById === "function") {
+        commands.executeCommandById(commandId);
+        return;
+      }
+    } catch (error) {
+      // Fall through to opening freshness.md.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        workspace.openLinkText("freshness", "", false);
+      }
+    } catch (error) {
+      // Nothing to fall back to.
+    }
+  }
+
+  // __FRESHNESS_E1_END__
+
   resolveTodayLink(target, dailyPath) {
     try {
       const metadataCache = this.app && this.app.metadataCache;
@@ -3303,6 +5186,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         // The cache is still correct; only the live refresh is skipped.
       }
       this.schedulePlanBlockRerender();
+      this.scheduleFreshnessStatusBar();
     }
     return changed;
   }
@@ -4666,4 +6550,26 @@ module.exports.helpers = {
   planBlockModel,
   planSectionRange,
   TODAY_RELOAD_EVENT,
+  freshnessInlineFields,
+  parseFreshDateStrict,
+  freshDateAddDays,
+  freshDateDiffDays,
+  freshnessTasksSuffixStart,
+  freshnessStampLine,
+  freshnessSetRefreshLine,
+  readFreshness,
+  defaultFreshnessConfig,
+  freshnessBlock,
+  coerceFreshnessConfig,
+  loadFreshnessConfig,
+  freshnessParseNoteRefresh,
+  freshnessIntervalFor,
+  freshnessEvaluate,
+  freshnessState,
+  freshnessQueue,
+  freshnessCounts,
+  freshnessCollectLints,
+  freshnessStatusView,
+  freshnessRowFromTask,
+  freshnessTierForState,
 };

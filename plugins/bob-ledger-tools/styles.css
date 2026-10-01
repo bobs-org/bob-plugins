@@ -74,3 +74,32 @@ a.bob-plan-chip:focus-visible {
   color: var(--text-muted);
   font-size: 0.8em;
 }
+
+/* Task freshness status bar counter (api v3): `⟳ 23 due · 3 new · ✓ 12
+   today`. Theme-native in light/dark and any community theme. */
+.bob-freshness {
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.bob-freshness-due {
+  color: var(--text-normal);
+}
+
+.bob-freshness-new {
+  color: var(--interactive-accent);
+  font-weight: 650;
+}
+
+.bob-freshness-clear {
+  color: var(--text-muted);
+}
+
+.bob-freshness-budget {
+  color: var(--task-status-next, var(--color-green, #3f8f5f));
+  font-weight: 650;
+}
+
+.bob-freshness-unavailable {
+  color: var(--text-faint, var(--text-muted));
+}

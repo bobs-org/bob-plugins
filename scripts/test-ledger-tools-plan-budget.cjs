@@ -492,7 +492,7 @@ test("plugin exposes the versioned api and registers the bob-plan block", async 
   process.env.XDG_CONFIG_HOME = "/definitely/missing/bob-plan-test";
   try {
     plugin.onload();
-    assert.equal(plugin.api.version, 2);
+    assert.equal(plugin.api.version, 3);
     assert.equal(plugin.api.nowBudget, undefined);
     assert.deepEqual(plugin.api.caps(), defaultPlanCaps());
     assert.equal(typeof plugin.codeBlocks["bob-plan"], "function");

@@ -383,12 +383,14 @@ function withMissingConfig(run) {
 const LEDGER = "## Pomodoros\n\n- [ ] () — GOALS\n    - [[a#^x]]\n";
 
 test("api v2 shape: Today and lane budgets, no nowBudget", () => {
+  // Note: the plugin now exposes api v3 (additive: freshness); the v2
+  // members asserted below are unchanged.
   withMissingConfig(() => {
     const app = makeTodayApp({ files: {}, targets: {}, triggers: [] });
     const plugin = new LedgerToolsPlugin(app, {});
     plugin.onload();
     try {
-      assert.equal(plugin.api.version, 2);
+      assert.equal(plugin.api.version, 3);
       assert.equal(typeof plugin.api.caps, "function");
       assert.equal(typeof plugin.api.planBudget, "function");
       assert.equal(typeof plugin.api.todayKeys, "function");

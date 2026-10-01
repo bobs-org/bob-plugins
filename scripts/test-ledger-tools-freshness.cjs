@@ -88,6 +88,7 @@ const {
   freshnessStatusView,
   freshnessSetRefreshLine,
   freshnessStampLine,
+  formatLocalDate,
   loadFreshnessConfig,
   readFreshness,
 } = helpers;
@@ -1432,4 +1433,194 @@ test("same-array cache updates and Today changes rebuild the memo", () => {
     }
   });
 });
+test("duplicate block IDs keep each row's own classification", () => {
+  withMissingConfig(() => {
+    // The FRESH row is stamped today (whatever today is), so the
+    // NEW/FRESH split holds on any calendar date.
+    const today = formatLocalDate(new Date());
+    const tasks = [
+      makeFreshnessTask({
+        path: "notes/a.md",
+        lineNumber: 0,
+        description: "New",
+        originalMarkdown: "- [ ] #task New",
+        blockLink: " ^duplicate",
+      }),
+      makeFreshnessTask({
+        path: "notes/a.md",
+        lineNumber: 1,
+        description: "Fresh",
+        originalMarkdown: `- [ ] #task Fresh [fresh:: ${today}]`,
+        blockLink: " ^duplicate",
+      }),
+    ];
+    const plugin = new LedgerToolsPlugin(
+      makeFreshnessApp({ tasks }),
+      {},
+    );
+    plugin.onload();
+    try {
+      const memo = plugin.freshnessEnsureMemo();
+      // Independent evaluation: NEW vs FRESH.
+      assert.equal(memo.rows.map((row) => row.line).join(","), "1,2");
+      // Each resolvable source row serves its own cached result, even
+      // though both rank keys collide on `notes/a.md#duplicate`.
+      assert.equal(plugin.apiFreshnessState(tasks[0]), "new");
+      assert.equal(plugin.apiFreshnessBucket(tasks[0]), "new");
+      assert.equal(plugin.apiFreshnessState(tasks[1]), "fresh");
+      assert.equal(plugin.apiFreshnessBucket(tasks[1]), null);
+      // The ambiguous key carries no borrowed classification.
+      assert.equal(memo.evaluatedByKey.has("notes/a.md#duplicate"), false);
+      // Membership, not just totals: the queue holds only the NEW row.
+      assert.equal(memo.queue.length, 1);
+      assert.equal(memo.queue[0].state, "new");
+      assert.equal(memo.queue[0].path, "notes/a.md");
+      assert.equal(memo.queue[0].line, 1);
+      assert.equal(memo.counts.new, 1);
+      assert.equal(memo.counts.fresh, 1);
+      // The review predicate partitions B the same way.
+      const isReview = plugin.freshnessReviewPredicate(memo);
+      assert.equal(isReview(tasks[0]), true);
+      assert.equal(isReview(tasks[1]), false);
+      // A cloned Tasks query object (same key, new identity) with an
+      // unambiguous key shares that key's cached result.
+      const lone = makeFreshnessTask({
+        path: "notes/b.md",
+        lineNumber: 2,
+        description: "Lone",
+        originalMarkdown: "- [ ] #task Lone",
+      });
+      const app2 = makeFreshnessApp({ tasks: [lone] });
+      const plugin2 = new LedgerToolsPlugin(app2, {});
+      plugin2.onload();
+      try {
+        const memo2 = plugin2.freshnessEnsureMemo();
+        assert.equal(memo2.evaluatedByKey.has("notes/b.md:3"), true);
+        const clone = { ...lone };
+        assert.equal(plugin2.apiFreshnessBucket(clone), "new");
+        assert.equal(plugin2.apiFreshnessState(clone), "new");
+      } finally {
+        plugin2.onunload();
+      }
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("line identity separates same-path rows without block IDs", () => {
+  withMissingConfig(() => {
+    const today = formatLocalDate(new Date());
+    const tasks = [
+      makeFreshnessTask({
+        path: "notes/a.md",
+        lineNumber: 0,
+        description: "Fresh",
+        originalMarkdown: `- [ ] #task Fresh [fresh:: ${today}]`,
+      }),
+      makeFreshnessTask({
+        path: "notes/a.md",
+        lineNumber: 1,
+        description: "New",
+        originalMarkdown: "- [ ] #task New",
+      }),
+    ];
+    const plugin = new LedgerToolsPlugin(
+      makeFreshnessApp({ tasks }),
+      {},
+    );
+    plugin.onload();
+    try {
+      plugin.freshnessEnsureMemo();
+      assert.equal(plugin.apiFreshnessBucket(tasks[0]), null);
+      assert.equal(plugin.apiFreshnessBucket(tasks[1]), "new");
+      assert.equal(plugin.apiFreshnessState(tasks[0]), "fresh");
+      assert.equal(plugin.apiFreshnessState(tasks[1]), "new");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("interval lookup serves the cached interval with one memo acquisition", () => {
+  withMissingConfig(() => {
+    const fs = require("node:fs");
+    const tasks = [
+      makeFreshnessTask({
+        description: "Custom",
+        originalMarkdown: "- [ ] #task Custom [refresh:: 14]",
+      }),
+      makeFreshnessTask({
+        path: "notes/b.md",
+        lineNumber: 2,
+        description: "Plain",
+        originalMarkdown: "- [ ] #task Plain",
+      }),
+    ];
+    const plugin = new LedgerToolsPlugin(
+      makeFreshnessApp({ tasks }),
+      {},
+    );
+    plugin.onload();
+    const originalRead = fs.readFileSync;
+    const originalStat = fs.statSync;
+    let reads = 0;
+    let stats = 0;
+    fs.readFileSync = (...args) => {
+      reads += 1;
+      return originalRead(...args);
+    };
+    fs.statSync = (...args) => {
+      stats += 1;
+      return originalStat(...args);
+    };
+    try {
+      const memo = plugin.freshnessEnsureMemo();
+      const readsAfterBuild = reads;
+      const statsAfterBuild = stats;
+      let ensures = 0;
+      const originalEnsure = plugin.freshnessEnsureMemo.bind(plugin);
+      plugin.freshnessEnsureMemo = (...args) => {
+        ensures += 1;
+        return originalEnsure(...args);
+      };
+      try {
+        assert.deepEqual(plugin.apiFreshnessIntervalFor(tasks[0]), {
+          days: 14,
+          source: "task",
+        });
+        assert.deepEqual(plugin.apiFreshnessIntervalFor(tasks[1]), {
+          days: 7,
+          source: "default",
+        });
+        // The warm row is the snapshot row: no reparse,
+        // re-evaluation, or config re-read.
+        assert.equal(plugin.apiFreshnessRowFor(tasks[0], memo), memo.rows[0]);
+        assert.equal(reads, readsAfterBuild);
+        assert.equal(stats, statsAfterBuild);
+        // The served interval matches the evaluated result used for
+        // state/bucket.
+        assert.equal(
+          plugin.freshnessEvaluatedFor(tasks[0], memo).intervalDays,
+          14,
+        );
+        assert.equal(
+          plugin.freshnessEvaluatedFor(tasks[1], memo).intervalDays,
+          7,
+        );
+        // Two interval calls plus this identity check: exactly one
+        // acquisition per call, all serving the same memo.
+        assert.equal(plugin.freshnessEnsureMemo(), memo);
+        assert.equal(ensures, 3);
+      } finally {
+        plugin.freshnessEnsureMemo = originalEnsure;
+      }
+    } finally {
+      fs.readFileSync = originalRead;
+      fs.statSync = originalStat;
+      plugin.onunload();
+    }
+  });
+});
+
 // __FRESHNESS_TEST_END__

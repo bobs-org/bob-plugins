@@ -1406,3 +1406,225 @@ test("READY speaks each host's chip language (daily single-tone, dash two-tone)"
     /\.bob-plan \.bob-plan-ready \.bob-plan-ready-value::before[^{]*\{[^}]*content: "\\00a0"/,
   );
 });
+
+// --- Daily paint ------------------------------------------------------------------
+// `paintPlanBlock` must carry the same snapshot's lane data to the shared
+// renderer: the rendered daily READY badge agrees with dashboard READY.
+
+function paintNode(tag, options = {}) {
+  const node = {
+    tag,
+    cls: options.cls,
+    text: options.text,
+    title: options.title,
+    href: options.href,
+    attrs: {},
+    children: [],
+    parentNode: null,
+    setAttribute(name, value) {
+      node.attrs[name] = String(value);
+    },
+    hasAttribute(name) {
+      return name in node.attrs;
+    },
+    setText(value) {
+      node.text = String(value);
+    },
+    addEventListener() {},
+    empty() {
+      node.children = [];
+    },
+    createDiv(childOptions = {}) {
+      return node.createEl("div", childOptions);
+    },
+    createEl(childTag, childOptions = {}) {
+      const child = paintNode(childTag, childOptions);
+      child.parentNode = node;
+      node.children.push(child);
+      return child;
+    },
+    querySelector(selector) {
+      const cls = String(selector).replace(/^\./, "");
+      return (
+        node.children.find((child) =>
+          String(child.cls || "")
+            .split(/\s+/)
+            .includes(cls),
+        ) || null
+      );
+    },
+    querySelectorAll(selector) {
+      const cls = String(selector).replace(/^\./, "");
+      return node.children.filter((child) =>
+        String(child.cls || "")
+          .split(/\s+/)
+          .includes(cls),
+      );
+    },
+  };
+  return node;
+}
+
+function paintEl() {
+  return paintNode("div");
+}
+
+function paintTasks(todayStamp) {
+  return [
+    readyTask({
+      path: "notes/new-a.md",
+      description: "- [ ] #task New thing",
+      originalMarkdown: "- [ ] #task New thing",
+    }),
+    readyTask({
+      path: "notes/ready-a.md",
+      description: `- [ ] #task Ready thing [fresh:: ${todayStamp}]`,
+      originalMarkdown: `- [ ] #task Ready thing [fresh:: ${todayStamp}]`,
+    }),
+  ];
+}
+
+function findReadyAnchor(el) {
+  const container = el.children[0];
+  assert.ok(container, "expected the bob-plan container");
+  const anchor = container.children.find((child) =>
+    String(child.cls || "")
+      .split(/\s+/)
+      .includes("bob-plan-ready"),
+  );
+  assert.ok(anchor, "expected the shared READY anchor in the daily block");
+  return anchor;
+}
+
+test("daily paint carries lane pressure to the shared READY renderer", async () => {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const todayStamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const tasks = paintTasks(todayStamp);
+  const app = makeApp({
+    plugins: {
+      plugins: { "obsidian-tasks-plugin": { getTasks: () => tasks } },
+    },
+  });
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = "/definitely/missing/ready-badge-test";
+  try {
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      plugin.isTodayTask = () => false;
+      plugin.readPlanBlockContent = () =>
+        Promise.resolve("## Pomodoros\n\n- [ ] () — GOALS\n");
+      const seen = [];
+      const originalPaint = plugin.paintReadyElement.bind(plugin);
+      plugin.paintReadyElement = (host, budget, options) => {
+        seen.push({ budget, options });
+        return originalPaint(host, budget, options);
+      };
+      try {
+        const el = paintEl();
+        plugin.paintPlanBlock(el, "2026/20260930.md");
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(seen.length, 1);
+        // NEW=1, ROTTEN=0, READY=1: the same snapshot's lane data.
+        assert.deepEqual(seen[0].budget, {
+          count: 1,
+          cap: 100,
+          over: false,
+          lane: { total: 2, new: 1, rotten: 0, ready: 1 },
+        });
+        const anchor = findReadyAnchor(el);
+        const shown = readyChildTexts(anchor);
+        assert.equal(shown.label, "READY");
+        assert.equal(shown.value, "1/100");
+        // Rendered title/aria agree with dashboard READY exactly.
+        const dashboard = readyBadgeModel(
+          { count: 1, cap: 100, over: false },
+          { lane: { total: 2, new: 1, rotten: 0, ready: 1 } },
+        );
+        assert.equal(
+          anchor.title,
+          "READY 1/100 · lane 2 = 1 new + 0 rotten + 1 ready",
+        );
+        assert.equal(anchor.title, dashboard.tooltip);
+        assert.equal(anchor.attrs["aria-label"], dashboard.aria);
+        // An old daily note renders the same lane tooltip.
+        const oldEl = paintEl();
+        plugin.paintPlanBlock(oldEl, "2026/20250101.md");
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(seen.length, 2);
+        assert.equal(findReadyAnchor(oldEl).title, dashboard.tooltip);
+      } finally {
+        plugin.paintReadyElement = originalPaint;
+      }
+    } finally {
+      plugin.onunload();
+    }
+  } finally {
+    if (savedXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = savedXdg;
+    }
+  }
+});
+
+test("daily paint degrades to the legacy tooltip without freshness", async () => {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const todayStamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = "/definitely/missing/ready-badge-test";
+  try {
+    // Unavailable Tasks: the placeholder keeps the legacy tooltip.
+    const empty = new LedgerToolsPlugin(makeApp({}), {});
+    empty.onload();
+    try {
+      empty.readPlanBlockContent = () =>
+        Promise.resolve("## Pomodoros\n\n- [ ] () — GOALS\n");
+      const el = paintEl();
+      empty.paintPlanBlock(el, "2026/20260930.md");
+      await new Promise((resolve) => setImmediate(resolve));
+      const anchor = findReadyAnchor(el);
+      const placeholder = readyBadgeModel({ count: null, cap: 100 });
+      assert.equal(anchor.title, placeholder.tooltip);
+      assert.match(anchor.title, /unavailable/);
+      assert.equal(readyChildTexts(anchor).value, "–");
+    } finally {
+      empty.onunload();
+    }
+    // Throwing freshness: the ungated count keeps the legacy tooltip.
+    const tasks = paintTasks(todayStamp);
+    const failing = new LedgerToolsPlugin(
+      makeApp({
+        plugins: {
+          plugins: { "obsidian-tasks-plugin": { getTasks: () => tasks } },
+        },
+      }),
+      {},
+    );
+    failing.onload();
+    try {
+      failing.isTodayTask = () => false;
+      failing.readPlanBlockContent = () =>
+        Promise.resolve("## Pomodoros\n\n- [ ] () — GOALS\n");
+      failing.freshnessEnsureMemo = () => {
+        throw new Error("freshness blew up");
+      };
+      const el = paintEl();
+      failing.paintPlanBlock(el, "2026/20260930.md");
+      await new Promise((resolve) => setImmediate(resolve));
+      const anchor = findReadyAnchor(el);
+      assert.match(anchor.title, /2 ready tasks; limit 100/);
+      assert.ok(!anchor.title.includes("lane"));
+    } finally {
+      failing.onunload();
+    }
+  } finally {
+    if (savedXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = savedXdg;
+    }
+  }
+});

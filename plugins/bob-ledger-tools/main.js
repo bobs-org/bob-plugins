@@ -6899,11 +6899,25 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         indexByTask.set(task, index);
       }
     }
-    const evaluatedByKey = new Map();
+    // Per-row evaluated results aligned with `rows`, so a task object
+    // already in the snapshot always serves its own row even when its
+    // rank key collides with another row (duplicate block IDs). The
+    // key map below only carries unambiguous keys: an ambiguous or
+    // missing identity never borrows another row's classification and
+    // instead falls back to the per-row evaluator (the neutral policy
+    // for genuinely unresolved identity).
+    const keyCounts = new Map();
     for (const row of rows) {
+      const key = freshnessRowKey(row);
+      keyCounts.set(key, (keyCounts.get(key) || 0) + 1);
+    }
+    const evaluatedByIndex = [];
+    const evaluatedByKey = new Map();
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
       try {
         const evaluated = freshnessEvaluate(row, dateText, snapshot.config);
-        evaluatedByKey.set(freshnessRowKey(row), {
+        const entry = {
           state: evaluated.state,
           bucket: freshnessBucketForState(evaluated.state),
           fresh: evaluated.fresh,
@@ -6911,7 +6925,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           daysOverdue: evaluated.daysOverdue,
           intervalDays: evaluated.intervalDays,
           intervalSource: evaluated.intervalSource,
-        });
+        };
+        evaluatedByIndex[rowIndex] = entry;
+        if (keyCounts.get(freshnessRowKey(row)) === 1) {
+          evaluatedByKey.set(freshnessRowKey(row), entry);
+        }
       } catch (error) {
         // One bad row never breaks the snapshot; lookups miss and use
         // the per-row fallback instead.
@@ -6930,6 +6948,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       tasksAvailable: Array.isArray(tasks),
       rows,
       indexByTask,
+      evaluatedByIndex,
       evaluatedByKey,
       queue,
       counts,
@@ -7137,6 +7156,22 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   // the gated READY count can fall back to the legacy count.
   freshnessEvaluatedFor(task, memo) {
     const active = memo || this.freshnessEnsureMemo();
+    // A task object already in the snapshot serves its own row's
+    // cached result first, so a duplicate block ID (or any other key
+    // collision) can never borrow another row's classification.
+    if (active && active.indexByTask instanceof Map) {
+      const index = active.indexByTask.get(task);
+      if (
+        Number.isInteger(index) &&
+        Array.isArray(active.evaluatedByIndex) &&
+        active.evaluatedByIndex[index]
+      ) {
+        return active.evaluatedByIndex[index];
+      }
+    }
+    // Cloned Tasks query objects (same key, new identity) share the
+    // unambiguous key's cached result; ambiguous keys are absent from
+    // the map and fall through to the per-row evaluator below.
     const key = this.freshnessMemoRankKey(task);
     if (
       key &&
@@ -7243,11 +7278,24 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
   apiFreshnessIntervalFor(task) {
     try {
+      // One memo acquisition, then the same evaluated result used for
+      // state/bucket: the cached interval, never a warm row reparse,
+      // re-evaluation, or config re-read. A miss still evaluates the
+      // row once through the shared path with the acquired memo.
       const memo = this.freshnessEnsureMemo();
-      const row = this.apiFreshnessRowFor(task);
-      const read = readFreshness(row.rawLine || "", memo.dateText);
-      const note = freshnessParseNoteRefresh(row.noteRefreshRaw);
-      return freshnessIntervalFor(read.refresh, note.days, memo.config);
+      const evaluated = this.freshnessEvaluatedFor(task, memo);
+      if (
+        evaluated &&
+        Number.isInteger(evaluated.intervalDays) &&
+        evaluated.intervalDays >= 1 &&
+        typeof evaluated.intervalSource === "string"
+      ) {
+        return {
+          days: evaluated.intervalDays,
+          source: evaluated.intervalSource,
+        };
+      }
+      return { days: 7, source: "default" };
     } catch (error) {
       return { days: 7, source: "default" };
     }
@@ -9021,7 +9069,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           });
         }
         try {
-          this.paintReadyElement(container, model.ready ? { count: model.ready.count, cap: model.ready.cap, over: model.ready.over } : { count: null, cap: effectivePlanCaps(caps).maxReady }, {
+          this.paintReadyElement(container, model.ready ? { count: model.ready.count, cap: model.ready.cap, over: model.ready.over, lane: model.lane || null } : { count: null, cap: effectivePlanCaps(caps).maxReady }, {
             sourcePath: typeof sourcePath === "string" ? sourcePath : "",
             invalid,
           });
@@ -10109,6 +10157,7 @@ function planBlockModel({
     next,
     pending,
     ready,
+    lane: reviewLane,
   };
 }
 

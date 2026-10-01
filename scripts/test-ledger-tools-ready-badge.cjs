@@ -896,3 +896,167 @@ test("READY refresh crosses the unavailable boundary and back", () => {
     plugin.onunload();
   }
 });
+
+test("READY never assigns the Obsidian text setter", () => {
+  function obsidianSpan(options = {}, parent = null) {
+    const span = {
+      tag: "span",
+      cls: options.cls,
+      text: options.text,
+      attrs: {},
+      parentNode: parent,
+      setAttribute(name, value) {
+        span.attrs[name] = value;
+      },
+      setText(value) {
+        span.text = String(value);
+      },
+      remove() {
+        if (parent && Array.isArray(parent.children)) {
+          const at = parent.children.indexOf(span);
+          if (at !== -1) {
+            parent.children.splice(at, 1);
+          }
+        }
+      },
+    };
+    return span;
+  }
+
+  function obsidianAnchor(parent, options = {}) {
+    const anchor = {
+      tag: "a",
+      cls: options.cls || "",
+      title: options.title || "",
+      href: options.href || "",
+      attrs: {},
+      listeners: [],
+      handlers: {},
+      children: [],
+      parentNode: parent || null,
+      isConnected: true,
+      assignedTexts: [],
+      createEl(tag, childOptions = {}) {
+        const span = obsidianSpan(childOptions, anchor);
+        anchor.children.push(span);
+        return span;
+      },
+      querySelector(selector) {
+        const cls = String(selector).replace(/^\./, "");
+        return (
+          anchor.children.find((child) =>
+            String(child.cls || "")
+              .split(/\s+/)
+              .includes(cls),
+          ) || null
+        );
+      },
+      querySelectorAll(selector) {
+        const cls = String(selector).replace(/^\./, "");
+        return anchor.children.filter((child) =>
+          String(child.cls || "")
+            .split(/\s+/)
+            .includes(cls),
+        );
+      },
+      setAttribute(name, value) {
+        anchor.attrs[name] = value;
+      },
+      hasAttribute() {
+        return false;
+      },
+      setText(value) {
+        anchor.assignedTexts.push(String(value));
+        anchor.children.splice(0, anchor.children.length);
+      },
+      addEventListener(name, handler) {
+        anchor.listeners.push(name);
+        anchor.handlers[name] = anchor.handlers[name] || [];
+        anchor.handlers[name].push(handler);
+      },
+      removeChild(child) {
+        const at = anchor.children.indexOf(child);
+        if (at !== -1) {
+          anchor.children.splice(at, 1);
+        }
+        return child;
+      },
+      remove() {},
+    };
+    anchor.childNodes = anchor.children;
+    // Mimic Obsidian's HTMLElement.text setter: assigning deletes children.
+    Object.defineProperty(anchor, "text", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return "";
+      },
+      set(value) {
+        anchor.assignedTexts.push(String(value));
+        anchor.children.splice(0, anchor.children.length);
+      },
+    });
+    return anchor;
+  }
+
+  function obsidianHost() {
+    const el = {
+      attrs: {},
+      children: [],
+      createEl(tag, options = {}) {
+        const anchor = obsidianAnchor(el, options);
+        anchor.parentNode = el;
+        el.children.push(anchor);
+        return anchor;
+      },
+      setAttribute() {},
+      contains(node) {
+        return Boolean(node) && node.parentNode === el;
+      },
+    };
+    return el;
+  }
+
+  const plugin = new LedgerToolsPlugin(makeApp(), {});
+  plugin.onload();
+  try {
+    for (const budget of [
+      { count: 3, cap: 100, over: false, value: "3/100" },
+      { count: 101, cap: 100, over: true, value: "101/100" },
+    ]) {
+      const parent = obsidianHost();
+      const anchor = plugin.paintReadyElement(parent, budget, {
+        sourcePath: "dash.md",
+      });
+      assert.ok(anchor);
+      assert.deepEqual(anchor.assignedTexts, []);
+      const painted = readyChildTexts(anchor);
+      assert.equal(painted.labelCount, 1);
+      assert.equal(painted.valueCount, 1);
+      assert.equal(painted.label, "READY");
+      assert.equal(painted.value, budget.value);
+
+      plugin.readyWidgets = new Set([
+        { el: anchor, sourcePath: "dash.md", component: null },
+      ]);
+      const stubBudget = plugin.readyBudget;
+      plugin.readyBudget = () => budget;
+      try {
+        assert.equal(plugin.refreshReadyBadges(new Date(2026, 8, 30)), true);
+      } finally {
+        plugin.readyBudget = stubBudget;
+      }
+      assert.equal(plugin.readyWidgets.size, 1);
+      const [widget] = Array.from(plugin.readyWidgets);
+      assert.equal(widget.el, anchor);
+      assert.deepEqual(anchor.assignedTexts, []);
+      const refreshed = readyChildTexts(anchor);
+      assert.equal(refreshed.labelCount, 1);
+      assert.equal(refreshed.valueCount, 1);
+      assert.equal(refreshed.label, "READY");
+      assert.equal(refreshed.value, budget.value);
+    }
+  } finally {
+    plugin.onunload();
+  }
+});

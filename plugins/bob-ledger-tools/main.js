@@ -3326,10 +3326,13 @@ function setReadyAnchorContent(anchor, model) {
     }
   }
   // Clear any flattened direct text left by older renders (or stub `.text`)
-  // while preserving the span children.
+  // while preserving the span children. Never assign `.text` on a live
+  // element: in Obsidian it is a setter that wipes the span children.
   try {
-    if (anchor && Array.isArray(anchor.childNodes)) {
-      for (const node of Array.from(anchor.childNodes)) {
+    const childNodes =
+      anchor && anchor.childNodes != null ? anchor.childNodes : null;
+    if (childNodes && typeof childNodes.length === "number") {
+      for (const node of Array.from(childNodes)) {
         if (
           node &&
           node.nodeType === 3 &&
@@ -3345,18 +3348,19 @@ function setReadyAnchorContent(anchor, model) {
   } catch (error) {
     // Best-effort cleanup only.
   }
-  if (
-    anchor &&
-    "text" in anchor &&
-    typeof anchor.text === "string" &&
-    anchor.text !== "" &&
-    !findReadySpan(anchor, READY_VALUE_CLS)
-  ) {
-    anchor.text = "";
-  } else if (anchor && "text" in anchor && typeof anchor.text === "string") {
-    // Stub anchors carry `.text` alongside `.children`; keep it empty so a
-    // stale flattened value can never shadow the spans.
-    anchor.text = "";
+  try {
+    const descriptor = anchor
+      ? Object.getOwnPropertyDescriptor(anchor, "text")
+      : undefined;
+    if (descriptor && typeof descriptor.value === "string") {
+      // Stub anchors carry `.text` as an own data property alongside
+      // `.children`; keep it empty so a stale flattened value can never
+      // shadow the spans. A live Obsidian accessor lives on the prototype
+      // and must be left alone.
+      anchor.text = "";
+    }
+  } catch (error) {
+    // Best-effort cleanup only.
   }
   if (typeof anchor.setAttribute === "function") {
     anchor.setAttribute("title", model.tooltip);

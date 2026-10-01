@@ -5965,6 +5965,481 @@ function replaceLinkOriginalsInContent(content, replacements) {
   });
 }
 
+function planProjectPromotionTargets(content) {
+  const text = String(content || "");
+  const splitted = splitMarkdownContent(text);
+  const lines = splitted.lines;
+  const lineEnding = splitted.lineEnding;
+  const contexts = getMarkdownLineContexts(text);
+  const candidates = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const context = contexts[index];
+    if (context && (context.inFrontmatter || context.inFence)) {
+      continue;
+    }
+    const line = String(lines[index] || "");
+    if (!OBSIDIAN_TASK_LINE_RE.test(line)) {
+      continue;
+    }
+    if (!isObsidianTaskLine(line)) {
+      continue;
+    }
+    if (isProjectLifecycleTaskLine(line)) {
+      continue;
+    }
+    if (line.includes(PROJECT_TASKS_PLACEHOLDER)) {
+      continue;
+    }
+    candidates.push(
+      Object.freeze({
+        line: index,
+        text: line,
+        blockId: getTrailingBlockId(line),
+      }),
+    );
+  }
+  if (candidates.length === 0) {
+    return Object.freeze({
+      targets: Object.freeze([]),
+      content: text,
+      error: null,
+    });
+  }
+  const allIds = new Map();
+  for (let index = 0; index < lines.length; index += 1) {
+    const context = contexts[index];
+    if (context && (context.inFrontmatter || context.inFence)) {
+      continue;
+    }
+    const id = getTrailingBlockId(String(lines[index] || ""));
+    if (!id) {
+      continue;
+    }
+    if (!allIds.has(id)) {
+      allIds.set(id, []);
+    }
+    allIds.get(id).push(index);
+  }
+  for (const candidate of candidates) {
+    if (!candidate.blockId) {
+      continue;
+    }
+    const occurrences = allIds.get(candidate.blockId) || [];
+    if (occurrences.length > 1) {
+      return Object.freeze({
+        targets: Object.freeze([]),
+        content: text,
+        error: `Target block ID ^${candidate.blockId} is duplicated`,
+      });
+    }
+  }
+  const reserved = new Set(allIds.keys());
+  reserved.add("prj");
+  const nextLines = lines.slice();
+  const targets = [];
+  for (const candidate of candidates) {
+    let id = candidate.blockId;
+    if (!id) {
+      id = suggestBlockIdFromTask(cleanTaskDisplayText(candidate.text), text, {
+        reservedIds: reserved,
+      });
+      nextLines[candidate.line] = appendBlockIdToLine(
+        nextLines[candidate.line],
+        id,
+      );
+      reserved.add(id);
+    }
+    targets.push(Object.freeze({ line: candidate.line, blockId: id }));
+  }
+  return Object.freeze({
+    targets: Object.freeze(targets),
+    content: nextLines.join(lineEnding),
+    error: null,
+  });
+}
+
+function isProjectPromotionEligibleDailyPath(filePath, today) {
+  const daily = canonicalRecoveryDailyDate(filePath);
+  if (!daily) {
+    return false;
+  }
+  const base = today instanceof Date ? today : new Date();
+  const local = getLocalDateStart(base);
+  const todayValue =
+    local.getFullYear() * 10000 + (local.getMonth() + 1) * 100 + local.getDate();
+  return daily.value >= todayValue;
+}
+
+function createProjectPromotionLinkIndex(files) {
+  const paths = new Set();
+  const basenames = new Map();
+  for (const file of Array.isArray(files) ? files : []) {
+    const rawPath = file && file.path ? file.path : file;
+    const normalized = normalizeVaultRelativePath(rawPath);
+    if (!normalized) {
+      continue;
+    }
+    paths.add(normalized);
+    const basename = recoveryMarkdownBasename(normalized).toLowerCase();
+    if (!basenames.has(basename)) {
+      basenames.set(basename, normalized);
+    } else if (basenames.get(basename) !== normalized) {
+      basenames.set(basename, null);
+    }
+  }
+  return Object.freeze({ paths, basenames });
+}
+
+function resolveProjectPromotionLinkTarget(linkTargetText, containingPath, index) {
+  const raw = String(linkTargetText || "").trim();
+  const container = normalizeVaultRelativePath(containingPath || "");
+  if (!raw) {
+    if (!container || !index || !index.paths) {
+      return null;
+    }
+    return index.paths.has(container) ? container : container;
+  }
+  if (!index || !index.paths || !index.basenames) {
+    return null;
+  }
+  const exact = canonicalRecoveryMarkdownPath(raw);
+  if (exact && index.paths.has(exact)) {
+    return exact;
+  }
+  const basename = recoveryMarkdownBasename(exact || raw).toLowerCase();
+  if (!basename) {
+    return null;
+  }
+  return index.basenames.get(basename) || null;
+}
+
+const PROJECT_PROMOTION_DEDICATED_BODY_RE =
+  /^(?:\[([^\]\n])\][ \t]+)?((?:🍅[ \t]+)*)(~~)?(!)?\[\[([^\]\n]*?)#\^([A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\](~~)?([ \t]*#)?[ \t]*$/u;
+
+function splitProjectPromotionLinkPrefix(line) {
+  const match = /^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$/.exec(String(line || ""));
+  if (!match) {
+    return null;
+  }
+  return Object.freeze({ prefix: match[1], body: match[2] });
+}
+
+function parseProjectPromotionDedicatedLink(line) {
+  const splitted = splitProjectPromotionLinkPrefix(line);
+  if (!splitted) {
+    return null;
+  }
+  const match = PROJECT_PROMOTION_DEDICATED_BODY_RE.exec(splitted.body);
+  if (!match) {
+    return null;
+  }
+  return Object.freeze({
+    prefix: splitted.prefix,
+    checkbox: match[1] === undefined ? null : match[1],
+    markerRun: match[2] || "",
+    strikeOpen: Boolean(match[3]),
+    embedded: Boolean(match[4]),
+    target: String(match[5] || "").trim(),
+    blockId: match[6],
+    strikeClose: Boolean(match[7]),
+    suffix: match[8] || "",
+  });
+}
+
+function buildProjectPromotionReplacementLines(
+  originalLine,
+  projectPathWithoutMd,
+  targetBlockIds,
+) {
+  const parsed = parseProjectPromotionDedicatedLink(originalLine);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.strikeOpen || parsed.strikeClose) {
+    return null;
+  }
+  if (
+    parsed.checkbox !== null &&
+    POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)
+  ) {
+    return null;
+  }
+  const projectRef = String(projectPathWithoutMd || "").trim();
+  if (!projectRef) {
+    return null;
+  }
+  const ids = Array.isArray(targetBlockIds) ? targetBlockIds : [];
+  if (ids.length === 0) {
+    return null;
+  }
+  const embedPrefix = parsed.embedded ? "!" : "";
+  const suffixText = parsed.suffix ? parsed.suffix.replace(/^[ \t]*/, " ") : "";
+  const lines = [];
+  ids.forEach((blockId, order) => {
+    const id = String(blockId || "").trim();
+    if (!id) {
+      return;
+    }
+    if (order === 0) {
+      const checkboxText =
+        parsed.checkbox !== null ? `[${parsed.checkbox}] ` : "";
+      lines.push(
+        `${parsed.prefix}${checkboxText}${parsed.markerRun}${embedPrefix}[[${projectRef}#^${id}]]${suffixText}`,
+      );
+    } else {
+      lines.push(
+        `${parsed.prefix}${embedPrefix}[[${projectRef}#^${id}]]${suffixText}`,
+      );
+    }
+  });
+  return Object.freeze(lines);
+}
+
+function planProjectPromotionFileEdits(content, filePath, options) {
+  const text = String(content || "");
+  const opts = options && typeof options === "object" ? options : {};
+  const sourcePath = normalizeVaultRelativePath(opts.sourcePath || "");
+  const sourceBlockId = String(opts.sourceBlockId || "").trim();
+  const projectPathWithoutMd = String(
+    opts.projectPathWithoutMd || opts.projectBasename || "",
+  ).trim();
+  const projectBasename = String(
+    opts.projectBasename || opts.projectPathWithoutMd || "",
+  )
+    .trim()
+    .split("/")
+    .pop();
+  const targetBlockIds = Array.isArray(opts.targetBlockIds)
+    ? opts.targetBlockIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  const today = opts.today instanceof Date ? opts.today : new Date();
+  const index =
+    opts.fileIndex && typeof opts.fileIndex === "object"
+      ? opts.fileIndex
+      : createProjectPromotionLinkIndex(opts.files || []);
+  const empty = Object.freeze({
+    content: text,
+    changed: false,
+    expandedCount: 0,
+    legacyCount: 0,
+  });
+  if (!sourcePath || !sourceBlockId || !projectPathWithoutMd || !projectBasename) {
+    return empty;
+  }
+  if (targetBlockIds.length === 0) {
+    return empty;
+  }
+  if (!isProjectPromotionEligibleDailyPath(filePath, today)) {
+    return empty;
+  }
+  const splitted = splitMarkdownContent(text);
+  const lines = splitted.lines;
+  const lineEnding = splitted.lineEnding;
+  const contexts = getMarkdownLineContexts(text);
+  const section = findPomodorosSectionRange(text);
+  if (!section) {
+    return empty;
+  }
+  const ranges = collectOpenPomodoroRanges(lines, contexts, section);
+  if (ranges.length === 0) {
+    return empty;
+  }
+  const expansions = [];
+  for (const range of ranges) {
+    for (
+      let lineIndex = range.startLine;
+      lineIndex <= range.endLine;
+      lineIndex += 1
+    ) {
+      const context = contexts[lineIndex];
+      if (context && (context.inFrontmatter || context.inFence)) {
+        continue;
+      }
+      const lineText = String(lines[lineIndex] || "");
+      if (!PROJECT_LIST_ITEM_RE.test(lineText)) {
+        continue;
+      }
+      if (findNearestParentListItem(lines, lineIndex) !== range.entryLine) {
+        continue;
+      }
+      const parsed = parseProjectPromotionDedicatedLink(lineText);
+      if (!parsed) {
+        continue;
+      }
+      if (parsed.strikeOpen || parsed.strikeClose) {
+        continue;
+      }
+      if (
+        parsed.checkbox !== null &&
+        POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)
+      ) {
+        continue;
+      }
+      if (parsed.blockId !== sourceBlockId) {
+        continue;
+      }
+      const resolved = resolveProjectPromotionLinkTarget(
+        parsed.target,
+        filePath,
+        index,
+      );
+      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
+        continue;
+      }
+      const replacementLines = buildProjectPromotionReplacementLines(
+        lineText,
+        projectPathWithoutMd,
+        targetBlockIds,
+      );
+      if (!replacementLines || replacementLines.length === 0) {
+        continue;
+      }
+      const block = findCurrentBulletChildBlock(lines, lineIndex);
+      const subtreeEnd =
+        block && Number.isFinite(block.endLineExclusive)
+          ? block.endLineExclusive
+          : lineIndex + 1;
+      expansions.push(
+        Object.freeze({
+          lineIndex,
+          originalLine: lineText,
+          replacementLines,
+          subtreeStart: lineIndex + 1,
+          subtreeEnd: Math.max(lineIndex + 1, subtreeEnd),
+        }),
+      );
+    }
+  }
+  if (expansions.length === 0) {
+    return empty;
+  }
+  const covered = new Set();
+  for (const expansion of expansions) {
+    for (
+      let lineIndex = expansion.lineIndex;
+      lineIndex < expansion.subtreeEnd;
+      lineIndex += 1
+    ) {
+      covered.add(lineIndex);
+    }
+  }
+  const nextLines = lines.slice();
+  const sorted = expansions.slice().sort((a, b) => b.lineIndex - a.lineIndex);
+  for (const expansion of sorted) {
+    const subtreeLines = nextLines.slice(
+      expansion.subtreeStart,
+      expansion.subtreeEnd,
+    );
+    const first = expansion.replacementLines[0];
+    const rest = expansion.replacementLines.slice(1);
+    const replacement = [first, ...subtreeLines, ...rest];
+    nextLines.splice(
+      expansion.lineIndex,
+      expansion.subtreeEnd - expansion.lineIndex,
+      ...replacement,
+    );
+  }
+  let legacyCount = 0;
+  const markdownLinkRe =
+    /\[([^\]\n]*)\]\(([^)\s]*?)#\^([A-Za-z0-9-]+)(?:\s+[^)]*)?\)/g;
+  for (let lineIndex = 0; lineIndex < nextLines.length; lineIndex += 1) {
+    let lineText = String(nextLines[lineIndex] || "");
+    const originalLineText = lineText;
+    const wikiOccurrences = collectPomodoroBlockLinkOccurrences(lineText);
+    const wikiReplacements = [];
+    for (const occurrence of wikiOccurrences) {
+      if (occurrence.blockId !== sourceBlockId) {
+        continue;
+      }
+      const resolved = resolveProjectPromotionLinkTarget(
+        occurrence.target,
+        filePath,
+        index,
+      );
+      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
+        continue;
+      }
+      let linkOnlyStart = occurrence.start;
+      const markerMatch = /^(?:🍅[ \t]+)*/.exec(
+        lineText.slice(occurrence.start, occurrence.end),
+      );
+      if (markerMatch) {
+        linkOnlyStart = occurrence.start + markerMatch[0].length;
+      }
+      const originalLink = lineText.slice(linkOnlyStart, occurrence.end);
+      const replacementLink = rewriteBlockIdLinkOriginal(
+        originalLink,
+        projectBasename,
+        "prj",
+      );
+      if (!replacementLink) {
+        continue;
+      }
+      wikiReplacements.push({ start: linkOnlyStart, end: occurrence.end, replacementLink });
+    }
+    wikiReplacements
+      .sort((a, b) => b.start - a.start)
+      .forEach((item) => {
+        lineText =
+          lineText.slice(0, item.start) +
+          item.replacementLink +
+          lineText.slice(item.end);
+        legacyCount += 1;
+      });
+    markdownLinkRe.lastIndex = 0;
+    let markdownMatch = null;
+    const markdownReplacements = [];
+    while ((markdownMatch = markdownLinkRe.exec(lineText)) !== null) {
+      const targetText = String(markdownMatch[2] || "").trim();
+      const blockId = markdownMatch[3];
+      if (blockId !== sourceBlockId) {
+        continue;
+      }
+      const strippedTarget = targetText.replace(/\.md$/i, "");
+      const resolved = resolveProjectPromotionLinkTarget(
+        strippedTarget || targetText,
+        filePath,
+        index,
+      );
+      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
+        continue;
+      }
+      const originalLink = markdownMatch[0];
+      const replacementLink = rewriteBlockIdLinkOriginal(
+        originalLink,
+        projectBasename,
+        "prj",
+      );
+      if (!replacementLink) {
+        continue;
+      }
+      markdownReplacements.push({
+        start: markdownMatch.index,
+        end: markdownMatch.index + originalLink.length,
+        replacementLink,
+      });
+    }
+    markdownReplacements
+      .sort((a, b) => b.start - a.start)
+      .forEach((item) => {
+        lineText =
+          lineText.slice(0, item.start) +
+          item.replacementLink +
+          lineText.slice(item.end);
+        legacyCount += 1;
+      });
+    if (lineText !== originalLineText) {
+      nextLines[lineIndex] = lineText;
+    }
+  }
+  return Object.freeze({
+    content: nextLines.join(lineEnding),
+    changed: nextLines.join(lineEnding) !== text,
+    expandedCount: expansions.length,
+    legacyCount,
+  });
+}
+
 function parseIntegerText(text) {
   return Number.parseInt(String(text || ""), 10);
 }
@@ -31158,19 +31633,61 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     let updatedLinkCount = 0;
-    if (parsedTask.blockId && blockIdBacklinkRewrites.length > 0) {
-      const rewriteResult = await this.applyBlockIdLinkRewrites(
-        blockIdBacklinkRewrites,
-        createdFile.basename,
+    if (parsedTask.blockId) {
+      const promotionPlan = planProjectPromotionTargets(
+        seedResult.content,
       );
-      updatedLinkCount = rewriteResult.updatedLinkCount;
-      if (rewriteResult.failed) {
-        const linkText =
-          rewriteResult.failedLinkCount === 1 ? "link" : "links";
+      if (promotionPlan.error) {
         new Notice(
-          `Created project, but ${rewriteResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
+          `Created project, but ${promotionPlan.error}; source task was kept`,
         );
         return true;
+      }
+      const promotionToday =
+        this.promotionTodayForTests instanceof Date
+          ? this.promotionTodayForTests
+          : new Date();
+      const expansionResult = await this.applyProjectPromotionBacklinkExpansion(
+        {
+          sourceFile,
+          createdFile,
+          sourceBlockId: parsedTask.blockId,
+          seedContent: seedResult.content,
+          promotionPlan,
+          blockIdBacklinkRewrites,
+          today: promotionToday,
+        },
+      );
+      if (expansionResult.expanded) {
+        updatedLinkCount = expansionResult.updatedLinkCount;
+        if (expansionResult.failed) {
+          if (expansionResult.error) {
+            new Notice(
+              `Created project, but ${expansionResult.error}; source task was kept`,
+            );
+          } else {
+            const linkText =
+              expansionResult.failedLinkCount === 1 ? "link" : "links";
+            new Notice(
+              `Created project, but ${expansionResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
+            );
+          }
+          return true;
+        }
+      } else if (blockIdBacklinkRewrites.length > 0) {
+        const rewriteResult = await this.applyBlockIdLinkRewrites(
+          blockIdBacklinkRewrites,
+          createdFile.basename,
+        );
+        updatedLinkCount = rewriteResult.updatedLinkCount;
+        if (rewriteResult.failed) {
+          const linkText =
+            rewriteResult.failedLinkCount === 1 ? "link" : "links";
+          new Notice(
+            `Created project, but ${rewriteResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
+          );
+          return true;
+        }
       }
     }
 
@@ -31686,6 +32203,334 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       updatedLinkCount,
       failedLinkCount,
       failed: failedLinkCount > 0,
+    });
+  }
+
+  async readProjectPromotionCandidateContent(path, file, buffers) {
+    const normalized = normalizeVaultRelativePath(path);
+    if (buffers && !buffers.ambiguous && buffers.has(normalized)) {
+      return String(buffers.get(normalized) || "");
+    }
+    const editor = this.getOpenMarkdownEditorForPath(normalized);
+    if (editor && typeof editor.getValue === "function") {
+      return String(editor.getValue() || "");
+    }
+    const vault = this.app && this.app.vault;
+    const vaultFile =
+      file ||
+      (vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(normalized)
+        : null);
+    if (!vault || !vaultFile) {
+      return null;
+    }
+    try {
+      if (typeof vault.cachedRead === "function") {
+        return String((await vault.cachedRead(vaultFile)) || "");
+      }
+      if (typeof vault.read === "function") {
+        return String((await vault.read(vaultFile)) || "");
+      }
+    } catch (error) {
+      return null;
+    }
+    return null;
+  }
+
+  async writeProjectPromotionFileChange(path, file, before, after) {
+    const normalized = normalizeVaultRelativePath(path);
+    const editor = this.getOpenMarkdownEditorForPath(normalized);
+    if (editor && typeof editor.getValue === "function") {
+      if (String(editor.getValue() || "") !== before) {
+        throw new Error(`Promotion preimage changed: ${normalized}`);
+      }
+      const applied = applyEditorContentTransaction(editor, before, after);
+      if (!applied || String(editor.getValue() || "") !== after) {
+        throw new Error(`Promotion editor write failed: ${normalized}`);
+      }
+      return;
+    }
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.process !== "function" || !file) {
+      throw new Error(`Vault content updates are unavailable: ${normalized}`);
+    }
+    let transformed = false;
+    await vault.process(file, (content) => {
+      if (String(content || "") !== before) {
+        throw new Error(`Promotion preimage changed: ${normalized}`);
+      }
+      transformed = true;
+      return after;
+    });
+    if (!transformed) {
+      throw new Error(`Promotion file write failed: ${normalized}`);
+    }
+  }
+
+  async applyProjectPromotionBacklinkExpansion(options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const sourceFile = opts.sourceFile;
+    const createdFile = opts.createdFile;
+    const sourceBlockId = String(opts.sourceBlockId || "").trim();
+    const seedContent = String(opts.seedContent || "");
+    const promotionPlan = opts.promotionPlan;
+    const blockIdBacklinkRewrites = Array.isArray(opts.blockIdBacklinkRewrites)
+      ? opts.blockIdBacklinkRewrites
+      : [];
+    const today =
+      opts.today instanceof Date ? opts.today : new Date();
+    const empty = Object.freeze({
+      updatedLinkCount: 0,
+      failedLinkCount: 0,
+      failed: false,
+      error: null,
+      expanded: false,
+    });
+    if (!sourceFile || !createdFile || !sourceBlockId || !promotionPlan) {
+      return empty;
+    }
+    if (promotionPlan.error) {
+      return Object.freeze({
+        updatedLinkCount: 0,
+        failedLinkCount: 0,
+        failed: true,
+        error: "target block IDs are ambiguous",
+        expanded: false,
+      });
+    }
+    const targets = Array.isArray(promotionPlan.targets)
+      ? promotionPlan.targets
+      : [];
+    if (targets.length === 0) {
+      return empty;
+    }
+    const targetBlockIds = targets.map((target) => target.blockId);
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.process !== "function") {
+      return Object.freeze({
+        updatedLinkCount: 0,
+        failedLinkCount: 0,
+        failed: true,
+        error: "vault updates are unavailable",
+        expanded: false,
+      });
+    }
+    const buffers = getOpenMarkdownBufferContents(this.app);
+    if (buffers && buffers.ambiguous) {
+      return Object.freeze({
+        updatedLinkCount: 0,
+        failedLinkCount: 0,
+        failed: true,
+        error: "open notes conflict",
+        expanded: false,
+      });
+    }
+    let markdownFiles = [];
+    try {
+      markdownFiles =
+        typeof vault.getMarkdownFiles === "function"
+          ? vault.getMarkdownFiles() || []
+          : [];
+    } catch (error) {
+      markdownFiles = [];
+    }
+    const fileIndex = createProjectPromotionLinkIndex(markdownFiles);
+    const sourcePath = normalizeVaultRelativePath(sourceFile.path);
+    const createdPath = normalizeVaultRelativePath(createdFile.path);
+    const projectPathWithoutMd = createdPath.replace(/\.md$/i, "");
+    const projectBasename =
+      (createdFile.basename ||
+        getVaultPathBasenameWithoutExtension(createdPath) ||
+        "").trim();
+    if (!projectPathWithoutMd || !projectBasename) {
+      return Object.freeze({
+        updatedLinkCount: 0,
+        failedLinkCount: 0,
+        failed: true,
+        error: "project note name is unavailable",
+        expanded: false,
+      });
+    }
+    const candidatePaths = new Set();
+    for (const rewrite of blockIdBacklinkRewrites) {
+      const rewritePath = normalizeVaultRelativePath(
+        (rewrite && rewrite.path) || "",
+      );
+      if (rewritePath) {
+        candidatePaths.add(rewritePath);
+      }
+    }
+    for (const file of markdownFiles) {
+      const filePath = normalizeVaultRelativePath(
+        (file && file.path) || "",
+      );
+      if (
+        filePath &&
+        isProjectPromotionEligibleDailyPath(filePath, today)
+      ) {
+        candidatePaths.add(filePath);
+      }
+    }
+    const fileByPath = new Map();
+    for (const file of markdownFiles) {
+      const filePath = normalizeVaultRelativePath(
+        (file && file.path) || "",
+      );
+      if (filePath && !fileByPath.has(filePath)) {
+        fileByPath.set(filePath, file);
+      }
+    }
+    const expansionWrites = [];
+    for (const candidatePath of candidatePaths) {
+      if (!isProjectPromotionEligibleDailyPath(candidatePath, today)) {
+        continue;
+      }
+      const file =
+        fileByPath.get(candidatePath) ||
+        (typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(candidatePath)
+          : null);
+      if (!this.isMarkdownFile(file)) {
+        continue;
+      }
+      const snapshot = await this.readProjectPromotionCandidateContent(
+        candidatePath,
+        file,
+        buffers,
+      );
+      if (snapshot === null) {
+        return Object.freeze({
+          updatedLinkCount: 0,
+          failedLinkCount: 0,
+          failed: true,
+          error: `daily note could not be read: ${candidatePath}`,
+          expanded: false,
+        });
+      }
+      const plan = planProjectPromotionFileEdits(snapshot, candidatePath, {
+        sourcePath,
+        sourceBlockId,
+        projectPathWithoutMd,
+        projectBasename,
+        targetBlockIds,
+        today,
+        fileIndex,
+      });
+      if (!plan.changed || plan.expandedCount === 0) {
+        continue;
+      }
+      expansionWrites.push(
+        Object.freeze({
+          path: candidatePath,
+          file,
+          before: snapshot,
+          after: plan.content,
+          expandedCount: plan.expandedCount,
+          legacyCount: plan.legacyCount,
+        }),
+      );
+    }
+    if (expansionWrites.length === 0) {
+      return empty;
+    }
+    const updatedProjectContent = promotionPlan.content;
+    if (updatedProjectContent !== seedContent) {
+      try {
+        await this.writeProjectPromotionFileChange(
+          createdPath,
+          createdFile,
+          seedContent,
+          updatedProjectContent,
+        );
+      } catch (error) {
+        return Object.freeze({
+          updatedLinkCount: 0,
+          failedLinkCount: 0,
+          failed: true,
+          error: "project anchors could not be persisted",
+          expanded: true,
+        });
+      }
+      const verifyContent = await this.readProjectPromotionCandidateContent(
+        createdPath,
+        createdFile,
+        getOpenMarkdownBufferContents(this.app),
+      );
+      if (verifyContent === null) {
+        return Object.freeze({
+          updatedLinkCount: 0,
+          failedLinkCount: 0,
+          failed: true,
+          error: "project note could not be verified",
+          expanded: true,
+        });
+      }
+      for (const target of targets) {
+        if (!blockIdExistsInContent(verifyContent, target.blockId)) {
+          return Object.freeze({
+            updatedLinkCount: 0,
+            failedLinkCount: 0,
+            failed: true,
+            error: "project anchors changed before ledger writes",
+            expanded: true,
+          });
+        }
+      }
+    }
+    let expandedTotal = 0;
+    let legacyFromExpansions = 0;
+    try {
+      for (const write of expansionWrites) {
+        await this.writeProjectPromotionFileChange(
+          write.path,
+          write.file,
+          write.before,
+          write.after,
+        );
+        expandedTotal += write.expandedCount;
+        legacyFromExpansions += write.legacyCount;
+      }
+    } catch (error) {
+      return Object.freeze({
+        updatedLinkCount: expandedTotal + legacyFromExpansions,
+        failedLinkCount: 0,
+        failed: true,
+        error: "daily note changed during promotion",
+        expanded: true,
+      });
+    }
+    const expandedPaths = new Set(
+      expansionWrites.map((write) => write.path),
+    );
+    const legacyOnlyRewrites = blockIdBacklinkRewrites.filter((rewrite) => {
+      const rewritePath = normalizeVaultRelativePath(
+        (rewrite && rewrite.path) || "",
+      );
+      return rewritePath && !expandedPaths.has(rewritePath);
+    });
+    let legacyUpdated = 0;
+    if (legacyOnlyRewrites.length > 0) {
+      const legacyResult = await this.applyBlockIdLinkRewrites(
+        legacyOnlyRewrites,
+        projectBasename,
+      );
+      legacyUpdated = legacyResult.updatedLinkCount;
+      if (legacyResult.failed) {
+        return Object.freeze({
+          updatedLinkCount: expandedTotal + legacyFromExpansions + legacyUpdated,
+          failedLinkCount: legacyResult.failedLinkCount,
+          failed: true,
+          error: null,
+          expanded: true,
+        });
+      }
+    }
+    return Object.freeze({
+      updatedLinkCount: expandedTotal + legacyFromExpansions + legacyUpdated,
+      failedLinkCount: 0,
+      failed: false,
+      error: null,
+      expanded: true,
     });
   }
 
@@ -32784,6 +33629,13 @@ module.exports.helpers = {
   collectProjectNoteBacklinkClassification,
   rewriteBlockIdLinkOriginal,
   replaceLinkOriginalsInContent,
+  planProjectPromotionTargets,
+  isProjectPromotionEligibleDailyPath,
+  createProjectPromotionLinkIndex,
+  resolveProjectPromotionLinkTarget,
+  parseProjectPromotionDedicatedLink,
+  buildProjectPromotionReplacementLines,
+  planProjectPromotionFileEdits,
   getProjectFromTaskNoticeText,
   getFutureProjectSchedule,
   isFutureInlineScheduledValue,

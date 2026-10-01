@@ -10401,14 +10401,29 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     }
 
     const commandId = this.commandIdForSymbol(nextSymbol);
+    const beforeLineCount =
+      editor && typeof editor.lineCount === "function"
+        ? editor.lineCount()
+        : null;
     if (
       this.lineMatchesTasksGlobalFilter(taskStatus.lineText) &&
       this.tryExecuteTasksCommand(commandId)
     ) {
-      // The Tasks plugin rewrote the line; stamp freshness in a follow-up
-      // edit. Placement lives in ledger-tools (see above); the stamper
-      // refuses closed and recurring lines, so closing never stamps.
-      this.stampFreshnessOnEditorLine(editor, taskStatus.line);
+      // Plan option (b): the Tasks plugin rewrote the line; stamp freshness
+      // in a follow-up edit only when the line still holds the same task
+      // with the expected new status. Placement lives in ledger-tools (see
+      // above); the stamper refuses closed and recurring lines, so closing
+      // never stamps. A recurrence insert or an onCompletion delete changes
+      // the line count, so those never stamp a different task.
+      if (
+        beforeLineCount !== null &&
+        typeof editor.lineCount === "function" &&
+        editor.lineCount() === beforeLineCount &&
+        getTaskStatusForLine(editor.getLine(taskStatus.line), taskStatus.line)
+          ?.symbol === nextSymbol
+      ) {
+        this.stampFreshnessOnEditorLine(editor, taskStatus.line);
+      }
       return true;
     }
 

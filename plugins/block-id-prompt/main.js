@@ -3325,11 +3325,13 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
     updatedLineText = `${updatedLineText.slice(0, trimmedLength)} ^${newBlockId}`;
   }
 
-  // Freshness is the last transformation of the task line. The stamper itself
-  // refuses closed and recurring lines, so those never stamp. Pure planners
-  // take the stamper as an injected option (identity by default).
+  // Freshness is the last transformation of the task line, and only when
+  // the gesture already rewrote the line (matching `bob capture`). The
+  // stamper itself refuses closed and recurring lines, so those never
+  // stamp. Pure planners take the stamper as an injected option.
+  const lineRewritten = removedFutureSchedule || statusChanged || Boolean(newBlockId);
   let freshnessChanged = false;
-  if (typeof options.stampLine === "function") {
+  if (lineRewritten && typeof options.stampLine === "function") {
     const stamped = applyFreshStampLine(
       updatedLineText,
       options.stampLine,

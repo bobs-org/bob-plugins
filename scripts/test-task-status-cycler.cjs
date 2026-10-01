@@ -6530,6 +6530,128 @@ test("cycler freshness: cycling a plain line stamps through the follow-up edit",
   assert.deepEqual(seen, [["- [*] Do it", today]]);
 });
 
+test("cycler freshness: Tasks-command rewrite with the expected status is stamped", () => {
+  const editor = createTextEditor("- [ ] #task Ship it");
+  const plugin = new TaskStatusCyclerPlugin();
+  const commandId = "obsidian-tasks-plugin:set-status-symbol-to-*";
+  plugin.app = {
+    commands: {
+      commands: { [commandId]: {} },
+      executeCommandById: (id) => {
+        assert.equal(id, commandId);
+        const current = editor.getLine(0);
+        editor.replaceRange(
+          current.replace("- [ ]", "- [*]"),
+          { line: 0, ch: 0 },
+          { line: 0, ch: current.length },
+        );
+        return true;
+      },
+    },
+  };
+  const seen = [];
+  plugin.getFreshnessStampLine = () => (line, dateText) => {
+    seen.push([line, dateText]);
+    return `${line} [fresh:: ${dateText}]`;
+  };
+  const taskStatus = helpers.getTaskStatusForLine("- [ ] #task Ship it", 0);
+  assert.equal(plugin.setActiveCheckboxStatus(editor, taskStatus, "*"), true);
+  const today = helpers.formatLocalDate();
+  assert.equal(editor.getLine(0), `- [*] #task Ship it [fresh:: ${today}]`);
+  assert.deepEqual(seen, [[`- [*] #task Ship it`, today]]);
+});
+
+test("cycler freshness: Tasks command that inserts a line never stamps", () => {
+  const editor = createTextEditor("- [ ] #task Ship it");
+  const plugin = new TaskStatusCyclerPlugin();
+  const commandId = "obsidian-tasks-plugin:set-status-symbol-to-*";
+  plugin.app = {
+    commands: {
+      commands: { [commandId]: {} },
+      executeCommandById: (id) => {
+        assert.equal(id, commandId);
+        const current = editor.getLine(0);
+        editor.replaceRange(
+          current.replace("- [ ]", "- [*]"),
+          { line: 0, ch: 0 },
+          { line: 0, ch: current.length },
+        );
+        editor.replaceRange("\n- [ ] #task Recurrence", { line: 1, ch: 0 });
+        return true;
+      },
+    },
+  };
+  let calls = 0;
+  plugin.getFreshnessStampLine = () => () => {
+    calls += 1;
+    return "unreachable";
+  };
+  const taskStatus = helpers.getTaskStatusForLine("- [ ] #task Ship it", 0);
+  assert.equal(plugin.setActiveCheckboxStatus(editor, taskStatus, "*"), true);
+  assert.equal(calls, 0);
+  assert.equal(editor.lineCount(), 2);
+  assert.ok(!editor.getLine(0).includes("[fresh::"));
+  assert.equal(editor.getLine(1), "- [ ] #task Recurrence");
+});
+
+test("cycler freshness: Tasks command that deletes the line never stamps the next task", () => {
+  const editor = createTextEditor(
+    "- [ ] #task First\n- [ ] #task Second",
+  );
+  const plugin = new TaskStatusCyclerPlugin();
+  const commandId = "obsidian-tasks-plugin:set-status-symbol-to-*";
+  plugin.app = {
+    commands: {
+      commands: { [commandId]: {} },
+      executeCommandById: (id) => {
+        assert.equal(id, commandId);
+        editor.replaceRange("", { line: 0, ch: 0 }, { line: 1, ch: 0 });
+        return true;
+      },
+    },
+  };
+  let calls = 0;
+  plugin.getFreshnessStampLine = () => () => {
+    calls += 1;
+    return "unreachable";
+  };
+  const taskStatus = helpers.getTaskStatusForLine("- [ ] #task First", 0);
+  assert.equal(plugin.setActiveCheckboxStatus(editor, taskStatus, "*"), true);
+  assert.equal(calls, 0);
+  assert.equal(editor.getLine(0), "- [ ] #task Second");
+  assert.ok(!editor.getValue().includes("[fresh::"));
+});
+
+test("cycler freshness: Tasks command that leaves a different status never stamps", () => {
+  const editor = createTextEditor("- [ ] #task Ship it");
+  const plugin = new TaskStatusCyclerPlugin();
+  const commandId = "obsidian-tasks-plugin:set-status-symbol-to-*";
+  plugin.app = {
+    commands: {
+      commands: { [commandId]: {} },
+      executeCommandById: (id) => {
+        assert.equal(id, commandId);
+        const current = editor.getLine(0);
+        editor.replaceRange(
+          current.replace("- [ ]", "- [x]"),
+          { line: 0, ch: 0 },
+          { line: 0, ch: current.length },
+        );
+        return true;
+      },
+    },
+  };
+  let calls = 0;
+  plugin.getFreshnessStampLine = () => () => {
+    calls += 1;
+    return "unreachable";
+  };
+  const taskStatus = helpers.getTaskStatusForLine("- [ ] #task Ship it", 0);
+  assert.equal(plugin.setActiveCheckboxStatus(editor, taskStatus, "*"), true);
+  assert.equal(calls, 0);
+  assert.equal(editor.getLine(0), "- [x] #task Ship it");
+});
+
 test("cycler freshness: cycling without ledger-tools writes no stamp", () => {
   const editor = createTextEditor("- [ ] Do it");
   const plugin = new TaskStatusCyclerPlugin();

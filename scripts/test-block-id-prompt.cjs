@@ -4408,18 +4408,43 @@ test("planTargetTaskUpdate without a stamper never stamps (identity default)", (
   assert.equal(plan.freshnessChanged, false);
 });
 
-test("planTargetTaskUpdate stamp-only change marks hasChanges", () => {
+test("planTargetTaskUpdate stamp-only input stays unchanged and never calls the stamper", () => {
   const now = localDate(2026, 7, 16);
+  let calls = 0;
   const plan = helpers.planTargetTaskUpdate("- [*] #task Ship it ^ship", 0, {
     activationEligible: true,
     now,
-    stampLine: (line, dateText) => `${line} [fresh:: ${dateText}]`,
+    stampLine: () => {
+      calls += 1;
+      return "- [*] #task Ship it ^ship [fresh:: 2026-07-16]";
+    },
     freshDateText: "2026-07-16",
   });
   assert.equal(plan.statusChanged, false);
+  assert.equal(calls, 0);
+  assert.equal(plan.freshnessChanged, false);
+  assert.equal(plan.hasChanges, false);
+  assert.equal(plan.content, "- [*] #task Ship it ^ship");
+});
+
+test("planTargetTaskUpdate stamps a Next task that gains a block ID", () => {
+  const now = localDate(2026, 7, 16);
+  const seen = [];
+  const plan = helpers.planTargetTaskUpdate("- [*] #task Ship it", 0, {
+    activationEligible: true,
+    now,
+    newBlockId: "ship",
+    stampLine: (line, dateText) => {
+      seen.push([line, dateText]);
+      return `${line} [fresh:: ${dateText}]`;
+    },
+    freshDateText: "2026-07-16",
+  });
+  assert.equal(plan.blockIdAppended, true);
   assert.equal(plan.freshnessChanged, true);
   assert.equal(plan.hasChanges, true);
   assert.equal(plan.content, "- [*] #task Ship it ^ship [fresh:: 2026-07-16]");
+  assert.deepEqual(seen, [["- [*] #task Ship it ^ship", "2026-07-16"]]);
 });
 
 test("planTargetTaskUpdate tolerates a throwing stamper", () => {

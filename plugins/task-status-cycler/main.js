@@ -121,6 +121,32 @@ function formatLocalDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+// Task freshness: placement lives in bob-ledger-tools
+// (`api.freshness.stampLine`, api `version >= 3`). This plugin never places
+// `[fresh::]` itself: a missing stamp only means Bryan sees the task once
+// more, while a misplaced stamp would hide Tasks fields. When ledger-tools is
+// absent or old, gestures simply don't stamp.
+function identityFreshStampLine(line) {
+  return String(line || "");
+}
+
+function applyFreshStampLine(line, stamper, dateText) {
+  const fn = typeof stamper === "function" ? stamper : identityFreshStampLine;
+  try {
+    const stamped = fn(String(line || ""), dateText);
+    return typeof stamped === "string" ? stamped : String(line || "");
+  } catch (error) {
+    return String(line || "");
+  }
+}
+
+function resolveFreshStamper(options) {
+  if (options && typeof options.stampLine === "function") {
+    return options.stampLine;
+  }
+  return null;
+}
+
 function getDailyNoteDateFromPath(path) {
   const match = String(path || "").match(
     /^(\d{4})\/(\d{4})(\d{2})(\d{2})\.md$/,
@@ -2763,18 +2789,30 @@ function addOrReplaceCompletionField(lineText, completionDateString) {
   return `${beforeBlockId}  ${completionField} ${blockIdMatch[0].trim()}`;
 }
 
-function rewriteTaskLineForLocalFallback(lineText, nextSymbol, completionDateString) {
+function rewriteTaskLineForLocalFallback(
+  lineText,
+  nextSymbol,
+  completionDateString,
+  options = {},
+) {
   const lineWithNextSymbol = replaceTaskStatusSymbol(lineText, nextSymbol);
 
+  let rewritten;
   if (nextSymbol === "x") {
-    return addOrReplaceCompletionField(lineWithNextSymbol, completionDateString);
+    rewritten = addOrReplaceCompletionField(lineWithNextSymbol, completionDateString);
+  } else if (nextSymbol === " " || nextSymbol === "/") {
+    rewritten = removeCompletionField(lineWithNextSymbol);
+  } else {
+    rewritten = lineWithNextSymbol;
   }
 
-  if (nextSymbol === " " || nextSymbol === "/") {
-    return removeCompletionField(lineWithNextSymbol);
+  // Freshness is the last transformation of the line. The stamper itself
+  // refuses closed and recurring lines, so closing never stamps.
+  const stamper = resolveFreshStamper(options);
+  if (!stamper) {
+    return rewritten;
   }
-
-  return lineWithNextSymbol;
+  return applyFreshStampLine(rewritten, stamper, options.freshDateText);
 }
 
 function lineMatchesTasksGlobalFilterText(lineText) {
@@ -2789,16 +2827,24 @@ function rewriteTaskLineForTranscludedSource(
   lineText,
   nextSymbol,
   completionDateString,
+  options = {},
 ) {
   if (lineMatchesTasksGlobalFilterText(lineText)) {
     return rewriteTaskLineForLocalFallback(
       lineText,
       nextSymbol,
       completionDateString,
+      options,
     );
   }
 
-  return replaceTaskStatusSymbol(lineText, nextSymbol);
+  const rewritten = replaceTaskStatusSymbol(lineText, nextSymbol);
+  // Freshness is the last transformation of the line (see above).
+  const stamper = resolveFreshStamper(options);
+  if (!stamper) {
+    return rewritten;
+  }
+  return applyFreshStampLine(rewritten, stamper, options.freshDateText);
 }
 
 function escapeRegExp(value) {
@@ -10359,6 +10405,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       this.lineMatchesTasksGlobalFilter(taskStatus.lineText) &&
       this.tryExecuteTasksCommand(commandId)
     ) {
+      // The Tasks plugin rewrote the line; stamp freshness in a follow-up
+      // edit. Placement lives in ledger-tools (see above); the stamper
+      // refuses closed and recurring lines, so closing never stamps.
+      this.stampFreshnessOnEditorLine(editor, taskStatus.line);
       return true;
     }
 
@@ -10370,7 +10420,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       );
     }
 
-    return this.setActiveCheckboxStatusLocal(editor, taskStatus, nextSymbol);
+    const wrote = this.setActiveCheckboxStatusLocal(
+      editor,
+      taskStatus,
+      nextSymbol,
+    );
+    if (wrote) {
+      this.stampFreshnessOnEditorLine(editor, taskStatus.line);
+    }
+    return wrote;
   }
 
   setCheckboxStatusLocalForLine(editor, taskStatus, nextSymbol) {
@@ -10386,7 +10444,15 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       );
     }
 
-    return this.setActiveCheckboxStatusLocal(editor, taskStatus, nextSymbol);
+    const wrote = this.setActiveCheckboxStatusLocal(
+      editor,
+      taskStatus,
+      nextSymbol,
+    );
+    if (wrote) {
+      this.stampFreshnessOnEditorLine(editor, taskStatus.line);
+    }
+    return wrote;
   }
 
   setActiveCheckboxStatusLocalWithTaskMetadata(editor, taskStatus, nextSymbol) {
@@ -10398,6 +10464,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       taskStatus.lineText,
       nextSymbol,
       this.getCompletionDateString(),
+      {
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: formatLocalDate(),
+      },
     );
     editor.replaceRange(
       nextLineText,
@@ -11190,7 +11260,74 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       lineText,
       nextSymbol,
       this.getCompletionDateString(),
+      {
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: formatLocalDate(),
+      },
     );
+  }
+
+  // Task freshness stamper from bob-ledger-tools (api `version >= 3`).
+  // Placement lives in ledger-tools; this plugin only calls
+  // `api?.freshness?.stampLine?.(line, dateText) ?? line`. Returns null when
+  // ledger-tools is absent or old, in which case gestures simply don't stamp.
+  getFreshnessStampLine() {
+    try {
+      const plugins = this.app && this.app.plugins;
+      const byId =
+        plugins && plugins.plugins
+          ? plugins.plugins["bob-ledger-tools"]
+          : null;
+      const holder =
+        byId ||
+        (plugins && typeof plugins.getPlugin === "function"
+          ? plugins.getPlugin("bob-ledger-tools")
+          : null);
+      const api = holder && holder.api;
+      if (!api || api.version < 3 || !api.freshness) {
+        return null;
+      }
+      const stampLine = api.freshness.stampLine;
+      if (typeof stampLine !== "function") {
+        return null;
+      }
+      return stampLine.bind(api.freshness);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Stamp one editor line with today's freshness date when a stamper is
+  // available. Best effort: returns false when nothing was written.
+  stampFreshnessOnEditorLine(editor, line) {
+    try {
+      const stamper = this.getFreshnessStampLine();
+      if (typeof stamper !== "function") {
+        return false;
+      }
+      if (!editor || typeof editor.getLine !== "function") {
+        return false;
+      }
+      const current = editor.getLine(line);
+      if (typeof current !== "string") {
+        return false;
+      }
+      const stamped = applyFreshStampLine(current, stamper, formatLocalDate());
+      if (stamped === current) {
+        return false;
+      }
+      if (typeof editor.replaceRange !== "function") {
+        return false;
+      }
+      editor.replaceRange(
+        stamped,
+        { line, ch: 0 },
+        { line, ch: current.length },
+      );
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   canForceTranscludedTaskStatus(taskStatus, forcedNextSymbol) {
@@ -11530,6 +11667,7 @@ module.exports.helpers = {
   addCreatedFieldToObsidianTaskLine,
   applyBlockedDependentRecoveryEdits,
   applyBlockedStatusRetirementToSourceText,
+  applyFreshStampLine,
   buildBlockedDependentRecoveryPlan,
   buildPomodoroCompletionPlan,
   buildPomodoroMoveOnlyTogglePlan,
@@ -11644,6 +11782,7 @@ module.exports.helpers = {
   getTaskCheckboxMarkerToggle,
   getTaskStatusForLine,
   getTaskBlockLinkTargetFromLine,
+  identityFreshStampLine,
   getVimRepeat,
   getPomodoroMoveOnlyAdditionalLines,
   getPendingVimRepeat,

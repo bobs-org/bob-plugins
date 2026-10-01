@@ -6460,3 +6460,96 @@ test("Ctrl+Enter on a Task Link to a Cancelled task leaves the Pomodoro open", a
   );
   assert.equal(editor.getValue(), daily);
 });
+
+test("cycler freshness: local-fallback rewrite stamps last via injected stamper", () => {
+  const calls = [];
+  const stamper = (line, dateText) => {
+    calls.push([line, dateText]);
+    return `${line} [fresh:: ${dateText}]`;
+  };
+  const out = helpers.rewriteTaskLineForLocalFallback(
+    "- [ ] #task Ship it",
+    "/",
+    "2026-10-01",
+    { stampLine: stamper, freshDateText: "2026-10-01" },
+  );
+  assert.equal(out, "- [/] #task Ship it [fresh:: 2026-10-01]");
+  assert.deepEqual(calls, [["- [/] #task Ship it", "2026-10-01"]]);
+});
+
+test("cycler freshness: rewrites without a stamper are unchanged (identity default)", () => {
+  assert.equal(
+    helpers.rewriteTaskLineForLocalFallback("- [ ] #task Ship it", "/", "2026-10-01"),
+    "- [/] #task Ship it",
+  );
+  assert.equal(
+    helpers.rewriteTaskLineForTranscludedSource("- [ ] Do it ^abc", "*", "2026-10-01"),
+    "- [*] Do it ^abc",
+  );
+});
+
+test("cycler freshness: a throwing stamper leaves the rewritten line intact", () => {
+  const out = helpers.rewriteTaskLineForLocalFallback(
+    "- [ ] #task Ship it",
+    "*",
+    "2026-10-01",
+    {
+      stampLine: () => {
+        throw new Error("ledger unavailable");
+      },
+      freshDateText: "2026-10-01",
+    },
+  );
+  assert.equal(out, "- [*] #task Ship it");
+});
+
+test("cycler freshness: transcluded rewrite stamps last via injected stamper", () => {
+  const stamper = (line, dateText) => `${line} [fresh:: ${dateText}]`;
+  const out = helpers.rewriteTaskLineForTranscludedSource(
+    "- [ ] Do it ^abc",
+    "*",
+    "2026-10-01",
+    { stampLine: stamper, freshDateText: "2026-10-01" },
+  );
+  assert.equal(out, "- [*] Do it ^abc [fresh:: 2026-10-01]");
+});
+
+test("cycler freshness: cycling a plain line stamps through the follow-up edit", () => {
+  const editor = createTextEditor("- [ ] Do it");
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {};
+  const seen = [];
+  plugin.getFreshnessStampLine = () => (line, dateText) => {
+    seen.push([line, dateText]);
+    return `${line} [fresh:: ${dateText}]`;
+  };
+  const taskStatus = helpers.getTaskStatusForLine("- [ ] Do it", 0);
+  assert.equal(plugin.setActiveCheckboxStatus(editor, taskStatus, "*"), true);
+  const today = helpers.formatLocalDate();
+  assert.equal(editor.getLine(0), `- [*] Do it [fresh:: ${today}]`);
+  assert.deepEqual(seen, [["- [*] Do it", today]]);
+});
+
+test("cycler freshness: cycling without ledger-tools writes no stamp", () => {
+  const editor = createTextEditor("- [ ] Do it");
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {};
+  const taskStatus = helpers.getTaskStatusForLine("- [ ] Do it", 0);
+  assert.equal(plugin.setActiveCheckboxStatus(editor, taskStatus, "*"), true);
+  assert.equal(editor.getLine(0), "- [*] Do it");
+});
+
+test("cycler freshness: getFreshnessStampLine degrades when ledger-tools is missing or old", () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = {};
+  assert.equal(plugin.getFreshnessStampLine(), null);
+  plugin.app = { plugins: { plugins: { "bob-ledger-tools": { api: { version: 2 } } } } };
+  assert.equal(plugin.getFreshnessStampLine(), null);
+  const stampLine = () => {};
+  plugin.app = {
+    plugins: {
+      plugins: { "bob-ledger-tools": { api: { version: 3, freshness: { stampLine } } } },
+    },
+  };
+  assert.equal(typeof plugin.getFreshnessStampLine(), "function");
+});

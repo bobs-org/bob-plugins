@@ -4376,3 +4376,77 @@ test("plan budget suffix: Task Link Notice omits the meter when no daily note ta
   assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
   assert.deepEqual(seen, []);
 });
+
+test("planTargetTaskUpdate stamps the rewritten line last via injected stamper", () => {
+  const now = localDate(2026, 7, 16);
+  const seen = [];
+  const stamper = (line, dateText) => {
+    seen.push([line, dateText]);
+    return `${line} [fresh:: ${dateText}]`;
+  };
+  const plan = helpers.planTargetTaskUpdate("- [ ] #task Ship it ^ship", 0, {
+    activationEligible: true,
+    now,
+    stampLine: stamper,
+    freshDateText: "2026-07-16",
+  });
+  assert.ok(plan);
+  assert.equal(plan.newStatus, "*");
+  assert.equal(plan.content, "- [*] #task Ship it ^ship [fresh:: 2026-07-16]");
+  assert.equal(plan.freshnessChanged, true);
+  assert.equal(plan.hasChanges, true);
+  assert.deepEqual(seen, [["- [*] #task Ship it ^ship", "2026-07-16"]]);
+});
+
+test("planTargetTaskUpdate without a stamper never stamps (identity default)", () => {
+  const now = localDate(2026, 7, 16);
+  const plan = helpers.planTargetTaskUpdate("- [ ] #task Ship it ^ship", 0, {
+    activationEligible: true,
+    now,
+  });
+  assert.equal(plan.content, "- [*] #task Ship it ^ship");
+  assert.equal(plan.freshnessChanged, false);
+});
+
+test("planTargetTaskUpdate stamp-only change marks hasChanges", () => {
+  const now = localDate(2026, 7, 16);
+  const plan = helpers.planTargetTaskUpdate("- [*] #task Ship it ^ship", 0, {
+    activationEligible: true,
+    now,
+    stampLine: (line, dateText) => `${line} [fresh:: ${dateText}]`,
+    freshDateText: "2026-07-16",
+  });
+  assert.equal(plan.statusChanged, false);
+  assert.equal(plan.freshnessChanged, true);
+  assert.equal(plan.hasChanges, true);
+  assert.equal(plan.content, "- [*] #task Ship it ^ship [fresh:: 2026-07-16]");
+});
+
+test("planTargetTaskUpdate tolerates a throwing stamper", () => {
+  const now = localDate(2026, 7, 16);
+  const plan = helpers.planTargetTaskUpdate("- [ ] #task Ship it ^ship", 0, {
+    activationEligible: true,
+    now,
+    stampLine: () => {
+      throw new Error("ledger unavailable");
+    },
+    freshDateText: "2026-07-16",
+  });
+  assert.equal(plan.content, "- [*] #task Ship it ^ship");
+  assert.equal(plan.freshnessChanged, false);
+  assert.equal(plan.hasChanges, true);
+});
+
+test("block-id-prompt freshness accessors degrade without ledger-tools", () => {
+  const plugin = new Plugin();
+  plugin.app = {};
+  assert.equal(plugin.getFreshnessStampLine(), undefined);
+  const stampLine = () => {};
+  plugin.app = {
+    plugins: {
+      plugins: { "bob-ledger-tools": { api: { version: 3, freshness: { stampLine } } } },
+    },
+  };
+  assert.equal(typeof plugin.getFreshnessStampLine(), "function");
+  assert.match(plugin.getFreshnessDateText(), /^\d{4}-\d{2}-\d{2}$/);
+});

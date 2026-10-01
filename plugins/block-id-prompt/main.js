@@ -795,6 +795,25 @@ function localTodayParts(now) {
   return { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() };
 }
 
+// Task freshness: placement lives in bob-ledger-tools
+// (`api.freshness.stampLine`, api `version >= 3`). This plugin never places
+// `[fresh::]` itself: a missing stamp only means Bryan sees the task once
+// more, while a misplaced stamp would hide Tasks fields. When ledger-tools is
+// absent or old, gestures simply don't stamp.
+function identityFreshStampLine(line) {
+  return String(line || "");
+}
+
+function applyFreshStampLine(line, stamper, dateText) {
+  const fn = typeof stamper === "function" ? stamper : identityFreshStampLine;
+  try {
+    const stamped = fn(String(line || ""), dateText);
+    return typeof stamped === "string" ? stamped : String(line || "");
+  } catch (error) {
+    return String(line || "");
+  }
+}
+
 // Exactly one recognized scheduled field, syntactically valid, and strictly
 // later than `today` — the only shape that qualifies for future-schedule
 // removal. Two or more recognized fields, an invalid date, or a today/past
@@ -3306,6 +3325,20 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
     updatedLineText = `${updatedLineText.slice(0, trimmedLength)} ^${newBlockId}`;
   }
 
+  // Freshness is the last transformation of the task line. The stamper itself
+  // refuses closed and recurring lines, so those never stamp. Pure planners
+  // take the stamper as an injected option (identity by default).
+  let freshnessChanged = false;
+  if (typeof options.stampLine === "function") {
+    const stamped = applyFreshStampLine(
+      updatedLineText,
+      options.stampLine,
+      options.freshDateText,
+    );
+    freshnessChanged = stamped !== updatedLineText;
+    updatedLineText = stamped;
+  }
+
   const lineStart = lineStartIndexFromLines(lines, taskLine);
   const lineEnd = lineEndIndexFromLines(lines, taskLine);
   const edits = [
@@ -3364,7 +3397,8 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
     logEntryAdded,
     logInsertLine,
     blockIdAppended: Boolean(newBlockId),
-    hasChanges: removedFutureSchedule || statusChanged || logEntryAdded || Boolean(newBlockId),
+    freshnessChanged,
+    hasChanges: removedFutureSchedule || statusChanged || logEntryAdded || Boolean(newBlockId) || freshnessChanged,
   };
 }
 
@@ -4636,6 +4670,8 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     const plan = planTargetTaskUpdate(destination.content, task.line, {
       activationEligible,
       now: this.now(),
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
     });
     if (!plan) {
       new Notice(`Task link stopped: selected task changed in ${destination.file.path}`);
@@ -4960,6 +4996,8 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       newBlockId: newId,
       activationEligible,
       now: this.now(),
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
     });
     if (!plan) {
       new Notice(`Task link stopped: selected task changed in ${destination.file.path}`);
@@ -5450,6 +5488,8 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
       forceNext: true,
       newBlockId: isNewId ? id : null,
       now: this.now(),
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
     });
     if (!plan) {
       new Notice(`Task link stopped: selected task changed in ${source.sourcePath}`);
@@ -6657,6 +6697,45 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
   now() {
     return new Date();
   }
+
+  // Task freshness stamper from bob-ledger-tools (api `version >= 3`).
+  // Placement lives in ledger-tools; this plugin only calls
+  // `api?.freshness?.stampLine?.(line, dateText) ?? line`. Returns undefined
+  // when ledger-tools is absent or old, in which case gestures simply don't
+  // stamp.
+  getFreshnessStampLine() {
+    try {
+      const plugins = this.app && this.app.plugins;
+      const byId =
+        plugins && plugins.plugins
+          ? plugins.plugins["bob-ledger-tools"]
+          : null;
+      const holder =
+        byId ||
+        (plugins && typeof plugins.getPlugin === "function"
+          ? plugins.getPlugin("bob-ledger-tools")
+          : null);
+      const api = holder && holder.api;
+      if (!api || api.version < 3 || !api.freshness) {
+        return undefined;
+      }
+      const stampLine = api.freshness.stampLine;
+      if (typeof stampLine !== "function") {
+        return undefined;
+      }
+      return stampLine.bind(api.freshness);
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  getFreshnessDateText() {
+    try {
+      return formatCalendarDate(localTodayParts(this.now()));
+    } catch (error) {
+      return undefined;
+    }
+  }
 };
 
 module.exports.helpers = {
@@ -6664,6 +6743,7 @@ module.exports.helpers = {
   activationSuccessChips,
   activationSuccessSuffix,
   applyFileLinkBlockCompletionWithEditorApi,
+  applyFreshStampLine,
   blockedChipLabel,
   buildBlockedTooltip,
   buildTaskDependencyIndex,
@@ -6689,6 +6769,7 @@ module.exports.helpers = {
   formatWorkLogEntry,
   getCaretCompletionDestination,
   getDailyNotesOptions,
+  identityFreshStampLine,
   isDedicatedTaskLinkBullet,
   isDependencyTransclusionLink,
   isSoleContentLinkBullet,

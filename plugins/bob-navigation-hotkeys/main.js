@@ -20424,6 +20424,404 @@ function isCtrlKey(event, key) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// freshness review (nav-review): vault-wide due-task jumps (Ctrl+Alt+J/K,
+// `]s` / `[s` via the vimrc) and Alt+F / Alt+Shift+F refresh.
+//
+// Reads come from `api.freshness.queue()` / `api.freshness.counts()` on
+// bob-ledger-tools (api `version >= 3`); writes go through
+// `api.freshness.stampLine` only. Placement is the exception to the
+// copy-small-helpers rule: nav never places `[fresh::]` itself, so when
+// ledger-tools is absent or old the command shows
+// "Bob Ledger Tools api v3 required" and changes nothing. A missing stamp
+// only means Bryan sees the task once more; a misplaced stamp could hide
+// Tasks fields, so the risky part lives in one place.
+
+const REVIEW_FRESHNESS_API_REQUIRED_NOTICE = "Bob Ledger Tools api v3 required";
+const REVIEW_QUEUE_CHANGED_NOTICE = "Review queue changed — try again";
+
+// The ledger-tools freshness namespace, or null when it is absent or older
+// than api `version >= 3`. Never throws.
+function getReviewFreshnessApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins ? plugins["bob-ledger-tools"] : null;
+    const api = holder ? holder.api : null;
+    if (!api || Number(api.version) < 3 || !api.freshness) {
+      return null;
+    }
+    return api.freshness;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Stable identity for a queue entry across re-reads. Ledger-tools entries
+// carry `key`; fall back to path plus the 1-based line.
+function reviewQueueEntryKey(entry) {
+  if (entry && typeof entry.key === "string" && entry.key) {
+    return entry.key;
+  }
+  const path = entry && typeof entry.path === "string" ? entry.path : "";
+  const line = entry && Number.isInteger(entry.line) ? entry.line : 0;
+  return `${path}:${line}`;
+}
+
+// Pure jump position over a freshly read queue. Returns `{ kind: "empty" }`
+// or `{ kind: "jump", entry, rank, total, wrapped }` (`rank` is 1-based).
+// `direction` is +1 (next) or -1 (prev); `cursor` is `{ path, line, text }`
+// with a 1-based line; `stamped` is `{ keys, rank, count }` remembered from
+// the Alt+F write in this session (the Tasks cache lags, so just-stamped
+// keys are skipped by key and the entry after the remembered rank wins).
+function planReviewJump(queue, options = {}) {
+  const list = Array.isArray(queue) ? queue.slice() : [];
+  const direction = options.direction < 0 ? -1 : 1;
+  if (list.length === 0) {
+    return Object.freeze({ kind: "empty" });
+  }
+  const stamped =
+    options.stamped && typeof options.stamped === "object"
+      ? options.stamped
+      : null;
+  if (stamped && Number.isInteger(stamped.rank)) {
+    const stampedKeys = new Set(
+      Array.isArray(stamped.keys) ? stamped.keys : [],
+    );
+    const filtered = list.filter(
+      (entry) => !stampedKeys.has(reviewQueueEntryKey(entry)),
+    );
+    if (filtered.length === 0) {
+      return Object.freeze({ kind: "empty" });
+    }
+    const skip = Math.max(
+      0,
+      stamped.rank - Math.max(0, Math.floor(numericOrDefault(stamped.count, 0))),
+    );
+    if (skip < filtered.length) {
+      return Object.freeze({
+        kind: "jump",
+        entry: filtered[skip],
+        rank: skip + 1,
+        total: filtered.length,
+        wrapped: false,
+      });
+    }
+    return Object.freeze({
+      kind: "jump",
+      entry: filtered[0],
+      rank: 1,
+      total: filtered.length,
+      wrapped: true,
+    });
+  }
+  const cursor =
+    options.cursor && typeof options.cursor === "object"
+      ? options.cursor
+      : null;
+  let cursorIndex = -1;
+  if (cursor) {
+    const cursorPath = String(cursor.path || "");
+    const cursorLine = Math.floor(numericOrDefault(cursor.line, Number.NaN));
+    const cursorText = String(cursor.text || "");
+    cursorIndex = list.findIndex((entry) => {
+      if (!entry || String(entry.path || "") !== cursorPath) {
+        return false;
+      }
+      if (Number.isInteger(cursorLine) && Number(entry.line) === cursorLine) {
+        return true;
+      }
+      return (
+        Boolean(cursorText) &&
+        String(entry.originalMarkdown || "") === cursorText
+      );
+    });
+  }
+  if (cursorIndex >= 0) {
+    let index = cursorIndex + direction;
+    let wrapped = false;
+    if (index < 0) {
+      index = list.length - 1;
+      wrapped = true;
+    } else if (index >= list.length) {
+      index = 0;
+      wrapped = true;
+    }
+    return Object.freeze({
+      kind: "jump",
+      entry: list[index],
+      rank: index + 1,
+      total: list.length,
+      wrapped,
+    });
+  }
+  const index = direction < 0 ? list.length - 1 : 0;
+  return Object.freeze({
+    kind: "jump",
+    entry: list[index],
+    rank: index + 1,
+    total: list.length,
+    wrapped: false,
+  });
+}
+
+// Resolve a queue entry to a 0-based line without writing: the entry's
+// `originalMarkdown` still at `line`, else a unique exact match in the file
+// (skipping frontmatter and fences). Anything else is a stale queue.
+function resolveReviewQueueLine(content, entry) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const want =
+    entry && typeof entry.originalMarkdown === "string"
+      ? entry.originalMarkdown
+      : "";
+  const oneBased = entry && Number.isInteger(entry.line) ? entry.line : null;
+  if (
+    oneBased !== null &&
+    oneBased >= 1 &&
+    oneBased <= lines.length &&
+    lines[oneBased - 1] === want
+  ) {
+    return Object.freeze({ ok: true, line: oneBased - 1, source: "line" });
+  }
+  if (!want) {
+    return Object.freeze({ ok: false, reason: "stale" });
+  }
+  const contexts = getMarkdownLineContexts(text);
+  const hits = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index] !== want) {
+      continue;
+    }
+    const context = contexts[index];
+    if (context && (context.inFrontmatter || context.inFence)) {
+      continue;
+    }
+    hits.push(index);
+  }
+  if (hits.length === 1) {
+    return Object.freeze({ ok: true, line: hits[0], source: "text" });
+  }
+  return Object.freeze({ ok: false, reason: "stale" });
+}
+
+// `Review 3/23 · NEW` (or `· stale 4d`, `· resurfaced`).
+function buildReviewJumpNotice(entry, rank, total, options = {}) {
+  const state = entry && typeof entry.state === "string" ? entry.state : "";
+  let detail = state;
+  if (state === "new") {
+    detail = "NEW";
+  } else if (state === "stale") {
+    const overdue =
+      entry && Number.isFinite(entry.daysOverdue)
+        ? entry.daysOverdue
+        : null;
+    detail = overdue === null ? "stale" : `stale ${overdue}d`;
+  } else if (state === "resurfaced") {
+    detail = "resurfaced";
+  }
+  const wrapped =
+    options && options.wrapped === true ? " · wrapped around" : "";
+  return `Review ${rank}/${total} · ${detail}${wrapped}`;
+}
+
+// `Nothing due for review · ✓ 12 today`.
+function buildReviewEmptyNotice(counts) {
+  const refreshed =
+    counts && Number.isFinite(counts.refreshedToday)
+      ? counts.refreshedToday
+      : 0;
+  return `Nothing due for review · ✓ ${refreshed} today`;
+}
+
+// Refusal class for one Alt+F target line: non-tasks, done and cancelled
+// tasks, and recurring tasks are never stamped. Every open status
+// (` `, `/`, `*`, `?`) stamps, because a Next, Pending or Blocked task may
+// come back to Ready later.
+function classifyFreshStampTarget(rawLine) {
+  const line = String(rawLine || "");
+  if (!isObsidianTaskLine(line)) {
+    return Object.freeze({ ok: false, refusal: "not-task" });
+  }
+  const status = getObsidianTaskCheckboxStatus(line);
+  if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+    return Object.freeze({ ok: false, refusal: "closed" });
+  }
+  if (isRecurringTaskLine(line)) {
+    return Object.freeze({ ok: false, refusal: "recurring" });
+  }
+  return Object.freeze({ ok: true, refusal: null });
+}
+
+function freshStampRefusalNotice(refusal) {
+  if (refusal === "recurring") {
+    return "recurring · not reviewed";
+  }
+  if (refusal === "closed") {
+    return "Task is closed · not reviewed";
+  }
+  return "Cursor is not on a task or Task Link";
+}
+
+// Pure stamp plan over 0-based `targetLines`: classify every target first so
+// one refusal refuses the whole batch with the note unchanged, then stamp
+// each line through the injected `stamper` (`api.freshness.stampLine` in the
+// plugin, identity by default). Returns `{ ok, refusal, content, stamped }`
+// where `stamped` is `[{ line, before, after }]`.
+function planFreshStampBatch(content, targetLines, stamper, dateText) {
+  const text = String(content || "");
+  const { lines, lineEnding } = splitMarkdownContent(text);
+  const apply = typeof stamper === "function" ? stamper : (line) => line;
+  const indices = Array.isArray(targetLines) ? targetLines : [];
+  for (const lineIndex of indices) {
+    const check = classifyFreshStampTarget(lines[lineIndex]);
+    if (!check.ok) {
+      return Object.freeze({
+        ok: false,
+        refusal: check.refusal,
+        content: text,
+        stamped: Object.freeze([]),
+      });
+    }
+  }
+  const next = lines.slice();
+  const stamped = [];
+  for (const lineIndex of indices) {
+    const before = String(lines[lineIndex] || "");
+    let after;
+    try {
+      after = String(apply(before, dateText) ?? before);
+    } catch (error) {
+      return Object.freeze({
+        ok: false,
+        refusal: "stamp",
+        content: text,
+        stamped: Object.freeze([]),
+      });
+    }
+    next[lineIndex] = after;
+    stamped.push(Object.freeze({ line: lineIndex, before, after }));
+  }
+  return Object.freeze({
+    ok: true,
+    refusal: null,
+    content: next.join(lineEnding),
+    stamped: Object.freeze(stamped),
+  });
+}
+
+// True when the line already carries today's stamp (re-stamping it repairs
+// placement at most and does not grow the "refreshed today" count).
+function freshStampLineHasToday(rawLine, dateText) {
+  const day = String(dateText || "").trim();
+  if (!day) {
+    return false;
+  }
+  const escaped = day.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`[\\[(]fresh\\s*::\\s*${escaped}`).test(
+    String(rawLine || ""),
+  );
+}
+
+// `Fresh ✓ 1 task · 22 due (3 new) · ✓ 13 today` from the pre-write counts
+// adjusted by the change (the Tasks cache lags, so post-write counts would
+// still show the old queue). With a budget the tail reads `✓ 13/15`; once
+// the budget is met and no NEW task remains, ` · done for today` is added.
+function buildFreshStampNotice(details = {}) {
+  const changed = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.changed, 0)),
+  );
+  const dueAfter = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.dueAfter, 0)),
+  );
+  const newAfter = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.newAfter, 0)),
+  );
+  const refreshedAfter = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.refreshedAfter, 0)),
+  );
+  const budgetRaw = details.budget === null || details.budget === undefined
+    ? null
+    : Math.floor(numericOrDefault(details.budget, Number.NaN));
+  const budget =
+    Number.isInteger(budgetRaw) && budgetRaw > 0 ? budgetRaw : null;
+  const tasks = changed === 1 ? "task" : "tasks";
+  const tail = budget !== null
+    ? `✓ ${refreshedAfter}/${budget}`
+    : `✓ ${refreshedAfter} today`;
+  const done =
+    budget !== null && refreshedAfter >= budget && newAfter === 0
+      ? " · done for today"
+      : "";
+  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}`;
+}
+
+// Match stamped `{ path, line, raw }` refs (0-based lines) against a
+// pre-write queue read: the keys still present, the highest pre-write rank,
+// and how many were NEW. Every queued entry is due, so `count` is also the
+// number of due tasks just stamped.
+function matchFreshStampRefs(queueBefore, refs) {
+  const list = Array.isArray(queueBefore) ? queueBefore : [];
+  const targets = Array.isArray(refs) ? refs : [];
+  const keys = [];
+  let rank = 0;
+  let newCount = 0;
+  for (const ref of targets) {
+    if (!ref || typeof ref !== "object") {
+      continue;
+    }
+    const refPath = String(ref.path || "");
+    const refLine = Math.floor(numericOrDefault(ref.line, Number.NaN));
+    const refRaw = String(ref.raw || "");
+    const foundIndex = list.findIndex((entry) => {
+      if (!entry || String(entry.path || "") !== refPath) {
+        return false;
+      }
+      if (Number.isInteger(refLine) && Number(entry.line) === refLine + 1) {
+        return true;
+      }
+      return Boolean(refRaw) && String(entry.originalMarkdown || "") === refRaw;
+    });
+    if (foundIndex < 0) {
+      continue;
+    }
+    const found = list[foundIndex];
+    keys.push(reviewQueueEntryKey(found));
+    const foundRank = Number.isInteger(found.rank)
+      ? found.rank
+      : foundIndex + 1;
+    if (foundRank > rank) {
+      rank = foundRank;
+    }
+    if (found.state === "new") {
+      newCount += 1;
+    }
+  }
+  return Object.freeze({
+    keys: Object.freeze(keys),
+    rank,
+    count: keys.length,
+    newCount,
+  });
+}
+
+// Alt+F (wantShift false) / Alt+Shift+F (wantShift true). CodeMirror Vim
+// swallows Alt chords in normal mode, so these run on the capture-phase
+// fallback like the counted lane toggle; the hotkeys below cover insert
+// mode and non-Vim editing.
+function isReviewRefreshKeydown(event, wantShift) {
+  if (!event || event.ctrlKey || event.metaKey || !event.altKey) {
+    return false;
+  }
+  if (Boolean(event.shiftKey) !== Boolean(wantShift)) {
+    return false;
+  }
+  return event.code === "KeyF" || event.key === "f" || event.key === "F";
+}
+
 async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
   if (!plugin || !plugin.isMarkdownFile(file)) {
     if (failureNotice) {
@@ -20555,6 +20953,35 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       name: "Commit to Next / release to Ready",
       hotkeys: [{ modifiers: ["Alt"], key: "N" }],
       editorCallback: (editor) => this.toggleTaskLane(editor),
+    });
+
+    this.addCommand({
+      id: "jump-to-next-due-task",
+      name: "Jump to next task due for freshness review",
+      hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "J" }],
+      callback: () => this.jumpToDueTask(1),
+    });
+
+    this.addCommand({
+      id: "jump-to-prev-due-task",
+      name: "Jump to previous task due for freshness review",
+      hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "K" }],
+      callback: () => this.jumpToDueTask(-1),
+    });
+
+    this.addCommand({
+      id: "refresh-task-freshness",
+      name: "Refresh task freshness (confirm it still looks right)",
+      hotkeys: [{ modifiers: ["Alt"], key: "F" }],
+      editorCallback: (editor) => this.refreshTaskFreshness(editor, {}),
+    });
+
+    this.addCommand({
+      id: "refresh-task-freshness-and-advance",
+      name: "Refresh task freshness and jump to the next due task",
+      hotkeys: [{ modifiers: ["Alt", "Shift"], key: "F" }],
+      editorCallback: (editor) =>
+        this.refreshTaskFreshness(editor, { advance: true }),
     });
 
     this.addCommand({
@@ -20713,7 +21140,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
     }
 
+    this.lastFreshStamp = null;
     this.registerOpenTaskJumpInputListeners();
+    this.registerReviewRefreshInputListeners();
     this.registerCountedTransclusionToggleInputListeners();
     this.registerCountedBulletPropertyInputListeners();
     this.registerCountedTaskMoveInputListeners();
@@ -22565,6 +22994,565 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // `options.summary`/`options.dateText` carry the reason-stage input; when
   // a release needs a reason and no summary was supplied, the caller routes
   // through the reason stage instead of calling this directly.
+  // Ledger-tools freshness namespace, or a "Bob Ledger Tools api v3
+  // required" Notice and null. Placement lives in ledger-tools (see the
+  // freshness-review section above `openMarkdownFileWithLeafReuse`): a
+  // missing api only skips the stamp, it never misplaces one.
+  requireFreshnessApi() {
+    const api = getReviewFreshnessApi(this.app);
+    if (!api) {
+      new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
+    }
+    return api;
+  }
+
+  readFreshnessQueue(api) {
+    try {
+      const queue =
+        api && typeof api.queue === "function" ? api.queue() : [];
+      return Array.isArray(queue) ? queue : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  readFreshnessCounts(api) {
+    try {
+      if (api && typeof api.counts === "function") {
+        const counts = api.counts();
+        if (counts && typeof counts === "object") {
+          return counts;
+        }
+      }
+    } catch (error) {
+      // Fall through to the zero counts below.
+    }
+    return {
+      due: 0,
+      new: 0,
+      resurfaced: 0,
+      stale: 0,
+      fresh: 0,
+      refreshedToday: 0,
+      budget: null,
+      budgetMet: false,
+    };
+  }
+
+  // Cursor context for jump positioning: the active note path, the 1-based
+  // line, and the line text. Null when there is no active editor.
+  getReviewJumpCursor() {
+    try {
+      const activeView = this.getActiveMarkdownView();
+      const editor = activeView && activeView.editor;
+      if (
+        !editor ||
+        typeof editor.getValue !== "function" ||
+        typeof editor.getCursor !== "function" ||
+        !activeView.file
+      ) {
+        return null;
+      }
+      const cursor = getEditorCursor(editor);
+      const lineText = cursor ? getEditorLine(editor, cursor.line) : null;
+      if (!cursor || lineText === null) {
+        return null;
+      }
+      return {
+        path: activeView.file.path,
+        line: cursor.line + 1,
+        text: String(lineText),
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Land on one queue entry without writing: resolve its line in the target
+  // note, then put the cursor there and center it. Same-note landings write
+  // the cursor directly; cross-note landings reuse the leaf-reuse open plus
+  // the shared jump-or-defer retry so the cursor lands after the new leaf
+  // renders. Returns `{ ok, stale }`; `stale` means the queue moved and the
+  // caller should rebuild once and try again.
+  async landOnReviewQueueEntry(entry) {
+    const path = entry && typeof entry.path === "string" ? entry.path : "";
+    if (!path) {
+      return { ok: false, stale: true };
+    }
+    const activeView = this.getActiveMarkdownView();
+    const activeEditor = activeView && activeView.editor;
+    const sameNote = Boolean(
+      activeView &&
+        activeView.file &&
+        activeView.file.path === path &&
+        activeEditor &&
+        typeof activeEditor.getValue === "function",
+    );
+    let content = null;
+    let file =
+      activeView && activeView.file && activeView.file.path === path
+        ? activeView.file
+        : null;
+    if (sameNote) {
+      content = String(activeEditor.getValue() || "");
+    } else {
+      const vault = this.app && this.app.vault;
+      file =
+        file ||
+        (vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
+          : null);
+      if (!file) {
+        return { ok: false, stale: true };
+      }
+      content = await this.readLinkPickerNoteContent(path, file);
+      if (content === null) {
+        return { ok: false, stale: true };
+      }
+    }
+    const resolved = resolveReviewQueueLine(content, entry);
+    if (!resolved.ok) {
+      return { ok: false, stale: true };
+    }
+    if (sameNote) {
+      if (!setEditorCursor(activeEditor, { line: resolved.line, ch: 0 })) {
+        return { ok: false, stale: false };
+      }
+      scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
+      return { ok: true, stale: false };
+    }
+    const opened = await openMarkdownFileWithLeafReuse(
+      this,
+      file,
+      `Review jump, but could not open ${path}`,
+    );
+    if (!opened) {
+      return { ok: false, stale: false };
+    }
+    this.jumpOrDeferTaskMoveDestination(path, {
+      line: resolved.line,
+      text: entry.originalMarkdown,
+    });
+    return { ok: true, stale: false };
+  }
+
+  // Vault-wide jump to the next (direction +1) or previous (direction -1)
+  // task due for freshness review. From a queued task go to the following
+  // (or preceding) entry; from a just-stamped task go to the entry after
+  // its remembered rank tuple; otherwise go to the first (or last) entry.
+  // Wraps with a Notice; an empty queue shows the refreshed-today count.
+  async jumpToDueTask(direction, options = {}) {
+    const api = this.requireFreshnessApi();
+    if (!api) {
+      return false;
+    }
+    const step = direction < 0 ? -1 : 1;
+    let queue = this.readFreshnessQueue(api);
+    if (queue.length === 0) {
+      new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
+      return false;
+    }
+    const cursor = this.getReviewJumpCursor();
+    const stamped =
+      options.fromStamp !== undefined
+        ? options.fromStamp
+        : this.lastFreshStamp || null;
+    let plan = planReviewJump(queue, {
+      direction: step,
+      cursor,
+      stamped,
+    });
+    if (plan.kind === "empty") {
+      new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
+      return false;
+    }
+    let landed = await this.landOnReviewQueueEntry(plan.entry);
+    if (!landed.ok && landed.stale) {
+      queue = this.readFreshnessQueue(api);
+      plan = planReviewJump(queue, { direction: step, cursor, stamped });
+      if (plan.kind === "empty") {
+        new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
+        return false;
+      }
+      landed = await this.landOnReviewQueueEntry(plan.entry);
+    }
+    if (!landed.ok) {
+      new Notice(
+        landed.stale ? REVIEW_QUEUE_CHANGED_NOTICE : "Could not jump to task",
+      );
+      return false;
+    }
+    new Notice(
+      buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
+        wrapped: plan.wrapped,
+      }),
+    );
+    return true;
+  }
+
+  // Alt+F (advance false) / Alt+Shift+F (advance true): stamp the cursor
+  // task, or a dedicated Task Link's target, plus the next N tasks when
+  // counted, and change nothing else. Targets are discovered like Alt+N's;
+  // the write goes through `api.freshness.stampLine` only (see the
+  // freshness-review section above `openMarkdownFileWithLeafReuse`).
+  // Single-note targets write through the editor transaction; cross-note
+  // targets write through the Alt+N plan with the preimage check and
+  // rollback. With `advance`, jump to the next due task afterwards,
+  // skipping every key just stamped.
+  async refreshTaskFreshness(cm, options = {}) {
+    const advance = options.advance === true;
+    const cursor = getEditorCursor(cm);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const lineText = getEditorLine(cm, cursor.line);
+    if (lineText === null) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content =
+      cm && typeof cm.getValue === "function"
+        ? String(cm.getValue() || "")
+        : "";
+    let countExplicit = options.countExplicit === true;
+    let additionalTaskCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(options.additionalTaskCount, 0)),
+    );
+    if (!countExplicit) {
+      const view = this.getActiveMarkdownView();
+      const editorForVim = view && view.editor === cm ? view.editor : cm;
+      if (this.isVimNormalModeEditor(editorForVim, view)) {
+        const vimCm = this.resolveVimCodeMirror(editorForVim, view);
+        const pending = getPendingVimRepeat(vimCm);
+        if (pending.explicit) {
+          countExplicit = true;
+          additionalTaskCount = Math.max(
+            0,
+            Math.floor(numericOrDefault(pending.repeat, 0)),
+          );
+          resetPendingVimInputState(vimCm, "review-freshness-refresh");
+        }
+      }
+    }
+    const api = this.requireFreshnessApi();
+    if (!api) {
+      return false;
+    }
+    const dateText = this.laneReleaseDateText(options);
+    const stamper = (line) => {
+      try {
+        if (api && typeof api.stampLine === "function") {
+          return String(api.stampLine(line, dateText) ?? line);
+        }
+      } catch (error) {
+        // A failed stamp leaves the line unchanged below.
+      }
+      return String(line);
+    };
+    if (isObsidianTaskAtLine(content, cursor.line)) {
+      return await this.refreshTaskFreshnessOnTasks(cm, cursor, content, {
+        countExplicit,
+        additionalTaskCount,
+        stamper,
+        dateText,
+        advance,
+      });
+    }
+    if (parseLinkPickerTaskLink(lineText)) {
+      return await this.refreshTaskFreshnessOnLinks(cm, cursor, content, {
+        countExplicit,
+        additionalTaskCount,
+        stamper,
+        dateText,
+        advance,
+        linkDiscovery: options.linkDiscovery || null,
+      });
+    }
+    new Notice("Cursor is not on a task or Task Link");
+    return false;
+  }
+
+  async refreshTaskFreshnessOnTasks(cm, cursor, content, options = {}) {
+    const session = discoverCountedObsidianTaskTargets(
+      content,
+      cursor.line,
+      options.countExplicit ? options.additionalTaskCount : 0,
+    );
+    if (!session.valid) {
+      new Notice(session.error);
+      return false;
+    }
+    const api = getReviewFreshnessApi(this.app);
+    if (!api) {
+      new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
+      return false;
+    }
+    const activeView = this.getActiveMarkdownView();
+    const filePath =
+      activeView && activeView.file ? activeView.file.path : null;
+    const queueBefore = this.readFreshnessQueue(api);
+    const countsBefore = this.readFreshnessCounts(api);
+    const plan = planFreshStampBatch(
+      content,
+      session.targets.map((target) => target.line),
+      options.stamper,
+      options.dateText,
+    );
+    if (!plan.ok) {
+      new Notice(freshStampRefusalNotice(plan.refusal));
+      return false;
+    }
+    if (
+      cm &&
+      typeof cm.getValue === "function" &&
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+    const guarded = this.getCountedTaskWriteContext(cm, filePath, session);
+    if (!guarded.valid || guarded.content !== content) {
+      new Notice(
+        guarded.valid
+          ? "Active note changed; no tasks were updated"
+          : guarded.error,
+      );
+      return false;
+    }
+    if (plan.content !== content) {
+      const nextLines = plan.content.split(/\r?\n/);
+      const applied = applyEditorContentTransaction(cm, content, plan.content, {
+        line: cursor.line,
+        ch: Math.min(
+          Math.max(cursor.ch, 0),
+          String(nextLines[cursor.line] || "").length,
+        ),
+      });
+      if (!applied) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+    }
+    this.finishFreshStamp(
+      queueBefore,
+      countsBefore,
+      plan.stamped.map((entry) => ({
+        path: filePath,
+        line: entry.line,
+        raw: entry.before,
+      })),
+      plan.stamped,
+      options.dateText,
+    );
+    if (options.advance === true) {
+      return await this.jumpToDueTask(1, { fromStamp: this.lastFreshStamp });
+    }
+    return true;
+  }
+
+  async refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
+    const discovery =
+      options.linkDiscovery ||
+      discoverLinkPickerTargets(
+        content,
+        cursor.line,
+        options.countExplicit ? options.additionalTaskCount : 0,
+      );
+    if (!discovery.valid) {
+      new Notice(
+        discovery.notLink
+          ? "Cursor is not on a task or Task Link"
+          : discovery.error,
+      );
+      return false;
+    }
+    const activeView = this.getActiveMarkdownView();
+    if (!activeView || activeView.editor !== cm || !activeView.file) {
+      new Notice("No active markdown note");
+      return false;
+    }
+    const api = getReviewFreshnessApi(this.app);
+    if (!api) {
+      new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
+      return false;
+    }
+    const resolution = await this.resolveLinkPickerTargets(
+      activeView.file.path,
+      discovery,
+    );
+    if (resolution.error) {
+      new Notice(resolution.error);
+      return false;
+    }
+    if (
+      cm &&
+      typeof cm.getValue === "function" &&
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+    const queueBefore = this.readFreshnessQueue(api);
+    const countsBefore = this.readFreshnessCounts(api);
+    const groups = groupLinkPickerTargetsByNote(resolution.targets);
+    if (groups.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    const planned = [];
+    const refs = [];
+    const stampedAll = [];
+    for (const group of groups) {
+      const plan = planFreshStampBatch(
+        group.content,
+        group.session.targets.map((target) => target.line),
+        options.stamper,
+        options.dateText,
+      );
+      if (!plan.ok) {
+        new Notice(freshStampRefusalNotice(plan.refusal));
+        return false;
+      }
+      for (const entry of plan.stamped) {
+        refs.push({ path: group.path, line: entry.line, raw: entry.before });
+        stampedAll.push(entry);
+      }
+      if (plan.content !== group.content) {
+        planned.push({ group, plan });
+      }
+    }
+    if (planned.length > 0) {
+      const commit = await this.commitLinkPickerNoteWrites(planned, {});
+      if (!commit.ok) {
+        new Notice("A linked note changed; no tasks were updated");
+        return false;
+      }
+    }
+    this.finishFreshStamp(
+      queueBefore,
+      countsBefore,
+      refs,
+      stampedAll,
+      options.dateText,
+    );
+    if (options.advance === true) {
+      return await this.jumpToDueTask(1, { fromStamp: this.lastFreshStamp });
+    }
+    return true;
+  }
+
+  // Remember the just-stamped rank tuple for the session (the Tasks cache
+  // lags, so the jump reads the queue fresh but skips these keys), then
+  // show the adjusted-counts Notice.
+  finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText) {
+    const matched = matchFreshStampRefs(queueBefore, refs);
+    this.lastFreshStamp =
+      matched.count > 0
+        ? { keys: matched.keys, rank: matched.rank, count: matched.count }
+        : null;
+    const changed = stamped.filter(
+      (entry) => entry.after !== entry.before,
+    ).length;
+    const newlyRefreshed = stamped.filter(
+      (entry) => !freshStampLineHasToday(entry.before, dateText),
+    ).length;
+    const counts =
+      countsBefore && typeof countsBefore === "object" ? countsBefore : {};
+    const dueBefore = Math.max(
+      0,
+      Math.floor(numericOrDefault(counts.due, 0)),
+    );
+    const newBefore = Math.max(
+      0,
+      Math.floor(numericOrDefault(counts.new, 0)),
+    );
+    const refreshedBefore = Math.max(
+      0,
+      Math.floor(numericOrDefault(counts.refreshedToday, 0)),
+    );
+    new Notice(
+      buildFreshStampNotice({
+        changed,
+        dueAfter: Math.max(0, dueBefore - matched.count),
+        newAfter: Math.max(0, newBefore - matched.newCount),
+        refreshedAfter: refreshedBefore + newlyRefreshed,
+        budget:
+          counts.budget === undefined || counts.budget === null
+            ? null
+            : counts.budget,
+      }),
+    );
+  }
+
+  // Capture-phase fallback so Alt+F / Alt+Shift+F reach the counted refresh
+  // route while Vim normal mode is active. CodeMirror Vim swallows Alt
+  // chords before Obsidian's hotkey dispatcher runs, so the hotkeys below
+  // only cover insert mode and non-Vim editing. A pending numeric Vim prefix
+  // is "N additional tasks", mirroring the counted Alt+N route, and the
+  // Shift of the chord selects refresh-and-advance.
+  registerReviewRefreshInputListeners() {
+    this.handledReviewRefreshEvents = new WeakSet();
+    const keydownHandler = (event) =>
+      this.handleReviewRefreshPhysicalKeydown(event);
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleReviewRefreshPhysicalKeydown(event) {
+    if (event && event.repeat) {
+      return false;
+    }
+    if (
+      !isReviewRefreshKeydown(event, false) &&
+      !isReviewRefreshKeydown(event, true)
+    ) {
+      return false;
+    }
+    if (
+      this.handledReviewRefreshEvents &&
+      this.handledReviewRefreshEvents.has(event)
+    ) {
+      return false;
+    }
+    const view = this.getFocusedMarkdownEditorView(event);
+    if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
+      return false;
+    }
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const pendingRepeat = getPendingVimRepeat(cm);
+    if (this.handledReviewRefreshEvents) {
+      this.handledReviewRefreshEvents.add(event);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+    resetPendingVimInputState(cm, "review-freshness-refresh");
+    void this.refreshTaskFreshness(view.editor, {
+      advance: event.shiftKey === true,
+      countExplicit: pendingRepeat.explicit,
+      additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
+    }).catch(() => false);
+    return true;
+  }
+
   async applyLaneToggleFromPicker(picker, options = {}) {
     if (!picker) {
       new Notice("Could not update task; no tasks were updated");
@@ -30471,6 +31459,19 @@ module.exports.helpers = {
   planTaskLaneBatch,
   buildLaneToggleNotice,
   readLaneBudgets,
+  getReviewFreshnessApi,
+  reviewQueueEntryKey,
+  planReviewJump,
+  resolveReviewQueueLine,
+  buildReviewJumpNotice,
+  buildReviewEmptyNotice,
+  classifyFreshStampTarget,
+  freshStampRefusalNotice,
+  planFreshStampBatch,
+  freshStampLineHasToday,
+  buildFreshStampNotice,
+  matchFreshStampRefs,
+  isReviewRefreshKeydown,
   describeLaneRow,
   getLaneReleaseReasonHints,
   discoverMovableObsidianTaskTargets,

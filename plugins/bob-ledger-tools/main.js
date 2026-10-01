@@ -3075,11 +3075,43 @@ function readyTaskVisible(task, todayDay) {
 // is the caller's Today predicate. Throws when `isToday` or `isBlocked`
 // throws, so callers can degrade to an unavailable badge rather than a
 // partial count.
-function readyCountFromTasks(tasks, today, isToday) {
+//
+// The optional `isReviewBucket` predicate gates the shared READY count
+// (`docs/freshness.md` §4 in bob-cli): tasks it flags (NEW or ROTTEN
+// review) are excluded from READY. A throwing predicate discards the
+// partial gated count and recomputes the legacy ungated count, so a
+// failure halfway through a batch never leaves a partially gated badge.
+function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
   const list = Array.isArray(tasks) ? tasks : [];
   const todayDay = planDayNumber(today === undefined ? new Date() : today);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
+  const gated = typeof isReviewBucket === "function";
+  const legacyCount = () => {
+    let total = 0;
+    for (const task of list) {
+      if (!readyTaskVisible(task, todayDay)) {
+        continue;
+      }
+      if (planTaskIsBlocked(task, list)) {
+        continue;
+      }
+      let todayFlag = false;
+      try {
+        todayFlag = Boolean(isTodayPredicate(task));
+      } catch (error) {
+        throw error;
+      }
+      if (todayFlag) {
+        continue;
+      }
+      total += 1;
+    }
+    return total;
+  };
+  if (!gated) {
+    return legacyCount();
+  }
   let count = 0;
   for (const task of list) {
     if (!readyTaskVisible(task, todayDay)) {
@@ -3097,15 +3129,29 @@ function readyCountFromTasks(tasks, today, isToday) {
     if (todayFlag) {
       continue;
     }
+    let review = false;
+    try {
+      review = Boolean(isReviewBucket(task));
+    } catch (error) {
+      return legacyCount();
+    }
+    if (review) {
+      continue;
+    }
     count += 1;
   }
   return count;
 }
 
-function readyBudgetFromTasks(tasks, today, caps, isToday) {
+function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket) {
   const effective = effectivePlanCaps(caps);
   const cap = planReadyCapOrDefault(effective.maxReady, READY_FALLBACK_CAP);
-  const count = readyCountFromTasks(tasks, today, isToday);
+  const count = readyCountFromTasks(
+    tasks,
+    today,
+    isToday,
+    isReviewBucket,
+  );
   return { count, cap, over: count > cap };
 }
 
@@ -3137,13 +3183,29 @@ function readyBadgeModel(budget, options = {}) {
   }
   const over = count > cap;
   const excess = count - cap;
-  const tooltip = over
-    ? `${count} ready tasks; limit ${cap}; ${excess} over the limit. ` +
-      `Live current backlog excluding Today. Open READY Tasks in dash.` +
-      (invalid ? " Plan config invalid, using defaults." : "")
-    : `${count} ready tasks; limit ${cap}. ` +
-      `Live current backlog excluding Today. Open READY Tasks in dash.` +
-      (invalid ? " Plan config invalid, using defaults." : "");
+  // Freshness-gated lanes carry total lane pressure: the gated READY
+  // count plus the NEW and ROTTEN review buckets behind it.
+  const lane = options.lane || null;
+  const laneValid =
+    lane &&
+    Number.isInteger(lane.total) &&
+    lane.total >= 0 &&
+    Number.isInteger(lane.new) &&
+    lane.new >= 0 &&
+    Number.isInteger(lane.rotten) &&
+    lane.rotten >= 0 &&
+    lane.ready === count;
+  const tooltip = laneValid
+    ? `READY ${count}/${cap} · lane ${lane.total} = ${lane.new} new + ${lane.rotten} rotten + ${lane.ready} ready` +
+      (over ? ` · ${excess} over the limit` : "") +
+      (invalid ? " · plan config invalid, using defaults" : "")
+    : over
+      ? `${count} ready tasks; limit ${cap}; ${excess} over the limit. ` +
+        `Live current backlog excluding Today. Open READY Tasks in dash.` +
+        (invalid ? " Plan config invalid, using defaults." : "")
+      : `${count} ready tasks; limit ${cap}. ` +
+        `Live current backlog excluding Today. Open READY Tasks in dash.` +
+        (invalid ? " Plan config invalid, using defaults." : "");
   const aria = over
     ? `READY: ${count} of ${cap} tasks, ${excess} over the limit. Open READY Tasks in dash.`
     : `READY: ${count} of ${cap} tasks. Open READY Tasks in dash.`;
@@ -3378,6 +3440,138 @@ function setReadyAnchorContent(anchor, model) {
   }
   if (anchor && typeof anchor.title === "string") {
     anchor.title = model.tooltip;
+  }
+}
+
+// Shared NEW/ROTTEN chip content: separate label and value spans like
+// the READY badge, so dashboard and rotten-summary chips style like
+// neighboring chips. NEW shows 0 when empty and is red above 0;
+// ROTTEN is neutral at 0, orange above 0, red once any returned or
+// age-expired row is a full interval overdue.
+const REVIEW_LABEL_CLS = "bob-plan-review-label";
+const REVIEW_VALUE_CLS = "bob-plan-review-value";
+
+function reviewChipText(kind, review) {
+  const active = review && review.available === true ? review : null;
+  if (kind === "rotten") {
+    return {
+      label: "ROTTEN",
+      value: active ? active.rottenText.replace(/^ROTTEN /, "") : "–",
+      tooltip: active ? active.tooltip : "ROTTEN unavailable",
+      aria: active ? active.tooltip : "ROTTEN: unavailable",
+    };
+  }
+  return {
+    label: "NEW",
+    value: active ? String(active.new) : "–",
+    tooltip: active
+      ? "NEW " + active.new + " unconfirmed · " + active.meter + " today"
+      : "NEW unavailable",
+    aria: active
+      ? "NEW: " + active.new + " unconfirmed"
+      : "NEW: unavailable",
+  };
+}
+
+function reviewChipClass(kind, review) {
+  const active = review && review.available === true ? review : null;
+  let cls = "bob-plan-chip bob-plan-review bob-plan-" + kind;
+  if (!active) {
+    return cls + " bob-plan-unavailable";
+  }
+  if (kind === "rotten") {
+    if (review.escalated) {
+      return cls + " bob-plan-over";
+    }
+    if (review.rotten > 0) {
+      return cls + " bob-plan-warn";
+    }
+    return cls;
+  }
+  if (review.new > 0) {
+    return cls + " bob-plan-over";
+  }
+  return cls;
+}
+
+function reviewChipHref(kind) {
+  return kind === "rotten" ? "rotten" : "dash#NEW Tasks";
+}
+
+function setReviewAnchorContent(anchor, kind, review) {
+  if (!anchor) {
+    return;
+  }
+  const content = reviewChipText(kind, review);
+  const cls = reviewChipClass(kind, review);
+  let label = findReadySpan(anchor, REVIEW_LABEL_CLS);
+  if (!label) {
+    label = createReadySpan(anchor, REVIEW_LABEL_CLS, content.label);
+  }
+  setReadySpanText(label, content.label);
+  let value = findReadySpan(anchor, REVIEW_VALUE_CLS);
+  if (!value) {
+    value = createReadySpan(anchor, REVIEW_VALUE_CLS, content.value);
+  }
+  setReadySpanText(value, content.value);
+  for (const spanCls of [REVIEW_LABEL_CLS, REVIEW_VALUE_CLS]) {
+    const matches = collectReadySpans(anchor, spanCls);
+    for (let index = 1; index < matches.length; index += 1) {
+      const extra = matches[index];
+      try {
+        if (extra && typeof extra.remove === "function") {
+          extra.remove();
+        } else if (anchor && Array.isArray(anchor.children)) {
+          const at = anchor.children.indexOf(extra);
+          if (at !== -1) {
+            anchor.children.splice(at, 1);
+          }
+        }
+      } catch (error) {
+        // Best-effort dedupe only.
+      }
+    }
+  }
+  if (typeof anchor.setAttribute === "function") {
+    anchor.setAttribute("title", content.tooltip);
+    anchor.setAttribute("aria-label", content.aria);
+    anchor.setAttribute("class", cls);
+    if (anchor.attrs && typeof anchor.attrs === "object") {
+      anchor.attrs.class = cls;
+    }
+  }
+  if (anchor && typeof anchor.cls === "string") {
+    anchor.cls = cls;
+  }
+  if (anchor && typeof anchor.title === "string") {
+    anchor.title = content.tooltip;
+  }
+}
+
+function paintReviewElement(host, kind, review) {
+  try {
+    if (!host || typeof host.createEl !== "function") {
+      return null;
+    }
+    const anchor = host.createEl("a", {
+      cls: reviewChipClass(kind, review),
+      title: reviewChipText(kind, review).tooltip,
+      href: reviewChipHref(kind),
+    });
+    setReviewAnchorContent(anchor, kind, review);
+    if (anchor && typeof anchor.setAttribute === "function") {
+      anchor.setAttribute("aria-label", reviewChipText(kind, review).aria);
+      anchor.setAttribute("role", "link");
+      if (
+        typeof anchor.hasAttribute !== "function" ||
+        !anchor.hasAttribute("tabindex")
+      ) {
+        anchor.setAttribute("tabindex", "0");
+      }
+    }
+    return anchor;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -4246,6 +4440,41 @@ function freshnessState(row, todayText, config) {
   return freshnessEvaluate(row, todayText, config).state;
 }
 
+// Stable read-time bucket for dashboard gating (`docs/freshness.md`
+// §4 in bob-cli): `"new"` surfaces in NEW, `"rotten"` (resurfaced or
+// age-expired) surfaces in ROTTEN review, anything else (fresh or
+// out of scope) has no bucket. Machine `state` names are unchanged;
+// only this mapping uses the `rotten` vocabulary until the
+// vocab-rotten migration.
+function freshnessBucketForState(state) {
+  if (state === "new") {
+    return "new";
+  }
+  if (state === "resurfaced" || state === "stale") {
+    return "rotten";
+  }
+  return null;
+}
+
+// Local day number for a canonical `YYYY-MM-DD` date text, parsed as a
+// local calendar date (never UTC, so DST boundaries match the vault's
+// local day). Null when the text is not a strict calendar date.
+function freshnessDayNumberForDateText(dateText) {
+  try {
+    const text = parseFreshDateStrict(dateText);
+    if (text === null) {
+      return null;
+    }
+    const parts = text.split("-").map((part) => Number(part));
+    if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) {
+      return null;
+    }
+    return planDayNumber(new Date(parts[0], parts[1] - 1, parts[2]));
+  } catch (error) {
+    return null;
+  }
+}
+
 function freshnessRowKey(row) {
   const path = String(row.path || "");
   if (row.blockId) {
@@ -4438,12 +4667,19 @@ function freshnessStatusView(counts, options = {}) {
   const freshNew = safe.new || 0;
   const resurfaced = safe.resurfaced || 0;
   const stale = safe.stale || 0;
+  const rotten = resurfaced + stale;
   const refreshed = safe.refreshedToday || 0;
   const budget =
     Number.isInteger(safe.budget) && safe.budget >= 1 ? safe.budget : null;
   const meter = budget !== null ? refreshed + "/" + budget : String(refreshed);
   const text =
-    "⟳ " + due + " due · " + freshNew + " new · ✓ " + meter + " today";
+    "⟳ " +
+    freshNew +
+    " new · " +
+    rotten +
+    " rotten · ✓ " +
+    meter +
+    " today";
   const mostOverdue =
     Number.isInteger(options.mostOverdue) && options.mostOverdue >= 0
       ? options.mostOverdue
@@ -4451,13 +4687,16 @@ function freshnessStatusView(counts, options = {}) {
   const tooltip =
     "NEW " +
     freshNew +
-    " · RESURFACED " +
+    " · RETURNED " +
     resurfaced +
-    " · STALE " +
+    " · ROTTEN " +
     stale +
     (mostOverdue === null
       ? " · nothing due"
-      : " · most overdue " + mostOverdue + "d");
+      : " · oldest " + mostOverdue + "d overdue") +
+    " · ✓ " +
+    meter +
+    " today";
   let mode = "due";
   if (safe.budgetMet) {
     mode = "budget";
@@ -4467,6 +4706,112 @@ function freshnessStatusView(counts, options = {}) {
     mode = "new";
   }
   return { text, tooltip, mode };
+}
+
+// Unavailable NEW/ROTTEN review model: explicit nulls, never a zero
+// that could read as an empty success.
+function freshnessReviewUnavailable() {
+  return {
+    available: false,
+    new: null,
+    returned: null,
+    rotten: null,
+    refreshedToday: null,
+    budget: null,
+    budgetMet: false,
+    meter: "✓ –",
+    severity: "unavailable",
+    escalated: false,
+    oldestDaysOverdue: null,
+    tooltip: "Review unavailable",
+    newText: "NEW –",
+    rottenText: "ROTTEN –",
+  };
+}
+
+// Shared NEW/ROTTEN view-model from one freshness snapshot. `counts`
+// is a `freshnessCounts` result and `queue` a `freshnessQueue` result
+// over the same rows. The ROTTEN total includes RETURNED; escalation
+// is per-row (`daysOverdue >= interval` for that row), never the
+// confirmation age or the global default. Never throws.
+function freshnessReviewModel(counts, queue) {
+  try {
+    const safe = counts || {};
+    const freshNew =
+      Number.isInteger(safe.new) && safe.new >= 0 ? safe.new : 0;
+    const resurfaced =
+      Number.isInteger(safe.resurfaced) && safe.resurfaced >= 0
+        ? safe.resurfaced
+        : 0;
+    const stale =
+      Number.isInteger(safe.stale) && safe.stale >= 0 ? safe.stale : 0;
+    const rotten = resurfaced + stale;
+    const refreshed =
+      Number.isInteger(safe.refreshedToday) && safe.refreshedToday >= 0
+        ? safe.refreshedToday
+        : 0;
+    const budget =
+      Number.isInteger(safe.budget) && safe.budget >= 1 ? safe.budget : null;
+    const budgetMet = Boolean(safe.budgetMet);
+    let oldest = null;
+    let escalated = false;
+    for (const entry of Array.isArray(queue) ? queue : []) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      if (entry.state !== "resurfaced" && entry.state !== "stale") {
+        continue;
+      }
+      if (Number.isInteger(entry.daysOverdue) && entry.daysOverdue >= 0) {
+        if (oldest === null || entry.daysOverdue > oldest) {
+          oldest = entry.daysOverdue;
+        }
+        if (
+          Number.isInteger(entry.interval) &&
+          entry.interval >= 1 &&
+          entry.daysOverdue >= entry.interval
+        ) {
+          escalated = true;
+        }
+      }
+    }
+    const meter =
+      budget !== null ? refreshed + "/" + budget : String(refreshed);
+    // NEW is red above 0; ROTTEN is neutral at 0, orange above 0, red
+    // once any returned or age-expired row is a full interval overdue.
+    const severity =
+      freshNew > 0 ? "new" : escalated ? "escalated" : rotten > 0 ? "rotten" : "none";
+    const tooltip =
+      "ROTTEN " +
+      rotten +
+      " = " +
+      resurfaced +
+      " returned + " +
+      stale +
+      " rotten · oldest " +
+      (oldest === null ? "–" : oldest + "d") +
+      " overdue · ✓ " +
+      meter +
+      " today";
+    return {
+      available: true,
+      new: freshNew,
+      returned: resurfaced,
+      rotten,
+      refreshedToday: refreshed,
+      budget,
+      budgetMet,
+      meter: "✓ " + meter,
+      severity,
+      escalated,
+      oldestDaysOverdue: oldest,
+      tooltip,
+      newText: "NEW " + freshNew,
+      rottenText: "ROTTEN " + rotten + " · ✓ " + meter,
+    };
+  } catch (error) {
+    return freshnessReviewUnavailable();
+  }
 }
 
 // --- Task freshness: display mark (mark-core) -------------------------------
@@ -5238,6 +5583,45 @@ function freshnessRowFromTask(task, index, context) {
   }
 }
 
+// True when the review-relevant snapshot changed: queue order/keys
+// or any row's state. A bucket/state change notifies even when the due
+// key set is unchanged. Never throws.
+function freshnessMemoReviewChanged(
+  previousDueKeys,
+  previousEvaluated,
+  next,
+) {
+  try {
+    const dueKeys = (next && Array.isArray(next.dueKeys)) ? next.dueKeys : [];
+    const previous = Array.isArray(previousDueKeys) ? previousDueKeys : [];
+    if (previous.length !== dueKeys.length) {
+      return true;
+    }
+    if (previous.some((key, index) => key !== dueKeys[index])) {
+      return true;
+    }
+    const current =
+      next && next.evaluatedByKey instanceof Map
+        ? next.evaluatedByKey
+        : null;
+    if (!(previousEvaluated instanceof Map) || current === null) {
+      return true;
+    }
+    if (previousEvaluated.size !== current.size) {
+      return true;
+    }
+    for (const [key, value] of current) {
+      const before = previousEvaluated.get(key);
+      if (!before || before.state !== value.state) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    return true;
+  }
+}
+
 // __FRESHNESS_A2_END__
 // __FRESHNESS_A1_END__
 
@@ -5254,9 +5638,22 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3): memoized review queue plus status bar.
+    // Task freshness (api v3, freshness namespace v2): memoized
+    // review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
+    // Freshness config snapshot cache (`{ path, statKey, checkedAt,
+    // config, invalid }`): the file is stat-checked at most once per
+    // 60-second tick and reparsed only on change.
+    this.freshnessConfigCache = null;
+    // Tasks cache generation observed by this plugin: bumped on every
+    // `obsidian-tasks-plugin:cache-update`, so a cache update that
+    // reuses the same array object still invalidates the memo.
+    this.freshnessTasksGen = 0;
+    // Shared NEW/ROTTEN review chips (dashboard and rotten summary use
+    // the same live models). Mirrors `readyWidgets` below.
+    this.reviewWidgets = new Set();
+    this.reviewRefreshTimer = null;
     this.freshnessFrontValues = new Map();
     this.freshnessStatusTimer = null;
     this.freshnessStatusEl = null;
@@ -5383,17 +5780,26 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       readyBudget: () => this.readyBudget(),
       renderReadyBadge: (parent, options = {}) =>
         this.renderReadyBadge(parent, options),
-      // Task freshness (api v3, additive: every v2 member above is
-      // unchanged). `freshness` mirrors `docs/freshness.md` in bob-cli.
-      // Every member is synchronous, never awaits and never throws.
+      renderReviewChip: (parent, options = {}) =>
+        this.renderReviewChip(parent, options),
+      // Task freshness (freshness namespace v2, additive: every v1
+      // member above is unchanged; top-level api stays v3).
+      // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
+      // member is synchronous, never awaits and never throws. Missing
+      // or old freshness namespaces degrade vault queries to the
+      // legacy READY visibility: guard calls with try/catch as well as
+      // optional chaining, since optional chaining alone does not
+      // catch a throwing api.
       freshness: Object.freeze({
-        version: 1,
+        version: 2,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),
         setRefreshLine: (line, days, dateText) =>
           this.apiFreshnessSetRefreshLine(line, days, dateText),
         state: (task) => this.apiFreshnessState(task),
+        bucket: (task) => this.apiFreshnessBucket(task),
+        reviewModel: () => this.freshnessReviewModel(),
         isDue: (task) => this.apiFreshnessIsDue(task),
         tier: (task) => this.apiFreshnessTier(task),
         rank: (task) => this.apiFreshnessRank(task),
@@ -5451,6 +5857,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               // Best-effort refresh only.
             }
           }
+          // Calendar-derived labels and escalation refresh each day
+          // even when every due task remains due.
+          try {
+            this.refreshReviewChips(new Date());
+          } catch (error) {
+            // Best-effort refresh only.
+          }
         }, 60 * 1000),
       );
     }
@@ -5461,10 +5874,15 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // badges even if its checkbox has not yet reconciled.
       this.registerEvent(
         planWorkspace.on("obsidian-tasks-plugin:cache-update", () => {
+          // Bump the observed Tasks generation first: a cache update
+          // may reuse the same array object, and the freshness memo
+          // must still rebuild on the next read.
+          this.freshnessTasksGen = (this.freshnessTasksGen || 0) + 1;
           this.schedulePlanBlockRerender();
           this.scheduleReadyRefresh();
           this.scheduleFreshnessStatusBar();
           this.scheduleFreshnessMarksRefresh();
+          this.scheduleReviewChipsRefresh();
         }),
       );
     }
@@ -5532,6 +5950,19 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     if (this.readyWidgets) {
       this.readyWidgets.clear();
     }
+    if (
+      this.reviewRefreshTimer !== null &&
+      this.reviewRefreshTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.reviewRefreshTimer);
+    }
+    this.reviewRefreshTimer = null;
+    if (this.reviewWidgets) {
+      this.reviewWidgets.clear();
+    }
+    this.freshnessConfigCache = null;
+    this.freshnessTasksGen = 0;
     this.readyLastCapsKey = null;
     this.readyLastDay = null;
     if (this.planPaintGens) {
@@ -5747,10 +6178,27 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       if (!this.isTodayCacheReady(now)) {
         return unavailable;
       }
+      // Gate the shared READY count from one validated freshness
+      // snapshot. A missing or throwing snapshot degrades to the
+      // legacy ungated count, never a partially gated one.
+      let gate = null;
+      let gateMemo = null;
+      try {
+        gateMemo = this.freshnessEnsureMemo(now);
+        if (gateMemo && gateMemo.tasksAvailable) {
+          gate = this.freshnessReviewPredicate(gateMemo);
+        }
+      } catch (error) {
+        gate = null;
+        gateMemo = null;
+      }
       let count;
       try {
-        count = readyCountFromTasks(tasks, now, (task) =>
-          this.isTodayTask(task),
+        count = readyCountFromTasks(
+          tasks,
+          now,
+          (task) => this.isTodayTask(task),
+          gate,
         );
       } catch (error) {
         return unavailable;
@@ -5758,7 +6206,31 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       if (!Number.isInteger(count) || count < 0) {
         return unavailable;
       }
-      return { count, cap, over: count > cap };
+      // Total lane pressure for the gated tooltip: the gated count
+      // plus the NEW and ROTTEN buckets behind it.
+      let lane = null;
+      try {
+        if (
+          gateMemo &&
+          gateMemo.tasksAvailable &&
+          gateMemo.counts &&
+          Number.isInteger(gateMemo.counts.new) &&
+          Number.isInteger(gateMemo.counts.resurfaced) &&
+          Number.isInteger(gateMemo.counts.stale)
+        ) {
+          const rotten =
+            gateMemo.counts.resurfaced + gateMemo.counts.stale;
+          lane = {
+            total: gateMemo.counts.new + rotten + count,
+            new: gateMemo.counts.new,
+            rotten,
+            ready: count,
+          };
+        }
+      } catch (error) {
+        lane = null;
+      }
+      return { count, cap, over: count > cap, lane };
     } catch (error) {
       return {
         count: null,
@@ -5781,7 +6253,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       const sourcePath =
         typeof options.sourcePath === "string" ? options.sourcePath : "";
       const invalid = Boolean(options.invalid);
-      const model = readyBadgeModel(budget, { invalid });
+      const model = readyBadgeModel(budget, {
+        invalid,
+        lane: budget && budget.lane ? budget.lane : null,
+      });
       const anchor = host.createEl("a", {
         cls: `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
         title: model.tooltip,
@@ -5969,6 +6444,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         }
         const model = readyBadgeModel(budget, {
           invalid: loaded.invalid,
+          lane: budget && budget.lane ? budget.lane : null,
         });
         // One shared routine keeps the label/value spans (and the
         // model-dependent title, aria label, and state classes) current
@@ -6034,7 +6510,137 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  // --- Task freshness (api v3) ------------------------------------------
+  // --- NEW/ROTTEN review chips (freshness namespace v2) ----------------
+  // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
+  // rotten summary): the same widget pattern as the READY badge — one
+  // anchor per component, detached nodes pruned, refreshed on the same
+  // debounce paths, subscriptions dropped when the component unloads.
+  // Models come from `freshnessReviewModel` so dash and rotten share
+  // counts, meter, tooltip, and severity.
+  renderReviewChip(parent, options = {}) {
+    try {
+      if (!parent || typeof parent.createEl !== "function") {
+        return null;
+      }
+      const kind =
+        options.kind === "rotten" ? "rotten" : "new";
+      const component = options.component || null;
+      if (!this.reviewWidgets) {
+        this.reviewWidgets = new Set();
+      }
+      if (component) {
+        for (const widget of Array.from(this.reviewWidgets)) {
+          if (widget.component === component && widget.kind === kind) {
+            try {
+              if (widget.el && widget.el.parentNode) {
+                widget.el.parentNode.removeChild(widget.el);
+              } else if (
+                widget.el &&
+                typeof widget.el.remove === "function"
+              ) {
+                widget.el.remove();
+              }
+            } catch (error) {
+              // Best-effort removal only.
+            }
+            this.reviewWidgets.delete(widget);
+          }
+        }
+      }
+      for (const widget of Array.from(this.reviewWidgets)) {
+        try {
+          const el = widget.el;
+          const detached =
+            !el ||
+            (typeof el.isConnected === "boolean" &&
+              el.isConnected === false &&
+              (!el.parentNode || el.parentNode === null));
+          if (detached && (!el.parentNode || el.parentNode === null)) {
+            if (!parent.contains || !parent.contains(el)) {
+              this.reviewWidgets.delete(widget);
+            }
+          }
+        } catch (error) {
+          // Keep the widget on inspection failure.
+        }
+      }
+      const review = this.freshnessReviewModel(new Date());
+      const anchor = paintReviewElement(parent, kind, review);
+      if (!anchor) {
+        return null;
+      }
+      const widget = { el: anchor, kind, component };
+      this.reviewWidgets.add(widget);
+      if (component && typeof component.register === "function") {
+        try {
+          component.register(() => {
+            this.reviewWidgets.delete(widget);
+          });
+        } catch (error) {
+          // The widget still refreshes with the batch; only the
+          // component-owned unregister is skipped.
+        }
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshReviewChips(now = new Date()) {
+    if (!this.reviewWidgets || this.reviewWidgets.size === 0) {
+      return false;
+    }
+    let refreshed = false;
+    let review = null;
+    try {
+      review = this.freshnessReviewModel(now);
+    } catch (error) {
+      return false;
+    }
+    for (const widget of Array.from(this.reviewWidgets)) {
+      try {
+        const el = widget.el;
+        const parent = el && el.parentNode ? el.parentNode : null;
+        if (!parent || typeof parent.createEl !== "function") {
+          if (!el || !el.isConnected) {
+            this.reviewWidgets.delete(widget);
+          }
+          continue;
+        }
+        setReviewAnchorContent(el, widget.kind, review);
+        refreshed = true;
+      } catch (error) {
+        // One stale widget never breaks the others.
+      }
+    }
+    return refreshed;
+  }
+
+  scheduleReviewChipsRefresh() {
+    if (
+      this.reviewRefreshTimer !== null &&
+      this.reviewRefreshTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" &&
+      typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    const self = this;
+    this.reviewRefreshTimer = schedule(() => {
+      self.reviewRefreshTimer = null;
+      try {
+        self.refreshReviewChips(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+    }, 150);
+  }
+
+  // --- Task freshness (freshness namespace v2) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh` come from `originalMarkdown`; frontmatter comes from
   // `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -6053,18 +6659,103 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  freshnessConfigSnapshot() {
+  // Cached freshness config snapshot: the config path plus its
+  // mtime/size is checked at most once per 60-second tick (or on
+  // explicit invalidation via `refreshFreshnessConfig`), and the file
+  // is reparsed only when the check differs. Creation, deletion,
+  // invalid edits and recovery, environment path overrides, and
+  // mobile's default-config behavior all flow through the same key, so
+  // a config edit is visible within the existing 60-second tick with
+  // no per-task disk reads or YAML parses.
+  freshnessConfigSnapshot(now = new Date()) {
+    const fallback = () => ({
+      config: { ...defaultFreshnessConfig(), intervalFromConfig: false },
+      invalid: false,
+    });
     try {
+      const configPath = planConfigPath();
+      const cached = this.freshnessConfigCache;
+      let nowMs = NaN;
+      try {
+        nowMs =
+          now instanceof Date
+            ? now.getTime()
+            : Number.isFinite(Number(now))
+              ? Number(now)
+              : Date.now();
+      } catch (error) {
+        nowMs = Date.now();
+      }
+      if (
+        cached &&
+        cached.path === configPath &&
+        Number.isFinite(nowMs) &&
+        Number.isFinite(cached.checkedAt) &&
+        nowMs - cached.checkedAt < 60 * 1000
+      ) {
+        return { config: cached.config, invalid: cached.invalid };
+      }
+      // One stat per check: missing-file errors become part of the key
+      // so creation and deletion invalidate like edits do.
+      let statKey = null;
+      try {
+        const fsModule = planRequireOptionalNodeModule("fs");
+        if (fsModule && typeof fsModule.statSync === "function") {
+          try {
+            const stat = fsModule.statSync(configPath);
+            const mtime =
+              stat && typeof stat.mtimeMs === "number"
+                ? stat.mtimeMs
+                : String(stat && stat.mtime);
+            statKey = mtime + ":" + String(stat && stat.size);
+          } catch (statError) {
+            statKey =
+              "missing:" +
+              String(
+                (statError && statError.code) || "error",
+              );
+          }
+        }
+      } catch (error) {
+        statKey = null;
+      }
+      if (
+        cached &&
+        cached.path === configPath &&
+        statKey !== null &&
+        cached.statKey === statKey
+      ) {
+        cached.checkedAt = nowMs;
+        return { config: cached.config, invalid: cached.invalid };
+      }
       const loaded = loadFreshnessConfig();
+      this.freshnessConfigCache = {
+        path: configPath,
+        statKey,
+        checkedAt: nowMs,
+        config: loaded.config,
+        invalid: Boolean(loaded.invalid),
+      };
       return {
         config: loaded.config,
         invalid: Boolean(loaded.invalid),
       };
     } catch (error) {
-      return {
-        config: { ...defaultFreshnessConfig(), intervalFromConfig: false },
-        invalid: false,
-      };
+      return fallback();
+    }
+  }
+
+  // Explicit config invalidation: drop the cached snapshot so the next
+  // read re-stats and reparses. Returns true when a cache entry existed.
+  refreshFreshnessConfig() {
+    try {
+      const had =
+        this.freshnessConfigCache !== null &&
+        this.freshnessConfigCache !== undefined;
+      this.freshnessConfigCache = null;
+      return had;
+    } catch (error) {
+      return false;
     }
   }
 
@@ -6120,14 +6811,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     };
   }
 
-  freshnessBuildMemo(tasks, dateText, snapshot) {
+  freshnessBuildMemo(tasks, dateText, snapshot, todayStamp) {
     const list = Array.isArray(tasks) ? tasks : [];
-    let todayDay = null;
-    try {
-      todayDay = planDayNumber(new Date());
-    } catch (error) {
-      todayDay = null;
-    }
+    // One supplied local date throughout the rebuild: the snapshot's
+    // date text drives lane visibility too, never a second `new Date()`.
+    const todayDay = freshnessDayNumberForDateText(dateText);
     const context = this.freshnessContextFor(list, dateText, todayDay);
     const rows = list.map((task, index) =>
       freshnessRowFromTask(task, index, context),
@@ -6136,6 +6824,37 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     const counts = freshnessCounts(rows, dateText, snapshot.config);
     const lints = freshnessCollectLints(rows, dateText, snapshot.config);
     const rank = new Map(queue.map((entry, index) => [entry.key, index]));
+    // Key-to-evaluated-result map built once per snapshot, covering
+    // FRESH and out-of-scope rows too — not just the review queue — so
+    // warm per-row lookups never re-parse a task or re-read the config.
+    // A miss (a task object outside the snapshot) falls back to the
+    // per-row evaluator with this memo's config, never a second
+    // `ensure` call or a normal-path linear `indexOf` scan.
+    const indexByTask = new Map();
+    for (let index = 0; index < list.length; index += 1) {
+      const task = list[index];
+      if (task && typeof task === "object" && !indexByTask.has(task)) {
+        indexByTask.set(task, index);
+      }
+    }
+    const evaluatedByKey = new Map();
+    for (const row of rows) {
+      try {
+        const evaluated = freshnessEvaluate(row, dateText, snapshot.config);
+        evaluatedByKey.set(freshnessRowKey(row), {
+          state: evaluated.state,
+          bucket: freshnessBucketForState(evaluated.state),
+          fresh: evaluated.fresh,
+          dueOn: evaluated.dueOn,
+          daysOverdue: evaluated.daysOverdue,
+          intervalDays: evaluated.intervalDays,
+          intervalSource: evaluated.intervalSource,
+        });
+      } catch (error) {
+        // One bad row never breaks the snapshot; lookups miss and use
+        // the per-row fallback instead.
+      }
+    }
     return {
       tasks,
       dateText,
@@ -6143,8 +6862,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       configKey: JSON.stringify([snapshot.config, snapshot.invalid]),
       config: snapshot.config,
       invalid: snapshot.invalid,
+      todayStamp:
+        typeof todayStamp === "string" ? todayStamp : null,
+      tasksGen: this.freshnessTasksGen || 0,
       tasksAvailable: Array.isArray(tasks),
       rows,
+      indexByTask,
+      evaluatedByKey,
       queue,
       counts,
       lints,
@@ -6153,50 +6877,98 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     };
   }
 
-  // Rebuild the memoized rows when the Tasks array identity, the local
-  // date, the frontmatter generation, or the config changed. When the
-  // due key set changes because of rollover, a frontmatter change or a
-  // config change (not task edits, which Tasks re-renders itself), every
-  // open Tasks query re-reads via TODAY_RELOAD_EVENT.
+  // Snapshot key for Today membership and readiness: the cache's
+  // date, daily path, and link keys. Any Today change (link, unlink,
+  // daily rebuild, rollover) invalidates the memo, because rows bake
+  // the membership in at build time.
+  freshnessTodayStamp() {
+    try {
+      const cache = this.todayCache;
+      if (!cache || !(cache.rank instanceof Map)) {
+        return JSON.stringify([null, null, null]);
+      }
+      return JSON.stringify([
+        cache.date || null,
+        cache.dailyPath || null,
+        Array.isArray(cache.keys) ? cache.keys : [],
+      ]);
+    } catch (error) {
+      return JSON.stringify(["error", "error", "error"]);
+    }
+  }
+
+  // Rebuild the memoized rows when the Tasks array identity or
+  // generation, the local date, the frontmatter generation, the
+  // config, or Today membership/readiness changed. When the queue keys
+  // or any row's state/bucket change because of rollover, a
+  // frontmatter change, a config change, or a Today-link-only change
+  // (not task edits, which Tasks re-renders itself), every open Tasks
+  // query re-reads via TODAY_RELOAD_EVENT and the badges, status bar,
+  // marks, and review chips refresh on the existing debounce paths.
   freshnessEnsureMemo(now = new Date()) {
     const tasks = planBlockTasks(this.app);
     const dateText = this.freshnessTodayText(now);
-    const snapshot = this.freshnessConfigSnapshot();
+    const snapshot = this.freshnessConfigSnapshot(now);
     const configKey = JSON.stringify([snapshot.config, snapshot.invalid]);
+    const todayStamp = this.freshnessTodayStamp();
+    const tasksGen = this.freshnessTasksGen || 0;
     const memo = this.freshnessMemo;
     if (
       memo &&
       memo.tasks === tasks &&
       memo.dateText === dateText &&
       (memo.frontGen || 0) === (this.freshnessFrontGen || 0) &&
-      memo.configKey === configKey
+      memo.configKey === configKey &&
+      (memo.todayStamp || null) === (todayStamp || null) &&
+      (memo.tasksGen || 0) === tasksGen
     ) {
       return memo;
     }
     const previousDueKeys = memo && Array.isArray(memo.dueKeys)
       ? memo.dueKeys
       : null;
+    const previousEvaluated =
+      memo && memo.evaluatedByKey instanceof Map
+        ? memo.evaluatedByKey
+        : null;
     const tasksOnlyChange =
       Boolean(memo) &&
       previousDueKeys !== null &&
-      memo.tasks !== tasks &&
+      (memo.tasks !== tasks || (memo.tasksGen || 0) !== tasksGen) &&
       memo.dateText === dateText &&
       (memo.frontGen || 0) === (this.freshnessFrontGen || 0) &&
-      memo.configKey === configKey;
-    const next = this.freshnessBuildMemo(tasks, dateText, snapshot);
+      memo.configKey === configKey &&
+      (memo.todayStamp || null) === (todayStamp || null);
+    const next = this.freshnessBuildMemo(
+      tasks,
+      dateText,
+      snapshot,
+      todayStamp,
+    );
     this.freshnessMemo = next;
-    if (!tasksOnlyChange && previousDueKeys !== null) {
-      const changed =
-        previousDueKeys.length !== next.dueKeys.length ||
-        previousDueKeys.some((key, index) => key !== next.dueKeys[index]);
-      if (changed) {
+    if (
+      !tasksOnlyChange &&
+      previousDueKeys !== null &&
+      freshnessMemoReviewChanged(previousDueKeys, previousEvaluated, next)
+    ) {
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // The memo is still correct; only the live refresh is skipped.
+      }
+      for (const refresh of [
+        () => this.scheduleReadyRefresh(),
+        () => this.scheduleFreshnessStatusBar(),
+        () => this.scheduleFreshnessMarksRefresh(),
+        () => this.scheduleReviewChipsRefresh(),
+      ]) {
         try {
-          const workspace = this.app && this.app.workspace;
-          if (workspace && typeof workspace.trigger === "function") {
-            workspace.trigger(TODAY_RELOAD_EVENT);
-          }
+          refresh();
         } catch (error) {
-          // The memo is still correct; only the live refresh is skipped.
+          // One missed schedule never breaks the memo.
         }
       }
     }
@@ -6256,37 +7028,115 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  apiFreshnessRowFor(task) {
-    const memo = this.freshnessEnsureMemo();
-    const tasks = memo.tasksAvailable ? memo.tasks : [];
-    const index = Array.isArray(tasks) ? tasks.indexOf(task) : -1;
-    let todayDay = null;
-    try {
-      todayDay = planDayNumber(new Date());
-    } catch (error) {
-      todayDay = null;
+  // Snapshot context for a per-row fallback: the already-acquired
+  // memo's date and config, never a second `ensure` call.
+  freshnessFallbackContext(memo) {
+    const list =
+      memo && Array.isArray(memo.tasks) ? memo.tasks : [];
+    return this.freshnessContextFor(
+      list,
+      (memo && memo.dateText) || this.freshnessTodayText(),
+      freshnessDayNumberForDateText((memo && memo.dateText) || ""),
+    );
+  }
+
+  apiFreshnessRowFor(task, memo) {
+    const active = memo || this.freshnessEnsureMemo();
+    const index =
+      active && active.indexByTask instanceof Map
+        ? active.indexByTask.get(task)
+        : undefined;
+    if (Number.isInteger(index) && active.rows[index]) {
+      return active.rows[index];
     }
+    // Miss (a task object outside the snapshot): evaluate this row
+    // alone with the memo's config, not a second `ensure` call or a
+    // linear `indexOf` scan.
+    const fallbackIndex =
+      task && Number.isInteger(task.lineNumber) ? task.lineNumber : 0;
     return freshnessRowFromTask(
       task,
-      index >= 0 ? index : 0,
-      this.freshnessContextFor(
-        Array.isArray(tasks) ? tasks : [],
-        memo.dateText,
-        todayDay,
-      ),
+      fallbackIndex,
+      this.freshnessFallbackContext(active),
     );
+  }
+
+  // Evaluated `{ state, bucket, ... }` for one task: a warm map hit
+  // inside the snapshot, or the per-row evaluator with the memo's
+  // config on a miss. Throws only when the memo itself is unusable, so
+  // the gated READY count can fall back to the legacy count.
+  freshnessEvaluatedFor(task, memo) {
+    const active = memo || this.freshnessEnsureMemo();
+    const key = this.freshnessMemoRankKey(task);
+    if (
+      key &&
+      active &&
+      active.evaluatedByKey instanceof Map &&
+      active.evaluatedByKey.has(key)
+    ) {
+      return active.evaluatedByKey.get(key);
+    }
+    const row = this.apiFreshnessRowFor(task, active);
+    const evaluated = freshnessEvaluate(
+      row,
+      (active && active.dateText) || this.freshnessTodayText(),
+      (active && active.config) || { interval: 7 },
+    );
+    return {
+      state: evaluated.state,
+      bucket: freshnessBucketForState(evaluated.state),
+      fresh: evaluated.fresh,
+      dueOn: evaluated.dueOn,
+      daysOverdue: evaluated.daysOverdue,
+      intervalDays: evaluated.intervalDays,
+      intervalSource: evaluated.intervalSource,
+    };
   }
 
   apiFreshnessState(task) {
     try {
-      const memo = this.freshnessEnsureMemo();
-      return freshnessState(
-        this.apiFreshnessRowFor(task),
-        memo.dateText,
-        memo.config,
-      );
+      return this.freshnessEvaluatedFor(task).state;
     } catch (error) {
       return null;
+    }
+  }
+
+  apiFreshnessBucket(task) {
+    try {
+      return this.freshnessEvaluatedFor(task).bucket;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Snapshot-backed READY gate: true when the task sits in NEW or
+  // ROTTEN review. Bound to one validated snapshot by the caller.
+  freshnessReviewPredicate(memo) {
+    const active = memo || this.freshnessMemo;
+    return (task) =>
+      this.freshnessEvaluatedFor(task, active).bucket !== null;
+  }
+
+  // Shared NEW/ROTTEN review model with an explicit availability bit.
+  // Unavailable while Tasks data, a Warm cache, or Today is missing —
+  // never an empty success.
+  freshnessReviewModel(now = new Date()) {
+    try {
+      const tasks = planBlockTasks(this.app);
+      if (!Array.isArray(tasks)) {
+        return freshnessReviewUnavailable();
+      }
+      const state = this.tasksCacheState();
+      if (typeof state === "string" && state !== "Warm") {
+        return freshnessReviewUnavailable();
+      }
+      if (!this.isTodayCacheReady(now)) {
+        return freshnessReviewUnavailable();
+      }
+      const memo = this.freshnessEnsureMemo(now);
+      return freshnessReviewModel(memo.counts, memo.queue);
+    } catch (error) {
+      return freshnessReviewUnavailable();
     }
   }
 
@@ -6418,8 +7268,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       } catch (error) {
         // The generation still counts; the memo rebuilds on next access.
       }
+      this.scheduleReadyRefresh();
       this.scheduleFreshnessStatusBar();
       this.scheduleFreshnessMarksRefresh();
+      this.scheduleReviewChipsRefresh();
       return true;
     } catch (error) {
       return false;
@@ -6442,8 +7294,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       } catch (error) {
         // The memo rebuilds on next access.
       }
+      this.scheduleReadyRefresh();
       this.scheduleFreshnessStatusBar();
       this.scheduleFreshnessMarksRefresh();
+      this.scheduleReviewChipsRefresh();
       return true;
     } catch (error) {
       return false;
@@ -6451,12 +7305,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   }
 
   // --- Task freshness: status bar -----------------------------------------
-  // Desktop only: `⟳ 23 due · 3 new · ✓ 12 today` (or `✓ 12/15` with a
-  // budget; `⟳ –` while Tasks is unavailable). An accent while `new > 0`,
-  // a muted "clear" style when nothing is due, a budget-met style when
-  // `budget_met` holds. Clicking runs
+  // Desktop only: `⟳ 3 new · 31 rotten · ✓ 12 today` (or `✓ 12/15`
+  // with a budget; `⟳ –` while Tasks is unavailable). An accent while
+  // `new > 0`, a muted "clear" style when nothing is due, a budget-met
+  // style when `budget_met` holds. Clicking runs
   // `bob-navigation-hotkeys:jump-to-next-due-task`, falling back to
-  // opening `freshness.md`.
+  // opening `freshness.md` (the fallback target switches to `rotten`
+  // in the dash-gating rollout, together with the review page).
 
   setupFreshnessStatusBar() {
     try {
@@ -8016,14 +8871,35 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           return;
         }
         el.empty();
+        const paintDay = new Date();
+        // Gate READY from one validated snapshot; a missing snapshot
+        // keeps the legacy ungated count and tooltip.
+        let planGate = null;
+        let planReview = null;
+        try {
+          const gateMemo = this.freshnessEnsureMemo(paintDay);
+          if (gateMemo && gateMemo.tasksAvailable) {
+            planGate = this.freshnessReviewPredicate(gateMemo);
+            planReview = {
+              new: gateMemo.counts.new,
+              rotten:
+                gateMemo.counts.resurfaced + gateMemo.counts.stale,
+            };
+          }
+        } catch (error) {
+          planGate = null;
+          planReview = null;
+        }
         const model = planBlockModel({
           content,
           tasks,
-          today: new Date(),
+          today: paintDay,
           caps,
           sourcePath,
           app: this.app,
           isToday: (task) => this.isTodayTask(task),
+          isReviewBucket: planGate,
+          review: planReview,
         });
         const container = el.createDiv({ cls: "bob-plan" });
         container.setAttribute("role", "status");
@@ -9033,6 +9909,8 @@ function planBlockModel({
   sourcePath,
   app,
   isToday,
+  isReviewBucket,
+  review,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -9065,7 +9943,13 @@ function planBlockModel({
   let ready = null;
   if (hasTasks) {
     try {
-      ready = readyBudgetFromTasks(taskList, day, effective, isTodayPredicate);
+      ready = readyBudgetFromTasks(
+        taskList,
+        day,
+        effective,
+        isTodayPredicate,
+        isReviewBucket,
+      );
     } catch (error) {
       ready = null;
     }
@@ -9089,11 +9973,30 @@ function planBlockModel({
   const themeCounts = budget.entries
     .filter((entry) => !entry.exempt)
     .map((entry) => `${entry.name} ${entry.links}`);
+  // Total lane pressure for the gated READY tooltip: the gated
+  // count plus the NEW and ROTTEN buckets behind it. Without a review
+  // breakdown the badge keeps its legacy tooltip.
+  const reviewLane =
+    review &&
+    Number.isInteger(review.new) &&
+    review.new >= 0 &&
+    Number.isInteger(review.rotten) &&
+    review.rotten >= 0 &&
+    ready &&
+    Number.isInteger(ready.count) &&
+    ready.count >= 0
+      ? {
+          total: review.new + review.rotten + ready.count,
+          new: review.new,
+          rotten: review.rotten,
+          ready: ready.count,
+        }
+      : null;
   const readyModel = readyBadgeModel(
     ready
       ? { count: ready.count, cap: ready.cap, over: ready.over }
       : { count: null, cap: effective.maxReady },
-    {},
+    reviewLane ? { lane: reviewLane } : {},
   );
   return {
     targetPath,
@@ -9226,10 +10129,20 @@ module.exports.helpers = {
   freshnessIntervalFor,
   freshnessEvaluate,
   freshnessState,
+  freshnessBucketForState,
   freshnessQueue,
   freshnessCounts,
   freshnessCollectLints,
   freshnessStatusView,
+  freshnessDayNumberForDateText,
+  freshnessReviewModel,
+  freshnessReviewUnavailable,
+  freshnessMemoReviewChanged,
+  reviewChipText,
+  reviewChipClass,
+  reviewChipHref,
+  paintReviewElement,
+  setReviewAnchorContent,
   freshnessRowFromTask,
   freshnessTierForState,
   freshnessTaskStatus,

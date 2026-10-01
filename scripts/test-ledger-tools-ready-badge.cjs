@@ -463,7 +463,15 @@ function makeApp(overrides = {}) {
 
 test("daily and dashboard share the READY element contract", () => {
   const day = new Date(2026, 8, 30);
-  const tasks = [readyTask({ path: "notes/a.md" })];
+  // A same-day confirmation keeps the fixture in gated READY: an
+  // unstamped task would sit in NEW review instead.
+  const tasks = [
+    readyTask({
+      path: "notes/a.md",
+      description: "- [ ] #task Do it [fresh:: 2026-09-30]",
+      originalMarkdown: "- [ ] #task Do it [fresh:: 2026-09-30]",
+    }),
+  ];
   const model = planBlockModel({
     content: "## Pomodoros\n\n- [ ] () — GOALS\n",
     tasks,
@@ -509,7 +517,12 @@ test("daily and dashboard share the READY element contract", () => {
     assert.equal(shown.label, "READY");
     assert.equal(shown.value, "1/100");
     assert.ok(anchor.text === undefined || anchor.text === "");
-    assert.equal(anchor.title, model.readyModel.tooltip);
+    // The live badge gates READY and carries total lane pressure,
+    // while the bare model above keeps the legacy tooltip.
+    assert.equal(
+      anchor.title,
+      "READY 1/100 · lane 1 = 0 new + 0 rotten + 1 ready",
+    );
     assert.equal(anchor.href, "dash#READY Tasks");
     assert.ok(anchor.listeners.includes("click"));
     assert.ok(anchor.listeners.includes("keydown"));
@@ -669,7 +682,13 @@ test("READY counts a valid empty queue as zero, not unavailable", () => {
 
 test("READY stays compatible with hosts exposing only getTasks()", () => {
   const day = new Date(2026, 8, 30);
-  const tasks = [readyTask({ path: "notes/a.md" })];
+  const tasks = [
+    readyTask({
+      path: "notes/a.md",
+      description: "- [ ] #task Do it [fresh:: 2026-09-30]",
+      originalMarkdown: "- [ ] #task Do it [fresh:: 2026-09-30]",
+    }),
+  ];
   const app = makeApp({
     plugins: {
       plugins: { "obsidian-tasks-plugin": { getTasks: () => tasks } },
@@ -1059,4 +1078,111 @@ test("READY never assigns the Obsidian text setter", () => {
   } finally {
     plugin.onunload();
   }
+});
+
+test("READY gating excludes review buckets and keeps the partition", () => {
+  const day = new Date(2026, 8, 30);
+  const tasks = [
+    readyTask({ path: "notes/new-a.md" }),
+    readyTask({ path: "notes/new-b.md" }),
+    readyTask({ path: "notes/rotten-a.md" }),
+    readyTask({ path: "notes/ready-a.md" }),
+    readyTask({ path: "notes/ready-b.md" }),
+  ];
+  const isReview = (task) =>
+    task.path === "notes/new-a.md" ||
+    task.path === "notes/new-b.md" ||
+    task.path === "notes/rotten-a.md";
+  const ungated = readyCountFromTasks(tasks, day, () => false);
+  assert.equal(ungated, 5);
+  const gated = readyCountFromTasks(tasks, day, () => false, isReview);
+  assert.equal(gated, 2);
+  // B = NEW ∪ ROTTEN ∪ READY, pairwise disjoint: the gated count plus
+  // the flagged buckets reconstruct the visible pool.
+  assert.equal(gated + tasks.filter(isReview).length, ungated);
+  // A missing predicate keeps the legacy count.
+  assert.equal(
+    readyCountFromTasks(tasks, day, () => false, null),
+    ungated,
+  );
+  // A throwing predicate discards the partial gated count and
+  // recomputes the legacy count instead of leaving a partial badge.
+  let calls = 0;
+  const throwing = () => {
+    calls += 1;
+    if (calls > 1) {
+      throw new Error("bucket lookup blew up");
+    }
+    return true;
+  };
+  assert.equal(
+    readyCountFromTasks(tasks, day, () => false, throwing),
+    ungated,
+  );
+  // A throwing Today predicate still degrades to unavailable, not legacy.
+  assert.throws(() =>
+    readyCountFromTasks(
+      tasks,
+      day,
+      () => {
+        throw new Error("today blew up");
+      },
+      isReview,
+    ),
+  );
+});
+
+test("gated READY tooltip carries total lane pressure", () => {
+  const model = readyBadgeModel(
+    { count: 120, cap: 100, over: true },
+    { lane: { total: 210, new: 3, rotten: 87, ready: 120 } },
+  );
+  assert.equal(model.text, "READY 120/100");
+  assert.equal(
+    model.tooltip,
+    "READY 120/100 · lane 210 = 3 new + 87 rotten + 120 ready · 20 over the limit",
+  );
+  // Without a lane breakdown the legacy tooltip stays byte-identical.
+  const legacy = readyBadgeModel({ count: 1, cap: 100, over: false }, {});
+  assert.match(legacy.tooltip, /1 ready tasks; limit 100/);
+  assert.match(legacy.tooltip, /excluding Today/);
+});
+
+test("planBlockModel gates READY and shares the lane tooltip", () => {
+  const day = new Date(2026, 8, 30);
+  const tasks = [
+    readyTask({ path: "notes/new-a.md" }),
+    readyTask({ path: "notes/rotten-a.md" }),
+    readyTask({ path: "notes/ready-a.md" }),
+    readyTask({ path: "notes/ready-b.md" }),
+  ];
+  const isReview = (task) =>
+    task.path !== "notes/ready-a.md" && task.path !== "notes/ready-b.md";
+  const gated = planBlockModel({
+    content: "",
+    tasks,
+    today: day,
+    caps: {},
+    sourcePath: "notes/daily.md",
+    app: null,
+    isToday: () => false,
+    isReviewBucket: isReview,
+    review: { new: 1, rotten: 1 },
+  });
+  assert.equal(gated.readyText, "READY 2/100");
+  assert.match(
+    gated.readyModel.tooltip,
+    /READY 2\/100 · lane 4 = 1 new \+ 1 rotten \+ 2 ready/,
+  );
+  const legacy = planBlockModel({
+    content: "",
+    tasks,
+    today: day,
+    caps: {},
+    sourcePath: "notes/daily.md",
+    app: null,
+    isToday: () => false,
+  });
+  assert.equal(legacy.readyText, "READY 4/100");
+  assert.match(legacy.readyModel.tooltip, /4 ready tasks; limit 100/);
 });

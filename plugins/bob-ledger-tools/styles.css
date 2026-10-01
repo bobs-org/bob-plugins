@@ -96,6 +96,32 @@ a.bob-plan-ready:hover {
   --bob-plan-accent: var(--task-status-blocked, var(--color-red, #c65367));
 }
 
+/* ROTTEN above zero but below escalation: orange, never the red that
+   means over-cap or needs-confirmation. */
+.bob-plan-chip.bob-plan-warn {
+  --bob-plan-accent: var(--color-orange, #d9822b);
+}
+
+/* Shared NEW/ROTTEN chip content: separate muted small-caps label and
+   accent-colored tabular value, matching the READY badge structure so
+   dashboard and rotten-summary chips style like neighboring chips. */
+.bob-plan-review .bob-plan-review-label {
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+}
+
+.bob-plan-review .bob-plan-review-value {
+  color: var(--bob-plan-accent);
+  font-size: 0.9em;
+  font-variant-caps: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  letter-spacing: normal;
+}
+
 .bob-plan-chip.bob-plan-unavailable {
   opacity: 0.72;
 }
@@ -118,8 +144,9 @@ a.bob-plan-ready:hover {
   font-size: 0.8em;
 }
 
-/* Task freshness status bar counter (api v3): `⟳ 23 due · 3 new · ✓ 12
-   today`. Theme-native in light/dark and any community theme. */
+/* Task freshness status bar counter (freshness namespace v2):
+   `⟳ 3 new · 31 rotten · ✓ 12 today`. Theme-native in light/dark and
+   any community theme. */
 .bob-freshness {
   font-variant-numeric: tabular-nums;
   cursor: pointer;

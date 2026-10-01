@@ -312,32 +312,133 @@ test("readyTaskVisible pins the hide-subtag distinction", () => {
 
 // --- Shared badge ------------------------------------------------------------
 
+function stubSpan(options = {}, parent = null) {
+  const span = {
+    tag: "span",
+    cls: options.cls,
+    text: options.text,
+    title: options.title,
+    href: options.href,
+    attrs: {},
+    listeners: [],
+    handlers: {},
+    parentNode: parent,
+    setAttribute: (name, value) => {
+      span.attrs[name] = value;
+    },
+    hasAttribute: () => false,
+    setText: (value) => {
+      span.text = String(value);
+    },
+    addEventListener: (name, handler) => {
+      span.listeners.push(name);
+      span.handlers[name] = span.handlers[name] || [];
+      span.handlers[name].push(handler);
+    },
+    remove: () => {
+      if (parent && Array.isArray(parent.children)) {
+        const at = parent.children.indexOf(span);
+        if (at !== -1) {
+          parent.children.splice(at, 1);
+        }
+      }
+    },
+  };
+  return span;
+}
+
+function stubAnchor(options = {}) {
+  const anchor = {
+    tag: "a",
+    cls: options.cls,
+    text: options.text,
+    title: options.title,
+    href: options.href,
+    attrs: {},
+    listeners: [],
+    handlers: {},
+    children: [],
+    parentNode: null,
+    isConnected: true,
+    createEl: (tag, childOptions = {}) => {
+      const span = stubSpan(childOptions, anchor);
+      anchor.children.push(span);
+      return span;
+    },
+    querySelector: (selector) => {
+      const cls = String(selector).replace(/^\./, "");
+      return (
+        anchor.children.find((child) =>
+          String(child.cls || "")
+            .split(/\s+/)
+            .includes(cls),
+        ) || null
+      );
+    },
+    querySelectorAll: (selector) => {
+      const cls = String(selector).replace(/^\./, "");
+      return anchor.children.filter((child) =>
+        String(child.cls || "")
+          .split(/\s+/)
+          .includes(cls),
+      );
+    },
+    setAttribute: (name, value) => {
+      anchor.attrs[name] = value;
+    },
+    hasAttribute: () => false,
+    setText: (value) => {
+      anchor.text = String(value);
+    },
+    addEventListener: (name, handler) => {
+      anchor.listeners.push(name);
+      anchor.handlers[name] = anchor.handlers[name] || [];
+      anchor.handlers[name].push(handler);
+    },
+    removeChild: (child) => {
+      const at = anchor.children.indexOf(child);
+      if (at !== -1) {
+        anchor.children.splice(at, 1);
+      }
+    },
+    remove: () => {
+      if (anchor.parentNode && Array.isArray(anchor.parentNode.children)) {
+        const at = anchor.parentNode.children.indexOf(anchor);
+        if (at !== -1) {
+          anchor.parentNode.children.splice(at, 1);
+        }
+      }
+    },
+  };
+  return anchor;
+}
+
 function stubHost() {
   const listeners = [];
   const el = {
     attrs: {},
+    children: [],
     createEl: (tag, options = {}) => {
-      const child = {
-        tag,
-        cls: options.cls,
-        text: options.text,
-        title: options.title,
-        href: options.href,
-        attrs: {},
-        listeners: [],
-        setAttribute: (name, value) => {
-          child.attrs[name] = value;
-        },
-        hasAttribute: () => false,
-        addEventListener: (name, handler) => {
-          child.listeners.push(name);
-        },
-      };
+      const child = stubAnchor(options);
+      child.parentNode = el;
+      el.children.push(child);
       return child;
     },
     setAttribute: () => {},
+    contains: (node) => node && node.parentNode === el,
   };
   return { el, listeners };
+}
+
+function readyChildTexts(anchor) {
+  const label = anchor.querySelector(".bob-plan-ready-label");
+  const value = anchor.querySelector(".bob-plan-ready-value");
+  return {
+    label: label ? label.text : null,
+    value: value ? value.text : null,
+    labelCount: anchor.querySelectorAll(".bob-plan-ready-label").length,
+    valueCount: anchor.querySelectorAll(".bob-plan-ready-value").length,
+  };
 }
 
 function makeApp(overrides = {}) {
@@ -401,7 +502,13 @@ test("daily and dashboard share the READY element contract", () => {
     assert.ok(anchor);
     assert.match(anchor.cls, /bob-plan-chip/);
     assert.match(anchor.cls, /bob-plan-ready/);
-    assert.equal(anchor.text, model.readyModel.text);
+    // Structured content: separate label and value spans, no flattened text.
+    const shown = readyChildTexts(anchor);
+    assert.equal(shown.labelCount, 1);
+    assert.equal(shown.valueCount, 1);
+    assert.equal(shown.label, "READY");
+    assert.equal(shown.value, "1/100");
+    assert.ok(anchor.text === undefined || anchor.text === "");
     assert.equal(anchor.title, model.readyModel.tooltip);
     assert.equal(anchor.href, "dash#READY Tasks");
     assert.ok(anchor.listeners.includes("click"));
@@ -448,24 +555,19 @@ test("READY keyboard and modifier-key navigation", () => {
     return Promise.resolve();
   };
   const host = {
+    last: null,
     createEl: (tag, options = {}) => {
-      const handlers = {};
-      const child = {
-        ...options,
-        handlers,
-        setAttribute: () => {},
-        hasAttribute: () => true,
-        addEventListener: (name, handler) => {
-          handlers[name] = handlers[name] || [];
-          handlers[name].push(handler);
-        },
-      };
+      const child = stubAnchor(options);
+      child.hasAttribute = () => true;
       host.last = child;
       return child;
     },
   };
   const anchor = plugin.paintReadyElement(host, { count: 3, cap: 100, over: false }, { sourcePath: "2026/20260930.md" });
   assert.ok(anchor);
+  const shown = readyChildTexts(anchor);
+  assert.equal(shown.label, "READY");
+  assert.equal(shown.value, "3/100");
   const click = host.last.handlers.click[0];
   click({ preventDefault: () => {}, ctrlKey: true, metaKey: false });
   assert.equal(opened[0].target, "dash#READY Tasks");
@@ -608,4 +710,189 @@ test("READY degrades to unavailable when the Today predicate throws", () => {
   });
   assert.equal(model.ready, null);
   assert.equal(model.readyText, "READY –");
+});
+
+// --- Live refresh ----------------------------------------------------------
+
+function paintOnParent(plugin, parent, budget) {
+  const anchor = plugin.paintReadyElement(parent, budget, {
+    sourcePath: "dash.md",
+  });
+  assert.ok(anchor);
+  return anchor;
+}
+
+function refreshWith(plugin, anchor, parent, budget) {
+  plugin.readyWidgets = new Set([
+    { el: anchor, sourcePath: "dash.md", component: null },
+  ]);
+  const stubBudget = plugin.readyBudget;
+  plugin.readyBudget = () => budget;
+  try {
+    assert.equal(plugin.refreshReadyBadges(new Date(2026, 8, 30)), true);
+  } finally {
+    if (stubBudget === undefined) {
+      delete plugin.readyBudget;
+    } else {
+      plugin.readyBudget = stubBudget;
+    }
+  }
+}
+
+test("READY renders label/value spans for every budget state", () => {
+  const plugin = new LedgerToolsPlugin(makeApp(), {});
+  plugin.onload();
+  try {
+    const cases = [
+      [{ count: 0, cap: 100, over: false }, "0/100", false],
+      [{ count: 42, cap: 100, over: false }, "42/100", false],
+      [{ count: 100, cap: 100, over: false }, "100/100", false],
+      [{ count: 101, cap: 100, over: true }, "101/100", true],
+      [{ count: null, cap: 100, over: false }, "–", false],
+      [{ count: null, cap: 7, over: false }, "–", false],
+    ];
+    for (const [budget, value, over] of cases) {
+      const parent = stubHost().el;
+      const anchor = paintOnParent(plugin, parent, budget);
+      const shown = readyChildTexts(anchor);
+      assert.equal(shown.labelCount, 1, `label count for ${value}`);
+      assert.equal(shown.valueCount, 1, `value count for ${value}`);
+      assert.equal(shown.label, "READY");
+      assert.equal(shown.value, value);
+      assert.equal(anchor.cls.includes("bob-plan-over"), over);
+      assert.equal(
+        anchor.cls.includes("bob-plan-unavailable"),
+        budget.count === null,
+      );
+    }
+  } finally {
+    plugin.onunload();
+  }
+});
+
+test("READY live refresh keeps the anchor, spans, and handlers", () => {
+  const plugin = new LedgerToolsPlugin(makeApp(), {});
+  plugin.onload();
+  try {
+    const parent = stubHost().el;
+    const anchor = paintOnParent(plugin, parent, {
+      count: 3,
+      cap: 100,
+      over: false,
+    });
+    const before = readyChildTexts(anchor);
+    assert.equal(before.value, "3/100");
+    const listenersBefore = anchor.listeners.length;
+    const handlersBefore = Object.values(anchor.handlers).map(
+      (list) => list.length,
+    );
+
+    refreshWith(plugin, anchor, parent, { count: 4, cap: 100, over: false });
+
+    // Same anchor object: listeners and widget registration survive.
+    assert.equal(plugin.readyWidgets.size, 1);
+    const [widget] = Array.from(plugin.readyWidgets);
+    assert.equal(widget.el, anchor);
+    const after = readyChildTexts(anchor);
+    assert.equal(after.labelCount, 1);
+    assert.equal(after.valueCount, 1);
+    assert.equal(after.label, "READY");
+    assert.equal(after.value, "4/100");
+    assert.ok(anchor.text === undefined || anchor.text === "");
+    assert.equal(anchor.listeners.length, listenersBefore);
+    assert.deepEqual(
+      Object.values(anchor.handlers).map((list) => list.length),
+      handlersBefore,
+    );
+
+    // Repeated refreshes never accumulate spans.
+    refreshWith(plugin, anchor, parent, { count: 5, cap: 100, over: false });
+    refreshWith(plugin, anchor, parent, { count: 5, cap: 100, over: false });
+    const repeated = readyChildTexts(anchor);
+    assert.equal(repeated.labelCount, 1);
+    assert.equal(repeated.valueCount, 1);
+    assert.equal(repeated.value, "5/100");
+    assert.equal(anchor.children.length, 2);
+  } finally {
+    plugin.onunload();
+  }
+});
+
+test("READY refresh crosses the over-cap boundary and back", () => {
+  const plugin = new LedgerToolsPlugin(makeApp(), {});
+  plugin.onload();
+  try {
+    const parent = stubHost().el;
+    const anchor = paintOnParent(plugin, parent, {
+      count: 100,
+      cap: 100,
+      over: false,
+    });
+    assert.equal(anchor.cls.includes("bob-plan-over"), false);
+
+    refreshWith(plugin, anchor, parent, {
+      count: 101,
+      cap: 100,
+      over: true,
+    });
+    const over = readyChildTexts(anchor);
+    assert.equal(over.value, "101/100");
+    assert.equal(anchor.cls.includes("bob-plan-over"), true);
+    assert.match(anchor.attrs["aria-label"], /101 of 100/);
+    assert.match(anchor.attrs["aria-label"], /over the limit/);
+    assert.match(anchor.attrs.title, /1 over the limit/);
+
+    refreshWith(plugin, anchor, parent, {
+      count: 99,
+      cap: 100,
+      over: false,
+    });
+    const back = readyChildTexts(anchor);
+    assert.equal(back.labelCount, 1);
+    assert.equal(back.valueCount, 1);
+    assert.equal(back.value, "99/100");
+    assert.equal(anchor.cls.includes("bob-plan-over"), false);
+  } finally {
+    plugin.onunload();
+  }
+});
+
+test("READY refresh crosses the unavailable boundary and back", () => {
+  const plugin = new LedgerToolsPlugin(makeApp(), {});
+  plugin.onload();
+  try {
+    const parent = stubHost().el;
+    const anchor = paintOnParent(plugin, parent, {
+      count: 2,
+      cap: 100,
+      over: false,
+    });
+    assert.equal(readyChildTexts(anchor).value, "2/100");
+
+    refreshWith(plugin, anchor, parent, {
+      count: null,
+      cap: 100,
+      over: false,
+    });
+    const off = readyChildTexts(anchor);
+    assert.equal(off.labelCount, 1);
+    assert.equal(off.valueCount, 1);
+    assert.equal(off.label, "READY");
+    assert.equal(off.value, "–");
+    assert.equal(anchor.cls.includes("bob-plan-unavailable"), true);
+    assert.match(anchor.attrs["aria-label"], /unavailable/);
+
+    refreshWith(plugin, anchor, parent, {
+      count: 2,
+      cap: 100,
+      over: false,
+    });
+    const on = readyChildTexts(anchor);
+    assert.equal(on.labelCount, 1);
+    assert.equal(on.valueCount, 1);
+    assert.equal(on.value, "2/100");
+    assert.equal(anchor.cls.includes("bob-plan-unavailable"), false);
+  } finally {
+    plugin.onunload();
+  }
 });

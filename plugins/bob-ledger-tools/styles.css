@@ -57,6 +57,39 @@ a.bob-plan-chip:focus-visible {
 
 .bob-plan-ready {
   --bob-plan-accent: var(--color-blue, var(--interactive-accent));
+  font-family: var(--font-interface);
+  line-height: 1.3;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+a.bob-plan-ready:hover {
+  transform: translateY(-1px);
+}
+
+/* Structured READY content: separate muted small-caps label and
+   accent-colored tabular value, matching the dashboard's neighboring
+   `.task-count-label` / `.task-count-value` chips. Scoped to
+   `.bob-plan-ready` so the parent chip's small-caps, weight, and letter
+   spacing do not distort the value, and so both the daily `bob-plan`
+   wrapper and the dashboard host render identically. */
+.bob-plan-ready .bob-plan-ready-label {
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+}
+
+.bob-plan-ready .bob-plan-ready-value {
+  color: var(--bob-plan-accent);
+  font-size: 0.9em;
+  font-variant-caps: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  letter-spacing: normal;
 }
 
 .bob-plan-chip.bob-plan-over {

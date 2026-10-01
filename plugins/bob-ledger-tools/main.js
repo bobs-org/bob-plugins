@@ -3105,6 +3105,225 @@ function readyBadgeModel(budget, options = {}) {
   };
 }
 
+// Structured READY content: the shared badge renders separate label and
+// value spans (`.bob-plan-ready-label` / `.bob-plan-ready-value`) so the
+// dashboard and daily surfaces can style them like neighboring chips. One
+// routine owns both initial paint and live refresh so updates never flatten
+// the anchor back to plain text.
+const READY_LABEL_TEXT = "READY";
+const READY_LABEL_CLS = "bob-plan-ready-label";
+const READY_VALUE_CLS = "bob-plan-ready-value";
+
+function readyBadgeValueText(model) {
+  if (
+    !model ||
+    model.placeholder ||
+    model.count === null ||
+    model.count === undefined
+  ) {
+    return "–";
+  }
+  return `${model.count}/${model.cap}`;
+}
+
+function setReadySpanText(span, text) {
+  if (!span) {
+    return;
+  }
+  if (typeof span.setText === "function") {
+    span.setText(text);
+    return;
+  }
+  // Real DOM elements expose textContent; minimal test stubs use `.text`.
+  // Assigning `.text` on a real Element is a harmless expando, while setting
+  // textContent on a stub without that field would create a misleading
+  // duplicate source of truth, so prefer whichever already exists.
+  if ("textContent" in span && typeof span.textContent === "string") {
+    span.textContent = text;
+  } else if ("text" in span) {
+    span.text = text;
+  } else if ("textContent" in span) {
+    span.textContent = text;
+  } else {
+    span.text = text;
+  }
+}
+
+function collectReadySpans(anchor, cls) {
+  if (!anchor) {
+    return [];
+  }
+  try {
+    if (typeof anchor.querySelectorAll === "function") {
+      return Array.from(anchor.querySelectorAll(`.${cls}`));
+    }
+  } catch (error) {
+    // Fall through to the children scan below.
+  }
+  const children =
+    (Array.isArray(anchor.children) && anchor.children) ||
+    (Array.isArray(anchor.childNodes) && anchor.childNodes) ||
+    [];
+  return children.filter((child) => {
+    if (!child) {
+      return false;
+    }
+    if (typeof child.cls === "string") {
+      return child.cls.split(/\s+/).includes(cls);
+    }
+    const classAttr =
+      child.attrs && typeof child.attrs.class === "string"
+        ? child.attrs.class
+        : typeof child.className === "string"
+          ? child.className
+          : null;
+    if (typeof classAttr === "string") {
+      return classAttr.split(/\s+/).includes(cls);
+    }
+    if (child.classList && typeof child.classList.contains === "function") {
+      try {
+        return child.classList.contains(cls);
+      } catch (error) {
+        return false;
+      }
+    }
+    return false;
+  });
+}
+
+function findReadySpan(anchor, cls) {
+  if (!anchor) {
+    return null;
+  }
+  try {
+    if (typeof anchor.querySelector === "function") {
+      return anchor.querySelector(`.${cls}`) || null;
+    }
+  } catch (error) {
+    // Fall through to the children scan below.
+  }
+  const matches = collectReadySpans(anchor, cls);
+  return matches.length > 0 ? matches[0] : null;
+}
+
+function createReadySpan(anchor, cls, text) {
+  if (anchor && typeof anchor.createEl === "function") {
+    return anchor.createEl("span", { cls, text });
+  }
+  // Minimal-stub fallback: track the child so structure assertions still see
+  // exactly one label and one value.
+  const span = {
+    tag: "span",
+    cls,
+    text,
+    attrs: {},
+    setAttribute(name, value) {
+      this.attrs[name] = value;
+    },
+  };
+  if (Array.isArray(anchor.children)) {
+    anchor.children.push(span);
+  }
+  return span;
+}
+
+// Update the anchor's child spans plus its model-dependent title,
+// accessibility label, and state classes without replacing the anchor or
+// disturbing its event listeners. Repeated calls leave exactly one label
+// and one value span.
+function setReadyAnchorContent(anchor, model) {
+  if (!anchor) {
+    return;
+  }
+  const valueText = readyBadgeValueText(model);
+  let label = findReadySpan(anchor, READY_LABEL_CLS);
+  if (!label) {
+    label = createReadySpan(anchor, READY_LABEL_CLS, READY_LABEL_TEXT);
+  }
+  setReadySpanText(label, READY_LABEL_TEXT);
+  let value = findReadySpan(anchor, READY_VALUE_CLS);
+  if (!value) {
+    value = createReadySpan(anchor, READY_VALUE_CLS, valueText);
+  }
+  setReadySpanText(value, valueText);
+  // Drop extras so repeated updates never accumulate spans.
+  for (const cls of [READY_LABEL_CLS, READY_VALUE_CLS]) {
+    const matches = collectReadySpans(anchor, cls);
+    for (let index = 1; index < matches.length; index += 1) {
+      const extra = matches[index];
+      try {
+        if (extra && typeof extra.remove === "function") {
+          extra.remove();
+        } else if (
+          anchor &&
+          typeof anchor.removeChild === "function" &&
+          extra &&
+          extra.parentNode === anchor
+        ) {
+          anchor.removeChild(extra);
+        } else if (anchor && Array.isArray(anchor.children)) {
+          const at = anchor.children.indexOf(extra);
+          if (at !== -1) {
+            anchor.children.splice(at, 1);
+          }
+        }
+      } catch (error) {
+        // Best-effort dedupe only.
+      }
+    }
+  }
+  // Clear any flattened direct text left by older renders (or stub `.text`)
+  // while preserving the span children.
+  try {
+    if (anchor && Array.isArray(anchor.childNodes)) {
+      for (const node of Array.from(anchor.childNodes)) {
+        if (
+          node &&
+          node.nodeType === 3 &&
+          node !== label &&
+          node !== value
+        ) {
+          if (typeof anchor.removeChild === "function") {
+            anchor.removeChild(node);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    // Best-effort cleanup only.
+  }
+  if (
+    anchor &&
+    "text" in anchor &&
+    typeof anchor.text === "string" &&
+    anchor.text !== "" &&
+    !findReadySpan(anchor, READY_VALUE_CLS)
+  ) {
+    anchor.text = "";
+  } else if (anchor && "text" in anchor && typeof anchor.text === "string") {
+    // Stub anchors carry `.text` alongside `.children`; keep it empty so a
+    // stale flattened value can never shadow the spans.
+    anchor.text = "";
+  }
+  if (typeof anchor.setAttribute === "function") {
+    anchor.setAttribute("title", model.tooltip);
+    anchor.setAttribute("aria-label", model.aria);
+    const cls =
+      `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+    anchor.setAttribute("class", cls);
+    if (anchor.attrs && typeof anchor.attrs === "object") {
+      anchor.attrs.class = cls;
+    }
+  }
+  if (anchor && typeof anchor.cls === "string") {
+    anchor.cls =
+      `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+  }
+  if (anchor && typeof anchor.title === "string") {
+    anchor.title = model.tooltip;
+  }
+}
+
 // --- Task freshness: placement ----------------------------------------------
 // Owned by `docs/freshness.md` in bob-cli; the Rust half is
 // `src/native/freshness/placement.rs`. Both sides run the placement (P)
@@ -4838,8 +5057,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
 
   // Shared READY element renderer used by both the daily `bob-plan`
   // block and the dashboard. Returns the anchor element or null. The
-  // element structure, classes, fraction, over state, tooltip, and
-  // destination are identical on both surfaces.
+  // element structure (separate READY label and count/cap value spans),
+  // classes, fraction, over state, tooltip, and destination are identical
+  // on both surfaces.
   paintReadyElement(host, budget, options = {}) {
     try {
       if (!host || typeof host.createEl !== "function") {
@@ -4851,10 +5071,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       const model = readyBadgeModel(budget, { invalid });
       const anchor = host.createEl("a", {
         cls: `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
-        text: model.text,
         title: model.tooltip,
         href: "dash#READY Tasks",
       });
+      setReadyAnchorContent(anchor, model);
       if (anchor && typeof anchor.setAttribute === "function") {
         anchor.setAttribute("aria-label", model.aria);
         anchor.setAttribute("role", "link");
@@ -5037,18 +5257,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         const model = readyBadgeModel(budget, {
           invalid: loaded.invalid,
         });
-        if (typeof el.setText === "function") {
-          el.setText(model.text);
-        } else if ("textContent" in el) {
-          el.textContent = model.text;
-        }
-        if (typeof el.setAttribute === "function") {
-          el.setAttribute("title", model.tooltip);
-          el.setAttribute("aria-label", model.aria);
-          const cls =
-            `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
-          el.setAttribute("class", cls);
-        }
+        // One shared routine keeps the label/value spans (and the
+        // model-dependent title, aria label, and state classes) current
+        // without replacing the anchor or flattening it to plain text,
+        // so listeners and widget registration survive live updates.
+        setReadyAnchorContent(el, model);
         refreshed = true;
       } catch (error) {
         // One stale widget never breaks the others.

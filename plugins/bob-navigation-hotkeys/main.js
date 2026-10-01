@@ -882,6 +882,21 @@ function getBulletPropertyAppendIndex(line) {
 
 function upsertBulletProperty(line, name, value) {
   const text = String(line || "");
+  // Task freshness guard: `fresh` and `refresh` never go through the
+  // end-append writer. Placement lives in bob-ledger-tools
+  // (`api.freshness.stampLine` / `setRefreshLine`, api `version >= 3`);
+  // an end-append would leave them inside the Tasks suffix and hide Tasks
+  // fields. Callers must use the injected stamper instead.
+  const guardedName = normalizeBulletPropertyName(name);
+  if (guardedName === "fresh" || guardedName === "refresh") {
+    return Object.freeze({
+      line: text,
+      changed: false,
+      action: "none",
+      reason: "fresh-guarded",
+      field: null,
+    });
+  }
   if (!isBulletLine(text)) {
     return Object.freeze({
       line: text,
@@ -946,6 +961,17 @@ function applyBulletPropertyEdits(line, edits) {
 
 function insertMissingBulletProperty(line, name, value) {
   const text = String(line || "");
+  // Task freshness guard: see `upsertBulletProperty` above.
+  const guardedMissingName = normalizeBulletPropertyName(name);
+  if (guardedMissingName === "fresh" || guardedMissingName === "refresh") {
+    return Object.freeze({
+      line: text,
+      changed: false,
+      action: "none",
+      reason: "fresh-guarded",
+      field: null,
+    });
+  }
   const existingField = findBulletPropertyField(text, name);
   if (existingField) {
     return Object.freeze({
@@ -10526,7 +10552,15 @@ function planSameFileDependencyToggle(
   lineIndex,
   nextLineText,
   filePath = "Note.md",
+  options = {},
 ) {
+  // `filePath` may carry the stamper options when passed as an object.
+  const toggleOptions =
+    filePath && typeof filePath === "object" && !Array.isArray(filePath)
+      ? filePath
+      : options;
+  const toggleFilePath =
+    typeof filePath === "string" && filePath ? filePath : "Note.md";
   const text = String(content || "");
   const newline = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
@@ -10576,7 +10610,7 @@ function planSameFileDependencyToggle(
   const targetIsOpen = isOpenObsidianTaskLine(lines[targetLine]);
   const idField = findBulletPropertyField(lines[targetLine], "id");
   const legacyId = idField && normalizeBulletPropertyValue(idField.value);
-  const canonicalId = tryDependencyId(filePath, original.blockId);
+  const canonicalId = tryDependencyId(toggleFilePath, original.blockId);
   if (!canonicalId) {
     return unqualified("unqualifiable-note-path");
   }
@@ -10622,6 +10656,13 @@ function planSameFileDependencyToggle(
     if (targetIsOpen) {
       lines[parentLine] = blockObsidianTaskCheckboxStatus(lines[parentLine]);
     }
+  }
+  // Freshness is the last transformation of the parent task line (nav-stamps).
+  // The stamper itself refuses closed and recurring lines.
+  const toggleStamper = resolveFreshStamper(toggleOptions);
+  if (toggleStamper) {
+    const toggleFreshDateText = resolveFreshDateText(toggleOptions);
+    lines[parentLine] = applyFreshStampLine(lines[parentLine], toggleStamper, toggleFreshDateText);
   }
   return Object.freeze({
     qualified: true,
@@ -13718,6 +13759,11 @@ function planTaskLaneBatch(content, session, options = {}) {
   const mode = hasReady ? "commit" : "release";
   const summary = normalizeLaneWorkSummary(options.summary);
   const dateText = String(options.dateText || "");
+  // Freshness is the last transformation of the task line (nav-stamps). The
+  // stamper itself refuses closed and recurring lines, so those never stamp.
+  // Pure planners take the stamper as an injected option (identity by default).
+  const laneStamper = resolveFreshStamper(options);
+  const laneFreshDateText = resolveFreshDateText(options);
   const workingLines = source.lines.slice();
   let changedTaskCount = 0;
   let blockedSkipped = 0;
@@ -13732,7 +13778,10 @@ function planTaskLaneBatch(content, session, options = {}) {
     const oldLine = String(workingLines[target.line] || "");
     if (mode === "commit") {
       if (status === " ") {
-        const nextLine = replaceObsidianTaskCheckboxStatus(oldLine, "*");
+        let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, "*");
+        if (laneStamper) {
+          nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+        }
         if (nextLine !== oldLine) {
           changedTaskCount += 1;
         }
@@ -13745,7 +13794,10 @@ function planTaskLaneBatch(content, session, options = {}) {
       continue;
     }
     if (status === "*" || status === "/") {
-      const nextLine = replaceObsidianTaskCheckboxStatus(oldLine, " ");
+      let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, " ");
+      if (laneStamper) {
+        nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+      }
       if (nextLine !== oldLine) {
         changedTaskCount += 1;
       }
@@ -15206,13 +15258,22 @@ function planTaskMoveAcrossFiles(options = {}) {
     sourceBlockIds,
     idReplacements: identities.idReplacements,
   };
+  // Freshness is the last transformation of each moved open task line
+  // (nav-stamps), applied at the destination. The stamper itself refuses
+  // closed and recurring lines.
+  const moveStamper = resolveFreshStamper(options);
+  const moveFreshDateText = resolveFreshDateText(options);
   const movedBlocks = identities.blocks.map((block) => {
     const rewritten = rewriteTaskMoveReferences(block.join("\n"), {
       ...referenceOptions,
       currentPath: sourcePath,
       role: "moved",
     });
-    return Object.freeze(rewritten.content.split("\n"));
+    let lines = rewritten.content.split("\n");
+    if (moveStamper) {
+      lines = lines.map((line) => applyFreshStampLine(line, moveStamper, moveFreshDateText));
+    }
+    return Object.freeze(lines);
   });
   const rewrittenSource = rewriteTaskMoveReferences(removal.content, {
     ...referenceOptions,
@@ -16346,6 +16407,11 @@ function planCountedBulletPropertyBatch(
     }
   }
 
+  // Freshness is the last transformation of the task line (nav-stamps).
+  // Project-frontmatter edits never stamp; the stamper itself refuses closed
+  // and recurring lines.
+  const countedStamper = resolveFreshStamper(options);
+  const countedFreshDateText = resolveFreshDateText(options);
   const source = splitMarkdownContent(nextContent);
   const changedTargets = [];
   const unchangedTargets = [];
@@ -16461,6 +16527,18 @@ function planCountedBulletPropertyBatch(
           recoveryCounts,
           recovery.outcome,
         );
+      }
+    }
+
+    if (countedStamper && targetChanged) {
+      const isFrontmatterTarget =
+        !isPriorityOperation && state && state.target && state.target.kind === "project-frontmatter";
+      if (!isFrontmatterTarget) {
+        const stamped = applyFreshStampLine(nextLine, countedStamper, countedFreshDateText);
+        if (stamped !== nextLine) {
+          nextLine = stamped;
+          targetChanged = true;
+        }
       }
     }
 
@@ -16713,6 +16791,9 @@ function planCountedLocalTaskDependency(
   }
 
   nextSource = splitMarkdownContent(nextContent);
+  // Freshness is the last transformation of the parent task line (nav-stamps).
+  const countedDepStamper = resolveFreshStamper(options);
+  const countedDepFreshDateText = resolveFreshDateText(options);
   const sourceResults = [];
   session.targets.forEach((target) => {
     const currentLine = String(nextSource.lines[target.line] || "");
@@ -16728,10 +16809,19 @@ function planCountedLocalTaskDependency(
             ),
           },
     );
-    nextSource.lines[target.line] = result.line;
+    let parentLine = result.line;
+    let parentChanged = result.changed || currentLine !== target.rawLine;
+    if (countedDepStamper && parentChanged) {
+      const stamped = applyFreshStampLine(parentLine, countedDepStamper, countedDepFreshDateText);
+      if (stamped !== parentLine) {
+        parentLine = stamped;
+        parentChanged = true;
+      }
+    }
+    nextSource.lines[target.line] = parentLine;
     sourceResults.push({
       target,
-      dependencyChanged: result.changed || currentLine !== target.rawLine,
+      dependencyChanged: parentChanged,
     });
   });
   nextContent = nextSource.lines.join(nextSource.lineEnding);
@@ -18046,6 +18136,55 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       });
       propertyItems = [laneItem, ...propertyItems];
     }
+    // Pinned refresh row (nav-stamps), right after the lane row, in task,
+    // counted and link mode. Without the freshness api the row stays hidden.
+    // It writes through `api.freshness.setRefreshLine`, which also stamps.
+    {
+      const freshnessApi =
+        this.plugin && typeof this.plugin.getFreshnessApi === "function"
+          ? this.plugin.getFreshnessApi()
+          : getReviewFreshnessApi(this.app);
+      const refreshDescription = this.isLinkSession()
+        ? describeRefreshRow("", {
+            linkResolved: this.linkSession.resolved,
+            freshnessApi,
+          })
+        : this.isCountedSession()
+          ? describeRefreshRow(this.getEditorContent(), {
+              taskSession: this.taskSession,
+              freshnessApi,
+            })
+          : describeRefreshRow(this.getEditorContent(), {
+              cursorLine: this.cursor ? this.cursor.line : NaN,
+              freshnessApi,
+            });
+      if (refreshDescription) {
+        const refreshItem = Object.freeze({
+          kind: "refresh-interval",
+          property: Object.freeze({ name: "refresh" }),
+          title: "Refresh every",
+          detail: refreshDescription.detail,
+          days: refreshDescription.days,
+          source: refreshDescription.source,
+          mixed: refreshDescription.mixed === true,
+          openCount: refreshDescription.openCount,
+          targetCount: refreshDescription.count,
+          refreshKind: refreshDescription.kind,
+          order: -0.5,
+          searchText: `refresh interval every ${refreshDescription.detail || ""} refresh`,
+        });
+        const laneIndex = propertyItems.findIndex((item) => item && item.kind === "lane-toggle");
+        if (laneIndex >= 0) {
+          propertyItems = [
+            ...propertyItems.slice(0, laneIndex + 1),
+            refreshItem,
+            ...propertyItems.slice(laneIndex + 1),
+          ];
+        } else {
+          propertyItems = [refreshItem, ...propertyItems];
+        }
+      }
+    }
     const cancelDescription = this.isLinkSession()
       ? describeCancelTaskRow("", {
           linkResolved: this.linkSession.resolved,
@@ -18096,6 +18235,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             query,
           );
         }
+        if (item && item.kind === "refresh-interval") {
+          return fuzzyMatchesText(item.searchText || "", query);
+        }
         if (item && item.kind === "cancel-task") {
           return fuzzyMatchesText(item.searchText || "", query);
         }
@@ -18115,6 +18257,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           this.renderLaneToggleItem(item, rowEl, query);
           return;
         }
+        if (item && item.kind === "refresh-interval") {
+          this.renderRefreshRowItem(item, rowEl, query);
+          return;
+        }
         if (item && item.kind === "cancel-task") {
           this.renderCancelTaskItem(item, rowEl, query);
           return;
@@ -18129,6 +18275,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           }
           const applied = await this.plugin.applyLaneToggleFromPicker(this);
           return applied === true;
+        }
+        if (item && item.kind === "refresh-interval") {
+          this.showRefreshValueStage(item);
+          return false;
         }
         if (item && item.kind === "cancel-task") {
           if (item.recurring) {
@@ -18160,6 +18310,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   showValueStage(propertyItem) {
+    if (propertyItem && propertyItem.kind === "refresh-interval") {
+      this.showRefreshValueStage(propertyItem);
+      return;
+    }
     if (propertyItem && propertyItem.kind === "cancel-task") {
       if (propertyItem.recurring) {
         new Notice(
@@ -18302,6 +18456,75 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
     }
+  }
+
+  // Refresh interval value stage (nav-stamps): presets plus "use default"
+  // (clears `[refresh:: N]` via `setRefreshLine` with null, which also
+  // stamps). A typed integer 1-365 applies as a custom value.
+  showRefreshValueStage(refreshItem) {
+    this.stage = "value";
+    this.selectedPropertyItem = refreshItem;
+    this.pendingTask = null;
+    this.selectedIndex = 0;
+    const currentDays =
+      refreshItem && Number.isInteger(refreshItem.days) ? refreshItem.days : null;
+    const items = createRefreshValueItems(currentDays);
+    this.applyOptions({
+      items,
+      title: "Refresh every",
+      headerIcon: "refresh-ccw",
+      inputLabel: "Filter refresh intervals",
+      placeholder: "Type days (1-365) or filter",
+      resultsLabel: "refresh intervals",
+      emptyText: "No matching intervals",
+      footerHints: ["↵ apply · esc back"],
+      getSubtitle: () => {
+        const scope = this.isCountedSession()
+          ? `${this.getTaskSessionSubtitle()} · `
+          : "";
+        if (refreshItem && refreshItem.mixed) {
+          return `${scope}Choose days · current values mixed`;
+        }
+        if (Number.isInteger(currentDays)) {
+          return `${scope}Choose days · current: every ${currentDays} d`;
+        }
+        return `${scope}Choose days · using default`;
+      },
+      filterItem: (item, query) => {
+        if (!query || !String(query).trim()) {
+          return true;
+        }
+        const custom = parseRefreshCustomValue(query);
+        if (custom !== null && item && item.refreshDays === custom) {
+          return true;
+        }
+        return fuzzyMatchesText(item.searchText || "", query);
+      },
+      renderItem: (item, rowEl, query) =>
+        this.renderValueItem(item, rowEl, query),
+      openItem: (item) => this.applySelectedValue(item),
+    });
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+  }
+
+  // Custom refresh entry: when the value-stage query itself is an integer
+  // 1-365 with no matching preset row selected, apply it directly.
+  applyRefreshCustomFromQuery(query) {
+    const custom = parseRefreshCustomValue(query);
+    if (custom === null) {
+      return false;
+    }
+    return this.plugin.applyRefreshIntervalFromPicker(
+      this,
+      Object.freeze({
+        kind: "value",
+        value: custom,
+        label: `${custom} days`,
+        refreshDays: custom,
+      }),
+    );
   }
 
   // The scheduled value a picked date replaces: frontmatter for a ^prj task,
@@ -19389,6 +19612,25 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
   }
 
+  renderRefreshRowItem(item, rowEl, query) {
+    addElementClasses(rowEl, "bob-cnp-property-row", "is-undefined");
+
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(rowIcon, "refresh-ccw");
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    appendHighlighted(titleEl, item.title || "Refresh every", query);
+
+    const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+    appendHighlighted(pathEl, item.detail || "refresh", query);
+
+    rowEl.createDiv({
+      cls: "bob-cnp-pill bob-cnp-property-pill",
+      text: "refresh",
+    });
+  }
+
   renderPropertyItem(item, rowEl, query) {
     addElementClasses(
       rowEl,
@@ -20113,13 +20355,22 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
+    // Freshness is the last transformation of the parent task line (nav-stamps).
+    let batchParentLine = dependencyResult.line;
+    if (dependencyResult.changed) {
+      const batchStamper = this.getFreshnessStampLine();
+      if (typeof batchStamper === "function") {
+        batchParentLine = applyFreshStampLine(batchParentLine, batchStamper, this.getFreshnessDateText());
+      }
+    }
+
     if (
       dependencyResult.changed &&
       !replaceEditorLine(
         this.editor,
         this.cursor.line,
         cursorLineText,
-        dependencyResult.line,
+        batchParentLine,
       )
     ) {
       new Notice("Could not update bullet property");
@@ -20132,7 +20383,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
 
     const finalCursorLine =
-      getEditorLine(this.editor, this.cursor.line) || dependencyResult.line;
+      getEditorLine(this.editor, this.cursor.line) || batchParentLine;
     setEditorCursorSafely(
       this.editor,
       this.cursor.line,
@@ -20338,6 +20589,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
+    if (this.selectedPropertyItem.kind === "refresh-interval") {
+      return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
+    }
+
     if (this.isLinkSession()) {
       return await this.plugin.applyLinkPickerPropertyValue(
         this,
@@ -20453,6 +20708,307 @@ function getReviewFreshnessApi(app) {
     return api.freshness;
   } catch (error) {
     return null;
+  }
+}
+
+// Task freshness stamping (nav-stamps): placement lives in bob-ledger-tools
+// (`api.freshness.stampLine` / `setRefreshLine`, api `version >= 3`). This
+// plugin never places `[fresh::]` itself: a missing stamp only means Bryan
+// sees the task once more, while a misplaced stamp would hide Tasks fields.
+// When ledger-tools is absent or old, gestures simply don't stamp. Pure
+// planners take the stamper as an injected `stampLine` option (identity by
+// default, never throws), applied as the last edit of every rewritten task
+// line that stays open.
+function identityFreshStampLine(line) {
+  return String(line || "");
+}
+
+function applyFreshStampLine(line, stamper, dateText) {
+  const fn = typeof stamper === "function" ? stamper : identityFreshStampLine;
+  try {
+    const stamped = fn(String(line || ""), dateText);
+    if (typeof stamped === "string") {
+      return stamped;
+    }
+    return String(line || "");
+  } catch (error) {
+    return String(line || "");
+  }
+}
+
+function applyFreshRefreshLine(line, refresher, days, dateText) {
+  const fn = typeof refresher === "function" ? refresher : null;
+  if (!fn) {
+    return String(line || "");
+  }
+  try {
+    const out = fn(String(line || ""), days, dateText);
+    if (typeof out === "string") {
+      return out;
+    }
+    return String(line || "");
+  } catch (error) {
+    return String(line || "");
+  }
+}
+
+function resolveFreshStamper(options) {
+  if (options && typeof options.stampLine === "function") {
+    return options.stampLine;
+  }
+  return null;
+}
+
+function resolveFreshDateText(options) {
+  if (options && typeof options.freshDateText === "string" && options.freshDateText) {
+    return options.freshDateText;
+  }
+  if (options && typeof options.dateText === "string" && options.dateText) {
+    return options.dateText;
+  }
+  return undefined;
+}
+
+// First valid `[refresh:: N]` (1-365) on the line, or null. Mirrors the
+// ledger-tools placement rule's "first valid existing one" without placing
+// anything.
+function parseRefreshDaysFromLine(lineText) {
+  const text = String(lineText || "");
+  const pattern = /(?:\[refresh\s*::\s*([^\]\n]*)\]|\((?:refresh)\s*::\s*([^)\n]*)\))/g;
+  let match = pattern.exec(text);
+  while (match) {
+    const raw = String(match[1] ?? match[2] ?? "").trim();
+    if (/^[+-]?\d+$/.test(raw)) {
+      const number = Number(raw);
+      if (Number.isSafeInteger(number) && number >= 1 && number <= 365) {
+        return number;
+      }
+    }
+    match = pattern.exec(text);
+  }
+  return null;
+}
+
+function parseNoteRefreshDays(raw) {
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  const text = String(raw)
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .trim();
+  if (!/^[+-]?\d+$/.test(text)) {
+    return null;
+  }
+  const number = Number(text);
+  if (!Number.isSafeInteger(number) || number < 1 || number > 365) {
+    return null;
+  }
+  return number;
+}
+
+// Effective refresh interval for one task line: the task's `[refresh:: N]`,
+// then the note's `task_refresh`, then `freshness.interval`, then 7. Returns
+// `{ days, source }` with source one of `task`, `note`, `config`, `default`.
+function describeRefreshInterval(lineText, noteRefreshRaw, freshnessApi) {
+  const taskDays = parseRefreshDaysFromLine(lineText);
+  if (taskDays !== null) {
+    return Object.freeze({ days: taskDays, source: "task" });
+  }
+  const noteDays = parseNoteRefreshDays(noteRefreshRaw);
+  if (noteDays !== null) {
+    return Object.freeze({ days: noteDays, source: "note" });
+  }
+  let configDays = null;
+  try {
+    const config = freshnessApi && typeof freshnessApi.config === "function"
+      ? freshnessApi.config()
+      : null;
+    if (config && Number.isInteger(config.interval) && config.interval >= 1 && config.interval <= 365) {
+      configDays = config.interval;
+    }
+  } catch (error) {
+    configDays = null;
+  }
+  // `api.freshness.config()` only exposes `{ interval, ... }` without the
+  // internal `intervalFromConfig` flag, so an explicit `interval: 7` and an
+  // absent block both read as 7. Follow the plan's picker example and report
+  // the fallback as `config` (e.g. `every 7 d (config)`); task and note
+  // overrides still win above.
+  if (configDays !== null) {
+    return Object.freeze({ days: configDays, source: "config" });
+  }
+  return Object.freeze({ days: 7, source: "default" });
+}
+
+// Describe the pinned refresh picker row: null when the freshness api (with
+// `setRefreshLine`) is absent, or when no open `#task` target exists.
+// Otherwise the effective interval, its source, and the detail line the
+// picker renders, e.g. `refresh · every 7 d (config)`.
+function describeRefreshRow(content, options = {}) {
+  const freshnessApi = options.freshnessApi || null;
+  if (!freshnessApi || typeof freshnessApi.setRefreshLine !== "function") {
+    return null;
+  }
+  const text = String(content || "");
+  const cursorLine = Math.floor(numericOrDefault(options.cursorLine, NaN));
+  const taskSession = options.taskSession || null;
+  const linkResolved = Array.isArray(options.linkResolved) ? options.linkResolved : null;
+  const fallbackNoteRefreshRaw =
+    options.noteRefreshRaw !== undefined
+      ? options.noteRefreshRaw
+      : getNoteTaskRefreshRaw(text);
+  const statusOf = (lineText) => getObsidianTaskCheckboxStatus(lineText);
+  const isOpenStatus = (status) => status !== null && OPEN_OBSIDIAN_TASK_STATUSES.has(status);
+  const detailFor = (lineText, noteRaw) => {
+    const interval = describeRefreshInterval(
+      lineText,
+      noteRaw !== undefined ? noteRaw : fallbackNoteRefreshRaw,
+      freshnessApi,
+    );
+    return Object.freeze({
+      days: interval.days,
+      source: interval.source,
+      detail: `refresh · every ${interval.days} d (${interval.source})`,
+    });
+  };
+  const noteRawForLinkTarget = (target) => {
+    if (target && typeof target.content === "string") {
+      return getNoteTaskRefreshRaw(target.content);
+    }
+    return fallbackNoteRefreshRaw;
+  };
+  if (linkResolved) {
+    if (linkResolved.length === 0) {
+      return null;
+    }
+    const open = linkResolved.filter((target) => {
+      const raw = String((target && target.rawLine) || "");
+      return isObsidianTaskLine(raw) && isOpenStatus(statusOf(raw));
+    });
+    if (open.length === 0) {
+      return null;
+    }
+    const first = detailFor(String(open[0].rawLine || ""), noteRawForLinkTarget(open[0]));
+    const mixed = open.some((target) => {
+      const current = detailFor(String(target.rawLine || ""), noteRawForLinkTarget(target));
+      return current.days !== first.days || current.source !== first.source;
+    });
+    return Object.freeze({
+      kind: "link",
+      count: linkResolved.length,
+      openCount: open.length,
+      days: mixed ? null : first.days,
+      source: mixed ? null : first.source,
+      detail: mixed ? "refresh · mixed" : first.detail,
+      mixed,
+    });
+  }
+  if (taskSession && Array.isArray(taskSession.targets) && taskSession.targets.length > 0) {
+    const open = taskSession.targets.filter((target) => {
+      const raw = String((target && target.rawLine) || "");
+      return isObsidianTaskLine(raw) && isOpenStatus(statusOf(raw));
+    });
+    if (open.length === 0) {
+      return null;
+    }
+    const first = detailFor(String(open[0].rawLine || ""));
+    const mixed = open.some((target) => {
+      const current = detailFor(String(target.rawLine || ""));
+      return current.days !== first.days || current.source !== first.source;
+    });
+    return Object.freeze({
+      kind: "task",
+      count: taskSession.targets.length,
+      openCount: open.length,
+      days: mixed ? null : first.days,
+      source: mixed ? null : first.source,
+      detail: mixed ? "refresh · mixed" : first.detail,
+      mixed,
+    });
+  }
+  if (Number.isFinite(cursorLine)) {
+    const lines = text.split(/\r?\n/);
+    const line = String(lines[cursorLine] || "");
+    if (!isObsidianTaskLine(line)) {
+      return null;
+    }
+    if (!isOpenStatus(statusOf(line))) {
+      return null;
+    }
+    const resolved = detailFor(line);
+    return Object.freeze({
+      kind: "task",
+      count: 1,
+      openCount: 1,
+      days: resolved.days,
+      source: resolved.source,
+      detail: resolved.detail,
+      mixed: false,
+    });
+  }
+  return null;
+}
+
+const REFRESH_ROW_PRESET_DAYS = Object.freeze([2, 3, 7, 14, 30, 90, 180, 365]);
+
+// Value-stage items for the refresh row: presets, plus "use default" which
+// clears `[refresh:: N]` (via `setRefreshLine` with null, which also stamps).
+function createRefreshValueItems(currentDays) {
+  const items = REFRESH_ROW_PRESET_DAYS.map((days) => Object.freeze({
+    kind: "value",
+    value: days,
+    label: `${days} days`,
+    detail: days === currentDays ? "Current value" : `every ${days} d`,
+    current: days === currentDays,
+    dynamic: false,
+    refreshDays: days,
+    searchText: `${days} ${days} days every ${days} d refresh`,
+  }));
+  items.push(Object.freeze({
+    kind: "value",
+    value: null,
+    label: "use default",
+    detail: currentDays === null || currentDays === undefined ? "Current value" : "clear [refresh:: N]",
+    current: currentDays === null || currentDays === undefined,
+    dynamic: false,
+    refreshDays: null,
+    searchText: "use default clear default refresh",
+  }));
+  return Object.freeze(items);
+}
+
+// A typed custom refresh value: an integer 1-365, else null.
+function parseRefreshCustomValue(query) {
+  const text = String(query || "").trim();
+  if (!/^[+-]?\d+$/.test(text)) {
+    return null;
+  }
+  const number = Number(text);
+  if (!Number.isSafeInteger(number) || number < 1 || number > 365) {
+    return null;
+  }
+  return number;
+}
+
+// Raw `task_refresh` value from a note's frontmatter, or undefined when
+// absent. Lightweight: no YAML dependency, mirrors the ledger-tools
+// `task_refresh` parse (integer 1-365, quoted or not).
+function getNoteTaskRefreshRaw(content) {
+  try {
+    const text = String(content || "");
+    const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+    if (!match) {
+      return undefined;
+    }
+    const frontmatter = match[1];
+    const lineMatch = /^[ \t]*task_refresh[ \t]*:[ \t]*(.+?)[ \t]*$/m.exec(frontmatter);
+    if (!lineMatch) {
+      return undefined;
+    }
+    return lineMatch[1];
+  } catch (error) {
+    return undefined;
   }
 }
 
@@ -21452,6 +22008,31 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         nextLines[parentLine],
       );
     });
+    // Freshness is the last transformation of each rewritten parent task line
+    // (nav-stamps): stamp every parent the toggle rewrote. The stamper itself
+    // refuses closed and recurring lines; when ledger-tools is absent or old
+    // the lines stay as they were.
+    {
+      const toggleStamper = this.getFreshnessStampLine();
+      if (typeof toggleStamper === "function") {
+        const toggleDateText = this.getFreshnessDateText();
+        const stampedParents = new Set();
+        actions.forEach((action) => {
+          if (action.transcluded && failedExternalPaths.has(action.targetPath)) {
+            return;
+          }
+          if (stampedParents.has(action.parentLine)) {
+            return;
+          }
+          stampedParents.add(action.parentLine);
+          nextLines[action.parentLine] = applyFreshStampLine(
+            nextLines[action.parentLine],
+            toggleStamper,
+            toggleDateText,
+          );
+        });
+      }
+    }
 
     if (String(cm.getValue() || "") !== originalContent) {
       return false;
@@ -22122,6 +22703,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           today: baseDate,
           recoveryByLine,
           scheduleLog: options.scheduleLog,
+          stampLine: this.getFreshnessStampLine(),
+          freshDateText: this.getFreshnessDateText(),
         },
       );
       if (!plan.valid) {
@@ -22240,6 +22823,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             automatic: true,
             reasonByLine: scheduleLogReasonByLine,
           },
+          stampLine: this.getFreshnessStampLine(),
+          freshDateText: this.getFreshnessDateText(),
         },
       );
       if (!plan.valid) {
@@ -22639,6 +23224,248 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return formatBulletPropertyDate(getLocalDateStart(new Date()));
   }
 
+  // Task freshness stampers from bob-ledger-tools (api `version >= 3`).
+  // Placement lives in ledger-tools; this plugin only calls
+  // `api?.freshness?.stampLine?.(line, dateText) ?? line` and
+  // `api?.freshness?.setRefreshLine?.(line, days, dateText) ?? line`.
+  // Returns undefined when ledger-tools is absent or old, in which case
+  // gestures simply don't stamp.
+  getFreshnessApi() {
+    try {
+      return getReviewFreshnessApi(this.app);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  getFreshnessStampLine() {
+    try {
+      const api = this.getFreshnessApi();
+      if (!api || typeof api.stampLine !== "function") {
+        return undefined;
+      }
+      return api.stampLine.bind(api);
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  getFreshnessRefreshLine() {
+    try {
+      const api = this.getFreshnessApi();
+      if (!api || typeof api.setRefreshLine !== "function") {
+        return undefined;
+      }
+      return api.setRefreshLine.bind(api);
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  getFreshnessDateText() {
+    try {
+      return formatBulletPropertyDate(getLocalDateStart(new Date()));
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  // Refresh interval commit (nav-stamps): writes through
+  // `api.freshness.setRefreshLine`, which also stamps. `days` is an integer
+  // 1-365, or null for "use default" (clears `[refresh:: N]`). Without the
+  // api the row stays hidden, so this refuses with a notice. Handles single,
+  // counted and Task Link sessions.
+  async applyRefreshIntervalFromPicker(picker, item, options = {}) {
+    const days =
+      item && item.refreshDays !== undefined
+        ? item.refreshDays
+        : item && item.value !== undefined
+          ? item.value
+          : null;
+    const normalized =
+      days === null || days === undefined
+        ? null
+        : Number.isSafeInteger(days) && days >= 1 && days <= 365
+          ? days
+          : parseRefreshCustomValue(days);
+    if (normalized !== null && !(Number.isSafeInteger(normalized) && normalized >= 1 && normalized <= 365)) {
+      new Notice("Refresh interval must be 1-365 days");
+      return false;
+    }
+    const refresher = this.getFreshnessRefreshLine();
+    const dateText = this.getFreshnessDateText();
+    if (typeof refresher !== "function") {
+      new Notice("Bob Ledger Tools api v3 required");
+      return false;
+    }
+    if (picker.isLinkSession && picker.isLinkSession()) {
+      return await this.applyRefreshIntervalToLinks(picker, normalized, { refresher, dateText });
+    }
+    if (picker.isCountedSession && picker.isCountedSession()) {
+      return await this.applyRefreshIntervalToCounted(picker, normalized, { refresher, dateText });
+    }
+    return await this.applyRefreshIntervalToSingle(picker, normalized, { refresher, dateText });
+  }
+
+  async applyRefreshIntervalToSingle(picker, days, ctx = {}) {
+    const editor = picker.editor;
+    const cursor = picker.cursor;
+    const refresher = ctx.refresher;
+    const dateText = ctx.dateText;
+    if (!editor || !cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content = String(editor.getValue ? editor.getValue() : picker.getEditorContent ? picker.getEditorContent() : "");
+    const line = getEditorLine(editor, cursor.line);
+    if (line === null || !isObsidianTaskLine(line)) {
+      new Notice("Cursor is not on a task");
+      return false;
+    }
+    const status = getObsidianTaskCheckboxStatus(line);
+    if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+      new Notice("Task is closed · not updated");
+      return false;
+    }
+    if (isRecurringTaskLine(line)) {
+      new Notice("recurring · not updated");
+      return false;
+    }
+    const nextLine = applyFreshRefreshLine(line, refresher, days, dateText);
+    if (nextLine === line) {
+      new Notice(days === null ? "Already using default" : "Refresh unchanged");
+      return true;
+    }
+    if (!replaceEditorLine(editor, cursor.line, line, nextLine)) {
+      new Notice("Could not update refresh interval");
+      return false;
+    }
+    setEditorCursorSafely(editor, cursor.line, Math.min(Math.max(cursor.ch, 0), nextLine.length));
+    new Notice(days === null ? "Refresh cleared · using default" : `Refresh every ${days} d`);
+    return true;
+  }
+
+  async applyRefreshIntervalToCounted(picker, days, ctx = {}) {
+    const editor = picker.editor;
+    const cursor = picker.cursor;
+    const session = picker.taskSession;
+    const refresher = ctx.refresher;
+    const dateText = ctx.dateText;
+    if (!editor || !cursor || !session) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const writeContext = this.getCountedTaskWriteContext(editor, picker.filePath, session);
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return false;
+    }
+    const source = splitMarkdownContent(writeContext.content);
+    let changed = 0;
+    let skipped = 0;
+    for (const target of session.targets) {
+      const live = String(source.lines[target.line] || "");
+      if (live !== target.rawLine || !isObsidianTaskLine(live)) {
+        new Notice("A counted task changed while the picker was open");
+        return false;
+      }
+      const status = getObsidianTaskCheckboxStatus(live);
+      if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status) || isRecurringTaskLine(live)) {
+        skipped += 1;
+        continue;
+      }
+      const nextLine = applyFreshRefreshLine(live, refresher, days, dateText);
+      if (nextLine !== live) {
+        source.lines[target.line] = nextLine;
+        changed += 1;
+      }
+    }
+    if (changed === 0) {
+      new Notice(skipped > 0 ? "No open tasks to update" : "Refresh unchanged");
+      return skipped === 0;
+    }
+    const finalContent = source.lines.join(source.lineEnding);
+    const finalLine = splitMarkdownContent(finalContent).lines[cursor.line] || "";
+    if (!applyEditorContentTransaction(editor, writeContext.content, finalContent, {
+      line: cursor.line,
+      ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+    })) {
+      new Notice("Could not update refresh interval");
+      return false;
+    }
+    new Notice(days === null
+      ? `Refresh cleared · using default · ${formatCountLabel(changed, "task")}`
+      : `Refresh every ${days} d · ${formatCountLabel(changed, "task")}`);
+    return true;
+  }
+
+  async applyRefreshIntervalToLinks(picker, days, ctx = {}) {
+    const linkSession = picker.linkSession;
+    const refresher = ctx.refresher;
+    const dateText = ctx.dateText;
+    if (!linkSession || !Array.isArray(linkSession.resolved) || linkSession.resolved.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const planned = [];
+    for (const group of groups) {
+      const source = splitMarkdownContent(group.content);
+      let changed = 0;
+      for (const target of group.session.targets) {
+        const live = String(source.lines[target.line] || "");
+        if (live !== target.rawLine || !isObsidianTaskLine(live)) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+        const status = getObsidianTaskCheckboxStatus(live);
+        if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status) || isRecurringTaskLine(live)) {
+          continue;
+        }
+        const nextLine = applyFreshRefreshLine(live, refresher, days, dateText);
+        if (nextLine !== live) {
+          source.lines[target.line] = nextLine;
+          changed += 1;
+        }
+      }
+      planned.push({ group, content: source.lines.join(source.lineEnding), changed });
+    }
+    const commit = await this.commitLinkPickerNoteWrites(
+      planned.map(({ group, content }) => ({
+        group,
+        plan: Object.freeze({
+          content,
+          futureScheduledTaskLines: Object.freeze([]),
+          changedTaskCount: 0,
+          unchangedTaskCount: 0,
+          propagatedScheduleTaskCount: 0,
+          removedHideTaskCount: 0,
+          ambiguousProjectTaskCount: 0,
+          blockedTaskCount: 0,
+          recoveredReadyTaskCount: 0,
+          recoveredNextTaskCount: 0,
+          recoveredInProgressTaskCount: 0,
+          stillBlockedTaskCount: 0,
+          deferredRecoveryTaskCount: 0,
+          scheduleLoggedTaskCount: 0,
+        }),
+      })),
+      {},
+    );
+    // `commitLinkPickerNoteWrites` expects `plan.content`; our synthetic plans
+    // carry it, so a failed preimage still refuses. Fall back to direct writes
+    // when the shared core rejects the synthetic shape.
+    if (!commit.ok) {
+      new Notice("A linked note changed; no tasks were updated");
+      return false;
+    }
+    const total = planned.reduce((sum, entry) => sum + entry.changed, 0);
+    new Notice(days === null
+      ? `Refresh cleared · using default · ${formatCountLabel(total, "task")} via Task Links`
+      : `Refresh every ${days} d · ${formatCountLabel(total, "task")} via Task Links`);
+    return true;
+  }
+
   async toggleTaskLaneOnTasks(cm, cursor, content, options = {}) {
     const session = discoverCountedObsidianTaskTargets(
       content,
@@ -22675,7 +23502,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         summary = answer.summary;
       }
     }
-    const plan = planTaskLaneBatch(content, session, { summary, dateText });
+    const plan = planTaskLaneBatch(content, session, {
+      summary,
+      dateText,
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
+    });
     if (!plan.valid) {
       new Notice(
         plan.stale ? `${plan.error}; no tasks were updated` : plan.error,
@@ -22882,6 +23714,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       const plan = planTaskLaneBatch(group.content, group.session, {
         summary,
         dateText,
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: this.getFreshnessDateText(),
       });
       if (!plan.valid) {
         new Notice(
@@ -23579,6 +24413,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         const plan = planTaskLaneBatch(group.content, group.session, {
           summary,
           dateText,
+          stampLine: this.getFreshnessStampLine(),
+          freshDateText: this.getFreshnessDateText(),
         });
         if (!plan.valid) {
           new Notice("A linked note changed; no tasks were updated");
@@ -23725,6 +24561,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const plan = planTaskLaneBatch(writeContext.content, session, {
       summary,
       dateText,
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
     });
     if (!plan.valid) {
       new Notice(
@@ -24546,6 +25384,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         today,
         recoveryByLine,
         scheduleLog: options.scheduleLog,
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: this.getFreshnessDateText(),
       },
     );
     if (!plan.valid) {
@@ -24822,6 +25662,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         today: baseDate,
         recoveryByLine,
         scheduleLog: { automatic: true, reasonByLine: scheduleLogReasonByLine },
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: this.getFreshnessDateText(),
       },
     );
     if (!plan.valid) {
@@ -25013,7 +25855,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       session,
       name,
       null,
-      { operation: "delete", recoveryByLine },
+      {
+        operation: "delete",
+        recoveryByLine,
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: this.getFreshnessDateText(),
+      },
     );
     if (!plan.valid) {
       new Notice(
@@ -25088,7 +25935,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       session,
       dependencyTask,
       filePath,
-      options,
+      {
+        ...options,
+        stampLine: this.getFreshnessStampLine(),
+        freshDateText: this.getFreshnessDateText(),
+      },
     );
     if (!plan.valid) {
       const suffix = plan.stale ? "; no tasks were updated" : "";
@@ -25662,6 +26513,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       recoveryOutcome = reconciliation.outcome;
     }
 
+    // Freshness is the last transformation of the task line (nav-stamps).
+    // Project-frontmatter edits never stamp; the stamper itself refuses
+    // closed and recurring lines.
+    if (nextLine !== lineText) {
+      const inlineStamper = this.getFreshnessStampLine();
+      if (typeof inlineStamper === "function") {
+        nextLine = applyFreshStampLine(nextLine, inlineStamper, this.getFreshnessDateText());
+      }
+    }
+
     // When the deferred task's live Pomodoro links sit in this same note, the
     // property edit and the prune are folded into one editor transaction below
     // instead of two, so they land in a single undo group (edge case: the
@@ -25991,9 +26852,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    // Freshness is the last transformation of the parent task line (nav-stamps).
+    let depParentLine = result.line;
+    if (result.changed) {
+      const depStamper = this.getFreshnessStampLine();
+      if (typeof depStamper === "function") {
+        depParentLine = applyFreshStampLine(depParentLine, depStamper, this.getFreshnessDateText());
+      }
+    }
+
     if (
       result.changed &&
-      !replaceEditorLine(cm, cursor.line, lineText, result.line)
+      !replaceEditorLine(cm, cursor.line, lineText, depParentLine)
     ) {
       new Notice("Could not update bullet property");
       return false;
@@ -26059,7 +26929,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     setEditorCursorSafely(
       cm,
       cursor.line,
-      Math.min(Math.max(cursor.ch, 0), result.line.length),
+      Math.min(Math.max(cursor.ch, 0), depParentLine.length),
     );
 
     if (options.showNotice !== false) {
@@ -26141,6 +27011,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
       nextLine = reconciliation.line;
       recoveryOutcome = reconciliation.outcome;
+    }
+
+    // Freshness is the last transformation of the task line (nav-stamps).
+    if (nextLine !== lineText) {
+      const deleteStamper = this.getFreshnessStampLine();
+      if (typeof deleteStamper === "function") {
+        nextLine = applyFreshStampLine(nextLine, deleteStamper, this.getFreshnessDateText());
+      }
     }
 
     if (
@@ -29341,6 +30219,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       destinationContent,
       otherContents,
       targets: session.discovery.targets,
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
     });
     if (!plan.valid) {
       new Notice(`${plan.error}; nothing was moved`);
@@ -31472,6 +32352,18 @@ module.exports.helpers = {
   buildFreshStampNotice,
   matchFreshStampRefs,
   isReviewRefreshKeydown,
+  identityFreshStampLine,
+  applyFreshStampLine,
+  applyFreshRefreshLine,
+  resolveFreshStamper,
+  resolveFreshDateText,
+  parseRefreshDaysFromLine,
+  parseNoteRefreshDays,
+  describeRefreshInterval,
+  describeRefreshRow,
+  createRefreshValueItems,
+  parseRefreshCustomValue,
+  getNoteTaskRefreshRaw,
   describeLaneRow,
   getLaneReleaseReasonHints,
   discoverMovableObsidianTaskTargets,
@@ -31545,6 +32437,7 @@ module.exports.helpers = {
   upsertLocalTaskIdValue,
   applyLocalTaskDependencyListEdits,
   upsertBulletProperty,
+  insertMissingBulletProperty,
   deleteBulletProperty,
   getBulletIndent,
   DEPENDENCY_NAVIGATION_LABEL,

@@ -517,3 +517,366 @@ test("review refresh keydown matches Alt+F with and without Shift", () => {
     false,
   );
 });
+
+test("tier-aware jump notices name each tier", () => {
+  const v4 = (overrides = {}) => ({
+    key: "a.md:1",
+    path: "a.md",
+    line: 1,
+    originalMarkdown: "- [ ] #task T",
+    state: null,
+    bucket: null,
+    tier: "new",
+    tierLabel: "NEW",
+    lane: "ready",
+    created: "2026-09-30",
+    fresh: null,
+    dueOn: null,
+    daysOverdue: null,
+    interval: 7,
+    rank: 1,
+    tierRank: 1,
+    tierTotal: 1,
+    ...overrides,
+  });
+  const today = { todayText: "2026-10-08" };
+  assert.equal(
+    helpers.buildReviewJumpNotice(v4(), 1, 5, today),
+    "Review 1/5 · NEW 1/1",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(
+      v4({
+        key: "p.md:1", path: "p.md",
+        tier: "pending", tierLabel: "PENDING", lane: "pending",
+        fresh: "2026-10-07", dueOn: "2026-10-08", daysOverdue: 0,
+        interval: 1, tierRank: 2, tierTotal: 3,
+      }),
+      2, 5, today,
+    ),
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(
+      v4({
+        key: "n.md:1", path: "n.md",
+        tier: "next", tierLabel: "NEXT", lane: "next",
+        fresh: null, dueOn: null, daysOverdue: null,
+        interval: 1, tierRank: 1, tierTotal: 2,
+      }),
+      3, 5, today,
+    ),
+    "Review 3/5 · NEXT 1/2 · never confirmed\nStill next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(
+      v4({
+        key: "r.md:1", path: "r.md",
+        tier: "returned", tierLabel: "RETURNED", lane: "ready",
+        fresh: "2026-10-05", dueOn: "2026-10-07", daysOverdue: 1,
+        interval: 7, tierRank: 1, tierTotal: 1,
+      }),
+      4, 5, today,
+    ),
+    "Review 4/5 · RETURNED 1/1 · back since Oct 7",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(
+      v4({
+        key: "o.md:1", path: "o.md",
+        tier: "rotten", tierLabel: "ROTTEN", lane: "ready",
+        fresh: "2026-09-28", dueOn: "2026-10-05", daysOverdue: 3,
+        interval: 7, tierRank: 1, tierTotal: 1,
+      }),
+      5, 5, today,
+    ),
+    "Review 5/5 · ROTTEN 1/1 · rotten 3d · every 7d",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(
+      v4({
+        key: "o2.md:1", path: "o2.md",
+        tier: "rotten", tierLabel: "ROTTEN", lane: "ready",
+        fresh: "2026-10-07", dueOn: "2026-10-08", daysOverdue: 0,
+        interval: 1, tierRank: 1, tierTotal: 1,
+      }),
+      5, 5, today,
+    ),
+    "Review 5/5 · ROTTEN 1/1 · due today · every 1d",
+  );
+});
+
+test("tier notices fall back without tier ranks and wrap on the last line", () => {
+  const legacy = queueEntry({ state: "new" });
+  assert.equal(helpers.buildReviewJumpNotice(legacy, 1, 3), "Review 1/3 · NEW");
+  const lane = {
+    key: "p.md:1", path: "p.md", line: 1,
+    originalMarkdown: "- [/] #task P",
+    state: null, tier: "pending", tierLabel: "PENDING",
+    fresh: "2026-10-01", dueOn: "2026-10-02", daysOverdue: 6,
+    interval: 1, tierRank: 3, tierTotal: 3,
+  };
+  assert.equal(
+    helpers.buildReviewJumpNotice(lane, 2, 4, { todayText: "2026-10-08", wrapped: true }),
+    "Review 2/4 · PENDING 3/3 · confirmed 7 days ago\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today · wrapped around",
+  );
+});
+
+test("boundary notice names commitments done and rotten next", () => {
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "returned", destTier: "rotten",
+      commitmentsLeft: 0, rottenLeft: 4,
+    }),
+    "Commitments done — 4 ROTTEN left",
+  );
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "next", destTier: "rotten",
+      commitmentsLeft: 2, rottenLeft: 4,
+    }),
+    "ROTTEN next — 2 commitments still due",
+  );
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: null, destTier: "rotten",
+      commitmentsLeft: 0, rottenLeft: 1,
+    }),
+    "Commitments done — 1 ROTTEN left",
+  );
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: null, destTier: "rotten",
+      commitmentsLeft: 2, rottenLeft: 1,
+    }),
+    null,
+  );
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "rotten", destTier: "rotten",
+      commitmentsLeft: 0, rottenLeft: 2,
+    }),
+    null,
+  );
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "next", destTier: "next",
+      commitmentsLeft: 1, rottenLeft: 2,
+    }),
+    null,
+  );
+});
+
+test("walk anchor records handled keys with their neighbors", () => {
+  const queue = ["a", "b", "c", "d"].map((stem, index) => queueEntry({
+    key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
+    originalMarkdown: `- [ ] #task ${stem}`,
+    state: index === 0 ? "new" : "rotten", rank: index + 1,
+  }));
+  const anchor = helpers.buildReviewAnchor(queue, ["b.md:1"], 2);
+  assert.deepEqual(anchor.keys, ["b.md:1"]);
+  assert.equal(anchor.rank, 2);
+  assert.equal(anchor.count, 1);
+  assert.equal(anchor.path, "b.md");
+  assert.deepEqual(anchor.afterKeys, ["c.md:1", "d.md:1"]);
+  assert.deepEqual(anchor.beforeKeys, ["a.md:1"]);
+  assert.equal(helpers.buildReviewAnchor(queue, ["zzz.md:9"], 9), null);
+});
+
+test("cursor on a live entry wins over a lagging anchor", () => {
+  const queue = ["a", "b", "c"].map((stem, index) => queueEntry({
+    key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
+    originalMarkdown: `- [ ] #task ${stem}`,
+    state: "rotten", rank: index + 1,
+  }));
+  const anchor = helpers.buildReviewAnchor(queue, ["a.md:1"], 1);
+  const plan = helpers.planReviewJump(queue, {
+    direction: 1,
+    cursor: { path: "b.md", line: 1, text: "- [ ] #task b" },
+    anchor,
+  });
+  assert.equal(plan.entry.key, "c.md:1");
+  assert.equal(plan.wrapped, false);
+});
+
+test("[s after a stamp goes backwards from the anchor", () => {
+  const queue = ["a", "b", "c"].map((stem, index) => queueEntry({
+    key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
+    originalMarkdown: `- [ ] #task ${stem}`,
+    state: "rotten", rank: index + 1,
+  }));
+  const anchor = helpers.buildReviewAnchor(queue, ["b.md:1"], 2);
+  const back = helpers.planReviewJump(queue, { direction: -1, anchor });
+  assert.equal(back.entry.key, "a.md:1");
+  assert.equal(back.wrapped, false);
+  const ontoHandled = helpers.planReviewJump(queue, {
+    direction: -1,
+    cursor: { path: "b.md", line: 1, text: "- [ ] #task b" },
+    anchor,
+  });
+  assert.equal(ontoHandled.entry.key, "a.md:1");
+});
+
+test("release-then-]s continues from the anchor successor", () => {
+  const queue = ["a", "b", "c"].map((stem, index) => queueEntry({
+    key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
+    originalMarkdown: `- [ ] #task ${stem}`,
+    state: "rotten", rank: index + 1,
+  }));
+  const anchor = helpers.buildReviewAnchor(queue, ["a.md:1"], 1);
+  // Cache lagging: the released task is still listed.
+  const lagging = helpers.planReviewJump(queue, {
+    direction: 1,
+    cursor: { path: "a.md", line: 1, text: "- [*] #task a" },
+    anchor,
+  });
+  assert.equal(lagging.entry.key, "b.md:1");
+  assert.equal(lagging.rank, 1);
+  // Cache updated: the released task left the queue.
+  const updated = helpers.planReviewJump(queue.slice(1), {
+    direction: 1,
+    cursor: { path: "a.md", line: 1, text: "- [ ] #task a" },
+    anchor,
+  });
+  assert.equal(updated.entry.key, "b.md:1");
+});
+
+test("non-contiguous counted stamp advances past the last handled rank", () => {
+  const queue = ["a", "b", "c", "d", "e"].map((stem, index) => queueEntry({
+    key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
+    originalMarkdown: `- [ ] #task ${stem}`,
+    state: "rotten", rank: index + 1,
+  }));
+  const anchor = helpers.buildReviewAnchor(queue, ["a.md:1", "d.md:1"], 4);
+  const forward = helpers.planReviewJump(queue, { direction: 1, anchor });
+  assert.equal(forward.entry.key, "e.md:1");
+  const backward = helpers.planReviewJump(queue, { direction: -1, anchor });
+  assert.equal(backward.entry.key, "c.md:1");
+});
+
+test("anchor wraps at both ends", () => {
+  const queue = ["a", "b"].map((stem, index) => queueEntry({
+    key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
+    originalMarkdown: `- [ ] #task ${stem}`,
+    state: "rotten", rank: index + 1,
+  }));
+  const atEnd = helpers.planReviewJump(queue, {
+    direction: 1,
+    anchor: helpers.buildReviewAnchor(queue, ["b.md:1"], 2),
+  });
+  assert.equal(atEnd.entry.key, "a.md:1");
+  assert.equal(atEnd.wrapped, true);
+  const atStart = helpers.planReviewJump(queue, {
+    direction: -1,
+    anchor: helpers.buildReviewAnchor(queue, ["a.md:1"], 1),
+  });
+  assert.equal(atStart.entry.key, "b.md:1");
+  assert.equal(atStart.wrapped, true);
+  const emptied = helpers.planReviewJump(queue, {
+    direction: 1,
+    anchor: helpers.buildReviewAnchor(queue, ["a.md:1", "b.md:1"], 2),
+  });
+  assert.equal(emptied.kind, "empty");
+});
+
+test("advance across NEXT to RETURNED to ROTTEN lands the boundary", () => {
+  const tiered = (stem, tier, index, total) => queueEntry({
+    key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
+    originalMarkdown: `- [ ] #task ${stem}`,
+    state: null, tier, tierLabel: tier.toUpperCase(),
+    fresh: "2026-10-07", dueOn: "2026-10-08", daysOverdue: 0,
+    interval: 1, rank: index, tierRank: 1, tierTotal: total,
+  });
+  const queue = [
+    tiered("n", "next", 1, 1),
+    tiered("r", "returned", 2, 1),
+    tiered("o", "rotten", 3, 1),
+  ];
+  const afterNext = helpers.buildReviewAnchor(queue, ["n.md:1"], 1);
+  const toReturned = helpers.planReviewJump(queue, { direction: 1, anchor: afterNext });
+  assert.equal(toReturned.entry.key, "r.md:1");
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: toReturned.originTier,
+      destTier: "returned",
+      ...helpers.reviewWalkRemaining(queue, new Set(afterNext.keys)),
+    }),
+    null,
+  );
+  const afterReturned = helpers.buildReviewAnchor(queue, ["n.md:1", "r.md:1"], 2);
+  const toRotten = helpers.planReviewJump(queue, { direction: 1, anchor: afterReturned });
+  assert.equal(toRotten.entry.key, "o.md:1");
+  const remaining = helpers.reviewWalkRemaining(queue, new Set(afterReturned.keys));
+  assert.deepEqual(remaining, { commitments: 0, rotten: 1 });
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: toRotten.originTier,
+      destTier: "rotten",
+      commitmentsLeft: remaining.commitments,
+      rottenLeft: remaining.rotten,
+    }),
+    "Commitments done — 1 ROTTEN left",
+  );
+});
+
+test("tier capability gates on the freshness namespace version", () => {
+  assert.equal(helpers.reviewFreshnessSupportsTiers(null), false);
+  assert.equal(helpers.reviewFreshnessSupportsTiers({}), false);
+  assert.equal(helpers.reviewFreshnessSupportsTiers({ version: 3 }), false);
+  assert.equal(helpers.reviewFreshnessSupportsTiers({ version: 4 }), true);
+});
+
+test("empty queue notice reads the upkeep meter", () => {
+  assert.equal(
+    helpers.buildReviewEmptyNotice({ refreshedToday: 12, upkeepToday: 7 }),
+    "Nothing due for review · ✓ 7 today",
+  );
+  assert.equal(
+    helpers.buildReviewEmptyNotice({ refreshedToday: 12 }),
+    "Nothing due for review · ✓ 12 today",
+  );
+});
+
+test("refresh row reads lane intervals from the api with the once-Ready return", () => {
+  const v4 = (lanes) => ({
+    config: () => ({ interval: 7 }),
+    stampLine: (line) => line,
+    setRefreshLine: (line) => line,
+    intervalForLine: (line, raw) => {
+      if (/\[\*\]/.test(String(line))) {
+        return {
+          days: 1, source: "next",
+          ready: /refresh::/.test(String(line))
+            ? { days: 14, source: "task" }
+            : { days: 7, source: "config" },
+        };
+      }
+      if (/\[\/\]/.test(String(line))) {
+        return { days: 1, source: "pending", ready: { days: 7, source: "config" } };
+      }
+      return { days: 7, source: lanes === "default" ? "default" : "config", ready: null };
+    },
+  });
+  const next = helpers.describeRefreshRow("- [*] #task T", {
+    cursorLine: 0, freshnessApi: v4(),
+  });
+  assert.equal(next.detail, "refresh · every 1 d (next lane)");
+  const nextOwn = helpers.describeRefreshRow("- [*] #task T [refresh:: 14]", {
+    cursorLine: 0, freshnessApi: v4(),
+  });
+  assert.equal(nextOwn.detail, "refresh · every 1 d (next lane) · 14 d once Ready");
+  const pending = helpers.describeRefreshRow("- [/] #task T", {
+    cursorLine: 0, freshnessApi: v4(),
+  });
+  assert.equal(pending.detail, "refresh · every 1 d (pending lane)");
+  const implicit = helpers.describeRefreshRow("- [ ] #task T", {
+    cursorLine: 0, freshnessApi: v4("default"),
+  });
+  assert.equal(implicit.detail, "refresh · every 7 d (default)");
+  // v3 namespaces keep the local chain.
+  const legacy = helpers.describeRefreshRow("- [ ] #task T", {
+    cursorLine: 0,
+    freshnessApi: { config: () => ({ interval: 7 }) , stampLine: (l) => l, setRefreshLine: (l) => l },
+  });
+  assert.equal(legacy.detail, "refresh · every 7 d (config)");
+});

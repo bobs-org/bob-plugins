@@ -23932,6 +23932,148 @@ function getReviewFreshnessApi(app) {
   }
 }
 
+// Tier-aware walk behavior (ledger-tools freshness namespace v4) requires
+// `api.freshness.version >= 4`. With v3 the walk still works, but notices
+// keep the legacy state text and the refresh row keeps the local chain.
+function reviewFreshnessSupportsTiers(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) && Number(freshnessApi.version) >= 4
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+// Machine walk tier for a queue entry: v4 `tier`, else the legacy v3
+// `state` mapping (`resurfaced` reads as the RETURNED tier). Returns "".
+function reviewEntryMachineTier(entry) {
+  const tier =
+    entry && typeof entry.tier === "string"
+      ? entry.tier.trim().toLowerCase()
+      : "";
+  if (
+    tier === "new" ||
+    tier === "pending" ||
+    tier === "next" ||
+    tier === "returned" ||
+    tier === "rotten"
+  ) {
+    return tier;
+  }
+  const state =
+    entry && typeof entry.state === "string"
+      ? entry.state.trim().toLowerCase()
+      : "";
+  if (state === "new") {
+    return "new";
+  }
+  if (state === "rotten") {
+    return "rotten";
+  }
+  if (state === "resurfaced") {
+    return "returned";
+  }
+  return "";
+}
+
+// Display tier for a queue entry: v4 `tierLabel`, else the machine tier.
+function reviewEntryTierLabel(entry) {
+  if (entry && typeof entry.tierLabel === "string" && entry.tierLabel) {
+    return entry.tierLabel;
+  }
+  const tier = reviewEntryMachineTier(entry);
+  return tier ? tier.toUpperCase() : "";
+}
+
+// True for v4 tiered entries (they carry per-tier ranks).
+function reviewEntryHasTierRanks(entry) {
+  return (
+    Boolean(entry) &&
+    Number.isInteger(entry.tierRank) &&
+    Number.isInteger(entry.tierTotal)
+  );
+}
+
+function reviewIsCommitmentTier(tier) {
+  return (
+    tier === "new" ||
+    tier === "pending" ||
+    tier === "next" ||
+    tier === "returned"
+  );
+}
+
+// Canonical `YYYY-MM-DD` as a day number, or null.
+function reviewParseDayNumber(text) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(text || "").trim());
+  if (!match) {
+    return null;
+  }
+  const day = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  if (!Number.isFinite(day)) {
+    return null;
+  }
+  return Math.round(day / 86400000);
+}
+
+// `2026-10-07` -> `Oct 7`, else the raw text.
+function reviewShortDate(text) {
+  const months = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  ];
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(text || "").trim());
+  if (!match) {
+    return String(text || "");
+  }
+  const month = months[Number(match[2]) - 1];
+  if (!month) {
+    return String(text || "");
+  }
+  return `${month} ${Number(match[3])}`;
+}
+
+// Lane detail for a PENDING/NEXT entry: `never confirmed`,
+// `confirmed yesterday`, or `confirmed {n} days ago`, from the age of
+// `fresh`. Prefers an explicit `todayText`, else derives the age from
+// `daysOverdue + interval` (`dueOn = fresh + interval`).
+function reviewLaneConfirmedDetail(entry, todayText) {
+  const fresh =
+    entry && typeof entry.fresh === "string" && entry.fresh
+      ? entry.fresh
+      : null;
+  if (!fresh) {
+    return "never confirmed";
+  }
+  const freshDay = reviewParseDayNumber(fresh);
+  const todayDay = reviewParseDayNumber(todayText);
+  let age = null;
+  if (freshDay !== null && todayDay !== null) {
+    age = todayDay - freshDay;
+  } else if (
+    entry &&
+    Number.isFinite(entry.daysOverdue) &&
+    Number.isInteger(entry.interval)
+  ) {
+    age = Math.max(0, Math.floor(entry.daysOverdue)) + entry.interval;
+  }
+  if (age === null || !Number.isFinite(age)) {
+    return `confirmed ${fresh}`;
+  }
+  if (age <= 0) {
+    return "confirmed today";
+  }
+  if (age === 1) {
+    return "confirmed yesterday";
+  }
+  return `confirmed ${age} days ago`;
+}
+
 // Task freshness stamping (nav-stamps): placement lives in bob-ledger-tools
 // (`api.freshness.stampLine` / `setRefreshLine`, api `version >= 3`). This
 // plugin never places `[fresh::]` itself: a missing stamp only means Bryan
@@ -24032,13 +24174,50 @@ function parseNoteRefreshDays(raw) {
 // then the note's `task_refresh`, then `freshness.interval`, then 7. Returns
 // `{ days, source }` with source one of `task`, `note`, `config`, `default`.
 function describeRefreshInterval(lineText, noteRefreshRaw, freshnessApi) {
+  // v4 ledger-tools exposes the lane-aware chain (with the Ready-chain
+  // interval the task returns to after release) as
+  // `api.freshness.intervalForLine`, so nav never re-implements it. v3
+  // namespaces keep the local chain below.
+  try {
+    if (
+      freshnessApi &&
+      typeof freshnessApi.intervalForLine === "function"
+    ) {
+      const resolved = freshnessApi.intervalForLine(
+        String(lineText || ""),
+        noteRefreshRaw,
+      );
+      if (
+        resolved &&
+        Number.isInteger(resolved.days) &&
+        resolved.days >= 1 &&
+        resolved.days <= 365 &&
+        typeof resolved.source === "string"
+      ) {
+        const ready =
+          resolved.ready && Number.isInteger(resolved.ready.days)
+            ? Object.freeze({
+              days: resolved.ready.days,
+              source: resolved.ready.source,
+            })
+            : null;
+        return Object.freeze({
+          days: resolved.days,
+          source: resolved.source,
+          ready,
+        });
+      }
+    }
+  } catch (error) {
+    // Fall through to the local chain.
+  }
   const taskDays = parseRefreshDaysFromLine(lineText);
   if (taskDays !== null) {
-    return Object.freeze({ days: taskDays, source: "task" });
+    return Object.freeze({ days: taskDays, source: "task", ready: null });
   }
   const noteDays = parseNoteRefreshDays(noteRefreshRaw);
   if (noteDays !== null) {
-    return Object.freeze({ days: noteDays, source: "note" });
+    return Object.freeze({ days: noteDays, source: "note", ready: null });
   }
   let configDays = null;
   try {
@@ -24057,9 +24236,9 @@ function describeRefreshInterval(lineText, noteRefreshRaw, freshnessApi) {
   // the fallback as `config` (e.g. `every 7 d (config)`); task and note
   // overrides still win above.
   if (configDays !== null) {
-    return Object.freeze({ days: configDays, source: "config" });
+    return Object.freeze({ days: configDays, source: "config", ready: null });
   }
-  return Object.freeze({ days: 7, source: "default" });
+  return Object.freeze({ days: 7, source: "default", ready: null });
 }
 
 // Describe the pinned refresh picker row: null when the freshness api (with
@@ -24087,6 +24266,20 @@ function describeRefreshRow(content, options = {}) {
       noteRaw !== undefined ? noteRaw : fallbackNoteRefreshRaw,
       freshnessApi,
     );
+    // Lane tasks read their lane interval, with the task's own refresh
+    // kept as the once-Ready return value, e.g.
+    // `refresh · every 1 d (next lane) · 14 d once Ready`.
+    if (interval.source === "pending" || interval.source === "next") {
+      let detail = `refresh · every ${interval.days} d (${interval.source} lane)`;
+      if (interval.ready && interval.ready.source === "task") {
+        detail += ` · ${interval.ready.days} d once Ready`;
+      }
+      return Object.freeze({
+        days: interval.days,
+        source: interval.source,
+        detail,
+      });
+    }
     return Object.freeze({
       days: interval.days,
       source: interval.source,
@@ -24244,57 +24437,201 @@ function reviewQueueEntryKey(entry) {
   return `${path}:${line}`;
 }
 
+// Walk anchor: where the walk is. Recorded on every successful landing
+// and every Alt+F / Alt+Shift+F stamp. Holds the handled entry keys, the
+// handled task's path/line/tier, and the ordered keys after and before
+// them in the queue they came from, so `]s` after an Alt+N release,
+// Ctrl+Shift+Enter, or a roll continues from the successor (and `[s` from
+// the predecessor) instead of restarting at rank 1.
+function buildReviewAnchor(queue, handledKeys, fallbackRank) {
+  const list = Array.isArray(queue) ? queue.slice() : [];
+  const keys = list.map((entry) => reviewQueueEntryKey(entry));
+  const handled = new Set(Array.isArray(handledKeys) ? handledKeys : []);
+  const positions = [];
+  keys.forEach((key, index) => {
+    if (handled.has(key)) {
+      positions.push(index);
+    }
+  });
+  if (positions.length === 0) {
+    return null;
+  }
+  const at = Math.max(...positions);
+  const holder = list[at];
+  const afterKeys = keys.slice(at + 1);
+  const beforeKeys = keys.slice(0, at).filter((key) => !handled.has(key));
+  const rank =
+    holder && Number.isInteger(holder.rank)
+      ? holder.rank
+      : Number.isInteger(fallbackRank)
+        ? fallbackRank
+        : at + 1;
+  return Object.freeze({
+    keys: Object.freeze(Array.from(handled)),
+    rank,
+    count: handled.size,
+    path: holder && typeof holder.path === "string" ? holder.path : "",
+    line: holder && Number.isInteger(holder.line) ? holder.line : null,
+    tier: reviewEntryMachineTier(holder) || null,
+    afterKeys: Object.freeze(afterKeys),
+    beforeKeys: Object.freeze(beforeKeys),
+  });
+}
+
+// Remaining walk counts after excluding handled keys: `{ commitments,
+// rotten }`. Commitments are the NEW/PENDING/NEXT/RETURNED tiers.
+function reviewWalkRemaining(queue, excludedKeys) {
+  const excluded =
+    excludedKeys instanceof Set
+      ? excludedKeys
+      : new Set(Array.isArray(excludedKeys) ? excludedKeys : []);
+  let commitments = 0;
+  let rotten = 0;
+  for (const entry of Array.isArray(queue) ? queue : []) {
+    if (excluded.has(reviewQueueEntryKey(entry))) {
+      continue;
+    }
+    const tier = reviewEntryMachineTier(entry);
+    if (reviewIsCommitmentTier(tier)) {
+      commitments += 1;
+    } else if (tier === "rotten") {
+      rotten += 1;
+    }
+  }
+  return Object.freeze({ commitments, rotten });
+}
+
+// Boundary line prepended when a forward step leaves a commitment tier
+// for ROTTEN, or null when no boundary applies:
+// - `Commitments done \u2014 {n} ROTTEN left` when none remain;
+// - `ROTTEN next \u2014 {m} commitments still due` otherwise.
+// A step from an unknown origin only shows the done line (when zero
+// remain); a step within ROTTEN never shows one.
+function buildReviewBoundaryNotice(options = {}) {
+  const dest = String(options.destTier || "").trim().toLowerCase();
+  if (dest !== "rotten") {
+    return null;
+  }
+  const origin =
+    options.originTier === null ||
+    options.originTier === undefined ||
+    String(options.originTier).trim() === ""
+      ? null
+      : String(options.originTier).trim().toLowerCase();
+  if (origin !== null && !reviewIsCommitmentTier(origin)) {
+    return null;
+  }
+  const commitments = Number.isInteger(options.commitmentsLeft)
+    ? options.commitmentsLeft
+    : null;
+  const rotten = Number.isInteger(options.rottenLeft)
+    ? options.rottenLeft
+    : null;
+  if (commitments === null) {
+    return null;
+  }
+  if (commitments === 0) {
+    return `Commitments done \u2014 ${rotten === null ? 0 : rotten} ROTTEN left`;
+  }
+  if (origin === null) {
+    return null;
+  }
+  return `ROTTEN next \u2014 ${commitments} commitments still due`;
+}
+
+// Resolve one anchor step over `remaining` (the queue minus the handled
+// keys). Forward takes the first surviving `afterKeys` entry, backward
+// the last surviving `beforeKeys` entry, wrapping to the first/last
+// remaining entry. Ranks count over `remaining` (1-based).
+function resolveReviewAnchorTarget(remaining, anchor, direction) {
+  const rest = Array.isArray(remaining) ? remaining : [];
+  if (rest.length === 0) {
+    return null;
+  }
+  const atRest = (key) =>
+    rest.findIndex((entry) => reviewQueueEntryKey(entry) === key);
+  if (direction < 0) {
+    const before = anchor && Array.isArray(anchor.beforeKeys)
+      ? anchor.beforeKeys
+      : [];
+    for (let index = before.length - 1; index >= 0; index -= 1) {
+      const found = atRest(before[index]);
+      if (found >= 0) {
+        return Object.freeze({
+          entry: rest[found],
+          rank: found + 1,
+          total: rest.length,
+          wrapped: false,
+        });
+      }
+    }
+    return Object.freeze({
+      entry: rest[rest.length - 1],
+      rank: rest.length,
+      total: rest.length,
+      wrapped: true,
+    });
+  }
+  const after = anchor && Array.isArray(anchor.afterKeys)
+    ? anchor.afterKeys
+    : [];
+  for (const key of after) {
+    const found = atRest(key);
+    if (found >= 0) {
+      return Object.freeze({
+        entry: rest[found],
+        rank: found + 1,
+        total: rest.length,
+        wrapped: false,
+      });
+    }
+  }
+  return Object.freeze({
+    entry: rest[0],
+    rank: 1,
+    total: rest.length,
+    wrapped: true,
+  });
+}
+
 // Pure jump position over a freshly read queue. Returns `{ kind: "empty" }`
-// or `{ kind: "jump", entry, rank, total, wrapped }` (`rank` is 1-based).
-// `direction` is +1 (next) or -1 (prev); `cursor` is `{ path, line, text }`
-// with a 1-based line; `stamped` is `{ keys, rank, count }` remembered from
-// the Alt+F write in this session (the Tasks cache lags, so just-stamped
-// keys are skipped by key and the entry after the remembered rank wins).
+// or `{ kind: "jump", entry, rank, total, wrapped, originTier }`
+// (`rank` is 1-based). `direction` is +1 (next) or -1 (prev);
+// `cursor` is `{ path, line, text }` with a 1-based line; `stamped` (or
+// `anchor`) is the walk anchor from the last landing or Alt+F write (the
+// Tasks cache lags, so handled keys are skipped by key). Origin resolves
+// in order: the cursor on a live (unhandled) queue entry goes to its
+// neighbor in `direction`; else the anchor goes to its first surviving
+// successor (`]s`) or last surviving predecessor (`[s`), wrapping with
+// the notice; else the first or last entry. Legacy `{ keys, rank, count }`
+// anchors without before/after keys keep the rank-skip behavior forward,
+// mirrored backward.
 function planReviewJump(queue, options = {}) {
   const list = Array.isArray(queue) ? queue.slice() : [];
   const direction = options.direction < 0 ? -1 : 1;
   if (list.length === 0) {
     return Object.freeze({ kind: "empty" });
   }
-  const stamped =
-    options.stamped && typeof options.stamped === "object"
-      ? options.stamped
-      : null;
-  if (stamped && Number.isInteger(stamped.rank)) {
-    const stampedKeys = new Set(
-      Array.isArray(stamped.keys) ? stamped.keys : [],
-    );
-    const filtered = list.filter(
-      (entry) => !stampedKeys.has(reviewQueueEntryKey(entry)),
-    );
-    if (filtered.length === 0) {
-      return Object.freeze({ kind: "empty" });
-    }
-    const skip = Math.max(
-      0,
-      stamped.rank - Math.max(0, Math.floor(numericOrDefault(stamped.count, 0))),
-    );
-    if (skip < filtered.length) {
-      return Object.freeze({
-        kind: "jump",
-        entry: filtered[skip],
-        rank: skip + 1,
-        total: filtered.length,
-        wrapped: false,
-      });
-    }
-    return Object.freeze({
-      kind: "jump",
-      entry: filtered[0],
-      rank: 1,
-      total: filtered.length,
-      wrapped: true,
-    });
-  }
+  const anchor =
+    options.anchor && typeof options.anchor === "object"
+      ? options.anchor
+      : options.stamped && typeof options.stamped === "object"
+        ? options.stamped
+        : null;
+  const handledKeys = new Set(
+    anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
+  );
+  const hasAnchorShape =
+    Boolean(anchor) &&
+    (Array.isArray(anchor.afterKeys) || Array.isArray(anchor.beforeKeys));
   const cursor =
     options.cursor && typeof options.cursor === "object"
       ? options.cursor
       : null;
+  // The cursor on a just-handled (stamped, released, or rolled) task is
+  // not a live queue entry, even when the lagging Tasks cache still
+  // lists it: handled keys never match here, so the anchor below
+  // continues the walk instead of stepping from a stale position.
   let cursorIndex = -1;
   if (cursor) {
     const cursorPath = String(cursor.path || "");
@@ -24302,6 +24639,9 @@ function planReviewJump(queue, options = {}) {
     const cursorText = String(cursor.text || "");
     cursorIndex = list.findIndex((entry) => {
       if (!entry || String(entry.path || "") !== cursorPath) {
+        return false;
+      }
+      if (handledKeys.has(reviewQueueEntryKey(entry))) {
         return false;
       }
       if (Number.isInteger(cursorLine) && Number(entry.line) === cursorLine) {
@@ -24329,7 +24669,88 @@ function planReviewJump(queue, options = {}) {
       rank: index + 1,
       total: list.length,
       wrapped,
+      originTier: reviewEntryMachineTier(list[cursorIndex]) || null,
     });
+  }
+  if (anchor && (handledKeys.size > 0 || hasAnchorShape)) {
+    const remaining = list.filter(
+      (entry) => !handledKeys.has(reviewQueueEntryKey(entry)),
+    );
+    if (remaining.length === 0) {
+      return Object.freeze({ kind: "empty" });
+    }
+    if (hasAnchorShape) {
+      const resolved = resolveReviewAnchorTarget(
+        remaining,
+        anchor,
+        direction,
+      );
+      if (!resolved) {
+        return Object.freeze({ kind: "empty" });
+      }
+      const originTier =
+        anchor && typeof anchor.tier === "string" && anchor.tier
+          ? String(anchor.tier).trim().toLowerCase() || null
+          : null;
+      return Object.freeze({
+        kind: "jump",
+        entry: resolved.entry,
+        rank: resolved.rank,
+        total: resolved.total,
+        wrapped: resolved.wrapped,
+        originTier,
+      });
+    }
+    if (Number.isInteger(anchor.rank)) {
+      const skip = Math.max(
+        0,
+        anchor.rank -
+          Math.max(0, Math.floor(numericOrDefault(anchor.count, 0))),
+      );
+      const originTier =
+        anchor && typeof anchor.tier === "string" && anchor.tier
+          ? String(anchor.tier).trim().toLowerCase() || null
+          : null;
+      if (direction < 0) {
+        const at = Math.min(skip - 1, remaining.length - 1);
+        if (at >= 0) {
+          return Object.freeze({
+            kind: "jump",
+            entry: remaining[at],
+            rank: at + 1,
+            total: remaining.length,
+            wrapped: false,
+            originTier,
+          });
+        }
+        return Object.freeze({
+          kind: "jump",
+          entry: remaining[remaining.length - 1],
+          rank: remaining.length,
+          total: remaining.length,
+          wrapped: true,
+          originTier,
+        });
+      }
+      if (skip < remaining.length) {
+        return Object.freeze({
+          kind: "jump",
+          entry: remaining[skip],
+          rank: skip + 1,
+          total: remaining.length,
+          wrapped: false,
+          originTier,
+        });
+      }
+      return Object.freeze({
+        kind: "jump",
+        entry: remaining[0],
+        rank: 1,
+        total: remaining.length,
+        wrapped: true,
+        originTier,
+      });
+    }
   }
   const index = direction < 0 ? list.length - 1 : 0;
   return Object.freeze({
@@ -24338,6 +24759,7 @@ function planReviewJump(queue, options = {}) {
     rank: index + 1,
     total: list.length,
     wrapped: false,
+    originTier: null,
   });
 }
 
@@ -24381,8 +24803,55 @@ function resolveReviewQueueLine(content, entry) {
   return Object.freeze({ ok: false, reason: "stale" });
 }
 
-// `Review 3/23 · NEW` (or `· stale 4d`, `· resurfaced`).
+// Tier-aware jump notice. v4 entries (with per-tier ranks) read
+// `Review {rank}/{total} · {TIER} {tierRank}/{tierTotal} · {detail}`:
+// NEW has no detail; PENDING/NEXT name the confirmation age; RETURNED
+// names the return date; ROTTEN names the overdue age and interval (or
+// `due today`). Lane tiers add a second line with the keep/release/today
+// actions. Legacy v3 entries keep today's state text.
 function buildReviewJumpNotice(entry, rank, total, options = {}) {
+  const todayText =
+    options && typeof options.todayText === "string"
+      ? options.todayText
+      : null;
+  if (reviewEntryHasTierRanks(entry)) {
+    const label = reviewEntryTierLabel(entry) || "REVIEW";
+    const tier = reviewEntryMachineTier(entry);
+    const head = `Review ${rank}/${total} · ${label} ${entry.tierRank}/${entry.tierTotal}`;
+    let detail = "";
+    if (tier === "pending" || tier === "next") {
+      detail = reviewLaneConfirmedDetail(entry, todayText);
+    } else if (tier === "returned") {
+      const since =
+        entry && typeof entry.dueOn === "string" && entry.dueOn
+          ? entry.dueOn
+          : entry && typeof entry.fresh === "string"
+            ? entry.fresh
+            : "";
+      detail = since ? `back since ${reviewShortDate(since)}` : "returned";
+    } else if (tier === "rotten") {
+      const interval =
+        entry && Number.isInteger(entry.interval) ? entry.interval : null;
+      const every = interval !== null ? ` · every ${interval}d` : "";
+      const overdue =
+        entry && Number.isFinite(entry.daysOverdue)
+          ? Math.max(0, Math.floor(entry.daysOverdue))
+          : null;
+      detail =
+        overdue === null || overdue < 1
+          ? `due today${every}`
+          : `rotten ${overdue}d${every}`;
+    }
+    const lines = [detail ? `${head} · ${detail}` : head];
+    if (tier === "pending") {
+      lines.push("Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+    } else if (tier === "next") {
+      lines.push("Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+    }
+    const wrapped =
+      options && options.wrapped === true ? " · wrapped around" : "";
+    return lines.join("\n") + wrapped;
+  }
   const state = entry && typeof entry.state === "string" ? entry.state : "";
   let detail = state;
   if (state === "new") {
@@ -24401,13 +24870,16 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
   return `Review ${rank}/${total} · ${detail}${wrapped}`;
 }
 
-// `Nothing due for review · ✓ 12 today`.
+// `Nothing due for review · ✓ 12 today` (the upkeep meter: tasks
+// stamped today outside the Pending/Next lanes).
 function buildReviewEmptyNotice(counts) {
-  const refreshed =
-    counts && Number.isFinite(counts.refreshedToday)
-      ? counts.refreshedToday
-      : 0;
-  return `Nothing due for review · ✓ ${refreshed} today`;
+  const upkeep =
+    counts && Number.isInteger(counts.upkeepToday)
+      ? counts.upkeepToday
+      : counts && Number.isFinite(counts.refreshedToday)
+        ? counts.refreshedToday
+        : 0;
+  return `Nothing due for review · ✓ ${upkeep} today`;
 }
 
 // Refusal class for one Alt+F target line: non-tasks, done and cancelled
@@ -24917,7 +25389,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
     }
 
-    this.lastFreshStamp = null;
+    this.reviewAnchor = null;
     this.registerOpenTaskJumpInputListeners();
     this.registerReviewRefreshInputListeners();
     this.registerCountedTransclusionToggleInputListeners();
@@ -27208,14 +27680,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     const cursor = this.getReviewJumpCursor();
-    const stamped =
+    const anchor =
       options.fromStamp !== undefined
         ? options.fromStamp
-        : this.lastFreshStamp || null;
+        : this.reviewAnchor || null;
+    const todayText = this.laneReleaseDateText({});
     let plan = planReviewJump(queue, {
       direction: step,
       cursor,
-      stamped,
+      stamped: anchor,
+      anchor,
+      todayText,
     });
     if (plan.kind === "empty") {
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
@@ -27224,7 +27699,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     let landed = await this.landOnReviewQueueEntry(plan.entry);
     if (!landed.ok && landed.stale) {
       queue = this.readFreshnessQueue(api);
-      plan = planReviewJump(queue, { direction: step, cursor, stamped });
+      plan = planReviewJump(queue, {
+        direction: step,
+        cursor,
+        stamped: anchor,
+        anchor,
+        todayText,
+      });
       if (plan.kind === "empty") {
         new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
         return false;
@@ -27237,11 +27718,36 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
       return false;
     }
-    new Notice(
-      buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
-        wrapped: plan.wrapped,
-      }),
+    // The walk anchor follows every successful landing, so a later
+    // release, roll, or stamp continues from here.
+    this.reviewAnchor = buildReviewAnchor(
+      queue,
+      [reviewQueueEntryKey(plan.entry)],
+      plan.rank,
     );
+    let notice = buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
+      wrapped: plan.wrapped,
+      todayText,
+    });
+    // A forward step out of the commitments into ROTTEN names the
+    // boundary (v4 tier entries only; v3 keeps the plain jump notice).
+    if (step > 0 && reviewFreshnessSupportsTiers(api)) {
+      const handled = new Set(
+        anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
+      );
+      const remaining = reviewWalkRemaining(queue, handled);
+      const boundary = buildReviewBoundaryNotice({
+        originTier:
+          plan && typeof plan.originTier === "string" ? plan.originTier : null,
+        destTier: reviewEntryMachineTier(plan.entry),
+        commitmentsLeft: remaining.commitments,
+        rottenLeft: remaining.rotten,
+      });
+      if (boundary) {
+        notice = `${boundary}\n${notice}`;
+      }
+    }
+    new Notice(notice);
     return true;
   }
 
@@ -27402,7 +27908,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       options.dateText,
     );
     if (options.advance === true) {
-      return await this.jumpToDueTask(1, { fromStamp: this.lastFreshStamp });
+      return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
     }
     return true;
   }
@@ -27493,25 +27999,23 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       options.dateText,
     );
     if (options.advance === true) {
-      return await this.jumpToDueTask(1, { fromStamp: this.lastFreshStamp });
+      return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
     }
     return true;
   }
 
-  // Remember the just-stamped rank tuple for the session (the Tasks cache
-  // lags, so the jump reads the queue fresh but skips these keys), then
-  // show the adjusted-counts Notice.
+  // Remember the walk anchor for the session (the Tasks cache lags, so
+  // the jump reads the queue fresh but continues from the handled entry's
+  // surviving successor or predecessor), then show the adjusted-counts
+  // Notice on the upkeep meter.
   finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText) {
     const matched = matchFreshStampRefs(queueBefore, refs);
-    this.lastFreshStamp =
+    this.reviewAnchor =
       matched.count > 0
-        ? { keys: matched.keys, rank: matched.rank, count: matched.count }
+        ? buildReviewAnchor(queueBefore, matched.keys, matched.rank)
         : null;
     const changed = stamped.filter(
       (entry) => entry.after !== entry.before,
-    ).length;
-    const newlyRefreshed = stamped.filter(
-      (entry) => !freshStampLineHasToday(entry.before, dateText),
     ).length;
     const counts =
       countsBefore && typeof countsBefore === "object" ? countsBefore : {};
@@ -27523,16 +28027,27 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       0,
       Math.floor(numericOrDefault(counts.new, 0)),
     );
-    const refreshedBefore = Math.max(
-      0,
-      Math.floor(numericOrDefault(counts.refreshedToday, 0)),
-    );
+    const upkeepBefore = Number.isInteger(counts.upkeepToday)
+      ? counts.upkeepToday
+      : Math.max(
+        0,
+        Math.floor(numericOrDefault(counts.refreshedToday, 0)),
+      );
+    // Lane stamps (Pending/Next) never grow upkeep: only stamped tasks
+    // that stay outside the lanes count.
+    const newlyUpkept = stamped.filter((entry) => {
+      if (freshStampLineHasToday(entry.before, dateText)) {
+        return false;
+      }
+      const status = getObsidianTaskCheckboxStatus(entry.after);
+      return status !== "/" && status !== "*";
+    }).length;
     new Notice(
       buildFreshStampNotice({
         changed,
         dueAfter: Math.max(0, dueBefore - matched.count),
         newAfter: Math.max(0, newBefore - matched.newCount),
-        refreshedAfter: refreshedBefore + newlyRefreshed,
+        refreshedAfter: upkeepBefore + newlyUpkept,
         budget:
           counts.budget === undefined || counts.budget === null
             ? null
@@ -36743,7 +37258,13 @@ module.exports.helpers = {
   buildLaneToggleNotice,
   readLaneBudgets,
   getReviewFreshnessApi,
+  reviewFreshnessSupportsTiers,
+  reviewEntryMachineTier,
+  reviewEntryTierLabel,
   reviewQueueEntryKey,
+  buildReviewAnchor,
+  reviewWalkRemaining,
+  buildReviewBoundaryNotice,
   planReviewJump,
   resolveReviewQueueLine,
   buildReviewJumpNotice,

@@ -7310,8 +7310,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   // `new > 0`, a muted "clear" style when nothing is due, a budget-met
   // style when `budget_met` holds. Clicking runs
   // `bob-navigation-hotkeys:jump-to-next-due-task`, falling back to
-  // opening `freshness.md` (the fallback target switches to `rotten`
-  // in the dash-gating rollout, together with the review page).
+  // opening `rotten` (switched in the dash-gating rollout with the review page).
 
   setupFreshnessStatusBar() {
     try {
@@ -7480,12 +7479,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         return;
       }
     } catch (error) {
-      // Fall through to opening freshness.md.
+      // Fall through to opening rotten.
     }
     try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.openLinkText === "function") {
-        workspace.openLinkText("freshness", "", false);
+        workspace.openLinkText("rotten", "", false);
       }
     } catch (error) {
       // Nothing to fall back to.

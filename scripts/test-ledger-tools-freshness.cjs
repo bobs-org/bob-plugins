@@ -895,7 +895,7 @@ function makeStatusEl() {
   };
 }
 
-test("status bar clicks through, falling back to freshness.md", () => {
+test("status bar clicks through, falling back to rotten", () => {
   withMissingConfig(() => {
     const executed = [];
     const opened = [];
@@ -936,7 +936,7 @@ test("status bar clicks through, falling back to freshness.md", () => {
       fallback.updateFreshnessStatusBar();
       assert.equal(fallbackEl.text, "⟳ 0 new · 0 rotten · ✓ 0 today");
       fallbackEl.handlers.click();
-      assert.deepEqual(fallbackOpened, ["freshness"]);
+      assert.deepEqual(fallbackOpened, ["rotten"]);
     } finally {
       fallback.onunload();
     }

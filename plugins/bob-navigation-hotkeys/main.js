@@ -312,6 +312,10 @@ const LEGACY_WORK_LOG_LABELS = Object.freeze(new Set(["Work log"]));
 // typed by a human.
 const SCHEDULE_LOG_AUTO_REASON_EMOJI = "🎲";
 const SCHEDULE_LOG_AUTO_REASON_SEPARATOR = " · ";
+// Default same-level rolls per level before Ctrl+Enter recommends a decay.
+// `🍂` (U+1F342, one code point) marks a decay-past-the-last-level cancel.
+const DEFAULT_PRIORITY_DECAY_ROLLS = 1;
+const PRIORITY_DECAY_CANCEL_EMOJI = "🍂";
 // A task with no priority field is the implicit highest level, P0. The picker
 // has no P0 row (Ctrl+D clears the field instead), so this label exists only to
 // render the previous side of a priority transition in a log entry.
@@ -576,12 +580,94 @@ function normalizeBulletPriorityLevel(name, level, index, options) {
     return null;
   }
 
+  let levelRolls = null;
+  if (
+    level.rolls !== undefined &&
+    level.rolls !== null
+  ) {
+    if (!Number.isInteger(level.rolls) || level.rolls < 0) {
+      showBulletPropertyNotice(
+        `${levelPrefix} rolls must be a non-negative integer`,
+        options,
+      );
+      return null;
+    }
+    levelRolls = level.rolls;
+  }
+
   return Object.freeze({
     label,
     value,
     minDays: level.min_days,
     maxDays: level.max_days,
+    rolls: levelRolls,
   });
+}
+
+// Normalize the `decay` block on a priority property. Absent, `true` or `{}` mean
+// decay is enabled with the default roll limit; `false` disables decay; otherwise
+// `decay.rolls` must be a non-negative integer. Any other key under `decay` is an
+// error so a typo such as `roll: 3` is never silently ignored.
+function normalizePriorityDecayConfig(name, rawDecay, options) {
+  if (rawDecay === undefined || rawDecay === null) {
+    return Object.freeze({
+      enabled: true,
+      rolls: DEFAULT_PRIORITY_DECAY_ROLLS,
+    });
+  }
+  if (rawDecay === true) {
+    return Object.freeze({
+      enabled: true,
+      rolls: DEFAULT_PRIORITY_DECAY_ROLLS,
+    });
+  }
+  if (rawDecay === false) {
+    return Object.freeze({ enabled: false, rolls: null });
+  }
+  if (typeof rawDecay !== "object" || Array.isArray(rawDecay)) {
+    showBulletPropertyNotice(
+      `Bullet property "${name}" decay must be true, false, or an object with rolls`,
+      options,
+    );
+    return null;
+  }
+  const knownKeys = new Set(["rolls"]);
+  for (const key of Object.keys(rawDecay)) {
+    if (!knownKeys.has(key)) {
+      showBulletPropertyNotice(
+        `Bullet property "${name}" decay has an unknown key "${key}"`,
+        options,
+      );
+      return null;
+    }
+  }
+  if (rawDecay.rolls === undefined || rawDecay.rolls === null) {
+    return Object.freeze({
+      enabled: true,
+      rolls: DEFAULT_PRIORITY_DECAY_ROLLS,
+    });
+  }
+  if (!Number.isInteger(rawDecay.rolls) || rawDecay.rolls < 0) {
+    showBulletPropertyNotice(
+      `Bullet property "${name}" decay rolls must be a non-negative integer`,
+      options,
+    );
+    return null;
+  }
+  return Object.freeze({ enabled: true, rolls: rawDecay.rolls });
+}
+
+// A level's own `rolls` overrides `decay.rolls` for that level. Null when decay
+// is disabled (accepted on levels but ignored).
+function getPriorityLevelRollLimit(property, level) {
+  const decay = property && property.decay;
+  if (!decay || decay.enabled !== true) {
+    return null;
+  }
+  if (level && level.rolls !== undefined && level.rolls !== null) {
+    return level.rolls;
+  }
+  return decay.rolls;
 }
 
 function normalizeBulletPriorityProperty(name, entry, options) {
@@ -635,6 +721,11 @@ function normalizeBulletPriorityProperty(name, entry, options) {
     return null;
   }
 
+  const decay = normalizePriorityDecayConfig(name, entry.decay, options);
+  if (decay === null) {
+    return null;
+  }
+
   const frozenLevels = Object.freeze(levels);
   return Object.freeze({
     name,
@@ -644,6 +735,7 @@ function normalizeBulletPriorityProperty(name, entry, options) {
     levelsByValue: Object.freeze(
       new Map(frozenLevels.map((level) => [level.value, level])),
     ),
+    decay,
   });
 }
 
@@ -697,6 +789,28 @@ function validateBulletPropertyConfig(config, options = {}) {
     ) {
       showBulletPropertyNotice(
         `Bullet property "${name}" levels are only valid when values is "priority"`,
+        options,
+      );
+      return null;
+    }
+
+    if (
+      values !== "priority" &&
+      Object.prototype.hasOwnProperty.call(entry, "decay")
+    ) {
+      showBulletPropertyNotice(
+        `Bullet property "${name}" decay is only valid when values is "priority"`,
+        options,
+      );
+      return null;
+    }
+
+    if (
+      values !== "priority" &&
+      Object.prototype.hasOwnProperty.call(entry, "rolls")
+    ) {
+      showBulletPropertyNotice(
+        `Bullet property "${name}" rolls is only valid when values is "priority"`,
         options,
       );
       return null;
@@ -2146,6 +2260,423 @@ function buildPriorityRollScheduleLog(details = {}) {
     reason,
     automatic: true,
   });
+}
+
+// Classify one Schedule Log reason for the roll-streak reader. Only reasonless,
+// same-level recommended rolls build a streak; any deliberate scheduling decision
+// resets it. Returns a frozen { kind, label, from, to } where kind is one of
+// "roll", "randomize", "decay" or "other". "randomize" is transparent (skipped
+// when counting); everything except a same-level "roll" stops the streak. The
+// caller compares a "roll" label against the task's current level label.
+function classifyScheduleLogRollReason(reason) {
+  const text = String(reason === null || reason === undefined ? "" : reason);
+  const prefix = `${SCHEDULE_LOG_AUTO_REASON_EMOJI} `;
+  if (!text.startsWith(prefix)) {
+    return Object.freeze({ kind: "other", label: "", from: "", to: "" });
+  }
+  const rest = text.slice(prefix.length);
+  const separatorIndex = rest.indexOf(SCHEDULE_LOG_AUTO_REASON_SEPARATOR);
+  const head =
+    separatorIndex === -1 ? rest.trim() : rest.slice(0, separatorIndex).trim();
+  if (!head) {
+    return Object.freeze({ kind: "other", label: "", from: "", to: "" });
+  }
+  if (head.includes(SCHEDULE_LOG_TRANSITION)) {
+    const parts = head.split(SCHEDULE_LOG_TRANSITION);
+    const from = (parts[0] || "").trim();
+    const toAndSuffix = (parts.slice(1).join(SCHEDULE_LOG_TRANSITION) || "").trim();
+    if (/(^|\s)decay(\s|$)/.test(toAndSuffix)) {
+      const to = toAndSuffix.replace(/(^|\s)decay(\s|$)/, " ").trim();
+      return Object.freeze({
+        kind: "decay",
+        label: "",
+        from,
+        to,
+      });
+    }
+    return Object.freeze({ kind: "other", label: "", from, to: toAndSuffix });
+  }
+  if (/\brandomize\b/.test(head)) {
+    return Object.freeze({ kind: "randomize", label: "", from: "", to: "" });
+  }
+  const rollMatch = /^(.+?)\s+roll$/.exec(head);
+  if (rollMatch) {
+    return Object.freeze({
+      kind: "roll",
+      label: rollMatch[1].trim(),
+      from: "",
+      to: "",
+    });
+  }
+  return Object.freeze({ kind: "other", label: "", from: "", to: "" });
+}
+
+// Count the roll streak from newest-first Schedule Log reasons. Only reasonless
+// same-level recommended rolls count; a `randomize` entry is transparent and
+// anything else (a decay, a priority re-pick, a typed reason, an unparseable
+// bullet) stops the walk.
+function countPriorityRollStreak(reasons, currentLabel) {
+  const label = normalizeBulletPropertyValue(currentLabel);
+  if (!label) {
+    return 0;
+  }
+  let streak = 0;
+  for (const reason of Array.isArray(reasons) ? reasons : []) {
+    const classified = classifyScheduleLogRollReason(reason);
+    if (classified.kind === "randomize") {
+      continue;
+    }
+    if (
+      classified.kind === "roll" &&
+      normalizeBulletPropertyValue(classified.label) === label
+    ) {
+      streak += 1;
+      continue;
+    }
+    break;
+  }
+  return streak;
+}
+
+// Read the roll streak from the task's managed Schedule Log: the number of
+// `🎲 <level> roll` entries at the current level, counted from the newest entry
+// until the first entry that breaks it. Derived, never stored. Returns 0 when
+// there is no log, no current label, or no streak.
+function getPriorityRollStreak(content, taskLine, currentLabel) {
+  const label = normalizeBulletPropertyValue(currentLabel);
+  if (!label) {
+    return 0;
+  }
+  const lines = String(content || "").split(/\r?\n/);
+  const parent = findScheduleLogParent(lines, taskLine);
+  if (!parent) {
+    return 0;
+  }
+  const block = findCurrentBulletChildBlock(lines, parent.line);
+  const reasons = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    const lineText = String(lines[index] || "");
+    if (lineText.trim() === "") {
+      continue;
+    }
+    if (
+      !BULLET_PROPERTY_LIST_ITEM_RE.test(lineText) ||
+      findNearestParentListItem(lines, index) !== parent.line
+    ) {
+      continue;
+    }
+    const parsed = parseScheduleLogEntryBullet(lineText);
+    if (!parsed) {
+      reasons.push(lineText);
+      continue;
+    }
+    reasons.push(parsed.reason);
+  }
+  return countPriorityRollStreak(reasons, label);
+}
+
+// Deterministic reason text for a decay write: the transition gains a `decay`
+// suffix, e.g. `🎲 P2 → P3 decay · in **45** (31–90) days`. The window always
+// comes from the level the task decays into.
+function formatPriorityDecayScheduleReason(details = {}) {
+  const fromLevel = details.fromLevel;
+  const toLevel = details.toLevel;
+  if (!fromLevel || !fromLevel.label || !toLevel || !toLevel.label) {
+    return "";
+  }
+  const windowText = formatPriorityRollChosenWindowText(
+    toLevel,
+    details.rolledDays,
+  );
+  if (!windowText) {
+    return "";
+  }
+  const head = `${fromLevel.label}${SCHEDULE_LOG_TRANSITION}${toLevel.label} decay`;
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} ${head}${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}${windowText}`;
+}
+
+// Cancel Log reason for a decay past the last level: `🍂 decayed past P4 after
+// 1 roll`, `… after 3 rolls`, or just `🍂 decayed past P4` when the streak is 0.
+function formatPriorityDecayCancelReason(details = {}) {
+  const label = normalizeBulletPropertyValue(
+    details.level && details.level.label,
+  );
+  if (!label) {
+    return "";
+  }
+  const streak = Math.floor(numericOrDefault(details.streak, 0));
+  if (!(streak > 0)) {
+    return `${PRIORITY_DECAY_CANCEL_EMOJI} decayed past ${label}`;
+  }
+  return `${PRIORITY_DECAY_CANCEL_EMOJI} decayed past ${label} after ${streak} roll${streak === 1 ? "" : "s"}`;
+}
+
+// Plan the recommended roll for one task: a same-level roll, a decay to the
+// next level, or a cancel past the last level. Pure: pass the streak explicitly,
+// or pass content + taskLine to derive it from the task's Schedule Log. Null
+// when there is no recommendation (no priority property, or the current value is
+// not a configured level). A cancel on a recurring task is `unavailable`:
+// nothing may be written, so no date is rolled.
+function planPriorityRollRecommendation(options = {}) {
+  const property = options.property;
+  if (!property || property.values !== "priority") {
+    return null;
+  }
+  const levels = Array.isArray(property.levels) ? property.levels : [];
+  let currentValue = normalizeBulletPropertyValue(options.currentValue);
+  let recurring = options.recurring === true;
+  let streak = options.streak;
+  if (
+    (currentValue === "" || streak === undefined) &&
+    options.content !== undefined &&
+    options.taskLine !== undefined
+  ) {
+    const lines = String(options.content || "").split(/\r?\n/);
+    const taskIndex = Math.floor(numericOrDefault(options.taskLine, NaN));
+    if (Number.isFinite(taskIndex) && taskIndex >= 0 && taskIndex < lines.length) {
+      const lineText = String(lines[taskIndex] || "");
+      if (currentValue === "") {
+        const field = findBulletPropertyField(lineText, property.name);
+        currentValue = normalizeBulletPropertyValue(field && field.value);
+      }
+      if (isRecurringTaskLine(lineText)) {
+        recurring = true;
+      }
+      if (streak === undefined) {
+        streak =
+          currentValue === ""
+            ? 0
+            : getPriorityRollStreak(
+                options.content,
+                options.taskLine,
+                getBulletPropertyCurrentLabel(property, currentValue),
+              );
+      }
+    }
+  }
+  if (currentValue === "") {
+    return null;
+  }
+  const level =
+    property.levelsByValue instanceof Map
+      ? property.levelsByValue.get(currentValue)
+      : levels.find((candidate) => candidate && candidate.value === currentValue);
+  if (!level) {
+    return null;
+  }
+  const levelIndex = levels.indexOf(level);
+  const safeLevelIndex = levelIndex >= 0 ? levelIndex : 0;
+  const streakCount = Number.isFinite(Number(streak))
+    ? Math.max(0, Math.floor(Number(streak)))
+    : 0;
+  const limit = getPriorityLevelRollLimit(property, level);
+  const baseDate =
+    options.baseDate instanceof Date ? options.baseDate : new Date();
+  const random = typeof options.random === "function" ? options.random : Math.random;
+  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
+
+  if (limit === null || streakCount < limit) {
+    const step = limit === null ? null : streakCount + 1;
+    const roll = rollPriorityRecommendationDate(
+      level,
+      baseDate,
+      random,
+      currentScheduled,
+    );
+    return Object.freeze({
+      kind: "roll",
+      level,
+      levelIndex: safeLevelIndex,
+      streak: streakCount,
+      limit,
+      step,
+      date: formatBulletPropertyDate(roll.date),
+      offset: roll.offset,
+      reason: formatPriorityRollScheduleReason({
+        source: "scheduled",
+        level,
+        rolledDays: roll.offset,
+      }),
+    });
+  }
+
+  const nextLevel = levels[safeLevelIndex + 1] || null;
+  if (nextLevel) {
+    const roll = rollPriorityRecommendationDate(
+      nextLevel,
+      baseDate,
+      random,
+      currentScheduled,
+    );
+    return Object.freeze({
+      kind: "decay",
+      fromLevel: level,
+      fromLevelIndex: safeLevelIndex,
+      toLevel: nextLevel,
+      toLevelIndex: safeLevelIndex + 1,
+      streak: streakCount,
+      limit,
+      date: formatBulletPropertyDate(roll.date),
+      offset: roll.offset,
+      reason: formatPriorityDecayScheduleReason({
+        fromLevel: level,
+        toLevel: nextLevel,
+        rolledDays: roll.offset,
+      }),
+    });
+  }
+
+  if (recurring) {
+    return Object.freeze({
+      kind: "unavailable",
+      level,
+      levelIndex: safeLevelIndex,
+      streak: streakCount,
+      limit,
+      date: "",
+      offset: null,
+      reason:
+        "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+    });
+  }
+  return Object.freeze({
+    kind: "cancel",
+    level,
+    levelIndex: safeLevelIndex,
+    streak: streakCount,
+    limit,
+    date: "",
+    offset: null,
+    reason: formatPriorityDecayCancelReason({ level, streak: streakCount }),
+  });
+}
+
+// Pure copy for the `scheduled` row's roll-preview line. All display strings
+// come from here so the picker render and the tests share one source.
+function buildPriorityRollPreviewModel(recommendation, baseDate) {
+  if (!recommendation || typeof recommendation.kind !== "string") {
+    return null;
+  }
+  const kind = recommendation.kind;
+  const start =
+    baseDate instanceof Date ? getLocalDateStart(baseDate) : getLocalDateStart(new Date());
+  const formatDatedLine = (dateValue) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(
+      normalizeBulletPropertyValue(dateValue),
+    );
+    if (!match) {
+      return { dateText: "", weekday: "", relative: "", ariaDate: "" };
+    }
+    const date = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+    );
+    const weekday = getBulletPropertyDateWeekday(date);
+    const relative = formatRelativeDayOffset(getLocalDayOffset(start, date));
+    return {
+      dateText: `${normalizeBulletPropertyValue(dateValue)} · ${weekday} · ${relative}`,
+      weekday,
+      relative,
+      ariaDate: `${weekday} ${normalizeBulletPropertyValue(dateValue)}, ${relative}`,
+    };
+  };
+
+  if (kind === "roll") {
+    const level = recommendation.level || {};
+    const label = normalizeBulletPropertyValue(level.label);
+    if (!label) {
+      return null;
+    }
+    const dated = formatDatedLine(recommendation.date);
+    const hasLimit = recommendation.limit !== null && recommendation.limit !== undefined;
+    const step = recommendation.step;
+    const meta =
+      hasLimit && Number.isFinite(Number(step))
+        ? `roll ${step}/${recommendation.limit}`
+        : "";
+    const metaTone =
+      hasLimit &&
+      Number.isFinite(Number(step)) &&
+      Number(step) >= Number(recommendation.limit)
+        ? "warn"
+        : "info";
+    return Object.freeze({
+      kind: "roll",
+      icon: "dices",
+      tone: "accent",
+      action: `${label} roll`,
+      dateText: dated.dateText,
+      dateValue: normalizeBulletPropertyValue(recommendation.date),
+      meta,
+      metaTone,
+      footerLabel: `Roll ${label}`,
+      ariaLabel:
+        `Ctrl+Enter: ${label} roll to ${dated.ariaDate}` +
+        (meta ? `, roll ${step} of ${recommendation.limit}` : ""),
+    });
+  }
+
+  if (kind === "decay") {
+    const fromLevel = recommendation.fromLevel || {};
+    const toLevel = recommendation.toLevel || {};
+    const fromLabel = normalizeBulletPropertyValue(fromLevel.label);
+    const toLabel = normalizeBulletPropertyValue(toLevel.label);
+    if (!fromLabel || !toLabel) {
+      return null;
+    }
+    const dated = formatDatedLine(recommendation.date);
+    return Object.freeze({
+      kind: "decay",
+      icon: "trending-down",
+      tone: "warn",
+      action: `${fromLabel} → ${toLabel}`,
+      dateText: dated.dateText,
+      dateValue: normalizeBulletPropertyValue(recommendation.date),
+      meta: "decay",
+      metaTone: "warn",
+      footerLabel: `Decay to ${toLabel}`,
+      ariaLabel: `Ctrl+Enter: ${fromLabel} → ${toLabel} decay to ${dated.ariaDate}`,
+    });
+  }
+
+  if (kind === "cancel") {
+    const level = recommendation.level || {};
+    const label = normalizeBulletPropertyValue(level.label);
+    if (!label) {
+      return null;
+    }
+    return Object.freeze({
+      kind: "cancel",
+      icon: "ban",
+      tone: "danger",
+      action: "Cancel task",
+      dateText: "",
+      dateValue: "",
+      meta: `decayed past ${label}`,
+      metaTone: "warn",
+      footerLabel: "Cancel task",
+      ariaLabel: `Ctrl+Enter: Cancel task, decayed past ${label}${recommendation.streak > 0 ? ` after ${recommendation.streak} roll${recommendation.streak === 1 ? "" : "s"}` : ""}`,
+    });
+  }
+
+  if (kind === "unavailable") {
+    return Object.freeze({
+      kind: "unavailable",
+      icon: "circle-slash",
+      tone: "muted",
+      action: "Cannot cancel",
+      dateText: "",
+      dateValue: "",
+      meta: "recurring · use Obsidian Tasks",
+      metaTone: "muted",
+      footerLabel: "",
+      ariaLabel:
+        "Ctrl+Enter unavailable: Cannot cancel a recurring task, use Obsidian Tasks",
+    });
+  }
+
+  return null;
 }
 
 function createDependencyNavigationCollection(fields) {
@@ -16972,6 +17503,56 @@ function rollPriorityScheduledDateWithOffset(
 
 function rollPriorityScheduledDate(level, baseDate, random = Math.random) {
   return rollPriorityScheduledDateWithOffset(level, baseDate, random).date;
+}
+
+// Roll a recommendation date that never lands on the task's current `scheduled`
+// date when the window has room. Draws uniformly from the window minus the
+// current date's offset, and only when that offset is inside the window and the
+// window spans more than one day; otherwise behaves exactly like
+// rollPriorityScheduledDateWithOffset. A skipped automatic entry (unchanged
+// date) would otherwise silently lose a streak step.
+function rollPriorityRecommendationDate(
+  level,
+  baseDate,
+  random = Math.random,
+  avoidValue = "",
+) {
+  const bounds = getPriorityRollBounds(level);
+  const start = getLocalDateStart(baseDate);
+  if (!bounds) {
+    return rollPriorityScheduledDateWithOffset(level, baseDate, random);
+  }
+  const span = bounds.maxDays - bounds.minDays + 1;
+  if (!(span > 1)) {
+    return rollPriorityScheduledDateWithOffset(level, baseDate, random);
+  }
+  const avoidText = normalizeBulletPropertyValue(avoidValue);
+  const avoidMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(avoidText);
+  if (!avoidMatch) {
+    return rollPriorityScheduledDateWithOffset(level, baseDate, random);
+  }
+  const avoidDate = new Date(
+    Number(avoidMatch[1]),
+    Number(avoidMatch[2]) - 1,
+    Number(avoidMatch[3]),
+  );
+  if (!Number.isFinite(avoidDate.getTime())) {
+    return rollPriorityScheduledDateWithOffset(level, baseDate, random);
+  }
+  const avoidOffset = getLocalDayOffset(start, avoidDate);
+  if (avoidOffset < bounds.minDays || avoidOffset > bounds.maxDays) {
+    return rollPriorityScheduledDateWithOffset(level, baseDate, random);
+  }
+  const rolled = Math.floor(random() * (span - 1));
+  const clamped = clampNumber(rolled, 0, Math.max(0, span - 2));
+  let offset = bounds.minDays + clamped;
+  if (offset >= avoidOffset) {
+    offset += 1;
+  }
+  return Object.freeze({
+    date: addLocalDateDays(start, offset),
+    offset,
+  });
 }
 
 function addLocalDateMonths(date, months) {
@@ -32406,6 +32987,11 @@ module.exports.helpers = {
   getPriorityLevelIconName,
   rollPriorityScheduledDateWithOffset,
   rollPriorityScheduledDate,
+  rollPriorityRecommendationDate,
+  DEFAULT_PRIORITY_DECAY_ROLLS,
+  PRIORITY_DECAY_CANCEL_EMOJI,
+  normalizePriorityDecayConfig,
+  getPriorityLevelRollLimit,
   getPriorityNoticeOutcomeParts,
   getPriorityNoticeChipTone,
   getPriorityNoticeChipText,
@@ -32488,8 +33074,15 @@ module.exports.helpers = {
   formatPriorityRollWindowText,
   getPriorityRollFromLevelLabel,
   formatPriorityRollScheduleReason,
+  formatPriorityDecayScheduleReason,
+  formatPriorityDecayCancelReason,
   shouldWriteAutomaticScheduleLog,
   buildPriorityRollScheduleLog,
+  classifyScheduleLogRollReason,
+  countPriorityRollStreak,
+  getPriorityRollStreak,
+  planPriorityRollRecommendation,
+  buildPriorityRollPreviewModel,
   getBulletPropertyScheduleReasonHints,
   getCancelTaskRowTitle,
   getCancelReasonHints,

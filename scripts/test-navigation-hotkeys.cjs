@@ -946,19 +946,27 @@ test("priority bullet property config normalizes frozen levels and preserves exi
       schedules: priority.schedules,
       levels: priority.levels,
       levelsByValue: priority.levelsByValue,
+      decay: priority.decay,
     },
     {
       name: "priority",
       values: "priority",
       schedules: "scheduled",
       levels: [
-        { label: "P1", value: "high", minDays: 2, maxDays: 7 },
-        { label: "P2", value: "medium", minDays: 8, maxDays: 30 },
+        { label: "P1", value: "high", minDays: 2, maxDays: 7, rolls: null },
+        { label: "P2", value: "medium", minDays: 8, maxDays: 30, rolls: null },
       ],
       levelsByValue: new Map([
-        ["high", { label: "P1", value: "high", minDays: 2, maxDays: 7 }],
-        ["medium", { label: "P2", value: "medium", minDays: 8, maxDays: 30 }],
+        [
+          "high",
+          { label: "P1", value: "high", minDays: 2, maxDays: 7, rolls: null },
+        ],
+        [
+          "medium",
+          { label: "P2", value: "medium", minDays: 8, maxDays: 30, rolls: null },
+        ],
       ]),
+      decay: { enabled: true, rolls: 1 },
     },
   );
   assert.equal(priority.levelsByValue.get("high"), priority.levels[0]);
@@ -970,6 +978,7 @@ test("priority bullet property config normalizes frozen levels and preserves exi
   assert.equal(Object.isFrozen(priority.levels), true);
   assert.equal(Object.isFrozen(priority.levels[0]), true);
   assert.equal(Object.isFrozen(priority.levelsByValue), true);
+  assert.equal(Object.isFrozen(priority.decay), true);
 });
 
 test("priority bullet property config rejects each invalid schema category once", () => {

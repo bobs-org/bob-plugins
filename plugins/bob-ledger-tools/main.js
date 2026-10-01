@@ -3011,20 +3011,58 @@ function laneBudgetFromTasks(tasks, today, caps, lane) {
 //
 // The predicate matches the dashboard READY section's effective filters:
 // TODO type (including custom TODO symbols), dashboard visibility
-// (template exclusion, dash.md self-exclusion, exact `#hide` match, and
-// the Tasks global query's `_conflicts` exclusion applied explicitly
-// because `getTasks()` returns the raw cache), not dependency-blocked
-// (against the full Tasks list), scheduled on or before the current
-// local day, and not Today. Self-exclusion always refers to `dash.md`,
-// never the hosting daily note.
-//
-// This deliberately does NOT reuse `planLaneVisible`: that helper's
-// hide-subtag (`#hide/x`, case-insensitive) and lowercased path checks
-// are broader than the dashboard's current explicit
-// `!task.tags.includes("#hide")` rule. The distinction is pinned in
-// fixtures.
+// (template/conflict exclusion, dash.md self-exclusion, `#hide`
+// case-insensitive substring match like Tasks `tag does not include
+// #hide`, and the Tasks global query's `_conflicts` exclusion applied
+// explicitly because `getTasks()` returns the raw cache), not
+// dependency-blocked (against the full Tasks list), scheduled on or
+// before the current local day, and not Today. Self-exclusion always
+// refers to `dash.md`, never the hosting daily note. Tasks built-in
+// path/folder filters are case-insensitive, so the helper lowercases
+// paths before comparing.
 const READY_DASH_PATH = "dash.md";
 const READY_FALLBACK_CAP = 100;
+
+// Shared dashboard section base visibility: the Tasks-effective filters
+// READY and the PENDING/NEXT dashboard sections agree on. Hide uses a
+// case-insensitive substring (`#hide`, `#hide/x`, `#Hide` all excluded),
+// paths use lowercased `_templates`/`_conflicts` checks, dash
+// self-exclusion is case-insensitive, and future schedules are out.
+// Status, done, blocked, and TODAY are layered by callers.
+function dashboardSectionBaseVisible(task, todayDay, dashPath = READY_DASH_PATH) {
+  if (!task || typeof task !== "object") {
+    return false;
+  }
+  const path = String(planTaskPath(task) || "");
+  if (!path) {
+    return false;
+  }
+  const lowered = path.toLowerCase();
+  if (lowered.includes("_templates")) {
+    return false;
+  }
+  if (lowered.includes("_conflicts")) {
+    return false;
+  }
+  if (lowered === String(dashPath || "").toLowerCase()) {
+    return false;
+  }
+  const tags = planTaskTags(task);
+  if (
+    tags.some(
+      (tag) => typeof tag === "string" && tag.toLowerCase().includes("#hide"),
+    )
+  ) {
+    return false;
+  }
+  if (todayDay !== null && todayDay !== undefined) {
+    const scheduled = planTaskScheduledDay(task);
+    if (scheduled !== null && scheduled > todayDay) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function readyTaskStatusIsTodo(task) {
   if (!task || typeof task !== "object") {
@@ -3048,30 +3086,155 @@ function readyTaskVisible(task, todayDay) {
   if (!readyTaskStatusIsTodo(task)) {
     return false;
   }
-  const path = String(planTaskPath(task) || "");
-  if (!path) {
+  return dashboardSectionBaseVisible(task, todayDay, READY_DASH_PATH);
+}
+
+// Dashboard PENDING/NEXT section membership: the dash section model
+// excludes TODAY and dash.md itself plus the shared base visibility
+// (templates, conflicts, hide, future schedules), dependency-blocked
+// tasks, and done tasks. Status uses IN_PROGRESS for PENDING and symbol
+// `*` for NEXT; the standard configured statuses are unchanged.
+function dashboardLaneStatusMatches(task, lane) {
+  if (lane === "next") {
+    return planTaskStatusSymbol(task) === "*";
+  }
+  if (lane === "pending") {
+    const status =
+      task && task.status && typeof task.status === "object"
+        ? task.status
+        : null;
+    return status !== null && status.type === "IN_PROGRESS";
+  }
+  return false;
+}
+
+function dashboardLaneSectionVisible(task, list, todayDay, lane) {
+  if (!dashboardSectionBaseVisible(task, todayDay, READY_DASH_PATH)) {
     return false;
   }
-  if (path.includes("_templates")) {
+  if (planTaskIsDone(task)) {
     return false;
   }
-  if (path.includes("_conflicts")) {
+  if (planTaskIsBlocked(task, list)) {
     return false;
   }
-  if (path === READY_DASH_PATH) {
-    return false;
+  return dashboardLaneStatusMatches(task, lane);
+}
+
+// Pure dashboard section budget over Tasks-plugin task objects.
+// `isToday` is the caller's Today predicate. Returns
+// `{ section, lane, cap, over, today }` with integers when available.
+// Throws when `isToday` throws so callers degrade to unavailable rather
+// than a partially gated zero.
+function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
+  if (lane !== "pending" && lane !== "next") {
+    throw new Error(`unknown lane: ${lane}`);
   }
-  const tags = planTaskTags(task);
-  if (tags.includes("#hide")) {
-    return false;
-  }
-  if (todayDay !== null && todayDay !== undefined) {
-    const scheduled = planTaskScheduledDay(task);
-    if (scheduled !== null && scheduled > todayDay) {
-      return false;
+  const effective = effectivePlanCaps(caps);
+  const list = Array.isArray(tasks) ? tasks : [];
+  const todayDay = planDayNumber(today === undefined ? new Date() : today);
+  const isTodayPredicate =
+    typeof isToday === "function" ? isToday : () => false;
+  const cap = lane === "pending" ? effective.maxPending : effective.maxNext;
+  const whole = laneBudgetFromTasks(list, today, effective, lane);
+  let section = 0;
+  let todayInLane = 0;
+  for (const task of list) {
+    if (!dashboardLaneSectionVisible(task, list, todayDay, lane)) {
+      continue;
     }
+    let todayFlag = false;
+    try {
+      todayFlag = Boolean(isTodayPredicate(task));
+    } catch (error) {
+      throw error;
+    }
+    if (todayFlag) {
+      todayInLane += 1;
+      continue;
+    }
+    section += 1;
   }
-  return true;
+  return {
+    section,
+    lane: whole.count,
+    count: section,
+    laneCount: whole.count,
+    today: todayInLane,
+    cap,
+    over: whole.over,
+  };
+}
+
+// Shared dashboard lane badge view-model. `budget` is
+// `{ section, lane, cap, over, today }` with nulls for unavailable.
+// The primary number is the section count; the whole-lane cap warning
+// stays in the tooltip and accessible label.
+function dashboardLaneBadgeModel(budget, lane) {
+  const label = lane === "next" ? "NEXT" : "PENDING";
+  const cap =
+    budget && Number.isInteger(budget.cap) && budget.cap >= 1
+      ? budget.cap
+      : lane === "next"
+        ? 15
+        : 10;
+  const section =
+    budget &&
+    (typeof budget.section === "number" || budget.section === null)
+      ? budget.section
+      : budget && typeof budget.count === "number"
+        ? budget.count
+        : null;
+  const laneCount =
+    budget &&
+    (typeof budget.lane === "number" || budget.lane === null)
+      ? budget.lane
+      : budget && typeof budget.laneCount === "number"
+        ? budget.laneCount
+        : null;
+  const today =
+    budget && (typeof budget.today === "number" || budget.today === null)
+      ? budget.today
+      : null;
+  if (
+    section === null ||
+    laneCount === null ||
+    !Number.isInteger(section) ||
+    section < 0 ||
+    !Number.isInteger(laneCount) ||
+    laneCount < 0
+  ) {
+    return {
+      text: `${label} –`,
+      tooltip: `${label} section unavailable; limit ${cap}. Live section excluding Today. Open ${label} Tasks in dash.`,
+      aria: `${label}: unavailable (limit ${cap}). Open ${label} Tasks in dash.`,
+      over: false,
+      placeholder: true,
+      section: null,
+      lane: null,
+      today: null,
+      cap,
+    };
+  }
+  const over = laneCount > cap;
+  const todayText = Number.isInteger(today) ? today : Math.max(0, laneCount - section);
+  const tooltip = over
+    ? `${section} in this section; whole lane ${laneCount}/${cap}; ${todayText} in TODAY · ${laneCount - cap} over the limit. Live section excluding Today. Open ${label} Tasks in dash.`
+    : `${section} in this section; whole lane ${laneCount}/${cap}; ${todayText} in TODAY. Live section excluding Today. Open ${label} Tasks in dash.`;
+  const aria = over
+    ? `${label}: ${section} in this section, whole lane ${laneCount} of ${cap}, ${laneCount - cap} over the limit, ${todayText} in TODAY. Open ${label} Tasks in dash.`
+    : `${label}: ${section} in this section, whole lane ${laneCount} of ${cap}, ${todayText} in TODAY. Open ${label} Tasks in dash.`;
+  return {
+    text: `${label} ${section}`,
+    tooltip,
+    aria,
+    over,
+    placeholder: false,
+    section,
+    lane: laneCount,
+    today: todayText,
+    cap,
+  };
 }
 
 // Pure, testable READY count over Tasks-plugin task objects. `isToday`
@@ -5783,6 +5946,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.readyRefreshTimer = null;
     this.readyLastCapsKey = null;
     this.readyLastDay = null;
+    this.dashboardLaneWidgets = new Set();
+    this.dashboardLaneRefreshTimer = null;
     this.planPaintGen = 0;
     this.planPaintGens = new Map();
     // Synchronous Today cache: `{ date, dailyPath, keys, rank }`. Built
@@ -5814,6 +5979,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           "pending",
         );
       },
+      dashboardLaneBudget: (lane) => this.dashboardLaneBudget(lane),
+      renderDashboardLaneBadge: (parent, options = {}) =>
+        this.renderDashboardLaneBadge(parent, options),
       readyBudget: () => this.readyBudget(),
       renderReadyBadge: (parent, options = {}) =>
         this.renderReadyBadge(parent, options),
@@ -5895,6 +6063,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
             } catch (error) {
               // Best-effort refresh only.
             }
+            try {
+              this.refreshDashboardLaneBadges(new Date());
+            } catch (error) {
+              // Best-effort refresh only.
+            }
           }
           // Calendar-derived labels and escalation refresh each day
           // even when every due task remains due.
@@ -5919,6 +6092,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           this.freshnessTasksGen = (this.freshnessTasksGen || 0) + 1;
           this.schedulePlanBlockRerender();
           this.scheduleReadyRefresh();
+          this.scheduleDashboardLaneRefresh();
           this.scheduleFreshnessStatusBar();
           this.scheduleFreshnessMarksRefresh();
           this.scheduleReviewChipsRefresh();
@@ -5988,6 +6162,17 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.readyRefreshTimer = null;
     if (this.readyWidgets) {
       this.readyWidgets.clear();
+    }
+    if (
+      this.dashboardLaneRefreshTimer !== null &&
+      this.dashboardLaneRefreshTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.dashboardLaneRefreshTimer);
+    }
+    this.dashboardLaneRefreshTimer = null;
+    if (this.dashboardLaneWidgets) {
+      this.dashboardLaneWidgets.clear();
     }
     if (
       this.reviewRefreshTimer !== null &&
@@ -6279,6 +6464,309 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
+  // Dashboard PENDING/NEXT section budget (api v3, additive). The
+  // section count excludes TODAY (and dash.md itself); the whole-lane
+  // count and cap keep their existing semantics for tooltips, cap
+  // warnings, and non-dashboard callers. `count`/`section` is null when
+  // unavailable (no Tasks data, a non-Warm cache, no initial Today
+  // build, or a failed evaluation); unavailable never becomes zero.
+  dashboardLaneBudget(lane, now = new Date()) {
+    try {
+      const normalized = lane === "next" ? "next" : lane === "pending" ? "pending" : null;
+      if (!normalized) {
+        return { section: null, lane: null, count: null, cap: 10, over: false, today: null };
+      }
+      const loaded = loadPlanCaps();
+      const caps = loaded.caps;
+      const effective = effectivePlanCaps(caps);
+      const fallbackCap =
+        normalized === "next" ? effective.maxNext : effective.maxPending;
+      const unavailable = {
+        section: null,
+        lane: null,
+        count: null,
+        laneCount: null,
+        cap: fallbackCap,
+        over: false,
+        today: null,
+      };
+      const tasks = planBlockTasks(this.app);
+      if (!Array.isArray(tasks)) {
+        return unavailable;
+      }
+      const state = this.tasksCacheState();
+      if (typeof state === "string" && state !== "Warm") {
+        return unavailable;
+      }
+      if (!this.isTodayCacheReady(now)) {
+        return unavailable;
+      }
+      let result = null;
+      try {
+        result = dashboardLaneBudgetFromTasks(
+          tasks,
+          now,
+          caps,
+          normalized,
+          (task) => this.isTodayTask(task),
+        );
+      } catch (error) {
+        return unavailable;
+      }
+      if (
+        !result ||
+        !Number.isInteger(result.section) ||
+        result.section < 0 ||
+        !Number.isInteger(result.lane) ||
+        result.lane < 0
+      ) {
+        return unavailable;
+      }
+      return result;
+    } catch (error) {
+      return { section: null, lane: null, count: null, cap: 10, over: false, today: null };
+    }
+  }
+
+  paintDashboardLaneElement(host, lane, budget, options = {}) {
+    try {
+      if (!host || typeof host.createEl !== "function") {
+        return null;
+      }
+      const normalized = lane === "next" ? "next" : "pending";
+      const label = normalized === "next" ? "NEXT" : "PENDING";
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const invalid = Boolean(options.invalid);
+      const model = dashboardLaneBadgeModel(budget, normalized);
+      const tooltip = model.tooltip + (invalid ? " Plan config invalid, using defaults." : "");
+      const anchor = host.createEl("a", {
+        cls: `bob-plan-chip bob-plan-${normalized}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        title: tooltip,
+        href: `dash#${label} Tasks`,
+      });
+      setReadyAnchorContent(
+        anchor,
+        {
+          ...model,
+          count: model.section,
+          cap: model.cap,
+        },
+      );
+      // Rewrite the label span to the lane label (the shared routine
+      // writes READY); the value span already shows the section count.
+      try {
+        const labelSpan = findReadySpan(anchor, READY_LABEL_CLS);
+        if (labelSpan) {
+          setReadySpanText(labelSpan, label);
+        }
+        const valueSpan = findReadySpan(anchor, READY_VALUE_CLS);
+        if (valueSpan) {
+          setReadySpanText(
+            valueSpan,
+            model.placeholder ? "–" : `${model.section}`,
+          );
+        }
+      } catch (error) {
+        // Label rewrite is best-effort only.
+      }
+      if (anchor && typeof anchor.setAttribute === "function") {
+        anchor.setAttribute("aria-label", model.aria);
+        anchor.setAttribute("role", "link");
+        if (!anchor.hasAttribute("tabindex")) {
+          anchor.setAttribute("tabindex", "0");
+        }
+      }
+      const open = (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (workspace && typeof workspace.openLinkText === "function") {
+            const newLeaf = Boolean(event && (event.ctrlKey || event.metaKey));
+            workspace.openLinkText(`dash#${label} Tasks`, sourcePath, newLeaf);
+          }
+        } catch (error) {
+          // The badge still shows the count without the navigation.
+        }
+      };
+      if (anchor && typeof anchor.addEventListener === "function") {
+        anchor.addEventListener("click", open);
+        anchor.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            open(event);
+          }
+        });
+        anchor.addEventListener("mouseover", (event) => {
+          try {
+            const workspace = this.app && this.app.workspace;
+            if (workspace && typeof workspace.trigger === "function") {
+              workspace.trigger("hover-link", {
+                event,
+                source: "bob-plan",
+                hoverParent: host,
+                targetEl: anchor,
+                linktext: `dash#${label} Tasks`,
+                sourcePath,
+              });
+            }
+          } catch (error) {
+            // Hover preview is best-effort only.
+          }
+        });
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  renderDashboardLaneBadge(parent, options = {}) {
+    try {
+      const lane = options.lane === "next" ? "next" : options.lane === "pending" ? "pending" : null;
+      if (!lane) {
+        return null;
+      }
+      if (!parent || typeof parent.createEl !== "function") {
+        return null;
+      }
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const component = options.component || null;
+      if (!this.dashboardLaneWidgets) {
+        this.dashboardLaneWidgets = new Set();
+      }
+      if (component) {
+        for (const widget of Array.from(this.dashboardLaneWidgets)) {
+          if (widget.component === component && widget.lane === lane) {
+            try {
+              if (widget.el && widget.el.parentNode) {
+                widget.el.parentNode.removeChild(widget.el);
+              } else if (widget.el && typeof widget.el.remove === "function") {
+                widget.el.remove();
+              }
+            } catch (error) {
+              // Best-effort removal only.
+            }
+            this.dashboardLaneWidgets.delete(widget);
+          }
+        }
+      }
+      for (const widget of Array.from(this.dashboardLaneWidgets)) {
+        try {
+          const el = widget.el;
+          const detached =
+            !el ||
+            (typeof el.isConnected === "boolean" &&
+              el.isConnected === false &&
+              (!el.parentNode || el.parentNode === null));
+          if (detached && (!el.parentNode || el.parentNode === null)) {
+            if (!parent.contains || !parent.contains(el)) {
+              this.dashboardLaneWidgets.delete(widget);
+            }
+          }
+        } catch (error) {
+          // Keep the widget on inspection failure.
+        }
+      }
+      const loaded = loadPlanCaps();
+      const budget = this.dashboardLaneBudget(lane, new Date());
+      const anchor = this.paintDashboardLaneElement(parent, lane, budget, {
+        sourcePath,
+        invalid: loaded.invalid,
+      });
+      if (!anchor) {
+        return null;
+      }
+      const widget = { el: anchor, lane, sourcePath, component };
+      this.dashboardLaneWidgets.add(widget);
+      if (component && typeof component.register === "function") {
+        try {
+          component.register(() => {
+            this.dashboardLaneWidgets.delete(widget);
+          });
+        } catch (error) {
+          // The widget still refreshes with the batch; only the
+          // component-owned unregister is skipped.
+        }
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshDashboardLaneBadges(now = new Date()) {
+    if (!this.dashboardLaneWidgets || this.dashboardLaneWidgets.size === 0) {
+      return false;
+    }
+    let refreshed = false;
+    const loaded = loadPlanCaps();
+    for (const widget of Array.from(this.dashboardLaneWidgets)) {
+      try {
+        const el = widget.el;
+        const lane = widget.lane === "next" ? "next" : "pending";
+        const label = lane === "next" ? "NEXT" : "PENDING";
+        const parent = el && el.parentNode ? el.parentNode : null;
+        if (!parent || typeof parent.createEl !== "function") {
+          if (!el || !el.isConnected) {
+            this.dashboardLaneWidgets.delete(widget);
+          }
+          continue;
+        }
+        const budget = this.dashboardLaneBudget(lane, now);
+        const model = dashboardLaneBadgeModel(budget, lane);
+        const tooltip = model.tooltip + (loaded.invalid ? " Plan config invalid, using defaults." : "");
+        if (el && typeof el.setAttribute === "function") {
+          try {
+            el.setAttribute("title", tooltip);
+            el.setAttribute("aria-label", model.aria);
+          } catch (error) {
+            // Best-effort label refresh only.
+          }
+        }
+        try {
+          const labelSpan = findReadySpan(el, READY_LABEL_CLS);
+          if (labelSpan) {
+            setReadySpanText(labelSpan, label);
+          }
+          const valueSpan = findReadySpan(el, READY_VALUE_CLS);
+          if (valueSpan) {
+            setReadySpanText(valueSpan, model.placeholder ? "–" : `${model.section}`);
+          }
+        } catch (error) {
+          // One stale widget never breaks the others.
+        }
+        refreshed = true;
+      } catch (error) {
+        // One stale widget never breaks the others.
+      }
+    }
+    return refreshed;
+  }
+
+  scheduleDashboardLaneRefresh() {
+    if (
+      this.dashboardLaneRefreshTimer !== null &&
+      this.dashboardLaneRefreshTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" && typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.dashboardLaneRefreshTimer = schedule(() => {
+      this.dashboardLaneRefreshTimer = null;
+      try {
+        this.refreshDashboardLaneBadges(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+    }, 150);
+  }
+
   // Shared READY element renderer used by both the daily `bob-plan`
   // block and the dashboard. Returns the anchor element or null. The
   // element structure (separate READY label and count/cap value spans),
@@ -6521,6 +7009,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         // Best-effort refresh only.
       }
       try {
+        this.refreshDashboardLaneBadges(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+      try {
         this.rerenderPlanBlocks();
       } catch (error) {
         // Best-effort refresh only.
@@ -6542,6 +7035,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         this.readyLastCapsKey = key;
         this.readyLastDay = day;
         this.refreshReadyBadges(now);
+        this.refreshDashboardLaneBadges(now);
         this.schedulePlanBlockRerender();
         return true;
       }
@@ -7042,6 +7536,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       }
       for (const refresh of [
         () => this.scheduleReadyRefresh(),
+        () => this.scheduleDashboardLaneRefresh(),
         () => this.scheduleFreshnessStatusBar(),
         () => this.scheduleFreshnessMarksRefresh(),
         () => this.scheduleReviewChipsRefresh(),
@@ -7387,6 +7882,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         // The generation still counts; the memo rebuilds on next access.
       }
       this.scheduleReadyRefresh();
+      this.scheduleDashboardLaneRefresh();
       this.scheduleFreshnessStatusBar();
       this.scheduleFreshnessMarksRefresh();
       this.scheduleReviewChipsRefresh();
@@ -7413,6 +7909,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         // The memo rebuilds on next access.
       }
       this.scheduleReadyRefresh();
+      this.scheduleDashboardLaneRefresh();
       this.scheduleFreshnessStatusBar();
       this.scheduleFreshnessMarksRefresh();
       this.scheduleReviewChipsRefresh();
@@ -8882,6 +9379,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       this.planBlockRerenderTimer !== undefined
     ) {
       this.scheduleReadyRefresh();
+      this.scheduleDashboardLaneRefresh();
       return;
     }
     const schedule =
@@ -8894,12 +9392,18 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       this.rerenderPlanBlocks();
     }, 150);
     this.scheduleReadyRefresh();
+    this.scheduleDashboardLaneRefresh();
   }
 
   rerenderPlanBlocks() {
     if (!this.planBlockViews) {
       try {
         this.refreshReadyBadges(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+      try {
+        this.refreshDashboardLaneBadges(new Date());
       } catch (error) {
         // Best-effort refresh only.
       }
@@ -8914,6 +9418,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
     try {
       this.refreshReadyBadges(new Date());
+    } catch (error) {
+      // Best-effort refresh only.
+    }
+    try {
+      this.refreshDashboardLaneBadges(new Date());
     } catch (error) {
       // Best-effort refresh only.
     }
@@ -10232,6 +10741,11 @@ module.exports.helpers = {
   computeTodayLinks,
   resolveTodayKeys,
   laneBudgetFromTasks,
+  dashboardLaneBudgetFromTasks,
+  dashboardLaneBadgeModel,
+  dashboardLaneSectionVisible,
+  dashboardLaneStatusMatches,
+  dashboardSectionBaseVisible,
   readyCountFromTasks,
   readyBudgetFromTasks,
   readyBadgeModel,

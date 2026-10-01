@@ -76,7 +76,9 @@ a.bob-plan-ready:hover {
    spacing do not distort the value. Inside the daily `bob-plan` block
    the spans instead take on the block's single-tone style, so READY
    reads like `PENDING n/10` (see the daily-block section below). */
-.bob-plan-ready .bob-plan-ready-label {
+.bob-plan-ready .bob-plan-ready-label,
+.bob-plan-pending .bob-plan-ready-label,
+.bob-plan-next .bob-plan-ready-label {
   color: var(--text-muted);
   font-size: 0.78em;
   font-variant-caps: all-small-caps;
@@ -84,7 +86,9 @@ a.bob-plan-ready:hover {
   letter-spacing: 0.045em;
 }
 
-.bob-plan-ready .bob-plan-ready-value {
+.bob-plan-ready .bob-plan-ready-value,
+.bob-plan-pending .bob-plan-ready-value,
+.bob-plan-next .bob-plan-ready-value {
   color: var(--bob-plan-accent);
   font-size: 0.9em;
   font-variant-caps: normal;

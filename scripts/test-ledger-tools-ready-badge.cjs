@@ -287,12 +287,16 @@ test("READY predicate: dash self-exclusion, daily files, templates, conflicts, h
     readyTask({ path: "notes/hidden.md", tags: ["#task", "#hide"] }),
     readyTask({ path: "notes/subtag.md", tags: ["#task", "#hide/x"] }),
     readyTask({ path: "notes/upper.md", tags: ["#task", "#Hide"] }),
+    readyTask({ path: "notes/case-tpl.md", tags: ["#task"] }),
   ];
-  // dash.md, templates, _conflicts, and the exact #hide tag stay out. The
-  // hide-subtag distinction is pinned here: `#hide/x` and `#Hide` count for
-  // READY (dashboard semantics) even though the broader lane helper hides
-  // them.
-  assert.equal(readyCountFromTasks(tasks, day, () => false), 4);
+  // dash.md, templates, _conflicts, and every `#hide` variant stay out.
+  // Tasks `tag does not include #hide` is a case-insensitive substring
+  // match, so `#hide/x` and `#Hide` are excluded like the exact tag.
+  // Case variants of template/conflict paths are excluded too.
+  tasks.push(readyTask({ path: "_TEMPLATES/case.md" }));
+  tasks.push(readyTask({ path: "notes/_Conflicts/case.md" }));
+  tasks.push(readyTask({ path: "DASH.MD" }));
+  assert.equal(readyCountFromTasks(tasks, day, () => false), 3);
 });
 
 test("READY predicate: Today exclusion", () => {
@@ -305,11 +309,13 @@ test("READY predicate: Today exclusion", () => {
   assert.equal(readyCountFromTasks(tasks, day, isToday), 1);
 });
 
-test("readyTaskVisible pins the hide-subtag distinction", () => {
+test("readyTaskVisible excludes hide variants like Tasks", () => {
   const day = new Date(2026, 8, 30).getFullYear() * 10000 + 9 * 100 + 30;
   assert.equal(readyTaskVisible(readyTask({ tags: ["#task", "#hide"] }), day), false);
-  assert.equal(readyTaskVisible(readyTask({ tags: ["#task", "#hide/x"] }), day), true);
-  assert.equal(readyTaskVisible(readyTask({ tags: ["#task", "#Hide"] }), day), true);
+  assert.equal(readyTaskVisible(readyTask({ tags: ["#task", "#hide/x"] }), day), false);
+  assert.equal(readyTaskVisible(readyTask({ tags: ["#task", "#Hide"] }), day), false);
+  assert.equal(readyTaskVisible(readyTask({ tags: ["#task", "#HIDE/now"] }), day), false);
+  assert.equal(readyTaskVisible(readyTask({ tags: ["#task"] }), day), true);
 });
 
 // --- Shared badge ------------------------------------------------------------
@@ -1363,14 +1369,15 @@ test("READY speaks each host's chip language (daily single-tone, dash two-tone)"
   );
   const styles = fs.readFileSync(stylesPath, "utf8");
   const flat = styles.replace(/\s+/g, " ");
-  // The two-tone default stays for the dashboard and other hosts.
+  // The two-tone default stays for the dashboard and other hosts
+  // (PENDING/NEXT dashboard badges share the same label/value spans).
   assert.match(
     flat,
-    /\.bob-plan-ready \.bob-plan-ready-label \{[^}]*color: var\(--text-muted\)/,
+    /\.bob-plan-ready \.bob-plan-ready-label[^{]*\{[^}]*color: var\(--text-muted\)/,
   );
   assert.match(
     flat,
-    /\.bob-plan-ready \.bob-plan-ready-value \{[^}]*color: var\(--bob-plan-accent\)/,
+    /\.bob-plan-ready \.bob-plan-ready-value[^{]*\{[^}]*color: var\(--bob-plan-accent\)/,
   );
   // Inside the daily block the spans inherit the chip's single-tone type.
   const dailyRule = flat.match(

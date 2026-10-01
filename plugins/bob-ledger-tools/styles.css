@@ -146,3 +146,90 @@ a.bob-plan-ready:hover {
 .bob-freshness-unavailable {
   color: var(--text-faint, var(--text-muted));
 }
+
+/* Task freshness mark (api v3): a small theme-native rendering of
+   `[fresh:: YYYY-MM-DD]` — `✓ today`, a draining lease ring with its
+   age, or `⟳ Nd` when due. Display-only; nothing ever writes it. */
+
+.bob-fresh-mark {
+  --bob-fresh-color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22em;
+  margin: 0 0.08em;
+  padding: 0.06em 0.14em;
+  border-radius: 999px;
+  color: var(--bob-fresh-color);
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  line-height: 1.1;
+  white-space: nowrap;
+  vertical-align: 0.05em;
+  opacity: 0.85;
+  cursor: default;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease;
+}
+
+.bob-fresh-mark[data-fold-space="true"] {
+  margin-inline-start: 0.3em;
+}
+
+.bob-fresh-mark:hover {
+  opacity: 1;
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.bob-fresh-mark-glyph {
+  width: 1.08em;
+  height: 1.08em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bob-fresh-mark-track {
+  opacity: 0.26;
+}
+
+.bob-fresh-mark[data-tone="today"] .bob-fresh-mark-track {
+  opacity: 1;
+}
+
+.bob-fresh-mark-interval {
+  opacity: 0.6;
+  font-weight: 450;
+}
+
+.bob-fresh-mark[data-tone="today"] {
+  --bob-fresh-color: var(--task-status-next, var(--color-green, #3f8f5f));
+}
+
+.bob-fresh-mark[data-tone="resting"] {
+  --bob-fresh-color: var(--text-faint, var(--text-muted));
+  opacity: 0.75;
+}
+
+.bob-fresh-mark[data-tone="due"] {
+  --bob-fresh-color: var(--color-orange, #d9822b);
+  padding: 0.08em 0.48em 0.08em 0.36em;
+  background-color: color-mix(in srgb, var(--color-orange, #d9822b) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-orange, #d9822b) 32%, transparent);
+  font-weight: 650;
+  opacity: 1;
+}
+
+.bob-fresh-mark[data-tone="due"]:hover {
+  background-color: color-mix(in srgb, var(--color-orange, #d9822b) 20%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-fresh-mark {
+    transition: none;
+  }
+}

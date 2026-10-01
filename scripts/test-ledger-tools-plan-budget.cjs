@@ -405,8 +405,7 @@ test("planBlockTargetPath prefers the containing daily note", () => {
 
 test("planBlockModel degrades to placeholders, never an error", () => {
   const model = planBlockModel({ content: null, tasks: null, today: new Date() });
-  assert.equal(model.planText, "PLAN –");
-  assert.equal(model.todayText, "TODAY –");
+  assert.equal(model.planText, "TODAY –");
   assert.equal(model.nextText, "NEXT –");
   assert.equal(model.pendingText, "PENDING –");
   assert.equal(model.themesText, "");
@@ -438,8 +437,7 @@ test("planBlockModel renders chips, themes, and lints", () => {
     app: {},
     isToday: (task) => task.blockLink === " ^aaa",
   });
-  assert.equal(model.planText, "PLAN 1/3 · 1/10");
-  assert.equal(model.todayText, "TODAY 1");
+  assert.equal(model.planText, "TODAY 1/3 · 1/10");
   assert.equal(model.nextText, "NEXT 1/15");
   assert.equal(model.pendingText, "PENDING 1/10");
   assert.equal(model.themesText, "★ GOALS");

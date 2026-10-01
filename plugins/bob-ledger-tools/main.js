@@ -5985,7 +5985,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         container.setAttribute("role", "status");
         container.setAttribute(
           "aria-label",
-          `${model.planText}, ${model.todayText}, ${model.pendingText}, ${model.nextText}, ${model.readyText}${model.over ? ", over plan" : ""}`,
+          `${model.planText}, ${model.pendingText}, ${model.nextText}, ${model.readyText}${model.over ? ", over plan" : ""}`,
         );
         const planChip = container.createEl("span", {
           cls: `bob-plan-chip bob-plan-plan${
@@ -5994,15 +5994,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           text: model.planText,
           title: model.planTitle,
         });
-        planChip.setAttribute("aria-label", `Plan budget: ${model.planTitle}`);
+        planChip.setAttribute("aria-label", `TODAY: ${model.planTitle}`);
         const laneChips = [
-          {
-            cls: "bob-plan-today",
-            text: model.todayText,
-            title: "Open TODAY tasks in dash",
-            href: "dash#TODAY Tasks",
-            over: false,
-          },
           {
             cls: "bob-plan-pending",
             text: model.pendingText,
@@ -6985,7 +6978,7 @@ function planBlockTasks(app) {
 // Synchronous view-model for the ```bob-plan block. Never throws: missing
 // content, caps, or Tasks all degrade to `–` placeholders, never an error.
 // `isToday` is the caller's Today predicate over cached Tasks tasks
-// (the plugin passes its synchronous cache); without it TODAY shows `–`.
+// (the plugin passes its synchronous cache); it still feeds READY.
 // READY is the shared live current backlog (Today excluded); it never
 // changes what the ledger's PLAN status means.
 function planBlockModel({
@@ -7033,16 +7026,6 @@ function planBlockModel({
       ready = null;
     }
   }
-  let todayCount = null;
-  if (hasTasks) {
-    try {
-      todayCount = taskList.filter(
-        (task) => !planTaskIsDone(task) && isTodayPredicate(task),
-      ).length;
-    } catch (error) {
-      todayCount = null;
-    }
-  }
   const over =
     budget.status === "over" ||
     (hasTasks && (next.over || pending.over));
@@ -7073,12 +7056,11 @@ function planBlockModel({
     hasContent: typeof content === "string",
     hasTasks,
     planText: budget.hasSection
-      ? `PLAN ${budget.themes.count}/${budget.themes.cap} · ${budget.links.count}/${budget.links.cap}`
-      : "PLAN –",
+      ? `TODAY ${budget.themes.count}/${budget.themes.cap} · ${budget.links.count}/${budget.links.cap}`
+      : "TODAY –",
     planTitle: budget.hasSection
       ? themeCounts.join(" · ") || "no themes"
       : "no Pomodoros section",
-    todayText: todayCount === null ? "TODAY –" : `TODAY ${todayCount}`,
     nextText: hasTasks ? `NEXT ${next.count}/${next.cap}` : "NEXT –",
     pendingText: hasTasks
       ? `PENDING ${pending.count}/${pending.cap}`
@@ -7096,7 +7078,6 @@ function planBlockModel({
     ),
     over,
     budget,
-    todayCount,
     next,
     pending,
     ready,

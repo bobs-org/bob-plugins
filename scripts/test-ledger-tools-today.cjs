@@ -201,9 +201,8 @@ test("T6 fenced: links inside fenced blocks drop", () => {
 
 // docs/plan.md T7: linked `[x]` and `[-]` tasks drop out; `[?]` stays.
 // Task status lives in the Tasks cache in JavaScript, so the link layer
-// lists every dedicated link while the block chip counts only not-done
-// cached tasks where `isToday` is true.
-test("T7 status: done and cancelled cached tasks leave the TODAY count", () => {
+// lists every dedicated link.
+test("T7 status: the link layer lists every dedicated link", () => {
   const content =
     "## Pomodoros\n\n" +
     "- [ ] () — GOALS\n" +
@@ -217,27 +216,6 @@ test("T7 status: done and cancelled cached tasks leave the TODAY count", () => {
     "a.md#z",
     "a.md#w",
   ]);
-  const { planBlockModel } = helpers;
-  const done = (symbol, type, blockLink) => ({
-    description: blockLink,
-    tags: ["#task"],
-    path: "a.md",
-    blockLink,
-    status: { type, name: type, symbol },
-  });
-  const model = planBlockModel({
-    content,
-    tasks: [
-      done("x", "DONE", " ^x"),
-      done("-", "CANCELLED", " ^y"),
-      done("?", "TODO", " ^z"),
-      done(" ", "TODO", " ^w"),
-    ],
-    today: new Date(2026, 9, 1),
-    caps: defaultPlanCaps(),
-    isToday: () => true,
-  });
-  assert.equal(model.todayText, "TODAY 2");
 });
 
 // docs/plan.md T8: `[[missing#^q]]` gives no key (Rust reports

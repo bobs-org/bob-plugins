@@ -69,12 +69,13 @@ a.bob-plan-ready:hover {
   transform: translateY(-1px);
 }
 
-/* Structured READY content: separate muted small-caps label and
-   accent-colored tabular value, matching the dashboard's neighboring
-   `.task-count-label` / `.task-count-value` chips. Scoped to
+/* Structured READY content: the two-tone default (muted small-caps
+   label, accent-colored tabular value) matches the dashboard's
+   neighboring `.task-count-label` / `.task-count-value` chips. Scoped to
    `.bob-plan-ready` so the parent chip's small-caps, weight, and letter
-   spacing do not distort the value, and so both the daily `bob-plan`
-   wrapper and the dashboard host render identically. */
+   spacing do not distort the value. Inside the daily `bob-plan` block
+   the spans instead take on the block's single-tone style, so READY
+   reads like `PENDING n/10` (see the daily-block section below). */
 .bob-plan-ready .bob-plan-ready-label {
   color: var(--text-muted);
   font-size: 0.78em;
@@ -120,6 +121,38 @@ a.bob-plan-ready:hover {
   font-variant-numeric: tabular-nums;
   font-weight: 750;
   letter-spacing: normal;
+}
+
+/* Daily `bob-plan` block: shared split chips speak the block's
+   single-tone chip language (one dark small-caps run like
+   `PENDING 50/10`); the accent only tints border and background. */
+.bob-plan .bob-plan-ready,
+.bob-plan .bob-plan-review {
+  gap: 0;
+  transition: none;
+}
+
+.bob-plan a.bob-plan-ready:hover {
+  transform: none;
+}
+
+.bob-plan .bob-plan-ready .bob-plan-ready-label,
+.bob-plan .bob-plan-ready .bob-plan-ready-value,
+.bob-plan .bob-plan-review .bob-plan-review-label,
+.bob-plan .bob-plan-review .bob-plan-review-value {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  font-variant-caps: inherit;
+  font-variant-numeric: inherit;
+  letter-spacing: inherit;
+}
+
+/* A real (no-break) word space instead of the flex gap, so the
+   label/value spacing equals the lane chips' `PENDING 50/10`. */
+.bob-plan .bob-plan-ready .bob-plan-ready-value::before,
+.bob-plan .bob-plan-review .bob-plan-review-value::before {
+  content: "\00a0";
 }
 
 .bob-plan-chip.bob-plan-unavailable {

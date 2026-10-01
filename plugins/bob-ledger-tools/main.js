@@ -1863,6 +1863,9 @@ const PLAN_LINT_INVENTORY_LABEL = "inventory_label_open";
 const PLAN_LINT_SUBHEADING = "subheading_in_pomodoros";
 const PLAN_LINT_NEXT_CAP = "next_cap_exceeded";
 const PLAN_LINT_PENDING_CAP = "pending_cap_exceeded";
+// Emitted only by the bob-ledger-tools `bob-plan` block: `bob plan` has
+// no native READY count.
+const PLAN_LINT_READY_CAP = "ready_cap_exceeded";
 const PLAN_DAILY_PATH_RE = /(^|\/)\d{4}\/\d{8}\.md$/;
 const PLAN_ENTRY_RE = /^- \[([^\]])\]/;
 const PLAN_PLACEHOLDER_RE = /^\([ \t]*\)/;
@@ -6279,8 +6282,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   // Shared READY element renderer used by both the daily `bob-plan`
   // block and the dashboard. Returns the anchor element or null. The
   // element structure (separate READY label and count/cap value spans),
-  // classes, fraction, over state, tooltip, and destination are identical
-  // on both surfaces.
+  // classes, fraction, over state, tooltip, and destination are shared;
+  // each host page styles them in its own chip language through
+  // `styles.css` (single-tone inside the daily block, two-tone on the
+  // dashboard).
   paintReadyElement(host, budget, options = {}) {
     try {
       if (!host || typeof host.createEl !== "function") {
@@ -10020,7 +10025,8 @@ function planBlockModel({
   }
   const over =
     budget.status === "over" ||
-    (hasTasks && (next.over || pending.over));
+    (hasTasks && (next.over || pending.over)) ||
+    (hasTasks && ready && ready.over);
   const lintWarnings = budget.warnings.slice();
   if (hasTasks && next.over) {
     lintWarnings.push({
@@ -10032,6 +10038,17 @@ function planBlockModel({
     lintWarnings.push({
       code: PLAN_LINT_PENDING_CAP,
       message: `PENDING has ${pending.count}/${pending.cap} tasks; release some with Alt+N`,
+    });
+  }
+  if (
+    hasTasks &&
+    ready &&
+    Number.isInteger(ready.count) &&
+    ready.over
+  ) {
+    lintWarnings.push({
+      code: PLAN_LINT_READY_CAP,
+      message: `READY has ${ready.count}/${ready.cap} tasks; prune at the weekly review`,
     });
   }
   const themeCounts = budget.entries

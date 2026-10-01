@@ -1,7 +1,9 @@
 // Focused READY backlog coverage for the shared daily/dashboard badge
 // (`docs/plan.md` "READY backlog" is the authoritative definition).
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 
 class TestMarkdownView {}
@@ -1185,4 +1187,222 @@ test("planBlockModel gates READY and shares the lane tooltip", () => {
   });
   assert.equal(legacy.readyText, "READY 4/100");
   assert.match(legacy.readyModel.tooltip, /4 ready tasks; limit 100/);
+});
+
+// --- READY cap lint -----------------------------------------------------------
+// Plugin-only lint: `bob plan` has no native READY count, so only the
+// daily `bob-plan` block raises `ready_cap_exceeded`.
+
+test("READY lint appears only on a strict excess", () => {
+  const day = new Date(2026, 8, 30);
+  const makeTasks = (count) =>
+    Array.from({ length: count }, (_, index) =>
+      readyTask({ path: `notes/lint-ready-${index}.md` }),
+    );
+  const modelOf = (tasks) =>
+    planBlockModel({
+      content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+      tasks,
+      today: day,
+      caps: defaultPlanCaps(),
+      sourcePath: "2026/20260930.md",
+      app: {},
+      isToday: () => false,
+    });
+  const over = modelOf(makeTasks(101));
+  const overLints = over.lints.filter((lint) =>
+    lint.endsWith("ready_cap_exceeded"),
+  );
+  assert.equal(overLints.length, 1);
+  assert.equal(
+    overLints[0],
+    "READY has 101/100 tasks; prune at the weekly review  ready_cap_exceeded",
+  );
+  assert.equal(over.over, true);
+  // READY over never changes the PLAN status.
+  assert.equal(over.budget.status, "ok");
+  const atCap = modelOf(makeTasks(100));
+  assert.deepEqual(
+    atCap.lints.filter((lint) => lint.endsWith("ready_cap_exceeded")),
+    [],
+  );
+  assert.equal(atCap.over, false);
+});
+
+test("READY lint uses a custom cap", () => {
+  const day = new Date(2026, 8, 30);
+  const model = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+    tasks: Array.from({ length: 6 }, (_, index) =>
+      readyTask({ path: `notes/custom-${index}.md` }),
+    ),
+    today: day,
+    caps: { maxReady: 5 },
+    sourcePath: "2026/20260930.md",
+    app: {},
+    isToday: () => false,
+  });
+  const readyLints = model.lints.filter((lint) =>
+    lint.endsWith("ready_cap_exceeded"),
+  );
+  assert.equal(readyLints.length, 1);
+  assert.equal(
+    readyLints[0],
+    "READY has 6/5 tasks; prune at the weekly review  ready_cap_exceeded",
+  );
+  assert.equal(model.over, true);
+});
+
+test("lane lints appear in NEXT, PENDING, READY order", () => {
+  const day = new Date(2026, 8, 30);
+  const tasks = [
+    ...Array.from({ length: 16 }, (_, index) =>
+      laneTask({
+        path: `notes/next-${index}.md`,
+        status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+      }),
+    ),
+    ...Array.from({ length: 11 }, (_, index) =>
+      laneTask({
+        path: `notes/pending-${index}.md`,
+        status: { type: "IN_PROGRESS", name: "In Progress", symbol: "/" },
+      }),
+    ),
+    ...Array.from({ length: 101 }, (_, index) =>
+      readyTask({ path: `notes/ready-${index}.md` }),
+    ),
+  ];
+  const model = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+    tasks,
+    today: day,
+    caps: defaultPlanCaps(),
+    sourcePath: "2026/20260930.md",
+    app: {},
+    isToday: () => false,
+  });
+  assert.deepEqual(model.lints, [
+    "NEXT has 16/15 tasks; release some with Alt+N  next_cap_exceeded",
+    "PENDING has 11/10 tasks; release some with Alt+N  pending_cap_exceeded",
+    "READY has 101/100 tasks; prune at the weekly review  ready_cap_exceeded",
+  ]);
+});
+
+test("READY lint uses the gated count", () => {
+  const day = new Date(2026, 8, 30);
+  const tasks = [
+    ...Array.from({ length: 101 }, (_, index) =>
+      readyTask({ path: `notes/ready-${index}.md` }),
+    ),
+    ...Array.from({ length: 4 }, (_, index) =>
+      readyTask({ path: `notes/new-${index}.md` }),
+    ),
+  ];
+  const model = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+    tasks,
+    today: day,
+    caps: defaultPlanCaps(),
+    sourcePath: "2026/20260930.md",
+    app: {},
+    isToday: () => false,
+    isReviewBucket: (task) => String(task.path).includes("notes/new-"),
+  });
+  assert.equal(model.readyText, "READY 101/100");
+  assert.equal(model.ready.count, 101);
+  assert.equal(model.ready.cap, 100);
+  const readyLints = model.lints.filter((lint) =>
+    lint.endsWith("ready_cap_exceeded"),
+  );
+  assert.equal(readyLints.length, 1);
+  assert.equal(
+    readyLints[0],
+    "READY has 101/100 tasks; prune at the weekly review  ready_cap_exceeded",
+  );
+});
+
+test("READY lint stays silent while unavailable", () => {
+  const day = new Date(2026, 8, 30);
+  const missing = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+    tasks: null,
+    today: day,
+    caps: defaultPlanCaps(),
+    sourcePath: "2026/20260930.md",
+    app: {},
+    isToday: () => false,
+  });
+  assert.equal(missing.readyText, "READY –");
+  assert.deepEqual(
+    missing.lints.filter((lint) => lint.endsWith("ready_cap_exceeded")),
+    [],
+  );
+  const throwing = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+    tasks: [readyTask({ path: "notes/a.md" })],
+    today: day,
+    caps: defaultPlanCaps(),
+    sourcePath: "2026/20260930.md",
+    app: {},
+    isToday: () => {
+      throw new Error("today blew up");
+    },
+  });
+  assert.equal(throwing.ready, null);
+  assert.equal(throwing.readyText, "READY –");
+  assert.deepEqual(
+    throwing.lints.filter((lint) => lint.endsWith("ready_cap_exceeded")),
+    [],
+  );
+});
+
+test("READY speaks each host's chip language (daily single-tone, dash two-tone)", () => {
+  const stylesPath = path.join(
+    __dirname,
+    "../plugins/bob-ledger-tools/styles.css",
+  );
+  const styles = fs.readFileSync(stylesPath, "utf8");
+  const flat = styles.replace(/\s+/g, " ");
+  // The two-tone default stays for the dashboard and other hosts.
+  assert.match(
+    flat,
+    /\.bob-plan-ready \.bob-plan-ready-label \{[^}]*color: var\(--text-muted\)/,
+  );
+  assert.match(
+    flat,
+    /\.bob-plan-ready \.bob-plan-ready-value \{[^}]*color: var\(--bob-plan-accent\)/,
+  );
+  // Inside the daily block the spans inherit the chip's single-tone type.
+  const dailyRule = flat.match(
+    /([^{}]*\.bob-plan \.bob-plan-ready \.bob-plan-ready-label[^{}]*)\{([^}]*)\}/,
+  );
+  assert.ok(dailyRule, "expected a daily-block READY span rule");
+  assert.ok(
+    dailyRule[1].includes(".bob-plan .bob-plan-ready .bob-plan-ready-value"),
+    `expected the daily rule to cover the value span, got: ${dailyRule[1]}`,
+  );
+  for (const declaration of [
+    "color: inherit",
+    "font-size: inherit",
+    "font-weight: inherit",
+    "font-variant-caps: inherit",
+    "letter-spacing: inherit",
+  ]) {
+    assert.ok(
+      dailyRule[2].includes(declaration),
+      `expected the daily rule to set ${declaration}`,
+    );
+  }
+  assert.match(
+    flat,
+    /\.bob-plan \.bob-plan-ready[^{,]*,\s*\.bob-plan \.bob-plan-review \{[^}]*gap: 0/,
+  );
+  assert.match(
+    flat,
+    /\.bob-plan a\.bob-plan-ready:hover \{[^}]*transform: none/,
+  );
+  assert.match(
+    flat,
+    /\.bob-plan \.bob-plan-ready \.bob-plan-ready-value::before[^{]*\{[^}]*content: "\\00a0"/,
+  );
 });

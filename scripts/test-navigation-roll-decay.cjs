@@ -720,3 +720,405 @@ test("buildPriorityRollPreviewModel carries the row copy for every kind", () => 
   );
   assert.equal(Object.isFrozen(rollOn), true);
 });
+
+test("picker-single recognizes the recommended-roll keypress", () => {
+  assert.equal(
+    helpers.isRecommendedRollKeydown({ key: "Enter", ctrlKey: true }),
+    true,
+  );
+  assert.equal(
+    helpers.isRecommendedRollKeydown({ key: "Enter", metaKey: true }),
+    true,
+  );
+  assert.equal(helpers.isRecommendedRollKeydown({ key: "Enter" }), false);
+  assert.equal(
+    helpers.isRecommendedRollKeydown({
+      key: "Enter",
+      ctrlKey: true,
+      shiftKey: true,
+    }),
+    false,
+  );
+  assert.equal(
+    helpers.isRecommendedRollKeydown({
+      key: "Enter",
+      ctrlKey: true,
+      altKey: true,
+    }),
+    false,
+  );
+  assert.equal(
+    helpers.isRecommendedRollKeydown({ key: "r", ctrlKey: true }),
+    false,
+  );
+  assert.equal(helpers.isRecommendedRollKeydown(null), false);
+});
+
+test("picker-single footers carry the recommended-roll hints", () => {
+  const baseDate = new Date(2026, 8, 30);
+  const property = decayProperty();
+  const roll = helpers.planPriorityRollRecommendation({
+    property,
+    currentValue: "medium",
+    streak: 0,
+    currentScheduled: "2026-10-01",
+    baseDate,
+    random: () => 0,
+  });
+  const preview = helpers.buildPriorityRollPreviewModel(roll, baseDate);
+  assert.equal(preview.footerLabel, "Roll P2");
+
+  const stageOne = helpers.getBulletPropertyStageOneHints(preview);
+  assert.deepEqual(
+    stageOne.map((hint) => `${hint.keys.join("+")} ${hint.label}`),
+    [
+      "↑+↓ Navigate",
+      "^N+^P Move",
+      "↵ Choose",
+      "^↵ Roll P2",
+      "^R Re-roll",
+      "^D Delete",
+      "esc Dismiss",
+    ],
+  );
+
+  const cancelPreview = helpers.buildPriorityRollPreviewModel(
+    { kind: "cancel", level: { label: "P4" }, streak: 1 },
+    baseDate,
+  );
+  const cancelHints = helpers.getBulletPropertyStageOneHints(cancelPreview);
+  assert.deepEqual(
+    cancelHints.map((hint) => `${hint.keys.join("+")} ${hint.label}`),
+    [
+      "↑+↓ Navigate",
+      "^N+^P Move",
+      "↵ Choose",
+      "^↵ Cancel task",
+      "^D Delete",
+      "esc Dismiss",
+    ],
+  );
+
+  assert.deepEqual(
+    helpers.getBulletPropertyStageOneHints(null).map((hint) => hint.label),
+    ["Navigate", "Move", "Choose", "Delete", "Dismiss"],
+  );
+
+  const stageTwo = helpers.getBulletPropertyStageTwoHints(true, preview);
+  assert.deepEqual(
+    stageTwo.map((hint) => `${hint.keys.join("+")} ${hint.label}`),
+    [
+      "↑+↓ Navigate",
+      "^N+^P Move",
+      "↵ Set",
+      "^R Re-roll",
+      "^↵ Roll P2",
+      "esc Dismiss",
+    ],
+  );
+  assert.deepEqual(
+    helpers
+      .getBulletPropertyStageTwoHints(true, null)
+      .map((hint) => `${hint.keys.join("+")} ${hint.label}`),
+    ["↑+↓ Navigate", "^N+^P Move", "↵ Set", "^R Re-roll", "esc Dismiss"],
+  );
+});
+
+test("picker-single shares one roll between the preview and the pinned row", () => {
+  const baseDate = new Date(2026, 8, 30);
+  const property = decayProperty();
+  const roll = helpers.planPriorityRollRecommendation({
+    property,
+    currentValue: "medium",
+    streak: 0,
+    currentScheduled: "2026-10-01",
+    baseDate,
+    random: () => 0,
+  });
+  assert.equal(roll.kind, "roll");
+  assert.equal(roll.date, "2026-10-08");
+
+  const shared = helpers.createPriorityRollDateItemFromRecommendation(
+    roll,
+    "2026-10-01",
+  );
+  const fresh = helpers.createPriorityRollDateItem(
+    property.levels[1],
+    baseDate,
+    "2026-10-01",
+    () => 0,
+  );
+  assert.deepEqual(shared, fresh);
+
+  assert.equal(
+    helpers.createPriorityRollDateItemFromRecommendation(
+      { kind: "decay", fromLevel: { label: "P2" } },
+      "",
+    ),
+    null,
+  );
+  assert.equal(
+    helpers.createPriorityRollDateItemFromRecommendation(
+      { kind: "roll", level: { label: "P2" }, date: "not-a-date" },
+      "",
+    ),
+    null,
+  );
+
+  assert.equal(
+    helpers.getPriorityRollFilterText(roll, baseDate),
+    "roll P2 roll roll 1/1",
+  );
+  assert.equal(
+    helpers.getPriorityRollCurrentLabel({
+      kind: "decay",
+      fromLevel: { label: "P2" },
+      toLevel: { label: "P3" },
+    }),
+    "P2",
+  );
+  assert.equal(helpers.getPriorityRollCurrentLabel(roll), "P2");
+  assert.equal(helpers.getPriorityRollCurrentLabel(null), "");
+});
+
+test("picker-single plans the next-roll hint for the notice chips", () => {
+  const baseDate = new Date(2026, 8, 30);
+  const property = decayProperty();
+  const plan = (currentValue, streak, extra = {}) =>
+    helpers.planPriorityRollRecommendation({
+      property,
+      currentValue,
+      streak,
+      currentScheduled: "2026-10-01",
+      baseDate,
+      random: () => 0,
+      ...extra,
+    });
+
+  assert.deepEqual(
+    helpers.planNextPriorityRollHint(property, plan("medium", 0)),
+    { next: "decay", nextLabel: "P3" },
+  );
+
+  const roomy = decayProperty({ decay: { rolls: 3 } });
+  const early = helpers.planPriorityRollRecommendation({
+    property: roomy,
+    currentValue: "medium",
+    streak: 1,
+    currentScheduled: "2026-10-01",
+    baseDate,
+    random: () => 0,
+  });
+  assert.equal(early.step, 2);
+  assert.equal(helpers.planNextPriorityRollHint(roomy, early), null);
+
+  assert.deepEqual(
+    helpers.planNextPriorityRollHint(property, plan("lowest", 0)),
+    { next: "cancel", nextLabel: "" },
+  );
+
+  const decay = plan("medium", 1);
+  assert.equal(decay.kind, "decay");
+  assert.equal(
+    helpers.planNextPriorityRollHint(property, decay),
+    null,
+  );
+
+  const instantDecay = decayProperty({ levelRolls: { P3: 0 } });
+  const intoInstant = helpers.planPriorityRollRecommendation({
+    property: instantDecay,
+    currentValue: "medium",
+    streak: 1,
+    currentScheduled: "2026-10-01",
+    baseDate,
+    random: () => 0,
+  });
+  assert.equal(intoInstant.kind, "decay");
+  assert.deepEqual(
+    helpers.planNextPriorityRollHint(instantDecay, intoInstant),
+    { next: "decay", nextLabel: "P4" },
+  );
+
+  const offProperty = decayProperty({ decay: false });
+  const offRoll = helpers.planPriorityRollRecommendation({
+    property: offProperty,
+    currentValue: "medium",
+    streak: 5,
+    currentScheduled: "2026-10-01",
+    baseDate,
+    random: () => 0,
+  });
+  assert.equal(offRoll.limit, null);
+  assert.equal(helpers.planNextPriorityRollHint(offProperty, offRoll), null);
+
+  assert.equal(
+    helpers.planNextPriorityRollHint(
+      property,
+      plan("lowest", 1, { recurring: true }),
+    ),
+    null,
+  );
+  assert.equal(helpers.planNextPriorityRollHint(property, null), null);
+});
+
+test("picker-single notice cards name the roll, decay and next press", () => {
+  const baseDate = new Date(2026, 8, 30);
+  const property = decayProperty();
+
+  const rollNotice = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[1],
+    levelIndex: 1,
+    baseDate,
+    scheduledValues: ["2026-10-08"],
+    taskCount: 1,
+    scope: "task",
+    roll: {
+      kind: "roll",
+      fromLevel: "P2",
+      step: 1,
+      limit: 1,
+      next: "decay",
+      nextLabel: "P3",
+    },
+    outcome: { blockedTaskCount: 1, scheduleLoggedTaskCount: 1 },
+  });
+  assert.equal(rollNotice.pill, "P2 roll");
+  assert.deepEqual(rollNotice.chips.slice(0, 2), [
+    { text: "roll 1/1", tone: "info" },
+    { text: "next ^↵ → P3", tone: "warn" },
+  ]);
+  assert.match(rollNotice.text, /scheduled → P2 roll/);
+  assert.match(rollNotice.text, /roll 1\/1/);
+  assert.match(rollNotice.text, /next \^↵ → P3/);
+
+  const decayNotice = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[2],
+    levelIndex: 2,
+    baseDate,
+    scheduledValues: ["2026-11-29"],
+    taskCount: 1,
+    scope: "task",
+    roll: { kind: "decay", fromLevel: "P2", next: "cancel" },
+    outcome: { blockedTaskCount: 1, scheduleLoggedTaskCount: 1 },
+  });
+  assert.equal(decayNotice.pill, "P2 → P3");
+  assert.equal(decayNotice.iconName, "signal-low");
+  assert.deepEqual(decayNotice.chips.slice(0, 2), [
+    { text: "decayed from P2", tone: "warn" },
+    { text: "next ^↵ cancels", tone: "warn" },
+  ]);
+  assert.match(
+    decayNotice.text,
+    /priority → P2 → P3 \(low\) · decayed from P2/,
+  );
+
+  const offNotice = helpers.buildPriorityNoticeModel({
+    property: decayProperty({ decay: false }),
+    level: property.levels[1],
+    levelIndex: 1,
+    baseDate,
+    scheduledValues: ["2026-10-08"],
+    taskCount: 1,
+    scope: "task",
+    roll: { kind: "roll", fromLevel: "P2", step: null, limit: null },
+    outcome: { blockedTaskCount: 1 },
+  });
+  assert.equal(offNotice.pill, "P2 roll");
+  assert.deepEqual(offNotice.chips, [{ text: "Blocked", tone: "warn" }]);
+
+  const plain = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[1],
+    levelIndex: 1,
+    baseDate,
+    scheduledValues: ["2026-10-08"],
+    taskCount: 1,
+    scope: "task",
+    outcome: { blockedTaskCount: 1, scheduleLoggedTaskCount: 1 },
+  });
+  assert.equal(plain.pill, "P2");
+  assert.deepEqual(plain.chips, [
+    { text: "logged", tone: "info" },
+    { text: "Blocked", tone: "warn" },
+  ]);
+});
+
+test("picker-single decay payload and preview-target comparison", () => {
+  const reason = "🎲 P2 → P3 decay · in **45** (31–90) days";
+  assert.deepEqual(
+    helpers.buildPriorityDecayScheduleLogPayload(
+      "2026-10-08",
+      "2026-11-29",
+      reason,
+    ),
+    {
+      from: "2026-10-08",
+      to: "2026-11-29",
+      reason,
+      automatic: true,
+    },
+  );
+  assert.equal(
+    helpers.buildPriorityDecayScheduleLogPayload(
+      "2026-11-29",
+      "2026-11-29",
+      reason,
+    ),
+    null,
+  );
+  assert.equal(
+    helpers.buildPriorityDecayScheduleLogPayload("2026-10-08", "2026-11-29", ""),
+    null,
+  );
+
+  const cached = {
+    kind: "roll",
+    level: { label: "P2" },
+    taskLine: 4,
+    date: "2026-10-08",
+  };
+  assert.equal(
+    helpers.isSamePriorityRollTarget(cached, {
+      kind: "roll",
+      level: { label: "P2" },
+      taskLine: 4,
+      date: "2026-10-20",
+    }),
+    true,
+  );
+  assert.equal(
+    helpers.isSamePriorityRollTarget(cached, {
+      kind: "decay",
+      fromLevel: { label: "P2" },
+      toLevel: { label: "P3" },
+      taskLine: 4,
+    }),
+    false,
+  );
+  assert.equal(
+    helpers.isSamePriorityRollTarget(cached, {
+      kind: "roll",
+      level: { label: "P3" },
+      taskLine: 4,
+    }),
+    false,
+  );
+  assert.equal(
+    helpers.isSamePriorityRollTarget(cached, {
+      kind: "roll",
+      level: { label: "P2" },
+      taskLine: 9,
+    }),
+    false,
+  );
+  assert.equal(
+    helpers.isSamePriorityRollTarget(
+      { kind: "unavailable", taskLine: 4 },
+      { kind: "unavailable", taskLine: 4 },
+    ),
+    false,
+  );
+  assert.equal(helpers.isSamePriorityRollTarget(cached, null), false);
+});

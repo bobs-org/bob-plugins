@@ -796,6 +796,94 @@
   );
 }
 
+/* --- Recommended roll preview (picker-single) --------------------------- */
+/* Third line on the `scheduled` row: ^↵, the action, the date it will write
+   and a meta pill. Quiet until the row is selected, then fully loud. */
+.bob-cnp-roll-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  margin-top: 2px;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+  opacity: 0.8;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.bob-cnp-row.is-selected .bob-cnp-roll-preview {
+  opacity: 1;
+}
+
+.bob-cnp-roll-preview.is-roll {
+  color: color-mix(in srgb, var(--text-accent) 88%, transparent);
+}
+
+.bob-cnp-roll-preview.is-decay {
+  color: var(--color-orange);
+}
+
+.bob-cnp-roll-preview.is-cancel {
+  color: var(--text-error);
+}
+
+.bob-cnp-roll-preview.is-unavailable {
+  color: var(--text-muted);
+}
+
+.bob-cnp-roll-kbd {
+  font-size: var(--font-ui-smaller);
+  padding: 0 4px;
+}
+
+.bob-cnp-roll-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.bob-cnp-roll-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.bob-cnp-roll-action {
+  font-weight: var(--font-semibold);
+}
+
+.bob-cnp-roll-date {
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-cnp-roll-meta {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+  opacity: 0.9;
+}
+
+.bob-cnp-roll-meta.is-info {
+  color: var(--text-accent);
+  background-color: color-mix(in srgb, var(--text-accent) 10%, transparent);
+}
+
+.bob-cnp-roll-meta.is-warn {
+  color: var(--color-orange);
+  background-color: color-mix(
+    in srgb,
+    var(--color-orange) 12%,
+    transparent
+  );
+}
+
+.bob-cnp-roll-meta.is-muted {
+  color: var(--text-muted);
+  background-color: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
 .bob-cnp-pill {
   display: inline-flex;
   align-items: center;

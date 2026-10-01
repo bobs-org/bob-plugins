@@ -2240,6 +2240,25 @@ function shouldWriteAutomaticScheduleLog(from, to) {
   return Boolean(toValue) && fromValue !== toValue;
 }
 
+// Schedule-log payload for a decay write: the previewed reason verbatim, or
+// null when the reason is empty or the date is unchanged (an automatic entry
+// that moves nothing writes nothing).
+function buildPriorityDecayScheduleLogPayload(from, to, reason) {
+  const text = normalizeBulletPropertyValue(reason);
+  if (!text || normalizeScheduleReasonText(text).empty) {
+    return null;
+  }
+  if (!shouldWriteAutomaticScheduleLog(from, to)) {
+    return null;
+  }
+  return Object.freeze({
+    from: normalizeBulletPropertyValue(from),
+    to: normalizeBulletPropertyValue(to),
+    reason: text,
+    automatic: true,
+  });
+}
+
 // Build the `options.scheduleLog` payload for a machine-rolled date, or null
 // when nothing should be logged. Returning null (rather than a flag the callers
 // must check) lets every writer keep its existing "falsy scheduleLog means no
@@ -11863,16 +11882,205 @@ const BULLET_PROPERTY_STAGE_TWO_HINTS = [
   { keys: ["esc"], label: "Dismiss" },
 ];
 
-function getBulletPropertyStageTwoHints(hasPriorityRoll) {
-  if (!hasPriorityRoll) {
-    return BULLET_PROPERTY_STAGE_TWO_HINTS;
+function getBulletPropertyStageTwoHints(hasPriorityRoll, rollPreview) {
+  const hints = !hasPriorityRoll
+    ? [...BULLET_PROPERTY_STAGE_TWO_HINTS]
+    : [
+        ...BULLET_PROPERTY_STAGE_TWO_HINTS.slice(0, -1),
+        { keys: ["^R"], label: "Re-roll" },
+        BULLET_PROPERTY_STAGE_TWO_HINTS[
+          BULLET_PROPERTY_STAGE_TWO_HINTS.length - 1
+        ],
+      ];
+  if (rollPreview && rollPreview.footerLabel) {
+    return [
+      ...hints.slice(0, -1),
+      { keys: ["^↵"], label: rollPreview.footerLabel },
+      hints[hints.length - 1],
+    ];
   }
+  return hints;
+}
 
-  return [
-    ...BULLET_PROPERTY_STAGE_TWO_HINTS.slice(0, -1),
-    { keys: ["^R"], label: "Re-roll" },
-    BULLET_PROPERTY_STAGE_TWO_HINTS[BULLET_PROPERTY_STAGE_TWO_HINTS.length - 1],
+// Stage-one footer with the recommended-roll hint: `^↵ <label>` after Choose,
+// plus `^R Re-roll` for dated recommendations (roll and decay). An
+// unactionable or absent preview keeps the base hints.
+function getBulletPropertyStageOneHints(rollPreview) {
+  if (!rollPreview || !rollPreview.footerLabel) {
+    return BULLET_PROPERTY_STAGE_ONE_HINTS;
+  }
+  const hints = [
+    ...BULLET_PROPERTY_STAGE_ONE_HINTS.slice(0, 3),
+    { keys: ["^↵"], label: rollPreview.footerLabel },
   ];
+  if (rollPreview.dateValue) {
+    hints.push({ keys: ["^R"], label: "Re-roll" });
+  }
+  return [...hints, ...BULLET_PROPERTY_STAGE_ONE_HINTS.slice(3)];
+}
+
+// Ctrl+Enter (or Cmd+Enter on macOS) takes the recommended roll. Alt and
+// Shift variants are never a recommended roll.
+function isRecommendedRollKeydown(event) {
+  if (
+    !event ||
+    typeof event.key !== "string" ||
+    event.key !== "Enter" ||
+    event.altKey === true ||
+    event.shiftKey === true
+  ) {
+    return false;
+  }
+  return event.ctrlKey === true || event.metaKey === true;
+}
+
+// Extra stage-one filter text for the `scheduled` row so typing `roll` or
+// `decay` lands on it: the word itself plus the preview's action and meta.
+function getPriorityRollFilterText(recommendation, baseDate) {
+  const preview = buildPriorityRollPreviewModel(recommendation, baseDate);
+  if (!preview) {
+    return "";
+  }
+  return `roll ${preview.action || ""} ${preview.meta || ""}`.trim();
+}
+
+// The task's current level label for a recommendation: the roll/cancel level,
+// or the decay's from level.
+function getPriorityRollCurrentLabel(recommendation) {
+  if (!recommendation) {
+    return "";
+  }
+  if (recommendation.kind === "decay") {
+    return normalizeBulletPropertyValue(
+      recommendation.fromLevel && recommendation.fromLevel.label,
+    );
+  }
+  return normalizeBulletPropertyValue(
+    recommendation.level && recommendation.level.label,
+  );
+}
+
+// A stage-two pinned `🎲 <level> roll` row built from an already-rolled
+// recommendation date, so Ctrl+Enter and Enter on the pinned row write the
+// identical date (one shared roll).
+function createPriorityRollDateItemFromRecommendation(
+  recommendation,
+  currentValue,
+) {
+  if (
+    !recommendation ||
+    recommendation.kind !== "roll" ||
+    !recommendation.level ||
+    !recommendation.level.label
+  ) {
+    return null;
+  }
+  const value = normalizeBulletPropertyValue(recommendation.date);
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) {
+    return null;
+  }
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  if (!Number.isFinite(date.getTime())) {
+    return null;
+  }
+  const level = recommendation.level;
+  const weekday = getBulletPropertyDateWeekday(date);
+  return {
+    kind: "value",
+    value,
+    label: `${level.label} roll`,
+    detail: `${value} · ${weekday} · ${formatPriorityRollWindowText(level)}`,
+    current: value === currentValue,
+    dynamic: false,
+    priorityRoll: true,
+    level,
+    rolledDays: recommendation.offset,
+    searchText: `${level.label} roll ${value} ${weekday} random priority`,
+  };
+}
+
+// Whether a recomputed recommendation still targets what the preview showed:
+// the same kind, the same from or to level, and the same target line. The
+// previewed date itself is allowed to differ (a re-roll), because the write
+// reuses the previewed date, never the recomputed one. `unavailable` never
+// writes, so it never matches.
+function isSamePriorityRollTarget(cached, fresh) {
+  if (!cached || !fresh || cached.kind !== fresh.kind) {
+    return false;
+  }
+  if (cached.taskLine !== fresh.taskLine) {
+    return false;
+  }
+  if (cached.kind === "decay") {
+    return (
+      normalizeBulletPropertyValue(
+        cached.fromLevel && cached.fromLevel.label,
+      ) ===
+        normalizeBulletPropertyValue(
+          fresh.fromLevel && fresh.fromLevel.label,
+        ) &&
+      normalizeBulletPropertyValue(cached.toLevel && cached.toLevel.label) ===
+        normalizeBulletPropertyValue(fresh.toLevel && fresh.toLevel.label)
+    );
+  }
+  if (cached.kind === "roll" || cached.kind === "cancel") {
+    return (
+      normalizeBulletPropertyValue(cached.level && cached.level.label) ===
+      normalizeBulletPropertyValue(fresh.level && fresh.level.label)
+    );
+  }
+  return false;
+}
+
+// What the *next* Ctrl+Enter would do after this recommendation is applied,
+// for the notice's `next ^↵` chip. Null when the next press is a plain roll
+// (or decay is disabled): no chip. Otherwise `{ next: "decay", nextLabel }`
+// or `{ next: "cancel" }`.
+function planNextPriorityRollHint(property, recommendation) {
+  if (!property || !recommendation) {
+    return null;
+  }
+  const levels = Array.isArray(property.levels) ? property.levels : [];
+  if (recommendation.kind === "roll") {
+    if (
+      recommendation.limit === null ||
+      recommendation.limit === undefined ||
+      Number(recommendation.step) < Number(recommendation.limit)
+    ) {
+      return null;
+    }
+    const nextLevel = levels[recommendation.levelIndex + 1] || null;
+    if (nextLevel && nextLevel.label) {
+      return Object.freeze({
+        next: "decay",
+        nextLabel: normalizeBulletPropertyValue(nextLevel.label),
+      });
+    }
+    return Object.freeze({ next: "cancel", nextLabel: "" });
+  }
+  if (recommendation.kind === "decay") {
+    const newLimit = getPriorityLevelRollLimit(
+      property,
+      recommendation.toLevel,
+    );
+    if (newLimit === null || newLimit === undefined || 0 < newLimit) {
+      return null;
+    }
+    const afterLevel = levels[recommendation.toLevelIndex + 1] || null;
+    if (afterLevel && afterLevel.label) {
+      return Object.freeze({
+        next: "decay",
+        nextLabel: normalizeBulletPropertyValue(afterLevel.label),
+      });
+    }
+    return Object.freeze({ next: "cancel", nextLabel: "" });
+  }
+  return null;
 }
 
 const BULLET_PROPERTY_LOCAL_TASK_HINTS = [
@@ -18401,6 +18609,9 @@ function formatPriorityNoticeText(model) {
   if (model.textHeader) {
     parts.push(model.textHeader);
   }
+  if (Array.isArray(model.leadingTextParts)) {
+    parts.push(...model.leadingTextParts);
+  }
   const dateText = model.textDateText || model.dateText || model.exactDateText;
   if (dateText) {
     const dateLabel = model.textDateLabel || model.dateLabel || "scheduled";
@@ -18427,7 +18638,17 @@ function buildPriorityNoticeModel(options = {}) {
     level,
     options.levelIndex,
   );
-  const pill = normalizeBulletPropertyValue(level.label);
+  const roll =
+    options.roll && typeof options.roll === "object" ? options.roll : null;
+  const rollKind =
+    roll && typeof roll.kind === "string" ? roll.kind : "";
+  const rollFromLevel = normalizeBulletPropertyValue(roll && roll.fromLevel);
+  const pill =
+    rollKind === "roll" && normalizeBulletPropertyValue(level.label)
+      ? `${normalizeBulletPropertyValue(level.label)} roll`
+      : rollKind === "decay" && rollFromLevel && normalizeBulletPropertyValue(level.label)
+        ? `${rollFromLevel} → ${normalizeBulletPropertyValue(level.label)}`
+        : normalizeBulletPropertyValue(level.label);
   const levelValue = normalizeBulletPropertyValue(level.value);
   const taskCount = Math.max(
     1,
@@ -18444,12 +18665,47 @@ function buildPriorityNoticeModel(options = {}) {
     scope,
   );
   const textHeader =
-    scope === "counted"
-      ? `${propertyName} → ${pill} (${levelValue}) on ${formatCountLabel(
-          taskCount,
-          "task",
-        )}`
-      : `${propertyName} → ${pill} (${levelValue})`;
+    rollKind === "roll"
+      ? `${scheduledName} → ${pill}`
+      : rollKind === "decay"
+        ? `${propertyName} → ${pill} (${levelValue}) · decayed from ${rollFromLevel}`
+        : scope === "counted"
+          ? `${propertyName} → ${pill} (${levelValue}) on ${formatCountLabel(
+              taskCount,
+              "task",
+            )}`
+          : `${propertyName} → ${pill} (${levelValue})`;
+  // Leading roll chips, before the existing outcome chips. With decay
+  // disabled (no step/limit) there are no roll or next chips.
+  const leadingChips = [];
+  if (rollKind === "roll" && Number.isFinite(Number(roll.step)) && roll.limit !== null && roll.limit !== undefined) {
+    leadingChips.push(
+      Object.freeze({ text: `roll ${roll.step}/${roll.limit}`, tone: "info" }),
+    );
+  } else if (rollKind === "decay" && rollFromLevel) {
+    leadingChips.push(
+      Object.freeze({ text: `decayed from ${rollFromLevel}`, tone: "warn" }),
+    );
+  }
+  if (
+    (rollKind === "roll" || rollKind === "decay") &&
+    roll &&
+    typeof roll.next === "string"
+  ) {
+    if (roll.next === "decay" && normalizeBulletPropertyValue(roll.nextLabel)) {
+      leadingChips.push(
+        Object.freeze({
+          text: `next ^↵ → ${normalizeBulletPropertyValue(roll.nextLabel)}`,
+          tone: "warn",
+        }),
+      );
+    } else if (roll.next === "cancel") {
+      leadingChips.push(
+        Object.freeze({ text: "next ^↵ cancels", tone: "warn" }),
+      );
+    }
+  }
+  const leadingTextParts = leadingChips.map((chip) => chip.text);
   const model = {
     iconName: getPriorityLevelIconName(levelIndex),
     levelIndex,
@@ -18465,15 +18721,17 @@ function buildPriorityNoticeModel(options = {}) {
     textDateText: scheduleSummary.textDateText,
     dateText: scheduleSummary.dateText,
     relativeText: scheduleSummary.relativeText,
-    chips: Object.freeze(
-      outcomeTextParts.map((part) =>
+    chips: Object.freeze([
+      ...leadingChips,
+      ...outcomeTextParts.map((part) =>
         Object.freeze({
           text: getPriorityNoticeChipText(part),
           tone: getPriorityNoticeChipTone(part),
         }),
       ),
-    ),
+    ]),
     outcomeTextParts,
+    leadingTextParts: Object.freeze(leadingTextParts),
     textHeader,
   };
   model.text = formatPriorityNoticeText(model);
@@ -19091,6 +19349,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingCancel = null;
     this.pendingLaneRelease = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
+    // The Ctrl+Enter recommendation is previewed once when the picker opens
+    // (what you see is what you get): the write reuses exactly this date and
+    // offset. Only Ctrl+R and the stale-write path replace it.
+    this.priorityRollRecommendation = null;
+    this.priorityRollRecommendationReady = false;
+    this.refreshPriorityRollRecommendation();
     this.showPropertyStage({ clearQuery: false });
   }
 
@@ -19276,7 +19540,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       placeholder: "Filter properties",
       resultsLabel: "Bullet properties",
       emptyText: "No matching properties",
-      footerHints: BULLET_PROPERTY_STAGE_ONE_HINTS,
+      footerHints: getBulletPropertyStageOneHints(
+        this.getStageOneRollPreview(),
+      ),
       getSubtitle: (visibleItems, allItems) => {
         const countText =
           visibleItems.length === allItems.length
@@ -19297,6 +19563,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         if (item && item.kind === "cancel-task") {
           return fuzzyMatchesText(item.searchText || "", query);
         }
+        const rollFilterText =
+          item &&
+          item.kind === "property" &&
+          item.property.values === "date"
+            ? getPriorityRollFilterText(
+                this.getScheduledRollRecommendation(item.property.name),
+                this.valueBaseDate,
+              )
+            : "";
         return fuzzyMatchesText(
           `${item.property.name} ${item.currentLabel || ""} ${
             item.currentValue || ""
@@ -19304,7 +19579,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             item.currentLabels ? item.currentLabels.join(" ") : ""
           } ${
             item.currentValues ? item.currentValues.join(" ") : ""
-          } ${item.valueState || ""}`,
+          } ${item.valueState || ""} ${rollFilterText}`,
           query,
         );
       },
@@ -19445,14 +19720,44 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
     const priorityRollLevel = this.getPriorityRollLevel(property);
     if (priorityRollLevel) {
-      items.unshift(
-        createPriorityRollDateItem(
+      // For a same-level recommendation the pinned row shares the previewed
+      // date, so Ctrl+Enter and Enter on the pinned row write the identical
+      // date. For a decay or cancel it keeps its own same-level roll as the
+      // explicit override, marked as over the ladder's limit.
+      const sharedRoll = this.getScheduledRollRecommendation(property.name);
+      if (sharedRoll && sharedRoll.kind === "roll") {
+        items.unshift(
+          createPriorityRollDateItemFromRecommendation(
+            sharedRoll,
+            propertyItem.currentValue || "",
+          ) ||
+            createPriorityRollDateItem(
+              priorityRollLevel,
+              this.valueBaseDate,
+              propertyItem.currentValue || "",
+              this.priorityRandom,
+            ),
+        );
+      } else {
+        const pinnedRoll = createPriorityRollDateItem(
           priorityRollLevel,
           this.valueBaseDate,
           propertyItem.currentValue || "",
           this.priorityRandom,
-        ),
-      );
+        );
+        if (
+          sharedRoll &&
+          (sharedRoll.kind === "decay" ||
+            sharedRoll.kind === "cancel" ||
+            sharedRoll.kind === "unavailable")
+        ) {
+          const overLabel = getPriorityRollCurrentLabel(sharedRoll);
+          if (overLabel) {
+            pinnedRoll.detail = `${pinnedRoll.detail} · over ${overLabel}'s roll limit`;
+          }
+        }
+        items.unshift(pinnedRoll);
+      }
     }
     this.applyOptions({
       items,
@@ -19472,7 +19777,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         ? "priority levels"
         : `${property.name} values`,
       emptyText: "No matching values",
-      footerHints: getBulletPropertyStageTwoHints(Boolean(priorityRollLevel)),
+      footerHints: getBulletPropertyStageTwoHints(
+        Boolean(priorityRollLevel),
+        this.getRollPreviewForDateProperty(property.name),
+      ),
       getSubtitle: () => {
         const scope = this.isCountedSession()
           ? `${this.getTaskSessionSubtitle()} · `
@@ -20216,6 +20524,357 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return priorityProperty.levelsByValue.get(currentValue) || null;
   }
 
+  // The Ctrl+Enter recommendation for this single (or ^prj) task, planned
+  // from the live note content. Null in counted and link sessions (later
+  // phases own those), and whenever there is no recommendation: a closed or
+  // non-task line, no priority property naming a date property, or a current
+  // value outside the configured levels.
+  computePriorityRollRecommendation() {
+    if (this.isCountedSession() || this.isLinkSession()) {
+      return null;
+    }
+    const cursor = this.cursor;
+    if (!cursor || !Number.isInteger(cursor.line)) {
+      return null;
+    }
+    const content = this.getEditorContent();
+    if (!isObsidianTaskAtLine(content, cursor.line)) {
+      return null;
+    }
+    const lines = splitMarkdownContent(content).lines;
+    const lineText = lines[cursor.line] || "";
+    if (!OPEN_OBSIDIAN_TASK_STATUSES.has(getObsidianTaskCheckboxStatus(lineText))) {
+      return null;
+    }
+    const properties =
+      this.config && Array.isArray(this.config.properties)
+        ? this.config.properties
+        : [];
+    const liveContext = getProjectNotePropertyContext(content, cursor.line);
+    for (const priorityProperty of properties) {
+      if (!priorityProperty || priorityProperty.values !== "priority") {
+        continue;
+      }
+      const schedulesName = normalizeBulletPropertyName(
+        priorityProperty.schedules,
+      );
+      if (!schedulesName) {
+        continue;
+      }
+      const scheduledTarget = resolveBulletPropertyTarget(
+        schedulesName,
+        liveContext,
+      );
+      let currentScheduled = "";
+      if (scheduledTarget.kind === "project-frontmatter") {
+        currentScheduled =
+          liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
+            ? liveContext.frontmatter.scheduledValue
+            : "";
+      } else {
+        const scheduledField = findBulletPropertyField(lineText, schedulesName);
+        currentScheduled = scheduledField ? scheduledField.value : "";
+      }
+      const planned = planPriorityRollRecommendation({
+        property: priorityProperty,
+        content,
+        taskLine: cursor.line,
+        currentScheduled,
+        baseDate: this.valueBaseDate,
+        random: this.priorityRandom,
+      });
+      if (!planned) {
+        continue;
+      }
+      return Object.freeze({
+        ...planned,
+        priorityName: priorityProperty.name,
+        schedulesName,
+        taskLine: cursor.line,
+      });
+    }
+    return null;
+  }
+
+  refreshPriorityRollRecommendation() {
+    this.priorityRollRecommendation = this.computePriorityRollRecommendation();
+    this.priorityRollRecommendationReady = true;
+    return this.priorityRollRecommendation;
+  }
+
+  getScheduledRollRecommendation(datePropertyName) {
+    const recommendation = this.priorityRollRecommendation;
+    if (!recommendation) {
+      return null;
+    }
+    if (
+      normalizeBulletPropertyName(recommendation.schedulesName) !==
+      normalizeBulletPropertyName(datePropertyName)
+    ) {
+      return null;
+    }
+    return recommendation;
+  }
+
+  getRollPreviewForDateProperty(datePropertyName) {
+    const recommendation = this.getScheduledRollRecommendation(datePropertyName);
+    if (!recommendation) {
+      return null;
+    }
+    return buildPriorityRollPreviewModel(recommendation, this.valueBaseDate);
+  }
+
+  getStageOneRollPreview() {
+    if (!this.priorityRollRecommendation) {
+      return null;
+    }
+    return buildPriorityRollPreviewModel(
+      this.priorityRollRecommendation,
+      this.valueBaseDate,
+    );
+  }
+
+  // Ctrl+R in stage one re-rolls the recommendation's date. Only dated
+  // recommendations (roll and decay) have one; nothing else uses Ctrl+R in
+  // stage one.
+  rerollPriorityRollRecommendation() {
+    const cached = this.priorityRollRecommendation;
+    if (!cached || !cached.date) {
+      return false;
+    }
+    const fresh = this.computePriorityRollRecommendation();
+    if (!fresh || !fresh.date || fresh.kind !== cached.kind) {
+      return false;
+    }
+    this.priorityRollRecommendation = fresh;
+    this.priorityRollRecommendationReady = true;
+    return true;
+  }
+
+  findPriorityPropertyByName(name) {
+    const properties =
+      this.config && Array.isArray(this.config.properties)
+        ? this.config.properties
+        : [];
+    return (
+      properties.find(
+        (candidate) =>
+          candidate &&
+          candidate.values === "priority" &&
+          normalizeBulletPropertyName(candidate.name) ===
+            normalizeBulletPropertyName(name),
+      ) || null
+    );
+  }
+
+  // Ctrl+Enter takes the previewed recommendation and closes the picker.
+  // Before writing, the recommendation is recomputed from the live note: when
+  // the kind, the from or to level, or the target line differs from the
+  // preview, nothing is written and stage one re-renders with the fresh
+  // recommendation. Ctrl+Enter honours `opening`, so it never double-fires.
+  async applyRecommendedRoll() {
+    const cached = this.priorityRollRecommendation;
+    if (!cached) {
+      return false;
+    }
+    if (cached.kind === "unavailable") {
+      new Notice(cached.reason);
+      return false;
+    }
+    if (this.opening) {
+      return false;
+    }
+    this.opening = true;
+    try {
+      const fresh = this.computePriorityRollRecommendation();
+      if (!fresh || !isSamePriorityRollTarget(cached, fresh)) {
+        new Notice("Task changed while the picker was open; nothing was written");
+        this.priorityRollRecommendation = fresh || null;
+        this.priorityRollRecommendationReady = true;
+        this.showPropertyStage({ clearQuery: false });
+        return false;
+      }
+      if (cached.kind === "roll") {
+        return await this.applyRecommendedRollWrite(cached);
+      }
+      if (cached.kind === "decay") {
+        return await this.applyRecommendedDecayWrite(cached);
+      }
+      if (cached.kind === "cancel") {
+        return await this.applyRecommendedCancelWrite(cached);
+      }
+      return false;
+    } finally {
+      this.opening = false;
+    }
+  }
+
+  async applyRecommendedRollWrite(recommendation) {
+    const property = this.findPriorityPropertyByName(
+      recommendation.priorityName,
+    );
+    if (!property) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      return false;
+    }
+    const content = this.getEditorContent();
+    const lines = splitMarkdownContent(content).lines;
+    const liveLine = lines[this.cursor.line] || "";
+    const liveContext = getProjectNotePropertyContext(content, this.cursor.line);
+    const scheduledTarget = resolveBulletPropertyTarget(
+      recommendation.schedulesName,
+      liveContext,
+    );
+    const nextHint = planNextPriorityRollHint(property, recommendation);
+    const rollOption = {
+      kind: "roll",
+      fromLevel: getPriorityRollCurrentLabel(recommendation),
+      step: recommendation.step,
+      limit: recommendation.limit,
+      next: nextHint ? nextHint.next : null,
+      nextLabel: nextHint ? nextHint.nextLabel : "",
+    };
+    const levelIndex = normalizePriorityLevelIndex(
+      property,
+      recommendation.level,
+    );
+    if (scheduledTarget.kind === "project-frontmatter") {
+      const liveScheduled =
+        liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
+          ? liveContext.frontmatter.scheduledValue
+          : "";
+      return await this.plugin.setProjectNoteScheduledValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        liveScheduled,
+        recommendation.date,
+        {
+          scheduleLog: buildPriorityRollScheduleLog({
+            source: "scheduled",
+            level: recommendation.level,
+            rolledDays: recommendation.offset,
+            from: liveScheduled,
+            to: recommendation.date,
+          }),
+          buildNotice: (outcome) =>
+            buildPriorityNoticeModel({
+              property,
+              level: recommendation.level,
+              levelIndex,
+              baseDate: this.valueBaseDate,
+              scheduledValues: [outcome.scheduled || recommendation.date],
+              taskCount: 1,
+              scope: "project",
+              roll: rollOption,
+              outcome: {
+                ...outcome,
+                scheduleLoggedTaskCount:
+                  outcome.scheduleLogOutcome === "added" ||
+                  outcome.scheduleLogOutcome === "created"
+                    ? 1
+                    : 0,
+              },
+            }),
+        },
+      );
+    }
+    const scheduledField = findBulletPropertyField(
+      liveLine,
+      recommendation.schedulesName,
+    );
+    return await this.plugin.setBulletPropertyValue(
+      this.editor,
+      this.cursor,
+      recommendation.schedulesName,
+      recommendation.date,
+      {
+        filePath: this.filePath,
+        expectedLine: this.lineText,
+        scheduleLog: buildPriorityRollScheduleLog({
+          source: "scheduled",
+          level: recommendation.level,
+          rolledDays: recommendation.offset,
+          from: scheduledField ? scheduledField.value : "",
+          to: recommendation.date,
+        }),
+        buildNotice: (outcome) =>
+          buildPriorityNoticeModel({
+            property,
+            level: recommendation.level,
+            levelIndex,
+            baseDate: this.valueBaseDate,
+            scheduledValues: [recommendation.date],
+            taskCount: 1,
+            scope: "task",
+            roll: rollOption,
+            outcome: {
+              blockedTaskCount: outcome.blocked ? 1 : 0,
+              recoveryCounts: outcome.recoveryCounts,
+              scheduleLoggedTaskCount:
+                outcome.scheduleLogOutcome === "added" ||
+                outcome.scheduleLogOutcome === "created"
+                  ? 1
+                  : 0,
+              removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
+              pomodoroPruneFailed: outcome.pomodoroPruneFailed,
+            },
+          }),
+      },
+    );
+  }
+
+  async applyRecommendedDecayWrite(recommendation) {
+    const property = this.findPriorityPropertyByName(
+      recommendation.priorityName,
+    );
+    if (!property || !recommendation.toLevel) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      return false;
+    }
+    const nextHint = planNextPriorityRollHint(property, recommendation);
+    const liveContext = getProjectNotePropertyContext(
+      this.getEditorContent(),
+      this.cursor.line,
+    );
+    return await this.plugin.setBulletPriorityValue(
+      this.editor,
+      this.cursor,
+      this.filePath,
+      this.lineText,
+      property,
+      recommendation.toLevel,
+      {
+        propertyContext: liveContext,
+        baseDate: this.valueBaseDate,
+        random: this.priorityRandom,
+        precomputedRoll: {
+          date: recommendation.date,
+          offset: recommendation.offset,
+        },
+        scheduleReasonOverride: recommendation.reason,
+        noticeRoll: {
+          kind: "decay",
+          fromLevel: getPriorityRollCurrentLabel(recommendation),
+          step: null,
+          limit: recommendation.limit,
+          next: nextHint ? nextHint.next : null,
+          nextLabel: nextHint ? nextHint.nextLabel : "",
+        },
+      },
+    );
+  }
+
+  async applyRecommendedCancelWrite(recommendation) {
+    return await this.plugin.applyTaskCancelFromPicker(this, {
+      reason: formatPriorityDecayCancelReason({
+        level: recommendation.level,
+        streak: recommendation.streak,
+      }),
+    });
+  }
+
   rerollPriorityDateSuggestion() {
     const rollIndex = this.items.findIndex((item) => item.priorityRoll);
     if (rollIndex === -1) {
@@ -20223,6 +20882,46 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     const previous = this.items[rollIndex];
+    // The pinned row mirrors the stage-one recommendation for a roll, so
+    // Ctrl+R re-rolls both together and keeps the shared date in sync.
+    const shared =
+      this.selectedPropertyItem && this.selectedPropertyItem.property
+        ? this.getScheduledRollRecommendation(
+            this.selectedPropertyItem.property.name,
+          )
+        : null;
+    if (
+      shared &&
+      shared.kind === "roll" &&
+      previous.level &&
+      shared.level &&
+      normalizeBulletPropertyValue(previous.level.label) ===
+        normalizeBulletPropertyValue(shared.level.label)
+    ) {
+      if (!this.rerollPriorityRollRecommendation()) {
+        return false;
+      }
+      const next = this.priorityRollRecommendation;
+      const nextItems = [...this.items];
+      nextItems[rollIndex] =
+        createPriorityRollDateItemFromRecommendation(
+          next,
+          this.selectedPropertyItem.currentValue || "",
+        ) ||
+        createPriorityRollDateItem(
+          previous.level,
+          this.valueBaseDate,
+          this.selectedPropertyItem.currentValue || "",
+          this.priorityRandom,
+        );
+      this.applyOptions({ items: nextItems });
+      this.selectedIndex = rollIndex;
+      if (this.resultsEl) {
+        this.renderAll({ clearQuery: true });
+      }
+      return true;
+    }
+
     const nextItems = [...this.items];
     nextItems[rollIndex] = createPriorityRollDateItem(
       previous.level,
@@ -20708,6 +21407,48 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         ? `Current value: ${item.currentLabel}`
         : "Not set";
     pathEl.setText(propertyStateText);
+
+    // The `scheduled` row carries the recommended roll preview: a third line
+    // with the ^↵ key, the action, the date it will write, and a meta pill.
+    if (
+      item.kind === "property" &&
+      item.property.values === "date"
+    ) {
+      const rollPreview = buildPriorityRollPreviewModel(
+        this.getScheduledRollRecommendation(item.property.name),
+        this.valueBaseDate,
+      );
+      if (rollPreview) {
+        const previewEl = textEl.createDiv({
+          cls: `bob-cnp-roll-preview is-${rollPreview.kind}`,
+          attr: { "aria-label": rollPreview.ariaLabel },
+        });
+        previewEl.createEl("kbd", {
+          cls: "bob-cnp-kbd bob-cnp-roll-kbd",
+          text: "^↵",
+        });
+        const rollIconEl = previewEl.createSpan({
+          cls: "bob-cnp-roll-icon",
+        });
+        applyIcon(rollIconEl, rollPreview.icon);
+        previewEl.createSpan({
+          cls: "bob-cnp-roll-action",
+          text: rollPreview.action,
+        });
+        if (rollPreview.dateText) {
+          previewEl.createSpan({
+            cls: "bob-cnp-roll-date",
+            text: rollPreview.dateText,
+          });
+        }
+        if (rollPreview.meta) {
+          previewEl.createSpan({
+            cls: `bob-cnp-roll-meta is-${rollPreview.metaTone}`,
+            text: rollPreview.meta,
+          });
+        }
+      }
+    }
 
     if (item.mixed) {
       rowEl.createDiv({
@@ -21517,6 +22258,48 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   handleKeydown(event) {
+    // Ctrl+Enter (or Cmd+Enter) on `scheduled` takes the recommended roll in
+    // both picker stages. Anywhere else it behaves exactly like Enter, as it
+    // does today; other stages keep their existing key handling untouched.
+    if (
+      isRecommendedRollKeydown(event) &&
+      (this.stage === "properties" || this.stage === "value")
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!this.opening) {
+        const rollPropertyName =
+          this.stage === "properties"
+            ? (() => {
+                const item = this.visibleItems[this.selectedIndex];
+                return item && item.kind === "property"
+                  ? item.property.name
+                  : "";
+              })()
+            : this.selectedPropertyItem &&
+                this.selectedPropertyItem.property
+              ? this.selectedPropertyItem.property.name
+              : "";
+        if (
+          rollPropertyName &&
+          this.getScheduledRollRecommendation(rollPropertyName)
+        ) {
+          void this.applyRecommendedRoll()
+            .then((applied) => {
+              if (applied === true) {
+                this.close();
+              }
+            })
+            .catch(() => {
+              new Notice("Could not apply the recommended roll");
+            });
+        } else {
+          super.handleKeydown(event);
+        }
+      }
+      return;
+    }
+
     if (
       this.isLocalTaskStage() &&
       !this.isCountedSession() &&
@@ -21570,6 +22353,31 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         .finally(() => {
           this.opening = false;
         });
+      return;
+    }
+
+    if (this.stage === "properties" && isCtrlKey(event, "r")) {
+      if (this.rerollPriorityRollRecommendation()) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.applyOptions({
+          footerHints: getBulletPropertyStageOneHints(
+            this.getStageOneRollPreview(),
+          ),
+        });
+        const scheduledIndex = this.visibleItems.findIndex(
+          (item) =>
+            item &&
+            item.kind === "property" &&
+            this.getScheduledRollRecommendation(item.property.name),
+        );
+        if (scheduledIndex !== -1) {
+          this.selectedIndex = scheduledIndex;
+        }
+        if (this.resultsEl) {
+          this.renderAll({ clearQuery: false });
+        }
+      }
       return;
     }
 
@@ -27764,11 +28572,37 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       context.baseDate instanceof Date
         ? getLocalDateStart(context.baseDate)
         : getLocalDateStart(new Date());
-    const roll = rollPriorityScheduledDateWithOffset(
-      level,
-      baseDate,
-      typeof context.random === "function" ? context.random : Math.random,
-    );
+    // A decay write reuses the previewed date (what you see is what you get)
+    // instead of rolling a fresh one. The override holds an already-formatted
+    // `date` plus its window `offset` for the reason text.
+    const precomputedRoll =
+      context.precomputedRoll && typeof context.precomputedRoll === "object"
+        ? context.precomputedRoll
+        : null;
+    const precomputedMatch =
+      precomputedRoll &&
+      /^(\d{4})-(\d{2})-(\d{2})/.exec(
+        normalizeBulletPropertyValue(precomputedRoll.date),
+      );
+    const roll =
+      precomputedMatch &&
+      Number.isInteger(Number(precomputedRoll.offset)) &&
+      getPriorityRollBounds(level) !== null &&
+      Number(precomputedRoll.offset) >= getPriorityRollBounds(level).minDays &&
+      Number(precomputedRoll.offset) <= getPriorityRollBounds(level).maxDays
+        ? Object.freeze({
+            date: new Date(
+              Number(precomputedMatch[1]),
+              Number(precomputedMatch[2]) - 1,
+              Number(precomputedMatch[3]),
+            ),
+            offset: Number(precomputedRoll.offset),
+          })
+        : rollPriorityScheduledDateWithOffset(
+            level,
+            baseDate,
+            typeof context.random === "function" ? context.random : Math.random,
+          );
     const rolledDate = roll.date;
     const rolledValue = formatBulletPropertyDate(rolledDate);
     const levelIndex = normalizePriorityLevelIndex(property, level);
@@ -27804,14 +28638,20 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         {
           inlineEdits: [{ name: property.name, value: level.value }],
           today: baseDate,
-          scheduleLog: buildPriorityRollScheduleLog({
-            source: "priority",
-            level,
-            rolledDays: roll.offset,
-            fromLevelLabel,
-            from: expectedScheduledValue,
-            to: rolledValue,
-          }),
+          scheduleLog: context.scheduleReasonOverride
+            ? buildPriorityDecayScheduleLogPayload(
+                expectedScheduledValue,
+                rolledValue,
+                context.scheduleReasonOverride,
+              )
+            : buildPriorityRollScheduleLog({
+                source: "priority",
+                level,
+                rolledDays: roll.offset,
+                fromLevelLabel,
+                from: expectedScheduledValue,
+                to: rolledValue,
+              }),
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
               property,
@@ -27821,6 +28661,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               scheduledValues: [outcome.scheduled || rolledValue],
               taskCount: 1,
               scope: "project",
+              roll: context.noticeRoll || null,
               outcome: {
                 ...outcome,
                 scheduleLoggedTaskCount:
@@ -27846,14 +28687,20 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         filePath,
         expectedLine: lineText,
         today: baseDate,
-        scheduleLog: buildPriorityRollScheduleLog({
-          source: "priority",
-          level,
-          rolledDays: roll.offset,
-          fromLevelLabel,
-          from: (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
-          to: rolledValue,
-        }),
+        scheduleLog: context.scheduleReasonOverride
+          ? buildPriorityDecayScheduleLogPayload(
+              (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
+              rolledValue,
+              context.scheduleReasonOverride,
+            )
+          : buildPriorityRollScheduleLog({
+              source: "priority",
+              level,
+              rolledDays: roll.offset,
+              fromLevelLabel,
+              from: (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
+              to: rolledValue,
+            }),
         buildNotice: (outcome) =>
           buildPriorityNoticeModel({
             property,
@@ -27863,6 +28710,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             scheduledValues: [rolledValue],
             taskCount: 1,
             scope: "task",
+            roll: context.noticeRoll || null,
             outcome: {
               blockedTaskCount: outcome.blocked ? 1 : 0,
               recoveryCounts: outcome.recoveryCounts,
@@ -33928,6 +34776,15 @@ module.exports.helpers = {
   formatPriorityRollScheduleReason,
   formatPriorityDecayScheduleReason,
   formatPriorityDecayCancelReason,
+  buildPriorityDecayScheduleLogPayload,
+  isSamePriorityRollTarget,
+  isRecommendedRollKeydown,
+  getBulletPropertyStageOneHints,
+  getBulletPropertyStageTwoHints,
+  getPriorityRollFilterText,
+  getPriorityRollCurrentLabel,
+  createPriorityRollDateItemFromRecommendation,
+  planNextPriorityRollHint,
   shouldWriteAutomaticScheduleLog,
   buildPriorityRollScheduleLog,
   classifyScheduleLogRollReason,

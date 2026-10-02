@@ -3329,6 +3329,8 @@ function planRecommendedRollBatch(
         today: baseDate,
         recoveryByLine,
         scheduleLog: { automatic: true, reasonByLine },
+        schedulingWorkLog:
+          details.schedulingWorkLog || details.workLog || null,
         stampLine:
           typeof details.stampLine === "function"
             ? details.stampLine
@@ -13400,6 +13402,28 @@ function getLaneReleaseReasonHints(options = {}) {
   ];
 }
 
+function getSchedulingWorkLogHints(options = {}) {
+  const enter = options.empty ? "Schedule without a summary" : "Schedule & log summary";
+  return [
+    { keys: ["↵"], label: enter },
+    { keys: ["esc"], label: "Cancel" },
+  ];
+}
+
+function formatSchedulingWorkLogDateSpan(dates) {
+  const values = Array.from(dates || [])
+    .map((date) => normalizeBulletPropertyValue(date))
+    .filter(Boolean)
+    .sort();
+  if (values.length === 0) {
+    return "";
+  }
+  if (values.length === 1 || values[0] === values[values.length - 1]) {
+    return `scheduled → ${values[0]}`;
+  }
+  return `scheduled → ${values[0]} → ${values[values.length - 1]}`;
+}
+
 class FilteredPickerModal extends Modal {
   constructor(app, options) {
     super(app);
@@ -15664,6 +15688,112 @@ function insertLaneWorkLogEntry(workingLines, taskLine, summary, dateText) {
   void taskIndent;
   workingLines.splice(block.endLineExclusive, 0, markerLine, entryLine);
   return true;
+}
+
+// Scheduling Work Log eligibility: the explicit target's validated line must be
+// a real open `#task` in Pending (`/`) or Next (`*`) before any schedule
+// propagation, checkbox recovery/blocking, freshness stamp, or cancellation.
+// Determined from the original status, never from links or the postimage
+// (which may already be `[?]` after a future-date prune).
+function isSchedulingWorkLogStatus(status) {
+  return status === "/" || status === "*";
+}
+
+function isSchedulingWorkLogRawLine(rawLine) {
+  const status = getObsidianTaskCheckboxStatus(String(rawLine || ""));
+  if (!isSchedulingWorkLogStatus(status)) {
+    return false;
+  }
+  return isObsidianTaskLine(String(rawLine || ""));
+}
+
+function normalizeSchedulingWorkSummary(value) {
+  return normalizeLaneWorkSummary(value);
+}
+
+function hasSchedulingWorkLogInput(workLog) {
+  if (!workLog || typeof workLog !== "object") {
+    return false;
+  }
+  return Boolean(normalizeSchedulingWorkSummary(workLog.summary));
+}
+
+function resolveSchedulingWorkLogDateText(workLog, fallbackDate) {
+  if (workLog && typeof workLog.dateText === "string" && workLog.dateText) {
+    return String(workLog.dateText);
+  }
+  if (typeof fallbackDate === "string" && fallbackDate) {
+    return String(fallbackDate);
+  }
+  return formatBulletPropertyDate(getLocalDateStart(new Date()));
+}
+
+// Original lines (pre-batch `target.line` values) whose validated `rawLine`
+// qualifies for a scheduling Work Log. Propagation-only tasks are never in
+// `targets`, so they are excluded by construction.
+function collectSchedulingWorkLogEligibleOriginalLines(targets) {
+  const eligible = new Set();
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (
+      target &&
+      Number.isInteger(target.line) &&
+      isSchedulingWorkLogRawLine(target.rawLine)
+    ) {
+      eligible.add(target.line);
+    }
+  }
+  return eligible;
+}
+
+// Insert one Work Log entry per eligible target into `workingLines` (mutated
+// in place). `mappedLinesByOriginal` maps original `target.line` to the
+// current line in `workingLines` after task edits, frontmatter shifts, Cancel
+// Log insertion, and Schedule Log insertion. Applies bottom-up so an earlier
+// insert never invalidates a later target's mapped line. Returns the number
+// of entries written. Blank summaries write nothing and never create a
+// marker (insertLaneWorkLogEntry already enforces this).
+function applySchedulingWorkLogsToLines(
+  workingLines,
+  mappedLinesByOriginal,
+  eligibleOriginalLines,
+  summary,
+  dateText,
+) {
+  const normalized = normalizeSchedulingWorkSummary(summary);
+  if (!normalized || !Array.isArray(workingLines)) {
+    return 0;
+  }
+  const eligible =
+    eligibleOriginalLines instanceof Set
+      ? eligibleOriginalLines
+      : new Set();
+  const entries = [];
+  if (mappedLinesByOriginal instanceof Map) {
+    for (const [originalLine, currentLine] of mappedLinesByOriginal) {
+      if (!eligible.has(originalLine)) {
+        continue;
+      }
+      if (!Number.isInteger(currentLine)) {
+        continue;
+      }
+      entries.push({ originalLine, currentLine });
+    }
+  }
+  entries.sort((a, b) => b.currentLine - a.currentLine);
+  let written = 0;
+  for (const entry of entries) {
+    if (
+      insertLaneWorkLogEntry(
+        workingLines,
+        entry.currentLine,
+        normalized,
+        dateText,
+      )
+    ) {
+      written += 1;
+    }
+  }
+  return written;
 }
 
 // Plan a lane commit/release across the task lines of one note's content.
@@ -18553,6 +18683,7 @@ function planCountedBulletPropertyBatch(
   let scheduleLoggedTaskCount = 0;
   let scheduleLogCreatedParentCount = 0;
   let scheduleLogFallbackTaskCount = 0;
+  const appliedScheduleInserts = [];
   const scheduleLogOptions =
     options.scheduleLog && (isPriorityOperation || (operation === "set" && propertyName === "scheduled"))
       ? options.scheduleLog
@@ -18594,8 +18725,13 @@ function planCountedBulletPropertyBatch(
       .filter((scheduleLogPlan) => scheduleLogPlan && scheduleLogPlan.valid)
       .sort((first, second) => second.insertLine - first.insertLine);
     for (const scheduleLogPlan of scheduleLogPlans) {
-      if (applyScheduleLogEntryToLines(source.lines, scheduleLogPlan) > 0) {
+      const applied = applyScheduleLogEntryToLines(source.lines, scheduleLogPlan);
+      if (applied > 0) {
         scheduleLoggedTaskCount += 1;
+        appliedScheduleInserts.push({
+          insertLine: scheduleLogPlan.insertLine,
+          count: applied,
+        });
         if (scheduleLogPlan.createdParent) {
           scheduleLogCreatedParentCount += 1;
         }
@@ -18603,6 +18739,58 @@ function planCountedBulletPropertyBatch(
           scheduleLogFallbackTaskCount += 1;
         }
       }
+    }
+  }
+
+  const isSchedulingWorkLogOperation =
+    isPriorityOperation || (operation === "set" && propertyName === "scheduled");
+  const schedulingWorkLogInput =
+    options.schedulingWorkLog && typeof options.schedulingWorkLog === "object"
+      ? options.schedulingWorkLog
+      : options.workLog && typeof options.workLog === "object"
+        ? options.workLog
+        : null;
+  let schedulingWorkLogWrittenCount = 0;
+  let schedulingWorkLogEligibleCount = 0;
+  if (isSchedulingWorkLogOperation && hasSchedulingWorkLogInput(schedulingWorkLogInput)) {
+    const eligibleOriginalLines =
+      collectSchedulingWorkLogEligibleOriginalLines(session.targets);
+    schedulingWorkLogEligibleCount = eligibleOriginalLines.size;
+    if (eligibleOriginalLines.size > 0) {
+      const mappedByOriginal = new Map();
+      for (const detail of changedTargets) {
+        mappedByOriginal.set(detail.originalLine, detail.line);
+      }
+      for (const detail of unchangedTargets) {
+        if (!mappedByOriginal.has(detail.originalLine)) {
+          mappedByOriginal.set(detail.originalLine, detail.line);
+        }
+      }
+      // Schedule inserts land strictly after their own task line, so shift
+      // every mapped task line at or after each applied insert.
+      for (const insert of appliedScheduleInserts) {
+        const at = Math.floor(numericOrDefault(insert.insertLine, NaN));
+        const count = Math.floor(numericOrDefault(insert.count, 0));
+        if (!Number.isFinite(at) || count <= 0) {
+          continue;
+        }
+        for (const [originalLine, currentLine] of Array.from(mappedByOriginal)) {
+          if (currentLine >= at) {
+            mappedByOriginal.set(originalLine, currentLine + count);
+          }
+        }
+      }
+      const workLogDateText = resolveSchedulingWorkLogDateText(
+        schedulingWorkLogInput,
+        undefined,
+      );
+      schedulingWorkLogWrittenCount = applySchedulingWorkLogsToLines(
+        source.lines,
+        mappedByOriginal,
+        eligibleOriginalLines,
+        schedulingWorkLogInput.summary,
+        workLogDateText,
+      );
     }
   }
 
@@ -18633,6 +18821,8 @@ function planCountedBulletPropertyBatch(
     scheduleLoggedTaskCount,
     scheduleLogCreatedParentCount,
     scheduleLogFallbackTaskCount,
+    schedulingWorkLogWrittenCount,
+    schedulingWorkLogEligibleCount,
     recoveredReadyTaskCount: recoveryCounts.ready,
     recoveredNextTaskCount: recoveryCounts.next,
     recoveredInProgressTaskCount: recoveryCounts.inProgress,
@@ -19315,6 +19505,16 @@ function getPriorityNoticeOutcomeParts(outcome = {}, scope = "task") {
       scope === "counted" ? `logged reason on ${formatCountLabel(scheduleLoggedTaskCount, "task")}` : "logged reason",
     );
   }
+  const schedulingWorkLogWrittenCount = normalizePriorityNoticeCount(
+    outcome.schedulingWorkLogWrittenCount,
+  );
+  if (schedulingWorkLogWrittenCount > 0) {
+    parts.push(
+      scope === "counted"
+        ? `${formatCountLabel(schedulingWorkLogWrittenCount, "Work Log")}`
+        : "1 Work Log",
+    );
+  }
   const blockedText = getPriorityNoticeBlockedText(
     normalizePriorityNoticeCount(outcome.blockedTaskCount),
     scope,
@@ -19360,6 +19560,9 @@ function getPriorityNoticeChipTone(text) {
   if (/^logged reason/.test(text)) {
     return "info";
   }
+  if (/Work Log$/.test(text)) {
+    return "info";
+  }
   return "muted";
 }
 
@@ -19371,6 +19574,13 @@ function getPriorityNoticeChipText(text) {
   const loggedMatch = /^logged reason(?: on (\d+) tasks?)?$/.exec(text);
   if (loggedMatch) {
     return loggedMatch[1] ? `${loggedMatch[1]} logged` : "logged";
+  }
+  const workLogMatch = /^(\d+) Work Logs?$/.exec(text);
+  if (workLogMatch) {
+    return workLogMatch[1] === "1" ? "1 Work Log" : `${workLogMatch[1]} Work Log`;
+  }
+  if (text === "1 Work Log") {
+    return "1 Work Log";
   }
   const pomodoroRemovedMatch = /^removed (\d+) Pomodoro links?$/.exec(text);
   if (pomodoroRemovedMatch) {
@@ -20286,6 +20496,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingScheduleReason = null;
     this.pendingCancel = null;
     this.pendingLaneRelease = null;
+    this.pendingScheduleWorkLog = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and
@@ -20776,14 +20987,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         normalizeBulletPropertyName(property.name) === "scheduled"
           ? (item) => {
               if (item.priorityRoll) {
-                return this.applySelectedValue(item, {
-                  scheduleLog: this.buildPriorityRollScheduleLogForItem(item),
-                });
+                return this.maybeOfferPinnedRollWorkLog(item);
               }
               this.showScheduleReasonStage(item);
               return false;
             }
-          : (item) => this.applySelectedValue(item),
+          : (item) => this.maybeOfferPriorityWorkLog(item),
     });
 
     if (this.resultsEl) {
@@ -21039,13 +21248,444 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // The payload is supplied even for an empty input: a task that already keeps
     // a log records the change anyway, and planScheduleLogEntry is what decides
     // that per task (per target, in a counted session).
-    return this.applySelectedValue(pending.dateItem, {
-      scheduleLog: {
-        from: pending.from,
-        to: pending.to,
-        reason: item.empty ? "" : item.reason,
-        fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
-      },
+    const scheduleLog = {
+      from: pending.from,
+      to: pending.to,
+      reason: item.empty ? "" : item.reason,
+      fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
+    };
+    return this.maybeOfferSchedulingWorkLog(
+      pending.dateItem,
+      scheduleLog,
+    );
+  }
+
+  // Optional Work Log stage for scheduling Pending/Next tasks. Entered after
+  // the schedule-reason stage (explicit dates) or directly (priority picks,
+  // pinned rolls, recommended rolls/decays). `pending.resume` commits the
+  // frozen scheduling action with the given normalized summary ("" skips).
+  // Escape or dismissal discards all pending state with zero writes via
+  // clearPendingBatch/onClose.
+  showSchedulingWorkLogStage(pending) {
+    if (!pending || typeof pending.resume !== "function") {
+      return;
+    }
+    this.stage = "schedule-work-log";
+    this.pendingScheduleWorkLog = pending;
+    this.clearLocalTaskMarks();
+    this.selectedIndex = 0;
+    this.applyOptions({
+      items: [],
+      title: pending.title || "Schedule task",
+      headerIcon: "briefcase",
+      inputLabel: "Work summary",
+      placeholder: "What did you get done? (optional · ↵ to skip)",
+      resultsLabel: "Work Log preview",
+      emptyText: "Type a summary",
+      footerHints: getSchedulingWorkLogHints({ empty: true }),
+      getSubtitle: () => this.getSchedulingWorkLogSubtitle(),
+      filterItem: () => true,
+      renderItem: (item, rowEl, query) =>
+        this.renderSchedulingWorkLogPreviewItem(item, rowEl, query),
+      openItem: (item) => this.confirmSchedulingWorkLog(item),
+    });
+
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+  }
+
+  getSchedulingWorkLogSubtitle() {
+    const pending = this.pendingScheduleWorkLog;
+    if (!pending) {
+      return "";
+    }
+    const parts = [];
+    if (pending.scheduleSummary) {
+      parts.push(String(pending.scheduleSummary));
+    }
+    if (Number.isInteger(pending.eligibleCount) && pending.eligibleCount > 0) {
+      const taskWord = pending.eligibleCount === 1 ? "task" : "tasks";
+      if (pending.isBatch) {
+        parts.push(`${pending.eligibleCount} of ${pending.totalCount || pending.eligibleCount} ${taskWord} qualify`);
+      } else {
+        parts.push(pending.eligibleCount === 1 ? "1 task qualifies" : `${pending.eligibleCount} tasks qualify`);
+      }
+    }
+    parts.push("nothing written yet");
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  renderSchedulingWorkLogPreviewItem(item, rowEl, query) {
+    const pending = this.pendingScheduleWorkLog;
+    const dateText = pending ? pending.dateText : "";
+    const state = item.empty ? "empty" : item.hasInlineField ? "warning" : "valid";
+    addElementClasses(rowEl, "bob-cnp-schedule-work-log-row", `is-${state}`);
+
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(rowIcon, item.empty ? "minus-circle" : item.hasInlineField ? "alert-triangle" : "check-circle-2");
+
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    if (item.empty) {
+      appendHighlighted(titleEl, "No summary", query);
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: "Schedule only; no Work Log",
+      });
+    } else {
+      appendHighlighted(
+        titleEl,
+        formatLaneWorkLogEntry(item.reason, dateText),
+        query,
+      );
+      if (item.hasInlineField) {
+        textEl.createDiv({
+          cls: "bob-cnp-row-meta",
+          text: '"::" creates a Dataview inline field on this bullet',
+        });
+      }
+      const eligible = pending ? Math.max(1, Math.floor(numericOrDefault(pending.eligibleCount, 1))) : 1;
+      textEl.createDiv({
+        cls: "bob-cnp-schedule-work-log-preview",
+        text:
+          eligible === 1
+            ? `Prepends under 🛠️ **WORK LOG** on the qualifying task`
+            : `Prepends under 🛠️ **WORK LOG** on each of the ${eligible} qualifying tasks`,
+      });
+    }
+    if (pending && pending.scheduleSummary) {
+      textEl.createDiv({
+        cls: "bob-cnp-schedule-work-log-effects",
+        text: String(pending.scheduleSummary),
+      });
+    }
+  }
+
+  async confirmSchedulingWorkLog(item) {
+    const pending = this.pendingScheduleWorkLog;
+    if (!pending || !item || typeof pending.resume !== "function") {
+      return false;
+    }
+    const summary = item.empty ? "" : String(item.reason || "");
+    let applied = false;
+    try {
+      applied = await pending.resume(summary);
+    } catch (error) {
+      applied = false;
+    }
+    if (applied === true) {
+      return true;
+    }
+    // Refusals must not carry a stale summary forward: drop the frozen action
+    // and return to property selection with fresh recommendations.
+    this.pendingScheduleWorkLog = null;
+    this.pendingScheduleReason = null;
+    this.showPropertyStage({ clearQuery: false });
+    return false;
+  }
+
+  // Count qualifying Pending/Next explicit targets for the current picker
+  // state. `targets` are `{ line, rawLine }` in original coordinates.
+  countSchedulingWorkLogEligible(targets) {
+    return collectSchedulingWorkLogEligibleOriginalLines(targets).size;
+  }
+
+  // Route one accepted scheduling gesture through the optional Work Log
+  // stage when any explicit target qualifies, else dispatch immediately.
+  // `dispatch` commits the frozen scheduling action given a normalized
+  // summary ("" skips the Work Log). Returns the dispatch result when no
+  // prompt is needed, else false to keep the modal open on the new stage.
+  async offerSchedulingWorkLogOrDispatch(options = {}) {
+    const targets = Array.isArray(options.targets) ? options.targets : [];
+    const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
+    const dispatch = options.dispatch;
+    if (typeof dispatch !== "function") {
+      return false;
+    }
+    if (eligible.size === 0) {
+      // Link sessions span notes where identical line numbers collide: a
+      // line-based Set can undercount, so recheck by task identity before
+      // skipping the prompt.
+      const fallbackEligible = targets.filter(
+        (target) =>
+          target &&
+          Number.isInteger(target.line) &&
+          isSchedulingWorkLogRawLine(target.rawLine),
+      );
+      if (fallbackEligible.length === 0) {
+        return await dispatch("");
+      }
+    }
+    // Deduplicate repeated Task Links by note and line so each qualifying
+    // task is counted once even when linked twice.
+    const dedupedTotal = new Set(
+      targets.map((target) =>
+        target && typeof target.path === "string"
+          ? `${target.path}::${target.line}`
+          : `::${target && target.line}`,
+      ),
+    );
+    const dedupedEligible = new Set();
+    for (const target of targets) {
+      if (
+        target &&
+        Number.isInteger(target.line) &&
+        isSchedulingWorkLogRawLine(target.rawLine)
+      ) {
+        dedupedEligible.add(
+          typeof target.path === "string"
+            ? `${target.path}::${target.line}`
+            : `::${target.line}`,
+        );
+      }
+    }
+    const totalCount = dedupedTotal.size;
+    const eligibleCount = dedupedEligible.size;
+    if (eligibleCount === 0) {
+      return await dispatch("");
+    }
+    const isBatch = totalCount > 1;
+    const dateText = formatBulletPropertyDate(
+      this.valueBaseDate instanceof Date
+        ? this.valueBaseDate
+        : getLocalDateStart(new Date()),
+    );
+    const title = isBatch
+      ? `Schedule ${totalCount} tasks`
+      : "Schedule task";
+    const pending = Object.freeze({
+      title,
+      isBatch,
+      eligibleCount,
+      totalCount,
+      dateText,
+      scheduleSummary: String(options.scheduleSummary || ""),
+      resume: dispatch,
+    });
+    this.showSchedulingWorkLogStage(pending);
+    return false;
+  }
+
+  // Explicit-date entry point (called from confirmScheduleReason): retains
+  // the Schedule Log reason payload, then offers the Work Log stage when any
+  // target qualifies.
+  async maybeOfferSchedulingWorkLog(dateItem, scheduleLog) {
+    const targets = this.isLinkSession()
+      ? Array.isArray(this.linkSession.resolved)
+        ? this.linkSession.resolved
+        : []
+      : this.isCountedSession() && this.taskSession
+        ? this.taskSession.targets
+        : this.cursor && Number.isInteger(this.cursor.line)
+          ? [
+              {
+                line: this.cursor.line,
+                rawLine: getEditorLine(this.editor, this.cursor.line) ?? this.lineText,
+              },
+            ]
+          : [];
+    const scheduleSummary =
+      scheduleLog && scheduleLog.to
+        ? `scheduled → ${normalizeBulletPropertyValue(scheduleLog.to)}`
+        : "";
+    return await this.offerSchedulingWorkLogOrDispatch({
+      targets,
+      scheduleSummary,
+      dispatch: async (summary) =>
+        await this.applySelectedValue(dateItem, {
+          scheduleLog,
+          schedulingWorkLog: summary
+            ? {
+                summary,
+                dateText: formatBulletPropertyDate(
+                  this.valueBaseDate instanceof Date
+                    ? this.valueBaseDate
+                    : getLocalDateStart(new Date()),
+                ),
+              }
+            : null,
+        }),
+    });
+  }
+
+  // Pinned roll row in the `scheduled` stage: deterministic Schedule Log
+  // reason, frozen date in `item.value`; offer the Work Log stage when any
+  // explicit target qualifies.
+  async maybeOfferPinnedRollWorkLog(item) {
+    if (!item) {
+      return false;
+    }
+    const scheduleLog = this.buildPriorityRollScheduleLogForItem(item);
+    const targets = this.isLinkSession()
+      ? Array.isArray(this.linkSession.resolved)
+        ? this.linkSession.resolved
+        : []
+      : this.isCountedSession() && this.taskSession
+        ? this.taskSession.targets
+        : this.cursor && Number.isInteger(this.cursor.line)
+          ? [
+              {
+                line: this.cursor.line,
+                rawLine: getEditorLine(this.editor, this.cursor.line) ?? this.lineText,
+              },
+            ]
+          : [];
+    const scheduleSummary = item.value
+      ? `scheduled → ${normalizeBulletPropertyValue(item.value)}`
+      : "";
+    return await this.offerSchedulingWorkLogOrDispatch({
+      targets,
+      scheduleSummary,
+      dispatch: async (summary) =>
+        await this.applySelectedValue(item, {
+          scheduleLog,
+          schedulingWorkLog: summary
+            ? {
+                summary,
+                dateText: formatBulletPropertyDate(
+                  this.valueBaseDate instanceof Date
+                    ? this.valueBaseDate
+                    : getLocalDateStart(new Date()),
+                ),
+              }
+            : null,
+        }),
+    });
+  }
+
+  // Priority-level picks (and any non-scheduled property): only priority
+  // scheduling gestures offer the Work Log stage. All other properties keep
+  // the existing immediate flow. Priority rolls are materialized once before
+  // the prompt and reused on resume, so opening/submitting the prompt never
+  // consumes extra randomness or changes the chosen schedule.
+  async maybeOfferPriorityWorkLog(item) {
+    const property =
+      this.selectedPropertyItem && this.selectedPropertyItem.property;
+    if (!property || property.values !== "priority") {
+      return await this.applySelectedValue(item);
+    }
+    const level = item && item.priorityLevel;
+    if (!level) {
+      return await this.applySelectedValue(item);
+    }
+    const baseDate =
+      this.valueBaseDate instanceof Date
+        ? getLocalDateStart(this.valueBaseDate)
+        : getLocalDateStart(new Date());
+    const random =
+      typeof this.priorityRandom === "function"
+        ? this.priorityRandom
+        : Math.random;
+    if (this.isLinkSession()) {
+      const resolved = Array.isArray(this.linkSession.resolved)
+        ? this.linkSession.resolved
+        : [];
+      const eligible = collectSchedulingWorkLogEligibleOriginalLines(resolved);
+      if (eligible.size === 0) {
+        return await this.applySelectedValue(item);
+      }
+      const groups = groupLinkPickerTargetsByNote(resolved);
+      const precomputedByPath = new Map();
+      const allDates = [];
+      for (const group of groups) {
+        const rollByLine = new Map(
+          group.session.targets.map((target) => [
+            target.line,
+            rollPriorityScheduledDateWithOffset(level, baseDate, random),
+          ]),
+        );
+        const scheduledValueByLine = new Map(
+          Array.from(rollByLine, ([line, roll]) => [
+            line,
+            formatBulletPropertyDate(roll.date),
+          ]),
+        );
+        for (const date of scheduledValueByLine.values()) {
+          allDates.push(date);
+        }
+        precomputedByPath.set(
+          group.path,
+          Object.freeze({ rollByLine, scheduledValueByLine }),
+        );
+      }
+      const scheduleSummary = formatSchedulingWorkLogDateSpan(allDates);
+      return await this.offerSchedulingWorkLogOrDispatch({
+        targets: resolved,
+        scheduleSummary,
+        dispatch: async (summary) =>
+          await this.plugin.applyLinkPickerPriorityValue(this, item, {
+            schedulingWorkLog: summary
+              ? { summary, dateText: formatBulletPropertyDate(baseDate) }
+              : null,
+            precomputedByPath,
+          }),
+      });
+    }
+    if (this.isCountedSession() && this.taskSession) {
+      const targets = this.taskSession.targets;
+      const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
+      if (eligible.size === 0) {
+        return await this.applySelectedValue(item);
+      }
+      const rollByLine = new Map(
+        targets.map((target) => [
+          target.line,
+          rollPriorityScheduledDateWithOffset(level, baseDate, random),
+        ]),
+      );
+      const scheduledValueByLine = new Map(
+        Array.from(rollByLine, ([line, roll]) => [
+          line,
+          formatBulletPropertyDate(roll.date),
+        ]),
+      );
+      const scheduleSummary = formatSchedulingWorkLogDateSpan(
+        Array.from(scheduledValueByLine.values()),
+      );
+      return await this.offerSchedulingWorkLogOrDispatch({
+        targets,
+        scheduleSummary,
+        dispatch: async (summary) =>
+          await this.applySelectedValue(item, {
+            schedulingWorkLog: summary
+              ? { summary, dateText: formatBulletPropertyDate(baseDate) }
+              : null,
+            precomputedRollByLine: rollByLine,
+            precomputedScheduledValueByLine: scheduledValueByLine,
+          }),
+      });
+    }
+    const targets =
+      this.cursor && Number.isInteger(this.cursor.line)
+        ? [
+            {
+              line: this.cursor.line,
+              rawLine: getEditorLine(this.editor, this.cursor.line) ?? this.lineText,
+            },
+          ]
+        : [];
+    const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
+    if (eligible.size === 0) {
+      return await this.applySelectedValue(item);
+    }
+    const roll = rollPriorityScheduledDateWithOffset(level, baseDate, random);
+    const rolledValue = formatBulletPropertyDate(roll.date);
+    const precomputedRoll = Object.freeze({
+      date: rolledValue,
+      offset: roll.offset,
+    });
+    const scheduleSummary = `scheduled → ${rolledValue}`;
+    return await this.offerSchedulingWorkLogOrDispatch({
+      targets,
+      scheduleSummary,
+      dispatch: async (summary) =>
+        await this.applySelectedValue(item, {
+          schedulingWorkLog: summary
+            ? { summary, dateText: formatBulletPropertyDate(baseDate) }
+            : null,
+          precomputedRoll,
+        }),
     });
   }
 
@@ -21927,11 +22567,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.showPropertyStage({ clearQuery: false });
         return false;
       }
-      if (cached.kind === "roll") {
-        return await this.applyRecommendedRollWrite(cached);
-      }
-      if (cached.kind === "decay") {
-        return await this.applyRecommendedDecayWrite(cached);
+      if (cached.kind === "roll" || cached.kind === "decay") {
+        return await this.maybeOfferRecommendedWorkLog(cached);
       }
       if (cached.kind === "cancel") {
         return await this.applyRecommendedCancelWrite(cached);
@@ -21942,7 +22579,49 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
   }
 
-  async applyRecommendedRollWrite(recommendation) {
+  async maybeOfferRecommendedWorkLog(cached) {
+    const targets =
+      this.cursor && Number.isInteger(this.cursor.line)
+        ? [
+            {
+              line: this.cursor.line,
+              rawLine: getEditorLine(this.editor, this.cursor.line) ?? this.lineText,
+            },
+          ]
+        : [];
+    const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
+    if (eligible.size === 0) {
+      if (cached.kind === "roll") {
+        return await this.applyRecommendedRollWrite(cached);
+      }
+      return await this.applyRecommendedDecayWrite(cached);
+    }
+    const scheduleSummary = cached.date
+      ? `scheduled → ${normalizeBulletPropertyValue(cached.date)}`
+      : "";
+    return await this.offerSchedulingWorkLogOrDispatch({
+      targets,
+      scheduleSummary,
+      dispatch: async (summary) => {
+        const schedulingWorkLog = summary
+          ? {
+              summary,
+              dateText: formatBulletPropertyDate(
+                this.valueBaseDate instanceof Date
+                  ? this.valueBaseDate
+                  : getLocalDateStart(new Date()),
+              ),
+            }
+          : null;
+        if (cached.kind === "roll") {
+          return await this.applyRecommendedRollWrite(cached, schedulingWorkLog);
+        }
+        return await this.applyRecommendedDecayWrite(cached, schedulingWorkLog);
+      },
+    });
+  }
+
+  async applyRecommendedRollWrite(recommendation, schedulingWorkLog = null) {
     const property = this.findPriorityPropertyByName(
       recommendation.priorityName,
     );
@@ -21991,6 +22670,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             from: liveScheduled,
             to: recommendation.date,
           }),
+          schedulingWorkLog,
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
               property,
@@ -22032,6 +22712,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           from: scheduledField ? scheduledField.value : "",
           to: recommendation.date,
         }),
+        schedulingWorkLog,
         buildNotice: (outcome) =>
           buildPriorityNoticeModel({
             property,
@@ -22050,6 +22731,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
                 outcome.scheduleLogOutcome === "created"
                   ? 1
                   : 0,
+              schedulingWorkLogWrittenCount:
+                outcome.schedulingWorkLogWrittenCount || 0,
               removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
               pomodoroPruneFailed: outcome.pomodoroPruneFailed,
             },
@@ -22058,7 +22741,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
   }
 
-  async applyRecommendedDecayWrite(recommendation) {
+  async applyRecommendedDecayWrite(recommendation, schedulingWorkLog = null) {
     const property = this.findPriorityPropertyByName(
       recommendation.priorityName,
     );
@@ -22087,6 +22770,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           offset: recommendation.offset,
         },
         scheduleReasonOverride: recommendation.reason,
+        schedulingWorkLog,
         noticeRoll: {
           kind: "decay",
           fromLevel: getPriorityRollCurrentLabel(recommendation),
@@ -22202,6 +22886,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingScheduleReason = null;
     this.pendingCancel = null;
     this.pendingLaneRelease = null;
+    this.pendingScheduleWorkLog = null;
   }
 
   // Dismissing the modal mid-prompt is a clean cancel: no writes happen until
@@ -22439,6 +23124,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getFilteredItems() {
+    if (this.stage === "schedule-work-log") {
+      const normalized = normalizeScheduleReasonText(this.getRawQuery());
+      return [
+        Object.freeze({
+          kind: "schedule-work-log-preview",
+          ...normalized,
+          counted: this.isCountedSession() || this.isLinkSession(),
+          searchText: normalized.reason,
+        }),
+      ];
+    }
+
     if (this.stage === "lane-release-reason") {
       const normalized = normalizeScheduleReasonText(this.getRawQuery());
       const facts = this.getLaneReleaseReasonFacts();
@@ -22551,6 +23248,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (this.stage === "lane-release-reason") {
       const item = (this.visibleItems || [])[0];
       this.footerHints = getLaneReleaseReasonHints({
+        empty: Boolean(item && item.empty),
+      });
+      this.renderFooter();
+    }
+    if (this.stage === "schedule-work-log") {
+      const item = (this.visibleItems || [])[0];
+      this.footerHints = getSchedulingWorkLogHints({
         empty: Boolean(item && item.empty),
       });
       this.renderFooter();
@@ -23533,10 +24237,53 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.showPropertyStage({ clearQuery: false });
         return false;
       }
-      return await this.plugin.applyCountedRecommendedRoll(this);
+      return await this.maybeOfferCountedRecommendedWorkLog(cached);
     } finally {
       this.opening = false;
     }
+  }
+
+  async maybeOfferCountedRecommendedWorkLog(cached) {
+    const entries = Array.isArray(cached.entries) ? cached.entries : [];
+    const schedulingEntries = entries.filter(
+      (entry) =>
+        entry &&
+        entry.recommendation &&
+        (entry.recommendation.kind === "roll" ||
+          entry.recommendation.kind === "decay"),
+    );
+    if (schedulingEntries.length === 0) {
+      return await this.plugin.applyCountedRecommendedRoll(this);
+    }
+    const targets = schedulingEntries.map((entry) => ({
+      line: entry.line,
+      rawLine: entry.rawLine,
+    }));
+    const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
+    if (eligible.size === 0) {
+      return await this.plugin.applyCountedRecommendedRoll(this);
+    }
+    const dates = schedulingEntries
+      .map((entry) => entry.recommendation && entry.recommendation.date)
+      .filter(Boolean);
+    const scheduleSummary = formatSchedulingWorkLogDateSpan(dates);
+    return await this.offerSchedulingWorkLogOrDispatch({
+      targets,
+      scheduleSummary,
+      dispatch: async (summary) =>
+        await this.plugin.applyCountedRecommendedRoll(this, {
+          schedulingWorkLog: summary
+            ? {
+                summary,
+                dateText: formatBulletPropertyDate(
+                  this.valueBaseDate instanceof Date
+                    ? this.valueBaseDate
+                    : getLocalDateStart(new Date()),
+                ),
+              }
+            : null,
+        }),
+    });
   }
 
   async applyLinkRecommendedRoll() {
@@ -23569,10 +24316,57 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.showPropertyStage({ clearQuery: false });
         return false;
       }
-      return await this.plugin.applyLinkRecommendedRoll(this);
+      return await this.maybeOfferLinkRecommendedWorkLog(cached);
     } finally {
       this.opening = false;
     }
+  }
+
+  async maybeOfferLinkRecommendedWorkLog(cached) {
+    const entries = Array.isArray(cached.entries) ? cached.entries : [];
+    const schedulingEntries = entries.filter(
+      (entry) =>
+        entry &&
+        entry.recommendation &&
+        (entry.recommendation.kind === "roll" ||
+          entry.recommendation.kind === "decay"),
+    );
+    if (schedulingEntries.length === 0) {
+      return await this.plugin.applyLinkRecommendedRoll(this);
+    }
+    const targets = schedulingEntries.map((entry) => ({
+      line: entry.line,
+      rawLine: entry.rawLine,
+      path: entry.path,
+    }));
+    const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
+    if (eligible.size === 0) {
+      return await this.plugin.applyLinkRecommendedRoll(this);
+    }
+    const dates = schedulingEntries
+      .map((entry) => entry.recommendation && entry.recommendation.date)
+      .filter(Boolean);
+    const scheduleSummary = formatSchedulingWorkLogDateSpan(dates);
+    // Writers resolve per-note groups and deduplicate repeated links by
+    // note and task identity so each qualifying task receives at most one
+    // entry; the prompt names the qualifying count for the scheduling subset.
+    return await this.offerSchedulingWorkLogOrDispatch({
+      targets,
+      scheduleSummary,
+      dispatch: async (summary) =>
+        await this.plugin.applyLinkRecommendedRoll(this, {
+          schedulingWorkLog: summary
+            ? {
+                summary,
+                dateText: formatBulletPropertyDate(
+                  this.valueBaseDate instanceof Date
+                    ? this.valueBaseDate
+                    : getLocalDateStart(new Date()),
+                ),
+              }
+            : null,
+        }),
+    });
   }
 
   handleKeydown(event) {
@@ -23892,11 +24686,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
     }
 
+    const schedulingWorkLog =
+      options.schedulingWorkLog || options.workLog || null;
+
     if (this.isLinkSession()) {
       return await this.plugin.applyLinkPickerPropertyValue(
         this,
         item,
-        options,
+        {
+          ...options,
+          schedulingWorkLog,
+        },
       );
     }
 
@@ -23912,6 +24712,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           {
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
+            schedulingWorkLog,
+            precomputedRollByLine: options.precomputedRollByLine,
+            precomputedScheduledValueByLine:
+              options.precomputedScheduledValueByLine,
+            rollByLine: options.rollByLine,
+            scheduledValueByLine: options.scheduledValueByLine,
           },
         );
       }
@@ -23922,7 +24728,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.taskSession,
         this.selectedPropertyItem.property.name,
         item.value,
-        { scheduleLog: options.scheduleLog },
+        { scheduleLog: options.scheduleLog, schedulingWorkLog },
       );
     }
 
@@ -23938,6 +24744,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           propertyContext: this.propertyContext,
           baseDate: this.valueBaseDate,
           random: this.priorityRandom,
+          schedulingWorkLog,
+          precomputedRoll: options.precomputedRoll,
         },
       );
     }
@@ -23950,7 +24758,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.lineText,
         this.selectedPropertyItem.currentValue,
         item.value,
-        { scheduleLog: options.scheduleLog },
+        { scheduleLog: options.scheduleLog, schedulingWorkLog },
       );
     }
 
@@ -23963,6 +24771,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         filePath: this.filePath,
         expectedLine: this.lineText,
         scheduleLog: options.scheduleLog,
+        schedulingWorkLog,
       },
     );
   }
@@ -26474,6 +27283,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           today: baseDate,
           recoveryByLine,
           scheduleLog: options.scheduleLog,
+          schedulingWorkLog: options.schedulingWorkLog || options.workLog,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         },
@@ -26495,6 +27305,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       {
         header: `${name} → ${normalizeBulletPropertyValue(value)}`,
         scheduleLog: options.scheduleLog,
+        schedulingWorkLog: options.schedulingWorkLog || options.workLog,
       },
     );
   }
@@ -26525,19 +27336,30 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     const planned = [];
     const rolledDates = [];
+    const precomputedByPath =
+      options.precomputedByPath instanceof Map ? options.precomputedByPath : null;
     for (const group of groups) {
-      const rollByLine = new Map(
-        group.session.targets.map((target) => [
-          target.line,
-          rollPriorityScheduledDateWithOffset(level, baseDate, random),
-        ]),
-      );
-      const scheduledValueByLine = new Map(
-        Array.from(rollByLine, ([line, roll]) => [
-          line,
-          formatBulletPropertyDate(roll.date),
-        ]),
-      );
+      const precomputed = precomputedByPath
+        ? precomputedByPath.get(group.path)
+        : null;
+      const rollByLine =
+        precomputed && precomputed.rollByLine instanceof Map
+          ? precomputed.rollByLine
+          : new Map(
+              group.session.targets.map((target) => [
+                target.line,
+                rollPriorityScheduledDateWithOffset(level, baseDate, random),
+              ]),
+            );
+      const scheduledValueByLine =
+        precomputed && precomputed.scheduledValueByLine instanceof Map
+          ? precomputed.scheduledValueByLine
+          : new Map(
+              Array.from(rollByLine, ([line, roll]) => [
+                line,
+                formatBulletPropertyDate(roll.date),
+              ]),
+            );
       for (const date of scheduledValueByLine.values()) {
         rolledDates.push(date);
       }
@@ -26594,6 +27416,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             automatic: true,
             reasonByLine: scheduleLogReasonByLine,
           },
+          schedulingWorkLog: options.schedulingWorkLog || options.workLog,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         },
@@ -26616,6 +27439,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         header: null,
         priority: { property, level },
         rolledDates,
+        schedulingWorkLog: options.schedulingWorkLog || options.workLog,
       },
     );
   }
@@ -26812,6 +27636,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       stillBlockedTaskCount: 0,
       deferredRecoveryTaskCount: 0,
       scheduleLoggedTaskCount: 0,
+      schedulingWorkLogWrittenCount: 0,
     };
     for (const { plan } of planned) {
       totals.changedTaskCount += plan.changedTaskCount;
@@ -26826,6 +27651,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       totals.stillBlockedTaskCount += plan.stillBlockedTaskCount;
       totals.deferredRecoveryTaskCount += plan.deferredRecoveryTaskCount;
       totals.scheduleLoggedTaskCount += plan.scheduleLoggedTaskCount;
+      totals.schedulingWorkLogWrittenCount +=
+        plan.schedulingWorkLogWrittenCount || 0;
     }
     const removedPomodoroLinkCount = dailyCleanupPlan && dailyCleanupPlan.changed && !pomodoroPruneFailed
       ? dailyCleanupPlan.removedLinkCount
@@ -26885,13 +27712,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const scheduleLogSuffix = totals.scheduleLoggedTaskCount > 0
       ? `; logged reason on ${formatCountLabel(totals.scheduleLoggedTaskCount, "task")}`
       : "";
+    const workLogSuffix = totals.schedulingWorkLogWrittenCount > 0
+      ? `; ${formatCountLabel(totals.schedulingWorkLogWrittenCount, "Work Log")}`
+      : "";
     const pomodoroPruneSuffix = removedPomodoroLinkCount > 0
       ? `; removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`
       : pomodoroPruneFailed
         ? "; Pomodoro links not removed"
         : "";
     new Notice(
-      `${notice.header} · ${taskNoun} ${viaLinks}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${pomodoroPruneSuffix}`,
+      `${notice.header} · ${taskNoun} ${viaLinks}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${workLogSuffix}${pomodoroPruneSuffix}`,
     );
     return true;
   }
@@ -29198,6 +30028,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         today,
         recoveryByLine,
         scheduleLog: options.scheduleLog,
+        schedulingWorkLog: options.schedulingWorkLog || options.workLog,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
       },
@@ -29352,6 +30183,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               : "logged reason on"
           } ${formatCountLabel(plan.scheduleLoggedTaskCount, "task")}`
         : "";
+    const workLogSuffix =
+      plan.schedulingWorkLogWrittenCount > 0
+        ? `; ${formatCountLabel(plan.schedulingWorkLogWrittenCount, "Work Log")}`
+        : "";
     const pomodoroPruneSuffix =
       removedPomodoroLinkCount > 0
         ? `; removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`
@@ -29365,7 +30200,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${pomodoroPruneSuffix}`,
+      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${workLogSuffix}${pomodoroPruneSuffix}`,
     );
     return true;
   }
@@ -29399,18 +30234,34 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         : getLocalDateStart(new Date());
     const random =
       typeof options.random === "function" ? options.random : Math.random;
-    const rollByLine = new Map(
-      session.targets.map((target) => [
-        target.line,
-        rollPriorityScheduledDateWithOffset(level, baseDate, random),
-      ]),
-    );
-    const scheduledValueByLine = new Map(
-      Array.from(rollByLine, ([line, roll]) => [
-        line,
-        formatBulletPropertyDate(roll.date),
-      ]),
-    );
+    const precomputedRollByLine =
+      options.precomputedRollByLine instanceof Map
+        ? options.precomputedRollByLine
+        : options.rollByLine instanceof Map
+          ? options.rollByLine
+          : null;
+    const precomputedScheduledValueByLine =
+      options.precomputedScheduledValueByLine instanceof Map
+        ? options.precomputedScheduledValueByLine
+        : options.scheduledValueByLine instanceof Map
+          ? options.scheduledValueByLine
+          : null;
+    const rollByLine =
+      precomputedRollByLine ||
+      new Map(
+        session.targets.map((target) => [
+          target.line,
+          rollPriorityScheduledDateWithOffset(level, baseDate, random),
+        ]),
+      );
+    const scheduledValueByLine =
+      precomputedScheduledValueByLine ||
+      new Map(
+        Array.from(rollByLine, ([line, roll]) => [
+          line,
+          formatBulletPropertyDate(roll.date),
+        ]),
+      );
     const includesDueDate = Array.from(scheduledValueByLine.values()).some(
       (scheduledValue) =>
         isDueInlineScheduledValue(scheduledValue, baseDate),
@@ -29476,6 +30327,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         today: baseDate,
         recoveryByLine,
         scheduleLog: { automatic: true, reasonByLine: scheduleLogReasonByLine },
+        schedulingWorkLog: options.schedulingWorkLog || options.workLog,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
       },
@@ -29610,6 +30462,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           stillBlockedTaskCount: plan.stillBlockedTaskCount,
           deferredRecoveryTaskCount: plan.deferredRecoveryTaskCount,
           scheduleLoggedTaskCount: plan.scheduleLoggedTaskCount,
+          schedulingWorkLogWrittenCount: plan.schedulingWorkLogWrittenCount,
           removedPomodoroLinkCount,
           pomodoroPruneFailed,
         },
@@ -29745,6 +30598,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         dateText,
         baseDate,
         recoveryByLine,
+        schedulingWorkLog: options.schedulingWorkLog || options.workLog,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
       },
@@ -29960,6 +30814,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           scheduleLoggedTaskCount:
             (priorityPlan ? priorityPlan.scheduleLoggedTaskCount : 0) +
             (cancelPlan ? cancelPlan.loggedCount : 0),
+          schedulingWorkLogWrittenCount: priorityPlan
+            ? priorityPlan.schedulingWorkLogWrittenCount || 0
+            : 0,
           removedPomodoroLinkCount,
           pomodoroPruneFailed,
           skippedCount: fresh.skippedCount,
@@ -30120,6 +30977,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           dateText,
           baseDate,
           recoveryByLine,
+          schedulingWorkLog: options.schedulingWorkLog || options.workLog,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         },
@@ -30271,6 +31129,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       stillBlockedTaskCount: 0,
       deferredRecoveryTaskCount: 0,
       scheduleLoggedTaskCount: 0,
+      schedulingWorkLogWrittenCount: 0,
       skippedCount: fresh.skippedCount,
       skippedClosedCount: 0,
       removedPomodoroLinkCount,
@@ -30299,6 +31158,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           priorityPlan.deferredRecoveryTaskCount || 0;
         outcome.scheduleLoggedTaskCount +=
           priorityPlan.scheduleLoggedTaskCount || 0;
+        outcome.schedulingWorkLogWrittenCount +=
+          priorityPlan.schedulingWorkLogWrittenCount || 0;
       }
       if (cancelPlan) {
         outcome.scheduleLoggedTaskCount += cancelPlan.loggedCount || 0;
@@ -30646,6 +31507,38 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       );
     }
 
+    const projectSchedulingWorkLogInput =
+      options.schedulingWorkLog && typeof options.schedulingWorkLog === "object"
+        ? options.schedulingWorkLog
+        : options.workLog && typeof options.workLog === "object"
+          ? options.workLog
+          : null;
+    let projectWorkLogWritten = false;
+    if (hasSchedulingWorkLogInput(projectSchedulingWorkLogInput)) {
+      const eligibilityLine = String(expectedLine ?? lineText ?? "");
+      if (isSchedulingWorkLogRawLine(eligibilityLine)) {
+        const summary = normalizeSchedulingWorkSummary(
+          projectSchedulingWorkLogInput.summary,
+        );
+        if (summary) {
+          const dateText = resolveSchedulingWorkLogDateText(
+            projectSchedulingWorkLogInput,
+            undefined,
+          );
+          if (
+            insertLaneWorkLogEntry(
+              plannedSource.lines,
+              plan.cursorLine,
+              summary,
+              dateText,
+            )
+          ) {
+            projectWorkLogWritten = true;
+          }
+        }
+      }
+    }
+
     let finalContent = plannedSource.lines.join(plannedSource.lineEnding);
     let finalCursorLine = plan.cursorLine;
 
@@ -30794,6 +31687,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     } else if (scheduleLogOutcome === "guard-failed") {
       parts.push("schedule log not written");
     }
+    if (projectWorkLogWritten) {
+      parts.push("1 Work Log");
+    }
     const recoveryCounts = {
       ready: plan.recoveredReadyTaskCount,
       next: plan.recoveredNextTaskCount,
@@ -30811,6 +31707,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           ambiguousTaskCount: plan.ambiguousTaskLines.length,
           recoveryCounts,
           scheduleLogOutcome,
+          schedulingWorkLogWrittenCount: projectWorkLogWritten ? 1 : 0,
           removedPomodoroLinkCount,
           pomodoroPruneFailed,
         }),
@@ -31084,6 +31981,24 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // the log entry land in one editor change set (one undo step).
     const hasTaskLineChange = nextLine !== lineText;
     const wantsScheduleLog = hasScheduleLogReasonInput(options.scheduleLog);
+    const schedulingWorkLogInput =
+      options.schedulingWorkLog && typeof options.schedulingWorkLog === "object"
+        ? options.schedulingWorkLog
+        : options.workLog && typeof options.workLog === "object"
+          ? options.workLog
+          : null;
+    const isSchedulingInlineEdit =
+      hasScheduledValue && Boolean(normalizedScheduledValue);
+    const wantsWorkLog =
+      isSchedulingInlineEdit &&
+      isSchedulingWorkLogRawLine(lineText) &&
+      hasSchedulingWorkLogInput(schedulingWorkLogInput);
+    const workLogSummary = wantsWorkLog
+      ? normalizeSchedulingWorkSummary(schedulingWorkLogInput.summary)
+      : "";
+    const workLogDateText = wantsWorkLog
+      ? resolveSchedulingWorkLogDateText(schedulingWorkLogInput, undefined)
+      : "";
     let preplannedScheduleLog = null;
     if (foldedDailyContent !== null) {
       const linesRemovedBeforeCursor = dailyCleanupPlan.removedLineRanges.reduce(
@@ -31119,25 +32034,90 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     };
 
     let scheduleLogOutcome = null;
+    let workLogWritten = false;
     if (foldedDailyContent !== null) {
       let finalContent = foldedDailyContent;
+      const folded = splitMarkdownContent(foldedDailyContent);
+      const mutable = folded.lines.slice();
       if (preplannedScheduleLog && preplannedScheduleLog.valid) {
-        const folded = splitMarkdownContent(foldedDailyContent);
-        const mutable = folded.lines.slice();
         applyScheduleLogEntryToLines(mutable, preplannedScheduleLog);
-        finalContent = mutable.join(folded.lineEnding);
       }
-      if (
-        !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+      if (wantsWorkLog && workLogSummary) {
+        if (
+          insertLaneWorkLogEntry(
+            mutable,
+            effectiveCursorLine,
+            workLogSummary,
+            workLogDateText,
+          )
+        ) {
+          workLogWritten = true;
+        }
+      }
+      finalContent = mutable.join(folded.lineEnding);
+      if (finalContent !== writeContext.content) {
+        if (
+          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+        ) {
+          new Notice("Could not update bullet property");
+          return false;
+        }
+      } else if (
+        hasTaskLineChange ||
+        (preplannedScheduleLog && preplannedScheduleLog.valid)
       ) {
-        new Notice("Could not update bullet property");
-        return false;
+        if (
+          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+        ) {
+          new Notice("Could not update bullet property");
+          return false;
+        }
       }
       if (preplannedScheduleLog) {
         scheduleLogOutcome = getScheduleLogWriteOutcome(
           preplannedScheduleLog,
           preplannedScheduleLog.valid,
         );
+      }
+    } else if (wantsWorkLog && workLogSummary) {
+      const original = splitMarkdownContent(writeContext.content);
+      const mutable = original.lines.slice();
+      if (hasTaskLineChange) {
+        mutable[cursor.line] = nextLine;
+      }
+      if (preplannedScheduleLog && preplannedScheduleLog.valid) {
+        applyScheduleLogEntryToLines(mutable, preplannedScheduleLog);
+      }
+      if (
+        insertLaneWorkLogEntry(
+          mutable,
+          effectiveCursorLine,
+          workLogSummary,
+          workLogDateText,
+        )
+      ) {
+        workLogWritten = true;
+      }
+      const finalContent = mutable.join(original.lineEnding);
+      scheduleLogOutcome = preplannedScheduleLog
+        ? getScheduleLogWriteOutcome(preplannedScheduleLog, preplannedScheduleLog.valid)
+        : null;
+      if (finalContent !== writeContext.content) {
+        if (
+          !applyEditorContentTransaction(cm, writeContext.content, finalContent, finalCursor)
+        ) {
+          new Notice("Could not update bullet property");
+          return false;
+        }
+      } else {
+        if (preplannedScheduleLog) {
+          scheduleLogOutcome = getScheduleLogWriteOutcome(preplannedScheduleLog, false);
+        }
+        if (!hasTaskLineChange && !workLogWritten) {
+          if (preplannedScheduleLog) {
+            scheduleLogOutcome = getScheduleLogWriteOutcome(preplannedScheduleLog, false);
+          }
+        }
       }
     } else {
       const wantsWrite =
@@ -31227,6 +32207,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           recoveryOutcome,
           recoveryCounts,
           scheduleLogOutcome,
+          schedulingWorkLogWrittenCount: workLogWritten ? 1 : 0,
           removedPomodoroLinkCount,
           pomodoroPruneFailed,
         }),
@@ -31243,6 +32224,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               : scheduleLogOutcome === "guard-failed"
                 ? "; schedule log not written"
                 : "";
+      const workLogSuffix = workLogWritten ? "; 1 Work Log" : "";
       const pomodoroPruneSuffix =
         removedPomodoroLinkCount > 0
           ? `; removed ${formatCountLabel(removedPomodoroLinkCount, "Pomodoro link")}`
@@ -31252,7 +32234,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(
         `${noticeText}${
           blocked ? "; marked task Blocked" : ""
-        }${scheduledRecoveryNoticeSuffix(recoveryCounts)}${scheduleLogSuffix}${pomodoroPruneSuffix}`,
+        }${scheduledRecoveryNoticeSuffix(recoveryCounts)}${scheduleLogSuffix}${workLogSuffix}${pomodoroPruneSuffix}`,
       );
     }
     return true;
@@ -31337,6 +32319,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       property.schedules,
       propertyContext,
     );
+    const schedulingWorkLogForPriority =
+      context.schedulingWorkLog || context.workLog || null;
     if (scheduledTarget.kind === "project-frontmatter") {
       const expectedScheduledValue =
         propertyContext.frontmatter &&
@@ -31367,6 +32351,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
                 from: expectedScheduledValue,
                 to: rolledValue,
               }),
+          schedulingWorkLog: schedulingWorkLogForPriority,
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
               property,
@@ -31416,6 +32401,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               from: (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
               to: rolledValue,
             }),
+        schedulingWorkLog: schedulingWorkLogForPriority,
         buildNotice: (outcome) =>
           buildPriorityNoticeModel({
             property,
@@ -31434,6 +32420,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
                 outcome.scheduleLogOutcome === "created"
                   ? 1
                   : 0,
+              schedulingWorkLogWrittenCount:
+                outcome.schedulingWorkLogWrittenCount || 0,
               removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
               pomodoroPruneFailed: outcome.pomodoroPruneFailed,
             },
@@ -37333,6 +38321,14 @@ module.exports.helpers = {
   normalizeLaneWorkSummary,
   formatLaneWorkLogEntry,
   findLaneWorkLogParent,
+  insertLaneWorkLogEntry,
+  isSchedulingWorkLogStatus,
+  isSchedulingWorkLogRawLine,
+  normalizeSchedulingWorkSummary,
+  hasSchedulingWorkLogInput,
+  resolveSchedulingWorkLogDateText,
+  collectSchedulingWorkLogEligibleOriginalLines,
+  applySchedulingWorkLogsToLines,
   planTaskLaneBatch,
   buildLaneToggleNotice,
   readLaneBudgets,
@@ -37369,6 +38365,8 @@ module.exports.helpers = {
   getNoteTaskRefreshRaw,
   describeLaneRow,
   getLaneReleaseReasonHints,
+  getSchedulingWorkLogHints,
+  formatSchedulingWorkLogDateSpan,
   discoverMovableObsidianTaskTargets,
   validateCountedTaskSession,
   parseTaskMoveContainerPrefix,

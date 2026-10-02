@@ -2673,3 +2673,85 @@ test("picker-counted Ctrl+Enter refuses a recurring cancel batch", async () => {
   assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
   assert.equal(harness.editor.undoGroups, 0);
 });
+
+async function confirmSchedulingWorkLogStage(picker, summary = "") {
+  assert.equal(picker.stage, "schedule-work-log");
+  picker.inputEl = { value: summary };
+  picker.visibleItems = picker.getFilteredItems();
+  return await picker.openItemAtIndex(0);
+}
+
+test("recommended roll on Pending offers a Work Log with the frozen date", async () => {
+  notices.length = 0;
+  const content = "- [/] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a";
+  const harness = createRollPickerHarness({ content });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.ok(picker.priorityRollRecommendation);
+  assert.equal(picker.priorityRollRecommendation.kind, "roll");
+  const frozenDate = picker.priorityRollRecommendation.date;
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(picker.stage, "schedule-work-log");
+  assert.equal(harness.editor.content, content);
+  assert.match(picker.getSchedulingWorkLogSubtitle(), new RegExp(frozenDate));
+  await confirmSchedulingWorkLogStage(picker, "Rolled work");
+  assert.ok(harness.editor.content.includes(`[scheduled:: ${frozenDate}]`));
+  assert.match(harness.editor.content, /\*2026-09-30\* — Rolled work/);
+  assert.match(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
+});
+
+test("recommended roll blank summary skips the Work Log without a fallback", async () => {
+  notices.length = 0;
+  const content = "- [*] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a";
+  const harness = createRollPickerHarness({ content });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(picker.stage, "schedule-work-log");
+  await confirmSchedulingWorkLogStage(picker, "   ");
+  assert.doesNotMatch(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
+  assert.doesNotMatch(harness.editor.content, /🤷 no reason given/);
+});
+
+test("Ctrl+Enter in the Work Log stage confirms instead of re-rolling", async () => {
+  notices.length = 0;
+  const content = "- [/] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a";
+  const harness = createRollPickerHarness({ content });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(picker.stage, "schedule-work-log");
+  picker.inputEl = { value: "Via ctrl enter" };
+  picker.visibleItems = picker.getFilteredItems();
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, notices.length);
+  assert.match(harness.editor.content, /Via ctrl enter/);
+});
+
+test("counted recommended mixed batch logs only eligible roll and decay targets", async () => {
+  notices.length = 0;
+  const content = [
+    "- [/] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
+    "- [*] #task B [priority:: medium] [scheduled:: 2026-09-01] ^b",
+    "- [ ] #task C [priority:: medium] [scheduled:: 2026-09-01] ^c",
+  ].join("\n");
+  const harness = createRollPickerHarness({ content });
+  assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 2 }), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.ok(picker.countedRollBatch);
+  selectRollPropertyRow(picker, "scheduled");
+  const before = notices.length;
+  picker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(harness.plugin, before);
+  assert.equal(picker.stage, "schedule-work-log");
+  await confirmSchedulingWorkLogStage(picker, "Batch work");
+  const after = harness.editor.content;
+  assert.equal((after.match(/Batch work/g) || []).length, 2);
+  assert.doesNotMatch(after.split("- [ ] #task C")[1] || "", /Batch work/);
+});

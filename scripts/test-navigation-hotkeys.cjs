@@ -19530,3 +19530,471 @@ test("forward promotion discovers live links without a backlink cache and uses o
   assert.doesNotMatch(openDaily.getValue(), /Areas\/Work#\^ship/);
   assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
 });
+
+async function confirmSchedulingWorkLogStage(picker, summary = "") {
+  assert.equal(picker.stage, "schedule-work-log");
+  picker.inputEl = { value: summary };
+  picker.visibleItems = picker.getFilteredItems();
+  return await picker.openItemAtIndex(0);
+}
+
+function schedulingWorkLogConfig() {
+  return helpers.validateBulletPropertyConfig({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+        ],
+      },
+    ],
+  });
+}
+
+test("scheduling Work Log eligibility requires Pending or Next #task lines", () => {
+  assert.equal(helpers.isSchedulingWorkLogRawLine("- [/] #task Pending ^a"), true);
+  assert.equal(helpers.isSchedulingWorkLogRawLine("- [*] #task Next ^b"), true);
+  assert.equal(helpers.isSchedulingWorkLogRawLine("- [ ] #task Ready ^c"), false);
+  assert.equal(helpers.isSchedulingWorkLogRawLine("- [?] #task Blocked ^d"), false);
+  assert.equal(helpers.isSchedulingWorkLogRawLine("- [x] #task Done ^e"), false);
+  assert.equal(helpers.isSchedulingWorkLogRawLine("- [/] plain bullet ^f"), false);
+  assert.equal(helpers.isSchedulingWorkLogRawLine("not a task"), false);
+  assert.equal(
+    helpers.collectSchedulingWorkLogEligibleOriginalLines([
+      { line: 0, rawLine: "- [/] #task A ^a" },
+      { line: 1, rawLine: "- [ ] #task B ^b" },
+      { line: 2, rawLine: "- [*] #task C ^c" },
+    ]).size,
+    2,
+  );
+});
+
+test("single Pending explicit date offers Work Log after the reason and writes both logs", async () => {
+  notices.length = 0;
+  const baseDate = new Date(2026, 9, 2);
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  assert.notEqual(scheduledIndex, -1);
+  await picker.openItemAtIndex(scheduledIndex);
+  assert.equal(picker.stage, "value");
+  const dateItem = picker.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-10-05",
+  );
+  assert.ok(dateItem);
+  await picker.openItem(dateItem);
+  assert.equal(picker.stage, "reason");
+  assert.equal(harness.editor.content, "- [/] #task Pending work ^a");
+  await confirmScheduleReasonStage(picker, "replan");
+  assert.equal(picker.stage, "schedule-work-log");
+  assert.equal(harness.editor.content, "- [/] #task Pending work ^a");
+  assert.match(picker.getSchedulingWorkLogSubtitle(), /scheduled → 2026-10-05/);
+  assert.match(picker.getSchedulingWorkLogSubtitle(), /nothing written yet/);
+  await confirmSchedulingWorkLogStage(picker, "Did the thing");
+  assert.match(harness.editor.content, /\[scheduled:: 2026-10-05\]/);
+  assert.match(harness.editor.content, /🗓️ \*\*SCHEDULE LOG\*\*/);
+  assert.match(harness.editor.content, /\*2026-10-02\* — Did the thing/);
+  assert.match(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
+  assert.match(notices.at(-1), /1 Work Log/);
+});
+
+test("single Next blank and whitespace summaries schedule without a Work Log", async () => {
+  for (const summary of ["", "   "]) {
+    notices.length = 0;
+    const baseDate = new Date(2026, 9, 2);
+    const harness = createBulletPropertyPickerHarness({
+      config: schedulingWorkLogConfig(),
+      content: "- [*] #task Next work ^a",
+      cursor: { line: 0, ch: 0 },
+      baseDate,
+    });
+    assert.equal(harness.open(), true);
+    const picker = harness.plugin.activeBulletPropertyPicker;
+    const scheduledIndex = picker.visibleItems.findIndex(
+      (item) => item.property.name === "scheduled",
+    );
+    await picker.openItemAtIndex(scheduledIndex);
+    const dateItem = picker.visibleItems.find(
+      (item) => item.kind === "value" && item.value === "2026-10-05",
+    );
+    await picker.openItem(dateItem);
+    await confirmScheduleReasonStage(picker, "");
+    assert.equal(picker.stage, "schedule-work-log");
+    await confirmSchedulingWorkLogStage(picker, summary);
+    assert.match(harness.editor.content, /\[scheduled:: 2026-10-05\]/);
+    assert.doesNotMatch(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
+    assert.doesNotMatch(notices.at(-1) || "", /Work Log/);
+    assert.doesNotMatch(harness.editor.content, /🤷 no reason given/);
+  }
+});
+
+test("Escape at the reason and Work Log stages writes nothing", async () => {
+  const baseDate = new Date(2026, 9, 2);
+  const content = "- [/] #task Pending work ^a";
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content,
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  await picker.openItemAtIndex(scheduledIndex);
+  const dateItem = picker.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-10-05",
+  );
+  await picker.openItem(dateItem);
+  assert.equal(picker.stage, "reason");
+  picker.close();
+  assert.equal(harness.editor.content, content);
+
+  const harness2 = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content,
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness2.open(), true);
+  const picker2 = harness2.plugin.activeBulletPropertyPicker;
+  const scheduledIndex2 = picker2.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  await picker2.openItemAtIndex(scheduledIndex2);
+  const dateItem2 = picker2.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-10-05",
+  );
+  await picker2.openItem(dateItem2);
+  await confirmScheduleReasonStage(picker2, "replan");
+  assert.equal(picker2.stage, "schedule-work-log");
+  assert.equal(harness2.editor.content, content);
+  picker2.close();
+  assert.equal(harness2.editor.content, content);
+});
+
+test("Ready and Blocked explicit dates keep the existing flow with no Work Log prompt", async () => {
+  for (const status of [" ", "?"]) {
+    notices.length = 0;
+    const baseDate = new Date(2026, 9, 2);
+    const harness = createBulletPropertyPickerHarness({
+      config: schedulingWorkLogConfig(),
+      content: `- [${status}] #task Task ^a`,
+      cursor: { line: 0, ch: 0 },
+      baseDate,
+    });
+    assert.equal(harness.open(), true);
+    const picker = harness.plugin.activeBulletPropertyPicker;
+    const scheduledIndex = picker.visibleItems.findIndex(
+      (item) => item.property.name === "scheduled",
+    );
+    await picker.openItemAtIndex(scheduledIndex);
+    const dateItem = picker.visibleItems.find(
+      (item) => item.kind === "value" && item.value === "2026-10-05",
+    );
+    await picker.openItem(dateItem);
+    assert.equal(picker.stage, "reason");
+    await confirmScheduleReasonStage(picker, "replan");
+    assert.notEqual(picker.stage, "schedule-work-log");
+    assert.match(harness.editor.content, /\[scheduled:: 2026-10-05\]/);
+    assert.doesNotMatch(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
+  }
+});
+
+test("future scheduling on Pending marks Blocked but still writes the Work Log", async () => {
+  notices.length = 0;
+  const baseDate = new Date(2026, 9, 2);
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  await picker.openItemAtIndex(scheduledIndex);
+  const dateItem = picker.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-11-02",
+  );
+  assert.ok(dateItem);
+  await picker.openItem(dateItem);
+  await confirmScheduleReasonStage(picker, "later");
+  assert.equal(picker.stage, "schedule-work-log");
+  await confirmSchedulingWorkLogStage(picker, "Did prep");
+  assert.match(harness.editor.content, /- \[\?\] #task Pending work/);
+  assert.match(harness.editor.content, /\*2026-10-02\* — Did prep/);
+});
+
+test("today date on Pending still offers the Work Log", async () => {
+  const baseDate = new Date(2026, 9, 2);
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  await picker.openItemAtIndex(scheduledIndex);
+  const dateItem = picker.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-10-02",
+  );
+  assert.ok(dateItem);
+  await picker.openItem(dateItem);
+  await confirmScheduleReasonStage(picker, "");
+  assert.equal(picker.stage, "schedule-work-log");
+  await confirmSchedulingWorkLogStage(picker, "Worked today");
+  assert.match(harness.editor.content, /\*2026-10-02\* — Worked today/);
+});
+
+test("priority pick on Pending freezes its roll and offers the Work Log", async () => {
+  notices.length = 0;
+  const baseDate = new Date(2026, 9, 2);
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+    random: () => 0,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const propertyIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "priority",
+  );
+  await picker.openItemAtIndex(propertyIndex);
+  const levelItem = picker.visibleItems.find(
+    (item) => item.priorityLevel && item.label === "P1",
+  );
+  assert.ok(levelItem);
+  await picker.openItem(levelItem);
+  assert.equal(picker.stage, "schedule-work-log");
+  assert.equal(harness.editor.content, "- [/] #task Pending work ^a");
+  const frozen = String(picker.pendingScheduleWorkLog.scheduleSummary || "");
+  assert.match(frozen, /scheduled → 2026-10-0[4-9]/);
+  await confirmSchedulingWorkLogStage(picker, "Priority work");
+  const expectedDate = frozen.match(/(\d{4}-\d{2}-\d{2})/)[1];
+  assert.ok(harness.editor.content.includes(`[scheduled:: ${expectedDate}]`));
+  assert.match(harness.editor.content, /\*2026-10-02\* — Priority work/);
+  assert.match(harness.editor.content, /🎲 P0 → P1/);
+});
+
+test("counted mixed statuses share one summary only on Pending and Next", async () => {
+  notices.length = 0;
+  const baseDate = new Date(2026, 9, 2);
+  const content = [
+    "- [/] #task Pending one ^a",
+    "- [*] #task Next two ^b",
+    "- [ ] #task Ready three ^c",
+    "- [?] #task Blocked four ^d",
+  ].join("\n");
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content,
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 3 }), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  await picker.openItemAtIndex(scheduledIndex);
+  const dateItem = picker.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-10-02",
+  );
+  assert.ok(dateItem);
+  await picker.openItem(dateItem);
+  await confirmScheduleReasonStage(picker, "batch");
+  assert.equal(picker.stage, "schedule-work-log");
+  assert.match(picker.getSchedulingWorkLogSubtitle(), /2 of 4 tasks qualify/);
+  const beforeUndo = harness.editor.undoGroups;
+  await confirmSchedulingWorkLogStage(picker, "Shared work");
+  assert.equal(harness.editor.undoGroups, beforeUndo + 1);
+  const after = harness.editor.content;
+  assert.equal((after.match(/\*2026-10-02\* — Shared work/g) || []).length, 2);
+  assert.ok(after.includes("- [/] #task Pending one"));
+  assert.ok(after.includes("- [*] #task Next two"));
+  assert.doesNotMatch(after, /Ready three[^]*🛠️ \*\*WORK LOG\*\*/);
+});
+
+test("counted planner composes Schedule and Work Logs bottom-up above later targets", () => {
+  const content = [
+    "- [/] #task First ^a",
+    "  - note child",
+    "- [*] #task Second ^b",
+  ].join("\n");
+  const session = Object.freeze({
+    valid: true,
+    error: null,
+    explicit: true,
+    targets: Object.freeze([
+      { line: 0, rawLine: "- [/] #task First ^a" },
+      { line: 2, rawLine: "- [*] #task Second ^b" },
+    ]),
+  });
+  const plan = helpers.planCountedBulletPropertyBatch(
+    content,
+    session,
+    "scheduled",
+    "2026-10-05",
+    {
+      operation: "set",
+      today: new Date(2026, 9, 2),
+      scheduleLog: { reason: "batch" },
+      schedulingWorkLog: { summary: "Did work", dateText: "2026-10-02" },
+    },
+  );
+  assert.equal(plan.valid, true);
+  assert.equal(plan.schedulingWorkLogWrittenCount, 2);
+  assert.equal(plan.schedulingWorkLogEligibleCount, 2);
+  const lines = String(plan.content).split("\n");
+  const firstTask = lines.findIndex((line) => line.includes("First"));
+  const secondTask = lines.findIndex((line) => line.includes("Second"));
+  assert.ok(firstTask < secondTask);
+  assert.equal(
+    String(plan.content).match(/\*2026-10-02\* — Did work/g).length,
+    2,
+  );
+  assert.ok(String(plan.content).includes("🗓️ **SCHEDULE LOG**"));
+  assert.ok(String(plan.content).includes("🛠️ **WORK LOG**"));
+});
+
+test("counted planner writes a Work Log even when the date is unchanged", () => {
+  const line = "- [/] #task Pending [scheduled:: 2026-10-05] ^a";
+  const session = Object.freeze({
+    valid: true,
+    error: null,
+    explicit: true,
+    targets: Object.freeze([{ line: 0, rawLine: line }]),
+  });
+  const plan = helpers.planCountedBulletPropertyBatch(line, session, "scheduled", "2026-10-05", {
+    operation: "set",
+    today: new Date(2026, 9, 2),
+    schedulingWorkLog: { summary: "Still worked", dateText: "2026-10-02" },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.changed, true);
+  assert.equal(plan.schedulingWorkLogWrittenCount, 1);
+  assert.match(plan.content, /\*2026-10-02\* — Still worked/);
+});
+
+test("scheduling Work Log ownership keeps nested logs and CRLF endings", () => {
+  const content = "- [/] #task Parent ^a\r\n\t- child task\r\n\t- 🛠️ **WORK LOG**\r\n\t\t- *2026-10-01* — Old work\r\n- [*] #task Sibling ^b";
+  const session = Object.freeze({
+    valid: true,
+    error: null,
+    explicit: true,
+    targets: Object.freeze([
+      { line: 0, rawLine: "- [/] #task Parent ^a" },
+      { line: 4, rawLine: "- [*] #task Sibling ^b" },
+    ]),
+  });
+  const plan = helpers.planCountedBulletPropertyBatch(content, session, "scheduled", "2026-10-05", {
+    operation: "set",
+    today: new Date(2026, 9, 2),
+    schedulingWorkLog: { summary: "New **markdown** work", dateText: "2026-10-02" },
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.schedulingWorkLogWrittenCount, 2);
+  assert.ok(plan.content.includes("\r\n"));
+  assert.match(plan.content, /\*2026-10-02\* — New \*\*markdown\*\* work/);
+  assert.match(plan.content, /\*2026-10-01\* — Old work/);
+});
+
+test("scheduling Work Log warns on :: and preserves Markdown", async () => {
+  const baseDate = new Date(2026, 9, 2);
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  await picker.openItemAtIndex(scheduledIndex);
+  const dateItem = picker.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-10-05",
+  );
+  await picker.openItem(dateItem);
+  await confirmScheduleReasonStage(picker, "r");
+  picker.inputEl = { value: "did :: field" };
+  const preview = picker.getFilteredItems()[0];
+  assert.equal(preview.hasInlineField, true);
+  await confirmSchedulingWorkLogStage(picker, "did :: field");
+  assert.match(harness.editor.content, /did :: field/);
+});
+
+test("stale task while prompting refuses with no scheduling or log writes", async () => {
+  notices.length = 0;
+  const baseDate = new Date(2026, 9, 2);
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const scheduledIndex = picker.visibleItems.findIndex(
+    (item) => item.property.name === "scheduled",
+  );
+  await picker.openItemAtIndex(scheduledIndex);
+  const dateItem = picker.visibleItems.find(
+    (item) => item.kind === "value" && item.value === "2026-10-05",
+  );
+  await picker.openItem(dateItem);
+  await confirmScheduleReasonStage(picker, "replan");
+  assert.equal(picker.stage, "schedule-work-log");
+  harness.editor.content = "- [/] #task Changed ^a";
+  await confirmSchedulingWorkLogStage(picker, "Late work");
+  assert.equal(harness.editor.content, "- [/] #task Changed ^a");
+  assert.doesNotMatch(harness.editor.content, /SCHEDULE LOG/);
+  assert.doesNotMatch(harness.editor.content, /WORK LOG/);
+  assert.match(notices.at(-1), /changed|stale|no tasks were updated/i);
+});
+
+test("scheduling prompt never leaks into lane, cancel, or dependency rows", async () => {
+  const baseDate = new Date(2026, 9, 2);
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const laneIndex = picker.visibleItems.findIndex((item) => item.kind === "lane-toggle");
+  if (laneIndex !== -1) {
+    await picker.openItemAtIndex(laneIndex);
+    assert.notEqual(picker.stage, "schedule-work-log");
+    picker.showPropertyStage({ clearQuery: false });
+  }
+  const cancelIndex = picker.visibleItems.findIndex((item) => item.kind === "cancel-task");
+  if (cancelIndex !== -1) {
+    await picker.openItemAtIndex(cancelIndex);
+    assert.notEqual(picker.stage, "schedule-work-log");
+  }
+});

@@ -4462,6 +4462,76 @@ test("planTargetTaskUpdate tolerates a throwing stamper", () => {
   assert.equal(plan.hasChanges, true);
 });
 
+// compat (bob-cli-3n.5): Depends-On line recogniser, contract DP vectors
+// (docs/task-dependencies.md section 11.1).
+test("Depends-On line recogniser covers the contract DP vectors", () => {
+  const accept = [
+    "  - ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]",
+    "  - ⛓️ **DEPENDS ON:** [[cash#^unemployment]]",
+    "  - ⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a|b • c]]",
+    "  - ⛓️ **DEPENDS ON:** ~~[[#^a]]~~",
+    "  - ⛓️ **DEPENDS ON:** ![[#^a]]",
+    "  - 🔗 **DEPENDS ON:** [[#^a]]",
+    "  - **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDENCIES:** [[#^a]]",
+    "  - ⛓ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:**",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]",
+  ];
+  for (const line of accept) {
+    assert.equal(helpers.isTaskDependencyLine(line), true, line);
+  }
+  const reject = [
+    "  - ⛓️ **DEPENDS ON:** [[#^a",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review",
+    "- [?] #task Make appt ^rahway",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "  - ![[Tasks#^ship]]",
+    "  - plain bullet",
+    "⛓️ **DEPENDS ON:** [[#^a]]",
+  ];
+  for (const line of reject) {
+    assert.equal(helpers.isTaskDependencyLine(line), false, line);
+  }
+});
+
+test("dedicated-link helpers reject Depends-On lines", () => {
+  const line = "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[Tasks#^b]]";
+  const link = selectTaskLink(line, line.indexOf("[[#^a]]") + 2);
+  assert.equal(helpers.isDedicatedTaskLinkBullet(line, link), false);
+  assert.equal(
+    helpers.isSoleContentLinkBullet(line, link.startCh, link.endCh),
+    false,
+  );
+  const tokenStart = line.indexOf("[[#^a]]");
+  assert.equal(
+    helpers.isDedicatedLinkBullet(
+      [line],
+      { line: 0 },
+      { start: tokenStart, end: tokenStart + "[[#^a]]".length },
+    ),
+    false,
+  );
+});
+
+test("Ctrl+Shift+Enter on a Depends-On link is refused without deleting anything", async () => {
+  resetNotices();
+  const depLine = "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]";
+  const content = ["- [?] #task Dependent ^dep", depLine].join("\n");
+  const editor = createEditor(content);
+  editor.setCursor({ line: 1, ch: depLine.indexOf("[[#^a]]") + 2 });
+  const plugin = new Plugin();
+  await plugin.startTaskLinkOpen(editor, { path: "Tasks.md" });
+  assert.equal(editor.getValue(), content);
+  assert.equal(lastNotice(), "⛓ Dependency link — edit it with Ctrl+Shift+P");
+});
+
 test("block-id-prompt freshness accessors degrade without ledger-tools", () => {
   const plugin = new Plugin();
   plugin.app = {};

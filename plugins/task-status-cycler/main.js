@@ -2603,6 +2603,11 @@ function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLi
 
   const targets = [];
   for (let line = range.startLine + 1; line <= range.endLine; line += 1) {
+    // Depends-On lines hold the dependent's prerequisites, which closing the
+    // dependent must never close.
+    if (isTaskDependencyLine(lines[line])) {
+      continue;
+    }
     for (const target of parseEmbeddedBlockTransclusions(lines[line])) {
       targets.push(target);
     }
@@ -2975,6 +2980,37 @@ function getBlockLinkTokenCandidates(lineText) {
       embedded: false,
     })),
   ].sort((left, right) => left.startIndex - right.startIndex);
+}
+
+// Depends-On line recogniser (contract docs/task-dependencies.md section 2,
+// DP vectors). Each plugin copies this small recogniser rather than importing
+// it, since deployed plugins must not import one another's main.js. The line
+// shape alone governs: writer form `⛓️ **DEPENDS ON:**` plus reader tolerance
+// (legacy `🔗` emoji, missing emoji, missing VS16, `DEPENDENCIES` label, `•` /
+// `·` / `,` / whitespace separators, aliased / struck / embedded links).
+// Block links are found first and never split on separators, because an alias
+// can contain one. Parentage (direct child of a `#task` line) and fenced code
+// are hooks projection concerns; compat gestures key off the line shape so a
+// managed line is never struck, restored, reformatted, or tree-closed.
+const TASK_DEPENDENCY_LINE_LINK_RE = /(?:~~)?!?(?:~~)?\[\[[^\]\n]+\]\](?:~~)?/g;
+const TASK_DEPENDENCY_LINE_REMAINDER_RE =
+  /^[ \t]*(?:⛓️?|🔗)?[ \t]*\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*[ \t•·,]*$/u;
+
+function isTaskDependencyLine(lineText) {
+  const line = String(lineText || "");
+  const marker = line.match(LIST_ITEM_MARKER_RE);
+  if (!marker) {
+    return false;
+  }
+  const body = marker[2] || "";
+  TASK_DEPENDENCY_LINE_LINK_RE.lastIndex = 0;
+  const remainder = body.replace(TASK_DEPENDENCY_LINE_LINK_RE, "");
+  TASK_DEPENDENCY_LINE_LINK_RE.lastIndex = 0;
+  if (remainder === body) {
+    // No block links: only a bare label line (R9 empty) still counts.
+    return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(body);
+  }
+  return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(remainder);
 }
 
 function getPomodoroMarkerPrefix(lineText, tokenStart) {
@@ -4636,7 +4672,11 @@ function retireClosedTaskReferencesInText(
   let retired = 0;
 
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    if (fenced.has(lineNumber) || !lines[lineNumber].includes("![[")) {
+    if (
+      fenced.has(lineNumber) ||
+      !lines[lineNumber].includes("![[") ||
+      isTaskDependencyLine(lines[lineNumber])
+    ) {
       continue;
     }
     const ancestry = hasEligibleRetirementAncestor(
@@ -4712,7 +4752,11 @@ function restoreReopenedTaskReferencesInText(
   let restored = 0;
 
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    if (fenced.has(lineNumber) || !lines[lineNumber].includes("[[")) {
+    if (
+      fenced.has(lineNumber) ||
+      !lines[lineNumber].includes("[[") ||
+      isTaskDependencyLine(lines[lineNumber])
+    ) {
       continue;
     }
     const ancestry = hasEligibleRetirementAncestor(
@@ -5362,6 +5406,11 @@ function getPlainListItemFormattingTarget(lineText) {
 
 function getPlainBulletFormatToggle(lineText, direction) {
   const line = String(lineText || "");
+  // Depends-On lines are managed by the dependency stage; Alt+]/Alt+[ cycle
+  // the link under the cursor there and must never reformat the bullet.
+  if (isTaskDependencyLine(line)) {
+    return null;
+  }
   const target = getPlainListItemFormattingTarget(line);
   if (!target) {
     return null;
@@ -8253,6 +8302,32 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         ? this.app.workspace.getActiveFile()
         : null);
     const activePath = activeFile && activeFile.path;
+    // Depends-On lines cycle the prerequisite under the cursor (the plain-link
+    // analogue of the transcluded path below) and never reformat the bullet.
+    if (this.isActiveTaskDependencyLine(editor)) {
+      if (checking) {
+        return true;
+      }
+
+      const dependencyCandidate =
+        this.getActiveTaskDependencyLinkTarget(editor, activePath);
+      if (!dependencyCandidate) {
+        new Notice("⛓ Put the cursor on a dependency link to cycle it");
+        return true;
+      }
+
+      const context = {
+        editor,
+        activePath,
+        originPath: activePath,
+      };
+      void this.cycleResolvedTranscludedTaskLink(
+        dependencyCandidate,
+        context,
+        direction,
+      ).catch(() => false);
+      return true;
+    }
     const candidate = this.getActiveLineTranscludedTaskTarget(editor, activePath);
     if (candidate) {
       if (checking) {
@@ -8573,6 +8648,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         return false;
       }
     } else if (
+      !this.isActiveTaskDependencyLine(view.editor) &&
       !this.getActiveLineTranscludedTaskTarget(view.editor, activePath)
     ) {
       return false;
@@ -8705,12 +8781,22 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         continue;
       }
 
-      const target = getTranscludedTaskTargetFromLine(
-        lineText,
-        activePath,
-        editorLineFor(line),
-        line === startLine ? cursor.ch : null,
-      );
+      // Depends-On lines cycle the prerequisite under the cursor (cursor-ch
+      // only on the start line; a lone link is unambiguous elsewhere), with
+      // the same resolve-and-cycle worker as transcluded targets.
+      const target = isTaskDependencyLine(lineText)
+        ? getTaskBlockLinkTargetFromLine(
+            lineText,
+            activePath,
+            editorLineFor(line),
+            line === startLine ? cursor.ch : null,
+          )
+        : getTranscludedTaskTargetFromLine(
+            lineText,
+            activePath,
+            editorLineFor(line),
+            line === startLine ? cursor.ch : null,
+          );
       if (!target) {
         continue;
       }
@@ -9063,6 +9149,12 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return { resolved: false, changed: false };
     }
 
+    // A link on a Depends-On line closes or reopens its prerequisite target
+    // root-only: the Blocked-dependent recovery in finalizeClosedTasks still
+    // runs, but nothing is ever struck, restored, or embedded on the line and
+    // no transcluded tree is closed.
+    const onDependencyLine = isTaskDependencyLine(candidate.activeLineText);
+
     const context = {
       editor,
       activePath,
@@ -9106,7 +9198,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         resolvedTarget,
         context,
       );
-      if (reopenResult.changed) {
+      if (reopenResult.changed && !onDependencyLine) {
         try {
           await this.unstrikeActiveSelectedTaskBlockLink(
             editor,
@@ -9120,7 +9212,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       return { resolved: true, changed: reopenResult.changed };
     }
 
-    const pomodoroTransclusion = candidate.embedded
+    const pomodoroTransclusion = candidate.embedded && !onDependencyLine
       ? this.getActivePomodoroTranscludedTaskLineTarget(editor, activePath)
       : null;
     if (pomodoroTransclusion) {
@@ -9169,14 +9261,16 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         resolvedTarget.taskStatus.lineText,
       ) || { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId };
       await this.finalizeClosedTasks([identity], context);
-      try {
-        await this.strikeActiveSelectedTaskBlockLink(
-          editor,
-          activePath,
-          candidate,
-        );
-      } catch (error) {
-        // Best effort: the close already landed; a missed strike is cosmetic.
+      if (!onDependencyLine) {
+        try {
+          await this.strikeActiveSelectedTaskBlockLink(
+            editor,
+            activePath,
+            candidate,
+          );
+        } catch (error) {
+          // Best effort: the close already landed; a missed strike is cosmetic.
+        }
       }
     }
     return { resolved: true, changed: !!wrote };
@@ -10960,6 +11054,56 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
     );
   }
 
+  // Whether the cursor sits on a Depends-On line. Gestures key off the line
+  // shape; the fenced-code and task-parentage rules stay hooks concerns.
+  isActiveTaskDependencyLine(editor) {
+    if (
+      !editor ||
+      typeof editor.getCursor !== "function" ||
+      typeof editor.getLine !== "function"
+    ) {
+      return false;
+    }
+
+    const cursor = editor.getCursor();
+    if (!cursor || typeof cursor.line !== "number") {
+      return false;
+    }
+
+    return isTaskDependencyLine(editor.getLine(cursor.line));
+  }
+
+  // The dependency link under the cursor on a Depends-On line (plain,
+  // embedded, or struck while canonicalisation is pending), or null when the
+  // active line is not one or the cursor names no single link.
+  getActiveTaskDependencyLinkTarget(editor, sourcePath) {
+    if (
+      !sourcePath ||
+      !editor ||
+      typeof editor.getCursor !== "function" ||
+      typeof editor.getLine !== "function"
+    ) {
+      return null;
+    }
+
+    const cursor = editor.getCursor();
+    if (!cursor || typeof cursor.line !== "number") {
+      return null;
+    }
+
+    const lineText = editor.getLine(cursor.line);
+    if (!isTaskDependencyLine(lineText)) {
+      return null;
+    }
+
+    return getTaskBlockLinkTargetFromLine(
+      lineText,
+      sourcePath,
+      cursor.line,
+      cursor.ch,
+    );
+  }
+
   // Detect when the active line is an embedded transcluded task link that is a
   // sub-bullet of a Pomodoro task. Returns { candidate, pomodoroLine } so the
   // caller can run recursive forced-done over the selected tree; null otherwise,
@@ -11830,6 +11974,7 @@ module.exports.helpers = {
   lineHasCreatedField,
   lineMatchesTasksGlobalFilterText,
   parseEmbeddedBlockTransclusions,
+  isTaskDependencyLine,
   parseTaskDependencyDocument,
   parseTaskDependencyLine,
   parseTaskDependencyMetadata,

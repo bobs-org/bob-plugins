@@ -56,6 +56,8 @@ const TASK_LINK_AMBIGUOUS_NOTICE =
   "Multiple task links on this line; place the cursor on one";
 const TASK_LINK_DEPENDENCY_NOTICE =
   "Task link is a sub-task dependency; edit dependencies instead";
+const TASK_DEPENDENCY_LINE_NOTICE =
+  "⛓ Dependency link — edit it with Ctrl+Shift+P";
 const TASK_LINK_CLOSED_NOTICE =
   "Task link target is closed; use Ctrl+Enter to reopen it";
 const TASK_LINK_NOT_A_TASK_NOTICE = "Task link does not point to a task";
@@ -2872,6 +2874,35 @@ function mergeCoveringEdits(edits) {
   );
 }
 
+// Depends-On line recogniser (contract docs/task-dependencies.md section 2,
+// DP vectors). Each plugin copies this small recogniser rather than importing
+// it, since deployed plugins must not import one another's main.js. The line
+// shape alone governs: writer form `⛓️ **DEPENDS ON:**` plus reader tolerance
+// (legacy `🔗` emoji, missing emoji, missing VS16, `DEPENDENCIES` label, `•` /
+// `·` / `,` / whitespace separators, aliased / struck / embedded links).
+// Block links are found first and never split on separators, because an alias
+// can contain one.
+const TASK_DEPENDENCY_LINE_LINK_RE = /(?:~~)?!?(?:~~)?\[\[[^\]\n]+\]\](?:~~)?/g;
+const TASK_DEPENDENCY_LINE_REMAINDER_RE =
+  /^[ \t]*(?:⛓️?|🔗)?[ \t]*\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*[ \t•·,]*$/u;
+
+function isTaskDependencyLine(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  const prefix = LIST_ITEM_PREFIX_RE.exec(line);
+  if (!prefix) {
+    return false;
+  }
+  const body = line.slice(prefix[0].length);
+  TASK_DEPENDENCY_LINE_LINK_RE.lastIndex = 0;
+  const remainder = body.replace(TASK_DEPENDENCY_LINE_LINK_RE, "");
+  TASK_DEPENDENCY_LINE_LINK_RE.lastIndex = 0;
+  if (remainder === body) {
+    // No block links: only a bare label line (R9 empty) still counts.
+    return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(body);
+  }
+  return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(remainder);
+}
+
 // An embedded link that is the sole content of a direct child bullet of a
 // `#task` line is that task's rendered dependency transclusion. Deleting it
 // alone would leave `[dependsOn:: …]` and the parent's Blocked state stale.
@@ -5298,6 +5329,10 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     this.promptOpen = true;
     try {
       const { link, lineNumber, lineText } = selection;
+      if (isTaskDependencyLine(lineText)) {
+        new Notice(TASK_DEPENDENCY_LINE_NOTICE);
+        return;
+      }
       if (
         isDependencyTransclusionLink(editor.getValue().split("\n"), lineNumber, link)
       ) {
@@ -5698,6 +5733,10 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     const activeContent = editor.getValue();
+    if (isTaskDependencyLine(activeContent.split("\n")[source.line])) {
+      new Notice(TASK_DEPENDENCY_LINE_NOTICE);
+      return false;
+    }
     if (isDependencyTransclusionLink(activeContent.split("\n"), source.line, link)) {
       new Notice(TASK_LINK_DEPENDENCY_NOTICE);
       return false;
@@ -6772,9 +6811,11 @@ module.exports.helpers = {
   getCaretCompletionDestination,
   getDailyNotesOptions,
   identityFreshStampLine,
+  isDedicatedLinkBullet,
   isDedicatedTaskLinkBullet,
   isDependencyTransclusionLink,
   isSoleContentLinkBullet,
+  isTaskDependencyLine,
   lineIsInsideCodeFence,
   listItemBodyBounds,
   localTodayParts,

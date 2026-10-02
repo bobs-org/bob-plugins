@@ -6675,3 +6675,164 @@ test("cycler freshness: getFreshnessStampLine degrades when ledger-tools is miss
   };
   assert.equal(typeof plugin.getFreshnessStampLine(), "function");
 });
+
+// compat (bob-cli-3n.5): Depends-On line recogniser, contract DP vectors
+// (docs/task-dependencies.md section 11.1). `line` is the candidate line on
+// its own; verdicts mirror the DP table.
+test("Depends-On line recogniser covers the contract DP vectors", () => {
+  const accept = [
+    "  - ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]",
+    "  - ⛓️ **DEPENDS ON:** [[cash#^unemployment]]",
+    "  - ⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a|b • c]]",
+    "  - ⛓️ **DEPENDS ON:** ~~[[#^a]]~~",
+    "  - ⛓️ **DEPENDS ON:** ![[#^a]]",
+    "  - 🔗 **DEPENDS ON:** [[#^a]]",
+    "  - **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDENCIES:** [[#^a]]",
+    "  - ⛓ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:**",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]",
+  ];
+  for (const line of accept) {
+    assert.equal(helpers.isTaskDependencyLine(line), true, line);
+  }
+  const reject = [
+    "  - ⛓️ **DEPENDS ON:** [[#^a",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review",
+    "- [?] #task Make appt ^rahway",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "  - ![[Tasks#^ship]]",
+    "  - plain bullet",
+    "⛓️ **DEPENDS ON:** [[#^a]]",
+  ];
+  for (const line of reject) {
+    assert.equal(helpers.isTaskDependencyLine(line), false, line);
+  }
+});
+
+test("close-time retirement skips Depends-On lines", () => {
+  const source = [
+    "- [ ] #task Dependent [dependsOn:: A__review] ^dep",
+    "  - ⛓️ **DEPENDS ON:** ![[A#^review]]",
+    "  - ![[A#^review|Control]]",
+  ].join("\n");
+  const result = helpers.retireClosedTaskReferencesInText(
+    source,
+    "Tasks.md",
+    [{ path: "A.md", blockId: "review" }],
+    () => "A.md",
+  );
+  assert.equal(result.retired, 1);
+  assert.match(result.text, /DEPENDS ON:\*\* !\[\[A#\^review\]\]/);
+  assert.match(result.text, /~~\[\[A#\^review\|Control\]\]~~/);
+});
+
+test("reopen restoration skips Depends-On lines instead of re-embedding them", () => {
+  const source = [
+    "- [ ] #task Dependent [dependsOn:: A__review] ^dep",
+    "  - ⛓️ **DEPENDS ON:** ~~[[A#^review]]~~",
+    "  - ~~[[A#^review|Control]]~~",
+  ].join("\n");
+  const result = helpers.restoreReopenedTaskReferencesInText(
+    source,
+    "Tasks.md",
+    [{ path: "A.md", blockId: "review" }],
+    () => "A.md",
+  );
+  assert.equal(result.restored, 1);
+  assert.match(result.text, /DEPENDS ON:\*\* ~~\[\[A#\^review\]\]~~/);
+  assert.match(result.text, /!\[\[A#\^review\|Control\]\]/);
+});
+
+test("embedded-tree close collection ignores Depends-On lines", () => {
+  const source = [
+    "- [ ] #task Dependent ^dep",
+    "  - ⛓️ **DEPENDS ON:** ![[A#^review]]",
+    "  - ![[A#^other]]",
+  ].join("\n");
+  const targets =
+    helpers.collectEmbeddedTranscludedTaskTargetsInListItemBlock(source, 0);
+  assert.deepEqual(
+    targets.map((target) => target.blockId),
+    ["other"],
+  );
+});
+
+test("Alt-bracket bullet formatting never applies to Depends-On lines", () => {
+  assert.equal(
+    helpers.getPlainBulletFormatToggle(
+      "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
+      1,
+    ),
+    null,
+  );
+  assert.equal(
+    helpers.getPlainBulletFormatToggle("  - ⛓️ **DEPENDS ON:** [[#^a]]", -1),
+    null,
+  );
+  assert.ok(helpers.getPlainBulletFormatToggle("  - plain bullet", 1));
+});
+
+test("Ctrl+Enter candidate resolution finds plain links on Depends-On lines", () => {
+  const lineText = "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[Tasks#^b]]";
+  const first = helpers.getTaskBlockLinkTargetFromLine(
+    lineText,
+    "Tasks.md",
+    1,
+    lineText.indexOf("[[#^a]]") + 2,
+  );
+  assert.equal(first && first.blockId, "a");
+  assert.equal(first.embedded, false);
+  const second = helpers.getTaskBlockLinkTargetFromLine(
+    lineText,
+    "Tasks.md",
+    1,
+    lineText.indexOf("[[Tasks#^b]]") + 2,
+  );
+  assert.equal(second && second.blockId, "b");
+  assert.equal(second.pathPart, "Tasks");
+});
+
+test("dependency-id normalisation never edits Depends-On lines", () => {
+  const depLine = "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]";
+  const source = [
+    "- [?] #task Dependent [dependsOn:: stale-a, stale-b] ^dep",
+    depLine,
+    "- [ ] #task A [id:: stale-a] ^a",
+    "- [ ] #task B [id:: stale-b] ^b",
+  ].join("\n");
+  const result = helpers.normalizeTaskDependencyBlockIds(source, "Tasks.md");
+  assert.equal(result.changed, true);
+  assert.equal(result.text.split("\n")[1], depLine);
+  // R1 consistency: the rewritten field mirrors the line's targets in order.
+  assert.match(result.text, /\[dependsOn:: Tasks__a, Tasks__b\]/);
+  assert.equal(
+    helpers.normalizeTaskDependencyBlockIds(result.text, "Tasks.md").changed,
+    false,
+  );
+});
+
+test("note rename rewrites fields while leaving Depends-On lines alone", () => {
+  const depLine = "  - ⛓️ **DEPENDS ON:** [[Old/Path#^review]]";
+  const source = [
+    "- [ ] #task Parent [dependsOn:: Old__Path__review] ^parent",
+    depLine,
+    "- [ ] #task Target [id:: Old__Path__review] ^review",
+  ].join("\n");
+  const result = helpers.rewriteRenamedDependencyIds(
+    source,
+    "Old/Path.md",
+    "New/Home.md",
+  );
+  assert.equal(result.changed, true);
+  assert.match(result.text, /\[dependsOn:: New__Home__review\]/);
+  assert.match(result.text, /\[id:: New__Home__review\] \^review/);
+  // Link healing across the rename is R3 territory, owned by nav-model.
+  assert.ok(result.text.includes(depLine));
+});

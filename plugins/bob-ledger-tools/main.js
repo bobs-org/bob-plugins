@@ -82,6 +82,25 @@ function ensureNoteReadyRefresh() {
   }
   return noteReadyRefresh;
 }
+// Dependency chips (bob-cli-3n chips): a StateEffect the consolidated
+// live-refresh fan-out dispatches so Live Preview chip widgets rebuild
+// without a doc change. Defined lazily on first dispatch so requiring
+// the module never adds an eager `StateEffect.define()` call (the
+// freshness-mark surfaces suite asserts exactly one eager effect).
+let dependencyChipsRefresh = null;
+function ensureDependencyChipsRefresh() {
+  if (dependencyChipsRefresh) {
+    return dependencyChipsRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      dependencyChipsRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    dependencyChipsRefresh = null;
+  }
+  return dependencyChipsRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;
@@ -6095,6 +6114,818 @@ function buildFreshnessMarkElement(doc, model, options) {
   }
 }
 
+// Dependency chips (bob-cli-3n chips): pure Depends-On grammar.
+// `docs/task-dependencies.md` §§2, 7, 11.1 (DP vectors) is authoritative.
+// Parses one candidate line; context (fenced code, nesting, Work Log)
+// arrives via `opts` so the DP18-DP20 `not-a-line` vectors stay testable.
+// Never throws.
+function parseDependencyLine(lineText, opts) {
+  try {
+    const options = opts && typeof opts === "object" ? opts : {};
+    if (options.inCode === true || options.inWorkLog === true) {
+      return { verdict: "not-a-line" };
+    }
+    if (options.isDirectChild === false) {
+      return { verdict: "not-a-line" };
+    }
+    if (typeof lineText !== "string") {
+      return { verdict: "not-a-line" };
+    }
+    const raw = lineText;
+    let content = raw.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "");
+    content = content.replace(/^\s+/, "");
+    const labelRe = /\*\*\s*DEPENDS\s+ON\s*:\s*\*\*|\*\*\s*DEPENDENCIES\s*:\s*\*\*/i;
+    const labelMatch = labelRe.exec(content);
+    if (!labelMatch) {
+      return { verdict: "not-a-line" };
+    }
+    const labelText = labelMatch[0];
+    const isLegacyLabel = /DEPENDENCIES/i.test(labelText);
+    const beforeLabel = content.slice(0, labelMatch.index);
+    const emojiMatch = /[⛓🔗]\uFE0F?/.exec(beforeLabel);
+    const hasChain = content.indexOf("⛓") !== -1;
+    const hasLinkEmoji = content.indexOf("🔗") !== -1;
+    let emojiKind = "missing";
+    let canonicalEmoji = false;
+    if (content.indexOf("⛓️") !== -1 && labelMatch.index >= 0) {
+      const head = content.slice(0, labelMatch.index);
+      if (head.indexOf("⛓️") !== -1) {
+        emojiKind = "chain-vs16";
+        canonicalEmoji = true;
+      }
+    }
+    if (!canonicalEmoji) {
+      if (hasChain) {
+        emojiKind = "chain-bare";
+      } else if (hasLinkEmoji) {
+        emojiKind = "legacy-link";
+      } else {
+        emojiKind = "missing";
+      }
+    }
+    const linkRe = /(~~)?(!)?\[\[([^\[\]\n]+?)\]\](~~)?/g;
+    const targets = [];
+    let m = null;
+    let hasBareNoteLink = false;
+    while ((m = linkRe.exec(content)) !== null) {
+      try {
+        const leadingStrike = Boolean(m[1]);
+        const embedded = Boolean(m[2]);
+        const inner = String(m[3] || "");
+        const trailingStrike = Boolean(m[4]);
+        const struck = leadingStrike || trailingStrike;
+        const barAt = inner.indexOf("|");
+        const linkBody = barAt === -1 ? inner : inner.slice(0, barAt);
+        const alias = barAt === -1 ? null : inner.slice(barAt + 1);
+        const hashAt = linkBody.indexOf("#");
+        if (hashAt === -1) {
+          hasBareNoteLink = true;
+          continue;
+        }
+        const linkpath = linkBody.slice(0, hashAt);
+        const afterHash = linkBody.slice(hashAt + 1);
+        if (afterHash.charAt(0) !== "^" || afterHash.length < 2) {
+          hasBareNoteLink = true;
+          continue;
+        }
+        const blockId = afterHash.slice(1);
+        if (!blockId) {
+          hasBareNoteLink = true;
+          continue;
+        }
+        targets.push({
+          raw: m[0],
+          linkpath,
+          blockId,
+          alias,
+          embedded,
+          struck,
+          linktext: linkBody,
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+    if (hasBareNoteLink) {
+      return { verdict: "malformed" };
+    }
+    let remainder = String(content);
+    remainder = remainder.replace(/(~~)?(!)?\[\[([^\[\]\n]+?)\]\](~~)?/g, "");
+    if (remainder.indexOf("[[") !== -1 || remainder.indexOf("]]") !== -1) {
+      return { verdict: "malformed" };
+    }
+    const remLabel = labelRe.exec(remainder);
+    if (!remLabel) {
+      return { verdict: "not-a-line" };
+    }
+    const after = remainder.slice(remLabel.index + remLabel[0].length);
+    const before = remainder.slice(0, remLabel.index);
+    const beforeOk = /^\s*(?:\u26D3\uFE0F?|\uD83D\uDD17\uFE0F?)?\s*$/.test(before);
+    const afterOk = /^[\s•·,]*$/.test(after);
+    if (!beforeOk || !afterOk) {
+      return { verdict: "malformed" };
+    }
+    if (targets.length === 0) {
+      return { verdict: "empty", targets: [], canonical: false, emoji: emojiKind, legacyLabel: isLegacyLabel };
+    }
+    let canonical = true;
+    if (emojiKind !== "chain-vs16" || isLegacyLabel) {
+      canonical = false;
+    }
+    for (const t of targets) {
+      if (t.alias !== null || t.embedded || t.struck) {
+        canonical = false;
+        break;
+      }
+    }
+    if (canonical && targets.length >= 2) {
+      if (after.indexOf("•") === -1) {
+        canonical = false;
+      }
+      if (after.indexOf("·") !== -1 || after.indexOf(",") !== -1) {
+        canonical = false;
+      }
+    }
+    return { verdict: "accept", count: targets.length, targets, canonical, emoji: emojiKind, legacyLabel: isLegacyLabel };
+  } catch (error) {
+    return { verdict: "not-a-line" };
+  }
+}
+
+// Dependency chips: cleaned task text for a chip (about 40ch in the
+// chip, full text in the tooltip). Strips wiki links to alias/basename,
+// Markdown emphasis, and Tasks suffix fields. Never throws.
+function dependencyCleanTaskText(text) {
+  try {
+    let out = String(text || "");
+    out = out.replace(/!?\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (match, target, alias) => {
+      if (alias !== undefined && alias !== null && String(alias).trim()) {
+        return String(alias);
+      }
+      const base = String(target || "").split("#")[0].split("/").pop() || target;
+      return String(base).replace(/\.md$/i, "");
+    });
+    out = out.replace(/(\*\*|__)(.*?)\1/g, "$2");
+    out = out.replace(/(^|\s)[*_~]{1,2}([^ *_~]+)[*_~]{1,2}(\s|$)/g, "$1$2$3");
+    out = out.replace(/\s*\[[a-zA-Z]+\s*::\s*[^\]]*\]/g, "");
+    out = out.replace(/\s+\^[A-Za-z0-9-]+(\s|$)/g, "$1");
+    out = out.replace(/#[A-Za-z0-9_/-]+/g, "");
+    out = out.replace(/\s+/g, " ").trim();
+    return out;
+  } catch (error) {
+    return String(text || "").slice(0, 80);
+  }
+}
+
+function dependencyStatusName(state) {
+  if (state === "todo") {
+    return "Todo";
+  }
+  if (state === "next") {
+    return "Next";
+  }
+  if (state === "in-progress") {
+    return "In Progress";
+  }
+  if (state === "blocked") {
+    return "Blocked";
+  }
+  if (state === "done") {
+    return "Done";
+  }
+  if (state === "cancelled") {
+    return "Cancelled";
+  }
+  if (state === "broken") {
+    return "Missing";
+  }
+  return "Not a task";
+}
+
+function dependencyStateFromSymbol(symbol, task) {
+  try {
+    if (task && typeof task === "object") {
+      if (task.isTask === false) {
+        return "not-task";
+      }
+      const type = task.status && task.status.type;
+      if (type === "NON_TASK") {
+        return "not-task";
+      }
+    }
+    const s = String(symbol || "")[0] || "";
+    if (s === "x" || s === "X") {
+      return "done";
+    }
+    if (s === "-") {
+      return "cancelled";
+    }
+    if (s === "*") {
+      return "next";
+    }
+    if (s === "/") {
+      return "in-progress";
+    }
+    if (s === "?") {
+      return "blocked";
+    }
+    return "todo";
+  } catch (error) {
+    return "todo";
+  }
+}
+
+function dependencySymbolForState(state) {
+  if (state === "next") {
+    return "*";
+  }
+  if (state === "in-progress") {
+    return "/";
+  }
+  if (state === "blocked") {
+    return "?";
+  }
+  if (state === "done") {
+    return "✓";
+  }
+  if (state === "cancelled") {
+    return "✕";
+  }
+  if (state === "broken" || state === "not-task") {
+    return "⚠";
+  }
+  return "○";
+}
+
+// Dependency chips: pure chip model for one Depends-On line.
+// `docs/task-dependencies.md` §§7, 11.5 (DC vectors) is authoritative.
+// `lookup(linkpath, blockId)` returns a Tasks-plugin task, `{isTask:false}`
+// for a resolved non-task block, or null for a missing target. `sourcePath`
+// decides the `↗ note` label. Never throws.
+function dependencyChipModel(lineText, sourcePath, lookup) {
+  try {
+    const parsed = parseDependencyLine(lineText);
+    if (!parsed || parsed.verdict === "not-a-line" || parsed.verdict === "malformed") {
+      return null;
+    }
+    const source = String(sourcePath || "");
+    const targets = parsed.verdict === "empty" ? [] : parsed.targets || [];
+    const lookupFn = typeof lookup === "function" ? lookup : () => null;
+    const lookupMap = lookup instanceof Map ? lookup : null;
+    const chips = [];
+    const getTask = (linkpath, blockId) => {
+      try {
+        if (lookupMap) {
+          const keys = [
+            String(linkpath || "") + "\u0000" + String(blockId || ""),
+            String(blockId || ""),
+          ];
+          for (const key of keys) {
+            if (lookupMap.has(key)) {
+              return lookupMap.get(key);
+            }
+          }
+          return null;
+        }
+        return lookupFn(linkpath, blockId);
+      } catch (error) {
+        return null;
+      }
+    };
+    for (const target of targets) {
+      try {
+        const linkpath = String(target.linkpath || "");
+        const blockId = String(target.blockId || "");
+        const task = getTask(linkpath, blockId);
+        const linktext = target.linktext || ((linkpath ? linkpath : "") + "#^" + blockId);
+        if (task === null || task === undefined) {
+          const noteLabel = linkpath ? "↗ " + linkpath.split("/").pop().replace(/\.md$/i, "") : null;
+          const text = "^" + blockId + " not found";
+          chips.push({
+            state: "broken",
+            symbol: "⚠",
+            text,
+            fullText: text,
+            noteLabel,
+            linktext,
+            blockId,
+            tooltip: "⚠ ^" + blockId + " not found — " + (source || "this note"),
+            ariaLabel: "Broken dependency ^" + blockId + " not found",
+          });
+          continue;
+        }
+        if (task && (task.isTask === false || (task.status && task.status.type === "NON_TASK"))) {
+          const noteLabel = linkpath ? "↗ " + linkpath.split("/").pop().replace(/\.md$/i, "") : null;
+          chips.push({
+            state: "not-task",
+            symbol: "⚠",
+            text: "not a task",
+            fullText: "not a task",
+            noteLabel,
+            linktext,
+            blockId,
+            tooltip: "⚠ not a task — " + (task.path || source || "this note") + " ^" + blockId,
+            ariaLabel: "Dependency is not a task ^" + blockId,
+          });
+          continue;
+        }
+        let symbol = "";
+        try {
+          if (task && typeof task === "object") {
+            symbol = planTaskStatusSymbol(task) || task.statusSymbol || task.symbol || "";
+            if (!symbol && task.status && typeof task.status.symbol === "string") {
+              symbol = task.status.symbol;
+            }
+          }
+        } catch (error) {
+          symbol = "";
+        }
+        if (!symbol) {
+          try {
+            const rawLine = (task && (task.originalMarkdown || task.rawLine)) || "";
+            symbol = freshnessTaskStatus(rawLine) || "";
+          } catch (error) {
+            symbol = "";
+          }
+        }
+        if (!symbol) {
+          symbol = " ";
+        }
+        const state = dependencyStateFromSymbol(symbol, task);
+        const sym = dependencySymbolForState(state);
+        let rawText = "";
+        try {
+          rawText = planTaskDescription(task) || task.description || task.text || "";
+        } catch (error) {
+          rawText = "";
+        }
+        const fullText = dependencyCleanTaskText(rawText) || ("^" + blockId);
+        let text = fullText;
+        if (text.length > 40) {
+          text = text.slice(0, 40) + "…";
+        }
+        let taskPath = "";
+        try {
+          taskPath = planTaskPath(task) || task.path || "";
+        } catch (error) {
+          taskPath = "";
+        }
+        let noteLabel = null;
+        if (linkpath) {
+          const base = linkpath.split("/").pop().replace(/\.md$/i, "");
+          if (!taskPath || taskPath !== source) {
+            noteLabel = "↗ " + base;
+          } else {
+            noteLabel = null;
+          }
+        }
+        let scheduled = null;
+        try {
+          scheduled = task.scheduled || task.scheduledDate || null;
+          if (scheduled && typeof scheduled !== "string") {
+            scheduled = String(scheduled);
+          }
+        } catch (error) {
+          scheduled = null;
+        }
+        const statusName = dependencyStatusName(state);
+        let tooltip = fullText + " — " + (taskPath || source || "this note") + " · " + statusName;
+        if (scheduled) {
+          tooltip += " · " + scheduled;
+        }
+        chips.push({
+          state,
+          symbol: sym,
+          text,
+          fullText,
+          noteLabel,
+          linktext,
+          blockId,
+          tooltip,
+          ariaLabel: "Dependency " + fullText + " (" + statusName + ")",
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+    let doneCount = 0;
+    for (const chip of chips) {
+      if (chip.state === "done") {
+        doneCount += 1;
+      }
+    }
+    let doneCollapsed = null;
+    let finalChips = chips;
+    if (doneCount > 3) {
+      doneCollapsed = { count: doneCount, text: "✓×" + doneCount };
+      const kept = [];
+      let inserted = false;
+      for (const chip of chips) {
+        if (chip.state === "done") {
+          if (!inserted) {
+            kept.push({
+              state: "done-collapsed",
+              symbol: "✓",
+              text: "×" + doneCount,
+              fullText: doneCount + " done",
+              noteLabel: null,
+              linktext: null,
+              blockId: null,
+              tooltip: "✓×" + doneCount + " done",
+              ariaLabel: doneCount + " done dependencies",
+              count: doneCount,
+            });
+            inserted = true;
+          }
+          continue;
+        }
+        kept.push(chip);
+      }
+      finalChips = kept;
+    }
+    let waiting = 0;
+    for (const chip of finalChips) {
+      if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked" || chip.state === "broken" || chip.state === "not-task") {
+        waiting += 1;
+      }
+      if (chip.state === "done-collapsed") {
+        continue;
+      }
+    }
+    if (doneCount > 3) {
+      waiting = 0;
+      for (const chip of chips) {
+        if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked" || chip.state === "broken" || chip.state === "not-task") {
+          waiting += 1;
+        }
+      }
+    }
+    const summary = waiting > 0 ? "waiting on " + waiting : "✓ all clear";
+    return { label: "depends on", chips: finalChips, doneCollapsed, summary };
+  } catch (error) {
+    return null;
+  }
+}
+
+// Dependency chips: Live Preview row element. `model` is
+// `dependencyChipModel(...)`; `options` carries `{ sourcePath,
+// interactive, onOpen(linktext, event, chip), onRemove(chip, event),
+// onAdd(event) }`. Chips are focusable spans (Enter opens); the remove
+// `×` and trailing `＋` render only when `interactive` is true (nav api
+// v1 present). Never throws.
+function buildDependencyChipElement(doc, model, options) {
+  try {
+    if (!doc || !model || typeof model !== "object") {
+      return null;
+    }
+    const opts = options && typeof options === "object" ? options : {};
+    const interactive = Boolean(opts.interactive);
+    const chips = Array.isArray(model.chips) ? model.chips : [];
+    const row = doc.createElement("span");
+    row.setAttribute("class", "bob-dep-row");
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", "depends on, " + String(model.summary || ""));
+    const label = doc.createElement("span");
+    label.setAttribute("class", "bob-dep-label");
+    label.setAttribute("aria-hidden", "true");
+    label.appendChild(doc.createTextNode("⛓ depends on"));
+    row.appendChild(label);
+    for (const chip of chips) {
+      try {
+        if (!chip || typeof chip !== "object") {
+          continue;
+        }
+        const el = doc.createElement("span");
+        const state = String(chip.state || "todo");
+        el.setAttribute("class", "bob-dep-chip is-" + state);
+        el.setAttribute("data-state", state);
+        el.setAttribute("role", "link");
+        el.setAttribute("tabindex", "0");
+        el.setAttribute("aria-label", String(chip.ariaLabel || chip.tooltip || chip.text || ""));
+        if (chip.tooltip) {
+          el.setAttribute("title", String(chip.tooltip));
+          el.setAttribute("data-tooltip-position", "top");
+        }
+        const box = doc.createElement("span");
+        box.setAttribute("class", "bob-dep-chip-box");
+        box.setAttribute("data-task", state);
+        box.setAttribute("aria-hidden", "true");
+        box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+        el.appendChild(box);
+        const textEl = doc.createElement("span");
+        textEl.setAttribute("class", "bob-dep-chip-text");
+        textEl.appendChild(doc.createTextNode(String(chip.text || "")));
+        el.appendChild(textEl);
+        if (chip.noteLabel) {
+          const note = doc.createElement("span");
+          note.setAttribute("class", "bob-dep-chip-note");
+          note.appendChild(doc.createTextNode(String(chip.noteLabel)));
+          el.appendChild(note);
+        }
+        if (interactive && chip.blockId && state !== "done-collapsed") {
+          const remove = doc.createElement("span");
+          remove.setAttribute("class", "bob-dep-chip-remove");
+          remove.setAttribute("role", "button");
+          remove.setAttribute("tabindex", "0");
+          remove.setAttribute("aria-label", "Remove dependency " + String(chip.fullText || chip.text || ""));
+          remove.setAttribute("title", "Remove");
+          remove.appendChild(doc.createTextNode("×"));
+          try {
+            if (typeof remove.addEventListener === "function") {
+              remove.addEventListener("click", (event) => {
+                try {
+                  if (event && typeof event.stopPropagation === "function") {
+                    event.stopPropagation();
+                  }
+                  if (event && typeof event.preventDefault === "function") {
+                    event.preventDefault();
+                  }
+                  if (typeof opts.onRemove === "function") {
+                    opts.onRemove(chip, event);
+                  }
+                } catch (error) {
+                  // Best-effort only.
+                }
+              });
+              remove.addEventListener("keydown", (event) => {
+                try {
+                  if (event && (event.key === "Enter" || event.key === " ")) {
+                    if (typeof event.preventDefault === "function") {
+                      event.preventDefault();
+                    }
+                    if (typeof opts.onRemove === "function") {
+                      opts.onRemove(chip, event);
+                    }
+                  }
+                } catch (error) {
+                  // Best-effort only.
+                }
+              });
+            }
+          } catch (error) {
+            // Listener-free remove still renders.
+          }
+          el.appendChild(remove);
+        }
+        try {
+          if (typeof el.addEventListener === "function") {
+            el.addEventListener("click", (event) => {
+              try {
+                if (event && event.target && event.target.classList && typeof event.target.classList.contains === "function") {
+                  try {
+                    if (event.target.classList.contains("bob-dep-chip-remove")) {
+                      return;
+                    }
+                  } catch (inner) {
+                    // Fall through to open.
+                  }
+                }
+                if (typeof opts.onOpen === "function" && chip.linktext) {
+                  opts.onOpen(chip.linktext, event, chip);
+                }
+              } catch (error) {
+                // Best-effort only.
+              }
+            });
+            el.addEventListener("keydown", (event) => {
+              try {
+                if (event && (event.key === "Enter" || event.key === " ")) {
+                  if (typeof event.preventDefault === "function") {
+                    event.preventDefault();
+                  }
+                  if (typeof opts.onOpen === "function" && chip.linktext) {
+                    opts.onOpen(chip.linktext, event, chip);
+                  }
+                }
+              } catch (error) {
+                // Best-effort only.
+              }
+            });
+            el.addEventListener("mouseover", (event) => {
+              try {
+                if (typeof opts.onHover === "function" && chip.linktext) {
+                  opts.onHover(chip.linktext, event, chip);
+                }
+              } catch (error) {
+                // Best-effort only.
+              }
+            });
+          }
+        } catch (error) {
+          // Listener-free chip still renders.
+        }
+        row.appendChild(doc.createTextNode(" "));
+        row.appendChild(el);
+      } catch (error) {
+        continue;
+      }
+    }
+    if (interactive) {
+      try {
+        row.appendChild(doc.createTextNode(" "));
+        const add = doc.createElement("span");
+        add.setAttribute("class", "bob-dep-add");
+        add.setAttribute("role", "button");
+        add.setAttribute("tabindex", "0");
+        add.setAttribute("aria-label", "Edit task dependencies");
+        add.setAttribute("title", "Edit task dependencies");
+        add.appendChild(doc.createTextNode("＋"));
+        if (typeof add.addEventListener === "function") {
+          add.addEventListener("click", (event) => {
+            try {
+              if (event && typeof event.stopPropagation === "function") {
+                event.stopPropagation();
+              }
+              if (typeof opts.onAdd === "function") {
+                opts.onAdd(event);
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          });
+          add.addEventListener("keydown", (event) => {
+            try {
+              if (event && (event.key === "Enter" || event.key === " ")) {
+                if (typeof event.preventDefault === "function") {
+                  event.preventDefault();
+                }
+                if (typeof opts.onAdd === "function") {
+                  opts.onAdd(event);
+                }
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          });
+        }
+        row.appendChild(add);
+      } catch (error) {
+        // Add button is best-effort.
+      }
+    }
+    try {
+      row.appendChild(doc.createTextNode(" "));
+      const summary = doc.createElement("span");
+      summary.setAttribute("class", "bob-dep-summary");
+      summary.appendChild(doc.createTextNode(String(model.summary || "")));
+      row.appendChild(summary);
+    } catch (error) {
+      // Summary is best-effort.
+    }
+    return row;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Live Preview chip widget for one Depends-On line. `eq` compares a key
+// built from `JSON.stringify(model)` so an unchanged line never flickers.
+// Defined only when `WidgetType` exists; otherwise null and the extension
+// is not registered.
+let DependencyChipWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  DependencyChipWidget = class extends WidgetType {
+    constructor(model, meta) {
+      super();
+      this.model = model;
+      this.meta = meta && typeof meta === "object" ? meta : {};
+      let key = "";
+      try {
+        key = JSON.stringify(model);
+      } catch (error) {
+        key = String((model && model.summary) || "");
+      }
+      this.key = key;
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof DependencyChipWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      let docNode = null;
+      try {
+        docNode = typeof document !== "undefined" ? document : null;
+      } catch (error) {
+        docNode = null;
+      }
+      if (!docNode) {
+        try {
+          const fallback = typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+          return fallback;
+        } catch (error) {
+          return null;
+        }
+      }
+      const plugin = this.meta && this.meta.plugin ? this.meta.plugin : null;
+      const sourcePath = (this.meta && this.meta.sourcePath) || "";
+      const interactive = Boolean(this.meta && this.meta.interactive);
+      const dom = buildDependencyChipElement(docNode, this.model, {
+        sourcePath,
+        interactive,
+        onOpen: (linktext, event) => {
+          try {
+            if (plugin && typeof plugin.dependencyOpenTarget === "function") {
+              plugin.dependencyOpenTarget(linktext, sourcePath, event);
+            }
+          } catch (error) {
+            // Best-effort only.
+          }
+        },
+        onHover: (linktext, event) => {
+          try {
+            if (plugin && typeof plugin.dependencyHoverTarget === "function") {
+              plugin.dependencyHoverTarget(linktext, sourcePath, event, dom);
+            }
+          } catch (error) {
+            // Best-effort only.
+          }
+        },
+        onRemove: (chip) => {
+          try {
+            if (plugin && typeof plugin.dependencyRemoveChip === "function") {
+              plugin.dependencyRemoveChip(chip, sourcePath, this.meta);
+            }
+          } catch (error) {
+            // Best-effort only.
+          }
+        },
+        onAdd: () => {
+          try {
+            if (plugin && typeof plugin.dependencyOpenStage === "function") {
+              plugin.dependencyOpenStage(sourcePath, this.meta);
+            }
+          } catch (error) {
+            // Best-effort only.
+          }
+        },
+      });
+      if (!dom) {
+        const fallback = docNode.createElement("span");
+        return fallback;
+      }
+      try {
+        const self = this;
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            const target = event && event.target ? event.target : null;
+            let interactiveTarget = false;
+            try {
+              if (target && typeof target.closest === "function") {
+                interactiveTarget = Boolean(target.closest(".bob-dep-chip,.bob-dep-add,.bob-dep-chip-remove"));
+              } else {
+                let node = target;
+                let guard = 0;
+                while (node && node !== dom && guard < 6) {
+                  guard += 1;
+                  const cls = node.className || "";
+                  if (typeof cls === "string" && (cls.indexOf("bob-dep-chip") !== -1 || cls.indexOf("bob-dep-add") !== -1)) {
+                    interactiveTarget = true;
+                    break;
+                  }
+                  node = node.parentNode || null;
+                }
+              }
+            } catch (error) {
+              interactiveTarget = false;
+            }
+            if (interactiveTarget) {
+              return;
+            }
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let anchor = null;
+            try {
+              anchor = view && typeof view.posAtDOM === "function" ? view.posAtDOM(dom) : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (typeof anchor === "number") {
+              view.dispatch({ selection: { anchor } });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+            void self;
+          } catch (error) {
+            // Reveal is best-effort.
+          }
+        });
+      } catch (error) {
+        // A listener-free row still renders.
+      }
+      return dom;
+    }
+  };
+}
+
 // Whether a CodeMirror position sits inside code: the syntax node at
 // the position, or any ancestor, is a codeblock (mirroring Dataview's
 // `HyperMD-codeblock` check) or inline code. Missing trees never throw
@@ -6496,6 +7327,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.freshnessMarksEnabled = true;
     this.freshnessMarkSnapshot = null;
     this.freshnessMarksTimer = null;
+    // Dependency chips (bob-cli-3n chips): session toggle plus a
+    // Tasks-memo index tied to the freshness generation.
+    this.dependencyChipsEnabled = true;
+    this.dependencyChipIndexCache = null;
+    this.dependencyChipsTimer = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -6835,6 +7671,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
     this.scheduleFreshnessMarksRefresh();
+    this.setupDependencyChips();
+    this.scheduleDependencyChipsRefresh();
   }
 
   onunload() {
@@ -6926,6 +7764,28 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-fresh-marks");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    if (
+      this.dependencyChipsTimer !== null &&
+      this.dependencyChipsTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.dependencyChipsTimer);
+    }
+    this.dependencyChipsTimer = null;
+    this.dependencyChipIndexCache = null;
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-dep-chips");
       }
     } catch (error) {
       // Body class cleanup is best-effort.
@@ -9854,6 +10714,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
+    try {
+      this.scheduleDependencyChipsRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
   }
 
   // --- NEW/ROTTEN review chips (freshness namespace v4) ----------------  // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
@@ -12078,6 +12943,935 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   }
 
   // __FRESHNESS_E1_END__
+
+  // --- Dependency chips (bob-cli-3n chips) ------------------------------
+  // Live status chips for `⛓️ **DEPENDS ON:**` lines. Data comes only from
+  // the in-memory Tasks memo (`planBlockTasks`) plus the metadata cache
+  // for linkpath resolution; never from disk during render.
+
+  dependencyNavApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
+      const api = nav ? nav.api : null;
+      if (api && typeof api === "object" && Number(api.version) >= 1) {
+        return api;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  dependencyTasksIndex() {
+    try {
+      const tasks = planBlockTasks(this.app);
+      const gen = this.freshnessTasksGen || 0;
+      const cached = this.dependencyChipIndexCache;
+      if (cached && cached.tasks === tasks && (cached.gen || 0) === gen && cached.map instanceof Map) {
+        return cached.map;
+      }
+      const map = new Map();
+      const list = Array.isArray(tasks) ? tasks : [];
+      for (const task of list) {
+        try {
+          if (!task || typeof task !== "object") {
+            continue;
+          }
+          const path = planTaskPath(task) || task.path || "";
+          const blockId = planTaskBlockId(task) || task.blockId || null;
+          if (!path || !blockId) {
+            continue;
+          }
+          const key = path + "\u0000" + String(blockId);
+          if (!map.has(key)) {
+            map.set(key, task);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      this.dependencyChipIndexCache = { tasks, gen, map };
+      return map;
+    } catch (error) {
+      return new Map();
+    }
+  }
+
+  dependencyResolveLink(linkpath, sourcePath) {
+    try {
+      const target = String(linkpath || "");
+      if (!target) {
+        return { path: String(sourcePath || "") };
+      }
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.getFirstLinkpathDest === "function") {
+        try {
+          const dest = metadataCache.getFirstLinkpathDest(target, String(sourcePath || ""));
+          if (dest && typeof dest.path === "string" && dest.path) {
+            return { path: dest.path };
+          }
+        } catch (error) {
+          // Fall through to the suffix fallback.
+        }
+      }
+      const withMd = /\.md$/i.test(target) ? target : target + ".md";
+      return { path: withMd };
+    } catch (error) {
+      return { path: String(sourcePath || "") };
+    }
+  }
+
+  dependencyChipModelForLine({ path, text }) {
+    try {
+      const parsed = parseDependencyLine(String(text || ""));
+      if (!parsed || parsed.verdict === "not-a-line" || parsed.verdict === "malformed") {
+        return null;
+      }
+      const sourcePath = String(path || "");
+      const index = this.dependencyTasksIndex();
+      const self = this;
+      const lookup = (linkpath, blockId) => {
+        try {
+          const resolved = self.dependencyResolveLink(linkpath, sourcePath);
+          const key = String(resolved.path || "") + "\u0000" + String(blockId || "");
+          if (index.has(key)) {
+            return index.get(key);
+          }
+          try {
+            const metadataCache = self.app && self.app.metadataCache;
+            if (metadataCache && typeof metadataCache.getCache === "function" && resolved.path) {
+              const cache = metadataCache.getCache(resolved.path);
+              const blocks = cache && cache.blocks ? cache.blocks : null;
+              if (blocks && Object.prototype.hasOwnProperty.call(blocks, String(blockId || ""))) {
+                return { isTask: false, path: resolved.path };
+              }
+            }
+          } catch (error) {
+            // Missing stays missing.
+          }
+          return null;
+        } catch (error) {
+          return null;
+        }
+      };
+      return dependencyChipModel(String(text || ""), sourcePath, lookup);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  dependencyChipsAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          DependencyChipWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createDependencyChipExtension() {
+    try {
+      if (!this.dependencyChipsAvailable()) {
+        return null;
+      }
+      if (!ViewPlugin || typeof ViewPlugin.fromClass !== "function" || typeof Prec.highest !== "function") {
+        return null;
+      }
+      const plugin = this;
+      const ChipPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildDependencyChipDecorations(view);
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+        }
+
+        update(u) {
+          try {
+            if (plugin.dependencyChipShouldRebuild(u)) {
+              this.decorations = plugin.buildDependencyChipDecorations(u.view);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(ChipPluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  dependencyChipShouldRebuild(u) {
+    try {
+      if (!u || typeof u !== "object") {
+        return false;
+      }
+      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        return true;
+      }
+      try {
+        const transactions = u.transactions || [];
+        for (const transaction of transactions) {
+          try {
+            const effects = transaction && transaction.effects !== undefined ? transaction.effects : null;
+            if (!effects) {
+              continue;
+            }
+            const list = Array.isArray(effects) ? effects : [effects];
+            const refresh = ensureDependencyChipsRefresh();
+            for (const effect of list) {
+              try {
+                if (!effect) {
+                  continue;
+                }
+                if (refresh && effect === refresh) {
+                  return true;
+                }
+                if (refresh && typeof effect.is === "function" && effect.is(refresh)) {
+                  return true;
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        // Effect scan is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && u.startState && u.state) {
+          let before = null;
+          let after = null;
+          try {
+            before = u.startState.field(editorLivePreviewField);
+          } catch (error) {
+            before = null;
+          }
+          try {
+            after = u.state.field(editorLivePreviewField);
+          } catch (error) {
+            after = null;
+          }
+          if (before !== after) {
+            return true;
+          }
+        }
+        if (editorInfoField && u.startState && u.state) {
+          let beforePath = null;
+          let afterPath = null;
+          try {
+            const beforeInfo = u.startState.field(editorInfoField);
+            beforePath = beforeInfo && beforeInfo.file ? beforeInfo.file.path : null;
+          } catch (error) {
+            beforePath = null;
+          }
+          try {
+            const afterInfo = u.state.field(editorInfoField);
+            afterPath = afterInfo && afterInfo.file ? afterInfo.file.path : null;
+          } catch (error) {
+            afterPath = null;
+          }
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildDependencyChipDecorations(view) {
+    try {
+      if (!this.dependencyChipsEnabled) {
+        return Decoration.none;
+      }
+      if (!Decoration || !RangeSetBuilder || !DependencyChipWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) {
+        return Decoration.none;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath = info && info.file && typeof info.file.path === "string" ? info.file.path : null;
+      if (!filePath) {
+        return Decoration.none;
+      }
+      const ranges = (view && view.visibleRanges) || [];
+      let selectionRanges = [];
+      try {
+        selectionRanges = (view.state.selection && view.state.selection.ranges) || [];
+      } catch (error) {
+        selectionRanges = [];
+      }
+      let tree = null;
+      try {
+        if (syntaxTree && typeof syntaxTree === "function" && view.state) {
+          tree = syntaxTree(view.state);
+        } else if (syntaxTree && typeof syntaxTree.resolveInner === "function") {
+          tree = syntaxTree;
+        }
+      } catch (error) {
+        tree = null;
+      }
+      const builder = new RangeSetBuilder();
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") {
+        return builder.finish();
+      }
+      const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      const interactive = Boolean(this.dependencyNavApi());
+      for (const range of ranges) {
+        try {
+          if (!range || typeof range.from !== "number") {
+            continue;
+          }
+          let pos = Math.max(0, range.from);
+          const end = Math.min(typeof range.to === "number" ? range.to : docLength, docLength);
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try {
+              line = doc.lineAt(pos);
+            } catch (error) {
+              break;
+            }
+            if (!line || typeof line.text !== "string") {
+              break;
+            }
+            try {
+              if (line.text.indexOf("DEPENDS ON") !== -1 || line.text.indexOf("DEPENDENCIES") !== -1) {
+                const parsed = parseDependencyLine(line.text);
+                if (parsed && (parsed.verdict === "accept" || parsed.verdict === "empty")) {
+                  let revealed = false;
+                  for (const selection of selectionRanges) {
+                    try {
+                      if (selection && typeof selection.from === "number" && typeof selection.to === "number" && selection.from <= line.to && selection.to >= line.from) {
+                        revealed = true;
+                        break;
+                      }
+                    } catch (error) {
+                      continue;
+                    }
+                  }
+                  if (!revealed) {
+                    let inCode = false;
+                    try {
+                      if (tree) {
+                        inCode = freshnessMarkPosInCode(tree, line.from);
+                      }
+                    } catch (error) {
+                      inCode = false;
+                    }
+                    if (!inCode) {
+                      const model = this.dependencyChipModelForLine({ path: filePath, text: line.text });
+                      if (model) {
+                        const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line.text);
+                        const from = line.from + (marker ? marker[0].length : 0);
+                        const lineNumber = typeof line.number === "number" ? line.number - 1 : null;
+                        builder.add(from, line.to, Decoration.replace({
+                          widget: new DependencyChipWidget(model, { plugin: this, sourcePath: filePath, lineNumber, interactive }),
+                        }));
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              // One bad line never breaks the build.
+            }
+            if (typeof line.to !== "number" || line.to >= end) {
+              break;
+            }
+            if (line.to < pos) {
+              break;
+            }
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  dependencyExcludedAncestor(node, root) {
+    try {
+      let current = node && node.parentNode ? node.parentNode : null;
+      let guard = 0;
+      while (current && current !== root && guard < 100) {
+        guard += 1;
+        try {
+          const tag = current.tagName || current.nodeName ? String(current.tagName || current.nodeName) : "";
+          if (tag === "CODE" || tag === "code" || tag === "PRE" || tag === "pre") {
+            return true;
+          }
+        } catch (error) {
+          // Keep walking.
+        }
+        current = current.parentNode || null;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  renderDependencyChipsIn(el, ctx) {
+    try {
+      if (!this.dependencyChipsEnabled) {
+        return;
+      }
+      if (!el || !ctx) {
+        return;
+      }
+      const path = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      const items = [];
+      try {
+        if (typeof el.querySelectorAll === "function") {
+          const found = el.querySelectorAll("li");
+          for (let i = 0; i < found.length; i += 1) {
+            items.push(found[i]);
+          }
+        } else if (Array.isArray(el.children)) {
+          for (const child of el.children) {
+            items.push(child);
+          }
+        }
+      } catch (error) {
+        return;
+      }
+      const interactive = Boolean(this.dependencyNavApi());
+      for (const li of items) {
+        try {
+          if (!li || li.nodeType !== 1) {
+            continue;
+          }
+          if (li.dataset && li.dataset.bobDepProcessed === "1") {
+            continue;
+          }
+          if (this.dependencyExcludedAncestor(li, el)) {
+            continue;
+          }
+          let text = "";
+          try {
+            text = String(li.textContent || "");
+          } catch (error) {
+            text = "";
+          }
+          if (text.indexOf("DEPENDS ON") === -1 && text.indexOf("DEPENDENCIES") === -1) {
+            continue;
+          }
+          const links = [];
+          try {
+            const anchors = li.querySelectorAll ? li.querySelectorAll("a.internal-link") : [];
+            for (let i = 0; i < anchors.length; i += 1) {
+              links.push(anchors[i]);
+            }
+          } catch (error) {
+            continue;
+          }
+          if (links.length === 0) {
+            continue;
+          }
+          const model = this.dependencyChipModelForDomLinks(links, path);
+          if (!model) {
+            continue;
+          }
+          const docNode = li.ownerDocument || (typeof document !== "undefined" ? document : null);
+          if (!docNode) {
+            continue;
+          }
+          li.classList.add("bob-dep-row");
+          if (li.dataset) {
+            li.dataset.bobDepProcessed = "1";
+          }
+          const label = docNode.createElement("span");
+          label.setAttribute("class", "bob-dep-label");
+          label.textContent = "⛓ depends on";
+          try {
+            li.insertBefore(label, li.firstChild);
+          } catch (error) {
+            try {
+              li.appendChild(label);
+            } catch (inner) {
+              continue;
+            }
+          }
+          for (const anchor of links) {
+            try {
+              const chip = model.byAnchor && model.byAnchor.get(anchor);
+              anchor.classList.add("bob-dep-chip");
+              if (chip && chip.state) {
+                anchor.classList.add("is-" + chip.state);
+                anchor.setAttribute("data-state", chip.state);
+              }
+              anchor.setAttribute("role", "link");
+              if (chip && chip.tooltip) {
+                anchor.setAttribute("title", chip.tooltip);
+                anchor.setAttribute("aria-label", chip.ariaLabel || chip.tooltip);
+              }
+              if (chip && chip.noteLabel) {
+                const note = docNode.createElement("span");
+                note.setAttribute("class", "bob-dep-chip-note");
+                note.textContent = chip.noteLabel;
+                anchor.appendChild(note);
+              }
+              if (interactive && chip && chip.blockId && chip.state !== "done-collapsed") {
+                const remove = docNode.createElement("span");
+                remove.setAttribute("class", "bob-dep-chip-remove");
+                remove.setAttribute("role", "button");
+                remove.setAttribute("aria-label", "Remove dependency " + (chip.fullText || ""));
+                remove.textContent = "×";
+                const self = this;
+                const target = { path: chip.resolvedPath, blockId: chip.blockId };
+                const parentRef = { path, line: null };
+                if (typeof remove.addEventListener === "function") {
+                  remove.addEventListener("click", (event) => {
+                    try {
+                      if (event) {
+                        if (typeof event.stopPropagation === "function") {
+                          event.stopPropagation();
+                        }
+                        if (typeof event.preventDefault === "function") {
+                          event.preventDefault();
+                        }
+                      }
+                      const api = self.dependencyNavApi();
+                      if (api && typeof api.removeDependency === "function") {
+                        Promise.resolve(api.removeDependency(parentRef, target)).then((result) => {
+                          if (result && result.ok === false && result.reason) {
+                            try {
+                              new Notice(String(result.reason));
+                            } catch (noticeError) {
+                              // Best-effort.
+                            }
+                          }
+                        });
+                      }
+                    } catch (error) {
+                      // Best-effort.
+                    }
+                  });
+                }
+                anchor.appendChild(remove);
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+          try {
+            const walker = docNode.createTreeWalker ? null : null;
+            void walker;
+            for (const node of Array.from(li.childNodes || [])) {
+              try {
+                if (node.nodeType === 3 && /^[\s•·,]*$/.test(String(node.nodeValue || ""))) {
+                  const sibs = li.childNodes || [];
+                  void sibs;
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+          } catch (error) {
+            // Separator hiding is best-effort.
+          }
+          try {
+            const summary = docNode.createElement("span");
+            summary.setAttribute("class", "bob-dep-summary");
+            summary.textContent = model.summary;
+            li.appendChild(summary);
+            if (interactive) {
+              const add = docNode.createElement("span");
+              add.setAttribute("class", "bob-dep-add");
+              add.setAttribute("role", "button");
+              add.setAttribute("tabindex", "0");
+              add.setAttribute("aria-label", "Edit task dependencies");
+              add.textContent = "＋";
+              const self = this;
+              if (typeof add.addEventListener === "function") {
+                add.addEventListener("click", () => {
+                  try {
+                    const api = self.dependencyNavApi();
+                    if (api && typeof api.openDependencyStage === "function") {
+                      Promise.resolve(api.openDependencyStage({ path, line: null }));
+                    }
+                  } catch (error) {
+                    // Best-effort.
+                  }
+                });
+              }
+              li.appendChild(add);
+            }
+          } catch (error) {
+            // Summary is best-effort.
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Reading chips never throw.
+    }
+  }
+
+  dependencyChipModelForDomLinks(anchors, sourcePath) {
+    try {
+      const source = String(sourcePath || "");
+      const index = this.dependencyTasksIndex();
+      const self = this;
+      const chips = [];
+      const byAnchor = new Map();
+      for (const anchor of anchors) {
+        try {
+          let href = "";
+          try {
+            href = anchor.getAttribute("data-href") || anchor.getAttribute("href") || "";
+          } catch (error) {
+            href = "";
+          }
+          href = String(href || "").split("#")[0] + "#" + String(href || "").split("#").slice(1).join("#");
+          let linkpath = "";
+          let blockId = "";
+          try {
+            const rawHref = String(anchor.getAttribute("data-href") || anchor.getAttribute("href") || "");
+            const hashAt = rawHref.indexOf("#");
+            if (hashAt === -1) {
+              continue;
+            }
+            linkpath = decodeURIComponent(rawHref.slice(0, hashAt));
+            const after = rawHref.slice(hashAt + 1);
+            blockId = after.charAt(0) === "^" ? decodeURIComponent(after.slice(1)) : "";
+            if (!blockId) {
+              continue;
+            }
+            linkpath = linkpath.replace(/\.md$/i, "");
+            if (linkpath === source.replace(/\.md$/i, "")) {
+              linkpath = "";
+            }
+          } catch (error) {
+            continue;
+          }
+          const resolved = self.dependencyResolveLink(linkpath, source);
+          const key = String(resolved.path || "") + "\u0000" + String(blockId || "");
+          let task = index.has(key) ? index.get(key) : null;
+          let isNonTask = false;
+          if (!task) {
+            try {
+              const metadataCache = self.app && self.app.metadataCache;
+              if (metadataCache && typeof metadataCache.getCache === "function" && resolved.path) {
+                const cache = metadataCache.getCache(resolved.path);
+                const blocks = cache && cache.blocks ? cache.blocks : null;
+                if (blocks && Object.prototype.hasOwnProperty.call(blocks, String(blockId || ""))) {
+                  isNonTask = true;
+                }
+              }
+            } catch (error) {
+              isNonTask = false;
+            }
+          }
+          let chip = null;
+          if (!task && !isNonTask) {
+            const noteLabel = linkpath ? "↗ " + linkpath.split("/").pop() : null;
+            chip = { state: "broken", symbol: "⚠", text: "^" + blockId + " not found", fullText: "^" + blockId + " not found", noteLabel, linktext: (linkpath ? linkpath : "") + "#^" + blockId, blockId, resolvedPath: resolved.path, tooltip: "⚠ ^" + blockId + " not found", ariaLabel: "Broken dependency ^" + blockId };
+          } else if (!task && isNonTask) {
+            const noteLabel = linkpath ? "↗ " + linkpath.split("/").pop() : null;
+            chip = { state: "not-task", symbol: "⚠", text: "not a task", fullText: "not a task", noteLabel, linktext: (linkpath ? linkpath : "") + "#^" + blockId, blockId, resolvedPath: resolved.path, tooltip: "⚠ not a task", ariaLabel: "Dependency is not a task" };
+          } else {
+            let symbol = "";
+            try {
+              symbol = planTaskStatusSymbol(task) || "";
+            } catch (error) {
+              symbol = "";
+            }
+            if (!symbol) {
+              symbol = " ";
+            }
+            const state = dependencyStateFromSymbol(symbol, task);
+            let rawText = "";
+            try {
+              rawText = planTaskDescription(task) || "";
+            } catch (error) {
+              rawText = "";
+            }
+            const fullText = dependencyCleanTaskText(rawText) || ("^" + blockId);
+            let text = fullText.length > 40 ? fullText.slice(0, 40) + "…" : fullText;
+            let taskPath = "";
+            try {
+              taskPath = planTaskPath(task) || "";
+            } catch (error) {
+              taskPath = "";
+            }
+            let noteLabel = null;
+            if (linkpath) {
+              noteLabel = "↗ " + linkpath.split("/").pop();
+            }
+            chip = { state, symbol: dependencySymbolForState(state), text, fullText, noteLabel, linktext: (linkpath ? linkpath : "") + "#^" + blockId, blockId, resolvedPath: taskPath || resolved.path, tooltip: fullText + " — " + (taskPath || source) + " · " + dependencyStatusName(state), ariaLabel: fullText };
+          }
+          chips.push(chip);
+          byAnchor.set(anchor, chip);
+        } catch (error) {
+          continue;
+        }
+      }
+      if (chips.length === 0) {
+        return null;
+      }
+      let waiting = 0;
+      for (const chip of chips) {
+        if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked" || chip.state === "broken" || chip.state === "not-task") {
+          waiting += 1;
+        }
+      }
+      return { chips, byAnchor, summary: waiting > 0 ? "waiting on " + waiting : "✓ all clear" };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  dependencyOpenTarget(linktext, sourcePath, event) {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        const mod = Boolean(event && (event.ctrlKey || event.metaKey));
+        workspace.openLinkText(String(linktext || ""), String(sourcePath || ""), mod);
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  dependencyHoverTarget(linktext, sourcePath, event, targetEl) {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.trigger === "function") {
+        workspace.trigger("hover-link", { event, source: "bob-dependency-chips", hoverParent: null, targetEl: targetEl || null, linktext: String(linktext || ""), sourcePath: String(sourcePath || "") });
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  dependencyRemoveChip(chip, sourcePath, meta) {
+    try {
+      const api = this.dependencyNavApi();
+      if (!api || typeof api.removeDependency !== "function") {
+        return;
+      }
+      let targetPath = String(sourcePath || "");
+      try {
+        if (chip && chip.linktext && chip.linktext.indexOf("#") !== -1) {
+          const linkpath = chip.linktext.split("#")[0];
+          if (linkpath) {
+            targetPath = this.dependencyResolveLink(linkpath, sourcePath).path;
+          }
+        }
+      } catch (error) {
+        // Keep the dependent path.
+      }
+      const parentRef = { path: String(sourcePath || ""), line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber + 1 : null };
+      const target = { path: targetPath, blockId: chip ? chip.blockId : null };
+      Promise.resolve(api.removeDependency(parentRef, target)).then((result) => {
+        if (result && result.ok === false && result.reason) {
+          try {
+            new Notice(String(result.reason));
+          } catch (noticeError) {
+            // Best-effort.
+          }
+        }
+      });
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  dependencyOpenStage(sourcePath, meta) {
+    try {
+      const api = this.dependencyNavApi();
+      if (!api || typeof api.openDependencyStage !== "function") {
+        return;
+      }
+      const ref = { path: String(sourcePath || ""), line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber + 1 : null };
+      Promise.resolve(api.openDependencyStage(ref));
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  setupDependencyChips() {
+    try {
+      if (typeof this.dependencyChipsEnabled !== "boolean") {
+        this.dependencyChipsEnabled = true;
+      }
+      try {
+        if (typeof document !== "undefined" && document && document.body && document.body.classList && typeof document.body.classList.add === "function") {
+          if (this.dependencyChipsEnabled) {
+            document.body.classList.add("bob-dep-chips");
+          } else {
+            document.body.classList.remove("bob-dep-chips");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({ id: "toggle-dependency-chips", name: "Toggle dependency chips", callback: () => this.toggleDependencyChips() });
+        }
+      } catch (error) {
+        // The toggle is best-effort.
+      }
+      try {
+        const extension = this.createDependencyChipExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview chips are best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor((el, ctx) => this.renderDependencyChipsIn(el, ctx), 50);
+        }
+      } catch (error) {
+        // Rendered-view chips are best-effort.
+      }
+    } catch (error) {
+      // Chips setup never throws.
+    }
+  }
+
+  toggleDependencyChips() {
+    try {
+      this.dependencyChipsEnabled = !this.dependencyChipsEnabled;
+      const enabled = this.dependencyChipsEnabled;
+      try {
+        if (typeof document !== "undefined" && document && document.body && document.body.classList) {
+          if (enabled) {
+            if (typeof document.body.classList.add === "function") {
+              document.body.classList.add("bob-dep-chips");
+            }
+          } else if (typeof document.body.classList.remove === "function") {
+            document.body.classList.remove("bob-dep-chips");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        this.refreshDependencyChipEditors();
+      } catch (error) {
+        // Editor refresh is best-effort.
+      }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // Tasks re-render is best-effort.
+      }
+      try {
+        new Notice(enabled ? "Dependency chips on" : "Dependency chips off");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.dependencyChipsEnabled;
+    }
+  }
+
+  refreshDependencyChipEditors() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      const refresh = ensureDependencyChipsRefresh();
+      for (const leaf of leaves) {
+        try {
+          const cm = leaf && leaf.view && leaf.view.editor ? leaf.view.editor.cm : null;
+          if (cm && typeof cm.dispatch === "function" && refresh) {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  scheduleDependencyChipsRefresh() {
+    try {
+      if (this.dependencyChipsTimer !== null && this.dependencyChipsTimer !== undefined) {
+        return;
+      }
+      const schedule = typeof window !== "undefined" && typeof window.setTimeout === "function" ? window.setTimeout : setTimeout;
+      const self = this;
+      this.dependencyChipsTimer = schedule(() => {
+        self.dependencyChipsTimer = null;
+        try {
+          self.refreshDependencyChipEditors();
+        } catch (error) {
+          // Refresh is best-effort.
+        }
+      }, 150);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
 
   resolveTodayLink(target, dailyPath) {
     try {
@@ -14651,4 +16445,12 @@ module.exports.helpers = {
   freshnessShortDate,
   buildFreshnessMarkElement,
   freshnessMarkPosInCode,
+  parseDependencyLine,
+  dependencyCleanTaskText,
+  dependencyStatusName,
+  dependencyStateFromSymbol,
+  dependencySymbolForState,
+  dependencyChipModel,
+  buildDependencyChipElement,
+  ensureDependencyChipsRefresh,
 };

@@ -20178,6 +20178,67 @@ function createBulletPropertyValueItems(propertyItem, baseDate) {
   }));
 }
 
+// Stage-one display policy: on a prioritized task the associated
+// date-property row opens first so the previewed recommendation is one
+// Ctrl+Enter away. Presence of a configured priority value controls the
+// promotion — not an existing schedule date or a valid recommendation — and
+// every other row keeps its relative order and identity. Non-task bullets
+// and tasks without priority keep the existing menu order.
+function promoteScheduledRowForPrioritizedTask(
+  config,
+  propertyItems,
+  options = {},
+) {
+  const items = Array.isArray(propertyItems) ? propertyItems : [];
+  if (options && options.isTask === false) {
+    return items;
+  }
+  const properties =
+    config && Array.isArray(config.properties) ? config.properties : [];
+  for (const property of properties) {
+    if (!property || property.values !== "priority") {
+      continue;
+    }
+    const priorityName = normalizeBulletPropertyName(property.name);
+    const priorityRow = items.find(
+      (item) =>
+        item &&
+        item.kind === "property" &&
+        (item.property === property ||
+          normalizeBulletPropertyName(
+            item.property && item.property.name,
+          ) === priorityName) &&
+        item.defined,
+    );
+    if (!priorityRow) {
+      continue;
+    }
+    const schedulesName = normalizeBulletPropertyName(property.schedules);
+    if (!schedulesName) {
+      continue;
+    }
+    const scheduleIndex = items.findIndex(
+      (item) =>
+        item &&
+        item.kind === "property" &&
+        normalizeBulletPropertyName(item.property && item.property.name) ===
+          schedulesName,
+    );
+    if (scheduleIndex === -1) {
+      continue;
+    }
+    if (scheduleIndex === 0) {
+      return items;
+    }
+    return [
+      items[scheduleIndex],
+      ...items.slice(0, scheduleIndex),
+      ...items.slice(scheduleIndex + 1),
+    ];
+  }
+  return items;
+}
+
 class BulletPropertyPickerModal extends FilteredPickerModal {
   constructor(app, plugin, editor, cursor, lineText, config, context = {}) {
     super(app, {
@@ -20414,6 +20475,23 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         searchText: `cancel cancelled canceled abandon drop obsolete wontfix won't do close ❌ ${cancelTitle} ${cancelDescription.detail || ""}`,
       });
       propertyItems = [...propertyItems, cancelItem];
+    }
+    // Prioritized tasks open on the schedule row so the previewed
+    // recommendation is one Ctrl+Enter away. Counted and link sessions
+    // aggregate real targets; single mode needs a real task line so plain
+    // bullets carrying priority-like metadata keep the existing order.
+    {
+      const isTaskContext =
+        this.isLinkSession() || this.isCountedSession()
+          ? true
+          : Boolean(
+              this.propertyContext && this.propertyContext.isObsidianTask,
+            );
+      propertyItems = promoteScheduledRowForPrioritizedTask(
+        this.config,
+        propertyItems,
+        { isTask: isTaskContext },
+      );
     }
     this.applyOptions({
       items: propertyItems,
@@ -37244,6 +37322,7 @@ module.exports.helpers = {
   resolveBulletPropertyTarget,
   getBulletPropertyCurrentLabel,
   createBulletPropertyItems,
+  promoteScheduledRowForPrioritizedTask,
   discoverCountedObsidianTaskTargets,
   parseLinkPickerTaskLink,
   discoverLinkPickerTargets,

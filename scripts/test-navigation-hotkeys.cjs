@@ -17918,10 +17918,341 @@ test("Ctrl+Shift+P pins the Cancel row last on an open task", () => {
   assert.equal(row.title, "Cancel task");
   assert.equal(row.detail, "Ready → Cancelled · asks why");
   assert.equal(row.recurring, false);
-  // The lane toggle stays pinned first.
-  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
+  // The prioritized task opens on the schedule row, with the lane toggle next.
+  assert.equal(picker.visibleItems[0].kind, "property");
+  assert.equal(picker.visibleItems[0].property.name, "scheduled");
+  assert.equal(picker.selectedIndex, 0);
+  assert.equal(picker.visibleItems[1].kind, "lane-toggle");
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
+});
+
+function stageOneRowNames(picker) {
+  return picker.visibleItems.map((item) =>
+    item && item.kind === "property" ? item.property.name : item.kind,
+  );
+}
+
+function openPriorityPicker(harnessOptions = {}, openOptions = {}, extra = {}) {
+  const harness = createBulletPropertyPickerHarness({
+    config: createPriorityPickerConfig(),
+    baseDate: new Date(2026, 7, 3),
+    random: () => 0,
+    ...harnessOptions,
+  });
+  if (extra.freshnessApi) {
+    harness.plugin.getFreshnessApi = () => extra.freshnessApi;
+  }
+  assert.equal(harness.open(openOptions), true);
+  return harness;
+}
+
+test("scheduled-first puts scheduled first on a prioritized task", () => {
+  for (const content of [
+    "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
+    "- [ ] #task A [priority:: medium] ^a",
+  ]) {
+    const harness = openPriorityPicker({ content });
+    const picker = harness.plugin.activeBulletPropertyPicker;
+    assert.equal(picker.selectedIndex, 0, content);
+    assert.equal(picker.visibleItems[0].kind, "property", content);
+    assert.equal(picker.visibleItems[0].property.name, "scheduled", content);
+    assert.deepEqual(
+      stageOneRowNames(picker),
+      ["scheduled", "lane-toggle", "priority", "cancel-task"],
+      content,
+    );
+    picker.close();
+    harness.plugin.activeBulletPropertyPicker = null;
+  }
+});
+
+test("scheduled-first honors configuration order for the remaining rows", () => {
+  const priorityFirst = helpers.validateBulletPropertyConfig({
+    properties: [
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+        ],
+      },
+      { name: "scheduled", values: "date" },
+    ],
+  });
+  const harness = openPriorityPicker(
+    {
+      config: priorityFirst,
+      content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
+    },
+  );
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.deepEqual(stageOneRowNames(picker), [
+    "scheduled",
+    "lane-toggle",
+    "priority",
+    "cancel-task",
+  ]);
+  picker.close();
+  harness.plugin.activeBulletPropertyPicker = null;
+
+  const withExtra = helpers.validateBulletPropertyConfig({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+        ],
+      },
+      { name: "energy", values: ["high", "low"] },
+    ],
+  });
+  const extra = openPriorityPicker({
+    config: withExtra,
+    content: "- [ ] #task A [priority:: medium] [energy:: high] ^a",
+  });
+  const extraPicker = extra.plugin.activeBulletPropertyPicker;
+  assert.deepEqual(stageOneRowNames(extraPicker), [
+    "scheduled",
+    "lane-toggle",
+    "priority",
+    "energy",
+    "cancel-task",
+  ]);
+  extraPicker.close();
+  extra.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first keeps lane, refresh, and cancel rows in place", () => {
+  const harness = openPriorityPicker(
+    {
+      content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
+    },
+    {},
+    {
+      freshnessApi: {
+        setRefreshLine: () => {},
+        config: () => ({ interval: 7 }),
+      },
+    },
+  );
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.deepEqual(stageOneRowNames(picker), [
+    "scheduled",
+    "lane-toggle",
+    "refresh-interval",
+    "priority",
+    "cancel-task",
+  ]);
+  assert.equal(picker.selectedIndex, 0);
+  picker.close();
+  harness.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first leaves unprioritized tasks and plain bullets alone", () => {
+  const scheduledOnly = openPriorityPicker({
+    content: "- [ ] #task A [scheduled:: 2026-09-01] ^a",
+  });
+  const scheduledPicker = scheduledOnly.plugin.activeBulletPropertyPicker;
+  assert.deepEqual(stageOneRowNames(scheduledPicker), [
+    "lane-toggle",
+    "scheduled",
+    "priority",
+    "cancel-task",
+  ]);
+  scheduledPicker.close();
+  scheduledOnly.plugin.activeBulletPropertyPicker = null;
+
+  const bare = openPriorityPicker({ content: "- [ ] #task A ^a" });
+  const barePicker = bare.plugin.activeBulletPropertyPicker;
+  assert.equal(barePicker.visibleItems[0].kind, "lane-toggle");
+  barePicker.close();
+  bare.plugin.activeBulletPropertyPicker = null;
+
+  const plain = openPriorityPicker({
+    content: "- just a bullet [priority:: medium]",
+  });
+  const plainPicker = plain.plugin.activeBulletPropertyPicker;
+  assert.deepEqual(stageOneRowNames(plainPicker), ["priority", "scheduled"]);
+  plainPicker.close();
+  plain.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first promotes on unconfigured and closed priorities", () => {
+  const unconfigured = openPriorityPicker({
+    content: "- [ ] #task A [priority:: highest] [scheduled:: 2026-09-01] ^a",
+  });
+  const unconfiguredPicker = unconfigured.plugin.activeBulletPropertyPicker;
+  assert.equal(unconfiguredPicker.visibleItems[0].property.name, "scheduled");
+  assert.equal(unconfiguredPicker.selectedIndex, 0);
+  assert.equal(unconfiguredPicker.priorityRollRecommendation, null);
+  unconfiguredPicker.close();
+  unconfigured.plugin.activeBulletPropertyPicker = null;
+
+  const closed = openPriorityPicker({
+    content: "- [x] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
+  });
+  const closedPicker = closed.plugin.activeBulletPropertyPicker;
+  assert.deepEqual(stageOneRowNames(closedPicker), ["scheduled", "priority"]);
+  assert.equal(closedPicker.selectedIndex, 0);
+  closedPicker.close();
+  closed.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first filtering still hides the schedule row normally", () => {
+  const harness = openPriorityPicker({
+    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
+  });
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const unfiltered = stageOneRowNames(picker);
+  assert.equal(unfiltered[0], "scheduled");
+
+  picker.inputEl = { value: "zzzz" };
+  assert.deepEqual(picker.getFilteredItems(), []);
+
+  picker.inputEl = { value: "e" };
+  assert.deepEqual(
+    picker.getFilteredItems().map((item) =>
+      item && item.kind === "property" ? item.property.name : item.kind,
+    ),
+    unfiltered,
+  );
+  picker.inputEl = null;
+  picker.close();
+  harness.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first keeps an explicit selectPropertyName rebuild", () => {
+  const harness = openPriorityPicker({
+    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
+  });
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  picker.resultsEl = {};
+  picker.renderResults = () => {};
+  picker.renderAll = function (options = {}) {
+    if (options.clearQuery !== false && this.inputEl) {
+      this.inputEl.value = "";
+    }
+    this.visibleItems = this.getFilteredItems();
+  };
+  picker.showPropertyStage({ selectPropertyName: "priority", clearQuery: false });
+  const priorityIndex = picker.visibleItems.findIndex(
+    (item) => item && item.kind === "property" && item.property.name === "priority",
+  );
+  assert.notEqual(priorityIndex, -1);
+  assert.equal(picker.selectedIndex, priorityIndex);
+  picker.close();
+  harness.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first promotes a prioritized ^prj task", () => {
+  const harness = openPriorityPicker({
+    content: [
+      "---",
+      "type: [[project]]",
+      "scheduled: 2026-08-05",
+      "---",
+      "- [ ] #task Ship [priority:: medium] ^prj",
+    ].join("\n"),
+    cursor: { line: 4, ch: 0 },
+    file: { path: "projects/Ship.md", basename: "Ship", extension: "md" },
+  });
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.visibleItems[0].kind, "property");
+  assert.equal(picker.visibleItems[0].property.name, "scheduled");
+  assert.equal(picker.selectedIndex, 0);
+  picker.close();
+  harness.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first promotes a mixed counted batch but not a plain one", () => {
+  const priorityFirst = helpers.validateBulletPropertyConfig({
+    properties: [
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+        ],
+      },
+      { name: "scheduled", values: "date" },
+    ],
+  });
+  const mixed = openPriorityPicker(
+    {
+      config: priorityFirst,
+      content: [
+        "- [ ] #task A [priority:: medium] ^a",
+        "- [ ] #task B ^b",
+        "- [ ] #task C [scheduled:: 2026-09-01] ^c",
+      ].join("\n"),
+    },
+    { countExplicit: true, additionalTaskCount: 2 },
+  );
+  const mixedPicker = mixed.plugin.activeBulletPropertyPicker;
+  assert.equal(mixedPicker.isCountedSession(), true);
+  const priorityRow = mixedPicker.visibleItems.find(
+    (item) => item && item.kind === "property" && item.property.name === "priority",
+  );
+  assert.equal(priorityRow.valueState, "mixed");
+  assert.equal(priorityRow.currentValue, "");
+  assert.deepEqual(stageOneRowNames(mixedPicker), [
+    "scheduled",
+    "lane-toggle",
+    "priority",
+    "cancel-task",
+  ]);
+  assert.equal(mixedPicker.selectedIndex, 0);
+  mixedPicker.close();
+  mixed.plugin.activeBulletPropertyPicker = null;
+
+  const plain = openPriorityPicker(
+    {
+      content: "- [ ] #task A ^a\n- [ ] #task B [scheduled:: 2026-09-01] ^b",
+    },
+    { countExplicit: true, additionalTaskCount: 1 },
+  );
+  const plainPicker = plain.plugin.activeBulletPropertyPicker;
+  assert.equal(plainPicker.visibleItems[0].kind, "lane-toggle");
+  plainPicker.close();
+  plain.plugin.activeBulletPropertyPicker = null;
+});
+
+test("scheduled-first promotes a prioritized Task Link session", async () => {
+  const harness = createLinkPickerHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: {
+      "Tasks.md": "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a1",
+    },
+  });
+  assert.equal(await harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.equal(picker.isLinkSession(), true);
+  assert.equal(picker.visibleItems[0].kind, "property");
+  assert.equal(picker.visibleItems[0].property.name, "scheduled");
+  assert.equal(picker.selectedIndex, 0);
+  picker.close();
+  harness.plugin.activeBulletPropertyPicker = null;
+
+  const plain = createLinkPickerHarness({
+    linkContent: "- [[Tasks#^b1]]",
+    notes: {
+      "Tasks.md": "- [ ] #task B [scheduled:: 2026-09-01] ^b1",
+    },
+  });
+  assert.equal(await plain.open(), true);
+  const plainPicker = plain.plugin.activeBulletPropertyPicker;
+  assert.equal(plainPicker.visibleItems[0].kind, "lane-toggle");
+  plainPicker.close();
+  plain.plugin.activeBulletPropertyPicker = null;
 });
 
 test("Cancel row hides on closed tasks, plain bullets, and all-closed sessions", () => {

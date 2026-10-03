@@ -3347,6 +3347,600 @@ function buildBatchPriorityRollPreviewModel(summary) {
   });
 }
 
+// --- Approved-decay decision planner (bob-cli-3v.4) --------------------------
+// Pure freshness decision planner adjacent to the priority recommendation
+// helpers. Composes the existing priority roll/decay planner, the refresh
+// presets, and the managed Schedule/Cancel Log insertion planners into one
+// stable, previewed card model. The card itself (interaction, guarded commit,
+// batch skip) lands in decision-card; this planner rolls every displayed date
+// exactly once so approval can persist the preview without re-rolling.
+//
+// Inputs: exact target preimages (content/taskLine/rawLine), parsed keeps,
+// effective interval days, normalized freshness decay policy, the validated
+// priority property, the local base date, and injectable randomness.
+// Output: a frozen card model with per-action plans and unavailable
+// explanations. No writes, no timers, no DOM access.
+//
+// Reason grammar (pinned):
+// - Schedule-changing decisions append ` · kept N×` after the existing
+//   roll/decay head, so `classifyScheduleLogRollReason` keeps its meaning:
+//   `🎲 P0 → P2 decay · in **17** (8–30) days · kept 3×` still classifies as
+//   "decay", and `🎲 P2 roll · … · kept 3×` still classifies as "roll".
+// - `🎲 less often · every A → B days · kept N×` and `🎲 reword · kept N×`
+//   deliberately classify as "other" and reset the roll streak: they are
+//   explicit human decisions, not roll events.
+// - Drop writes `🍂 dropped after N keep(s)` to the Cancel Log and preserves
+//   keeps history on the closed line.
+function formatKeptCountTail(keeps) {
+  const count = Number.isInteger(keeps) && keeps >= 0 ? keeps : 0;
+  return ` · kept ${count}×`;
+}
+
+function formatFreshnessDecayReasonWithKeptTail(baseReason, keeps) {
+  return `${normalizeBulletPropertyValue(baseReason)}${formatKeptCountTail(keeps)}`;
+}
+
+function formatFreshnessDecisionLessOftenReason(details = {}) {
+  const before = Math.floor(numericOrDefault(details.beforeDays, NaN));
+  const after = Math.floor(numericOrDefault(details.afterDays, NaN));
+  const keeps = Number.isInteger(details.keeps) && details.keeps >= 0 ? details.keeps : 0;
+  if (!Number.isInteger(before) || !Number.isInteger(after)) {
+    return "";
+  }
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} less often${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}every ${before} → ${after} days${formatKeptCountTail(keeps)}`;
+}
+
+function formatFreshnessDecisionRewordReason(details = {}) {
+  const keeps = Number.isInteger(details.keeps) && details.keeps >= 0 ? details.keeps : 0;
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} reword${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}kept ${keeps}×`;
+}
+
+function formatFreshnessDecisionDropCancelReason(details = {}) {
+  const keeps = Number.isInteger(details.keeps) && details.keeps >= 0 ? details.keeps : 0;
+  const noun = keeps === 1 ? "keep" : "keeps";
+  return `${PRIORITY_DECAY_CANCEL_EMOJI} dropped after ${keeps} ${noun}`;
+}
+
+function normalizeFreshnessDecayKeepsCount(value) {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 0) {
+    return 0;
+  }
+  return Math.min(999, count);
+}
+
+// Resolve the `enter` label against the configured priority ladder. Returns
+// the matching level or null when `enter` is absent. Unknown labels return
+// `{ unknown: label }` so the caller can explain Not now's unavailability
+// without inventing a fallback level.
+function resolveFreshnessDecayEnterLevel(property, enterLabel) {
+  const label = normalizeBulletPropertyValue(enterLabel);
+  if (!label) {
+    return null;
+  }
+  const levels = property && Array.isArray(property.levels) ? property.levels : [];
+  const found = levels.find(
+    (level) => level && normalizeBulletPropertyValue(level.label) === label,
+  );
+  if (found) {
+    return found;
+  }
+  return { unknown: label };
+}
+
+// P0 entry: the first configured level in ladder order with
+// `min_days > effective interval`. A valid fixed `enter` level overrides the
+// scan. Returns `{ level }` or `{ unavailable, reason }`. Never shortens the
+// lease, never picks the last level silently, never cancels.
+function resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel) {
+  const levels = property && Array.isArray(property.levels) ? property.levels : [];
+  if (levels.length === 0) {
+    return { unavailable: true, reason: "no configured priority levels" };
+  }
+  const enterResolved = resolveFreshnessDecayEnterLevel(property, enterLabel);
+  if (enterResolved && enterResolved.unknown) {
+    return {
+      unavailable: true,
+      reason: `unknown enter level "${enterResolved.unknown}"`,
+    };
+  }
+  if (enterResolved) {
+    return { level: enterResolved };
+  }
+  const interval = Math.floor(numericOrDefault(intervalDays, NaN));
+  if (!Number.isInteger(interval)) {
+    return { unavailable: true, reason: "unknown refresh interval" };
+  }
+  const entry = levels.find(
+    (level) =>
+      level &&
+      Number.isInteger(level.minDays) &&
+      Number.isInteger(level.maxDays) &&
+      level.minDays <= level.maxDays &&
+      level.minDays > interval,
+  );
+  if (!entry) {
+    return {
+      unavailable: true,
+      reason: `no level stays out longer than every ${interval} days`,
+    };
+  }
+  return { level: entry };
+}
+
+function isFutureDatedRollResult(rolled) {
+  if (!rolled || !(rolled.date instanceof Date)) {
+    return false;
+  }
+  if (!Number.isFinite(rolled.date.getTime())) {
+    return false;
+  }
+  return Number.isInteger(rolled.offset) && rolled.offset >= 1;
+}
+
+// Less often: the next refresh preset strictly above the current interval.
+// Below 90 the planner names the exact next preset day; at 90+ the existing
+// custom refresh picker takes over (constrained to a longer value ≤ 365);
+// at 365 there is nowhere longer to go.
+function planFreshnessDecayLessOften(intervalDays) {
+  const current = Number(intervalDays);
+  if (!Number.isInteger(current) || current < 1 || current > 365) {
+    return Object.freeze({
+      available: false,
+      mode: "unavailable",
+      unavailableReason: "unknown refresh interval",
+      beforeDays: null,
+      afterDays: null,
+    });
+  }
+  if (current >= 365) {
+    return Object.freeze({
+      available: false,
+      mode: "unavailable",
+      unavailableReason: "already reviewing every 365 days",
+      beforeDays: current,
+      afterDays: null,
+    });
+  }
+  if (current >= 90) {
+    return Object.freeze({
+      available: true,
+      mode: "picker",
+      beforeDays: current,
+      afterDays: null,
+      minDays: current + 1,
+      maxDays: 365,
+    });
+  }
+  const presets = Array.isArray(REFRESH_ROW_PRESET_DAYS)
+    ? REFRESH_ROW_PRESET_DAYS
+    : [];
+  const next = presets.find(
+    (days) => Number.isInteger(days) && days > current,
+  );
+  if (!Number.isInteger(next)) {
+    return Object.freeze({
+      available: true,
+      mode: "picker",
+      beforeDays: current,
+      afterDays: null,
+      minDays: current + 1,
+      maxDays: 365,
+    });
+  }
+  return Object.freeze({
+    available: true,
+    mode: "refresh",
+    beforeDays: current,
+    afterDays: next,
+  });
+}
+
+// Explicit 1–4 level picks in ladder order: one previewed roll per configured
+// level, each with reset. No absent levels are invented; invalid windows and
+// non-future dates are unavailable per level rather than failing the card.
+function planFreshnessDecayExplicitLevelPicks(options = {}) {
+  const property = options.property || null;
+  const levels = property && Array.isArray(property.levels) ? property.levels : [];
+  const baseDate = options.baseDate instanceof Date ? options.baseDate : new Date();
+  const random = typeof options.random === "function" ? options.random : Math.random;
+  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
+  const fromLabel = normalizeBulletPropertyValue(options.fromLabel) || IMPLICIT_PRIORITY_LEVEL_LABEL;
+  const keeps = normalizeFreshnessDecayKeepsCount(options.keeps);
+  const picks = levels.map((level, index) => {
+    if (!level || !level.label) {
+      return Object.freeze({
+        index,
+        label: "",
+        available: false,
+        unavailableReason: "unconfigured level",
+        date: "",
+        offset: null,
+        reason: "",
+      });
+    }
+    const rolled = rollPriorityRecommendationDate(level, baseDate, random, currentScheduled);
+    if (!isFutureDatedRollResult(rolled)) {
+      return Object.freeze({
+        index,
+        label: normalizeBulletPropertyValue(level.label),
+        available: false,
+        unavailableReason: "no future date in this level's window",
+        date: "",
+        offset: null,
+        reason: "",
+      });
+    }
+    const windowText = formatPriorityRollChosenWindowText(level, rolled.offset);
+    if (!windowText) {
+      return Object.freeze({
+        index,
+        label: normalizeBulletPropertyValue(level.label),
+        available: false,
+        unavailableReason: "invalid level window",
+        date: "",
+        offset: null,
+        reason: "",
+      });
+    }
+    const baseReason = formatPriorityRollScheduleReason({
+      source: "priority",
+      fromLevelLabel: fromLabel,
+      level,
+      rolledDays: rolled.offset,
+    });
+    if (!baseReason) {
+      return Object.freeze({
+        index,
+        label: normalizeBulletPropertyValue(level.label),
+        available: false,
+        unavailableReason: "cannot describe this level pick",
+        date: "",
+        offset: null,
+        reason: "",
+      });
+    }
+    return Object.freeze({
+      index,
+      label: normalizeBulletPropertyValue(level.label),
+      available: true,
+      unavailableReason: null,
+      date: formatBulletPropertyDate(rolled.date),
+      offset: rolled.offset,
+      windowText,
+      reason: formatFreshnessDecayReasonWithKeptTail(baseReason, keeps),
+    });
+  });
+  return Object.freeze(picks);
+}
+
+// The shared approved-decay action planner. Pure: rolls each displayed date
+// exactly once with the injected `random` and freezes the model so approval
+// can persist the preview without re-rolling.
+function planFreshnessDecayCard(options = {}) {
+  const keeps = normalizeFreshnessDecayKeepsCount(options.keeps);
+  const limitRaw = options.limit;
+  const decay = options.freshnessDecay && typeof options.freshnessDecay === "object"
+    ? options.freshnessDecay
+    : {};
+  const limit = Number.isInteger(decay.keeps) && decay.keeps >= 0
+    ? decay.keeps
+    : Number.isInteger(limitRaw) && limitRaw >= 0
+      ? limitRaw
+      : 3;
+  const enterLabel = decay.enter !== undefined && decay.enter !== null
+    ? normalizeBulletPropertyValue(decay.enter)
+    : "";
+  const decayInvalid = decay.invalid === true;
+  const decayEnabled = decay.enabled !== false;
+  const property = options.property || null;
+  const hasPriorityLadder = Boolean(property && property.values === "priority");
+  const baseDate = options.baseDate instanceof Date ? options.baseDate : new Date();
+  const random = typeof options.random === "function" ? options.random : Math.random;
+  const todayText = formatBulletPropertyDate(getLocalDateStart(baseDate));
+  const intervalDays = Number(options.intervalDays);
+  const intervalValid = Number.isInteger(intervalDays) && intervalDays >= 1 && intervalDays <= 365;
+  const content = typeof options.content === "string" ? options.content : null;
+  const taskLine = Number.isInteger(options.taskLine) ? options.taskLine : null;
+  const rawLine = typeof options.rawLine === "string"
+    ? options.rawLine
+    : content !== null && taskLine !== null
+      ? String(String(content).split(/\r?\n/)[taskLine] || "")
+      : "";
+  let currentValue = options.currentValue !== undefined
+    ? normalizeBulletPropertyValue(options.currentValue)
+    : "";
+  if (options.currentValue === undefined && rawLine && hasPriorityLadder) {
+    try {
+      const field = findBulletPropertyField(rawLine, property.name);
+      currentValue = normalizeBulletPropertyValue(field && field.value);
+    } catch (error) {
+      currentValue = "";
+    }
+  }
+  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
+  const fromLabel = currentValue
+    ? getPriorityRollFromLevelLabel(property, currentValue)
+    : IMPLICIT_PRIORITY_LEVEL_LABEL;
+  const reviewNoun = keeps === 1 ? "review" : "reviews";
+  const title = `Kept ${keeps} ${reviewNoun} in a row`;
+
+  const unavailable = (reason) =>
+    Object.freeze({
+      available: false,
+      unavailableReason: reason,
+      date: "",
+      offset: null,
+      reason: "",
+    });
+
+  let notNow = unavailable("Not now is unavailable");
+  if (decayInvalid) {
+    notNow = unavailable("priority config is invalid");
+  } else if (!decayEnabled) {
+    notNow = unavailable("decay is off");
+  } else if (!hasPriorityLadder) {
+    notNow = unavailable("no priority ladder is configured");
+  } else if (!currentValue) {
+    const entry = resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel);
+    if (entry.unavailable) {
+      notNow = unavailable(entry.reason);
+    } else {
+      const rolled = rollPriorityRecommendationDate(entry.level, baseDate, random, currentScheduled);
+      const windowText = formatPriorityRollChosenWindowText(entry.level, rolled && rolled.offset);
+      if (!isFutureDatedRollResult(rolled) || !windowText) {
+        notNow = unavailable("no future date in this level's window");
+      } else {
+        const baseReason = formatPriorityDecayScheduleReason({
+          fromLevel: { label: IMPLICIT_PRIORITY_LEVEL_LABEL },
+          toLevel: entry.level,
+          rolledDays: rolled.offset,
+        });
+        if (!baseReason) {
+          notNow = unavailable("cannot describe the P0 entry");
+        } else {
+          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps);
+          notNow = Object.freeze({
+            available: true,
+            unavailableReason: null,
+            kind: "entry",
+            fromLabel: IMPLICIT_PRIORITY_LEVEL_LABEL,
+            levelLabel: normalizeBulletPropertyValue(entry.level.label),
+            date: formatBulletPropertyDate(rolled.date),
+            offset: rolled.offset,
+            windowText,
+            from: currentScheduled,
+            to: formatBulletPropertyDate(rolled.date),
+            reason,
+            substitutedFor: null,
+            scheduleLog: buildPriorityDecayScheduleLogPayload(
+              currentScheduled,
+              formatBulletPropertyDate(rolled.date),
+              reason,
+            ),
+          });
+        }
+      }
+    }
+  } else {
+    const levels = Array.isArray(property.levels) ? property.levels : [];
+    const level = property.levelsByValue instanceof Map
+      ? property.levelsByValue.get(currentValue)
+      : levels.find((candidate) => candidate && candidate.value === currentValue);
+    if (!level) {
+      notNow = unavailable(`unknown priority "${currentValue}"`);
+    } else {
+      const planned = planPriorityRollRecommendation({
+        property,
+        currentValue,
+        content: content !== null ? content : undefined,
+        taskLine: taskLine !== null ? taskLine : undefined,
+        streak: options.streak,
+        currentScheduled,
+        baseDate,
+        random,
+      });
+      if (!planned || planned.kind === "unavailable" || !planned.kind) {
+        notNow = unavailable(
+          planned && planned.reason
+            ? planned.reason
+            : "no priority recommendation is available",
+        );
+      } else if (planned.kind === "roll" || planned.kind === "decay") {
+        if (!Number.isInteger(planned.offset) || planned.offset < 1 || !planned.date) {
+          notNow = unavailable("no future date in this level's window");
+        } else {
+          const reason = formatFreshnessDecayReasonWithKeptTail(planned.reason, keeps);
+          const payload = planned.kind === "decay"
+            ? buildPriorityDecayScheduleLogPayload(currentScheduled, planned.date, reason)
+            : shouldWriteAutomaticScheduleLog(currentScheduled, planned.date)
+              ? Object.freeze({
+                from: currentScheduled,
+                to: planned.date,
+                reason,
+                automatic: true,
+              })
+              : null;
+          notNow = Object.freeze({
+            available: true,
+            unavailableReason: null,
+            kind: planned.kind,
+            fromLabel: getPriorityRollFromLevelLabel(property, currentValue),
+            levelLabel: normalizeBulletPropertyValue(
+              (planned.level || planned.toLevel || {}).label,
+            ),
+            date: normalizeBulletPropertyValue(planned.date),
+            offset: planned.offset,
+            windowText: formatPriorityRollChosenWindowText(
+              planned.level || planned.toLevel,
+              planned.offset,
+            ),
+            from: currentScheduled,
+            to: normalizeBulletPropertyValue(planned.date),
+            reason,
+            substitutedFor: null,
+            scheduleLog: payload || null,
+          });
+        }
+      } else if (planned.kind === "cancel") {
+        const rolled = rollPriorityRecommendationDate(level, baseDate, random, currentScheduled);
+        const windowText = formatPriorityRollChosenWindowText(level, rolled && rolled.offset);
+        if (!isFutureDatedRollResult(rolled) || !windowText) {
+          notNow = unavailable("no future date in this level's window");
+        } else {
+          const baseReason = formatPriorityRollScheduleReason({
+            source: "scheduled",
+            level,
+            rolledDays: rolled.offset,
+          });
+          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps);
+          notNow = Object.freeze({
+            available: true,
+            unavailableReason: null,
+            kind: "card-roll",
+            fromLabel: getPriorityRollFromLevelLabel(property, currentValue),
+            levelLabel: normalizeBulletPropertyValue(level.label),
+            date: formatBulletPropertyDate(rolled.date),
+            offset: rolled.offset,
+            windowText,
+            from: currentScheduled,
+            to: formatBulletPropertyDate(rolled.date),
+            reason,
+            substitutedFor: "cancel",
+            terminalWouldCancel: true,
+            scheduleLog: Object.freeze({
+              from: currentScheduled,
+              to: formatBulletPropertyDate(rolled.date),
+              reason,
+              automatic: true,
+            }),
+          });
+        }
+      } else {
+        notNow = unavailable("no priority recommendation is available");
+      }
+    }
+  }
+
+  let lessOften = planFreshnessDecayLessOften(intervalDays);
+  if (lessOften.available && lessOften.mode === "refresh") {
+    const reason = formatFreshnessDecisionLessOftenReason({
+      beforeDays: lessOften.beforeDays,
+      afterDays: lessOften.afterDays,
+      keeps,
+    });
+    let scheduleLogPlan = null;
+    if (content !== null && taskLine !== null) {
+      try {
+        scheduleLogPlan = planScheduleLogEntry(content, taskLine, {
+          from: currentScheduled,
+          to: currentScheduled,
+          reason,
+        });
+      } catch (error) {
+        scheduleLogPlan = null;
+      }
+    }
+    lessOften = Object.freeze({
+      ...lessOften,
+      reason,
+      scheduleLogPlan,
+    });
+  } else if (lessOften.available && lessOften.mode === "picker") {
+    lessOften = Object.freeze({
+      ...lessOften,
+      reason: "",
+      scheduleLogPlan: null,
+    });
+  }
+
+  const rewordReason = formatFreshnessDecisionRewordReason({ keeps });
+  let rewordScheduleLogPlan = null;
+  if (content !== null && taskLine !== null) {
+    try {
+      rewordScheduleLogPlan = planScheduleLogEntry(content, taskLine, {
+        from: currentScheduled,
+        to: currentScheduled,
+        reason: rewordReason,
+      });
+    } catch (error) {
+      rewordScheduleLogPlan = null;
+    }
+  }
+  const reword = Object.freeze({
+    available: true,
+    reason: rewordReason,
+    scheduleLogPlan: rewordScheduleLogPlan,
+  });
+
+  const dropReason = formatFreshnessDecisionDropCancelReason({ keeps });
+  let dropCancelLogPlan = null;
+  if (content !== null && taskLine !== null) {
+    try {
+      dropCancelLogPlan = planCancelLogEntry(content, taskLine, {
+        date: todayText,
+        reason: dropReason,
+      });
+    } catch (error) {
+      dropCancelLogPlan = null;
+    }
+  }
+  const drop = Object.freeze({
+    available: true,
+    reason: dropReason,
+    date: todayText,
+    cancelLogPlan: dropCancelLogPlan,
+  });
+
+  const keep = Object.freeze({
+    available: true,
+    nextKeeps: Math.min(999, keeps + 1),
+  });
+
+  const levels = decayInvalid || !hasPriorityLadder
+    ? Object.freeze(
+      (property && Array.isArray(property.levels) ? property.levels : []).map((level, index) =>
+        Object.freeze({
+          index,
+          label: normalizeBulletPropertyValue(level && level.label),
+          available: false,
+          unavailableReason: decayInvalid
+            ? "priority config is invalid"
+            : "no priority ladder is configured",
+          date: "",
+          offset: null,
+          reason: "",
+        }),
+      ),
+    )
+    : planFreshnessDecayExplicitLevelPicks({
+      property,
+      fromLabel,
+      keeps,
+      currentScheduled,
+      baseDate,
+      random,
+    });
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    keeps,
+    limit,
+    enterLabel,
+    fromLabel,
+    title,
+    todayText,
+    intervalDays: intervalValid ? intervalDays : null,
+    notNow,
+    lessOften,
+    reword,
+    drop,
+    keep,
+    levels,
+  });
+}
+
 // Compose the cancel and set-priority plans into one undoable editor
 // transaction: cancel first, remap the remaining lines through the cancel's
 // `cursorLineShift`, then set-priority for the roll and decay targets.
@@ -46086,6 +46680,17 @@ module.exports.helpers = {
   getPriorityRollStreak,
   planPriorityRollRecommendation,
   planPriorityRollRecommendationsForTargets,
+  formatKeptCountTail,
+  formatFreshnessDecayReasonWithKeptTail,
+  formatFreshnessDecisionLessOftenReason,
+  formatFreshnessDecisionRewordReason,
+  formatFreshnessDecisionDropCancelReason,
+  normalizeFreshnessDecayKeepsCount,
+  resolveFreshnessDecayEnterLevel,
+  resolveFreshnessDecayP0EntryLevel,
+  planFreshnessDecayLessOften,
+  planFreshnessDecayExplicitLevelPicks,
+  planFreshnessDecayCard,
   buildBatchPriorityRollPreviewModel,
   buildBatchPriorityRollNoticeModel,
   planRecommendedRollBatch,

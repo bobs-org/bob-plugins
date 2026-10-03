@@ -1130,6 +1130,51 @@ test("reading view renders chips on DP30 (owner is a task under a Work Log entry
   assert.ok(collectReadingClasses(li).join(" ").indexOf("bob-dep-chip") !== -1, "DP30 chips render");
 });
 
+test("reading view DP30 row actions send the owned Depends-On line", async () => {
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const seen = { open: [], remove: [] };
+  const navApi = {
+    version: 1,
+    openDependencyStage: (ref) => {
+      seen.open.push(ref);
+      return Promise.resolve({ ok: true });
+    },
+    removeDependency: (parentRef, target) => {
+      seen.remove.push([parentRef, target]);
+      return Promise.resolve({ ok: true });
+    },
+  };
+  // DP30: the Depends-On line is owned by a #task nested under a Work Log
+  // entry. The section holds three list-item lines, so the third rendered
+  // list item maps to the third line (contract §7.4).
+  const noteText = [
+    "- WORK LOG",
+    "  - [ ] #task Make appt ^appt",
+    "    - ⛓️ **DEPENDS ON:** [[#^a]]",
+  ].join("\n");
+  const plugin = readingVaultApp(tasks, navApi, noteText);
+  const section = { lineStart: 0, lineEnd: 2 };
+  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["a"], section, { rowIndex: 2, rowCount: 3 }), 2);
+  const fixture = fakeReadingDoc();
+  const { nested: outer } = readingTaskLi(fixture, fixture.root, "WORK LOG");
+  const { nested } = readingTaskLi(fixture, outer, "#task Make appt ");
+  const { li } = readingDepLi(fixture, nested, ["a"]);
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md", getSectionInfo: () => section });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const remove = findReadingByClass(li, "bob-dep-chip-remove");
+  assert.ok(remove, "remove renders for the DP30 row");
+  remove.handlers.click({});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen.remove[0][0], { path: "a.md", line: 2 });
+  assert.deepEqual(seen.remove[0][1], { path: "a.md", blockId: "a" });
+  const add = findReadingByClass(li, "bob-dep-add");
+  assert.ok(add, "add renders for the DP30 row");
+  add.handlers.click({});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen.open[0], { path: "a.md", line: 2 });
+});
+
 test("reading view second-row remove sends the second line when two tasks share a prerequisite", async () => {
   const tasks = [depTask({ blockId: "x", symbol: " ", description: "Shared", path: "a.md" })];
   const seen = { open: [], remove: [] };

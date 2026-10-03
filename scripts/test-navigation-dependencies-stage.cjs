@@ -1287,6 +1287,11 @@ test("stage counted add applies to every source task", async () => {
     "- [ ] #task Target ^target",
   ].join("\n");
   const { plugin } = stubPlugin({ "Tasks.md": content });
+  plugin.app.plugins = {
+    plugins: {
+      "obsidian-tasks-plugin": { getState: () => "Warm", getTasks: () => [] },
+    },
+  };
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
   plugin.getActiveMarkdownView = () => ({
     editor,
@@ -1300,25 +1305,39 @@ test("stage counted add applies to every source task", async () => {
       { line: 1, rawLine: "- [ ] #task Second ^second" },
     ],
   };
-  const item = {
-    path: "Tasks.md",
-    line: 2,
-    rawLine: "- [ ] #task Target ^target",
-    displayText: "Target",
-    disabled: false,
-    needsBlockIdPrompt: false,
-  };
-  const applied = await modal.chooseCountedTaskDependency(item);
+  // Real open: the modal builds its own rows from the vault pool through
+  // the production counted property items, with a stubbed Tasks plugin.
+  const countedConfig = validateBulletPropertyConfig({
+    properties: [{ name: "dependsOn", values: "local_task_id" }],
+  });
+  const aggregate = helpers.createCountedBulletPropertyItems(
+    countedConfig,
+    content,
+    modal.taskSession,
+  );
+  assert.equal(aggregate.valid, true, aggregate.error || "counted items build");
+  const propertyItem = aggregate.items.find(
+    (entry) => entry && entry.property && entry.property.name === "dependsOn",
+  );
+  assert.ok(propertyItem, "Depends on opens from the counted properties");
+  modal.showValueStage(propertyItem);
+  await sleep(25);
+  const row = modal.visibleItems.find(
+    (entry) => entry && entry.displayText === "Target" && !entry.disabled,
+  );
+  assert.ok(row, "Target reaches the stage the modal built");
+  // Real apply: the row the modal built goes through the production entry.
+  const applied = await modal.chooseTaskDependency(row);
   assert.equal(applied, true);
   const links = editor.content.match(/⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/g) || [];
   assert.equal(links.length, 2, `both sources link the target:\n${editor.content}`);
   assert.equal(editor.undoGroups, 1);
 });
 
-// Two marked rows whose links close a cycle are guarded on the post-batch
-// graph through the real marking-flow executor: the batch refuses, nothing
-// is written, and both rows stay guarded.
-test("stage batch cycle of two marked rows writes nothing", async () => {
+// Cycle rows stay guarded in the view the modal actually built: every added
+// edge leaves the same dependent, so each row alone closes a cycle back to
+// it. Marking (⇥) a guarded row is refused, and applying (↵) writes nothing.
+test("stage batch cycle rows stay guarded and write nothing", async () => {
   const content = [
     "- [ ] #task Dependent ^d",
     "- [ ] #task Alpha ^a",
@@ -1327,66 +1346,45 @@ test("stage batch cycle of two marked rows writes nothing", async () => {
     "  - ⛓️ **DEPENDS ON:** [[#^d]]",
   ].join("\n");
   const { plugin } = stubPlugin({ "Tasks.md": content });
+  plugin.app.plugins = {
+    plugins: {
+      "obsidian-tasks-plugin": { getState: () => "Warm", getTasks: () => [] },
+    },
+  };
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
   const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
-  const batch = {
-    propertyName: "dependsOn",
-    cursorLineText: "- [ ] #task Dependent ^d",
-    removals: [],
-    readyAdditions: [
-      {
-        markKey: "Tasks.md#1",
-        path: "Tasks.md",
-        line: 1,
-        rawLine: "- [ ] #task Alpha ^a",
-        displayText: "Alpha",
-        existingIdField: null,
-        blockId: "a",
-      },
-      {
-        markKey: "Tasks.md#3",
-        path: "Tasks.md",
-        line: 3,
-        rawLine: "- [ ] #task Beta ^b",
-        displayText: "Beta",
-        existingIdField: null,
-        blockId: "b",
-      },
-    ],
-    promptQueue: [],
-    promptIndex: 0,
-    confirmedById: new Map(),
-    reservedIds: new Set(),
-    hasVault: false,
+  // Real open on the dependent through the production value stage.
+  modal.selectedPropertyItem = {
+    property: { name: "dependsOn", values: "local_task_id" },
   };
+  modal.showValueStage(modal.selectedPropertyItem);
+  await sleep(25);
+  for (const blockId of ["a", "b"]) {
+    const row = modal.visibleItems.find((entry) => entry && entry.blockId === blockId);
+    assert.ok(row, `${blockId} reaches the stage the modal built`);
+    assert.equal(row.disabled, true, `${blockId} stays guarded`);
+    assert.match(row.disabledReason || "", /cycle/i, `${blockId} names the cycle`);
+    assert.ok(row.cycle && row.cycle.length > 0, `${blockId} carries the cycle path`);
+  }
+  // Marking (⇥) a guarded row is refused.
   const before = notices.length;
-  const applied = await modal.executeDependencyBatch(batch);
+  for (const blockId of ["a", "b"]) {
+    modal.selectedIndex = modal.visibleItems.findIndex(
+      (entry) => entry && entry.blockId === blockId,
+    );
+    modal.toggleHighlightedLocalTaskMark();
+  }
+  assert.equal(modal.getMarkedCount(), 0, "guarded rows never mark");
+  const fresh = notices.slice(before);
+  assert.equal(fresh.length, 2, `both marks refused, got: ${JSON.stringify(fresh)}`);
+  for (const notice of fresh) {
+    assert.match(notice, /cycle/i);
+  }
+  // Applying (↵) with nothing marked writes nothing.
+  const applied = await modal.commitMarkedDependencies();
   assert.equal(applied, false);
-  assert.match(notices[before], /cycle/);
   assert.equal(editor.content, content);
   assert.equal(editor.undoGroups, 0);
-  // Both rows stay guarded on the post-batch graph.
-  const notes = [{ path: "Tasks.md", content }];
-  const index = indexDependencyStageNotes(notes);
-  const edges = collectDependencyStageEdges(notes, index);
-  const pool = collectVaultDependencyCandidates(notes, {
-    dependentPath: "Tasks.md",
-    dependentLines: new Set([0]),
-  });
-  const view = planDependencyStageView({
-    current: [],
-    candidates: pool,
-    query: "",
-    dependent: { path: "Tasks.md", line: 0, key: dependencyStageRowKey("Tasks.md", "d") },
-    edges,
-    linkedKeys: new Set(),
-  });
-  for (const blockId of ["a", "b"]) {
-    const row = view.find((entry) => entry.blockId === blockId);
-    assert.ok(row, `${blockId} reaches the stage`);
-    assert.equal(row.disabled, true, `${blockId} stays guarded`);
-    assert.match(row.disabledReason, /cycle/);
-  }
 });
 
 // The `edit-task-dependencies` palette command ships with no default
@@ -1859,25 +1857,76 @@ test("stage counted vault add with a stale target refuses and reopens", async ()
   assert.doesNotMatch(editor.content, /DEPENDS ON/);
 });
 
-// A stale vault-commit write refuses with `changed — reopen` and reopens
-// the stage fresh instead of reporting the writer reason.
-test("stage vault commit with a stale write refuses and reopens", async () => {
-  const content = "- [ ] #task Parent ^parent\n";
+// A stale vault-commit write notifies exactly once: the real writer shows
+// `changed — reopen`, so the stage only reopens fresh without a second
+// notice. The editor is mutated between the stage snapshot and the real
+// write, with no fake writer anywhere on the path.
+test("stage vault commit with a stale write notifies once and reopens", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target ^target",
+  ].join("\n");
   const { plugin } = stubPlugin({ "Tasks.md": content });
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
   const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
   const reopened = stubReopen(plugin);
-  plugin.applyDependencyEdit = async () => ({ ok: false, reason: "stale-editor" });
   const before = notices.length;
-  const applied = await modal.commitVaultRefs(
+  const pending = modal.commitVaultRefs(
     [{ path: "Tasks.md", blockId: "target" }],
     [],
     { stale: 0, other: 0 },
   );
+  const mutated = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target edited ^target",
+  ].join("\n");
+  editor.content = mutated;
+  const applied = await pending;
   assert.equal(applied, false);
-  assert.match(notices[before], /changed — reopen/);
+  const fresh = notices.slice(before);
+  assert.equal(
+    fresh.filter((notice) => /changed — reopen/.test(notice)).length,
+    1,
+    `exactly one reopen notice, got: ${JSON.stringify(fresh)}`,
+  );
   assert.equal(reopened.length, 1);
-  assert.equal(editor.content, content);
+  assert.equal(reopened[0].initialProperty, "dependsOn");
+  assert.equal(editor.content, mutated);
+});
+
+// A stale single-remove write notifies exactly once through the same real
+// path: the writer's notice is the only one, and the stage reopens fresh.
+test("stage single remove with a stale write notifies once and reopens", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = stubReopen(plugin);
+  const before = notices.length;
+  const pending = modal.removeSingleDependency({
+    path: "Tasks.md",
+    blockId: "target",
+  });
+  const mutated = [
+    "- [ ] #task Parent ^parent",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Target edited ^target",
+  ].join("\n");
+  editor.content = mutated;
+  const applied = await pending;
+  assert.equal(applied, false);
+  const fresh = notices.slice(before);
+  assert.equal(
+    fresh.filter((notice) => /changed — reopen/.test(notice)).length,
+    1,
+    `exactly one reopen notice, got: ${JSON.stringify(fresh)}`,
+  );
+  assert.equal(reopened.length, 1);
+  assert.equal(editor.content, mutated);
 });
 
 // The `+ id` single guard refuses a changed target and reopens fresh.
@@ -1952,4 +2001,234 @@ test("stage single +id guard refuses a stale target", async () => {
   assert.match(notices[before], /changed — reopen/);
   assert.equal(reopened.length, 1);
   assert.equal(editor.undoGroups, 0);
+});
+
+// A concurrent edit during a counted CURRENT remove refuses with
+// `changed — reopen` and reopens the stage fresh (§6.4), writing nothing.
+test("stage counted remove with a stale write refuses and reopens", async () => {
+  const content = [
+    "- [ ] #task First [dependsOn:: Tasks__target] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Second ^second",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [ ] #task First [dependsOn:: Tasks__target] ^first" },
+      { line: 2, rawLine: "- [ ] #task Second ^second" },
+    ],
+  };
+  const reopened = stubReopen(plugin);
+  const before = notices.length;
+  const pending = modal.removeCountedDependency({
+    path: "Tasks.md",
+    blockId: "target",
+    displayText: "Target",
+  });
+  const mutated = content.replace(
+    "- [ ] #task Target ^target",
+    "- [ ] #task Target edited ^target",
+  );
+  editor.content = mutated;
+  const applied = await pending;
+  assert.equal(applied, false);
+  const fresh = notices.slice(before);
+  assert.equal(
+    fresh.filter((notice) => /changed — reopen/.test(notice)).length,
+    1,
+    `exactly one reopen notice, got: ${JSON.stringify(fresh)}`,
+  );
+  assert.equal(reopened.length, 1);
+  assert.equal(editor.content, mutated);
+});
+
+// The counted CURRENT remove notice counts only sources that changed: with
+// one source already unlinked, removing the prerequisite reports one task.
+test("stage counted remove counts only changed sources", async () => {
+  const content = [
+    "- [ ] #task First [dependsOn:: Tasks__target] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Second ^second",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [ ] #task First [dependsOn:: Tasks__target] ^first" },
+      { line: 2, rawLine: "- [ ] #task Second ^second" },
+    ],
+  };
+  const before = notices.length;
+  const applied = await modal.removeCountedDependency({
+    path: "Tasks.md",
+    blockId: "target",
+    displayText: "Target",
+  });
+  assert.equal(applied, true);
+  assert.match(notices[before], /⛓ Removed from 1 task/);
+  assert.doesNotMatch(editor.content, /DEPENDS ON/);
+  assert.doesNotMatch(editor.content, /dependsOn/);
+});
+
+// A counted local add on `[?]` sources never recovers, so it reads zero
+// extra notes through the real async vault stub.
+test("counted local add on [?] sources reads zero extra notes", async () => {
+  const content = [
+    "- [?] #task First ^first",
+    "- [?] #task Second ^second",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({
+    "Tasks.md": content,
+    "Other.md": "- [ ] #task Other ^other",
+  });
+  let reads = 0;
+  const vault = plugin.app.vault;
+  const originalCachedRead = vault.cachedRead;
+  vault.cachedRead = async (file) => {
+    reads += 1;
+    return originalCachedRead(file);
+  };
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [?] #task First ^first" },
+      { line: 1, rawLine: "- [?] #task Second ^second" },
+    ],
+  };
+  const applied = await modal.chooseCountedTaskDependency({
+    path: "Tasks.md",
+    line: 2,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+  });
+  assert.equal(applied, true);
+  assert.equal(reads, 0, `counted add read ${reads} extra notes`);
+  const links = editor.content.match(/⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/g) || [];
+  assert.equal(links.length, 2, `both sources link the target:\n${editor.content}`);
+});
+
+// A counted local toggle-off on a Pomodoro-linked `[?]` source still reads
+// the vault snapshot and recovers the source to `[*]`.
+test("counted local toggle-off on a Pomodoro-linked [?] source recovers", async () => {
+  const content = [
+    "- [?] #task First [dependsOn:: Tasks__target] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [x] #task Target [id:: Tasks__target] ^target",
+  ].join("\n");
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const dailyPath = `${now.getFullYear()}/${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.md`;
+  const dailyNote = [
+    "## Pomodoros",
+    "- [ ] 10:00 Focus",
+    "  - [[Tasks#^first]]",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content, [dailyPath]: dailyNote });
+  let reads = 0;
+  const vault = plugin.app.vault;
+  const originalCachedRead = vault.cachedRead;
+  vault.cachedRead = async (file) => {
+    reads += 1;
+    return originalCachedRead(file);
+  };
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [?] #task First [dependsOn:: Tasks__target] ^first" },
+    ],
+  };
+  const applied = await modal.chooseCountedTaskDependency({
+    path: "Tasks.md",
+    line: 2,
+    rawLine: "- [x] #task Target [id:: Tasks__target] ^target",
+    displayText: "Target",
+  });
+  assert.equal(applied, true);
+  assert.ok(reads > 0, `toggle-off read ${reads} extra notes`);
+  assert.doesNotMatch(editor.content, /DEPENDS ON/);
+  assert.match(editor.content, /- \[\*\] #task First\b/m);
+});
+
+// The vault counted-add notice counts only sources that changed: with one
+// source already carrying the link, adding reports one task.
+test("stage counted vault add counts only changed sources", async () => {
+  const content = [
+    "- [ ] #task First ^first",
+    "- [?] #task Second [dependsOn:: Tasks__target] ^second",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Target [id:: Tasks__target] ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [ ] #task First ^first" },
+      { line: 1, rawLine: "- [?] #task Second [dependsOn:: Tasks__target] ^second" },
+    ],
+  };
+  const before = notices.length;
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Tasks.md",
+    line: 3,
+    rawLine: "- [ ] #task Target [id:: Tasks__target] ^target",
+    displayText: "Target",
+    existingIdField: "Tasks__target",
+    blockId: "target",
+  });
+  assert.equal(applied, true);
+  assert.match(notices[before], /⛓ Linked 1 task/);
+});
+
+// The vault counted-remove notice counts only sources that changed: with
+// one source already unlinked, removing reports one task.
+test("stage counted vault remove counts only changed sources", async () => {
+  const content = [
+    "- [ ] #task First [dependsOn:: Tasks__target] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Second ^second",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [ ] #task First [dependsOn:: Tasks__target] ^first" },
+      { line: 2, rawLine: "- [ ] #task Second ^second" },
+    ],
+  };
+  const before = notices.length;
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Tasks.md",
+    line: 3,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    blockId: "target",
+    remove: true,
+  });
+  assert.equal(applied, true);
+  assert.match(notices[before], /⛓ Removed from 1 task/);
 });

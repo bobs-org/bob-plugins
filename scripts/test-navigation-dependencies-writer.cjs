@@ -943,8 +943,8 @@ test("writer keeps the full route for duplicate basenames", async () => {
     "cash.md": "- [ ] #task Cash ^a",
     "chat/cash.md": "- [ ] #task Cash ^a",
   });
-  plugin.readDependencyVaultFileList = () => ["Tasks.md", "cash.md", "chat/cash.md"];
-  plugin.dependencyLinkpathResolver = () => () => "chat/cash.md";
+  // No vault or resolver stubs: the plugin's own linkpath resolution and
+  // vault file list run against the async vault stub below.
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
   const outcome = await plugin.applyDependencyEdit({
     editor,

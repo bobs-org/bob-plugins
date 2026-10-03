@@ -22104,7 +22104,7 @@ function planDependencyStageView(args = {}) {
         ? tryDependencyId(candidate.path, candidate.blockId)
         : null) ||
       "";
-    // BLOCKED rows name what blocks them (`docs/task-dependencies.md` §6.4):
+    // BLOCKED rows name what blocks them (`docs/task-dependencies.md` §6.3):
     // `🔒 waits on N` only when N >= 1 open prerequisites remain (the
     // candidate's own open count when the builder attached one, else the
     // post-batch graph edges, else 0 — never `waits on 0`); with no open
@@ -26329,8 +26329,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (item.stageSection === "current" && item.alreadyLinked) {
       return this.removeCountedDependency(item);
     }
-    // Vault-wide rows commit per source task through the writer; same-note
-    // rows keep the counted single-transaction planner.
+    // Vault-wide rows plan every source on one working copy and commit once
+    // through the writer; same-note rows keep the counted single-transaction
+    // planner.
     if (
       item.stageSection &&
       item.path &&
@@ -26409,8 +26410,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // Counted CURRENT toggle-off: ↵ on a fully linked CURRENT row removes
   // that prerequisite from every source task. A same-note target that still
   // resolves keeps the counted one-transaction planner; anything else
-  // (cross-note, or a target whose note is gone) removes per source through
-  // the writer, bottom-up, so a missing target is always removable.
+  // (cross-note, or a target whose note is gone) plans every source on one
+  // working copy bottom-up and commits once, so a missing target is always
+  // removable.
   async removeCountedDependency(item) {
     const sessionValidation = validateCountedTaskSession(
       this.getEditorContent(),
@@ -26433,7 +26435,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     // A CURRENT row may be linked on only some sources: the counted
     // one-transaction planner toggles, so it runs only when every source
-    // carries the link. Otherwise each linked source removes alone.
+    // carries the link. Otherwise every linked source is planned onto one
+    // working copy and removed in the single commit below.
     if (targetPath === ownerPath) {
       const content = String(this.editor.getValue() || "");
       const contentLines = content.split(/\r?\n/);
@@ -26615,9 +26618,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       new Notice("No dependencies changed");
       return false;
     }
+    // A concurrent edit refuses with `changed — reopen` and reopens the
+    // stage fresh, like every other stale stage path (§6.4).
     if (String(this.editor.getValue() || "") !== originalContent) {
-      new Notice("Selected dependency changed; no tasks were updated");
-      return false;
+      return this.refuseDependencyStale();
     }
     if (!applyEditorContentTransaction(this.editor, originalContent, working)) {
       new Notice("Could not update counted dependencies; no tasks were updated");
@@ -27137,7 +27141,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
     // The planner resolves targets by `^block-id`, so the confirmed id is
-    // written to the target before the per-source commits run.
+    // written to the target before the single commit below runs.
     const targetLines = String(files.get(targetPath)).split(/\r?\n/);
     if (
       targetLines[snapshot.line] !== snapshot.rawLine ||
@@ -27442,10 +27446,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       }
     });
 
-    // Cycle guard on the post-batch graph (§6.4): two marked rows that only
-    // form a cycle together refuse before any write, like the vault path
-    // above. The single-note graph covers same-note batches; cross-note rows
-    // commit through `commitVaultRefs`, which guards the full graph.
+    // Cycle guard on the post-batch graph (§6.4): a marked row whose edge
+    // closes a cycle back to the dependent refuses before any write, like
+    // the vault path above (every added edge leaves the same dependent, so
+    // one row alone closes a simple cycle). The single-note graph covers
+    // same-note batches; cross-note rows commit through `commitVaultRefs`,
+    // which guards the full graph.
     {
       const cursorLines = originalContent.split(/\r?\n/);
       const cursorText = String(cursorLines[this.cursor.line] || "");
@@ -27618,7 +27624,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
     if (!outcome.ok) {
       if (outcome.reason === "stale-editor") {
-        return this.refuseDependencyStale();
+        // `applyDependencyEdit` already showed `changed — reopen`: only
+        // reopen the stage fresh, without a second notice (§6.4).
+        this.reopenDependencyStageFresh();
+        return false;
       }
       new Notice(`⛓ Could not remove dependency (${outcome.reason})`);
       return false;
@@ -27861,10 +27870,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       remove: removeRefs,
     });
     if (!outcome.ok) {
-      // A stale write refuses with `changed — reopen` and reopens the stage
-      // fresh, exactly like the same-note `executeDependencyBatch` (§6.4).
+      // A stale write refuses and reopens the stage fresh, exactly like the
+      // same-note `executeDependencyBatch` (§6.4). `applyDependencyEdit`
+      // already showed `changed — reopen`, so only reopen here.
       if (outcome.reason === "stale-editor") {
-        return this.refuseDependencyStale();
+        this.reopenDependencyStageFresh();
+        return false;
       }
       new Notice(dependencyPlanFailureNotice(outcome.reason, "update"));
       return false;
@@ -27878,8 +27889,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   // Batch executor for stages containing cross-note rows: every target is
-  // re-read fresh (stale rows are skipped with a count), `+ id` prompts were
-  // collected up front, and the whole batch commits once.
+  // re-read fresh (a stale row refuses the whole batch before any write),
+  // `+ id` prompts were collected up front, and the whole batch commits
+  // once.
   async executeVaultDependencyBatch(batch, seedCounters = null) {
     const parentValidation = validateDependencyParentForEditor(
       this.editor,
@@ -34931,7 +34943,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     const normalizedPath = normalizeVaultRelativePath(filePath);
-    const countedNeedsSnapshot = String(writeContext.content || "")
+    const hasQuestionSource = String(writeContext.content || "")
       .split(/\r?\n/)
       .some((line, index) => {
         if (!(session.targets || []).some((target) => target.line === index)) {
@@ -34939,29 +34951,54 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         }
         return getObsidianTaskCheckboxStatus(String(line || "")) === "?";
       });
-    const plan = planCountedLocalTaskDependency(
+    const countedRecoveryBase = {
+      registry: await readTasksStatusRegistry(this.app),
+      today: new Date(),
+      vaultContents: null,
+    };
+    const countedOptions = {
+      ...options,
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
+      vaultFiles: this.readDependencyVaultFileList(),
+      resolveLinkpath: this.dependencyLinkpathResolver(),
+    };
+    // The toggle direction comes from the pure planner: adds never recover
+    // (contract), so the vault snapshot is only read when the toggle will
+    // remove from a `[?]` source. The preview below is valid exactly when
+    // the final plan is (recovery never changes validity or direction), so
+    // an invalid toggle reads nothing.
+    const preview = planCountedLocalTaskDependency(
       writeContext.content,
       session,
       dependencyTask,
       filePath,
-      {
-        ...options,
-        stampLine: this.getFreshnessStampLine(),
-        freshDateText: this.getFreshnessDateText(),
-        vaultFiles: this.readDependencyVaultFileList(),
-        resolveLinkpath: this.dependencyLinkpathResolver(),
-        recovery: {
-          registry: await readTasksStatusRegistry(this.app),
-          today: new Date(),
-          vaultContents: countedNeedsSnapshot
-            ? await this.readDependencyRecoveryVaultContents(
-                normalizedPath,
-                writeContext.content,
-              )
-            : null,
-        },
-      },
+      { ...countedOptions, recovery: countedRecoveryBase },
     );
+    if (!preview.valid) {
+      const suffix = preview.stale ? "; no tasks were updated" : "";
+      new Notice(`${preview.error}${suffix}`);
+      return false;
+    }
+    let plan = preview;
+    if (preview.operation === "remove" && hasQuestionSource) {
+      plan = planCountedLocalTaskDependency(
+        writeContext.content,
+        session,
+        dependencyTask,
+        filePath,
+        {
+          ...countedOptions,
+          recovery: {
+            ...countedRecoveryBase,
+            vaultContents: await this.readDependencyRecoveryVaultContents(
+              normalizedPath,
+              writeContext.content,
+            ),
+          },
+        },
+      );
+    }
     if (!plan.valid) {
       const suffix = plan.stale ? "; no tasks were updated" : "";
       new Notice(`${plan.error}${suffix}`);
@@ -36613,7 +36650,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const edges = collectDependencyStageEdges(notes, index);
     mergeStageCacheEdges(edges, cache.ready ? cache.tasks : [], index);
     // Open prerequisite counts for the BLOCKED badge (`docs/task-dependencies.md`
-    // §6.4, DC7/DC8): every Blocked candidate counts from its own Depends-On
+    // §6.3, DC7/DC8): every Blocked candidate counts from its own Depends-On
     // line, whether or not it carries a `^blockId` — closed, missing, and
     // non-task targets never count, so one closed plus one open prerequisite
     // reads `waits on 1`. Candidates whose own line cannot be resolved fall

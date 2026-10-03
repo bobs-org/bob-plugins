@@ -31276,7 +31276,7 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
         entry && Number.isInteger(entry.interval) ? entry.interval : null;
       const every = interval !== null ? ` · every ${interval}d` : "";
       if (!fresh) {
-        detail = `No Ready tasks in this project · never confirmed${every}`;
+        detail = `No open tasks in this project · never confirmed${every}`;
       } else {
         const overdue =
           entry && Number.isFinite(entry.daysOverdue)
@@ -31290,7 +31290,7 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
             : overdue < 1
               ? "due today"
               : `${overdue}d overdue`;
-        detail = `No Ready tasks in this project · ${lead} · confirmed ${reviewShortDate(fresh)}${every}`;
+        detail = `No open tasks in this project · ${lead} · confirmed ${reviewShortDate(fresh)}${every}`;
       }
     } else if (tier === "pending" || tier === "next") {
       detail = reviewLaneConfirmedDetail(entry, todayText);

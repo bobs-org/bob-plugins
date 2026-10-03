@@ -4577,6 +4577,8 @@ function defaultFreshnessConfig() {
     interval: 7,
     pendingInterval: 1,
     nextInterval: 1,
+    projectInterval: null,
+    referenceInterval: null,
     rottenDailyBudget: null,
     decay: { enabled: true, keeps: 3, enter: null },
   };
@@ -4777,6 +4779,38 @@ function coerceFreshnessConfig(block) {
   if (nextCoerced.invalid) {
     invalid = true;
   }
+  // Tracker intervals: absent or null inherits (`null`); an integer
+  // 1-365 sets the explicit type cadence. Booleans (including
+  // `false`), zero, negatives, >365, fractional numbers, strings,
+  // and containers are config errors. Mirrors
+  // `parse_tracker_interval` in `src/native/config/freshness.rs`.
+  const coerceTrackerInterval = (raw) => {
+    if (raw === undefined || raw === null) {
+      return { days: null, invalid: false };
+    }
+    if (typeof raw === "boolean") {
+      return { days: null, invalid: true };
+    }
+    if (
+      typeof raw === "number" &&
+      Number.isInteger(raw) &&
+      raw >= 1 &&
+      raw <= 365
+    ) {
+      return { days: raw, invalid: false };
+    }
+    return { days: null, invalid: true };
+  };
+  const rawProject = pick("project_interval", "projectInterval");
+  const projectCoerced = coerceTrackerInterval(rawProject);
+  if (projectCoerced.invalid) {
+    invalid = true;
+  }
+  const rawReference = pick("reference_interval", "referenceInterval");
+  const referenceCoerced = coerceTrackerInterval(rawReference);
+  if (referenceCoerced.invalid) {
+    invalid = true;
+  }
   // Keep-streak policy: absent, null, `true`, or `{}` means enabled
   // with 3 keeps; `false` keeps counting/display but never asks;
   // `keeps` 0-999 and a nonempty `enter` label otherwise. Mirrors
@@ -4797,6 +4831,8 @@ function coerceFreshnessConfig(block) {
       interval,
       pendingInterval: pendingCoerced.days,
       nextInterval: nextCoerced.days,
+      projectInterval: projectCoerced.days,
+      referenceInterval: referenceCoerced.days,
       rottenDailyBudget: budget,
       intervalFromConfig,
       deprecatedStaleBudget,
@@ -4914,13 +4950,57 @@ function freshnessLaneIntervalDays(config, lane) {
   return null;
 }
 
-// Effective interval and where it came from. A lane task in a walked
-// lane uses that lane's interval (source `pending` | `next`),
-// overriding the whole Ready chain below. Otherwise the task's
-// `[refresh:: N]`, then the note's `task_refresh`, then
-// `freshness.interval`, then 7. Mirrors `evaluate` + `interval_for`
-// in `src/native/freshness/state.rs`.
-function freshnessIntervalFor(taskDays, noteDays, config, lane) {
+// Whether a Tasks status type string is open for project occupancy:
+// everything but DONE, CANCELLED, NON_TASK, and EMPTY.
+function freshnessIsOpenStatusType(statusType) {
+  return (
+    statusType !== "DONE" &&
+    statusType !== "CANCELLED" &&
+    statusType !== "NON_TASK" &&
+    statusType !== "EMPTY"
+  );
+}
+
+// Project occupancy predicate shared by the memo and fallback paths:
+// an open task that is not an exact `^prj` row. Hidden, recurring,
+// future-scheduled, Today-linked, fresh, NEW, RETURNED, and ROTTEN
+// tasks all count; an open `^ref` counts.
+function freshnessIsOpenProjectTask(isOpen, blockId) {
+  return Boolean(isOpen) && blockId !== "prj";
+}
+
+// Effective interval and where it came from. A configured tracker
+// interval wins for that tracker type (source `project` |
+// `reference`). Otherwise a lane task in a walked lane uses that
+// lane's interval (source `pending` | `next`), overriding the whole
+// Ready chain below. Otherwise the task's `[refresh:: N]`, then the
+// note's `task_refresh`, then `freshness.interval`, then 7. Mirrors
+// `evaluate` + `interval_for` in `src/native/freshness/state.rs`.
+function freshnessTrackerIntervalFor(config, tracker) {
+  if (tracker === "prj") {
+    const days =
+      config && Number.isInteger(config.projectInterval)
+        ? config.projectInterval
+        : null;
+    if (days !== null) {
+      return { days, source: "project" };
+    }
+  } else if (tracker === "ref") {
+    const days =
+      config && Number.isInteger(config.referenceInterval)
+        ? config.referenceInterval
+        : null;
+    if (days !== null) {
+      return { days, source: "reference" };
+    }
+  }
+  return null;
+}
+function freshnessIntervalFor(taskDays, noteDays, config, lane, tracker) {
+  const trackerInterval = freshnessTrackerIntervalFor(config, tracker || null);
+  if (trackerInterval !== null) {
+    return trackerInterval;
+  }
   if (lane === "pending") {
     const days = freshnessLaneIntervalDays(config, "pending");
     if (days !== null) {
@@ -4950,24 +5030,41 @@ function freshnessIntervalFor(taskDays, noteDays, config, lane) {
 
 // Pure, never-throwing line interval for nav's refresh row:
 // `{ days, source, ready: { days, source } }`. Reads the status from
-// the line (quote-aware) and the lane intervals from `config`.
-// `ready` is the Ready-chain interval the task returns to after
-// release. A `^prj` tracker in any lane shows the Ready-chain
-// interval (the weekly project reminder never becomes a daily lane
-// review). Mirrors `docs/freshness.md` §4.
+// the line (quote-aware) and the lane/tracker intervals from
+// `config`. `ready` is the interval the task returns to after
+// release, including a configured tracker override. A `^prj`
+// tracker in any lane shows the Ready-chain interval when no
+// project interval is set (the weekly project reminder never
+// becomes a daily lane review). Mirrors `docs/freshness.md` §4.
 function freshnessIntervalForLine(line, noteRefreshRaw, config) {
   try {
     const text = typeof line === "string" ? line : "";
     const read = readFreshness(text, freshnessTodayFallback());
     const note = freshnessParseNoteRefresh(noteRefreshRaw);
-    const ready = freshnessIntervalFor(read.refresh, note.days, config, null);
     const blockMatch = / \^([A-Za-z0-9-]+)\s*$/.exec(
       String(text || "").split("\n")[0] || "",
     );
-    const isPrj = blockMatch !== null && blockMatch[1] === "prj";
+    const tracker =
+      blockMatch !== null && (blockMatch[1] === "prj" || blockMatch[1] === "ref")
+        ? blockMatch[1]
+        : null;
+    const isPrj = tracker === "prj";
+    const ready =
+      freshnessTrackerIntervalFor(config, tracker) ||
+      freshnessIntervalFor(read.refresh, note.days, config, null, null);
     const symbol = freshnessTaskStatus(text);
     const lane =
       symbol === "/" ? "pending" : symbol === "*" ? "next" : null;
+    if (tracker !== null) {
+      const trackerInterval = freshnessTrackerIntervalFor(config, tracker);
+      if (trackerInterval !== null) {
+        return {
+          days: trackerInterval.days,
+          source: trackerInterval.source,
+          ready: { ...ready },
+        };
+      }
+    }
     if (lane !== null && !isPrj) {
       const days = freshnessLaneIntervalDays(config, lane);
       if (days !== null) {
@@ -5053,8 +5150,9 @@ function freshnessEvaluate(row, todayText, config) {
       ? freshnessLaneIntervalDays(config, lane)
       : null;
 
-  // Exact tracking identity (`^prj`/`^ref` block IDs only). Project
-  // trackers in a walked lane keep the Ready-chain cadence.
+  // Exact tracking identity (`^prj`/`^ref` block IDs only). A
+  // configured tracker interval wins for that type; otherwise
+  // project trackers in a walked lane keep the Ready-chain cadence.
   const tracker =
     freshnessTrackerFromBlockId(
       typeof safe.tracker === "string"
@@ -5064,16 +5162,20 @@ function freshnessEvaluate(row, todayText, config) {
           : null,
     );
   const isPrj = tracker === "prj";
+  const trackerInterval = freshnessTrackerIntervalFor(config, tracker);
   const readyInterval = freshnessIntervalFor(
     read.refresh,
     note.days,
     config,
     null,
+    null,
   );
   const interval =
-    isPrj && (lane === "pending" || lane === "next")
-      ? readyInterval
-      : freshnessIntervalFor(read.refresh, note.days, config, lane);
+    trackerInterval !== null
+      ? trackerInterval
+      : isPrj && (lane === "pending" || lane === "next")
+        ? readyInterval
+        : freshnessIntervalFor(read.refresh, note.days, config, lane, null);
   const fresh = read.fresh;
 
   const walkScope =
@@ -5083,14 +5185,21 @@ function freshnessEvaluate(row, todayText, config) {
     !safe.isDailyNote &&
     !safe.isToday;
 
+  // A configured `^ref` cadence drives lane due arithmetic; a
+  // disabled lane walk still disables the lane.
+  const effectiveLaneDays =
+    (lane === "pending" || lane === "next") && laneDays !== null &&
+      trackerInterval !== null && trackerInterval.source === "reference"
+      ? trackerInterval.days
+      : laneDays;
   let laneDueOn = null;
   let laneDue = false;
   let laneDaysOverdue = null;
-  if ((lane === "pending" || lane === "next") && laneDays !== null) {
+  if ((lane === "pending" || lane === "next") && effectiveLaneDays !== null) {
     if (fresh === null) {
       laneDue = true;
     } else {
-      const due = freshDateAddDays(fresh, laneDays);
+      const due = freshDateAddDays(fresh, effectiveLaneDays);
       laneDueOn = due;
       if (today >= due) {
         laneDue = true;
@@ -5120,12 +5229,21 @@ function freshnessEvaluate(row, todayText, config) {
           safe.projectScheduled === undefined
         ? true
         : String(safe.projectScheduled) <= today;
-  const projectReadyCount =
-    Number.isInteger(safe.projectReadyCount) && safe.projectReadyCount >= 0
-      ? safe.projectReadyCount
+  const projectOpenCount =
+    Number.isInteger(
+      safe.projectOpenCount !== undefined
+        ? safe.projectOpenCount
+        : safe.projectReadyCount,
+    ) &&
+    (safe.projectOpenCount !== undefined
+      ? safe.projectOpenCount
+      : safe.projectReadyCount) >= 0
+      ? (safe.projectOpenCount !== undefined
+          ? safe.projectOpenCount
+          : safe.projectReadyCount)
       : 0;
   const prjEmpty =
-    !isPrj || (inScope && projectReadyCount === 0 && projectGate);
+    !isPrj || (inScope && projectOpenCount === 0 && projectGate);
   const prjLaneEligible =
     isPrj &&
     (lane === "pending" || lane === "next") &&
@@ -5133,7 +5251,7 @@ function freshnessEvaluate(row, todayText, config) {
     !safe.recurring &&
     !safe.isDailyNote &&
     !safe.isToday &&
-    projectReadyCount === 0 &&
+    projectOpenCount === 0 &&
     projectGate;
 
   const inlineScheduled = freshnessEvaluateValidScheduled(safe.scheduled);
@@ -6241,10 +6359,11 @@ function freshnessShortDate(dateText, todayText) {
 
 // The out-of-scope reason for a resolved-but-out-of-scope row, in the
 // documented order. Tracker rows report their project state first: a
-// populated project reads as not due because it has Ready tasks (not
-// a generic hidden-task exemption). Then lane statuses, `isToday`,
-// `isDailyNote`, `recurring`, `_templates`/`_conflicts` path segments,
-// and `scheduled` (only when after today). Never throws.
+// populated project reads as not due because the project has open
+// tasks (not a generic hidden-task exemption). Then lane statuses,
+// `isToday`, `isDailyNote`, `recurring`, `_templates`/`_conflicts`
+// path segments, and `scheduled` (only when after today). Never
+// throws.
 function freshnessMarkReason(status, row, today) {
   try {
     const safe = row && typeof row === "object" ? row : {};
@@ -6255,11 +6374,12 @@ function freshnessMarkReason(status, row, today) {
             typeof safe.blockId === "string" ? safe.blockId : null,
           );
     if (tracker === "prj") {
-      if (
-        Number.isInteger(safe.projectReadyCount) &&
-        safe.projectReadyCount > 0
-      ) {
-        return "not due — project has Ready tasks";
+      const openCount =
+        safe.projectOpenCount !== undefined
+          ? safe.projectOpenCount
+          : safe.projectReadyCount;
+      if (Number.isInteger(openCount) && openCount > 0) {
+        return "not due — project has open tasks";
       }
       if (safe.projectScheduleInvalid) {
         return "project scheduled is invalid — fix the note schedule";
@@ -6416,6 +6536,12 @@ function freshnessMarkEveryPhrase(days, source) {
   }
   if (source === "next") {
     return head + " (next lane)";
+  }
+  if (source === "project") {
+    return head + " (project)";
+  }
+  if (source === "reference") {
+    return head + " (reference)";
   }
   return head;
 }
@@ -8197,6 +8323,7 @@ function freshnessRowFromTask(task, index, context) {
         created: null,
         rawLine: "",
         noteRefreshRaw: undefined,
+        projectOpenCount: 0,
         projectReadyCount: 0,
         projectScheduled: null,
         projectScheduleInvalid: false,
@@ -8359,18 +8486,26 @@ function freshnessRowFromTask(task, index, context) {
       created = null;
     }
     // Own-note project context for `^prj` rows: the memo supplies
-    // exact per-path counts and frontmatter schedules; row-level
+    // exact per-path open counts and frontmatter schedules; row-level
     // fallbacks (marks, cloned lookups) compute the count from the
-    // same task list and stay neutral (suppress) when the cache is
-    // unavailable rather than reading it as an empty project.
-    let projectReadyCount = 0;
+    // same task list with the shared occupancy predicate and stay
+    // neutral (suppress) when the cache is unavailable rather than
+    // reading it as an empty project.
+    let projectOpenCount = 0;
     let projectScheduled = null;
     let projectScheduleInvalid = false;
     if (tracker === "prj") {
       try {
-        if (typeof safeContext.projectReadyCountFor === "function") {
-          const count = safeContext.projectReadyCountFor(path);
-          projectReadyCount =
+        if (
+          typeof safeContext.projectOpenCountFor === "function" ||
+          typeof safeContext.projectReadyCountFor === "function"
+        ) {
+          const getter =
+            typeof safeContext.projectOpenCountFor === "function"
+              ? safeContext.projectOpenCountFor
+              : safeContext.projectReadyCountFor;
+          const count = getter(path);
+          projectOpenCount =
             Number.isInteger(count) && count >= 0 ? count : 1;
         } else if (Array.isArray(list) && list.length > 0) {
           let count = 0;
@@ -8386,24 +8521,18 @@ function freshnessRowFromTask(task, index, context) {
                 other.status && typeof other.status === "object"
                   ? other.status.type
                   : undefined;
-              const otherTodo =
+              const otherOpen =
                 typeof otherType === "string"
-                  ? otherType === "TODO"
-                  : planTaskStatusSymbol(other) === " ";
-              if (!otherTodo) {
-                continue;
-              }
-              if (!planLaneVisible(other, list, safeContext.todayDay ?? null)) {
-                continue;
-              }
-              const otherRecurring =
-                Boolean(other.recurrence) ||
-                other.isRecurring === true ||
-                other.recurring === true;
-              if (otherRecurring) {
-                continue;
-              }
-              if (planTaskBlockId(other) === "prj") {
+                  ? freshnessIsOpenStatusType(otherType)
+                  : planTaskStatusSymbol(other) === " " ||
+                    planTaskStatusSymbol(other) === "/" ||
+                    planTaskStatusSymbol(other) === "*";
+              if (
+                !freshnessIsOpenProjectTask(
+                  otherOpen,
+                  planTaskBlockId(other),
+                )
+              ) {
                 continue;
               }
               count += 1;
@@ -8411,12 +8540,12 @@ function freshnessRowFromTask(task, index, context) {
               continue;
             }
           }
-          projectReadyCount = count;
+          projectOpenCount = count;
         } else {
-          projectReadyCount = 1;
+          projectOpenCount = 1;
         }
       } catch (error) {
-        projectReadyCount = 1;
+        projectOpenCount = 1;
       }
       try {
         if (typeof safeContext.projectScheduledFor === "function") {
@@ -8449,7 +8578,8 @@ function freshnessRowFromTask(task, index, context) {
       created,
       rawLine,
       noteRefreshRaw,
-      projectReadyCount,
+      projectOpenCount,
+      projectReadyCount: projectOpenCount,
       projectScheduled,
       projectScheduleInvalid,
     };
@@ -8472,6 +8602,7 @@ function freshnessRowFromTask(task, index, context) {
       created: null,
       rawLine: "",
       noteRefreshRaw: undefined,
+      projectOpenCount: 0,
       projectReadyCount: 0,
       projectScheduled: null,
       projectScheduleInvalid: false,
@@ -12267,15 +12398,17 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   freshnessContextFor(list, todayText, todayDay, project) {
     const self = this;
     const safeProject = project && typeof project === "object" ? project : {};
+    const countGetter =
+      typeof safeProject.countFor === "function"
+        ? (path) => safeProject.countFor(path)
+        : undefined;
     return {
       list,
       todayDay,
       noteRefreshRawFor: (path) => self.noteFreshnessRawFor(path),
       isToday: (task) => self.isTodayTask(task),
-      projectReadyCountFor:
-        typeof safeProject.countFor === "function"
-          ? (path) => safeProject.countFor(path)
-          : undefined,
+      projectOpenCountFor: countGetter,
+      projectReadyCountFor: countGetter,
       projectScheduledFor:
         typeof safeProject.scheduledFor === "function"
           ? (path) => safeProject.scheduledFor(path)
@@ -12283,14 +12416,15 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     };
   }
 
-  // Own-note Ready-lane counts for `^prj` review, built once per memo
-  // from the unchanged visible Ready predicate: TODO-type tasks that
-  // pass the strict lane predicate (hide excluded), excluding
-  // recurring tasks and every `^prj` row. Includes NEW/RETURNED/
-  // ROTTEN/fresh and Today-linked rows; ignores caps; no child
-  // roll-up. Never calls `api.noteReady` (it already depends on this
-  // memo). One vault pass, then O(1) per-path lookups.
-  freshnessProjectReadyCounts(list, todayDay) {
+  // Own-note open-task counts for `^prj` review, built once per
+  // memo from the unfiltered inventory with the shared occupancy
+  // predicate: every open status by Tasks status type, excluding
+  // every exact `^prj` row. Includes hidden, recurring,
+  // future-scheduled, Today-linked, fresh, NEW, RETURNED, and
+  // ROTTEN tasks; an open `^ref` counts. Never calls
+  // `api.noteReady` (it already depends on this memo). One vault
+  // pass, then O(1) per-path lookups.
+  freshnessProjectOpenCounts(list) {
     const counts = new Map();
     try {
       const tasks = Array.isArray(list) ? list : [];
@@ -12305,29 +12439,14 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               : {};
           const type =
             typeof status.type === "string" ? status.type : undefined;
-          const isTodo =
+          const symbol = planTaskStatusSymbol(task);
+          const isOpen =
             typeof type === "string"
-              ? type === "TODO"
-              : planTaskStatusSymbol(task) === " ";
-          if (!isTodo) {
-            continue;
-          }
-          if (!planLaneVisible(task, tasks, todayDay ?? null)) {
-            continue;
-          }
-          const rawLine =
-            typeof task.originalMarkdown === "string"
-              ? task.originalMarkdown
-              : "";
-          const recurring =
-            Boolean(task.recurrence) ||
-            task.isRecurring === true ||
-            task.recurring === true ||
-            (rawLine ? freshnessHasRepeatField(rawLine) : false);
-          if (recurring) {
-            continue;
-          }
-          if (planTaskBlockId(task) === "prj") {
+              ? freshnessIsOpenStatusType(type)
+              : symbol === " " || symbol === "/" || symbol === "*";
+          if (
+            !freshnessIsOpenProjectTask(isOpen, planTaskBlockId(task))
+          ) {
             continue;
           }
           const path = planTaskPath(task) || "";
@@ -12344,6 +12463,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // on purpose: callers fall back per-row, still neutral).
     }
     return counts;
+  }
+  freshnessProjectReadyCounts(list, todayDay) {
+    return this.freshnessProjectOpenCounts(list);
   }
 
   // Own-note frontmatter `scheduled` for `^prj` review gating, parsed
@@ -12408,9 +12530,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     // date text drives lane visibility too, never a second `new Date()`.
     const todayDay = freshnessDayNumberForDateText(dateText);
     // Project review inputs, built/cached once per memo (never one
-    // scan per project or per API lookup): per-path Ready counts plus
+    // scan per project or per API lookup): per-path open counts plus
     // per-note frontmatter schedules.
-    const projectCounts = this.freshnessProjectReadyCounts(list, todayDay);
+    const projectCounts = this.freshnessProjectOpenCounts(list);
     const projectScheduleCache = new Map();
     const self = this;
     const context = this.freshnessContextFor(list, dateText, todayDay, {
@@ -12642,6 +12764,14 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         snapshot.config.nextInterval !== undefined
           ? snapshot.config.nextInterval
           : 1;
+      const projectInterval =
+        snapshot.config.projectInterval !== undefined
+          ? snapshot.config.projectInterval
+          : null;
+      const referenceInterval =
+        snapshot.config.referenceInterval !== undefined
+          ? snapshot.config.referenceInterval
+          : null;
       const rawDecay =
         snapshot.config.decay && typeof snapshot.config.decay === "object"
           ? snapshot.config.decay
@@ -12650,6 +12780,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         interval: snapshot.config.interval,
         pendingInterval,
         nextInterval,
+        projectInterval,
+        referenceInterval,
         rottenDailyBudget: snapshot.config.rottenDailyBudget,
         intervalFromConfig: Boolean(snapshot.config.intervalFromConfig),
         invalid: snapshot.invalid,
@@ -12675,6 +12807,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         interval: 7,
         pendingInterval: 1,
         nextInterval: 1,
+        projectInterval: null,
+        referenceInterval: null,
         rottenDailyBudget: null,
         intervalFromConfig: false,
         invalid: false,
@@ -18319,6 +18453,9 @@ module.exports.helpers = {
   freshnessParseNoteRefresh,
   freshnessLaneForRow,
   freshnessLaneIntervalDays,
+  freshnessIsOpenStatusType,
+  freshnessIsOpenProjectTask,
+  freshnessTrackerIntervalFor,
   freshnessIntervalFor,
   freshnessIntervalForLine,
   freshnessTierLabel,

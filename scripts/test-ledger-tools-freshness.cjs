@@ -563,6 +563,8 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     interval: 7,
     pendingInterval: 1,
     nextInterval: 1,
+    projectInterval: null,
+    referenceInterval: null,
     rottenDailyBudget: null,
     decay: { enabled: true, keeps: 3, enter: null },
   });
@@ -631,6 +633,8 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
         interval: coerced.config.interval,
         pendingInterval: coerced.config.pendingInterval,
         nextInterval: coerced.config.nextInterval,
+        projectInterval: coerced.config.projectInterval,
+        referenceInterval: coerced.config.referenceInterval,
         rottenDailyBudget: coerced.config.rottenDailyBudget,
         decay: coerced.config.decay,
       },
@@ -638,6 +642,8 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
         interval: 7,
         pendingInterval: 1,
         nextInterval: 1,
+        projectInterval: null,
+        referenceInterval: null,
         rottenDailyBudget: null,
         decay: { enabled: true, keeps: 3, enter: null },
       },
@@ -927,6 +933,8 @@ test("freshness namespace v5 keeps every member on rotten vocabulary", () => {
           interval: 7,
           pendingInterval: 1,
           nextInterval: 1,
+          projectInterval: null,
+          referenceInterval: null,
           rottenDailyBudget: null,
           intervalFromConfig: false,
           invalid: false,
@@ -1615,6 +1623,8 @@ test("config snapshot caches the parse and invalidates explicitly", () => {
           interval: 7,
           pendingInterval: 1,
           nextInterval: 1,
+          projectInterval: null,
+          referenceInterval: null,
           rottenDailyBudget: null,
           decay: { enabled: true, keeps: 3, enter: null },
           intervalFromConfig: false,
@@ -2420,6 +2430,121 @@ test("tracking queue orders NEW before PROJECTS before lanes", () => {
     queue.map((entry) => entry.tier),
     ["new", "projects"],
   );
+});
+
+test("tracker intervals override every level with project/reference sources", () => {
+  const cfg = { ...CFG, projectInterval: 1, referenceInterval: 3 };
+  const prj = helpers.freshnessEvaluate(
+    sRow({
+      rawLine: "- [ ] #task P [fresh:: 2026-10-07] [refresh:: 30] ^prj",
+      blockId: "prj",
+      tracker: "prj",
+      noteRefreshRaw: "14",
+      projectOpenCount: 0,
+      projectReadyCount: 0,
+    }),
+    D,
+    cfg,
+  );
+  assert.equal(prj.intervalDays, 1);
+  assert.equal(prj.intervalSource, "project");
+  assert.equal(prj.dueOn, "2026-10-08");
+  assert.equal(prj.tier, "projects");
+  const freshRef = helpers.freshnessEvaluate(
+    sRow({
+      rawLine: "- [ ] #task R [fresh:: 2026-10-06] ^ref",
+      blockId: "ref",
+      tracker: "ref",
+    }),
+    D,
+    cfg,
+  );
+  assert.equal(freshRef.intervalDays, 3);
+  assert.equal(freshRef.intervalSource, "reference");
+  assert.equal(freshRef.state, "fresh");
+  const rottenRef = helpers.freshnessEvaluate(
+    sRow({
+      rawLine: "- [ ] #task R [fresh:: 2026-10-05] ^ref",
+      blockId: "ref",
+      tracker: "ref",
+    }),
+    D,
+    cfg,
+  );
+  assert.equal(rottenRef.intervalDays, 3);
+  assert.equal(rottenRef.intervalSource, "reference");
+  assert.equal(rottenRef.state, "rotten");
+  assert.equal(rottenRef.dueOn, "2026-10-08");
+  const ordinary = helpers.freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task T [fresh:: 2026-10-01]" }),
+    D,
+    cfg,
+  );
+  assert.equal(ordinary.intervalDays, 7);
+  assert.equal(ordinary.intervalSource, "default");
+  const pendingRef = helpers.freshnessEvaluate(
+    laneRow("r.md", 1, "/", "2026-10-05", null),
+    D,
+    cfg,
+  );
+  // laneRow has no tracker; attach the reference identity explicitly.
+  pendingRef.rawLine = "- [/] #task Walk [fresh:: 2026-10-05] ^ref";
+  const pendingEvaluated = helpers.freshnessEvaluate(
+    { ...laneRow("r.md", 1, "/", "2026-10-05", null), blockId: "ref", tracker: "ref" },
+    D,
+    cfg,
+  );
+  assert.equal(pendingEvaluated.intervalDays, 3);
+  assert.equal(pendingEvaluated.intervalSource, "reference");
+  assert.equal(pendingEvaluated.tier, "pending");
+  assert.equal(pendingEvaluated.state, null);
+  assert.equal(
+    helpers.freshnessIntervalForLine(
+      "- [ ] #task P [fresh:: 2026-10-07] ^prj",
+      null,
+      cfg,
+    ).source,
+    "project",
+  );
+  assert.equal(
+    helpers.freshnessIntervalForLine(
+      "- [ ] #task R [fresh:: 2026-10-05] ^ref",
+      null,
+      cfg,
+    ).source,
+    "reference",
+  );
+});
+
+test("tracker config rejects booleans and out-of-range values", () => {
+  for (const block of [
+    { project_interval: false },
+    { reference_interval: false },
+    { project_interval: true },
+    { reference_interval: 0 },
+    { project_interval: 366 },
+    { reference_interval: "soon" },
+    { reference_interval: 7.5 },
+  ]) {
+    assert.equal(coerceFreshnessConfig(block).invalid, true, JSON.stringify(block));
+  }
+  assert.equal(coerceFreshnessConfig({ project_interval: 1 }).config.projectInterval, 1);
+  assert.equal(coerceFreshnessConfig({ reference_interval: 3 }).config.referenceInterval, 3);
+  assert.equal(coerceFreshnessConfig({}).config.projectInterval, null);
+  assert.equal(coerceFreshnessConfig({}).config.referenceInterval, null);
+});
+
+test("project occupancy counts every open status with one shared predicate", () => {
+  assert.equal(helpers.freshnessIsOpenStatusType("TODO"), true);
+  assert.equal(helpers.freshnessIsOpenStatusType("IN_PROGRESS"), true);
+  assert.equal(helpers.freshnessIsOpenStatusType("ON_HOLD"), true);
+  assert.equal(helpers.freshnessIsOpenStatusType("DONE"), false);
+  assert.equal(helpers.freshnessIsOpenStatusType("CANCELLED"), false);
+  assert.equal(helpers.freshnessIsOpenStatusType("NON_TASK"), false);
+  assert.equal(helpers.freshnessIsOpenProjectTask(true, null), true);
+  assert.equal(helpers.freshnessIsOpenProjectTask(true, "ref"), true);
+  assert.equal(helpers.freshnessIsOpenProjectTask(true, "prj"), false);
+  assert.equal(helpers.freshnessIsOpenProjectTask(false, null), false);
 });
 
 // __FRESHNESS_TEST_END__

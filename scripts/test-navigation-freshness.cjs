@@ -638,7 +638,7 @@ test("projects tier walks with commitment rank and project notice", () => {
   };
   assert.equal(
     helpers.buildReviewJumpNotice(entry, 2, 6, { todayText: "2026-10-08" }),
-    "Review 2/6 · PROJECTS 1/1 · No Ready tasks in this project · never confirmed · every 7d",
+    "Review 2/6 · PROJECTS 1/1 · No open tasks in this project · never confirmed · every 7d",
   );
   const stamped = {
     ...entry,
@@ -648,7 +648,7 @@ test("projects tier walks with commitment rank and project notice", () => {
   };
   assert.equal(
     helpers.buildReviewJumpNotice(stamped, 2, 6, { todayText: "2026-10-08" }),
-    "Review 2/6 · PROJECTS 1/1 · No Ready tasks in this project · due today · confirmed Oct 1 · every 7d",
+    "Review 2/6 · PROJECTS 1/1 · No open tasks in this project · due today · confirmed Oct 1 · every 7d",
   );
   // Without the capability the walk still lands; only the project
   // detail is withheld.

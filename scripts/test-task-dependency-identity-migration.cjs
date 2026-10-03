@@ -26,7 +26,7 @@ test("identity migration resolves links, refuses ambiguity, and is idempotent", 
   const parent = first.files.find((file) => file.relativePath === "Parent.md");
   assert.match(parent.nextContent, /\[dependsOn:: projects__Shared__review, Parent__local\]/);
   assert.match(parent.nextContent, /\[id:: Parent__local\] \^local/);
-  assert.match(parent.nextContent, /!\[\[projects\/Shared#\^review\]\]/);
+  assert.match(parent.nextContent, /⛓️ \*\*DEPENDS ON:\*\* \[\[projects\/Shared#\^review\]\] • \[\[#\^local\]\]/);
   const shared = first.files.find((file) => file.relativePath === "projects/Shared.md");
   assert.match(shared.nextContent, /\[id:: projects__Shared__review\] \^review/);
 
@@ -69,7 +69,7 @@ test("identity migration gives uniquely resolved legacy targets a block ID", asy
     plan.files[0].nextContent,
     [
       "- [ ] #task Parent [dependsOn:: Legacy__launch-hitl]",
-      "\t- ![[#^launch-hitl]]",
+      "\t- ⛓️ **DEPENDS ON:** [[#^launch-hitl]]",
       "- [ ] #task Target [id:: Legacy__launch-hitl] ^launch-hitl",
     ].join("\n"),
   );

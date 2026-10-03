@@ -611,6 +611,7 @@ test("scheduled recovery ranks Blocked tasks from both ledgers and transclusion 
         "- [ ] Current (0900-0930)",
         "  - [[Tasks#^direct|alias]]",
         "  - ![[Tasks#^root]]",
+        "  - [[Tasks#^working]]",
         "  - ~~[[Tasks#^retired]]~~",
         "- [-] Canceled (1000-1030)",
         "  - [[Tasks#^canceled]]",
@@ -637,8 +638,8 @@ test("scheduled recovery ranks Blocked tasks from both ledgers and transclusion 
         "- [?] #task Direct previous ^previous",
         "- [?] #task Root ^root",
         "  - ![[#^working]]",
-        "- [/] #task Working ^working",
-        "  - ![[#^graph]]",
+        "- [/] #task Working [dependsOn:: Tasks__graph] ^working",
+        "  - ⛓️ **DEPENDS ON:** [[#^graph]]",
         "- [?] #task Graph-derived ^graph",
         "- [?] #task Retired ^retired",
         "- [?] #task Canceled ^canceled",
@@ -648,6 +649,8 @@ test("scheduled recovery ranks Blocked tasks from both ledgers and transclusion 
         "- [?] #task Missing dependency [dependsOn:: missing] ^missing",
         "- [?] #task No block ID",
         "- [ ] #task Ordinary previous ^ordinary",
+        "- [?] #task Reading ^reader",
+        "  - ![[ref/chat/example#^ref]]",
       ].join("\n"),
     },
   ];
@@ -670,6 +673,9 @@ test("scheduled recovery ranks Blocked tasks from both ledgers and transclusion 
   assert.equal(decision(12).state, "blocked");
   assert.equal(decision(13).state, "ready");
   assert.equal(decision(14).state, "ready");
+  // A `#^ref` reading embed is content, never an edge: it neither promotes
+  // nor poisons the rank snapshot.
+  assert.equal(decision(16).state, "ready");
 
   const session = helpers.discoverCountedObsidianTaskTargets(
     files[2].content,
@@ -704,7 +710,8 @@ test("scheduled recovery ranks Blocked tasks from both ledgers and transclusion 
   assert.equal(duePlan.recoveredNextTaskCount, 3);
   assert.equal(duePlan.recoveredInProgressTaskCount, 1);
   assert.equal(duePlan.stillBlockedTaskCount, 1);
-  assert.equal(statuses.at(-1), " ");
+  assert.equal(statuses[13], " ");
+  assert.equal(statuses.at(-1), "?");
 });
 
 test("scheduled recovery defers incompatible status settings and ambiguous identities", () => {
@@ -1760,17 +1767,17 @@ test("schedule deletion removes only exactly matching propagated fields", () => 
   assert.equal(deleted.recoveredNextTaskCount, 1);
 });
 
-test("dependency bullets render one canonical transclusion per target", () => {
+test("dependency lines render one canonical Depends-On line per parent", () => {
   assert.equal(
     helpers.formatDependencyNavigationBullet(["a", "b"], "\t"),
-    "\t- ![[#^a]]\n\t- ![[#^b]]",
+    "\t- ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
   );
   assert.equal(
     helpers.formatDependencyNavigationBullet(
       { blockId: "remote", note: "projects/Other" },
       "  ",
     ),
-    "  - ![[projects/Other#^remote]]",
+    "  - ⛓️ **DEPENDS ON:** [[projects/Other#^remote]]",
   );
   assert.deepEqual(
     helpers.parseDependencyTransclusionBulletDetails("  - ![[Other#^remote]]"),
@@ -1839,11 +1846,11 @@ test("prompted block IDs truthfully replace legacy id fields", () => {
   );
 });
 
-test("dependency navigation identity includes note path and accepts aliases", () => {
+test("dependency navigation identity includes note path and folds legacy children", () => {
   const input = [
     "- [ ] #task Parent [dependsOn:: Here__x, Other__x] ^parent",
-    "  - ![[#^x|local]]",
-    "  - ![[Other#^x|remote]]",
+    "  - ![[#^x]]",
+    "  - ![[Other#^x]]",
     "- [ ] #task Local [id:: Here__x] ^x",
   ].join("\n");
   const collection = helpers.collectDependencyNavigationBullets(input, 0);
@@ -1856,7 +1863,11 @@ test("dependency navigation identity includes note path and accepts aliases", ()
     { blockId: "x", note: "Other" },
   ]);
   assert.equal(plan.operation, "rewrite");
-  assert.deepEqual(plan.lineTexts, ["  - ![[#^x]]", "  - ![[Other#^x]]"]);
+  assert.deepEqual(plan.lineTexts, [
+    "  - ⛓️ **DEPENDS ON:** [[#^x]] • [[Other#^x]]",
+  ]);
+  assert.equal(plan.replaceLine, 1);
+  assert.deepEqual(plan.deleteLines, [2]);
 
   const keepRemote = helpers.planDependencyNavigationBulletSync(input, 0, [
     { blockId: "x", note: "" },
@@ -1864,9 +1875,7 @@ test("dependency navigation identity includes note path and accepts aliases", ()
     "new",
   ]);
   assert.deepEqual(keepRemote.lineTexts, [
-    "  - ![[#^x]]",
-    "  - ![[Other#^x]]",
-    "  - ![[#^new]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^x]] • [[Other#^x]] • [[#^new]]",
   ]);
 });
 
@@ -1896,7 +1905,7 @@ test("dependsOn replacement accepts spaces around field name and separator", () 
   );
 });
 
-test("dependency sync splits legacy bullets and protects unrelated transclusions", () => {
+test("dependency sync canonicalises the line and protects unrelated transclusions", () => {
   const input = [
     "- [ ] #task Parent [dependsOn:: a, b] ^parent",
     "  - 🔗 **DEPENDS ON:** [[#^a]] • [[#^b]]",
@@ -1906,19 +1915,22 @@ test("dependency sync splits legacy bullets and protects unrelated transclusions
   ].join("\n");
   const plan = helpers.planDependencyNavigationBulletSync(input, 0, ["a", "b"]);
   assert.equal(plan.operation, "rewrite");
-  assert.deepEqual(plan.lineTexts, ["  - ![[#^a]]", "  - ![[#^b]]"]);
+  assert.deepEqual(plan.lineTexts, [
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
+  ]);
+  assert.equal(plan.replaceLine, 1);
+  assert.deepEqual(plan.deleteLines, []);
 
   const canonical = [
     "- [ ] #task Parent [dependsOn:: a, b] ^parent",
-    "  - ![[#^a]]",
-    "  - ![[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
     "  - ![[ref/chat/example#^ref]]",
     "- [ ] #task A [id:: a] ^a",
     "- [ ] #task B [id:: b] ^b",
   ].join("\n");
   const collection = helpers.collectDependencyNavigationBullets(canonical, 0);
   assert.deepEqual(collection.blockIds, ["a", "b"]);
-  assert.deepEqual(collection.lineIndices, [1, 2]);
+  assert.deepEqual(collection.lineIndices, [1]);
   assert.equal(
     helpers.planDependencyNavigationBulletSync(canonical, 0, ["a", "b"]).changed,
     false,
@@ -1934,11 +1946,11 @@ test("dependency sync inserts, removes, and preserves arbitrary child bullets", 
   const insert = helpers.planDependencyNavigationBulletSync(propertyOnly, 0, ["a"]);
   assert.equal(insert.operation, "insert");
   assert.equal(insert.insertLine, 1);
-  assert.equal(insert.lineText, "  - ![[#^a]]");
+  assert.equal(insert.lineText, "  - ⛓️ **DEPENDS ON:** [[#^a]]");
 
   const canonical = propertyOnly.replace(
     "  - Keep me",
-    "  - ![[#^a]]\n  - Keep me",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]\n  - Keep me",
   );
   const remove = helpers.planDependencyNavigationBulletSync(
     canonical.replace("[dependsOn:: a]", "[dependsOn:: ]"),
@@ -1968,6 +1980,8 @@ test("dependency sync inserts, removes, and preserves arbitrary child bullets", 
   );
   assert.equal(mixedPlan.operation, "rewrite");
   assert.equal(mixedPlan.replaceLine, 1);
+  assert.equal(mixedPlan.lineText, "  - ⛓️ **DEPENDS ON:** [[#^a]]");
+  assert.deepEqual(mixedPlan.deleteLines, []);
 
   const nested = [
     "- [ ] #task Parent [dependsOn:: a]",
@@ -1983,7 +1997,7 @@ test("dependency sync inserts, removes, and preserves arbitrary child bullets", 
   );
 });
 
-test("dependency sync preserves terminal struck dependencies and protects unrelated strikes", () => {
+test("dependency sync folds struck legacy children and protects unrelated strikes", () => {
   const input = [
     "- [ ] #task Parent [dependsOn:: a, b] ^parent",
     "  - ~~[[#^a]]~~",
@@ -1997,12 +2011,15 @@ test("dependency sync preserves terminal struck dependencies and protects unrela
 
   const plan = helpers.planDependencyNavigationBulletSync(input, 0, ["a", "b"]);
   assert.equal(plan.operation, "rewrite");
-  assert.deepEqual(plan.lineTexts, ["  - ~~[[#^a]]~~", "  - ![[#^b]]"]);
+  assert.deepEqual(plan.lineTexts, [
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
+  ]);
+  assert.equal(plan.replaceLine, 1);
+  assert.deepEqual(plan.deleteLines, []);
 
   const canonical = [
     "- [ ] #task Parent [dependsOn:: a, b] ^parent",
-    "  - ~~[[#^a]]~~",
-    "  - ![[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
     "  - ~~[[#^ref]]~~",
     "- [x] #task A [id:: a] ^a",
     "- [ ] #task B [id:: b] ^b",
@@ -2020,7 +2037,7 @@ test("dependency sync preserves terminal struck dependencies and protects unrela
     { managedBlockIds: ["a", "b"] },
   );
   assert.equal(remove.operation, "delete");
-  assert.deepEqual(remove.deleteLines, [1, 2]);
+  assert.deepEqual(remove.deleteLines, [1]);
 });
 
 test("same-file dependency toggle synchronizes dependsOn and target id", () => {
@@ -2578,11 +2595,12 @@ test("counted due recovery applies Ready Next and In Progress in one transaction
   const source = [
     "- [?] #task Ready [scheduled:: 2000-01-01] ^ready",
     "- [?] #task Next [scheduled:: 2000-01-01] ^next",
-    "- [?] #task Root [scheduled:: 2000-01-01] ^root",
-    "  - ![[#^working]]",
-    "- [/] #task Working ^working",
-    "  - ![[#^graph]]",
-    "- [?] #task Graph [scheduled:: 2000-01-01] ^graph",
+    "- [?] #task Root [scheduled:: 2000-01-01] [dependsOn:: Tasks__done-helper] ^root",
+    "  - ⛓️ **DEPENDS ON:** [[#^done-helper]]",
+    "- [/] #task Working [dependsOn:: Tasks__graph] ^working",
+    "  - ⛓️ **DEPENDS ON:** [[#^graph]]",
+    "- [?] #task Graph [scheduled:: 2000-01-01] [id:: Tasks__graph] ^graph",
+    "- [x] #task Done helper [id:: Tasks__done-helper] ^done-helper",
   ].join("\r\n");
   const today = new Date();
   const year = String(today.getFullYear()).padStart(4, "0");
@@ -2595,6 +2613,7 @@ test("counted due recovery applies Ready Next and In Progress in one transaction
     "- [ ] Current (0900-0930)",
     "  - [[Tasks#^next]]",
     "  - [[Tasks#^root]]",
+    "  - [[Tasks#^working]]",
   ].join("\n");
   const editor = new TransactionEditor(source, { line: 0, ch: 12 }, 701);
   const sourceFile = { path: "Tasks.md", extension: "md" };
@@ -2635,7 +2654,7 @@ test("counted due recovery applies Ready Next and In Progress in one transaction
       .split(/\r?\n/)
       .filter((line) => helpers.isObsidianTaskLine(line))
       .map((line) => helpers.getObsidianTaskCheckboxStatus(line)),
-    [" ", "*", "*", "/", "/"],
+    [" ", "*", "*", "/", "/", "x"],
   );
   assert.match(
     notices.at(-1),
@@ -2873,14 +2892,22 @@ test("counted dependencies converge mixed sources and maintain one link per pare
   assert.equal(added.valid, true);
   assert.equal(added.operation, "add");
   assert.equal(added.targetCount, 3);
+  // An existing `[id::]` is never rewritten: the kept id resolves the field.
   assert.equal(
-    (added.content.match(/\[dependsOn:: Tasks__target\]/g) || []).length,
+    (added.content.match(/\[dependsOn:: legacy-target\]/g) || []).length,
     3,
   );
-  assert.equal((added.content.match(/!\[\[#\^target\]\]/g) || []).length, 3);
-  assert.match(added.content, /> \t- !\[\[#\^target\]\]/);
-  assert.match(added.content, /Target \[id:: Tasks__target\] \^target/);
-  assert.doesNotMatch(added.content, /legacy-target/);
+  assert.equal(
+    (added.content.match(/⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/g) || [])
+      .length,
+    3,
+  );
+  assert.match(
+    added.content,
+    /> \t- ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/,
+  );
+  assert.match(added.content, /Target \[id:: legacy-target\] \^target/);
+  assert.doesNotMatch(added.content, /Tasks__target/);
 
   const removeSession = helpers.discoverCountedObsidianTaskTargets(
     added.content,
@@ -2898,8 +2925,8 @@ test("counted dependencies converge mixed sources and maintain one link per pare
   );
   assert.equal(removed.valid, true);
   assert.equal(removed.operation, "remove");
-  assert.doesNotMatch(removed.content, /dependsOn|!\[\[#\^target\]\]/);
-  assert.match(removed.content, /Target \[id:: Tasks__target\] \^target/);
+  assert.doesNotMatch(removed.content, /dependsOn|⛓️/);
+  assert.match(removed.content, /Target \[id:: legacy-target\] \^target/);
 });
 
 test("counted dependency candidates exclude every source and expose mixed state", () => {
@@ -2958,7 +2985,11 @@ test("counted dependency block-ID prompting is planned atomically", () => {
     (planned.content.match(/\[dependsOn:: Tasks__target\]/g) || []).length,
     2,
   );
-  assert.equal((planned.content.match(/!\[\[#\^target\]\]/g) || []).length, 2);
+  assert.equal(
+    (planned.content.match(/⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/g) || [])
+      .length,
+    2,
+  );
 
   const stale = input.replace("#task Two", "#task Two changed");
   const rejected = helpers.planCountedLocalTaskDependency(
@@ -3012,7 +3043,11 @@ test("counted dependency runtime applies target, parents, and navigation in one 
     (editor.content.match(/\[dependsOn:: Tasks__target\]/g) || []).length,
     2,
   );
-  assert.equal((editor.content.match(/!\[\[#\^target\]\]/g) || []).length, 2);
+  assert.equal(
+    (editor.content.match(/⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/g) || [])
+      .length,
+    2,
+  );
   assert.match(editor.content, /Target \[id:: Tasks__target\] \^target/);
 });
 
@@ -3649,8 +3684,10 @@ test("migration transform rewrites only real tasks and reports skipped non-tasks
     resolutions,
   );
   assert.equal(migrated.changed, true);
-  assert.match(migrated.content, /  - !\[\[#\^a\]\]/);
-  assert.match(migrated.content, /  - !\[\[Other#\^actual\]\]/);
+  assert.match(
+    migrated.content,
+    /  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\] • \[\[Other#\^actual\]\]/,
+  );
   assert.match(
     migrated.content,
     /- Plain parent \[dependsOn:: a\]\n\t- arbitrary child/,

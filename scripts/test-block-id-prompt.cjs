@@ -2099,6 +2099,312 @@ test("planPomodoroLinkInsertion reports no-section, no-eligible-entry, and multi
   );
 });
 
+function pomodoroLinkBase(overrides = {}) {
+  return {
+    blockId: "foobar",
+    targetPath: "Tasks.md",
+    sourcePath: "Daily.md",
+    resolveTarget: (reference) => {
+      if (reference.oldId === "foobar" || reference.oldId === "second") {
+        return "Tasks.md";
+      }
+      return reference.oldId === "abc" ? "Other.md" : null;
+    },
+    linkText: "[[Tasks#^foobar]]",
+    ...overrides,
+  };
+}
+
+test("planPomodoroLinkInsertion inserts before trailing separators, preserving LF endings", () => {
+  const head = ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Other#^abc]]"];
+  const cases = [
+    [head.join("\n"), [...head, "  - [[Tasks#^foobar]]"].join("\n")],
+    [`${head.join("\n")}\n`, [...head, "  - [[Tasks#^foobar]]", ""].join("\n")],
+    [`${head.join("\n")}\n\n`, [...head, "  - [[Tasks#^foobar]]", "", ""].join("\n")],
+    [
+      [...head, "   ", "\t"].join("\n"),
+      [...head, "  - [[Tasks#^foobar]]", "   ", "\t"].join("\n"),
+    ],
+  ];
+
+  for (const [input, expected] of cases) {
+    const plan = helpers.planPomodoroLinkInsertion(input, pomodoroLinkBase());
+    assert.equal(plan.alreadyLinked, false);
+    assert.equal(plan.removedCount, 0);
+    assert.equal(plan.content, expected, JSON.stringify(input));
+  }
+});
+
+test("planPomodoroLinkInsertion inserts before trailing separators, preserving CRLF endings", () => {
+  const head = ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Other#^abc]]"];
+  const cases = [
+    [head.join("\r\n"), [...head, "  - [[Tasks#^foobar]]"].join("\r\n")],
+    [`${head.join("\r\n")}\r\n`, [...head, "  - [[Tasks#^foobar]]", ""].join("\r\n")],
+    [`${head.join("\r\n")}\r\n\r\n`, [...head, "  - [[Tasks#^foobar]]", "", ""].join("\r\n")],
+  ];
+
+  for (const [input, expected] of cases) {
+    const plan = helpers.planPomodoroLinkInsertion(input, pomodoroLinkBase());
+    assert.equal(plan.content, expected, JSON.stringify(input));
+    assert.doesNotMatch(plan.content, /(^|[^\r])\n/);
+  }
+});
+
+test("planPomodoroLinkInsertion covers empty destinations, indentation, and nested subtrees", () => {
+  const empty = helpers.planPomodoroLinkInsertion(
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)"].join("\n") + "\n",
+    pomodoroLinkBase(),
+  );
+  assert.equal(
+    empty.content,
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "\t- [[Tasks#^foobar]]", ""].join("\n"),
+  );
+
+  const tabbed = helpers.planPomodoroLinkInsertion(
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "\t- [[Other#^abc]]"].join("\n") + "\n",
+    pomodoroLinkBase(),
+  );
+  assert.equal(
+    tabbed.content,
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "\t- [[Other#^abc]]", "\t- [[Tasks#^foobar]]", ""].join("\n"),
+  );
+
+  const nested = helpers.planPomodoroLinkInsertion(
+    [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Other#^abc]]",
+      "    - nested note",
+      "",
+      "  - second child",
+    ].join("\n") + "\n",
+    pomodoroLinkBase(),
+  );
+  assert.equal(
+    nested.content,
+    [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Other#^abc]]",
+      "    - nested note",
+      "",
+      "  - second child",
+      "  - [[Tasks#^foobar]]",
+      "",
+    ].join("\n"),
+  );
+
+  const screenshot = helpers.planPomodoroLinkInsertion(
+    [
+      "## Pomodoros",
+      "- [ ] (10:40-10:50) GTD",
+      "  - [[#^gtd]]",
+      "",
+      "  - [[bob#^fresh-refs]]",
+    ].join("\n") + "\n",
+    pomodoroLinkBase(),
+  );
+  assert.equal(
+    screenshot.content,
+    [
+      "## Pomodoros",
+      "- [ ] (10:40-10:50) GTD",
+      "  - [[#^gtd]]",
+      "",
+      "  - [[bob#^fresh-refs]]",
+      "  - [[Tasks#^foobar]]",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("planPomodoroLinkInsertion inserts before the separator preceding later content", () => {
+  const head = ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Other#^abc]]"];
+  const cases = [
+    [
+      [...head, "", "- [ ] Next ()"].join("\n") + "\n",
+      [...head, "  - [[Tasks#^foobar]]", "", "- [ ] Next ()", ""].join("\n"),
+    ],
+    [
+      [...head, "", "## Notes", "hello"].join("\n"),
+      [...head, "  - [[Tasks#^foobar]]", "", "## Notes", "hello"].join("\n"),
+    ],
+    [
+      [...head, "", "Just prose"].join("\n"),
+      [...head, "  - [[Tasks#^foobar]]", "", "Just prose"].join("\n"),
+    ],
+  ];
+
+  for (const [input, expected] of cases) {
+    const plan = helpers.planPomodoroLinkInsertion(input, pomodoroLinkBase());
+    assert.equal(plan.content, expected, JSON.stringify(input));
+  }
+});
+
+test("planPomodoroLinkInsertion repeats as a no-op and keeps two distinct links adjacent", () => {
+  const first = helpers.planPomodoroLinkInsertion(
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Other#^abc]]"].join("\n") + "\n",
+    pomodoroLinkBase(),
+  );
+  const repeat = helpers.planPomodoroLinkInsertion(first.content, pomodoroLinkBase());
+  assert.equal(repeat.alreadyLinked, true);
+  assert.deepEqual(repeat.edits, []);
+  assert.equal(repeat.content, first.content);
+
+  const second = helpers.planPomodoroLinkInsertion(
+    first.content,
+    pomodoroLinkBase({ blockId: "second", linkText: "[[Tasks#^second]]" }),
+  );
+  assert.equal(
+    second.content,
+    [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Other#^abc]]",
+      "  - [[Tasks#^foobar]]",
+      "  - [[Tasks#^second]]",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("planPomodoroLinkInsertion before separators composes with future cleanup, preserving history", () => {
+  const input =
+    [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Other#^abc]]",
+      "",
+      "- [ ] Later ()",
+      "  - [[Tasks#^foobar]]",
+      "- [x] Done (09:00-09:25)",
+      "  - [[Tasks#^foobar]]",
+    ].join("\n") + "\n";
+  const plan = helpers.planPomodoroLinkInsertion(input, pomodoroLinkBase());
+  assert.equal(plan.removedCount, 1);
+  assert.equal(
+    plan.content,
+    [
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Other#^abc]]",
+      "  - [[Tasks#^foobar]]",
+      "",
+      "- [ ] Later ()",
+      "- [x] Done (09:00-09:25)",
+      "  - [[Tasks#^foobar]]",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("existing-ID Pomodoro link runtime keeps terminal-newline separators adjacent (cross-note)", async () => {
+  resetNotices();
+  const editor = createEditor("- [?] #task Ship it [scheduled:: 2026-08-20] ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const dailyContent = ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Other#^other]]"].join("\n") + "\n";
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let written = null;
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? dailyContent : null),
+      modify: async (file, content) => {
+        written = { path: file.path, content };
+      },
+    },
+    metadataCache: {
+      fileToLinktext: (file) => file.path.replace(/\.md$/, ""),
+    },
+  };
+  plugin.resolveReferenceDestination = () => null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(
+    written.content,
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Other#^other]]", "  - [[Tasks#^ship]]", ""].join("\n"),
+  );
+});
+
+test("same-note Pomodoro link runtime composes the task update with adjacent insertion", async () => {
+  resetNotices();
+  const editor = createEditor(
+    [
+      "- [?] #task Ship it [scheduled:: 2026-08-20] ^ship",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Other#^other]]",
+      "",
+    ].join("\n"),
+  );
+  const source = sourceForPomodoroLink(editor, "Daily.md", 0);
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Daily.md" ? { path: "Daily.md" } : null);
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "" ? { path: "Daily.md" } : null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.completePomodoroTaskLink(source, "ship");
+
+  assert.equal(result, true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "- [*] #task Ship it ^ship",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "  \t- _2026-08-20 → 2026-08-15_ — 🍅 pulled into today's Pomodoro",
+      "## Pomodoros",
+      "- [ ] Current (10:00-10:25)",
+      "  - [[Other#^other]]",
+      "  - [[#^ship]]",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("new-ID Pomodoro link runtime keeps terminal-newline separators adjacent", async () => {
+  resetNotices();
+  const editor = createEditor("- [ ] #task Ship it [priority:: high]");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const dailyContent = ["## Pomodoros", "- [ ] Later ()", "  - [[Other#^other]]"].join("\n") + "\n";
+  const plugin = new Plugin();
+  plugin.now = () => localDate(2026, 8, 15);
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  let written = null;
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? dailyContent : null),
+      modify: async (file, content) => {
+        written = { path: file.path, content };
+      },
+    },
+    metadataCache: {
+      fileToLinktext: (file) => file.path.replace(/\.md$/, ""),
+    },
+  };
+  plugin.resolveReferenceDestination = () => null;
+  plugin.suppressEditorScans = () => {};
+
+  const result = await plugin.submitPomodoroTaskLinkBlockId(source, "ship");
+
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it [priority:: high] ^ship");
+  assert.equal(
+    written.content,
+    ["## Pomodoros", "- [ ] Later ()", "  - [[Other#^other]]", "  - [[Tasks#^ship]]", ""].join("\n"),
+  );
+});
+
 test("planFuturePomodoroLinkCleanup accepts a direct ownerLine/section context, bypassing findPomodoroSourceContext", () => {
   const content = [
     "## Pomodoros",

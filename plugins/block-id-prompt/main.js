@@ -3268,23 +3268,27 @@ function planPomodoroLinkInsertion(content, options = {}) {
   if (!alreadyLinked) {
     const indentation = findPomodoroChildIndentation(lines, entryLine, entryEndLine, section);
     const entryLineText = `${indentation}- ${linkText}`;
-    const insertLine = entryEndLine + 1;
-    const markerHasCR = Boolean(lines[entryEndLine] && lines[entryEndLine].endsWith("\r"));
-
-    if (insertLine < lines.length) {
-      const insertionIndex = lineStartIndexFromLines(lines, insertLine);
-      insertionEdits.push({
-        start: insertionIndex,
-        end: insertionIndex,
-        replacement: `${entryLineText}${markerHasCR ? "\r" : ""}\n`,
-      });
-    } else {
-      insertionEdits.push({
-        start: snapshot.length,
-        end: snapshot.length,
-        replacement: `\n${entryLineText}`,
-      });
+    // The ownership range extends through trailing separator blanks (and the
+    // final empty split element from a terminal newline), but the new child
+    // belongs immediately after the last nonblank descendant so separators
+    // stay after it.
+    let insertAfterLine = entryEndLine;
+    while (
+      insertAfterLine > entryLine &&
+      !normalizeMarkdownLine(lines[insertAfterLine]).trim()
+    ) {
+      insertAfterLine -= 1;
     }
+    const insertLine = insertAfterLine + 1;
+    insertionEdits.push(
+      insertionEditAtLine(
+        snapshot,
+        lines,
+        insertLine,
+        [entryLineText],
+        lineEndingForInsertion(snapshot, lines, insertAfterLine),
+      ),
+    );
   }
 
   const edits = [...insertionEdits, ...cleanup.edits];

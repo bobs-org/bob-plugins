@@ -2040,42 +2040,6 @@ test("dependency sync folds struck legacy children and protects unrelated strike
   assert.deepEqual(remove.deleteLines, [1]);
 });
 
-test("same-file dependency toggle synchronizes dependsOn and target id", () => {
-  const input = [
-    "- [ ] #task Parent ^parent",
-    "  - [[#^child]]",
-    "- [ ] #task Child ^child",
-  ].join("\n");
-  const added = helpers.planSameFileDependencyToggle(
-    input,
-    1,
-    "  - ![[#^child]]",
-    "projects/Here.md",
-  );
-  assert.equal(added.qualified, true);
-  assert.match(added.content, /- \[\?\] #task Parent/);
-  assert.match(added.content, /Parent \[dependsOn:: projects__Here__child\] \^parent/);
-  assert.match(added.content, /Child \[id:: projects__Here__child\] \^child/);
-
-  const removed = helpers.planSameFileDependencyToggle(
-    added.content,
-    1,
-    "  - [[#^child]]",
-    "projects/Here.md",
-  );
-  assert.equal(removed.qualified, true);
-  assert.doesNotMatch(removed.content, /dependsOn/);
-  assert.match(removed.content, /- \[\?\] #task Parent/);
-  assert.match(removed.content, /Child \[id:: projects__Here__child\] \^child/);
-
-  const unrelated = helpers.planSameFileDependencyToggle(
-    input.replace("[[#^child]]", "[[#^ref]]"),
-    1,
-    "  - ![[#^ref]]",
-  );
-  assert.equal(unrelated.qualified, false);
-});
-
 test("task status helpers keep Blocked open but rankless", () => {
   assert.equal(
     helpers.getObsidianTaskCheckboxStatus("- [*] #task Next ^next"),
@@ -2164,166 +2128,6 @@ test("bare future scheduled writes block only real supported open inline tasks",
   }
 });
 
-test("same-file dependency toggle promotes monotonically and unlinking is status-neutral", () => {
-  for (const scenario of [
-    { parent: "*", target: " ", expected: "*" },
-    { parent: "/", target: " ", expected: "/" },
-    { parent: "/", target: "*", expected: "/" },
-    { parent: "*", target: "/", expected: "/" },
-    { parent: " ", target: "*", expected: "*" },
-    { parent: "/", target: "x", expected: "x" },
-    { parent: "/", target: "-", expected: "-" },
-    { parent: "/", target: "?", expected: "?" },
-  ]) {
-    const input = [
-      `- [${scenario.parent}] #task Parent ^parent`,
-      "  - [[#^child]]",
-      `- [${scenario.target}] #task Child ^child`,
-    ].join("\n");
-    const added = helpers.planSameFileDependencyToggle(
-      input,
-      1,
-      "  - ![[#^child]]",
-      "Here.md",
-    );
-    assert.equal(added.qualified, true);
-    assert.ok(
-      added.content.includes(`- [${scenario.expected}] #task Child`),
-      added.content,
-    );
-    const parentStatus = [" ", "*", "/", "?"].includes(scenario.target)
-      ? "?"
-      : scenario.parent;
-    assert.ok(
-      added.content.includes(`- [${parentStatus}] #task Parent`),
-      added.content,
-    );
-  }
-
-  const linked = [
-    "- [/] #task Parent [dependsOn:: Here__child] ^parent",
-    "  - ![[#^child]]",
-    "- [/] #task Child [id:: Here__child] ^child",
-  ].join("\n");
-  const removed = helpers.planSameFileDependencyToggle(
-    linked,
-    1,
-    "  - [[#^child]]",
-    "Here.md",
-  );
-  assert.equal(removed.qualified, true);
-  assert.match(removed.content, /- \[\/\] #task Child/);
-  assert.doesNotMatch(removed.content, /dependsOn/);
-});
-
-test("same-file dependency blocking requires open target and open parent", () => {
-  for (const scenario of [
-    { parent: " ", target: "x", expectedParent: " " },
-    { parent: "/", target: "-", expectedParent: "/" },
-    { parent: "*", target: "!", expectedParent: "*" },
-    { parent: " ", target: "?", expectedParent: "?" },
-    { parent: "x", target: " ", expectedParent: "x" },
-  ]) {
-    const input = [
-      `- [${scenario.parent}] #task Parent ^parent`,
-      "  - [[#^child]]",
-      `- [${scenario.target}] #task Child ^child`,
-    ].join("\n");
-    const added = helpers.planSameFileDependencyToggle(
-      input,
-      1,
-      "  - ![[#^child]]",
-      "Here.md",
-    );
-    assert.equal(added.qualified, true);
-    assert.match(added.content, /dependsOn:: Here__child/);
-    assert.ok(
-      added.content.includes(`- [${scenario.expectedParent}] #task Parent`),
-      added.content,
-    );
-  }
-});
-
-test("same-file dependency toggle skips hidden targets using whole-tag boundaries", () => {
-  const hidden = [
-    "- [ ] #task Parent ^parent",
-    "  - [[#^child]]",
-    "- [ ] #task Child (#hide), ^child",
-  ].join("\n");
-  const hiddenResult = helpers.planSameFileDependencyToggle(
-    hidden,
-    1,
-    "  - ![[#^child]]",
-    "projects/Here.md",
-  );
-  assert.equal(hiddenResult.qualified, false);
-  assert.equal(hiddenResult.reason, "target-hidden");
-  assert.match(hiddenResult.content, /  - !\[\[#\^child\]\]/);
-  assert.doesNotMatch(hiddenResult.content, /dependsOn|\[id::/);
-
-  const nearMatchResult = helpers.planSameFileDependencyToggle(
-    hidden.replace("(#hide),", "#hidden"),
-    1,
-    "  - ![[#^child]]",
-    "projects/Here.md",
-  );
-  assert.equal(nearMatchResult.qualified, true);
-  assert.match(nearMatchResult.content, /\[dependsOn:: projects__Here__child\]/);
-  assert.match(nearMatchResult.content, /\[id:: projects__Here__child\]/);
-});
-
-test("same-file dependency toggle can unlink a target that became hidden", () => {
-  const input = [
-    "- [ ] #task Parent [dependsOn:: projects__Here__child] ^parent",
-    "  - ![[#^child]]",
-    "- [ ] #task Child #hide [id:: projects__Here__child] ^child",
-  ].join("\n");
-  const removed = helpers.planSameFileDependencyToggle(
-    input,
-    1,
-    "  - [[#^child]]",
-    "projects/Here.md",
-  );
-  assert.equal(removed.qualified, true);
-  assert.doesNotMatch(removed.content, /dependsOn/);
-  assert.match(
-    removed.content,
-    /Child #hide \[id:: projects__Here__child\] \^child/,
-  );
-});
-
-test("same-file dependency toggle preserves plain toggling for invalid parents and targets", () => {
-  const pomodoro = [
-    "- [ ] (**1535-1705** [t:: 90m])",
-    "  - [[#^child]]",
-    "- [ ] #task Child ^child",
-  ].join("\n");
-  const pomodoroResult = helpers.planSameFileDependencyToggle(
-    pomodoro,
-    1,
-    "  - ![[#^child]]",
-    "Here.md",
-  );
-  assert.equal(pomodoroResult.qualified, false);
-  assert.match(pomodoroResult.content, /  - !\[\[#\^child\]\]/);
-  assert.doesNotMatch(pomodoroResult.content, /dependsOn|\[id::/);
-
-  const invalidTarget = [
-    "- [ ] #task Parent",
-    "  - [[#^child]]",
-    "- [ ] Plain target ^child",
-  ].join("\n");
-  const invalidTargetResult = helpers.planSameFileDependencyToggle(
-    invalidTarget,
-    1,
-    "  - ![[#^child]]",
-    "Here.md",
-  );
-  assert.equal(invalidTargetResult.qualified, false);
-  assert.match(invalidTargetResult.content, /  - !\[\[#\^child\]\]/);
-  assert.doesNotMatch(invalidTargetResult.content, /dependsOn|\[id::/);
-});
-
 test("single runtime transclusion toggle preserves viewport in one line transaction", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = Array.from({ length: 24 }, (_, index) => `context ${index}`);
@@ -2353,7 +2157,7 @@ test("single runtime transclusion toggle preserves viewport in one line transact
   assert.equal(editor.getLine(activeLine), "- ![[Target]] trailing");
 });
 
-test("same-file runtime dependency add and removal use focused transactions", async () => {
+test("same-file runtime toggle changes only markers, never fields or statuses", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = Array.from({ length: 24 }, (_, index) => `context ${index}`);
   const parentLine = 3;
@@ -2378,22 +2182,14 @@ test("same-file runtime dependency add and removal use focused transactions", as
 
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.undoGroups, 1);
-  assertLineBoundedTransaction(
-    editor.transactions[0],
-    lines,
-    [parentLine, activeLine, targetLine],
-  );
+  assertLineBoundedTransaction(editor.transactions[0], lines, [activeLine]);
   assert.deepEqual(editor.transactions[0].selection, {
     from: { line: activeLine, ch: 13 },
     to: { line: activeLine, ch: 13 },
   });
-  assert.match(editor.getLine(parentLine), /dependsOn:: Here__target/);
-  assert.match(editor.getLine(parentLine), /- \[\?\] #task Parent/);
+  assert.equal(editor.getLine(parentLine), "- [/] #task Parent ^parent");
   assert.equal(editor.getLine(activeLine), "  - ![[#^target]]");
-  assert.match(
-    editor.getLine(targetLine),
-    /- \[\/\] #task Target \[id:: Here__target\] \^target/,
-  );
+  assert.equal(editor.getLine(targetLine), "- [ ] #task Target ^target");
   assert.equal(editor.getScrollInfo().top, originalScrollTop);
 
   const beforeRemovalLines = editor.content.split("\n");
@@ -2404,22 +2200,19 @@ test("same-file runtime dependency add and removal use focused transactions", as
   assertLineBoundedTransaction(
     editor.transactions[1],
     beforeRemovalLines,
-    [parentLine, activeLine],
+    [activeLine],
   );
   assert.deepEqual(editor.transactions[1].selection, {
     from: { line: activeLine, ch: 12 },
     to: { line: activeLine, ch: 12 },
   });
-  assert.doesNotMatch(editor.getLine(parentLine), /dependsOn/);
-  assert.match(editor.getLine(parentLine), /- \[\?\] #task Parent/);
+  assert.equal(editor.getLine(parentLine), "- [/] #task Parent ^parent");
   assert.equal(editor.getLine(activeLine), "  - [[#^target]]");
-  assert.match(editor.getLine(targetLine), /id:: Here__target/);
+  assert.equal(editor.getLine(targetLine), "- [ ] #task Target ^target");
   assert.equal(editor.getScrollInfo().top, originalScrollTop);
 });
-
-test("async dependency toggle does not restore a cursor moved during sync", async () => {
+test("pure toggle leaves a cursor moved during the toggle where it landed", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
   const lines = [
     "- [/] #task Parent ^parent",
     "  - [[Other#^target]]",
@@ -2429,51 +2222,28 @@ test("async dependency toggle does not restore a cursor moved during sync", asyn
     line: 1,
     ch: 12,
   });
-  let targetContent = "- [ ] #task Target ^target";
-  let resolveTargetRead;
-  let markTargetReadStarted;
-  const targetReadStarted = new Promise((resolve) => {
-    markTargetReadStarted = resolve;
-  });
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
     workspace: { getActiveFile: () => activeFile },
-    metadataCache: {
-      getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
-    },
-    vault: {
-      cachedRead: async () => {
-        markTargetReadStarted();
-        return await new Promise((resolve) => {
-          resolveTargetRead = () => resolve(targetContent);
-        });
-      },
-      getAbstractFileByPath: (filePath) =>
-        filePath === activeFile.path ? activeFile : null,
-      process: async (_file, transform) => {
-        targetContent = transform(targetContent);
-      },
-    },
   };
   const originalScrollTop = editor.getScrollInfo().top;
 
   const toggle = plugin.toggleCurrentLineTransclusions(editor);
-  await targetReadStarted;
   editor.setCursor({ line: 2, ch: 0 });
-  resolveTargetRead();
 
   assert.equal(await toggle, true);
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.undoGroups, 1);
-  assertLineBoundedTransaction(editor.transactions[0], lines, [0, 1]);
-  assert.equal(editor.transactions[0].selection, undefined);
+  assertLineBoundedTransaction(editor.transactions[0], lines, [1]);
+  assert.deepEqual(editor.transactions[0].selection, {
+    from: { line: 1, ch: 13 },
+    to: { line: 1, ch: 13 },
+  });
   assert.deepEqual(editor.getCursor(), { line: 2, ch: 0 });
   assert.equal(editor.getScrollInfo().top, originalScrollTop);
-  assert.match(editor.getLine(0), /- \[\?\] #task Parent \[dependsOn:: Other__target\] \^parent/);
+  assert.equal(editor.getLine(0), "- [/] #task Parent ^parent");
   assert.equal(editor.getLine(1), "  - ![[Other#^target]]");
-  assert.match(targetContent, /- \[\/\] #task Target \[id:: Other__target\] \^target/);
 });
-
 test("counted runtime transclusion toggle preserves viewport and caret", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = Array.from({ length: 22 }, (_, index) => `context ${index}`);
@@ -3051,59 +2821,32 @@ test("counted dependency runtime applies target, parents, and navigation in one 
   assert.match(editor.content, /Target \[id:: Tasks__target\] \^target/);
 });
 
-test("async cross-file runtime toggle applies one focused source transaction", async () => {
+test("cross-file toggle changes only the source link", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
-  const lines = Array.from({ length: 22 }, (_, index) => `context ${index}`);
-  const parentLine = 5;
-  const activeLine = 7;
-  lines[parentLine] = "- [/] #task Parent ^parent";
-  lines[6] = "  - supporting detail";
-  lines[activeLine] = "  - [[Other#^target]]";
-  let targetContent = "- [ ] #task Target ^target";
-  const editor = new TransactionEditor(lines.join("\n"), {
-    line: activeLine,
-    ch: 12,
-  });
+  const lines = [
+    "- [/] #task Parent ^parent",
+    "  - [[Other#^target]]",
+    "context below",
+  ];
+  const editor = new TransactionEditor(lines.join("\n"), { line: 1, ch: 12 });
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
     workspace: { getActiveFile: () => activeFile },
-    metadataCache: { getFirstLinkpathDest: () => targetFile },
-    vault: {
-      cachedRead: async () => {
-        await Promise.resolve();
-        return targetContent;
-      },
-      getAbstractFileByPath: () => null,
-      process: async (_file, transform) => {
-        await Promise.resolve();
-        targetContent = transform(targetContent);
-      },
-    },
   };
 
   assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
 
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.undoGroups, 1);
-  assertLineBoundedTransaction(
-    editor.transactions[0],
-    lines,
-    [parentLine, activeLine],
-  );
+  assertLineBoundedTransaction(editor.transactions[0], lines, [1]);
   assert.deepEqual(editor.transactions[0].selection, {
-    from: { line: activeLine, ch: 13 },
-    to: { line: activeLine, ch: 13 },
+    from: { line: 1, ch: 13 },
+    to: { line: 1, ch: 13 },
   });
-  assert.match(editor.getLine(parentLine), /dependsOn:: Other__target/);
-  assert.match(editor.getLine(parentLine), /- \[\?\] #task Parent/);
-  assert.match(
-    targetContent,
-    /- \[\/\] #task Target \[id:: Other__target\] \^target/,
-  );
-  assert.equal(editor.getScrollInfo().top, 640);
+  assert.equal(editor.getLine(1), "  - ![[Other#^target]]");
+  assert.doesNotMatch(editor.getLine(0), /dependsOn/);
+  assert.doesNotMatch(editor.getLine(0), /- \[\?\]/);
 });
-
 test("cross-file write failure still toggles only the source link", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const targetFile = { path: "Other.md", extension: "md" };
@@ -3137,14 +2880,12 @@ test("cross-file write failure still toggles only the source link", async () => 
 test("line-local fallback applies bottom-up and preserves CRLF", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = Array.from({ length: 22 }, (_, index) => `context ${index}`);
-  const parentLine = 3;
   const activeLine = 6;
-  const targetLine = 15;
-  lines[parentLine] = "- [/] #task Parent ^parent";
+  lines[3] = "- [/] #task Parent ^parent";
   lines[4] = "  - supporting detail";
   lines[5] = "  - another detail";
   lines[activeLine] = "  - [[#^target]]";
-  lines[targetLine] = "- [ ] #task Target ^target";
+  lines[15] = "- [ ] #task Target ^target";
   const editor = new RecordingFallbackEditor(lines.join("\r\n"), {
     line: activeLine,
     ch: 12,
@@ -3158,28 +2899,20 @@ test("line-local fallback applies bottom-up and preserves CRLF", async () => {
 
   assert.deepEqual(
     editor.replaceCalls.map((call) => call.from.line),
-    [targetLine, activeLine, parentLine],
+    [activeLine],
   );
   assert.equal(
     editor.replaceCalls.every((call) => call.from.line === call.to.line),
     true,
   );
-  assert.deepEqual(editor.events, [
-    `replace:${targetLine}`,
-    `replace:${activeLine}`,
-    `replace:${parentLine}`,
-    "cursor",
-  ]);
+  assert.deepEqual(editor.events, [`replace:${activeLine}`, "cursor"]);
   assert.deepEqual(editor.setCursorCalls, [{ line: activeLine, ch: 13 }]);
   const expected = lines.slice();
-  expected[parentLine] =
-    "- [?] #task Parent [dependsOn:: Here__target] ^parent";
   expected[activeLine] = "  - ![[#^target]]";
-  expected[targetLine] =
-    "- [/] #task Target [id:: Here__target] ^target";
   assert.equal(editor.content, expected.join("\r\n"));
+  assert.equal(lines[3], "- [/] #task Parent ^parent");
+  assert.equal(lines[15], "- [ ] #task Target ^target");
 });
-
 test("source line-count invariant rejects embedded newline changes", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const editor = new TransactionEditor("before\n- [[Target]]\nafter", {
@@ -3201,455 +2934,24 @@ test("source line-count invariant rejects embedded newline changes", async () =>
   assert.deepEqual(editor.transactions, []);
 });
 
-test("runtime dependency toggle atomically promotes a cross-file target", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
-  let targetContent = "- [ ] #task Target ^target";
+test("pure toggle refuses when the source changed under it", async () => {
+  let reads = 0;
+  const drifting = {
+    getValue: () =>
+      reads++ === 0 ? "- [[Target]]" : "- [[Target]] edited",
+  };
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    metadataCache: {
-      getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
-    },
-    vault: {
-      cachedRead: async () => targetContent,
-      getAbstractFileByPath: (filePath) =>
-        filePath === activeFile.path ? activeFile : null,
-      process: async (_file, transform) => {
-        targetContent = transform(targetContent);
-      },
-    },
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
-  const editor = new TestEditor(
-    "- [/] #task Parent ^parent\n  - [[Other#^target]]",
-  );
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(editor, [
-      { line: 1, nextLineText: "  - ![[Other#^target]]" },
-    ]),
-    true,
-  );
-  assert.match(editor.content, /- \[\?\] #task Parent \[dependsOn:: Other__target\] \^parent/);
-  assert.match(targetContent, /- \[\/\] #task Target \[id:: Other__target\] \^target/);
 
   assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(editor, [
-      { line: 1, nextLineText: "  - [[Other#^target]]" },
-    ]),
-    true,
-  );
-  assert.doesNotMatch(editor.content, /dependsOn/);
-  assert.match(editor.content, /- \[\?\] #task Parent \^parent/);
-  assert.match(targetContent, /- \[\/\] #task Target \[id:: Other__target\] \^target/);
-});
-
-test("runtime cross-file terminal and unknown targets do not block parent", async () => {
-  for (const targetStatus of ["x", "-", "!"]) {
-    const activeFile = { path: "Here.md", extension: "md" };
-    const targetFile = { path: "Other.md", extension: "md" };
-    let targetContent = `- [${targetStatus}] #task Target ^target`;
-    const plugin = new NavigationHotkeysPlugin();
-    plugin.app = {
-      workspace: { getActiveFile: () => activeFile },
-      metadataCache: { getFirstLinkpathDest: () => targetFile },
-      vault: {
-        cachedRead: async () => targetContent,
-        process: async (_file, transform) => {
-          targetContent = transform(targetContent);
-        },
-      },
-    };
-    const editor = new TestEditor(
-      "- [/] #task Parent ^parent\n  - [[Other#^target]]",
-    );
-    assert.equal(
-      await plugin.applyDependencyAwareTransclusionChanges(editor, [
-        { line: 1, nextLineText: "  - ![[Other#^target]]" },
-      ]),
-      true,
-    );
-    assert.match(editor.content, /- \[\/\] #task Parent \[dependsOn:: Other__target\]/);
-    assert.doesNotMatch(editor.content, /- \[\?\] #task Parent/);
-    assert.ok(
-      targetContent.includes(
-        `- [${targetStatus}] #task Target [id:: Other__target]`,
-      ),
-      targetContent,
-    );
-  }
-});
-
-test("runtime dependency toggle embeds hidden cross-file targets without writing them", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
-  const originalTargetContent = "- [ ] #task Target #hide ^target";
-  let targetContent = originalTargetContent;
-  let processCalls = 0;
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    metadataCache: {
-      getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
-    },
-    vault: {
-      cachedRead: async () => targetContent,
-      getAbstractFileByPath: () => null,
-      process: async (_file, transform) => {
-        processCalls += 1;
-        targetContent = transform(targetContent);
-      },
-    },
-  };
-  const editor = new TestEditor(
-    "- [ ] #task Parent ^parent\n  - [[Other#^target]]",
-  );
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(editor, [
-      { line: 1, nextLineText: "  - ![[Other#^target]]" },
-    ]),
-    true,
-  );
-  assert.match(editor.content, /  - !\[\[Other#\^target\]\]/);
-  assert.doesNotMatch(editor.content, /dependsOn/);
-  assert.equal(targetContent, originalTargetContent);
-  assert.equal(processCalls, 0);
-});
-
-test("runtime dependency toggle can unlink a hidden cross-file target", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
-  const targetContent =
-    "- [ ] #task Target #hide [id:: Other__target] ^target";
-  let processCalls = 0;
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    metadataCache: { getFirstLinkpathDest: () => targetFile },
-    vault: {
-      cachedRead: async () => targetContent,
-      process: async () => {
-        processCalls += 1;
-      },
-    },
-  };
-  const editor = new TestEditor(
-    [
-      "- [ ] #task Parent [dependsOn:: Other__target] ^parent",
-      "  - ![[Other#^target]]",
-    ].join("\n"),
-  );
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(editor, [
-      { line: 1, nextLineText: "  - [[Other#^target]]" },
-    ]),
-    true,
-  );
-  assert.match(editor.content, /  - \[\[Other#\^target\]\]/);
-  assert.doesNotMatch(editor.content, /dependsOn/);
-  assert.equal(processCalls, 0);
-});
-
-test("runtime dependency toggle leaves external files untouched for invalid endpoints", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
-  for (const scenario of [
-    {
-      source: "- [ ] (**1535-1705** [t:: 90m])\n  - [[Other#^target]]",
-      target: "- [ ] #task Target ^target",
-    },
-    {
-      source: "- [ ] #task Parent\n  - [[Other#^target]]",
-      target: "- [ ] Plain target ^target",
-    },
-  ]) {
-    let targetContent = scenario.target;
-    let processCalls = 0;
-    const plugin = new NavigationHotkeysPlugin();
-    plugin.app = {
-      workspace: { getActiveFile: () => activeFile },
-      metadataCache: {
-        getFirstLinkpathDest: (target) => (target === "Other" ? targetFile : null),
-      },
-      vault: {
-        cachedRead: async () => targetContent,
-        getAbstractFileByPath: () => null,
-        process: async (_file, transform) => {
-          processCalls += 1;
-          targetContent = transform(targetContent);
-        },
-      },
-    };
-    const editor = new TestEditor(scenario.source);
-    assert.equal(
-      await plugin.applyDependencyAwareTransclusionChanges(editor, [
-        { line: 1, nextLineText: "  - ![[Other#^target]]" },
-      ]),
-      true,
-    );
-    assert.match(editor.content, /!\[\[Other#\^target\]\]/);
-    assert.doesNotMatch(editor.content, /dependsOn/);
-    assert.equal(targetContent, scenario.target);
-    assert.equal(processCalls, 0);
-  }
-});
-
-test("runtime dependency toggle rechecks source before external writes", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
-  const editor = new TestEditor(
-    "- [ ] #task Parent ^parent\n  - [[Other#^target]]",
-  );
-  let processCalls = 0;
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    metadataCache: { getFirstLinkpathDest: () => targetFile },
-    vault: {
-      cachedRead: async () => {
-        editor.content += "\nuser edit";
-        return "- [ ] #task Target ^target";
-      },
-      process: async () => {
-        processCalls += 1;
-      },
-    },
-  };
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(editor, [
-      { line: 1, nextLineText: "  - ![[Other#^target]]" },
+    await plugin.applyDependencyAwareTransclusionChanges(drifting, [
+      { line: 0, nextLineText: "- ![[Target]]" },
     ]),
     false,
   );
-  assert.equal(processCalls, 0);
 });
-
-test("runtime dependency toggle rejects a stale target snapshot without partial metadata", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const targetFile = { path: "Other.md", extension: "md" };
-  const cachedTarget = "- [ ] #task Target ^target";
-  let targetContent = "- [ ] #task Target changed concurrently ^target";
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    metadataCache: { getFirstLinkpathDest: () => targetFile },
-    vault: {
-      cachedRead: async () => cachedTarget,
-      process: async (_file, transform) => {
-        targetContent = transform(targetContent);
-      },
-    },
-  };
-  const editor = new TestEditor(
-    "- [/] #task Parent ^parent\n  - [[Other#^target]]",
-  );
-
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(editor, [
-      { line: 1, nextLineText: "  - ![[Other#^target]]" },
-    ]),
-    true,
-  );
-  assert.match(editor.content, /  - !\[\[Other#\^target\]\]/);
-  assert.doesNotMatch(editor.content, /dependsOn/);
-  assert.doesNotMatch(editor.content, /- \[\?\] #task Parent/);
-  assert.equal(targetContent, "- [ ] #task Target changed concurrently ^target");
-});
-
-test("counted dependency toggles block a parent when any linked target is open", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    vault: { getAbstractFileByPath: () => activeFile },
-  };
-  const editor = new TestEditor(
-    [
-      "- [/] #task Parent ^parent",
-      "  - [[#^done]]",
-      "  - [[#^open]]",
-      "- [x] #task Done target ^done",
-      "- [?] #task Blocked target ^open",
-    ].join("\n"),
-  );
-  const toggle = helpers.toggleLineRangeTransclusions(
-    editor.content.split("\n"),
-    1,
-    2,
-  );
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(
-      editor,
-      toggle.changesByLine,
-    ),
-    true,
-  );
-  assert.match(
-    editor.content,
-    /- \[\?\] #task Parent \[dependsOn:: Here__done, Here__open\]/,
-  );
-  assert.match(editor.content, /- \[x\] #task Done target \[id:: Here__done\]/);
-  assert.match(editor.content, /- \[\?\] #task Blocked target \[id:: Here__open\]/);
-});
-
-test("dependency propagation prefilters files and continues after failures", async () => {
-  const contents = new Map([
-    ["clean.md", "- [ ] #task Clean"],
-    ["broken.md", "- [ ] #task Broken [dependsOn:: old]"],
-    ["updated.md", "- [ ] #task Updated [dependsOn:: old]"],
-  ]);
-  const reads = [];
-  const processes = [];
-  const files = Array.from(contents.keys(), (filePath) => ({ path: filePath }));
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    vault: {
-      getMarkdownFiles: () => files,
-      cachedRead: async (file) => {
-        reads.push(file.path);
-        return contents.get(file.path);
-      },
-      process: async (file, transform) => {
-        processes.push(file.path);
-        if (file.path === "broken.md") throw new Error("write failed");
-        contents.set(file.path, transform(contents.get(file.path)));
-      },
-    },
-  };
-  const originalConsoleError = console.error;
-  console.error = () => {};
-  try {
-    assert.equal(
-      await plugin.propagateDependencyIdReplacements(
-        new Map([["old", "new"]]),
-      ),
-      false,
-    );
-  } finally {
-    console.error = originalConsoleError;
-  }
-  assert.deepEqual(reads, ["clean.md", "broken.md", "updated.md"]);
-  assert.deepEqual(processes, ["broken.md", "updated.md"]);
-  assert.match(contents.get("updated.md"), /dependsOn:: new/);
-});
-
-test("counted runtime toggles every link but synchronizes only valid task pairs", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    vault: { getAbstractFileByPath: () => activeFile },
-  };
-  const editor = new TestEditor(
-    [
-      "- [ ] #task Parent",
-      "  - [[#^valid]]",
-      "- [ ] #task Valid target ^valid",
-      "- [ ] (**1535-1705** [t:: 90m])",
-      "  - [[#^plain]]",
-      "- [ ] Plain target ^plain",
-      "- [[loose]]",
-    ].join("\n"),
-  );
-  const toggle = helpers.toggleLineRangeTransclusions(
-    editor.content.split("\n"),
-    0,
-    6,
-  );
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(
-      editor,
-      toggle.changesByLine,
-    ),
-    true,
-  );
-  assert.match(editor.content, /  - !\[\[#\^valid\]\]/);
-  assert.match(editor.content, /  - !\[\[#\^plain\]\]/);
-  assert.match(editor.content, /- !\[\[loose\]\]/);
-  assert.match(editor.content, /- \[\?\] #task Parent \[dependsOn:: Here__valid\]/);
-  assert.match(editor.content, /Valid target \[id:: Here__valid\] \^valid/);
-  assert.doesNotMatch(editor.content, /Here__plain|Plain target \[id::/);
-});
-
-test("counted runtime dependency toggles handle hidden and visible targets independently", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    vault: { getAbstractFileByPath: () => activeFile },
-  };
-  const editor = new TestEditor(
-    [
-      "- [ ] #task Hidden parent",
-      "  - [[#^hidden]]",
-      "- [ ] #task Hidden target #hide ^hidden",
-      "- [ ] #task Visible parent",
-      "  - [[#^visible]]",
-      "- [ ] #task Visible target ^visible",
-    ].join("\n"),
-  );
-  const toggle = helpers.toggleLineRangeTransclusions(
-    editor.content.split("\n"),
-    0,
-    5,
-  );
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(
-      editor,
-      toggle.changesByLine,
-    ),
-    true,
-  );
-  assert.match(editor.content, /  - !\[\[#\^hidden\]\]/);
-  assert.match(editor.content, /  - !\[\[#\^visible\]\]/);
-  assert.doesNotMatch(editor.content, /Here__hidden/);
-  assert.match(editor.content, /- \[\?\] #task Visible parent \[dependsOn:: Here__visible\]/);
-  assert.match(editor.content, /- \[ \] #task Hidden parent/);
-  assert.match(editor.content, /Visible target \[id:: Here__visible\] \^visible/);
-});
-
-test("counted dependency toggles retain the strongest rank for repeated targets", async () => {
-  const activeFile = { path: "Here.md", extension: "md" };
-  const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {
-    workspace: { getActiveFile: () => activeFile },
-    vault: { getAbstractFileByPath: () => activeFile },
-  };
-  const editor = new TestEditor(
-    [
-      "- [*] #task Next parent ^next-parent",
-      "  - [[#^shared]]",
-      "- [/] #task Working parent ^working-parent",
-      "  - [[#^shared]]",
-      "- [ ] #task Shared target ^shared",
-      "- [/] #task Hidden parent ^hidden-parent",
-      "  - [[#^hidden]]",
-      "- [ ] #task Hidden target #hide ^hidden",
-    ].join("\n"),
-  );
-  const toggle = helpers.toggleLineRangeTransclusions(
-    editor.content.split("\n"),
-    0,
-    7,
-  );
-
-  assert.equal(
-    await plugin.applyDependencyAwareTransclusionChanges(
-      editor,
-      toggle.changesByLine,
-    ),
-    true,
-  );
-  assert.match(editor.content, /- \[\?\] #task Next parent \[dependsOn:: Here__shared\]/);
-  assert.match(editor.content, /- \[\?\] #task Working parent \[dependsOn:: Here__shared\]/);
-  assert.match(
-    editor.content,
-    /- \[\/\] #task Shared target \[id:: Here__shared\] \^shared/,
-  );
-  assert.match(editor.content, /  - !\[\[#\^hidden\]\]/);
-  assert.doesNotMatch(editor.content, /Here__hidden/);
-  assert.match(editor.content, /- \[ \] #task Hidden target #hide \^hidden/);
-});
-
 test("counted transclusion toggle evaluates each line independently", () => {
   const result = helpers.toggleLineRangeTransclusions(
     ["- [[a]] and ![[b]]", "- ![[c]]"],
@@ -3664,6 +2966,404 @@ test("counted transclusion toggle evaluates each line independently", () => {
     helpers.toggleLineTransclusions("prefix [[a]] and [[b]]").line,
     "prefix ![[a]] and ![[b]]",
   );
+});
+
+test("transclusion toggle is refused on Depends-On lines", async () => {
+  const line = "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[Other#^b]]";
+  assert.deepEqual(helpers.findTransclusionToggleTargets(line), []);
+  assert.equal(helpers.toggleLineTransclusions(line).found, false);
+  const editor = new TransactionEditor(
+    [
+      "- [?] #task P [dependsOn:: Here__a, Other__b] ^p",
+      line,
+      "- [x] #task A [id:: Here__a] ^a",
+    ].join("\n"),
+    { line: 1, ch: 5 },
+  );
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md", extension: "md" }) },
+  };
+  notices.length = 0;
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), false);
+  assert.equal(editor.transactions.length, 0);
+  assert.equal(editor.content.split("\n")[1], line);
+  assert.match(notices.at(-1), /Ctrl\+Shift\+P/);
+});
+
+test("legacy sole-link children toggle purely, without field or status writes", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const lines = [
+    "- [/] #task Parent ^parent",
+    "  - [[#^child]]",
+    "- [ ] #task Child ^child",
+  ];
+  const editor = new TransactionEditor(lines.join("\n"), { line: 1, ch: 5 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+  };
+
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+  assert.equal(editor.transactions.length, 1);
+  assert.deepEqual(
+    editor.transactions[0].changes.map((change) => change.from.line),
+    [1],
+  );
+  assert.equal(editor.getLine(0), "- [/] #task Parent ^parent");
+  assert.equal(editor.getLine(1), "  - ![[#^child]]");
+  assert.equal(editor.getLine(2), "- [ ] #task Child ^child");
+
+  assert.equal(await plugin.toggleCurrentLineTransclusions(editor), true);
+  assert.equal(editor.getLine(1), "  - [[#^child]]");
+  assert.equal(editor.getLine(0), "- [/] #task Parent ^parent");
+  assert.equal(editor.getLine(2), "- [ ] #task Child ^child");
+});
+
+test("Ctrl+D on the Depends on row clears the line, field, and legacy children", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const editor = new TransactionEditor(
+    [
+      "- [?] #task P [dependsOn:: Here__a] ^p",
+      "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+      "  - ![[#^a]]",
+      "- [x] #task A [id:: Here__a] ^a",
+    ].join("\n"),
+    { line: 0, ch: 2 },
+  );
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+  };
+  notices.length = 0;
+  const result = await plugin.deleteBulletPropertyValue(
+    editor,
+    { line: 0, ch: 2 },
+    "dependsOn",
+    {},
+  );
+  assert.equal(result.deleted, true);
+  assert.match(editor.getValue(), /- \[ \] #task P \^p$/m);
+  assert.doesNotMatch(editor.getValue(), /DEPENDS ON|dependsOn/);
+  assert.doesNotMatch(editor.getValue(), /\[\[#\^a\]\]/);
+  assert.match(notices.at(-1), /No longer waits on/);
+});
+
+test("Ctrl+D clears a field-only dependency without a line", async () => {
+  const activeFile = { path: "Here.md", extension: "md" };
+  const editor = new TransactionEditor(
+    [
+      "- [?] #task P [dependsOn:: Here__a] ^p",
+      "- [x] #task A [id:: Here__a] ^a",
+    ].join("\n"),
+    { line: 0, ch: 2 },
+  );
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => activeFile },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+  };
+  const result = await plugin.deleteBulletPropertyValue(
+    editor,
+    { line: 0, ch: 2 },
+    "dependsOn",
+    {},
+  );
+  assert.equal(result.deleted, true);
+  assert.match(editor.getValue(), /- \[\?\] #task P \^p$/m);
+  assert.doesNotMatch(editor.getValue(), /dependsOn/);
+});
+
+test("counted Ctrl+D on the Depends on row clears every targeted task", async () => {
+  const lines = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [?] #task Q [dependsOn:: Here__a] ^q",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [x] #task A [id:: Here__a] ^a",
+  ];
+  const editor = new TransactionEditor(lines.join("\n"), { line: 0, ch: 2 });
+  const session = helpers.discoverCountedObsidianTaskTargets(
+    editor.content,
+    0,
+    1,
+  );
+  assert.deepEqual(
+    session.targets.map((target) => target.line),
+    [0, 2],
+  );
+  const file = { path: "Here.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  plugin.app = {
+    workspace: { getActiveFile: () => file },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+  };
+  const result = await plugin.deleteCountedBulletPropertyValue(
+    editor,
+    { line: 0, ch: 2 },
+    file.path,
+    session,
+    "dependsOn",
+  );
+  assert.equal(result.deleted, true);
+  assert.match(editor.getValue(), /- \[ \] #task P \^p$/m);
+  assert.match(editor.getValue(), /- \[ \] #task Q \^q$/m);
+  assert.doesNotMatch(editor.getValue(), /DEPENDS ON|dependsOn/);
+});
+
+test("findRemovedLineText reports deleted lines", () => {
+  assert.equal(
+    helpers.findRemovedLineText("a\nb\nc", "a\nc"),
+    "b",
+  );
+  assert.equal(
+    helpers.findRemovedLineText("a\nb\nc", "a\nx\nc"),
+    "b",
+  );
+  assert.equal(helpers.findRemovedLineText("a\nb", "a\nb"), "");
+  assert.equal(helpers.findRemovedLineText("a", "a\nb"), "");
+});
+
+test("hand-edit mirror projects an edited line into the field", async () => {
+  const content = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const plan = helpers.planDependencyHandEditMirror(content, content, 1, "");
+  assert.equal(plan.kind, "touch");
+  assert.equal(plan.owning, 0);
+  const editor = new TransactionEditor(content, { line: 2, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    1,
+    "",
+  );
+  assert.equal(result.mirrored, true);
+  assert.match(editor.getValue(), /\[dependsOn:: Here__a\]/);
+  assert.match(editor.getValue(), /- \[ \] #task A \[id:: Here__a\] \^a/);
+});
+
+test("hand-edit mirror canonicalises a hand-written line variant", async () => {
+  const content = [
+    "- [ ] #task P [dependsOn:: Here__a] ^p",
+    "  - 🔗 **DEPENDENCIES:** [[#^a]]",
+    "- [ ] #task A [id:: Here__a] ^a",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 3, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    1,
+    "",
+  );
+  assert.equal(result.mirrored, true);
+  assert.match(
+    editor.getValue(),
+    /  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\]/,
+  );
+});
+
+test("hand-edit mirror drops a linkless line and the field", async () => {
+  const content = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "  - ⛓️ **DEPENDS ON:**",
+    "- [x] #task A [id:: Here__a] ^a",
+  ].join("\n");
+  const plan = helpers.planDependencyHandEditMirror(content, content, 1, "");
+  assert.equal(plan.kind, "clear-empty");
+  const editor = new TransactionEditor(content, { line: 2, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    1,
+    "",
+    { registry: helpers.parseTasksStatusRegistry(compatibleTasksSettings()) },
+  );
+  assert.equal(result.mirrored, true);
+  assert.match(editor.getValue(), /- \[ \] #task P \^p$/m);
+  assert.doesNotMatch(editor.getValue(), /DEPENDS ON|dependsOn/);
+});
+
+test("hand-edit mirror clears the field after the line is deleted", async () => {
+  const oldContent = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [x] #task A [id:: Here__a] ^a",
+  ].join("\n");
+  const newContent = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "- [x] #task A [id:: Here__a] ^a",
+  ].join("\n");
+  const removed = helpers.findRemovedLineText(oldContent, newContent);
+  assert.match(removed, /DEPENDS ON/);
+  const plan = helpers.planDependencyHandEditMirror(
+    oldContent,
+    newContent,
+    1,
+    removed,
+  );
+  assert.equal(plan.kind, "clear-field");
+  const editor = new TransactionEditor(newContent, { line: 1, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    oldContent,
+    1,
+    removed,
+    { registry: helpers.parseTasksStatusRegistry(compatibleTasksSettings()) },
+  );
+  assert.equal(result.mirrored, true);
+  assert.match(editor.getValue(), /- \[ \] #task P \^p$/m);
+  assert.doesNotMatch(editor.getValue(), /dependsOn/);
+});
+
+test("hand-edit mirror leaves malformed lines alone", async () => {
+  const content = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] plus prose",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  assert.equal(
+    helpers.planDependencyHandEditMirror(content, content, 1, ""),
+    null,
+  );
+  const editor = new TransactionEditor(content, { line: 2, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    1,
+    "",
+  );
+  assert.equal(result.mirrored, false);
+  assert.equal(editor.getValue(), content);
+});
+
+test("hand-edit mirror leaves legacy-only children for the hooks", async () => {
+  const content = [
+    "- [ ] #task P [dependsOn:: Here__a] ^p",
+    "  - ![[#^a]]",
+    "- [x] #task A [id:: Here__a] ^a",
+  ].join("\n");
+  assert.equal(
+    helpers.planDependencyHandEditMirror(content, content, 0, ""),
+    null,
+  );
+  const editor = new TransactionEditor(content, { line: 2, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    0,
+    "",
+  );
+  assert.equal(result.mirrored, false);
+  assert.equal(editor.getValue(), content);
+});
+
+test("task moves carry the Depends-On line and repath stranded same-note links", () => {
+  const source = [
+    "- [ ] #task One [dependsOn:: Source__two] ^one",
+    "  - ⛓️ **DEPENDS ON:** [[#^two]]",
+    "- [ ] #task Two ^two",
+  ].join("\n");
+  const destination = [
+    "---",
+    'type: "[[project]]"',
+    "status: waiting",
+    "---",
+    "## Tasks",
+    "",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 0);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Dest.md",
+    sourceContent: source,
+    destinationContent: destination,
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const nextDestination = plan.changes.get("Dest.md").after;
+  assert.match(
+    nextDestination,
+    /\[dependsOn:: Source__two\]/,
+  );
+  assert.match(
+    nextDestination,
+    /⛓️ \*\*DEPENDS ON:\*\* \[\[Source#\^two\]\]/,
+  );
+  const nextSource = plan.changes.get("Source.md").after;
+  assert.doesNotMatch(nextSource, /#task One/);
+  assert.match(nextSource, /- \[ \] #task Two \^two/);
+});
+
+test("task moves keep pathless links when the target moves along", () => {
+  const source = [
+    "- [ ] #task One [dependsOn:: Source__two] ^one",
+    "  - ⛓️ **DEPENDS ON:** [[#^two]]",
+    "- [ ] #task Two ^two",
+  ].join("\n");
+  const destination = [
+    "---",
+    'type: "[[project]]"',
+    "status: waiting",
+    "---",
+    "## Tasks",
+    "",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 1);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Dest.md",
+    sourceContent: source,
+    destinationContent: destination,
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const nextDestination = plan.changes.get("Dest.md").after;
+  assert.match(
+    nextDestination,
+    /⛓️ \*\*DEPENDS ON:\*\* \[\[#\^two\]\]/,
+  );
+  assert.match(nextDestination, /\[dependsOn:: Dest__two\]/);
 });
 
 test("migration transform rewrites only real tasks and reports skipped non-tasks", () => {
@@ -3704,28 +3404,6 @@ test("migration transform rewrites only real tasks and reports skipped non-tasks
     resolutions,
   );
   assert.equal(second.changed, false);
-});
-
-test("migration warns and never rewrites ambiguous dependency IDs", (t) => {
-  const vault = fs.mkdtempSync(path.join(os.tmpdir(), "bob-dependency-migration-"));
-  t.after(() => fs.rmSync(vault, { recursive: true, force: true }));
-  const parentPath = path.join(vault, "Parent.md");
-  const originalParent = [
-    "- [ ] #task Parent [dependsOn:: x] ^parent",
-    "  - 🔗 **DEPENDENCIES:** [[#^x]]",
-  ].join("\n");
-  fs.writeFileSync(parentPath, originalParent);
-  fs.writeFileSync(path.join(vault, "A.md"), "- [ ] #task A ^x\n");
-  fs.writeFileSync(path.join(vault, "B.md"), "- [ ] #task B [id:: x] ^y\n");
-
-  const result = spawnSync(
-    process.execPath,
-    [path.join(__dirname, "migrate-dependency-bullets.mjs"), "--vault", vault, "--write"],
-    { encoding: "utf8" },
-  );
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /ambiguous dependency ID x:/);
-  assert.equal(fs.readFileSync(parentPath, "utf8"), originalParent);
 });
 
 test("counted task moves discover movable tasks without wrapping or examples", () => {

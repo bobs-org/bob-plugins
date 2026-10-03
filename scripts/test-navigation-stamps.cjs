@@ -306,21 +306,6 @@ test("counted dependency edit stamps the rewritten parent", () => {
   assert.match(parent, /\[fresh:: 2026-10-08\]/);
 });
 
-test("same-file dependency toggle stamps the parent line", () => {
-  const content = [
-    "- [ ] #task Parent ^parent",
-    "  - [[#^child]]",
-    "- [ ] #task Child ^child",
-  ].join("\n");
-  const plan = helpers.planSameFileDependencyToggle(content, 1, "  - ![[#^child]]", "Here.md", {
-    stampLine: stamp,
-    freshDateText: DATE,
-  });
-  assert.equal(plan.qualified, true);
-  const parent = plan.content.split("\n")[plan.parentLine];
-  assert.match(parent, /\[fresh:: 2026-10-08\]/);
-});
-
 test("moved tasks are stamped at their destination", () => {
   const source = "- [ ] #task Move me ^mmm";
   const destination = ["---", 'type: "[[area]]"', "---", "# Area", "Body"].join("\n");

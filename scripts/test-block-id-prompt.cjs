@@ -4463,49 +4463,72 @@ test("planTargetTaskUpdate tolerates a throwing stamper", () => {
 });
 
 // compat (bob-cli-3n.5): Depends-On line recogniser, contract DP vectors
-// (docs/task-dependencies.md section 11.1).
+// (docs/task-dependencies.md section 11.1). `line` is the candidate line on
+// its own. Guarded lines refuse Ctrl+Shift+Enter through
+// `isTaskDependencyLine` or `isMalformedTaskDependencyLine`: every
+// `accept`/`empty` shape and every `malformed` vector (DP15, DP16, DP23,
+// DP25, DP26), while every `not-a-line` vector (DP24, DP27, DP28, DP29)
+// stays unguarded. DP18/DP19/DP20/DP21/DP30 share an accept line shape —
+// parentage, fenced code, and Work Log ancestry are hooks projection
+// concerns, so the shape stays guarded here.
 test("Depends-On line recogniser covers the contract DP vectors", () => {
-  const accept = [
-    "  - ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]",
-    "  - ⛓️ **DEPENDS ON:** [[cash#^unemployment]]",
-    "  - ⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a|b • c]]",
-    "  - ⛓️ **DEPENDS ON:** ~~[[#^a]]~~",
-    "  - ⛓️ **DEPENDS ON:** ![[#^a]]",
-    "  - 🔗 **DEPENDS ON:** [[#^a]]",
-    "  - **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **DEPENDENCIES:** [[#^a]]",
-    "  - ⛓ **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:**",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]",
-    // DP25/DP26 are malformed per the contract but keep the guarded shape,
-    // so the boolean recogniser stays true for them.
-    "  - ⛓️ **DEPENDS ON:** [[note]]",
-    "  - ⛓️ **DEPENDS ON:** [[note#Heading]]",
-    "  - ⛓️ **DEPENDS ON:** • ,",
+  const guardedStrict = [
+    ["DP1", "  - ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]"],
+    ["DP2", "  - ⛓️ **DEPENDS ON:** [[cash#^unemployment]]"],
+    ["DP3", "  - ⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]"],
+    ["DP4", "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]"],
+    ["DP5", "  - ⛓️ **DEPENDS ON:** [[#^a|b • c]]"],
+    ["DP6", "  - ⛓️ **DEPENDS ON:** ~~[[#^a]]~~"],
+    ["DP7", "  - ⛓️ **DEPENDS ON:** ![[#^a]]"],
+    ["DP8", "  - 🔗 **DEPENDS ON:** [[#^a]]"],
+    ["DP9", "  - **DEPENDS ON:** [[#^a]]"],
+    ["DP10", "  - ⛓️ **DEPENDENCIES:** [[#^a]]"],
+    ["DP11", "  - ⛓ **DEPENDS ON:** [[#^a]]"],
+    ["DP12", "  - ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]"],
+    ["DP13", "  - ⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]"],
+    ["DP14", "  - ⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]"],
+    ["DP17", "  - ⛓️ **DEPENDS ON:**"],
+    // DP18/DP19/DP20 share DP1's shape; the context makes them
+    // not-a-line for projection, but the shape stays guarded here.
+    ["DP18-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP21", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP22", "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]"],
+    // DP23/DP25/DP26 are malformed per the contract but keep the guarded
+    // shape, so the boolean recogniser stays true for them.
+    ["DP23", "  - ⛓️ **DEPENDS ON:** [[note]]"],
+    ["DP25", "  - ⛓️ **DEPENDS ON:** [[note#Heading]]"],
+    ["DP26", "  - ⛓️ **DEPENDS ON:** • ,"],
+    // DP30 shares DP1's shape; its Work Log context is pinned by the
+    // Rust discovery test and the hooks, not by this shape guard.
+    ["DP30-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
   ];
-  for (const line of accept) {
-    assert.equal(helpers.isTaskDependencyLine(line), true, line);
+  for (const [id, line] of guardedStrict) {
+    assert.equal(helpers.isTaskDependencyLine(line), true, id + ": " + line);
+    assert.equal(helpers.isMalformedTaskDependencyLine(line), false, id + " not malformed: " + line);
   }
-  const reject = [
-    "  - ⛓️ **DEPENDS ON:** [[#^a",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review",
-    "- [?] #task Make appt ^rahway",
-    "  - 🗓️ **SCHEDULE LOG**",
-    "  - ![[Tasks#^ship]]",
-    "  - plain bullet",
-    "⛓️ **DEPENDS ON:** [[#^a]]",
-    "  - 🔗️ **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **depends on:** [[#^a]]",
-    "> - ⛓️ **DEPENDS ON:** [[#^a]]",
+  // DP15/DP16 are malformed per the contract and guarded through
+  // `isMalformedTaskDependencyLine`, which refuses Ctrl+Shift+Enter.
+  const guardedMalformed = [
+    ["DP15", "  - ⛓️ **DEPENDS ON:** [[#^a"],
+    ["DP16", "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review"],
   ];
-  for (const line of reject) {
-    assert.equal(helpers.isTaskDependencyLine(line), false, line);
+  for (const [id, line] of guardedMalformed) {
+    assert.equal(helpers.isTaskDependencyLine(line), false, id + ": " + line);
+    assert.equal(helpers.isMalformedTaskDependencyLine(line), true, id + " malformed: " + line);
+  }
+  const unguarded = [
+    ["DP24", "  - 🔗️ **DEPENDS ON:** [[#^a]]"],
+    ["DP27", "  - ⛓️ **depends on:** [[#^a]]"],
+    ["DP28", "⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["task", "- [?] #task Make appt ^rahway"],
+    ["schedule-log", "  - 🗓️ **SCHEDULE LOG**"],
+    ["transclusion", "  - ![[Tasks#^ship]]"],
+    ["bullet", "  - plain bullet"],
+  ];
+  for (const [id, line] of unguarded) {
+    assert.equal(helpers.isTaskDependencyLine(line), false, id + ": " + line);
+    assert.equal(helpers.isMalformedTaskDependencyLine(line), false, id + " not malformed: " + line);
   }
 });
 
@@ -4562,6 +4585,25 @@ test("malformed Depends-On lines refuse Ctrl+Shift+Enter instead of deleting the
   ]) {
     assert.equal(helpers.isMalformedTaskDependencyLine(line), false, line);
   }
+});
+
+test("Ctrl+Shift+Enter on a not-a-line Depends-On shape skips the dependency refusal", async () => {
+  resetNotices();
+  // DP24 (link emoji with VS16) is not-a-line: unguarded, so the flow
+  // passes the dependency guard and reaches normal link resolution.
+  const depLine = "  - 🔗️ **DEPENDS ON:** [[#^a]]";
+  const content = ["- [?] #task Dependent ^dep", depLine].join("\n");
+  const editor = createEditor(content);
+  editor.setCursor({ line: 1, ch: depLine.indexOf("[[#^a]]") + 2 });
+  const plugin = new Plugin();
+  let resolved = 0;
+  plugin.resolveTaskLinkTarget = async () => {
+    resolved += 1;
+    return { error: "stop" };
+  };
+  await plugin.startTaskLinkOpen(editor, { path: "Tasks.md" });
+  assert.equal(resolved, 1);
+  assert.notEqual(lastNotice(), "⛓ Dependency link — edit it with Ctrl+Shift+P");
 });
 
 test("Ctrl+Shift+Enter on a malformed Depends-On line is refused without deleting anything", async () => {

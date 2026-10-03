@@ -3008,14 +3008,33 @@ function isTaskDependencyLine(lineText) {
     return false;
   }
   const body = marker[2] || "";
+  // DP24: the legacy link emoji never carries VS16 — not a line. Only
+  // the pre-label emoji counts, as in the ledger-tools parser, so a
+  // VS16 sequence inside a link alias cannot trip it.
+  const labelAt = body.search(/\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/);
+  if (/🔗️/.test(labelAt === -1 ? body : body.slice(0, labelAt))) {
+    return false;
+  }
   TASK_DEPENDENCY_LINE_LINK_RE.lastIndex = 0;
   const remainder = body.replace(TASK_DEPENDENCY_LINE_LINK_RE, "");
   TASK_DEPENDENCY_LINE_LINK_RE.lastIndex = 0;
-  if (remainder === body) {
-    // No block links: only a bare label line (R9 empty) still counts.
-    return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(body);
+  if (TASK_DEPENDENCY_LINE_REMAINDER_RE.test(remainder)) {
+    // Accepted and empty (R9) lines, plus the malformed vectors whose
+    // links strip cleanly (DP23 bare note link, DP25 heading link, DP26
+    // separator-only): all guarded.
+    return true;
   }
-  return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(remainder);
+  // Malformed lines (contract R10: DP15 half-typed, DP16 trailing prose)
+  // are still managed lines: guard them exactly like accepted ones, so
+  // every malformed vector (DP15, DP16, DP23, DP25, DP26) behaves the
+  // same way. Only the not-a-line vectors stay unguarded (DP24 rejected
+  // above; DP27 lowercase label has no label match; DP28 no marker).
+  // Like the Rust parser, link brackets mark the residue as malformed
+  // rather than a new shape.
+  if (/\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/.test(body) && /(\[\[|\]\])/.test(body)) {
+    return true;
+  }
+  return false;
 }
 
 function getPomodoroMarkerPrefix(lineText, tokenStart) {

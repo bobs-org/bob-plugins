@@ -6273,6 +6273,24 @@ function parseDependencyLine(lineText, opts) {
 }
 
 // Dependency chips: true when a candidate Depends-On line is a real one —
+// Shared predicates for the Depends-On ownership check below.
+function dependencyChipIndentWidth(text) {
+  const match = /^[ \t]*/.exec(String(text || ""));
+  return match ? match[0].length : 0;
+}
+
+function dependencyChipHasMarker(text) {
+  return /^\s*(?:[-*+]|\d+[.)])\s+/.test(String(text || ""));
+}
+
+function dependencyChipIsTaskLine(text) {
+  const line = String(text || "");
+  if (!/^\s*(?:[-*+]|\d+[.)])\s+\[[^\]\n]\]/.test(line)) {
+    return false;
+  }
+  return /#task(?![A-Za-z0-9_/-])/.test(line);
+}
+
 // a direct child of a `#task` list item and not inside a Work Log entry
 // (contract DP19/DP20). `lineTexts` holds every note line; `lineIndex` is
 // the 0-based index of the candidate. Never throws.
@@ -6284,18 +6302,9 @@ function dependencyChipLineOwnedByTask(lineTexts, lineIndex) {
     if (lineIndex < 0 || lineIndex >= lineTexts.length) {
       return false;
     }
-    const widthOf = (text) => {
-      const match = /^[ \t]*/.exec(String(text || ""));
-      return match ? match[0].length : 0;
-    };
-    const hasMarker = (text) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(String(text || ""));
-    const isTaskLine = (text) => {
-      const line = String(text || "");
-      if (!/^\s*(?:[-*+]|\d+[.)])\s+\[[^\]\n]\]/.test(line)) {
-        return false;
-      }
-      return /#task(?![A-Za-z0-9_/-])/.test(line);
-    };
+    const widthOf = dependencyChipIndentWidth;
+    const hasMarker = dependencyChipHasMarker;
+    const isTaskLine = dependencyChipIsTaskLine;
     const candidateWidth = widthOf(lineTexts[lineIndex]);
     if (!hasMarker(lineTexts[lineIndex])) {
       return false;
@@ -6336,6 +6345,81 @@ function dependencyChipLineOwnedByTask(lineTexts, lineIndex) {
     return true;
   } catch (error) {
     return false;
+  }
+}
+
+// Same ownership check as `dependencyChipLineOwnedByTask`, but walking
+// ancestors with `doc.line(n)` lookups (contract §7.4) so Live Preview
+// touches only visible ranges instead of copying every document line.
+// `lineNumber` is 1-based, as `doc.lineAt(pos).number` reports it. Fails
+// open (true) when line access is unavailable; fails closed (false) when
+// the candidate or its parent is not an owned Depends-On line. Never
+// throws.
+function dependencyChipLineOwnedByTaskAtDoc(doc, lineNumber) {
+  try {
+    if (!doc || typeof doc.line !== "function" || !Number.isInteger(lineNumber) || lineNumber < 1) {
+      return true;
+    }
+    const readLine = (number) => {
+      try {
+        const line = doc.line(number);
+        return line && typeof line.text === "string" ? line.text : null;
+      } catch (error) {
+        return null;
+      }
+    };
+    const candidate = readLine(lineNumber);
+    if (candidate === null) {
+      return true;
+    }
+    if (!dependencyChipHasMarker(candidate)) {
+      return false;
+    }
+    const candidateWidth = dependencyChipIndentWidth(candidate);
+    let parent = -1;
+    let parentText = "";
+    for (let number = lineNumber - 1; number >= 1; number -= 1) {
+      const text = readLine(number);
+      if (text === null) {
+        return true;
+      }
+      if (!text.trim()) {
+        continue;
+      }
+      if (dependencyChipIndentWidth(text) >= candidateWidth) {
+        continue;
+      }
+      if (!dependencyChipHasMarker(text)) {
+        return false;
+      }
+      parent = number;
+      parentText = text;
+      break;
+    }
+    if (parent === -1 || !dependencyChipIsTaskLine(parentText)) {
+      return false;
+    }
+    // DP20: reject lines nested under a Work Log entry anywhere above.
+    let width = dependencyChipIndentWidth(parentText);
+    for (let number = parent; number >= 1; number -= 1) {
+      const text = readLine(number);
+      if (text === null) {
+        return true;
+      }
+      if (!text.trim()) {
+        continue;
+      }
+      const w = dependencyChipIndentWidth(text);
+      if (w < width || number === parent) {
+        width = Math.min(width, w);
+        if (/WORK LOG/.test(text)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  } catch (error) {
+    return true;
   }
 }
 
@@ -6417,6 +6501,153 @@ function dependencyReadingAnchorOwner(anchor, root) {
     return null;
   } catch (error) {
     return null;
+  }
+}
+
+// Owning `#task` item for a Reading-view Depends-On row: the row's
+// parent list must hang directly off a `#task` list item (contract
+// DP19). Returns the owner li, or null. Never throws.
+function dependencyReadingOwningTask(li, root) {
+  try {
+    if (!li || li.nodeType !== 1) {
+      return null;
+    }
+    const list = li.parentNode || null;
+    if (!list || list === root) {
+      return null;
+    }
+    const listTag = String((list.tagName || list.nodeName) || "").toUpperCase();
+    if (listTag !== "UL" && listTag !== "OL") {
+      return null;
+    }
+    const owner = list.parentNode || null;
+    if (!owner || owner.nodeType !== 1) {
+      return null;
+    }
+    const ownerTag = String((owner.tagName || owner.nodeName) || "").toUpperCase();
+    if (ownerTag !== "LI") {
+      return null;
+    }
+    // The owner's own text (nested lists excluded) must carry the task
+    // tag, so a row under a Work Log entry or a prose item never counts.
+    if (!/#task(?![A-Za-z0-9_/-])/.test(dependencyReadingOwnText(owner))) {
+      return null;
+    }
+    return owner;
+  } catch (error) {
+    return null;
+  }
+}
+
+// True when a Reading-view Depends-On row sits under a Work Log entry
+// (contract DP20/DP30): any ancestor list item above the row whose own
+// text is a Work Log label. Never throws.
+function dependencyReadingWorkLogAncestor(li, root) {
+  try {
+    let node = li && li.parentNode ? li.parentNode : null;
+    let guard = 0;
+    while (node && node !== root && guard < 100) {
+      guard += 1;
+      try {
+        const tag = String((node.tagName || node.nodeName) || "").toUpperCase();
+        if (tag === "LI" && node !== li) {
+          const own = dependencyReadingOwnText(node);
+          if (/^\s*(?:🛠️\s*)?\**\s*WORK LOG(?![A-Za-z0-9_])/.test(own)) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Keep walking.
+      }
+      node = node.parentNode || null;
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// True when a Reading-view row's own non-link text holds only the
+// Depends-On label shape (contract §2/R10): the emoji, the bold label,
+// and separators. Trailing prose (DP16), a half-typed link (DP15), a
+// VS16 link emoji (DP24), or a lowercase label (DP27) fail. Anchors
+// carry the links (their hrefs are validated separately) and nested
+// lists are not part of the line. Never throws.
+function dependencyReadingRowShapeOk(li) {
+  try {
+    if (!li) {
+      return false;
+    }
+    let hasLabel = false;
+    let residue = "";
+    let guard = 0;
+    const walk = (parent) => {
+      let children = [];
+      try {
+        children = Array.from(parent.childNodes || []);
+      } catch (error) {
+        return;
+      }
+      for (const child of children) {
+        guard += 1;
+        if (guard > 500) {
+          return;
+        }
+        try {
+          if (!child) {
+            continue;
+          }
+          if (child.nodeType === 3) {
+            residue += String(child.nodeValue !== undefined && child.nodeValue !== null ? child.nodeValue : child.textContent || "");
+            continue;
+          }
+          if (child.nodeType !== 1) {
+            continue;
+          }
+          const tag = String(child.tagName || child.nodeName || "").toUpperCase();
+          if (tag === "UL" || tag === "OL" || tag === "LI") {
+            continue;
+          }
+          if (tag === "A") {
+            try {
+              const classes = String(child.className || "").split(/\s+/);
+              if (classes.includes("internal-link")) {
+                continue;
+              }
+            } catch (error) {
+              // Fall through to residue.
+            }
+          }
+          if ((tag === "STRONG" || tag === "B") && /(?:DEPENDS ON|DEPENDENCIES)/.test(String(child.textContent || ""))) {
+            hasLabel = true;
+            continue;
+          }
+          if (tag === "DIV" || tag === "SECTION" || tag === "TABLE") {
+            continue;
+          }
+          walk(child);
+        } catch (error) {
+          continue;
+        }
+      }
+    };
+    walk(li);
+    if (!hasLabel) {
+      return false;
+    }
+    let full = "";
+    try {
+      full = String(li.textContent || "");
+    } catch (error) {
+      full = residue;
+    }
+    // DP24: the legacy link emoji never carries VS16.
+    if (/🔗️/.test(full)) {
+      return false;
+    }
+    return /^[\s•·,⛓🔗\uFE0F]*$/u.test(residue);
+  } catch (error) {
+    return false;
   }
 }
 
@@ -13195,20 +13426,19 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   // rebuild drops the index with it (one cache, one lifecycle).
   dependencyTasksIndex() {
     try {
-      const tasks = planBlockTasks(this.app);
-      const gen = this.freshnessTasksGen || 0;
-      let memo = null;
-      try {
-        memo = this.freshnessMemo || null;
-      } catch (error) {
-        memo = null;
+      // One cache with one invalidation: the index lives on the
+      // freshness memo via `freshnessEnsureMemo`, so two passes over an
+      // unchanged vault build it once and any freshness change drops it
+      // with the memo.
+      const memo = this.freshnessEnsureMemo();
+      if (!memo || typeof memo !== "object") {
+        return new Map();
       }
-      const memoCurrent = Boolean(memo && memo.tasks === tasks && (memo.tasksGen || 0) === gen);
-      if (memoCurrent && memo.dependencyTasksIndex instanceof Map) {
+      if (memo.dependencyTasksIndex instanceof Map) {
         return memo.dependencyTasksIndex;
       }
       const map = new Map();
-      const list = Array.isArray(tasks) ? tasks : [];
+      const list = Array.isArray(memo.tasks) ? memo.tasks : [];
       for (const task of list) {
         try {
           if (!task || typeof task !== "object") {
@@ -13228,9 +13458,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         }
       }
       try {
-        if (memoCurrent) {
-          memo.dependencyTasksIndex = map;
-        }
+        memo.dependencyTasksIndex = map;
       } catch (error) {
         // An uncacheable memo still returns a correct index.
       }
@@ -13497,30 +13725,18 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         return builder.finish();
       }
       const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
-      // Full note lines for the Depends-On ownership check (DP19/DP20),
-      // read lazily on the first candidate line. Stays null when the doc
-      // does not expose line access; ownership then fails open.
-      let chipLineTexts = null;
-      let chipLineTextsFailed = false;
-      const chipLineTextsFor = () => {
-        if (chipLineTexts !== null || chipLineTextsFailed) {
-          return chipLineTexts;
-        }
+      // Depends-On ownership (DP19/DP20) walks ancestors with line
+      // lookups, touching only visible ranges (contract §7.4) instead of
+      // copying every document line. When line access is unavailable the
+      // ownership check fails open.
+      const chipLineOwned = (lineNumber) => {
         try {
-          const count = doc.lines;
-          if (!Number.isInteger(count) || count <= 0 || count >= 100000 || typeof doc.line !== "function") {
-            chipLineTextsFailed = true;
-            return null;
+          if (typeof lineNumber !== "number") {
+            return true;
           }
-          const texts = [];
-          for (let number = 1; number <= count; number += 1) {
-            texts.push(String(doc.line(number).text || ""));
-          }
-          chipLineTexts = texts;
-          return chipLineTexts;
+          return dependencyChipLineOwnedByTaskAtDoc(doc, lineNumber);
         } catch (error) {
-          chipLineTextsFailed = true;
-          return null;
+          return true;
         }
       };
       const interactive = Boolean(this.dependencyNavApi());
@@ -13549,14 +13765,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
                 if (parsed && (parsed.verdict === "accept" || parsed.verdict === "empty")) {
                   // DP19/DP20: only a direct child of a #task line gets
                   // chips — never paragraphs, grandchildren, or Work Log
-                  // lines. Fails open when line access is unavailable.
+                  // lines. Ancestors walk with line lookups (contract
+                  // §7.4); fails open when line access is unavailable.
                   let owned = true;
                   try {
                     if (typeof line.number === "number") {
-                      const texts = chipLineTextsFor();
-                      if (texts !== null) {
-                        owned = dependencyChipLineOwnedByTask(texts, line.number - 1);
-                      }
+                      owned = chipLineOwned(line.number);
                     }
                   } catch (error) {
                     owned = true;
@@ -13629,6 +13843,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         try {
           const tag = current.tagName || current.nodeName ? String(current.tagName || current.nodeName) : "";
           if (tag === "CODE" || tag === "code" || tag === "PRE" || tag === "pre") {
+            return true;
+          }
+          // DP29: a blockquoted row is never a Depends-On line.
+          if (tag === "BLOCKQUOTE" || tag === "blockquote") {
             return true;
           }
         } catch (error) {
@@ -13706,6 +13924,23 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
             continue;
           }
           if (links.length === 0) {
+            continue;
+          }
+          // Owning-line rules, as in Live Preview
+          // (`dependencyChipLineOwnedByTask`, contract DP16/DP19/DP20/
+          // DP29/DP30): the row's parent list must hang directly off a
+          // `#task` item, the row must sit outside Work Log entries, and
+          // its own text must parse as the label shape (never chips on
+          // malformed, grandchild, Work Log, or blockquoted rows).
+          // Blockquotes and code reach here through
+          // `dependencyExcludedAncestor` above.
+          if (!dependencyReadingOwningTask(li, el)) {
+            continue;
+          }
+          if (dependencyReadingWorkLogAncestor(li, el)) {
+            continue;
+          }
+          if (!dependencyReadingRowShapeOk(li)) {
             continue;
           }
           const model = this.dependencyChipModelForDomLinks(links, path);
@@ -13860,8 +14095,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           } catch (error) {
             // An uncollapsed row never breaks the chips.
           }
-          // Hide the raw separators between chips (blanking is idempotent
-          // across re-renders); the label and outer text stay untouched.
+          // Hide the raw separators between chips and the leading emoji
+          // text (blanking is idempotent across re-renders), as Live
+          // Preview does; the label element is hidden above and outer
+          // text stays untouched.
           try {
             const kids = Array.from(li.childNodes || []);
             const owned = new Set(links);
@@ -13875,13 +14112,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
                 last = index;
               }
             }
-            for (let index = first; index >= 0 && index <= last; index += 1) {
+            for (let index = 0; index >= 0 && index <= last; index += 1) {
               const node = kids[index];
               if (!node || node.nodeType !== 3) {
                 continue;
               }
               const value = node.nodeValue !== undefined && node.nodeValue !== null ? node.nodeValue : node.textContent;
-              if (/^[\s•·,]*$/.test(String(value || ""))) {
+              if (/^[\s•·,⛓🔗\uFE0F]*$/u.test(String(value || ""))) {
                 try {
                   node.nodeValue = "";
                 } catch (clearError) {
@@ -13907,13 +14144,24 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           }
           // Actions carry the derived 0-based note line (contract §9) and
           // stay hidden when the line cannot be derived.
+          // The 0-based line is the section's line start from
+          // `ctx.getSectionInfo(el)` plus the row's offset in the
+          // section; without section info the actions stay hidden.
+          let readingSection = null;
+          try {
+            if (ctx && typeof ctx.getSectionInfo === "function") {
+              readingSection = ctx.getSectionInfo(el) || null;
+            }
+          } catch (error) {
+            readingSection = null;
+          }
           if (interactive && readingActions.length > 0) {
             const self = this;
             const pending = readingActions.slice();
             const blockIds = pending.map((action) => String((action.chip && action.chip.blockId) || ""));
             try {
               Promise.resolve()
-                .then(() => self.dependencyReadingLineFor(path, blockIds))
+                .then(() => self.dependencyReadingLineFor(path, blockIds, readingSection))
                 .then((line) => {
                   try {
                     if (!Number.isInteger(line)) {
@@ -14141,13 +14389,22 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  // 0-based note line of the Depends-On row rendered in Reading view,
-  // matched by its link block ids in order (contract §9); null when the
-  // line cannot be derived, in which case chip actions stay hidden.
-  async dependencyReadingLineFor(path, blockIds) {
+  // 0-based note line of the Depends-On row rendered in Reading view
+  // (contract §9): the section's line start from
+  // `ctx.getSectionInfo(el)` plus the row's offset in the section. The
+  // row is the section's only owned, accepted Depends-On line whose
+  // link block ids match in order; null when the line cannot be derived
+  // uniquely (no match, or two tasks with identical lines), in which
+  // case chip actions stay hidden. Never throws.
+  async dependencyReadingLineFor(path, blockIds, section) {
     try {
       const want = (Array.isArray(blockIds) ? blockIds : []).map((id) => String(id || ""));
       if (!path || want.length === 0) {
+        return null;
+      }
+      const lineStart = section && Number.isInteger(section.lineStart) ? section.lineStart : null;
+      const lineEnd = section && Number.isInteger(section.lineEnd) ? section.lineEnd : null;
+      if (lineStart === null || lineEnd === null) {
         return null;
       }
       let text = null;
@@ -14164,7 +14421,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         return null;
       }
       const lines = text.split("\n");
-      for (let index = 0; index < lines.length; index += 1) {
+      const low = Math.max(0, lineStart);
+      const high = Math.min(lines.length - 1, lineEnd);
+      const matches = [];
+      for (let index = low; index <= high; index += 1) {
         let parsed = null;
         try {
           parsed = parseDependencyLine(lines[index]);
@@ -14175,11 +14435,26 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           continue;
         }
         const have = (parsed.targets || []).map((target) => String(target.blockId || ""));
-        if (have.length === want.length && have.every((id, at) => id === want[at])) {
-          return index;
+        if (have.length !== want.length || !have.every((id, at) => id === want[at])) {
+          continue;
         }
+        // Ownership, as in Live Preview: only a direct child of a
+        // `#task` line counts, never a grandchild, a Work Log line, or
+        // (per DP30) a line whose owner nests under a Work Log entry.
+        let owned = true;
+        try {
+          owned = dependencyChipLineOwnedByTask(lines, index);
+        } catch (error) {
+          owned = false;
+        }
+        if (!owned) {
+          continue;
+        }
+        matches.push(index);
       }
-      return null;
+      // Two tasks with identical Depends-On lines share every block id:
+      // the row cannot be told apart, so actions stay hidden.
+      return matches.length === 1 ? matches[0] : null;
     } catch (error) {
       return null;
     }
@@ -16954,6 +17229,10 @@ module.exports.helpers = {
   dependencyChipLineOwnedByTask,
   dependencyReadingOwnText,
   dependencyReadingAnchorOwner,
+  dependencyReadingOwningTask,
+  dependencyReadingWorkLogAncestor,
+  dependencyReadingRowShapeOk,
+  dependencyChipLineOwnedByTaskAtDoc,
   dependencyReadingLabelElement,
   dependencyReadingBlockId,
   dependencyCleanTaskText,

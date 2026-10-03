@@ -6678,49 +6678,62 @@ test("cycler freshness: getFreshnessStampLine degrades when ledger-tools is miss
 
 // compat (bob-cli-3n.5): Depends-On line recogniser, contract DP vectors
 // (docs/task-dependencies.md section 11.1). `line` is the candidate line on
-// its own; verdicts mirror the DP table.
+// its own. The boolean guards the line: every `accept`/`empty` shape and
+// every `malformed` vector (DP15, DP16, DP23, DP25, DP26) stays guarded,
+// while every `not-a-line` vector (DP24, DP27, DP28, DP29) stays
+// unguarded. DP18/DP19/DP20/DP21/DP30 share an accept line shape —
+// parentage, fenced code, and Work Log ancestry are hooks projection
+// concerns, so the shape stays guarded here.
 test("Depends-On line recogniser covers the contract DP vectors", () => {
-  const accept = [
-    "  - ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]",
-    "  - ⛓️ **DEPENDS ON:** [[cash#^unemployment]]",
-    "  - ⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a|b • c]]",
-    "  - ⛓️ **DEPENDS ON:** ~~[[#^a]]~~",
-    "  - ⛓️ **DEPENDS ON:** ![[#^a]]",
-    "  - 🔗 **DEPENDS ON:** [[#^a]]",
-    "  - **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **DEPENDENCIES:** [[#^a]]",
-    "  - ⛓ **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]",
-    "  - ⛓️ **DEPENDS ON:**",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]",
-    // DP25/DP26 are malformed per the contract but keep the guarded shape,
-    // so the boolean recogniser stays true for them.
-    "  - ⛓️ **DEPENDS ON:** [[note]]",
-    "  - ⛓️ **DEPENDS ON:** [[note#Heading]]",
-    "  - ⛓️ **DEPENDS ON:** • ,",
+  const guarded = [
+    ["DP1", "  - ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]"],
+    ["DP2", "  - ⛓️ **DEPENDS ON:** [[cash#^unemployment]]"],
+    ["DP3", "  - ⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]"],
+    ["DP4", "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]"],
+    ["DP5", "  - ⛓️ **DEPENDS ON:** [[#^a|b • c]]"],
+    ["DP6", "  - ⛓️ **DEPENDS ON:** ~~[[#^a]]~~"],
+    ["DP7", "  - ⛓️ **DEPENDS ON:** ![[#^a]]"],
+    ["DP8", "  - 🔗 **DEPENDS ON:** [[#^a]]"],
+    ["DP9", "  - **DEPENDS ON:** [[#^a]]"],
+    ["DP10", "  - ⛓️ **DEPENDENCIES:** [[#^a]]"],
+    ["DP11", "  - ⛓ **DEPENDS ON:** [[#^a]]"],
+    ["DP12", "  - ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]"],
+    ["DP13", "  - ⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]"],
+    ["DP14", "  - ⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]"],
+    // DP15/DP16 are malformed per the contract but guarded exactly like
+    // accepted lines: the cycler never strikes or retires them.
+    ["DP15", "  - ⛓️ **DEPENDS ON:** [[#^a"],
+    ["DP16", "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review"],
+    ["DP17", "  - ⛓️ **DEPENDS ON:**"],
+    // DP18/DP19/DP20 share DP1's shape; the context makes them
+    // not-a-line for projection, but the shape stays guarded here.
+    ["DP18-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP21", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP22", "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]"],
+    // DP23/DP25/DP26 are malformed per the contract but keep the guarded
+    // shape, so the boolean recogniser stays true for them.
+    ["DP23", "  - ⛓️ **DEPENDS ON:** [[note]]"],
+    ["DP25", "  - ⛓️ **DEPENDS ON:** [[note#Heading]]"],
+    ["DP26", "  - ⛓️ **DEPENDS ON:** • ,"],
+    // DP30 shares DP1's shape; its Work Log context is pinned by the
+    // Rust discovery test and the hooks, not by this shape guard.
+    ["DP30-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
   ];
-  for (const line of accept) {
-    assert.equal(helpers.isTaskDependencyLine(line), true, line);
+  for (const [id, line] of guarded) {
+    assert.equal(helpers.isTaskDependencyLine(line), true, id + ": " + line);
   }
-  const reject = [
-    "  - ⛓️ **DEPENDS ON:** [[#^a",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review",
-    "- [?] #task Make appt ^rahway",
-    "  - 🗓️ **SCHEDULE LOG**",
-    "  - ![[Tasks#^ship]]",
-    "  - plain bullet",
-    "⛓️ **DEPENDS ON:** [[#^a]]",
-    "  - 🔗️ **DEPENDS ON:** [[#^a]]",
-    "  - ⛓️ **depends on:** [[#^a]]",
-    "> - ⛓️ **DEPENDS ON:** [[#^a]]",
+  const unguarded = [
+    ["DP24", "  - 🔗️ **DEPENDS ON:** [[#^a]]"],
+    ["DP27", "  - ⛓️ **depends on:** [[#^a]]"],
+    ["DP28", "⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["task", "- [?] #task Make appt ^rahway"],
+    ["schedule-log", "  - 🗓️ **SCHEDULE LOG**"],
+    ["transclusion", "  - ![[Tasks#^ship]]"],
+    ["bullet", "  - plain bullet"],
   ];
-  for (const line of reject) {
-    assert.equal(helpers.isTaskDependencyLine(line), false, line);
+  for (const [id, line] of unguarded) {
+    assert.equal(helpers.isTaskDependencyLine(line), false, id + ": " + line);
   }
 });
 
@@ -6814,6 +6827,30 @@ test("Ctrl+Enter on a dependency link closes only the target and runs the recove
   assert.ok(editor.getValue().indexOf("~~") === -1);
   // ... and the Blocked-dependent recovery runs.
   assert.ok(finalized);
+});
+
+test("Ctrl+Enter on a dependency link reopens only the target, root-only", async () => {
+  const source = [
+    "- [?] #task Dependent ^dep",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [x] #task Prereq ^a",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": source });
+  const editor = createTextEditor(source, { line: 1, ch: 25 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  const result = await plugin.handleActiveTaskBlockLinkOpenDone(
+    editor,
+    harness.app.vault.getAbstractFileByPath("Tasks.md"),
+  );
+  assert.equal(result.resolved, true);
+  assert.equal(result.changed, true);
+  // The target reopens root-only ...
+  assert.match(editor.getValue(), /^- \[ \] #task Prereq \^a$/m);
+  // ... the Depends-On line is never struck, restored, or reformatted ...
+  assert.match(editor.getValue(), /^  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\]$/m);
+  assert.ok(editor.getValue().indexOf("~~") === -1);
+  assert.ok(editor.getValue().indexOf("![[#^a]]") === -1);
 });
 
 test("single and counted Alt-bracket cycle the dependency target under the cursor", async () => {

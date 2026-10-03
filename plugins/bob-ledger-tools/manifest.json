@@ -1,7 +1,7 @@
 {
   "id": "bob-ledger-tools",
   "name": "Bob Ledger Tools",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "minAppVersion": "1.8.7",
   "description": "Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, render task freshness stamps as compact marks, and render Depends-On lines as live dependency chips.",
   "author": "Bryan",

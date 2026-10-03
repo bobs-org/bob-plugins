@@ -2903,17 +2903,29 @@ function isTaskDependencyLine(lineText) {
   return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(remainder);
 }
 
-// A malformed Depends-On line (contract R10: DP15 half-typed, DP16
-// trailing prose, DP25 bare links, DP26 separator-only): the list marker
-// and bold label shape are present but `isTaskDependencyLine` is false.
-// Ctrl+Shift+Enter must refuse these with the dependency notice instead
-// of deleting the link token.
+// A malformed Depends-On line (contract R10) is refused by
+// Ctrl+Shift+Enter with the dependency notice instead of deleting the
+// link token. Covers DP15 (half-typed link) and DP16 (trailing prose):
+// the list marker and bold label shape are present but
+// `isTaskDependencyLine` is false. DP23 (bare note link), DP25
+// (heading link), and DP26 (separator-only) are malformed per the
+// contract but stay guard-true through `isTaskDependencyLine` instead,
+// so this stays false for them. Every not-a-line vector stays false
+// here and unguarded: DP24 (link emoji with VS16 — a VS16 emoji is
+// never a malformed label), DP27 (lowercase label, no match below),
+// DP28 (no list marker), DP29 (blockquote, never matches the prefix).
 function isMalformedTaskDependencyLine(lineText) {
   const line = normalizeMarkdownLine(lineText);
   if (!LIST_ITEM_PREFIX_RE.test(line)) {
     return false;
   }
   if (!/\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/.test(line)) {
+    return false;
+  }
+  // DP24: only the pre-label emoji counts, as in the ledger-tools
+  // parser, so a VS16 sequence inside a link alias cannot trip it.
+  const labelAt = line.search(/\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/);
+  if (/🔗\uFE0F/.test(labelAt === -1 ? line : line.slice(0, labelAt))) {
     return false;
   }
   return !isTaskDependencyLine(lineText);

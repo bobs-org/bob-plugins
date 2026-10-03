@@ -2998,6 +2998,11 @@ const TASK_DEPENDENCY_LINE_REMAINDER_RE =
 
 function isTaskDependencyLine(lineText) {
   const line = String(lineText || "");
+  // DP29: a blockquoted line is never a Depends-On line (contract §2.3;
+  // the Rust parser and nav reject it too).
+  if (/^[ \t]*>/.test(line)) {
+    return false;
+  }
   const marker = line.match(LIST_ITEM_MARKER_RE);
   if (!marker) {
     return false;
@@ -8710,6 +8715,7 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
       : null;
     const seenResolvedTargets = new Set();
     let changed = false;
+    let startDepLineUntargeted = false;
 
     // Predict, from the pre-write snapshot, every line where cycling out of
     // Blocked will insert a Schedule Log entry. Recorded in snapshot
@@ -8798,6 +8804,11 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
             line === startLine ? cursor.ch : null,
           );
       if (!target) {
+        // As in the single form, a Depends-On start line with the cursor
+        // off every link reports instead of silently doing nothing.
+        if (line === startLine && isTaskDependencyLine(lineText)) {
+          startDepLineUntargeted = true;
+        }
         continue;
       }
 
@@ -8841,6 +8852,10 @@ module.exports = class TaskStatusCyclerPlugin extends Plugin {
         line: mappedStartLine,
         ch: Math.max(0, Math.min(cursor.ch || 0, cursorLineText.length)),
       });
+    }
+
+    if (!changed && startDepLineUntargeted) {
+      new Notice("⛓ Put the cursor on a dependency link to cycle it");
     }
 
     return changed;

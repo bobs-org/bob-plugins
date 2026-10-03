@@ -4483,6 +4483,11 @@ test("Depends-On line recogniser covers the contract DP vectors", () => {
     "  - ⛓️ **DEPENDS ON:**",
     "  - ⛓️ **DEPENDS ON:** [[#^a]]",
     "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]",
+    // DP25/DP26 are malformed per the contract but keep the guarded shape,
+    // so the boolean recogniser stays true for them.
+    "  - ⛓️ **DEPENDS ON:** [[note]]",
+    "  - ⛓️ **DEPENDS ON:** [[note#Heading]]",
+    "  - ⛓️ **DEPENDS ON:** • ,",
   ];
   for (const line of accept) {
     assert.equal(helpers.isTaskDependencyLine(line), true, line);
@@ -4495,6 +4500,9 @@ test("Depends-On line recogniser covers the contract DP vectors", () => {
     "  - ![[Tasks#^ship]]",
     "  - plain bullet",
     "⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - 🔗️ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **depends on:** [[#^a]]",
+    "> - ⛓️ **DEPENDS ON:** [[#^a]]",
   ];
   for (const line of reject) {
     assert.equal(helpers.isTaskDependencyLine(line), false, line);
@@ -4523,6 +4531,42 @@ test("dedicated-link helpers reject Depends-On lines", () => {
 test("Ctrl+Shift+Enter on a Depends-On link is refused without deleting anything", async () => {
   resetNotices();
   const depLine = "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]";
+  const content = ["- [?] #task Dependent ^dep", depLine].join("\n");
+  const editor = createEditor(content);
+  editor.setCursor({ line: 1, ch: depLine.indexOf("[[#^a]]") + 2 });
+  const plugin = new Plugin();
+  await plugin.startTaskLinkOpen(editor, { path: "Tasks.md" });
+  assert.equal(editor.getValue(), content);
+  assert.equal(lastNotice(), "⛓ Dependency link — edit it with Ctrl+Shift+P");
+});
+
+test("malformed Depends-On lines refuse Ctrl+Shift+Enter instead of deleting the link token", () => {
+  // Contract R10: the marker and bold label shape are present but the
+  // remainder is not clean, so `isTaskDependencyLine` stays false and the
+  // old guard missed these. (DP25/DP26 shapes stay guard-true through
+  // `isTaskDependencyLine` instead.)
+  for (const line of [
+    "  - ⛓️ **DEPENDS ON:** [[#^a",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] [[oops",
+  ]) {
+    assert.equal(helpers.isMalformedTaskDependencyLine(line), true, line);
+  }
+  for (const line of [
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDS ON:**",
+    "  - ⛓️ **DEPENDS ON:** [[note]]",
+    "  - ⛓️ **DEPENDS ON:** • ,",
+    "  - [ ] #task plain [[#^a]]",
+    "  - plain bullet",
+  ]) {
+    assert.equal(helpers.isMalformedTaskDependencyLine(line), false, line);
+  }
+});
+
+test("Ctrl+Shift+Enter on a malformed Depends-On line is refused without deleting anything", async () => {
+  resetNotices();
+  const depLine = "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review";
   const content = ["- [?] #task Dependent ^dep", depLine].join("\n");
   const editor = createEditor(content);
   editor.setCursor({ line: 1, ch: depLine.indexOf("[[#^a]]") + 2 });

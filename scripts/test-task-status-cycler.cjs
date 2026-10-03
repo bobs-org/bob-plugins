@@ -6698,6 +6698,11 @@ test("Depends-On line recogniser covers the contract DP vectors", () => {
     "  - ⛓️ **DEPENDS ON:**",
     "  - ⛓️ **DEPENDS ON:** [[#^a]]",
     "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]",
+    // DP25/DP26 are malformed per the contract but keep the guarded shape,
+    // so the boolean recogniser stays true for them.
+    "  - ⛓️ **DEPENDS ON:** [[note]]",
+    "  - ⛓️ **DEPENDS ON:** [[note#Heading]]",
+    "  - ⛓️ **DEPENDS ON:** • ,",
   ];
   for (const line of accept) {
     assert.equal(helpers.isTaskDependencyLine(line), true, line);
@@ -6710,6 +6715,9 @@ test("Depends-On line recogniser covers the contract DP vectors", () => {
     "  - ![[Tasks#^ship]]",
     "  - plain bullet",
     "⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - 🔗️ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **depends on:** [[#^a]]",
+    "> - ⛓️ **DEPENDS ON:** [[#^a]]",
   ];
   for (const line of reject) {
     assert.equal(helpers.isTaskDependencyLine(line), false, line);
@@ -6777,6 +6785,103 @@ test("Alt-bracket bullet formatting never applies to Depends-On lines", () => {
     null,
   );
   assert.ok(helpers.getPlainBulletFormatToggle("  - plain bullet", 1));
+});
+
+test("Ctrl+Enter on a dependency link closes only the target and runs the recovery", async () => {
+  const source = [
+    "- [?] #task Dependent ^dep",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task Prereq ^a",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Tasks.md": source });
+  const editor = createTextEditor(source, { line: 1, ch: 25 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  let finalized = null;
+  plugin.finalizeClosedTasks = async (identities) => {
+    finalized = identities;
+    return { reopened: 0, retired: 0 };
+  };
+  const result = await plugin.handleActiveTaskBlockLinkOpenDone(
+    editor,
+    harness.app.vault.getAbstractFileByPath("Tasks.md"),
+  );
+  assert.equal(result.resolved, true);
+  // The target closes root-only (the close stamps completion) ...
+  assert.match(editor.getValue(), /^- \[x\] #task Prereq .* \^a$/m);
+  // ... the Depends-On line is never struck, restored, or reformatted ...
+  assert.match(editor.getValue(), /^  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\]$/m);
+  assert.ok(editor.getValue().indexOf("~~") === -1);
+  // ... and the Blocked-dependent recovery runs.
+  assert.ok(finalized);
+});
+
+test("single and counted Alt-bracket cycle the dependency target under the cursor", async () => {
+  const source = [
+    "- [?] #task Dependent ^dep",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [?] #task Prereq [scheduled:: 2026-08-20] ^a",
+    "\t- 🗓️ **SCHEDULE LOG**",
+  ].join("\n");
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  {
+    const harness = createInMemoryObsidianApp({ "Tasks.md": source });
+    const editor = createTextEditor(source, { line: 1, ch: 25 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.app = harness.app;
+    plugin.getScheduleLogDateString = () => "2026-08-17";
+    const view = Object.assign(new MarkdownView(), { editor, file: { path: "Tasks.md" } });
+    assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+    await flush();
+    await flush();
+    assert.match(editor.getValue(), /^- \[ \] #task Prereq \^a$/m);
+    assert.match(editor.getValue(), /^  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\]$/m);
+  }
+  {
+    const harness = createInMemoryObsidianApp({ "Tasks.md": source });
+    const editor = createTextEditor(source, { line: 1, ch: 25 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.app = harness.app;
+    plugin.getScheduleLogDateString = () => "2026-08-17";
+    const changed = await plugin.cycleTaskStatusRange(editor, { path: "Tasks.md" }, 1, 0);
+    assert.equal(changed, true);
+    assert.match(editor.getValue(), /^- \[ \] #task Prereq \^a$/m);
+    assert.match(editor.getValue(), /^  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\]$/m);
+  }
+});
+
+test("single and counted Alt-bracket report when the cursor is off every dependency link", async () => {
+  // Two links: with a lone link the cursor position is unambiguous and the
+  // target cycles, so the notice needs an ambiguous line.
+  const source = [
+    "- [?] #task Dependent ^dep",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
+    "- [ ] #task Prereq A ^a",
+    "- [ ] #task Prereq B ^b",
+  ].join("\n");
+  const expected = "⛓ Put the cursor on a dependency link to cycle it";
+  {
+    const harness = createInMemoryObsidianApp({ "Tasks.md": source });
+    const editor = createTextEditor(source, { line: 1, ch: 4 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.app = harness.app;
+    const view = Object.assign(new MarkdownView(), { editor, file: { path: "Tasks.md" } });
+    notices.length = 0;
+    assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+    assert.ok(notices.indexOf(expected) !== -1, JSON.stringify(notices));
+    assert.equal(editor.getValue(), source);
+  }
+  {
+    const harness = createInMemoryObsidianApp({ "Tasks.md": source });
+    const editor = createTextEditor(source, { line: 1, ch: 4 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.app = harness.app;
+    notices.length = 0;
+    const changed = await plugin.cycleTaskStatusRange(editor, { path: "Tasks.md" }, 1, 0);
+    assert.equal(changed, false);
+    assert.ok(notices.indexOf(expected) !== -1, JSON.stringify(notices));
+    assert.equal(editor.getValue(), source);
+  }
 });
 
 test("Ctrl+Enter candidate resolution finds plain links on Depends-On lines", () => {

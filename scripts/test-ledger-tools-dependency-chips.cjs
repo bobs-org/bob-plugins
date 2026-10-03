@@ -145,34 +145,50 @@ const LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
 const { helpers } = LedgerToolsPlugin;
 Module._load = originalLoad;
 
-const { parseDependencyLine, dependencyChipModel, buildDependencyChipElement } = helpers;
+const {
+  parseDependencyLine,
+  dependencyChipModel,
+  buildDependencyChipElement,
+  dependencyChipLineOwnedByTask,
+  dependencyReadingOwnText,
+  dependencyReadingAnchorOwner,
+  dependencyReadingLabelElement,
+  dependencyReadingBlockId,
+} = helpers;
 
 // DP vectors copied from docs/task-dependencies.md §11.1.
 test("DP parse vectors", () => {
   const cases = [
-    ["DP1", "⛓️ **DEPENDS ON:** [[#^hospital-swarm]]", {}, "accept", 1],
-    ["DP2", "⛓️ **DEPENDS ON:** [[cash#^unemployment]]", {}, "accept", 1],
-    ["DP3", "⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]", {}, "accept", 1],
-    ["DP4", "⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]", {}, "accept", 2],
-    ["DP5", "⛓️ **DEPENDS ON:** [[#^a|b • c]]", {}, "accept", 1],
-    ["DP6", "⛓️ **DEPENDS ON:** ~~[[#^a]]~~", {}, "accept", 1],
-    ["DP7", "⛓️ **DEPENDS ON:** ![[#^a]]", {}, "accept", 1],
-    ["DP8", "🔗 **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
-    ["DP9", "**DEPENDS ON:** [[#^a]]", {}, "accept", 1],
-    ["DP10", "⛓️ **DEPENDENCIES:** [[#^a]]", {}, "accept", 1],
-    ["DP11", "⛓ **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
-    ["DP12", "⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]", {}, "accept", 2],
-    ["DP13", "⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]", {}, "accept", 2],
-    ["DP14", "⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]", {}, "accept", 2],
-    ["DP15", "⛓️ **DEPENDS ON:** [[#^a", {}, "malformed"],
-    ["DP16", "⛓️ **DEPENDS ON:** [[#^a]] needs review", {}, "malformed"],
-    ["DP17", "⛓️ **DEPENDS ON:**", {}, "empty"],
-    ["DP18", "⛓️ **DEPENDS ON:** [[#^a]]", { inCode: true }, "not-a-line"],
-    ["DP19", "⛓️ **DEPENDS ON:** [[#^a]]", { isDirectChild: false }, "not-a-line"],
-    ["DP20", "⛓️ **DEPENDS ON:** [[#^a]]", { inWorkLog: true }, "not-a-line"],
-    ["DP21", "⛓️ **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
-    ["DP22", "⛓️ **DEPENDS ON:** [[#^a|swarm]]", {}, "accept", 1],
-    ["DP23", "⛓️ **DEPENDS ON:** [[note]]", {}, "malformed"],
+    ["DP1", "- ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]", {}, "accept", 1],
+    ["DP2", "- ⛓️ **DEPENDS ON:** [[cash#^unemployment]]", {}, "accept", 1],
+    ["DP3", "- ⛓️ **DEPENDS ON:** [[money/cash#^unemployment]]", {}, "accept", 1],
+    ["DP4", "- ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]", {}, "accept", 2],
+    ["DP5", "- ⛓️ **DEPENDS ON:** [[#^a|b • c]]", {}, "accept", 1],
+    ["DP6", "- ⛓️ **DEPENDS ON:** ~~[[#^a]]~~", {}, "accept", 1],
+    ["DP7", "- ⛓️ **DEPENDS ON:** ![[#^a]]", {}, "accept", 1],
+    ["DP8", "- 🔗 **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
+    ["DP9", "- **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
+    ["DP10", "- ⛓️ **DEPENDENCIES:** [[#^a]]", {}, "accept", 1],
+    ["DP11", "- ⛓ **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
+    ["DP12", "- ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]", {}, "accept", 2],
+    ["DP13", "- ⛓️ **DEPENDS ON:** [[#^a]], [[#^b]]", {}, "accept", 2],
+    ["DP14", "- ⛓️ **DEPENDS ON:** [[#^a]] [[#^b]]", {}, "accept", 2],
+    ["DP15", "- ⛓️ **DEPENDS ON:** [[#^a", {}, "malformed"],
+    ["DP16", "- ⛓️ **DEPENDS ON:** [[#^a]] needs review", {}, "malformed"],
+    ["DP17", "- ⛓️ **DEPENDS ON:**", {}, "empty"],
+    ["DP18", "- ⛓️ **DEPENDS ON:** [[#^a]]", { inCode: true }, "not-a-line"],
+    ["DP19", "- ⛓️ **DEPENDS ON:** [[#^a]]", { isDirectChild: false }, "not-a-line"],
+    ["DP20", "- ⛓️ **DEPENDS ON:** [[#^a]]", { inWorkLog: true }, "not-a-line"],
+    ["DP21", "- ⛓️ **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
+    ["DP22", "- ⛓️ **DEPENDS ON:** [[#^a|swarm]]", {}, "accept", 1],
+    ["DP23", "- ⛓️ **DEPENDS ON:** [[note]]", {}, "malformed"],
+
+    ["DP24", "- 🔗️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line"],
+    ["DP25", "- ⛓️ **DEPENDS ON:** [[note#Heading]]", {}, "malformed"],
+    ["DP26", "- ⛓️ **DEPENDS ON:** • ,", {}, "malformed"],
+    ["DP27", "- ⛓️ **depends on:** [[#^a]]", {}, "not-a-line"],
+    ["DP28", "⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line"],
+    ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line"],
   ];
   for (const [id, line, opts, verdict, count] of cases) {
     const parsed = parseDependencyLine(line, opts);
@@ -182,17 +198,17 @@ test("DP parse vectors", () => {
     }
   }
   // Canonical writer form stays canonical; tolerated variants do not.
-  assert.equal(parseDependencyLine("⛓️ **DEPENDS ON:** [[#^a]]").canonical, true, "DP1 canonical");
-  assert.equal(parseDependencyLine("⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]").canonical, true, "DP4 canonical");
+  assert.equal(parseDependencyLine("- ⛓️ **DEPENDS ON:** [[#^a]]").canonical, true, "DP1 canonical");
+  assert.equal(parseDependencyLine("- ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]").canonical, true, "DP4 canonical");
   for (const line of [
-    "⛓️ **DEPENDS ON:** ~~[[#^a]]~~",
-    "⛓️ **DEPENDS ON:** ![[#^a]]",
-    "🔗 **DEPENDS ON:** [[#^a]]",
-    "**DEPENDS ON:** [[#^a]]",
-    "⛓️ **DEPENDENCIES:** [[#^a]]",
-    "⛓ **DEPENDS ON:** [[#^a]]",
-    "⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]",
-    "⛓️ **DEPENDS ON:** [[#^a|swarm]]",
+    "- ⛓️ **DEPENDS ON:** ~~[[#^a]]~~",
+    "- ⛓️ **DEPENDS ON:** ![[#^a]]",
+    "- 🔗 **DEPENDS ON:** [[#^a]]",
+    "- **DEPENDS ON:** [[#^a]]",
+    "- ⛓️ **DEPENDENCIES:** [[#^a]]",
+    "- ⛓ **DEPENDS ON:** [[#^a]]",
+    "- ⛓️ **DEPENDS ON:** [[#^a]] · [[#^b]]",
+    "- ⛓️ **DEPENDS ON:** [[#^a|swarm]]",
   ]) {
     assert.equal(parseDependencyLine(line).canonical, false, "non-canonical for " + line);
   }
@@ -214,7 +230,7 @@ function depLookup(entries) {
 
 // DC vectors copied from docs/task-dependencies.md §11.5.
 test("DC chip model vectors", () => {
-  const lineFor = (id) => "⛓️ **DEPENDS ON:** [[#^" + id + "]]";
+  const lineFor = (id) => "- ⛓️ **DEPENDS ON:** [[#^" + id + "]]";
   let model = dependencyChipModel(lineFor("a"), "a.md", depLookup([["a", depTask({ blockId: "a", symbol: " ", description: "Todo task" })]]));
   assert.equal(model.chips[0].state, "todo");
   assert.equal(model.chips[0].symbol, "○");
@@ -237,7 +253,7 @@ test("DC chip model vectors", () => {
   assert.equal(model.summary, "✓ all clear");
 
   const both = dependencyChipModel(
-    "⛓️ **DEPENDS ON:** [[#^a]] • [[#^e]]",
+    "- ⛓️ **DEPENDS ON:** [[#^a]] • [[#^e]]",
     "a.md",
     depLookup([
       ["a", depTask({ blockId: "a", symbol: " ", description: "Open" })],
@@ -260,14 +276,14 @@ test("DC chip model vectors", () => {
   assert.equal(model.summary, "waiting on 1");
 
   model = dependencyChipModel(
-    "⛓️ **DEPENDS ON:** [[sase_bug_bash#^e2e-sase-8v]]",
+    "- ⛓️ **DEPENDS ON:** [[sase_bug_bash#^e2e-sase-8v]]",
     "body.md",
     depLookup([["e2e-sase-8v", depTask({ blockId: "e2e-sase-8v", symbol: " ", description: "Run e2e", path: "sase_bug_bash.md" })]]),
   );
   assert.equal(model.chips[0].noteLabel, "↗ sase_bug_bash");
 
   const fourDone = dependencyChipModel(
-    "⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]] • [[#^c]] • [[#^d]]",
+    "- ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]] • [[#^c]] • [[#^d]]",
     "a.md",
     depLookup([
       ["a", depTask({ blockId: "a", symbol: "x", description: "A", type: "DONE" })],
@@ -300,6 +316,10 @@ function makeDepDoc(lines) {
   });
   return {
     length: Math.max(0, offset - 1),
+    lines: lineObjs.length,
+    line(number) {
+      return lineObjs[number - 1];
+    },
     lineAt(pos) {
       for (const line of lineObjs) {
         if (pos >= line.from && pos <= line.to) {
@@ -365,34 +385,98 @@ function depPluginWithTasks(lines, tasks, options = {}) {
 }
 
 test("decoration builds one widget, reveals on cursor, skips code and ranges", () => {
+  const task = "- [ ] #task T ^t";
   const line = "  - ⛓️ **DEPENDS ON:** [[#^a]]";
   const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
   const plugin = depPluginWithTasks([line], tasks);
-  const view = makeDepView({ lines: [line] });
+  const view = makeDepView({ lines: [task, line] });
   const decorations = plugin.buildDependencyChipDecorations(view);
   assert.equal(decorations.adds.length, 1);
   const [add] = decorations.adds;
   assert.ok(add.value.widget);
   assert.equal(add.value._decorationReplace, true);
 
-  const selected = makeDepView({ lines: [line], selection: [{ from: 0, to: 5 }] });
+  const selected = makeDepView({
+    lines: [task, line],
+    selection: [{ from: task.length + 1, to: task.length + 6 }],
+  });
   assert.equal(plugin.buildDependencyChipDecorations(selected).adds.length, 0);
 
-  const coded = makeDepView({ lines: [line], treeTag: "codeblock" });
+  const coded = makeDepView({ lines: [task, line], treeTag: "codeblock" });
   assert.equal(plugin.buildDependencyChipDecorations(coded).adds.length, 0, "no chips in code");
 
-  const offscreen = makeDepView({ lines: [line, "plain", line] });
-  offscreen.visibleRanges = [{ from: 0, to: 2 }];
-  const all = plugin.buildDependencyChipDecorations(makeDepView({ lines: [line] }));
+  // Only visible ranges are processed: the offscreen duplicate builds nothing.
+  const offscreen = makeDepView({ lines: [task, line, "plain", line] });
+  offscreen.visibleRanges = [{ from: 0, to: task.length + 1 + line.length }];
+  assert.equal(plugin.buildDependencyChipDecorations(offscreen).adds.length, 1);
+
+  const all = plugin.buildDependencyChipDecorations(makeDepView({ lines: [task, line] }));
   assert.equal(all.adds.length, 1);
 
   const first = plugin.buildDependencyChipDecorations(view).adds[0].value.widget;
-  const second = plugin.buildDependencyChipDecorations(makeDepView({ lines: [line] })).adds[0].value.widget;
+  const second = plugin.buildDependencyChipDecorations(makeDepView({ lines: [task, line] })).adds[0].value.widget;
   assert.equal(first.eq(second), true);
   const changedTasks = [depTask({ blockId: "a", symbol: "*", description: "Alpha", path: "a.md" })];
   const changedPlugin = depPluginWithTasks([line], changedTasks);
-  const changed = changedPlugin.buildDependencyChipDecorations(makeDepView({ lines: [line] })).adds[0].value.widget;
+  const changed = changedPlugin.buildDependencyChipDecorations(makeDepView({ lines: [task, line] })).adds[0].value.widget;
   assert.equal(first.eq(changed), false);
+});
+
+test("decoration skips paragraphs, grandchildren, and Work Log lines", () => {
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const plugin = depPluginWithTasks([], tasks);
+  // Paragraph: no list marker, no task parent.
+  assert.equal(
+    plugin.buildDependencyChipDecorations(makeDepView({ lines: ["para ⛓️ **DEPENDS ON:** [[#^a]]"] })).adds.length,
+    0,
+    "paragraph",
+  );
+  // Grandchild (DP19): nested two levels under the task.
+  assert.equal(
+    plugin.buildDependencyChipDecorations(
+      makeDepView({ lines: ["- [ ] #task T ^t", "  - outer", "    - ⛓️ **DEPENDS ON:** [[#^a]]"] }),
+    ).adds.length,
+    0,
+    "grandchild",
+  );
+  // Work Log entry (DP20).
+  assert.equal(
+    plugin.buildDependencyChipDecorations(
+      makeDepView({ lines: ["- [ ] #task T ^t", "  - 🛠️ **WORK LOG**", "    - ⛓️ **DEPENDS ON:** [[#^a]]"] }),
+    ).adds.length,
+    0,
+    "work log",
+  );
+  // Direct child still decorates.
+  assert.equal(
+    plugin.buildDependencyChipDecorations(
+      makeDepView({ lines: ["- [ ] #task T ^t", "  - ⛓️ **DEPENDS ON:** [[#^a]]"] }),
+    ).adds.length,
+    1,
+    "direct child",
+  );
+});
+
+test("widget identity covers the line and the interactive flag", () => {
+  const task = "- [ ] #task T ^t";
+  const line = "  - ⛓️ **DEPENDS ON:** [[#^a]]";
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const navApi = {
+    version: 1,
+    openDependencyStage: () => Promise.resolve({ ok: true }),
+    removeDependency: () => Promise.resolve({ ok: true }),
+  };
+  const plain = depPluginWithTasks([line], tasks);
+  const live = depPluginWithTasks([line], tasks, { navApi });
+  const widget = (withNav, lines) =>
+    (withNav ? live : plain).buildDependencyChipDecorations(makeDepView({ lines })).adds[0].value.widget;
+  const base = widget(false, [task, line]);
+  // Same line, same api: equal.
+  assert.equal(base.eq(widget(false, [task, line])), true);
+  // A line inserted above shifts the line number: not equal.
+  assert.equal(base.eq(widget(false, ["- [ ] #task Before ^b", task, line])), false);
+  // Nav's api loading later flips interactivity: not equal.
+  assert.equal(base.eq(widget(true, [task, line])), false);
 });
 
 test("element hides actions without nav api v1", () => {
@@ -433,7 +517,7 @@ test("element hides actions without nav api v1", () => {
     return out;
   }
   const model = dependencyChipModel(
-    "⛓️ **DEPENDS ON:** [[#^a]]",
+    "- ⛓️ **DEPENDS ON:** [[#^a]]",
     "a.md",
     depLookup([["a", depTask({ blockId: "a", symbol: " ", description: "Alpha" })]]),
   );
@@ -508,7 +592,10 @@ function fakeReadingDoc() {
         }
         return child;
       },
-      addEventListener: () => {},
+      handlers: {},
+      addEventListener: (name, handler) => {
+        node.handlers[name] = handler;
+      },
       querySelectorAll: (selector) => {
         const out = [];
         const stack = [node];
@@ -540,28 +627,86 @@ function fakeReadingDoc() {
   return { root, doc, el };
 }
 
-test("reading view decorates links, keeps anchors, stays idempotent", () => {
-  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha task", path: "a.md" })];
-  const plugin = depPluginWithTasks([], tasks);
-  const { root, doc, el } = fakeReadingDoc();
+function readingDepRow(fixture, blockIds) {
+  // Builds a parent task row containing one Depends-On row, as Reading
+  // view renders it: emoji text, bold label, and one anchor per block id
+  // joined by raw separators.
+  const { root, doc, el } = fixture;
+  const taskLi = el("li");
+  taskLi.ownerDocument = doc;
+  taskLi.appendChild(doc.createTextNode("Make appt "));
+  const nested = el("ul");
+  taskLi.appendChild(nested);
   const li = el("li");
   li.ownerDocument = doc;
-  li.textContent = "⛓️ DEPENDS ON: link";
-  root.appendChild(li);
-  const anchor = el("a");
-  anchor.ownerDocument = doc;
-  anchor.className = "internal-link";
-  anchor.setAttribute("data-href", "a.md#^a");
-  anchor.setAttribute("href", "a.md#^a");
-  anchor.textContent = "link";
-  li.appendChild(anchor);
-  li.textContent = "⛓️ DEPENDS ON: link";
-  plugin.renderDependencyChipsIn(root, { sourcePath: "a.md" });
+  nested.appendChild(li);
+  li.appendChild(doc.createTextNode("⛓️ "));
+  const strong = el("strong");
+  strong.ownerDocument = doc;
+  strong.textContent = "DEPENDS ON:";
+  li.appendChild(strong);
+  const anchors = [];
+  blockIds.forEach((blockId, index) => {
+    if (index > 0) {
+      li.appendChild(doc.createTextNode(" • "));
+    } else {
+      li.appendChild(doc.createTextNode(" "));
+    }
+    const anchor = el("a");
+    anchor.ownerDocument = doc;
+    anchor.className = "internal-link";
+    anchor.setAttribute("data-href", "a.md#^" + blockId);
+    anchor.setAttribute("href", "a.md#^" + blockId);
+    anchor.appendChild(doc.createTextNode("Task " + blockId));
+    li.appendChild(anchor);
+    anchors.push(anchor);
+  });
+  root.appendChild(taskLi);
+  return { taskLi, li, strong, anchors };
+}
+
+function collectReadingClasses(node, out = []) {
+  if (node._attrs && node._attrs.class) {
+    out.push(node._attrs.class);
+  }
+  for (const child of node.childNodes || node.children || []) {
+    if (child && (child.childNodes || child.children)) {
+      collectReadingClasses(child, out);
+    }
+  }
+  return out;
+}
+
+test("reading view decorates only the Depends-On row, hides chrome, stays idempotent", () => {
+  const tasks = [
+    depTask({ blockId: "a", symbol: " ", description: "Alpha task", path: "a.md" }),
+    depTask({ blockId: "b", symbol: "x", description: "Beta task", path: "a.md", type: "DONE" }),
+  ];
+  const plugin = depPluginWithTasks([], tasks);
+  const fixture = fakeReadingDoc();
+  const { taskLi, li, strong, anchors } = readingDepRow(fixture, ["a", "b"]);
+  const [anchorA, anchorB] = anchors;
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md" });
+  // The parent task row stays undecorated even though it contains the label.
+  assert.equal(taskLi.className.indexOf("bob-dep-row"), -1);
   assert.ok(li.className.indexOf("bob-dep-row") !== -1);
-  assert.ok(anchor.className.indexOf("bob-dep-chip") !== -1);
-  assert.equal(anchor.getAttribute("href"), "a.md#^a");
+  assert.ok(anchorA.className.indexOf("bob-dep-chip") !== -1);
+  assert.equal(anchorA.getAttribute("href"), "a.md#^a");
+  // Status-symbol boxes render on both chips.
+  const classes = collectReadingClasses(li).join(" ");
+  assert.ok(classes.indexOf("bob-dep-chip-box") !== -1);
+  // Done text is struck through inside its own span.
+  assert.ok(classes.indexOf("bob-dep-chip-text") !== -1);
+  // The bold label is hidden and the raw separators are blanked.
+  assert.equal(strong.getAttribute("data-bob-dep-hidden"), "1");
+  assert.ok(anchorB.className.indexOf("is-done") !== -1);
+  for (const child of li.childNodes || []) {
+    if (child && child.nodeType === 3) {
+      assert.ok(String(child.nodeValue || "").indexOf("•") === -1, "separator hidden");
+    }
+  }
   const before = li.childNodes.length;
-  plugin.renderDependencyChipsIn(root, { sourcePath: "a.md" });
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md" });
   assert.equal(li.childNodes.length, before);
 
   const coded = fakeReadingDoc();
@@ -577,6 +722,211 @@ test("reading view decorates links, keeps anchors, stays idempotent", () => {
   innerLi.appendChild(innerA);
   plugin.renderDependencyChipsIn(coded.root, { sourcePath: "a.md" });
   assert.equal(innerA.className.indexOf("bob-dep-chip"), -1);
+});
+
+test("reading view collapses more than three Done targets to one chip", () => {
+  const tasks = ["a", "b", "c", "d"].map((blockId) =>
+    depTask({ blockId, symbol: "x", description: "Done " + blockId, path: "a.md", type: "DONE" }),
+  );
+  const plugin = depPluginWithTasks([], tasks);
+  const fixture = fakeReadingDoc();
+  const { li, anchors } = readingDepRow(fixture, ["a", "b", "c", "d"]);
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md" });
+  for (const anchor of anchors) {
+    assert.equal(anchor.getAttribute("data-bob-dep-collapsed"), "1");
+  }
+  const classes = collectReadingClasses(li).join(" ");
+  assert.ok(classes.indexOf("is-done-collapsed") !== -1);
+  let collapsedFound = false;
+  const scan = (node) => {
+    if (node && node.nodeType === 1) {
+      const cls = node._attrs && node._attrs.class ? String(node._attrs.class) : "";
+      if (cls.indexOf("is-done-collapsed") !== -1 && node.textContent === "✓×4") {
+        collapsedFound = true;
+      }
+    }
+    for (const child of (node && node.childNodes) || []) {
+      scan(child);
+    }
+  };
+  scan(li);
+  assert.ok(collapsedFound, "collapsed chip shows ✓×4");
+});
+
+test("DC chip model vectors by id: DC2, DC5, DC6, DC9", () => {
+  const lineFor = (id) => "- ⛓️ **DEPENDS ON:** [[#^" + id + "]]";
+  // DC2: Next shows `*`.
+  let model = dependencyChipModel(
+    lineFor("n"),
+    "a.md",
+    depLookup([["n", depTask({ blockId: "n", symbol: "*", description: "Next one" })]]),
+  );
+  assert.equal(model.chips[0].state, "next");
+  assert.equal(model.chips[0].symbol, "*");
+  assert.equal(model.summary, "waiting on 1");
+  // DC5: Done shows `✓`; beside an open target the summary still waits.
+  model = dependencyChipModel(
+    "- ⛓️ **DEPENDS ON:** [[#^open]] • [[#^done]]",
+    "a.md",
+    depLookup([
+      ["open", depTask({ blockId: "open", symbol: " ", description: "Open" })],
+      ["done", depTask({ blockId: "done", symbol: "x", description: "Done", type: "DONE" })],
+    ]),
+  );
+  assert.equal(model.chips[1].state, "done");
+  assert.equal(model.chips[1].symbol, "✓");
+  assert.equal(model.summary, "waiting on 1");
+  // DC6: Cancelled shows `✕`, visibly different from Done's `✓`.
+  model = dependencyChipModel(
+    lineFor("c"),
+    "a.md",
+    depLookup([["c", depTask({ blockId: "c", symbol: "-", description: "Cancelled", type: "CANCELLED" })]]),
+  );
+  assert.equal(model.chips[0].state, "cancelled");
+  assert.equal(model.chips[0].symbol, "✕");
+  // DC9: a cross-note target carries `↗ note` and counts as waiting.
+  model = dependencyChipModel(
+    "- ⛓️ **DEPENDS ON:** [[sase_bug_bash#^e2e]]",
+    "body.md",
+    depLookup([["e2e", depTask({ blockId: "e2e", symbol: " ", description: "Run e2e", path: "sase_bug_bash.md" })]]),
+  );
+  assert.equal(model.chips[0].noteLabel, "↗ sase_bug_bash");
+  assert.equal(model.summary, "waiting on 1");
+});
+
+test("chip actions send the 0-based line index through nav api v1", () => {
+  const task = "- [ ] #task T ^t";
+  const line = "  - ⛓️ **DEPENDS ON:** [[#^a]]";
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const seen = { open: [], remove: [] };
+  const navApi = {
+    version: 1,
+    openDependencyStage: (ref) => {
+      seen.open.push(ref);
+      return Promise.resolve({ ok: true });
+    },
+    removeDependency: (parentRef, target) => {
+      seen.remove.push([parentRef, target]);
+      return Promise.resolve({ ok: true });
+    },
+  };
+  const plugin = depPluginWithTasks([line], tasks, { navApi });
+  const widget = plugin.buildDependencyChipDecorations(makeDepView({ lines: [task, line] })).adds[0].value.widget;
+  // The widget sits on the second note line: 0-based line 1 (contract §9).
+  assert.equal(widget.meta.lineNumber, 1);
+  plugin.dependencyRemoveChip(widget.model.chips[0], "a.md", widget.meta);
+  plugin.dependencyOpenStage("a.md", widget.meta);
+  assert.deepEqual(seen.remove[0][0], { path: "a.md", line: 1 });
+  assert.deepEqual(seen.remove[0][1], { path: "a.md", blockId: "a" });
+  assert.deepEqual(seen.open[0], { path: "a.md", line: 1 });
+});
+
+test("chip hover passes the chip element and its row to the preview", () => {
+  const seen = [];
+  const app = makeDepApp({ tasks: [] });
+  app.workspace.trigger = (name, payload) => {
+    seen.push([name, payload]);
+  };
+  const plugin = new LedgerToolsPlugin(app, {});
+  const rowEl = { id: "row" };
+  const chipEl = { id: "chip" };
+  plugin.dependencyHoverTarget("a#^a", "a.md", {}, chipEl, rowEl);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0], "hover-link");
+  assert.equal(seen[0][1].targetEl, chipEl);
+  assert.equal(seen[0][1].hoverParent, rowEl);
+  assert.equal(seen[0][1].linktext, "a#^a");
+});
+
+test("chip lookup index lives on the freshness memo", () => {
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const plugin = depPluginWithTasks([], tasks);
+  plugin.freshnessMemo = { tasks, tasksGen: 0 };
+  const first = plugin.dependencyTasksIndex();
+  assert.ok(first instanceof Map);
+  assert.equal(first.get("a.md a").description, "Alpha");
+  // A current memo reuses the same index object.
+  assert.equal(plugin.dependencyTasksIndex(), first);
+  // A rebuilt memo drops the index with it.
+  plugin.freshnessMemo = { tasks, tasksGen: 0 };
+  assert.notEqual(plugin.dependencyTasksIndex(), first);
+});
+
+test("reading view hides actions when the line cannot be derived", async () => {
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const navApi = {
+    version: 1,
+    openDependencyStage: () => Promise.resolve({ ok: true }),
+    removeDependency: () => Promise.resolve({ ok: true }),
+  };
+  const plugin = depPluginWithTasks([], tasks, { navApi });
+  const fixture = fakeReadingDoc();
+  const { li } = readingDepRow(fixture, ["a"]);
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const classes = collectReadingClasses(li).join(" ");
+  assert.ok(classes.indexOf("bob-dep-chip") !== -1, "chips still render");
+  assert.equal(classes.indexOf("bob-dep-chip-remove"), -1, "no remove without a line");
+  assert.equal(classes.indexOf("bob-dep-add"), -1, "no add without a line");
+});
+
+test("reading view actions carry the derived 0-based line", async () => {
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const seen = { open: [], remove: [] };
+  const navApi = {
+    version: 1,
+    openDependencyStage: (ref) => {
+      seen.open.push(ref);
+      return Promise.resolve({ ok: true });
+    },
+    removeDependency: (parentRef, target) => {
+      seen.remove.push([parentRef, target]);
+      return Promise.resolve({ ok: true });
+    },
+  };
+  const noteText = ["- [ ] #task T ^t", "  - prose", "  - ⛓️ **DEPENDS ON:** [[#^a]]"].join("\n");
+  const app = makeDepApp({ tasks, navApi });
+  app.vault.getAbstractFileByPath = (filePath) => (filePath === "a.md" ? { path: "a.md" } : null);
+  app.vault.cachedRead = () => Promise.resolve(noteText);
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.dependencyChipsEnabled = true;
+  const fixture = fakeReadingDoc();
+  const { li, anchors } = readingDepRow(fixture, ["a"]);
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  // The Depends-On row is the third note line: 0-based line 2.
+  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["a"]), 2);
+  const findByClass = (root, cls) => {
+    let found = null;
+    const scan = (node) => {
+      if (found || !node || node.nodeType !== 1) {
+        return;
+      }
+      if (String((node._attrs && node._attrs.class) || "").split(/\s+/).includes(cls)) {
+        found = node;
+        return;
+      }
+      for (const child of node.childNodes || []) {
+        scan(child);
+      }
+    };
+    scan(root);
+    return found;
+  };
+  const remove = findByClass(li, "bob-dep-chip-remove");
+  assert.ok(remove, "remove renders once the line is known");
+  remove.handlers.click({});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen.remove[0][0], { path: "a.md", line: 2 });
+  assert.deepEqual(seen.remove[0][1], { path: "a.md", blockId: "a" });
+  const add = findByClass(li, "bob-dep-add");
+  assert.ok(add, "add renders once the line is known");
+  add.handlers.click({});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen.open[0], { path: "a.md", line: 2 });
+  void anchors;
 });
 
 test("toggle flips the body class and onload wires chips", () => {

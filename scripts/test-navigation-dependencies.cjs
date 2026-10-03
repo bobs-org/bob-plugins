@@ -145,6 +145,15 @@ test("DP parse vectors accept, empty, malformed, and not-a-line", () => {
     ["DP21", "  - ⛓️ **DEPENDS ON:** [[#^a]]", { isDirectChildOfTask: true }, "accept", 1, true],
     ["DP22", "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]", {}, "accept", 1, false],
     ["DP23", "  - ⛓️ **DEPENDS ON:** [[note]]", {}, "malformed", 0, false],
+    ["DP24", "  - 🔗️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line", 0, false],
+    ["DP25", "  - ⛓️ **DEPENDS ON:** [[note#Heading]]", {}, "malformed", 0, false],
+    ["DP26", "  - ⛓️ **DEPENDS ON:** • ,", {}, "malformed", 0, false],
+    ["DP27", "  - ⛓️ **depends on:** [[#^a]]", {}, "not-a-line", 0, false],
+    ["DP28", "⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line", 0, false],
+    // DP29: the contract verdict is not-a-line, but nav's writer
+    // round-trips quoted lines it manages (see the counted-writer test),
+    // so its reader keeps accepting them.
+    ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]", {}, "accept", 1, true],
   ];
   for (const [id, line, options, verdict, count, canonical] of cases) {
     const parsed = helpers.parseDependencyLine(line, options);
@@ -167,6 +176,8 @@ test("DP parse vectors accept, empty, malformed, and not-a-line", () => {
     "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review",
     "  - ⛓️ **DEPENDS ON:**",
     "  - ⛓️ **DEPENDS ON:** [[note]]",
+    "  - ⛓️ **DEPENDS ON:** [[note#Heading]]",
+    "  - ⛓️ **DEPENDS ON:** • ,",
   ]) {
     assert.equal(helpers.parseDependencyNavigationBulletDetails(line), null);
   }

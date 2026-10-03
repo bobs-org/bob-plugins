@@ -2903,6 +2903,22 @@ function isTaskDependencyLine(lineText) {
   return TASK_DEPENDENCY_LINE_REMAINDER_RE.test(remainder);
 }
 
+// A malformed Depends-On line (contract R10: DP15 half-typed, DP16
+// trailing prose, DP25 bare links, DP26 separator-only): the list marker
+// and bold label shape are present but `isTaskDependencyLine` is false.
+// Ctrl+Shift+Enter must refuse these with the dependency notice instead
+// of deleting the link token.
+function isMalformedTaskDependencyLine(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  if (!LIST_ITEM_PREFIX_RE.test(line)) {
+    return false;
+  }
+  if (!/\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/.test(line)) {
+    return false;
+  }
+  return !isTaskDependencyLine(lineText);
+}
+
 // An embedded link that is the sole content of a direct child bullet of a
 // `#task` line is that task's rendered dependency transclusion. Deleting it
 // alone would leave `[dependsOn:: …]` and the parent's Blocked state stale.
@@ -5329,7 +5345,7 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     this.promptOpen = true;
     try {
       const { link, lineNumber, lineText } = selection;
-      if (isTaskDependencyLine(lineText)) {
+      if (isTaskDependencyLine(lineText) || isMalformedTaskDependencyLine(lineText)) {
         new Notice(TASK_DEPENDENCY_LINE_NOTICE);
         return;
       }
@@ -5733,7 +5749,8 @@ module.exports = class BlockIdPromptPlugin extends Plugin {
     }
 
     const activeContent = editor.getValue();
-    if (isTaskDependencyLine(activeContent.split("\n")[source.line])) {
+    const activeLineText = activeContent.split("\n")[source.line];
+    if (isTaskDependencyLine(activeLineText) || isMalformedTaskDependencyLine(activeLineText)) {
       new Notice(TASK_DEPENDENCY_LINE_NOTICE);
       return false;
     }
@@ -6816,6 +6833,7 @@ module.exports.helpers = {
   isDependencyTransclusionLink,
   isSoleContentLinkBullet,
   isTaskDependencyLine,
+  isMalformedTaskDependencyLine,
   lineIsInsideCodeFence,
   listItemBodyBounds,
   localTodayParts,

@@ -6132,16 +6132,29 @@ function parseDependencyLine(lineText, opts) {
       return { verdict: "not-a-line" };
     }
     const raw = lineText;
+    // DP29: a blockquoted line is never a Depends-On line.
+    if (/^\s*>/.test(raw)) {
+      return { verdict: "not-a-line" };
+    }
+    // DP28: the list marker is required, as in the Rust parser and nav.
+    if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(raw)) {
+      return { verdict: "not-a-line" };
+    }
     let content = raw.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "");
     content = content.replace(/^\s+/, "");
-    const labelRe = /\*\*\s*DEPENDS\s+ON\s*:\s*\*\*|\*\*\s*DEPENDENCIES\s*:\s*\*\*/i;
+    // Labels are case-sensitive (DP27), matching the Rust parser and nav.
+    const labelRe = /\*\*\s*DEPENDS\s+ON\s*:\s*\*\*|\*\*\s*DEPENDENCIES\s*:\s*\*\*/;
     const labelMatch = labelRe.exec(content);
     if (!labelMatch) {
       return { verdict: "not-a-line" };
     }
     const labelText = labelMatch[0];
-    const isLegacyLabel = /DEPENDENCIES/i.test(labelText);
+    const isLegacyLabel = /DEPENDENCIES/.test(labelText);
     const beforeLabel = content.slice(0, labelMatch.index);
+    // DP24: the legacy link emoji never carries VS16; that is not a line.
+    if (/\uD83D\uDD17\uFE0F/.test(beforeLabel)) {
+      return { verdict: "not-a-line" };
+    }
     const emojiMatch = /[⛓🔗]\uFE0F?/.exec(beforeLabel);
     const hasChain = content.indexOf("⛓") !== -1;
     const hasLinkEmoji = content.indexOf("🔗") !== -1;
@@ -6220,12 +6233,19 @@ function parseDependencyLine(lineText, opts) {
     }
     const after = remainder.slice(remLabel.index + remLabel[0].length);
     const before = remainder.slice(0, remLabel.index);
-    const beforeOk = /^\s*(?:\u26D3\uFE0F?|\uD83D\uDD17\uFE0F?)?\s*$/.test(before);
+    // DP24: VS16 after the legacy link emoji is rejected above; only the
+    // bare chain tolerates a missing VS16.
+    const beforeOk = /^\s*(?:\u26D3\uFE0F?|\uD83D\uDD17)?\s*$/.test(before);
     const afterOk = /^[\s•·,]*$/.test(after);
     if (!beforeOk || !afterOk) {
       return { verdict: "malformed" };
     }
     if (targets.length === 0) {
+      // DP26: a label followed only by separators is malformed; only a bare
+      // label (R9) is empty.
+      if (!/^[\s]*$/.test(after)) {
+        return { verdict: "malformed" };
+      }
       return { verdict: "empty", targets: [], canonical: false, emoji: emojiKind, legacyLabel: isLegacyLabel };
     }
     let canonical = true;
@@ -6249,6 +6269,207 @@ function parseDependencyLine(lineText, opts) {
     return { verdict: "accept", count: targets.length, targets, canonical, emoji: emojiKind, legacyLabel: isLegacyLabel };
   } catch (error) {
     return { verdict: "not-a-line" };
+  }
+}
+
+// Dependency chips: true when a candidate Depends-On line is a real one —
+// a direct child of a `#task` list item and not inside a Work Log entry
+// (contract DP19/DP20). `lineTexts` holds every note line; `lineIndex` is
+// the 0-based index of the candidate. Never throws.
+function dependencyChipLineOwnedByTask(lineTexts, lineIndex) {
+  try {
+    if (!Array.isArray(lineTexts) || !Number.isInteger(lineIndex)) {
+      return false;
+    }
+    if (lineIndex < 0 || lineIndex >= lineTexts.length) {
+      return false;
+    }
+    const widthOf = (text) => {
+      const match = /^[ \t]*/.exec(String(text || ""));
+      return match ? match[0].length : 0;
+    };
+    const hasMarker = (text) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(String(text || ""));
+    const isTaskLine = (text) => {
+      const line = String(text || "");
+      if (!/^\s*(?:[-*+]|\d+[.)])\s+\[[^\]\n]\]/.test(line)) {
+        return false;
+      }
+      return /#task(?![A-Za-z0-9_/-])/.test(line);
+    };
+    const candidateWidth = widthOf(lineTexts[lineIndex]);
+    if (!hasMarker(lineTexts[lineIndex])) {
+      return false;
+    }
+    let parent = -1;
+    for (let index = lineIndex - 1; index >= 0; index -= 1) {
+      const text = String(lineTexts[index] || "");
+      if (!text.trim()) {
+        continue;
+      }
+      if (widthOf(text) >= candidateWidth) {
+        continue;
+      }
+      if (!hasMarker(text)) {
+        return false;
+      }
+      parent = index;
+      break;
+    }
+    if (parent === -1 || !isTaskLine(lineTexts[parent])) {
+      return false;
+    }
+    // DP20: reject lines nested under a Work Log entry anywhere above.
+    let width = widthOf(lineTexts[parent]);
+    for (let index = parent; index >= 0; index -= 1) {
+      const text = String(lineTexts[index] || "");
+      if (!text.trim()) {
+        continue;
+      }
+      const w = widthOf(text);
+      if (w < width || index === parent) {
+        width = Math.min(width, w);
+        if (/WORK LOG/.test(text)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Reading-view helpers. `dependencyReadingOwnText` returns an li's own
+// text with nested lists excluded, so only an li whose own leading text
+// is the Depends-On label is decorated — never the parent task row.
+// `dependencyReadingAnchorOwner` finds the nearest owning li for an
+// anchor. Never throws.
+function dependencyReadingOwnText(li) {
+  try {
+    let out = "";
+    const pushText = (node) => {
+      try {
+        out += String(node.nodeValue !== undefined && node.nodeValue !== null ? node.nodeValue : node.textContent || "");
+      } catch (error) {
+        // Best-effort.
+      }
+    };
+    const walk = (parent) => {
+      let children = [];
+      try {
+        children = Array.from(parent.childNodes || []);
+      } catch (error) {
+        return;
+      }
+      for (const child of children) {
+        try {
+          if (!child) {
+            continue;
+          }
+          if (child.nodeType === 3) {
+            pushText(child);
+            continue;
+          }
+          if (child.nodeType !== 1) {
+            continue;
+          }
+          const tag = String(child.tagName || child.nodeName || "").toUpperCase();
+          if (tag === "UL" || tag === "OL" || tag === "LI") {
+            continue;
+          }
+          if (tag === "P") {
+            walk(child);
+            continue;
+          }
+          try {
+            out += String(child.textContent || "");
+          } catch (error) {
+            // Best-effort.
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    };
+    walk(li);
+    return out;
+  } catch (error) {
+    return "";
+  }
+}
+
+function dependencyReadingAnchorOwner(anchor, root) {
+  try {
+    let node = anchor && anchor.parentNode ? anchor.parentNode : null;
+    let guard = 0;
+    while (node && node !== root && guard < 50) {
+      guard += 1;
+      try {
+        const tag = String((node.tagName || node.nodeName) || "").toUpperCase();
+        if (tag === "LI") {
+          return node;
+        }
+      } catch (error) {
+        // Keep walking.
+      }
+      node = node.parentNode || null;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// First bold label element (not inside a nested list) carrying the
+// Depends-On label. Never throws.
+function dependencyReadingLabelElement(li) {
+  try {
+    const stack = [li];
+    let guard = 0;
+    while (stack.length > 0 && guard < 500) {
+      guard += 1;
+      const node = stack.pop();
+      if (!node || node.nodeType !== 1) {
+        continue;
+      }
+      if (node !== li) {
+        const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+        if (tag === "UL" || tag === "OL" || tag === "LI") {
+          continue;
+        }
+        if ((tag === "STRONG" || tag === "B") && /DEPENDS ON|DEPENDENCIES/.test(String(node.textContent || ""))) {
+          return node;
+        }
+      }
+      let children = [];
+      try {
+        children = Array.from(node.childNodes || []);
+      } catch (error) {
+        continue;
+      }
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push(children[index]);
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Block id carried by a Reading-view anchor's href. Empty when absent.
+function dependencyReadingBlockId(anchor) {
+  try {
+    const raw = String((anchor.getAttribute && (anchor.getAttribute("data-href") || anchor.getAttribute("href"))) || "");
+    const hashAt = raw.indexOf("#");
+    if (hashAt === -1) {
+      return "";
+    }
+    const after = raw.slice(hashAt + 1);
+    const id = after.charAt(0) === "^" ? after.slice(1) : "";
+    return decodeURIComponent(id || "");
+  } catch (error) {
+    return "";
   }
 }
 
@@ -6704,7 +6925,7 @@ function buildDependencyChipElement(doc, model, options) {
             el.addEventListener("mouseover", (event) => {
               try {
                 if (typeof opts.onHover === "function" && chip.linktext) {
-                  opts.onHover(chip.linktext, event, chip);
+                  opts.onHover(chip.linktext, event, el);
                 }
               } catch (error) {
                 // Best-effort only.
@@ -6789,9 +7010,17 @@ if (WidgetType && typeof WidgetType === "function") {
       super();
       this.model = model;
       this.meta = meta && typeof meta === "object" ? meta : {};
+      // The key covers the model plus the placement meta: a reused DOM node
+      // must never keep a stale lineNumber (lines inserted above) or a stale
+      // interactive flag (nav's api loading later). Click handlers also
+      // re-check the api live at click time.
       let key = "";
       try {
-        key = JSON.stringify(model);
+        key = JSON.stringify([
+          model,
+          this.meta.lineNumber === undefined ? null : this.meta.lineNumber,
+          Boolean(this.meta.interactive),
+        ]);
       } catch (error) {
         key = String((model && model.summary) || "");
       }
@@ -6838,10 +7067,10 @@ if (WidgetType && typeof WidgetType === "function") {
             // Best-effort only.
           }
         },
-        onHover: (linktext, event) => {
+        onHover: (linktext, event, chipEl) => {
           try {
             if (plugin && typeof plugin.dependencyHoverTarget === "function") {
-              plugin.dependencyHoverTarget(linktext, sourcePath, event, dom);
+              plugin.dependencyHoverTarget(linktext, sourcePath, event, chipEl || dom, dom);
             }
           } catch (error) {
             // Best-effort only.
@@ -7327,10 +7556,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.freshnessMarksEnabled = true;
     this.freshnessMarkSnapshot = null;
     this.freshnessMarksTimer = null;
-    // Dependency chips (bob-cli-3n chips): session toggle plus a
-    // Tasks-memo index tied to the freshness generation.
+    // Dependency chips (bob-cli-3n chips): session toggle; the
+    // Tasks-memo index lives on the freshness memo itself.
     this.dependencyChipsEnabled = true;
-    this.dependencyChipIndexCache = null;
     this.dependencyChipsTimer = null;
 
     this.addCommand({
@@ -7776,7 +8004,6 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       clearTimeout(this.dependencyChipsTimer);
     }
     this.dependencyChipsTimer = null;
-    this.dependencyChipIndexCache = null;
     try {
       if (
         typeof document !== "undefined" &&
@@ -12963,13 +13190,22 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
+  // Depends-On chip lookup over the Tasks memo. The index lives on the
+  // freshness memo itself, so it shares the memo's invalidation: a memo
+  // rebuild drops the index with it (one cache, one lifecycle).
   dependencyTasksIndex() {
     try {
       const tasks = planBlockTasks(this.app);
       const gen = this.freshnessTasksGen || 0;
-      const cached = this.dependencyChipIndexCache;
-      if (cached && cached.tasks === tasks && (cached.gen || 0) === gen && cached.map instanceof Map) {
-        return cached.map;
+      let memo = null;
+      try {
+        memo = this.freshnessMemo || null;
+      } catch (error) {
+        memo = null;
+      }
+      const memoCurrent = Boolean(memo && memo.tasks === tasks && (memo.tasksGen || 0) === gen);
+      if (memoCurrent && memo.dependencyTasksIndex instanceof Map) {
+        return memo.dependencyTasksIndex;
       }
       const map = new Map();
       const list = Array.isArray(tasks) ? tasks : [];
@@ -12991,7 +13227,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           continue;
         }
       }
-      this.dependencyChipIndexCache = { tasks, gen, map };
+      try {
+        if (memoCurrent) {
+          memo.dependencyTasksIndex = map;
+        }
+      } catch (error) {
+        // An uncacheable memo still returns a correct index.
+      }
       return map;
     } catch (error) {
       return new Map();
@@ -13255,6 +13497,32 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         return builder.finish();
       }
       const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      // Full note lines for the Depends-On ownership check (DP19/DP20),
+      // read lazily on the first candidate line. Stays null when the doc
+      // does not expose line access; ownership then fails open.
+      let chipLineTexts = null;
+      let chipLineTextsFailed = false;
+      const chipLineTextsFor = () => {
+        if (chipLineTexts !== null || chipLineTextsFailed) {
+          return chipLineTexts;
+        }
+        try {
+          const count = doc.lines;
+          if (!Number.isInteger(count) || count <= 0 || count >= 100000 || typeof doc.line !== "function") {
+            chipLineTextsFailed = true;
+            return null;
+          }
+          const texts = [];
+          for (let number = 1; number <= count; number += 1) {
+            texts.push(String(doc.line(number).text || ""));
+          }
+          chipLineTexts = texts;
+          return chipLineTexts;
+        } catch (error) {
+          chipLineTextsFailed = true;
+          return null;
+        }
+      };
       const interactive = Boolean(this.dependencyNavApi());
       for (const range of ranges) {
         try {
@@ -13279,7 +13547,21 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               if (line.text.indexOf("DEPENDS ON") !== -1 || line.text.indexOf("DEPENDENCIES") !== -1) {
                 const parsed = parseDependencyLine(line.text);
                 if (parsed && (parsed.verdict === "accept" || parsed.verdict === "empty")) {
-                  let revealed = false;
+                  // DP19/DP20: only a direct child of a #task line gets
+                  // chips — never paragraphs, grandchildren, or Work Log
+                  // lines. Fails open when line access is unavailable.
+                  let owned = true;
+                  try {
+                    if (typeof line.number === "number") {
+                      const texts = chipLineTextsFor();
+                      if (texts !== null) {
+                        owned = dependencyChipLineOwnedByTask(texts, line.number - 1);
+                      }
+                    }
+                  } catch (error) {
+                    owned = true;
+                  }
+                  let revealed = !owned;
                   for (const selection of selectionRanges) {
                     try {
                       if (selection && typeof selection.from === "number" && typeof selection.to === "number" && selection.from <= line.to && selection.to >= line.from) {
@@ -13396,20 +13678,29 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           if (this.dependencyExcludedAncestor(li, el)) {
             continue;
           }
-          let text = "";
+          // Only an li whose own leading text is the label (nested lists
+          // excluded) — never the parent task row that merely contains one.
+          let ownText = "";
           try {
-            text = String(li.textContent || "");
+            ownText = dependencyReadingOwnText(li);
           } catch (error) {
-            text = "";
+            ownText = "";
           }
-          if (text.indexOf("DEPENDS ON") === -1 && text.indexOf("DEPENDENCIES") === -1) {
+          if (!/^\s*(?:\u26D3\uFE0F?|\uD83D\uDD17)?\s*\*{0,2}(?:DEPENDS ON|DEPENDENCIES)/.test(ownText)) {
             continue;
           }
+          // Only anchors owned directly by this li — never a nested row's.
           const links = [];
           try {
             const anchors = li.querySelectorAll ? li.querySelectorAll("a.internal-link") : [];
             for (let i = 0; i < anchors.length; i += 1) {
-              links.push(anchors[i]);
+              try {
+                if (dependencyReadingAnchorOwner(anchors[i], el) === li) {
+                  links.push(anchors[i]);
+                }
+              } catch (error) {
+                continue;
+              }
             }
           } catch (error) {
             continue;
@@ -13429,18 +13720,25 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           if (li.dataset) {
             li.dataset.bobDepProcessed = "1";
           }
-          const label = docNode.createElement("span");
-          label.setAttribute("class", "bob-dep-label");
-          label.textContent = "⛓ depends on";
+          // Chips replace the row chrome: hide the rendered bold label.
           try {
-            li.insertBefore(label, li.firstChild);
-          } catch (error) {
-            try {
-              li.appendChild(label);
-            } catch (inner) {
-              continue;
+            const labelEl = dependencyReadingLabelElement(li);
+            if (labelEl) {
+              try {
+                labelEl.style.display = "none";
+              } catch (styleError) {
+                // Attribute fallback for style-free DOMs.
+              }
+              try {
+                labelEl.setAttribute("data-bob-dep-hidden", "1");
+              } catch (attrError) {
+                // Best-effort.
+              }
             }
+          } catch (error) {
+            // A visible label never breaks the row.
           }
+          const readingActions = [];
           for (const anchor of links) {
             try {
               const chip = model.byAnchor && model.byAnchor.get(anchor);
@@ -13454,66 +13752,146 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
                 anchor.setAttribute("title", chip.tooltip);
                 anchor.setAttribute("aria-label", chip.ariaLabel || chip.tooltip);
               }
+              // Done strike-through wraps the original link text only.
+              if (chip && chip.state === "done") {
+                try {
+                  const kids = Array.from(anchor.childNodes || []);
+                  if (kids.length > 0) {
+                    const wrap = docNode.createElement("span");
+                    wrap.setAttribute("class", "bob-dep-chip-text");
+                    try {
+                      wrap.style.textDecoration = "line-through";
+                    } catch (styleError) {
+                      // Attribute fallback for style-free DOMs.
+                    }
+                    for (const kid of kids) {
+                      try {
+                        wrap.appendChild(kid);
+                      } catch (moveError) {
+                        // Best-effort.
+                      }
+                    }
+                    try {
+                      anchor.childNodes.length = 0;
+                    } catch (clearError) {
+                      // Live DOMs already moved the children.
+                    }
+                    anchor.appendChild(wrap);
+                  }
+                } catch (error) {
+                  // Unstruck Done text never breaks the row.
+                }
+              }
+              // Status-symbol box, as in Live Preview.
+              try {
+                const box = docNode.createElement("span");
+                box.setAttribute("class", "bob-dep-chip-box");
+                box.setAttribute("data-task", chip && chip.state ? chip.state : "todo");
+                box.setAttribute("aria-hidden", "true");
+                box.textContent = (chip && chip.symbol) || "○";
+                const firstKids = Array.from(anchor.childNodes || []);
+                if (typeof anchor.insertBefore === "function") {
+                  anchor.insertBefore(box, firstKids.length > 0 ? firstKids[0] : null);
+                } else {
+                  anchor.appendChild(box);
+                }
+              } catch (error) {
+                // The box is decorative.
+              }
               if (chip && chip.noteLabel) {
                 const note = docNode.createElement("span");
                 note.setAttribute("class", "bob-dep-chip-note");
                 note.textContent = chip.noteLabel;
                 anchor.appendChild(note);
               }
-              if (interactive && chip && chip.blockId && chip.state !== "done-collapsed") {
-                const remove = docNode.createElement("span");
-                remove.setAttribute("class", "bob-dep-chip-remove");
-                remove.setAttribute("role", "button");
-                remove.setAttribute("aria-label", "Remove dependency " + (chip.fullText || ""));
-                remove.textContent = "×";
-                const self = this;
-                const target = { path: chip.resolvedPath, blockId: chip.blockId };
-                const parentRef = { path, line: null };
-                if (typeof remove.addEventListener === "function") {
-                  remove.addEventListener("click", (event) => {
-                    try {
-                      if (event) {
-                        if (typeof event.stopPropagation === "function") {
-                          event.stopPropagation();
-                        }
-                        if (typeof event.preventDefault === "function") {
-                          event.preventDefault();
-                        }
-                      }
-                      const api = self.dependencyNavApi();
-                      if (api && typeof api.removeDependency === "function") {
-                        Promise.resolve(api.removeDependency(parentRef, target)).then((result) => {
-                          if (result && result.ok === false && result.reason) {
-                            try {
-                              new Notice(String(result.reason));
-                            } catch (noticeError) {
-                              // Best-effort.
-                            }
-                          }
-                        });
-                      }
-                    } catch (error) {
-                      // Best-effort.
-                    }
-                  });
-                }
-                anchor.appendChild(remove);
+              if (chip && chip.blockId) {
+                readingActions.push({ anchor, chip });
               }
             } catch (error) {
               continue;
             }
           }
+          // DC10: more than three Done targets collapse to one `✓×N` chip.
           try {
-            const walker = docNode.createTreeWalker ? null : null;
-            void walker;
-            for (const node of Array.from(li.childNodes || [])) {
-              try {
-                if (node.nodeType === 3 && /^[\s•·,]*$/.test(String(node.nodeValue || ""))) {
-                  const sibs = li.childNodes || [];
-                  void sibs;
+            const doneActions = [];
+            for (const action of readingActions) {
+              if (action.chip && action.chip.state === "done") {
+                doneActions.push(action);
+              }
+            }
+            if (doneActions.length > 3) {
+              for (const action of doneActions) {
+                try {
+                  action.anchor.style.display = "none";
+                } catch (styleError) {
+                  // Attribute fallback for style-free DOMs.
                 }
-              } catch (error) {
+                try {
+                  action.anchor.setAttribute("data-bob-dep-collapsed", "1");
+                } catch (attrError) {
+                  // Best-effort.
+                }
+              }
+              for (let index = readingActions.length - 1; index >= 0; index -= 1) {
+                if (readingActions[index].chip && readingActions[index].chip.state === "done") {
+                  readingActions.splice(index, 1);
+                }
+              }
+              const collapsed = docNode.createElement("span");
+              collapsed.setAttribute("class", "bob-dep-chip is-done-collapsed");
+              collapsed.setAttribute("role", "link");
+              collapsed.setAttribute("aria-label", doneActions.length + " done dependencies");
+              collapsed.setAttribute("title", "✓×" + doneActions.length + " done");
+              collapsed.textContent = "✓×" + doneActions.length;
+              try {
+                if (typeof li.insertBefore === "function") {
+                  li.insertBefore(collapsed, doneActions[0].anchor || null);
+                } else {
+                  li.appendChild(collapsed);
+                }
+              } catch (insertError) {
+                try {
+                  li.appendChild(collapsed);
+                } catch (appendError) {
+                  // Best-effort.
+                }
+              }
+            }
+          } catch (error) {
+            // An uncollapsed row never breaks the chips.
+          }
+          // Hide the raw separators between chips (blanking is idempotent
+          // across re-renders); the label and outer text stay untouched.
+          try {
+            const kids = Array.from(li.childNodes || []);
+            const owned = new Set(links);
+            let first = -1;
+            let last = -1;
+            for (let index = 0; index < kids.length; index += 1) {
+              if (owned.has(kids[index])) {
+                if (first === -1) {
+                  first = index;
+                }
+                last = index;
+              }
+            }
+            for (let index = first; index >= 0 && index <= last; index += 1) {
+              const node = kids[index];
+              if (!node || node.nodeType !== 3) {
                 continue;
+              }
+              const value = node.nodeValue !== undefined && node.nodeValue !== null ? node.nodeValue : node.textContent;
+              if (/^[\s•·,]*$/.test(String(value || ""))) {
+                try {
+                  node.nodeValue = "";
+                } catch (clearError) {
+                  // Best-effort.
+                }
+                try {
+                  node.textContent = "";
+                } catch (clearError) {
+                  // Best-effort.
+                }
               }
             }
           } catch (error) {
@@ -13524,30 +13902,109 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
             summary.setAttribute("class", "bob-dep-summary");
             summary.textContent = model.summary;
             li.appendChild(summary);
-            if (interactive) {
-              const add = docNode.createElement("span");
-              add.setAttribute("class", "bob-dep-add");
-              add.setAttribute("role", "button");
-              add.setAttribute("tabindex", "0");
-              add.setAttribute("aria-label", "Edit task dependencies");
-              add.textContent = "＋";
-              const self = this;
-              if (typeof add.addEventListener === "function") {
-                add.addEventListener("click", () => {
-                  try {
-                    const api = self.dependencyNavApi();
-                    if (api && typeof api.openDependencyStage === "function") {
-                      Promise.resolve(api.openDependencyStage({ path, line: null }));
-                    }
-                  } catch (error) {
-                    // Best-effort.
-                  }
-                });
-              }
-              li.appendChild(add);
-            }
           } catch (error) {
             // Summary is best-effort.
+          }
+          // Actions carry the derived 0-based note line (contract §9) and
+          // stay hidden when the line cannot be derived.
+          if (interactive && readingActions.length > 0) {
+            const self = this;
+            const pending = readingActions.slice();
+            const blockIds = pending.map((action) => String((action.chip && action.chip.blockId) || ""));
+            try {
+              Promise.resolve()
+                .then(() => self.dependencyReadingLineFor(path, blockIds))
+                .then((line) => {
+                  try {
+                    if (!Number.isInteger(line)) {
+                      return;
+                    }
+                    const ref = { path, line };
+                    for (const action of pending) {
+                      try {
+                        if (action.anchor.getAttribute && action.anchor.getAttribute("data-bob-dep-actions") === "1") {
+                          continue;
+                        }
+                        const remove = docNode.createElement("span");
+                        remove.setAttribute("class", "bob-dep-chip-remove");
+                        remove.setAttribute("role", "button");
+                        remove.setAttribute("aria-label", "Remove dependency " + (action.chip.fullText || ""));
+                        remove.textContent = "×";
+                        const target = { path: action.chip.resolvedPath, blockId: action.chip.blockId };
+                        if (typeof remove.addEventListener === "function") {
+                          remove.addEventListener("click", (event) => {
+                            try {
+                              if (event) {
+                                if (typeof event.stopPropagation === "function") {
+                                  event.stopPropagation();
+                                }
+                                if (typeof event.preventDefault === "function") {
+                                  event.preventDefault();
+                                }
+                              }
+                              const api = self.dependencyNavApi();
+                              if (api && typeof api.removeDependency === "function") {
+                                Promise.resolve(api.removeDependency(ref, target)).then((result) => {
+                                  if (result && result.ok === false && result.reason) {
+                                    try {
+                                      new Notice(String(result.reason));
+                                    } catch (noticeError) {
+                                      // Best-effort.
+                                    }
+                                  }
+                                });
+                              }
+                            } catch (error) {
+                              // Best-effort.
+                            }
+                          });
+                        }
+                        action.anchor.appendChild(remove);
+                        try {
+                          action.anchor.setAttribute("data-bob-dep-actions", "1");
+                        } catch (attrError) {
+                          // Best-effort.
+                        }
+                      } catch (error) {
+                        continue;
+                      }
+                    }
+                    try {
+                      if (li.dataset && li.dataset.bobDepAdd === "1") {
+                        return;
+                      }
+                      const add = docNode.createElement("span");
+                      add.setAttribute("class", "bob-dep-add");
+                      add.setAttribute("role", "button");
+                      add.setAttribute("tabindex", "0");
+                      add.setAttribute("aria-label", "Edit task dependencies");
+                      add.textContent = "＋";
+                      if (typeof add.addEventListener === "function") {
+                        add.addEventListener("click", () => {
+                          try {
+                            const api = self.dependencyNavApi();
+                            if (api && typeof api.openDependencyStage === "function") {
+                              Promise.resolve(api.openDependencyStage(ref));
+                            }
+                          } catch (error) {
+                            // Best-effort.
+                          }
+                        });
+                      }
+                      li.appendChild(add);
+                      if (li.dataset) {
+                        li.dataset.bobDepAdd = "1";
+                      }
+                    } catch (error) {
+                      // The add button is best-effort.
+                    }
+                  } catch (error) {
+                    // Async actions never break the row.
+                  }
+                });
+            } catch (error) {
+              // Async actions never break the row.
+            }
           }
         } catch (error) {
           continue;
@@ -13684,11 +14141,57 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  dependencyHoverTarget(linktext, sourcePath, event, targetEl) {
+  // 0-based note line of the Depends-On row rendered in Reading view,
+  // matched by its link block ids in order (contract §9); null when the
+  // line cannot be derived, in which case chip actions stay hidden.
+  async dependencyReadingLineFor(path, blockIds) {
+    try {
+      const want = (Array.isArray(blockIds) ? blockIds : []).map((id) => String(id || ""));
+      if (!path || want.length === 0) {
+        return null;
+      }
+      let text = null;
+      try {
+        const vault = this.app && this.app.vault;
+        const file = vault && typeof vault.getAbstractFileByPath === "function" ? vault.getAbstractFileByPath(path) : null;
+        if (file && vault && typeof vault.cachedRead === "function") {
+          text = await vault.cachedRead(file);
+        }
+      } catch (error) {
+        return null;
+      }
+      if (typeof text !== "string" || !text) {
+        return null;
+      }
+      const lines = text.split("\n");
+      for (let index = 0; index < lines.length; index += 1) {
+        let parsed = null;
+        try {
+          parsed = parseDependencyLine(lines[index]);
+        } catch (error) {
+          continue;
+        }
+        if (!parsed || parsed.verdict !== "accept") {
+          continue;
+        }
+        const have = (parsed.targets || []).map((target) => String(target.blockId || ""));
+        if (have.length === want.length && have.every((id, at) => id === want[at])) {
+          return index;
+        }
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Native page preview for a chip: the chip element is the hover
+  // target and its row is the hover parent, as the bob-plan chips do.
+  dependencyHoverTarget(linktext, sourcePath, event, targetEl, hoverParent) {
     try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.trigger === "function") {
-        workspace.trigger("hover-link", { event, source: "bob-dependency-chips", hoverParent: null, targetEl: targetEl || null, linktext: String(linktext || ""), sourcePath: String(sourcePath || "") });
+        workspace.trigger("hover-link", { event, source: "bob-dependency-chips", hoverParent: hoverParent || targetEl || null, targetEl: targetEl || null, linktext: String(linktext || ""), sourcePath: String(sourcePath || "") });
       }
     } catch (error) {
       // Best-effort.
@@ -13712,7 +14215,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       } catch (error) {
         // Keep the dependent path.
       }
-      const parentRef = { path: String(sourcePath || ""), line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber + 1 : null };
+      // api v1 ref.line is a 0-based line index (contract §9).
+      const parentRef = { path: String(sourcePath || ""), line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber : null };
       const target = { path: targetPath, blockId: chip ? chip.blockId : null };
       Promise.resolve(api.removeDependency(parentRef, target)).then((result) => {
         if (result && result.ok === false && result.reason) {
@@ -13734,7 +14238,8 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       if (!api || typeof api.openDependencyStage !== "function") {
         return;
       }
-      const ref = { path: String(sourcePath || ""), line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber + 1 : null };
+      // api v1 ref.line is a 0-based line index (contract §9).
+      const ref = { path: String(sourcePath || ""), line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber : null };
       Promise.resolve(api.openDependencyStage(ref));
     } catch (error) {
       // Best-effort.
@@ -16446,6 +16951,11 @@ module.exports.helpers = {
   buildFreshnessMarkElement,
   freshnessMarkPosInCode,
   parseDependencyLine,
+  dependencyChipLineOwnedByTask,
+  dependencyReadingOwnText,
+  dependencyReadingAnchorOwner,
+  dependencyReadingLabelElement,
+  dependencyReadingBlockId,
   dependencyCleanTaskText,
   dependencyStatusName,
   dependencyStateFromSymbol,

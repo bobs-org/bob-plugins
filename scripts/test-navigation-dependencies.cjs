@@ -593,7 +593,7 @@ test("removal stays Blocked with a future schedule", () => {
 });
 
 // One gesture writes: preparations first, then one dependent transaction.
-test("one gesture commits the dependent note in a single transaction", () => {
+test("one gesture commits the dependent note in a single transaction", async () => {
   const content = [
     "- [ ] #task Parent ^parent",
     "- [ ] #task Target ^target",
@@ -604,7 +604,7 @@ test("one gesture commits the dependent note in a single transaction", () => {
   ], []);
   assert.equal(plan.ok, true);
   assert.deepEqual(plan.preparations, []);
-  const outcome = helpers.applyDependencyEditTransaction(plan, {
+  const outcome = await helpers.applyDependencyEditTransaction(plan, {
     prepareTargetFile: () => ({ ok: true }),
     commitDependentContent: (nextContent) => ({
       ok: helpers.applyEditorContentTransaction(
@@ -620,7 +620,7 @@ test("one gesture commits the dependent note in a single transaction", () => {
 });
 
 // A failed cross-note preparation leaves the dependent untouched.
-test("a failed preparation leaves the dependent untouched", () => {
+test("a failed preparation leaves the dependent untouched", async () => {
   const parentNote = "- [ ] #task Parent ^parent";
   const targetNote = "- [ ] #task Target ^target";
   const plan = helpers.planDependencyEdit({
@@ -636,7 +636,7 @@ test("a failed preparation leaves the dependent untouched", () => {
   assert.equal(plan.preparations[0].path, "Other.md");
   assert.match(plan.nextContent, /\[\[Other#\^target\]\]/);
   let committed = 0;
-  const outcome = helpers.applyDependencyEditTransaction(plan, {
+  const outcome = await helpers.applyDependencyEditTransaction(plan, {
     prepareTargetFile: () => ({ ok: false, reason: "target-changed" }),
     commitDependentContent: () => {
       committed += 1;

@@ -4178,10 +4178,21 @@ function dependencyLinkNoteForPath(targetPath, parentPath) {
   return target.replace(/\.md$/i, "");
 }
 
-function dependencyPathForLinkNote(linkNote, parentPath) {
+function dependencyPathForLinkNote(linkNote, parentPath, resolveLinkpath = null) {
   const note = String(linkNote || "").trim();
   if (!note) {
     return normalizeVaultRelativePath(parentPath);
+  }
+  if (typeof resolveLinkpath === "function") {
+    try {
+      const resolved = resolveLinkpath(note, parentPath);
+      const normalized = normalizeVaultRelativePath(resolved || "");
+      if (normalized) {
+        return normalized;
+      }
+    } catch (_error) {
+      // Fall through to the suffix heuristic below.
+    }
   }
   return normalizeVaultRelativePath(`${note}.md`);
 }
@@ -4304,6 +4315,21 @@ function planDependencyEdit(args = {}) {
   if (!filesMap.has(parentPath)) {
     filesMap.set(parentPath, content);
   }
+  // Link-form ranking uses the vault's file list when the caller injects it
+  // (`args.vaultFiles`); otherwise it falls back to the loaded notes. Link
+  // paths resolve through `args.resolveLinkpath` (the vault's linkpath
+  // resolver) with the same-note suffix heuristic as the fallback.
+  const resolveLinkpath =
+    typeof args.resolveLinkpath === "function" ? args.resolveLinkpath : null;
+  const rankPaths =
+    Array.isArray(args.vaultFiles) && args.vaultFiles.length > 0
+      ? args.vaultFiles
+          .map((entry) =>
+            entry && typeof entry === "object" ? entry.path : entry,
+          )
+          .map((entry) => normalizeVaultRelativePath(entry))
+          .filter(Boolean)
+      : [...filesMap.keys()];
 
   const add = (Array.isArray(args.add) ? args.add : [])
     .map(normalizeDependencyTargetRef)
@@ -4330,8 +4356,9 @@ function planDependencyEdit(args = {}) {
   }
   const existing = collection.targets.map((target) =>
     Object.freeze({
-      path: dependencyPathForLinkNote(target.note, parentPath),
+      path: dependencyPathForLinkNote(target.note, parentPath, resolveLinkpath),
       blockId: target.blockId,
+      note: String(target.note || "").trim(),
     }),
   );
   // Existing links keep their order; new links append; re-adds move to the
@@ -4365,7 +4392,19 @@ function planDependencyEdit(args = {}) {
   }
 
   // Resolve every final target to its dependency id and canonical link.
+  // A kept link whose note is not loaded (an unloaded cross-note target, or
+  // a deleted note) stays verbatim: its id comes from the parent field by
+  // position and it counts as open, so recovery never fires on unknowns.
+  // Removing such a link always works. Only added links must resolve.
   const filePaths = [...filesMap.keys()];
+  const keptExisting = existing.filter(
+    (ref) => !removeKeys.has(dependencyTargetRefKey(ref)),
+  );
+  const parentField = findBulletPropertyField(lines[parentIndex], "dependsOn");
+  const parentFieldValues = parentField
+    ? parseLocalTaskIdList(parentField.value)
+    : [];
+  const addedKeys = new Set(add.map(dependencyTargetRefKey));
   const resolved = [];
   const targetRows = new Map();
   for (const ref of finalRefs) {
@@ -4373,7 +4412,36 @@ function planDependencyEdit(args = {}) {
       ? String(filesMap.get(ref.path) || "").split(/\r?\n/)
       : null;
     if (!targetContent) {
-      return fail("target-not-found");
+      if (addedKeys.has(dependencyTargetRefKey(ref))) {
+        return fail("target-not-found");
+      }
+      const slot = keptExisting.findIndex(
+        (entry) => dependencyTargetRefKey(entry) === dependencyTargetRefKey(ref),
+      );
+      const keptValue =
+        slot !== -1 ? parentFieldValues[slot] : undefined;
+      if (!keptValue) {
+        return fail("target-not-found");
+      }
+      const keptNote = slot !== -1 ? keptExisting[slot].note : "";
+      const row = Object.freeze({
+        ref,
+        depValue: keptValue,
+        link: Object.freeze({
+          note: keptNote,
+          text: keptNote ? `[[${keptNote}#^${ref.blockId}]]` : `[[#^${ref.blockId}]]`,
+        }),
+        line: null,
+        text: "",
+        status: "?",
+        open: true,
+        description: `^${ref.blockId}`,
+        needsBlockId: false,
+        needsIdField: false,
+      });
+      resolved.push(row);
+      targetRows.set(dependencyTargetRefKey(ref), row);
+      continue;
     }
     const targetLine = findTaskLineByTrailingBlockId(targetContent, ref.blockId);
     if (targetLine === null) {
@@ -4384,7 +4452,7 @@ function planDependencyEdit(args = {}) {
     if (!depValue) {
       return fail("target-id-unencodable");
     }
-    const link = canonicalDependencyLink(ref, parentPath, filePaths);
+    const link = canonicalDependencyLink(ref, parentPath, rankPaths);
     const status = getObsidianTaskCheckboxStatus(targetText);
     const row = Object.freeze({
       ref,
@@ -4586,15 +4654,38 @@ function planDependencyEdit(args = {}) {
       lineText,
       lineEnding,
     );
-    const previewFiles = filePaths.map((filePath) => ({
-      path: filePath,
-      content:
+    // Recovery resolves over the vault snapshot with the edited buffer
+    // overriding (`args.recovery.vaultContents`), so Pomodoro-linked
+    // dependents in unloaded notes (including today's daily note) recover
+    // to their derived rank instead of deferring or defaulting to Ready.
+    const recoveryFiles = new Map();
+    const vaultContents =
+      args.recovery && args.recovery.vaultContents;
+    if (vaultContents instanceof Map) {
+      for (const [filePath, fileContent] of vaultContents) {
+        const normalized = normalizeVaultRelativePath(filePath);
+        if (normalized) {
+          recoveryFiles.set(normalized, String(fileContent || ""));
+        }
+      }
+    } else if (vaultContents && typeof vaultContents === "object") {
+      for (const filePath of Object.keys(vaultContents)) {
+        const normalized = normalizeVaultRelativePath(filePath);
+        if (normalized) {
+          recoveryFiles.set(normalized, String(vaultContents[filePath] || ""));
+        }
+      }
+    }
+    for (const filePath of filePaths) {
+      recoveryFiles.set(
+        filePath,
         filePath === parentPath
           ? preview.lines.join(preview.lineEnding)
           : String(filesMap.get(filePath) || ""),
-    }));
+      );
+    }
     const recoveryIndex = buildScheduledRecoveryIndex(
-      previewFiles,
+      [...recoveryFiles].map(([path, content]) => ({ path, content })),
       args.recovery.registry,
       args.recovery.today,
     );
@@ -4746,8 +4837,10 @@ function buildDependencyEditNotice(summary, names = {}) {
 // Sequencing core for the writer: preparations first (an unused target id is
 // acceptable, a link to an unprepared target is not), then the dependent's
 // one-transaction commit. Both effects are injected so tests can stub them;
-// the plugin method below wires the real editor and vault.
-function applyDependencyEditTransaction(plan, io = {}) {
+// the plugin method below wires the real editor and vault. Preparations are
+// awaited before the commit: a failed preparation aborts with the dependent
+// untouched, so a failed gesture can never leave a promoted target behind.
+async function applyDependencyEditTransaction(plan, io = {}) {
   if (!plan || plan.ok !== true) {
     return Object.freeze({
       ok: false,
@@ -4757,11 +4850,11 @@ function applyDependencyEditTransaction(plan, io = {}) {
   const prepare =
     typeof io.prepareTargetFile === "function"
       ? io.prepareTargetFile
-      : () => ({ ok: true });
+      : async () => ({ ok: true });
   for (const preparation of plan.preparations || []) {
     let result = null;
     try {
-      result = prepare(preparation.path, preparation);
+      result = await prepare(preparation.path, preparation);
     } catch (_error) {
       result = { ok: false, reason: "target-preparation-threw" };
     }
@@ -20056,6 +20149,9 @@ function planCountedLocalTaskDependency(
       add: remove ? [] : [countedTargetRef],
       remove: remove ? [countedTargetRef] : [],
       files: { [normalizeVaultRelativePath(filePath)]: nextContent },
+      vaultFiles: options.vaultFiles,
+      resolveLinkpath: options.resolveLinkpath,
+      recovery: options.recovery,
     });
     if (!parentPlan.ok) {
       return Object.freeze({
@@ -26158,25 +26254,31 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    // An existing valid `[id::]` is never rewritten (§3): only apply the
-    // add-missing-id edit. The planner resolves the kept id for the field.
+    // An existing valid `[id::]` is never rewritten (§3): the missing-id
+    // edit folds into the writer's one transaction below (one Ctrl+Z). The
+    // planner resolves the kept id for the field.
     const missingIdEdits = resolved.targetEdits.filter(
       (edit) => edit.kind === "add-id-field",
     );
-    if (missingIdEdits.length > 0) {
-      const finalLine = missingIdEdits[missingIdEdits.length - 1].line;
-      if (!replaceEditorLine(this.editor, item.line, targetLine, finalLine)) {
-        new Notice("Could not update target task");
-        return false;
-      }
-    }
+    const pendingTargetLine =
+      missingIdEdits.length > 0
+        ? {
+            line: item.line,
+            expected: targetLine,
+            text: missingIdEdits[missingIdEdits.length - 1].line,
+          }
+        : null;
 
     return this.plugin.setLocalTaskDependency(
       this.editor,
       this.cursor,
       this.selectedPropertyItem.property.name,
       resolved.value,
-      { linkBlockId: resolved.linkBlockId, filePath: this.filePath },
+      {
+        linkBlockId: resolved.linkBlockId,
+        filePath: this.filePath,
+        pendingTargetLine,
+      },
     );
   }
 
@@ -26195,6 +26297,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!sessionValidation.valid) {
       new Notice(`${sessionValidation.error}; no tasks were updated`);
       return false;
+    }
+    // CURRENT rows carry no target line, so they toggle off through the
+    // counted remover below instead of the line-pinned paths.
+    if (item.stageSection === "current" && item.alreadyLinked) {
+      return this.removeCountedDependency(item);
     }
     // Vault-wide rows commit per source task through the writer; same-note
     // rows keep the counted single-transaction planner.
@@ -26274,6 +26381,111 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return this.applyVaultCountedDependencyRef(snapshot);
   }
 
+  // Counted CURRENT toggle-off: ↵ on a fully linked CURRENT row removes
+  // that prerequisite from every source task. A same-note target that still
+  // resolves keeps the counted one-transaction planner; anything else
+  // (cross-note, or a target whose note is gone) removes per source through
+  // the writer, bottom-up, so a missing target is always removable.
+  async removeCountedDependency(item) {
+    const sessionValidation = validateCountedTaskSession(
+      this.getEditorContent(),
+      this.taskSession,
+    );
+    if (!sessionValidation.valid) {
+      new Notice(`${sessionValidation.error}; no tasks were updated`);
+      return false;
+    }
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const blockId = normalizeBulletPropertyValue(
+      item.blockId || item.existingBlockId || "",
+    );
+    const targetPath = normalizeVaultRelativePath(
+      item.path || ownerPath,
+    );
+    if (!ownerPath || !blockId) {
+      new Notice("⛓ Could not remove dependency (missing link target)");
+      return false;
+    }
+    // A CURRENT row may be linked on only some sources: the counted
+    // one-transaction planner toggles, so it runs only when every source
+    // carries the link. Otherwise each linked source removes alone.
+    if (targetPath === ownerPath) {
+      const content = String(this.editor.getValue() || "");
+      const contentLines = content.split(/\r?\n/);
+      const found = findTaskLineByTrailingBlockId(contentLines, blockId);
+      if (found !== null && isObsidianTaskAtLine(content, found)) {
+        const targetText = String(contentLines[found] || "");
+        const targetIdField = findBulletPropertyField(targetText, "id");
+        const aliases = new Set(
+          [
+            dependencyTargetId(targetText, ownerPath, blockId),
+            targetIdField
+              ? normalizeBulletPropertyValue(targetIdField.value)
+              : "",
+            blockId,
+          ]
+            .map(normalizeBulletPropertyValue)
+            .filter(Boolean),
+        );
+        const everyLinked = (this.taskSession.targets || []).every(
+          (target) => {
+            const field = findBulletPropertyField(
+              String(target.rawLine || ""),
+              "dependsOn",
+            );
+            const values = new Set(
+              field ? parseLocalTaskIdList(field.value) : [],
+            );
+            return [...aliases].some((alias) => values.has(alias));
+          },
+        );
+        if (everyLinked) {
+          return this.plugin.applyCountedLocalTaskDependency(
+            this.editor,
+            this.cursor,
+            this.filePath,
+            this.taskSession,
+            {
+              line: found,
+              rawLine: contentLines[found],
+              displayText: item.displayText,
+              existingIdField: item.existingIdField || null,
+              existingBlockId: blockId,
+            },
+          );
+        }
+      }
+    }
+    const ordered = (this.taskSession.targets || [])
+      .slice()
+      .sort((first, second) => second.line - first.line);
+    let removed = 0;
+    for (const target of ordered) {
+      const outcome = await this.plugin.applyDependencyEdit({
+        editor: this.editor,
+        parentPath: ownerPath,
+        parentLine: target.line,
+        add: [],
+        remove: [{ path: targetPath, blockId }],
+      });
+      if (!outcome.ok) {
+        new Notice(
+          `⛓ ${removed > 0 ? `Removed from ${removed} task${removed === 1 ? "" : "s"}; ` : ""}could not update the task on line ${target.line + 1} (${outcome.reason})`,
+        );
+        return removed > 0;
+      }
+      if (outcome.reason !== "unchanged") {
+        removed += 1;
+      }
+    }
+    new Notice(
+      removed > 0
+        ? `⛓ Removed from ${removed} task${removed === 1 ? "" : "s"}`
+        : "No dependencies changed",
+    );
+    return removed > 0;
+  }
+
   // Apply one vault-wide counted toggle: linked everywhere removes from
   // every source, otherwise unlinked sources gain the link. Each source
   // commits its own one-transaction write; the first failure stops the run
@@ -26310,7 +26522,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     const ref = { path: targetPath, blockId: snapshot.blockId };
     let applied = 0;
-    for (const target of this.taskSession.targets) {
+    // Bottom-up so an inserted Depends-On line never shifts a still-pending
+    // source's line number (mirrors `deleteCountedDependencyLinesAndFields`).
+    const orderedSources = (this.taskSession.targets || [])
+      .slice()
+      .sort((first, second) => second.line - first.line);
+    for (const target of orderedSources) {
       const outcome = await this.plugin.applyDependencyEdit({
         editor: this.editor,
         parentPath: ownerPath,
@@ -26667,12 +26884,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return this.applyVaultCountedDependencyRef(confirmed);
   }
 
-  confirmCountedDependencyBlockId(item) {
+  async confirmCountedDependencyBlockId(item) {
     const dependencyTask = this.pendingCountedDependency;
     if (!dependencyTask || !item.valid) {
       return false;
     }
-    const applied = this.plugin.applyCountedLocalTaskDependency(
+    const applied = await this.plugin.applyCountedLocalTaskDependency(
       this.editor,
       this.cursor,
       this.filePath,
@@ -26689,7 +26906,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // Record one confirmed block ID and either advance to the next prompt (modal
   // stays open) or, on the final prompt, run the batch executor and close only
   // when it succeeds.
-  confirmBatchBlockId(item) {
+  async confirmBatchBlockId(item) {
     const batch = this.pendingBatch;
     const snapshot = batch.promptQueue[batch.promptIndex];
     if (!snapshot) {
@@ -26707,8 +26924,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return this.promptNextBatchBlockId();
     }
 
-    // Cross-note batches commit asynchronously (stale re-read per target
-    // plus target preparation); same-note batches stay synchronous.
+    // Cross-note and same-note batches both commit asynchronously (stale
+    // re-read per target plus target preparation and recovery).
     if (batch.hasVault) {
       return this.executeVaultDependencyBatch(batch).then((applied) => {
         if (applied) {
@@ -26717,7 +26934,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return applied;
       });
     }
-    if (this.executeDependencyBatch(batch)) {
+    if (await this.executeDependencyBatch(batch)) {
       this.clearPendingBatch();
       return true;
     }
@@ -26750,7 +26967,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
     // An existing valid `[id::]` is never rewritten (§3); the planner
     // resolves the kept id for the field. Unencodable paths refuse only
-    // when the target has no `[id::]` yet.
+    // when the target has no `[id::]` yet. The confirmed id folds into the
+    // writer's one transaction below (one Ctrl+Z).
     const updatedLine = applyPromptedBlockIdPreservingLegacyId(
       targetLine,
       item.id,
@@ -26760,10 +26978,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       new Notice(
         "Dependency not added: this note path cannot be encoded as a dependency ID",
       );
-      return false;
-    }
-    if (!replaceEditorLine(this.editor, task.line, targetLine, updatedLine)) {
-      new Notice("Could not update target task");
       return false;
     }
 
@@ -26777,7 +26991,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.cursor,
       this.selectedPropertyItem.property.name,
       depValue,
-      { showNotice: false, linkBlockId: item.id, filePath: this.filePath },
+      {
+        showNotice: false,
+        linkBlockId: item.id,
+        filePath: this.filePath,
+        pendingTargetLine: {
+          line: task.line,
+          expected: targetLine,
+          text: updatedLine,
+        },
+      },
     );
     if (!linked) {
       return false;
@@ -26791,7 +27014,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // rewrite the `[dependsOn:: ...]` list once, then reconcile navigation
   // bullets. Target-line edits are single-line replaces, so target indices stay
   // stable; only the nav reconciliation shifts lines and re-reads as it goes.
-  executeDependencyBatch(batch) {
+  async executeDependencyBatch(batch) {
     const parentValidation = validateDependencyParentForEditor(
       this.editor,
       this.cursor,
@@ -26817,6 +27040,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const removals = batch.removals.slice();
     let skippedStale = 0;
     let skippedOther = 0;
+    // Confirmed `+ id` targets are stamped into a working copy first (the
+    // planner resolves by `^block-id`), so the single commit below writes
+    // the target ids and the link together.
+    const workingLines = originalContent.split(/\r?\n/);
     const collectAddition = (snapshot, confirmedId = null) => {
       const targetLine = getEditorLine(this.editor, snapshot.line);
       if (targetLine !== snapshot.rawLine) {
@@ -26828,9 +27055,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return null;
       }
       if (confirmedId !== null) {
+        // Validated against the working copy (an earlier stamp in this
+        // batch already landed there), not the batch's reserved set, which
+        // already holds this confirmed id.
         const validation = validateBlockIdCandidate(
           confirmedId,
-          originalContent,
+          workingLines.join(originalContent.includes("\r\n") ? "\r\n" : "\n"),
         );
         if (!validation.valid) {
           skippedOther += 1;
@@ -26840,6 +27070,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           skippedOther += 1;
           return null;
         }
+        const stampedLine = applyPromptedBlockIdPreservingLegacyId(
+          targetLine,
+          confirmedId,
+          filePath,
+        );
+        if (stampedLine === null) {
+          skippedOther += 1;
+          return null;
+        }
+        workingLines[snapshot.line] = stampedLine;
         return { blockId: confirmedId };
       }
       const resolved = resolveTargetTaskIdentity(targetLine, {
@@ -26908,13 +27148,32 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       }
     });
 
+    const workingContent = workingLines.join(
+      originalContent.includes("\r\n") ? "\r\n" : "\n",
+    );
+    const registry = await readTasksStatusRegistry(
+      this.plugin ? this.plugin.app : null,
+    );
+    const vaultContents = this.plugin
+      ? await this.plugin.readDependencyRecoveryVaultContents(
+          filePath,
+          workingContent,
+        )
+      : null;
     const plan = planDependencyEdit({
-      content: originalContent,
+      content: workingContent,
       parentLine: this.cursor.line,
       parentPath: filePath,
       add: addRefs,
       remove: removeRefs,
-      files: { [filePath]: originalContent },
+      files: { [filePath]: workingContent },
+      vaultFiles: this.plugin
+        ? this.plugin.readDependencyVaultFileList()
+        : null,
+      resolveLinkpath: this.plugin
+        ? this.plugin.dependencyLinkpathResolver()
+        : null,
+      recovery: { registry, today: new Date(), vaultContents },
     });
     if (!plan.ok) {
       new Notice(`⛓ Could not update dependencies (${plan.reason})`);
@@ -27711,8 +27970,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
       this.opening = true;
       const markedOutcome = this.commitMarkedDependencies();
-      // Vault batches commit asynchronously (stale re-read per target);
-      // same-note batches stay synchronous.
+      // Batches commit asynchronously (stale re-read per target, target
+      // preparation, and recovery); the modal closes when the outcome
+      // resolves truthy.
       if (markedOutcome && typeof markedOutcome.then === "function") {
         markedOutcome
           .then((applied) => {
@@ -34275,7 +34535,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return { deleted: true, line: finalLine };
   }
 
-  applyCountedLocalTaskDependency(
+  async applyCountedLocalTaskDependency(
     cm,
     cursor,
     filePath,
@@ -34292,6 +34552,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(writeContext.error);
       return false;
     }
+    const normalizedPath = normalizeVaultRelativePath(filePath);
     const plan = planCountedLocalTaskDependency(
       writeContext.content,
       session,
@@ -34301,6 +34562,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         ...options,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
+        vaultFiles: this.readDependencyVaultFileList(),
+        resolveLinkpath: this.dependencyLinkpathResolver(),
+        recovery: {
+          registry: await readTasksStatusRegistry(this.app),
+          today: new Date(),
+          vaultContents: await this.readDependencyRecoveryVaultContents(
+            normalizedPath,
+            writeContext.content,
+          ),
+        },
       },
     );
     if (!plan.valid) {
@@ -35476,11 +35747,30 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (!files.has(parentPath)) {
         files.set(parentPath, content);
       }
+      // Every note the edit touches is loaded: the add/remove targets plus
+      // every note already linked on the line (open buffers first, else the
+      // vault). A link whose note cannot be loaded stays verbatim in the
+      // planner (or drops when removed), so one cross-note prerequisite
+      // never blocks every other add or remove.
+      const resolveLinkpath = this.dependencyLinkpathResolver();
       const wanted = new Set([parentPath]);
       for (const ref of [...add, ...remove]) {
         const normalized = normalizeDependencyTargetRef(ref);
         if (normalized.path && normalized.blockId) {
           wanted.add(normalized.path);
+        }
+      }
+      const existingLinks = collectDependencyNavigationBullets(content, parentLine);
+      if (!existingLinks.reason) {
+        for (const target of existingLinks.targets) {
+          const targetPath = dependencyPathForLinkNote(
+            target.note,
+            parentPath,
+            resolveLinkpath,
+          );
+          if (targetPath) {
+            wanted.add(targetPath);
+          }
         }
       }
       for (const filePath of wanted) {
@@ -35493,11 +35783,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           parentPath,
         );
         if (loaded === null) {
-          return Object.freeze({ ok: false, reason: "target-not-found" });
+          if (filePath === parentPath) {
+            return Object.freeze({ ok: false, reason: "target-not-found" });
+          }
+          continue;
         }
         files.set(filePath, loaded);
       }
       const registry = await readTasksStatusRegistry(this.app);
+      const vaultContents = await this.readDependencyRecoveryVaultContents(
+        parentPath,
+        content,
+      );
       const plan = planDependencyEdit({
         content,
         parentLine,
@@ -35505,7 +35802,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         add,
         remove,
         files,
-        recovery: { registry, today: args.today || new Date() },
+        vaultFiles: this.readDependencyVaultFileList(),
+        resolveLinkpath,
+        recovery: {
+          registry,
+          today: args.today || new Date(),
+          vaultContents,
+        },
       });
       if (!plan.ok) {
         return Object.freeze({ ok: false, reason: plan.reason });
@@ -35513,12 +35816,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (!plan.changed) {
         return Object.freeze({ ok: true, reason: "unchanged", notice: plan.notice });
       }
-      const outcome = applyDependencyEditTransaction(plan, {
+      const outcome = await applyDependencyEditTransaction(plan, {
         prepareTargetFile: (filePath, preparation) =>
           this.prepareDependencyTargetNote(filePath, preparation),
         commitDependentContent: (nextContent) => {
           if (!editor) {
             return { ok: false, reason: "no-editor" };
+          }
+          if (typeof editor.getValue === "function") {
+            const live = String(editor.getValue() || "");
+            if (live !== content) {
+              return { ok: false, reason: "stale-editor" };
+            }
           }
           const stamped = this.stampDependencyParentLine(
             nextContent,
@@ -35536,6 +35845,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             : { ok: false, reason: "commit-failed" };
         },
       });
+      if (!outcome.ok && outcome.reason === "stale-editor") {
+        new Notice("The note changed — reopen the picker and try again");
+      }
       return outcome;
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "apply-failed" });
@@ -35589,6 +35901,97 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         }
       }
       return null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  // Vault linkpath resolver for the writer (`docs/task-dependencies.md` §3):
+  // bare basenames resolve through the metadata cache against the whole
+  // vault (so `[[cash#^a]]` with duplicate basenames keeps its full route),
+  // with the same-note suffix heuristic as the fallback. Returns null when
+  // no resolver is available; the planner then uses the heuristic alone.
+  dependencyLinkpathResolver() {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        !metadataCache ||
+        typeof metadataCache.getFirstLinkpathDest !== "function"
+      ) {
+        return null;
+      }
+      return (linkpath, sourcePath) => {
+        try {
+          const dest = metadataCache.getFirstLinkpathDest(
+            String(linkpath || ""),
+            String(sourcePath || ""),
+          );
+          if (dest && dest.path) {
+            return normalizeVaultRelativePath(dest.path);
+          }
+        } catch (_error) {
+          // Fall through to the heuristic.
+        }
+        return null;
+      };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  // Vault markdown file list for writer link-form ranking, or null when the
+  // vault cannot list files (the planner then ranks loaded notes only).
+  readDependencyVaultFileList() {
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.getMarkdownFiles !== "function") {
+        return null;
+      }
+      const paths = [];
+      for (const file of vault.getMarkdownFiles() || []) {
+        const normalized = normalizeVaultRelativePath(file && file.path);
+        if (normalized) {
+          paths.push(normalized);
+        }
+      }
+      return paths;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  // Vault snapshot for ADJ-8 recovery: every markdown note with open-buffer
+  // contents winning (unsaved edits count), so the recovery index sees the
+  // vault with the edited buffer overriding, including today's daily note.
+  // Returns null when the vault cannot be snapshotted; the planner then
+  // recovers from the loaded notes alone.
+  async readDependencyRecoveryVaultContents(sourcePath, sourceContent) {
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.getMarkdownFiles !== "function") {
+        return null;
+      }
+      const buffers = getOpenMarkdownBufferContents(this.app);
+      const contents = new Map();
+      for (const file of vault.getMarkdownFiles() || []) {
+        const normalized = normalizeVaultRelativePath(file && file.path);
+        if (!normalized || contents.has(normalized)) {
+          continue;
+        }
+        if (buffers.has(normalized)) {
+          contents.set(normalized, String(buffers.get(normalized) || ""));
+          continue;
+        }
+        if (typeof vault.cachedRead !== "function") {
+          return null;
+        }
+        contents.set(normalized, String(await vault.cachedRead(file)));
+      }
+      const source = normalizeVaultRelativePath(sourcePath);
+      if (source) {
+        contents.set(source, String(sourceContent || ""));
+      }
+      return contents;
     } catch (_error) {
       return null;
     }
@@ -36120,6 +36523,28 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (owning === null) {
         return Object.freeze({ ok: false, reason: "no-owning-task" });
       }
+      // Contract §9: the dependent is re-read and the removal refuses when
+      // the target is not on its line — never a silent `ok`.
+      const owningLinks = collectDependencyNavigationBullets(content, owning);
+      if (owningLinks.reason) {
+        return Object.freeze({ ok: false, reason: owningLinks.reason });
+      }
+      const linkResolver = this.dependencyLinkpathResolver();
+      const onLine = owningLinks.targets.some((entry) => {
+        const entryPath = dependencyPathForLinkNote(
+          entry.note,
+          path,
+          linkResolver,
+        );
+        return (
+          normalizeVaultRelativePath(entryPath) === targetPath &&
+          normalizeBulletPropertyValue(entry.blockId) === blockId
+        );
+      });
+      if (!onLine) {
+        new Notice("⛓ That dependency is not on this task");
+        return Object.freeze({ ok: false, reason: "not-on-line" });
+      }
       const outcome = await this.applyDependencyEdit({
         editor: view.editor,
         parentPath: path,
@@ -36267,14 +36692,30 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // legacy folding in one editor transaction (one Ctrl+Z), with `[fresh::
   // today]` stamped last. `options.linkBlockId` is the target's `^block-id`
   // in this note; `options.filePath` overrides the active file.
+  // `options.pendingTargetLine` (`{line, expected, text}`) folds a same-note
+  // target `^id` / `[id::]` write into that one transaction instead of a
+  // separate edit.
   setLocalTaskDependencyLink(cm, cursor, id, options = {}) {
-    const content =
+    let content =
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : null;
     if (content === null) {
       new Notice("No active markdown editor");
       return false;
+    }
+    const pendingTarget = options.pendingTargetLine || null;
+    if (pendingTarget) {
+      const pendingLines = content.split(/\r?\n/);
+      if (
+        !Number.isInteger(pendingTarget.line) ||
+        pendingLines[pendingTarget.line] !== pendingTarget.expected
+      ) {
+        new Notice("Task changed; dependency not added");
+        return false;
+      }
+      pendingLines[pendingTarget.line] = pendingTarget.text;
+      content = pendingLines.join(content.includes("\r\n") ? "\r\n" : "\n");
     }
     const depValue = normalizeBulletPropertyValue(id);
     if (!depValue) {
@@ -36306,6 +36747,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       add: [{ path: filePath, blockId: linkBlockId }],
       remove: [],
       files: { [filePath]: content },
+      vaultFiles: this.readDependencyVaultFileList(),
+      resolveLinkpath: this.dependencyLinkpathResolver(),
     });
     if (!plan.ok) {
       new Notice(`⛓ Could not add dependency (${plan.reason})`);

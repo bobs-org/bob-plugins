@@ -2775,7 +2775,7 @@ test("counted dependency block-ID prompting is planned atomically", () => {
   assert.doesNotMatch(rejected.content, /dependsOn|\[id::/);
 });
 
-test("counted dependency runtime applies target, parents, and navigation in one undo group", () => {
+test("counted dependency runtime applies target, parents, and navigation in one undo group", async () => {
   const input = [
     "- [ ] #task One ^one",
     "- [/] #task Two ^two",
@@ -2792,7 +2792,7 @@ test("counted dependency runtime applies target, parents, and navigation in one 
   plugin.getActiveMarkdownView = () => ({ editor, file });
 
   assert.equal(
-    plugin.applyCountedLocalTaskDependency(
+    await plugin.applyCountedLocalTaskDependency(
       editor,
       cursor,
       file.path,

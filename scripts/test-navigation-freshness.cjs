@@ -606,7 +606,7 @@ test("tier-aware jump notices name each tier", () => {
   );
 });
 
-test("projects tier walks with commitment rank and project notice", () => {
+test("projects tier walks with commitment rank and empty-project notice", () => {
   assert.equal(
     helpers.reviewEntryMachineTier({ tier: "projects" }),
     "projects",
@@ -638,7 +638,7 @@ test("projects tier walks with commitment rank and project notice", () => {
   };
   assert.equal(
     helpers.buildReviewJumpNotice(entry, 2, 6, { todayText: "2026-10-08" }),
-    "Review 2/6 · PROJECTS 1/1 · No open tasks in this project · never confirmed · every 7d",
+    "Review 2/6 · PROJECTS 1/1 · Empty project · never confirmed · every 7d",
   );
   const stamped = {
     ...entry,
@@ -648,7 +648,7 @@ test("projects tier walks with commitment rank and project notice", () => {
   };
   assert.equal(
     helpers.buildReviewJumpNotice(stamped, 2, 6, { todayText: "2026-10-08" }),
-    "Review 2/6 · PROJECTS 1/1 · No open tasks in this project · due today · confirmed Oct 1 · every 7d",
+    "Review 2/6 · PROJECTS 1/1 · Empty project · due today · confirmed Oct 1 · every 7d",
   );
   // Without the capability the walk still lands; only the project
   // detail is withheld.
@@ -659,6 +659,75 @@ test("projects tier walks with commitment rank and project notice", () => {
     }),
     "Review 2/6 · PROJECTS 1/1",
   );
+});
+
+test("references tier walks with commitment rank and reference notice", () => {
+  assert.equal(
+    helpers.reviewEntryMachineTier({ tier: "references" }),
+    "references",
+  );
+  // The walk counts references as commitments, not upkeep.
+  const queue = [
+    { key: "r.md:1", tier: "references" },
+    { key: "o.md:1", tier: "rotten" },
+  ];
+  assert.deepEqual(helpers.reviewWalkRemaining(queue, new Set()), {
+    commitments: 1,
+    rotten: 1,
+  });
+  assert.deepEqual(
+    helpers.reviewWalkRemaining(queue, new Set(["r.md:1"])),
+    { commitments: 0, rotten: 1 },
+  );
+  // Stepping REFERENCES → ROTTEN crosses the boundary.
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "references", destTier: "rotten",
+      commitmentsLeft: 0, rottenLeft: 1,
+    }),
+    "Commitments done — 1 ROTTEN left",
+  );
+  const entry = {
+    key: "r.md:1",
+    path: "r.md",
+    line: 1,
+    originalMarkdown: "- [ ] #task Read ^ref",
+    state: "new",
+    bucket: "new",
+    tier: "references",
+    tierLabel: "REFERENCES",
+    lane: "ready",
+    created: null,
+    fresh: null,
+    dueOn: null,
+    daysOverdue: null,
+    interval: 7,
+    rank: 5,
+    tierRank: 1,
+    tierTotal: 1,
+  };
+  assert.equal(
+    helpers.buildReviewJumpNotice(entry, 5, 6, { todayText: "2026-10-08" }),
+    "Review 5/6 · REFERENCES 1/1 · Reference · never confirmed · every 7d",
+  );
+  const stamped = {
+    ...entry,
+    fresh: "2026-10-01",
+    dueOn: "2026-10-08",
+    daysOverdue: 0,
+  };
+  assert.equal(
+    helpers.buildReviewJumpNotice(stamped, 5, 6, { todayText: "2026-10-08" }),
+    "Review 5/6 · REFERENCES 1/1 · Reference · due today · confirmed Oct 1 · every 7d",
+  );
+  // A references-tier entry never authorizes an exact keep: the
+  // matcher refuses it with `tier`, like PROJECTS.
+  const match = helpers.matchFreshStampExactEntry(
+    [{ ...stamped, line: 1 }],
+    { path: "r.md", line: 0, raw: "- [ ] #task Read ^ref" },
+  );
+  assert.equal(match.ok, false);
+  assert.equal(match.reason, "tier");
 });
 
 test("tier notices fall back without tier ranks and wrap on the last line", () => {

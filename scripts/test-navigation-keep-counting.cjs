@@ -224,6 +224,22 @@ test("exact eligibility refuses non-Ready and non-due rows", () => {
     ).reason,
     "tier",
   );
+  // Tracker tiers never decide: PROJECTS and REFERENCES rows refuse
+  // with `tier`, like NEW.
+  assert.equal(
+    helpers.matchFreshStampExactEntry(
+      [rottenEntry({ lane: "ready", tier: "projects", state: "new" })],
+      ref,
+    ).reason,
+    "tier",
+  );
+  assert.equal(
+    helpers.matchFreshStampExactEntry(
+      [rottenEntry({ lane: "ready", tier: "references", state: "rotten" })],
+      ref,
+    ).reason,
+    "tier",
+  );
   // Legacy v3 rows without a lane never authorize.
   assert.equal(
     helpers.matchFreshStampExactEntry(

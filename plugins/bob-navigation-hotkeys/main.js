@@ -30356,8 +30356,9 @@ function reviewFreshnessSupportsTiers(freshnessApi) {
 
 // Project/reference tracking review (ledger-tools freshness capability
 // `trackerReview`). Legacy v3/v4 queues keep working when the
-// capability is absent: they never carry `projects` entries, and every
-// branch below treats a missing capability as "no project detail".
+// capability is absent: they never carry `projects` or `references`
+// entries, and every branch below treats a missing capability as "no
+// tracker detail".
 function reviewFreshnessSupportsTrackers(freshnessApi) {
   try {
     return (
@@ -30369,8 +30370,8 @@ function reviewFreshnessSupportsTrackers(freshnessApi) {
 }
 
 // Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
-// tracker tier), else the legacy v3 `state` mapping (`resurfaced`
-// reads as the RETURNED tier). Returns "".
+// and `references` tracker tiers), else the legacy v3 `state` mapping
+// (`resurfaced` reads as the RETURNED tier). Returns "".
 function reviewEntryMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
@@ -30382,6 +30383,7 @@ function reviewEntryMachineTier(entry) {
     tier === "pending" ||
     tier === "next" ||
     tier === "returned" ||
+    tier === "references" ||
     tier === "rotten"
   ) {
     return tier;
@@ -30426,7 +30428,8 @@ function reviewIsCommitmentTier(tier) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
-    tier === "returned"
+    tier === "returned" ||
+    tier === "references"
   );
 }
 
@@ -30905,7 +30908,8 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank) {
 }
 
 // Remaining walk counts after excluding handled keys: `{ commitments,
-// rotten }`. Commitments are the NEW/PENDING/NEXT/RETURNED tiers.
+// rotten }`. Commitments are the NEW/PROJECTS/PENDING/NEXT/RETURNED/
+// REFERENCES tiers.
 function reviewWalkRemaining(queue, excludedKeys) {
   const excluded =
     excludedKeys instanceof Set
@@ -31267,7 +31271,7 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
     const tier = reviewEntryMachineTier(entry);
     const head = `Review ${rank}/${total} · ${label} ${entry.tierRank}/${entry.tierTotal}`;
     let detail = "";
-    if (tier === "projects" && trackers) {
+    if ((tier === "projects" || tier === "references") && trackers) {
       const fresh =
         entry && typeof entry.fresh === "string" && entry.fresh
           ? entry.fresh
@@ -31275,8 +31279,9 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
       const interval =
         entry && Number.isInteger(entry.interval) ? entry.interval : null;
       const every = interval !== null ? ` · every ${interval}d` : "";
+      const kind = tier === "projects" ? "Empty project" : "Reference";
       if (!fresh) {
-        detail = `No open tasks in this project · never confirmed${every}`;
+        detail = `${kind} · never confirmed${every}`;
       } else {
         const overdue =
           entry && Number.isFinite(entry.daysOverdue)
@@ -31290,7 +31295,7 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
             : overdue < 1
               ? "due today"
               : `${overdue}d overdue`;
-        detail = `No open tasks in this project · ${lead} · confirmed ${reviewShortDate(fresh)}${every}`;
+        detail = `${kind} · ${lead} · confirmed ${reviewShortDate(fresh)}${every}`;
       }
     } else if (tier === "pending" || tier === "next") {
       detail = reviewLaneConfirmedDetail(entry, todayText);

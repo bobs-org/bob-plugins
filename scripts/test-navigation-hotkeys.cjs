@@ -1858,25 +1858,6 @@ test("dependency navigation identity includes note path and folds legacy childre
     collection.targets.map(({ note, blockId }) => `${note}#^${blockId}`),
     ["#^x", "Other#^x"],
   );
-  const plan = helpers.planDependencyNavigationBulletSync(input, 0, [
-    { blockId: "x", note: "" },
-    { blockId: "x", note: "Other" },
-  ]);
-  assert.equal(plan.operation, "rewrite");
-  assert.deepEqual(plan.lineTexts, [
-    "  - ⛓️ **DEPENDS ON:** [[#^x]] • [[Other#^x]]",
-  ]);
-  assert.equal(plan.replaceLine, 1);
-  assert.deepEqual(plan.deleteLines, [2]);
-
-  const keepRemote = helpers.planDependencyNavigationBulletSync(input, 0, [
-    { blockId: "x", note: "" },
-    { blockId: "x", note: "Other" },
-    "new",
-  ]);
-  assert.deepEqual(keepRemote.lineTexts, [
-    "  - ⛓️ **DEPENDS ON:** [[#^x]] • [[Other#^x]] • [[#^new]]",
-  ]);
 });
 
 test("retired dependency bullets are excluded from single and counted toggles", () => {
@@ -1903,141 +1884,6 @@ test("dependsOn replacement accepts spaces around field name and separator", () 
     ),
     "- [ ] #task Parent [ dependsOn :: new, keep]",
   );
-});
-
-test("dependency sync canonicalises the line and protects unrelated transclusions", () => {
-  const input = [
-    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
-    "  - 🔗 **DEPENDS ON:** [[#^a]] • [[#^b]]",
-    "  - ![[ref/chat/example#^ref]]",
-    "- [ ] #task A [id:: a] ^a",
-    "- [ ] #task B [id:: b] ^b",
-  ].join("\n");
-  const plan = helpers.planDependencyNavigationBulletSync(input, 0, ["a", "b"]);
-  assert.equal(plan.operation, "rewrite");
-  assert.deepEqual(plan.lineTexts, [
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
-  ]);
-  assert.equal(plan.replaceLine, 1);
-  assert.deepEqual(plan.deleteLines, []);
-
-  const canonical = [
-    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
-    "  - ![[ref/chat/example#^ref]]",
-    "- [ ] #task A [id:: a] ^a",
-    "- [ ] #task B [id:: b] ^b",
-  ].join("\n");
-  const collection = helpers.collectDependencyNavigationBullets(canonical, 0);
-  assert.deepEqual(collection.blockIds, ["a", "b"]);
-  assert.deepEqual(collection.lineIndices, [1]);
-  assert.equal(
-    helpers.planDependencyNavigationBulletSync(canonical, 0, ["a", "b"]).changed,
-    false,
-  );
-});
-
-test("dependency sync inserts, removes, and preserves arbitrary child bullets", () => {
-  const propertyOnly = [
-    "- [ ] #task Parent [dependsOn:: a]",
-    "  - Keep me",
-    "- [ ] #task A [id:: a] ^a",
-  ].join("\n");
-  const insert = helpers.planDependencyNavigationBulletSync(propertyOnly, 0, ["a"]);
-  assert.equal(insert.operation, "insert");
-  assert.equal(insert.insertLine, 1);
-  assert.equal(insert.lineText, "  - ⛓️ **DEPENDS ON:** [[#^a]]");
-
-  const canonical = propertyOnly.replace(
-    "  - Keep me",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]]\n  - Keep me",
-  );
-  const remove = helpers.planDependencyNavigationBulletSync(
-    canonical.replace("[dependsOn:: a]", "[dependsOn:: ]"),
-    0,
-    [],
-    { managedBlockIds: ["a"] },
-  );
-  assert.equal(remove.operation, "delete");
-  assert.deepEqual(remove.deleteLines, [1]);
-
-  const plain = propertyOnly.replace("- [ ] #task Parent", "- Plain parent");
-  assert.equal(
-    helpers.planDependencyNavigationBulletSync(plain, 0, ["a"]).operation,
-    "guard",
-  );
-
-  const mixedIndent = [
-    "- [ ] #task Parent [dependsOn:: a]",
-    "  - 🔗 **DEPENDS ON:** [[#^a]]",
-    "\t- arbitrary child",
-    "- [ ] #task A [id:: a] ^a",
-  ].join("\n");
-  const mixedPlan = helpers.planDependencyNavigationBulletSync(
-    mixedIndent,
-    0,
-    ["a"],
-  );
-  assert.equal(mixedPlan.operation, "rewrite");
-  assert.equal(mixedPlan.replaceLine, 1);
-  assert.equal(mixedPlan.lineText, "  - ⛓️ **DEPENDS ON:** [[#^a]]");
-  assert.deepEqual(mixedPlan.deleteLines, []);
-
-  const nested = [
-    "- [ ] #task Parent [dependsOn:: a]",
-    "  - arbitrary child",
-    "    - ![[#^a]]",
-    "- [ ] #task A [id:: a] ^a",
-  ].join("\n");
-  const nestedCollection = helpers.collectDependencyNavigationBullets(nested, 0);
-  assert.deepEqual(nestedCollection.blockIds, []);
-  assert.equal(
-    helpers.planDependencyNavigationBulletSync(nested, 0, ["a"]).operation,
-    "insert",
-  );
-});
-
-test("dependency sync folds struck legacy children and protects unrelated strikes", () => {
-  const input = [
-    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
-    "  - ~~[[#^a]]~~",
-    "  - ~~[[#^ref]]~~",
-    "- [x] #task A [id:: a] ^a",
-    "- [ ] #task B [id:: b] ^b",
-  ].join("\n");
-  const collection = helpers.collectDependencyNavigationBullets(input, 0);
-  assert.deepEqual(collection.blockIds, ["a"]);
-  assert.deepEqual(collection.lineIndices, [1]);
-
-  const plan = helpers.planDependencyNavigationBulletSync(input, 0, ["a", "b"]);
-  assert.equal(plan.operation, "rewrite");
-  assert.deepEqual(plan.lineTexts, [
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
-  ]);
-  assert.equal(plan.replaceLine, 1);
-  assert.deepEqual(plan.deleteLines, []);
-
-  const canonical = [
-    "- [ ] #task Parent [dependsOn:: a, b] ^parent",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
-    "  - ~~[[#^ref]]~~",
-    "- [x] #task A [id:: a] ^a",
-    "- [ ] #task B [id:: b] ^b",
-  ].join("\n");
-  assert.equal(
-    helpers.planDependencyNavigationBulletSync(canonical, 0, ["a", "b"])
-      .changed,
-    false,
-  );
-
-  const remove = helpers.planDependencyNavigationBulletSync(
-    canonical.replace("[dependsOn:: a, b]", "[dependsOn:: ]"),
-    0,
-    [],
-    { managedBlockIds: ["a", "b"] },
-  );
-  assert.equal(remove.operation, "delete");
-  assert.deepEqual(remove.deleteLines, [1]);
 });
 
 test("task status helpers keep Blocked open but rankless", () => {
@@ -3075,7 +2921,9 @@ test("Ctrl+D clears a field-only dependency without a line", async () => {
     {},
   );
   assert.equal(result.deleted, true);
-  assert.match(editor.getValue(), /- \[\?\] #task P \^p$/m);
+  // The field-only clear recovers immediately (ADJ-8): the only prerequisite
+  // is closed, so nothing still blocks.
+  assert.match(editor.getValue(), /- \[ \] #task P \^p$/m);
   assert.doesNotMatch(editor.getValue(), /dependsOn/);
 });
 
@@ -3156,6 +3004,8 @@ test("hand-edit mirror projects an edited line into the field", async () => {
   assert.equal(result.mirrored, true);
   assert.match(editor.getValue(), /\[dependsOn:: Here__a\]/);
   assert.match(editor.getValue(), /- \[ \] #task A \[id:: Here__a\] \^a/);
+  // The hand-added open prerequisite blocks the dependent.
+  assert.match(editor.getValue(), /- \[\?\] #task P \[dependsOn:: Here__a\] \^p$/m);
 });
 
 test("hand-edit mirror canonicalises a hand-written line variant", async () => {
@@ -3181,6 +3031,8 @@ test("hand-edit mirror canonicalises a hand-written line variant", async () => {
     editor.getValue(),
     /  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\]/,
   );
+  // Canonicalising keeps the block the open prerequisite implies.
+  assert.match(editor.getValue(), /- \[\?\] #task P /m);
 });
 
 test("hand-edit mirror drops a linkless line and the field", async () => {
@@ -3298,6 +3150,446 @@ test("hand-edit mirror leaves legacy-only children for the hooks", async () => {
   assert.equal(editor.getValue(), content);
 });
 
+test("hand-edit mirror blocks when an open prerequisite is added by hand", async () => {
+  const content = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 2, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  // Even with a freshness stamper available, the mirror never stamps.
+  plugin.getFreshnessStampLine = () => (line) => `${line} [fresh:: today]`;
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    1,
+    "",
+  );
+  assert.equal(result.mirrored, true);
+  assert.match(
+    editor.getValue(),
+    /- \[\?\] #task P \[dependsOn:: Here__a\] \^p$/m,
+  );
+  assert.match(editor.getValue(), /- \[ \] #task A \[id:: Here__a\] \^a$/m);
+  assert.doesNotMatch(editor.getValue(), /fresh::/);
+});
+
+test("hand-edit mirror never transfers commitment to the target", async () => {
+  const content = [
+    "- [*] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 2, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    1,
+    "",
+  );
+  assert.equal(result.mirrored, true);
+  assert.match(editor.getValue(), /- \[\?\] #task P \[dependsOn:: Here__a\] \^p$/m);
+  // The stage would raise the open target to Next; the mirror leaves it Ready.
+  assert.match(editor.getValue(), /- \[ \] #task A \[id:: Here__a\] \^a$/m);
+});
+
+test("hand-edit mirror recovers when the last open prerequisite is removed by hand", async () => {
+  const oldContent = [
+    "- [?] #task P [dependsOn:: Here__a, Here__b] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]",
+    "- [x] #task A [id:: Here__a] ^a",
+    "- [ ] #task B [id:: Here__b] ^b",
+  ].join("\n");
+  const newContent = [
+    "- [?] #task P [dependsOn:: Here__a, Here__b] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [x] #task A [id:: Here__a] ^a",
+    "- [ ] #task B [id:: Here__b] ^b",
+  ].join("\n");
+  const editor = new TransactionEditor(newContent, { line: 3, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+  };
+  plugin.getFreshnessStampLine = () => (line) => `${line} [fresh:: today]`;
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    oldContent,
+    1,
+    "",
+  );
+  assert.equal(result.mirrored, true);
+  assert.match(editor.getValue(), /- \[ \] #task P \[dependsOn:: Here__a\] \^p$/m);
+  assert.match(
+    editor.getValue(),
+    /  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\]$/m,
+  );
+  // The closed prerequisite stays as history; the open one is untouched.
+  assert.match(editor.getValue(), /- \[ \] #task B \[id:: Here__b\] \^b$/m);
+  assert.doesNotMatch(editor.getValue(), /fresh::/);
+});
+
+test("hand-edit mirror leaves a half-typed link alone", async () => {
+  const content = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  assert.equal(
+    helpers.planDependencyHandEditMirror(content, content, 1, ""),
+    null,
+  );
+  const editor = new TransactionEditor(content, { line: 2, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    content,
+    1,
+    "",
+  );
+  assert.equal(result.mirrored, false);
+  assert.equal(editor.getValue(), content);
+});
+
+test("hand-edit mirror clears the owning task when its last-child line is deleted", async () => {
+  const oldContent = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [?] #task S [dependsOn:: Here__b] ^s",
+    "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+    "- [x] #task A [id:: Here__a] ^a",
+    "- [x] #task B [id:: Here__b] ^b",
+  ].join("\n");
+  const newContent = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "- [?] #task S [dependsOn:: Here__b] ^s",
+    "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+    "- [x] #task A [id:: Here__a] ^a",
+    "- [x] #task B [id:: Here__b] ^b",
+  ].join("\n");
+  const removed = helpers.findRemovedLineText(oldContent, newContent);
+  assert.match(removed, /DEPENDS ON/);
+  const plan = helpers.planDependencyHandEditMirror(
+    oldContent,
+    newContent,
+    1,
+    removed,
+  );
+  // The owner maps by task identity: P at its shifted line, never the
+  // sibling S that slid into the deleted index.
+  assert.equal(plan.kind, "clear-field");
+  assert.equal(plan.owning, 0);
+  const editor = new TransactionEditor(newContent, { line: 3, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+  };
+  const result = await plugin.mirrorDependencyHandEdit(
+    editor,
+    "Here.md",
+    oldContent,
+    1,
+    removed,
+  );
+  assert.equal(result.mirrored, true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "- [ ] #task P ^p",
+      "- [?] #task S [dependsOn:: Here__b] ^s",
+      "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+      "- [x] #task A [id:: Here__a] ^a",
+      "- [x] #task B [id:: Here__b] ^b",
+    ].join("\n"),
+  );
+});
+
+test("mirror scheduler debounces at the contract interval", () => {
+  assert.equal(helpers.DEPENDENCY_MIRROR_DEBOUNCE_MS, 400);
+  const plugin = new NavigationHotkeysPlugin();
+  assert.equal(typeof plugin.scheduleDependencyHandEditMirrorFromUpdate, "function");
+  assert.equal(typeof plugin.enqueueDependencyHandEditMirror, "function");
+  assert.equal(typeof plugin.fireDependencyHandEditMirror, "function");
+});
+
+test("mirror scheduler captures the pre-change baseline and keeps it across a burst", () => {
+  const oldContent = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const midContent = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]x",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const newerContent = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]xy",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const editor = new TransactionEditor(midContent, { line: 1, ch: 30 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  plugin.dependencyMirrorByPath = new Map([["Here.md", oldContent]]);
+  plugin.scheduleDependencyHandEditMirror(editor, { from: { line: 1 } });
+  let snapshot = plugin.pendingDependencyMirrorSnapshot;
+  assert.equal(snapshot.oldContent, oldContent);
+  assert.equal(snapshot.editedLine, 1);
+  assert.equal(
+    snapshot.removedText,
+    helpers.findRemovedLineText(oldContent, midContent),
+  );
+  // A second keystroke in the same burst keeps the first baseline, so the
+  // original deletion is never dropped by re-arming on a shifted index.
+  editor.content = newerContent;
+  plugin.scheduleDependencyHandEditMirror(editor, { from: { line: 1 } });
+  snapshot = plugin.pendingDependencyMirrorSnapshot;
+  assert.equal(snapshot.oldContent, oldContent);
+  assert.equal(
+    snapshot.removedText,
+    helpers.findRemovedLineText(oldContent, newerContent),
+  );
+  clearTimeout(plugin.pendingDependencyMirror);
+  plugin.pendingDependencyMirror = null;
+  plugin.pendingDependencyMirrorSnapshot = null;
+});
+
+test("mirror fire re-arms while the cursor stays on the edited line", async () => {
+  const content = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 1, ch: 2 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  const snapshot = {
+    editor,
+    parentPath: "Here.md",
+    oldContent: content,
+    editedLine: 1,
+    removedText: "",
+  };
+  await plugin.fireDependencyHandEditMirror(snapshot);
+  assert.notEqual(plugin.pendingDependencyMirror, null);
+  assert.equal(editor.getValue(), content);
+  clearTimeout(plugin.pendingDependencyMirror);
+  plugin.pendingDependencyMirror = null;
+  // Once the cursor leaves the line, the queued pass runs.
+  editor.setCursor({ line: 2, ch: 0 });
+  await plugin.fireDependencyHandEditMirror(snapshot);
+  assert.equal(plugin.pendingDependencyMirror, null);
+  assert.match(editor.getValue(), /- \[\?\] #task P \[dependsOn:: Here__a\] \^p$/m);
+});
+
+test("mirror scheduler reads changed ranges from the CM6 update", () => {
+  const oldContent = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:**",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const newContent = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const editor = new TransactionEditor(newContent, { line: 1, ch: 28 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { workspace: {} };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Here.md" },
+  });
+  plugin.dependencyMirrorByPath = new Map([["Here.md", oldContent]]);
+  const update = {
+    docChanged: true,
+    view: {},
+    changes: {
+      iterChangedRanges: (callback) => callback(24, 24, 24, 30),
+    },
+    state: { doc: { lineAt: () => ({ number: 2 }) } },
+  };
+  plugin.scheduleDependencyHandEditMirrorFromUpdate(update);
+  const snapshot = plugin.pendingDependencyMirrorSnapshot;
+  assert.equal(snapshot.editedLine, 1);
+  assert.equal(snapshot.oldContent, oldContent);
+  clearTimeout(plugin.pendingDependencyMirror);
+  plugin.pendingDependencyMirror = null;
+  plugin.pendingDependencyMirrorSnapshot = null;
+});
+
+test("mirror scheduler skips IME composition", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { workspace: {} };
+  plugin.dependencyMirrorByPath = new Map();
+  let rangesRead = 0;
+  plugin.scheduleDependencyHandEditMirrorFromUpdate({
+    docChanged: true,
+    view: { composing: true },
+    changes: {
+      iterChangedRanges: () => {
+        rangesRead += 1;
+      },
+    },
+    state: {},
+  });
+  assert.equal(rangesRead, 0);
+  assert.equal(plugin.pendingDependencyMirrorSnapshot || null, null);
+  assert.equal(plugin.pendingDependencyMirror || null, null);
+});
+
+test("mirror scheduler skips open modals", () => {
+  const realDocument = global.document;
+  global.document = {
+    querySelector: (selector) => (selector === ".modal-container" ? {} : null),
+  };
+  try {
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.app = { workspace: {} };
+    plugin.dependencyMirrorByPath = new Map();
+    plugin.scheduleDependencyHandEditMirrorFromUpdate({
+      docChanged: true,
+      view: {},
+      changes: {
+        iterChangedRanges: () => {
+          throw new Error("ranges must not be read while a modal is open");
+        },
+      },
+      state: {},
+    });
+    assert.equal(plugin.pendingDependencyMirrorSnapshot || null, null);
+    assert.equal(plugin.pendingDependencyMirror || null, null);
+  } finally {
+    if (realDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = realDocument;
+    }
+  }
+});
+
+test("counted Ctrl+D clears every targeted task in one transaction with one notice", async () => {
+  const lines = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [?] #task Q [dependsOn:: Here__a] ^q",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [x] #task A [id:: Here__a] ^a",
+  ];
+  const editor = new TransactionEditor(lines.join("\n"), { line: 0, ch: 2 });
+  const session = helpers.discoverCountedObsidianTaskTargets(
+    editor.content,
+    0,
+    1,
+  );
+  assert.deepEqual(
+    session.targets.map((target) => target.line),
+    [0, 2],
+  );
+  const file = { path: "Here.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  plugin.app = {
+    workspace: { getActiveFile: () => file },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+  };
+  const before = notices.length;
+  const result = await plugin.deleteCountedBulletPropertyValue(
+    editor,
+    { line: 0, ch: 2 },
+    file.path,
+    session,
+    "dependsOn",
+  );
+  assert.equal(result.deleted, true);
+  assert.match(editor.getValue(), /- \[ \] #task P \^p$/m);
+  assert.match(editor.getValue(), /- \[ \] #task Q \^q$/m);
+  assert.doesNotMatch(editor.getValue(), /DEPENDS ON|dependsOn/);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(notices.length - before, 1);
+  assert.match(notices.at(-1), /Cleared dependencies from 2 tasks/);
+});
+
+test("counted N! refuses Depends-On lines with the Ctrl+Shift+P notice", async () => {
+  const editor = new TransactionEditor(
+    [
+      "- [ ] #task P ^p",
+      "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+      "- [[One]]",
+    ].join("\n"),
+    { line: 1, ch: 0 },
+  );
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  notices.length = 0;
+  const result = await plugin.toggleCountedLineTransclusions(
+    editor,
+    { line: 1, ch: 0 },
+    1,
+  );
+  assert.equal(result, true);
+  // The Depends-On line is untouched while the neighbouring link toggles.
+  assert.equal(
+    editor.getLine(1),
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+  );
+  assert.equal(editor.getLine(2), "- ![[One]]");
+  assert.match(notices.at(-1), /Dependencies use plain links/);
+});
+
+test("counted N! on only a Depends-On line refuses without writing", async () => {
+  const content = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+  ].join("\n");
+  const editor = new TransactionEditor(content, { line: 1, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  notices.length = 0;
+  const result = await plugin.toggleCountedLineTransclusions(
+    editor,
+    { line: 1, ch: 0 },
+    0,
+  );
+  assert.equal(result, false);
+  assert.equal(editor.getValue(), content);
+  assert.equal(editor.transactions.length, 0);
+  assert.match(notices.at(-1), /Dependencies use plain links/);
+});
+
 test("task moves carry the Depends-On line and repath stranded same-note links", () => {
   const source = [
     "- [ ] #task One [dependsOn:: Source__two] ^one",
@@ -3364,46 +3656,6 @@ test("task moves keep pathless links when the target moves along", () => {
     /⛓️ \*\*DEPENDS ON:\*\* \[\[#\^two\]\]/,
   );
   assert.match(nextDestination, /\[dependsOn:: Dest__two\]/);
-});
-
-test("migration transform rewrites only real tasks and reports skipped non-tasks", () => {
-  const input = [
-    "- [ ] #task Parent [dependsOn:: a, remote, missing]",
-    "  - 🔗 **DEPENDENCIES:** [[#^a]] • [[#^remote]]",
-    "- Plain parent [dependsOn:: a]",
-    "\t- arbitrary child",
-    "- [ ] #task A [id:: a] ^a",
-  ].join("\n");
-  const resolutions = new Map([
-    ["a", { filePath: "Here.md", blockId: "a" }],
-    ["remote", { filePath: "folder/Other.md", blockId: "actual" }],
-  ]);
-  const migrated = helpers.transformDependencyBulletsInContent(
-    input,
-    "Here.md",
-    resolutions,
-  );
-  assert.equal(migrated.changed, true);
-  assert.match(
-    migrated.content,
-    /  - ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^a\]\] • \[\[Other#\^actual\]\]/,
-  );
-  assert.match(
-    migrated.content,
-    /- Plain parent \[dependsOn:: a\]\n\t- arbitrary child/,
-  );
-  assert.equal(migrated.skippedNonTaskCount, 1);
-  assert.deepEqual(migrated.skippedNonTasks, [
-    { filePath: "Here.md", line: 3 },
-  ]);
-  assert.equal(migrated.unresolved.length, 1);
-  assert.equal(migrated.unresolved[0].id, "missing");
-  const second = helpers.transformDependencyBulletsInContent(
-    migrated.content,
-    "Here.md",
-    resolutions,
-  );
-  assert.equal(second.changed, false);
 });
 
 test("counted task moves discover movable tasks without wrapping or examples", () => {

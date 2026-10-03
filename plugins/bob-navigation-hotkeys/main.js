@@ -249,8 +249,9 @@ const PROJECT_HIDE_TAG = "#hide";
 const DEPENDENCY_NAVIGATION_LABEL = "DEPENDS ON";
 const DEPENDENCY_NAVIGATION_EMOJI = "⛓️";
 const DEPENDENCY_NAVIGATION_SEPARATOR = " • ";
-// Trailing debounce before the hand-edit mirror runs after an edit.
-const DEPENDENCY_MIRROR_DEBOUNCE_MS = 350;
+// Trailing debounce before the hand-edit mirror runs after an edit
+// (`docs/task-dependencies.md` §8: once the cursor leaves the edited line).
+const DEPENDENCY_MIRROR_DEBOUNCE_MS = 400;
 // Legacy labels the picker still recognizes (and normalizes in place) so lines
 // written before the rename keep working for dedupe, removal, and grouping.
 const LEGACY_DEPENDENCY_NAVIGATION_LABELS = Object.freeze(
@@ -1414,12 +1415,6 @@ function findNearestParentListItem(lines, childLine) {
   return null;
 }
 
-function normalizeDependencyNavigationBlockIds(blockIds) {
-  return normalizeDependencyNavigationTargets(blockIds).map(
-    (target) => target.blockId,
-  );
-}
-
 function dependencyNavigationTargetKey(target) {
   const blockId = normalizeBulletPropertyValue(
     target && typeof target === "object" ? target.blockId : target,
@@ -1681,24 +1676,6 @@ function isDependencyLineWriterSeparators(linkSpan) {
 // Rewrite a managed dependency navigation bullet to the current label while
 // preserving its existing indentation and list marker, so a legacy bullet can be
 // normalized in place without disturbing tab-indented or non-dash markers.
-function formatDependencyNavigationBulletFromDetails(details) {
-  const blockIds = Array.isArray(details && details.blockIds)
-    ? details.blockIds
-    : [details && details.blockId];
-  const targets = details && details.terminal
-    ? blockIds.map((blockId) => ({
-        blockId,
-        note: details.note || "",
-        terminal: true,
-      }))
-    : blockIds;
-  return formatDependencyNavigationBulletWithMarker(
-    targets,
-    details && details.indent,
-    details && details.marker,
-  );
-}
-
 function getTaskIdentityByBlockId(content) {
   const identities = new Map();
   const text = String(content || "");
@@ -3804,145 +3781,6 @@ function computeFinalDependencyLinkOrder(existingIds, addIds, removeIds) {
   return finalTargets;
 }
 
-function createDependencyNavigationSyncPlan(fields) {
-  return Object.freeze({
-    operation: fields.operation,
-    changed: Boolean(fields.changed),
-    reason: fields.reason === undefined ? null : fields.reason,
-    insertLine: fields.insertLine === undefined ? null : fields.insertLine,
-    replaceLine: fields.replaceLine === undefined ? null : fields.replaceLine,
-    lineText: fields.lineText === undefined ? null : fields.lineText,
-    lineTexts: Object.freeze((fields.lineTexts || []).slice()),
-    deleteLines: Object.freeze((fields.deleteLines || []).slice()),
-    blockIds: Object.freeze((fields.blockIds || []).slice()),
-    existingBlockIds: Object.freeze((fields.existingBlockIds || []).slice()),
-    lineIndices: Object.freeze((fields.lineIndices || []).slice()),
-    consolidated: Boolean(fields.consolidated),
-  });
-}
-
-function planDependencyNavigationBulletSync(
-  content,
-  parentLine,
-  finalBlockIds,
-  options = {},
-) {
-  const lines = String(content || "").split(/\r?\n/);
-  const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
-  const finalTargets = normalizeDependencyNavigationTargets(finalBlockIds);
-  const finalIds = finalTargets.map((target) => target.blockId);
-  const guard = (reason) =>
-    createDependencyNavigationSyncPlan({
-      operation: "guard",
-      changed: false,
-      reason,
-      blockIds: finalIds,
-    });
-
-  if (
-    !Number.isFinite(parentIndex) ||
-    parentIndex < 0 ||
-    parentIndex >= lines.length
-  ) {
-    return guard("parent-out-of-range");
-  }
-
-  if (!isObsidianTaskAtLine(content, parentIndex)) {
-    return guard("not-task");
-  }
-
-  const collection = collectDependencyNavigationBullets(content, parentIndex, [
-    ...finalTargets,
-    ...(options.managedBlockIds || []),
-  ]);
-  if (collection.reason) {
-    return guard(collection.reason);
-  }
-
-  if (collection.lineIndices.length === 0) {
-    if (finalIds.length === 0) {
-      return createDependencyNavigationSyncPlan({
-        operation: "noop",
-        changed: false,
-        blockIds: finalIds,
-        existingBlockIds: collection.blockIds,
-        lineIndices: collection.lineIndices,
-      });
-    }
-
-    // Create the line as the first child, or second when a `❌ **CANCEL LOG**`
-    // child exists (`docs/task-dependencies.md` §2.1).
-    const indent = getDependencyChildIndent(lines, parentIndex);
-    const lineText = formatDependencyNavigationBulletWithMarker(
-      finalTargets,
-      indent,
-      collection.marker || "-",
-    );
-    return createDependencyNavigationSyncPlan({
-      operation: "insert",
-      changed: true,
-      insertLine: getDependencyInsertLine(lines, parentIndex),
-      lineText,
-      lineTexts: [lineText],
-      blockIds: finalIds,
-      existingBlockIds: collection.blockIds,
-      lineIndices: collection.lineIndices,
-    });
-  }
-
-  if (finalIds.length === 0) {
-    return createDependencyNavigationSyncPlan({
-      operation: "delete",
-      changed: true,
-      deleteLines: collection.lineIndices,
-      blockIds: finalIds,
-      existingBlockIds: collection.blockIds,
-      lineIndices: collection.lineIndices,
-      consolidated: collection.lineIndices.length > 1 || collection.anyLegacy,
-    });
-  }
-
-  // One transaction folds the dependent's legacy children into the rewritten
-  // line and canonicalises every reader-tolerated variant in place.
-  const replaceLine =
-    collection.lineIndex === null
-      ? collection.lineIndices[0]
-      : collection.lineIndex;
-  const lineText = formatDependencyNavigationBulletWithMarker(
-    finalTargets,
-    collection.indent,
-    collection.marker,
-  );
-  if (
-    collection.lineIndex !== null &&
-    collection.lineIndices.length === 1 &&
-    lines[replaceLine] === lineText
-  ) {
-    return createDependencyNavigationSyncPlan({
-      operation: "noop",
-      changed: false,
-      blockIds: finalIds,
-      existingBlockIds: collection.blockIds,
-      lineIndices: collection.lineIndices,
-    });
-  }
-
-  return createDependencyNavigationSyncPlan({
-    operation: "rewrite",
-    changed: true,
-    replaceLine,
-    lineText,
-    lineTexts: [lineText],
-    deleteLines: collection.lineIndices.filter(
-      (lineIndex) => lineIndex !== replaceLine,
-    ),
-    blockIds: finalIds,
-    existingBlockIds: collection.blockIds,
-    lineIndices: collection.lineIndices,
-    consolidated: collection.lineIndices.length > 1 || collection.anyLegacy,
-  });
-}
-
 // Insertion point for a new Depends-On line: the first direct child, or the
 // second when a `❌ **CANCEL LOG**` child exists.
 function getDependencyInsertLine(lines, parentLine) {
@@ -4063,8 +3901,11 @@ function dependencyHandEditChildVerdicts(lines, owning) {
 }
 
 // The edited task across a snapshot pair: the owner in the old content,
-// mapped onto the new content by identity (trailing block id, or both
-// id-less), with a new-coordinates fallback when the mapping misses.
+// mapped onto the new content by task identity (trailing block id). Deleting
+// a Depends-On line that is its task's last child shifts the next sibling
+// into its index, so an index comparison would mistake the sibling for the
+// owner and clear the sibling's field. When the owning task itself is gone,
+// there is nothing to mirror.
 function dependencyHandEditOwningLine(oldLines, newLines, editedLine) {
   const at = Math.floor(numericOrDefault(editedLine, Number.NaN));
   if (!Number.isFinite(at)) {
@@ -4075,14 +3916,27 @@ function dependencyHandEditOwningLine(oldLines, newLines, editedLine) {
       oldLines,
       Math.max(0, Math.min(at, oldLines.length - 1)),
     );
-    if (
-      oldOwning !== null &&
-      oldOwning < newLines.length &&
-      isObsidianTaskAtLine(newLines.join("\n"), oldOwning) &&
-      getTrailingBlockId(String(oldLines[oldOwning] || "")) ===
-        getTrailingBlockId(String(newLines[oldOwning] || ""))
-    ) {
-      return oldOwning;
+    if (oldOwning !== null && oldOwning !== undefined) {
+      const oldId = getTrailingBlockId(String(oldLines[oldOwning] || ""));
+      if (oldId) {
+        const newContent = newLines.join("\n");
+        for (let index = 0; index < newLines.length; index += 1) {
+          if (
+            getTrailingBlockId(String(newLines[index] || "")) === oldId &&
+            isObsidianTaskAtLine(newContent, index)
+          ) {
+            return index;
+          }
+        }
+        return null;
+      }
+      if (
+        oldOwning < newLines.length &&
+        isObsidianTaskAtLine(newLines.join("\n"), oldOwning) &&
+        !getTrailingBlockId(String(newLines[oldOwning] || ""))
+      ) {
+        return oldOwning;
+      }
     }
   }
   if (newLines.length === 0) {
@@ -4526,16 +4380,21 @@ function planDependencyEdit(args = {}) {
 
   // Status effects (§5). Adding an open prerequisite blocks the dependent;
   // when the dependent held Next/In Progress, the open target rises to at
-  // least that lane (commitment transfer).
+  // least that lane (commitment transfer). The hand-edit mirror
+  // (`mirrorTouch`) applies the same effects from the hand-edited state:
+  // a hand-added open prerequisite blocks, but there is never a commitment
+  // transfer.
+  const mirrorTouch = args.mirrorTouch === true;
   const addedOpen = addedRows.filter((row) => row.open);
   let blockParent = false;
-  if (addedOpen.length > 0) {
+  const mirrorOpenRemaining = resolved.filter((row) => row.open).length;
+  if (mirrorTouch ? mirrorOpenRemaining > 0 : addedOpen.length > 0) {
     const blocked = blockObsidianTaskCheckboxStatus(parentText);
     blockParent = blocked !== parentText;
     parentText = blocked;
   }
   const promotions = [];
-  for (const row of addedOpen) {
+  for (const row of (mirrorTouch ? [] : addedOpen)) {
     const desired = getDependencyPromotionStatus(parentStatusBefore);
     if (!desired) {
       continue;
@@ -4633,13 +4492,18 @@ function planDependencyEdit(args = {}) {
   // Removing a dependency recovers the dependent to its derived rank
   // immediately (ADJ-8) when no open prerequisite and no future `scheduled`
   // date remain; otherwise it stays `[?]`. The hooks keep the final word.
+  // A cleared field counts as a removal even when no link row was removed
+  // (field-only Ctrl+D), and the hand-edit mirror recovers whenever no open
+  // prerequisite remains, since the hand edit itself is the removal.
   const openRemaining = resolved.filter((row) => row.open).length;
   const recoveryToday =
     args.recovery && args.recovery.today
       ? args.recovery.today
       : new Date();
+  const fieldCleared =
+    parentFieldValues.length > 0 && fieldValues.length === 0;
   let recoverParent =
-    removedCount > 0 &&
+    (removedCount > 0 || fieldCleared || mirrorTouch) &&
     openRemaining === 0 &&
     getObsidianTaskCheckboxStatus(parentText) === "?" &&
     !dependencyParentHasFutureSchedule(parentText, recoveryToday);
@@ -4883,51 +4747,6 @@ async function applyDependencyEditTransaction(plan, io = {}) {
   }
   return Object.freeze({ ok: true, reason: null, notice: plan.notice });
 }
-
-function applyDependencyNavigationBulletSyncPlan(cm, plan) {
-  const result = {
-    changed: false,
-    inserted: 0,
-    deleted: 0,
-    replaced: 0,
-    consolidated: false,
-  };
-
-  if (!plan || !plan.changed) {
-    return Object.freeze(result);
-  }
-
-  (plan.deleteLines || [])
-    .slice()
-    .sort((a, b) => b - a)
-    .forEach((line) => {
-      if (deleteEditorLine(cm, line)) {
-        result.deleted += 1;
-        result.changed = true;
-      }
-    });
-
-  if (plan.operation === "rewrite" && plan.replaceLine !== null) {
-    const oldLineText = getEditorLine(cm, plan.replaceLine);
-    if (oldLineText !== null && oldLineText !== plan.lineText) {
-      if (
-        replaceEditorLine(cm, plan.replaceLine, oldLineText, plan.lineText)
-      ) {
-        result.replaced += 1;
-        result.changed = true;
-      }
-    }
-  } else if (plan.operation === "insert") {
-    if (insertEditorLine(cm, plan.insertLine, plan.lineText)) {
-      result.inserted += Math.max((plan.lineTexts || []).length, 1);
-      result.changed = true;
-    }
-  }
-
-  result.consolidated = Boolean(plan.consolidated && result.changed);
-  return Object.freeze(result);
-}
-
 
 // Build the notice for a local-task dependency write, distinguishing whether the
 // `[dependsOn:: ...]` field was newly added vs already present and summarizing
@@ -8846,16 +8665,6 @@ function resolveScheduledRecoveryNote(index, sourcePath, target) {
     return exact;
   }
   return index.basenames.get(recoveryMarkdownBasename(exact).toLowerCase()) || null;
-}
-
-function parseRecoveryTransclusion(lineText) {
-  const match =
-    /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+!\[\[([^#|\]\n]*)#\^([A-Za-z0-9-]+)\]\]\s*$/.exec(
-      String(lineText || ""),
-    );
-  return match
-    ? Object.freeze({ target: match[1].trim(), blockId: match[2] })
-    : null;
 }
 
 // Promotion references on one child line (`docs/task-dependencies.md` §5):
@@ -13536,130 +13345,6 @@ function findTaskLineByBlockId(lines, blockId) {
 }
 
 
-
-
-// Navigation-bullet rewrite for the identity migration
-// (`scripts/migrate-task-dependency-identities.mjs`): rebuild managed
-// Depends-On lines from `[dependsOn::]` fields in the canonical writer form.
-// The "Rewrite dependency navigation links" command that exposed this is
-// gone; the writer owns interactive edits.
-function applyDependencyNavigationPlanToLines(lines, plan) {
-  const nextLines = lines.slice();
-  if (!plan || !plan.changed) {
-    return nextLines;
-  }
-  (plan.deleteLines || [])
-    .slice()
-    .sort((a, b) => b - a)
-    .forEach((line) => nextLines.splice(line, 1));
-  const replacement = String(plan.lineText || "").split("\n");
-  if (plan.operation === "rewrite" && plan.replaceLine !== null) {
-    nextLines.splice(plan.replaceLine, 1, ...replacement);
-  } else if (plan.operation === "insert") {
-    nextLines.splice(plan.insertLine, 0, ...replacement);
-  }
-  return nextLines;
-}
-
-function transformDependencyBulletsInContent(
-  content,
-  filePath,
-  dependencyResolutions,
-  options = {},
-) {
-  const text = String(content || "");
-  const newline = text.includes("\r\n") ? "\r\n" : "\n";
-  let lines = text.split(/\r?\n/);
-  const resolutions =
-    dependencyResolutions instanceof Map
-      ? dependencyResolutions
-      : new Map(Object.entries(dependencyResolutions || {}));
-  const ambiguousIds =
-    options.ambiguousIds instanceof Set
-      ? options.ambiguousIds
-      : new Set(options.ambiguousIds || []);
-  const unresolved = [];
-  const skippedNonTasks = [];
-  let changedTasks = 0;
-  let dependencyItems = 0;
-  let currentContent = lines.join(newline);
-  let lineContexts = getMarkdownLineContexts(currentContent);
-
-  for (let parentLine = lines.length - 1; parentLine >= 0; parentLine -= 1) {
-    const field = findBulletPropertyField(lines[parentLine], "dependsOn");
-    if (!field) {
-      continue;
-    }
-    if (
-      !isObsidianTaskAtLine(
-        currentContent,
-        parentLine,
-        lineContexts,
-        lines,
-      )
-    ) {
-      skippedNonTasks.push(
-        Object.freeze({ filePath, line: parentLine + 1 }),
-      );
-      continue;
-    }
-    const desired = [];
-    const dependencyIds = parseLocalTaskIdList(field.value);
-    if (dependencyIds.some((id) => ambiguousIds.has(id))) {
-      dependencyIds
-        .filter((id) => ambiguousIds.has(id))
-        .forEach((id) =>
-          unresolved.push(
-            Object.freeze({ filePath, line: parentLine + 1, id, ambiguous: true }),
-          ),
-        );
-      continue;
-    }
-    dependencyIds.forEach((id) => {
-      const resolution = resolutions.get(id);
-      if (!resolution || !normalizeBulletPropertyValue(resolution.blockId)) {
-        unresolved.push(Object.freeze({ filePath, line: parentLine + 1, id }));
-        return;
-      }
-      const targetPath = String(resolution.filePath || "");
-      const basename = targetPath
-        .split("/")
-        .pop()
-        .replace(/\.md$/i, "");
-      desired.push({
-        blockId: resolution.blockId,
-        note:
-          targetPath && targetPath !== filePath
-            ? String(resolution.note || basename)
-            : "",
-      });
-    });
-    dependencyItems += desired.length;
-    const plan = planDependencyNavigationBulletSync(
-      currentContent,
-      parentLine,
-      desired,
-      { managedBlockIds: desired },
-    );
-    if (plan.changed) {
-      lines = applyDependencyNavigationPlanToLines(lines, plan);
-      currentContent = lines.join(newline);
-      lineContexts = getMarkdownLineContexts(currentContent);
-      changedTasks += 1;
-    }
-  }
-
-  const nextContent = currentContent;
-  return Object.freeze({
-    content: nextContent,
-    changed: nextContent !== text,
-    changedTasks,
-    dependencyItems,
-    unresolved: Object.freeze(unresolved),
-    skippedNonTaskCount: skippedNonTasks.length,
-    skippedNonTasks: Object.freeze(skippedNonTasks.reverse()),
-  });
-}
 
 
 function applyTransclusionChanges(line, changes) {
@@ -27645,61 +27330,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return this.commitVaultRefs(addRefs, removeRefs, counters);
   }
 
-  // Reconcile managed navigation child bullets for a finished batch as one
-  // consolidated bullet. The dependency field is canonical; this layer preserves
-  // existing on-screen link order, drops removed link targets, and appends new
-  // link targets.
-  reconcileDependencyNavigationBullets(removals, additions) {
-    const content =
-      this.editor && typeof this.editor.getValue === "function"
-        ? String(this.editor.getValue() || "")
-        : null;
-    if (content === null) {
-      return { added: 0, removed: 0, updated: 0, consolidated: 0 };
-    }
-
-    const collection = collectDependencyNavigationBullets(
-      content,
-      this.cursor.line,
-      removals.map((removal) => removal.linkBlockId),
-    );
-    const finalBlockIds = computeFinalDependencyLinkOrder(
-      collection.targets,
-      additions.map((addition) => addition.linkBlockId),
-      removals.map((removal) => removal.linkBlockId),
-    );
-    const existingSet = new Set(
-      collection.targets.map(dependencyNavigationTargetKey),
-    );
-    const finalSet = new Set(
-      normalizeDependencyNavigationTargets(finalBlockIds).map(
-        dependencyNavigationTargetKey,
-      ),
-    );
-    const plan = planDependencyNavigationBulletSync(
-      content,
-      this.cursor.line,
-      finalBlockIds,
-      { managedBlockIds: removals.map((removal) => removal.linkBlockId) },
-    );
-    const applied = applyDependencyNavigationBulletSyncPlan(this.editor, plan);
-    if (plan.changed && !applied.changed) {
-      return { added: 0, removed: 0, updated: 0, consolidated: 0 };
-    }
-
-    return {
-      added: normalizeDependencyNavigationTargets(finalBlockIds).filter(
-        (target) => !existingSet.has(dependencyNavigationTargetKey(target)),
-      ).length,
-      removed: collection.targets.filter(
-        (target) => !finalSet.has(dependencyNavigationTargetKey(target)),
-      ).length,
-      updated:
-        applied.replaced > 0 && !applied.consolidated ? applied.replaced : 0,
-      consolidated: applied.consolidated ? 1 : 0,
-    };
-  }
-
   hasCountedRollBatchForDateProperty(datePropertyName) {
     if (!this.isCountedSession()) {
       return false;
@@ -29825,15 +29455,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => this.trackOpenedFile(file)),
     );
-    // Hand-edit mirror (`docs/task-dependencies.md` §7): once the cursor
+    // Hand-edit mirror (`docs/task-dependencies.md` §8): once the cursor
     // leaves an edited line, R1/R9 sync the owning task's line and field.
+    // The mirror reads real changed ranges from a CM6 update listener:
+    // `editor-change` carries no change object, so the edited line was
+    // always 0 and the mirror only ever acted on the task owning line 0.
     this.dependencyMirrorByPath = new Map();
     this.pendingDependencyMirror = null;
-    this.registerEvent(
-      this.app.workspace.on("editor-change", (editor, change) =>
-        this.scheduleDependencyHandEditMirror(editor, change),
-      ),
-    );
+    this.pendingDependencyMirrorSnapshot = null;
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () =>
         this.refreshDashScrollCaptureTarget(),
@@ -29846,9 +29475,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       typeof EditorView.updateListener.of === "function"
     ) {
       this.registerEditorExtension(
-        EditorView.updateListener.of((update) =>
-          this.trackSelectionUpdate(update),
-        ),
+        EditorView.updateListener.of((update) => {
+          this.trackSelectionUpdate(update);
+          this.scheduleDependencyHandEditMirrorFromUpdate(update);
+        }),
       );
     }
 
@@ -29869,6 +29499,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         clearTimeout(this.pendingDependencyMirror);
         this.pendingDependencyMirror = null;
       }
+      this.pendingDependencyMirrorSnapshot = null;
       this.cancelPendingRestore();
       this.cancelPendingDashTasksJump();
       this.cancelPendingDashLocationRestore();
@@ -30079,7 +29710,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     if (parseDependencyLine(lineText, {}).verdict !== "not-a-line") {
-      new Notice("Use Ctrl+Shift+P to edit task dependencies");
+      new Notice("⛓ Dependencies use plain links — edit them with Ctrl+Shift+P");
       return false;
     }
 
@@ -30136,8 +29767,27 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       lines[line] = lineText === null ? "" : lineText;
     }
 
+    // Counted `N!` never toggles a Depends-On line: like bare `!` it is
+    // refused with a notice pointing to Ctrl+Shift+P
+    // (`docs/task-dependencies.md` §8). Other lines in the range still
+    // toggle; the notice reports the skipped Depends-On lines.
+    let skippedDependencyLine = false;
+    for (let line = startLine; line <= endLine; line += 1) {
+      if (
+        parseDependencyLine(String(lines[line] || ""), {}).verdict !==
+        "not-a-line"
+      ) {
+        skippedDependencyLine = true;
+        break;
+      }
+    }
     const result = toggleLineRangeTransclusions(lines, startLine, endLine);
     if (!result.found || !result.changed) {
+      if (skippedDependencyLine) {
+        new Notice(
+          "⛓ Dependencies use plain links — edit them with Ctrl+Shift+P",
+        );
+      }
       return false;
     }
 
@@ -30169,6 +29819,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    if (skippedDependencyLine) {
+      new Notice(
+        "⛓ Dependencies use plain links — edit them with Ctrl+Shift+P",
+      );
+    }
     return true;
   }
 
@@ -35795,6 +35450,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         parentPath,
         content,
       );
+      const mirrorTouch = args.mirrorTouch === true;
       const plan = planDependencyEdit({
         content,
         parentLine,
@@ -35804,6 +35460,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         files,
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath,
+        mirrorTouch,
         recovery: {
           registry,
           today: args.today || new Date(),
@@ -35817,8 +35474,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         return Object.freeze({ ok: true, reason: "unchanged", notice: plan.notice });
       }
       const outcome = await applyDependencyEditTransaction(plan, {
-        prepareTargetFile: (filePath, preparation) =>
-          this.prepareDependencyTargetNote(filePath, preparation),
+        // The hand-edit mirror never writes cross-note targets' `[id::]`;
+        // the hooks reconcile them (contract §4).
+        prepareTargetFile: mirrorTouch
+          ? async () => ({ ok: true })
+          : (filePath, preparation) =>
+              this.prepareDependencyTargetNote(filePath, preparation),
         commitDependentContent: (nextContent) => {
           if (!editor) {
             return { ok: false, reason: "no-editor" };
@@ -35829,16 +35490,19 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
               return { ok: false, reason: "stale-editor" };
             }
           }
-          const stamped = this.stampDependencyParentLine(
-            nextContent,
-            parentLine,
-            args.stamper,
-            args.dateText,
-          );
+          // The hand-edit mirror never stamps freshness.
+          const finalContent = mirrorTouch
+            ? nextContent
+            : this.stampDependencyParentLine(
+                nextContent,
+                parentLine,
+                args.stamper,
+                args.dateText,
+              );
           const committed = applyEditorContentTransaction(
             editor,
             content,
-            stamped,
+            finalContent,
           );
           return committed
             ? { ok: true }
@@ -36610,63 +36274,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    // Add the human-navigation child bullet last: it shifts line numbers below
-    // the cursor, and by now the `[dependsOn:: ...]` merge (and any target-task
-    // edit done by the caller) is already complete.
-    let navigationResult = null;
-    let navigationConsolidated = false;
-    const linkBlockId = normalizeBulletPropertyValue(options.linkBlockId);
-    if (linkBlockId) {
-      const content =
-        cm && typeof cm.getValue === "function"
-          ? String(cm.getValue() || "")
-          : null;
-      if (content === null) {
-        navigationResult = "guard-failed";
-      } else {
-        const collection = collectDependencyNavigationBullets(
-          content,
-          cursor.line,
-        );
-        const localTargetKey = dependencyNavigationTargetKey(linkBlockId);
-        const hadNavigationLink = collection.targets.some(
-          (target) => dependencyNavigationTargetKey(target) === localTargetKey,
-        );
-        const finalBlockIds = computeFinalDependencyLinkOrder(
-          collection.targets,
-          [linkBlockId],
-          [],
-        );
-        const plan = planDependencyNavigationBulletSync(
-          content,
-          cursor.line,
-          finalBlockIds,
-        );
-        if (plan.operation === "guard") {
-          navigationResult = "guard-failed";
-        } else {
-          const applied = applyDependencyNavigationBulletSyncPlan(cm, plan);
-          navigationConsolidated = applied.consolidated;
-          if (plan.changed && !applied.changed) {
-            navigationResult = "failed";
-          } else if (
-            !hadNavigationLink &&
-            normalizeDependencyNavigationTargets(finalBlockIds).some(
-              (target) => dependencyNavigationTargetKey(target) === localTargetKey,
-            )
-          ) {
-            navigationResult = applied.changed ? "added" : "failed";
-          } else if (applied.changed) {
-            navigationResult = "updated";
-          } else if (hadNavigationLink) {
-            navigationResult = "already-present";
-          } else {
-            navigationResult = "failed";
-          }
-        }
-      }
-    }
-
     setEditorCursorSafely(
       cm,
       cursor.line,
@@ -36679,8 +36286,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           name,
           id,
           dependencyAlreadyPresent: result.alreadyPresent,
-          navigationResult,
-          navigationConsolidated,
+          navigationResult: null,
+          navigationConsolidated: false,
         }),
       );
     }
@@ -36824,8 +36431,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return null;
     }
     const field = findBulletPropertyField(lines[owning], "dependsOn");
+    const resolveLinkpath = this.dependencyLinkpathResolver();
     const remove = collection.targets.map((target) => ({
-      path: dependencyPathForLinkNote(target.note, parentPath),
+      path: dependencyPathForLinkNote(target.note, parentPath, resolveLinkpath),
       blockId: target.blockId,
     }));
     if (remove.length === 0 && !field) {
@@ -36875,30 +36483,132 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   // Ctrl+D on the Depends on row in a counted (`N<Ctrl+Shift+P>`) session:
-  // clear every targeted task bottom-up so earlier line numbers stay valid.
+  // clear every targeted task bottom-up so earlier line numbers stay valid,
+  // planned against one working copy and committed in one editor transaction
+  // (one Ctrl+Z) with one summary notice.
   async deleteCountedDependencyLinesAndFields(cm, cursor, filePath, session) {
+    const writeContext = this.getCountedTaskWriteContext(
+      cm,
+      filePath,
+      session,
+    );
+    if (!writeContext.valid) {
+      new Notice(writeContext.error);
+      return null;
+    }
+    const parentPath = normalizeVaultRelativePath(filePath);
+    const originalContent = writeContext.content;
     const ordered = (session.targets || []).slice().sort((a, b) => b.line - a.line);
+    const resolveLinkpath = this.dependencyLinkpathResolver();
+    const vaultFiles = this.readDependencyVaultFileList();
+    const registry = await readTasksStatusRegistry(this.app);
+    const baseVaultContents = await this.readDependencyRecoveryVaultContents(
+      parentPath,
+      originalContent,
+    );
+    const today = new Date();
+    let working = originalContent;
     let cleared = 0;
     let unchanged = 0;
+    const preparations = [];
     for (const target of ordered) {
-      const outcome = await this.deleteDependencyLineAndField(
-        cm,
-        { line: target.line, ch: 0 },
-        { filePath },
-      );
-      if (!outcome) {
-        new Notice("Could not delete task dependencies; no further tasks were updated");
+      if (!Number.isInteger(target.line)) {
+        continue;
+      }
+      const workingLines = working.split(/\r?\n/);
+      if (target.line < 0 || target.line >= workingLines.length) {
+        continue;
+      }
+      const owning = findOwningTaskLine(workingLines, target.line);
+      if (owning === null) {
+        continue;
+      }
+      const collection = collectDependencyNavigationBullets(working, owning);
+      if (collection.reason) {
+        new Notice("Could not delete task dependencies; no tasks were updated");
         return null;
       }
-      // The per-task clear already reported its own notice; keep one summary.
-      if (outcome.deleted) {
-        cleared += 1;
-      } else {
+      const field = findBulletPropertyField(workingLines[owning], "dependsOn");
+      const remove = collection.targets.map((entry) => ({
+        path: dependencyPathForLinkNote(entry.note, parentPath, resolveLinkpath),
+        blockId: entry.blockId,
+      }));
+      if (remove.length === 0 && !field) {
         unchanged += 1;
+        continue;
+      }
+      const files = new Map();
+      files.set(parentPath, working);
+      const plan = planDependencyEdit({
+        content: working,
+        parentLine: owning,
+        parentPath,
+        add: [],
+        remove,
+        files,
+        vaultFiles,
+        resolveLinkpath,
+        recovery: { registry, today, vaultContents: baseVaultContents },
+      });
+      if (!plan.ok) {
+        new Notice("Could not delete task dependencies; no tasks were updated");
+        return null;
+      }
+      for (const preparation of plan.preparations || []) {
+        preparations.push(preparation);
+      }
+      if (!plan.changed) {
+        unchanged += 1;
+        continue;
+      }
+      // Freshness stays the last transformation of the rewritten task line
+      // (nav-stamps), as in the single Ctrl+D commit.
+      working = this.stampDependencyParentLine(plan.nextContent, owning);
+      cleared += 1;
+    }
+    for (const preparation of preparations) {
+      let result = null;
+      try {
+        result = await this.prepareDependencyTargetNote(
+          preparation.path,
+          preparation,
+        );
+      } catch (_error) {
+        result = { ok: false, reason: "target-preparation-threw" };
+      }
+      if (!result || result.ok !== true) {
+        new Notice("Could not delete task dependencies; no tasks were updated");
+        return null;
       }
     }
+    if (working === originalContent) {
+      return { deleted: cleared > 0, cleared, unchanged };
+    }
+    if (String(cm.getValue() || "") !== originalContent) {
+      new Notice("Active note changed; no tasks were updated");
+      return null;
+    }
+    const finalLines = working.split(/\r?\n/);
+    const anchor = Math.max(0, Math.min(cursor.line, finalLines.length - 1));
+    if (
+      !applyEditorContentTransaction(cm, originalContent, working, {
+        line: anchor,
+        ch: Math.min(
+          Math.max(cursor.ch, 0),
+          String(finalLines[anchor] || "").length,
+        ),
+      })
+    ) {
+      new Notice("Could not delete task dependencies; no tasks were updated");
+      return null;
+    }
+    new Notice(
+      `⛓ Cleared dependencies from ${cleared} ${cleared === 1 ? "task" : "tasks"}` +
+        (unchanged > 0 ? ` (${unchanged} unchanged)` : ""),
+    );
     return { deleted: cleared > 0, cleared, unchanged };
   }
+
 
   // Hand-edit mirror (`docs/task-dependencies.md` §7). The scheduler calls
   // this once the cursor has left the edited line: R1 projects the line into
@@ -36923,12 +36633,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return Object.freeze({ mirrored: false });
     }
     if (plan.kind === "touch") {
+      // A touch projects the hand-edited line into the field with the same
+      // status effects as the stage (block on a hand-added open
+      // prerequisite, recover when none remains), except commitment
+      // transfer, and never stamps freshness or writes cross-note `[id::]`.
       const outcome = await this.applyDependencyEdit({
         editor,
         parentPath,
         parentLine: plan.owning,
         add: [],
         remove: [],
+        mirrorTouch: true,
       });
       if (!outcome.ok) {
         return Object.freeze({ mirrored: false, reason: outcome.reason });
@@ -36975,14 +36690,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     );
     const reconciled = reconcileBlockedScheduledTaskLine(parentText, metadata);
     parentText = reconciled.line;
-    const stamper = this.getFreshnessStampLine();
-    if (typeof stamper === "function") {
-      parentText = applyFreshStampLine(
-        parentText,
-        stamper,
-        this.getFreshnessDateText(),
-      );
-    }
+    // The hand-edit mirror never stamps freshness.
     next[owning] = parentText;
     const nextContent = next.join(lineEnding);
     if (nextContent === content) {
@@ -37001,9 +36709,79 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return Object.freeze({ mirrored: true });
   }
 
-  // Editor-change scheduler for the hand-edit mirror: snapshot per note, then
-  // a short trailing debounce. The mirror runs once the cursor has left the
-  // edited line; while the cursor stays, the fire re-arms instead of writing.
+  // CM6 update-listener entry for the hand-edit mirror: reads the real
+  // changed ranges from the update (never `editor-change`, which carries no
+  // change object). Skips IME composition and open modals.
+  scheduleDependencyHandEditMirrorFromUpdate(update) {
+    if (!update || !update.docChanged) {
+      return;
+    }
+    const view = update.view || null;
+    if (view && view.composing) {
+      return;
+    }
+    if (typeof document !== "undefined" && document) {
+      try {
+        if (
+          typeof document.querySelector === "function" &&
+          document.querySelector(".modal-container")
+        ) {
+          return;
+        }
+      } catch (_error) {
+        // A DOM lookup must never break the scheduler.
+      }
+    }
+    const activeView =
+      typeof this.getActiveMarkdownView === "function"
+        ? this.getActiveMarkdownView()
+        : null;
+    if (!activeView || !activeView.file || !activeView.editor) {
+      return;
+    }
+    if (
+      view &&
+      activeView.editor.cm &&
+      activeView.editor.cm !== view
+    ) {
+      return;
+    }
+    const editor = activeView.editor;
+    if (typeof editor.getValue !== "function") {
+      return;
+    }
+    const parentPath = normalizeVaultRelativePath(activeView.file.path);
+    const newContent = String(editor.getValue() || "");
+    let editedLine = null;
+    try {
+      if (update.changes && typeof update.changes.iterChangedRanges === "function") {
+        update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+          try {
+            const doc = update.state && update.state.doc;
+            const line =
+              doc && typeof doc.lineAt === "function"
+                ? doc.lineAt(Math.max(0, fromB)).number - 1
+                : null;
+            if (Number.isInteger(line) && (editedLine === null || line < editedLine)) {
+              editedLine = line;
+            }
+          } catch (_rangeError) {
+            // One unreadable range must not drop the others.
+          }
+        });
+      }
+    } catch (_error) {
+      // An unreadable changeset falls back to the cursor line below.
+    }
+    if (editedLine === null) {
+      const cursor = getEditorCursor(editor);
+      editedLine = cursor ? cursor.line : 0;
+    }
+    this.enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine);
+  }
+
+  // Fallback scheduler entry (kept for tests): queues a mirror pass for the
+  // editor's current content at the edited line.
   scheduleDependencyHandEditMirror(editor, change) {
     if (!editor || typeof editor.getValue !== "function") {
       return;
@@ -37018,36 +36796,50 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return;
     }
     const parentPath = normalizeVaultRelativePath(activeFile.path);
-    const content = String(editor.getValue() || "");
-    const previous = this.dependencyMirrorByPath
-      ? this.dependencyMirrorByPath.get(parentPath)
-      : undefined;
-    if (!this.dependencyMirrorByPath) {
-      this.dependencyMirrorByPath = new Map();
-    }
-    this.dependencyMirrorByPath.set(parentPath, content);
-    if (previous === content) {
-      return;
-    }
-    // Without a baseline (first edit after open) there is nothing known
-    // removed; line/field projection still applies.
-    const removedText =
-      previous === undefined ? "" : findRemovedLineText(previous, content);
+    const newContent = String(editor.getValue() || "");
     const editedLine =
       change && change.from && Number.isInteger(change.from.line)
         ? change.from.line
         : 0;
+    this.enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine);
+  }
+
+  // Queue one trailing mirror pass per note. The pre-change content captured
+  // at the first change is the baseline for the whole burst: later changes
+  // refresh the removed-text against the latest content but never reset the
+  // baseline, so a deletion (including vim `dd`, which shifts every line
+  // below it) is never dropped by re-arming on a shifted index.
+  enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine) {
+    if (!this.dependencyMirrorByPath) {
+      this.dependencyMirrorByPath = new Map();
+    }
+    const previous = this.dependencyMirrorByPath.get(parentPath);
+    this.dependencyMirrorByPath.set(parentPath, newContent);
+    if (previous === newContent) {
+      return;
+    }
+    const pending =
+      this.pendingDependencyMirrorSnapshot &&
+      this.pendingDependencyMirrorSnapshot.parentPath === parentPath
+        ? this.pendingDependencyMirrorSnapshot
+        : null;
+    // Without a baseline (first edit after open) there is nothing known
+    // removed; line/field projection still applies.
+    const oldContent = pending ? pending.oldContent : previous;
+    const removedText =
+      oldContent === undefined ? "" : findRemovedLineText(oldContent, newContent);
+    this.pendingDependencyMirrorSnapshot = {
+      editor,
+      parentPath,
+      oldContent,
+      editedLine,
+      removedText,
+    };
     if (this.pendingDependencyMirror) {
       clearTimeout(this.pendingDependencyMirror);
       this.pendingDependencyMirror = null;
     }
-    const snapshot = {
-      editor,
-      parentPath,
-      oldContent: content,
-      editedLine,
-      removedText,
-    };
+    const snapshot = this.pendingDependencyMirrorSnapshot;
     this.pendingDependencyMirror = setTimeout(() => {
       this.pendingDependencyMirror = null;
       this.fireDependencyHandEditMirror(snapshot);
@@ -37056,12 +36848,22 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
   async fireDependencyHandEditMirror(snapshot) {
     try {
-      const cursor = getEditorCursor(snapshot.editor);
+      const cursor = snapshot.editor ? getEditorCursor(snapshot.editor) : null;
       if (cursor && cursor.line === snapshot.editedLine) {
-        // Still on the edited line: poll until the cursor leaves, tracking
-        // the latest content so the eventual mirror sees the final state.
-        snapshot.oldContent = String(snapshot.editor.getValue() || "");
-        snapshot.removedText = "";
+        // Still on the edited line: re-arm until the cursor leaves, keeping
+        // the first-change baseline and refreshing the removed text against
+        // the latest content.
+        if (typeof snapshot.editor.getValue === "function") {
+          const latest = String(snapshot.editor.getValue() || "");
+          if (!this.dependencyMirrorByPath) {
+            this.dependencyMirrorByPath = new Map();
+          }
+          this.dependencyMirrorByPath.set(snapshot.parentPath, latest);
+          snapshot.removedText =
+            snapshot.oldContent === undefined
+              ? ""
+              : findRemovedLineText(snapshot.oldContent, latest);
+        }
         this.pendingDependencyMirror = setTimeout(() => {
           this.pendingDependencyMirror = null;
           this.fireDependencyHandEditMirror(snapshot);
@@ -37078,6 +36880,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     } catch (_error) {
       // A timer must never throw: the next edit re-arms the mirror.
     } finally {
+      if (this.pendingDependencyMirrorSnapshot === snapshot) {
+        this.pendingDependencyMirrorSnapshot = null;
+      }
       if (snapshot.editor && typeof snapshot.editor.getValue === "function") {
         if (!this.dependencyMirrorByPath) {
           this.dependencyMirrorByPath = new Map();
@@ -37089,6 +36894,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       }
     }
   }
+
 
   async deleteBulletPropertyValue(cm, cursor, name, options = {}) {
     const writeContext = this.getInlinePropertyWriteContext(
@@ -42751,7 +42557,6 @@ module.exports.helpers = {
   parseTasksStatusRegistry,
   parseTrailingRecoveryTaskMetadata,
   parseScheduledRecoveryTaskLine,
-  parseRecoveryTransclusion,
   recoveryBlockReferences,
   recentPomodoroReferences,
   canonicalRecoveryDailyDate,
@@ -42991,7 +42796,6 @@ module.exports.helpers = {
   DEPENDENCY_MIRROR_DEBOUNCE_MS,
   LEGACY_DEPENDENCY_NAVIGATION_LABELS,
   formatDependencyNavigationBullet,
-  formatDependencyNavigationBulletFromDetails,
   parseDependencyTransclusionBulletDetails,
   getDependencyNavigationBlockIds,
   parseDependencyNavigationBullet,
@@ -43120,8 +42924,6 @@ module.exports.helpers = {
   showCancelNotice,
   collectDependencyNavigationBullets,
   computeFinalDependencyLinkOrder,
-  planDependencyNavigationBulletSync,
-  transformDependencyBulletsInContent,
   buildLocalTaskDependencyNotice,
   buildMultiDependencyNotice,
   applyEditorContentTransaction,

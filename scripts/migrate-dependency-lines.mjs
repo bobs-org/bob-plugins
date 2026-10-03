@@ -4,8 +4,7 @@
 // dependent, project `[dependsOn::]`/`[id::]` for open dependents per R1,
 // and adopt field-only lines per R2 (`docs/task-dependencies.md` §§2-4).
 //
-// Modeled on the retired `migrate-task-dependency-identities.mjs`. Grammar,
-// link form, and formatting come from nav's exported `helpers`
+// Grammar, link form, and formatting come from nav's exported `helpers`
 // (`parseDependencyLine`, `parseDependencyLegacyChildDetails`,
 // `canonicalDependencyLink`, `formatDependencyNavigationBullet`); the batch
 // planner below is migration-specific because status effects stay with the

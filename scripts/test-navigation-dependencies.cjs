@@ -478,16 +478,6 @@ test("DW18 legacy children fold into the line", () => {
     "- [ ] #task Parent [dependsOn:: Tasks__a, Tasks__b, Tasks__c] ^parent",
     "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]] • [[#^c]]",
   ]);
-  const folded = helpers.planDependencyNavigationBulletSync(content, 0, [
-    "a",
-    "b",
-    "c",
-  ]);
-  assert.equal(folded.operation, "rewrite");
-  assert.deepEqual(folded.lineTexts, [
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]] • [[#^c]]",
-  ]);
-  assert.deepEqual(folded.deleteLines, [2, 3]);
 });
 
 // DW19: every reader-tolerated variant canonicalises with the same targets.

@@ -16038,13 +16038,26 @@ class FilteredPickerModal extends Modal {
     }
 
     this.footerEl.empty();
-    (this.footerHints || KEYBOARD_HINTS).forEach((hint) => {
-      const group = this.footerEl.createDiv({ cls: "bob-cnp-hint" });
-      hint.keys.forEach((key) =>
-        group.createEl("kbd", { cls: "bob-cnp-kbd", text: key }),
-      );
-      group.createEl("span", { cls: "bob-cnp-hint-label", text: hint.label });
-    });
+    (Array.isArray(this.footerHints) ? this.footerHints : KEYBOARD_HINTS).forEach(
+      (hint) => {
+        if (
+          !hint ||
+          !Array.isArray(hint.keys) ||
+          typeof hint.label !== "string" ||
+          hint.keys.length === 0
+        ) {
+          return;
+        }
+        const group = this.footerEl.createDiv({ cls: "bob-cnp-hint" });
+        hint.keys.forEach((key) =>
+          group.createEl("kbd", { cls: "bob-cnp-kbd", text: key }),
+        );
+        group.createEl("span", {
+          cls: "bob-cnp-hint-label",
+          text: hint.label,
+        });
+      },
+    );
   }
 
   onClose() {
@@ -24968,7 +24981,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       placeholder: "Type days (1-365) or filter",
       resultsLabel: "refresh intervals",
       emptyText: "No matching intervals",
-      footerHints: ["↵ apply · esc back"],
+      footerHints: [
+        { keys: ["↵"], label: "Apply" },
+        { keys: ["esc"], label: "Close or dismiss" },
+      ],
       getSubtitle: () => {
         const scope = this.isCountedSession()
           ? `${this.getTaskSessionSubtitle()} · `
@@ -35323,6 +35339,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       picker.showRefreshValueStage({
         days: lessOften.beforeDays,
         mixed: false,
+        property: { values: "number" },
       });
       const constrained = createRefreshValueItems(lessOften.beforeDays).filter(
         (item) =>

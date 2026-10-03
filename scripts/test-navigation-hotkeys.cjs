@@ -3364,7 +3364,7 @@ test("mirror scheduler debounces at the contract interval", () => {
   assert.equal(typeof plugin.fireDependencyHandEditMirror, "function");
 });
 
-test("mirror scheduler captures the pre-change baseline and keeps it across a burst", () => {
+test("mirror scheduler seeds the baseline from the update start state", () => {
   const oldContent = [
     "- [ ] #task P ^p",
     "  - ⛓️ **DEPENDS ON:** [[#^a]]",
@@ -3375,38 +3375,184 @@ test("mirror scheduler captures the pre-change baseline and keeps it across a bu
     "  - ⛓️ **DEPENDS ON:** [[#^a]]x",
     "- [ ] #task A ^a",
   ].join("\n");
-  const newerContent = [
-    "- [ ] #task P ^p",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]]xy",
-    "- [ ] #task A ^a",
-  ].join("\n");
   const editor = new TransactionEditor(midContent, { line: 1, ch: 30 });
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
     workspace: { getActiveFile: () => ({ path: "Here.md" }) },
   };
-  plugin.dependencyMirrorByPath = new Map([["Here.md", oldContent]]);
-  plugin.scheduleDependencyHandEditMirror(editor, { from: { line: 1 } });
-  let snapshot = plugin.pendingDependencyMirrorSnapshot;
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Here.md" },
+  });
+  // No cached content: the first edit after opening the note still seeds
+  // its baseline from the CM6 start state instead of mirroring blind.
+  const lineAt = (offset) => ({
+    number: midContent.slice(0, Math.max(0, offset)).split("\n").length,
+  });
+  plugin.scheduleDependencyHandEditMirrorFromUpdate({
+    docChanged: true,
+    view: {},
+    startState: { doc: { toString: () => oldContent } },
+    changes: {
+      iterChangedRanges: (callback) => callback(30, 30, 30, 31),
+      mapPos: (position) => position,
+    },
+    state: { doc: { lineAt } },
+  });
+  const snapshot = plugin.pendingDependencyMirrorSnapshot;
   assert.equal(snapshot.oldContent, oldContent);
   assert.equal(snapshot.editedLine, 1);
+  assert.ok(Number.isInteger(snapshot.ownerPos));
   assert.equal(
     snapshot.removedText,
     helpers.findRemovedLineText(oldContent, midContent),
   );
-  // A second keystroke in the same burst keeps the first baseline, so the
-  // original deletion is never dropped by re-arming on a shifted index.
+  clearTimeout(plugin.pendingDependencyMirror);
+  plugin.pendingDependencyMirror = null;
+  plugin.pendingDependencyMirrorSnapshot = null;
+});
+
+test("mirror scheduler keeps the first baseline and maps the owner across a burst", () => {
+  const oldContent = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  const midContent = [
+    "- [ ] #task P ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]x",
+    "- [ ] #task A ^a",
+  ].join("\n");
+  // A second update inserts a header above: the owner anchor maps forward
+  // instead of jumping to the latest edited line.
+  const newerContent = ["# header", ...midContent.split("\n")].join("\n");
+  const editor = new TransactionEditor(midContent, { line: 1, ch: 30 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+  };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Here.md" },
+  });
+  const lineAt = (text) => (offset) => ({
+    number: text.slice(0, Math.max(0, offset)).split("\n").length,
+  });
+  plugin.scheduleDependencyHandEditMirrorFromUpdate({
+    docChanged: true,
+    view: {},
+    startState: { doc: { toString: () => oldContent } },
+    changes: {
+      iterChangedRanges: (callback) => callback(30, 30, 30, 31),
+      mapPos: (position) => position,
+    },
+    state: { doc: { lineAt: lineAt(midContent) } },
+  });
+  let snapshot = plugin.pendingDependencyMirrorSnapshot;
+  assert.equal(snapshot.oldContent, oldContent);
+  assert.equal(snapshot.editedLine, 1);
+  const ownerPos = snapshot.ownerPos;
   editor.content = newerContent;
-  plugin.scheduleDependencyHandEditMirror(editor, { from: { line: 1 } });
+  plugin.scheduleDependencyHandEditMirrorFromUpdate({
+    docChanged: true,
+    view: {},
+    startState: { doc: { toString: () => midContent } },
+    changes: {
+      iterChangedRanges: (callback) => callback(0, 0, 0, 9),
+      mapPos: (position) => position + 9,
+    },
+    state: { doc: { lineAt: lineAt(newerContent) } },
+  });
   snapshot = plugin.pendingDependencyMirrorSnapshot;
+  // The burst baseline never resets, the removed text refreshes against the
+  // latest content, and the owner follows its anchor down one line.
   assert.equal(snapshot.oldContent, oldContent);
   assert.equal(
     snapshot.removedText,
     helpers.findRemovedLineText(oldContent, newerContent),
   );
+  assert.equal(snapshot.ownerPos, ownerPos + 9);
+  assert.equal(snapshot.editedLine, 2);
   clearTimeout(plugin.pendingDependencyMirror);
   plugin.pendingDependencyMirror = null;
   plugin.pendingDependencyMirrorSnapshot = null;
+});
+
+test("mirror listener runs clear-field for a first-edit deletion with a following sibling", async () => {
+  const oldContent = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [?] #task S [dependsOn:: Here__b] ^s",
+    "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+    "- [x] #task A [id:: Here__a] ^a",
+    "- [x] #task B [id:: Here__b] ^b",
+  ].join("\n");
+  const newContent = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "- [?] #task S [dependsOn:: Here__b] ^s",
+    "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+    "- [x] #task A [id:: Here__a] ^a",
+    "- [x] #task B [id:: Here__b] ^b",
+  ].join("\n");
+  // A vim `dd` of the Depends-On line: the cursor stays on the line that
+  // slid up, so the queued pass re-arms until the cursor leaves.
+  const editor = new TransactionEditor(newContent, { line: 1, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md" }) },
+    vault: {
+      adapter: { read: async () => JSON.stringify(compatibleTasksSettings()) },
+    },
+  };
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Here.md" },
+  });
+  const oldLines = oldContent.split("\n");
+  const deleteFrom = oldLines.slice(0, 1).join("\n").length + 1;
+  const deleteTo = deleteFrom + oldLines[1].length + 1;
+  const lineAt = (offset) => ({
+    number: newContent.slice(0, Math.max(0, offset)).split("\n").length,
+  });
+  plugin.scheduleDependencyHandEditMirrorFromUpdate({
+    docChanged: true,
+    view: {},
+    startState: { doc: { toString: () => oldContent } },
+    changes: {
+      iterChangedRanges: (callback) =>
+        callback(deleteFrom, deleteTo, deleteFrom, deleteFrom),
+      mapPos: (position) =>
+        position >= deleteTo ? position - (deleteTo - deleteFrom) : position,
+    },
+    state: { doc: { lineAt } },
+  });
+  const snapshot = plugin.pendingDependencyMirrorSnapshot;
+  // Seeded from the start state with no cache: the deleted line is known
+  // removed, so the plan clears P instead of touching S.
+  assert.equal(snapshot.oldContent, oldContent);
+  assert.match(snapshot.removedText, /DEPENDS ON/);
+  clearTimeout(plugin.pendingDependencyMirror);
+  plugin.pendingDependencyMirror = null;
+  // Still on the edited line: the pass re-arms and writes nothing.
+  await plugin.fireDependencyHandEditMirror(snapshot);
+  assert.notEqual(plugin.pendingDependencyMirror, null);
+  assert.equal(editor.getValue(), newContent);
+  clearTimeout(plugin.pendingDependencyMirror);
+  plugin.pendingDependencyMirror = null;
+  // Once the cursor leaves the line, P's field clears and S is untouched.
+  editor.setCursor({ line: 0, ch: 0 });
+  await plugin.fireDependencyHandEditMirror(snapshot);
+  assert.equal(plugin.pendingDependencyMirror, null);
+  assert.equal(
+    editor.getValue(),
+    [
+      "- [ ] #task P ^p",
+      "- [?] #task S [dependsOn:: Here__b] ^s",
+      "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+      "- [x] #task A [id:: Here__a] ^a",
+      "- [x] #task B [id:: Here__b] ^b",
+    ].join("\n"),
+  );
 });
 
 test("mirror fire re-arms while the cursor stays on the edited line", async () => {

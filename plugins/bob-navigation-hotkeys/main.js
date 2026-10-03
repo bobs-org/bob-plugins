@@ -3907,6 +3907,45 @@ function findRemovedLineText(oldContent, newContent) {
   return before.slice(prefix, before.length - suffix).join("\n");
 }
 
+// Offset of a 0-based line's first character in note content, for the
+// hand-edit mirror's owner anchor (`ChangeSet.mapPos` works on offsets, not
+// lines). Clamps to the final line; null when the line is not a number.
+function dependencyMirrorOffsetOfLine(content, line) {
+  const target = Math.floor(numericOrDefault(line, Number.NaN));
+  if (!Number.isFinite(target) || target < 0) {
+    return null;
+  }
+  const text = String(content || "");
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  const clamped = Math.min(target, lines.length - 1);
+  let offset = 0;
+  for (let index = 0; index < clamped; index += 1) {
+    offset += lines[index].length + newline.length;
+  }
+  return offset;
+}
+
+// 0-based line holding a note-content offset (clamped into range), so a
+// `mapPos`-mapped owner anchor becomes the line the mirror runs on.
+function dependencyMirrorLineOfOffset(content, offset) {
+  const at = Math.floor(numericOrDefault(offset, Number.NaN));
+  if (!Number.isFinite(at) || at < 0) {
+    return null;
+  }
+  const text = String(content || "");
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  let rest = Math.min(at, text.length);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (rest <= lines[index].length || index === lines.length - 1) {
+      return index;
+    }
+    rest -= lines[index].length + newline.length;
+  }
+  return lines.length - 1;
+}
+
 // Direct-child Depends-On verdicts for the hand-edit mirror. Fences never
 // count; only direct children of the owning task are scanned.
 function dependencyHandEditChildVerdicts(lines, owning) {
@@ -21945,6 +21984,39 @@ function planDependencyStageView(args = {}) {
   const linkedByCandidate = new Map(
     fresh.map((entry) => [entry.candidate, entry.linkedCount || 0]),
   );
+  // Task descriptions by stage row key, so disabled cycle rows tooltip
+  // readable `description → description` paths instead of raw
+  // `path blockId` keys (`docs/task-dependencies.md` §6.4). Keys without a
+  // row (the dependent itself, `id:` values) keep the raw key.
+  const labelByKey = new Map();
+  for (const row of [...current, ...pool]) {
+    if (!row) {
+      continue;
+    }
+    const rowKey =
+      row.path && row.blockId
+        ? dependencyStageRowKey(row.path, row.blockId)
+        : null;
+    const label = row.displayText || row.text || null;
+    if (rowKey && label && !labelByKey.has(rowKey)) {
+      labelByKey.set(rowKey, label);
+    }
+  }
+  const labelDependencyStageCycle = (cycle) =>
+    Object.freeze(
+      (Array.isArray(cycle) ? cycle : []).map((key) =>
+        labelByKey.has(key) ? labelByKey.get(key) : key,
+      ),
+    );
+  // The dependent line itself is never a pool row, so its description would
+  // otherwise fall back to the raw key at the end of every cycle path.
+  if (
+    dependentKey &&
+    !labelByKey.has(dependentKey) &&
+    (dependent.displayText || dependent.text)
+  ) {
+    labelByKey.set(dependentKey, dependent.displayText || dependent.text);
+  }
   const guard = (candidate) => {
     const key =
       candidate.path && candidate.blockId
@@ -21952,10 +22024,12 @@ function planDependencyStageView(args = {}) {
         : null;
     if (key && dependentKey) {
       if (key === dependentKey) {
+        const selfCycle = Object.freeze([dependentKey]);
         return {
           disabled: true,
           reason: "this task",
-          cycle: Object.freeze([dependentKey]),
+          cycle: selfCycle,
+          cycleLabels: labelDependencyStageCycle(selfCycle),
         };
       }
       const cycle = findDependencyStageCycle(edges, dependentKey, key);
@@ -21964,6 +22038,7 @@ function planDependencyStageView(args = {}) {
           disabled: true,
           reason: "would create a cycle",
           cycle: Object.freeze(cycle),
+          cycleLabels: labelDependencyStageCycle(cycle),
         };
       }
     }
@@ -21976,9 +22051,10 @@ function planDependencyStageView(args = {}) {
         disabled: true,
         reason: "path can't be an id",
         cycle: null,
+        cycleLabels: null,
       };
     }
-    return { disabled: false, reason: null, cycle: null };
+    return { disabled: false, reason: null, cycle: null, cycleLabels: null };
   };
   const shape = (candidate, section, first) => {
     const verdict = guard(candidate);
@@ -21988,9 +22064,10 @@ function planDependencyStageView(args = {}) {
         ? tryDependencyId(candidate.path, candidate.blockId)
         : null) ||
       "";
-    // BLOCKED rows carry the `🔒 waits on N` count from the post-batch
-    // graph when available, else the candidate's own open prerequisite
-    // count, else 1 (a Blocked task always waits on something).
+    // BLOCKED rows carry the `🔒 waits on N` count of open prerequisites
+    // only (DC7/DC8): the candidate's own open count when the builder
+    // attached one, else the post-batch graph edges, else 1 (a Blocked
+    // task always waits on something).
     let waitsOn = null;
     if (section === "blocked") {
       const rowKey =
@@ -22002,10 +22079,10 @@ function planDependencyStageView(args = {}) {
           ? edges.get(rowKey).length
           : null;
       waitsOn =
-        Number.isInteger(edgeCount) && edgeCount > 0
-          ? edgeCount
-          : Number.isInteger(candidate.openCount) && candidate.openCount > 0
-            ? candidate.openCount
+        Number.isInteger(candidate.openCount) && candidate.openCount >= 0
+          ? candidate.openCount
+          : Number.isInteger(edgeCount) && edgeCount > 0
+            ? edgeCount
             : 1;
     }
     return Object.freeze({
@@ -22066,6 +22143,7 @@ function planDependencyStageView(args = {}) {
       disabled: verdict.disabled,
       disabledReason: verdict.reason,
       cycle: verdict.cycle,
+      cycleLabels: verdict.cycleLabels || null,
       waitsOn,
     });
   };
@@ -22097,6 +22175,7 @@ function planDependencyStageView(args = {}) {
         disabled: true,
         disabledReason: `type to search ${hiddenCount} more`,
         cycle: null,
+        cycleLabels: null,
         waitsOn: null,
       }),
     );
@@ -25962,10 +26041,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         cls: "bob-cnp-row-guard bob-cnp-dep-guard",
         text: item.disabledReason,
       });
-      // Disabled rows expose the cycle path in the tooltip when present.
+      // Disabled rows expose the cycle path in the tooltip when present:
+      // task descriptions joined by `→`, with raw keys only where no row
+      // names the key.
       if (item.cycle && item.cycle.length > 0 && guardEl) {
         try {
-          guardEl.setAttribute("title", item.cycle.join(" → "));
+          const path =
+            item.cycleLabels && item.cycleLabels.length === item.cycle.length
+              ? item.cycleLabels
+              : item.cycle;
+          guardEl.setAttribute("title", path.join(" → "));
         } catch (_guardTitleError) {
           // Best-effort tooltip only.
         }
@@ -26751,8 +26836,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       targetLines[snapshot.line] !== snapshot.rawLine ||
       !isObsidianTaskAtLine(targetContent, snapshot.line, null, targetLines)
     ) {
-      new Notice("Task changed; dependency not added");
-      return false;
+      return this.refuseDependencyStale();
     }
     const updatedLine = applyPromptedBlockIdPreservingLegacyId(
       targetLines[snapshot.line],
@@ -26819,8 +26903,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       targetLines[snapshot.line] !== snapshot.rawLine ||
       !isObsidianTaskAtLine(files.get(targetPath), snapshot.line, null, targetLines)
     ) {
-      new Notice("Task changed; dependency not added");
-      return false;
+      return this.refuseDependencyStale();
     }
     const updatedLine = applyPromptedBlockIdPreservingLegacyId(
       targetLines[snapshot.line],
@@ -26923,8 +27006,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const task = this.pendingTask;
     const targetLine = getEditorLine(this.editor, task.line);
     if (targetLine !== task.rawLine) {
-      new Notice("Task changed; dependency not added");
-      return false;
+      return this.refuseDependencyStale();
     }
     if (!isObsidianTaskAtLine(this.getEditorContent(), task.line)) {
       new Notice("Selected dependency is no longer a #task checkbox");
@@ -27077,6 +27159,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         addRefs.push({ path: filePath, blockId: addition.blockId });
       }
     });
+
+    // A stale target refuses the whole batch before any write, then reopens
+    // the stage fresh — never a partial commit with a skip count.
+    if (skippedStale > 0) {
+      return this.refuseDependencyStale();
+    }
 
     // Removal marks carry the field value; resolve each to its `^block-id`
     // in this note. Field-only values need no link edit: the planner sets
@@ -36206,6 +36294,25 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     registerStageCacheRecords(index, cache.ready ? cache.tasks : []);
     const edges = collectDependencyStageEdges(notes, index);
     mergeStageCacheEdges(edges, cache.ready ? cache.tasks : [], index);
+    // Open prerequisite counts for the BLOCKED `🔒 waits on N` badge
+    // (`docs/task-dependencies.md` DC7/DC8): closed, missing, and non-task
+    // targets never count, so one closed plus one open prerequisite reads
+    // `waits on 1`.
+    candidates = candidates.map((candidate) => {
+      const key =
+        candidate.path && candidate.blockId
+          ? dependencyStageRowKey(candidate.path, candidate.blockId)
+          : null;
+      const targets = (key && edges.get(key)) || [];
+      let openPrereqs = 0;
+      for (const target of targets) {
+        const record = index.byKey.get(target);
+        if (record && record.open) {
+          openPrereqs += 1;
+        }
+      }
+      return Object.freeze({ ...candidate, openCount: openPrereqs });
+    });
     const currentRows = [];
     const linkedKeys = new Set();
     for (const parentLine of parents) {
@@ -36258,6 +36365,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         path: ownerPath,
         line: primary,
         key: dependentKey,
+        displayText: cleanTaskDisplayText(parentText) || null,
+        text: cleanTaskDisplayText(parentText) || null,
       }),
       sourceValueSets: Array.isArray(args.dependencyValueSets)
         ? args.dependencyValueSets
@@ -37160,39 +37269,36 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       const cursor = getEditorCursor(editor);
       editedLine = cursor ? cursor.line : 0;
     }
-    this.enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine);
+    // The burst baseline is the update's pre-change document: the first
+    // update after a note opens (or after the last mirror ran) seeds the
+    // mirror even though nothing cached the opened content. Later updates
+    // in the same burst keep that baseline and only move the owner.
+    let baseline = null;
+    try {
+      const startDoc = update.startState && update.startState.doc;
+      if (startDoc && typeof startDoc.toString === "function") {
+        baseline = String(startDoc.toString());
+      }
+    } catch (_baselineError) {
+      // An unreadable pre-change document falls back to the cache below.
+    }
+    this.enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine, {
+      baseline,
+      changes:
+        update.changes && typeof update.changes.mapPos === "function"
+          ? update.changes
+          : null,
+    });
   }
 
-  // Fallback scheduler entry (kept for tests): queues a mirror pass for the
-  // editor's current content at the edited line.
-  scheduleDependencyHandEditMirror(editor, change) {
-    if (!editor || typeof editor.getValue !== "function") {
-      return;
-    }
-    const activeFile =
-      this.app &&
-      this.app.workspace &&
-      typeof this.app.workspace.getActiveFile === "function"
-        ? this.app.workspace.getActiveFile()
-        : null;
-    if (!activeFile || !activeFile.path) {
-      return;
-    }
-    const parentPath = normalizeVaultRelativePath(activeFile.path);
-    const newContent = String(editor.getValue() || "");
-    const editedLine =
-      change && change.from && Number.isInteger(change.from.line)
-        ? change.from.line
-        : 0;
-    this.enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine);
-  }
-
-  // Queue one trailing mirror pass per note. The pre-change content captured
-  // at the first change is the baseline for the whole burst: later changes
-  // refresh the removed-text against the latest content but never reset the
-  // baseline, so a deletion (including vim `dd`, which shifts every line
-  // below it) is never dropped by re-arming on a shifted index.
-  enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine) {
+  // Queue one trailing mirror pass per note. The pre-change content from the
+  // first update's start state is the baseline for the whole burst: later
+  // updates refresh the removed-text against the latest content but never
+  // reset the baseline, so a first-edit deletion (including vim `dd`, which
+  // shifts every line below it) is never mistaken for a sibling touch. The
+  // owner is an offset anchor mapped forward through each update's
+  // `ChangeSet.mapPos`, never the latest edited line.
+  enqueueDependencyHandEditMirror(editor, parentPath, newContent, editedLine, options = {}) {
     if (!this.dependencyMirrorByPath) {
       this.dependencyMirrorByPath = new Map();
     }
@@ -37201,21 +37307,61 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (previous === newContent) {
       return;
     }
+    const opts = options && typeof options === "object" ? options : {};
     const pending =
       this.pendingDependencyMirrorSnapshot &&
       this.pendingDependencyMirrorSnapshot.parentPath === parentPath
         ? this.pendingDependencyMirrorSnapshot
         : null;
-    // Without a baseline (first edit after open) there is nothing known
-    // removed; line/field projection still applies.
-    const oldContent = pending ? pending.oldContent : previous;
+    let oldContent;
+    let ownerLine = editedLine;
+    let ownerPos = dependencyMirrorOffsetOfLine(newContent, editedLine);
+    if (pending) {
+      oldContent = pending.oldContent;
+      // Map the first-change owner through this update instead of adopting
+      // the latest edited line. Without a `mapPos` changeset the first
+      // owner simply stays.
+      if (
+        opts.changes &&
+        Number.isInteger(pending.ownerPos) &&
+        pending.ownerPos >= 0
+      ) {
+        let mapped = null;
+        try {
+          mapped = opts.changes.mapPos(pending.ownerPos);
+        } catch (_mapError) {
+          mapped = null;
+        }
+        if (Number.isInteger(mapped) && mapped >= 0) {
+          ownerPos = mapped;
+          const lineOf = dependencyMirrorLineOfOffset(newContent, mapped);
+          if (lineOf !== null) {
+            ownerLine = lineOf;
+          } else {
+            ownerLine = pending.editedLine;
+          }
+        } else {
+          ownerLine = pending.editedLine;
+        }
+      } else {
+        ownerLine = pending.editedLine;
+      }
+      if (!Number.isInteger(ownerPos) || ownerPos < 0) {
+        ownerPos = dependencyMirrorOffsetOfLine(newContent, ownerLine);
+      }
+    } else if (typeof opts.baseline === "string") {
+      oldContent = opts.baseline;
+    } else {
+      oldContent = previous;
+    }
     const removedText =
       oldContent === undefined ? "" : findRemovedLineText(oldContent, newContent);
     this.pendingDependencyMirrorSnapshot = {
       editor,
       parentPath,
       oldContent,
-      editedLine,
+      editedLine: ownerLine,
+      ownerPos,
       removedText,
     };
     if (this.pendingDependencyMirror) {
@@ -43195,6 +43341,8 @@ module.exports.helpers = {
   findOwningTaskLine,
   findDependencyLineIndex,
   findRemovedLineText,
+  dependencyMirrorOffsetOfLine,
+  dependencyMirrorLineOfOffset,
   planDependencyHandEditMirror,
   getDependencyInsertLine,
   normalizeDependencyTargetRef,

@@ -59,7 +59,224 @@ const {
   describeRemovedDependencyTarget,
   buildDependencyEditNotice,
   planDependencyEdit,
+  validateBulletPropertyConfig,
+  BulletPropertyPickerModal,
 } = helpers;
+const fs = require("node:fs");
+const path = require("node:path");
+
+// Picker-harness stubs (nav-mirror-stage): the real modal, picker, and
+// writer paths with an async vault/editor stub and a stubbed Tasks plugin,
+// so the stage tests below exercise production code instead of pure
+// helpers.
+function compatibleTasksSettings() {
+  return {
+    globalFilter: "#task",
+    statusSettings: {
+      coreStatuses: [],
+      customStatuses: [
+        {
+          symbol: "?",
+          name: "Blocked",
+          nextStatusSymbol: " ",
+          availableAsCommand: true,
+          type: "ON_HOLD",
+        },
+      ],
+    },
+  };
+}
+
+class TestEditor {
+  constructor(content) {
+    this.content = content;
+  }
+  getValue() {
+    return this.content;
+  }
+  getLine(line) {
+    return this.content.split(/\r?\n/)[line] ?? null;
+  }
+  getCursor() {
+    return { line: 0, ch: 0 };
+  }
+  replaceRange(text, from, to = from) {
+    const newline = this.content.includes("\r\n") ? "\r\n" : "\n";
+    const lines = this.content.split(/\r?\n/);
+    const offset = (position) =>
+      lines
+        .slice(0, position.line)
+        .reduce((sum, line) => sum + line.length + newline.length, 0) +
+      position.ch;
+    const start = offset(from);
+    const end = offset(to);
+    this.content = this.content.slice(0, start) + text + this.content.slice(end);
+  }
+}
+
+class TransactionEditor extends TestEditor {
+  constructor(content, cursor) {
+    super(content);
+    this.cursor = { ...cursor };
+    this.undoGroups = 0;
+  }
+  getCursor() {
+    return { ...this.cursor };
+  }
+  getScrollInfo() {
+    return { left: 0, top: 0 };
+  }
+  setCursor(lineOrPosition, ch) {
+    this.cursor =
+      typeof lineOrPosition === "object"
+        ? { ...lineOrPosition }
+        : { line: lineOrPosition, ch };
+  }
+  transaction(transaction) {
+    if (transaction.changes && transaction.changes.length > 0) {
+      this.undoGroups += 1;
+    }
+    const changes = [...(transaction.changes || [])].sort(
+      (left, right) =>
+        right.from.line - left.from.line || right.from.ch - left.from.ch,
+    );
+    for (const change of changes) {
+      super.replaceRange(change.text, change.from, change.to || change.from);
+    }
+    if (transaction.selection) {
+      this.cursor = {
+        ...(transaction.selection.to || transaction.selection.from),
+      };
+    }
+  }
+}
+
+function stubApp(notes) {
+  const store = new Map(Object.entries(notes));
+  const settingsPath = ".obsidian/plugins/obsidian-tasks-plugin/data.json";
+  const vault = {
+    getMarkdownFiles: () =>
+      [...store.keys()]
+        .filter((vaultPath) => /\.md$/i.test(vaultPath))
+        .map((vaultPath) => ({ path: vaultPath })),
+    getAbstractFileByPath: (vaultPath) =>
+      store.has(vaultPath) || vaultPath === settingsPath
+        ? { path: vaultPath }
+        : null,
+    cachedRead: async (file) => {
+      const content = store.get(file.path);
+      return content === undefined ? "" : String(content);
+    },
+    read: async (file) => {
+      if (file.path === settingsPath) {
+        return JSON.stringify(compatibleTasksSettings());
+      }
+      return vault.cachedRead(file);
+    },
+    process: async (file, fn) => {
+      const current = store.get(file.path) || "";
+      store.set(file.path, String(fn(current)));
+    },
+  };
+  const metadataCache = {
+    getFirstLinkpathDest: (linkpath) => {
+      const wanted = String(linkpath || "");
+      if (!wanted || wanted.includes("#")) {
+        return null;
+      }
+      const direct = `${wanted}.md`;
+      if (store.has(direct)) {
+        return { path: direct };
+      }
+      return null;
+    },
+  };
+  return {
+    app: {
+      vault,
+      metadataCache,
+      workspace: { getLeavesOfType: () => [] },
+    },
+    store,
+  };
+}
+
+function stubPlugin(notes) {
+  const { app, store } = stubApp(notes);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = app;
+  return { plugin, store };
+}
+
+function stubStageModal(plugin, editor, filePath, cursorLine) {
+  const content = String(editor.getValue() || "");
+  const lines = content.split(/\r?\n/);
+  const cursor = { line: cursorLine, ch: 0 };
+  const config = validateBulletPropertyConfig({
+    properties: [{ name: "dependsOn", values: ["x"] }],
+  });
+  const modal = new BulletPropertyPickerModal(
+    {},
+    plugin,
+    editor,
+    cursor,
+    String(lines[cursorLine] || ""),
+    config,
+    { filePath },
+  );
+  modal.filePath = filePath;
+  modal.selectedPropertyItem = {
+    property: { name: "dependsOn", values: "local_task_id" },
+  };
+  return modal;
+}
+
+function stubRowEl() {
+  const el = {
+    children: [],
+    titles: {},
+    text: "",
+    classes: [],
+    classList: { add: (...names) => el.classes.push(...names) },
+    createDiv(options = {}) {
+      const child = stubRowEl();
+      if (options.cls !== undefined) {
+        child.cls = options.cls;
+      }
+      if (options.text !== undefined) {
+        child.text = options.text;
+      }
+      el.children.push(child);
+      return child;
+    },
+    createSpan(options = {}) {
+      return el.createDiv(options);
+    },
+    createEl(_tag, options = {}) {
+      return el.createDiv(options);
+    },
+    setText(value) {
+      el.text = String(value);
+    },
+    appendText(value) {
+      el.text += String(value);
+    },
+    setAttribute(key, value) {
+      el.titles[key] = String(value);
+    },
+  };
+  return el;
+}
+
+function rowTitles(el, out = []) {
+  if (el.titles && el.titles.title) {
+    out.push(el.titles.title);
+  }
+  for (const child of el.children) {
+    rowTitles(child, out);
+  }
+  return out;
+}
 
 function dkCandidate(text, route, blockId, section) {
   return { text, route, blockId: blockId || null, section: section || null };
@@ -865,5 +1082,394 @@ test("stage ranker filters 1,000 synthetic tasks under 16 ms per keystroke", () 
   assert.ok(
     elapsedMs < 16,
     `filtering 1,000 tasks took ${elapsedMs.toFixed(2)} ms (budget 16 ms)`,
+  );
+});
+
+// A stale single add refuses with `changed — reopen` and reopens the stage
+// fresh instead of writing against the changed line.
+test("stage stale single add refuses and reopens", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = [];
+  plugin.openBulletPropertyPicker = async (reopenEditor, options) => {
+    reopened.push(options);
+    return true;
+  };
+  const item = {
+    path: "Tasks.md",
+    line: 1,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    stageSection: "results",
+    disabled: false,
+    alreadyLinked: false,
+    needsBlockIdPrompt: false,
+  };
+  editor.content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target edited ^target",
+  ].join("\n");
+  const before = notices.length;
+  const applied = await modal.chooseTaskDependency(item);
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+  assert.equal(reopened[0].initialProperty, "dependsOn");
+  assert.doesNotMatch(editor.content, /DEPENDS ON/);
+});
+
+// A `＋ id` row opens the block-ID prompt without writing: no ids are
+// allocated and the editor is untouched until the id is confirmed.
+test("stage +id row prompts without writing", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const prompts = [];
+  modal.showBlockIdStage = (snapshot, options) => {
+    prompts.push({ snapshot, options });
+    return false;
+  };
+  const item = {
+    path: "Tasks.md",
+    line: 1,
+    rawLine: "- [ ] #task Target",
+    displayText: "Target",
+    stageSection: "results",
+    disabled: false,
+    alreadyLinked: false,
+    needsBlockIdPrompt: true,
+  };
+  const before = notices.length;
+  const applied = await modal.chooseTaskDependency(item);
+  assert.equal(applied, false);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].options.mode, "single");
+  assert.equal(notices.length, before);
+  assert.equal(editor.content, content);
+  assert.equal(editor.getLine(1), "- [ ] #task Target");
+});
+
+// Dismissing the stage mid-batch (Esc) writes nothing: dismissal drops the
+// pending batch state through `onClose` and the editor is untouched.
+test("stage dismissal writes no bytes and drops the batch", () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.pendingBatch = {
+    propertyName: "dependsOn",
+    cursorLineText: "- [ ] #task Parent ^parent",
+    removals: [],
+    readyAdditions: [],
+    promptQueue: [],
+    promptIndex: 0,
+    confirmedById: new Map(),
+    reservedIds: new Set(),
+    hasVault: false,
+  };
+  modal.modalEl = { removeClass: () => {} };
+  modal.contentEl = { empty: () => {} };
+  plugin.activeBulletPropertyPicker = modal;
+  modal.onClose();
+  assert.equal(modal.pendingBatch, null);
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+  assert.equal(editor.content, content);
+  assert.equal(editor.undoGroups, 0);
+});
+
+// A same-note marked batch commits the line, the field, and the target id
+// in a single editor transaction: one undo group for the whole gesture.
+test("stage same-note batch commits in one undo group", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => () => "Tasks.md";
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const batch = {
+    propertyName: "dependsOn",
+    cursorLineText: "- [ ] #task Parent ^parent",
+    removals: [],
+    readyAdditions: [
+      {
+        markKey: "Tasks.md#1",
+        path: "Tasks.md",
+        line: 1,
+        rawLine: "- [ ] #task Target ^target",
+        displayText: "Target",
+        existingIdField: null,
+        blockId: "target",
+      },
+    ],
+    promptQueue: [],
+    promptIndex: 0,
+    confirmedById: new Map(),
+    reservedIds: new Set(),
+    hasVault: false,
+  };
+  const applied = await modal.executeDependencyBatch(batch);
+  assert.equal(applied, true);
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.content, /⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/);
+});
+
+// A stale marked row refuses the whole batch before any write and reopens
+// the stage fresh: no partial commit, no skip count.
+test("stage batch with a stale row refuses and reopens", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => () => "Tasks.md";
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = [];
+  plugin.openBulletPropertyPicker = async (reopenEditor, options) => {
+    reopened.push(options);
+    return true;
+  };
+  const batch = {
+    propertyName: "dependsOn",
+    cursorLineText: "- [ ] #task Parent ^parent",
+    removals: [],
+    readyAdditions: [
+      {
+        markKey: "Tasks.md#1",
+        path: "Tasks.md",
+        line: 1,
+        rawLine: "- [ ] #task Target ^target",
+        displayText: "Target",
+        existingIdField: null,
+        blockId: "target",
+      },
+    ],
+    promptQueue: [],
+    promptIndex: 0,
+    confirmedById: new Map(),
+    reservedIds: new Set(),
+    hasVault: false,
+  };
+  editor.content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target edited ^target",
+  ].join("\n");
+  const before = notices.length;
+  const applied = await modal.executeDependencyBatch(batch);
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+  assert.equal(editor.undoGroups, 0);
+  assert.doesNotMatch(editor.content, /DEPENDS ON/);
+});
+
+// A counted same-note stage add fans out through the counted session in one
+// call: every source task gains the link together.
+test("stage counted add applies to every source task", async () => {
+  const content = [
+    "- [ ] #task First ^first",
+    "- [ ] #task Second ^second",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [ ] #task First ^first" },
+      { line: 1, rawLine: "- [ ] #task Second ^second" },
+    ],
+  };
+  const calls = [];
+  plugin.applyCountedLocalTaskDependency = async (
+    callEditor,
+    cursor,
+    filePath,
+    session,
+    task,
+  ) => {
+    calls.push({ cursor, filePath, session, task });
+    return true;
+  };
+  const item = {
+    path: "Tasks.md",
+    line: 2,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    disabled: false,
+    needsBlockIdPrompt: false,
+  };
+  const applied = await modal.chooseCountedTaskDependency(item);
+  assert.equal(applied, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].filePath, "Tasks.md");
+  assert.equal(calls[0].session.targets.length, 2);
+  assert.equal(calls[0].task, item);
+});
+
+// Two marked rows whose links close a cycle are guarded on the post-batch
+// graph: the batch refuses and nothing is written.
+test("stage batch cycle of two marked rows writes nothing", async () => {
+  const content = "- [ ] #task Dependent ^d\n";
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const dependentKey = dependencyStageRowKey("Tasks.md", "d");
+  const aKey = dependencyStageRowKey("Tasks.md", "a");
+  const bKey = dependencyStageRowKey("Tasks.md", "b");
+  modal.vaultStage = {
+    dependent: { key: dependentKey },
+    edges: new Map([
+      [aKey, [bKey]],
+      [bKey, [dependentKey]],
+    ]),
+    files: new Map([["Tasks.md", content]]),
+  };
+  const writes = [];
+  plugin.applyDependencyEdit = async () => {
+    writes.push(true);
+    return { ok: true, notice: "⛓ Dependencies updated" };
+  };
+  const before = notices.length;
+  const applied = await modal.commitVaultRefs(
+    [
+      { path: "Tasks.md", blockId: "a" },
+      { path: "Tasks.md", blockId: "b" },
+    ],
+    [],
+    { stale: 0, other: 0 },
+  );
+  assert.equal(applied, false);
+  assert.equal(writes.length, 0);
+  assert.match(notices[before], /cycle/);
+  assert.equal(editor.content, content);
+});
+
+// The `edit-task-dependencies` palette command ships with no default
+// hotkey: it opens only from the palette (or a user-bound chord).
+test("stage edit-task-dependencies registers with no default hotkey", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "main.js"),
+    "utf8",
+  );
+  const anchor = source.indexOf('id: "edit-task-dependencies"');
+  assert.ok(anchor >= 0, "edit-task-dependencies is registered");
+  const blockEnd = source.indexOf("});", anchor);
+  assert.ok(blockEnd > anchor, "registration block closes");
+  const block = source.slice(anchor, blockEnd);
+  assert.doesNotMatch(block, /hotkeys/);
+  assert.match(block, /openDependencyStageAtCursor/);
+});
+
+// The BLOCKED `🔒 waits on N` badge counts open prerequisites only: one
+// closed plus one open prerequisite reads `waits on 1` (DC7/DC8).
+test("stage waits-on badge counts open prerequisites only", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "- [?] #task Beta ^beta",
+    "  - ⛓️ **DEPENDS ON:** [[#^alpha]] [[#^gamma]]",
+    "- [ ] #task Alpha ^alpha",
+    "- [x] #task Gamma ^gamma",
+  ].join("\n");
+  const notes = [{ path: "Tasks.md", content }];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.collectStageBufferNotes = () => [];
+  plugin.readStageTasksCache = () => ({ ready: false, tasks: [] });
+  const stage = plugin.buildVaultDependencyStageFromNotes(notes, {
+    filePath: "Tasks.md",
+    content,
+    parentLines: [0],
+  });
+  const beta = stage.candidates.find(
+    (candidate) => candidate.blockId === "beta",
+  );
+  assert.ok(beta, "Beta reaches the stage pool");
+  assert.equal(beta.openCount, 1);
+  const view = planDependencyStageView({
+    current: [],
+    candidates: stage.candidates,
+    query: "Beta",
+    dependent: {
+      path: "Tasks.md",
+      line: 0,
+      key: dependencyStageRowKey("Tasks.md", "owner"),
+    },
+    edges: stage.edges,
+    linkedKeys: new Set(),
+  });
+  const row = view.find((entry) => entry.blockId === "beta");
+  assert.ok(row, "Beta renders in the stage view");
+  assert.equal(row.stageSection, "blocked");
+  assert.equal(row.waitsOn, 1);
+});
+
+// Disabled cycle rows tooltip the readable path: task descriptions joined
+// by `→`, never raw `path blockId` keys.
+test("stage cycle tooltip shows task descriptions", () => {
+  const notes = [
+    {
+      path: "a.md",
+      content: "- [ ] #task Alpha ^alpha\n",
+    },
+    {
+      path: "b.md",
+      content: [
+        "- [?] #task Beta ^beta",
+        "  - ⛓️ **DEPENDS ON:** [[a#^alpha]]",
+      ].join("\n"),
+    },
+  ];
+  const index = indexDependencyStageNotes(notes);
+  const edges = collectDependencyStageEdges(notes, index);
+  const pool = collectVaultDependencyCandidates(notes, {
+    dependentPath: "a.md",
+    dependentLines: new Set([0]),
+  });
+  const view = planDependencyStageView({
+    current: [],
+    candidates: pool,
+    query: "Beta",
+    dependent: {
+      path: "a.md",
+      line: 0,
+      key: dependencyStageRowKey("a.md", "alpha"),
+      displayText: "Alpha",
+      text: "Alpha",
+    },
+    edges,
+    linkedKeys: new Set(),
+  });
+  const beta = view.find((row) => row.blockId === "beta");
+  assert.ok(beta, "Beta reaches the stage with a matching query");
+  assert.equal(beta.disabledReason, "would create a cycle");
+  assert.deepEqual(beta.cycleLabels, ["Beta", "Alpha"]);
+  const picker = { markedLines: new Set() };
+  const rowEl = stubRowEl();
+  BulletPropertyPickerModal.prototype.renderTaskValueItem.call(
+    picker,
+    beta,
+    rowEl,
+    "Beta",
+  );
+  assert.ok(
+    rowTitles(rowEl).includes("Beta → Alpha"),
+    `cycle tooltip reads Beta → Alpha, got ${JSON.stringify(rowTitles(rowEl))}`,
   );
 });

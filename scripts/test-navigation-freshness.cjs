@@ -880,3 +880,391 @@ test("refresh row reads lane intervals from the api with the once-Ready return",
   });
   assert.equal(legacy.detail, "refresh · every 7 d (config)");
 });
+
+// Mixed-tier queue so an endpoint cannot accidentally be scoped to one tier.
+function mixedTierQueue() {
+  const v4 = (overrides = {}) => ({
+    key: "a.md:1",
+    path: "a.md",
+    line: 1,
+    originalMarkdown: "- [ ] #task T",
+    state: null,
+    bucket: null,
+    tier: "new",
+    tierLabel: "NEW",
+    lane: "ready",
+    fresh: null,
+    dueOn: null,
+    daysOverdue: null,
+    interval: 7,
+    rank: 1,
+    tierRank: 1,
+    tierTotal: 1,
+    ...overrides,
+  });
+  return [
+    v4({ key: "n.md:1", path: "n.md", originalMarkdown: "- [ ] #task New" }),
+    v4({
+      key: "p.md:2", path: "p.md", line: 2,
+      originalMarkdown: "- [/] #task Pending",
+      tier: "pending", tierLabel: "PENDING", lane: "pending",
+      fresh: "2026-10-07", dueOn: "2026-10-08", daysOverdue: 0,
+      interval: 1, rank: 2, tierRank: 1, tierTotal: 1,
+    }),
+    v4({
+      key: "x.md:3", path: "x.md", line: 3,
+      originalMarkdown: "- [*] #task Next",
+      tier: "next", tierLabel: "NEXT", lane: "next",
+      fresh: null, dueOn: null, daysOverdue: null,
+      interval: 1, rank: 3, tierRank: 1, tierTotal: 1,
+    }),
+    v4({
+      key: "r.md:4", path: "r.md", line: 4,
+      originalMarkdown: "- [ ] #task Returned",
+      tier: "returned", tierLabel: "RETURNED", lane: "ready",
+      fresh: "2026-10-05", dueOn: "2026-10-07", daysOverdue: 1,
+      interval: 7, rank: 4, tierRank: 1, tierTotal: 1,
+    }),
+    v4({
+      key: "o.md:5", path: "o.md", line: 5,
+      originalMarkdown: "- [ ] #task Rotten",
+      tier: "rotten", tierLabel: "ROTTEN", lane: "ready",
+      fresh: "2026-09-28", dueOn: "2026-10-05", daysOverdue: 3,
+      interval: 7, rank: 5, tierRank: 1, tierTotal: 1,
+    }),
+  ];
+}
+
+test("endpoint jumps select the queue ends with full rank and total", () => {
+  const queue = mixedTierQueue();
+  const first = helpers.planReviewJump(queue, {
+    direction: 1,
+    endpoint: "first",
+    cursor: { path: "x.md", line: 3, text: "- [*] #task Next" },
+    anchor: helpers.buildReviewAnchor(queue, ["x.md:3"], 3),
+  });
+  assert.equal(first.kind, "jump");
+  assert.equal(first.entry.key, "n.md:1");
+  assert.equal(first.rank, 1);
+  assert.equal(first.total, 5);
+  assert.equal(first.wrapped, false);
+  assert.equal(first.originTier, null);
+
+  const last = helpers.planReviewJump(queue, {
+    direction: -1,
+    endpoint: "last",
+    cursor: { path: "x.md", line: 3, text: "- [*] #task Next" },
+    anchor: helpers.buildReviewAnchor(queue, ["x.md:3"], 3),
+  });
+  assert.equal(last.kind, "jump");
+  assert.equal(last.entry.key, "o.md:5");
+  assert.equal(last.rank, 5);
+  assert.equal(last.total, 5);
+  assert.equal(last.wrapped, false);
+  assert.equal(last.originTier, null);
+});
+
+test("endpoint jumps ignore cursor, anchor, and direction", () => {
+  const queue = mixedTierQueue();
+  const anchor = helpers.buildReviewAnchor(queue, ["p.md:2", "x.md:3"], 3);
+  for (const cursor of [
+    { path: "o.md", line: 5, text: "- [ ] #task Rotten" },
+    { path: "elsewhere.md", line: 1, text: "- [ ] #task Other" },
+    null,
+  ]) {
+    assert.equal(
+      helpers.planReviewJump(queue, { direction: -1, endpoint: "first", cursor, anchor }).entry.key,
+      "n.md:1",
+    );
+    assert.equal(
+      helpers.planReviewJump(queue, { direction: 1, endpoint: "last", cursor, anchor }).entry.key,
+      "o.md:5",
+    );
+  }
+  // Unrecognized endpoint values keep the relative path.
+  const relative = helpers.planReviewJump(queue, {
+    direction: 1,
+    endpoint: "middle",
+    cursor: { path: "n.md", line: 1, text: "- [ ] #task New" },
+  });
+  assert.equal(relative.entry.key, "p.md:2");
+});
+
+test("endpoint jumps on empty and one-entry queues", () => {
+  assert.deepEqual(helpers.planReviewJump([], { endpoint: "first" }), {
+    kind: "empty",
+  });
+  assert.deepEqual(helpers.planReviewJump([], { endpoint: "last" }), {
+    kind: "empty",
+  });
+  const solo = [mixedTierQueue()[0]];
+  for (const endpoint of ["first", "last"]) {
+    const plan = helpers.planReviewJump(solo, {
+      endpoint,
+      cursor: { path: "n.md", line: 1, text: "- [ ] #task New" },
+      anchor: helpers.buildReviewAnchor(solo, ["n.md:1"], 1),
+    });
+    assert.equal(plan.kind, "jump");
+    assert.equal(plan.entry.key, "n.md:1");
+    assert.equal(plan.rank, 1);
+    assert.equal(plan.total, 1);
+    assert.equal(plan.wrapped, false);
+  }
+});
+
+test("a visited endpoint is still due under its own anchor", () => {
+  const queue = mixedTierQueue();
+  const afterFirst = helpers.buildReviewAnchor(queue, ["n.md:1"], 1);
+  const repeat = helpers.planReviewJump(queue, {
+    endpoint: "first",
+    anchor: afterFirst,
+  });
+  assert.equal(repeat.entry.key, "n.md:1");
+  assert.equal(repeat.rank, 1);
+  assert.equal(repeat.total, 5);
+
+  const afterLast = helpers.buildReviewAnchor(queue, ["o.md:5"], 5);
+  const repeatLast = helpers.planReviewJump(queue, {
+    endpoint: "last",
+    anchor: afterLast,
+  });
+  assert.equal(repeatLast.entry.key, "o.md:5");
+  assert.equal(repeatLast.rank, 5);
+  assert.equal(repeatLast.total, 5);
+});
+
+test("lowercase steps continue from an endpoint anchor", () => {
+  const queue = mixedTierQueue();
+  const fromFirst = helpers.buildReviewAnchor(queue, ["n.md:1"], 1);
+  const next = helpers.planReviewJump(queue, { direction: 1, anchor: fromFirst });
+  assert.equal(next.entry.key, "p.md:2");
+
+  const fromLast = helpers.buildReviewAnchor(queue, ["o.md:5"], 5);
+  const prev = helpers.planReviewJump(queue, { direction: -1, anchor: fromLast });
+  assert.equal(prev.entry.key, "r.md:4");
+  const wrapped = helpers.planReviewJump(queue, { direction: 1, anchor: fromLast });
+  assert.equal(wrapped.entry.key, "n.md:1");
+  assert.equal(wrapped.wrapped, true);
+});
+
+test("a stamped endpoint that moved is stale and cannot land from old text", () => {
+  const queue = mixedTierQueue();
+  const first = queue[0];
+  assert.deepEqual(
+    helpers.resolveReviewQueueLine("- [ ] #task Something else", first),
+    { ok: false, reason: "stale" },
+  );
+  assert.deepEqual(
+    helpers.resolveReviewQueueLine(
+      ["# Tasks", first.originalMarkdown].join("\n"),
+      first,
+    ),
+    { ok: true, line: 1, source: "text" },
+  );
+});
+
+// Method harness: stubbed ledger-tools api plus landing, with write and
+// stamp spies that throw if an endpoint jump attempts to mutate content.
+function endpointMethodHarness({ queues, landings }) {
+  const seen = { landCalls: [], landEntries: [] };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.register = () => {};
+  const queueCalls = [];
+  const freshness = {
+    version: 4,
+    queue: () => {
+      queueCalls.push(true);
+      return queues[Math.min(queueCalls.length, queues.length) - 1];
+    },
+    counts: () => ({ upkeepToday: 3, refreshedToday: 3 }),
+    stampLine: () => {
+      throw new Error("endpoint jumps never stamp");
+    },
+    setRefreshLine: () => {
+      throw new Error("endpoint jumps never set refresh");
+    },
+  };
+  plugin.app = {
+    plugins: { plugins: { "bob-ledger-tools": { api: { version: 3, freshness } } } },
+    vault: {
+      getAbstractFileByPath: () => {
+        throw new Error("endpoint tests stub landing; vault is never read");
+      },
+    },
+    workspace: { getActiveFile: () => null, on: () => ({}) },
+  };
+  plugin.getActiveMarkdownView = () => null;
+  plugin.reviewAnchor = null;
+  plugin.landOnReviewQueueEntry = async (entry) => {
+    seen.landCalls.push(entry);
+    seen.landEntries.push(entry && entry.key);
+    return landings[Math.min(seen.landCalls.length, landings.length) - 1];
+  };
+  return { plugin, seen };
+}
+
+test("stale endpoint target reselects the same endpoint in the new queue", async () => {
+  const before = mixedTierQueue();
+  // The reread queue dropped the old head; ranks are 1-based over it.
+  const after = mixedTierQueue()
+    .slice(1)
+    .map((entry, index) => ({ ...entry, rank: index + 1 }));
+  const { plugin, seen } = endpointMethodHarness({
+    queues: [before, after],
+    landings: [{ ok: false, stale: true }, { ok: true, stale: false }],
+  });
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(1, { endpoint: "first" }), true);
+  assert.deepEqual(seen.landEntries, [before[0].key, after[0].key]);
+  assert.equal(plugin.reviewAnchor.keys[0], after[0].key);
+  assert.equal(plugin.reviewAnchor.rank, 1);
+  assert.match(notices.at(-1), /^Review 1\/4 · /);
+  assert.ok(!notices.at(-1).includes("wrapped around"));
+
+  const lastHarness = endpointMethodHarness({
+    queues: [before, after],
+    landings: [{ ok: false, stale: true }, { ok: true, stale: false }],
+  });
+  notices.length = 0;
+  assert.equal(await lastHarness.plugin.jumpToDueTask(-1, { endpoint: "last" }), true);
+  assert.deepEqual(lastHarness.seen.landEntries, [before[4].key, after[3].key]);
+  assert.equal(lastHarness.plugin.reviewAnchor.keys[0], after[3].key);
+  assert.match(notices.at(-1), /^Review 4\/4 · /);
+});
+
+test("endpoint retry is bounded and failures preserve the anchor", async () => {
+  const queue = mixedTierQueue();
+  const anchor = helpers.buildReviewAnchor(queue, ["x.md:3"], 3);
+
+  const retryEmpty = endpointMethodHarness({
+    queues: [queue, []],
+    landings: [{ ok: false, stale: true }, { ok: true, stale: false }],
+  });
+  retryEmpty.plugin.reviewAnchor = anchor;
+  notices.length = 0;
+  assert.equal(await retryEmpty.plugin.jumpToDueTask(1, { endpoint: "first" }), false);
+  assert.equal(notices.at(-1), "Nothing due for review · ✓ 3 today");
+  assert.equal(retryEmpty.plugin.reviewAnchor, anchor);
+
+  const retryStale = endpointMethodHarness({
+    queues: [queue, queue],
+    landings: [{ ok: false, stale: true }, { ok: false, stale: true }],
+  });
+  retryStale.plugin.reviewAnchor = anchor;
+  notices.length = 0;
+  assert.equal(await retryStale.plugin.jumpToDueTask(-1, { endpoint: "last" }), false);
+  assert.equal(retryStale.seen.landCalls.length, 2);
+  assert.equal(notices.at(-1), "Review queue changed — try again");
+  assert.equal(retryStale.plugin.reviewAnchor, anchor);
+
+  const hardFailure = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: false, stale: false }],
+  });
+  hardFailure.plugin.reviewAnchor = anchor;
+  notices.length = 0;
+  assert.equal(await hardFailure.plugin.jumpToDueTask(1, { endpoint: "first" }), false);
+  assert.equal(hardFailure.seen.landCalls.length, 1);
+  assert.equal(notices.at(-1), "Could not jump to task");
+  assert.equal(hardFailure.plugin.reviewAnchor, anchor);
+
+  const missingApi = endpointMethodHarness({ queues: [queue], landings: [] });
+  missingApi.plugin.app = {};
+  missingApi.plugin.reviewAnchor = anchor;
+  notices.length = 0;
+  assert.equal(await missingApi.plugin.jumpToDueTask(1, { endpoint: "first" }), false);
+  assert.equal(notices.at(-1), "Bob Ledger Tools api v3 required");
+  assert.equal(missingApi.plugin.reviewAnchor, anchor);
+});
+
+test("endpoint jump to ROTTEN carries no boundary preamble", async () => {
+  const queue = mixedTierQueue();
+  const { plugin } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(-1, { endpoint: "last" }), true);
+  assert.match(notices.at(-1), /^Review 5\/5 · ROTTEN 1\/1 · rotten 3d · every 7d$/);
+  assert.ok(!notices.at(-1).includes("Commitments done"));
+  assert.ok(!notices.at(-1).includes("ROTTEN next"));
+  // The installed anchor lets lowercase navigation continue from the end.
+  const back = helpers.planReviewJump(queue, { direction: -1, anchor: plugin.reviewAnchor });
+  assert.equal(back.entry.key, "r.md:4");
+
+  const relative = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  relative.plugin.reviewAnchor = helpers.buildReviewAnchor(
+    queue,
+    ["n.md:1", "p.md:2", "x.md:3", "r.md:4"],
+    4,
+  );
+  notices.length = 0;
+  assert.equal(await relative.plugin.jumpToDueTask(1), true);
+  assert.ok(notices.at(-1).startsWith("Commitments done — 1 ROTTEN left\n"));
+});
+
+test("endpoint notices keep v4 tier details and legacy v3 text", () => {
+  const queue = mixedTierQueue();
+  assert.equal(
+    helpers.buildReviewJumpNotice(queue[0], 1, 5, { todayText: "2026-10-08" }),
+    "Review 1/5 · NEW 1/1",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(queueEntry({ state: "new" }), 1, 3),
+    "Review 1/3 · NEW",
+  );
+});
+
+test("onload registers first/last commands routed to the shared jump", () => {
+  const commands = [];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: {
+      getActiveFile: () => null,
+      on: () => ({}),
+      onLayoutReady: () => {},
+    },
+  };
+  plugin.addCommand = (command) => commands.push(command);
+  plugin.register = () => {};
+  plugin.registerEvent = () => {};
+  plugin.registerVimMappingsWhenReady = () => {};
+  plugin.registerVimJumpHistoryVaultEvents = () => {};
+  plugin.registerOpenTaskJumpInputListeners = () => {};
+  plugin.registerReviewRefreshInputListeners = () => {};
+  plugin.registerCountedTransclusionToggleInputListeners = () => {};
+  plugin.registerCountedBulletPropertyInputListeners = () => {};
+  plugin.registerCountedTaskMoveInputListeners = () => {};
+  plugin.registerCountedLaneToggleInputListeners = () => {};
+  plugin.registerClearSearchHighlightInputListeners = () => {};
+  plugin.onload();
+  const first = commands.find((item) => item.id === "jump-to-first-due-task");
+  const last = commands.find((item) => item.id === "jump-to-last-due-task");
+  assert.ok(first);
+  assert.ok(last);
+  assert.equal(first.name, "Jump to first task due for freshness review");
+  assert.equal(last.name, "Jump to last task due for freshness review");
+  assert.equal(first.hotkeys, undefined);
+  assert.equal(last.hotkeys, undefined);
+  // Both route through the shared jump with an explicit endpoint, never the
+  // relative fallback (forward would map to first, backward to last).
+  const calls = [];
+  plugin.jumpToDueTask = (direction, options) => {
+    calls.push({ direction, options });
+    return true;
+  };
+  first.callback();
+  last.callback();
+  assert.deepEqual(calls, [
+    { direction: 1, options: { endpoint: "first" } },
+    { direction: -1, options: { endpoint: "last" } },
+  ]);
+  // Existing review commands keep working.
+  const next = commands.find((item) => item.id === "jump-to-next-due-task");
+  const prev = commands.find((item) => item.id === "jump-to-prev-due-task");
+  assert.ok(next);
+  assert.ok(prev);
+});

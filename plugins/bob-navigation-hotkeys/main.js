@@ -29786,7 +29786,9 @@ function resolveReviewAnchorTarget(remaining, anchor, direction) {
 
 // Pure jump position over a freshly read queue. Returns `{ kind: "empty" }`
 // or `{ kind: "jump", entry, rank, total, wrapped, originTier }`
-// (`rank` is 1-based). `direction` is +1 (next) or -1 (prev);
+// (`rank` is 1-based). `endpoint` ("first"/"last") selects that queue
+// endpoint with full-queue rank/total, `wrapped: false`, and a null origin,
+// ignoring cursor and anchor. `direction` is +1 (next) or -1 (prev);
 // `cursor` is `{ path, line, text }` with a 1-based line; `stamped` (or
 // `anchor`) is the walk anchor from the last landing or Alt+F write (the
 // Tasks cache lags, so handled keys are skipped by key). Origin resolves
@@ -29801,6 +29803,21 @@ function planReviewJump(queue, options = {}) {
   const direction = options.direction < 0 ? -1 : 1;
   if (list.length === 0) {
     return Object.freeze({ kind: "empty" });
+  }
+  const endpointRaw =
+    options && typeof options.endpoint === "string"
+      ? options.endpoint.trim().toLowerCase()
+      : "";
+  if (endpointRaw === "first" || endpointRaw === "last") {
+    const index = endpointRaw === "first" ? 0 : list.length - 1;
+    return Object.freeze({
+      kind: "jump",
+      entry: list[index],
+      rank: index + 1,
+      total: list.length,
+      wrapped: false,
+      originTier: null,
+    });
   }
   const anchor =
     options.anchor && typeof options.anchor === "object"
@@ -30465,6 +30482,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       name: "Jump to previous task due for freshness review",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "K" }],
       callback: () => this.jumpToDueTask(-1),
+    });
+
+    this.addCommand({
+      id: "jump-to-first-due-task",
+      name: "Jump to first task due for freshness review",
+      callback: () => this.jumpToDueTask(1, { endpoint: "first" }),
+    });
+
+    this.addCommand({
+      id: "jump-to-last-due-task",
+      name: "Jump to last task due for freshness review",
+      callback: () => this.jumpToDueTask(-1, { endpoint: "last" }),
     });
 
     this.addCommand({
@@ -32607,12 +32636,20 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // (or preceding) entry; from a just-stamped task go to the entry after
   // its remembered rank tuple; otherwise go to the first (or last) entry.
   // Wraps with a Notice; an empty queue shows the refreshed-today count.
+  // With `options.endpoint` ("first"/"last") jump to that queue endpoint
+  // instead, ignoring cursor and anchor, without a boundary preamble.
   async jumpToDueTask(direction, options = {}) {
     const api = this.requireFreshnessApi();
     if (!api) {
       return false;
     }
     const step = direction < 0 ? -1 : 1;
+    const endpointRaw =
+      options && typeof options.endpoint === "string"
+        ? options.endpoint.trim().toLowerCase()
+        : "";
+    const endpoint =
+      endpointRaw === "first" || endpointRaw === "last" ? endpointRaw : null;
     let queue = this.readFreshnessQueue(api);
     if (queue.length === 0) {
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
@@ -32630,6 +32667,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       stamped: anchor,
       anchor,
       todayText,
+      endpoint,
     });
     if (plan.kind === "empty") {
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
@@ -32644,6 +32682,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         stamped: anchor,
         anchor,
         todayText,
+        endpoint,
       });
       if (plan.kind === "empty") {
         new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
@@ -32670,7 +32709,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
     // A forward step out of the commitments into ROTTEN names the
     // boundary (v4 tier entries only; v3 keeps the plain jump notice).
-    if (step > 0 && reviewFreshnessSupportsTiers(api)) {
+    // Endpoint jumps never carry the relative-walk boundary preamble.
+    if (!endpoint && step > 0 && reviewFreshnessSupportsTiers(api)) {
       const handled = new Set(
         anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
       );

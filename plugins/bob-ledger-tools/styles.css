@@ -368,6 +368,42 @@ body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-fiel
   font-variant-numeric: tabular-nums;
 }
 
+/* Dashboard collections (dashboardCollections v1): Browse-row PROJECTS /
+   REFERENCES chips. Restrained shared accent; collection size is
+   informational and never turns red for being large or empty. Scoped to
+   `.bob-plan-projects` / `.bob-plan-references` so daily `bob-plan`
+   blocks and shared badges elsewhere are untouched. */
+
+.bob-plan-projects,
+.bob-plan-references {
+  --bob-plan-accent: var(--interactive-accent);
+}
+
+.bob-plan-projects .bob-plan-ready-label,
+.bob-plan-references .bob-plan-ready-label {
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+}
+
+.bob-plan-projects .bob-plan-ready-value,
+.bob-plan-references .bob-plan-ready-value {
+  color: var(--bob-plan-accent);
+  font-size: 0.9em;
+  font-variant-caps: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  letter-spacing: normal;
+}
+
+.bob-plan-projects-arrow,
+.bob-plan-references-arrow {
+  color: var(--bob-plan-accent);
+  font-variant-numeric: tabular-nums;
+}
+
 .bob-ready-notes {
   display: flex;
   flex-direction: column;

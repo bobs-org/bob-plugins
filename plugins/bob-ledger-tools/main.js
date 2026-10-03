@@ -8798,6 +8798,15 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     // Preview plus Reading view).
     this.crowdedWidgets = new Set();
     this.crowdedRefreshTimer = null;
+    // Dashboard collections (dashboardCollections v1): Browse-row
+    // PROJECTS / REFERENCES chips. One shared widget set keyed by
+    // owning component and kind, one debounced refresh, async Base
+    // contracts outside the synchronous snapshot.
+    this.dashboardCollectionWidgets = new Set();
+    this.dashboardCollectionsRefreshTimer = null;
+    this.dashboardCollectionsBase = null;
+    this.dashboardCollectionsBaseKey = null;
+    this.dashboardCollectionsBaseToken = 0;
     this.readyNotesViews = new Set();
     this.readyNotesRefreshTimer = null;
     this.noteReadyReadingWidgets = new Set();
@@ -8898,6 +8907,16 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         renderCrowdedChip: (host, options = {}) =>
           this.renderCrowdedChip(host, options),
       }),
+      // Dashboard collections (dashboardCollections namespace v1):
+      // live PROJECTS / REFERENCES badges. Additive: top-level api
+      // stays v3. Every member is synchronous and never throws: guard
+      // calls with try/catch as well as optional chaining.
+      dashboardCollections: Object.freeze({
+        version: DASHBOARD_COLLECTIONS_VERSION,
+        snapshot: () => this.dashboardCollectionsSnapshot(),
+        renderChip: (host, options = {}) =>
+          this.dashboardCollectionsRenderChip(host, options),
+      }),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -8937,15 +8956,33 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           this.refreshTodayCacheForChangedFile(file, data);
           this.refreshFreshnessForChangedFile(file, data);
           this.refreshNoteReadyForChangedFile(file);
+          this.scheduleDashboardCollectionsRefresh();
+          try {
+            const path = file && typeof file.path === "string" ? file.path : "";
+            if (/(^|\/)(projects\.base|refs\.base)$/.test(path)) {
+              void this.dashboardCollectionsEnsureBaseContracts();
+            }
+          } catch (error) {
+            // Best-effort Base reload only.
+          }
         }),
       );
       this.registerEvent(
         metadataCache.on("deleted", (file) => {
           this.refreshNoteReadyForDeletedPath(file && file.path);
+          this.scheduleDashboardCollectionsRefresh();
         }),
       );
       this.registerEvent(
-        metadataCache.on("resolved", () => this.refreshTodayCacheFromDaily()),
+        metadataCache.on("resolved", () => {
+          this.refreshTodayCacheFromDaily();
+          this.scheduleDashboardCollectionsRefresh();
+          try {
+            void this.dashboardCollectionsEnsureBaseContracts();
+          } catch (error) {
+            // Best-effort Base reload only.
+          }
+        }),
       );
     }
     const vault = this.app && this.app.vault;
@@ -8962,6 +8999,19 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           ),
         );
       }
+      for (const event of ["create", "delete", "rename", "modify"]) {
+        this.registerEvent(
+          vault.on(event, (file, oldPath) =>
+            this.refreshDashboardCollectionsForFileEvent(file, oldPath),
+          ),
+        );
+      }
+    }
+    try {
+      void this.dashboardCollectionsEnsureBaseContracts();
+    } catch (error) {
+      // Base contracts load asynchronously; the snapshot stays
+      // unavailable until they resolve.
     }
     if (
       typeof this.registerInterval === "function" &&
@@ -8994,6 +9044,11 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           // even when every due task remains due.
           try {
             this.refreshReviewChips(new Date());
+          } catch (error) {
+            // Best-effort refresh only.
+          }
+          try {
+            this.refreshDashboardCollectionChips(new Date());
           } catch (error) {
             // Best-effort refresh only.
           }
@@ -9093,6 +9148,20 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     if (this.dashboardLaneWidgets) {
       this.dashboardLaneWidgets.clear();
     }
+    if (
+      this.dashboardCollectionsRefreshTimer !== null &&
+      this.dashboardCollectionsRefreshTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.dashboardCollectionsRefreshTimer);
+    }
+    this.dashboardCollectionsRefreshTimer = null;
+    if (this.dashboardCollectionWidgets) {
+      this.dashboardCollectionWidgets.clear();
+    }
+    this.dashboardCollectionsBase = null;
+    this.dashboardCollectionsBaseKey = null;
+    this.dashboardCollectionsBaseToken = 0;
     if (
       this.reviewRefreshTimer !== null &&
       this.reviewRefreshTimer !== undefined &&
@@ -10972,6 +11041,595 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         // Best-effort refresh only.
       }
     }, 150);
+  }
+
+  // --- Dashboard collections (api.dashboardCollections v1) -----------
+  // Synchronous, never-throwing `snapshot()` plus lifecycle-owned
+  // `renderChip(host, { kind, sourcePath, component })` for `projects`
+  // and `references`. Counts come from one shared vault/metadata pass
+  // per snapshot (never per badge, never note bodies, never the Tasks
+  // plugin or Dataview's excluded-folder index). Base definitions load
+  // asynchronously outside the snapshot; a changed contract fails
+  // closed to unavailable instead of a stale number. Documented
+  // together: to support a future filter change, extend the predicate
+  // (`dashboardCollectionIsProjectMember` /
+  // `dashboardCollectionIsReferenceMember`) and its contract validator
+  // (`dashboardCollectionValidateProjectsBase` /
+  // `dashboardCollectionValidateRefsBase`) together.
+
+  dashboardCollectionsResolver() {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        !metadataCache ||
+        typeof metadataCache.getFirstLinkpathDest !== "function"
+      ) {
+        return null;
+      }
+      return (target, sourcePath) => {
+        try {
+          return metadataCache.getFirstLinkpathDest(
+            String(target || ""),
+            String(sourcePath || ""),
+          );
+        } catch (error) {
+          return null;
+        }
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  dashboardCollectionsCountOnce() {
+    try {
+      const vault = this.app && this.app.vault;
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        !vault ||
+        typeof vault.getMarkdownFiles !== "function" ||
+        !metadataCache ||
+        typeof metadataCache.getFileCache !== "function"
+      ) {
+        return { projects: 0, references: 0, incomplete: true, reason: "vault unavailable" };
+      }
+      const files = vault.getMarkdownFiles();
+      if (!Array.isArray(files)) {
+        return { projects: 0, references: 0, incomplete: true, reason: "vault unavailable" };
+      }
+      const resolver = this.dashboardCollectionsResolver();
+      if (!resolver) {
+        return { projects: 0, references: 0, incomplete: true, reason: "metadata unavailable" };
+      }
+      let projects = 0;
+      let references = 0;
+      let incomplete = false;
+      const seen = new Set();
+      for (const file of files) {
+        try {
+          const path =
+            file && typeof file.path === "string" ? file.path : "";
+          if (!path || seen.has(path)) {
+            continue;
+          }
+          seen.add(path);
+          let cache = null;
+          try {
+            cache = metadataCache.getFileCache(file);
+          } catch (error) {
+            cache = null;
+          }
+          if (!cache) {
+            incomplete = true;
+            continue;
+          }
+          const frontmatter =
+            cache.frontmatter &&
+            typeof cache.frontmatter === "object" &&
+            !Array.isArray(cache.frontmatter)
+              ? cache.frontmatter
+              : {};
+          const note = { path, frontmatter };
+          try {
+            if (dashboardCollectionIsProjectMember(note, resolver)) {
+              projects += 1;
+            }
+          } catch (error) {
+            // One bad note never breaks the pass.
+          }
+          try {
+            if (dashboardCollectionIsReferenceMember(note)) {
+              references += 1;
+            }
+          } catch (error) {
+            // One bad note never breaks the pass.
+          }
+        } catch (error) {
+          // One bad file never breaks the pass.
+        }
+      }
+      return { projects, references, incomplete, reason: incomplete ? "metadata pending" : null };
+    } catch (error) {
+      return { projects: 0, references: 0, incomplete: true, reason: "snapshot failed" };
+    }
+  }
+
+  dashboardCollectionsSnapshot() {
+    try {
+      const base = this.dashboardCollectionsBase;
+      if (!base || !base.projects || !base.references) {
+        return {
+          projects: dashboardCollectionEntryFor("projects", null, false, "base definitions loading"),
+          references: dashboardCollectionEntryFor("references", null, false, "base definitions loading"),
+        };
+      }
+      if (base.projects.ok !== true) {
+        return {
+          projects: dashboardCollectionEntryFor(
+            "projects",
+            null,
+            false,
+            base.projects.reason || "projects.base changed",
+          ),
+          references: base.references.ok === true
+            ? this.dashboardCollectionsSnapshotOne("references", base)
+            : dashboardCollectionEntryFor(
+                "references",
+                null,
+                false,
+                base.references.reason || "refs.base changed",
+              ),
+        };
+      }
+      if (base.references.ok !== true) {
+        return {
+          projects: this.dashboardCollectionsSnapshotOne("projects", base),
+          references: dashboardCollectionEntryFor(
+            "references",
+            null,
+            false,
+            base.references.reason || "refs.base changed",
+          ),
+        };
+      }
+      let counted = null;
+      try {
+        counted = this.dashboardCollectionsCountOnce();
+      } catch (error) {
+        counted = null;
+      }
+      if (!counted || counted.incomplete === true) {
+        const reason =
+          (counted && counted.reason) || "metadata pending";
+        return {
+          projects: dashboardCollectionEntryFor("projects", null, false, reason),
+          references: dashboardCollectionEntryFor("references", null, false, reason),
+        };
+      }
+      return {
+        projects: dashboardCollectionEntryFor("projects", counted.projects, true, null),
+        references: dashboardCollectionEntryFor("references", counted.references, true, null),
+      };
+    } catch (error) {
+      return {
+        projects: dashboardCollectionEntryFor("projects", null, false, "unavailable"),
+        references: dashboardCollectionEntryFor("references", null, false, "unavailable"),
+      };
+    }
+  }
+
+  dashboardCollectionsSnapshotOne(kind, base) {
+    try {
+      const normalized = kind === "references" ? "references" : "projects";
+      const contract = base ? base[normalized] : null;
+      if (!contract || contract.ok !== true) {
+        return dashboardCollectionEntryFor(
+          normalized,
+          null,
+          false,
+          (contract && contract.reason) || "base definition changed",
+        );
+      }
+      let counted = null;
+      try {
+        counted = this.dashboardCollectionsCountOnce();
+      } catch (error) {
+        counted = null;
+      }
+      if (!counted || counted.incomplete === true) {
+        return dashboardCollectionEntryFor(
+          normalized,
+          null,
+          false,
+          (counted && counted.reason) || "metadata pending",
+        );
+      }
+      const count = normalized === "projects" ? counted.projects : counted.references;
+      return dashboardCollectionEntryFor(normalized, count, true, null);
+    } catch (error) {
+      const normalized = kind === "references" ? "references" : "projects";
+      return dashboardCollectionEntryFor(normalized, null, false, "unavailable");
+    }
+  }
+
+  async dashboardCollectionsEnsureBaseContracts() {
+    let token = null;
+    try {
+      this.dashboardCollectionsBaseToken = (this.dashboardCollectionsBaseToken || 0) + 1;
+      token = this.dashboardCollectionsBaseToken;
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.getAbstractFileByPath !== "function") {
+        this.dashboardCollectionsBase = {
+          projects: { ok: false, reason: "vault unavailable" },
+          references: { ok: false, reason: "vault unavailable" },
+        };
+        try {
+          this.scheduleDashboardCollectionsRefresh();
+        } catch (error) {
+          // Best-effort refresh only.
+        }
+        return;
+      }
+      const readOne = async (name) => {
+        try {
+          const file = vault.getAbstractFileByPath(name);
+          if (!file) {
+            return null;
+          }
+          if (typeof vault.cachedRead === "function") {
+            return await vault.cachedRead(file);
+          }
+          if (typeof vault.read === "function") {
+            return await vault.read(file);
+          }
+          return null;
+        } catch (error) {
+          return null;
+        }
+      };
+      const [projectsText, refsText] = await Promise.all([
+        readOne("projects.base"),
+        readOne("refs.base"),
+      ]);
+      if (token !== this.dashboardCollectionsBaseToken) {
+        return;
+      }
+      const yamlParser = parseYaml;
+      const parseOne = (text) => {
+        try {
+          if (typeof text !== "string" || typeof yamlParser !== "function") {
+            return null;
+          }
+          return yamlParser(text);
+        } catch (error) {
+          return null;
+        }
+      };
+      const projectsParsed = parseOne(projectsText);
+      const refsParsed = parseOne(refsText);
+      const projects =
+        projectsText === null || projectsParsed === null
+          ? { ok: false, reason: "projects.base is unreadable" }
+          : dashboardCollectionValidateProjectsBase(projectsParsed);
+      const references =
+        refsText === null || refsParsed === null
+          ? { ok: false, reason: "refs.base is unreadable" }
+          : dashboardCollectionValidateRefsBase(refsParsed);
+      const key = JSON.stringify([projectsText, refsText]);
+      const previousKey = this.dashboardCollectionsBaseKey || null;
+      this.dashboardCollectionsBase = { projects, references };
+      this.dashboardCollectionsBaseKey = key;
+      if (key !== previousKey) {
+        try {
+          this.scheduleDashboardCollectionsRefresh();
+        } catch (error) {
+          // Best-effort refresh only.
+        }
+      }
+    } catch (error) {
+      try {
+        if (token === null || token === this.dashboardCollectionsBaseToken) {
+          this.dashboardCollectionsBase = {
+            projects: { ok: false, reason: "base definitions unavailable" },
+            references: { ok: false, reason: "base definitions unavailable" },
+          };
+        }
+      } catch (inner) {
+        // Best-effort state only.
+      }
+    }
+  }
+
+  paintDashboardCollectionElement(host, kind, entry, options = {}) {
+    try {
+      if (!host || typeof host.createEl !== "function") {
+        return null;
+      }
+      const normalized = kind === "references" ? "references" : "projects";
+      const model = dashboardCollectionChipModel(normalized, entry);
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const anchor = host.createEl("a", {
+        cls:
+          `bob-plan-chip bob-plan-${normalized}` +
+          `${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        title: model.tooltip,
+        href: model.destination,
+      });
+      setReadyAnchorContent(
+        anchor,
+        {
+          count: null,
+          cap: null,
+          over: false,
+          placeholder: model.placeholder,
+          tooltip: model.tooltip,
+          aria: model.aria,
+        },
+        { kind: "ready", label: model.label },
+      );
+      try {
+        const valueSpan = findReadySpan(anchor, READY_VALUE_CLS);
+        if (valueSpan) {
+          setReadySpanText(valueSpan, model.valueText);
+        }
+      } catch (error) {
+        // Value rewrite is best-effort only.
+      }
+      try {
+        let arrow = null;
+        if (typeof anchor.querySelector === "function") {
+          arrow = anchor.querySelector(`.bob-plan-${normalized}-arrow`);
+        }
+        if (!arrow && typeof anchor.createEl === "function") {
+          arrow = anchor.createEl("span", {
+            cls: `bob-plan-crowded-arrow bob-plan-${normalized}-arrow`,
+            text: DASHBOARD_COLLECTION_ARROW,
+          });
+        }
+        if (arrow && typeof arrow.setAttribute === "function") {
+          arrow.setAttribute("aria-hidden", "true");
+        }
+      } catch (error) {
+        // Arrow is best-effort only.
+      }
+      if (anchor && typeof anchor.setAttribute === "function") {
+        anchor.setAttribute("aria-label", model.aria);
+        anchor.setAttribute("role", "link");
+        try {
+          if (!anchor.hasAttribute("tabindex")) {
+            anchor.setAttribute("tabindex", "0");
+          }
+        } catch (error) {
+          // tabindex is best-effort only.
+        }
+      }
+      const open = (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (workspace && typeof workspace.openLinkText === "function") {
+            const newLeaf = Boolean(event && (event.ctrlKey || event.metaKey));
+            workspace.openLinkText(model.destination, sourcePath, newLeaf);
+          }
+        } catch (error) {
+          // The chip still shows the count without the navigation.
+        }
+      };
+      if (anchor && typeof anchor.addEventListener === "function") {
+        anchor.addEventListener("click", open);
+        anchor.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            open(event);
+          }
+        });
+        anchor.addEventListener("mouseover", (event) => {
+          try {
+            const workspace = this.app && this.app.workspace;
+            if (workspace && typeof workspace.trigger === "function") {
+              workspace.trigger("hover-link", {
+                event,
+                source: "bob-plan",
+                hoverParent: host,
+                targetEl: anchor,
+                linktext: model.destination,
+                sourcePath,
+              });
+            }
+          } catch (error) {
+            // Hover preview is best-effort only.
+          }
+        });
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  dashboardCollectionsRenderChip(host, options = {}) {
+    try {
+      const kind = options.kind === "references" ? "references" : options.kind === "projects" ? "projects" : null;
+      if (!kind) {
+        return null;
+      }
+      if (!host || typeof host.createEl !== "function") {
+        return null;
+      }
+      const sourcePath =
+        typeof options.sourcePath === "string" ? options.sourcePath : "";
+      const component = options.component || null;
+      if (!this.dashboardCollectionWidgets) {
+        this.dashboardCollectionWidgets = new Set();
+      }
+      if (component) {
+        for (const widget of Array.from(this.dashboardCollectionWidgets)) {
+          if (widget.component === component && widget.kind === kind) {
+            try {
+              if (widget.el && widget.el.parentNode) {
+                widget.el.parentNode.removeChild(widget.el);
+              } else if (widget.el && typeof widget.el.remove === "function") {
+                widget.el.remove();
+              }
+            } catch (error) {
+              // Best-effort removal only.
+            }
+            this.dashboardCollectionWidgets.delete(widget);
+          }
+        }
+      }
+      for (const widget of Array.from(this.dashboardCollectionWidgets)) {
+        try {
+          const el = widget.el;
+          const detached =
+            !el ||
+            (typeof el.isConnected === "boolean" &&
+              el.isConnected === false &&
+              (!el.parentNode || el.parentNode === null));
+          if (detached && (!el.parentNode || el.parentNode === null)) {
+            if (!host.contains || !host.contains(el)) {
+              this.dashboardCollectionWidgets.delete(widget);
+            }
+          }
+        } catch (error) {
+          // Keep the widget on inspection failure.
+        }
+      }
+      let snapshot = null;
+      try {
+        snapshot = this.dashboardCollectionsSnapshot();
+      } catch (error) {
+        snapshot = null;
+      }
+      const entry =
+        snapshot && snapshot[kind]
+          ? snapshot[kind]
+          : dashboardCollectionEntryFor(kind, null, false, "unavailable");
+      const anchor = this.paintDashboardCollectionElement(host, kind, entry, {
+        sourcePath,
+      });
+      if (!anchor) {
+        return null;
+      }
+      const widget = { el: anchor, kind, sourcePath, component };
+      this.dashboardCollectionWidgets.add(widget);
+      if (component && typeof component.register === "function") {
+        try {
+          component.register(() => {
+            this.dashboardCollectionWidgets.delete(widget);
+          });
+        } catch (error) {
+          // The widget still refreshes with the batch; only the
+          // component-owned unregister is skipped.
+        }
+      }
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshDashboardCollectionChips(now = new Date()) {
+    if (!this.dashboardCollectionWidgets || this.dashboardCollectionWidgets.size === 0) {
+      return false;
+    }
+    let snapshot = null;
+    try {
+      snapshot = this.dashboardCollectionsSnapshot();
+    } catch (error) {
+      return false;
+    }
+    let refreshed = false;
+    for (const widget of Array.from(this.dashboardCollectionWidgets)) {
+      try {
+        const el = widget.el;
+        const parent = el && el.parentNode ? el.parentNode : null;
+        if (!parent || typeof parent.createEl !== "function") {
+          if (!el || !el.isConnected) {
+            this.dashboardCollectionWidgets.delete(widget);
+          }
+          continue;
+        }
+        const entry =
+          snapshot && snapshot[widget.kind]
+            ? snapshot[widget.kind]
+            : dashboardCollectionEntryFor(widget.kind, null, false, "unavailable");
+        const model = dashboardCollectionChipModel(widget.kind, entry);
+        try {
+          if (el && typeof el.setAttribute === "function") {
+            el.setAttribute("title", model.tooltip);
+            el.setAttribute("aria-label", model.aria);
+            el.setAttribute(
+              "class",
+              `bob-plan-chip bob-plan-${widget.kind}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+            );
+          }
+        } catch (error) {
+          // Best-effort label refresh only.
+        }
+        try {
+          const valueSpan = findReadySpan(el, READY_VALUE_CLS);
+          if (valueSpan) {
+            setReadySpanText(valueSpan, model.valueText);
+          }
+        } catch (error) {
+          // One stale widget never breaks the others.
+        }
+        refreshed = true;
+      } catch (error) {
+        // One stale widget never breaks the others.
+      }
+    }
+    return refreshed;
+  }
+
+  scheduleDashboardCollectionsRefresh() {
+    if (
+      this.dashboardCollectionsRefreshTimer !== null &&
+      this.dashboardCollectionsRefreshTimer !== undefined
+    ) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" && typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.dashboardCollectionsRefreshTimer = schedule(() => {
+      this.dashboardCollectionsRefreshTimer = null;
+      try {
+        this.refreshDashboardCollectionChips(new Date());
+      } catch (error) {
+        // Best-effort refresh only.
+      }
+    }, 150);
+  }
+
+  refreshDashboardCollectionsForFileEvent(file, oldPath) {
+    try {
+      const path =
+        file && typeof file.path === "string"
+          ? file.path
+          : typeof oldPath === "string"
+            ? oldPath
+            : "";
+      if (!path) {
+        return false;
+      }
+      if (/(^|\/)(projects\.base|refs\.base)(\.md)?$/.test(path) || path === "projects.base" || path === "refs.base") {
+        try {
+          void this.dashboardCollectionsEnsureBaseContracts();
+        } catch (error) {
+          // Best-effort reload only.
+        }
+        return true;
+      }
+      this.scheduleDashboardCollectionsRefresh();
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   renderReadyNotesBlock(el, ctx) {
@@ -17859,6 +18517,431 @@ function noteReadyCrowdedKey(notes, capsKey) {
   }
 }
 
+// --- Dashboard collections (dashboardCollections namespace v1) ------------
+// Live PROJECTS / REFERENCES badges for the Dashboard Browse row. Counts
+// mirror the pinned default Base views (`projects.base#Active & Waiting`
+// and `refs.base#Reading Queue`) without a general Bases interpreter:
+// the Base contracts below are validated together with the membership
+// predicates, and any membership-affecting drift marks that collection
+// unavailable rather than advertising a stale count. All pure helpers
+// are unit-testable without Obsidian.
+
+const DASHBOARD_COLLECTIONS_VERSION = 1;
+const DASHBOARD_COLLECTION_PROJECTS_VIEW = "🚀 Active & Waiting";
+const DASHBOARD_COLLECTION_REFERENCES_VIEW = "🔖 Reading Queue";
+const DASHBOARD_COLLECTION_PROJECTS_DEST = "dash_projects";
+const DASHBOARD_COLLECTION_REFERENCES_DEST = "dash_references";
+const DASHBOARD_COLLECTION_PROJECTS_LABEL = "PROJECTS";
+const DASHBOARD_COLLECTION_REFERENCES_LABEL = "REFERENCES";
+const DASHBOARD_COLLECTION_ARROW = "↗";
+
+function dashboardCollectionStripQuotes(value) {
+  try {
+    let text = String(value === null || value === undefined ? "" : value).trim();
+    if (text.length >= 2) {
+      const first = text[0];
+      const last = text[text.length - 1];
+      if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+        text = text.slice(1, -1).trim();
+      }
+    }
+    return text;
+  } catch (error) {
+    return "";
+  }
+}
+
+function dashboardCollectionLinkTarget(value) {
+  try {
+    const stripped = dashboardCollectionStripQuotes(value);
+    if (!stripped) {
+      return "";
+    }
+    const m = stripped.match(/^\[\[(.+?)\]\]$/);
+    let inner = m ? m[1] : stripped;
+    inner = String(inner || "").trim();
+    if (!inner) {
+      return "";
+    }
+    const pipeAt = inner.indexOf("|");
+    if (pipeAt !== -1) {
+      inner = inner.slice(0, pipeAt).trim();
+    }
+    const hashAt = inner.indexOf("#");
+    if (hashAt !== -1) {
+      inner = inner.slice(0, hashAt).trim();
+    }
+    return inner;
+  } catch (error) {
+    return "";
+  }
+}
+
+// Obsidian Bases `containsAny` semantics: a scalar string uses substring
+// matching while a list matches list elements exactly. Anything else
+// (missing, number, object) never matches.
+function dashboardCollectionStatusContainsAny(statusRaw, needles) {
+  try {
+    const wants = Array.isArray(needles) ? needles : [];
+    if (typeof statusRaw === "string") {
+      for (const needle of wants) {
+        if (typeof needle === "string" && needle && statusRaw.indexOf(needle) !== -1) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (Array.isArray(statusRaw)) {
+      for (const item of statusRaw) {
+        if (typeof item !== "string") {
+          continue;
+        }
+        for (const needle of wants) {
+          if (item === needle) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+function dashboardCollectionPathInTemplates(path) {
+  try {
+    const parts = String(path || "").split("/");
+    for (const part of parts.slice(0, -1)) {
+      if (part === "_templates") {
+        return true;
+      }
+    }
+    // A root-level `_templates.md` is not a folder match.
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// A project note: scalar type link resolving to `project.md` (alias and
+// path spellings resolve through the caller-supplied resolver), outside
+// any `_templates/` folder, with active/waiting status. A list type or an
+// unresolvable type never counts: never widened into link equality.
+function dashboardCollectionIsProjectMember(note, resolver) {
+  try {
+    if (!note || typeof note !== "object") {
+      return false;
+    }
+    const path = typeof note.path === "string" ? note.path : "";
+    if (!path || !/\.md$/.test(path)) {
+      return false;
+    }
+    if (dashboardCollectionPathInTemplates(path)) {
+      return false;
+    }
+    const frontmatter =
+      note.frontmatter && typeof note.frontmatter === "object" && !Array.isArray(note.frontmatter)
+        ? note.frontmatter
+        : null;
+    if (!frontmatter) {
+      return false;
+    }
+    const typeRaw = frontmatter.type;
+    if (typeof typeRaw !== "string") {
+      return false;
+    }
+    const target = dashboardCollectionLinkTarget(typeRaw);
+    if (!target) {
+      return false;
+    }
+    let destPath = null;
+    try {
+      if (typeof resolver === "function") {
+        const dest = resolver(target, path);
+        if (dest && typeof dest.path === "string") {
+          destPath = dest.path;
+        } else if (typeof dest === "string") {
+          destPath = dest;
+        }
+      }
+    } catch (error) {
+      destPath = null;
+    }
+    if (!destPath) {
+      // Fallback for pure unit tests without an Obsidian resolver: an
+      // exact `project` / `project.md` target counts. Live code always
+      // supplies the resolver above, so this never widens vault reads.
+      const lowered = target.toLowerCase();
+      if (lowered !== "project" && lowered !== "project.md") {
+        return false;
+      }
+    } else if (destPath !== "project.md") {
+      return false;
+    }
+    return dashboardCollectionStatusContainsAny(frontmatter.status, ["wip", "waiting"]);
+  } catch (error) {
+    return false;
+  }
+}
+
+// A reference note: exact `ref/` prefix, Markdown extension, scalar status
+// exactly `next`, `wip`, or `ready` (case-sensitive). Lists never count,
+// PDFs/`lib/` files, `ref.md`, and similarly named folders never count,
+// and no task-only Today/hide/freshness/schedule filters apply.
+function dashboardCollectionIsReferenceMember(note) {
+  try {
+    if (!note || typeof note !== "object") {
+      return false;
+    }
+    const path = typeof note.path === "string" ? note.path : "";
+    if (!path || path.indexOf("ref/") !== 0) {
+      return false;
+    }
+    if (!/\.md$/.test(path)) {
+      return false;
+    }
+    const frontmatter =
+      note.frontmatter && typeof note.frontmatter === "object" && !Array.isArray(note.frontmatter)
+        ? note.frontmatter
+        : null;
+    if (!frontmatter) {
+      return false;
+    }
+    const status = frontmatter.status;
+    return status === "next" || status === "wip" || status === "ready";
+  } catch (error) {
+    return false;
+  }
+}
+
+function dashboardCollectionNormalizeFilterText(text) {
+  try {
+    return String(text === null || text === undefined ? "" : text)
+      .replace(/'/g, '"')
+      .replace(/\s+/g, "")
+      .trim();
+  } catch (error) {
+    return "";
+  }
+}
+
+function dashboardCollectionFilterList(value) {
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === "string");
+  }
+  if (typeof value === "string") {
+    return [value];
+  }
+  return [];
+}
+
+function dashboardCollectionFindView(parsed, name) {
+  try {
+    const views = parsed && Array.isArray(parsed.views) ? parsed.views : [];
+    for (const view of views) {
+      if (view && view.name === name) {
+        return view;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function dashboardCollectionHasLimit(node) {
+  try {
+    if (!node || typeof node !== "object") {
+      return false;
+    }
+    for (const key of ["limit", "pagination", "maxResults", "take"]) {
+      if (node[key] !== undefined && node[key] !== null) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Validate the membership-affecting structure of `projects.base`:
+// global `note.type == link("project")` plus `_templates` exclusion, and
+// the `Active & Waiting` view's `status.containsAny("wip","waiting")`.
+// Presentation-only keys (formulas, columns, grouping, sorting) are
+// ignored. Any result limit, extra global filter, or renamed view fails
+// closed so the badge shows unavailable instead of a stale count.
+function dashboardCollectionValidateProjectsBase(parsed) {
+  try {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, reason: "projects.base is unreadable" };
+    }
+    if (dashboardCollectionHasLimit(parsed)) {
+      return { ok: false, reason: "projects.base has a result limit" };
+    }
+    const filters = parsed.filters && typeof parsed.filters === "object" ? parsed.filters : null;
+    const globalAnd = filters ? dashboardCollectionFilterList(filters.and) : [];
+    if (!filters || !Array.isArray(filters.and) || globalAnd.length !== 2) {
+      return { ok: false, reason: "projects.base global filters changed" };
+    }
+    const normalized = new Set(globalAnd.map(dashboardCollectionNormalizeFilterText));
+    const wantA = dashboardCollectionNormalizeFilterText('note.type == link("project")');
+    const wantB = dashboardCollectionNormalizeFilterText('file.inFolder("_templates") == false');
+    if (!normalized.has(wantA) || !normalized.has(wantB) || normalized.size !== 2) {
+      return { ok: false, reason: "projects.base global filters changed" };
+    }
+    const view = dashboardCollectionFindView(parsed, DASHBOARD_COLLECTION_PROJECTS_VIEW);
+    if (!view) {
+      return { ok: false, reason: "projects.base Active & Waiting view is missing" };
+    }
+    if (dashboardCollectionHasLimit(view)) {
+      return { ok: false, reason: "projects.base Active & Waiting view has a result limit" };
+    }
+    const viewFilters = view.filters && typeof view.filters === "object" ? view.filters : null;
+    const viewAnd = viewFilters ? dashboardCollectionFilterList(viewFilters.and) : [];
+    if (!viewFilters || !Array.isArray(viewFilters.and) || viewAnd.length !== 1) {
+      return { ok: false, reason: "projects.base Active & Waiting filters changed" };
+    }
+    const wantView = dashboardCollectionNormalizeFilterText('status.containsAny("wip", "waiting")');
+    if (dashboardCollectionNormalizeFilterText(viewAnd[0]) !== wantView) {
+      return { ok: false, reason: "projects.base Active & Waiting filters changed" };
+    }
+    return { ok: true, reason: null };
+  } catch (error) {
+    return { ok: false, reason: "projects.base is unreadable" };
+  }
+}
+
+// Validate the membership-affecting structure of `refs.base`: global
+// `ref/` prefix plus Markdown extension, and the Reading Queue view's
+// exact `next`/`wip`/`ready` disjunction. Same fail-closed policy.
+function dashboardCollectionValidateRefsBase(parsed) {
+  try {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, reason: "refs.base is unreadable" };
+    }
+    if (dashboardCollectionHasLimit(parsed)) {
+      return { ok: false, reason: "refs.base has a result limit" };
+    }
+    const filters = parsed.filters && typeof parsed.filters === "object" ? parsed.filters : null;
+    const globalAnd = filters ? dashboardCollectionFilterList(filters.and) : [];
+    if (!filters || !Array.isArray(filters.and) || globalAnd.length !== 2) {
+      return { ok: false, reason: "refs.base global filters changed" };
+    }
+    const normalized = new Set(globalAnd.map(dashboardCollectionNormalizeFilterText));
+    const wantA = dashboardCollectionNormalizeFilterText('file.path.startsWith("ref/")');
+    const wantB = dashboardCollectionNormalizeFilterText('file.ext == "md"');
+    if (!normalized.has(wantA) || !normalized.has(wantB) || normalized.size !== 2) {
+      return { ok: false, reason: "refs.base global filters changed" };
+    }
+    const view = dashboardCollectionFindView(parsed, DASHBOARD_COLLECTION_REFERENCES_VIEW);
+    if (!view) {
+      return { ok: false, reason: "refs.base Reading Queue view is missing" };
+    }
+    if (dashboardCollectionHasLimit(view)) {
+      return { ok: false, reason: "refs.base Reading Queue view has a result limit" };
+    }
+    const viewFilters = view.filters && typeof view.filters === "object" ? view.filters : null;
+    const viewOr = viewFilters ? dashboardCollectionFilterList(viewFilters.or) : [];
+    if (!viewFilters || !Array.isArray(viewFilters.or) || viewOr.length !== 3) {
+      return { ok: false, reason: "refs.base Reading Queue filters changed" };
+    }
+    const normalizedOr = new Set(viewOr.map(dashboardCollectionNormalizeFilterText));
+    const wantNext = dashboardCollectionNormalizeFilterText('status == "next"');
+    const wantWip = dashboardCollectionNormalizeFilterText('status == "wip"');
+    const wantReady = dashboardCollectionNormalizeFilterText('status == "ready"');
+    if (!normalizedOr.has(wantNext) || !normalizedOr.has(wantWip) || !normalizedOr.has(wantReady) || normalizedOr.size !== 3) {
+      return { ok: false, reason: "refs.base Reading Queue filters changed" };
+    }
+    return { ok: true, reason: null };
+  } catch (error) {
+    return { ok: false, reason: "refs.base is unreadable" };
+  }
+}
+
+function dashboardCollectionEntryFor(kind, count, available, reason) {
+  const isProjects = kind === "projects";
+  const label = isProjects ? DASHBOARD_COLLECTION_PROJECTS_LABEL : DASHBOARD_COLLECTION_REFERENCES_LABEL;
+  const destination = isProjects ? DASHBOARD_COLLECTION_PROJECTS_DEST : DASHBOARD_COLLECTION_REFERENCES_DEST;
+  const view = isProjects ? DASHBOARD_COLLECTION_PROJECTS_VIEW : DASHBOARD_COLLECTION_REFERENCES_VIEW;
+  const unit = isProjects ? "projects" : "references";
+  if (available === true && Number.isInteger(count) && count >= 0) {
+    const tooltip = isProjects
+      ? `${count} projects in Active & Waiting. Open Projects.`
+      : `${count} references in Reading Queue (next, wip, ready). Open References.`;
+    return {
+      kind: isProjects ? "projects" : "references",
+      label,
+      count,
+      available: true,
+      reason: null,
+      destination,
+      view,
+      unit,
+      valueText: String(count),
+      tooltip,
+      aria: tooltip,
+      placeholder: false,
+      over: false,
+    };
+  }
+  const short = reason ? String(reason) : "unavailable";
+  const tooltip = isProjects
+    ? `PROJECTS – ${short}. Open Projects.`
+    : `REFERENCES – ${short}. Open References.`;
+  const aria = isProjects
+    ? `PROJECTS unavailable (${short}). Open Projects.`
+    : `REFERENCES unavailable (${short}). Open References.`;
+  return {
+    kind: isProjects ? "projects" : "references",
+    label,
+    count: null,
+    available: false,
+    reason: short,
+    destination,
+    view,
+    unit,
+    valueText: "–",
+    tooltip,
+    aria,
+    placeholder: true,
+    over: false,
+  };
+}
+
+function dashboardCollectionChipModel(kind, entry) {
+  try {
+    const normalized = kind === "references" ? "references" : "projects";
+    const safe =
+      entry && typeof entry === "object"
+        ? entry
+        : dashboardCollectionEntryFor(normalized, null, false, "unavailable");
+    return {
+      kind: normalized,
+      label: normalized === "projects" ? DASHBOARD_COLLECTION_PROJECTS_LABEL : DASHBOARD_COLLECTION_REFERENCES_LABEL,
+      valueText: typeof safe.valueText === "string" ? safe.valueText : "–",
+      tooltip: typeof safe.tooltip === "string" ? safe.tooltip : "Unavailable",
+      aria: typeof safe.aria === "string" ? safe.aria : "Unavailable",
+      destination: typeof safe.destination === "string" ? safe.destination : normalized === "projects" ? DASHBOARD_COLLECTION_PROJECTS_DEST : DASHBOARD_COLLECTION_REFERENCES_DEST,
+      placeholder: safe.placeholder === true || safe.available === false,
+    };
+  } catch (error) {
+    const normalized = kind === "references" ? "references" : "projects";
+    const fallback = dashboardCollectionEntryFor(normalized, null, false, "unavailable");
+    return {
+      kind: normalized,
+      label: fallback.label,
+      valueText: "–",
+      tooltip: fallback.tooltip,
+      aria: fallback.aria,
+      destination: fallback.destination,
+      placeholder: true,
+    };
+  }
+}
+
 // --- Per-note Ready cap views (ledger-views) ---------------------------
 // Pure view models for the dash CROWDED chip, the `bob-ready-notes`
 // ranked-bar block, and the `## Tasks` heading chip. All take plain
@@ -18506,4 +19589,20 @@ module.exports.helpers = {
   dependencyChipModel,
   buildDependencyChipElement,
   ensureDependencyChipsRefresh,
+  DASHBOARD_COLLECTIONS_VERSION,
+  DASHBOARD_COLLECTION_PROJECTS_VIEW,
+  DASHBOARD_COLLECTION_REFERENCES_VIEW,
+  DASHBOARD_COLLECTION_PROJECTS_DEST,
+  DASHBOARD_COLLECTION_REFERENCES_DEST,
+  dashboardCollectionStripQuotes,
+  dashboardCollectionLinkTarget,
+  dashboardCollectionStatusContainsAny,
+  dashboardCollectionPathInTemplates,
+  dashboardCollectionIsProjectMember,
+  dashboardCollectionIsReferenceMember,
+  dashboardCollectionNormalizeFilterText,
+  dashboardCollectionValidateProjectsBase,
+  dashboardCollectionValidateRefsBase,
+  dashboardCollectionEntryFor,
+  dashboardCollectionChipModel,
 };

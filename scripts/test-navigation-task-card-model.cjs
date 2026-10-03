@@ -141,7 +141,7 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
   assert.equal(model.priorityStrip.levels.length, 5);
   assert.deepEqual(
     model.priorityStrip.levels.map((item) => item.key),
-    ["1", "2", "3", "4", null],
+    ["1", "2", "3", "4", "5"],
   );
 });
 
@@ -166,7 +166,7 @@ test("explicit preview builder matches writer rolls and deduplicates linked targ
   assert.equal(model.targets.length, 2);
   assert.equal(model.targets[0].id, "Tasks/Alpha.md#^alpha");
   assert.equal(model.levels[0].key, "1");
-  assert.equal(model.levels[4].key, null);
+  assert.equal(model.levels[4].key, "5");
   assert.equal(model.targets[0].previews.length, 5);
   assert.equal(model.targets[1].previews.length, 5);
   assert.equal(model.targets[0].previews[0].offset, 2);
@@ -318,7 +318,16 @@ test("priority, recommendation, navigation, action, deletion, and search keys re
   assert.equal(key(model, "Backspace").type, "back");
   assert.equal(key(model, "q", { ctrlKey: true }), null);
   assert.equal(key(model, "ArrowUp", { ctrlKey: true, altKey: true }), null);
-  assert.equal(key(model, "5").type, "open-search");
+  assert.equal(key(model, "5").type, "set-priority");
+  const fourLevelConfig = {
+    properties: buildConfig().properties.map((property) =>
+      property.values === "priority"
+        ? { ...property, levels: property.levels.slice(0, 4) }
+        : property,
+    ),
+  };
+  const fourLevelModel = makeModel({ config: fourLevelConfig });
+  assert.deepEqual(key(fourLevelModel, "5"), { type: "open-search", query: "5" });
 });
 
 test("unavailable actions, search mode, input composition, and repeats stay safe", () => {

@@ -1,5 +1,6 @@
 const obsidian = require("obsidian");
-const { MarkdownView, Modal, Notice, Plugin, parseYaml } = obsidian;
+const { MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, parseYaml } = obsidian;
+const PluginSettingTabBase = PluginSettingTab || class {};
 const { EditorView } = require("@codemirror/view");
 
 const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
@@ -16182,7 +16183,12 @@ class FilteredPickerModal extends Modal {
 
     this.renderAll();
 
-    window.setTimeout(() => this.inputEl.focus(), 0);
+    const openingInput = this.inputEl;
+    window.setTimeout(() => {
+      if (this.isOpen && this.inputEl === openingInput && openingInput && typeof openingInput.focus === "function") {
+        openingInput.focus();
+      }
+    }, 0);
   }
 
   renderAll(options = {}) {
@@ -24718,7 +24724,7 @@ function buildTaskCardPriorityPreviews(options = {}) {
   const levelPreviews = levels.map((level, index) => {
     const label = normalizeBulletPropertyValue(level && level.label);
     const value = normalizeBulletPropertyValue(level && level.value);
-    const key = index < 4 ? String(index + 1) : null;
+    const key = index < 9 ? String(index + 1) : null;
     if (unavailable || !label || !value) {
       const reason = unavailable || "Priority level is not configured";
       return Object.freeze({
@@ -24848,6 +24854,9 @@ function taskCardPropertyItems(context, session, config) {
 }
 
 function taskCardPriorityRecommendation(context, session, priorityProperty) {
+  if (Object.prototype.hasOwnProperty.call(context, "frozenRecommendation")) {
+    return context.frozenRecommendation || null;
+  }
   if (!priorityProperty || !session.valid) {
     return null;
   }
@@ -24945,7 +24954,12 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
   }
   return Object.freeze({
     kind: "single",
-    source: recommendation,
+    source: Object.freeze({
+      ...recommendation,
+      priorityName: priorityProperty.name,
+      schedulesName: normalizeBulletPropertyName(priorityProperty.schedules),
+      taskLine: session.cursorLine,
+    }),
     preview: buildPriorityRollPreviewModel(recommendation, baseDate),
     available:
       recommendation.kind !== "unavailable" &&
@@ -25066,11 +25080,7 @@ function planTaskCard(context = {}) {
   );
   const distinctStatuses = Array.from(new Set(targetStatuses));
   const previewTargets = deduplicateTaskCardTargets(targets).map((entry) => entry.target);
-  const recommendation = taskCardPriorityRecommendation(
-    context,
-    session,
-    priorityProperty,
-  );
+  const recommendation = taskCardPriorityRecommendation(context, session, priorityProperty);
   const priorityStrip = buildTaskCardPriorityPreviews({
     property: priorityProperty,
     targets: session.valid ? previewTargets : [],
@@ -25379,7 +25389,7 @@ function resolveTaskCardKey(model, event) {
   const movement = (direction) =>
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
-    (!modified && /^[0-4bfx]$/i.test(key)) ||
+    (!modified && /^[0-9bfx]$/i.test(key)) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
     (alt && !ctrl && !meta && !shift && lower === "n");
@@ -25446,10 +25456,13 @@ function resolveTaskCardKey(model, event) {
       targetCount: selected.targetCount || model.session.targetCount,
     });
   }
-  if (!modified && /^[1-4]$/.test(key)) {
+  if (!modified && /^[1-9]$/.test(key)) {
     const level = model.priorityStrip?.levels?.find((item) => item.key === key);
     if (!level) {
-      return unavailable("set-priority", "Priority level is not configured");
+      if (!model.priorityStrip?.propertyName || Number(key) <= 4) {
+        return unavailable("set-priority", "Priority level is not configured");
+      }
+      return Object.freeze({ type: "open-search", query: key });
     }
     if (!level.available) {
       return unavailable("set-priority", level.unavailableReason || "Priority level is unavailable");
@@ -26087,6 +26100,21 @@ function renderTaskCardView(container, model, options = {}) {
           : "accent");
     const banner = container.createDiv({
       cls: `bob-task-card-banner is-${preview.kind || recommendation.source.kind || "roll"} is-${tone}`,
+      attr: { role: "button", tabindex: "0", "aria-label": "Apply recommendation" },
+    });
+    const activateRecommendation = (event) => {
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      if (typeof options.onApplyRecommendation === "function") {
+        options.onApplyRecommendation();
+      }
+    };
+    banner.addEventListener("click", activateRecommendation);
+    banner.addEventListener("keydown", (event) => {
+      if (event && (event.key === "Enter" || event.key === " ")) {
+        activateRecommendation(event);
+      }
     });
     const bannerMain = banner.createDiv({ cls: "bob-task-card-banner-main" });
     appendTaskCardKeycap(bannerMain, "Ctrl+Enter");
@@ -26142,6 +26170,14 @@ function renderTaskCardView(container, model, options = {}) {
         cls: "bob-task-card-timeline-regen",
       });
       appendTaskCardKeycap(regen, "Ctrl+R");
+      regen.addEventListener("click", (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        if (typeof options.onRefreshPreviews === "function") {
+          options.onRefreshPreviews();
+        }
+      });
     }
   }
   const strip = model && model.priorityStrip;
@@ -26154,6 +26190,7 @@ function renderTaskCardView(container, model, options = {}) {
   });
   stripEl.setAttribute("role", "radiogroup");
   stripEl.setAttribute("aria-label", "Priority levels");
+  const priorityRadios = [];
   const currentPriority = currentTaskCardPriorityValue(model);
   const levels = strip && Array.isArray(strip.levels) ? strip.levels : [];
   if (!strip || !strip.propertyName || levels.length === 0) {
@@ -26184,10 +26221,45 @@ function renderTaskCardView(container, model, options = {}) {
           role: "radio",
           "aria-checked": isCurrent ? "true" : "false",
           "aria-disabled": level.available ? "false" : "true",
+          tabindex: isCurrent ? "0" : "-1",
+          "aria-label": `${level.key ? `${level.key} ` : ""}${level.label}${dateLabel ? ` ${dateLabel}` : ""}`,
         },
       });
       levelEl.setAttribute("role", "radio");
       levelEl.setAttribute("aria-checked", isCurrent ? "true" : "false");
+      levelEl.setAttribute("tabindex", isCurrent ? "0" : "-1");
+      levelEl.addEventListener("click", (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        if (typeof options.onSelectPriority === "function") {
+          options.onSelectPriority(level);
+        }
+      });
+      levelEl.addEventListener("keydown", (event) => {
+        if (event && ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"].includes(event.key)) {
+          event.preventDefault();
+          event.stopPropagation();
+          const current = priorityRadios.indexOf(levelEl);
+          const next = event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? priorityRadios.length - 1
+              : (current + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + priorityRadios.length) % priorityRadios.length;
+          if (priorityRadios[next] && typeof priorityRadios[next].focus === "function") {
+            priorityRadios[next].focus();
+          }
+          return;
+        }
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof options.onSelectPriority === "function") {
+            options.onSelectPriority(level);
+          }
+        }
+      });
+      priorityRadios.push(levelEl);
       if (level.key) {
         appendTaskCardKeycap(levelEl, level.key);
       }
@@ -26220,6 +26292,7 @@ function renderTaskCardView(container, model, options = {}) {
     });
     zeroEl.setAttribute("role", "radio");
     zeroEl.setAttribute("aria-checked", zeroCurrent ? "true" : "false");
+    zeroEl.setAttribute("tabindex", zeroCurrent ? "0" : "-1");
     appendTaskCardKeycap(zeroEl, "0");
     const zeroBody = zeroEl.createDiv({ cls: "bob-task-card-level-body" });
     zeroBody.createDiv({
@@ -26230,6 +26303,36 @@ function renderTaskCardView(container, model, options = {}) {
       cls: "bob-task-card-level-date",
       text: "clear · keeps date",
     });
+    zeroEl.addEventListener("click", (event) => {
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      if (typeof options.onClearPriority === "function") {
+        options.onClearPriority();
+      }
+    });
+    zeroEl.addEventListener("keydown", (event) => {
+      if (event && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof options.onClearPriority === "function") {
+          options.onClearPriority();
+        }
+      } else if (event && ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        event.stopPropagation();
+        const current = priorityRadios.indexOf(zeroEl);
+        const next = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? priorityRadios.length - 1
+            : (current + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + priorityRadios.length) % priorityRadios.length;
+        if (priorityRadios[next] && typeof priorityRadios[next].focus === "function") {
+          priorityRadios[next].focus();
+        }
+      }
+    });
+    priorityRadios.push(zeroEl);
     if (currentPriority === "mixed") {
       stripEl.createDiv({
         cls: "bob-task-card-strip-mixed",
@@ -26296,7 +26399,9 @@ function renderTaskCardView(container, model, options = {}) {
       if (event && typeof event.preventDefault === "function") {
         event.preventDefault();
       }
-      if (typeof options.onSelectRow === "function") {
+      if (typeof options.onOpenRow === "function") {
+        options.onOpenRow(row.id);
+      } else if (typeof options.onSelectRow === "function") {
         options.onSelectRow(row.id);
       }
     });
@@ -26317,6 +26422,21 @@ function renderTaskCardView(container, model, options = {}) {
     for (const item of moreProperties) {
       const moreRow = more.createDiv({
         cls: "bob-task-card-more-row",
+        attr: { role: "button", tabindex: "0", "aria-label": `Open ${item.propertyName || item.label || "property"}` },
+      });
+      const openProperty = (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        if (typeof options.onOpenProperty === "function") {
+          options.onOpenProperty(item.propertyName || item.label || "");
+        }
+      };
+      moreRow.addEventListener("click", openProperty);
+      moreRow.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          openProperty(event);
+        }
       });
       moreRow.createSpan({
         cls: "bob-task-card-more-name",
@@ -26387,6 +26507,9 @@ function renderTaskCardView(container, model, options = {}) {
   } else if (listEl && typeof listEl.focus === "function") {
     listEl.focus();
   }
+  if (typeof options.onKeydown === "function") {
+    listEl.addEventListener("keydown", options.onKeydown);
+  }
   return Object.freeze({
     titleId,
     listEl,
@@ -26429,6 +26552,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.priorityRandom =
       typeof context.random === "function" ? context.random : Math.random;
     this.taskCardEnabled = context.taskCard === true;
+    this.linkResolving = context.linkResolving === true;
     this.cardViewMode = this.taskCardEnabled ? "card" : "classic";
     this.taskCardModel = null;
     this.taskCardSelectedRowId = "schedule";
@@ -26473,6 +26597,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.refreshLinkRollBatch();
     if (this.taskCardEnabled) {
       this.showTaskCard({ rebuild: true });
+    } else if (this.linkResolving) {
+      this.applyOptions({
+        items: [],
+        title: "Resolving Task Link",
+        headerIcon: "link",
+        inputLabel: "Task Link status",
+        placeholder: "Resolving linked tasks…",
+        resultsLabel: "Task Link status",
+        emptyText: "Resolving linked tasks…",
+        footerHints: [{ keys: ["esc"], label: "Close" }],
+        getSubtitle: () => "nothing written yet",
+        filterItem: () => false,
+        renderItem: () => {},
+        openItem: () => false,
+      });
     } else {
       this.showPropertyStage({ clearQuery: false });
     }
@@ -26523,6 +26662,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       baseDate: this.fixedValueBaseDate || this.valueBaseDate,
       random: this.priorityRandom,
       freshnessApi: this.getTaskCardFreshnessApi(),
+      frozenRecommendation: this.getTaskCardFrozenRecommendation(),
       selectedRowId: this.taskCardSelectedRowId,
       mode: this.cardViewMode === "search" ? "search" : "card",
       query: this.inputEl
@@ -26572,22 +26712,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       fromTaskCard: true,
     });
     this.applyTaskCardChrome({ wide: false });
-    if (this.headerEl) {
-      const back = this.headerEl.createEl("button", {
-        cls: "bob-task-card-back bob-key-card-key",
-        text: "Back",
-        attr: {
-          type: "button",
-          "aria-label": "Back to Task Card",
-        },
-      });
-      back.addEventListener("click", (event) => {
-        if (event && typeof event.preventDefault === "function") {
-          event.preventDefault();
-        }
-        this.showTaskCard();
-      });
-    }
     if (this.inputEl && typeof this.inputEl.focus === "function") {
       this.inputEl.focus();
     }
@@ -26615,6 +26739,24 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         });
         this.renderTaskCard();
       },
+      onOpenRow: (rowId) => {
+        const row = (this.taskCardModel && this.taskCardModel.rows || []).find((item) => item.id === rowId);
+        void this.dispatchTaskCardIntent(taskCardIntentForRow(row));
+      },
+      onSelectPriority: (level) => {
+        void this.dispatchTaskCardIntent({ type: "set-priority", key: level && level.key, value: level && level.value });
+      },
+      onClearPriority: () => {
+        void this.dispatchTaskCardIntent({ type: "clear-priority" });
+      },
+      onApplyRecommendation: () => {
+        void this.dispatchTaskCardIntent({ type: "apply-recommendation" });
+      },
+      onRefreshPreviews: () => this.refreshTaskCardPreviews(),
+      onOpenProperty: (propertyName) => {
+        this.showSearchFromCard(propertyName);
+      },
+      onKeydown: (event) => this.handleTaskCardKeydown(event),
       onFocusList: (listEl) => {
         this.taskCardListEl = listEl;
         if (listEl && typeof listEl.focus === "function") {
@@ -26632,6 +26774,357 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.footerEl = null;
   }
 
+  getTaskCardFrozenRecommendation() {
+    const baseDate = this.valueBaseDate instanceof Date
+      ? this.valueBaseDate
+      : getLocalDateStart(new Date());
+    if (this.linkSession && this.linkSession.kind === "task-link") {
+      const source = this.linkRollBatch;
+      if (!source) {
+        return null;
+      }
+      return Object.freeze({
+        kind: "batch",
+        source,
+        preview: buildLinkRollPreviewModel(source, baseDate),
+        available: source.actionableCount > 0 && !source.unavailableReason,
+        unavailableReason: source.unavailableReason || null,
+        effects: source.counts,
+        targetCount: source.total,
+        actionableCount: source.actionableCount,
+        skippedCount: source.skippedCount,
+      });
+    }
+    if (this.isCountedSession()) {
+      const source = this.countedRollBatch;
+      if (!source) {
+        return null;
+      }
+      return Object.freeze({
+        kind: "batch",
+        source,
+        preview: buildBatchPriorityRollPreviewModel(source),
+        available: source.actionableCount > 0 && !source.unavailableReason,
+        unavailableReason: source.unavailableReason || null,
+        effects: source.counts,
+        targetCount: source.total,
+        actionableCount: source.actionableCount,
+        skippedCount: source.skippedCount,
+      });
+    }
+    const source = this.priorityRollRecommendation;
+    if (!source) {
+      return null;
+    }
+    const preview = buildPriorityRollPreviewModel(source, baseDate);
+    const available = source.kind !== "unavailable" && Boolean(source.date || source.kind === "cancel");
+    return Object.freeze({
+      kind: "single",
+      source,
+      preview,
+      available,
+      unavailableReason: source.kind === "unavailable" ? source.reason || "Recommendation is unavailable" : null,
+      effects: Object.freeze({
+        roll: source.kind === "roll" ? 1 : 0,
+        decay: source.kind === "decay" ? 1 : 0,
+        cancel: source.kind === "cancel" ? 1 : 0,
+      }),
+      targetCount: 1,
+      actionableCount: available ? 1 : 0,
+      skippedCount: 0,
+    });
+  }
+
+  getTaskCardPropertyItems() {
+    if (this.isLinkSession()) {
+      const aggregate = createLinkPickerPropertyItems(this.config, this.linkSession.resolved);
+      return aggregate.valid ? aggregate.items : [];
+    }
+    if (this.isCountedSession()) {
+      const aggregate = createCountedBulletPropertyItems(this.config, this.getEditorContent(), this.taskSession);
+      return aggregate.valid ? aggregate.items : [];
+    }
+    return createBulletPropertyItems(this.config, this.lineText, this.propertyContext);
+  }
+
+  getTaskCardPropertyItem(propertyName) {
+    const normalized = normalizeBulletPropertyName(propertyName);
+    return this.getTaskCardPropertyItems().find(
+      (item) => item && item.property && normalizeBulletPropertyName(item.property.name) === normalized,
+    ) || null;
+  }
+
+  taskCardRowAction(rowId) {
+    const row = (this.taskCardModel && this.taskCardModel.rows || []).find((item) => item.id === rowId);
+    return row ? row.action : "";
+  }
+
+  ensureTaskCardStageChrome() {
+    if (this.stage !== "task-card") {
+      return;
+    }
+    this.stage = "properties";
+    FilteredPickerModal.prototype.onOpen.call(this);
+    this.applyTaskCardChrome({ wide: false });
+  }
+
+  selectTaskCardRow(rowId) {
+    this.taskCardSelectedRowId = rowId;
+    if (this.taskCardModel) {
+      this.taskCardModel = Object.freeze({ ...this.taskCardModel, selectedRowId: rowId });
+    }
+    this.renderTaskCard();
+  }
+
+  returnToTaskCard() {
+    this.pendingScheduleReason = null;
+    this.pendingCancel = null;
+    this.pendingLaneRelease = null;
+    this.pendingScheduleWorkLog = null;
+    this.pendingTask = null;
+    this.pendingBatch = null;
+    this.pendingVaultSingle = null;
+    this.pendingVaultCounted = null;
+    this.pendingCountedDependency = null;
+    this.clearLocalTaskMarks();
+    this.taskCardQuery = "";
+    this.showTaskCard();
+  }
+
+  handleTaskCardKeydown(event) {
+    if (!event) {
+      return;
+    }
+    const stop = () => {
+      if (typeof event.preventDefault === "function") event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+    };
+    if (event.isComposing === true || event.keyCode === 229) {
+      stop();
+      return;
+    }
+    if (this.linkResolving) {
+      stop();
+      if (event.key === "Escape") this.close();
+      return;
+    }
+    const model = this.taskCardModel;
+    const intent = resolveTaskCardKey(model, event);
+    if (!intent) {
+      return;
+    }
+    stop();
+    if (intent.type === "ignored") {
+      return;
+    }
+    if (intent.type === "move-selection") {
+      const rows = orderedTaskCardRows(model);
+      if (rows.length === 0) return;
+      const current = rows.findIndex((row) => row.id === this.taskCardSelectedRowId);
+      const delta = intent.direction === "previous" ? -1 : 1;
+      const next = (Math.max(0, current) + delta + rows.length) % rows.length;
+      this.selectTaskCardRow(rows[next].id);
+      return;
+    }
+    if (intent.type === "open-search") {
+      this.showSearchFromCard(intent.query);
+      return;
+    }
+    if (intent.type === "back") {
+      this.returnToTaskCard();
+      return;
+    }
+    void this.dispatchTaskCardIntent(intent).catch(() => {
+      new Notice("Could not apply Task Card action");
+    });
+  }
+
+  async dispatchTaskCardIntent(intent) {
+    if (!intent) return false;
+    if (intent.type === "unavailable") {
+      if (intent.reason) new Notice(intent.reason);
+      return false;
+    }
+    if (intent.type === "close-card") {
+      this.close();
+      return true;
+    }
+    if (this.linkResolving || this.taskCardDispatching || this.opening) {
+      return false;
+    }
+    this.taskCardDispatching = true;
+    try {
+      let result = false;
+      if (intent.type === "move-selection") {
+        const rows = orderedTaskCardRows(this.taskCardModel);
+        const index = rows.findIndex((row) => row.id === this.taskCardSelectedRowId);
+        const delta = intent.direction === "previous" ? -1 : 1;
+        if (rows.length) this.selectTaskCardRow(rows[(Math.max(0, index) + delta + rows.length) % rows.length].id);
+      } else if (intent.type === "refresh-previews") {
+        this.refreshTaskCardPreviews();
+      } else if (intent.type === "apply-recommendation") {
+        result = await this.applyTaskCardRecommendation();
+      } else if (intent.type === "set-priority") {
+        const level = this.taskCardModel.priorityStrip.levels.find((item) =>
+          intent.key ? item.key === intent.key : item.value === intent.value,
+        );
+        result = await this.commitTaskCardPriority(level);
+      } else if (intent.type === "clear-priority") {
+        result = await this.clearTaskCardPriority();
+      } else if (intent.type === "delete-property") {
+        result = await this.deleteTaskCardProperty(intent.propertyName);
+      } else if (intent.type === "open-action") {
+        result = await this.openTaskCardAction(intent.rowId, intent.action);
+      } else if (intent.type === "open-search") {
+        this.showSearchFromCard(intent.query);
+      } else if (intent.type === "back") {
+        this.returnToTaskCard();
+      }
+      if (result === true && this.isOpen) this.close();
+      return result;
+    } finally {
+      this.taskCardDispatching = false;
+    }
+  }
+
+  async openTaskCardAction(rowId, action) {
+    if (rowId === "more-properties") {
+      this.showSearchFromCard("");
+      return false;
+    }
+    this.ensureTaskCardStageChrome();
+    if (action === "schedule" || rowId === "schedule") {
+      const scheduleRow = (this.taskCardModel && this.taskCardModel.rows || []).find((row) => row.id === "schedule");
+      const item = this.getTaskCardPropertyItem(scheduleRow && scheduleRow.propertyName || "scheduled");
+      if (!item) {
+        new Notice("Schedule is not configured");
+        return false;
+      }
+      this.valueBaseDate = this.fixedValueBaseDate || this.valueBaseDate;
+      this.showValueStage(item);
+      return false;
+    }
+    this.showPropertyStage({ clearQuery: true });
+    if (rowId === "depends-on" || action === "dependencies") {
+      const item = this.propertyItems.find((candidate) => candidate && candidate.property && candidate.property.values === "local_task_id");
+      if (item) this.showValueStage(item);
+      return false;
+    }
+    if (rowId === "review-every" || action === "refresh") {
+      const item = this.propertyItems.find((candidate) => candidate && candidate.kind === "refresh-interval");
+      if (item) this.showRefreshValueStage(item);
+      return false;
+    }
+    if (rowId === "cancel" || action === "cancel") {
+      const item = this.propertyItems.find((candidate) => candidate && candidate.kind === "cancel-task");
+      if (item) this.showCancelReasonStage(item);
+      return false;
+    }
+    if (rowId === "lane" || action === "toggle-lane") {
+      const item = this.propertyItems.find((candidate) => candidate && candidate.kind === "lane-toggle");
+      if (!item) return false;
+      if (item.needsReason) {
+        this.showLaneReleaseReasonStage(item);
+        return false;
+      }
+      return await this.plugin.applyLaneToggleFromPicker(this);
+    }
+    return false;
+  }
+
+  taskCardPrecomputedPriorityOptions(level) {
+    const previews = Array.isArray(level && level.targetPreviews) ? level.targetPreviews : [];
+    const byPath = new Map();
+    const byLine = new Map();
+    const scheduledByLine = new Map();
+    for (const preview of previews) {
+      const roll = Object.freeze({ date: preview.date, offset: preview.offset });
+      if (this.isLinkSession()) {
+        const path = normalizeVaultRelativePath(preview.path || "");
+        if (!byPath.has(path)) byPath.set(path, { rollByLine: new Map(), scheduledValueByLine: new Map() });
+        byPath.get(path).rollByLine.set(preview.line, roll);
+        byPath.get(path).scheduledValueByLine.set(preview.line, preview.date);
+      } else {
+        byLine.set(preview.line, roll);
+        scheduledByLine.set(preview.line, preview.date);
+      }
+    }
+    for (const [path, value] of byPath) byPath.set(path, Object.freeze(value));
+    const first = previews[0];
+    return {
+      precomputedRoll: first ? Object.freeze({ date: first.date, offset: first.offset }) : null,
+      precomputedRollByLine: byLine,
+      precomputedScheduledValueByLine: scheduledByLine,
+      precomputedByPath: byPath,
+      scheduleSummary: formatSchedulingWorkLogDateSpan(previews.map((item) => item.date)),
+    };
+  }
+
+  async commitTaskCardPriority(level) {
+    if (!level || !level.available || this.linkResolving || this.opening) {
+      if (level && level.unavailableReason) new Notice(level.unavailableReason);
+      return false;
+    }
+    const item = this.getTaskCardPropertyItem(this.taskCardModel && this.taskCardModel.priorityStrip && this.taskCardModel.priorityStrip.propertyName);
+    if (!item) {
+      new Notice("Priority is not configured");
+      return false;
+    }
+    const valueItem = createBulletPropertyValueItems(item, this.valueBaseDate).find(
+      (entry) => entry.value === level.value,
+    );
+    if (!valueItem) {
+      new Notice("Priority level is not configured");
+      return false;
+    }
+    this.selectedPropertyItem = item;
+    const previewOptions = this.taskCardPrecomputedPriorityOptions(level);
+    return await this.maybeOfferPriorityWorkLog(valueItem, previewOptions);
+  }
+
+  async clearTaskCardPriority() {
+    const name = this.taskCardModel && this.taskCardModel.priorityStrip && this.taskCardModel.priorityStrip.propertyName;
+    return await this.deleteTaskCardProperty(name);
+  }
+
+  async deleteTaskCardProperty(propertyName) {
+    if (!propertyName) {
+      new Notice("This action has no deletable property");
+      return false;
+    }
+    this.ensureTaskCardStageChrome();
+    this.showPropertyStage({ clearQuery: true, selectPropertyName: propertyName });
+    const index = this.visibleItems.findIndex((item) => item && item.kind === "property" && item.property && item.property.name === propertyName);
+    if (index < 0) {
+      new Notice(`${propertyName} is not a deletable property`);
+      return false;
+    }
+    this.selectedIndex = index;
+    this.renderResults();
+    return await this.deleteSelectedProperty();
+  }
+
+  async applyTaskCardRecommendation() {
+    if (!this.taskCardModel || !this.taskCardModel.recommendation || !this.taskCardModel.recommendation.available) {
+      new Notice(this.taskCardModel?.recommendation?.unavailableReason || "No recommendation is available");
+      return false;
+    }
+    if (this.isLinkSession()) return await this.applyLinkRecommendedRoll();
+    if (this.isCountedSession()) return await this.applyCountedRecommendedRoll();
+    return await this.applyRecommendedRoll();
+  }
+
+  refreshTaskCardPreviews() {
+    if (this.linkSession && this.linkSession.kind === "task-link") {
+      this.refreshLinkRollBatch();
+    } else if (this.isCountedSession()) {
+      this.refreshCountedRollBatch();
+    } else {
+      this.refreshPriorityRollRecommendation();
+    }
+    this.showTaskCard({ rebuild: true });
+  }
+
   onOpen() {
     if (this.stage === "task-card") {
       this.contentEl.empty();
@@ -26643,12 +27136,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     super.onOpen();
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
+    if (this.linkResolving && this.inputEl && typeof this.inputEl.focus === "function") {
+      this.inputEl.focus();
+    }
   }
 
   onClose() {
     if (this.modalEl) {
       this.modalEl.removeClass("bob-task-card-modal");
       this.modalEl.removeClass("bob-task-card-wide");
+    }
+    this.linkResolving = false;
+    this.taskCardDispatching = false;
+    if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
+      this.plugin.activeBulletPropertyPicker = null;
     }
     super.onClose();
   }
@@ -26661,6 +27162,26 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     super.renderAll(options);
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
     this.wireTaskCardSearchAria();
+    this.addTaskCardBackButton();
+  }
+
+  addTaskCardBackButton() {
+    if (!this.taskCardEnabled || this.stage === "task-card" || !this.headerEl) {
+      return;
+    }
+    if (this.taskCardBackHeaderEl === this.headerEl) {
+      return;
+    }
+    const back = this.headerEl.createEl("button", {
+      cls: "bob-task-card-back bob-key-card-key",
+      text: "Back",
+      attr: { type: "button", "aria-label": "Back to Task Card" },
+    });
+    back.addEventListener("click", (event) => {
+      if (event && typeof event.preventDefault === "function") event.preventDefault();
+      this.returnToTaskCard();
+    });
+    this.taskCardBackHeaderEl = this.headerEl;
   }
 
   wireTaskCardSearchAria() {
@@ -27778,7 +28299,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // the existing immediate flow. Priority rolls are materialized once before
   // the prompt and reused on resume, so opening/submitting the prompt never
   // consumes extra randomness or changes the chosen schedule.
-  async maybeOfferPriorityWorkLog(item) {
+  async maybeOfferPriorityWorkLog(item, precomputed = {}) {
     const property =
       this.selectedPropertyItem && this.selectedPropertyItem.property;
     if (!property || property.values !== "priority") {
@@ -27802,33 +28323,37 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         : [];
       const eligible = collectSchedulingWorkLogEligibleOriginalLines(resolved);
       if (eligible.size === 0) {
-        return await this.applySelectedValue(item);
+        return await this.applySelectedValue(item, precomputed);
       }
       const groups = groupLinkPickerTargetsByNote(resolved);
-      const precomputedByPath = new Map();
+      const precomputedByPath = precomputed.precomputedByPath instanceof Map
+        ? precomputed.precomputedByPath
+        : new Map();
       const allDates = [];
       for (const group of groups) {
-        const rollByLine = new Map(
-          group.session.targets.map((target) => [
-            target.line,
-            rollPriorityScheduledDateWithOffset(level, baseDate, random),
-          ]),
-        );
-        const scheduledValueByLine = new Map(
-          Array.from(rollByLine, ([line, roll]) => [
-            line,
-            formatBulletPropertyDate(roll.date),
-          ]),
-        );
+        let frozen = precomputedByPath.get(group.path);
+        if (!frozen) {
+          const rollByLine = new Map(
+            group.session.targets.map((target) => [
+              target.line,
+              rollPriorityScheduledDateWithOffset(level, baseDate, random),
+            ]),
+          );
+          const scheduledValueByLine = new Map(
+            Array.from(rollByLine, ([line, roll]) => [
+              line,
+              formatBulletPropertyDate(roll.date),
+            ]),
+          );
+          frozen = Object.freeze({ rollByLine, scheduledValueByLine });
+          precomputedByPath.set(group.path, frozen);
+        }
+        const scheduledValueByLine = frozen.scheduledValueByLine;
         for (const date of scheduledValueByLine.values()) {
           allDates.push(date);
         }
-        precomputedByPath.set(
-          group.path,
-          Object.freeze({ rollByLine, scheduledValueByLine }),
-        );
       }
-      const scheduleSummary = formatSchedulingWorkLogDateSpan(allDates);
+      const scheduleSummary = precomputed.scheduleSummary || formatSchedulingWorkLogDateSpan(allDates);
       return await this.offerSchedulingWorkLogOrDispatch({
         targets: resolved,
         scheduleSummary,
@@ -27845,23 +28370,25 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       const targets = this.taskSession.targets;
       const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
       if (eligible.size === 0) {
-        return await this.applySelectedValue(item);
+        return await this.applySelectedValue(item, precomputed);
       }
-      const rollByLine = new Map(
-        targets.map((target) => [
-          target.line,
-          rollPriorityScheduledDateWithOffset(level, baseDate, random),
-        ]),
-      );
-      const scheduledValueByLine = new Map(
-        Array.from(rollByLine, ([line, roll]) => [
-          line,
-          formatBulletPropertyDate(roll.date),
-        ]),
-      );
-      const scheduleSummary = formatSchedulingWorkLogDateSpan(
-        Array.from(scheduledValueByLine.values()),
-      );
+      const rollByLine = precomputed.precomputedRollByLine instanceof Map
+        ? precomputed.precomputedRollByLine
+        : new Map(
+            targets.map((target) => [
+              target.line,
+              rollPriorityScheduledDateWithOffset(level, baseDate, random),
+            ]),
+          );
+      const scheduledValueByLine = precomputed.precomputedScheduledValueByLine instanceof Map
+        ? precomputed.precomputedScheduledValueByLine
+        : new Map(
+            Array.from(rollByLine, ([line, roll]) => [
+              line,
+              formatBulletPropertyDate(roll.date),
+            ]),
+          );
+      const scheduleSummary = precomputed.scheduleSummary || formatSchedulingWorkLogDateSpan(Array.from(scheduledValueByLine.values()));
       return await this.offerSchedulingWorkLogOrDispatch({
         targets,
         scheduleSummary,
@@ -27886,15 +28413,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         : [];
     const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
     if (eligible.size === 0) {
-      return await this.applySelectedValue(item);
+      return await this.applySelectedValue(item, precomputed);
     }
-    const roll = rollPriorityScheduledDateWithOffset(level, baseDate, random);
-    const rolledValue = formatBulletPropertyDate(roll.date);
-    const precomputedRoll = Object.freeze({
-      date: rolledValue,
-      offset: roll.offset,
-    });
-    const scheduleSummary = `scheduled → ${rolledValue}`;
+    const frozenRoll = precomputed.precomputedRoll || rollPriorityScheduledDateWithOffset(level, baseDate, random);
+    const rolledValue = typeof frozenRoll.date === "string"
+      ? normalizeBulletPropertyValue(frozenRoll.date)
+      : formatBulletPropertyDate(frozenRoll.date);
+    const precomputedRoll = Object.freeze({ date: rolledValue, offset: frozenRoll.offset });
+    const scheduleSummary = precomputed.scheduleSummary || `scheduled → ${rolledValue}`;
     return await this.offerSchedulingWorkLogOrDispatch({
       targets,
       scheduleSummary,
@@ -32146,6 +32672,26 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   handleKeydown(event) {
+    if (this.linkResolving && event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") this.close();
+      return;
+    }
+    if (
+      this.taskCardEnabled &&
+      this.stage !== "task-card" &&
+      event &&
+      event.key === "Backspace" &&
+      event.target === this.inputEl &&
+      this.inputEl &&
+      !String(this.inputEl.value || "")
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.returnToTaskCard();
+      return;
+    }
     // Ctrl+Enter (or Cmd+Enter) on `scheduled` takes the recommended roll in
     // both picker stages. Anywhere else it behaves exactly like Enter, as it
     // does today; other stages keep their existing key handling untouched.
@@ -32430,31 +32976,33 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return false;
     }
 
-    const result = await (this.isCountedSession()
-      ? this.plugin.deleteCountedBulletPropertyValue(
-          this.editor,
-          this.cursor,
-          this.filePath,
-          this.taskSession,
-          propertyName,
-        )
-      : item.target.kind === "project-frontmatter"
-        ? await this.plugin.deleteProjectNoteScheduledValue(
+    const result = await (this.isLinkSession()
+      ? this.plugin.deleteLinkPickerPropertyValue(this, item)
+      : this.isCountedSession()
+        ? this.plugin.deleteCountedBulletPropertyValue(
             this.editor,
             this.cursor,
             this.filePath,
-            this.lineText,
-            item.currentValue,
-          )
-        : this.plugin.deleteBulletPropertyValue(
-            this.editor,
-            this.cursor,
+            this.taskSession,
             propertyName,
-            {
-              filePath: this.filePath,
-              expectedLine: this.lineText,
-            },
-          ));
+          )
+        : item.target.kind === "project-frontmatter"
+          ? await this.plugin.deleteProjectNoteScheduledValue(
+              this.editor,
+              this.cursor,
+              this.filePath,
+              this.lineText,
+              item.currentValue,
+            )
+          : this.plugin.deleteBulletPropertyValue(
+              this.editor,
+              this.cursor,
+              propertyName,
+              {
+                filePath: this.filePath,
+                expectedLine: this.lineText,
+              },
+            ));
     if (!result || result.deleted !== true) {
       if (result && result.line) {
         this.lineText = result.line;
@@ -34178,8 +34726,105 @@ function createDependencyNavApi(plugin) {
   });
 }
 
+function taskCardPilotEnabled(savedData, loaded = true) {
+  return loaded === true && Boolean(
+    savedData && typeof savedData === "object" && !Array.isArray(savedData) && savedData.taskCard === true,
+  );
+}
+
+function mergeTaskCardPilotPreference(savedData, enabled) {
+  const base = savedData && typeof savedData === "object" && !Array.isArray(savedData)
+    ? savedData
+    : {};
+  return { ...base, taskCard: enabled === true };
+}
+
+class TaskCardPilotSettingTab extends PluginSettingTabBase {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const container = this.containerEl;
+    if (!container || typeof container.empty !== "function" || typeof Setting !== "function") {
+      return;
+    }
+    container.empty();
+    if (typeof container.createEl === "function") {
+      container.createEl("h2", { text: "Bob Navigation Hotkeys" });
+    }
+    new Setting(container)
+      .setName("Task Card pilot")
+      .setDesc("Open Ctrl+Shift+P in Task Card mode. Turn off to use the classic property list.")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.isTaskCardPilotEnabled());
+        if (typeof toggle.setDisabled === "function") {
+          toggle.setDisabled(!this.plugin.taskCardSettingsLoaded);
+        }
+        toggle.onChange((enabled) => {
+          void this.plugin.setTaskCardPilotEnabled(enabled);
+        });
+      });
+  }
+}
+
 module.exports = class BobNavigationHotkeysPlugin extends Plugin {
+  isTaskCardPilotEnabled() {
+    return taskCardPilotEnabled(this.taskCardData, this.taskCardSettingsLoaded === true);
+  }
+
+  async loadTaskCardSettings() {
+    const generation = this.taskCardSettingsGeneration;
+    let saved = null;
+    try {
+      saved = typeof this.loadData === "function" ? await this.loadData() : null;
+    } catch (_error) {
+      saved = null;
+    }
+    if (generation !== this.taskCardSettingsGeneration || this.taskCardPluginUnloading) {
+      return false;
+    }
+    this.taskCardData = saved && typeof saved === "object" && !Array.isArray(saved)
+      ? { ...saved }
+      : {};
+    this.taskCardSettingsLoaded = true;
+    if (this.taskCardSettingsTab && typeof this.taskCardSettingsTab.display === "function") {
+      this.taskCardSettingsTab.display();
+    }
+    return true;
+  }
+
+  async setTaskCardPilotEnabled(enabled) {
+    if (!this.taskCardSettingsLoaded || typeof this.saveData !== "function") {
+      new Notice("Task Card settings are not available yet");
+      return false;
+    }
+    const next = mergeTaskCardPilotPreference(this.taskCardData, enabled);
+    try {
+      await this.saveData(next);
+    } catch (_error) {
+      new Notice("Could not save Task Card setting");
+      return false;
+    }
+    this.taskCardData = next;
+    if (this.taskCardSettingsTab && typeof this.taskCardSettingsTab.display === "function") {
+      this.taskCardSettingsTab.display();
+    }
+    return true;
+  }
+
   onload() {
+    this.taskCardSettingsGeneration = 1;
+    this.taskCardSettingsLoaded = false;
+    this.taskCardData = {};
+    this.taskCardPluginUnloading = false;
+    this.taskCardSettingsTab = null;
+    void this.loadTaskCardSettings();
+    if (typeof this.addSettingTab === "function" && PluginSettingTab) {
+      this.taskCardSettingsTab = new TaskCardPilotSettingTab(this.app, this);
+      this.addSettingTab(this.taskCardSettingsTab);
+    }
     this.currentFilePath = null;
     this.alternateFilePath = null;
     this.filePositions = new Map();
@@ -34540,6 +35185,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   onunload() {
+    this.taskCardPluginUnloading = true;
+    this.taskCardSettingsGeneration = (this.taskCardSettingsGeneration || 0) + 1;
+    this.linkPickerRequestToken = (this.linkPickerRequestToken || 0) + 1;
+    if (this.activeBulletPropertyPicker) {
+      try {
+        this.activeBulletPropertyPicker.close();
+      } catch (_error) {
+        this.activeBulletPropertyPicker = null;
+      }
+    }
     // Drop the decision-card capability first so ledger-tools marks stop
     // promising a leaf the moment this plugin unloads (mixed-version and
     // disable/enable sessions degrade to counting pips without a reset).
@@ -34975,10 +35630,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return Object.freeze({ error: null, targets: Object.freeze(targets) });
   }
 
-  // Open the bullet-property picker in link mode against the tasks behind the
-  // dedicated Task Links under the cursor. Async because target notes are read
-  // from the vault when they have no open buffer; the synchronous
-  // openBulletPropertyPicker detects the link bullet and hands off here.
+  // Open the Task Link shell synchronously, then resolve its target notes.
+  // Keys pressed while resolution is pending are consumed by the shell and
+  // never replayed after the linked session becomes ready.
   async openLinkPicker(cm, options = {}) {
     const activePicker = this.activeBulletPropertyPicker;
     const incomingCountExplicit = options.countExplicit === true;
@@ -35026,37 +35680,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     const filePath = activeView.file.path;
-    const resolution = await this.resolveLinkPickerTargets(
-      filePath,
-      discovery,
-    );
-    if (resolution.error) {
-      new Notice(resolution.error);
-      return false;
-    }
-    if (
-      cm &&
-      typeof cm.getValue === "function" &&
-      String(cm.getValue() || "") !== content
-    ) {
-      new Notice("Current note changed; no tasks were updated");
-      return false;
-    }
-
     const config = options.config || loadBulletPropertyConfig();
     if (!config) {
-      return false;
-    }
-    const linkSession = Object.freeze({
-      ...discovery,
-      resolved: resolution.targets,
-    });
-    const aggregate = createLinkPickerPropertyItems(
-      config,
-      linkSession.resolved,
-    );
-    if (!aggregate.valid) {
-      new Notice(aggregate.error);
       return false;
     }
     const basePropertyContext = getProjectNotePropertyContext(
@@ -35067,7 +35692,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(basePropertyContext.error);
       return false;
     }
-
+    const requestToken = (this.linkPickerRequestToken || 0) + 1;
+    this.linkPickerRequestToken = requestToken;
+    const linkSession = Object.freeze({
+      ...discovery,
+      resolved: Object.freeze([]),
+      valid: false,
+      error: "Resolving Task Link targets…",
+    });
     const picker = new BulletPropertyPickerModal(
       this.app,
       this,
@@ -35079,10 +35711,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         filePath,
         propertyContext: { ...basePropertyContext, isObsidianTask: false },
         linkSession,
+        linkResolving: true,
+        taskCard: !options.initialProperty && (
+          Object.prototype.hasOwnProperty.call(options, "taskCard")
+            ? options.taskCard === true
+            : this.isTaskCardPilotEnabled()
+        ),
         random: options.random,
         baseDate: options.baseDate,
       },
     );
+    picker.linkResolutionToken = requestToken;
     this.activeBulletPropertyPicker = picker;
     try {
       picker.open();
@@ -35091,6 +35730,63 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         this.activeBulletPropertyPicker = null;
       }
       throw error;
+    }
+
+    let resolution;
+    try {
+      resolution = await this.resolveLinkPickerTargets(filePath, discovery);
+    } catch (_error) {
+      resolution = Object.freeze({ error: "Task Link targets could not be read", targets: null });
+    }
+    const stillCurrent =
+      requestToken === this.linkPickerRequestToken &&
+      this.activeBulletPropertyPicker === picker &&
+      picker.isOpen === true &&
+      picker.linkResolutionToken === requestToken &&
+      this.taskCardPluginUnloading !== true;
+    if (!stillCurrent) {
+      return false;
+    }
+    const currentView = this.getActiveMarkdownView();
+    if (
+      !currentView ||
+      currentView.editor !== cm ||
+      !currentView.file ||
+      currentView.file.path !== filePath ||
+      !cm ||
+      typeof cm.getValue !== "function" ||
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      picker.close();
+      return false;
+    }
+    if (resolution && resolution.error) {
+      new Notice(resolution.error);
+      picker.close();
+      return false;
+    }
+    const resolvedSession = Object.freeze({
+      ...discovery,
+      resolved: resolution.targets,
+      valid: true,
+      error: null,
+    });
+    const aggregate = createLinkPickerPropertyItems(config, resolvedSession.resolved);
+    if (!aggregate.valid) {
+      new Notice(aggregate.error);
+      picker.close();
+      return false;
+    }
+    picker.linkSession = resolvedSession;
+    picker.linkResolving = false;
+    picker.refreshPriorityRollRecommendation();
+    picker.refreshCountedRollBatch();
+    picker.refreshLinkRollBatch();
+    if (picker.taskCardEnabled) {
+      picker.showTaskCard({ rebuild: true });
+    } else {
+      picker.showPropertyStage({ clearQuery: true });
     }
     return true;
   }
@@ -35133,6 +35829,64 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // marked Blocked by that planner and pruned from today's open Pomodoros
   // afterwards. Write order is targets, then the daily note. The whole
   // operation is refused when any preimage changed.
+  async deleteLinkPickerPropertyValue(picker, item) {
+    const linkSession = picker && picker.linkSession;
+    const property = item && item.property;
+    if (!linkSession || !property || !linkSession.resolved) {
+      new Notice("Could not delete task property; no tasks were updated");
+      return null;
+    }
+    const name = normalizeBulletPropertyName(property.name);
+    const baseDate = picker.valueBaseDate instanceof Date
+      ? getLocalDateStart(picker.valueBaseDate)
+      : getLocalDateStart(new Date());
+    const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
+    const planned = [];
+    for (const group of groups) {
+      let recoveryByLine = null;
+      if (name === "scheduled") {
+        recoveryByLine = await buildTargetScheduledRecoveryByLine(
+          this.app,
+          group.path,
+          group.content,
+          group.session.targets.map((target) => target.line),
+          baseDate,
+        );
+        const guarded = await this.readLinkPickerNoteContent(group.path, group.file);
+        if (guarded !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return null;
+        }
+      }
+      const plan = planCountedBulletPropertyBatch(
+        group.content,
+        group.session,
+        name,
+        null,
+        {
+          operation: "delete",
+          today: baseDate,
+          recoveryByLine,
+          stampLine: this.getFreshnessStampLine(),
+          freshDateText: this.getFreshnessDateText(),
+        },
+      );
+      if (!plan.valid) {
+        new Notice(plan.stale ? `${plan.error}; no tasks were updated` : plan.error);
+        return null;
+      }
+      planned.push({ group, plan });
+    }
+    const committed = await this.commitLinkPickerPlans(
+      picker,
+      linkSession,
+      planned,
+      baseDate,
+      { header: `${name} ✗ removed` },
+    );
+    return committed === true ? { deleted: true } : null;
+  }
+
   async applyLinkPickerPropertyValue(picker, item, options = {}) {
     const linkSession = picker.linkSession;
     const property = picker.selectedPropertyItem &&
@@ -38967,6 +39721,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         propertyContext,
         taskSession,
         initialProperty: options.initialProperty || null,
+        taskCard: !options.initialProperty && (
+          Object.prototype.hasOwnProperty.call(options, "taskCard")
+            ? options.taskCard === true
+            : this.isTaskCardPilotEnabled()
+        ),
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -50579,6 +51338,9 @@ module.exports.helpers = {
   buildTaskCardPriorityPreviews,
   planTaskCard,
   resolveTaskCardKey,
+  taskCardPilotEnabled,
+  mergeTaskCardPilotPreference,
+  TaskCardPilotSettingTab,
   renderTaskCardView,
   orderedTaskCardRows,
   promoteScheduledRowForPrioritizedTask,

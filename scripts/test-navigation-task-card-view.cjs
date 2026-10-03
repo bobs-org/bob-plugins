@@ -89,6 +89,24 @@ function byClass(element, className) {
   );
 }
 
+function dispatchCardKey(modal, key, modifiers = {}) {
+  const list = modal.taskCardListEl;
+  let prevented = false;
+  let stopped = false;
+  list.listeners.keydown({
+    key,
+    target: list,
+    ...modifiers,
+    preventDefault() { prevented = true; },
+    stopPropagation() { stopped = true; },
+  });
+  return { prevented, stopped };
+}
+
+function nextTurn() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function sequence(values) {
   let index = 0;
   return () => values[index++ % values.length];
@@ -410,6 +428,278 @@ test("search transition keeps compact width, seeds the query, and Back restores 
   back.listeners.click({ preventDefault() {} });
   assert.equal(modal.stage, "task-card");
   assert.match(flattenText(modal.contentEl), /Schedule…/);
+});
+
+test("card focus is synchronous; action keys and Back route through the existing stages", () => {
+  const { modal } = openPropertyPicker({
+    taskCard: true,
+    content: "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship",
+  });
+  assert.equal(modal.taskCardListEl.focused, true);
+  const enter = dispatchCardKey(modal, "Enter");
+  assert.equal(enter.prevented, true);
+  assert.equal(enter.stopped, true);
+  assert.equal(modal.stage, "value");
+  assert.equal(modal.selectedPropertyItem.property.name, "scheduled");
+
+  const backspace = {
+    key: "Backspace",
+    target: modal.inputEl,
+    preventDefault() {},
+    stopPropagation() {},
+  };
+  modal.inputEl.listeners.keydown(backspace);
+  assert.equal(modal.stage, "task-card");
+  assert.equal(modal.taskCardListEl.focused, true);
+
+  dispatchCardKey(modal, "p");
+  assert.equal(modal.cardViewMode, "search");
+  assert.equal(modal.inputEl.value, "p");
+  assert.equal(byClass(modal.contentEl, "bob-task-card-back").length, 1);
+});
+
+test("Task Link opens focused while resolving and consumes keys without replay", async () => {
+  const content = "- [[Tasks/Alpha#^alpha]]";
+  const editor = makeEditor(content);
+  editor.getCursor = () => ({ line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
+  let resolveTargets;
+  plugin.resolveLinkPickerTargets = () => new Promise((resolve) => {
+    resolveTargets = resolve;
+  });
+
+  const resolving = plugin.openLinkPicker(editor, {
+    taskCard: true,
+    config: buildConfig(),
+    baseDate: BASE_DATE,
+  });
+  const modal = plugin.activeBulletPropertyPicker;
+  assert.ok(modal);
+  assert.equal(modal.isOpen, true);
+  assert.equal(modal.linkResolving, true);
+  assert.equal(modal.stage, "task-card");
+  assert.equal(modal.taskCardListEl.focused, true);
+  const enter = dispatchCardKey(modal, "x");
+  assert.deepEqual(enter, { prevented: true, stopped: true });
+  assert.equal(modal.stage, "task-card");
+  assert.equal(editor.writes(), 0);
+
+  resolveTargets({
+    error: null,
+    targets: [{
+      path: "Tasks/Alpha.md",
+      file: { path: "Tasks/Alpha.md" },
+      content: "- [ ] #task Alpha [priority:: high] [scheduled:: 2026-10-12] ^alpha\n",
+      line: 0,
+      rawLine: "- [ ] #task Alpha [priority:: high] [scheduled:: 2026-10-12] ^alpha",
+      blockId: "alpha",
+      displayText: "Alpha",
+    }],
+  });
+  assert.equal(await resolving, true);
+  assert.equal(modal.linkResolving, false);
+  assert.equal(modal.stage, "task-card");
+  assert.equal(modal.isOpen, true);
+  assert.match(flattenText(modal.contentEl), /Alpha/);
+});
+
+test("Task Link count replacement and source edits invalidate old resolutions", async () => {
+  let content = "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]";
+  const editor = {
+    getValue: () => content,
+    getLine: (line) => content.split(/\r?\n/)[line] ?? null,
+    getCursor: () => ({ line: 0, ch: 0 }),
+    writes: 0,
+    replaceRange() { this.writes += 1; },
+  };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
+  const pending = [];
+  plugin.resolveLinkPickerTargets = () => new Promise((resolve) => pending.push(resolve));
+
+  const firstResolution = plugin.openLinkPicker(editor, {
+    taskCard: true,
+    config: buildConfig(),
+  });
+  const firstModal = plugin.activeBulletPropertyPicker;
+  const countedResolution = plugin.openLinkPicker(editor, {
+    taskCard: true,
+    config: buildConfig(),
+    countExplicit: true,
+    additionalTaskCount: 1,
+  });
+  const countedModal = plugin.activeBulletPropertyPicker;
+  assert.ok(countedModal);
+  assert.notEqual(countedModal, firstModal);
+  assert.equal(firstModal.isOpen, false);
+
+  pending[0]({ error: null, targets: [] });
+  assert.equal(await firstResolution, false);
+  assert.equal(plugin.activeBulletPropertyPicker, countedModal);
+  assert.equal(countedModal.linkResolving, true);
+
+  content += "\nchanged while targets were loading";
+  pending[1]({ error: null, targets: [] });
+  assert.equal(await countedResolution, false);
+  assert.equal(countedModal.isOpen, false);
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+  assert.equal(editor.writes, 0);
+});
+
+test("Task Link resolution failure and plugin unload close their shells", async () => {
+  const content = "- [[Tasks/Alpha#^alpha]]";
+  const editor = makeEditor(content);
+  editor.getCursor = () => ({ line: 0, ch: 0 });
+  const failed = new NavigationHotkeysPlugin();
+  failed.app = {};
+  failed.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
+  failed.resolveLinkPickerTargets = async () => ({ error: "target read failed", targets: null });
+  const failure = failed.openLinkPicker(editor, { taskCard: true, config: buildConfig() });
+  const failedModal = failed.activeBulletPropertyPicker;
+  assert.equal(failedModal.linkResolving, true);
+  assert.equal(await failure, false);
+  assert.equal(failedModal.isOpen, false);
+  assert.equal(failed.activeBulletPropertyPicker, null);
+
+  const unloading = new NavigationHotkeysPlugin();
+  unloading.app = {};
+  unloading.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
+  let resolveTargets;
+  unloading.resolveLinkPickerTargets = () => new Promise((resolve) => { resolveTargets = resolve; });
+  const pendingResolution = unloading.openLinkPicker(editor, { taskCard: true, config: buildConfig() });
+  const unloadingModal = unloading.activeBulletPropertyPicker;
+  unloading.onunload();
+  resolveTargets({ error: null, targets: [] });
+  assert.equal(await pendingResolution, false);
+  assert.equal(unloadingModal.isOpen, false);
+  assert.equal(unloading.activeBulletPropertyPicker, null);
+});
+
+test("Task Card pilot preserves direct Depends on entry", () => {
+  const content = "- [ ] #task Parent [priority:: medium] ^parent";
+  const editor = makeEditor(content);
+  editor.getCursor = () => ({ line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.taskCardSettingsLoaded = true;
+  plugin.taskCardData = { taskCard: true };
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+
+  assert.equal(plugin.openBulletPropertyPicker(editor, {
+    config: buildConfig(),
+    initialProperty: "dependsOn",
+  }), true);
+  const modal = plugin.activeBulletPropertyPicker;
+  assert.ok(modal);
+  assert.equal(modal.taskCardEnabled, false);
+  assert.notEqual(modal.stage, "task-card");
+  modal.close();
+});
+
+test("priority gesture writes the frozen date and duplicate dispatch is single-flight", async () => {
+  const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
+  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const preview = modal.taskCardModel.priorityStrip.levels[1];
+  let writes = 0;
+  let writtenContext = null;
+  plugin.setBulletPriorityValue = async (...args) => {
+    writes += 1;
+    writtenContext = args[6];
+    return true;
+  };
+  dispatchCardKey(modal, "2");
+  dispatchCardKey(modal, "2");
+  await nextTurn();
+  assert.equal(writes, 1);
+  assert.ok(writtenContext, "priority writer receives frozen writer options");
+  assert.ok(writtenContext.precomputedRoll, JSON.stringify(writtenContext));
+  assert.equal(writtenContext.precomputedRoll.date, preview.date);
+  assert.equal(writtenContext.precomputedRoll.offset, preview.targetPreviews[0].offset);
+  assert.equal(modal.isOpen, false);
+
+  const clicked = openPropertyPicker({ taskCard: true, content });
+  let clickWrites = 0;
+  clicked.plugin.setBulletPriorityValue = async () => { clickWrites += 1; return true; };
+  const secondLevel = byClass(clicked.modal.contentEl, "bob-task-card-level")[1];
+  secondLevel.listeners.click({ preventDefault() {} });
+  secondLevel.listeners.click({ preventDefault() {} });
+  await nextTurn();
+  assert.equal(clickWrites, 1);
+});
+
+test("pending priority action passes its card preview through the Work Log adapter", async () => {
+  const content = "- [/] #task Pending work [priority:: medium] ^pending";
+  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const preview = modal.taskCardModel.priorityStrip.levels[1];
+  let writtenContext = null;
+  plugin.setBulletPriorityValue = async (...args) => {
+    writtenContext = args[6];
+    return true;
+  };
+  modal.offerSchedulingWorkLogOrDispatch = async ({ dispatch }) => await dispatch("");
+
+  dispatchCardKey(modal, "2");
+  await nextTurn();
+  assert.ok(writtenContext && writtenContext.precomputedRoll);
+  assert.equal(writtenContext.precomputedRoll.date, preview.date);
+  assert.equal(writtenContext.precomputedRoll.offset, preview.targetPreviews[0].offset);
+});
+
+test("selected-property deletion uses the existing writer; other card rows stay non-deletable", async () => {
+  const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
+  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  let deleted = null;
+  plugin.deleteBulletPropertyValue = async (_editor, _cursor, propertyName) => {
+    deleted = propertyName;
+    return { deleted: true };
+  };
+  dispatchCardKey(modal, "d", { ctrlKey: true });
+  await nextTurn();
+  assert.equal(deleted, "scheduled");
+  assert.equal(modal.isOpen, false);
+
+  const next = openPropertyPicker({ taskCard: true, content });
+  dispatchCardKey(next.modal, "ArrowDown");
+  assert.equal(next.modal.taskCardSelectedRowId, "depends-on");
+  dispatchCardKey(next.modal, "d", { ctrlKey: true });
+  await nextTurn();
+  assert.equal(next.modal.stage, "task-card");
+  assert.equal(next.editor.writes(), 0);
+});
+
+test("Task Card pilot preference fails closed and preserves other plugin data", async () => {
+  const { taskCardPilotEnabled, mergeTaskCardPilotPreference } = helpers;
+  assert.equal(taskCardPilotEnabled({ taskCard: true }, false), false);
+  assert.equal(taskCardPilotEnabled({}, true), false);
+  assert.equal(taskCardPilotEnabled({ taskCard: true }, true), true);
+  assert.deepEqual(
+    mergeTaskCardPilotPreference({ unrelated: { kept: true } }, false),
+    { unrelated: { kept: true }, taskCard: false },
+  );
+
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.taskCardSettingsGeneration = 1;
+  plugin.taskCardSettingsLoaded = false;
+  plugin.taskCardPluginUnloading = false;
+  plugin.loadData = async () => ({ unrelated: "preserved", taskCard: true });
+  await plugin.loadTaskCardSettings();
+  assert.equal(plugin.isTaskCardPilotEnabled(), true);
+  let saved = null;
+  plugin.saveData = async (data) => { saved = data; };
+  await plugin.setTaskCardPilotEnabled(false);
+  assert.deepEqual(saved, { unrelated: "preserved", taskCard: false });
+  assert.equal(plugin.isTaskCardPilotEnabled(), false);
+
+  const unreadable = new NavigationHotkeysPlugin();
+  unreadable.taskCardSettingsGeneration = 1;
+  unreadable.taskCardSettingsLoaded = false;
+  unreadable.taskCardPluginUnloading = false;
+  unreadable.loadData = async () => { throw new Error("unreadable"); };
+  await unreadable.loadTaskCardSettings();
+  assert.equal(unreadable.isTaskCardPilotEnabled(), false);
 });
 
 test("missing freshness API disables Review every with an honest reason", () => {

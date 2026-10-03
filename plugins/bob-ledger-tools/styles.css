@@ -181,30 +181,117 @@ a.bob-plan-ready:hover {
   font-size: 0.8em;
 }
 
-/* Task freshness status bar counter (freshness namespace v2):
-   `⟳ 3 new · 31 rotten · ✓ 12 today`. Theme-native in light/dark and
-   any community theme. */
+/* Task freshness review footer (freshness namespace v5): one compact
+   native status-bar item. Empty groups are omitted; an empty queue
+   removes the whole item from layout. Theme-native in light/dark. */
 .bob-freshness {
+  display: flex;
+  align-items: center;
+  gap: 0.15em;
+  margin-right: auto;
+  flex: 1 1 auto;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0 0.2em;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller, 12px);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
+  line-height: 1;
+}
+
+.bob-freshness.bob-freshness-hidden,
+.bob-freshness-hidden {
+  display: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  flex: 0 0 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+.bob-freshness-main {
+  appearance: none;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
+  padding: 0 0.15em;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28em;
+  line-height: inherit;
 }
 
-.bob-freshness-due {
+.bob-freshness-main:focus {
+  outline: none;
+}
+
+.bob-freshness-main:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-s, 4px);
+}
+
+.bob-freshness > span:not(.bob-freshness-omit)::before {
+  content: "·";
+  display: inline;
+  margin: 0 0.5em 0 0.35em;
+  color: var(--text-faint, var(--text-muted));
+}
+
+.bob-freshness-icon {
+  color: var(--text-muted);
+}
+
+.bob-freshness-main .bob-freshness-due {
   color: var(--text-normal);
+  font-weight: 600;
 }
 
-.bob-freshness-new {
+.bob-freshness-new .bob-freshness-main .bob-freshness-due {
   color: var(--interactive-accent);
+}
+
+.bob-freshness-context,
+.bob-freshness-detail,
+.bob-freshness-hint,
+.bob-freshness-groups,
+.bob-freshness-meter {
+  color: var(--text-muted);
+}
+
+.bob-freshness-tier {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.bob-freshness-new .bob-freshness-tier {
+  color: var(--interactive-accent);
+}
+
+.bob-freshness-budget .bob-freshness-meter {
+  color: var(--task-status-next, var(--color-green, #3f8f5f));
   font-weight: 650;
+}
+
+.bob-freshness-omit {
+  display: none !important;
 }
 
 .bob-freshness-clear {
   color: var(--text-muted);
-}
-
-.bob-freshness-budget {
-  color: var(--task-status-next, var(--color-green, #3f8f5f));
-  font-weight: 650;
 }
 
 .bob-freshness-unavailable {

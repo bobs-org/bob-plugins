@@ -33529,7 +33529,62 @@ function resolveReviewQueueLine(content, entry) {
 // date; ROTTEN names the overdue age and interval (or `due today`).
 // Lane tiers add a second line with the keep/release/today actions.
 // Legacy v3 entries keep today's state text.
+function formatReviewJumpNoticeFromView(entry, rank, total, options = {}) {
+  const viewFn =
+    options && typeof options.reviewEntryView === "function"
+      ? options.reviewEntryView
+      : null;
+  if (!viewFn || !reviewEntryHasTierRanks(entry)) {
+    return null;
+  }
+  try {
+    const todayText =
+      options && typeof options.todayText === "string"
+        ? options.todayText
+        : null;
+    const trackers =
+      options && typeof options.trackers === "boolean"
+        ? options.trackers
+        : true;
+    const presentation = viewFn(entry, { todayText });
+    if (
+      !presentation ||
+      typeof presentation !== "object" ||
+      presentation.ok === false ||
+      !presentation.label
+    ) {
+      return null;
+    }
+    const label = String(presentation.label);
+    const head = `Review ${rank}/${total} · ${label} ${entry.tierRank}/${entry.tierTotal}`;
+    const tier =
+      typeof presentation.tier === "string" && presentation.tier
+        ? presentation.tier
+        : reviewEntryMachineTier(entry);
+    let detail =
+      typeof presentation.detail === "string" ? presentation.detail : "";
+    if ((tier === "projects" || tier === "references") && !trackers) {
+      detail = "";
+    }
+    const actionHint =
+      typeof presentation.actionHint === "string" ? presentation.actionHint : "";
+    const lines = [detail ? `${head} · ${detail}` : head];
+    if (actionHint) {
+      lines.push(actionHint);
+    }
+    const wrapped =
+      options && options.wrapped === true ? " · wrapped around" : "";
+    return lines.join("\n") + wrapped;
+  } catch (error) {
+    return null;
+  }
+}
+
 function buildReviewJumpNotice(entry, rank, total, options = {}) {
+  const fromView = formatReviewJumpNoticeFromView(entry, rank, total, options);
+  if (fromView !== null) {
+    return fromView;
+  }
   const todayText =
     options && typeof options.todayText === "string"
       ? options.todayText
@@ -36497,6 +36552,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       wrapped: plan.wrapped,
       todayText,
       trackers: reviewFreshnessSupportsTrackers(api),
+      reviewEntryView:
+        api && typeof api.reviewEntryView === "function"
+          ? (noticeEntry, noticeOptions) =>
+              api.reviewEntryView(noticeEntry, noticeOptions)
+          : null,
     });
     // A forward step out of the commitments into ROTTEN names the
     // boundary (v4 tier entries only; v3 keeps the plain jump notice).
@@ -50555,6 +50615,7 @@ module.exports.helpers = {
   buildReviewBoundaryNotice,
   planReviewJump,
   resolveReviewQueueLine,
+  formatReviewJumpNoticeFromView,
   buildReviewJumpNotice,
   buildReviewEmptyNotice,
   classifyFreshStampTarget,

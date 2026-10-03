@@ -923,6 +923,7 @@ test("freshness namespace v5 keeps every member on rotten vocabulary", () => {
         "queue",
         "counts",
         "lints",
+        "reviewEntryView",
       ]) {
         assert.equal(typeof freshness[key], "function", `freshness ${key}`);
       }
@@ -1326,16 +1327,28 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
 
 function makeStatusEl() {
   const classes = new Set();
-  return {
+  const el = {
     text: "",
     attrs: {},
     handlers: {},
     style: {},
+    children: [],
+    clientWidth: 800,
+    scrollWidth: 400,
     setText(value) {
       this.text = String(value);
+      this.textContent = String(value);
     },
     setAttribute(key, value) {
       this.attrs[key] = String(value);
+    },
+    removeAttribute(key) {
+      delete this.attrs[key];
+    },
+    empty() {
+      this.children = [];
+      this.text = "";
+      this.textContent = "";
     },
     classList: {
       add: (name) => classes.add(name),
@@ -1345,7 +1358,21 @@ function makeStatusEl() {
     addEventListener(event, handler) {
       this.handlers[event] = handler;
     },
+    createEl(tag, options = {}) {
+      const child = makeStatusEl();
+      child.tag = tag;
+      child.cls = options.cls || "";
+      if (options.cls) {
+        for (const name of String(options.cls).split(/\s+/)) {
+          if (name) child.classList.add(name);
+        }
+      }
+      this.children.push(child);
+      return child;
+    },
   };
+  el.textContent = "";
+  return el;
 }
 
 test("status bar clicks through, falling back to rotten", () => {
@@ -1367,8 +1394,11 @@ test("status bar clicks through, falling back to rotten", () => {
     try {
       assert.equal(plugin.freshnessStatusEl, el);
       plugin.updateFreshnessStatusBar();
-      assert.equal(el.text, "⟳ 1 new · 0 projects · 0 pending · 0 next · 0 references · 0 rotten · ✓ 0 today");
-      el.handlers.click();
+      const button = el.children.find((child) => child.tag === "button");
+      assert.ok(button);
+      assert.equal(button.children.find((child) => child.classList.has("bob-freshness-due")).textContent, "Review 1 due");
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      button.handlers.click();
       assert.deepEqual(executed, [
         "bob-navigation-hotkeys:jump-to-next-due-task",
       ]);
@@ -1387,8 +1417,10 @@ test("status bar clicks through, falling back to rotten", () => {
     fallback.onload();
     try {
       fallback.updateFreshnessStatusBar();
-      assert.equal(fallbackEl.text, "⟳ 0 new · 0 projects · 0 pending · 0 next · 0 references · 0 rotten · ✓ 0 today");
-      fallbackEl.handlers.click();
+      assert.equal(fallbackEl.classList.has("bob-freshness-hidden"), true);
+      const button = fallbackEl.children.find((child) => child.tag === "button");
+      assert.ok(button);
+      button.handlers.click();
       assert.deepEqual(fallbackOpened, ["rotten"]);
     } finally {
       fallback.onunload();
@@ -1419,6 +1451,7 @@ test("every freshness api member is synchronous and never throws", () => {
         ready: { days: 7, source: "default" },
       });
       assert.deepEqual(freshness.queue(), []);
+      assert.equal(freshness.reviewEntryView(null).ok, false);
       assert.equal(freshness.counts().due, 0);
       assert.equal(freshness.counts().walk, 0);
       assert.equal(freshness.counts().upkeepToday, 0);

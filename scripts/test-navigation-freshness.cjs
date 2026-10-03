@@ -796,6 +796,87 @@ test("references tier walks with commitment rank and reference notice", () => {
   assert.equal(match.reason, "tier");
 });
 
+test("jump notices use reviewEntryView when provided and keep the fallback", () => {
+  const v4 = (overrides = {}) => ({
+    key: "a.md:1",
+    path: "a.md",
+    line: 1,
+    originalMarkdown: "- [ ] #task T",
+    state: null,
+    bucket: null,
+    tier: "pending",
+    tierLabel: "PENDING",
+    lane: "pending",
+    created: "2026-09-30",
+    fresh: "2026-10-07",
+    dueOn: "2026-10-08",
+    daysOverdue: 0,
+    interval: 1,
+    rank: 2,
+    tierRank: 2,
+    tierTotal: 3,
+    ...overrides,
+  });
+  const reviewEntryView = () => ({
+    ok: true,
+    tier: "pending",
+    label: "PENDING",
+    detail: "confirmed yesterday",
+    compact: "confirmed yesterday",
+    actionHint:
+      "Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+  });
+  assert.equal(
+    helpers.buildReviewJumpNotice(v4(), 2, 5, {
+      todayText: "2026-10-08",
+      reviewEntryView,
+    }),
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(v4(), 2, 5, {
+      todayText: "2026-10-08",
+      wrapped: true,
+      reviewEntryView,
+    }),
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today · wrapped around",
+  );
+  assert.equal(
+    helpers.buildReviewJumpNotice(v4(), 2, 5, {
+      reviewEntryView: () => {
+        throw new Error("boom");
+      },
+    }),
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+  );
+  const project = v4({
+    tier: "projects",
+    tierLabel: "PROJECTS",
+    lane: "ready",
+    fresh: null,
+    dueOn: null,
+    daysOverdue: null,
+    interval: 7,
+    tierRank: 1,
+    tierTotal: 1,
+  });
+  assert.equal(
+    helpers.buildReviewJumpNotice(project, 2, 6, {
+      todayText: "2026-10-08",
+      trackers: false,
+      reviewEntryView: () => ({
+        ok: true,
+        tier: "projects",
+        label: "PROJECTS",
+        detail: "Empty project · never confirmed · every 7d",
+        compact: "Empty project",
+        actionHint: "",
+      }),
+    }),
+    "Review 2/6 · PROJECTS 1/1",
+  );
+});
+
 test("tier notices fall back without tier ranks and wrap on the last line", () => {
   const legacy = queueEntry({ state: "new" });
   assert.equal(helpers.buildReviewJumpNotice(legacy, 1, 3), "Review 1/3 · NEW");

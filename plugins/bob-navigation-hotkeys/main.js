@@ -4400,11 +4400,15 @@ class FreshnessDecayCardModal extends Modal {
     contentEl.empty();
     this.modalEl.addClass("bob-decay-card-modal");
     contentEl.addClass("bob-decay-card");
+    contentEl.addClass("bob-key-card");
     const header = contentEl.createDiv({ cls: "bob-decay-card-header" });
     const icon = header.createDiv({ cls: "bob-decay-card-icon" });
     applyIcon(icon, "leaf");
     const headerText = header.createDiv({ cls: "bob-decay-card-header-text" });
-    headerText.createDiv({ cls: "bob-decay-card-title", text: this.decayTitle });
+    headerText.createDiv({
+      cls: "bob-decay-card-title bob-key-card-title",
+      text: this.decayTitle,
+    });
     if (this.decaySubtitle) {
       headerText.createDiv({
         cls: "bob-decay-card-subtitle",
@@ -4414,7 +4418,9 @@ class FreshnessDecayCardModal extends Modal {
     const list = contentEl.createDiv({ cls: "bob-decay-card-rows" });
     this.rowEls = this.decayRows.map((row) => {
       const rowEl = list.createDiv({
-        cls: "bob-decay-card-row" + (row.available ? "" : " is-unavailable"),
+        cls:
+          "bob-decay-card-row bob-key-card-row" +
+          (row.available ? "" : " is-unavailable"),
       });
       rowEl.setAttribute("role", "button");
       rowEl.setAttribute(
@@ -4428,7 +4434,10 @@ class FreshnessDecayCardModal extends Modal {
       } else {
         rowEl.setAttribute("aria-disabled", "true");
       }
-      rowEl.createDiv({ cls: "bob-decay-card-key", text: row.key });
+      rowEl.createDiv({
+        cls: "bob-decay-card-key bob-key-card-key",
+        text: row.key,
+      });
       const body = rowEl.createDiv({ cls: "bob-decay-card-body" });
       const labelRow = body.createDiv({ cls: "bob-decay-card-label-row" });
       labelRow.createSpan({ cls: "bob-decay-card-label", text: row.label });
@@ -4456,7 +4465,7 @@ class FreshnessDecayCardModal extends Modal {
       return rowEl;
     });
     contentEl.createDiv({
-      cls: "bob-decay-card-footer",
+      cls: "bob-decay-card-footer bob-key-card-footer",
       text: "Esc changes nothing · 1–4 pick a P-level instead",
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
@@ -16143,6 +16152,7 @@ class FilteredPickerModal extends Modal {
     contentEl.addClass("bob-cnp");
 
     const header = contentEl.createDiv({ cls: "bob-cnp-header" });
+    this.headerEl = header;
     this.headerIconEl = header.createDiv({ cls: "bob-cnp-header-icon" });
     const headerText = header.createDiv({ cls: "bob-cnp-header-text" });
     this.titleEl = headerText.createDiv({ cls: "bob-cnp-title" });
@@ -25232,6 +25242,27 @@ function planTaskCard(context = {}) {
       definedCount: projection.definedCount,
     });
   }
+  const frozenMixedMetadata = Object.freeze(mixedMetadata);
+  const baseDate =
+    context.baseDate instanceof Date
+      ? getLocalDateStart(context.baseDate)
+      : getLocalDateStart(new Date());
+  const header = buildTaskCardHeader({
+    session,
+    lineText: session.lineText,
+    filePath: context.filePath || "",
+    schedule: scheduleProjection,
+    priorityStrip,
+    mixedMetadata: frozenMixedMetadata,
+    refreshDescription,
+    rows,
+    baseDate,
+  });
+  const timeline = buildTaskCardTimeline({
+    recommendation,
+    schedule: scheduleProjection,
+    baseDate,
+  });
   return Object.freeze({
     kind: "task-card",
     mode: context.mode === "search" ? "search" : "card",
@@ -25251,6 +25282,9 @@ function planTaskCard(context = {}) {
       mixedStatus: distinctStatuses.length > 1,
     }),
     title: truncateBulletPropertySubtitle(session.lineText),
+    header,
+    timeline,
+    baseDate: formatBulletPropertyDate(baseDate),
     rows,
     selectedRowId,
     inputActive: context.inputActive === true,
@@ -25267,7 +25301,7 @@ function planTaskCard(context = {}) {
           item.propertyName !== (dependencyProperty && dependencyProperty.name),
       ),
     ),
-    mixedMetadata: Object.freeze(mixedMetadata),
+    mixedMetadata: frozenMixedMetadata,
     availability: Object.freeze({
       schedule: scheduleAvailable,
       priority: priorityStrip.available,
@@ -25476,6 +25510,890 @@ function resolveTaskCardKey(model, event) {
   return null;
 }
 
+const TASK_CARD_ROW_ORDER = Object.freeze([
+  "schedule",
+  "depends-on",
+  "review-every",
+  "lane",
+  "cancel",
+  "more-properties",
+]);
+
+const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
+  schedule: "Enter",
+  "depends-on": "b",
+  "review-every": "f",
+  lane: "Alt+N",
+  cancel: "x",
+  "more-properties": "",
+});
+
+function getTaskCardLaneChipLabel(status) {
+  switch (String(status ?? "")) {
+    case " ":
+      return "READY";
+    case "*":
+      return "NEXT";
+    case "/":
+      return "PENDING";
+    case "?":
+      return "BLOCKED";
+    default:
+      return null;
+  }
+}
+
+function parseTaskCardIsoDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(
+    normalizeBulletPropertyValue(value),
+  );
+  if (!match) {
+    return null;
+  }
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function formatTaskCardCompactRelative(offset) {
+  const days = Number(offset);
+  if (!Number.isFinite(days)) {
+    return "";
+  }
+  if (days === 0) {
+    return "today";
+  }
+  if (days > 0) {
+    return `in ${days}d`;
+  }
+  return `${Math.abs(days)}d overdue`;
+}
+
+function buildTaskCardDateDisplay(iso, baseDate) {
+  const date = parseTaskCardIsoDate(iso);
+  if (!date) {
+    return null;
+  }
+  const start =
+    baseDate instanceof Date
+      ? getLocalDateStart(baseDate)
+      : getLocalDateStart(new Date());
+  const offset = getLocalDayOffset(start, date);
+  return Object.freeze({
+    iso: formatBulletPropertyDate(date),
+    weekday: getBulletPropertyDateWeekday(date),
+    offset,
+    relative: formatTaskCardCompactRelative(offset),
+    today: offset === 0,
+    overdue: offset < 0,
+  });
+}
+
+function buildTaskCardHeader(details = {}) {
+  const session = details.session || {};
+  const lineText = String(details.lineText || session.lineText || "");
+  const fullTitle = lineText ? cleanTaskDisplayText(lineText) : "";
+  const filePath = String(details.filePath || "");
+  const note = getVaultPathBasenameWithoutExtension(filePath);
+  const statusFromTargets = Array.isArray(session.targets)
+    ? session.targets.map((target) =>
+        getObsidianTaskCheckboxStatus((target && target.rawLine) || ""),
+      )
+    : [];
+  const statuses = Array.isArray(session.statuses) && session.statuses.length > 0
+    ? session.statuses
+    : statusFromTargets.length > 0
+      ? statusFromTargets
+      : [session.currentStatus];
+  const laneLabels = Array.from(
+    new Set(statuses.map(getTaskCardLaneChipLabel).filter(Boolean)),
+  );
+  const lane =
+    laneLabels.length === 0
+      ? null
+      : laneLabels.length === 1
+        ? laneLabels[0]
+        : "mixed";
+  const priorityStrip = details.priorityStrip || {};
+  const mixedPriority = details.mixedMetadata && details.mixedMetadata.priority;
+  let priority = null;
+  if (!priorityStrip.propertyName) {
+    priority = Object.freeze({ available: false, label: "unavailable" });
+  } else if (mixedPriority && mixedPriority.mixed) {
+    priority = Object.freeze({ available: true, label: "mixed", mixed: true });
+  } else {
+    const currentValue = normalizeBulletPropertyValue(
+      mixedPriority && Array.isArray(mixedPriority.currentValues)
+        ? mixedPriority.currentValues[0]
+        : priorityStrip.targets &&
+            priorityStrip.targets[0] &&
+            priorityStrip.targets[0].currentValue,
+    );
+    const currentLabel = currentValue
+      ? getBulletPropertyCurrentLabel(priorityStrip.property, currentValue) ||
+        currentValue
+      : IMPLICIT_PRIORITY_LEVEL_LABEL;
+    priority = Object.freeze({
+      available: true,
+      label: currentLabel,
+      value: currentValue,
+      mixed: false,
+    });
+  }
+  const scheduleProjection = details.schedule || null;
+  let schedule = Object.freeze({ available: false, label: "unavailable" });
+  if (scheduleProjection && scheduleProjection.enabled !== false) {
+    if (scheduleProjection.mixed) {
+      schedule = Object.freeze({
+        available: true,
+        mixed: true,
+        label: "mixed",
+      });
+    } else {
+      const display = buildTaskCardDateDisplay(
+        scheduleProjection.currentValue,
+        details.baseDate,
+      );
+      schedule = display
+        ? Object.freeze({
+            available: true,
+            mixed: false,
+            label: `${display.weekday} ${display.iso} · ${display.relative}`,
+            ...display,
+          })
+        : Object.freeze({ available: false, label: "unavailable" });
+    }
+  }
+  const dependsRow =
+    (Array.isArray(details.rows) ? details.rows : []).find(
+      (row) => row && row.id === "depends-on",
+    ) || null;
+  const dependencies = dependsRow
+    ? Object.freeze({
+        available: dependsRow.enabled,
+        label: dependsRow.enabled
+          ? dependsRow.detail || "none"
+          : dependsRow.unavailableReason || "unavailable",
+        mixed: Boolean(dependsRow.mixed),
+      })
+    : Object.freeze({ available: false, label: "unavailable" });
+  const refresh = details.refreshDescription
+    ? Object.freeze({
+        available: true,
+        days: details.refreshDescription.days,
+        source: details.refreshDescription.source,
+        mixed: Boolean(details.refreshDescription.mixed),
+        label: details.refreshDescription.mixed
+          ? "mixed"
+          : details.refreshDescription.detail ||
+            `${details.refreshDescription.days}d`,
+      })
+    : Object.freeze({
+        available: false,
+        label: "unavailable",
+      });
+  const targetNotes = Array.from(
+    new Set(
+      (priorityStrip.targets || [])
+        .map((target) =>
+          getVaultPathBasenameWithoutExtension((target && target.path) || ""),
+        )
+        .filter(Boolean),
+    ),
+  );
+  const chips = [];
+  if (session.type === "linked") {
+    chips.push("via Task Link");
+  }
+  if (isProjectLifecycleTaskLine(lineText)) {
+    chips.push("project");
+  }
+  if (note) {
+    chips.push(note);
+  }
+  if (lane) {
+    chips.push(lane);
+  }
+  if (priority && priority.available) {
+    chips.push(priority.label);
+  }
+  if (schedule && schedule.available) {
+    chips.push(schedule.label);
+  }
+  if (dependencies.available && dependsRow && dependsRow.detail) {
+    chips.push(dependsRow.detail);
+  }
+  if (refresh.available && refresh.label && refresh.label !== "unavailable") {
+    chips.push(refresh.label);
+  }
+  if (session.type === "counted") {
+    const countLabel = session.clamped
+      ? `${formatCountLabel(session.targetCount, "task")} of ${session.requestedCount} requested · end of note`
+      : formatCountLabel(session.targetCount, "task");
+    chips.push(countLabel);
+  }
+  if (session.type === "linked" && targetNotes.length > 0) {
+    chips.push(targetNotes.join(", "));
+  }
+  return Object.freeze({
+    title: fullTitle || "Task Card",
+    fullTitle: fullTitle || "Task Card",
+    note: note || "",
+    lane,
+    laneMixed: lane === "mixed",
+    priority,
+    schedule,
+    dependencies,
+    review: refresh,
+    chips: Object.freeze(chips),
+    viaTaskLink: session.type === "linked",
+    project: isProjectLifecycleTaskLine(lineText),
+    targetNotes: Object.freeze(targetNotes),
+    error: session.valid ? null : session.error || "Task context is unavailable",
+    empty: !session.valid || session.targetCount === 0,
+  });
+}
+
+function buildTaskCardTimeline(details = {}) {
+  const recommendation = details.recommendation;
+  if (!recommendation || !recommendation.available) {
+    return null;
+  }
+  const source = recommendation.source || {};
+  const preview = recommendation.preview || {};
+  const scheduleDisplay = buildTaskCardDateDisplay(
+    details.schedule && details.schedule.currentValue,
+    details.baseDate,
+  );
+  if (recommendation.kind === "batch") {
+    return Object.freeze({
+      kind: "batch",
+      dateStart: normalizeBulletPropertyValue(source.dateStart || preview.dateValue),
+      dateEnd: normalizeBulletPropertyValue(source.dateEnd || ""),
+      currentOffset:
+        scheduleDisplay && Number.isFinite(scheduleDisplay.offset)
+          ? scheduleDisplay.offset
+          : null,
+      frozenOffset: null,
+      minDays: null,
+      maxDays: null,
+      outOfWindow: false,
+      label:
+        source.dateStart && source.dateEnd && source.dateStart !== source.dateEnd
+          ? `${source.dateStart} → ${source.dateEnd}`
+          : source.dateStart || source.dateEnd || preview.dateText || "",
+    });
+  }
+  const level = source.toLevel || source.level || null;
+  const bounds = getPriorityRollBounds(level);
+  const frozenOffset = Number.isFinite(Number(source.offset))
+    ? Number(source.offset)
+    : null;
+  const minDays = bounds ? bounds.minDays : null;
+  const maxDays = bounds ? bounds.maxDays : null;
+  const outOfWindow =
+    frozenOffset !== null &&
+    minDays !== null &&
+    maxDays !== null &&
+    (frozenOffset < minDays || frozenOffset > maxDays);
+  return Object.freeze({
+    kind: source.kind || preview.kind || "roll",
+    dateStart: "",
+    dateEnd: "",
+    currentOffset:
+      scheduleDisplay && Number.isFinite(scheduleDisplay.offset)
+        ? scheduleDisplay.offset
+        : 0,
+    frozenOffset,
+    minDays,
+    maxDays,
+    outOfWindow,
+    label:
+      frozenOffset === null
+        ? ""
+        : `${formatTaskCardCompactRelative(frozenOffset)} · ${minDays ?? "?"}–${maxDays ?? "?"}d`,
+  });
+}
+
+function presentTaskCardRow(row) {
+  if (!row) {
+    return null;
+  }
+  const shortcut = TASK_CARD_ROW_SHORTCUTS[row.id] || "";
+  let label = row.label || "";
+  if (row.id === "schedule") {
+    label = "Schedule…";
+  } else if (row.id === "depends-on") {
+    label = "Blocked by…";
+  } else if (row.id === "review-every") {
+    label = "Review every…";
+  } else if (row.id === "cancel" && label && !label.endsWith("…")) {
+    label = `${label}…`;
+  }
+  return Object.freeze({
+    id: row.id,
+    kind: row.kind,
+    action: row.action,
+    shortcut,
+    label,
+    detail: row.enabled
+      ? row.currentLabel || row.detail || ""
+      : row.unavailableReason || row.detail || "",
+    enabled: Boolean(row.enabled),
+    unavailableReason: row.unavailableReason || null,
+    selected: false,
+    destructive: row.id === "cancel",
+    dividerBefore: row.id === "cancel",
+  });
+}
+
+function orderedTaskCardRows(model) {
+  const rows = Array.isArray(model && model.rows) ? model.rows : [];
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const ordered = [];
+  for (const id of TASK_CARD_ROW_ORDER) {
+    const row = byId.get(id);
+    if (!row) {
+      continue;
+    }
+    if (id === "more-properties" && !(model.moreProperties || []).length) {
+      continue;
+    }
+    const presented = presentTaskCardRow(row);
+    ordered.push(
+      Object.freeze({
+        ...presented,
+        selected: row.id === (model && model.selectedRowId),
+      }),
+    );
+  }
+  for (const row of rows) {
+    if (TASK_CARD_ROW_ORDER.includes(row.id)) {
+      continue;
+    }
+    const presented = presentTaskCardRow(row);
+    ordered.push(
+      Object.freeze({
+        ...presented,
+        selected: row.id === (model && model.selectedRowId),
+      }),
+    );
+  }
+  return Object.freeze(ordered);
+}
+
+function taskCardLevelToneClass(index) {
+  if (index === 0) {
+    return "is-p1";
+  }
+  if (index === 1) {
+    return "is-p2";
+  }
+  if (index === 2) {
+    return "is-p3";
+  }
+  if (index === 3) {
+    return "is-p4";
+  }
+  return "is-extra";
+}
+
+function currentTaskCardPriorityValue(model) {
+  const mixed = model && model.mixedMetadata && model.mixedMetadata.priority;
+  if (!mixed || mixed.mixed) {
+    return mixed && mixed.mixed ? "mixed" : "";
+  }
+  return normalizeBulletPropertyValue(
+    Array.isArray(mixed.currentValues) ? mixed.currentValues[0] : "",
+  );
+}
+
+function appendTaskCardKeycap(parent, text) {
+  if (!parent || !text) {
+    return null;
+  }
+  return parent.createEl("kbd", {
+    cls: "bob-key-card-key bob-task-card-key",
+    text,
+  });
+}
+
+function renderTaskCardTimelineTrack(container, timeline) {
+  if (!container || !timeline) {
+    return;
+  }
+  const track = container.createDiv({ cls: "bob-task-card-timeline-track" });
+  track.createSpan({
+    cls: "bob-task-card-timeline-today",
+    text: "today",
+  });
+  if (timeline.kind === "batch") {
+    track.createSpan({
+      cls: "bob-task-card-timeline-span",
+      text: timeline.label || "multiple dates",
+    });
+    return;
+  }
+  const min = Number(timeline.minDays);
+  const max = Number(timeline.maxDays);
+  const frozen = Number(timeline.frozenOffset);
+  const current = Number(timeline.currentOffset);
+  const points = [0];
+  if (Number.isFinite(min)) {
+    points.push(min);
+  }
+  if (Number.isFinite(max)) {
+    points.push(max);
+  }
+  if (Number.isFinite(frozen)) {
+    points.push(frozen);
+  }
+  if (Number.isFinite(current)) {
+    points.push(current);
+  }
+  const lo = Math.min(...points);
+  const hi = Math.max(...points);
+  const span = Math.max(1, hi - lo);
+  const place = (value, cls, label) => {
+    if (!Number.isFinite(value)) {
+      return;
+    }
+    const tick = track.createDiv({ cls: `bob-task-card-timeline-tick ${cls}` });
+    const percent = ((value - lo) / span) * 100;
+    tick.style.left = `${Math.max(0, Math.min(100, percent))}%`;
+    tick.setAttribute("title", label);
+    tick.setAttribute("aria-label", label);
+  };
+  if (Number.isFinite(min) && Number.isFinite(max)) {
+    const windowEl = track.createDiv({
+      cls: "bob-task-card-timeline-window",
+    });
+    windowEl.style.left = `${Math.max(0, Math.min(100, ((min - lo) / span) * 100))}%`;
+    windowEl.style.width = `${Math.max(0, Math.min(100, ((max - min) / span) * 100))}%`;
+    windowEl.setAttribute("aria-hidden", "true");
+    track.createSpan({
+      cls: "bob-task-card-timeline-bound is-min",
+      text: `${min}d`,
+    });
+    track.createSpan({
+      cls: "bob-task-card-timeline-bound is-max",
+      text: `${max}d`,
+    });
+  }
+  place(current, "is-current", "current date");
+  if (Number.isFinite(frozen)) {
+    place(
+      frozen,
+      timeline.outOfWindow ? "is-frozen is-out-of-window" : "is-frozen",
+      `preview ${formatTaskCardCompactRelative(frozen)}`,
+    );
+  }
+}
+
+function renderTaskCardView(container, model, options = {}) {
+  if (!container) {
+    return null;
+  }
+  container.empty();
+  addElementClasses(container, "bob-task-card", "bob-key-card");
+  const headerModel = (model && model.header) || {};
+  const titleId = "bob-task-card-title";
+  const header = container.createDiv({ cls: "bob-task-card-header" });
+  const titleEl = header.createDiv({
+    cls: "bob-task-card-title bob-key-card-title",
+    text: headerModel.title || "Task Card",
+    attr: {
+      id: titleId,
+      title: headerModel.fullTitle || headerModel.title || "Task Card",
+    },
+  });
+  titleEl.setAttribute("id", titleId);
+  titleEl.setAttribute(
+    "title",
+    headerModel.fullTitle || headerModel.title || "Task Card",
+  );
+  const closeButton = header.createEl("button", {
+    cls: "bob-task-card-close",
+    text: "Close",
+    attr: { type: "button", "aria-label": "Close" },
+  });
+  closeButton.addEventListener("click", (event) => {
+    if (event && typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
+    if (typeof options.onClose === "function") {
+      options.onClose();
+    }
+  });
+  const meta = container.createDiv({
+    cls: "bob-task-card-meta",
+    attr: { "aria-label": "Task metadata" },
+  });
+  const chips = Array.isArray(headerModel.chips) ? headerModel.chips : [];
+  if (chips.length === 0) {
+    meta.createSpan({
+      cls: "bob-task-card-chip is-muted",
+      text: headerModel.error || "unavailable",
+    });
+  } else {
+    for (const chip of chips) {
+      const text = String(chip || "");
+      const laneClass =
+        text === "NEXT"
+          ? " is-lane-next"
+          : text === "PENDING"
+            ? " is-lane-pending"
+            : text === "READY"
+              ? " is-lane-ready"
+              : text === "BLOCKED"
+                ? " is-lane-blocked"
+                : "";
+      const dateTone =
+        headerModel.schedule &&
+        headerModel.schedule.overdue &&
+        text === headerModel.schedule.label
+          ? " is-overdue"
+          : headerModel.schedule &&
+              headerModel.schedule.today &&
+              text === headerModel.schedule.label
+            ? " is-today"
+            : "";
+      meta.createSpan({
+        cls: `bob-task-card-chip${laneClass}${dateTone}`,
+        text,
+      });
+    }
+  }
+  if (headerModel.error) {
+    const errorEl = container.createDiv({
+      cls: "bob-task-card-error",
+      text: headerModel.error,
+      attr: { role: "alert" },
+    });
+    errorEl.setAttribute("role", "alert");
+  }
+  const recommendation = model && model.recommendation;
+  if (recommendation && recommendation.available) {
+    const preview = recommendation.preview || {};
+    const tone =
+      preview.tone ||
+      (preview.kind === "cancel" || recommendation.source.kind === "cancel"
+        ? "danger"
+        : preview.kind === "decay"
+          ? "warn"
+          : "accent");
+    const banner = container.createDiv({
+      cls: `bob-task-card-banner is-${preview.kind || recommendation.source.kind || "roll"} is-${tone}`,
+    });
+    const bannerMain = banner.createDiv({ cls: "bob-task-card-banner-main" });
+    appendTaskCardKeycap(bannerMain, "Ctrl+Enter");
+    const actionText =
+      preview.kind === "cancel" ||
+      (recommendation.source && recommendation.source.kind === "cancel")
+        ? "Cancel task"
+        : preview.action || "Roll";
+    bannerMain.createSpan({
+      cls: "bob-task-card-banner-action",
+      text: actionText,
+    });
+    if (preview.dateText || preview.dateValue) {
+      const dateEl = bannerMain.createSpan({
+        cls: "bob-task-card-banner-date",
+        text: preview.dateText || preview.dateValue,
+      });
+      if (preview.kind === "cancel") {
+        addElementClasses(dateEl, "is-danger");
+      }
+    }
+    if (preview.meta) {
+      bannerMain.createSpan({
+        cls: "bob-task-card-banner-meta",
+        text: preview.meta,
+      });
+    }
+    if (recommendation.kind === "batch") {
+      const counts = recommendation.effects || {};
+      const skipped = recommendation.skippedCount || 0;
+      banner.createDiv({
+        cls: "bob-task-card-banner-batch",
+        text: [
+          recommendation.actionableCount
+            ? `${recommendation.actionableCount} actions`
+            : "",
+          counts.roll ? `${counts.roll} roll` : "",
+          counts.decay ? `${counts.decay} decay` : "",
+          counts.cancel ? `${counts.cancel} cancel` : "",
+          skipped ? `${skipped} skipped` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+    }
+    const timeline = model.timeline;
+    if (timeline) {
+      const timelineEl = banner.createDiv({
+        cls: "bob-task-card-timeline",
+      });
+      renderTaskCardTimelineTrack(timelineEl, timeline);
+      const regen = timelineEl.createDiv({
+        cls: "bob-task-card-timeline-regen",
+      });
+      appendTaskCardKeycap(regen, "Ctrl+R");
+    }
+  }
+  const strip = model && model.priorityStrip;
+  const stripEl = container.createDiv({
+    cls: "bob-task-card-strip",
+    attr: {
+      role: "radiogroup",
+      "aria-label": "Priority levels",
+    },
+  });
+  stripEl.setAttribute("role", "radiogroup");
+  stripEl.setAttribute("aria-label", "Priority levels");
+  const currentPriority = currentTaskCardPriorityValue(model);
+  const levels = strip && Array.isArray(strip.levels) ? strip.levels : [];
+  if (!strip || !strip.propertyName || levels.length === 0) {
+    stripEl.createDiv({
+      cls: "bob-task-card-strip-empty",
+      text: (strip && strip.unavailableReason) || "Priority is unavailable",
+    });
+  } else {
+    for (const level of levels) {
+      const isCurrent =
+        currentPriority !== "mixed" &&
+        normalizeBulletPropertyValue(level.value) === currentPriority &&
+        currentPriority !== "";
+      const dateDisplay = buildTaskCardDateDisplay(
+        level.mixed ? "" : level.date,
+        model && model.baseDate ? parseTaskCardIsoDate(model.baseDate) : null,
+      );
+      const dateLabel = level.mixed
+        ? `${level.dateStart || ""} → ${level.dateEnd || ""}`.trim()
+        : dateDisplay
+          ? `${dateDisplay.weekday} ${dateDisplay.iso}`
+          : level.date || "";
+      const levelEl = stripEl.createDiv({
+        cls: `bob-task-card-level bob-key-card-row ${taskCardLevelToneClass(level.index)}${
+          isCurrent ? " is-current" : ""
+        }${level.available ? "" : " is-disabled"}${level.mixed ? " is-mixed" : ""}`,
+        attr: {
+          role: "radio",
+          "aria-checked": isCurrent ? "true" : "false",
+          "aria-disabled": level.available ? "false" : "true",
+        },
+      });
+      levelEl.setAttribute("role", "radio");
+      levelEl.setAttribute("aria-checked", isCurrent ? "true" : "false");
+      if (level.key) {
+        appendTaskCardKeycap(levelEl, level.key);
+      }
+      const body = levelEl.createDiv({ cls: "bob-task-card-level-body" });
+      body.createDiv({
+        cls: "bob-task-card-level-label",
+        text: level.label,
+      });
+      body.createDiv({
+        cls: "bob-task-card-level-date",
+        text: dateLabel || (level.available ? "" : level.unavailableReason || ""),
+      });
+      if (isCurrent) {
+        body.createDiv({
+          cls: "bob-task-card-level-hint",
+          text: "re-pick · resets streak",
+        });
+      }
+    }
+    const zeroCurrent = currentPriority === "";
+    const zeroEl = stripEl.createDiv({
+      cls: `bob-task-card-level bob-key-card-row is-p0${
+        zeroCurrent ? " is-current" : ""
+      }`,
+      attr: {
+        role: "radio",
+        "aria-checked": zeroCurrent ? "true" : "false",
+        "aria-label": "P0 clear, keeps date",
+      },
+    });
+    zeroEl.setAttribute("role", "radio");
+    zeroEl.setAttribute("aria-checked", zeroCurrent ? "true" : "false");
+    appendTaskCardKeycap(zeroEl, "0");
+    const zeroBody = zeroEl.createDiv({ cls: "bob-task-card-level-body" });
+    zeroBody.createDiv({
+      cls: "bob-task-card-level-label",
+      text: IMPLICIT_PRIORITY_LEVEL_LABEL,
+    });
+    zeroBody.createDiv({
+      cls: "bob-task-card-level-date",
+      text: "clear · keeps date",
+    });
+    if (currentPriority === "mixed") {
+      stripEl.createDiv({
+        cls: "bob-task-card-strip-mixed",
+        text: "mixed priorities",
+      });
+    }
+  }
+  const listEl = container.createDiv({
+    cls: "bob-task-card-actions",
+    attr: {
+      role: "listbox",
+      "aria-label": "Task Card actions",
+      tabindex: "0",
+    },
+  });
+  listEl.setAttribute("role", "listbox");
+  listEl.setAttribute("aria-label", "Task Card actions");
+  listEl.setAttribute("tabindex", "0");
+  const presentedRows = orderedTaskCardRows(model);
+  let selectedOptionId = "";
+  for (const row of presentedRows) {
+    if (row.dividerBefore) {
+      listEl.createDiv({
+        cls: "bob-task-card-divider",
+        attr: { role: "separator" },
+      });
+    }
+    const optionId = `bob-task-card-row-${row.id}`;
+    const rowEl = listEl.createDiv({
+      cls: `bob-task-card-row bob-key-card-row${
+        row.selected ? " is-selected" : ""
+      }${row.enabled ? "" : " is-disabled"}${
+        row.destructive ? " is-destructive" : ""
+      }`,
+      attr: {
+        id: optionId,
+        role: "option",
+        "aria-selected": row.selected ? "true" : "false",
+        "aria-disabled": row.enabled ? "false" : "true",
+      },
+    });
+    rowEl.setAttribute("id", optionId);
+    rowEl.setAttribute("role", "option");
+    rowEl.setAttribute("aria-selected", row.selected ? "true" : "false");
+    if (row.selected) {
+      selectedOptionId = optionId;
+    }
+    if (row.shortcut) {
+      appendTaskCardKeycap(rowEl, row.shortcut);
+    } else {
+      rowEl.createDiv({ cls: "bob-task-card-key-spacer" });
+    }
+    const body = rowEl.createDiv({ cls: "bob-task-card-row-body" });
+    body.createDiv({ cls: "bob-task-card-row-label", text: row.label });
+    if (row.detail) {
+      body.createDiv({
+        cls: row.enabled
+          ? "bob-task-card-row-detail"
+          : "bob-task-card-row-reason",
+        text: row.detail,
+      });
+    }
+    rowEl.addEventListener("click", (event) => {
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      if (typeof options.onSelectRow === "function") {
+        options.onSelectRow(row.id);
+      }
+    });
+  }
+  if (selectedOptionId) {
+    listEl.setAttribute("aria-activedescendant", selectedOptionId);
+  }
+  const moreProperties = (model && model.moreProperties) || [];
+  if (moreProperties.length > 0) {
+    const more = container.createDiv({
+      cls: "bob-task-card-more",
+      attr: { "aria-label": "More properties" },
+    });
+    more.createDiv({
+      cls: "bob-task-card-more-title",
+      text: "More",
+    });
+    for (const item of moreProperties) {
+      const moreRow = more.createDiv({
+        cls: "bob-task-card-more-row",
+      });
+      moreRow.createSpan({
+        cls: "bob-task-card-more-name",
+        text: item.propertyName || item.label || "property",
+      });
+      moreRow.createSpan({
+        cls: "bob-task-card-more-value",
+        text: item.mixed
+          ? "mixed"
+          : item.currentLabel || item.currentValue || "unset",
+      });
+    }
+  }
+  if (model && model.session && model.session.type !== "single") {
+    const disclosure = container.createDiv({
+      cls: "bob-task-card-disclosure",
+    });
+    if (model.session.type === "counted") {
+      disclosure.createDiv({
+        cls: "bob-task-card-disclosure-title",
+        text: model.session.clamped
+          ? `${model.session.targetCount} of ${model.session.requestedCount} requested · end of note`
+          : formatCountLabel(model.session.targetCount, "task"),
+      });
+    } else if (model.session.type === "linked") {
+      disclosure.createDiv({
+        cls: "bob-task-card-disclosure-title",
+        text: `via Task Link · ${formatCountLabel(model.session.targetCount, "task")}`,
+      });
+      const notes = (model.header && model.header.targetNotes) || [];
+      if (notes.length > 0) {
+        disclosure.createDiv({
+          cls: "bob-task-card-disclosure-notes",
+          text: notes.join(" · "),
+        });
+      }
+    }
+    if (recommendation && recommendation.kind === "batch") {
+      const entries =
+        recommendation.source && Array.isArray(recommendation.source.entries)
+          ? recommendation.source.entries
+          : [];
+      for (const entry of entries.slice(0, 8)) {
+        const rec = entry && entry.recommendation;
+        disclosure.createDiv({
+          cls: "bob-task-card-disclosure-item",
+          text: rec
+            ? `${rec.kind}${rec.date ? ` · ${rec.date}` : ""}`
+            : entry.skipped || "skipped",
+        });
+      }
+    }
+  }
+  if (headerModel.empty && !headerModel.error) {
+    container.createDiv({
+      cls: "bob-task-card-empty",
+      text: "No task targets are available",
+    });
+  }
+  const footer = container.createDiv({
+    cls: "bob-task-card-footer bob-key-card-footer",
+  });
+  footer.createSpan({
+    text: "type to search · Ctrl+D clear selected property · Esc close",
+  });
+  if (typeof options.onFocusList === "function") {
+    options.onFocusList(listEl);
+  } else if (listEl && typeof listEl.focus === "function") {
+    listEl.focus();
+  }
+  return Object.freeze({
+    titleId,
+    listEl,
+    closeButton,
+  });
+}
+
 class BulletPropertyPickerModal extends FilteredPickerModal {
   constructor(app, plugin, editor, cursor, lineText, config, context = {}) {
     super(app, {
@@ -25510,6 +26428,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.taskItemsByLine = new Map();
     this.priorityRandom =
       typeof context.random === "function" ? context.random : Math.random;
+    this.taskCardEnabled = context.taskCard === true;
+    this.cardViewMode = this.taskCardEnabled ? "card" : "classic";
+    this.taskCardModel = null;
+    this.taskCardSelectedRowId = "schedule";
+    this.taskCardQuery = "";
+    this.taskCardListEl = null;
     this.fixedValueBaseDate =
       context.baseDate instanceof Date
         ? getLocalDateStart(context.baseDate)
@@ -25547,7 +26471,225 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.refreshPriorityRollRecommendation();
     this.refreshCountedRollBatch();
     this.refreshLinkRollBatch();
-    this.showPropertyStage({ clearQuery: false });
+    if (this.taskCardEnabled) {
+      this.showTaskCard({ rebuild: true });
+    } else {
+      this.showPropertyStage({ clearQuery: false });
+    }
+  }
+
+  applyTaskCardChrome(options = {}) {
+    if (!this.modalEl) {
+      return;
+    }
+    const add =
+      typeof this.modalEl.addClass === "function"
+        ? (name) => this.modalEl.addClass(name)
+        : () => {};
+    const remove =
+      typeof this.modalEl.removeClass === "function"
+        ? (name) => this.modalEl.removeClass(name)
+        : () => {};
+    if (this.taskCardEnabled) {
+      add("bob-task-card-modal");
+      if (options.wide) {
+        add("bob-task-card-wide");
+      } else {
+        remove("bob-task-card-wide");
+      }
+    } else {
+      remove("bob-task-card-modal");
+      remove("bob-task-card-wide");
+    }
+  }
+
+  getTaskCardFreshnessApi() {
+    if (this.plugin && typeof this.plugin.getFreshnessApi === "function") {
+      return this.plugin.getFreshnessApi();
+    }
+    return getReviewFreshnessApi(this.app);
+  }
+
+  buildTaskCardContext() {
+    return {
+      config: this.config,
+      content: this.getEditorContent(),
+      lineText: this.lineText,
+      cursorLine: this.cursor ? this.cursor.line : 0,
+      filePath: this.filePath,
+      propertyContext: this.propertyContext,
+      taskSession: this.taskSession,
+      linkSession: this.linkSession,
+      baseDate: this.fixedValueBaseDate || this.valueBaseDate,
+      random: this.priorityRandom,
+      freshnessApi: this.getTaskCardFreshnessApi(),
+      selectedRowId: this.taskCardSelectedRowId,
+      mode: this.cardViewMode === "search" ? "search" : "card",
+      query: this.inputEl
+        ? this.inputEl.value
+        : this.taskCardQuery || "",
+    };
+  }
+
+  showTaskCard(options = {}) {
+    this.taskCardEnabled = true;
+    this.cardViewMode = "card";
+    this.stage = "task-card";
+    this.selectedPropertyItem = null;
+    this.pendingTask = null;
+    if (typeof this.clearPendingBatch === "function") {
+      this.clearPendingBatch();
+    }
+    if (options.rebuild === true || !this.taskCardModel) {
+      this.taskCardModel = planTaskCard(this.buildTaskCardContext());
+      this.taskCardSelectedRowId =
+        this.taskCardModel.selectedRowId || "schedule";
+    } else if (this.taskCardSelectedRowId) {
+      this.taskCardModel = Object.freeze({
+        ...this.taskCardModel,
+        selectedRowId: this.taskCardSelectedRowId,
+        mode: "card",
+      });
+    }
+    this.applyTaskCardChrome({ wide: false });
+    if (this.isOpen && this.contentEl && this.modalEl) {
+      this.contentEl.empty();
+      this.modalEl.addClass("bob-cnp-modal");
+      this.contentEl.addClass("bob-cnp");
+      this.renderTaskCard();
+    }
+  }
+
+  showSearchFromCard(query = "") {
+    this.taskCardEnabled = true;
+    this.cardViewMode = "search";
+    this.taskCardQuery = String(query || "");
+    this.stage = "properties";
+    FilteredPickerModal.prototype.onOpen.call(this);
+    this.showPropertyStage({
+      clearQuery: false,
+      seedQuery: this.taskCardQuery,
+      fromTaskCard: true,
+    });
+    this.applyTaskCardChrome({ wide: false });
+    if (this.headerEl) {
+      const back = this.headerEl.createEl("button", {
+        cls: "bob-task-card-back bob-key-card-key",
+        text: "Back",
+        attr: {
+          type: "button",
+          "aria-label": "Back to Task Card",
+        },
+      });
+      back.addEventListener("click", (event) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        this.showTaskCard();
+      });
+    }
+    if (this.inputEl && typeof this.inputEl.focus === "function") {
+      this.inputEl.focus();
+    }
+  }
+
+  renderTaskCard() {
+    if (!this.contentEl || !this.taskCardModel) {
+      return;
+    }
+    this.contentEl.empty();
+    this.contentEl.addClass("bob-cnp");
+    this.contentEl.addClass("bob-task-card-root");
+    this.modalEl.addClass("bob-cnp-modal");
+    this.applyTaskCardChrome({ wide: false });
+    this.modalEl.setAttribute("role", "dialog");
+    this.modalEl.setAttribute("aria-modal", "true");
+    this.modalEl.setAttribute("aria-labelledby", "bob-task-card-title");
+    const rendered = renderTaskCardView(this.contentEl, this.taskCardModel, {
+      onClose: () => this.close(),
+      onSelectRow: (rowId) => {
+        this.taskCardSelectedRowId = rowId;
+        this.taskCardModel = Object.freeze({
+          ...this.taskCardModel,
+          selectedRowId: rowId,
+        });
+        this.renderTaskCard();
+      },
+      onFocusList: (listEl) => {
+        this.taskCardListEl = listEl;
+        if (listEl && typeof listEl.focus === "function") {
+          listEl.focus();
+        }
+      },
+    });
+    this.taskCardListEl = rendered && rendered.listEl;
+    this.inputEl = null;
+    this.resultsEl = null;
+    this.headerEl = null;
+    this.headerIconEl = null;
+    this.titleEl = null;
+    this.subtitleEl = null;
+    this.footerEl = null;
+  }
+
+  onOpen() {
+    if (this.stage === "task-card") {
+      this.contentEl.empty();
+      this.modalEl.addClass("bob-cnp-modal");
+      this.contentEl.addClass("bob-cnp");
+      this.applyTaskCardChrome({ wide: false });
+      this.renderTaskCard();
+      return;
+    }
+    super.onOpen();
+    this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
+  }
+
+  onClose() {
+    if (this.modalEl) {
+      this.modalEl.removeClass("bob-task-card-modal");
+      this.modalEl.removeClass("bob-task-card-wide");
+    }
+    super.onClose();
+  }
+
+  renderAll(options = {}) {
+    if (this.stage === "task-card") {
+      this.renderTaskCard();
+      return;
+    }
+    super.renderAll(options);
+    this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
+    this.wireTaskCardSearchAria();
+  }
+
+  wireTaskCardSearchAria() {
+    if (
+      !this.taskCardEnabled ||
+      this.cardViewMode !== "search" ||
+      !this.inputEl ||
+      !this.resultsEl
+    ) {
+      return;
+    }
+    const resultsId = "bob-task-card-search-results";
+    this.resultsEl.setAttribute("id", resultsId);
+    this.inputEl.setAttribute("role", "combobox");
+    this.inputEl.setAttribute("aria-autocomplete", "list");
+    this.inputEl.setAttribute("aria-controls", resultsId);
+    this.inputEl.setAttribute("aria-expanded", "true");
+    const options = Array.isArray(this.resultsEl.children)
+      ? this.resultsEl.children.filter(
+          (child) => child && child.attributes && child.attributes.role === "option",
+        )
+      : [];
+    options.forEach((row, index) => {
+      const id = `bob-task-card-search-option-${index}`;
+      row.setAttribute("id", id);
+      if (row.classes && row.classes.includes("is-selected")) {
+        this.inputEl.setAttribute("aria-activedescendant", id);
+      }
+    });
   }
 
   isCountedSession() {
@@ -25834,8 +26976,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
 
     this.propertyItems = Array.isArray(propertyItems) ? propertyItems : [];
+    this.applyTaskCardChrome({ wide: false });
     if (this.resultsEl) {
       this.renderAll({ clearQuery: options.clearQuery !== false });
+      if (options.seedQuery && this.inputEl) {
+        this.inputEl.value = options.seedQuery;
+        this.renderResults();
+      }
       const wantedPropertyName =
         options.selectPropertyName || this.initialProperty;
       if (wantedPropertyName) {
@@ -28187,6 +29334,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
     }
+    this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
     if (
       stage &&
       !stage.cacheReady &&
@@ -28518,6 +29666,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // as the user types, mirroring refreshLocalTaskFooter.
   renderResults() {
     super.renderResults();
+    this.wireTaskCardSearchAria();
     if (this.stage === "reason") {
       const item = (this.visibleItems || [])[0];
       this.footerHints = getBulletPropertyScheduleReasonHints({
@@ -49128,6 +50277,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 module.exports.helpers = {
   FilteredPickerModal,
   FreshnessRefreshSummaryModal,
+  ChildNotePickerModal,
   TaskMoveDestinationPickerModal,
   PomodoroBulletMovePickerModal,
   PomodoroEntryMovePickerModal,
@@ -49369,6 +50519,8 @@ module.exports.helpers = {
   buildTaskCardPriorityPreviews,
   planTaskCard,
   resolveTaskCardKey,
+  renderTaskCardView,
+  orderedTaskCardRows,
   promoteScheduledRowForPrioritizedTask,
   discoverCountedObsidianTaskTargets,
   parseLinkPickerTaskLink,

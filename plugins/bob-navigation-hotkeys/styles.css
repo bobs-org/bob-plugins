@@ -1570,3 +1570,449 @@
   color: var(--text-faint, var(--text-muted));
   font-size: 0.85em;
 }
+
+/* Shared key-card tokens used by the decay card and Task Card. */
+.bob-key-card-title {
+  font-weight: 650;
+  color: var(--text-normal);
+}
+
+.bob-key-card-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 0.8em;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.bob-key-card-row {
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bob-key-card-row {
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+  }
+}
+
+.bob-key-card-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.bob-key-card-row:focus,
+.bob-key-card-row:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+.bob-key-card-footer {
+  color: var(--text-faint, var(--text-muted));
+  font-size: 0.85em;
+}
+
+/* Compact Task Card modal. Scoped so generic child-note, task-move, and
+   Pomodoro pickers keep the default bob-cnp-modal dimensions. */
+.modal.bob-cnp-modal.bob-task-card-modal {
+  width: min(600px, 92vw);
+  max-width: min(600px, 92vw);
+  height: auto;
+  max-height: min(75vh, 840px);
+}
+
+.modal.bob-cnp-modal.bob-task-card-modal.bob-task-card-wide {
+  width: min(92vw, 960px);
+  max-width: 960px;
+}
+
+.bob-task-card,
+.bob-task-card-root {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  max-height: min(75vh, 840px);
+  padding: 12px 14px 10px;
+  overflow: auto;
+}
+
+.bob-task-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.bob-task-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 1.05em;
+  line-height: 1.3;
+}
+
+.bob-task-card-close {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.bob-task-card-close:hover,
+.bob-task-card-back:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.bob-task-card-back {
+  margin-left: auto;
+}
+
+.bob-task-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 1px 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-task-card-chip.is-lane-next {
+  color: var(--task-status-next, var(--color-green));
+  border-color: color-mix(
+    in srgb,
+    var(--task-status-next, var(--color-green)) 45%,
+    transparent
+  );
+}
+
+.bob-task-card-chip.is-lane-pending {
+  color: var(--task-status-in-progress, var(--color-orange));
+  border-color: color-mix(
+    in srgb,
+    var(--task-status-in-progress, var(--color-orange)) 45%,
+    transparent
+  );
+}
+
+.bob-task-card-chip.is-lane-ready {
+  color: var(--task-status-todo, var(--color-blue));
+  border-color: color-mix(
+    in srgb,
+    var(--task-status-todo, var(--color-blue)) 45%,
+    transparent
+  );
+}
+
+.bob-task-card-chip.is-lane-blocked {
+  color: var(--text-error);
+  border-color: color-mix(in srgb, var(--text-error) 45%, transparent);
+}
+
+.bob-task-card-chip.is-today {
+  color: var(--text-warning, var(--color-orange));
+}
+
+.bob-task-card-chip.is-overdue {
+  color: var(--text-error);
+}
+
+.bob-task-card-chip.is-muted {
+  color: var(--text-faint, var(--text-muted));
+}
+
+.bob-task-card-error {
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 8px 11px;
+  border-radius: var(--radius-m);
+  border-left: 3px solid var(--interactive-accent);
+  background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
+.bob-task-card-banner.is-warn {
+  border-left-color: var(--color-orange);
+  background-color: color-mix(in srgb, var(--color-orange) 12%, transparent);
+}
+
+.bob-task-card-banner.is-danger,
+.bob-task-card-banner.is-cancel {
+  border-left-color: var(--text-error);
+  background-color: color-mix(in srgb, var(--text-error) 12%, transparent);
+}
+
+.bob-task-card-banner-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.bob-task-card-banner-action {
+  font-weight: 650;
+}
+
+.bob-task-card-banner-date {
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-task-card-banner-date.is-danger,
+.bob-task-card-banner.is-danger .bob-task-card-banner-action {
+  color: var(--text-error);
+}
+
+.bob-task-card-banner-meta,
+.bob-task-card-banner-batch {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bob-task-card-timeline-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 22px;
+  margin: 4px 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-task-card-timeline-window {
+  position: absolute;
+  top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--text-muted) 28%, transparent);
+}
+
+.bob-task-card-timeline-tick {
+  position: absolute;
+  top: 3px;
+  width: 8px;
+  height: 16px;
+  margin-left: -4px;
+  border-radius: 2px;
+  background-color: var(--interactive-accent);
+}
+
+.bob-task-card-timeline-tick.is-current {
+  background: transparent;
+  border: 2px solid var(--text-muted);
+}
+
+.bob-task-card-timeline-tick.is-out-of-window {
+  background-color: var(--text-warning, var(--color-orange));
+}
+
+.bob-task-card-timeline-today,
+.bob-task-card-timeline-bound,
+.bob-task-card-timeline-span {
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-task-card-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bob-task-card-level {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 88px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+}
+
+.bob-task-card-level.is-current {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.bob-task-card-level.is-disabled {
+  opacity: 0.62;
+}
+
+.bob-task-card-level.is-p1 {
+  background-color: color-mix(in srgb, var(--color-red, var(--text-error)) 10%, transparent);
+}
+
+.bob-task-card-level.is-p2 {
+  background-color: color-mix(in srgb, var(--color-orange) 10%, transparent);
+}
+
+.bob-task-card-level.is-p3 {
+  background-color: color-mix(in srgb, var(--color-yellow) 10%, transparent);
+}
+
+.bob-task-card-level.is-p4 {
+  background-color: color-mix(in srgb, var(--color-blue) 10%, transparent);
+}
+
+.bob-task-card-level.is-p0,
+.bob-task-card-level.is-extra {
+  background-color: color-mix(in srgb, var(--text-muted) 8%, transparent);
+}
+
+.bob-task-card-level-label {
+  font-weight: 650;
+}
+
+.bob-task-card-level-date,
+.bob-task-card-level-hint,
+.bob-task-card-strip-mixed,
+.bob-task-card-strip-empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-task-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bob-task-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.bob-task-card-row.is-selected {
+  background-color: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.bob-task-card-row.is-disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.bob-task-card-row.is-disabled:hover {
+  background-color: transparent;
+}
+
+.bob-task-card-row.is-destructive .bob-task-card-row-label {
+  color: var(--text-error);
+}
+
+.bob-task-card-row-body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.bob-task-card-row-label {
+  font-weight: 600;
+}
+
+.bob-task-card-row-detail,
+.bob-task-card-row-reason {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.bob-task-card-key-spacer {
+  flex: 0 0 44px;
+}
+
+.bob-task-card-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background-color: var(--background-modifier-border);
+}
+
+.bob-task-card-more {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.bob-task-card-more-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bob-task-card-more-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-disclosure,
+.bob-task-card-empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-disclosure-item,
+.bob-task-card-disclosure-notes {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+  .modal.bob-cnp-modal.bob-task-card-modal {
+    width: min(600px, calc(100vw - 24px));
+    max-width: min(600px, calc(100vw - 24px));
+  }
+
+  .bob-task-card-strip,
+  .bob-task-card-banner-main,
+  .bob-task-card-row {
+    flex-wrap: wrap;
+  }
+}

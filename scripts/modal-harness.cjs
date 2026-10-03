@@ -13,7 +13,21 @@ class ElementStub {
       remove: (...names) => {
         this.classes = this.classes.filter((name) => !names.includes(name));
       },
+      contains: (name) => this.classes.includes(name),
+      toggle: (name, force) => {
+        const has = this.classes.includes(name);
+        const shouldHave = force === undefined ? !has : Boolean(force);
+        if (shouldHave && !has) {
+          this.classes.push(name);
+        } else if (!shouldHave && has) {
+          this.classes = this.classes.filter((item) => item !== name);
+        }
+        return shouldHave;
+      },
     };
+    this.tagName = String(options.tag || "div").toUpperCase();
+    this.style = {};
+    this.focused = false;
     this.textContent = options.text || "";
     this.value = "";
   }
@@ -37,8 +51,12 @@ class ElementStub {
     this.children.push(new ElementStub({ text: String(value) }));
   }
 
-  createEl(_tag, options = {}) {
-    return this.createDiv(options);
+  setText(value) {
+    this.textContent = String(value);
+  }
+
+  createEl(tag, options = {}) {
+    return this.createDiv({ ...options, tag: tag || "div" });
   }
 
   addClass(name) {
@@ -61,7 +79,9 @@ class ElementStub {
     this.listeners[type] = callback;
   }
 
-  focus() {}
+  focus() {
+    this.focused = true;
+  }
   scrollIntoView() {}
 }
 

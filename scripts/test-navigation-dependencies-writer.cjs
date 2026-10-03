@@ -320,25 +320,10 @@ test("links to unloaded notes tolerate add, remove, and deleted targets", async 
   assert.doesNotMatch(editor.content, /Other#\^x/);
 });
 
-// A subfolder target with a duplicate basename keeps its full route: link
-// form ranks against the vault file list and paths resolve through the
-// linkpath resolver.
-test("duplicate basenames keep the full route", () => {
-  const link = helpers.canonicalDependencyLink(
-    { path: "chat/cash.md", blockId: "a" },
-    "Tasks.md",
-    ["Tasks.md", "cash.md", "chat/cash.md"],
-  );
-  assert.equal(link.text, "[[chat/cash#^a]]");
-  const resolved = helpers.dependencyPathForLinkNote("cash", "Tasks.md", () => "chat/cash.md");
-  assert.equal(resolved, "chat/cash.md");
-  const fallback = helpers.dependencyPathForLinkNote("cash", "Tasks.md", null);
-  assert.equal(fallback, "cash.md");
-});
-
-// Recovery resolves over the vault snapshot: a dependent linked from
-// today's Pomodoro recovers to Next, not Ready.
-test("Pomodoro-linked dependents recover to Next from the daily note", () => {
+// Recovery resolves over the plugin's own vault snapshot (no injected
+// `vaultContents`): a dependent linked from today's Pomodoro recovers to
+// Next, not Ready — and to Ready when the daily note has no such link.
+test("Pomodoro-linked dependents recover through the plugin vault read", async () => {
   const parentNote = [
     "- [?] #task P [dependsOn:: Tasks__a] ^p",
     "  - ⛓️ **DEPENDS ON:** [[#^a]]",
@@ -349,37 +334,39 @@ test("Pomodoro-linked dependents recover to Next from the daily note", () => {
     "- [ ] 10:00 Focus",
     "  - [[Tasks#^p]]",
   ].join("\n");
-  const today = new Date(2026, 9, 3);
-  const dailyPath = "2026/20261003.md";
-  const registry = helpers.parseTasksStatusRegistry(compatibleTasksSettings());
-  assert.equal(registry.safe, true);
-  const withDaily = helpers.planDependencyEdit({
-    content: parentNote,
-    parentLine: 0,
+  // The daily note must be today's for the recovery index: derive its path
+  // from the live date so this test is not pinned to one calendar day.
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const dailyPath = `${now.getFullYear()}/${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.md`;
+  const { plugin } = stubPlugin({
+    "Tasks.md": parentNote,
+    [dailyPath]: dailyNote,
+  });
+  const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  const outcome = await plugin.applyDependencyEdit({
+    editor,
     parentPath: "Tasks.md",
+    parentLine: 0,
     add: [],
     remove: [{ path: "Tasks.md", blockId: "a" }],
-    files: { "Tasks.md": parentNote },
-    recovery: {
-      registry,
-      today,
-      vaultContents: { "Tasks.md": parentNote, [dailyPath]: dailyNote },
-    },
   });
-  assert.equal(withDaily.ok, true, withDaily.reason);
-  assert.match(withDaily.nextContent, /- \[\*\] #task P \^p$/m);
+  assert.equal(outcome.ok, true, JSON.stringify(outcome));
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.content, /- \[\*\] #task P\b/m);
+  assert.doesNotMatch(editor.content, /DEPENDS ON/);
 
-  const withoutDaily = helpers.planDependencyEdit({
-    content: parentNote,
-    parentLine: 0,
+  const { plugin: lonelyPlugin } = stubPlugin({ "Tasks.md": parentNote });
+  const lonelyEditor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  const lonely = await lonelyPlugin.applyDependencyEdit({
+    editor: lonelyEditor,
     parentPath: "Tasks.md",
+    parentLine: 0,
     add: [],
     remove: [{ path: "Tasks.md", blockId: "a" }],
-    files: { "Tasks.md": parentNote },
-    recovery: { registry, today },
   });
-  assert.equal(withoutDaily.ok, true, withoutDaily.reason);
-  assert.match(withoutDaily.nextContent, /- \[ \] #task P \^p$/m);
+  assert.equal(lonely.ok, true, JSON.stringify(lonely));
+  assert.match(lonelyEditor.content, /- \[ \] #task P\b/m);
 });
 
 // The same-note marked-batch `+ id` stamps the confirmed id into a working
@@ -671,18 +658,28 @@ test("kept unloaded links resolve the field id by line position", async () => {
   assert.equal(mismatched.ok, false);
   assert.equal(mismatched.reason, "target-not-found");
 
+  // Plugin level through the batch executor: `Other.md` is not in the
+  // vault at all, yet removing `a` keeps `[[Other#^x]]` with its own field
+  // id `Other__x` (never `a`'s id) in one undo group.
   const { plugin } = stubPlugin({ "Tasks.md": parentNote });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
-  const outcome = await plugin.applyDependencyEdit({
-    editor,
-    parentPath: "Tasks.md",
-    parentLine: 0,
-    add: [],
-    remove: [{ path: "Other.md", blockId: "x" }],
+  const modal = stubModal(plugin, editor, "Tasks.md", 0);
+  const applied = await modal.executeDependencyBatch({
+    propertyName: "dependsOn",
+    cursorLineText: "- [?] #task P [dependsOn:: Tasks__a, Other__x] ^p",
+    removals: [{ linkBlockId: "a", depValue: "Tasks__a", legacyDepValue: null }],
+    readyAdditions: [],
+    promptQueue: [],
+    promptIndex: 0,
+    confirmedById: new Map(),
+    reservedIds: new Set(),
+    hasVault: false,
   });
-  assert.equal(outcome.ok, true, JSON.stringify(outcome));
-  assert.doesNotMatch(editor.content, /Other#\^x/);
-  assert.match(editor.content, /\[dependsOn:: Tasks__a\]/);
+  assert.equal(applied, true);
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.content, /\[\[Other#\^x\]\]/);
+  assert.match(editor.content, /\[dependsOn:: Other__x\]/);
+  assert.doesNotMatch(editor.content, /\[\[#\^a\]\]/);
 });
 
 // Same-note `pendingTargetLine` folds the target `^id`/`[id::]` write into
@@ -796,6 +793,38 @@ test("counted vault add commits every source in one transaction", async () => {
   assert.equal(quotedEditor.undoGroups, 0);
 });
 
+// A field-only clear snapshots the vault: a `[?]` task whose field is
+// cleared with no link removed still recovers when a Pomodoro points at it.
+test("field-only clears snapshot the vault and recover", async () => {
+  const parentNote = "- [?] #task P [dependsOn:: Tasks__a] ^p";
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const dailyPath = `${now.getFullYear()}/${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.md`;
+  const dailyNote = [
+    "## Pomodoros",
+    "- [ ] 10:00 Focus",
+    "  - [[Tasks#^p]]",
+  ].join("\n");
+  const { plugin } = stubPlugin({
+    "Tasks.md": parentNote,
+    [dailyPath]: dailyNote,
+  });
+  const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  const result = await plugin.deleteDependencyLineAndField(
+    editor,
+    { line: 0, ch: 0 },
+    { filePath: "Tasks.md" },
+  );
+  assert.ok(result && result.deleted, JSON.stringify(result));
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.content, /- \[\*\] #task P\b/m);
+  assert.doesNotMatch(editor.content, /dependsOn/);
+});
+
 // Writer calls that cannot recover read zero extra notes: a same-note add
 // with a non-Blocked parent never snapshots the vault.
 test("adds without recovery read zero extra vault notes", async () => {
@@ -826,8 +855,9 @@ test("adds without recovery read zero extra vault notes", async () => {
   assert.match(editor.content, /\[\[#\^target\]\]/);
 });
 
-// The hand-edit clear path recovers from the vault snapshot: a
-// Pomodoro-linked dependent recovers to Next, not Ready.
+// The hand-edit clear path does its own vault read (no injected
+// `vaultContents`): a Pomodoro-linked dependent recovers to Next, not
+// Ready — while a non-Blocked parent reads zero extra notes.
 test("hand-edit clear recovers Pomodoro-linked dependents to Next", async () => {
   const oldNote = [
     "- [?] #task P [dependsOn:: Tasks__a] ^p",
@@ -843,8 +873,11 @@ test("hand-edit clear recovers Pomodoro-linked dependents to Next", async () => 
     "- [ ] 10:00 Focus",
     "  - [[Tasks#^p]]",
   ].join("\n");
-  const dailyPath = "2026/20261003.md";
-  const today = new Date(2026, 9, 3);
+  // The daily note must be today's for the recovery index: derive its path
+  // from the live date so this test is not pinned to one calendar day.
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const dailyPath = `${now.getFullYear()}/${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.md`;
   const { plugin } = stubPlugin({
     "Tasks.md": newNote,
     [dailyPath]: dailyNote,
@@ -858,16 +891,51 @@ test("hand-edit clear recovers Pomodoro-linked dependents to Next", async () => 
   );
   assert.ok(plan);
   const outcome = await plugin.applyDependencyHandEditClear(editor, "Tasks.md", plan, {
-    today,
-    vaultContents: { "Tasks.md": newNote, [dailyPath]: dailyNote },
-    registry: helpers.parseTasksStatusRegistry(compatibleTasksSettings()),
+    today: now,
   });
   assert.equal(outcome.mirrored, true);
-  assert.match(editor.content, /- \[\*\] #task P \^p$/m);
+  assert.match(editor.content, /- \[\*\] #task P\b/m);
+});
+
+test("hand-edit clear on a non-Blocked parent reads zero extra notes", async () => {
+  const oldNote = [
+    "- [ ] #task P [dependsOn:: Tasks__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [x] #task A [id:: Tasks__a] ^a",
+  ].join("\n");
+  const newNote = [
+    "- [ ] #task P [dependsOn:: Tasks__a] ^p",
+    "- [x] #task A [id:: Tasks__a] ^a",
+  ].join("\n");
+  const { plugin } = stubPlugin({
+    "Tasks.md": newNote,
+    "Other.md": "- [ ] #task Other ^other",
+  });
+  let reads = 0;
+  const vault = plugin.app.vault;
+  const originalCachedRead = vault.cachedRead;
+  vault.cachedRead = async (file) => {
+    reads += 1;
+    return originalCachedRead(file);
+  };
+  const editor = new TransactionEditor(newNote, { line: 0, ch: 0 });
+  const plan = helpers.planDependencyHandEditMirror(
+    oldNote,
+    newNote,
+    1,
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+  );
+  assert.ok(plan);
+  const outcome = await plugin.applyDependencyHandEditClear(editor, "Tasks.md", plan, {});
+  assert.equal(outcome.mirrored, true);
+  assert.equal(reads, 0);
+  assert.doesNotMatch(editor.content, /dependsOn/);
 });
 
 // Duplicate basenames keep the full route through the writer: a subfolder
-// target links with its explicit path.
+// target links with its explicit path. (This plugin-level test supersedes
+// the pure `duplicate basenames keep the full route` helper test, which
+// pinned the same ranking one level down.)
 test("writer keeps the full route for duplicate basenames", async () => {
   const parentNote = "- [ ] #task Parent ^parent";
   const { plugin } = stubPlugin({
@@ -887,4 +955,330 @@ test("writer keeps the full route for duplicate basenames", async () => {
   });
   assert.equal(outcome.ok, true, JSON.stringify(outcome));
   assert.match(editor.content, /\[\[chat\/cash#\^a\]\]/);
+});
+
+// Adds never snapshot — even on a `[?]` parent that already carries a
+// field — and a mirror touch on a non-Blocked parent reads nothing: both
+// count zero `cachedRead` calls through the real async vault stub.
+test("adds on Blocked parents and non-Blocked mirror touches read nothing", async () => {
+  const countReads = (plugin) => {
+    let reads = 0;
+    const vault = plugin.app.vault;
+    const originalCachedRead = vault.cachedRead;
+    vault.cachedRead = async (file) => {
+      reads += 1;
+      return originalCachedRead(file);
+    };
+    return () => reads;
+  };
+
+  const blockedNote = [
+    "- [?] #task P [dependsOn:: Tasks__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A [id:: Tasks__a] ^a",
+    "- [ ] #task B [id:: Tasks__b] ^b",
+  ].join("\n");
+  const { plugin } = stubPlugin({
+    "Tasks.md": blockedNote,
+    "Other.md": "- [ ] #task Other ^other",
+  });
+  const readCount = countReads(plugin);
+  const editor = new TransactionEditor(blockedNote, { line: 0, ch: 0 });
+  const added = await plugin.applyDependencyEdit({
+    editor,
+    parentPath: "Tasks.md",
+    parentLine: 0,
+    add: [{ path: "Tasks.md", blockId: "b" }],
+    remove: [],
+  });
+  assert.equal(added.ok, true, JSON.stringify(added));
+  assert.equal(readCount(), 0);
+  assert.match(editor.content, /\[\[#\^b\]\]/);
+
+  const plainNote = "- [ ] #task P ^p";
+  const { plugin: mirrorPlugin } = stubPlugin({
+    "Tasks.md": plainNote,
+    "Other.md": "- [ ] #task Other ^other",
+  });
+  const mirrorReads = countReads(mirrorPlugin);
+  const mirrorEditor = new TransactionEditor(plainNote, { line: 0, ch: 0 });
+  const touched = await mirrorPlugin.applyDependencyEdit({
+    editor: mirrorEditor,
+    parentPath: "Tasks.md",
+    parentLine: 0,
+    add: [],
+    remove: [],
+    mirrorTouch: true,
+  });
+  assert.equal(touched.ok, true, JSON.stringify(touched));
+  assert.equal(mirrorReads(), 0);
+});
+
+// A counted vault add loads the notes behind each source's existing links:
+// a source with an unloaded cross-note link and a missing field still
+// adds instead of refusing `target-not-found`.
+test("counted vault add loads each source's existing links", async () => {
+  const ownerNote = [
+    "- [ ] #task First",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^x]]",
+    "- [ ] #task Second ^second",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({
+    "Tasks.md": ownerNote,
+    "Other.md": "- [ ] #task Ex ^x",
+  });
+  const editor = new TransactionEditor(ownerNote, { line: 0, ch: 0 });
+  const modal = stubModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    valid: true,
+    targets: [
+      { line: 0, rawLine: "- [ ] #task First" },
+      { line: 2, rawLine: "- [ ] #task Second ^second" },
+    ],
+  };
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Tasks.md",
+    line: 3,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    existingIdField: null,
+    blockId: "target",
+  });
+  assert.equal(applied, true);
+  assert.equal(editor.undoGroups, 1);
+  const lines = editor.content.split("\n");
+  assert.match(lines[0], /\[dependsOn:: Other__x, Tasks__target\]/);
+  assert.match(editor.content, /\[\[Other#\^x\]\]/);
+  assert.match(editor.content, /\[\[#\^target\]\]/);
+});
+
+// Counted Ctrl+D on a blockquoted task refuses with the blockquote notice
+// and writes nothing.
+test("counted Ctrl+D on a blockquoted task refuses with the blockquote notice", async () => {
+  const content = [
+    "- [?] #task First [dependsOn:: Tasks__a] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "> - [?] #task Quoted [dependsOn:: Tasks__a] ^quoted",
+    "- [x] #task A [id:: Tasks__a] ^a",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  const session = {
+    valid: true,
+    targets: [
+      { line: 0, rawLine: content.split("\n")[0] },
+      { line: 2, rawLine: content.split("\n")[2] },
+    ],
+  };
+  const before = notices.length;
+  const result = await plugin.deleteCountedDependencyLinesAndFields(
+    editor,
+    { line: 0, ch: 0 },
+    "Tasks.md",
+    session,
+  );
+  assert.equal(result, null);
+  assert.equal(editor.content, content);
+  assert.equal(editor.undoGroups, 0);
+  assert.ok(
+    notices.slice(before).some((message) => message.includes("inside a blockquote")),
+    JSON.stringify(notices.slice(before)),
+  );
+});
+
+// Single Ctrl+D on a quoted task with no field refuses with the blockquote
+// notice instead of reporting `dependsOn is not set on this bullet`.
+test("single Ctrl+D on a quoted task without a field refuses as a blockquote", async () => {
+  const content = [
+    "> - [ ] #task Quoted ^quoted",
+    "- [ ] #task Other ^other",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  const before = notices.length;
+  const result = await plugin.deleteDependencyLineAndField(
+    editor,
+    { line: 0, ch: 0 },
+    { filePath: "Tasks.md" },
+  );
+  assert.equal(result, null);
+  assert.equal(editor.content, content);
+  assert.equal(editor.undoGroups, 0);
+  assert.ok(
+    notices.slice(before).some((message) => message.includes("inside a blockquote")),
+    JSON.stringify(notices.slice(before)),
+  );
+});
+
+// `pendingTargetLine` through `confirmSingleBlockId`, with and without an
+// existing Depends-On line: the target gains `^id`/`[id::]`, the dependent
+// gains the link, everything lands in one undo group.
+test("confirmSingleBlockId folds the target id into one transaction", async () => {
+  for (const withExisting of [false, true]) {
+    const content = [
+      withExisting
+        ? "- [?] #task P [dependsOn:: Tasks__a] ^p"
+        : "- [ ] #task Parent ^parent",
+      ...(withExisting ? ["  - ⛓️ **DEPENDS ON:** [[#^a]]"] : []),
+      ...(withExisting ? ["- [ ] #task A [id:: Tasks__a] ^a"] : []),
+      "- [ ] #task Target",
+    ].join("\n");
+    const { plugin } = stubPlugin({ "Tasks.md": content });
+    const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+    const modal = stubModal(plugin, editor, "Tasks.md", 0);
+    modal.selectedPropertyItem = { property: { name: "dependsOn" } };
+    modal.lineText = content.split("\n")[0];
+    const targetLine = content.split("\n").indexOf("- [ ] #task Target");
+    modal.pendingTask = {
+      line: targetLine,
+      rawLine: "- [ ] #task Target",
+    };
+    const linked = modal.confirmSingleBlockId({ id: "b" });
+    assert.equal(linked, true);
+    assert.equal(editor.undoGroups, 1);
+    assert.match(editor.content, /- \[ \] #task Target \[id:: Tasks__b\] \^b/);
+    assert.match(editor.content, /\[\[#\^b\]\]/);
+    if (withExisting) {
+      assert.match(editor.content, /\[\[#\^a\]\]/);
+    }
+  }
+});
+
+// `pendingTargetLine` through `chooseTaskDependency`, with and without an
+// existing Depends-On line: a target with a `^id` but no `[id::]` gains
+// the field while the link lands in one undo group.
+test("chooseTaskDependency folds a missing target id into one transaction", async () => {
+  for (const withExisting of [false, true]) {
+    const content = [
+      withExisting
+        ? "- [?] #task P [dependsOn:: Tasks__a] ^p"
+        : "- [ ] #task Parent ^parent",
+      ...(withExisting ? ["  - ⛓️ **DEPENDS ON:** [[#^a]]"] : []),
+      ...(withExisting ? ["- [ ] #task A [id:: Tasks__a] ^a"] : []),
+      "- [ ] #task Target ^target",
+    ].join("\n");
+    const { plugin } = stubPlugin({ "Tasks.md": content });
+    const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+    const modal = stubModal(plugin, editor, "Tasks.md", 0);
+    modal.selectedPropertyItem = { property: { name: "dependsOn" } };
+    modal.lineText = content.split("\n")[0];
+    const targetLine = content.split("\n").indexOf("- [ ] #task Target ^target");
+    const linked = await modal.chooseTaskDependency({
+      path: "Tasks.md",
+      line: targetLine,
+      rawLine: "- [ ] #task Target ^target",
+      displayText: "Target",
+      existingIdField: null,
+      blockId: "target",
+      alreadyLinked: false,
+    });
+    assert.equal(linked, true);
+    assert.equal(editor.undoGroups, 1);
+    assert.match(editor.content, /- \[ \] #task Target \[id:: Tasks__target\] \^target/);
+    assert.match(editor.content, /\[\[#\^target\]\]/);
+    if (withExisting) {
+      assert.match(editor.content, /\[\[#\^a\]\]/);
+    }
+  }
+});
+
+// Counted remove commits once: every source clears in one undo group, and a
+// source that fails to plan — even when it sorts after a healthy source in
+// bottom-up order — refuses before any write. (A cross-note target, so the
+// CURRENT-row shortcut cannot claim the gesture and the per-source planner
+// loop runs.)
+test("counted remove commits every source in one transaction", async () => {
+  const otherNote = "- [x] #task Ex [id:: Other__x] ^x";
+  const content = [
+    "> - [?] #task Quoted [dependsOn:: Other__x] ^quoted",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^x]]",
+    "- [?] #task First [dependsOn:: Other__x] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^x]]",
+    "- [?] #task Second [dependsOn:: Other__x] ^second",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^x]]",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content, "Other.md": otherNote });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    valid: true,
+    targets: [
+      {
+        line: 0,
+        rawLine: "> - [?] #task Quoted [dependsOn:: Other__x] ^quoted",
+      },
+      {
+        line: 2,
+        rawLine: "- [?] #task First [dependsOn:: Other__x] ^first",
+      },
+      {
+        line: 4,
+        rawLine: "- [?] #task Second [dependsOn:: Other__x] ^second",
+      },
+    ],
+  };
+  const before = notices.length;
+  // Bottom-up plans line 4, then line 2, and only then hits the quoted
+  // line 0: the refusal must leave the healthy sources untouched.
+  const refused = await modal.removeCountedDependency({
+    stageSection: "results",
+    alreadyLinked: false,
+    path: "Other.md",
+    blockId: "x",
+    existingBlockId: "x",
+    displayText: "Ex",
+    existingIdField: "Other__x",
+  });
+  assert.equal(refused, false);
+  assert.equal(editor.content, content);
+  assert.equal(editor.undoGroups, 0);
+  assert.ok(
+    notices.slice(before).some((message) => message.includes("no tasks were updated")),
+    JSON.stringify(notices.slice(before)),
+  );
+
+  const healthy = [
+    "- [?] #task First [dependsOn:: Other__x] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^x]]",
+    "- [?] #task Second [dependsOn:: Other__x] ^second",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^x]]",
+  ].join("\n");
+  const { plugin: healthyPlugin } = stubPlugin({ "Tasks.md": healthy, "Other.md": otherNote });
+  const healthyEditor = new TransactionEditor(healthy, { line: 0, ch: 0 });
+  const healthyModal = stubModal(healthyPlugin, healthyEditor, "Tasks.md", 0);
+  healthyModal.taskSession = {
+    valid: true,
+    targets: [
+      {
+        line: 0,
+        rawLine: "- [?] #task First [dependsOn:: Other__x] ^first",
+      },
+      {
+        line: 2,
+        rawLine: "- [?] #task Second [dependsOn:: Other__x] ^second",
+      },
+    ],
+  };
+  const removed = await healthyModal.removeCountedDependency({
+    stageSection: "results",
+    alreadyLinked: false,
+    path: "Other.md",
+    blockId: "x",
+    existingBlockId: "x",
+    displayText: "Ex",
+    existingIdField: "Other__x",
+  });
+  assert.equal(removed, true);
+  assert.equal(healthyEditor.undoGroups, 1);
+  assert.doesNotMatch(healthyEditor.content, /DEPENDS ON/);
+  assert.doesNotMatch(healthyEditor.content, /dependsOn/);
 });

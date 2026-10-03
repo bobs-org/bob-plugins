@@ -153,6 +153,12 @@ test("DP parse vectors accept, empty, malformed, and not-a-line", () => {
     // DP29: a blockquoted Depends-On line is not-a-line everywhere,
     // including nav (nav refuses dependency gestures inside blockquotes).
     ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line", 0, false],
+    // DP30 (`docs/task-dependencies.md` §11.1): a Depends-On line that is
+    // the first direct child of a `#task` nested under a Work Log entry is
+    // owned by that inner task (unlike DP20, whose parent is the entry
+    // itself), so the caller passes `isDirectChildOfTask: true` and the
+    // line parses as `accept(1)`.
+    ["DP30", "  - ⛓️ **DEPENDS ON:** [[#^a]]", { isDirectChildOfTask: true }, "accept", 1, true],
   ];
   for (const [id, line, options, verdict, count, canonical] of cases) {
     const parsed = helpers.parseDependencyLine(line, options);
@@ -180,6 +186,26 @@ test("DP parse vectors accept, empty, malformed, and not-a-line", () => {
   ]) {
     assert.equal(helpers.parseDependencyNavigationBulletDetails(line), null);
   }
+});
+
+// DP30 (`docs/task-dependencies.md` §11.1): a Depends-On line that is the
+// first direct child of a `#task` nested under a Work Log entry is owned by
+// that inner task — unlike DP20, whose parent is the Work Log entry itself,
+// so the outer task collects nothing.
+test("DP30 attributes a Work-Log-nested Depends-On line to the inner task", () => {
+  const content = [
+    "- [ ] #task Outer ^outer",
+    "  - 🛠️ **WORK LOG**",
+    "    - [ ] #task Inner [dependsOn:: Tasks__a] ^inner",
+    "      - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A [id:: Tasks__a] ^a",
+  ].join("\n");
+  const owned = helpers.collectDependencyNavigationBullets(content, 2);
+  assert.equal(owned.reason, null);
+  assert.deepEqual(owned.blockIds, ["a"]);
+  assert.equal(owned.lineIndex, 3);
+  const outer = helpers.collectDependencyNavigationBullets(content, 0);
+  assert.deepEqual(outer.targets, []);
 });
 
 test("fenced lines never collect as Depends-On lines", () => {

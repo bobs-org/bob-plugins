@@ -44,6 +44,7 @@ const {
   resolveDependencyStageCurrent,
   collectDependencyStageEdges,
   findDependencyStageCycle,
+  compareDependencyStageCanonical,
   planDependencyStageView,
   formatDependencyStagePill,
   describeDependencyRowState,
@@ -55,6 +56,9 @@ const {
   editorSelectionSpansTasks,
   bulletPropertyTaskMarkKey,
   createLinkPickerPropertyItems,
+  describeRemovedDependencyTarget,
+  buildDependencyEditNotice,
+  planDependencyEdit,
 } = helpers;
 
 function dkCandidate(text, route, blockId, section) {
@@ -300,7 +304,7 @@ test("stage view groups CURRENT, RESULTS, and BLOCKED with guards", () => {
   const view = planDependencyStageView({
     current: current.rows,
     candidates: pool,
-    query: "",
+    query: "cash",
     dependent: { path: "body.md", line: 0, key: "body.md\x00dependent" },
     edges,
     linkedKeys,
@@ -329,14 +333,14 @@ test("stage view disables cycles and unencodable targets, keeps +id rows", () =>
   const notes = [
     {
       path: "has space.md",
-      content: "- [ ] #task Spaced out ^spaced\n",
+      content: "- [/] #task Spaced out ^spaced\n",
     },
     {
       path: "b.md",
       content: [
-        "- [ ] #task Beta ^beta",
+        "- [/] #task Beta ^beta",
         "  - ⛓️ **DEPENDS ON:** [[a#^alpha]]",
-        "- [ ] #task No id yet ^noid",
+        "- [*] #task No id yet ^noid",
       ].join("\n"),
     },
     {
@@ -350,6 +354,8 @@ test("stage view disables cycles and unencodable targets, keeps +id rows", () =>
     dependentPath: "a.md",
     dependentLines: new Set([0]),
   });
+  // Empty query shows same-note plus the In Progress and Next lanes, so the
+  // In Progress / Next fixtures above stay visible without typing.
   const view = planDependencyStageView({
     current: [],
     candidates: pool,
@@ -430,7 +436,7 @@ test("stage cache tasks normalize across Tasks shapes, buffers win", () => {
   );
 });
 
-test("stage Task Link mode shows Depends on for one link, hides it for batches", () => {
+test("stage Task Link mode shows Depends on for one link and batches", () => {
   const config = {
     properties: [{ name: "dependsOn", values: "local_task_id" }],
   };
@@ -455,7 +461,8 @@ test("stage Task Link mode shows Depends on for one link, hides it for batches",
     { ...single[0], path: "body.md" },
   ]);
   assert.equal(batch.valid, true);
-  assert.equal(batch.items.length, 0, "batches keep the old refusal");
+  assert.equal(batch.items.length, 1, "batches show Depends on like single links");
+  assert.equal(batch.items[0].linkDependency, true);
 });
 
 test("stage mark keys never collide across notes", () => {
@@ -524,7 +531,7 @@ test("stage builder composes pool, current, guards, and pill title", () => {
     },
     {
       path: "cash.md",
-      content: "- [ ] #task File for unemployment ^unemployment\n",
+      content: "- [/] #task File for unemployment ^unemployment\n",
     },
   ];
   const offline = {
@@ -620,4 +627,243 @@ test("stage entry resolves the line itself and refuses prose", () => {
   assert.equal(onTask.skipPropertyStep, false);
   const onProse = resolveDependencyStageEntry(content, 4);
   assert.equal(onProse.ok, false);
+});
+
+test("stage canonical order ranks #hide last ahead of the lane", () => {
+  const dependentPath = "body.md";
+  const hiddenPending = {
+    path: "cash.md",
+    line: 1,
+    status: "/",
+    hidden: true,
+  };
+  const visibleReady = {
+    path: "cash.md",
+    line: 2,
+    status: " ",
+    hidden: false,
+  };
+  assert.ok(
+    compareDependencyStageCanonical(hiddenPending, visibleReady, dependentPath) > 0,
+    "a hidden In Progress task sorts after a visible Ready one",
+  );
+  assert.ok(
+    compareDependencyStageCanonical(visibleReady, hiddenPending, dependentPath) < 0,
+  );
+});
+
+test("stage empty query shows same-note plus In Progress and Next only", () => {
+  const notes = [
+    {
+      path: "body.md",
+      content: [
+        "- [ ] #task Dependent ^dependent",
+        "- [ ] #task Same note sibling ^sibling",
+      ].join("\n"),
+    },
+    {
+      path: "cash.md",
+      content: [
+        "- [ ] #task Ready elsewhere ^ready-else",
+        "- [/] #task Pending elsewhere ^pending-else",
+        "- [*] #task Next elsewhere ^next-else",
+      ].join("\n"),
+    },
+  ];
+  const index = indexDependencyStageNotes(notes);
+  const edges = collectDependencyStageEdges(notes, index);
+  const pool = collectVaultDependencyCandidates(notes, {
+    dependentPath: "body.md",
+    dependentLines: new Set([0]),
+  });
+  const view = planDependencyStageView({
+    current: [],
+    candidates: pool,
+    query: "",
+    dependent: { path: "body.md", line: 0, key: "body.md\x00dependent" },
+    edges,
+    linkedKeys: new Set(),
+  });
+  const ids = view
+    .filter((row) => row.kind !== "stage-more")
+    .map((row) => row.blockId);
+  assert.ok(ids.includes("sibling"), "same-note tasks stay on empty query");
+  assert.ok(ids.includes("pending-else"), "In Progress stays on empty query");
+  assert.ok(ids.includes("next-else"), "Next stays on empty query");
+  assert.ok(
+    !ids.includes("ready-else"),
+    "Ready tasks from other notes need typing",
+  );
+});
+
+test("stage cap appends a type-to-search-more hint row", () => {
+  const candidates = [];
+  for (let i = 0; i < 70; i += 1) {
+    candidates.push({
+      path: "cash.md",
+      route: "cash",
+      note: "cash",
+      line: i,
+      rawLine: `- [/] #task Task ${i} ^task-${i}`,
+      status: "/",
+      displayText: `Task ${i}`,
+      text: `Task ${i}`,
+      blockId: `task-${i}`,
+      existingBlockId: `task-${i}`,
+      idField: null,
+      existingIdField: null,
+      section: null,
+      open: true,
+      blocked: false,
+      hidden: false,
+    });
+  }
+  const view = planDependencyStageView({
+    current: [],
+    candidates,
+    query: "Task",
+    dependent: { path: "body.md", line: 0, key: "body.md\x00dependent" },
+    edges: new Map(),
+    linkedKeys: new Set(),
+    maxRows: 60,
+  });
+  const more = view.find((row) => row.kind === "stage-more");
+  assert.ok(more, "truncation appends the hint row");
+  assert.match(more.displayText, /type to search \d+ more/);
+  assert.equal(more.disabled, true);
+});
+
+test("stage BLOCKED rows carry waits-on counts and short guard reasons", () => {
+  const notes = [
+    {
+      path: "has space.md",
+      content: "- [/] #task Spaced out ^spaced\n",
+    },
+    {
+      path: "b.md",
+      content: [
+        "- [/] #task Beta ^beta",
+        "  - ⛓️ **DEPENDS ON:** [[a#^alpha]]",
+      ].join("\n"),
+    },
+    {
+      path: "a.md",
+      content: "- [ ] #task Alpha ^alpha\n",
+    },
+  ];
+  const index = indexDependencyStageNotes(notes);
+  const edges = collectDependencyStageEdges(notes, index);
+  const pool = collectVaultDependencyCandidates(notes, {
+    dependentPath: "a.md",
+    dependentLines: new Set([0]),
+  });
+  const view = planDependencyStageView({
+    current: [],
+    candidates: pool,
+    query: "Beta",
+    dependent: { path: "a.md", line: 0, key: dependencyStageRowKey("a.md", "alpha") },
+    edges,
+    linkedKeys: new Set(),
+  });
+  const beta = view.find((row) => row.blockId === "beta");
+  assert.ok(beta, "Beta reaches the stage with a matching query");
+  assert.equal(beta.disabled, true);
+  assert.equal(beta.disabledReason, "would create a cycle");
+  const spacedView = planDependencyStageView({
+    current: [],
+    candidates: pool,
+    query: "Spaced",
+    dependent: { path: "a.md", line: 0, key: dependencyStageRowKey("a.md", "alpha") },
+    edges,
+    linkedKeys: new Set(),
+  });
+  const spaced = spacedView.find((row) => row.blockId === "spaced");
+  assert.equal(spaced.disabledReason, "path can't be an id");
+});
+
+test("stage removal notices name the task description, not the block id", () => {
+  const content = [
+    "- [?] #task P [dependsOn:: Tasks__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [x] #task Read me [id:: Tasks__a] ^a",
+  ].join("\n");
+  const files = new Map([["Tasks.md", content]]);
+  const named = describeRemovedDependencyTarget(
+    { path: "Tasks.md", blockId: "a" },
+    files,
+  );
+  assert.equal(named, "Read me");
+  const notice = buildDependencyEditNotice(
+    { added: 0, removed: 1, openRemaining: 0, blockedAfter: false, recoveredOutcome: "ready" },
+    { added: [], removed: [named] },
+  );
+  assert.match(notice, /Read me/);
+  assert.doesNotMatch(notice, /\^a/);
+});
+
+test("stage Task Link batches keep Depends on without refusal", () => {
+  const config = {
+    properties: [{ name: "dependsOn", values: "local_task_id" }],
+  };
+  const targets = [
+    {
+      path: "cash.md",
+      content: "- [ ] #task One ^one\n",
+      line: 0,
+      rawLine: "- [ ] #task One ^one",
+      blockId: "one",
+      displayText: "One",
+    },
+    {
+      path: "body.md",
+      content: "- [ ] #task Two ^two\n",
+      line: 0,
+      rawLine: "- [ ] #task Two ^two",
+      blockId: "two",
+      displayText: "Two",
+    },
+  ];
+  const batch = createLinkPickerPropertyItems(config, targets);
+  assert.equal(batch.valid, true);
+  assert.equal(batch.items.length, 1);
+  assert.equal(batch.items[0].linkDependency, true);
+  assert.match(batch.items[0].detailText, /2 linked tasks/);
+});
+
+test("stage batch cycle check runs on the post-batch graph", () => {
+  const notes = [
+    {
+      path: "a.md",
+      content: ["- [ ] #task Alpha ^alpha", "  - ⛓️ **DEPENDS ON:** [[b#^beta]]"].join("\n"),
+    },
+    {
+      path: "b.md",
+      content: ["- [ ] #task Beta ^beta", "  - ⛓️ **DEPENDS ON:** [[a#^alpha]]"].join("\n"),
+    },
+  ];
+  const index = indexDependencyStageNotes(notes);
+  const edges = collectDependencyStageEdges(notes, index);
+  const alpha = dependencyStageRowKey("a.md", "alpha");
+  const beta = dependencyStageRowKey("b.md", "beta");
+  assert.deepEqual(findDependencyStageCycle(edges, alpha, beta), [beta, alpha]);
+});
+
+test("stage ranker filters 1,000 synthetic tasks under 16 ms per keystroke", () => {
+  const pool = [];
+  for (let i = 0; i < 1000; i += 1) {
+    pool.push({
+      text: `Synthetic task number ${i} with searchable words`,
+      route: i % 2 === 0 ? "cash" : "body",
+      blockId: `synthetic-${i}`,
+      section: null,
+    });
+  }
+  const start = process.hrtime.bigint();
+  const ranked = dependencyStageRank(pool, "synthetic cash");
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.ok(ranked.length > 0, "synthetic pool matches");
+  assert.ok(
+    elapsedMs < 16,
+    `filtering 1,000 tasks took ${elapsedMs.toFixed(2)} ms (budget 16 ms)`,
+  );
 });

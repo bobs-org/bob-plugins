@@ -4604,14 +4604,14 @@ function planDependencyEdit(args = {}) {
     removed: Object.freeze(
       existing
         .filter((ref) => !targetRows.has(dependencyTargetRefKey(ref)))
-        .map((ref) => `^${ref.blockId}`),
+        .map((ref) => describeRemovedDependencyTarget(ref, filesMap)),
     ),
     summary,
     notice: buildDependencyEditNotice(summary, {
       added: addedRows.map((row) => row.description),
       removed: existing
         .filter((ref) => !targetRows.has(dependencyTargetRefKey(ref)))
-        .map((ref) => ref.blockId),
+        .map((ref) => describeRemovedDependencyTarget(ref, filesMap)),
     }),
   });
 }
@@ -4666,6 +4666,34 @@ function applyDependencyPlanLines(
     sourceLines[at] = lineText;
   }
   return { lines: sourceLines, lineEnding: ending };
+}
+
+// Removal notices name the task's description, never its block id
+// (`docs/task-dependencies.md` §6.7): resolve the removed target's display
+// text from the loaded notes, falling back to `^blockId` when the note is
+// gone or the line no longer resolves.
+function describeRemovedDependencyTarget(ref, filesMap) {
+  try {
+    const path = normalizeVaultRelativePath((ref && ref.path) || "");
+    const blockId = normalizeBulletPropertyValue((ref && ref.blockId) || "");
+    if (!path || !blockId || !(filesMap instanceof Map)) {
+      return blockId ? `^${blockId}` : "(missing task)";
+    }
+    const content = filesMap.get(path);
+    if (content === undefined) {
+      return `^${blockId}`;
+    }
+    const targetLines = String(content).split(/\r?\n/);
+    const found = findTaskLineByTrailingBlockId(targetLines, blockId);
+    if (found === null) {
+      return `^${blockId}`;
+    }
+    const cleaned = cleanTaskDisplayText(String(targetLines[found] || ""));
+    return cleaned || `^${blockId}`;
+  } catch (_removedNameError) {
+    const fallback = normalizeBulletPropertyValue((ref && ref.blockId) || "");
+    return fallback ? `^${fallback}` : "(missing task)";
+  }
 }
 
 // Contract §6.7 notices for one dependency gesture.
@@ -16203,16 +16231,13 @@ function findUniqueLinkPickerTargetLine(noteContent, blockId) {
 // Aggregate one property row across link-picker targets that live in different
 // notes. Mirrors createCountedBulletPropertyItems (common only when every
 // target defines the same value, otherwise mixed) but reads each target from
-// its own note content. The dependsOn row stays hidden in link mode: remote
-// tasks are edited through their own notes, never via dependency transclusion.
+// its own note content. The Depends on row edits the linked task in its own
+// note, for single links and batches alike (`docs/task-dependencies.md` §6.1).
 function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
   const targets = Array.isArray(resolvedTargets) ? resolvedTargets : [];
   if (targets.length === 0) {
     return Object.freeze({ valid: false, error: "No linked tasks", items: [] });
   }
-  // The Depends on row is no longer hidden in Task Link mode: with one
-  // dedicated Task Link it edits the linked task in its own note
-  // (`docs/task-dependencies.md` §6.1). Batches keep the old refusal.
   const singleLinkTarget =
     targets.length === 1 ? targets[0] : null;
   const properties = (config && Array.isArray(config.properties)
@@ -16221,7 +16246,7 @@ function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
   ).filter((property) => {
     const name = normalizeBulletPropertyName(property && property.name);
     if (property && property.values === "local_task_id") {
-      return name === "dependsOn" && singleLinkTarget !== null;
+      return name === "dependsOn";
     }
     return name !== "dependsOn";
   });
@@ -16259,8 +16284,7 @@ function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
     const isLinkDependencyRow =
       property &&
       property.values === "local_task_id" &&
-      normalizeBulletPropertyName(property.name) === "dependsOn" &&
-      singleLinkTarget !== null;
+      normalizeBulletPropertyName(property.name) === "dependsOn";
     items.push({
       kind: "property",
       property,
@@ -16279,7 +16303,9 @@ function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
       sourceStates: Object.freeze(states),
       linkDependency: isLinkDependencyRow,
       detailText: isLinkDependencyRow
-        ? `↗ ${dependencyStageBasenameOf(singleLinkTarget.path)} · ${singleLinkTarget.displayText}`
+        ? singleLinkTarget
+          ? `↗ ${dependencyStageBasenameOf(singleLinkTarget.path)} · ${singleLinkTarget.displayText}`
+          : `↗ ${targets.length} linked tasks · opens each in its own note`
         : null,
     });
   }
@@ -21687,14 +21713,16 @@ function compareDependencyStageCanonical(first, second, dependentPath) {
   if (firstSame && secondSame) {
     return first.line - second.line;
   }
+  // `#hide` ranks last, ahead of the lane: a hidden In Progress task sorts
+  // after a visible Ready one (`docs/task-dependencies.md` §6.3).
+  if (Boolean(first.hidden) !== Boolean(second.hidden)) {
+    return first.hidden ? 1 : -1;
+  }
   const lane = (status) =>
     status === "/" ? 0 : status === "*" ? 1 : status === " " ? 2 : 3;
   const laneDiff = lane(first.status) - lane(second.status);
   if (laneDiff !== 0) {
     return laneDiff;
-  }
-  if (first.hidden !== second.hidden) {
-    return first.hidden ? 1 : -1;
   }
   if (first.path !== second.path) {
     return first.path < second.path ? -1 : 1;
@@ -21791,7 +21819,16 @@ function planDependencyStageView(args = {}) {
   }
   let ordered;
   if (!query.trim()) {
-    ordered = fresh
+    // Empty query shows only what the design lists: CURRENT is separate,
+    // RESULTS is same-note tasks plus the In Progress and Next lanes.
+    // Ready tasks from other notes (and Blocked elsewhere) need typing.
+    const emptyPool = fresh.filter(
+      (entry) =>
+        entry.candidate.path === dependentPath ||
+        entry.candidate.status === "/" ||
+        entry.candidate.status === "*",
+    );
+    ordered = emptyPool
       .slice()
       .sort((left, right) =>
         compareDependencyStageCanonical(
@@ -21848,14 +21885,18 @@ function planDependencyStageView(args = {}) {
         ? dependencyStageRowKey(candidate.path, candidate.blockId)
         : null;
     if (key && dependentKey) {
-      const cycle =
-        key === dependentKey
-          ? [dependentKey]
-          : findDependencyStageCycle(edges, dependentKey, key);
+      if (key === dependentKey) {
+        return {
+          disabled: true,
+          reason: "this task",
+          cycle: Object.freeze([dependentKey]),
+        };
+      }
+      const cycle = findDependencyStageCycle(edges, dependentKey, key);
       if (cycle) {
         return {
           disabled: true,
-          reason: `Would create a cycle (${cycle.length - 1} back-link${cycle.length - 1 === 1 ? "" : "s"})`,
+          reason: "would create a cycle",
           cycle: Object.freeze(cycle),
         };
       }
@@ -21867,7 +21908,7 @@ function planDependencyStageView(args = {}) {
     ) {
       return {
         disabled: true,
-        reason: "This note path cannot be encoded as a dependency ID",
+        reason: "path can't be an id",
         cycle: null,
       };
     }
@@ -21881,6 +21922,26 @@ function planDependencyStageView(args = {}) {
         ? tryDependencyId(candidate.path, candidate.blockId)
         : null) ||
       "";
+    // BLOCKED rows carry the `🔒 waits on N` count from the post-batch
+    // graph when available, else the candidate's own open prerequisite
+    // count, else 1 (a Blocked task always waits on something).
+    let waitsOn = null;
+    if (section === "blocked") {
+      const rowKey =
+        candidate.path && candidate.blockId
+          ? dependencyStageRowKey(candidate.path, candidate.blockId)
+          : null;
+      const edgeCount =
+        rowKey && edges instanceof Map && edges.get(rowKey)
+          ? edges.get(rowKey).length
+          : null;
+      waitsOn =
+        Number.isInteger(edgeCount) && edgeCount > 0
+          ? edgeCount
+          : Number.isInteger(candidate.openCount) && candidate.openCount > 0
+            ? candidate.openCount
+            : 1;
+    }
     return Object.freeze({
       kind: "local-task",
       stageSection: section,
@@ -21939,6 +22000,7 @@ function planDependencyStageView(args = {}) {
       disabled: verdict.disabled,
       disabledReason: verdict.reason,
       cycle: verdict.cycle,
+      waitsOn,
     });
   };
   const out = [...markedCurrent];
@@ -21950,6 +22012,29 @@ function planDependencyStageView(args = {}) {
   pickedBlocked.forEach((candidate, index) =>
     out.push(shape(candidate, "blocked", index === 0)),
   );
+  // The ~60-row cap truncates: append the "type to search N more" hint row
+  // so keyboard filtering reaches the rest (`docs/task-dependencies.md` §6.3).
+  const totalOrdered = [...results, ...blocked].length;
+  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  if (hiddenCount > 0) {
+    out.push(
+      Object.freeze({
+        kind: "stage-more",
+        stageSection: pickedBlocked.length > 0 ? "blocked" : "results",
+        firstInSection: false,
+        path: null,
+        blockId: null,
+        displayText: `type to search ${hiddenCount} more`,
+        text: `type to search ${hiddenCount} more`,
+        searchText: "",
+        hiddenCount,
+        disabled: true,
+        disabledReason: `type to search ${hiddenCount} more`,
+        cycle: null,
+        waitsOn: null,
+      }),
+    );
+  }
   return Object.freeze(out);
 }
 
@@ -22860,18 +22945,31 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (property.values === "local_task_id") {
       if (this.isLinkSession()) {
         // Task Link mode: the Depends on row edits the linked task in its
-        // own note (`docs/task-dependencies.md` §6.1). Anything else keeps
-        // the old refusal (batches never route here: the row stays hidden).
-        if (
-          propertyItem.linkDependency &&
-          this.linkSession.resolved.length === 1
-        ) {
-          const target = this.linkSession.resolved[0];
-          this.close();
-          void this.plugin.openLinkedDependencyStage(target);
-          return;
+        // own note (`docs/task-dependencies.md` §6.1), for single links and
+        // batches alike. Batches open each linked task's stage in turn.
+        if (propertyItem.linkDependency) {
+          const resolved = Array.isArray(this.linkSession.resolved)
+            ? this.linkSession.resolved
+            : [];
+          if (resolved.length === 1) {
+            const target = resolved[0];
+            this.close();
+            void this.plugin.openLinkedDependencyStage(target);
+            return;
+          }
+          if (resolved.length > 1) {
+            const [first, ...rest] = resolved;
+            this.close();
+            void this.plugin.openLinkedDependencyStage(first);
+            if (rest.length > 0) {
+              new Notice(
+                `⛓ Opened the first of ${resolved.length} linked tasks; reopen Depends on for the rest`,
+              );
+            }
+            return;
+          }
         }
-        new Notice("Dependencies cannot be set through a Task Link");
+        new Notice("No linked task to edit dependencies for");
         this.showPropertyStage({ clearQuery: false });
         return;
       }
@@ -24968,15 +25066,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         (hint) => !hint.keys.includes("⇥"),
       );
     }
-    const hints = getBulletPropertyLocalTaskHints(this.getMarkedCount() > 0);
-    // The vault-wide stage toggles rows (`↵ toggle`), it never just links.
+    // The vault-wide Depends on stage footer per the design:
+    // `↑↓ navigate · ⇥ mark · ↵ toggle · esc dismiss`, with ↵ reading
+    // `apply N` when rows are marked.
     if (this.vaultStage) {
-      return hints.map((hint) =>
-        hint.keys.includes("↵") && hint.label === "Link"
-          ? { ...hint, label: "Toggle" }
-          : hint,
-      );
+      const marked = this.getMarkedCount();
+      return [
+        { keys: ["↑", "↓"], label: "navigate" },
+        { keys: ["⇥"], label: "mark" },
+        { keys: ["↵"], label: marked > 0 ? `apply ${marked}` : "toggle" },
+        { keys: ["esc"], label: "dismiss" },
+      ];
     }
+    const hints = getBulletPropertyLocalTaskHints(this.getMarkedCount() > 0);
     return hints;
   }
 
@@ -25710,6 +25812,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         text: sectionNames[item.stageSection] || item.stageSection,
       });
     }
+    // The ~60-row cap hint row: muted, non-interactive, styled on its own.
+    if (item && item.kind === "stage-more") {
+      addElementClasses(rowEl, "bob-cnp-task-value-row", "bob-cnp-dep-row", "bob-cnp-dep-more", "is-disabled");
+      rowEl.setAttribute("aria-disabled", "true");
+      const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text bob-cnp-dep-text" });
+      const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+      titleEl.setText(item.displayText || "type to search more");
+      return;
+    }
     const markKey = bulletPropertyTaskMarkKey(item);
     const marked =
       this.markedLines instanceof Set &&
@@ -25721,6 +25832,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     addElementClasses(
       rowEl,
       "bob-cnp-task-value-row",
+      "bob-cnp-dep-row",
+      item.hidden ? "bob-cnp-dep-hidden" : "",
+      item.stageSection === "blocked" ? "bob-cnp-dep-blocked" : "",
       item.alreadyLinked ? "is-linked" : "",
       item.linkState === "mixed" ? "is-mixed" : "",
       item.needsBlockIdPrompt ? "is-create" : "is-existing",
@@ -25734,6 +25848,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (item.disabled) {
       rowEl.setAttribute("aria-disabled", "true");
     }
+    // Muted `#hide` rows carry the design tooltip; disabled rows expose
+    // the short reason plus the cycle path when present.
+    if (item.hidden) {
+      rowEl.setAttribute("title", "#hide · muted · ranked last");
+    }
 
     const markEl = rowEl.createDiv({
       cls: marked ? "bob-cnp-mark is-marked" : "bob-cnp-mark",
@@ -25746,15 +25865,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     rowEl.createDiv({
-      cls: `bob-cnp-status-pill is-${taskStatusClass(item.status)}`,
+      cls: `bob-cnp-status-pill bob-cnp-dep-status is-${taskStatusClass(item.status)}`,
       text: taskStatusLabel(item.status),
     });
 
-    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text bob-cnp-dep-text" });
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
     appendHighlighted(titleEl, item.displayText, query);
 
-    const metaEl = textEl.createDiv({ cls: "bob-cnp-row-meta" });
+    const metaEl = textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-dep-meta" });
     // Cross-note rows name their note (`↗ note`); the badge below always
     // shows the block id, never the path-encoded id (§6.3).
     const metaBits = [];
@@ -25773,10 +25892,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         (item.missing ? "missing link · removable" : ""),
     });
     if (item.disabled && item.disabledReason) {
-      metaEl.createSpan({
-        cls: "bob-cnp-row-guard",
+      const guardEl = metaEl.createSpan({
+        cls: "bob-cnp-row-guard bob-cnp-dep-guard",
         text: item.disabledReason,
       });
+      // Disabled rows expose the cycle path in the tooltip when present.
+      if (item.cycle && item.cycle.length > 0 && guardEl) {
+        try {
+          guardEl.setAttribute("title", item.cycle.join(" → "));
+        } catch (_guardTitleError) {
+          // Best-effort tooltip only.
+        }
+      }
     }
 
     const badgeClasses = [
@@ -25793,7 +25920,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
                 ? "is-create"
                 : "is-existing",
     ];
-    const badgeEl = rowEl.createDiv({ cls: badgeClasses.join(" ") });
+    const badgeEl = rowEl.createDiv({ cls: `bob-cnp-dep-badge ${badgeClasses.join(" ")}` });
     if (markedRemove) {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
@@ -25803,10 +25930,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
     } else if (markedAdd) {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ add" });
+    } else if (item.stageSection === "blocked" && Number.isInteger(item.waitsOn)) {
+      // BLOCKED rows name how many prerequisites they wait on.
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action bob-cnp-dep-waits",
+        text: `🔒 waits on ${item.waitsOn}`,
+      });
     } else if (item.alreadyLinked) {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
-        text: "✓ depends",
+        text: "−",
       });
     } else if (item.linkState === "mixed") {
       badgeEl.createSpan({
@@ -25816,13 +25949,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     } else if (item.needsBlockIdPrompt) {
       // Unmarked, not yet linked, and missing a trailing block ID: pressing
       // Enter prompts for one before linking.
-      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "+ id" });
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
     } else {
-      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "↵" });
-      badgeEl.createSpan({
-        cls: "bob-cnp-task-badge-id",
-        text: `^${item.badgeId || item.value}`,
-      });
+      badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋" });
     }
   }
 
@@ -25912,15 +26041,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return this.chooseVaultTaskDependency(item);
     }
 
-    // Single-select path. Re-read the target so a stale row never writes.
+    // Single-select path. Re-read the target so a stale row never writes:
+    // refuse with `changed — reopen`, then reopen the stage fresh (§6.4).
     const targetLine = getEditorLine(this.editor, item.line);
     if (targetLine !== item.rawLine) {
-      new Notice("Task changed; dependency not added");
-      return false;
+      return this.refuseDependencyStale();
     }
     if (!isObsidianTaskAtLine(this.getEditorContent(), item.line)) {
-      new Notice("Selected dependency is no longer a #task checkbox");
-      return false;
+      return this.refuseDependencyStale();
     }
 
     // A missing trailing block ID always prompts, even when an `[id:: value]`
@@ -26003,8 +26131,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       targetLine !== item.rawLine ||
       !isObsidianTaskAtLine(this.getEditorContent(), item.line)
     ) {
-      new Notice("Selected dependency changed; no tasks were updated");
-      return false;
+      return this.refuseDependencyStale();
     }
 
     const resolved = resolveTargetTaskIdentity(targetLine, {
@@ -26903,6 +27030,39 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // (`docs/task-dependencies.md` §6.6). Removing a link is always allowed,
   // so the target is never re-read; the dependent is guarded by its
   // snapshot line text.
+  // A stale target or dependent refuses with `changed — reopen` and then
+  // reopens the stage fresh (`docs/task-dependencies.md` §6.4). Best-effort:
+  // harness stubs without a picker opener just keep the refusal.
+  reopenDependencyStageFresh() {
+    try {
+      const plugin = this.plugin;
+      const editor = this.editor;
+      if (
+        !plugin ||
+        !editor ||
+        typeof plugin.openBulletPropertyPicker !== "function"
+      ) {
+        return;
+      }
+      try {
+        this.close();
+      } catch (_closeError) {
+        // Best-effort close only.
+      }
+      void plugin.openBulletPropertyPicker(editor, {
+        initialProperty: "dependsOn",
+      });
+    } catch (_reopenError) {
+      // Best-effort reopen only.
+    }
+  }
+
+  refuseDependencyStale(message = "changed — reopen") {
+    new Notice(message);
+    this.reopenDependencyStageFresh();
+    return false;
+  }
+
   async removeSingleDependency(item) {
     const ownerPath = normalizeVaultRelativePath(this.filePath || "");
     const blockId = normalizeBulletPropertyValue(
@@ -26922,6 +27082,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       ],
     });
     if (!outcome.ok) {
+      if (outcome.reason === "stale-editor") {
+        return this.refuseDependencyStale();
+      }
       new Notice(`⛓ Could not remove dependency (${outcome.reason})`);
       return false;
     }
@@ -26973,8 +27136,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         snapshot.displayText,
       );
       if (!located) {
-        new Notice("Task changed; dependency not added");
-        return false;
+        return this.refuseDependencyStale();
       }
       snapshot.line = located.line;
       snapshot.rawLine = located.rawLine;
@@ -26991,11 +27153,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const counters = { stale: 0, other: 0 };
     const addition = this.collectVaultAddition(snapshot, files, counters);
     if (!addition) {
-      new Notice(
-        counters.stale > 0
-          ? "Task changed; dependency not added"
-          : "Could not identify the selected dependency",
-      );
+      if (counters.stale > 0) {
+        return this.refuseDependencyStale();
+      }
+      new Notice("Could not identify the selected dependency");
       return false;
     }
     return this.commitVaultRefs([addition], [], counters);
@@ -35510,7 +35671,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         },
       });
       if (!outcome.ok && outcome.reason === "stale-editor") {
-        new Notice("The note changed — reopen the picker and try again");
+        new Notice("changed — reopen");
       }
       return outcome;
     } catch (_error) {
@@ -42847,6 +43008,7 @@ module.exports.helpers = {
   mergeStageCacheEdges,
   locateStageDisplayText,
   editorSelectionSpansTasks,
+  describeRemovedDependencyTarget,
   buildDependencyEditNotice,
   applyDependencyEditTransaction,
   applyPromptedBlockIdPreservingLegacyId,

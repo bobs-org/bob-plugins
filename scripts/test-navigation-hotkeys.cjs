@@ -16529,7 +16529,7 @@ test("findUniqueLinkPickerTargetLine vets missing, duplicated, non-task, and clo
   );
 });
 
-test("createLinkPickerPropertyItems hides dependsOn and aggregates common and mixed values", () => {
+test("createLinkPickerPropertyItems shows dependsOn and aggregates common and mixed values", () => {
   const config = createLinkPickerEnergyConfig();
   const aggregate = helpers.createLinkPickerPropertyItems(config, [
     {
@@ -16544,9 +16544,11 @@ test("createLinkPickerPropertyItems hides dependsOn and aggregates common and mi
     },
   ]);
   assert.equal(aggregate.valid, true);
-  assert.ok(
-    aggregate.items.every((item) => item.property.name !== "dependsOn"),
+  const dependsOn = aggregate.items.find(
+    (item) => item.property.name === "dependsOn",
   );
+  assert.ok(dependsOn, "Task Link batches show Depends on");
+  assert.equal(dependsOn.linkDependency, true);
   const energy = aggregate.items.find(
     (item) => item.property.name === "energy",
   );

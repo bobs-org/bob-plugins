@@ -1386,3 +1386,56 @@
   color: var(--text-warning, var(--text-muted));
   font-size: var(--font-ui-smaller);
 }
+
+/* Vault-wide Depends on stage polish (nav-stage-polish): `bob-cnp-dep-*`
+   classes over the shared `bob-cnp` modal styling, coloured with the
+   existing `--task-status-*` tokens and no new palette. */
+.bob-cnp-dep-row .bob-cnp-dep-text {
+  min-width: 0;
+}
+
+.bob-cnp-dep-row .bob-cnp-dep-meta {
+  color: var(--text-muted);
+}
+
+.bob-cnp-dep-row .bob-cnp-dep-guard {
+  color: var(--text-warning, var(--text-muted));
+}
+
+.bob-cnp-dep-status.is-todo {
+  color: var(--task-status-todo, var(--text-normal));
+}
+
+.bob-cnp-dep-status.is-next {
+  color: var(--task-status-next, var(--text-accent));
+}
+
+.bob-cnp-dep-status.is-active {
+  color: var(--task-status-in-progress, var(--text-accent));
+}
+
+.bob-cnp-dep-badge {
+  flex: 0 0 auto;
+}
+
+.bob-cnp-dep-badge .bob-cnp-dep-waits {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.bob-cnp-dep-hidden {
+  opacity: 0.62;
+}
+
+.bob-cnp-dep-hidden .bob-cnp-row-title {
+  color: var(--text-muted);
+}
+
+.bob-cnp-dep-blocked .bob-cnp-row-title {
+  color: var(--text-muted);
+}
+
+.bob-cnp-dep-more {
+  opacity: 0.75;
+  font-style: italic;
+}

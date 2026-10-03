@@ -554,7 +554,7 @@ test("removing the last open prerequisite recovers immediately", () => {
   );
   assert.equal(plan.ok, true);
   assert.match(plan.nextContent, /- \[ \] #task P \^p$/m);
-  assert.equal(plan.notice, '⛓ No longer waits on "a" · Ready again');
+  assert.equal(plan.notice, '⛓ No longer waits on "A" · Ready again');
 });
 
 test("removal stays Blocked while another prerequisite is open", () => {
@@ -570,7 +570,7 @@ test("removal stays Blocked while another prerequisite is open", () => {
   assert.equal(plan.ok, true);
   assert.match(plan.nextContent, /- \[\?\] #task P /);
   assert.match(plan.nextContent, /\[dependsOn:: Tasks__b\]/);
-  assert.equal(plan.notice, '⛓ No longer waits on "a" · Still blocked');
+  assert.equal(plan.notice, '⛓ No longer waits on "A" · Still blocked');
 });
 
 test("removal stays Blocked with a future schedule", () => {

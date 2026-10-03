@@ -2492,7 +2492,7 @@ test("counted dependencies converge mixed sources and maintain one link per pare
   const input = [
     "- [ ] #task One [dependsOn:: Tasks__target] ^one",
     "- [/] #task Two ^two",
-    "> - [*] #task Three [dependsOn:: legacy-target] ^three",
+    "- [*] #task Three [dependsOn:: legacy-target] ^three",
     "- [ ] #task Target [id:: legacy-target] ^target",
   ].join("\n");
   const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
@@ -2518,10 +2518,6 @@ test("counted dependencies converge mixed sources and maintain one link per pare
       .length,
     3,
   );
-  assert.match(
-    added.content,
-    /> \t- ⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/,
-  );
   assert.match(added.content, /Target \[id:: legacy-target\] \^target/);
   assert.doesNotMatch(added.content, /Tasks__target/);
 
@@ -2543,6 +2539,41 @@ test("counted dependencies converge mixed sources and maintain one link per pare
   assert.equal(removed.operation, "remove");
   assert.doesNotMatch(removed.content, /dependsOn|⛓️/);
   assert.match(removed.content, /Target \[id:: legacy-target\] \^target/);
+});
+
+test("counted and single dependency gestures refuse inside a blockquote (DP29)", () => {
+  const input = [
+    "- [ ] #task One ^one",
+    "> - [ ] #task Quoted ^quoted",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const quotedPlan = helpers.planDependencyEdit({
+    content: input,
+    parentLine: 1,
+    parentPath: "Tasks.md",
+    add: [{ path: "Tasks.md", blockId: "target" }],
+    remove: [],
+    files: { "Tasks.md": input },
+  });
+  assert.equal(quotedPlan.ok, false);
+  assert.equal(quotedPlan.reason, "in-blockquote");
+  assert.equal(
+    helpers.dependencyPlanFailureNotice(quotedPlan.reason, "add"),
+    "⛓ Dependencies can't be edited inside a blockquote",
+  );
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 1);
+  const dependencyTask = helpers
+    .getOpenLocalTasks(input)
+    .find((task) => task.line === 2);
+  const counted = helpers.planCountedLocalTaskDependency(
+    input,
+    session,
+    dependencyTask,
+    "Tasks.md",
+  );
+  assert.equal(counted.valid, false);
+  assert.match(counted.error, /blockquote/);
+  assert.equal(counted.content, input);
 });
 
 test("counted dependency candidates exclude every source and expose mixed state", () => {

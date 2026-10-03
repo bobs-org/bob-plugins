@@ -268,7 +268,7 @@ const DEPENDENCY_LINE_EMOJIS = Object.freeze(["⛓️", "⛓", "🔗"]);
 // `linkSpan` (everything after the label; the link scan decides). Never split
 // `linkSpan` on separators: an alias can contain one.
 const DEPENDENCY_NAVIGATION_BULLET_RE = new RegExp(
-  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?:(?<emoji>⛓️|⛓|🔗)[ \\t]+)?\\*\\*(?<label>${[
+  `^(?<indent>\\s*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?:(?<emoji>⛓️|⛓|🔗)[ \\t]+)?\\*\\*(?<label>${[
     DEPENDENCY_NAVIGATION_LABEL,
     ...LEGACY_DEPENDENCY_NAVIGATION_LABELS,
   ]
@@ -1372,6 +1372,37 @@ function resolveTargetTaskIdentity(line, options = {}) {
     reason: null,
     targetEdits: Object.freeze([]),
   });
+}
+
+// A blockquoted task can never own a Depends-On line (DP29): every
+// dependency gesture there refuses with `⛓ Dependencies can't be edited
+// inside a blockquote`.
+function isBlockquotedMarkdownLine(lineText) {
+  return /^\s*>/.test(String(lineText || ""));
+}
+
+function dependencyPlanFailureNotice(reason, verb = "update") {
+  if (reason === "in-blockquote") {
+    return "⛓ Dependencies can't be edited inside a blockquote";
+  }
+  return `⛓ Could not ${verb} dependencies (${reason})`;
+}
+
+// Recovery snapshots cost a whole-vault read, so build one only when ADJ-8
+// recovery can actually fire: a prerequisite was removed (or the mirror
+// touched) while the dependent is Blocked. Adds never recover.
+function needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch) {
+  const lines = String(content || "").split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return false;
+  }
+  if (!Array.isArray(remove) || remove.length === 0) {
+    if (mirrorTouch !== true) {
+      return false;
+    }
+  }
+  return getObsidianTaskCheckboxStatus(String(lines[at] || "")) === "?";
 }
 
 // Leading list container prefix, including any Markdown blockquote markers.
@@ -3965,6 +3996,9 @@ function planDependencyHandEditMirror(oldContent, newContent, editedLine, remove
   if (owning === null) {
     return null;
   }
+  if (isBlockquotedMarkdownLine(lines[owning])) {
+    return null;
+  }
   const verdicts = dependencyHandEditChildVerdicts(lines, owning);
   if (verdicts.some((entry) => entry.verdict === "malformed")) {
     return null;
@@ -4156,6 +4190,9 @@ function planDependencyEdit(args = {}) {
   if (!isObsidianTaskAtLine(content, parentIndex)) {
     return fail("not-task");
   }
+  if (isBlockquotedMarkdownLine(lines[parentIndex])) {
+    return fail("in-blockquote");
+  }
   const filesMap = new Map();
   const rawFiles = args.files;
   if (rawFiles instanceof Map) {
@@ -4273,7 +4310,10 @@ function planDependencyEdit(args = {}) {
       if (addedKeys.has(dependencyTargetRefKey(ref))) {
         return fail("target-not-found");
       }
-      const slot = keptExisting.findIndex(
+      if (parentFieldValues.length !== existing.length) {
+        return fail("target-not-found");
+      }
+      const slot = existing.findIndex(
         (entry) => dependencyTargetRefKey(entry) === dependencyTargetRefKey(ref),
       );
       const keptValue =
@@ -4281,7 +4321,7 @@ function planDependencyEdit(args = {}) {
       if (!keptValue) {
         return fail("target-not-found");
       }
-      const keptNote = slot !== -1 ? keptExisting[slot].note : "";
+      const keptNote = slot !== -1 ? existing[slot].note : "";
       const row = Object.freeze({
         ref,
         depValue: keptValue,
@@ -18465,6 +18505,13 @@ function validateDependencyParentForEditor(editor, cursor, expectedLine = null) 
       message: "Dependencies can only be set on #task checkboxes.",
     });
   }
+  if (isBlockquotedMarkdownLine(line)) {
+    return Object.freeze({
+      valid: false,
+      line,
+      message: "⛓ Dependencies can't be edited inside a blockquote",
+    });
+  }
   if (expectedLine !== null && line !== expectedLine) {
     return Object.freeze({
       valid: false,
@@ -19699,6 +19746,21 @@ function planCountedLocalTaskDependency(
       content: text,
       changed: false,
     });
+  }
+  const countedLines = String(content || "").split(/\r?\n/);
+  for (const target of session.targets || []) {
+    if (
+      Number.isInteger(target.line) &&
+      isBlockquotedMarkdownLine(countedLines[target.line])
+    ) {
+      return Object.freeze({
+        valid: false,
+        stale: true,
+        error: "⛓ Dependencies can't be edited inside a blockquote",
+        content: text,
+        changed: false,
+      });
+    }
   }
 
   const dependencyLine = dependencyTask && dependencyTask.line;
@@ -26337,28 +26399,116 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       snapshot = { ...snapshot, blockId: addition.blockId };
     }
     const ref = { path: targetPath, blockId: snapshot.blockId };
-    let applied = 0;
-    // Bottom-up so an inserted Depends-On line never shifts a still-pending
-    // source's line number (mirrors `deleteCountedDependencyLinesAndFields`).
+    // One gesture commits every source in one editor transaction (one
+    // Ctrl+Z): plan every source on one working copy bottom-up, refuse
+    // before any write when any source fails to plan, then commit once.
     const orderedSources = (this.taskSession.targets || [])
       .slice()
       .sort((first, second) => second.line - first.line);
+    const originalContent = String(this.editor.getValue() || "");
+    let working = originalContent;
+    const preparations = new Map();
+    const resolveLinkpath =
+      this.plugin && typeof this.plugin.dependencyLinkpathResolver === "function"
+        ? this.plugin.dependencyLinkpathResolver()
+        : null;
+    const vaultFiles =
+      this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
+        ? this.plugin.readDependencyVaultFileList()
+        : null;
+    const countedRegistry = this.plugin
+      ? await readTasksStatusRegistry(this.plugin.app)
+      : null;
+    const countedNeedsRecovery =
+      Boolean(snapshot.remove) &&
+      String(originalContent || "")
+        .split(/\r?\n/)
+        .some((line, index) => {
+          if (!orderedSources.some((target) => target.line === index)) {
+            return false;
+          }
+          return getObsidianTaskCheckboxStatus(String(line || "")) === "?";
+        });
+    const countedVaultContents =
+      this.plugin && countedNeedsRecovery
+        ? await this.plugin.readDependencyRecoveryVaultContents(ownerPath, originalContent)
+        : null;
     for (const target of orderedSources) {
-      const outcome = await this.plugin.applyDependencyEdit({
-        editor: this.editor,
-        parentPath: ownerPath,
+      const targetContent = files.get(targetPath);
+      const planFiles = new Map();
+      planFiles.set(ownerPath, working);
+      if (targetPath !== ownerPath && targetContent !== undefined) {
+        planFiles.set(targetPath, String(targetContent));
+      }
+      for (const [path, content] of files) {
+        if (!planFiles.has(path)) {
+          planFiles.set(path, String(content));
+        }
+      }
+      const plan = planDependencyEdit({
+        content: working,
         parentLine: target.line,
+        parentPath: ownerPath,
         add: snapshot.remove ? [] : [ref],
         remove: snapshot.remove ? [ref] : [],
+        files: planFiles,
+        vaultFiles,
+        resolveLinkpath,
+        recovery: {
+          registry: countedRegistry,
+          today: new Date(),
+          vaultContents: countedVaultContents,
+        },
       });
-      if (!outcome.ok) {
+      if (!plan.ok) {
         new Notice(
-          `⛓ ${applied > 0 ? `Updated ${applied} task${applied === 1 ? "" : "s"}; ` : ""}could not update the task on line ${target.line + 1} (${outcome.reason})`,
+          plan.reason === "in-blockquote"
+            ? "⛓ Dependencies can't be edited inside a blockquote; no tasks were updated"
+            : `⛓ Could not update the task on line ${target.line + 1} (${plan.reason}); no tasks were updated`,
         );
-        return applied > 0;
+        return false;
       }
-      applied += 1;
+      for (const preparation of plan.preparations || []) {
+        const key = `${preparation.path}\x00${preparation.line}\x00${preparation.from}\x00${preparation.text}`;
+        if (!preparations.has(key)) {
+          preparations.set(key, preparation);
+        }
+      }
+      let nextWorking = plan.nextContent;
+      if (plan.changed && this.plugin && typeof this.plugin.stampDependencyParentLine === "function") {
+        nextWorking = this.plugin.stampDependencyParentLine(nextWorking, target.line);
+      }
+      working = nextWorking;
     }
+    for (const preparation of preparations.values()) {
+      let result = null;
+      try {
+        result = await this.plugin.prepareDependencyTargetNote(preparation.path, preparation);
+      } catch (_error) {
+        result = { ok: false, reason: "target-preparation-threw" };
+      }
+      if (!result || result.ok !== true) {
+        new Notice(
+          `⛓ Could not prepare the selected dependency (${(result && result.reason) || "target-preparation-failed"}); no tasks were updated`,
+        );
+        return false;
+      }
+    }
+    if (working === originalContent) {
+      new Notice("No dependencies changed");
+      return true;
+    }
+    if (String(this.editor.getValue() || "") !== originalContent) {
+      new Notice("Selected dependency changed; no tasks were updated");
+      return false;
+    }
+    if (
+      !applyEditorContentTransaction(this.editor, originalContent, working)
+    ) {
+      new Notice("Could not update counted dependencies; no tasks were updated");
+      return false;
+    }
+    const applied = orderedSources.length;
     new Notice(
       snapshot.remove
         ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
@@ -26970,12 +27120,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const registry = await readTasksStatusRegistry(
       this.plugin ? this.plugin.app : null,
     );
-    const vaultContents = this.plugin
-      ? await this.plugin.readDependencyRecoveryVaultContents(
-          filePath,
-          workingContent,
-        )
-      : null;
+    const vaultContents =
+      this.plugin &&
+      needsDependencyRecoverySnapshot(workingContent, this.cursor.line, removeRefs, false)
+        ? await this.plugin.readDependencyRecoveryVaultContents(
+            filePath,
+            workingContent,
+          )
+        : null;
     const plan = planDependencyEdit({
       content: workingContent,
       parentLine: this.cursor.line,
@@ -26992,7 +27144,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       recovery: { registry, today: new Date(), vaultContents },
     });
     if (!plan.ok) {
-      new Notice(`⛓ Could not update dependencies (${plan.reason})`);
+      new Notice(dependencyPlanFailureNotice(plan.reason, "update"));
       return false;
     }
     if (plan.changed) {
@@ -27330,7 +27482,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       remove: removeRefs,
     });
     if (!outcome.ok) {
-      new Notice(`⛓ Could not update dependencies (${outcome.reason})`);
+      new Notice(dependencyPlanFailureNotice(outcome.reason, "update"));
       return false;
     }
     const skipped = (counters.stale || 0) + (counters.other || 0);
@@ -34373,6 +34525,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
     const normalizedPath = normalizeVaultRelativePath(filePath);
+    const countedNeedsSnapshot = String(writeContext.content || "")
+      .split(/\r?\n/)
+      .some((line, index) => {
+        if (!(session.targets || []).some((target) => target.line === index)) {
+          return false;
+        }
+        return getObsidianTaskCheckboxStatus(String(line || "")) === "?";
+      });
     const plan = planCountedLocalTaskDependency(
       writeContext.content,
       session,
@@ -34387,10 +34547,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         recovery: {
           registry: await readTasksStatusRegistry(this.app),
           today: new Date(),
-          vaultContents: await this.readDependencyRecoveryVaultContents(
-            normalizedPath,
-            writeContext.content,
-          ),
+          vaultContents: countedNeedsSnapshot
+            ? await this.readDependencyRecoveryVaultContents(
+                normalizedPath,
+                writeContext.content,
+              )
+            : null,
         },
       },
     );
@@ -35610,12 +35772,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         }
         files.set(filePath, loaded);
       }
-      const registry = await readTasksStatusRegistry(this.app);
-      const vaultContents = await this.readDependencyRecoveryVaultContents(
-        parentPath,
-        content,
-      );
       const mirrorTouch = args.mirrorTouch === true;
+      const registry = await readTasksStatusRegistry(this.app);
+      const vaultContents = needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch)
+        ? await this.readDependencyRecoveryVaultContents(parentPath, content)
+        : null;
       const plan = planDependencyEdit({
         content,
         parentLine,
@@ -36468,14 +36629,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // target `^id` / `[id::]` write into that one transaction instead of a
   // separate edit.
   setLocalTaskDependencyLink(cm, cursor, id, options = {}) {
-    let content =
+    const originalContent =
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : null;
-    if (content === null) {
+    if (originalContent === null) {
       new Notice("No active markdown editor");
       return false;
     }
+    let content = originalContent;
     const pendingTarget = options.pendingTargetLine || null;
     if (pendingTarget) {
       const pendingLines = content.split(/\r?\n/);
@@ -36523,7 +36685,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       resolveLinkpath: this.dependencyLinkpathResolver(),
     });
     if (!plan.ok) {
-      new Notice(`⛓ Could not add dependency (${plan.reason})`);
+      new Notice(dependencyPlanFailureNotice(plan.reason, "add"));
       return false;
     }
     let nextContent = plan.nextContent;
@@ -36534,7 +36696,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         undefined,
         undefined,
       );
-      if (!applyEditorContentTransaction(cm, content, nextContent)) {
+    }
+    if (nextContent !== originalContent) {
+      if (!applyEditorContentTransaction(cm, originalContent, nextContent)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -36621,7 +36785,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       remove,
     });
     if (!outcome.ok) {
-      new Notice(`⛓ Could not clear dependencies (${outcome.reason})`);
+      new Notice(
+        outcome.reason === "in-blockquote"
+          ? "⛓ Dependencies can't be edited inside a blockquote"
+          : `⛓ Could not clear dependencies (${outcome.reason})`,
+      );
       return null;
     }
     const nextLines = String(cm.getValue() || "").split(/\r?\n/);
@@ -36667,10 +36835,20 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const resolveLinkpath = this.dependencyLinkpathResolver();
     const vaultFiles = this.readDependencyVaultFileList();
     const registry = await readTasksStatusRegistry(this.app);
-    const baseVaultContents = await this.readDependencyRecoveryVaultContents(
-      parentPath,
-      originalContent,
-    );
+    const deleteNeedsSnapshot = String(originalContent || "")
+      .split(/\r?\n/)
+      .some((line, index) => {
+        if (!(session.targets || []).some((target) => target.line === index)) {
+          return false;
+        }
+        return getObsidianTaskCheckboxStatus(String(line || "")) === "?";
+      });
+    const baseVaultContents = deleteNeedsSnapshot
+      ? await this.readDependencyRecoveryVaultContents(
+          parentPath,
+          originalContent,
+        )
+      : null;
     const today = new Date();
     let working = originalContent;
     let cleared = 0;
@@ -36827,6 +37005,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (!Number.isInteger(owning) || owning < 0 || owning >= lines.length) {
       return Object.freeze({ mirrored: false });
     }
+    if (isBlockquotedMarkdownLine(lines[owning])) {
+      return Object.freeze({ mirrored: false });
+    }
     const next = lines.slice();
     if (plan.kind === "clear-empty" && Array.isArray(plan.emptyLines)) {
       const dels = plan.emptyLines
@@ -36843,10 +37024,47 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       options.registry || (await readTasksStatusRegistry(this.app));
     const preview = next.slice();
     preview[owning] = parentText;
+    const previewContent = preview.join(lineEnding);
+    const recoveryToday = options.today || new Date();
+    let recoverySnapshot = options.vaultContents !== undefined ? options.vaultContents : null;
+    if (options.vaultContents === undefined && typeof this.readDependencyRecoveryVaultContents === "function") {
+      try {
+        recoverySnapshot = await this.readDependencyRecoveryVaultContents(parentPath, previewContent);
+      } catch (_snapshotError) {
+        recoverySnapshot = null;
+      }
+    }
+    const recoveryNotes = [];
+    if (recoverySnapshot instanceof Map) {
+      for (const [filePath, fileContent] of recoverySnapshot) {
+        const normalized = normalizeVaultRelativePath(filePath);
+        if (!normalized) {
+          continue;
+        }
+        recoveryNotes.push({
+          path: normalized,
+          content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(fileContent || ""),
+        });
+      }
+    } else if (recoverySnapshot && typeof recoverySnapshot === "object") {
+      for (const filePath of Object.keys(recoverySnapshot)) {
+        const normalized = normalizeVaultRelativePath(filePath);
+        if (!normalized) {
+          continue;
+        }
+        recoveryNotes.push({
+          path: normalized,
+          content: normalized === normalizeVaultRelativePath(parentPath) ? previewContent : String(recoverySnapshot[filePath] || ""),
+        });
+      }
+    }
+    if (!recoveryNotes.some((note) => normalizeVaultRelativePath(note.path) === normalizeVaultRelativePath(parentPath))) {
+      recoveryNotes.push({ path: parentPath, content: previewContent });
+    }
     const recoveryIndex = buildScheduledRecoveryIndex(
-      [{ path: parentPath, content: preview.join(lineEnding) }],
+      recoveryNotes,
       registry,
-      options.today || new Date(),
+      recoveryToday,
     );
     const metadata = getScheduledRecoveryMetadata(
       recoveryIndex,
@@ -42955,6 +43173,9 @@ module.exports.helpers = {
   insertMissingBulletProperty,
   deleteBulletProperty,
   getBulletIndent,
+  isBlockquotedMarkdownLine,
+  dependencyPlanFailureNotice,
+  needsDependencyRecoverySnapshot,
   DEPENDENCY_NAVIGATION_LABEL,
   DEPENDENCY_NAVIGATION_EMOJI,
   DEPENDENCY_NAVIGATION_SEPARATOR,

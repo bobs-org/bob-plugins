@@ -150,10 +150,9 @@ test("DP parse vectors accept, empty, malformed, and not-a-line", () => {
     ["DP26", "  - ⛓️ **DEPENDS ON:** • ,", {}, "malformed", 0, false],
     ["DP27", "  - ⛓️ **depends on:** [[#^a]]", {}, "not-a-line", 0, false],
     ["DP28", "⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line", 0, false],
-    // DP29: the contract verdict is not-a-line, but nav's writer
-    // round-trips quoted lines it manages (see the counted-writer test),
-    // so its reader keeps accepting them.
-    ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]", {}, "accept", 1, true],
+    // DP29: a blockquoted Depends-On line is not-a-line everywhere,
+    // including nav (nav refuses dependency gestures inside blockquotes).
+    ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line", 0, false],
   ];
   for (const [id, line, options, verdict, count, canonical] of cases) {
     const parsed = helpers.parseDependencyLine(line, options);

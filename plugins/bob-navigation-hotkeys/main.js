@@ -11458,7 +11458,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   const targetKeys = new Set(
     targetList.map(
       (target) =>
-        `${normalizeVaultRelativePath(target.path)} ${target.blockId}`,
+        `${normalizeVaultRelativePath(target.path)}\x00${target.blockId}`,
     ),
   );
 
@@ -11491,7 +11491,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
           unresolvedCount += 1;
           continue;
         }
-        const key = `${resolved} ${occurrence.blockId}`;
+        const key = `${resolved}\x00${occurrence.blockId}`;
         if (!targetKeys.has(key)) {
           continue;
         }
@@ -11637,7 +11637,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     removedTargets: Object.freeze(
       targetList.filter((target) =>
         removedTargetKeys.has(
-          `${normalizeVaultRelativePath(target.path)} ${target.blockId}`,
+          `${normalizeVaultRelativePath(target.path)}\x00${target.blockId}`,
         ),
       ),
     ),
@@ -13913,6 +13913,22 @@ const BULLET_PROPERTY_WEEKDAY_NAMES = [
   "Fri",
   "Sat",
 ];
+
+// Vault-wide stage rows are keyed by `path#line` so marks never collide
+// across notes; current-note rows keep their line-number keys.
+function bulletPropertyTaskMarkKey(item) {
+  if (!item) {
+    return null;
+  }
+  if (
+    item.markKey !== undefined &&
+    item.markKey !== null &&
+    item.markKey !== ""
+  ) {
+    return item.markKey;
+  }
+  return Number.isInteger(item.line) ? item.line : null;
+}
 
 function getBulletPropertyLocalTaskHints(hasMarks) {
   return BULLET_PROPERTY_LOCAL_TASK_HINTS.map((hint) => {
@@ -16478,15 +16494,21 @@ function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
   if (targets.length === 0) {
     return Object.freeze({ valid: false, error: "No linked tasks", items: [] });
   }
+  // The Depends on row is no longer hidden in Task Link mode: with one
+  // dedicated Task Link it edits the linked task in its own note
+  // (`docs/task-dependencies.md` §6.1). Batches keep the old refusal.
+  const singleLinkTarget =
+    targets.length === 1 ? targets[0] : null;
   const properties = (config && Array.isArray(config.properties)
     ? config.properties
     : []
-  ).filter(
-    (property) =>
-      normalizeBulletPropertyName(property && property.name) !==
-        "dependsOn" &&
-      (!property || property.values !== "local_task_id"),
-  );
+  ).filter((property) => {
+    const name = normalizeBulletPropertyName(property && property.name);
+    if (property && property.values === "local_task_id") {
+      return name === "dependsOn" && singleLinkTarget !== null;
+    }
+    return name !== "dependsOn";
+  });
   const items = [];
   for (let order = 0; order < properties.length; order += 1) {
     const property = properties[order];
@@ -16518,6 +16540,11 @@ function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
     const currentLabels = Object.freeze(
       values.map((value) => getBulletPropertyCurrentLabel(property, value)),
     );
+    const isLinkDependencyRow =
+      property &&
+      property.values === "local_task_id" &&
+      normalizeBulletPropertyName(property.name) === "dependsOn" &&
+      singleLinkTarget !== null;
     items.push({
       kind: "property",
       property,
@@ -16534,6 +16561,10 @@ function createLinkPickerPropertyItems(config, resolvedTargets, options = {}) {
       mixed: valueState === "mixed",
       dependencyEligible: false,
       sourceStates: Object.freeze(states),
+      linkDependency: isLinkDependencyRow,
+      detailText: isLinkDependencyRow
+        ? `↗ ${dependencyStageBasenameOf(singleLinkTarget.path)} · ${singleLinkTarget.displayText}`
+        : null,
     });
   }
 
@@ -21361,6 +21392,1175 @@ function createBulletPropertyLocalTaskItems(content, options = {}) {
   );
 }
 
+// ---------- Vault-wide Depends on stage (nav-stage) ----------
+// `docs/task-dependencies.md` §6 in bob-cli is authoritative: the candidate
+// pool is vault-wide (Tasks cache with open-buffer overrides, falling back
+// to a one-time vault scan), ranking ports `capture_link_tasks.rs::rank`,
+// and rows group into CURRENT / RESULTS / BLOCKED with guards. Every helper
+// here is pure and synchronous so the stage never reads from disk on a
+// keystroke; the plugin methods below supply the pool and the commit path.
+const DEPENDENCY_STAGE_MAX_ROWS = 60;
+const DEPENDENCY_STAGE_SECTION_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
+
+// Identity key for one stage row or graph node: the NUL separator keeps
+// paths with spaces unambiguous (block ids never contain whitespace).
+function dependencyStageRowKey(path, blockId) {
+  const normalized = normalizeVaultRelativePath(path || "");
+  const id = normalizeBulletPropertyValue(blockId || "");
+  if (!normalized || !id) {
+    return null;
+  }
+  return `${normalized}\x00${id}`;
+}
+
+// One tier check, ported from `field_tier` in
+// `src/native/capture_link_tasks.rs`: 3 for a field prefix, 2 for a word
+// prefix (the preceding character is not alphanumeric), 1 for a substring,
+// and 0 for an in-order subsequence. Both sides are already lowercased.
+function dependencyStageFieldTier(field, term) {
+  const text = String(field || "");
+  const needle = String(term || "");
+  if (!needle) {
+    return null;
+  }
+  if (text.startsWith(needle)) {
+    return 3;
+  }
+  let from = text.indexOf(needle, 1);
+  while (from !== -1) {
+    const before = text[from - 1];
+    if (before !== undefined && !/[\p{L}\p{N}]/u.test(before)) {
+      return 2;
+    }
+    from = text.indexOf(needle, from + 1);
+  }
+  if (text.includes(needle)) {
+    return 1;
+  }
+  let wanted = 0;
+  for (const cell of text) {
+    if (cell === needle[wanted]) {
+      wanted += 1;
+      if (wanted >= needle.length) {
+        return 0;
+      }
+    }
+  }
+  return null;
+}
+
+// A term's best tier over the searchable fields, or null when it matches
+// nothing: the cleaned description, `route:blockId`, the block id, the note
+// route, and the section heading (`docs/task-dependencies.md` §6.3).
+function dependencyStageTermTier(candidate, term) {
+  const needle = String(term || "").toLowerCase();
+  if (!needle || !candidate) {
+    return null;
+  }
+  const fields = [];
+  if (candidate.blockId) {
+    fields.push(`${candidate.route || ""}:${candidate.blockId}`);
+    fields.push(candidate.blockId);
+  }
+  fields.push(candidate.text || "");
+  fields.push(candidate.route || "");
+  if (candidate.section) {
+    fields.push(candidate.section);
+  }
+  let best = null;
+  for (const field of fields) {
+    const tier = dependencyStageFieldTier(
+      String(field || "").toLowerCase(),
+      needle,
+    );
+    if (tier !== null && (best === null || tier > best)) {
+      best = tier;
+    }
+  }
+  return best;
+}
+
+// Rank candidates for a query, ported from `rank` in
+// `src/native/capture_link_tasks.rs`: every whitespace-separated term must
+// match, tasks order by the summed tiers descending, and ties (and the empty
+// query) keep the input order. The sort is stable, so callers pre-sort into
+// canonical order first.
+function dependencyStageRank(candidates, query) {
+  const list = Array.isArray(candidates) ? candidates.slice() : [];
+  const terms = String(query || "")
+    .split(/\s+/)
+    .map((term) => term.toLowerCase())
+    .filter(Boolean);
+  if (terms.length === 0) {
+    return list;
+  }
+  const scored = [];
+  for (const candidate of list) {
+    let total = 0;
+    let matched = true;
+    for (const term of terms) {
+      const tier = dependencyStageTermTier(candidate, term);
+      if (tier === null) {
+        matched = false;
+        break;
+      }
+      total += tier;
+    }
+    if (matched) {
+      scored.push({ candidate, total });
+    }
+  }
+  scored.sort((left, right) => right.total - left.total);
+  return scored.map((entry) => entry.candidate);
+}
+
+function dependencyStageRouteOf(path) {
+  return String(path || "").replace(/\.md$/i, "");
+}
+
+function dependencyStageBasenameOf(path) {
+  const route = dependencyStageRouteOf(path);
+  const at = route.lastIndexOf("/");
+  return at === -1 ? route : route.slice(at + 1);
+}
+
+// RESULTS exclusions (`docs/task-dependencies.md` §6.2): daily notes
+// (`YYYY/YYYYMMDD.md`), `done/`, `_templates`, `_generated`, `_conflicts`
+// (matched as a path segment), dot-dirs, and the dependent itself (handled
+// by the caller through `dependentLines`). Fenced code never reaches here:
+// the task scanner skips it.
+function isDependencyStageExcludedPath(path) {
+  const normalized = String(path || "").replace(/\\/g, "");
+  if (!normalized || isUnsafeVaultPath(normalized)) {
+    return true;
+  }
+  if (/^\d{4}\/\d{8}\.md$/i.test(normalized)) {
+    return true;
+  }
+  const segments = normalized.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        segment.startsWith(".") ||
+        segment === "_templates" ||
+        segment === "_generated" ||
+        segment === "_conflicts",
+    )
+  ) {
+    return true;
+  }
+  return segments[0] === "done";
+}
+
+function findDependencyStageSection(lines, line) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  for (let index = line - 1; index >= 0; index -= 1) {
+    const match = DEPENDENCY_STAGE_SECTION_RE.exec(
+      String(sourceLines[index] || ""),
+    );
+    if (match) {
+      return (match[1] || "").trim() || null;
+    }
+  }
+  return null;
+}
+
+// Every `#task` line in one note, open or closed, plus non-task block-id
+// carriers (for the "not a task" CURRENT state). Fenced code and frontmatter
+// are skipped through the shared line contexts.
+function scanDependencyStageNoteTasks(content) {
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const entries = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    const rawLine = String(lines[line] || "");
+    const context = contexts[line] || {};
+    if (!context.valid || context.inFrontmatter || context.inFence) {
+      continue;
+    }
+    if (isObsidianTaskLine(rawLine)) {
+      const match = OBSIDIAN_TASK_LINE_RE.exec(rawLine);
+      const status = match ? match[1] : " ";
+      const idField = findBulletPropertyField(rawLine, "id");
+      entries.push(
+        Object.freeze({
+          line,
+          rawLine,
+          isTask: true,
+          status,
+          open: OPEN_OBSIDIAN_TASK_STATUSES.has(status),
+          blocked: status === "?",
+          text: cleanTaskDisplayText(rawLine),
+          blockId: getTrailingBlockId(rawLine),
+          idField: idField
+            ? normalizeBulletPropertyValue(idField.value)
+            : null,
+          hidden: hasWholeTaskTag(rawLine, PROJECT_HIDE_TAG),
+          section: findDependencyStageSection(lines, line),
+        }),
+      );
+    } else {
+      const blockId = getTrailingBlockId(rawLine);
+      if (blockId) {
+        entries.push(
+          Object.freeze({
+            line,
+            rawLine,
+            isTask: false,
+            status: null,
+            open: false,
+            blocked: false,
+            text: rawLine.trim(),
+            blockId,
+            idField: null,
+            hidden: false,
+            section: findDependencyStageSection(lines, line),
+          }),
+        );
+      }
+    }
+  }
+  return Object.freeze(entries);
+}
+
+// The vault-wide RESULTS pool (`docs/task-dependencies.md` §6.2): open
+// tasks passing the `#task` global filter, including `ref/`, inbox,
+// Blocked, and `#hide`. `notes` is `[{path, content}]`; open editor buffers
+// must already override the cache in that list, so unsaved edits count.
+function collectVaultDependencyCandidates(notes, options = {}) {
+  const dependentPath = normalizeVaultRelativePath(options.dependentPath || "");
+  const dependentLines =
+    options.dependentLines instanceof Set
+      ? options.dependentLines
+      : new Set(options.dependentLines || []);
+  const out = [];
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (!note) {
+      continue;
+    }
+    const path = normalizeVaultRelativePath(note.path || "");
+    if (!path || isDependencyStageExcludedPath(path)) {
+      continue;
+    }
+    const route = dependencyStageRouteOf(path);
+    const noteName = dependencyStageBasenameOf(path);
+    for (const entry of scanDependencyStageNoteTasks(note.content)) {
+      if (!entry.isTask || !entry.open) {
+        continue;
+      }
+      if (path === dependentPath && dependentLines.has(entry.line)) {
+        continue;
+      }
+      out.push(
+        Object.freeze({
+          path,
+          route,
+          note: noteName,
+          line: entry.line,
+          rawLine: entry.rawLine,
+          status: entry.status,
+          displayText: entry.text,
+          text: entry.text,
+          blockId: entry.blockId,
+          existingBlockId: entry.blockId,
+          idField: entry.idField,
+          existingIdField: entry.idField,
+          section: entry.section,
+          open: true,
+          blocked: entry.blocked,
+          hidden: entry.hidden,
+        }),
+      );
+    }
+  }
+  return Object.freeze(out);
+}
+
+// Lookup over everything — including closed, archived, hidden, and missing
+// targets — so CURRENT rows can still be removed
+// (`docs/task-dependencies.md` §6.2).
+function indexDependencyStageNotes(notes) {
+  const byKey = new Map();
+  const byBlockId = new Map();
+  const byIdField = new Map();
+  const basenames = new Map();
+  const register = (path, entry) => {
+    const record = Object.freeze({ path, ...entry });
+    if (entry.blockId) {
+      const key = dependencyStageRowKey(path, entry.blockId);
+      if (!byKey.has(key)) {
+        byKey.set(key, record);
+      }
+      if (!byBlockId.has(entry.blockId)) {
+        byBlockId.set(entry.blockId, []);
+      }
+      byBlockId.get(entry.blockId).push(record);
+    }
+    if (entry.idField && !byIdField.has(entry.idField)) {
+      byIdField.set(entry.idField, record);
+    }
+    return record;
+  };
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (!note) {
+      continue;
+    }
+    const path = normalizeVaultRelativePath(note.path || "");
+    if (!path) {
+      continue;
+    }
+    const basename = dependencyStageBasenameOf(path);
+    if (!basenames.has(basename)) {
+      basenames.set(basename, []);
+    }
+    basenames.get(basename).push(path);
+    for (const entry of scanDependencyStageNoteTasks(note.content)) {
+      register(path, entry);
+    }
+  }
+  return Object.freeze({ byKey, byBlockId, byIdField, basenames });
+}
+
+// Resolve one Depends-On line link to its note path: same-note links stay
+// put, bare basenames resolve when unique (case-insensitive), otherwise the
+// full vault-relative route wins.
+function resolveDependencyStageLinkTarget(linkNote, blockId, parentPath, index) {
+  const id = normalizeBulletPropertyValue(blockId);
+  if (!id || !index) {
+    return null;
+  }
+  const note = String(linkNote || "");
+  if (!note) {
+    return normalizeVaultRelativePath(parentPath || "");
+  }
+  if (note.includes("/")) {
+    return normalizeVaultRelativePath(`${note}.md`);
+  }
+  const paths = index.basenames.get(note) || [];
+  const lowered = note.toLowerCase();
+  const matches = paths.length > 0 ? paths : [];
+  if (matches.length === 0) {
+    for (const [basename, candidates] of index.basenames) {
+      if (basename.toLowerCase() === lowered) {
+        return normalizeVaultRelativePath(candidates[0] || "");
+      }
+    }
+    return null;
+  }
+  return normalizeVaultRelativePath(matches[0] || "");
+}
+
+// CURRENT rows: the dependent's existing prerequisites resolved against
+// everything, so closed, archived, hidden, and missing targets stay
+// removable. Returns `{ok, rows}` or `{ok: false, reason}` for a malformed
+// line (left alone, never projected).
+function resolveDependencyStageCurrent(content, parentLine, parentPath, index) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return Object.freeze({ ok: false, reason: "parent-out-of-range", rows: [] });
+  }
+  const collection = collectDependencyNavigationBullets(text, at);
+  if (collection.reason) {
+    return Object.freeze({ ok: false, reason: collection.reason, rows: [] });
+  }
+  const rows = [];
+  for (const target of collection.targets) {
+    const targetPath = resolveDependencyStageLinkTarget(
+      target.note,
+      target.blockId,
+      parentPath,
+      index,
+    );
+    const key =
+      targetPath && target.blockId
+        ? dependencyStageRowKey(targetPath, target.blockId)
+        : null;
+    const record = (key && index.byKey.get(key)) || null;
+    if (!record) {
+      const siblings =
+        (target.blockId && index.byBlockId.get(target.blockId)) || [];
+      if (siblings.length === 0) {
+        rows.push(
+          Object.freeze({
+            kind: "current",
+            path: targetPath,
+            blockId: target.blockId,
+            status: "?",
+            displayText: `^${target.blockId} not found`,
+            text: `^${target.blockId} not found`,
+            missing: true,
+            open: true,
+            blocked: false,
+            rawLine: null,
+            section: null,
+          }),
+        );
+        continue;
+      }
+    }
+    if (record && !record.isTask) {
+      rows.push(
+        Object.freeze({
+          kind: "current",
+          path: record.path,
+          blockId: record.blockId,
+          status: record.status,
+          displayText: record.text,
+          text: record.text,
+          nonTask: true,
+          open: false,
+          blocked: false,
+          rawLine: record.rawLine,
+          section: record.section,
+        }),
+      );
+      continue;
+    }
+    if (record) {
+      rows.push(
+        Object.freeze({
+          kind: "current",
+          path: record.path,
+          blockId: record.blockId,
+          status: record.status,
+          displayText: record.text,
+          text: record.text,
+          open: record.open,
+          blocked: record.blocked,
+          closed: !record.open,
+          rawLine: record.rawLine,
+          section: record.section,
+        }),
+      );
+      continue;
+    }
+    rows.push(
+      Object.freeze({
+        kind: "current",
+        path: targetPath,
+        blockId: target.blockId,
+        status: "?",
+        displayText: `^${target.blockId} not found`,
+        text: `^${target.blockId} not found`,
+        missing: true,
+        open: true,
+        blocked: false,
+        rawLine: null,
+        section: null,
+      }),
+    );
+  }
+  return Object.freeze({ ok: true, reason: null, rows: Object.freeze(rows) });
+}
+
+// Dependency edges for cycle guards: each open task's Depends-On line links
+// plus its `[dependsOn::]` field ids, resolved to `path blockId` keys.
+// Unresolvable links are skipped: they never block and never guard.
+function collectDependencyStageEdges(notes, index) {
+  const edges = new Map();
+  const add = (from, to) => {
+    if (!from || !to || from === to) {
+      return;
+    }
+    if (!edges.has(from)) {
+      edges.set(from, []);
+    }
+    if (!edges.get(from).includes(to)) {
+      edges.get(from).push(to);
+    }
+  };
+  const noteList = Array.isArray(notes) ? notes : [];
+  for (const note of noteList) {
+    if (!note) {
+      continue;
+    }
+    const path = normalizeVaultRelativePath(note.path || "");
+    if (!path) {
+      continue;
+    }
+    const text = String(note.content || "");
+    const lines = text.split(/\r?\n/);
+    const contexts = getMarkdownLineContexts(text);
+    for (let line = 0; line < lines.length; line += 1) {
+      if (!isObsidianTaskAtLine(text, line, contexts, lines)) {
+        continue;
+      }
+      if (!isOpenObsidianTaskLine(lines[line])) {
+        continue;
+      }
+      const rawLine = String(lines[line] || "");
+      const selfBlockId = getTrailingBlockId(rawLine);
+      const selfIdField = findBulletPropertyField(rawLine, "id");
+      const from =
+        (selfBlockId && dependencyStageRowKey(path, selfBlockId)) ||
+        (selfIdField &&
+          normalizeBulletPropertyValue(selfIdField.value) &&
+          `id:${normalizeBulletPropertyValue(selfIdField.value)}`) ||
+        `${path}#line:${line}`;
+      const collection = collectDependencyNavigationBullets(text, line);
+      if (!collection.reason) {
+        for (const target of collection.targets) {
+          const targetPath = resolveDependencyStageLinkTarget(
+            target.note,
+            target.blockId,
+            path,
+            index,
+          );
+          if (targetPath && target.blockId) {
+            add(from, dependencyStageRowKey(targetPath, target.blockId));
+          }
+        }
+      }
+      const field = findBulletPropertyField(rawLine, "dependsOn");
+      if (field && index) {
+        for (const id of parseLocalTaskIdList(field.value)) {
+          const record = index.byIdField.get(id);
+          if (record && record.blockId) {
+            add(from, dependencyStageRowKey(record.path, record.blockId));
+          }
+        }
+      }
+    }
+  }
+  return edges;
+}
+
+// Whether linking `fromKey` to `toKey` would create a cycle: `toKey` already
+// reaches `fromKey` through the current graph. Returns the cycle path
+// (for the tooltip) or null.
+function findDependencyStageCycle(edges, fromKey, toKey) {
+  if (!fromKey || !toKey || !edges) {
+    return null;
+  }
+  if (fromKey === toKey) {
+    return Object.freeze([fromKey]);
+  }
+  const visited = new Set([toKey]);
+  const stack = [{ key: toKey, trail: [toKey] }];
+  while (stack.length > 0) {
+    const { key, trail } = stack.pop();
+    const next = edges instanceof Map ? edges.get(key) : edges[key];
+    for (const edge of next || []) {
+      if (edge === fromKey) {
+        return Object.freeze([...trail, fromKey]);
+      }
+      if (!visited.has(edge)) {
+        visited.add(edge);
+        stack.push({ key: edge, trail: [...trail, edge] });
+      }
+    }
+  }
+  return null;
+}
+
+// Canonical order for ties and the empty query
+// (`docs/task-dependencies.md` §6.3): same-note tasks in document order,
+// then In Progress, Next, Ready (by path, then line), then `#hide`.
+function compareDependencyStageCanonical(first, second, dependentPath) {
+  const firstSame = first.path === dependentPath;
+  const secondSame = second.path === dependentPath;
+  if (firstSame !== secondSame) {
+    return firstSame ? -1 : 1;
+  }
+  if (firstSame && secondSame) {
+    return first.line - second.line;
+  }
+  const lane = (status) =>
+    status === "/" ? 0 : status === "*" ? 1 : status === " " ? 2 : 3;
+  const laneDiff = lane(first.status) - lane(second.status);
+  if (laneDiff !== 0) {
+    return laneDiff;
+  }
+  if (first.hidden !== second.hidden) {
+    return first.hidden ? 1 : -1;
+  }
+  if (first.path !== second.path) {
+    return first.path < second.path ? -1 : 1;
+  }
+  return first.line - second.line;
+}
+
+// The staged view: CURRENT, then RESULTS, then BLOCKED
+// (`docs/task-dependencies.md` §6). Guards disable rows with a reason: the
+// dependent itself, a cycle (checked on the graph after the whole batch,
+// with the path), an unencodable target, or a stale target/dependent
+// (refused at commit time, then reopened fresh). Removing a link is always
+// allowed, so CURRENT rows are never disabled. At most about 60 rows
+// render; typing reaches the rest.
+function planDependencyStageView(args = {}) {
+  const current = Array.isArray(args.current) ? args.current : [];
+  const pool = Array.isArray(args.candidates) ? args.candidates : [];
+  const query = String(args.query || "");
+  const dependent = args.dependent || {};
+  const dependentPath = normalizeVaultRelativePath(dependent.path || "");
+  const dependentLine = Math.floor(numericOrDefault(dependent.line, -1));
+  const dependentKey = dependent.key || null;
+  const edges = args.edges || new Map();
+  const linkedKeys = args.linkedKeys instanceof Set ? args.linkedKeys : new Set();
+  // Counted sessions (`N<Ctrl+Shift+P>`) match each candidate against every
+  // source task's field set, so partially linked rows stay visible with a
+  // `k/n depend` badge instead of being folded into CURRENT.
+  const sourceValueSets =
+    Array.isArray(args.sourceValueSets) && args.sourceValueSets.length > 0
+      ? args.sourceValueSets.map((values) =>
+          values instanceof Set ? values : new Set(values || []),
+        )
+      : null;
+  const maxRows = Math.max(
+    1,
+    Math.floor(numericOrDefault(args.maxRows, DEPENDENCY_STAGE_MAX_ROWS)),
+  );
+  const markedCurrent = current.map((row, index) =>
+    Object.freeze({
+      ...row,
+      stageSection: "current",
+      alreadyLinked: true,
+      firstInSection: index === 0,
+      markKey:
+        row.markKey ||
+        (row.path
+          ? `${normalizeVaultRelativePath(row.path)}#${row.blockId || `line:${row.line}`}`
+          : row.line),
+    }),
+  );
+  const candidateAliases = (candidate) => {
+    const depValue =
+      candidate.idField ||
+      (candidate.blockId
+        ? tryDependencyId(candidate.path, candidate.blockId)
+        : null) ||
+      "";
+    return [depValue, candidate.idField, candidate.blockId]
+      .map(normalizeBulletPropertyValue)
+      .filter(Boolean);
+  };
+  const seen = new Set(linkedKeys);
+  const fresh = [];
+  for (const candidate of pool) {
+    const key =
+      candidate.path && candidate.blockId
+        ? dependencyStageRowKey(candidate.path, candidate.blockId)
+        : null;
+    if (
+      candidate.path === dependentPath &&
+      candidate.line === dependentLine
+    ) {
+      continue;
+    }
+    if (sourceValueSets) {
+      const aliases = candidateAliases(candidate);
+      const linkedCount = sourceValueSets.filter((values) =>
+        aliases.some((alias) => values.has(alias)),
+      ).length;
+      // Fully linked rows live in CURRENT; mixed and unlinked stay in RESULTS.
+      if (linkedCount > 0 && linkedCount === sourceValueSets.length) {
+        continue;
+      }
+      fresh.push({ candidate, key, linkedCount });
+      continue;
+    }
+    if (key && seen.has(key)) {
+      continue;
+    }
+    if (key) {
+      seen.add(key);
+    }
+    fresh.push({ candidate, key, linkedCount: 0 });
+  }
+  let ordered;
+  if (!query.trim()) {
+    ordered = fresh
+      .slice()
+      .sort((left, right) =>
+        compareDependencyStageCanonical(
+          left.candidate,
+          right.candidate,
+          dependentPath,
+        ),
+      )
+      .map((entry) => entry.candidate);
+  } else {
+    const ranked = dependencyStageRank(
+      fresh.map((entry) => entry.candidate),
+      query,
+    );
+    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
+    ordered = fresh
+      .slice()
+      .sort((left, right) => {
+        const leftRank = rankIndex.has(left.candidate)
+          ? rankIndex.get(left.candidate)
+          : Number.POSITIVE_INFINITY;
+        const rightRank = rankIndex.has(right.candidate)
+          ? rankIndex.get(right.candidate)
+          : Number.POSITIVE_INFINITY;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        return compareDependencyStageCanonical(
+          left.candidate,
+          right.candidate,
+          dependentPath,
+        );
+      })
+      .map((entry) => entry.candidate)
+      .filter((candidate) => rankIndex.has(candidate));
+  }
+  const results = [];
+  const blocked = [];
+  for (const candidate of ordered) {
+    if (candidate.blocked) {
+      blocked.push(candidate);
+    } else {
+      results.push(candidate);
+    }
+  }
+  const room = Math.max(0, maxRows - markedCurrent.length);
+  const picked = [...results, ...blocked].slice(0, room);
+  const linkedByCandidate = new Map(
+    fresh.map((entry) => [entry.candidate, entry.linkedCount || 0]),
+  );
+  const guard = (candidate) => {
+    const key =
+      candidate.path && candidate.blockId
+        ? dependencyStageRowKey(candidate.path, candidate.blockId)
+        : null;
+    if (key && dependentKey) {
+      const cycle =
+        key === dependentKey
+          ? [dependentKey]
+          : findDependencyStageCycle(edges, dependentKey, key);
+      if (cycle) {
+        return {
+          disabled: true,
+          reason: `Would create a cycle (${cycle.length - 1} back-link${cycle.length - 1 === 1 ? "" : "s"})`,
+          cycle: Object.freeze(cycle),
+        };
+      }
+    }
+    if (
+      candidate.blockId &&
+      !candidate.idField &&
+      !tryDependencyId(candidate.path, candidate.blockId)
+    ) {
+      return {
+        disabled: true,
+        reason: "This note path cannot be encoded as a dependency ID",
+        cycle: null,
+      };
+    }
+    return { disabled: false, reason: null, cycle: null };
+  };
+  const shape = (candidate, section, first) => {
+    const verdict = guard(candidate);
+    const depValue =
+      candidate.idField ||
+      (candidate.blockId
+        ? tryDependencyId(candidate.path, candidate.blockId)
+        : null) ||
+      "";
+    return Object.freeze({
+      kind: "local-task",
+      stageSection: section,
+      firstInSection: first,
+      path: candidate.path,
+      blockId: candidate.blockId,
+      route: candidate.route,
+      note: candidate.note,
+      noteLabel:
+        candidate.path && candidate.path !== dependentPath
+          ? dependencyStageBasenameOf(candidate.path)
+          : null,
+      line: candidate.line,
+      rawLine: candidate.rawLine,
+      status: candidate.status,
+      displayText: candidate.displayText,
+      text: candidate.text,
+      searchText: [
+        candidate.displayText,
+        candidate.route,
+        candidate.blockId
+          ? `${candidate.route}:${candidate.blockId}`
+          : "",
+        candidate.blockId || "",
+        candidate.section || "",
+        candidate.note || "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      value: depValue,
+      dependencyValue: depValue,
+      legacyDependencyValue: candidate.idField || candidate.blockId || "",
+      linkBlockId: candidate.blockId || "",
+      badgeId: candidate.blockId || "",
+      existingBlockId: candidate.blockId,
+      existingIdField: candidate.idField,
+      alreadyLinked: sourceValueSets
+        ? (linkedByCandidate.get(candidate) || 0) === sourceValueSets.length &&
+          sourceValueSets.length > 0
+        : false,
+      linkedSourceCount: linkedByCandidate.get(candidate) || 0,
+      sourceCount: sourceValueSets ? sourceValueSets.length : 1,
+      linkState: !sourceValueSets
+        ? "none"
+        : (linkedByCandidate.get(candidate) || 0) === 0
+          ? "none"
+          : (linkedByCandidate.get(candidate) || 0) >= sourceValueSets.length
+            ? "all"
+            : "mixed",
+      needsBlockIdPrompt: !candidate.blockId,
+      needsDependencyValue: !depValue,
+      needsPromptForAdd: !candidate.blockId,
+      hidden: candidate.hidden,
+      section: candidate.section,
+      markKey: `${candidate.path}#${candidate.line >= 0 ? candidate.line : (candidate.blockId || candidate.displayText)}`,
+      disabled: verdict.disabled,
+      disabledReason: verdict.reason,
+      cycle: verdict.cycle,
+    });
+  };
+  const out = [...markedCurrent];
+  const pickedResults = picked.filter((candidate) => !candidate.blocked);
+  const pickedBlocked = picked.filter((candidate) => candidate.blocked);
+  pickedResults.forEach((candidate, index) =>
+    out.push(shape(candidate, "results", index === 0)),
+  );
+  pickedBlocked.forEach((candidate, index) =>
+    out.push(shape(candidate, "blocked", index === 0)),
+  );
+  return Object.freeze(out);
+}
+
+// The summary pill on the Depends on row: `⛓ 2 · 1 open` / `⛓ none`
+// (`docs/task-dependencies.md` §6.1). Missing links count as waiting: they
+// are removable prerequisites, never silent.
+function formatDependencyStagePill(openCount, totalCount) {
+  const total = Math.max(0, Math.floor(numericOrDefault(totalCount, 0)));
+  if (total === 0) {
+    return "⛓ none";
+  }
+  const open = Math.max(0, Math.floor(numericOrDefault(openCount, 0)));
+  return `⛓ ${total} · ${open} open`;
+}
+
+// Row state for the Depends on picker row: total prerequisites and how many
+// are still open, resolved through the sync pool lookup.
+function describeDependencyRowState(content, parentLine, parentPath, index) {
+  const resolved = resolveDependencyStageCurrent(
+    content,
+    parentLine,
+    parentPath,
+    index,
+  );
+  const rows = resolved.ok ? resolved.rows : [];
+  const open = rows.filter((row) => row.open).length;
+  return Object.freeze({
+    total: rows.length,
+    open,
+    pill: formatDependencyStagePill(open, rows.length),
+  });
+}
+
+// Normalize one Tasks cache task to pool shape, or null when it carries no
+// usable location. Field names differ across Tasks versions, so every known
+// alias is tried; the vault scan covers whatever falls through.
+function normalizeStageCacheTask(entry) {
+  const task = entry && typeof entry === "object" ? entry : null;
+  if (!task) {
+    return null;
+  }
+  const location =
+    task.taskLocation && typeof task.taskLocation === "object"
+      ? task.taskLocation
+      : {};
+  const file = task.file && typeof task.file === "object" ? task.file : {};
+  const path = normalizeVaultRelativePath(
+    task.path || location.path || file.path || "",
+  );
+  if (!path) {
+    return null;
+  }
+  const status =
+    (task.status && task.status.symbol) ||
+    task.statusSymbol ||
+    (typeof task.status === "string" ? task.status : null) ||
+    " ";
+  const lineCandidates = [
+    task.lineNumber,
+    task.line,
+    location.lineNumber,
+    location.line,
+  ];
+  let line = -1;
+  for (const candidate of lineCandidates) {
+    const numeric = Math.floor(numericOrDefault(candidate, Number.NaN));
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      line = numeric;
+      break;
+    }
+  }
+  const rawLine =
+    typeof task.originalMarkdown === "string" ? task.originalMarkdown : null;
+  const text =
+    (typeof task.description === "string" && task.description) ||
+    (typeof task.text === "string" && task.text) ||
+    (rawLine ? cleanTaskDisplayText(rawLine) : "(untitled task)");
+  const trailingId =
+    (typeof task.blockId === "string" && task.blockId) ||
+    (rawLine ? getTrailingBlockId(rawLine) : null) ||
+    null;
+  const idField =
+    (typeof task.id === "string" && task.id) ||
+    (task.taskId && String(task.taskId)) ||
+    null;
+  const dependsOn = Array.isArray(task.dependsOn)
+    ? task.dependsOn
+        .map(normalizeBulletPropertyValue)
+        .filter(Boolean)
+    : [];
+  return Object.freeze({
+    path,
+    route: dependencyStageRouteOf(path),
+    note: dependencyStageBasenameOf(path),
+    line,
+    rawLine,
+    status,
+    displayText: text,
+    text,
+    blockId: trailingId ? normalizeBulletPropertyValue(trailingId) : null,
+    existingBlockId: trailingId ? normalizeBulletPropertyValue(trailingId) : null,
+    idField: idField ? normalizeBulletPropertyValue(idField) : null,
+    existingIdField: idField ? normalizeBulletPropertyValue(idField) : null,
+    section:
+      (typeof task.section === "string" && task.section) ||
+      (typeof task.precedingHeader === "string" && task.precedingHeader) ||
+      null,
+    open: OPEN_OBSIDIAN_TASK_STATUSES.has(status),
+    blocked: status === "?",
+    hidden: Boolean(task.hidden),
+    dependsOn: Object.freeze(dependsOn),
+  });
+}
+
+// Merge Tasks cache records under open-buffer notes: buffers win per note
+// (unsaved edits count), cache-only notes fill the rest. Exclusions and the
+// dependent match the note parser exactly.
+function mergeStageCacheCandidates(cacheTasks, notes, options = {}) {
+  const dependentPath = normalizeVaultRelativePath(options.dependentPath || "");
+  const dependentLines =
+    options.dependentLines instanceof Set
+      ? options.dependentLines
+      : new Set(options.dependentLines || []);
+  const buffered = new Set(
+    (Array.isArray(notes) ? notes : []).map((note) =>
+      normalizeVaultRelativePath(note.path || ""),
+    ),
+  );
+  const out = collectVaultDependencyCandidates(notes, {
+    dependentPath,
+    dependentLines,
+  }).slice();
+  for (const record of cacheTasks || []) {
+    if (!record || buffered.has(record.path)) {
+      continue;
+    }
+    if (isDependencyStageExcludedPath(record.path)) {
+      continue;
+    }
+    if (!record.open) {
+      continue;
+    }
+    if (
+      record.path === dependentPath &&
+      dependentLines.has(record.line)
+    ) {
+      continue;
+    }
+    out.push(record);
+  }
+  return Object.freeze(out);
+}
+
+// Register cache-only records in the lookup (for CURRENT rows and pill
+// counts) and the basename table (for link resolution).
+function registerStageCacheRecords(index, cacheTasks) {
+  if (!index) {
+    return;
+  }
+  for (const record of cacheTasks || []) {
+    if (!record) {
+      continue;
+    }
+    const basename = dependencyStageBasenameOf(record.path);
+    if (index.basenames && !index.basenames.has(basename)) {
+      index.basenames.set(basename, []);
+    }
+    if (index.basenames && !index.basenames.get(basename).includes(record.path)) {
+      index.basenames.get(basename).push(record.path);
+    }
+    if (record.blockId) {
+      const key = dependencyStageRowKey(record.path, record.blockId);
+      if (key && index.byKey && !index.byKey.has(key)) {
+        index.byKey.set(key, record);
+      }
+      if (index.byBlockId) {
+        if (!index.byBlockId.has(record.blockId)) {
+          index.byBlockId.set(record.blockId, []);
+        }
+        index.byBlockId.get(record.blockId).push(record);
+      }
+    }
+    if (record.idField && index.byIdField && !index.byIdField.has(record.idField)) {
+      index.byIdField.set(record.idField, record);
+    }
+  }
+}
+
+// Cycle-guard edges from cache `[dependsOn::]` fields for notes with no
+// open buffer: identity through the block id when present, else the stable
+// `id:` key shared with the note parser's edge scheme.
+function mergeStageCacheEdges(edges, cacheTasks, index) {
+  if (!(edges instanceof Map)) {
+    return;
+  }
+  for (const record of cacheTasks || []) {
+    if (!record || !Array.isArray(record.dependsOn) || record.dependsOn.length === 0) {
+      continue;
+    }
+    const from =
+      (record.blockId && dependencyStageRowKey(record.path, record.blockId)) ||
+      (record.idField ? `id:${record.idField}` : null);
+    if (!from) {
+      continue;
+    }
+    for (const id of record.dependsOn) {
+      const target = index && index.byIdField ? index.byIdField.get(id) : null;
+      const to =
+        target && target.blockId
+          ? dependencyStageRowKey(target.path, target.blockId)
+          : null;
+      if (to && to !== from) {
+        if (!edges.has(from)) {
+          edges.set(from, []);
+        }
+        if (!edges.get(from).includes(to)) {
+          edges.get(from).push(to);
+        }
+      }
+    }
+  }
+}
+
+// Locate one open task by its cleaned display text: cache-only `+ id` rows
+// carry no staged line text, so the target is matched fresh. Exactly one
+// block-id-less match links; anything else refuses as stale.
+function locateStageDisplayText(content, displayText) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const contexts = getMarkdownLineContexts(text);
+  const want = String(displayText || "");
+  const matches = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    if (!isObsidianTaskAtLine(text, line, contexts, lines)) {
+      continue;
+    }
+    if (!isOpenObsidianTaskLine(lines[line])) {
+      continue;
+    }
+    if (cleanTaskDisplayText(lines[line]) !== want) {
+      continue;
+    }
+    matches.push(
+      Object.freeze({
+        line,
+        rawLine: String(lines[line] || ""),
+        blockId: getTrailingBlockId(lines[line]),
+      }),
+    );
+    if (matches.length > 1) {
+      return null;
+    }
+  }
+  // The unique match, with or without a block id (the caller routes `+ id`
+  // prompts versus ready adds); ambiguous or absent matches refuse.
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// True when a non-collapsed selection covers two or more `#task` lines: the
+// stage edits one dependent, so such selections are refused with a reason.
+function editorSelectionSpansTasks(cm, content) {
+  try {
+    if (!cm || typeof cm.listSelections !== "function") {
+      return false;
+    }
+    const text = String(content || "");
+    const lines = text.split(/\r?\n/);
+    const contexts = getMarkdownLineContexts(text);
+    for (const selection of cm.listSelections() || []) {
+      const anchor = selection && selection.anchor;
+      const head = selection && selection.head;
+      if (!anchor || !head) {
+        continue;
+      }
+      if (anchor.line === head.line && anchor.ch === head.ch) {
+        continue;
+      }
+      const from = Math.max(0, Math.min(anchor.line, head.line));
+      const to = Math.max(0, Math.max(anchor.line, head.line));
+      let tasks = 0;
+      for (let line = from; line <= to && tasks < 2; line += 1) {
+        if (isObsidianTaskAtLine(text, line, contexts, lines)) {
+          tasks += 1;
+        }
+      }
+      if (tasks >= 2) {
+        return true;
+      }
+    }
+    return false;
+  } catch (_error) {
+    return false;
+  }
+}
+
+// Entry-point resolution (`docs/task-dependencies.md` §6.1): anywhere on a
+// Depends-On line resolves to the owning task and skips the property step;
+// a `#task` line (or any other line of its block) resolves to the owning
+// task through the property step; prose with no owning task is refused.
+function resolveDependencyStageEntry(content, line) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(line, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return Object.freeze({ ok: false, parentLine: null, reason: "no-task" });
+  }
+  const owning = findOwningTaskLine(lines, at);
+  if (owning === null) {
+    return Object.freeze({ ok: false, parentLine: null, reason: "no-task" });
+  }
+  if (
+    findDependencyLineIndex(lines, owning) === at &&
+    parseDependencyLine(String(lines[at] || ""), { isDirectChildOfTask: true })
+      .verdict === "accept"
+  ) {
+    return Object.freeze({
+      ok: true,
+      parentLine: owning,
+      skipPropertyStep: true,
+      reason: null,
+    });
+  }
+  return Object.freeze({
+    ok: true,
+    parentLine: owning,
+    skipPropertyStep: false,
+    reason: null,
+  });
+}
+
 function taskStatusLabel(status) {
   return `[${status || " "}]`;
 }
@@ -21565,12 +22765,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // collecting block IDs for a pending multi-task apply (see commit flow).
     this.pendingBatch = null;
     this.pendingCountedDependency = null;
+    this.pendingVaultSingle = null;
+    this.pendingVaultCounted = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
     this.pendingCancel = null;
     this.pendingLaneRelease = null;
     this.pendingScheduleWorkLog = null;
+    // Vault-wide Depends on stage (nav-stage) state: the sync pool built when
+    // the local-task value stage opens, plus the property rows for the
+    // `initialProperty` skip. `initialProperty: "dependsOn"` opens the
+    // Depends on value stage straight from the cursor entry points.
+    this.initialProperty = context.initialProperty || null;
+    this.propertyItems = [];
+    this.vaultStage = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and
@@ -21778,6 +22987,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         { isTask: isTaskContext },
       );
     }
+    propertyItems = this.withDependencyPropertyPills(propertyItems);
     this.applyOptions({
       items: propertyItems,
       title: "Set bullet property",
@@ -21869,11 +23079,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       },
     });
 
+    this.propertyItems = Array.isArray(propertyItems) ? propertyItems : [];
     if (this.resultsEl) {
       this.renderAll({ clearQuery: options.clearQuery !== false });
-      if (options.selectPropertyName) {
+      const wantedPropertyName =
+        options.selectPropertyName || this.initialProperty;
+      if (wantedPropertyName) {
         const selectedIndex = this.visibleItems.findIndex(
-          (item) => item.property.name === options.selectPropertyName,
+          (item) =>
+            item &&
+            item.property &&
+            item.property.name === wantedPropertyName,
         );
         if (selectedIndex !== -1 && selectedIndex !== this.selectedIndex) {
           this.selectedIndex = selectedIndex;
@@ -21924,6 +23140,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const property = propertyItem.property;
     if (property.values === "local_task_id") {
       if (this.isLinkSession()) {
+        // Task Link mode: the Depends on row edits the linked task in its
+        // own note (`docs/task-dependencies.md` §6.1). Anything else keeps
+        // the old refusal (batches never route here: the row stays hidden).
+        if (
+          propertyItem.linkDependency &&
+          this.linkSession.resolved.length === 1
+        ) {
+          const target = this.linkSession.resolved[0];
+          this.close();
+          void this.plugin.openLinkedDependencyStage(target);
+          return;
+        }
         new Notice("Dependencies cannot be set through a Task Link");
         this.showPropertyStage({ clearQuery: false });
         return;
@@ -23946,8 +25174,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.markedLines = new Set();
     this.taskItemsByLine = new Map();
     (Array.isArray(items) ? items : []).forEach((item) => {
-      if (item && Number.isInteger(item.line)) {
-        this.taskItemsByLine.set(item.line, item);
+      const key = bulletPropertyTaskMarkKey(item);
+      if (key !== null) {
+        this.taskItemsByLine.set(key, item);
       }
     });
   }
@@ -23955,6 +25184,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   clearPendingBatch() {
     this.pendingBatch = null;
     this.pendingCountedDependency = null;
+    this.pendingVaultSingle = null;
+    this.pendingVaultCounted = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -24018,7 +25249,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         (hint) => !hint.keys.includes("⇥"),
       );
     }
-    return getBulletPropertyLocalTaskHints(this.getMarkedCount() > 0);
+    const hints = getBulletPropertyLocalTaskHints(this.getMarkedCount() > 0);
+    // The vault-wide stage toggles rows (`↵ toggle`), it never just links.
+    if (this.vaultStage) {
+      return hints.map((hint) =>
+        hint.keys.includes("↵") && hint.label === "Link"
+          ? { ...hint, label: "Toggle" }
+          : hint,
+      );
+    }
+    return hints;
   }
 
   refreshLocalTaskFooter() {
@@ -24061,19 +25301,33 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!item || item.kind !== "local-task") {
       return;
     }
+    if (item.disabled) {
+      new Notice(item.disabledReason || "That task cannot be linked");
+      return;
+    }
+    const key = bulletPropertyTaskMarkKey(item);
+    if (key === null) {
+      return;
+    }
 
     // Block-ID-less tasks can now be marked; their block IDs are collected via
     // sequential prompts when the batch is applied.
-    if (this.markedLines.has(item.line)) {
-      this.markedLines.delete(item.line);
+    if (this.markedLines.has(key)) {
+      this.markedLines.delete(key);
     } else {
-      this.markedLines.add(item.line);
+      this.markedLines.add(key);
     }
 
     this.refreshLocalTaskFooter();
     this.moveSelection(1);
   }
 
+  // Vault-wide Depends on stage (nav-stage, `docs/task-dependencies.md`
+  // §6): the CURRENT / RESULTS / BLOCKED layout over the vault-wide pool.
+  // Ranking and guards come from `planDependencyStageView`; the commit
+  // paths below write through the single-transaction writer, so one gesture
+  // still commits the line, the field, target ids, status effects, legacy
+  // folding, and the freshness stamp in one transaction.
   showLocalTaskValueStage(propertyItem) {
     this.stage = "value";
     this.selectedPropertyItem = propertyItem;
@@ -24090,28 +25344,63 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
             parseLocalTaskIdList(this.getCurrentPropertyValue(property.name)),
           ),
         ];
-    const items = createBulletPropertyLocalTaskItems(this.getEditorContent(), {
-      excludeLine: this.isCountedSession() ? null : this.cursor.line,
-      excludeLines: this.isCountedSession()
-        ? new Set(this.taskSession.targets.map((target) => target.line))
-        : new Set(),
-      dependencyValues: dependencyValueSets[0],
-      dependencyValueSets,
-      filePath: this.filePath,
-    });
+    const parentLines = this.isCountedSession()
+      ? this.taskSession.targets.map((target) => target.line)
+      : [this.cursor.line];
+    // The vault pool is best-effort: anything unexpected falls back to the
+    // current-note stage rather than refusing to open.
+    let stage = null;
+    try {
+      stage =
+        this.plugin &&
+        typeof this.plugin.buildVaultDependencyStage === "function"
+          ? this.plugin.buildVaultDependencyStage({
+              filePath: this.filePath,
+              content: this.getEditorContent(),
+              parentLines,
+              dependencyValueSets: this.isCountedSession()
+                ? dependencyValueSets
+                : null,
+            })
+          : null;
+    } catch (_stageError) {
+      stage = null;
+    }
+    this.vaultStage = stage;
+    const items = stage
+      ? planDependencyStageView({
+          current: stage.current,
+          candidates: stage.candidates,
+          query: "",
+          dependent: stage.dependent,
+          edges: stage.edges,
+          linkedKeys: stage.linkedKeys,
+          sourceValueSets: stage.sourceValueSets,
+        })
+      : createBulletPropertyLocalTaskItems(this.getEditorContent(), {
+          excludeLine: this.isCountedSession() ? null : this.cursor.line,
+          excludeLines: this.isCountedSession()
+            ? new Set(this.taskSession.targets.map((target) => target.line))
+            : new Set(),
+          dependencyValues: dependencyValueSets[0],
+          dependencyValueSets,
+          filePath: this.filePath,
+        });
     this.resetLocalTaskMarks(items);
 
     this.applyOptions({
       items,
-      title: property.name,
+      title: stage ? stage.title : property.name,
       headerIcon: "link",
-      inputLabel: "Filter open tasks",
-      placeholder: "Filter open tasks",
-      resultsLabel: "Open tasks",
-      emptyText: "No open tasks in this file",
+      inputLabel: "Filter tasks",
+      placeholder: "Filter tasks",
+      resultsLabel: "Depends on candidates",
+      emptyText: stage ? "No matching tasks in the vault" : "No open tasks in this file",
       footerHints: this.getLocalTaskFooterHints(),
       getSubtitle: (visibleItems, allItems) =>
-        this.getLocalTaskSubtitle(visibleItems, allItems),
+        this.vaultStage
+          ? this.getVaultStageSubtitle(visibleItems, allItems)
+          : this.getLocalTaskSubtitle(visibleItems, allItems),
       filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
       renderItem: (item, rowEl, query) =>
         this.renderTaskValueItem(item, rowEl, query),
@@ -24121,14 +25410,140 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
     }
+    if (
+      stage &&
+      !stage.cacheReady &&
+      this.plugin &&
+      typeof this.plugin.refreshVaultDependencyStage === "function"
+    ) {
+      void this.plugin.refreshVaultDependencyStage(this, stage);
+    }
+  }
+
+  // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
+  // are stable (`path#line`), so marked rows survive the pool replacement.
+  applyVaultStageItems(stage) {
+    if (!stage || this.vaultStage !== stage.refreshOf) {
+      return;
+    }
+    const marked = this.markedLines instanceof Set
+      ? new Set(this.markedLines)
+      : new Set();
+    this.vaultStage = stage;
+    const items = planDependencyStageView({
+      current: stage.current,
+      candidates: stage.candidates,
+      query: this.getQuery(),
+      dependent: stage.dependent,
+      edges: stage.edges,
+      linkedKeys: stage.linkedKeys,
+      sourceValueSets: stage.sourceValueSets,
+    });
+    this.resetLocalTaskMarks(items);
+    for (const key of marked) {
+      if (this.taskItemsByLine.has(key)) {
+        this.markedLines.add(key);
+      }
+    }
+    this.items = items;
+    if (this.resultsEl) {
+      this.renderResults();
+    }
+  }
+
+  getVaultStageSubtitle(visibleItems, allItems) {
+    const stage = this.vaultStage;
+    if (!stage) {
+      return this.getLocalTaskSubtitle(visibleItems, allItems);
+    }
+    const countText =
+      visibleItems.length === allItems.length
+        ? ""
+        : `Showing ${visibleItems.length} of ${allItems.length} · `;
+    const head = `${countText}${stage.current.length} prerequisite${stage.current.length === 1 ? "" : "s"} · ${stage.openCount} open · searching ${stage.poolSize} open tasks`;
+    if (this.getMarkedCount() === 0) {
+      return `${head} · ⇥ to mark several`;
+    }
+    const diff = this.getMarkedTaskDiff();
+    const parts = [];
+    if (diff.add > 0) {
+      parts.push(`${diff.add} to add`);
+    }
+    if (diff.needId > 0) {
+      parts.push(`${diff.needId} ${diff.needId === 1 ? "needs ID" : "need IDs"}`);
+    }
+    if (diff.remove > 0) {
+      parts.push(`${diff.remove} to remove`);
+    }
+    parts.push("↵ to apply");
+    return `${head} · ${parts.join(" · ")}`;
+  }
+
+  withDependencyPropertyPills(propertyItems) {
+    const items = Array.isArray(propertyItems) ? propertyItems : [];
+    if (
+      this.isLinkSession() ||
+      this.isCountedSession() ||
+      !this.plugin ||
+      typeof this.plugin.describeDependencyRowPill !== "function"
+    ) {
+      return items;
+    }
+    let changed = false;
+    const next = items.map((item) => {
+      if (
+        !item ||
+        item.kind !== "property" ||
+        !item.property ||
+        item.property.values !== "local_task_id" ||
+        !item.dependencyEligible
+      ) {
+        return item;
+      }
+      const pill = this.plugin.describeDependencyRowPill(
+        this.filePath,
+        this.cursor ? this.cursor.line : NaN,
+        this.getEditorContent(),
+      );
+      changed = true;
+      return { ...item, dependencyPill: pill };
+    });
+    return changed ? next : items;
+  }
+
+  // The note whose content seeds `+ id` suggestions and uniqueness checks:
+  // the target's own note for vault-wide rows, else the dependent's note.
+  getBlockIdStageContent() {
+    const task = this.pendingTask;
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const targetPath = normalizeVaultRelativePath(
+      (task && task.path) || ownerPath,
+    );
+    if (
+      targetPath &&
+      targetPath !== ownerPath &&
+      this.vaultStage &&
+      this.vaultStage.files instanceof Map &&
+      this.vaultStage.files.has(targetPath)
+    ) {
+      return String(this.vaultStage.files.get(targetPath) || "");
+    }
+    return this.getEditorContent();
   }
 
   // Reserved block IDs chosen earlier in the current batch prompt sequence, so
   // suggestions and validation avoid colliding with them before any write.
   getBlockIdReservedIds() {
-    return this.blockIdMode === "batch" && this.pendingBatch
-      ? this.pendingBatch.reservedIds
-      : new Set();
+    if (this.blockIdMode === "batch" && this.pendingBatch) {
+      return this.pendingBatch.reservedIds;
+    }
+    if (this.blockIdMode === "vault-single" && this.pendingVaultSingle) {
+      return this.pendingVaultSingle.reservedIds || new Set();
+    }
+    if (this.blockIdMode === "vault-counted" && this.pendingVaultCounted) {
+      return this.pendingVaultCounted.reservedIds || new Set();
+    }
+    return new Set();
   }
 
   // Render the block-ID prompt for one task. Serves both the single-task flow
@@ -24137,7 +25552,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   showBlockIdStage(task, options = {}) {
     this.stage = "blockid";
     this.pendingTask = task;
-    this.blockIdMode = ["batch", "counted-source"].includes(options.mode)
+    this.blockIdMode = [
+      "batch",
+      "counted-source",
+      "vault-single",
+      "vault-counted",
+    ].includes(options.mode)
       ? options.mode
       : "single";
     this.blockIdContext =
@@ -24152,10 +25572,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const reservedIds = this.getBlockIdReservedIds();
     // Prefill with the existing `[id::]` value when present (confirmation
     // replaces it with the canonical path-qualified ID); otherwise suggest a slug that avoids existing and
-    // reserved block IDs.
+    // reserved block IDs in the target's own note.
     const suggestedId = task.existingIdField
       ? normalizeBulletPropertyValue(task.existingIdField)
-      : suggestBlockIdFromTask(task.displayText, this.getEditorContent(), {
+      : suggestBlockIdFromTask(task.displayText, this.getBlockIdStageContent(), {
           reservedIds,
         });
     const isLast =
@@ -24198,6 +25618,24 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   getFilteredItems() {
+    // Ranked, section-ordered rows for the vault-wide Depends on stage. The
+    // sync pool never reads from disk; the one-time vault scan (when the
+    // Tasks cache is not Warm) refreshes through `applyVaultStageItems`.
+    if (this.isLocalTaskStage() && this.vaultStage) {
+      try {
+        return planDependencyStageView({
+          current: this.vaultStage.current,
+          candidates: this.vaultStage.candidates,
+          query: this.getQuery(),
+          dependent: this.vaultStage.dependent,
+          edges: this.vaultStage.edges,
+          linkedKeys: this.vaultStage.linkedKeys,
+          sourceValueSets: this.vaultStage.sourceValueSets,
+        });
+      } catch (_error) {
+        return super.getFilteredItems();
+      }
+    }
     if (this.stage === "schedule-work-log") {
       const normalized = normalizeScheduleReasonText(this.getRawQuery());
       return [
@@ -24257,9 +25695,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (this.stage === "blockid") {
+      // Uniqueness is checked against the target's note: cross-note `+ id`
+      // rows prompt for an id that must be fresh in that note, not this one.
       const validation = validateBlockIdCandidate(
         this.getRawQuery(),
-        this.getEditorContent(),
+        this.getBlockIdStageContent(),
         { reservedIds: this.getBlockIdReservedIds() },
       );
       return [
@@ -24412,11 +25852,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     appendHighlighted(titleEl, item.property.name, query);
 
     const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    const propertyStateText = item.mixed
-      ? `Mixed across ${item.definedCount} of ${item.targetCount} tasks`
-      : item.defined
-        ? `Current value: ${item.currentLabel}`
-        : "Not set";
+    // The Depends on row shows the summary pill (`⛓ 2 · 1 open` / `⛓ none`)
+    // instead of the raw `[dependsOn::]` ids (`docs/task-dependencies.md` §6.1).
+    const propertyStateText = item.dependencyPill
+      ? item.dependencyPill
+      : item.linkDependency && item.detailText
+        ? item.detailText
+        : item.mixed
+          ? `Mixed across ${item.definedCount} of ${item.targetCount} tasks`
+          : item.defined
+            ? `Current value: ${item.currentLabel}`
+            : "Not set";
     pathEl.setText(propertyStateText);
 
     // The `scheduled` row carries the recommended roll preview: a third line
@@ -24461,7 +25907,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       }
     }
 
-    if (item.mixed) {
+    if (item.dependencyPill) {
+      rowEl.createDiv({
+        cls: "bob-cnp-pill bob-cnp-property-pill",
+        text: item.dependencyPill,
+      });
+    } else if (item.mixed) {
       rowEl.createDiv({
         cls: "bob-cnp-pill bob-cnp-property-pill",
         text: "mixed",
@@ -24531,8 +25982,20 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   renderTaskValueItem(item, rowEl, query) {
+    // CURRENT / RESULTS / BLOCKED section headers for the vault-wide stage
+    // (`docs/task-dependencies.md` §6).
+    if (item && item.stageSection && item.firstInSection) {
+      const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED" };
+      rowEl.createDiv({
+        cls: "bob-cnp-section-header",
+        text: sectionNames[item.stageSection] || item.stageSection,
+      });
+    }
+    const markKey = bulletPropertyTaskMarkKey(item);
     const marked =
-      this.markedLines instanceof Set && this.markedLines.has(item.line);
+      this.markedLines instanceof Set &&
+      markKey !== null &&
+      this.markedLines.has(markKey);
     const markedRemove = marked && item.alreadyLinked;
     const markedNeedsId = marked && !item.alreadyLinked && item.needsPromptForAdd;
     const markedAdd = marked && !item.alreadyLinked && !item.needsPromptForAdd;
@@ -24542,11 +26005,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       item.alreadyLinked ? "is-linked" : "",
       item.linkState === "mixed" ? "is-mixed" : "",
       item.needsBlockIdPrompt ? "is-create" : "is-existing",
+      item.disabled ? "is-disabled" : "",
+      item.stageSection ? `is-stage-${item.stageSection}` : "",
       marked ? "is-marked" : "",
       markedRemove ? "is-marked-remove" : "",
       markedAdd ? "is-marked-add" : "",
       markedNeedsId ? "is-marked-id-needed" : "",
     );
+    if (item.disabled) {
+      rowEl.setAttribute("aria-disabled", "true");
+    }
 
     const markEl = rowEl.createDiv({
       cls: marked ? "bob-cnp-mark is-marked" : "bob-cnp-mark",
@@ -24568,7 +26036,29 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     appendHighlighted(titleEl, item.displayText, query);
 
     const metaEl = textEl.createDiv({ cls: "bob-cnp-row-meta" });
-    metaEl.createSpan({ text: `Line ${item.line + 1}` });
+    // Cross-note rows name their note (`↗ note`); the badge below always
+    // shows the block id, never the path-encoded id (§6.3).
+    const metaBits = [];
+    if (item.noteLabel) {
+      metaBits.push(`↗ ${item.noteLabel}`);
+    }
+    if (Number.isInteger(item.line) && item.line >= 0) {
+      metaBits.push(`Line ${item.line + 1}`);
+    }
+    if (item.cycle && item.cycle.length > 0) {
+      metaBits.push(`⟲ ${item.cycle.length - 1} back-link${item.cycle.length - 1 === 1 ? "" : "s"}`);
+    }
+    metaEl.createSpan({
+      text:
+        metaBits.join(" · ") ||
+        (item.missing ? "missing link · removable" : ""),
+    });
+    if (item.disabled && item.disabledReason) {
+      metaEl.createSpan({
+        cls: "bob-cnp-row-guard",
+        text: item.disabledReason,
+      });
+    }
 
     const badgeClasses = [
       "bob-cnp-task-badge",
@@ -24612,7 +26102,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "↵" });
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-id",
-        text: `^${item.value}`,
+        text: `^${item.badgeId || item.value}`,
       });
     }
   }
@@ -24656,7 +26146,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
   }
 
-  chooseTaskDependency(item) {
+  async chooseTaskDependency(item) {
     if (!this.selectedPropertyItem) {
       return false;
     }
@@ -24665,11 +26155,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return this.chooseCountedTaskDependency(item);
     }
 
+    if (!item) {
+      return false;
+    }
+
     if (this.getMarkedCount() > 0) {
       return this.commitMarkedDependencies();
     }
 
-    if (!item) {
+    // Guarded rows are disabled with their reason; removing a CURRENT link
+    // is always allowed, so CURRENT rows are never disabled.
+    if (item.disabled) {
+      new Notice(item.disabledReason || "That task cannot be linked");
       return false;
     }
 
@@ -24681,6 +26178,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!parentValidation.valid) {
       new Notice(parentValidation.message);
       return false;
+    }
+
+    // CURRENT rows toggle off: ↵ removes that prerequisite. Cross-note rows
+    // commit through the vault path with a stale re-read.
+    if (item.stageSection === "current" && item.alreadyLinked) {
+      return this.removeSingleDependency(item);
+    }
+    if (
+      item.path &&
+      normalizeVaultRelativePath(item.path) !==
+        normalizeVaultRelativePath(this.filePath)
+    ) {
+      return this.chooseVaultTaskDependency(item);
     }
 
     // Single-select path. Re-read the target so a stale row never writes.
@@ -24736,6 +26246,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!item) {
       return false;
     }
+    if (item.disabled) {
+      new Notice(item.disabledReason || "That task cannot be linked");
+      return false;
+    }
     const sessionValidation = validateCountedTaskSession(
       this.getEditorContent(),
       this.taskSession,
@@ -24743,6 +26257,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!sessionValidation.valid) {
       new Notice(`${sessionValidation.error}; no tasks were updated`);
       return false;
+    }
+    // Vault-wide rows commit per source task through the writer; same-note
+    // rows keep the counted single-transaction planner.
+    if (
+      item.stageSection &&
+      item.path &&
+      normalizeVaultRelativePath(item.path) !==
+        normalizeVaultRelativePath(this.filePath)
+    ) {
+      return this.chooseVaultCountedDependency(item);
     }
     const targetLine = getEditorLine(this.editor, item.line);
     if (
@@ -24772,6 +26296,106 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
   }
 
+  // Counted (`N<Ctrl+Shift+P>`) vault-wide commits: the existing
+  // add-to-all / remove-from-all semantics, one writer transaction per
+  // source task, with the target re-read fresh. Rows without a block id
+  // detour through one `+ id` prompt first.
+  async chooseVaultCountedDependency(item) {
+    const sessionValidation = validateCountedTaskSession(
+      this.getEditorContent(),
+      this.taskSession,
+    );
+    if (!sessionValidation.valid) {
+      new Notice(`${sessionValidation.error}; no tasks were updated`);
+      return false;
+    }
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const snapshot = {
+      markKey: bulletPropertyTaskMarkKey(item),
+      path: normalizeVaultRelativePath(item.path || ownerPath),
+      line: item.line,
+      rawLine: item.rawLine,
+      displayText: item.displayText,
+      existingIdField: item.existingIdField || null,
+      blockId: item.blockId || item.existingBlockId || null,
+    };
+    if (item.alreadyLinked) {
+      return this.applyVaultCountedDependencyRef(
+        { ...snapshot, remove: true },
+      );
+    }
+    if (!snapshot.blockId) {
+      this.pendingVaultCounted = {
+        snapshot,
+        session: this.taskSession,
+        reservedIds: new Set(),
+      };
+      this.showBlockIdStage(snapshot, { mode: "vault-counted" });
+      return false;
+    }
+    return this.applyVaultCountedDependencyRef(snapshot);
+  }
+
+  // Apply one vault-wide counted toggle: linked everywhere removes from
+  // every source, otherwise unlinked sources gain the link. Each source
+  // commits its own one-transaction write; the first failure stops the run
+  // with the successes already noticed.
+  async applyVaultCountedDependencyRef(snapshot) {
+    const sessionValidation = validateCountedTaskSession(
+      this.getEditorContent(),
+      this.taskSession,
+    );
+    if (!sessionValidation.valid) {
+      new Notice(`${sessionValidation.error}; no tasks were updated`);
+      return false;
+    }
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const targetPath = normalizeVaultRelativePath(
+      snapshot.path || ownerPath,
+    );
+    const files = await this.readVaultStageFiles([targetPath]);
+    if (!files) {
+      return false;
+    }
+    const counters = { stale: 0, other: 0 };
+    if (!snapshot.remove) {
+      const addition = this.collectVaultAddition(snapshot, files, counters);
+      if (!addition) {
+        new Notice(
+          counters.stale > 0
+            ? "Selected dependency changed; no tasks were updated"
+            : "Could not identify the selected dependency",
+        );
+        return false;
+      }
+      snapshot = { ...snapshot, blockId: addition.blockId };
+    }
+    const ref = { path: targetPath, blockId: snapshot.blockId };
+    let applied = 0;
+    for (const target of this.taskSession.targets) {
+      const outcome = await this.plugin.applyDependencyEdit({
+        editor: this.editor,
+        parentPath: ownerPath,
+        parentLine: target.line,
+        add: snapshot.remove ? [] : [ref],
+        remove: snapshot.remove ? [ref] : [],
+      });
+      if (!outcome.ok) {
+        new Notice(
+          `⛓ ${applied > 0 ? `Updated ${applied} task${applied === 1 ? "" : "s"}; ` : ""}could not update the task on line ${target.line + 1} (${outcome.reason})`,
+        );
+        return applied > 0;
+      }
+      applied += 1;
+    }
+    new Notice(
+      snapshot.remove
+        ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
+        : `⛓ Linked ${applied} task${applied === 1 ? "" : "s"}`,
+    );
+    return true;
+  }
+
   // Preparation phase for a marked batch apply. Guards the cursor bullet, then
   // partitions the marked rows into removals, ready additions (already have a
   // trailing block ID), and additions that still need a prompted block ID. When
@@ -24799,10 +26423,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const readyAdditions = [];
     const promptQueue = [];
 
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
     this.getMarkedTaskItems().forEach((item) => {
+      const itemPath = normalizeVaultRelativePath(item.path || ownerPath);
       if (item.alreadyLinked) {
         // alreadyLinked implies a non-empty dependency value.
         removals.push({
+          path: itemPath,
+          blockId: item.blockId || item.existingBlockId || null,
           depValue: item.value,
           legacyDepValue: item.legacyDependencyValue || null,
           linkBlockId:
@@ -24812,10 +26440,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       }
 
       const snapshot = {
+        markKey: bulletPropertyTaskMarkKey(item),
+        path: itemPath,
         line: item.line,
         rawLine: item.rawLine,
         displayText: item.displayText,
         existingIdField: item.existingIdField || null,
+        blockId: item.existingBlockId || null,
       };
 
       if (item.needsPromptForAdd) {
@@ -24834,13 +26465,83 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       promptIndex: 0,
       confirmedById: new Map(),
       reservedIds: new Set(),
+      // Cross-note batches commit through the vault writer (stale re-read
+      // per target, one dependent transaction); same-note batches keep the
+      // existing single-transaction executor below.
+      hasVault: removals.some(
+        (removal) => removal.path && removal.path !== ownerPath,
+      ),
     };
+    if (!batch.hasVault) {
+      batch.hasVault = [...readyAdditions, ...promptQueue].some(
+        (snapshot) => snapshot.path && snapshot.path !== ownerPath,
+      );
+    }
+
+    // Cross-note batches preload every prompt target (suggestion content
+    // plus cache-only locating) before the first prompt opens.
+    if (batch.hasVault) {
+      return this.prepareVaultBatch(batch);
+    }
 
     if (promptQueue.length === 0) {
       this.clearPendingBatch();
       return this.executeDependencyBatch(batch);
     }
 
+    this.pendingBatch = batch;
+    return this.promptNextBatchBlockId();
+  }
+
+  // Preload prompt-target contents for a vault batch: cache-only rows gain
+  // fresh line snapshots (or drop as stale), and every prompt target lands
+  // in the stage files so `+ id` suggestions validate against the right
+  // note. Empty queues execute straight through.
+  async prepareVaultBatch(batch) {
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const live = [];
+    for (const snapshot of batch.promptQueue) {
+      const targetPath = normalizeVaultRelativePath(
+        snapshot.path || ownerPath,
+      );
+      const files = await this.readVaultStageFiles([targetPath]);
+      if (!files) {
+        return false;
+      }
+      if (this.vaultStage && this.vaultStage.files instanceof Map) {
+        this.vaultStage.files.set(targetPath, files.get(targetPath));
+      }
+      if (snapshot.rawLine == null && !snapshot.blockId) {
+        const located = locateStageDisplayText(
+          files.get(targetPath),
+          snapshot.displayText,
+        );
+        if (!located) {
+          snapshot.dead = true;
+          live.push(snapshot);
+          continue;
+        }
+        snapshot.line = located.line;
+        snapshot.rawLine = located.rawLine;
+        if (located.blockId) {
+          snapshot.blockId = located.blockId;
+          batch.readyAdditions.push(snapshot);
+          continue;
+        }
+      }
+      live.push(snapshot);
+    }
+    batch.promptQueue = live.filter((snapshot) => !snapshot.dead);
+    const deadCount = live.filter((snapshot) => snapshot.dead).length;
+    if (deadCount > 0) {
+      batch.deadPromptCount = (batch.deadPromptCount || 0) + deadCount;
+    }
+    if (batch.promptQueue.length === 0) {
+      this.clearPendingBatch();
+      return this.executeVaultDependencyBatch(batch, {
+        skippedOther: batch.deadPromptCount || 0,
+      });
+    }
     this.pendingBatch = batch;
     return this.promptNextBatchBlockId();
   }
@@ -24886,7 +26587,146 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return this.confirmCountedDependencyBlockId(item);
     }
 
+    if (this.blockIdMode === "vault-single" && this.pendingVaultSingle) {
+      return this.confirmVaultSingleBlockId(item);
+    }
+
+    if (this.blockIdMode === "vault-counted" && this.pendingVaultCounted) {
+      return this.confirmVaultCountedBlockId(item);
+    }
+
     return this.confirmSingleBlockId(item);
+  }
+
+  // Single `+ id` for a cross-note row: the confirmed id is written to the
+  // target note first (an unused target id is acceptable, a link to an
+  // unprepared target is not), then the link commits through the writer.
+  async confirmVaultSingleBlockId(item) {
+    const pending = this.pendingVaultSingle;
+    if (!pending || !item.valid) {
+      return false;
+    }
+    const snapshot = pending.snapshot;
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const targetPath = normalizeVaultRelativePath(
+      snapshot.path || ownerPath,
+    );
+    const files = await this.readVaultStageFiles([targetPath]);
+    if (!files) {
+      return false;
+    }
+    const targetContent = files.get(targetPath);
+    const validation = validateBlockIdCandidate(item.id, targetContent, {
+      reservedIds: pending.reservedIds || new Set(),
+    });
+    if (!validation.valid || !tryDependencyId(targetPath, validation.id)) {
+      new Notice(
+        validation.message || "That block ID cannot be used in the target note",
+      );
+      return false;
+    }
+    const targetLines = String(targetContent).split(/\r?\n/);
+    if (
+      targetLines[snapshot.line] !== snapshot.rawLine ||
+      !isObsidianTaskAtLine(targetContent, snapshot.line, null, targetLines)
+    ) {
+      new Notice("Task changed; dependency not added");
+      return false;
+    }
+    const updatedLine = applyPromptedBlockIdPreservingLegacyId(
+      targetLines[snapshot.line],
+      validation.id,
+      targetPath,
+    );
+    if (updatedLine === null) {
+      new Notice(
+        "Dependency not added: this note path cannot be encoded as a dependency ID",
+      );
+      return false;
+    }
+    const prepared = await this.plugin.prepareDependencyTargetNote(
+      targetPath,
+      {
+        line: snapshot.line,
+        from: targetLines[snapshot.line],
+        text: updatedLine,
+      },
+    );
+    if (!prepared.ok) {
+      new Notice(`⛓ Could not prepare ${targetPath} (${prepared.reason})`);
+      return false;
+    }
+    this.clearPendingBatch();
+    const counters = { stale: 0, other: 0 };
+    return this.commitVaultRefs(
+      [{ path: targetPath, blockId: validation.id }],
+      [],
+      counters,
+    );
+  }
+
+  // Counted `+ id` for a cross-note row: one prompt, then the link applies
+  // to every source task that is not already linked.
+  async confirmVaultCountedBlockId(item) {
+    const pending = this.pendingVaultCounted;
+    if (!pending || !item.valid) {
+      return false;
+    }
+    const snapshot = pending.snapshot;
+    const targetPath = normalizeVaultRelativePath(
+      snapshot.path || this.filePath || "",
+    );
+    const files = await this.readVaultStageFiles([targetPath]);
+    if (!files) {
+      return false;
+    }
+    const validation = validateBlockIdCandidate(
+      item.id,
+      files.get(targetPath),
+      { reservedIds: pending.reservedIds || new Set() },
+    );
+    if (!validation.valid || !tryDependencyId(targetPath, validation.id)) {
+      new Notice(
+        validation.message || "That block ID cannot be used in the target note",
+      );
+      return false;
+    }
+    // The planner resolves targets by `^block-id`, so the confirmed id is
+    // written to the target before the per-source commits run.
+    const targetLines = String(files.get(targetPath)).split(/\r?\n/);
+    if (
+      targetLines[snapshot.line] !== snapshot.rawLine ||
+      !isObsidianTaskAtLine(files.get(targetPath), snapshot.line, null, targetLines)
+    ) {
+      new Notice("Task changed; dependency not added");
+      return false;
+    }
+    const updatedLine = applyPromptedBlockIdPreservingLegacyId(
+      targetLines[snapshot.line],
+      validation.id,
+      targetPath,
+    );
+    if (updatedLine === null) {
+      new Notice(
+        "Dependency not added: this note path cannot be encoded as a dependency ID",
+      );
+      return false;
+    }
+    const prepared = await this.plugin.prepareDependencyTargetNote(
+      targetPath,
+      {
+        line: snapshot.line,
+        from: targetLines[snapshot.line],
+        text: updatedLine,
+      },
+    );
+    if (!prepared.ok) {
+      new Notice(`⛓ Could not prepare ${targetPath} (${prepared.reason})`);
+      return false;
+    }
+    const confirmed = { ...snapshot, blockId: validation.id, preparedId: true };
+    this.clearPendingBatch();
+    return this.applyVaultCountedDependencyRef(confirmed);
   }
 
   confirmCountedDependencyBlockId(item) {
@@ -24919,6 +26759,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     batch.confirmedById.set(snapshot.line, item.id);
+    if (snapshot.markKey !== undefined && snapshot.markKey !== null) {
+      batch.confirmedById.set(snapshot.markKey, item.id);
+    }
     batch.reservedIds.add(item.id);
     batch.promptIndex += 1;
 
@@ -24926,6 +26769,16 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return this.promptNextBatchBlockId();
     }
 
+    // Cross-note batches commit asynchronously (stale re-read per target
+    // plus target preparation); same-note batches stay synchronous.
+    if (batch.hasVault) {
+      return this.executeVaultDependencyBatch(batch).then((applied) => {
+        if (applied) {
+          this.clearPendingBatch();
+        }
+        return applied;
+      });
+    }
     if (this.executeDependencyBatch(batch)) {
       this.clearPendingBatch();
       return true;
@@ -25162,6 +27015,437 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       plan.notice + (skipped > 0 ? ` (${skipped} skipped)` : ""),
     );
     return true;
+  }
+
+  // Vault-wide single remove: CURRENT rows toggle off through the writer
+  // (`docs/task-dependencies.md` §6.6). Removing a link is always allowed,
+  // so the target is never re-read; the dependent is guarded by its
+  // snapshot line text.
+  async removeSingleDependency(item) {
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const blockId = normalizeBulletPropertyValue(
+      item.blockId || item.existingBlockId || "",
+    );
+    if (!ownerPath || !blockId) {
+      new Notice("⛓ Could not remove dependency (missing link target)");
+      return false;
+    }
+    const outcome = await this.plugin.applyDependencyEdit({
+      editor: this.editor,
+      parentPath: ownerPath,
+      parentLine: this.cursor.line,
+      add: [],
+      remove: [
+        { path: normalizeVaultRelativePath(item.path || ownerPath), blockId },
+      ],
+    });
+    if (!outcome.ok) {
+      new Notice(`⛓ Could not remove dependency (${outcome.reason})`);
+      return false;
+    }
+    new Notice(outcome.notice || "⛓ Dependency removed");
+    return true;
+  }
+
+  // Vault-wide single add: re-read the target note and refuse when the
+  // target changed since the stage opened, then commit through the writer.
+  // Rows without a block id detour through the `+ id` prompt first.
+  async chooseVaultTaskDependency(item) {
+    const parentValidation = validateDependencyParentForEditor(
+      this.editor,
+      this.cursor,
+      this.lineText,
+    );
+    if (!parentValidation.valid) {
+      new Notice(parentValidation.message);
+      return false;
+    }
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const snapshot = {
+      markKey: bulletPropertyTaskMarkKey(item),
+      path: normalizeVaultRelativePath(item.path || ownerPath),
+      line: item.line,
+      rawLine: item.rawLine,
+      displayText: item.displayText,
+      existingIdField: item.existingIdField || null,
+      blockId: item.existingBlockId || null,
+    };
+    const ownerForSingle = normalizeVaultRelativePath(this.filePath || "");
+    const singleTargetPath = normalizeVaultRelativePath(
+      snapshot.path || ownerForSingle,
+    );
+    const singleFiles = await this.readVaultStageFiles([singleTargetPath]);
+    if (!singleFiles) {
+      return false;
+    }
+    if (this.vaultStage && this.vaultStage.files instanceof Map) {
+      this.vaultStage.files.set(
+        singleTargetPath,
+        singleFiles.get(singleTargetPath),
+      );
+    }
+    if (!snapshot.blockId && snapshot.rawLine == null) {
+      // Cache-only `+ id` row: match the target fresh by display text.
+      const located = locateStageDisplayText(
+        singleFiles.get(singleTargetPath),
+        snapshot.displayText,
+      );
+      if (!located) {
+        new Notice("Task changed; dependency not added");
+        return false;
+      }
+      snapshot.line = located.line;
+      snapshot.rawLine = located.rawLine;
+      if (located.blockId) {
+        snapshot.blockId = located.blockId;
+      }
+    }
+    if (!snapshot.blockId) {
+      this.pendingVaultSingle = { snapshot, reservedIds: new Set() };
+      this.showBlockIdStage(snapshot, { mode: "vault-single" });
+      return false;
+    }
+    const files = singleFiles;
+    const counters = { stale: 0, other: 0 };
+    const addition = this.collectVaultAddition(snapshot, files, counters);
+    if (!addition) {
+      new Notice(
+        counters.stale > 0
+          ? "Task changed; dependency not added"
+          : "Could not identify the selected dependency",
+      );
+      return false;
+    }
+    return this.commitVaultRefs([addition], [], counters);
+  }
+
+  // Fresh contents for the parent plus every involved target note: stage
+  // snapshots first (open buffers win), then a guarded vault read for the
+  // rest. Returns null with a notice when an addition target is unreadable:
+  // if preparation fails, the dependent is untouched (§6.6).
+  async readVaultStageFiles(paths) {
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const files = new Map();
+    if (this.vaultStage && this.vaultStage.files instanceof Map) {
+      for (const [path, content] of this.vaultStage.files) {
+        files.set(path, String(content || ""));
+      }
+    }
+    files.set(ownerPath, String(this.editor.getValue() || ""));
+    for (const rawPath of paths || []) {
+      const path = normalizeVaultRelativePath(rawPath || "");
+      if (!path) {
+        continue;
+      }
+      // Open buffers win over stage snapshots (a `+ id` pre-write lands in
+      // the buffer first); otherwise re-read, so validation and planning
+      // see post-open edits.
+      const buffered =
+        this.plugin && typeof this.plugin.readOpenBufferContent === "function"
+          ? this.plugin.readOpenBufferContent(path)
+          : null;
+      if (buffered !== null) {
+        files.set(path, buffered);
+        continue;
+      }
+      if (files.has(path)) {
+        continue;
+      }
+      const loaded = await this.plugin.readDependencyNoteContent(
+        path,
+        null,
+        ownerPath,
+      );
+      if (loaded === null) {
+        new Notice(`⛓ Could not read ${path}; no tasks were updated`);
+        return null;
+      }
+      files.set(path, String(loaded));
+    }
+    return files;
+  }
+
+  // Resolve one vault addition against fresh content: the target must still
+  // carry the staged block id on the staged line text, else it is stale.
+  // Prompt-queue snapshots (no block id yet) match by line text instead.
+  collectVaultAddition(snapshot, files, counters, confirmedId = null) {
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const targetPath = normalizeVaultRelativePath(
+      snapshot.path || ownerPath,
+    );
+    const targetContent = files.get(targetPath);
+    if (targetContent === undefined) {
+      counters.other += 1;
+      return null;
+    }
+    const targetLines = String(targetContent).split(/\r?\n/);
+    const at = Math.floor(numericOrDefault(snapshot.line, Number.NaN));
+    const wantBlockId =
+      confirmedId !== null
+        ? normalizeBulletPropertyValue(confirmedId)
+        : normalizeBulletPropertyValue(snapshot.blockId || "");
+    if (confirmedId !== null) {
+      const validation = validateBlockIdCandidate(
+        confirmedId,
+        targetContent,
+        { reservedIds: this.getBlockIdReservedIds() },
+      );
+      if (!validation.valid || !tryDependencyId(targetPath, validation.id)) {
+        counters.other += 1;
+        return null;
+      }
+      if (
+        !Number.isFinite(at) ||
+        targetLines[at] !== snapshot.rawLine ||
+        !isObsidianTaskAtLine(targetContent, at, null, targetLines)
+      ) {
+        counters.stale += 1;
+        return null;
+      }
+      return { path: targetPath, blockId: validation.id };
+    }
+    if (!wantBlockId) {
+      counters.other += 1;
+      return null;
+    }
+    // Just-prepared `+ id` targets — and cache-only rows, which carry no
+    // staged line text — resolve by block id with task-ness as the check.
+    if (snapshot.preparedId || snapshot.rawLine == null) {
+      const placed = findTaskLineByTrailingBlockId(targetLines, wantBlockId);
+      if (
+        placed === null ||
+        !isObsidianTaskAtLine(targetContent, placed, null, targetLines)
+      ) {
+        counters.stale += 1;
+        return null;
+      }
+      return { path: targetPath, blockId: wantBlockId };
+    }
+    const found = findTaskLineByTrailingBlockId(targetLines, wantBlockId);
+    if (
+      found === null ||
+      String(targetLines[found] || "") !== String(snapshot.rawLine || "") ||
+      !isObsidianTaskAtLine(targetContent, found, null, targetLines)
+    ) {
+      counters.stale += 1;
+      return null;
+    }
+    return { path: targetPath, blockId: wantBlockId };
+  }
+
+  // One vault commit for a whole batch: guards the batch graph for cycles
+  // after the whole batch (§6.4), then writes through `applyDependencyEdit`
+  // — cross-note targets prepared first, the dependent committed in one
+  // editor transaction, with the §6.7 notice.
+  async commitVaultRefs(addRefs, removeRefs, counters = { stale: 0, other: 0 }) {
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    const stage = this.vaultStage;
+    const dependentKey = stage && stage.dependent ? stage.dependent.key : null;
+    if (dependentKey && stage && stage.edges instanceof Map) {
+      const trial = new Map();
+      for (const [from, targets] of stage.edges) {
+        trial.set(from, targets.slice());
+      }
+      const dropKeys = new Set(
+        removeRefs
+          .map((ref) => dependencyStageRowKey(ref.path, ref.blockId))
+          .filter(Boolean),
+      );
+      const current = (trial.get(dependentKey) || []).filter(
+        (key) => !dropKeys.has(key),
+      );
+      for (const ref of addRefs) {
+        const key = dependencyStageRowKey(ref.path, ref.blockId);
+        if (key && !current.includes(key)) {
+          current.push(key);
+        }
+      }
+      trial.set(dependentKey, current);
+      for (const ref of addRefs) {
+        const key = dependencyStageRowKey(ref.path, ref.blockId);
+        const cycle =
+          key === dependentKey
+            ? [dependentKey]
+            : findDependencyStageCycle(trial, dependentKey, key);
+        if (key && cycle) {
+          new Notice(
+            `⛓ Could not update dependencies (would create a cycle: ${cycle.length - 1} back-link${cycle.length - 1 === 1 ? "" : "s"})`,
+          );
+          return false;
+        }
+      }
+    }
+    const outcome = await this.plugin.applyDependencyEdit({
+      editor: this.editor,
+      parentPath: ownerPath,
+      parentLine: this.cursor.line,
+      add: addRefs,
+      remove: removeRefs,
+    });
+    if (!outcome.ok) {
+      new Notice(`⛓ Could not update dependencies (${outcome.reason})`);
+      return false;
+    }
+    const skipped = (counters.stale || 0) + (counters.other || 0);
+    new Notice(
+      (outcome.notice || "⛓ Dependencies updated") +
+        (skipped > 0 ? ` (${skipped} skipped)` : ""),
+    );
+    return true;
+  }
+
+  // Batch executor for stages containing cross-note rows: every target is
+  // re-read fresh (stale rows are skipped with a count), `+ id` prompts were
+  // collected up front, and the whole batch commits once.
+  async executeVaultDependencyBatch(batch, seedCounters = null) {
+    const parentValidation = validateDependencyParentForEditor(
+      this.editor,
+      this.cursor,
+      batch.cursorLineText,
+    );
+    if (!parentValidation.valid) {
+      new Notice(parentValidation.message);
+      return false;
+    }
+    const ownerPath = normalizeVaultRelativePath(this.filePath || "");
+    if (!ownerPath) {
+      new Notice(
+        "Dependencies are unavailable: this note path cannot be encoded as a dependency ID",
+      );
+      return false;
+    }
+    const targetPaths = new Set();
+    for (const snapshot of [...batch.readyAdditions, ...batch.promptQueue]) {
+      targetPaths.add(normalizeVaultRelativePath(snapshot.path || ownerPath));
+    }
+    const files = await this.readVaultStageFiles([...targetPaths]);
+    if (!files) {
+      return false;
+    }
+    const counters = {
+      stale: (seedCounters && seedCounters.stale) || 0,
+      other: (seedCounters && seedCounters.skippedOther) || 0,
+    };
+    const addRefs = [];
+    for (const snapshot of batch.readyAdditions) {
+      const addition = this.collectVaultAddition(snapshot, files, counters);
+      if (addition) {
+        addRefs.push(addition);
+      }
+    }
+    for (const snapshot of batch.promptQueue) {
+      const key = snapshot.markKey !== undefined && snapshot.markKey !== null
+        ? snapshot.markKey
+        : snapshot.line;
+      const confirmedId = batch.confirmedById.get(key);
+      if (!confirmedId) {
+        counters.other += 1;
+        continue;
+      }
+      const addition = this.collectVaultAddition(
+        snapshot,
+        files,
+        counters,
+        confirmedId,
+      );
+      if (!addition) {
+        continue;
+      }
+      // The planner resolves targets by `^block-id`, so the confirmed id is
+      // written to the target first (open editor, else a preimage-checked
+      // vault update). If preparation fails the dependent is untouched.
+      const targetPath = normalizeVaultRelativePath(
+        snapshot.path || ownerPath,
+      );
+      const freshContent = files.get(targetPath);
+      const freshLines = String(freshContent).split(/\r?\n/);
+      const updatedLine = applyPromptedBlockIdPreservingLegacyId(
+        freshLines[snapshot.line],
+        addition.blockId,
+        targetPath,
+      );
+      if (updatedLine === null) {
+        counters.other += 1;
+        continue;
+      }
+      const prepared = await this.plugin.prepareDependencyTargetNote(
+        targetPath,
+        {
+          line: snapshot.line,
+          from: freshLines[snapshot.line],
+          text: updatedLine,
+        },
+      );
+      if (!prepared.ok) {
+        new Notice(
+          `⛓ Could not prepare ${targetPath} (${prepared.reason}); no tasks were updated`,
+        );
+        return false;
+      }
+      addRefs.push(addition);
+    }
+    // Removal marks carry the field value; cross-note removals resolve
+    // through the staged block id, same-note removals through the existing
+    // note scan. Field-only values need no link edit: the planner sets the
+    // field from the line, so they fall out on their own.
+    const noteLines = String(this.editor.getValue() || "").split(/\r?\n/);
+    const removeRefs = [];
+    for (const removal of batch.removals) {
+      const removalPath = normalizeVaultRelativePath(
+        removal.path || ownerPath,
+      );
+      if (removalPath !== ownerPath) {
+        if (normalizeBulletPropertyValue(removal.blockId || "")) {
+          removeRefs.push({ path: removalPath, blockId: removal.blockId });
+        } else {
+          counters.other += 1;
+        }
+        continue;
+      }
+      const candidates = [
+        removal.linkBlockId,
+        removal.depValue,
+        removal.legacyDepValue,
+      ]
+        .map(normalizeBulletPropertyValue)
+        .filter(Boolean);
+      let resolved = null;
+      for (const candidate of candidates) {
+        if (findTaskLineByTrailingBlockId(noteLines, candidate) !== null) {
+          resolved = candidate;
+          break;
+        }
+      }
+      if (!resolved) {
+        for (let index = 0; index < noteLines.length; index += 1) {
+          if (!isObsidianTaskAtLine(String(this.editor.getValue() || ""), index)) {
+            continue;
+          }
+          const idField = findBulletPropertyField(noteLines[index], "id");
+          const idValue = idField && normalizeBulletPropertyValue(idField.value);
+          if (idValue && candidates.includes(idValue)) {
+            const blockId = getTrailingBlockId(noteLines[index]);
+            if (blockId) {
+              resolved = blockId;
+              break;
+            }
+          }
+        }
+      }
+      if (resolved) {
+        removeRefs.push({ path: ownerPath, blockId: resolved });
+      }
+    }
+    if (addRefs.length === 0 && removeRefs.length === 0) {
+      const skipped = counters.stale + counters.other;
+      new Notice(
+        skipped > 0
+          ? `No dependencies changed (${skipped} skipped)`
+          : "No dependencies changed",
+      );
+      return false;
+    }
+    return this.commitVaultRefs(addRefs, removeRefs, counters);
   }
 
   // Reconcile managed navigation child bullets for a finished batch as one
@@ -25488,12 +27772,28 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       }
 
       this.opening = true;
-      try {
-        if (this.commitMarkedDependencies()) {
-          this.close();
+      const markedOutcome = this.commitMarkedDependencies();
+      // Vault batches commit asynchronously (stale re-read per target);
+      // same-note batches stay synchronous.
+      if (markedOutcome && typeof markedOutcome.then === "function") {
+        markedOutcome
+          .then((applied) => {
+            if (applied) {
+              this.close();
+            }
+          })
+          .catch(() => false)
+          .finally(() => {
+            this.opening = false;
+          });
+      } else {
+        try {
+          if (markedOutcome) {
+            this.close();
+          }
+        } finally {
+          this.opening = false;
         }
-      } finally {
-        this.opening = false;
       }
       return;
     }
@@ -27149,6 +29449,14 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       id: "set-bullet-property",
       name: "Set bullet property",
       editorCallback: (editor) => this.openBulletPropertyPicker(editor),
+    });
+
+    // No default hotkey (Q6): the vault-wide Depends on stage for the task
+    // under the cursor (`docs/task-dependencies.md` §6.1).
+    this.addCommand({
+      id: "edit-task-dependencies",
+      name: "Edit task dependencies",
+      editorCallback: (editor) => this.openDependencyStageAtCursor(editor),
     });
 
     this.addCommand({
@@ -30858,6 +33166,23 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
+    // Anywhere on a Depends-On line opens the owning task's Depends on
+    // stage, skipping the property step — never the link under the cursor
+    // (`docs/task-dependencies.md` §6.1).
+    if (!options.taskSession && !options.initialProperty) {
+      const entry = resolveDependencyStageEntry(content, cursor.line);
+      if (entry.ok && entry.skipPropertyStep) {
+        setEditorCursorSafely(cm, entry.parentLine, 0);
+        return this.openBulletPropertyPicker(cm, {
+          ...options,
+          initialProperty: "dependsOn",
+        });
+      }
+    }
+    if (!options.taskSession && editorSelectionSpansTasks(cm, content)) {
+      new Notice("Selection spans several tasks; put the cursor on one task");
+      return false;
+    }
     // On a dedicated Task Link bullet, the picker targets the linked task in
     // its own note. On a #task line the existing behavior is unchanged.
     if (
@@ -30882,6 +33207,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         return false;
       }
     } else if (!isBulletLine(lineText)) {
+      // Prose with several links is refused with a short reason; a single
+      // dedicated Task Link routed to the link picker above.
+      if ((lineText.match(/\[\[/g) || []).length >= 2) {
+        new Notice("Several links here — put the cursor on one Task Link");
+        return false;
+      }
       new Notice("Cursor is not on a bullet");
       return false;
     }
@@ -30933,6 +33264,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         filePath,
         propertyContext,
         taskSession,
+        initialProperty: options.initialProperty || null,
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -30945,6 +33277,20 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         this.activeBulletPropertyPicker = null;
       }
       throw error;
+    }
+    // `initialProperty: "dependsOn"` skips the property step: the Depends
+    // on value stage opens straight away (`docs/task-dependencies.md` §6.1).
+    if (options.initialProperty) {
+      const wanted = (picker.propertyItems || []).find(
+        (item) =>
+          item &&
+          item.kind === "property" &&
+          item.property &&
+          item.property.name === options.initialProperty,
+      );
+      if (wanted) {
+        picker.showValueStage(wanted);
+      }
     }
     return true;
   }
@@ -33646,28 +35992,45 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
   // Best-effort vault read for planner target resolution: the open buffer
   // when the note is open (unsaved edits count), else the vault content.
+  // Open-buffer content for a note path (unsaved edits count), or null
+  // when the note has no open markdown leaf. Synchronous, so the picker
+  // never waits on disk while typing.
+  readOpenBufferContent(filePath) {
+    try {
+      const normalized = normalizeVaultRelativePath(filePath || "");
+      const workspace = this.app && this.app.workspace;
+      if (!normalized || !workspace || typeof workspace.getLeavesOfType !== "function") {
+        return null;
+      }
+      for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+        const view = leaf && leaf.view;
+        if (
+          view &&
+          view.file &&
+          normalizeVaultRelativePath(view.file.path) === normalized &&
+          view.editor &&
+          typeof view.editor.getValue === "function"
+        ) {
+          return String(view.editor.getValue() || "");
+        }
+      }
+      return null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   async readDependencyNoteContent(filePath, editor, parentPath) {
     try {
       const normalized = normalizeVaultRelativePath(filePath);
-      const app = this.app;
-      const workspace = app && app.workspace;
-      if (workspace && typeof workspace.getLeavesOfType === "function") {
-        for (const leaf of workspace.getLeavesOfType("markdown") || []) {
-          const view = leaf && leaf.view;
-          if (
-            view &&
-            view.file &&
-            normalizeVaultRelativePath(view.file.path) === normalized &&
-            view.editor &&
-            typeof view.editor.getValue === "function"
-          ) {
-            return String(view.editor.getValue() || "");
-          }
-        }
+      const buffered = this.readOpenBufferContent(normalized);
+      if (buffered !== null) {
+        return buffered;
       }
       if (editor && normalized === normalizeVaultRelativePath(parentPath)) {
         return String(editor.getValue() || "");
       }
+      const app = this.app;
       const vault = app && app.vault;
       const file =
         vault && typeof vault.getAbstractFileByPath === "function"
@@ -33751,8 +36114,373 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
   }
 
-  // nav api v1: open the Depends on stage for the owning task of `ref`.
-  // `nav-stage` swaps today's current-note stage for the vault-wide one.
+  // ---- Vault-wide Depends on stage pool (nav-stage) ----
+  // `docs/task-dependencies.md` §6.2: the pool comes from the Tasks cache
+  // (`getTasks()` when `getState()` is `"Warm"`) with open-buffer
+  // overrides, falling back to a one-time vault scan when the stage opens.
+  // Never reads from disk on a keystroke: the scan runs once per open and
+  // refreshes the already-open stage.
+  collectStageBufferNotes() {
+    const notes = new Map();
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return notes;
+      }
+      for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+        const view = leaf && leaf.view;
+        if (
+          !view ||
+          !view.file ||
+          !view.editor ||
+          typeof view.editor.getValue !== "function"
+        ) {
+          continue;
+        }
+        const path = normalizeVaultRelativePath(view.file.path || "");
+        if (path && !notes.has(path)) {
+          notes.set(path, String(view.editor.getValue() || ""));
+        }
+      }
+    } catch (_error) {
+      // Best effort: the vault scan still covers unopened notes.
+    }
+    return notes;
+  }
+
+  // Defensive read of the Tasks plugin cache. Tasks 8.4.0 exposes `id` and
+  // `dependsOn` on each task; the exact accessor differs by version, so
+  // every known shape is tried and anything unusable falls back to the
+  // vault scan (still correct, just one read at open).
+  readStageTasksCache() {
+    try {
+      const plugins =
+        (this.app && this.app.plugins && this.app.plugins.plugins) || {};
+      const tasksPlugin = plugins["obsidian-tasks-plugin"];
+      if (!tasksPlugin) {
+        return { ready: false, tasks: [] };
+      }
+      const apis = [tasksPlugin.apiV1, tasksPlugin.api, tasksPlugin].filter(
+        Boolean,
+      );
+      for (const api of apis) {
+        if (!api || typeof api.getTasks !== "function") {
+          continue;
+        }
+        const state =
+          typeof api.getState === "function" ? api.getState() : "Warm";
+        if (state !== "Warm") {
+          return { ready: false, tasks: [] };
+        }
+        const raw = api.getTasks();
+        if (!Array.isArray(raw)) {
+          continue;
+        }
+        const tasks = raw
+          .map((entry) => normalizeStageCacheTask(entry))
+          .filter(Boolean);
+        return { ready: true, tasks };
+      }
+    } catch (_error) {
+      // Fall through to the vault scan.
+    }
+    return { ready: false, tasks: [] };
+  }
+
+  buildVaultDependencyStage(args = {}) {
+    const notes = [];
+    for (const [path, content] of this.collectStageBufferNotes()) {
+      notes.push({ path, content });
+    }
+    return this.buildVaultDependencyStageFromNotes(notes, args);
+  }
+
+  buildVaultDependencyStageFromNotes(bufferNotes, args = {}) {
+    const ownerPath = normalizeVaultRelativePath(args.filePath || "");
+    const text = String(args.content || "");
+    const lines = text.split(/\r?\n/);
+    const parents = (Array.isArray(args.parentLines) ? args.parentLines : [])
+      .map((line) => Math.floor(numericOrDefault(line, Number.NaN)))
+      .filter((line) => Number.isFinite(line) && line >= 0 && line < lines.length);
+    const primary = parents.length > 0 ? parents[0] : -1;
+    const notes = (Array.isArray(bufferNotes) ? bufferNotes : []).slice();
+    const seen = new Set(notes.map((note) => normalizeVaultRelativePath(note.path || "")));
+    if (ownerPath && !seen.has(ownerPath)) {
+      notes.push({ path: ownerPath, content: text });
+      seen.add(ownerPath);
+    } else if (ownerPath) {
+      for (const note of notes) {
+        if (normalizeVaultRelativePath(note.path || "") === ownerPath) {
+          note.content = text;
+        }
+      }
+    }
+    const files = new Map(
+      notes.map((note) => [
+        normalizeVaultRelativePath(note.path || ""),
+        String(note.content || ""),
+      ]),
+    );
+    const cache = this.readStageTasksCache();
+    const dependentLines = new Set(parents);
+    let candidates = collectVaultDependencyCandidates(notes, {
+      dependentPath: ownerPath,
+      dependentLines,
+    });
+    let cacheReady = false;
+    if (cache.ready && cache.tasks.length > 0) {
+      candidates = mergeStageCacheCandidates(cache.tasks, notes, {
+        dependentPath: ownerPath,
+        dependentLines,
+      });
+      cacheReady = true;
+    }
+    const index = indexDependencyStageNotes(notes);
+    registerStageCacheRecords(index, cache.ready ? cache.tasks : []);
+    const edges = collectDependencyStageEdges(notes, index);
+    mergeStageCacheEdges(edges, cache.ready ? cache.tasks : [], index);
+    const currentRows = [];
+    const linkedKeys = new Set();
+    for (const parentLine of parents) {
+      const resolved = resolveDependencyStageCurrent(
+        text,
+        parentLine,
+        ownerPath,
+        index,
+      );
+      for (const row of resolved.ok ? resolved.rows : []) {
+        const key =
+          row.path && row.blockId
+            ? dependencyStageRowKey(row.path, row.blockId)
+            : `missing:${normalizeVaultRelativePath(row.path || "")}#^${row.blockId || ""}`;
+        if (row.path && row.blockId) {
+          linkedKeys.add(key);
+        }
+        if (!currentRows.some((entry) => entry.dedupeKey === key)) {
+          currentRows.push({ ...row, dedupeKey: key });
+        }
+      }
+    }
+    const current = currentRows.map(({ dedupeKey, ...row }) => Object.freeze(row));
+    const openCount = current.filter((row) => row.open).length;
+    let dependentKey = null;
+    let parentText = "";
+    if (primary >= 0) {
+      parentText = String(lines[primary] || "");
+      const parentBlockId = getTrailingBlockId(parentText);
+      const parentIdField = findBulletPropertyField(parentText, "id");
+      const parentIdValue =
+        parentIdField && normalizeBulletPropertyValue(parentIdField.value);
+      dependentKey =
+        (parentBlockId && dependencyStageRowKey(ownerPath, parentBlockId)) ||
+        (parentIdValue ? `id:${parentIdValue}` : null);
+    }
+    const title =
+      parents.length > 1
+        ? `⛓ Depends on · ${formatCountLabel(parents.length, "task")}`
+        : `⛓ Depends on · ${cleanTaskDisplayText(parentText).slice(0, 48)}`;
+    return {
+      candidates,
+      current: Object.freeze(current),
+      linkedKeys,
+      edges,
+      files,
+      index,
+      cacheReady,
+      dependent: Object.freeze({
+        path: ownerPath,
+        line: primary,
+        key: dependentKey,
+      }),
+      sourceValueSets: Array.isArray(args.dependencyValueSets)
+        ? args.dependencyValueSets
+        : null,
+      title,
+      openCount,
+      poolSize: candidates.length,
+      refreshOf: null,
+    };
+  }
+
+  // One-time vault scan for stages that opened while the Tasks cache was
+  // not Warm. Open buffers override the scan; the already-open stage keeps
+  // its marks across the refresh.
+  async refreshVaultDependencyStage(modal, stage) {
+    try {
+      if (
+        !modal ||
+        modal.vaultStage !== stage ||
+        typeof modal.isLocalTaskStage !== "function" ||
+        !modal.isLocalTaskStage()
+      ) {
+        return;
+      }
+      const vault = this.app && this.app.vault;
+      if (
+        !vault ||
+        typeof vault.getMarkdownFiles !== "function" ||
+        typeof vault.cachedRead !== "function"
+      ) {
+        return;
+      }
+      const notes = [];
+      for (const file of vault.getMarkdownFiles() || []) {
+        if (!file || !file.path || !/\.md$/i.test(file.path)) {
+          continue;
+        }
+        try {
+          notes.push({
+            path: file.path,
+            content: String((await vault.cachedRead(file)) || ""),
+          });
+        } catch (_readError) {
+          continue;
+        }
+      }
+      if (modal.vaultStage !== stage || !modal.isLocalTaskStage()) {
+        return;
+      }
+      for (const [path, content] of this.collectStageBufferNotes()) {
+        const at = notes.findIndex(
+          (note) => normalizeVaultRelativePath(note.path || "") === path,
+        );
+        if (at === -1) {
+          notes.push({ path, content });
+        } else {
+          notes[at].content = content;
+        }
+      }
+      const request = {
+        filePath: stage.dependent.path,
+        content:
+          modal.editor && typeof modal.editor.getValue === "function"
+            ? String(modal.editor.getValue() || "")
+            : "",
+        parentLines: [stage.dependent.line],
+        dependencyValueSets: stage.sourceValueSets,
+      };
+      const fresh = this.buildVaultDependencyStageFromNotes(notes, request);
+      fresh.refreshOf = stage;
+      fresh.cacheReady = true;
+      modal.applyVaultStageItems(fresh);
+    } catch (_error) {
+      // Best effort: the sync pool stays in place.
+    }
+  }
+
+  describeDependencyRowPill(filePath, parentLine, content) {
+    try {
+      const notes = [];
+      for (const [path, noteContent] of this.collectStageBufferNotes()) {
+        notes.push({ path, content: noteContent });
+      }
+      const ownerPath = normalizeVaultRelativePath(filePath || "");
+      if (!notes.some((note) => normalizeVaultRelativePath(note.path || "") === ownerPath)) {
+        notes.push({ path: ownerPath, content: String(content || "") });
+      }
+      const index = indexDependencyStageNotes(notes);
+      const state = describeDependencyRowState(
+        String(content || ""),
+        parentLine,
+        ownerPath,
+        index,
+      );
+      return state.pill;
+    } catch (_error) {
+      return "⛓ none";
+    }
+  }
+
+  // Task Link mode: the Depends on row edits the linked task in its own
+  // note, named in the stage title (`docs/task-dependencies.md` §6.1).
+  async openLinkedDependencyStage(target) {
+    try {
+      const path = normalizeVaultRelativePath((target && target.path) || "");
+      if (!path) {
+        new Notice("Linked task has no note");
+        return false;
+      }
+      let editor =
+        typeof this.getOpenMarkdownEditorForPath === "function"
+          ? this.getOpenMarkdownEditorForPath(path)
+          : null;
+      if (!editor) {
+        const vault = this.app && this.app.vault;
+        const file =
+          vault && typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(path)
+            : null;
+        if (!file) {
+          new Notice(`Linked note not found: ${path}`);
+          return false;
+        }
+        const opened = await openMarkdownFileWithLeafReuse(
+          this,
+          file,
+          `Could not open ${path}`,
+        );
+        if (!opened) {
+          return false;
+        }
+        editor =
+          typeof this.getOpenMarkdownEditorForPath === "function"
+            ? this.getOpenMarkdownEditorForPath(path)
+            : null;
+        if (!editor) {
+          new Notice(`Could not open ${path}`);
+          return false;
+        }
+      }
+      const line = Math.floor(numericOrDefault(target.line, Number.NaN));
+      if (Number.isFinite(line)) {
+        setEditorCursorSafely(editor, line, 0);
+      }
+      return this.openBulletPropertyPicker(editor, {
+        initialProperty: "dependsOn",
+      });
+    } catch (_error) {
+      new Notice("Could not open the linked task");
+      return false;
+    }
+  }
+
+  // Palette command `edit-task-dependencies` (no default hotkey, Q6): the
+  // task under the cursor. Prose with several links, or a selection
+  // spanning tasks, is refused with a short reason.
+  openDependencyStageAtCursor(editor) {
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content = String(editor.getValue() || "");
+    if (editorSelectionSpansTasks(editor, content)) {
+      new Notice("Selection spans several tasks; put the cursor on one task");
+      return false;
+    }
+    const entry = resolveDependencyStageEntry(content, cursor.line);
+    if (entry.ok) {
+      if (entry.parentLine !== cursor.line) {
+        setEditorCursorSafely(editor, entry.parentLine, 0);
+      }
+      return this.openBulletPropertyPicker(editor, {
+        initialProperty: "dependsOn",
+      });
+    }
+    const lineText = getEditorLine(editor, cursor.line);
+    if (lineText !== null && parseLinkPickerTaskLink(lineText)) {
+      void this.openLinkPicker(editor).catch(() => false);
+      return true;
+    }
+    if (lineText !== null && (lineText.match(/\[\[/g) || []).length >= 2) {
+      new Notice("Several links here — put the cursor on one Task Link");
+      return false;
+    }
+    return this.openBulletPropertyPicker(editor);
+  }
+
+  // nav api v1: open the vault-wide Depends on stage for the owning task
+  // of `ref` (nav-stage; `docs/task-dependencies.md` §6).
   async openDependencyStageForRef(ref = {}) {
     try {
       const path = normalizeVaultRelativePath(ref.path || "");
@@ -39800,6 +42528,7 @@ module.exports.helpers = {
   discoverLinkPickerTargets,
   findUniqueLinkPickerTargetLine,
   createLinkPickerPropertyItems,
+  bulletPropertyTaskMarkKey,
   groupLinkPickerTargetsByNote,
   getLinkPickerSessionSubtitle,
   normalizeLaneWorkSummary,
@@ -39959,6 +42688,32 @@ module.exports.helpers = {
   findTaskLineByTrailingBlockId,
   planDependencyEdit,
   applyDependencyPlanLines,
+  dependencyStageFieldTier,
+  dependencyStageTermTier,
+  dependencyStageRank,
+  dependencyStageRouteOf,
+  dependencyStageBasenameOf,
+  dependencyStageRowKey,
+  isDependencyStageExcludedPath,
+  findDependencyStageSection,
+  scanDependencyStageNoteTasks,
+  collectVaultDependencyCandidates,
+  indexDependencyStageNotes,
+  resolveDependencyStageLinkTarget,
+  resolveDependencyStageCurrent,
+  collectDependencyStageEdges,
+  findDependencyStageCycle,
+  compareDependencyStageCanonical,
+  planDependencyStageView,
+  formatDependencyStagePill,
+  describeDependencyRowState,
+  resolveDependencyStageEntry,
+  normalizeStageCacheTask,
+  mergeStageCacheCandidates,
+  registerStageCacheRecords,
+  mergeStageCacheEdges,
+  locateStageDisplayText,
+  editorSelectionSpansTasks,
   buildDependencyEditNotice,
   applyDependencyEditTransaction,
   applyPromptedBlockIdPreservingLegacyId,

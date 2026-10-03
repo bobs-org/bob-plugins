@@ -1356,3 +1356,33 @@
 .bob-nh-notice .bob-nh-notice-chip.is-muted {
   --bob-nh-tone: var(--text-muted);
 }
+
+/* Vault-wide Depends on stage (nav-stage): CURRENT / RESULTS / BLOCKED
+   section dividers, guarded (disabled) rows, and cross-note guard reasons.
+   Section headers sit inside the first row of their section and read as a
+   full-width divider above the row content. */
+.bob-cnp-task-value-row:has(> .bob-cnp-section-header) {
+  flex-wrap: wrap;
+}
+
+.bob-cnp-section-header {
+  flex: 1 1 100%;
+  padding: 6px 2px 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.bob-cnp-task-value-row.is-disabled {
+  opacity: 0.62;
+}
+
+.bob-cnp-task-value-row.is-disabled.is-selected {
+  opacity: 0.85;
+}
+
+.bob-cnp-row-guard {
+  color: var(--text-warning, var(--text-muted));
+  font-size: var(--font-ui-smaller);
+}

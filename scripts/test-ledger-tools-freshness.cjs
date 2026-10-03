@@ -1145,10 +1145,10 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     status.text,
-    "⟳ 3 new · 10 pending · 15 next · 20 rotten · ✓ 12 today",
+    "⟳ 3 new · 0 projects · 10 pending · 15 next · 20 rotten · ✓ 12 today",
   );
   assert.equal(status.mode, "new");
-  assert.match(status.tooltip, /Walk 48 · NEW 3 · PENDING 10 · NEXT 15/);
+  assert.match(status.tooltip, /Walk 48 · NEW 3 · PROJECTS 0 · PENDING 10 · NEXT 15/);
   assert.match(status.tooltip, /RETURNED 2 · ROTTEN 18/);
   assert.match(status.tooltip, /oldest 11d overdue/);
   assert.match(status.tooltip, /✓ 12 today/);
@@ -1170,7 +1170,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     budgeted.text,
-    "⟳ 0 new · 0 pending · 0 next · 5 rotten · ✓ 12/15 today",
+    "⟳ 0 new · 0 projects · 0 pending · 0 next · 5 rotten · ✓ 12/15 today",
   );
   assert.equal(budgeted.mode, "due");
   assert.match(budgeted.tooltip, /RETURNED 1 · ROTTEN 4/);
@@ -1326,7 +1326,7 @@ test("status bar clicks through, falling back to rotten", () => {
     try {
       assert.equal(plugin.freshnessStatusEl, el);
       plugin.updateFreshnessStatusBar();
-      assert.equal(el.text, "⟳ 1 new · 0 pending · 0 next · 0 rotten · ✓ 0 today");
+      assert.equal(el.text, "⟳ 1 new · 0 projects · 0 pending · 0 next · 0 rotten · ✓ 0 today");
       el.handlers.click();
       assert.deepEqual(executed, [
         "bob-navigation-hotkeys:jump-to-next-due-task",
@@ -1346,7 +1346,7 @@ test("status bar clicks through, falling back to rotten", () => {
     fallback.onload();
     try {
       fallback.updateFreshnessStatusBar();
-      assert.equal(fallbackEl.text, "⟳ 0 new · 0 pending · 0 next · 0 rotten · ✓ 0 today");
+      assert.equal(fallbackEl.text, "⟳ 0 new · 0 projects · 0 pending · 0 next · 0 rotten · ✓ 0 today");
       fallbackEl.handlers.click();
       assert.deepEqual(fallbackOpened, ["rotten"]);
     } finally {
@@ -2270,6 +2270,156 @@ test("review model meter uses upkeep and exposes refreshed", () => {
   assert.equal(model.upkeepToday, 5);
   assert.equal(model.refreshedToday, 25);
   assert.equal(model.rottenText, "ROTTEN 1 · ✓ 5/15");
+});
+
+
+test("tracking review: empty ^prj walks PROJECTS, populated suppresses, hidden ^ref is NEW", () => {
+  const { freshnessEvaluate } = helpers;
+  const empty = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Project ^prj", blockId: "prj", projectReadyCount: 0 }),
+    D,
+    CFG,
+  );
+  assert.equal(empty.state, "new");
+  assert.equal(empty.tier, "projects");
+
+  const stamped = freshnessEvaluate(
+    sRow({
+      rawLine: "- [ ] #task Project [fresh:: 2026-10-08] ^prj",
+      blockId: "prj",
+      projectReadyCount: 0,
+    }),
+    D,
+    CFG,
+  );
+  assert.equal(stamped.state, "fresh");
+  assert.equal(stamped.tier, null);
+
+  const populated = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Project ^prj", blockId: "prj", projectReadyCount: 1 }),
+    D,
+    CFG,
+  );
+  assert.equal(populated.state, null);
+  assert.equal(populated.tier, null);
+
+  const hiddenRef = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Read #hide ^ref", blockId: "ref" }),
+    D,
+    CFG,
+  );
+  assert.equal(hiddenRef.state, "new");
+  assert.equal(hiddenRef.tier, "new");
+
+  const hidden = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Read #hide", laneVisible: false }),
+    D,
+    CFG,
+  );
+  assert.equal(hidden.state, null);
+  assert.equal(hidden.tier, null);
+
+  const nearMatch = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Read ^prj-extra", blockId: "prj-extra" }),
+    D,
+    CFG,
+  );
+  assert.equal(nearMatch.tier, "new");
+});
+
+test("tracking review: lane ^prj keeps its lane with the Ready cadence", () => {
+  const { freshnessEvaluate } = helpers;
+  const row = {
+    path: "p.md",
+    line: 2,
+    statusSymbol: "/",
+    isTodo: false,
+    recurring: false,
+    laneVisible: true,
+    isDailyNote: false,
+    isToday: false,
+    scheduled: null,
+    created: null,
+    rawLine: "- [/] #task Project ^prj",
+    noteRefreshRaw: undefined,
+    blockId: "prj",
+    projectReadyCount: 0,
+    projectScheduled: null,
+    projectScheduleInvalid: false,
+  };
+  const evaluated = freshnessEvaluate(row, D, CFG);
+  assert.equal(evaluated.lane, "pending");
+  assert.equal(evaluated.state, null);
+  assert.equal(evaluated.tier, "projects");
+  assert.equal(evaluated.intervalDays, 7);
+  assert.equal(evaluated.intervalSource, "default");
+});
+
+test("tracking counts decouple states from the six-key tier histogram", () => {
+  const emptyPrj = sRow({
+    rawLine: "- [ ] #task Project ^prj",
+    blockId: "prj",
+    projectReadyCount: 0,
+  });
+  const hiddenRef = sRow({
+    rawLine: "- [ ] #task Read #hide ^ref",
+    blockId: "ref",
+  });
+  const lanePrj = {
+    path: "p.md",
+    line: 2,
+    statusSymbol: "/",
+    isTodo: false,
+    recurring: false,
+    laneVisible: true,
+    isDailyNote: false,
+    isToday: false,
+    scheduled: null,
+    created: null,
+    rawLine: "- [/] #task Project ^prj",
+    noteRefreshRaw: undefined,
+    blockId: "prj",
+    projectReadyCount: 0,
+    projectScheduled: null,
+    projectScheduleInvalid: false,
+  };
+  const report = freshnessCounts([emptyPrj, hiddenRef, lanePrj], D, CFG);
+  assert.equal(report.new, 2);
+  assert.equal(report.due, 2);
+  assert.equal(report.projectsDue, 2);
+  assert.equal(report.byTier.new, 1);
+  assert.equal(report.byTier.projects, 2);
+  assert.equal(
+    report.walk,
+    report.byTier.new +
+      report.byTier.projects +
+      report.byTier.pending +
+      report.byTier.next +
+      report.byTier.returned +
+      report.byTier.rotten,
+  );
+});
+
+test("tracking queue orders NEW before PROJECTS before lanes", () => {
+  const rows = [
+    sRow({
+      path: "b.md",
+      line: 1,
+      rawLine: "- [ ] #task Ordinary",
+    }),
+    sRow({
+      path: "a.md",
+      line: 1,
+      rawLine: "- [ ] #task Project ^prj",
+      blockId: "prj",
+      projectReadyCount: 0,
+    }),
+  ];
+  const queue = freshnessQueue(rows, D, CFG);
+  assert.deepEqual(
+    queue.map((entry) => entry.tier),
+    ["new", "projects"],
+  );
 });
 
 // __FRESHNESS_TEST_END__

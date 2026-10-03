@@ -606,6 +606,61 @@ test("tier-aware jump notices name each tier", () => {
   );
 });
 
+test("projects tier walks with commitment rank and project notice", () => {
+  assert.equal(
+    helpers.reviewEntryMachineTier({ tier: "projects" }),
+    "projects",
+  );
+  assert.equal(
+    helpers.reviewFreshnessSupportsTrackers({ trackerReview: true }),
+    true,
+  );
+  assert.equal(helpers.reviewFreshnessSupportsTrackers({}), false);
+  assert.equal(helpers.reviewFreshnessSupportsTrackers(null), false);
+  const entry = {
+    key: "p.md:1",
+    path: "p.md",
+    line: 1,
+    originalMarkdown: "- [ ] #task Project ^prj",
+    state: "new",
+    bucket: "new",
+    tier: "projects",
+    tierLabel: "PROJECTS",
+    lane: "ready",
+    created: null,
+    fresh: null,
+    dueOn: null,
+    daysOverdue: null,
+    interval: 7,
+    rank: 2,
+    tierRank: 1,
+    tierTotal: 1,
+  };
+  assert.equal(
+    helpers.buildReviewJumpNotice(entry, 2, 6, { todayText: "2026-10-08" }),
+    "Review 2/6 · PROJECTS 1/1 · No Ready tasks in this project · never confirmed · every 7d",
+  );
+  const stamped = {
+    ...entry,
+    fresh: "2026-10-01",
+    dueOn: "2026-10-08",
+    daysOverdue: 0,
+  };
+  assert.equal(
+    helpers.buildReviewJumpNotice(stamped, 2, 6, { todayText: "2026-10-08" }),
+    "Review 2/6 · PROJECTS 1/1 · No Ready tasks in this project · due today · confirmed Oct 1 · every 7d",
+  );
+  // Without the capability the walk still lands; only the project
+  // detail is withheld.
+  assert.equal(
+    helpers.buildReviewJumpNotice(entry, 2, 6, {
+      todayText: "2026-10-08",
+      trackers: false,
+    }),
+    "Review 2/6 · PROJECTS 1/1",
+  );
+});
+
 test("tier notices fall back without tier ranks and wrap on the last line", () => {
   const legacy = queueEntry({ state: "new" });
   assert.equal(helpers.buildReviewJumpNotice(legacy, 1, 3), "Review 1/3 · NEW");

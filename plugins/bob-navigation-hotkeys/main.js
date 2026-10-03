@@ -29730,8 +29730,23 @@ function reviewFreshnessSupportsTiers(freshnessApi) {
   }
 }
 
-// Machine walk tier for a queue entry: v4 `tier`, else the legacy v3
-// `state` mapping (`resurfaced` reads as the RETURNED tier). Returns "".
+// Project/reference tracking review (ledger-tools freshness capability
+// `trackerReview`). Legacy v3/v4 queues keep working when the
+// capability is absent: they never carry `projects` entries, and every
+// branch below treats a missing capability as "no project detail".
+function reviewFreshnessSupportsTrackers(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) && freshnessApi.trackerReview === true
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+// Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
+// tracker tier), else the legacy v3 `state` mapping (`resurfaced`
+// reads as the RETURNED tier). Returns "".
 function reviewEntryMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
@@ -29739,6 +29754,7 @@ function reviewEntryMachineTier(entry) {
       : "";
   if (
     tier === "new" ||
+    tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
     tier === "returned" ||
@@ -29783,6 +29799,7 @@ function reviewEntryHasTierRanks(entry) {
 function reviewIsCommitmentTier(tier) {
   return (
     tier === "new" ||
+    tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
     tier === "returned"
@@ -30607,21 +30624,51 @@ function resolveReviewQueueLine(content, entry) {
 
 // Tier-aware jump notice. v4 entries (with per-tier ranks) read
 // `Review {rank}/{total} · {TIER} {tierRank}/{tierTotal} · {detail}`:
-// NEW has no detail; PENDING/NEXT name the confirmation age; RETURNED
-// names the return date; ROTTEN names the overdue age and interval (or
-// `due today`). Lane tiers add a second line with the keep/release/today
-// actions. Legacy v3 entries keep today's state text.
+// NEW has no detail; PROJECTS names the empty-project confirmation;
+// PENDING/NEXT name the confirmation age; RETURNED names the return
+// date; ROTTEN names the overdue age and interval (or `due today`).
+// Lane tiers add a second line with the keep/release/today actions.
+// Legacy v3 entries keep today's state text.
 function buildReviewJumpNotice(entry, rank, total, options = {}) {
   const todayText =
     options && typeof options.todayText === "string"
       ? options.todayText
       : null;
+  const trackers =
+    options && typeof options.trackers === "boolean"
+      ? options.trackers
+      : true;
   if (reviewEntryHasTierRanks(entry)) {
     const label = reviewEntryTierLabel(entry) || "REVIEW";
     const tier = reviewEntryMachineTier(entry);
     const head = `Review ${rank}/${total} · ${label} ${entry.tierRank}/${entry.tierTotal}`;
     let detail = "";
-    if (tier === "pending" || tier === "next") {
+    if (tier === "projects" && trackers) {
+      const fresh =
+        entry && typeof entry.fresh === "string" && entry.fresh
+          ? entry.fresh
+          : null;
+      const interval =
+        entry && Number.isInteger(entry.interval) ? entry.interval : null;
+      const every = interval !== null ? ` · every ${interval}d` : "";
+      if (!fresh) {
+        detail = `No Ready tasks in this project · never confirmed${every}`;
+      } else {
+        const overdue =
+          entry && Number.isFinite(entry.daysOverdue)
+            ? Math.max(0, Math.floor(entry.daysOverdue))
+            : null;
+        const lead =
+          overdue === null
+            ? entry && typeof entry.dueOn === "string" && entry.dueOn
+              ? `due ${reviewShortDate(entry.dueOn)}`
+              : "due"
+            : overdue < 1
+              ? "due today"
+              : `${overdue}d overdue`;
+        detail = `No Ready tasks in this project · ${lead} · confirmed ${reviewShortDate(fresh)}${every}`;
+      }
+    } else if (tier === "pending" || tier === "next") {
       detail = reviewLaneConfirmedDetail(entry, todayText);
     } else if (tier === "returned") {
       const since =
@@ -33482,6 +33529,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     let notice = buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
       wrapped: plan.wrapped,
       todayText,
+      trackers: reviewFreshnessSupportsTrackers(api),
     });
     // A forward step out of the commitments into ROTTEN names the
     // boundary (v4 tier entries only; v3 keeps the plain jump notice).
@@ -46431,6 +46479,7 @@ module.exports.helpers = {
   readLaneBudgets,
   getReviewFreshnessApi,
   reviewFreshnessSupportsTiers,
+  reviewFreshnessSupportsTrackers,
   reviewEntryMachineTier,
   reviewEntryTierLabel,
   reviewQueueEntryKey,

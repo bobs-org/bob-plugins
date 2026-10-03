@@ -731,12 +731,13 @@ test("active decision due: data stays truthful, leaf stays gated", () => {
   assert.equal(model.tone, "due");
   assert.equal(model.keeps, 3);
   assert.equal(model.decide, true);
-  // No leaf until the decision-card phase ships its card capability:
-  // the capsule keeps the refresh glyph and the existing key hint.
+  // No card capability here (mixed-version shape): the capsule keeps the
+  // refresh glyph, the existing key hint, and counting-only wording — never
+  // a promise the installed nav cannot keep. The decision-card phase owns
+  // the capable variants (leaf, `Alt+F to decide`, "asks" wording).
   assert.equal(model.glyph, "refresh");
-  assert.ok(
-    model.tooltip.includes("Kept 3 reviews in a row · Bob asks at 3"),
-  );
+  assert.ok(model.tooltip.includes("Kept 3 reviews in a row"));
+  assert.ok(!model.tooltip.includes("Bob asks at"));
   assert.ok(model.tooltip.endsWith("Alt+F to confirm"));
 });
 

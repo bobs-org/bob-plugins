@@ -3352,7 +3352,7 @@ function buildBatchPriorityRollPreviewModel(summary) {
 // helpers. Composes the existing priority roll/decay planner, the refresh
 // presets, and the managed Schedule/Cancel Log insertion planners into one
 // stable, previewed card model. The card itself (interaction, guarded commit,
-// batch skip) lands in decision-card; this planner rolls every displayed date
+// batch skip) landed in decision-card; this planner rolls every displayed date
 // exactly once so approval can persist the preview without re-rolling.
 //
 // Inputs: exact target preimages (content/taskLine/rawLine), parsed keeps,
@@ -3939,6 +3939,594 @@ function planFreshnessDecayCard(options = {}) {
     keep,
     levels,
   });
+}
+
+// Decision card and review-walk integration (`docs/freshness.md` §2a,
+// decision-card phase). The trigger is a single source-task
+// Alt+F/Alt+Shift+F with exact eligibility and a pre-write `decide`
+// row once the rollout is active; the press opens the card and writes
+// nothing. Counted source sessions and all Task Link sessions never
+// open cards: exact at-limit targets skip without changing
+// fresh/count. Pure unless noted; never throws.
+
+// The day the keep-streak decision machinery activates, in the vault's
+// local calendar. Rollout policy, not an editable config knob.
+// Mirrors `decay_active_from` in `src/native/config/freshness.rs` and
+// `FRESHNESS_DECAY_ACTIVE_FROM` in bob-ledger-tools.
+const FRESHNESS_DECAY_ACTIVE_FROM = "2026-10-19";
+
+// The review-walk decision-card capability ledger-tools feature-detects
+// (`api.freshnessDecayCard.version >= 1`). Exposed on the plugin api at
+// load; removed again on unload so marks cannot promise an absent card.
+// Bumped only for a breaking card-contract change.
+const FRESHNESS_DECAY_CARD_VERSION = 1;
+const FRESHNESS_DECAY_CARD_CAPABILITY = Object.freeze({
+  version: FRESHNESS_DECAY_CARD_VERSION,
+});
+
+// Whether the decision machinery may ask for `todayText` under `decay`
+// (`{ enabled }`): the rollout date is reached and decay is not off.
+// `decay: false` keeps counting/display but never asks or skips. The
+// per-row `decide` flag already encodes this; this predicate covers
+// callers without a resolved row. Never throws.
+function freshnessDecayCardActive(todayText, decay) {
+  try {
+    const today = normalizeBulletPropertyValue(todayText);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+      return false;
+    }
+    if (decay && typeof decay === "object" && decay.enabled === false) {
+      return false;
+    }
+    return today >= FRESHNESS_DECAY_ACTIVE_FROM;
+  } catch (error) {
+    return false;
+  }
+}
+
+// True when a pre-write queue row says a choice is due — never permission
+// to execute an action. Pre-v5 rows carry no flag and never decide.
+function isFreshnessDecayDecisionEntry(entry) {
+  try {
+    return Boolean(entry) && entry.decide === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Partition resolved stamp entries into writes and decision skips:
+// `resolved` is `[{ target, match }]` with `match` a
+// `matchFreshStampExactEntry` result. An exact, due, at-limit row skips
+// without changing fresh/count; everything else stamps (counted only
+// when exactly eligible). Skip is a named decision outcome, not a
+// swallowed write failure. Returns `{ stamp, skipped }`. Never throws.
+function partitionFreshStampDecisionSkips(resolved) {
+  try {
+    const stamp = [];
+    const skipped = [];
+    for (const item of Array.isArray(resolved) ? resolved : []) {
+      const match = item ? item.match : null;
+      if (
+        match &&
+        match.ok === true &&
+        isFreshnessDecayDecisionEntry(match.entry)
+      ) {
+        skipped.push(item.target);
+      } else {
+        stamp.push(item.target);
+      }
+    }
+    return Object.freeze({ stamp: Object.freeze(stamp), skipped: Object.freeze(skipped) });
+  } catch (error) {
+    const targets = [];
+    for (const item of Array.isArray(resolved) ? resolved : []) {
+      if (item && item.target !== undefined) {
+        targets.push(item.target);
+      }
+    }
+    return Object.freeze({ stamp: Object.freeze(targets), skipped: Object.freeze([]) });
+  }
+}
+
+// The skip tail appended to a Fresh notice when some targets needed a
+// decision (`1 needs a decision`), or "" when none skipped. Skipped
+// targets never inflate upkeep and never enter anchor exclusions.
+function formatFreshStampSkipTail(skipped) {
+  try {
+    const count = Math.floor(numericOrDefault(skipped, Number.NaN));
+    if (!Number.isInteger(count) || count <= 0) {
+      return "";
+    }
+    return count === 1 ? " · 1 needs a decision" : ` · ${count} need a decision`;
+  } catch (error) {
+    return "";
+  }
+}
+
+// The standalone notice when every target skipped: nothing was written,
+// and the review walk reaches the decision later.
+function formatFreshStampSkippedNotice(skipped) {
+  try {
+    const count = Math.floor(numericOrDefault(skipped, Number.NaN));
+    if (!Number.isInteger(count) || count <= 0) {
+      return "Could not update task; no tasks were updated";
+    }
+    const tasks = count === 1 ? "1 task" : `${count} tasks`;
+    const verb = count === 1 ? "needs" : "need";
+    return `${tasks} ${verb} a decision · the review walk reaches it later`;
+  } catch (error) {
+    return "Could not update task; no tasks were updated";
+  }
+}
+
+// Cursor placement for Reword: the end of the task body, before trailing
+// metadata (`[key:: v]` / `(key:: v)` fields, `#tags`, `^block-id`), so
+// editing starts on the wording and the count restarts from the commit.
+// Falls back to the trimmed line end. Never throws.
+function freshnessDecayRewordCursorCh(line) {
+  try {
+    const text = String(line || "");
+    // `#task` is the global filter token, not metadata: the cursor belongs
+    // after the wording, never wedged between the checkbox and `#task`.
+    const pattern = /[ \t]+(?:\[[A-Za-z][A-Za-z0-9_-]*\s*::|\([A-Za-z][A-Za-z0-9_-]*\s*::|#(?!task(?:[\s]|$))[^\s#][^\s]*|\^[A-Za-z0-9-]+[ \t]*$)/;
+    const match = pattern.exec(text);
+    if (match && Number.isInteger(match.index) && match.index > 0) {
+      return match.index;
+    }
+    return text.replace(/[ \t]+$/, "").length;
+  } catch (error) {
+    return String(line || "").length;
+  }
+}
+
+// "captured 6 weeks ago" from a `[created:: YYYY-MM-DD]` value for the
+// card context line. Null when created is unavailable — age is optional.
+// Never throws.
+function formatFreshnessDecayCapturedAge(createdValue, todayText) {
+  try {
+    const created = normalizeBulletPropertyValue(createdValue);
+    const today = normalizeBulletPropertyValue(todayText);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(created) || !/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+      return null;
+    }
+    const start = new Date(created + "T00:00:00");
+    const end = new Date(today + "T00:00:00");
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+      return null;
+    }
+    const days = Math.round((end.getTime() - start.getTime()) / 86_400_000);
+    if (!Number.isInteger(days) || days < 0) {
+      return null;
+    }
+    if (days === 0) {
+      return "captured today";
+    }
+    if (days === 1) {
+      return "captured yesterday";
+    }
+    if (days < 14) {
+      return `captured ${days} days ago`;
+    }
+    const weeks = Math.floor(days / 7);
+    return weeks === 1 ? "captured 1 week ago" : `captured ${weeks} weeks ago`;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The first configured priority-ladder property (`values === "priority"`),
+// or null. Priority validity resolves against this loader, never a second
+// hard-coded table. Never throws.
+function findFreshnessDecayPriorityProperty(config) {
+  try {
+    const properties =
+      config && Array.isArray(config.properties) ? config.properties : [];
+    return (
+      properties.find(
+        (candidate) => candidate && candidate.values === "priority",
+      ) || null
+    );
+  } catch (error) {
+    return null;
+  }
+}
+
+// The effective review interval for a decision card, in days: the
+// ledger-resolved interval for the queue row, else the line's
+// `[refresh:: N]`, else the note's `task_refresh`, else the configured
+// interval, else 7. Never throws.
+function resolveFreshnessDecayIntervalDays(api, entry, rawLine, content) {
+  try {
+    if (api && typeof api.intervalFor === "function" && entry) {
+      const resolved = api.intervalFor(entry);
+      if (
+        resolved &&
+        Number.isInteger(resolved.days) &&
+        resolved.days >= 1 &&
+        resolved.days <= 365
+      ) {
+        return resolved.days;
+      }
+    }
+  } catch (error) {
+    // Fall through to the local chain below.
+  }
+  try {
+    const lineDays = parseRefreshDaysFromLine(rawLine);
+    if (Number.isInteger(lineDays)) {
+      return lineDays;
+    }
+  } catch (error) {
+    // Fall through to the note chain below.
+  }
+  try {
+    const noteDays = parseNoteRefreshDays(getNoteTaskRefreshRaw(content));
+    if (Number.isInteger(noteDays)) {
+      return noteDays;
+    }
+  } catch (error) {
+    // Fall through to the configured interval below.
+  }
+  try {
+    if (api && typeof api.config === "function") {
+      const config = api.config();
+      if (config && Number.isInteger(config.interval) && config.interval >= 1 && config.interval <= 365) {
+        return config.interval;
+      }
+    }
+  } catch (error) {
+    // Fall through to the default below.
+  }
+  return 7;
+}
+
+// One decision-card row: `{ key, action, label, detail, available,
+// unavailableReason, recommended }`. `action` is the commit key the
+// modal hands back (`notNow`, `lessOften`, `reword`, `drop`, `keep`,
+// or `level:N`). Pure; never throws.
+function buildFreshnessDecayCardRows(plan) {
+  try {
+    const source = plan && typeof plan === "object" ? plan : {};
+    const keeps = normalizeFreshnessDecayKeepsCount(source.keeps);
+    const keepNoun = keeps === 1 ? "keep" : "keeps";
+    const backPhrase = (windowText, offset) => {
+      const clean = normalizeBulletPropertyValue(windowText).replace(
+        /\*\*/g,
+        "",
+      );
+      const windowed = /^in (\d+) (\([^)]*\)) days$/.exec(clean);
+      if (windowed) {
+        return `back in ${windowed[1]} days ${windowed[2]}`;
+      }
+      if (clean) {
+        return `back ${clean}`;
+      }
+      return Number.isInteger(offset) ? `back in ${offset} days` : "back";
+    };
+    const rows = [];
+    const notNow = source.notNow && typeof source.notNow === "object" ? source.notNow : {};
+    if (notNow.available === true) {
+      rows.push(
+        Object.freeze({
+          key: "Enter",
+          action: "notNow",
+          label: "Not now",
+          detail: `${normalizeBulletPropertyValue(notNow.fromLabel) || "P0"} → ${normalizeBulletPropertyValue(notNow.levelLabel)} · ${backPhrase(notNow.windowText, notNow.offset)}`,
+          available: true,
+          unavailableReason: null,
+          recommended: true,
+        }),
+      );
+    } else {
+      rows.push(
+        Object.freeze({
+          key: "Enter",
+          action: "notNow",
+          label: "Not now",
+          detail: normalizeBulletPropertyValue(notNow.unavailableReason) || "Not now is unavailable",
+          available: false,
+          unavailableReason: normalizeBulletPropertyValue(notNow.unavailableReason) || "Not now is unavailable",
+          recommended: false,
+        }),
+      );
+    }
+    const lessOften = source.lessOften && typeof source.lessOften === "object" ? source.lessOften : {};
+    if (lessOften.available === true && lessOften.mode === "refresh") {
+      rows.push(
+        Object.freeze({
+          key: "L",
+          action: "lessOften",
+          label: "Less often",
+          detail: `review every ${lessOften.afterDays} days instead of ${lessOften.beforeDays}`,
+          available: true,
+          unavailableReason: null,
+          recommended: false,
+        }),
+      );
+    } else if (lessOften.available === true && lessOften.mode === "picker") {
+      rows.push(
+        Object.freeze({
+          key: "L",
+          action: "lessOften",
+          label: "Less often",
+          detail: `choose every ${lessOften.minDays}–${lessOften.maxDays} days…`,
+          available: true,
+          unavailableReason: null,
+          recommended: false,
+        }),
+      );
+    } else {
+      rows.push(
+        Object.freeze({
+          key: "L",
+          action: "lessOften",
+          label: "Less often",
+          detail: normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable",
+          available: false,
+          unavailableReason: normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable",
+          recommended: false,
+        }),
+      );
+    }
+    rows.push(
+      Object.freeze({
+        key: "E",
+        action: "reword",
+        label: "Reword",
+        detail: "edit the task · start the count over",
+        available: true,
+        unavailableReason: null,
+        recommended: false,
+      }),
+    );
+    rows.push(
+      Object.freeze({
+        key: "D",
+        action: "drop",
+        label: "Drop",
+        detail: `cancel · dropped after ${keeps} ${keepNoun}`,
+        available: true,
+        unavailableReason: null,
+        recommended: false,
+      }),
+    );
+    rows.push(
+      Object.freeze({
+        key: "Alt+F",
+        action: "keep",
+        label: "Keep",
+        detail: "still right · asks again next review",
+        available: true,
+        unavailableReason: null,
+        recommended: false,
+      }),
+    );
+    const levels = Array.isArray(source.levels) ? source.levels : [];
+    levels.forEach((pick, index) => {
+      const entry = pick && typeof pick === "object" ? pick : {};
+      const label = normalizeBulletPropertyValue(entry.label) || `P${index + 1}`;
+      if (entry.available === true) {
+        rows.push(
+          Object.freeze({
+            key: String(index + 1),
+            action: `level:${index}`,
+            label,
+            detail: backPhrase(entry.windowText, entry.offset),
+            available: true,
+            unavailableReason: null,
+            recommended: false,
+          }),
+        );
+      } else {
+        rows.push(
+          Object.freeze({
+            key: String(index + 1),
+            action: `level:${index}`,
+            label,
+            detail: normalizeBulletPropertyValue(entry.unavailableReason) || `${label} is unavailable`,
+            available: false,
+            unavailableReason: normalizeBulletPropertyValue(entry.unavailableReason) || `${label} is unavailable`,
+            recommended: false,
+          }),
+        );
+      }
+    });
+    return Object.freeze(rows);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// The review-walk decision card (`docs/freshness.md` §2a): a small
+// keyboard-first modal over one due Ready task at its keep limit. Enter
+// defers but never cancels; Esc changes nothing. The opening gesture is
+// consumed — key repeat, bubbling, and a double callback cannot approve
+// or apply twice — and the card never opens nested cards. Selection,
+// mouse, and keyboard activate the same action. Never throws out of the
+// callbacks; dismissal writes nothing.
+class FreshnessDecayCardModal extends Modal {
+  constructor(app, options) {
+    super(app);
+    const settings = options && typeof options === "object" ? options : {};
+    this.decayTitle = String(settings.title || "Kept reviews in a row");
+    this.decaySubtitle = String(settings.subtitle || "");
+    this.decayRows = Array.isArray(settings.rows) ? settings.rows : [];
+    this.onChoose =
+      typeof settings.onChoose === "function" ? settings.onChoose : null;
+    this.onDismiss =
+      typeof settings.onDismiss === "function" ? settings.onDismiss : null;
+    this.settled = false;
+    this.rowEls = [];
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.addClass("bob-decay-card-modal");
+    contentEl.addClass("bob-decay-card");
+    const header = contentEl.createDiv({ cls: "bob-decay-card-header" });
+    const icon = header.createDiv({ cls: "bob-decay-card-icon" });
+    applyIcon(icon, "leaf");
+    const headerText = header.createDiv({ cls: "bob-decay-card-header-text" });
+    headerText.createDiv({ cls: "bob-decay-card-title", text: this.decayTitle });
+    if (this.decaySubtitle) {
+      headerText.createDiv({
+        cls: "bob-decay-card-subtitle",
+        text: this.decaySubtitle,
+      });
+    }
+    const list = contentEl.createDiv({ cls: "bob-decay-card-rows" });
+    this.rowEls = this.decayRows.map((row) => {
+      const rowEl = list.createDiv({
+        cls: "bob-decay-card-row" + (row.available ? "" : " is-unavailable"),
+      });
+      rowEl.setAttribute("role", "button");
+      rowEl.setAttribute(
+        "aria-label",
+        row.available
+          ? `${row.label}: ${row.detail}`
+          : `${row.label} unavailable: ${row.detail}`,
+      );
+      if (row.available) {
+        rowEl.setAttribute("tabindex", "0");
+      } else {
+        rowEl.setAttribute("aria-disabled", "true");
+      }
+      rowEl.createDiv({ cls: "bob-decay-card-key", text: row.key });
+      const body = rowEl.createDiv({ cls: "bob-decay-card-body" });
+      const labelRow = body.createDiv({ cls: "bob-decay-card-label-row" });
+      labelRow.createSpan({ cls: "bob-decay-card-label", text: row.label });
+      if (row.recommended) {
+        labelRow.createSpan({
+          cls: "bob-decay-card-recommended",
+          text: "recommended",
+        });
+      }
+      body.createDiv({ cls: "bob-decay-card-detail", text: row.detail });
+      if (row.available) {
+        rowEl.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.choose(row.action);
+        });
+        rowEl.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            this.choose(row.action);
+          }
+        });
+      }
+      return rowEl;
+    });
+    contentEl.createDiv({
+      cls: "bob-decay-card-footer",
+      text: "Esc changes nothing · 1–4 pick a P-level instead",
+    });
+    contentEl.addEventListener("keydown", (event) => this.handleKey(event));
+    window.setTimeout(() => {
+      const first = this.rowEls.find((rowEl, index) => {
+        const row = this.decayRows[index];
+        return row && row.available;
+      });
+      if (first && typeof first.focus === "function") {
+        first.focus();
+      }
+    }, 0);
+  }
+
+  handleKey(event) {
+    if (!event || this.settled) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.close();
+      return;
+    }
+    // The opening Alt+F (and any held-key repeat) must not approve: only a
+    // fresh, non-repeat Alt+F press chooses Keep.
+    if (event.altKey && (event.code === "KeyF" || event.key === "f" || event.key === "F")) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) {
+        return;
+      }
+      this.choose("keep");
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    if (event.repeat) {
+      return;
+    }
+    const key = String(event.key || "").toLowerCase();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.choose("notNow");
+      return;
+    }
+    if (key === "l") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.choose("lessOften");
+      return;
+    }
+    if (key === "e") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.choose("reword");
+      return;
+    }
+    if (key === "d") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.choose("drop");
+      return;
+    }
+    if (/^[1-4]$/.test(key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.choose(`level:${Number(key) - 1}`);
+    }
+  }
+
+  choose(action) {
+    if (this.settled) {
+      return;
+    }
+    const row = this.decayRows.find((candidate) => candidate && candidate.action === action);
+    if (!row || !row.available) {
+      return;
+    }
+    this.settled = true;
+    const callback = this.onChoose;
+    this.onChoose = null;
+    this.onDismiss = null;
+    try {
+      if (typeof callback === "function") {
+        callback(action);
+      }
+    } finally {
+      this.close();
+    }
+  }
+
+  onClose() {
+    contentElCleanup(this.contentEl);
+    if (!this.settled && typeof this.onDismiss === "function") {
+      try {
+        this.onDismiss();
+      } catch (error) {
+        // Best effort: dismissal writes nothing by construction.
+      }
+    }
+    this.onChoose = null;
+    this.onDismiss = null;
+  }
 }
 
 // Compose the cancel and set-priority plans into one undoable editor
@@ -30893,8 +31481,9 @@ function parseKeepsCount(lineText) {
 // How many stamped entries actually incremented their streak: a counted
 // entry whose after-line keeps is exactly one above the before-line keeps
 // (saturating at 999). Uncounted preserves, same-day counted preserves,
-// and stale-cache mismatches never inflate this number. Never promises
-// `next review asks`: no decision card exists yet.
+// and stale-cache mismatches never inflate this number. Batch notices
+// never promise `next review asks` — only the decision card's Keep does,
+// where the installed card is the active capability.
 function countFreshStampKept(stamped) {
   let kept = 0;
   for (const entry of Array.isArray(stamped) ? stamped : []) {
@@ -31149,8 +31738,13 @@ function createDependencyNavApi(plugin) {
       return Promise.resolve({ ok: false, reason: "api-failed" });
     }
   };
+  // The review-walk decision card (`docs/freshness.md` §2a): present
+  // while the plugin is loaded so ledger-tools marks can promise the
+  // leaf and `Alt+F to decide`. Removed again on unload (see `onunload`)
+  // so marks degrade to counting pips instead of an absent card.
   return Object.freeze({
     version: 1,
+    ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
@@ -31494,6 +32088,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     this.reviewAnchor = null;
+    // At most one review-walk decision card at a time; the guard also
+    // prevents nested cards.
+    this.activeFreshnessDecayCard = null;
     // nav api v1 (`docs/task-dependencies.md` §9): frozen, versioned, never
     // throws. bob-ledger-tools feature-detects `api?.version >= 1`.
     this.api = createDependencyNavApi(this);
@@ -31527,6 +32124,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   onunload() {
+    // Drop the decision-card capability first so ledger-tools marks stop
+    // promising a leaf the moment this plugin unloads (mixed-version and
+    // disable/enable sessions degrade to counting pips without a reset).
+    try {
+      this.activeFreshnessDecayCard = null;
+      this.api = createDependencyNavApi(null);
+    } catch (error) {
+      // Best effort: Obsidian is tearing down.
+    }
     this.cleanupVimJumpHistoryMappings();
     if (this.vimJumpHistory) {
       clearVimJumpHistory(this.vimJumpHistory);
@@ -33608,8 +34214,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // count (`docs/freshness.md` §2a) — including uncounted ones, so the
     // streak is preserved rather than reset. A v5 namespace missing
     // `keepLine` fails without writing; only pre-v5 namespaces fall back
-    // to the old uncounted stamper. No card interception happens here:
-    // counting ships while the decision card does not exist yet.
+    // to the old uncounted stamper. A single exact, due, at-limit target
+    // opens the decision card instead of stamping; counted and Task Link
+    // sessions skip those targets (see `refreshTaskFreshnessOnTasks`).
     if (!freshnessSupportsKeeps(api) && Number(api.version) >= 5) {
       new Notice(REVIEW_FRESHNESS_KEEP_REQUIRED_NOTICE);
       return false;
@@ -33681,7 +34288,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // Every other explicit keep still goes through `keepLine` uncounted so
     // the streak is preserved, never reset.
     const contentLines = splitMarkdownContent(content).lines;
-    const keepTargets = deduplicateFreshStampTargets(
+    const resolved = deduplicateFreshStampTargets(
       session.targets.map((target) => ({
         path: filePath,
         line: target.line,
@@ -33689,18 +34296,115 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       })),
     ).map((target) => {
       const raw = String(contentLines[target.line] || "");
-      const exact = matchFreshStampExactEntry(queueBefore, {
+      const match = matchFreshStampExactEntry(queueBefore, {
         path: target.path,
         line: target.line,
         raw,
       });
       return Object.freeze({
-        line: target.line,
-        path: target.path,
-        raw,
-        counted: exact.ok,
+        target: Object.freeze({
+          line: target.line,
+          path: target.path,
+          raw,
+          counted: match.ok,
+        }),
+        match,
       });
     });
+    // Single source-task trigger: one requested target outside a counted
+    // session, exact eligible with a due choice, opens the card and writes
+    // nothing. A press moving below-limit to limit simply stamps; the next
+    // due press asks.
+    if (
+      options.countExplicit !== true &&
+      resolved.length === 1 &&
+      resolved[0].match.ok === true &&
+      isFreshnessDecayDecisionEntry(resolved[0].match.entry)
+    ) {
+      const opened = await this.maybeOpenFreshnessDecayCard(
+        cm,
+        cursor,
+        content,
+        filePath,
+        resolved[0],
+        queueBefore,
+        {
+          dateText: options.dateText,
+          advance: options.advance === true,
+        },
+      );
+      if (opened) {
+        return true;
+      }
+      // The card cannot render (mixed versions, unusable plan): fall
+      // through to counting so the streak still counts.
+      const fallback = resolved.map((item) => item.target);
+      const fallbackPlan = planFreshStampBatch(
+        content,
+        fallback,
+        options.stamper,
+        options.dateText,
+      );
+      if (!fallbackPlan.ok) {
+        new Notice(freshStampRefusalNotice(fallbackPlan.refusal));
+        return false;
+      }
+      if (
+        cm &&
+        typeof cm.getValue === "function" &&
+        String(cm.getValue() || "") !== content
+      ) {
+        new Notice("Current note changed; no tasks were updated");
+        return false;
+      }
+      const fallbackGuarded = this.getCountedTaskWriteContext(cm, filePath, session);
+      if (!fallbackGuarded.valid || fallbackGuarded.content !== content) {
+        new Notice(
+          fallbackGuarded.valid
+            ? "Active note changed; no tasks were updated"
+            : fallbackGuarded.error,
+        );
+        return false;
+      }
+      if (fallbackPlan.content !== content) {
+        const nextLines = fallbackPlan.content.split(/\r?\n/);
+        const applied = applyEditorContentTransaction(cm, content, fallbackPlan.content, {
+          line: cursor.line,
+          ch: Math.min(
+            Math.max(cursor.ch, 0),
+            String(nextLines[cursor.line] || "").length,
+          ),
+        });
+        if (!applied) {
+          new Notice("Could not update task; no tasks were updated");
+          return false;
+        }
+      }
+      this.finishFreshStamp(
+        queueBefore,
+        countsBefore,
+        fallbackPlan.stamped.map((entry) => ({
+          path: filePath,
+          line: entry.line,
+          raw: entry.before,
+        })),
+        fallbackPlan.stamped,
+        options.dateText,
+      );
+      if (options.advance === true) {
+        return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
+      }
+      return true;
+    }
+    // Batch path: counted sessions skip exact at-limit targets without
+    // changing fresh/count; skipped tasks stay due for the walk later.
+    const partition = partitionFreshStampDecisionSkips(resolved);
+    const keepTargets = partition.stamp;
+    const skipTail = formatFreshStampSkipTail(partition.skipped.length);
+    if (keepTargets.length === 0 && partition.skipped.length > 0) {
+      new Notice(formatFreshStampSkippedNotice(partition.skipped.length));
+      return true;
+    }
     const plan = planFreshStampBatch(
       content,
       keepTargets,
@@ -33752,6 +34456,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       })),
       plan.stamped,
       options.dateText,
+      { skipTail },
     );
     if (options.advance === true) {
       return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
@@ -33811,25 +34516,54 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+    // Task Link sessions never open cards — even a single link. Exact
+    // at-limit targets skip without changing fresh/count; below
+    // threshold they count normally. Skipped targets stay due for the
+    // walk and never enter anchor exclusions.
+    const linkResolved = groups.map((group) => {
+      const groupLines = splitMarkdownContent(group.content).lines;
+      return {
+        group,
+        resolved: group.session.targets.map((target) => {
+          const raw = String(groupLines[target.line] || "");
+          const match = matchFreshStampExactEntry(queueBefore, {
+            path: group.path,
+            line: target.line,
+            raw,
+          });
+          return Object.freeze({
+            target: Object.freeze({
+              line: target.line,
+              path: group.path,
+              raw,
+              counted: match.ok,
+            }),
+            match,
+          });
+        }),
+      };
+    });
+    const linkSkipped = linkResolved.reduce(
+      (count, item) =>
+        count +
+        partitionFreshStampDecisionSkips(item.resolved).skipped.length,
+      0,
+    );
+    const linkStamped = linkResolved.reduce(
+      (count, item) =>
+        count + partitionFreshStampDecisionSkips(item.resolved).stamp.length,
+      0,
+    );
+    const linkSkipTail = formatFreshStampSkipTail(linkSkipped);
+    if (linkStamped === 0 && linkSkipped > 0) {
+      new Notice(formatFreshStampSkippedNotice(linkSkipped));
+      return true;
+    }
     const planned = [];
     const refs = [];
     const stampedAll = [];
-    for (const group of groups) {
-      const groupLines = splitMarkdownContent(group.content).lines;
-      const keepTargets = group.session.targets.map((target) => {
-        const raw = String(groupLines[target.line] || "");
-        const exact = matchFreshStampExactEntry(queueBefore, {
-          path: group.path,
-          line: target.line,
-          raw,
-        });
-        return Object.freeze({
-          line: target.line,
-          path: group.path,
-          raw,
-          counted: exact.ok,
-        });
-      });
+    for (const { group, resolved } of linkResolved) {
+      const keepTargets = partitionFreshStampDecisionSkips(resolved).stamp;
       const plan = planFreshStampBatch(
         group.content,
         keepTargets,
@@ -33861,6 +34595,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       refs,
       stampedAll,
       options.dateText,
+      { skipTail: linkSkipTail },
     );
     if (options.advance === true) {
       return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
@@ -33872,7 +34607,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // the jump reads the queue fresh but continues from the handled entry's
   // surviving successor or predecessor), then show the adjusted-counts
   // Notice on the upkeep meter.
-  finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText) {
+  finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText, extra = {}) {
     const matched = matchFreshStampRefs(queueBefore, refs);
     this.reviewAnchor =
       matched.count > 0
@@ -33909,6 +34644,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // Only actual streak increments tail the notice; preserves, same-day
     // repeats, and stale-cache mismatches report no `kept N×`.
     const kept = countFreshStampKept(stamped);
+    const skipTail =
+      extra && typeof extra.skipTail === "string" ? extra.skipTail : "";
     new Notice(
       buildFreshStampNotice({
         changed,
@@ -33920,8 +34657,811 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             ? null
             : counts.budget,
         kept,
-      }),
+      }) + skipTail,
     );
+  }
+
+  // Decision card: open, revalidate, and commit (`docs/freshness.md` §2a).
+  // The card opens for one exact, due, at-limit source task and writes
+  // nothing until approval. Every approval revalidates the task line,
+  // the local day, the decay config, and the trigger eligibility, then
+  // reuses the previewed plan/date through the existing transactional
+  // writers — one source-note decision is one undo step. Stale inputs
+  // write nothing and rebuild for a fresh choice.
+
+  // Normalized decay policy from the ledger api, with counting defaults
+  // when the namespace is old or throwing. Never throws.
+  readFreshnessDecayPolicy(api) {
+    const fallback = Object.freeze({
+      enabled: true,
+      keeps: 3,
+      enter: null,
+      invalid: false,
+    });
+    try {
+      if (api && typeof api.config === "function") {
+        const config = api.config();
+        const decay =
+          config && config.decay && typeof config.decay === "object"
+            ? config.decay
+            : {};
+        return Object.freeze({
+          enabled: decay.enabled !== false,
+          keeps:
+            Number.isInteger(decay.keeps) && decay.keeps >= 0
+              ? decay.keeps
+              : 3,
+          enter:
+            typeof decay.enter === "string" && decay.enter !== ""
+              ? decay.enter
+              : null,
+          invalid: config ? config.invalid === true : false,
+        });
+      }
+    } catch (error) {
+      // Fall through to the counting defaults below.
+    }
+    return fallback;
+  }
+
+  // Build the card context for one resolved single-task trigger, or null
+  // when the card cannot render (mixed versions, unusable plan) so the
+  // caller falls back to counting. Never throws.
+  buildFreshnessDecayCardCtx(cm, cursor, content, filePath, resolved, queueBefore, options) {
+    try {
+      const api = getReviewFreshnessApi(this.app);
+      if (!api || !freshnessSupportsKeeps(api)) {
+        return null;
+      }
+      const settings = options && typeof options === "object" ? options : {};
+      const dateText = String(settings.dateText || "");
+      const line = resolved && resolved.target ? resolved.target.line : NaN;
+      const raw = resolved && resolved.target ? String(resolved.target.raw || "") : "";
+      if (!Number.isInteger(line) || !raw || !/^\d{4}-\d{2}-\d{2}$/.test(dateText)) {
+        return null;
+      }
+      const match = resolved.match;
+      const entry = match && match.entry ? match.entry : null;
+      const decay = this.readFreshnessDecayPolicy(api);
+      const property = findFreshnessDecayPriorityProperty(this.config);
+      const keeps = parseKeepsCount(raw);
+      const intervalDays = resolveFreshnessDecayIntervalDays(api, entry, raw, content);
+      const schedulesName =
+        property && typeof property.schedules === "string" ? property.schedules : "";
+      const scheduledField =
+        schedulesName ? findBulletPropertyField(raw, schedulesName) : null;
+      const currentScheduled = normalizeBulletPropertyValue(
+        scheduledField ? scheduledField.value : "",
+      );
+      const priorityField =
+        property && typeof property.name === "string"
+          ? findBulletPropertyField(raw, property.name)
+          : null;
+      const currentValue = normalizeBulletPropertyValue(
+        priorityField ? priorityField.value : "",
+      );
+      const plan = planFreshnessDecayCard({
+        keeps,
+        intervalDays,
+        freshnessDecay: {
+          enabled: decay.enabled,
+          keeps: decay.keeps,
+          enter: decay.enter,
+          invalid: decay.invalid,
+        },
+        property,
+        baseDate: new Date(),
+        random: Math.random,
+        currentScheduled,
+        content: String(content || ""),
+        taskLine: line,
+      });
+      if (!plan || plan.valid !== true) {
+        return null;
+      }
+      const taskText = cleanTaskDisplayText(raw);
+      const noteBase = String(filePath || "").split("/").pop() || String(filePath || "");
+      const createdField = findBulletPropertyField(raw, "created");
+      const age = formatFreshnessDecayCapturedAge(
+        createdField ? createdField.value : "",
+        dateText,
+      );
+      const subtitle = age
+        ? `${taskText} · ${noteBase} · ${age}`
+        : `${taskText} · ${noteBase}`;
+      return Object.freeze({
+        cm,
+        filePath: String(filePath || ""),
+        line,
+        rawLine: raw,
+        invokeCh: cursor && Number.isInteger(cursor.ch) ? cursor.ch : 0,
+        dateText,
+        advance: settings.advance === true,
+        queueBefore: Array.isArray(queueBefore) ? queueBefore : [],
+        entry,
+        keeps,
+        limit: decay.keeps,
+        intervalDays,
+        currentScheduled,
+        currentValue,
+        decay,
+        plan,
+        rows: buildFreshnessDecayCardRows(plan),
+        subtitle,
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Open the card for one trigger. True when the gesture is consumed
+  // (card open, or a notice explains why nothing was written); false
+  // when the caller should fall back to counting.
+  async maybeOpenFreshnessDecayCard(cm, cursor, content, filePath, resolved, queueBefore, options) {
+    try {
+      if (this.activeFreshnessDecayCard) {
+        new Notice("A decision card is already open");
+        return true;
+      }
+      const cardCtx = this.buildFreshnessDecayCardCtx(
+        cm,
+        cursor,
+        content,
+        filePath,
+        resolved,
+        queueBefore,
+        options,
+      );
+      if (!cardCtx) {
+        return false;
+      }
+      return this.openFreshnessDecayCard(cardCtx);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  openFreshnessDecayCard(cardCtx) {
+    try {
+      if (!cardCtx || this.activeFreshnessDecayCard) {
+        return false;
+      }
+      const modal = new FreshnessDecayCardModal(this.app, {
+        title: cardCtx.plan.title || `Kept ${cardCtx.keeps} reviews in a row`,
+        subtitle: cardCtx.subtitle,
+        rows: cardCtx.rows,
+        onChoose: (action) => {
+          this.activeFreshnessDecayCard = null;
+          void this.applyFreshnessDecayCardChoice(cardCtx, action);
+        },
+        onDismiss: () => {
+          // Esc changes nothing: no writes, no log entries, no
+          // accounting, no walk advance; the anchor is retained.
+          this.activeFreshnessDecayCard = null;
+        },
+      });
+      this.activeFreshnessDecayCard = modal;
+      modal.open();
+      return true;
+    } catch (error) {
+      this.activeFreshnessDecayCard = null;
+      return false;
+    }
+  }
+
+  // Revalidate the previewed plan against live state immediately before
+  // commit: the task line, the local day, the decay config, the trigger
+  // eligibility, and the plan inputs (keeps, interval, scheduled and
+  // priority values). Child-log positions are recomputed at commit, so a
+  // log edit elsewhere never misplaces an entry. Returns `{ ok, live }`.
+  revalidateFreshnessDecayCard(cardCtx) {
+    const stale = (reason) => ({ ok: false, reason, live: null });
+    try {
+      if (!cardCtx || !cardCtx.cm || typeof cardCtx.cm.getValue !== "function") {
+        return stale("no-editor");
+      }
+      const cm = cardCtx.cm;
+      const liveContent = String(cm.getValue() || "");
+      const liveLine = getEditorLine(cm, cardCtx.line);
+      if (liveLine === null || liveLine !== cardCtx.rawLine) {
+        return stale("task-line");
+      }
+      if (this.getFreshnessDateText() !== cardCtx.dateText) {
+        return stale("local-day");
+      }
+      const api = getReviewFreshnessApi(this.app);
+      if (!api || !freshnessSupportsKeeps(api)) {
+        return stale("freshness-api");
+      }
+      const decay = this.readFreshnessDecayPolicy(api);
+      if (
+        decay.enabled !== cardCtx.decay.enabled ||
+        decay.keeps !== cardCtx.decay.keeps ||
+        decay.enter !== cardCtx.decay.enter ||
+        decay.invalid !== cardCtx.decay.invalid
+      ) {
+        return stale("config");
+      }
+      const queue = this.readFreshnessQueue(api);
+      const match = matchFreshStampExactEntry(queue, {
+        path: cardCtx.filePath,
+        line: cardCtx.line,
+        raw: liveLine,
+      });
+      if (match.ok !== true || !isFreshnessDecayDecisionEntry(match.entry)) {
+        return stale("eligibility");
+      }
+      if (parseKeepsCount(liveLine) !== cardCtx.keeps) {
+        return stale("keeps");
+      }
+      if (
+        resolveFreshnessDecayIntervalDays(api, match.entry, liveLine, liveContent) !==
+        cardCtx.intervalDays
+      ) {
+        return stale("interval");
+      }
+      const property = findFreshnessDecayPriorityProperty(this.config);
+      const schedulesName =
+        property && typeof property.schedules === "string" ? property.schedules : "";
+      const scheduledField =
+        schedulesName ? findBulletPropertyField(liveLine, schedulesName) : null;
+      if (
+        normalizeBulletPropertyValue(scheduledField ? scheduledField.value : "") !==
+        cardCtx.currentScheduled
+      ) {
+        return stale("scheduled");
+      }
+      const priorityField =
+        property && typeof property.name === "string"
+          ? findBulletPropertyField(liveLine, property.name)
+          : null;
+      if (
+        normalizeBulletPropertyValue(priorityField ? priorityField.value : "") !==
+        cardCtx.currentValue
+      ) {
+        return stale("priority");
+      }
+      return {
+        ok: true,
+        reason: null,
+        live: Object.freeze({ content: liveContent, lineText: liveLine, queue }),
+      };
+    } catch (error) {
+      return stale("unexpected");
+    }
+  }
+
+  // Rebuild for a fresh choice after a stale commit: new preview, new
+  // card. False when the task no longer decides — the next press stamps.
+  async reopenFreshnessDecayCard(cardCtx) {
+    try {
+      const cm = cardCtx ? cardCtx.cm : null;
+      if (!cm || typeof cm.getValue !== "function") {
+        return false;
+      }
+      const content = String(cm.getValue() || "");
+      const liveLine = getEditorLine(cm, cardCtx.line);
+      if (liveLine === null) {
+        return false;
+      }
+      const api = getReviewFreshnessApi(this.app);
+      const queue = this.readFreshnessQueue(api);
+      const match = matchFreshStampExactEntry(queue, {
+        path: cardCtx.filePath,
+        line: cardCtx.line,
+        raw: liveLine,
+      });
+      if (match.ok !== true || !isFreshnessDecayDecisionEntry(match.entry)) {
+        return false;
+      }
+      const cursor = getEditorCursor(cm) || { line: cardCtx.line, ch: 0 };
+      const next = this.buildFreshnessDecayCardCtx(
+        cm,
+        cursor,
+        content,
+        cardCtx.filePath,
+        {
+          target: Object.freeze({
+            line: cardCtx.line,
+            path: cardCtx.filePath,
+            raw: liveLine,
+            counted: true,
+          }),
+          match,
+        },
+        queue,
+        { dateText: cardCtx.dateText, advance: cardCtx.advance },
+      );
+      if (!next) {
+        return false;
+      }
+      return this.openFreshnessDecayCard(next);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async applyFreshnessDecayCardChoice(cardCtx, action) {
+    this.activeFreshnessDecayCard = null;
+    try {
+      const check = this.revalidateFreshnessDecayCard(cardCtx);
+      if (!check.ok) {
+        // Write nothing; rebuild for a fresh choice rather than applying
+        // unseen dates or overwriting another edit.
+        new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
+        await this.reopenFreshnessDecayCard(cardCtx);
+        return false;
+      }
+      const key = String(action || "");
+      if (key === "notNow") {
+        return await this.applyFreshnessDecayCardDeferral(
+          cardCtx,
+          check.live,
+          cardCtx.plan.notNow,
+        );
+      }
+      if (key.startsWith("level:")) {
+        const index = Number(key.slice("level:".length));
+        const pick =
+          cardCtx.plan.levels && Number.isInteger(index)
+            ? cardCtx.plan.levels[index]
+            : null;
+        return await this.applyFreshnessDecayCardDeferral(cardCtx, check.live, pick);
+      }
+      if (key === "lessOften") {
+        return await this.applyFreshnessDecayCardLessOften(cardCtx, check.live);
+      }
+      if (key === "reword") {
+        return await this.applyFreshnessDecayCardReword(cardCtx, check.live);
+      }
+      if (key === "drop") {
+        return await this.applyFreshnessDecayCardDrop(cardCtx, check.live);
+      }
+      if (key === "keep") {
+        return await this.applyFreshnessDecayCardKeep(cardCtx, check.live);
+      }
+      return false;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  // Walk bookkeeping shared by applied decisions: the handled entry keys
+  // the walk anchor (the Tasks cache lags, so the jump reads the queue
+  // fresh but continues from the surviving successor or predecessor).
+  rememberFreshnessDecayCardAnchor(cardCtx) {
+    try {
+      const matched = matchFreshStampRefs(cardCtx.queueBefore, [
+        { path: cardCtx.filePath, line: cardCtx.line, raw: cardCtx.rawLine },
+      ]);
+      this.reviewAnchor =
+        matched.count > 0
+          ? buildReviewAnchor(cardCtx.queueBefore, matched.keys, matched.rank)
+          : null;
+    } catch (error) {
+      this.reviewAnchor = null;
+    }
+  }
+
+  // Successful Alt+Shift+F outcomes advance exactly once after commit —
+  // except Reword, which leaves focus for editing, and failed or
+  // dismissed secondary pickers, which stay due.
+  async maybeAdvanceFreshnessDecayWalk(cardCtx, action) {
+    try {
+      if (cardCtx && cardCtx.advance === true && action !== "reword") {
+        return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
+      }
+    } catch (error) {
+      return false;
+    }
+    return true;
+  }
+
+  // Resolve a previewed deferral pick to its configured level. Unknown
+  // labels (or a missing ladder) refuse rather than inventing a level.
+  resolveFreshnessDecayCardLevel(pick) {
+    try {
+      const property = findFreshnessDecayPriorityProperty(this.config);
+      if (!property || !Array.isArray(property.levels)) {
+        return null;
+      }
+      const label = normalizeBulletPropertyValue(pick ? pick.levelLabel : "");
+      if (!label) {
+        return null;
+      }
+      return (
+        property.levels.find(
+          (level) =>
+            level && normalizeBulletPropertyValue(level.label) === label,
+        ) || null
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Not now (Enter) and explicit 1–4 picks: preview and apply a deferral
+  // through the existing priority writer. The previewed date persists
+  // (what you see is what you get); Enter never cancels, including past
+  // the last ladder level, where the planner already substituted a
+  // same-level roll for this card only. Stamps and clears keeps through
+  // the writer's own freshness step. One undo step.
+  async applyFreshnessDecayCardDeferral(cardCtx, live, pick) {
+    try {
+      if (!pick || pick.available !== true) {
+        new Notice("That choice is unavailable; nothing was written");
+        return false;
+      }
+      const property = findFreshnessDecayPriorityProperty(this.config);
+      if (!property) {
+        new Notice("No priority ladder is configured; nothing was written");
+        return false;
+      }
+      const level = this.resolveFreshnessDecayCardLevel(pick);
+      if (!level) {
+        new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
+        return false;
+      }
+      const ok = await this.setBulletPriorityValue(
+        cardCtx.cm,
+        { line: cardCtx.line, ch: 0 },
+        cardCtx.filePath,
+        cardCtx.rawLine,
+        property,
+        level,
+        {
+          baseDate: getLocalDateStart(new Date()),
+          precomputedRoll: { date: pick.date, offset: pick.offset },
+          scheduleReasonOverride: pick.reason,
+        },
+      );
+      if (!ok) {
+        return false;
+      }
+      this.rememberFreshnessDecayCardAnchor(cardCtx);
+      await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "deferral");
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  // Less often (L): the next refresh preset strictly above the current
+  // interval, stamped and cleared, with a dated review-reason Schedule
+  // Log entry. At 90+ the existing custom refresh picker takes over,
+  // constrained to a longer value ≤365; at 365 the row is unavailable.
+  // One source-note decision is one undo step.
+  async applyFreshnessDecayCardLessOften(cardCtx, live) {
+    try {
+      const lessOften = cardCtx.plan.lessOften;
+      if (!lessOften || lessOften.available !== true) {
+        new Notice("That choice is unavailable; nothing was written");
+        return false;
+      }
+      if (lessOften.mode === "picker") {
+        this.openFreshnessDecayLessOftenPicker(cardCtx);
+        return true;
+      }
+      if (lessOften.mode !== "refresh" || !Number.isInteger(lessOften.afterDays)) {
+        new Notice("That choice is unavailable; nothing was written");
+        return false;
+      }
+      return await this.applyFreshnessDecayLessOftenDays(
+        cardCtx,
+        live,
+        lessOften.beforeDays,
+        lessOften.afterDays,
+      );
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  // Commit a Less often interval: refresh-set (which stamps and clears)
+  // plus the dated review-reason entry in one editor transaction.
+  async applyFreshnessDecayLessOftenDays(cardCtx, live, beforeDays, days) {
+    try {
+      if (
+        !Number.isInteger(days) ||
+        days <= beforeDays ||
+        days < 1 ||
+        days > 365
+      ) {
+        new Notice("That choice is unavailable; nothing was written");
+        return false;
+      }
+      const refresher = this.getFreshnessRefreshLine();
+      if (typeof refresher !== "function") {
+        new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
+        return false;
+      }
+      const reason = formatFreshnessDecisionLessOftenReason({
+        beforeDays,
+        afterDays: days,
+        keeps: cardCtx.keeps,
+      });
+      if (!reason) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      const nextLine = applyFreshRefreshLine(
+        live.lineText,
+        refresher,
+        days,
+        cardCtx.dateText,
+      );
+      if (nextLine === live.lineText) {
+        new Notice("Refresh unchanged; nothing was written");
+        return false;
+      }
+      const logPlan = planScheduleLogEntry(live.content, cardCtx.line, {
+        from: cardCtx.currentScheduled,
+        to: cardCtx.currentScheduled,
+        reason,
+      });
+      const split = splitMarkdownContent(live.content);
+      const lines = split.lines.slice();
+      lines[cardCtx.line] = nextLine;
+      applyScheduleLogEntryToLines(lines, logPlan);
+      const applied = applyEditorContentTransaction(
+        cardCtx.cm,
+        live.content,
+        lines.join(split.lineEnding),
+        {
+          line: cardCtx.line,
+          ch: Math.min(cardCtx.invokeCh, nextLine.length),
+        },
+      );
+      if (!applied) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      this.rememberFreshnessDecayCardAnchor(cardCtx);
+      new Notice(`Less often · every ${beforeDays} → ${days} days · kept ${cardCtx.keeps}×`);
+      await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "lessOften");
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  // Less often at 90+: the existing custom refresh picker, constrained to
+  // a longer value ≤365. The picker only selects; the commit revalidates
+  // and writes through the same single-transaction path as presets. A
+  // dismissed picker stays due and never advances.
+  openFreshnessDecayLessOftenPicker(cardCtx) {
+    try {
+      const lessOften = cardCtx.plan.lessOften;
+      if (!lessOften || lessOften.mode !== "picker") {
+        return false;
+      }
+      const liveLine = getEditorLine(cardCtx.cm, cardCtx.line);
+      if (liveLine === null || liveLine !== cardCtx.rawLine) {
+        new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
+        return false;
+      }
+      const picker = new BulletPropertyPickerModal(
+        this.app,
+        this,
+        cardCtx.cm,
+        { line: cardCtx.line, ch: 0 },
+        liveLine,
+        this.config,
+        {
+          filePath: cardCtx.filePath,
+          baseDate: getLocalDateStart(new Date()),
+        },
+      );
+      picker.showRefreshValueStage({
+        days: lessOften.beforeDays,
+        mixed: false,
+      });
+      const constrained = createRefreshValueItems(lessOften.beforeDays).filter(
+        (item) =>
+          Number.isInteger(item.refreshDays) &&
+          item.refreshDays >= lessOften.minDays &&
+          item.refreshDays <= lessOften.maxDays,
+      );
+      picker.applyOptions({
+        items: constrained,
+        title: `Refresh every · longer than ${lessOften.beforeDays} d`,
+        emptyText: `No longer preset · type ${lessOften.minDays}–${lessOften.maxDays}`,
+        getSubtitle: () =>
+          `Choose days · current: every ${lessOften.beforeDays} d · longer only`,
+        openItem: (item) => picker.applySelectedValue(item),
+      });
+      const plugin = this;
+      picker.applySelectedValue = async (item) => {
+        try {
+          const days =
+            item && Number.isInteger(item.refreshDays)
+              ? item.refreshDays
+              : item && Number.isInteger(item.value)
+                ? item.value
+                : null;
+          if (
+            !Number.isInteger(days) ||
+            days < lessOften.minDays ||
+            days > lessOften.maxDays
+          ) {
+            new Notice(
+              `Choose every ${lessOften.minDays}–${lessOften.maxDays} days`,
+            );
+            return false;
+          }
+          picker.close();
+          const check = plugin.revalidateFreshnessDecayCard(cardCtx);
+          if (!check.ok) {
+            new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
+            await plugin.reopenFreshnessDecayCard(cardCtx);
+            return false;
+          }
+          return await plugin.applyFreshnessDecayLessOftenDays(
+            cardCtx,
+            check.live,
+            lessOften.beforeDays,
+            days,
+          );
+        } catch (error) {
+          new Notice("Could not update task; no tasks were updated");
+          return false;
+        }
+      };
+      picker.applyRefreshCustomFromQuery = (query) => {
+        try {
+          const custom = parseRefreshCustomValue(query);
+          if (custom === null) {
+            return false;
+          }
+          void picker.applySelectedValue({
+            refreshDays: custom,
+            value: custom,
+          });
+          return true;
+        } catch (error) {
+          return false;
+        }
+      };
+      picker.open();
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  // Reword (E): stamp and clear, then put the cursor at the end of the
+  // task body before metadata for editing. Stays on this task even for
+  // Alt+Shift+F — no walk advance.
+  async applyFreshnessDecayCardReword(cardCtx, live) {
+    try {
+      const stamper = this.getFreshnessStampLine();
+      if (typeof stamper !== "function") {
+        new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
+        return false;
+      }
+      const nextLine = applyFreshStampLine(
+        live.lineText,
+        stamper,
+        cardCtx.dateText,
+      );
+      const reason = formatFreshnessDecisionRewordReason({
+        keeps: cardCtx.keeps,
+      });
+      if (reason !== cardCtx.plan.reword.reason) {
+        new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
+        return false;
+      }
+      const logPlan = planScheduleLogEntry(live.content, cardCtx.line, {
+        from: cardCtx.currentScheduled,
+        to: cardCtx.currentScheduled,
+        reason,
+      });
+      const split = splitMarkdownContent(live.content);
+      const lines = split.lines.slice();
+      lines[cardCtx.line] = nextLine;
+      applyScheduleLogEntryToLines(lines, logPlan);
+      const applied = applyEditorContentTransaction(
+        cardCtx.cm,
+        live.content,
+        lines.join(split.lineEnding),
+        {
+          line: cardCtx.line,
+          ch: freshnessDecayRewordCursorCh(nextLine),
+        },
+      );
+      if (!applied) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      try {
+        if (cardCtx.cm && typeof cardCtx.cm.focus === "function") {
+          cardCtx.cm.focus();
+        }
+      } catch (error) {
+        // Best effort: the cursor is already placed for editing.
+      }
+      this.rememberFreshnessDecayCardAnchor(cardCtx);
+      new Notice("Reword · count restarted — edit the task");
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  // Drop (D): the existing guarded cancel writer and side effects, with
+  // the dated `dropped after N keeps` Cancel Log reason. History stays
+  // on the closed line; no stamp runs on a cancel row.
+  async applyFreshnessDecayCardDrop(cardCtx, live) {
+    try {
+      const reason = cardCtx.plan.drop ? cardCtx.plan.drop.reason : "";
+      if (!reason) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      const ok = await this.applyTaskCancelFromPicker(
+        {
+          editor: cardCtx.cm,
+          cursor: { line: cardCtx.line, ch: 0 },
+          filePath: cardCtx.filePath,
+          lineText: cardCtx.rawLine,
+          valueBaseDate: getLocalDateStart(new Date()),
+        },
+        { reason },
+      );
+      if (!ok) {
+        return false;
+      }
+      this.rememberFreshnessDecayCardAnchor(cardCtx);
+      await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "drop");
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  // Keep (Alt+F): a counted keep with saturation — stamp, do not reset.
+  // The next due review asks again.
+  async applyFreshnessDecayCardKeep(cardCtx, live) {
+    try {
+      const api = getReviewFreshnessApi(this.app);
+      if (!freshnessSupportsKeeps(api)) {
+        new Notice(REVIEW_FRESHNESS_KEEP_REQUIRED_NOTICE);
+        return false;
+      }
+      if (getEditorLine(cardCtx.cm, cardCtx.line) !== live.lineText) {
+        new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
+        return false;
+      }
+      let nextLine = null;
+      try {
+        nextLine = String(
+          api.keepLine(live.lineText, cardCtx.dateText, { counted: true }) ??
+            live.lineText,
+        );
+      } catch (error) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      if (!replaceEditorLine(cardCtx.cm, cardCtx.line, live.lineText, nextLine)) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      this.rememberFreshnessDecayCardAnchor(cardCtx);
+      const nextKeeps = Math.min(999, cardCtx.keeps + 1);
+      new Notice(`Kept ${nextKeeps}× · next review asks`);
+      await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "keep");
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
   }
 
   // Capture-phase fallback so Alt+F / Alt+Shift+F reach the counted refresh
@@ -46740,6 +48280,20 @@ module.exports.helpers = {
   planFreshnessDecayLessOften,
   planFreshnessDecayExplicitLevelPicks,
   planFreshnessDecayCard,
+  FRESHNESS_DECAY_ACTIVE_FROM,
+  FRESHNESS_DECAY_CARD_VERSION,
+  FRESHNESS_DECAY_CARD_CAPABILITY,
+  freshnessDecayCardActive,
+  isFreshnessDecayDecisionEntry,
+  partitionFreshStampDecisionSkips,
+  formatFreshStampSkipTail,
+  formatFreshStampSkippedNotice,
+  freshnessDecayRewordCursorCh,
+  formatFreshnessDecayCapturedAge,
+  findFreshnessDecayPriorityProperty,
+  resolveFreshnessDecayIntervalDays,
+  buildFreshnessDecayCardRows,
+  FreshnessDecayCardModal,
   buildBatchPriorityRollPreviewModel,
   buildBatchPriorityRollNoticeModel,
   planRecommendedRollBatch,

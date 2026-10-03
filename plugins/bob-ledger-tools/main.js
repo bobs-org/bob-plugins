@@ -4554,6 +4554,24 @@ function freshnessDecayActive(todayText) {
   }
 }
 
+// Whether the compatible review-walk decision card is present: nav exposes
+// `api.freshnessDecayCard.version >= 1` (decision-card phase). The leaf, the
+// `Alt+F to decide` key hint, and the "asks" promise stay gated behind it so
+// a mixed-version session degrades to counting pips with truthful
+// counting-only wording — never a promise the installed nav cannot keep.
+// Never throws.
+function freshnessDecayCardCapable(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins ? plugins["bob-navigation-hotkeys"] : null;
+    const api = holder ? holder.api : null;
+    const card = api ? api.freshnessDecayCard : null;
+    return Boolean(card) && Number(card.version) >= 1;
+  } catch (error) {
+    return false;
+  }
+}
+
 function defaultFreshnessConfig() {
   return {
     interval: 7,
@@ -6299,15 +6317,19 @@ function freshnessMarkReason(status, row, today) {
 
 // Wrap `freshnessEvaluate` for one memo row: `{ state, tier, lane,
 // dueOn, scheduled, status, reason, intervalDays, intervalSource,
-// keeps, decide, decayKeeps, decayEnabled, decayActive }`.
+// keeps, decide, decayKeeps, decayEnabled, decayActive,
+// decayCardCapable }`.
 // A null `state` with a null `tier` and a reason means out of scope;
 // a lane `tier` (pending/next) means due in the walk; an in-walk
 // lane with a null tier and no reason is stamped today (M10). An
 // evaluator `"new"` is treated as unresolved (null). `keeps` is the
 // valid streak and `decide` whether a choice is due (never permission
 // to act); both join model equality and consensus so ambiguous
-// rendered matches stay neutral. Never throws.
-function freshnessMarkResolution(row, todayText, config) {
+// rendered matches stay neutral. `decayCardCapable` (from
+// `options.cardCapable`, default false) records whether the compatible
+// nav decision card is installed; only the display affordances read
+// it, never the `decide` flag itself. Never throws.
+function freshnessMarkResolution(row, todayText, config, options) {
   try {
     if (!row || typeof row !== "object") {
       return null;
@@ -6369,6 +6391,9 @@ function freshnessMarkResolution(row, todayText, config) {
         Number.isInteger(decay.keeps) && decay.keeps >= 0 ? decay.keeps : 3,
       decayEnabled: decay.enabled !== false,
       decayActive: freshnessDecayActive(today),
+      decayCardCapable: Boolean(
+        options && typeof options === "object" && options.cardCapable === true,
+      ),
     };
   } catch (error) {
     return null;
@@ -6425,12 +6450,11 @@ function freshnessMarkDotCap(limit) {
 
 // The tooltip keeps line for a nonzero streak, or null when there is
 // no streak to report. Wording is truthful about the rollout: the
-// "asks" clause appears only when the card is active and decay is on;
-// before activation or with decay off the line counts only. The leaf
-// and the `Alt+F to decide` key hint stay gated behind the compatible
-// nav card capability (absent until the decision-card phase), so this
-// line never changes the key hint. Proper singulars; an explicit
-// sentence for threshold zero. Never throws.
+// "asks" clause appears only when the rollout is active, decay is on,
+// and the compatible nav decision card is installed; before activation,
+// with decay off, or in a mixed-version session the line counts only.
+// Proper singulars; an explicit sentence for threshold zero. Never
+// throws.
 function freshnessMarkKeepsLine(keeps, options) {
   try {
     if (!Number.isInteger(keeps) || keeps <= 0) {
@@ -6457,15 +6481,17 @@ function freshnessMarkKeepsLine(keeps, options) {
 
 // The render model for one mark: `{ text, fresh, ageDays, label,
 // intervalDays, intervalSource, intervalLabel, remaining, tone, glyph
-// ("check" | "ring" | "refresh"), resolved, keeps, decide, dots,
-// overflow, tooltip }`. When resolved the model uses the resolution's
-// interval, otherwise `input.interval`. `keeps` is the folded streak
-// (the resolution's evaluated count when resolved, else the source's
-// folded count) and `decide` whether a choice is due; both join model
-// equality and consensus. Dots render for any nonzero streak —
-// including resting and unresolved marks, quietly — but never a
-// decision glyph: out-of-scope/closed tasks show historical dots and
-// no leaf. Bad sources yield null. Never throws.
+// ("check" | "ring" | "refresh" | "leaf"), resolved, keeps, decide,
+// dots, overflow, tooltip }`. When resolved the model uses the
+// resolution's interval, otherwise `input.interval`. `keeps` is the
+// folded streak (the resolution's evaluated count when resolved, else
+// the source's folded count) and `decide` whether a choice is due;
+// both join model equality and consensus. Dots render for any nonzero
+// streak — including resting and unresolved marks, quietly — but the
+// decision glyph appears only for an active, enabled, capable due
+// choice: out-of-scope/closed tasks, pre-activation rows, decay-off
+// rows, and mixed-version sessions (no compatible nav card) show
+// historical dots and no leaf. Bad sources yield null. Never throws.
 function freshnessMarkModel(input) {
   try {
     const args = input && typeof input === "object" ? input : null;
@@ -6520,7 +6546,7 @@ function freshnessMarkModel(input) {
     } else {
       tone = "aging";
     }
-    const glyph = tone === "today" ? "check" : tone === "due" ? "refresh" : "ring";
+    let glyph = tone === "today" ? "check" : tone === "due" ? "refresh" : "ring";
     const remaining =
       Math.round(
         (Math.min(Math.max((interval.days - ageDays) / interval.days, 0), 1) *
@@ -6591,10 +6617,27 @@ function freshnessMarkModel(input) {
           ? "Review lease ended " + shortNext + " · " + every
           : "Next review " + shortNext + " · " + every;
     }
+    // The leaf replaces `refresh` only for an active, enabled, capable
+    // due choice (`docs/freshness.md` §2a): the rollout is active, decay
+    // is on, the resolution says a choice is due, and the compatible nav
+    // decision card is installed. Everything else keeps its existing
+    // glyph and counting-only wording.
+    const cardCapable = Boolean(resolution && resolution.decayCardCapable);
+    const showDecision =
+      tone === "due" &&
+      Boolean(resolution && resolution.decide) &&
+      cardCapable &&
+      Boolean(resolution && resolution.decayActive) &&
+      resolution.decayEnabled !== false;
+    if (showDecision) {
+      glyph = "leaf";
+    }
     let line3 = null;
     if (tone === "due") {
       if (tier === "pending" || tier === "next") {
         line3 = "Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
+      } else if (showDecision) {
+        line3 = "Alt+F to decide";
       } else {
         line3 = "Alt+F to confirm";
       }
@@ -6623,7 +6666,7 @@ function freshnessMarkModel(input) {
     const keepsLine =
       resolution && resolution.decayActive !== undefined
         ? freshnessMarkKeepsLine(keeps, {
-            active: resolution.decayActive,
+            active: resolution.decayActive && cardCapable,
             enabled: resolution.decayEnabled !== false,
             limit,
           })
@@ -6700,6 +6743,10 @@ function buildFreshnessMarkElement(doc, model, options) {
     span.setAttribute("data-tone", tone);
     span.setAttribute("data-resolved", model.resolved ? "true" : "false");
     span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
+    span.setAttribute(
+      "data-decide",
+      model.glyph === "leaf" ? "true" : "false",
+    );
     span.setAttribute("role", "img");
     span.setAttribute("aria-label", String(model.tooltip || ""));
     span.setAttribute("data-tooltip-position", "top");
@@ -6728,6 +6775,19 @@ function buildFreshnessMarkElement(doc, model, options) {
       const head = doc.createElementNS("http://www.w3.org/2000/svg", "path");
       head.setAttribute("d", "M14 2v3.33h-3.33");
       svg.appendChild(head);
+    } else if (model.glyph === "leaf") {
+      // Active decision due (`docs/freshness.md` §2a): a code-native leaf
+      // in the established 16-unit box and 1.9 stroke, inheriting the due
+      // capsule's subdued orange — no new theme variables, no bitmap.
+      const body = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+      body.setAttribute(
+        "d",
+        "M12.8 3.2C7.6 3.4 4 6.6 3.4 12.6 9.4 12 12.6 8.4 12.8 3.2Z",
+      );
+      svg.appendChild(body);
+      const vein = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+      vein.setAttribute("d", "M4.2 11.8C6.6 9.4 9 7 11.8 4.2");
+      svg.appendChild(vein);
     } else {
       svg.appendChild(track);
       if (model.remaining > 0) {
@@ -13555,7 +13615,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         if (index && Number.isInteger(lineNumber)) {
           const row = index.byLine.get(path + "\u0000" + String(lineNumber));
           if (row && row.rawLine === text) {
-            const resolution = freshnessMarkResolution(row, dateText, config);
+            const resolution = freshnessMarkResolution(row, dateText, config, {
+              cardCapable: freshnessDecayCardCapable(this.app),
+            });
             if (resolution) {
               const model = freshnessMarkModel({
                 source,
@@ -13597,7 +13659,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               continue;
             }
             hasCandidates = true;
-            const resolution = freshnessMarkResolution(row, dateText, config);
+            const resolution = freshnessMarkResolution(row, dateText, config, {
+              cardCapable: freshnessDecayCardCapable(this.app),
+            });
             const model = freshnessMarkModel({
               source,
               today: dateText,
@@ -13699,7 +13763,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               continue;
             }
             hasCandidates = true;
-            const resolution = freshnessMarkResolution(row, dateText, config);
+            const resolution = freshnessMarkResolution(row, dateText, config, {
+              cardCapable: freshnessDecayCardCapable(this.app),
+            });
             const status =
               resolution &&
               resolution.status !== undefined &&
@@ -18243,6 +18309,7 @@ module.exports.helpers = {
   readFreshness,
   FRESHNESS_DECAY_ACTIVE_FROM,
   freshnessDecayActive,
+  freshnessDecayCardCapable,
   coerceFreshnessDecay,
   freshnessDecideFor,
   defaultFreshnessConfig,

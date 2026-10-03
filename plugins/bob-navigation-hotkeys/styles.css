@@ -1439,3 +1439,134 @@
   opacity: 0.75;
   font-style: italic;
 }
+
+/* Review-walk decision card (decision-card phase): a small keyboard-first
+   modal over one due Ready task at its keep limit. Narrow-screen rows wrap;
+   focus is always visible; unavailable rows read muted with their reason. */
+.modal.bob-decay-card-modal {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.modal.bob-decay-card-modal .bob-decay-card {
+  padding: 4px 2px;
+}
+
+.bob-decay-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.bob-decay-card-icon {
+  flex: 0 0 auto;
+  color: var(--color-orange);
+  margin-top: 2px;
+}
+
+.bob-decay-card-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.bob-decay-card-header-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.bob-decay-card-title {
+  font-weight: 650;
+  font-size: 1.05em;
+}
+
+.bob-decay-card-subtitle {
+  color: var(--text-muted);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.bob-decay-card-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bob-decay-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.bob-decay-card-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.bob-decay-card-row:focus,
+.bob-decay-card-row:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+.bob-decay-card-row.is-unavailable {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.bob-decay-card-row.is-unavailable:hover {
+  background-color: transparent;
+}
+
+.bob-decay-card-key {
+  flex: 0 0 auto;
+  min-width: 44px;
+  text-align: center;
+  font-size: 0.8em;
+  font-weight: 650;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.bob-decay-card-body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.bob-decay-card-label-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bob-decay-card-label {
+  font-weight: 600;
+}
+
+.bob-decay-card-recommended {
+  font-size: 0.78em;
+  font-weight: 650;
+  color: var(--color-orange);
+  border: 1px solid color-mix(in srgb, var(--color-orange) 45%, transparent);
+  border-radius: 999px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.bob-decay-card-detail {
+  color: var(--text-muted);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.bob-decay-card-footer {
+  margin-top: 10px;
+  color: var(--text-faint, var(--text-muted));
+  font-size: 0.85em;
+}

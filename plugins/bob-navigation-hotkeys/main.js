@@ -15867,6 +15867,176 @@ class LaneReleaseSummaryModal extends Modal {
   }
 }
 
+// Alt+F / Alt+Shift+F summary stage for Pending tasks. This is deliberately
+// separate from both lane release and scheduling: the refresh gesture only
+// stamps the task and optionally prepends a Work Log entry.
+class FreshnessRefreshSummaryModal extends Modal {
+  constructor(app, options = {}) {
+    super(app);
+    this.options = options || {};
+    this.onDone = this.options.onDone;
+    this.completed = false;
+    this.inputEl = null;
+    this.previewEl = null;
+    this.hintsEl = null;
+    this.refreshButton = null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.addClass("bob-cnp-modal");
+    contentEl.addClass("bob-cnp");
+    const totalCount = Math.max(
+      1,
+      Math.floor(numericOrDefault(this.options.totalCount, 1)),
+    );
+    const eligibleCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(this.options.eligibleCount, totalCount)),
+    );
+    const taskWord = totalCount === 1 ? "task" : "tasks";
+    const header = contentEl.createDiv({ cls: "bob-cnp-header" });
+    const headerIcon = header.createDiv({ cls: "bob-cnp-header-icon" });
+    applyIcon(headerIcon, "refresh-cw");
+    const headerText = header.createDiv({ cls: "bob-cnp-header-text" });
+    headerText.createDiv({
+      cls: "bob-cnp-title",
+      text: totalCount === 1 ? "Refresh task" : `Refresh ${totalCount} tasks`,
+    });
+    const subtitleParts = [];
+    if (eligibleCount !== totalCount) {
+      subtitleParts.push(`${eligibleCount} of ${totalCount} ${taskWord} qualify`);
+    }
+    subtitleParts.push("nothing written yet");
+    headerText.createDiv({
+      cls: "bob-cnp-subtitle",
+      text: subtitleParts.join(" · "),
+    });
+    const inputWrap = contentEl.createDiv({ cls: "bob-cnp-search" });
+    const inputIcon = inputWrap.createDiv({ cls: "bob-cnp-search-icon" });
+    applyIcon(inputIcon, "briefcase");
+    this.inputEl = inputWrap.createEl("input", {
+      cls: "bob-cnp-input",
+      attr: {
+        "aria-label": "Work summary",
+        placeholder: "What did you get done? (optional · ↵ to skip)",
+        type: "text",
+      },
+    });
+    this.previewEl = contentEl.createDiv({ cls: "bob-cnp-results" });
+    this.hintsEl = contentEl.createDiv({ cls: "bob-cnp-footer" });
+    this.inputEl.addEventListener("input", () => this.renderPreview());
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.submit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.close();
+      }
+    });
+    const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
+    const cancelButton = actions.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => this.close());
+    this.refreshButton = actions.createEl("button", { text: "Refresh" });
+    this.refreshButton.addEventListener("click", () => this.submit());
+    this.renderPreview();
+    window.setTimeout(() => {
+      if (this.inputEl) {
+        this.inputEl.focus();
+      }
+    }, 0);
+  }
+
+  renderPreview() {
+    if (!this.previewEl || !this.inputEl) {
+      return;
+    }
+    const summary = normalizeLaneWorkSummary(this.inputEl.value);
+    const hasInlineField = summary.includes("::");
+    this.previewEl.empty();
+    const row = this.previewEl.createDiv({
+      cls: "bob-cnp-row bob-cnp-schedule-reason-row",
+    });
+    addElementClasses(
+      row,
+      summary ? (hasInlineField ? "is-warning" : "is-valid") : "is-empty",
+    );
+    const icon = row.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(icon, summary ? (hasInlineField ? "alert-triangle" : "check-circle-2") : "minus-circle");
+    const text = row.createDiv({ cls: "bob-cnp-row-text" });
+    text.createDiv({
+      cls: "bob-cnp-row-title",
+      text: summary
+        ? formatLaneWorkLogEntry(
+            summary,
+            String(this.options.dateText || ""),
+          )
+        : "No summary",
+    });
+    if (hasInlineField) {
+      text.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: '"::" creates a Dataview inline field on this bullet',
+      });
+    }
+    const eligibleCount = Math.max(
+      1,
+      Math.floor(numericOrDefault(this.options.eligibleCount, 1)),
+    );
+    text.createDiv({
+      cls: "bob-cnp-schedule-reason-preview",
+      text: summary
+        ? eligibleCount === 1
+          ? "Prepends under 🛠️ **WORK LOG** on the qualifying task"
+          : `Prepends under 🛠️ **WORK LOG** on each of the ${eligibleCount} qualifying tasks`
+        : "Refresh only; no Work Log entry",
+    });
+    if (this.hintsEl) {
+      this.hintsEl.empty();
+      const enter = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
+      enter.createEl("kbd", { cls: "bob-cnp-kbd", text: "↵" });
+      enter.createSpan({
+        cls: "bob-cnp-hint-label",
+        text: summary ? "Refresh & log summary" : "Refresh without a summary",
+      });
+      const escape = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
+      escape.createEl("kbd", { cls: "bob-cnp-kbd", text: "esc" });
+      escape.createSpan({ cls: "bob-cnp-hint-label", text: "Cancel" });
+    }
+  }
+
+  submit() {
+    if (this.completed) {
+      return;
+    }
+    this.completed = true;
+    const value = this.inputEl ? this.inputEl.value : "";
+    try {
+      if (typeof this.onDone === "function") {
+        this.onDone(String(value || ""));
+      }
+    } finally {
+      this.close();
+    }
+  }
+
+  onClose() {
+    contentElCleanup(this.contentEl);
+    if (!this.completed && typeof this.onDone === "function") {
+      try {
+        this.onDone(null);
+      } catch (error) {
+        // Best effort.
+      }
+    }
+    this.onDone = null;
+  }
+}
+
 function contentElCleanup(contentEl) {
   try {
     if (contentEl && typeof contentEl.empty === "function") {
@@ -18345,6 +18515,14 @@ function isSchedulingWorkLogRawLine(rawLine) {
     return false;
   }
   return isObsidianTaskLine(String(rawLine || ""));
+}
+
+function isPendingWorkLogTargetRawLine(rawLine) {
+  const line = String(rawLine || "");
+  return (
+    getObsidianTaskCheckboxStatus(line) === "/" &&
+    isObsidianTaskLine(line)
+  );
 }
 
 function normalizeSchedulingWorkSummary(value) {
@@ -32430,6 +32608,47 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
   });
 }
 
+// Pure freshness refresh plan with an optional Pending Work Log summary.
+// Every target is stamped first, preserving the planner's all-or-nothing
+// refusal behavior, then one entry is prepended for each stamped pre-write
+// Pending (`[/]`) task. The shared inserter preserves marker ownership,
+// indentation, line endings, and existing child blocks.
+function planFreshStampBatchWithWorkLogs(
+  content,
+  targetLines,
+  stamper,
+  dateText,
+  summary,
+) {
+  const stampPlan = planFreshStampBatch(content, targetLines, stamper, dateText);
+  if (!stampPlan.ok) {
+    return Object.freeze({ ...stampPlan, workLogWrittenCount: 0 });
+  }
+  const normalized = normalizeLaneWorkSummary(summary);
+  if (!normalized) {
+    return Object.freeze({ ...stampPlan, workLogWrittenCount: 0 });
+  }
+  const { lines, lineEnding } = splitMarkdownContent(stampPlan.content);
+  const pendingLines = Array.from(
+    new Set(
+      stampPlan.stamped
+        .filter((entry) => isPendingWorkLogTargetRawLine(entry.before))
+        .map((entry) => entry.line),
+    ),
+  ).sort((a, b) => b - a);
+  let workLogWrittenCount = 0;
+  for (const line of pendingLines) {
+    if (insertLaneWorkLogEntry(lines, line, normalized, dateText)) {
+      workLogWrittenCount += 1;
+    }
+  }
+  return Object.freeze({
+    ...stampPlan,
+    content: lines.join(lineEnding),
+    workLogWrittenCount,
+  });
+}
+
 // True when the line already carries today's stamp (re-stamping it repairs
 // placement at most and does not grow the "refreshed today" count).
 function freshStampLineHasToday(rawLine, dateText) {
@@ -32543,7 +32762,14 @@ function buildFreshStampNotice(details = {}) {
   const keptRaw = Math.floor(numericOrDefault(details.kept, 0));
   const keptTail =
     Number.isInteger(keptRaw) && keptRaw > 0 ? ` · kept ${keptRaw}×` : "";
-  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}`;
+  const workLogWrittenCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.workLogWrittenCount, 0)),
+  );
+  const workLogTail = workLogWrittenCount > 0
+    ? ` · ${formatCountLabel(workLogWrittenCount, "Work Log")}`
+    : "";
+  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}${workLogTail}`;
 }
 
 // Match stamped `{ path, line, raw }` refs (0-based lines) against a
@@ -35233,6 +35459,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         stamper,
         dateText,
         advance,
+        summary: options.summary,
       });
     }
     if (parseLinkPickerTaskLink(lineText)) {
@@ -35242,11 +35469,63 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         stamper,
         dateText,
         advance,
+        summary: options.summary,
         linkDiscovery: options.linkDiscovery || null,
       });
     }
     new Notice("Cursor is not on a task or Task Link");
     return false;
+  }
+
+  async requestFreshnessRefreshSummary(options = {}) {
+    if (typeof options.summary === "string") {
+      return { cancelled: false, summary: options.summary };
+    }
+    if (typeof FreshnessRefreshSummaryModal !== "function") {
+      return { cancelled: false, failed: true, summary: "" };
+    }
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(result);
+      };
+      let modal;
+      try {
+        modal = new FreshnessRefreshSummaryModal(this.app, {
+          dateText: options.dateText,
+          totalCount: options.totalCount,
+          eligibleCount: options.eligibleCount,
+          onDone: (result) => {
+            if (result === null) {
+              finish({ cancelled: true, summary: "" });
+            } else {
+              finish({ cancelled: false, summary: String(result || "") });
+            }
+          },
+        });
+        if (!modal || typeof modal.open !== "function") {
+          finish({ cancelled: false, failed: true, summary: "" });
+          return;
+        }
+        modal.open();
+      } catch (error) {
+        if (modal) {
+          modal.onDone = null;
+          try {
+            if (typeof modal.close === "function") {
+              modal.close();
+            }
+          } catch (closeError) {
+            // The prompt failure still refuses the refresh below.
+          }
+        }
+        finish({ cancelled: false, failed: true, summary: "" });
+      }
+    });
   }
 
   async refreshTaskFreshnessOnTasks(cm, cursor, content, options = {}) {
@@ -35391,15 +35670,32 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(formatFreshStampSkippedNotice(partition.skipped.length));
       return true;
     }
-    const plan = planFreshStampBatch(
-      content,
-      keepTargets,
-      options.stamper,
-      options.dateText,
+    for (const target of keepTargets) {
+      const check = classifyFreshStampTarget(target.raw);
+      if (!check.ok) {
+        new Notice(freshStampRefusalNotice(check.refusal));
+        return false;
+      }
+    }
+    const eligibleTargets = keepTargets.filter((target) =>
+      isPendingWorkLogTargetRawLine(target.raw),
     );
-    if (!plan.ok) {
-      new Notice(freshStampRefusalNotice(plan.refusal));
-      return false;
+    let summary = "";
+    if (eligibleTargets.length > 0) {
+      const result = await this.requestFreshnessRefreshSummary({
+        summary: options.summary,
+        dateText: options.dateText,
+        totalCount: keepTargets.length,
+        eligibleCount: eligibleTargets.length,
+      });
+      if (result.failed) {
+        new Notice("Could not open Work Log prompt; no tasks were updated");
+        return false;
+      }
+      if (result.cancelled) {
+        return false;
+      }
+      summary = result.summary;
     }
     if (
       cm &&
@@ -35416,6 +35712,17 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           ? "Active note changed; no tasks were updated"
           : guarded.error,
       );
+      return false;
+    }
+    const plan = planFreshStampBatchWithWorkLogs(
+      content,
+      keepTargets,
+      options.stamper,
+      options.dateText,
+      summary,
+    );
+    if (!plan.ok) {
+      new Notice(freshStampRefusalNotice(plan.refusal));
       return false;
     }
     if (plan.content !== content) {
@@ -35442,7 +35749,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       })),
       plan.stamped,
       options.dateText,
-      { skipTail },
+      { skipTail, workLogWrittenCount: plan.workLogWrittenCount },
     );
     if (options.advance === true) {
       return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
@@ -35545,21 +35852,74 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       new Notice(formatFreshStampSkippedNotice(linkSkipped));
       return true;
     }
+    const stampTargetsByGroup = linkResolved.map(({ group, resolved }) => ({
+      group,
+      targets: partitionFreshStampDecisionSkips(resolved).stamp,
+    }));
+    for (const { targets } of stampTargetsByGroup) {
+      for (const target of targets) {
+        const check = classifyFreshStampTarget(target.raw);
+        if (!check.ok) {
+          new Notice(freshStampRefusalNotice(check.refusal));
+          return false;
+        }
+      }
+    }
+    const eligibleTargets = stampTargetsByGroup.flatMap(({ targets }) =>
+      targets.filter((target) => isPendingWorkLogTargetRawLine(target.raw)),
+    );
+    let summary = "";
+    if (eligibleTargets.length > 0) {
+      const result = await this.requestFreshnessRefreshSummary({
+        summary: options.summary,
+        dateText: options.dateText,
+        totalCount: linkStamped,
+        eligibleCount: eligibleTargets.length,
+      });
+      if (result.failed) {
+        new Notice("Could not open Work Log prompt; no tasks were updated");
+        return false;
+      }
+      if (result.cancelled) {
+        return false;
+      }
+      summary = result.summary;
+      if (
+        cm &&
+        typeof cm.getValue === "function" &&
+        String(cm.getValue() || "") !== content
+      ) {
+        new Notice("Current note changed; no tasks were updated");
+        return false;
+      }
+      for (const { group } of stampTargetsByGroup) {
+        const live = await this.readLinkPickerNoteContent(
+          group.path,
+          group.file,
+        );
+        if (live !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+      }
+    }
     const planned = [];
     const refs = [];
     const stampedAll = [];
-    for (const { group, resolved } of linkResolved) {
-      const keepTargets = partitionFreshStampDecisionSkips(resolved).stamp;
-      const plan = planFreshStampBatch(
+    let workLogWrittenCount = 0;
+    for (const { group, targets } of stampTargetsByGroup) {
+      const plan = planFreshStampBatchWithWorkLogs(
         group.content,
-        keepTargets,
+        targets,
         options.stamper,
         options.dateText,
+        summary,
       );
       if (!plan.ok) {
         new Notice(freshStampRefusalNotice(plan.refusal));
         return false;
       }
+      workLogWrittenCount += plan.workLogWrittenCount;
       for (const entry of plan.stamped) {
         refs.push({ path: group.path, line: entry.line, raw: entry.before });
         stampedAll.push(entry);
@@ -35581,7 +35941,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       refs,
       stampedAll,
       options.dateText,
-      { skipTail: linkSkipTail },
+      { skipTail: linkSkipTail, workLogWrittenCount },
     );
     if (options.advance === true) {
       return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
@@ -35643,6 +36003,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
             ? null
             : counts.budget,
         kept,
+        workLogWrittenCount: extra && extra.workLogWrittenCount,
       }) + skipTail,
     );
   }
@@ -48766,6 +49127,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
 module.exports.helpers = {
   FilteredPickerModal,
+  FreshnessRefreshSummaryModal,
   TaskMoveDestinationPickerModal,
   PomodoroBulletMovePickerModal,
   PomodoroEntryMovePickerModal,
@@ -49046,6 +49408,7 @@ module.exports.helpers = {
   classifyFreshStampTarget,
   freshStampRefusalNotice,
   planFreshStampBatch,
+  planFreshStampBatchWithWorkLogs,
   freshStampLineHasToday,
   buildFreshStampNotice,
   matchFreshStampRefs,

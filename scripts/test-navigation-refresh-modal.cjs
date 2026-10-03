@@ -117,3 +117,60 @@ test("renderFooter skips malformed hints and retains valid structured hints", ()
   assert.match(flattenText(footer), /Apply/);
   assert.match(flattenText(footer), /Close or dismiss/);
 });
+
+test("Pending refresh modal previews the dated Work Log and confirms once", () => {
+  openedModals.length = 0;
+  const results = [];
+  const modal = new NavigationHotkeysPlugin.helpers.FreshnessRefreshSummaryModal(
+    {},
+    {
+      dateText: "2026-10-08",
+      totalCount: 3,
+      eligibleCount: 1,
+      onDone: (value) => results.push(value),
+    },
+  );
+  modal.open();
+  assert.equal(modal.isOpen, true);
+  assert.match(flattenText(modal.contentEl), /Refresh 3 tasks/);
+  assert.match(flattenText(modal.contentEl), /1 of 3 tasks qualify/);
+  assert.match(flattenText(modal.contentEl), /nothing written yet/);
+  assert.equal(
+    modal.inputEl.getAttribute("placeholder"),
+    "What did you get done? (optional · ↵ to skip)",
+  );
+
+  modal.inputEl.value = "Checked the API :: field";
+  modal.inputEl.listeners.input();
+  assert.match(flattenText(modal.previewEl), /\*2026-10-08\* — Checked the API :: field/);
+  assert.match(flattenText(modal.previewEl), /Dataview inline field/);
+  assert.match(flattenText(modal.previewEl), /WORK LOG/);
+  assert.match(flattenText(modal.hintsEl), /Refresh & log summary/);
+
+  modal.inputEl.listeners.keydown({
+    key: "Enter",
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  modal.submit();
+  assert.deepEqual(results, ["Checked the API :: field"]);
+  assert.equal(modal.isOpen, false);
+});
+
+test("dismissing the Pending refresh modal cancels without a summary", () => {
+  const results = [];
+  const modal = new NavigationHotkeysPlugin.helpers.FreshnessRefreshSummaryModal(
+    {},
+    { dateText: "2026-10-08", onDone: (value) => results.push(value) },
+  );
+  modal.open();
+  assert.match(flattenText(modal.previewEl), /Refresh only; no Work Log entry/);
+  assert.match(flattenText(modal.hintsEl), /Refresh without a summary/);
+  modal.inputEl.listeners.keydown({
+    key: "Escape",
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.deepEqual(results, [null]);
+  assert.equal(modal.isOpen, false);
+});

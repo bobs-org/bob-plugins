@@ -407,6 +407,72 @@ test("a throwing stamper refuses the fresh stamp batch", () => {
   assert.equal(plan.refusal, "stamp");
 });
 
+test("fresh stamp plus Work Log prepends only stamped Pending targets", () => {
+  const content = [
+    "- [/] #task Parent [fresh:: 2026-10-08] ^parent",
+    "  - 🗓️ **SCHEDULE LOG**",
+    "    - *2026-10-07* — moved the date",
+    "  - 🛠️ **WORK LOG**",
+    "    + *2026-10-06* — older parent work",
+    "  - [/] #task Child ^child",
+    "    - 🛠️ **WORK LOG**",
+    "      - *2026-10-05* — child work",
+    "- [*] #task Next",
+  ].join("\r\n");
+  const plan = helpers.planFreshStampBatchWithWorkLogs(
+    content,
+    [0, 5, 8],
+    (line) => line,
+    "2026-10-08",
+    "  Finished\tparent :: note  ",
+  );
+  assert.equal(plan.ok, true);
+  assert.equal(plan.workLogWrittenCount, 2);
+  assert.equal(
+    plan.content,
+    [
+      "- [/] #task Parent [fresh:: 2026-10-08] ^parent",
+      "  - 🗓️ **SCHEDULE LOG**",
+      "    - *2026-10-07* — moved the date",
+      "  - 🛠️ **WORK LOG**",
+      "    + *2026-10-08* — Finished parent :: note",
+      "    + *2026-10-06* — older parent work",
+      "  - [/] #task Child ^child",
+      "    - 🛠️ **WORK LOG**",
+      "      - *2026-10-08* — Finished parent :: note",
+      "      - *2026-10-05* — child work",
+      "- [*] #task Next",
+    ].join("\r\n"),
+  );
+  assert.doesNotMatch(plan.content, /[^\r]\n/);
+});
+
+test("blank Work Log summary and stamp refusal never create a log marker", () => {
+  const content = "- [/] #task Pending\r\n- [x] #task Closed";
+  const blank = helpers.planFreshStampBatchWithWorkLogs(
+    content,
+    [0],
+    (line) => line,
+    "2026-10-08",
+    " \t ",
+  );
+  assert.equal(blank.ok, true);
+  assert.equal(blank.workLogWrittenCount, 0);
+  assert.equal(blank.content, content);
+
+  const refused = helpers.planFreshStampBatchWithWorkLogs(
+    content,
+    [0, 1],
+    (line) => line,
+    "2026-10-08",
+    "Did something",
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(refused.content, content);
+  assert.equal(refused.workLogWrittenCount, 0);
+  assert.doesNotMatch(refused.content, /WORK LOG/);
+});
+
 test("fresh stamp notices adjust the pre-write counts", () => {
   assert.equal(
     helpers.buildFreshStampNotice({

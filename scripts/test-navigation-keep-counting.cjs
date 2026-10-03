@@ -647,6 +647,143 @@ test("same-day repeat stays identical and counts nothing", async () => {
   assert.doesNotMatch(notices[notices.length - 1], /kept \d+×/);
 });
 
+test("Pending Alt+F writes its summary with the stamp in one edit", async () => {
+  clearNotices();
+  const editor = makeEditor("- [/] #task Pending work", 0);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([], BASE_COUNTS),
+  });
+  const ok = await plugin.refreshTaskFreshness(editor, {
+    dateText: DATE,
+    summary: "Finished the review",
+  });
+  assert.equal(ok, true);
+  assert.equal(editor.state.transactions.length, 1);
+  assert.equal(
+    editor.state.lines.join("\n"),
+    [
+      "- [/] #task Pending work [fresh:: 2026-10-08]",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-10-08* — Finished the review",
+    ].join("\n"),
+  );
+  assert.match(notices[notices.length - 1], /1 Work Log/);
+});
+
+test("counted Pending refresh shares one summary only with Pending targets", async () => {
+  clearNotices();
+  const editor = makeEditor(
+    ["- [/] #task Pending", "- [*] #task Next"].join("\n"),
+    0,
+  );
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([], BASE_COUNTS),
+  });
+  const ok = await plugin.refreshTaskFreshness(editor, {
+    dateText: DATE,
+    countExplicit: true,
+    additionalTaskCount: 1,
+    summary: "Shared work",
+  });
+  assert.equal(ok, true);
+  const after = editor.state.lines.join("\n");
+  assert.match(after, /\[\/\] #task Pending \[fresh:: 2026-10-08\][\s\S]*WORK LOG/);
+  assert.match(after, /\[\*\] #task Next \[fresh:: 2026-10-08\]/);
+  assert.equal((after.match(/Shared work/g) || []).length, 1);
+  assert.match(notices[notices.length - 1], /1 Work Log/);
+});
+
+test("a refusing counted target refuses before the Pending Work Log prompt", async () => {
+  clearNotices();
+  const original = [
+    "- [/] #task Pending",
+    "- [ ] #task Recurring [repeat:: every day]",
+  ].join("\n");
+  const editor = makeEditor(original, 0);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([], BASE_COUNTS),
+  });
+  let prompted = false;
+  plugin.requestFreshnessRefreshSummary = async () => {
+    prompted = true;
+    return { cancelled: false, summary: "Should not be asked" };
+  };
+  const ok = await plugin.refreshTaskFreshness(editor, {
+    dateText: DATE,
+    countExplicit: true,
+    additionalTaskCount: 1,
+  });
+  assert.equal(ok, false);
+  assert.equal(prompted, false);
+  assert.equal(editor.state.lines.join("\n"), original);
+  assert.equal(notices[notices.length - 1], "recurring · not reviewed");
+});
+
+test("blank Pending refresh advances; cancelled or stale prompts write nothing", async () => {
+  clearNotices();
+  const blankEditor = makeEditor("- [/] #task Pending work", 0);
+  const blankPlugin = makePlugin({
+    filePath: "a.md",
+    editor: blankEditor,
+    freshness: freshnessV5([], BASE_COUNTS),
+  });
+  let advances = 0;
+  blankPlugin.jumpToDueTask = async () => {
+    advances += 1;
+    return true;
+  };
+  assert.equal(
+    await blankPlugin.refreshTaskFreshness(blankEditor, {
+      dateText: DATE,
+      summary: "",
+      advance: true,
+    }),
+    true,
+  );
+  assert.equal(advances, 1);
+  assert.equal(blankEditor.state.lines.length, 1);
+  assert.match(blankEditor.state.lines[0], /\[fresh:: 2026-10-08\]/);
+  assert.doesNotMatch(blankEditor.state.lines.join("\n"), /WORK LOG|🤷/);
+
+  for (const mode of ["cancel", "stale", "failed"]) {
+    const editor = makeEditor("- [/] #task Pending work", 0);
+    const plugin = makePlugin({
+      filePath: "a.md",
+      editor,
+      freshness: freshnessV5([], BASE_COUNTS),
+    });
+    let advanced = false;
+    plugin.jumpToDueTask = async () => {
+      advanced = true;
+      return true;
+    };
+    plugin.requestFreshnessRefreshSummary = async () => {
+      if (mode === "stale") {
+        editor.state.lines[0] = "- [/] #task Changed while prompt was open";
+        return { cancelled: false, summary: "Finished" };
+      }
+      if (mode === "failed") {
+        return { failed: true, summary: "" };
+      }
+      return { cancelled: true, summary: "" };
+    };
+    const ok = await plugin.refreshTaskFreshness(editor, {
+      dateText: DATE,
+      advance: true,
+    });
+    assert.equal(ok, false, mode);
+    assert.equal(advanced, false, mode);
+    assert.equal(editor.state.transactions.length, 0, mode);
+    assert.doesNotMatch(editor.state.lines.join("\n"), /fresh::|WORK LOG/, mode);
+  }
+});
+
 test("stale queue match stamps uncounted and never inflates", async () => {
   clearNotices();
   // The queue still shows the old line number after the task moved.
@@ -903,6 +1040,44 @@ test("duplicate Task Links to one target stamp and count once", async () => {
   assert.equal(ok, true);
   assert.match(noteMap.get("Target.md"), /\[keeps:: 3\]/);
   assert.match(notices[notices.length - 1], /kept 1×/);
+});
+
+test("counted Task Links dedupe targets and log only the Pending target", async () => {
+  clearNotices();
+  const pendingLink = "- [ ] [[Target#^p]]";
+  const noteMap = new Map([
+    [
+      "Target.md",
+      [
+        "- [/] #task Pending linked task ^p",
+        "- [*] #task Next linked task ^n",
+      ].join("\n"),
+    ],
+  ]);
+  const plugin = makeLinkPlugin({
+    cursorContent: [
+      pendingLink,
+      pendingLink,
+      "- [ ] [[Target#^n]]",
+    ].join("\n"),
+    cursorLine: 0,
+    noteMap,
+    freshness: freshnessV5([], BASE_COUNTS),
+  });
+  const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
+    dateText: DATE,
+    countExplicit: true,
+    additionalTaskCount: 2,
+    summary: "Linked work",
+  });
+  assert.equal(ok, true);
+  const after = noteMap.get("Target.md");
+  assert.match(after, /\[\/\] #task Pending linked task \[fresh:: 2026-10-08\] \^p/);
+  assert.match(after, /\[\*\] #task Next linked task \[fresh:: 2026-10-08\] \^n/);
+  assert.equal((after.match(/Linked work/g) || []).length, 1);
+  assert.equal((after.match(/WORK LOG/g) || []).length, 1);
+  assert.equal(plugin.writes.length, 1);
+  assert.match(notices[notices.length - 1], /1 Work Log/);
 });
 
 test("multi-note stale preimage refuses with no writes", async () => {

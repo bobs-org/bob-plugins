@@ -16165,6 +16165,7 @@ class FilteredPickerModal extends Modal {
     this.subtitleEl = headerText.createDiv({ cls: "bob-cnp-subtitle" });
 
     const searchEl = contentEl.createDiv({ cls: "bob-cnp-search" });
+    this.searchEl = searchEl;
     const searchIcon = searchEl.createDiv({ cls: "bob-cnp-search-icon" });
     applyIcon(searchIcon, "search");
     this.inputEl = searchEl.createEl("input", {
@@ -18567,9 +18568,198 @@ function resolveSchedulingWorkLogDateText(workLog, fallbackDate) {
   return formatBulletPropertyDate(getLocalDateStart(new Date()));
 }
 
+// Note-plus-identity key for a scheduling target. Linked notes can share a
+// line number, so eligibility and review counts never use line alone.
+function schedulingWorkLogTargetIdentity(target) {
+  if (!target || typeof target !== "object") {
+    return "";
+  }
+  const path = typeof target.path === "string" ? target.path : "";
+  const blockId =
+    normalizeBulletPropertyValue(target.blockId) ||
+    getTrailingBlockId(String(target.rawLine || "")) ||
+    "";
+  if (blockId) {
+    return `${path}#^${blockId}`;
+  }
+  if (Number.isInteger(target.line)) {
+    return `${path}::${target.line}`;
+  }
+  return "";
+}
+
+function freezeSchedulingWorkLogTargets(targets) {
+  return Object.freeze(
+    (Array.isArray(targets) ? targets : [])
+      .filter((target) => target && Number.isInteger(target.line))
+      .map((target) =>
+        Object.freeze({
+          path: typeof target.path === "string" ? target.path : "",
+          line: target.line,
+          rawLine: String(target.rawLine || ""),
+          blockId:
+            normalizeBulletPropertyValue(target.blockId) ||
+            getTrailingBlockId(String(target.rawLine || "")) ||
+            "",
+        }),
+      ),
+  );
+}
+
+function collectSchedulingWorkLogTargetIdentities(targets) {
+  const identities = new Set();
+  for (const target of Array.isArray(targets) ? targets : []) {
+    const identity = schedulingWorkLogTargetIdentity(target);
+    if (identity) {
+      identities.add(identity);
+    }
+  }
+  return identities;
+}
+
+function collectSchedulingWorkLogEligibleIdentities(targets) {
+  const eligible = new Set();
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (!isSchedulingWorkLogRawLine(target && target.rawLine)) {
+      continue;
+    }
+    const identity = schedulingWorkLogTargetIdentity(target);
+    if (identity) {
+      eligible.add(identity);
+    }
+  }
+  return eligible;
+}
+
+function schedulingWorkLogSnapshotChanged(frozen, currentTargets) {
+  const current = freezeSchedulingWorkLogTargets(currentTargets);
+  const previous = freezeSchedulingWorkLogTargets(frozen);
+  if (previous.length !== current.length) {
+    return true;
+  }
+  for (let index = 0; index < previous.length; index += 1) {
+    const left = previous[index];
+    const right = current[index];
+    if (
+      !left ||
+      !right ||
+      left.path !== right.path ||
+      left.line !== right.line ||
+      left.rawLine !== right.rawLine ||
+      left.blockId !== right.blockId
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getScheduleReviewHints(options = {}) {
+  const hints = [
+    {
+      keys: ["↵"],
+      label: options.empty ? "Skip optional logs" : "Apply schedule",
+    },
+  ];
+  if (options.hasWorkLog) {
+    hints.push({ keys: ["tab"], label: "Next field" });
+  }
+  hints.push({ keys: ["esc"], label: "Cancel" });
+  return hints;
+}
+
+// Pure planner for the combined Task Card schedule review. A review is needed
+// when the reason is still unknown or any explicit Next/Pending target
+// qualifies for a Work Log. Inline/skip reasons with no Work target dispatch
+// immediately.
+function planScheduleReview(options = {}) {
+  const dateItem = options.dateItem || null;
+  const from = normalizeBulletPropertyValue(options.from);
+  const to = normalizeBulletPropertyValue(
+    options.to || (dateItem && dateItem.value) || "",
+  );
+  const reasonText = normalizeScheduleReasonText(options.reason);
+  const reasonSupplied = options.reasonSupplied === true;
+  const targets = freezeSchedulingWorkLogTargets(options.targets);
+  const totalIdentities = collectSchedulingWorkLogTargetIdentities(targets);
+  const eligibleIdentities = collectSchedulingWorkLogEligibleIdentities(targets);
+  const totalCount = Math.max(totalIdentities.size, targets.length);
+  const eligibleCount = eligibleIdentities.size;
+  const needsWorkLog = eligibleCount > 0;
+  const needsReason = !reasonSupplied;
+  const needsReview = needsReason || needsWorkLog;
+  const isProject = options.isProject === true;
+  const isBatch = totalCount > 1;
+  const baseDate =
+    options.baseDate instanceof Date
+      ? getLocalDateStart(options.baseDate)
+      : getLocalDateStart(new Date());
+  const validation = validateProjectScheduledDate(to);
+  const scheduledDate = validation.valid
+    ? projectScheduleLocalDate(validation)
+    : null;
+  const offset =
+    scheduledDate instanceof Date
+      ? getLocalDayOffset(baseDate, scheduledDate)
+      : null;
+  const future = Number.isInteger(offset) && offset > 0;
+  const effects = [];
+  if (from && to && from !== to) {
+    effects.push(`${from}${SCHEDULE_LOG_TRANSITION}${to}`);
+  } else if (to) {
+    effects.push(`scheduled → ${to}`);
+  }
+  if (scheduledDate instanceof Date) {
+    effects.push(getBulletPropertyDateWeekday(scheduledDate));
+    if (Number.isInteger(offset)) {
+      effects.push(formatRelativeDayOffset(offset));
+    }
+  }
+  if (isProject) {
+    effects.push("propagates to project tasks");
+  }
+  if (future) {
+    effects.push("future date marks Blocked");
+  }
+  if (needsWorkLog) {
+    const taskWord = eligibleCount === 1 ? "task" : "tasks";
+    effects.push(
+      isBatch
+        ? `${eligibleCount} of ${totalCount} ${taskWord} qualify for Work Log`
+        : eligibleCount === 1
+          ? "1 task qualifies for Work Log"
+          : `${eligibleCount} tasks qualify for Work Log`,
+    );
+  }
+  effects.push("nothing written yet");
+  return Object.freeze({
+    dateItem,
+    from,
+    to,
+    reason: reasonText.reason,
+    reasonEmpty: reasonText.empty,
+    reasonHasInlineField: reasonText.hasInlineField,
+    reasonSupplied,
+    needsReason,
+    needsWorkLog,
+    needsReview,
+    targets,
+    totalCount,
+    eligibleCount,
+    isBatch,
+    isProject,
+    future,
+    title: isBatch ? `Schedule ${totalCount} tasks` : "Schedule task",
+    focusField: needsReason ? "reason" : needsWorkLog ? "summary" : "reason",
+    effects: Object.freeze(effects),
+    scheduleSummary: effects.filter((part) => part !== "nothing written yet").join(" · "),
+  });
+}
+
 // Original lines (pre-batch `target.line` values) whose validated `rawLine`
 // qualifies for a scheduling Work Log. Propagation-only tasks are never in
-// `targets`, so they are excluded by construction.
+// `targets`, so they are excluded by construction. Prompt counting uses
+// identity keys; writers still map these original lines.
 function collectSchedulingWorkLogEligibleOriginalLines(targets) {
   const eligible = new Set();
   for (const target of Array.isArray(targets) ? targets : []) {
@@ -27175,6 +27365,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
   returnToTaskCard() {
     this.pendingScheduleReason = null;
+    this.pendingScheduleReview = null;
     this.pendingCancel = null;
     this.pendingLaneRelease = null;
     this.pendingScheduleWorkLog = null;
@@ -27183,6 +27374,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
     this.pendingCountedDependency = null;
+    this.scheduleReviewFormEl = null;
+    this.scheduleReviewReasonEl = null;
+    this.scheduleReviewSummaryEl = null;
     this.clearLocalTaskMarks();
     this.taskCardQuery = "";
     this.showTaskCard();
@@ -27456,6 +27650,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.renderTaskCard();
       return;
     }
+    if (this.stage === "schedule-review") {
+      super.renderAll({ ...options, clearQuery: false });
+      this.applyTaskCardChrome({ wide: false });
+      this.addTaskCardBackButton();
+      this.renderScheduleReviewForm();
+      return;
+    }
     super.renderAll(options);
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
     this.wireTaskCardSearchAria();
@@ -27466,7 +27667,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!this.taskCardEnabled || this.stage === "task-card" || !this.headerEl) {
       return;
     }
-    if (this.taskCardBackHeaderEl === this.headerEl) {
+    if (this.taskCardBackHeaderEl === this.headerEl && this.taskCardBackButtonEl) {
       return;
     }
     const back = this.headerEl.createEl("button", {
@@ -27479,6 +27680,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.returnToTaskCard();
     });
     this.taskCardBackHeaderEl = this.headerEl;
+    this.taskCardBackButtonEl = back;
   }
 
   wireTaskCardSearchAria() {
@@ -28161,10 +28363,45 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
   }
 
+  // Live explicit targets for scheduling review/Work Log prompts. Counted and
+  // single-note rows re-read the editor so a mid-review edit is visible.
+  getSchedulingWorkLogTargets() {
+    const path = typeof this.filePath === "string" ? this.filePath : "";
+    if (this.isLinkSession()) {
+      const resolved = Array.isArray(this.linkSession.resolved)
+        ? this.linkSession.resolved
+        : [];
+      return resolved.map((target) => ({
+        ...target,
+        path: typeof target.path === "string" ? target.path : path,
+      }));
+    }
+    if (this.isCountedSession() && this.taskSession) {
+      return this.taskSession.targets.map((target) => ({
+        ...target,
+        path: typeof target.path === "string" ? target.path : path,
+        rawLine:
+          getEditorLine(this.editor, target.line) ?? target.rawLine,
+      }));
+    }
+    if (this.cursor && Number.isInteger(this.cursor.line)) {
+      return [
+        {
+          line: this.cursor.line,
+          path,
+          rawLine:
+            getEditorLine(this.editor, this.cursor.line) ?? this.lineText,
+        },
+      ];
+    }
+    return [];
+  }
+
   // Freeze a scheduled date pick and either skip the reason prompt (inline
   // reason, Shift+Enter blank-reason) or open the existing reason stage.
   // Invalid typed previews never write. Pinned rolls keep their deterministic
-  // reason and skip this path.
+  // reason and skip this path. With the Task Card enabled, unknown reasons
+  // and remaining Work Log opportunities share one uncommitted review.
   commitScheduledDateItem(item, options = {}) {
     if (!item) {
       return false;
@@ -28181,7 +28418,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         ? String(item.inlineReason || "")
         : "";
     const normalizedInline = normalizeScheduleReasonText(inlineReason);
-    if (skipReason || !normalizedInline.empty) {
+    const reasonSupplied = skipReason || !normalizedInline.empty;
+    if (this.taskCardEnabled) {
+      return this.openScheduleReviewOrDispatch(item, {
+        reason: skipReason ? "" : normalizedInline.reason,
+        reasonSupplied,
+      });
+    }
+    if (reasonSupplied) {
       this.pendingScheduleReason = Object.freeze({
         dateItem: item,
         from: this.getPendingScheduleFrom(),
@@ -28198,6 +28442,40 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       );
     }
     this.showScheduleReasonStage(item);
+    return false;
+  }
+
+  // Task Card explicit-date review: one optional Reason field plus Work
+  // summary when any Next/Pending target qualifies. Inline/skip reasons with
+  // no Work target dispatch immediately through the existing writer.
+  openScheduleReviewOrDispatch(item, options = {}) {
+    const from = this.getPendingScheduleFrom();
+    const plan = planScheduleReview({
+      dateItem: item,
+      from,
+      to: item && item.value,
+      reason: options.reason,
+      reasonSupplied: options.reasonSupplied === true,
+      targets: this.getSchedulingWorkLogTargets(),
+      isProject: Boolean(
+        this.selectedPropertyItem &&
+          this.selectedPropertyItem.target &&
+          this.selectedPropertyItem.target.kind === "project-frontmatter",
+      ),
+      baseDate: this.valueBaseDate,
+    });
+    if (!plan.needsReview) {
+      return this.applySelectedValue(item, {
+        scheduleLog: {
+          from: plan.from,
+          to: plan.to,
+          reason: plan.reason,
+          fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
+        },
+        schedulingWorkLog: null,
+      });
+    }
+    this.showScheduleReviewStage(plan);
     return false;
   }
 
@@ -28339,6 +28617,295 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
   }
 
+  // Combined Task Card review: Reason plus optional Work summary in one
+  // uncommitted state. Nothing is written until Enter confirms both fields.
+  showScheduleReviewStage(plan) {
+    if (!plan || !plan.dateItem) {
+      return;
+    }
+    this.stage = "schedule-review";
+    this.pendingScheduleReview = Object.freeze({
+      ...plan,
+      resume: async ({ reason, summary }) => {
+        const scheduleLog = {
+          from: plan.from,
+          to: plan.to,
+          reason,
+          fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
+        };
+        return await this.applySelectedValue(plan.dateItem, {
+          scheduleLog,
+          schedulingWorkLog: summary
+            ? {
+                summary,
+                dateText: formatBulletPropertyDate(
+                  this.valueBaseDate instanceof Date
+                    ? this.valueBaseDate
+                    : getLocalDateStart(new Date()),
+                ),
+              }
+            : null,
+        });
+      },
+    });
+    this.pendingScheduleReason = Object.freeze({
+      dateItem: plan.dateItem,
+      from: plan.from,
+      to: plan.to,
+    });
+    this.scheduleReviewFormEl = null;
+    this.clearLocalTaskMarks();
+    this.selectedIndex = 0;
+    this.applyOptions({
+      items: [],
+      title: plan.title || "Schedule task",
+      headerIcon: "calendar-clock",
+      inputLabel: "Reason for this date",
+      placeholder: "Why this date? (optional)",
+      resultsLabel: "Schedule review",
+      emptyText: "Nothing written yet",
+      footerHints: getScheduleReviewHints({
+        empty: plan.reasonEmpty && !plan.needsWorkLog,
+        hasWorkLog: plan.needsWorkLog,
+      }),
+      getSubtitle: () => this.getScheduleReviewSubtitle(),
+      filterItem: () => true,
+      renderItem: (item, rowEl, query) =>
+        this.renderScheduleReviewPreview(item, rowEl, query),
+      openItem: () => this.confirmScheduleReview(),
+    });
+    if (!this.headerEl || !this.searchEl || !this.resultsEl) {
+      FilteredPickerModal.prototype.onOpen.call(this);
+      return;
+    }
+    this.renderAll();
+  }
+
+  getScheduleReviewSubtitle() {
+    const pending = this.pendingScheduleReview;
+    if (!pending) {
+      return "";
+    }
+    return (pending.effects || []).join(" · ");
+  }
+
+  getScheduleReviewReasonText() {
+    if (this.scheduleReviewReasonEl) {
+      return String(this.scheduleReviewReasonEl.value || "");
+    }
+    const pending = this.pendingScheduleReview;
+    return pending ? String(pending.reason || "") : "";
+  }
+
+  getScheduleReviewSummaryText() {
+    if (!this.pendingScheduleReview || !this.pendingScheduleReview.needsWorkLog) {
+      return "";
+    }
+    if (this.scheduleReviewSummaryEl) {
+      return String(this.scheduleReviewSummaryEl.value || "");
+    }
+    return "";
+  }
+
+  renderScheduleReviewForm() {
+    const pending = this.pendingScheduleReview;
+    if (!pending || !this.searchEl) {
+      return;
+    }
+    const reasonValue = this.getScheduleReviewReasonText() || pending.reason || "";
+    const summaryValue = this.getScheduleReviewSummaryText();
+    this.searchEl.empty();
+    addElementClasses(this.searchEl, "bob-task-card-review");
+    const form = this.searchEl.createDiv({
+      cls: "bob-task-card-review-form",
+    });
+    this.scheduleReviewFormEl = form;
+
+    const reasonField = form.createDiv({ cls: "bob-task-card-review-field" });
+    reasonField.createEl("label", {
+      text: "Reason for this date (optional)",
+      attr: { for: "bob-schedule-review-reason" },
+    });
+    const reasonInput = reasonField.createEl("input", {
+      cls: "bob-cnp-input bob-task-card-review-input",
+      attr: {
+        id: "bob-schedule-review-reason",
+        type: "text",
+        "aria-label": "Reason for this date",
+        placeholder: "Why this date? (optional)",
+      },
+    });
+    reasonInput.value = reasonValue;
+    this.inputEl = reasonInput;
+    this.scheduleReviewReasonEl = reasonInput;
+    reasonInput.addEventListener("input", () => {
+      this.selectedIndex = 0;
+      this.renderResults();
+    });
+    reasonInput.addEventListener("keydown", (event) =>
+      this.handleKeydown(event),
+    );
+
+    this.scheduleReviewSummaryEl = null;
+    if (pending.needsWorkLog) {
+      const summaryField = form.createDiv({
+        cls: "bob-task-card-review-field",
+      });
+      const countLabel =
+        pending.eligibleCount === 1
+          ? "1 Next/Pending target only"
+          : `${pending.eligibleCount} Next/Pending targets only`;
+      summaryField.createEl("label", {
+        text: `Work summary (optional · ${countLabel})`,
+        attr: { for: "bob-schedule-review-summary" },
+      });
+      const summaryInput = summaryField.createEl("input", {
+        cls: "bob-cnp-input bob-task-card-review-input",
+        attr: {
+          id: "bob-schedule-review-summary",
+          type: "text",
+          "aria-label": "Work summary",
+          placeholder: "What did you get done? (optional · ↵ to skip)",
+        },
+      });
+      summaryInput.value = summaryValue;
+      this.scheduleReviewSummaryEl = summaryInput;
+      summaryInput.addEventListener("input", () => {
+        this.selectedIndex = 0;
+        this.renderResults();
+      });
+      summaryInput.addEventListener("keydown", (event) =>
+        this.handleKeydown(event),
+      );
+    }
+
+    this.renderResults();
+    const focusEl =
+      pending.focusField === "summary" && this.scheduleReviewSummaryEl
+        ? this.scheduleReviewSummaryEl
+        : reasonInput;
+    if (focusEl && typeof focusEl.focus === "function") {
+      focusEl.focus();
+    }
+  }
+
+  cycleScheduleReviewFocus(event, reverse) {
+    const fields = [
+      this.scheduleReviewReasonEl,
+      this.scheduleReviewSummaryEl,
+      this.taskCardBackButtonEl,
+    ].filter(Boolean);
+    if (fields.length === 0) {
+      return;
+    }
+    const current = fields.indexOf(event && event.target);
+    const delta = reverse ? -1 : 1;
+    const start = current >= 0 ? current : 0;
+    const next = fields[(start + delta + fields.length) % fields.length];
+    if (next && typeof next.focus === "function") {
+      next.focus();
+    }
+  }
+
+  renderScheduleReviewPreview(item, rowEl, query) {
+    const pending = this.pendingScheduleReview;
+    addElementClasses(rowEl, "bob-cnp-schedule-reason-row", "bob-task-card-review-preview");
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    if (item && item.reasonEmpty) {
+      appendHighlighted(
+        titleEl,
+        item.reasonFallback ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : "No reason",
+        query,
+      );
+    } else {
+      appendHighlighted(
+        titleEl,
+        formatScheduleLogEntryText({
+          from: pending ? pending.from : "",
+          to: pending ? pending.to : "",
+          reason: item && item.reason,
+        }),
+        query,
+      );
+    }
+    if (item && item.reasonHasInlineField) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: '"::" creates a Dataview inline field on this bullet',
+      });
+    }
+    if (pending && pending.needsWorkLog) {
+      textEl.createDiv({
+        cls: "bob-cnp-schedule-work-log-preview",
+        text: item && item.summaryEmpty
+          ? "Schedule only; no Work Log"
+          : pending.eligibleCount === 1
+            ? `Prepends under 🛠️ **WORK LOG** on the qualifying task`
+            : `Prepends under 🛠️ **WORK LOG** on each of the ${pending.eligibleCount} qualifying tasks`,
+      });
+      if (item && !item.summaryEmpty) {
+        textEl.createDiv({
+          cls: "bob-cnp-schedule-work-log-effects",
+          text: formatLaneWorkLogEntry(
+            item.summary,
+            formatBulletPropertyDate(
+              this.valueBaseDate instanceof Date
+                ? this.valueBaseDate
+                : getLocalDateStart(new Date()),
+            ),
+          ),
+        });
+      }
+    }
+    if (pending && Array.isArray(pending.effects)) {
+      textEl.createDiv({
+        cls: "bob-task-card-review-effects",
+        text: pending.effects.join(" · "),
+      });
+    }
+  }
+
+  async confirmScheduleReview() {
+    const pending = this.pendingScheduleReview;
+    if (!pending || typeof pending.resume !== "function") {
+      return false;
+    }
+    if (schedulingWorkLogSnapshotChanged(pending.targets, this.getSchedulingWorkLogTargets())) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      this.pendingScheduleReview = null;
+      this.pendingScheduleReason = null;
+      if (this.taskCardEnabled) {
+        this.returnToTaskCard();
+      } else {
+        this.showPropertyStage({ clearQuery: false });
+      }
+      return false;
+    }
+    const reason = normalizeScheduleReasonText(this.getScheduleReviewReasonText());
+    const summary = normalizeSchedulingWorkSummary(this.getScheduleReviewSummaryText());
+    let applied = false;
+    try {
+      applied = await pending.resume({
+        reason: reason.empty ? "" : reason.reason,
+        summary,
+      });
+    } catch (_error) {
+      applied = false;
+    }
+    if (applied === true) {
+      return true;
+    }
+    this.pendingScheduleReview = null;
+    this.pendingScheduleReason = null;
+    if (this.taskCardEnabled) {
+      this.returnToTaskCard();
+    } else {
+      this.showPropertyStage({ clearQuery: false });
+    }
+    return false;
+  }
+
   // Optional Work Log stage for scheduling Pending/Next tasks. Entered after
   // the schedule-reason stage (explicit dates) or directly (priority picks,
   // pinned rolls, recommended rolls/decays). `pending.resume` commits the
@@ -28477,50 +29044,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // prompt is needed, else false to keep the modal open on the new stage.
   async offerSchedulingWorkLogOrDispatch(options = {}) {
     const targets = Array.isArray(options.targets) ? options.targets : [];
-    const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
     const dispatch = options.dispatch;
     if (typeof dispatch !== "function") {
       return false;
     }
-    if (eligible.size === 0) {
-      // Link sessions span notes where identical line numbers collide: a
-      // line-based Set can undercount, so recheck by task identity before
-      // skipping the prompt.
-      const fallbackEligible = targets.filter(
-        (target) =>
-          target &&
-          Number.isInteger(target.line) &&
-          isSchedulingWorkLogRawLine(target.rawLine),
-      );
-      if (fallbackEligible.length === 0) {
-        return await dispatch("");
-      }
-    }
-    // Deduplicate repeated Task Links by note and line so each qualifying
-    // task is counted once even when linked twice.
-    const dedupedTotal = new Set(
-      targets.map((target) =>
-        target && typeof target.path === "string"
-          ? `${target.path}::${target.line}`
-          : `::${target && target.line}`,
-      ),
-    );
-    const dedupedEligible = new Set();
-    for (const target of targets) {
-      if (
-        target &&
-        Number.isInteger(target.line) &&
-        isSchedulingWorkLogRawLine(target.rawLine)
-      ) {
-        dedupedEligible.add(
-          typeof target.path === "string"
-            ? `${target.path}::${target.line}`
-            : `::${target.line}`,
-        );
-      }
-    }
-    const totalCount = dedupedTotal.size;
-    const eligibleCount = dedupedEligible.size;
+    // Deduplicate by note plus identity so linked notes with equal line
+    // numbers still count separately, and duplicate links to one task count
+    // once.
+    const totalCount = collectSchedulingWorkLogTargetIdentities(targets).size;
+    const eligibleCount = collectSchedulingWorkLogEligibleIdentities(targets).size;
     if (eligibleCount === 0) {
       return await dispatch("");
     }
@@ -30434,6 +30966,34 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return super.getFilteredItems();
       }
     }
+    if (this.stage === "schedule-review") {
+      const reason = normalizeScheduleReasonText(this.getScheduleReviewReasonText());
+      const summary = normalizeSchedulingWorkSummary(
+        this.getScheduleReviewSummaryText(),
+      );
+      const pending = this.pendingScheduleReview;
+      const parentExists = Boolean(
+        findScheduleLogParent(this.getEditorContent(), this.cursor.line),
+      );
+      const fallback = reason.empty && this.willLogWithoutReason();
+      return [
+        Object.freeze({
+          kind: "schedule-review-preview",
+          reason: reason.reason,
+          reasonEmpty: reason.empty,
+          reasonHasInlineField: reason.hasInlineField,
+          reasonFallback: fallback,
+          summary,
+          summaryEmpty: !summary,
+          summaryHasInlineField: /::/.test(summary),
+          parentExists,
+          counted: this.isCountedSession() || this.isLinkSession(),
+          eligibleCount: pending ? pending.eligibleCount : 0,
+          searchText: reason.reason,
+        }),
+      ];
+    }
+
     if (this.stage === "schedule-work-log") {
       const normalized = normalizeScheduleReasonText(this.getRawQuery());
       return [
@@ -30590,6 +31150,15 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       const item = (this.visibleItems || [])[0];
       this.footerHints = getSchedulingWorkLogHints({
         empty: Boolean(item && item.empty),
+      });
+      this.renderFooter();
+    }
+    if (this.stage === "schedule-review") {
+      const item = (this.visibleItems || [])[0];
+      const pending = this.pendingScheduleReview;
+      this.footerHints = getScheduleReviewHints({
+        empty: Boolean(item && item.reasonEmpty && item.summaryEmpty),
+        hasWorkLog: Boolean(pending && pending.needsWorkLog),
       });
       this.renderFooter();
     }
@@ -33048,6 +33617,46 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       event.stopPropagation();
       if (event.key === "Escape") this.close();
       return;
+    }
+    if (this.stage === "schedule-review" && event) {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.cycleScheduleReviewFocus(event, event.shiftKey === true);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.opening) {
+          return;
+        }
+        this.opening = true;
+        Promise.resolve(this.confirmScheduleReview())
+          .then((applied) => {
+            if (applied === true) {
+              this.close();
+            }
+          })
+          .catch(() => false)
+          .finally(() => {
+            this.opening = false;
+          });
+        return;
+      }
+      if (
+        event.key === "Backspace" &&
+        this.scheduleReviewSummaryEl &&
+        event.target === this.scheduleReviewSummaryEl &&
+        !String(this.scheduleReviewSummaryEl.value || "")
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.scheduleReviewReasonEl && typeof this.scheduleReviewReasonEl.focus === "function") {
+          this.scheduleReviewReasonEl.focus();
+        }
+        return;
+      }
     }
     if (
       this.taskCardEnabled &&
@@ -51883,6 +52492,13 @@ module.exports.helpers = {
   normalizeSchedulingWorkSummary,
   hasSchedulingWorkLogInput,
   resolveSchedulingWorkLogDateText,
+  schedulingWorkLogTargetIdentity,
+  freezeSchedulingWorkLogTargets,
+  collectSchedulingWorkLogTargetIdentities,
+  collectSchedulingWorkLogEligibleIdentities,
+  schedulingWorkLogSnapshotChanged,
+  planScheduleReview,
+  getScheduleReviewHints,
   collectSchedulingWorkLogEligibleOriginalLines,
   applySchedulingWorkLogsToLines,
   planTaskLaneBatch,

@@ -2009,6 +2009,52 @@
   overflow-wrap: anywhere;
 }
 
+.bob-cnp-search.bob-task-card-review {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+
+.bob-task-card-review-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.bob-task-card-review-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bob-task-card-review-field label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-review-input {
+  min-height: 32px;
+}
+
+.bob-task-card-review-effects {
+  margin-top: var(--size-2-1);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.bob-task-card-review-preview .bob-cnp-schedule-work-log-effects {
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 700px) {
   .modal.bob-cnp-modal.bob-task-card-modal {
     width: min(600px, calc(100vw - 24px));

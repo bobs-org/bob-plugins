@@ -142,6 +142,14 @@ const DASH_RENDERED_TASKS_QUERY_RESULT_SELECTOR =
   "ul.plugin-tasks-query-result";
 const DASH_RENDERED_TASKS_BLOCK_SELECTOR = ".block-language-tasks";
 const DASH_RENDERED_TASKS_SCROLL_PADDING_PX = 8;
+// File-aware Vim jump history for Enter link jumps (see plan
+// 202610/obsidian_enter_vim_jump_history.md). Kept distinct from
+// `filePositions`, alternate-file navigation, and Obsidian workspace history.
+// Bounded to 100 locations, matching upstream CodeMirror Vim's jump-list size.
+const VIM_JUMP_HISTORY_LIMIT = 100;
+const VIM_JUMP_HISTORY_DESTINATION_RETRIES = 24;
+const VIM_JUMP_HISTORY_COMPATIBILITY_NOTICE =
+  "Vim jump history unavailable: Obsidian Vim adapter has no jump list; link jumps still open but Ctrl+O/Ctrl+I use Vim defaults";
 const PROJECT_STATUS_CANCELED_ALIASES = new Set(["canceled", "cancelled"]);
 const PROJECT_STATUS_PRESENTATIONS = Object.freeze({
   wip: Object.freeze({
@@ -5571,6 +5579,269 @@ function getVimEnterTargetLine(cm, actionArgs) {
 
 function getVimBackspaceTargetLine(cm, actionArgs) {
   return getVimOffsetTargetLine(cm, actionArgs, -1, -1);
+}
+
+function normalizeVimJumpLocation(location) {
+  if (!location || typeof location !== "object") {
+    return null;
+  }
+
+  const path =
+    typeof location.path === "string" && location.path.trim()
+      ? location.path
+      : null;
+  if (!path) {
+    return null;
+  }
+
+  const position = normalizePosition(location);
+  if (!position) {
+    return null;
+  }
+
+  return { path, line: position.line, ch: position.ch };
+}
+
+function cloneVimJumpLocation(location) {
+  const normalized = normalizeVimJumpLocation(location);
+  if (!normalized) {
+    return null;
+  }
+
+  return { path: normalized.path, line: normalized.line, ch: normalized.ch };
+}
+
+function vimJumpLocationsEqual(left, right) {
+  const normalizedLeft = normalizeVimJumpLocation(left);
+  const normalizedRight = normalizeVimJumpLocation(right);
+  return Boolean(
+    normalizedLeft &&
+      normalizedRight &&
+      normalizedLeft.path === normalizedRight.path &&
+      normalizedLeft.line === normalizedRight.line &&
+      normalizedLeft.ch === normalizedRight.ch,
+  );
+}
+
+function createVimJumpHistory() {
+  return { entries: [], index: -1 };
+}
+
+function getVimJumpHistoryLength(state) {
+  if (!state || !Array.isArray(state.entries)) {
+    return 0;
+  }
+
+  return state.entries.length;
+}
+
+function getVimJumpCurrentIndex(state) {
+  if (!state || !Array.isArray(state.entries) || state.entries.length === 0) {
+    return -1;
+  }
+
+  const index = Math.floor(numericOrDefault(state.index, -1));
+  if (!Number.isFinite(index)) {
+    return state.entries.length - 1;
+  }
+
+  return Math.min(Math.max(index, 0), state.entries.length - 1);
+}
+
+function releaseVimJumpBookmark(entry) {
+  if (!entry || !entry.bookmark) {
+    return;
+  }
+
+  try {
+    if (typeof entry.bookmark.clear === "function") {
+      entry.bookmark.clear();
+    }
+  } catch (error) {
+    // Best-effort release only.
+  }
+  entry.bookmark = null;
+}
+
+function recordVimJumpLocation(state, location) {
+  if (!state || !Array.isArray(state.entries)) {
+    return false;
+  }
+
+  const normalized = cloneVimJumpLocation(location);
+  if (!normalized) {
+    return false;
+  }
+
+  let index = getVimJumpCurrentIndex(state);
+  if (index !== -1) {
+    const current = state.entries[index];
+    if (vimJumpLocationsEqual(current, normalized)) {
+      return false;
+    }
+
+    if (index < state.entries.length - 1) {
+      const discarded = state.entries.slice(index + 1);
+      for (const entry of discarded) {
+        releaseVimJumpBookmark(entry);
+      }
+      state.entries = state.entries.slice(0, index + 1);
+    }
+  } else if (state.entries.length > 0) {
+    state.entries = [];
+  }
+
+  state.entries.push(normalized);
+  while (state.entries.length > VIM_JUMP_HISTORY_LIMIT) {
+    const evicted = state.entries.shift();
+    releaseVimJumpBookmark(evicted);
+  }
+  state.index = state.entries.length - 1;
+  return true;
+}
+
+function recordVimJumpTransition(state, origin, destination) {
+  const normalizedOrigin = normalizeVimJumpLocation(origin);
+  const normalizedDestination = normalizeVimJumpLocation(destination);
+  if (!normalizedOrigin || !normalizedDestination) {
+    return false;
+  }
+
+  if (vimJumpLocationsEqual(normalizedOrigin, normalizedDestination)) {
+    return false;
+  }
+
+  if (
+    !state ||
+    !Array.isArray(state.entries) ||
+    state.entries.length === 0
+  ) {
+    recordVimJumpLocation(state, normalizedOrigin);
+    return recordVimJumpLocation(state, normalizedDestination);
+  }
+
+  const index = getVimJumpCurrentIndex(state);
+  const current = index === -1 ? null : state.entries[index];
+  if (!current || !vimJumpLocationsEqual(current, normalizedOrigin)) {
+    recordVimJumpLocation(state, normalizedOrigin);
+  }
+
+  return recordVimJumpLocation(state, normalizedDestination);
+}
+
+function refreshVimJumpCurrentLocation(state, liveLocation) {
+  if (!state || !Array.isArray(state.entries) || state.entries.length === 0) {
+    return false;
+  }
+
+  const normalized = normalizeVimJumpLocation(liveLocation);
+  if (!normalized) {
+    return false;
+  }
+
+  const index = getVimJumpCurrentIndex(state);
+  const current = state.entries[index];
+  if (!current || vimJumpLocationsEqual(current, normalized)) {
+    return false;
+  }
+
+  // At the tip any live file counts (the user may have switched notes by hand
+  // after landing). Deeper in the stack only refresh the same file so a manual
+  // note switch never rewrites an older entry to a different file.
+  if (index !== state.entries.length - 1 && current.path !== normalized.path) {
+    return false;
+  }
+
+  releaseVimJumpBookmark(current);
+  state.entries[index] = cloneVimJumpLocation(normalized);
+  return true;
+}
+
+function updateVimJumpHistoryPath(state, oldPath, newPath) {
+  if (
+    !state ||
+    !Array.isArray(state.entries) ||
+    typeof oldPath !== "string" ||
+    typeof newPath !== "string" ||
+    !oldPath ||
+    !newPath ||
+    oldPath === newPath
+  ) {
+    return 0;
+  }
+
+  let updated = 0;
+  for (const entry of state.entries) {
+    if (entry && entry.path === oldPath) {
+      entry.path = newPath;
+      updated += 1;
+    }
+  }
+
+  return updated;
+}
+
+function removeVimJumpHistoryPath(state, path) {
+  if (!state || !Array.isArray(state.entries) || typeof path !== "string") {
+    return 0;
+  }
+
+  const kept = [];
+  let removed = 0;
+  for (const entry of state.entries) {
+    if (entry && entry.path === path) {
+      releaseVimJumpBookmark(entry);
+      removed += 1;
+      continue;
+    }
+    kept.push(entry);
+  }
+
+  state.entries = kept.slice(-VIM_JUMP_HISTORY_LIMIT);
+  state.index =
+    state.entries.length === 0
+      ? -1
+      : Math.min(getVimJumpCurrentIndex(state), state.entries.length - 1);
+  if (state.entries.length === 0) {
+    state.index = -1;
+  }
+  return removed;
+}
+
+function clearVimJumpHistory(state) {
+  if (!state || !Array.isArray(state.entries)) {
+    return;
+  }
+
+  for (const entry of state.entries) {
+    releaseVimJumpBookmark(entry);
+  }
+  state.entries = [];
+  state.index = -1;
+}
+
+function resolveVimJumpCount(actionArgs) {
+  return normalizeVimRepeat(actionArgs && actionArgs.repeat);
+}
+
+function isVimJumpBridgeAvailable(vim) {
+  if (!vim || typeof vim.getVimGlobalState_ !== "function") {
+    return false;
+  }
+
+  let globalState = null;
+  try {
+    globalState = vim.getVimGlobalState_();
+  } catch (error) {
+    return false;
+  }
+
+  const jumpList = globalState && globalState.jumpList;
+  return Boolean(
+    jumpList &&
+      typeof jumpList.add === "function" &&
+      typeof jumpList.move === "function",
+  );
 }
 
 function isExternalLinkTarget(target) {
@@ -15153,7 +15424,15 @@ class PomodoroEntryMovePickerModal extends FilteredPickerModal {
 }
 
 class LinkCandidatePickerModal extends FilteredPickerModal {
-  constructor(app, plugin, candidates, targetLine) {
+  constructor(app, plugin, candidates, targetLine, jumpContext = null) {
+    const frozenJumpContext = jumpContext
+      ? Object.freeze({
+          origin: jumpContext.origin
+            ? Object.freeze({ ...jumpContext.origin })
+            : null,
+          token: jumpContext.token,
+        })
+      : null;
     super(app, {
       items: candidates,
       title: "Open link target",
@@ -15200,8 +15479,10 @@ class LinkCandidatePickerModal extends FilteredPickerModal {
         });
         appendHighlighted(statusEl, candidate.actionLabel, query);
       },
-      openItem: (candidate) => plugin.openOrCreateLinkCandidate(candidate),
+      openItem: (candidate) =>
+        plugin.openOrCreateLinkCandidate(candidate, frozenJumpContext),
     });
+    this.vimJumpContext = frozenJumpContext;
   }
 }
 
@@ -30056,6 +30337,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.currentFilePath = null;
     this.alternateFilePath = null;
     this.filePositions = new Map();
+    this.vimJumpHistory = createVimJumpHistory();
+    this.vimJumpOperationToken = 0;
+    this.vimJumpHistoryChain = Promise.resolve();
+    this.vimJumpBridgeVim = null;
+    this.vimJumpBridgeJumpList = null;
+    this.vimJumpBridgeOriginalAdd = null;
+    this.vimJumpBridgeDiagnosticShown = false;
+    this.vimJumpSuppressNativeMirror = false;
+    this.vimJumpPendingDestinationDeferred = null;
     this.dashLocation = null;
     this.pendingRestoreDeferred = null;
     this.pendingDashTasksDeferred = null;
@@ -30320,6 +30610,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.registerVimMappingsWhenReady();
+    this.registerVimJumpHistoryVaultEvents();
 
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => this.trackOpenedFile(file)),
@@ -30377,7 +30668,19 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       cancelDeferred(this.pendingOpenTaskJumpCenterDeferred);
       this.pendingOpenTaskJumpCenterDeferred = null;
       this.cancelPendingTaskMoveJump();
+      this.cancelPendingVimJumpDestination();
+      if (this.vimJumpHistory) {
+        clearVimJumpHistory(this.vimJumpHistory);
+      }
     });
+  }
+
+  onunload() {
+    this.cleanupVimJumpHistoryMappings();
+    if (this.vimJumpHistory) {
+      clearVimJumpHistory(this.vimJumpHistory);
+    }
+    this.cancelPendingVimJumpDestination();
   }
 
   // Pure transclusion toggle (`docs/task-dependencies.md` §7): `!` only adds
@@ -39495,6 +39798,21 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
   registerVimMappings() {
     if (this.vimMappingsRegistered) {
+      // The Vim adapter object can be replaced on Vimrc reload. Reinstall the
+      // jump-history bridge when a different Vim instance appears so the new
+      // adapter gets the file-aware <C-o>/<C-i> history without stacking
+      // duplicate wrappers on the old one.
+      const latestVim =
+        typeof window === "undefined"
+          ? null
+          : window.CodeMirrorAdapter && window.CodeMirrorAdapter.Vim;
+      if (
+        latestVim &&
+        this.vimJumpBridgeVim &&
+        latestVim !== this.vimJumpBridgeVim
+      ) {
+        this.installVimJumpHistoryMappings(latestVim);
+      }
       return true;
     }
 
@@ -39521,7 +39839,735 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     );
 
     this.vimMappingsRegistered = true;
+    this.installVimJumpHistoryMappings(vim);
     return true;
+  }
+
+  ensureVimJumpHistory() {
+    if (!this.vimJumpHistory || !Array.isArray(this.vimJumpHistory.entries)) {
+      this.vimJumpHistory = createVimJumpHistory();
+    }
+
+    if (!this.vimJumpHistoryChain || typeof this.vimJumpHistoryChain.then !== "function") {
+      this.vimJumpHistoryChain = Promise.resolve();
+    }
+
+    return this.vimJumpHistory;
+  }
+
+  registerVimJumpHistoryVaultEvents() {
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.on !== "function") {
+        return false;
+      }
+
+      this.registerEvent(
+        vault.on("rename", (file, oldPath) => {
+          if (!file || typeof file.path !== "string" || typeof oldPath !== "string") {
+            return;
+          }
+
+          this.ensureVimJumpHistory();
+          updateVimJumpHistoryPath(this.vimJumpHistory, oldPath, file.path);
+        }),
+      );
+      this.registerEvent(
+        vault.on("delete", (file) => {
+          if (!file || typeof file.path !== "string") {
+            return;
+          }
+
+          this.ensureVimJumpHistory();
+          removeVimJumpHistoryPath(this.vimJumpHistory, file.path);
+        }),
+      );
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  getVimAdapter() {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    const adapter = window.CodeMirrorAdapter;
+    return adapter && adapter.Vim ? adapter.Vim : null;
+  }
+
+  installVimJumpHistoryMappings(vim) {
+    const targetVim = vim || this.getVimAdapter();
+    if (
+      !targetVim ||
+      typeof targetVim.defineAction !== "function" ||
+      typeof targetVim.mapCommand !== "function"
+    ) {
+      return false;
+    }
+
+    if (this.vimJumpBridgeVim === targetVim && this.vimJumpBridgeJumpList) {
+      return true;
+    }
+
+    this.ensureVimJumpHistory();
+
+    if (!isVimJumpBridgeAvailable(targetVim)) {
+      if (!this.vimJumpBridgeDiagnosticShown) {
+        this.vimJumpBridgeDiagnosticShown = true;
+        try {
+          new Notice(VIM_JUMP_HISTORY_COMPATIBILITY_NOTICE);
+        } catch (error) {
+          // Notice delivery is best-effort in tests.
+        }
+      }
+      return false;
+    }
+
+    let globalState = null;
+    try {
+      globalState = targetVim.getVimGlobalState_();
+    } catch (error) {
+      return false;
+    }
+
+    const jumpList = globalState && globalState.jumpList;
+    if (
+      !jumpList ||
+      typeof jumpList.add !== "function" ||
+      typeof jumpList.move !== "function"
+    ) {
+      return false;
+    }
+
+    if (jumpList.add && jumpList.add.bobNavigationJumpBridge === true) {
+      // Already wrapped by this plugin: never stack a second wrapper.
+      // Re-point at the current Vim instance (Vimrc reload) and reinstall the
+      // traversal keys below without touching `add` again.
+      this.vimJumpBridgeVim = targetVim;
+      this.vimJumpBridgeJumpList = jumpList;
+      // Fall through to (re)install the traversal mappings, which are
+      // idempotent per Vim instance via defineAction/mapCommand shadowing.
+    } else {
+      const originalAdd = jumpList.add.bind(jumpList);
+      const plugin = this;
+      const wrappedAdd = function wrappedVimJumpAdd(cm, oldCur, newCur) {
+        let result;
+        try {
+          result = originalAdd(cm, oldCur, newCur);
+        } catch (error) {
+          throw error;
+        }
+
+        try {
+          plugin.mirrorNativeVimJump(cm, oldCur, newCur);
+        } catch (error) {
+          // Mirroring must never break native jump recording.
+        }
+
+        return result;
+      };
+      wrappedAdd.bobNavigationJumpBridge = true;
+      jumpList.add = wrappedAdd;
+      this.vimJumpBridgeOriginalAdd = originalAdd;
+      this.vimJumpBridgeVim = targetVim;
+      this.vimJumpBridgeJumpList = jumpList;
+    }
+
+    this.vimJumpBridgeVim = targetVim;
+    this.vimJumpBridgeJumpList = jumpList;
+
+    try {
+      targetVim.defineAction("bobNavigationJumpBack", (cm, actionArgs) =>
+        this.handleVimJumpBack(cm, actionArgs),
+      );
+      targetVim.defineAction("bobNavigationJumpForward", (cm, actionArgs) =>
+        this.handleVimJumpForward(cm, actionArgs),
+      );
+      // Map only <C-o>/<C-i> in normal mode. Insert-mode <C-o>
+      // (one-normal-command), visual mode, and plain Tab are untouched.
+      targetVim.mapCommand(
+        "<C-o>",
+        "action",
+        "bobNavigationJumpBack",
+        {},
+        { context: "normal" },
+      );
+      targetVim.mapCommand(
+        "<C-i>",
+        "action",
+        "bobNavigationJumpForward",
+        {},
+        { context: "normal" },
+      );
+    } catch (error) {
+      return false;
+    }
+
+    return true;
+  }
+
+  cleanupVimJumpHistoryMappings() {
+    const vim = this.vimJumpBridgeVim || this.getVimAdapter();
+    try {
+      if (
+        this.vimJumpBridgeJumpList &&
+        this.vimJumpBridgeOriginalAdd &&
+        this.vimJumpBridgeJumpList.add &&
+        this.vimJumpBridgeJumpList.add.bobNavigationJumpBridge === true
+      ) {
+        this.vimJumpBridgeJumpList.add = this.vimJumpBridgeOriginalAdd;
+      }
+    } catch (error) {
+      // Best-effort restore only.
+    }
+
+    // Only remove our own mapping: if another plugin mapped <C-o>/<C-i> after
+    // us, its entry shadows ours and unmapping would delete its keys. The Vim
+    // API exposes no mapping inspection, so consult the recorded default
+    // keymap only when the adapter exposes it for tests; otherwise attempt a
+    // guarded unmap that leaves a foreign owner intact.
+    try {
+      if (vim && typeof vim.unmap === "function") {
+        const ownsMapping = this.vimOwnsJumpMapping(vim, "<C-o>") !== false;
+        const ownsForward = this.vimOwnsJumpMapping(vim, "<C-i>") !== false;
+        if (ownsMapping) {
+          try {
+            vim.unmap("<C-o>", "normal");
+          } catch (error) {
+            // Best-effort.
+          }
+        }
+        if (ownsForward) {
+          try {
+            vim.unmap("<C-i>", "normal");
+          } catch (error) {
+            // Best-effort.
+          }
+        }
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+
+    this.vimJumpBridgeVim = null;
+    this.vimJumpBridgeJumpList = null;
+    this.vimJumpBridgeOriginalAdd = null;
+  }
+
+  vimOwnsJumpMapping(vim, keys) {
+    // Test adapters may expose `__bobTestKeymap` for inspection. Real adapters
+    // do not, in which case return true so cleanup still runs once per owner.
+    try {
+      const keymap = vim && vim.__bobTestKeymap;
+      if (!Array.isArray(keymap)) {
+        return true;
+      }
+
+      const match = keymap.find(
+        (entry) => entry && entry.keys === keys && entry.context === "normal",
+      );
+      if (!match) {
+        return false;
+      }
+
+      return (
+        match.action === "bobNavigationJumpBack" ||
+        match.action === "bobNavigationJumpForward"
+      );
+    } catch (error) {
+      return true;
+    }
+  }
+
+  resolveVimJumpFileForCm(cm) {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace) {
+        return null;
+      }
+
+      if (cm && typeof workspace.getLeavesOfType === "function") {
+        const leaves = workspace.getLeavesOfType("markdown") || [];
+        for (const leaf of leaves) {
+          const view = leaf && leaf.view;
+          const editor = view && view.editor;
+          if (!view || !view.file || !editor) {
+            continue;
+          }
+
+          if (
+            editor === cm ||
+            (editor.cm && editor.cm === cm) ||
+            (editor.cm6 && editor.cm6 === cm) ||
+            (editor.cm6 && cm && cm.cm6 && editor.cm6 === cm.cm6)
+          ) {
+            return this.isMarkdownFile(view.file) ? view.file.path : null;
+          }
+        }
+      }
+
+      // Do not fall back to the active file for a background editor: an
+      // unrelated active note would otherwise be recorded for that editor.
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  resolveVimJumpLiveLocation(cm) {
+    try {
+      const view = this.getActiveMarkdownView();
+      if (!view || !view.file) {
+        return null;
+      }
+
+      let cursor = null;
+      if (cm && typeof cm.getCursor === "function") {
+        cursor = normalizePosition(cm.getCursor());
+      }
+
+      if (!cursor && view.editor && typeof view.editor.getCursor === "function") {
+        cursor = normalizePosition(view.editor.getCursor());
+      }
+
+      if (!cursor) {
+        return null;
+      }
+
+      return { path: view.file.path, line: cursor.line, ch: cursor.ch };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  mirrorNativeVimJump(cm, oldCur, newCur) {
+    if (this.vimJumpSuppressNativeMirror) {
+      return false;
+    }
+
+    const oldPosition = normalizePosition(oldCur);
+    const newPosition = normalizePosition(newCur);
+    if (!oldPosition || !newPosition) {
+      return false;
+    }
+
+    if (
+      oldPosition.line === newPosition.line &&
+      oldPosition.ch === newPosition.ch
+    ) {
+      return false;
+    }
+
+    const filePath = this.resolveVimJumpFileForCm(cm);
+    if (!filePath) {
+      return false;
+    }
+
+    this.ensureVimJumpHistory();
+    return recordVimJumpTransition(
+      this.vimJumpHistory,
+      { path: filePath, line: oldPosition.line, ch: oldPosition.ch },
+      { path: filePath, line: newPosition.line, ch: newPosition.ch },
+    );
+  }
+
+  enqueueVimJumpOperation(operation) {
+    this.ensureVimJumpHistory();
+    const run = () => {
+      try {
+        const result = operation();
+        return result && typeof result.then === "function"
+          ? result
+          : Promise.resolve(result);
+      } catch (error) {
+        return Promise.resolve(false);
+      }
+    };
+
+    this.vimJumpHistoryChain = this.vimJumpHistoryChain.then(run, run);
+    return this.vimJumpHistoryChain;
+  }
+
+  handleVimJumpBack(cm, actionArgs) {
+    const count = resolveVimJumpCount(actionArgs);
+    return this.enqueueVimJumpOperation(() =>
+      this.traverseVimJumpHistory(-1, count, cm),
+    );
+  }
+
+  handleVimJumpForward(cm, actionArgs) {
+    const count = resolveVimJumpCount(actionArgs);
+    return this.enqueueVimJumpOperation(() =>
+      this.traverseVimJumpHistory(1, count, cm),
+    );
+  }
+
+  async traverseVimJumpHistory(direction, count, cm) {
+    this.ensureVimJumpHistory();
+    const state = this.vimJumpHistory;
+    if (state.entries.length === 0) {
+      return this.walkNativeJumpList(cm, direction, count);
+    }
+
+    const steps = Math.max(
+      1,
+      Math.floor(numericOrDefault(count, 1)) || 1,
+    );
+    const live = this.resolveVimJumpLiveLocation(cm);
+    if (live) {
+      refreshVimJumpCurrentLocation(state, live);
+    }
+
+    let index = getVimJumpCurrentIndex(state);
+    const signedSteps = direction < 0 ? -steps : steps;
+    let targetIndex = index + signedSteps;
+    targetIndex = Math.min(Math.max(targetIndex, 0), state.entries.length - 1);
+    if (targetIndex === index) {
+      // At a file-aware boundary: a no-op, never a fallback that replays
+      // stale native entries.
+      return false;
+    }
+
+    // Skip deleted/unresolvable entries without creating files. A recoverable
+    // open error keeps the traversal index intact.
+    const increment = direction < 0 ? -1 : 1;
+    let candidateIndex = targetIndex;
+    let lastErrorIndex = -1;
+    while (candidateIndex >= 0 && candidateIndex < state.entries.length) {
+      const entry = state.entries[candidateIndex];
+      if (await this.isVimJumpEntryResolvable(entry)) {
+        break;
+      }
+
+      candidateIndex += increment;
+      if (
+        (direction < 0 && candidateIndex < 0) ||
+        (direction > 0 && candidateIndex >= state.entries.length)
+      ) {
+        return false;
+      }
+    }
+
+    if (candidateIndex < 0 || candidateIndex >= state.entries.length) {
+      return false;
+    }
+
+    const token = ++this.vimJumpOperationToken;
+    this.vimJumpSuppressNativeMirror = true;
+    try {
+      const opened = await this.openVimJumpLocation(
+        state.entries[candidateIndex],
+        token,
+      );
+      if (!opened) {
+        lastErrorIndex = candidateIndex;
+        return false;
+      }
+
+      state.index = candidateIndex;
+      return true;
+    } finally {
+      this.vimJumpSuppressNativeMirror = false;
+      if (lastErrorIndex !== -1) {
+        // Keep the index on the last good entry; forward history is kept.
+      }
+    }
+  }
+
+  async isVimJumpEntryResolvable(entry) {
+    const normalized = normalizeVimJumpLocation(entry);
+    if (!normalized) {
+      return false;
+    }
+
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.getAbstractFileByPath !== "function") {
+        return true;
+      }
+
+      const file = vault.getAbstractFileByPath(normalized.path);
+      return this.isMarkdownFile(file);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async walkNativeJumpList(cm, direction, count) {
+    try {
+      const vim = this.getVimAdapter();
+      if (!isVimJumpBridgeAvailable(vim)) {
+        return false;
+      }
+
+      const globalState = vim.getVimGlobalState_();
+      const jumpList = globalState && globalState.jumpList;
+      if (!jumpList || typeof jumpList.move !== "function") {
+        return false;
+      }
+
+      if (!cm || typeof cm.getCursor !== "function" || typeof cm.setCursor !== "function") {
+        return false;
+      }
+
+      const steps = Math.max(1, Math.floor(numericOrDefault(count, 1)) || 1);
+      const mark = jumpList.move(cm, direction < 0 ? -steps : steps);
+      const markPos = mark && typeof mark.find === "function" ? mark.find() : null;
+      const target = normalizePosition(markPos) || normalizePosition(cm.getCursor());
+      if (!target) {
+        return false;
+      }
+
+      this.vimJumpSuppressNativeMirror = true;
+      try {
+        if (typeof cm.setCursor === "function") {
+          try {
+            cm.setCursor(target.line, target.ch);
+          } catch (error) {
+            cm.setCursor(target);
+          }
+        }
+      } finally {
+        this.vimJumpSuppressNativeMirror = false;
+      }
+
+      return true;
+    } catch (error) {
+      this.vimJumpSuppressNativeMirror = false;
+      return false;
+    }
+  }
+
+  async openVimJumpLocation(entry, operationToken) {
+    const normalized = normalizeVimJumpLocation(entry);
+    if (!normalized) {
+      return false;
+    }
+
+    if (
+      operationToken !== undefined &&
+      operationToken !== this.vimJumpOperationToken
+    ) {
+      return false;
+    }
+
+    let file = null;
+    try {
+      const vault = this.app && this.app.vault;
+      file =
+        vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(normalized.path)
+          : null;
+    } catch (error) {
+      return false;
+    }
+
+    if (!this.isMarkdownFile(file)) {
+      return false;
+    }
+
+    try {
+      const activeView = this.getActiveMarkdownView();
+      if (activeView && activeView.file && activeView.file.path === file.path) {
+        const target = activeView.editor
+          ? clampPositionToEditor(activeView.editor, normalized)
+          : normalized;
+        if (target && activeView.editor) {
+          setEditorCursor(activeView.editor, target);
+          this.saveFilePosition(file.path, target);
+        }
+        await this.focusWorkspaceLeaf(
+          (this.app.workspace && this.app.workspace.activeLeaf) || null,
+        );
+        return true;
+      }
+
+      const existingLeaf = this.findMarkdownLeafByPath(file.path);
+      if (existingLeaf && (await this.activateWorkspaceLeaf(existingLeaf))) {
+        const settled = await this.waitForVimJumpDestination(
+          file.path,
+          operationToken,
+        );
+        const editor = settled && settled.editor ? settled.editor : null;
+        const target = editor
+          ? clampPositionToEditor(editor, normalized)
+          : normalized;
+        if (target && editor) {
+          setEditorCursor(editor, target);
+          this.saveFilePosition(file.path, target);
+        }
+        return Boolean(settled);
+      }
+
+      const opened = await this.openMarkdownFileWithLeafReuse(file, null);
+      if (!opened) {
+        return false;
+      }
+
+      const settled = await this.waitForVimJumpDestination(
+        file.path,
+        operationToken,
+      );
+      const editor = settled && settled.editor ? settled.editor : null;
+      const target = editor
+        ? clampPositionToEditor(editor, normalized)
+        : normalized;
+      if (target && editor) {
+        setEditorCursor(editor, target);
+        this.saveFilePosition(file.path, target);
+      }
+      return Boolean(settled);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  waitForVimJumpDestination(expectedPath, operationToken, retries = VIM_JUMP_HISTORY_DESTINATION_RETRIES) {
+    const attempts = Math.max(1, Math.floor(numericOrDefault(retries, 1)) || 1);
+    return new Promise((resolve) => {
+      let attempt = 0;
+      const check = () => {
+        if (
+          operationToken !== undefined &&
+          operationToken !== this.vimJumpOperationToken
+        ) {
+          resolve(null);
+          return;
+        }
+
+        let view = null;
+        try {
+          view = this.getActiveMarkdownView();
+        } catch (error) {
+          view = null;
+        }
+
+        if (view && view.file && view.file.path === expectedPath && view.editor) {
+          resolve(view);
+          return;
+        }
+
+        attempt += 1;
+        if (attempt >= attempts) {
+          resolve(null);
+          return;
+        }
+
+        this.vimJumpPendingDestinationDeferred = deferToNextFrame(check);
+      };
+
+      check();
+    });
+  }
+
+  cancelPendingVimJumpDestination() {
+    cancelDeferred(this.vimJumpPendingDestinationDeferred);
+    this.vimJumpPendingDestinationDeferred = null;
+    this.vimJumpOperationToken += 1;
+  }
+
+  beginVimLinkJump(cm) {
+    this.ensureVimJumpHistory();
+    let origin = null;
+    try {
+      const view = this.getActiveMarkdownView();
+      if (view && view.file) {
+        let cursor = null;
+        if (cm && typeof cm.getCursor === "function") {
+          cursor = normalizePosition(cm.getCursor());
+        }
+        if (!cursor && view.editor && typeof view.editor.getCursor === "function") {
+          cursor = normalizePosition(view.editor.getCursor());
+        }
+        if (cursor) {
+          origin = { path: view.file.path, line: cursor.line, ch: cursor.ch };
+        }
+      }
+    } catch (error) {
+      origin = null;
+    }
+
+    if (!normalizeVimJumpLocation(origin)) {
+      return null;
+    }
+
+    const token = ++this.vimJumpOperationToken;
+    return Object.freeze({
+      origin: Object.freeze({ ...origin }),
+      token,
+    });
+  }
+
+  async finishVimLinkJump(jumpContext, expectedPath) {
+    if (!jumpContext || !jumpContext.origin) {
+      return false;
+    }
+
+    const normalizedOrigin = normalizeVimJumpLocation(jumpContext.origin);
+    if (!normalizedOrigin) {
+      return false;
+    }
+
+    if (typeof expectedPath !== "string" || !expectedPath) {
+      return false;
+    }
+
+    // Destination readiness is tied to the expected file/leaf and the
+    // operation token: never capture an unrelated active note and never run a
+    // late recording into a newer navigation.
+    const settled = await this.waitForVimJumpDestination(
+      expectedPath,
+      jumpContext.token,
+    );
+    if (!settled || !settled.editor) {
+      return false;
+    }
+
+    if (jumpContext.token !== this.vimJumpOperationToken) {
+      return false;
+    }
+
+    let destination = null;
+    try {
+      const cursor = normalizePosition(settled.editor.getCursor());
+      if (cursor) {
+        destination = { path: expectedPath, line: cursor.line, ch: cursor.ch };
+      }
+    } catch (error) {
+      destination = null;
+    }
+
+    if (!normalizeVimJumpLocation(destination)) {
+      return false;
+    }
+
+    if (vimJumpLocationsEqual(normalizedOrigin, destination)) {
+      return false;
+    }
+
+    // Serialize with traversal so overlapping link opens cannot race the index.
+    return this.enqueueVimJumpOperation(() => {
+      if (jumpContext.token !== this.vimJumpOperationToken) {
+        // A newer navigation began while this destination was settling.
+        // Drop the stale context rather than racing the history index.
+        return false;
+      }
+
+      this.ensureVimJumpHistory();
+      const recorded = recordVimJumpTransition(
+        this.vimJumpHistory,
+        normalizedOrigin,
+        destination,
+      );
+      // Advance the token so a late duplicate callback for the same context
+      // cannot record twice.
+      if (recorded) {
+        this.vimJumpOperationToken += 1;
+      }
+      return recorded;
+    });
   }
 
   getLeafViewState(leaf) {
@@ -40460,6 +41506,15 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    // Snapshot the original cursor before a count selects another line and
+    // before a picker takes focus. Counted Enter returns to this origin, not
+    // to the counted link line.
+    const jumpContext = this.beginVimLinkJump(cm);
+    if (!jumpContext) {
+      // No resolvable origin: fall through to the existing no-history path so
+      // ordinary link opening keeps working.
+    }
+
     const targetLine = getVimOffsetTargetLine(
       cm,
       actionArgs,
@@ -40481,13 +41536,19 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     if (candidates.length === 1) {
-      this.openOrCreateLinkCandidate(candidates[0]).catch(() => {
+      this.openOrCreateLinkCandidate(candidates[0], jumpContext).catch(() => {
         new Notice("Could not open link target");
       });
       return true;
     }
 
-    new LinkCandidatePickerModal(this.app, this, candidates, targetLine).open();
+    new LinkCandidatePickerModal(
+      this.app,
+      this,
+      candidates,
+      targetLine,
+      jumpContext,
+    ).open();
     return true;
   }
 
@@ -40631,22 +41692,70 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return `${candidate.actionKind}:${candidate.target}`;
   }
 
-  async openOrCreateLinkCandidate(candidate) {
+  async openOrCreateLinkCandidate(candidate, jumpContext = null) {
     if (!candidate) {
       return false;
     }
 
     this.captureActiveFilePosition();
 
+    // A stale picker (the user switched notes while it was open) never
+    // records a false jump: still open the chosen target, but drop the
+    // recording context.
+    let effectiveJumpContext = jumpContext;
+    if (
+      effectiveJumpContext &&
+      effectiveJumpContext.origin &&
+      typeof effectiveJumpContext.origin.path === "string"
+    ) {
+      try {
+        const activeFile =
+          this.app && this.app.workspace
+            ? this.app.workspace.getActiveFile()
+            : null;
+        const activePath =
+          activeFile && typeof activeFile.path === "string"
+            ? activeFile.path
+            : null;
+        if (activePath && activePath !== effectiveJumpContext.origin.path) {
+          effectiveJumpContext = null;
+        }
+      } catch (error) {
+        // Best-effort staleness check only.
+      }
+    }
+
+    const expectedPath =
+      candidate.resolvedFile && candidate.resolvedFile.path
+        ? candidate.resolvedFile.path
+        : candidate.creation && candidate.creation.path
+          ? candidate.creation.path
+          : typeof candidate.path === "string"
+            ? candidate.path
+            : null;
+
+    let opened = false;
     if (candidate.resolvedFile) {
-      return this.openResolvedLink(
+      opened = await this.openResolvedLink(
         candidate.target,
         candidate.sourcePath,
         "Link target not found",
       );
+    } else {
+      opened = await this.createNoteFromLinkCandidate(candidate);
     }
 
-    return this.createNoteFromLinkCandidate(candidate);
+    if (!opened || !effectiveJumpContext || !expectedPath) {
+      return opened;
+    }
+
+    try {
+      await this.finishVimLinkJump(effectiveJumpContext, expectedPath);
+    } catch (error) {
+      // Recording must never turn a successful open into a failure.
+    }
+
+    return opened;
   }
 
   async createNoteFromLinkCandidate(candidate) {
@@ -43856,6 +44965,24 @@ module.exports.helpers = {
   getVimOffsetTargetLine,
   getVimEnterTargetLine,
   getVimBackspaceTargetLine,
+  normalizeVimJumpLocation,
+  cloneVimJumpLocation,
+  vimJumpLocationsEqual,
+  createVimJumpHistory,
+  getVimJumpHistoryLength,
+  getVimJumpCurrentIndex,
+  recordVimJumpLocation,
+  recordVimJumpTransition,
+  refreshVimJumpCurrentLocation,
+  updateVimJumpHistoryPath,
+  removeVimJumpHistoryPath,
+  clearVimJumpHistory,
+  resolveVimJumpCount,
+  isVimJumpBridgeAvailable,
+  LinkCandidatePickerModal,
+  VIM_JUMP_HISTORY_LIMIT,
+  VIM_JUMP_HISTORY_DESTINATION_RETRIES,
+  VIM_JUMP_HISTORY_COMPATIBILITY_NOTICE,
   getEditorFirstLine,
   getEditorLastLine,
   getEditorLineText,

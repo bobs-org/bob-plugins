@@ -8565,11 +8565,18 @@ test("tab pin Vim action registers once and toggles only the active leaf once", 
 
   const actions = new Map();
   const mappings = [];
+  const jumpList = {
+    add() {},
+    move() {
+      return null;
+    },
+  };
   global.window = {
     CodeMirrorAdapter: {
       Vim: {
         defineAction: (name, handler) => actions.set(name, handler),
         mapCommand: (...args) => mappings.push(args),
+        getVimGlobalState_: () => ({ jumpList }),
       },
     },
   };
@@ -8588,21 +8595,44 @@ test("tab pin Vim action registers once and toggles only the active leaf once", 
   };
   const workspace = { activeLeaf: firstLeaf };
   const plugin = new NavigationHotkeysPlugin();
-  plugin.app = { workspace };
+  plugin.app = {
+    workspace,
+    vault: { getAbstractFileByPath: () => null, on: () => ({}) },
+    metadataCache: { getFirstLinkpathDest: () => null },
+  };
   plugin.vimMappingsRegistered = false;
 
   assert.equal(plugin.registerVimMappings(), true);
   assert.equal(plugin.registerVimMappings(), true);
-  assert.deepEqual(mappings, [
-    [
-      "\\s",
-      "action",
-      "bobNavigationToggleCurrentTabPin",
-      {},
-      { context: "normal" },
-    ],
+  assert.deepEqual(
+    mappings.map(([key]) => key),
+    ["\\s", "<C-o>", "<C-i>"],
+  );
+  assert.deepEqual(mappings[0], [
+    "\\s",
+    "action",
+    "bobNavigationToggleCurrentTabPin",
+    {},
+    { context: "normal" },
+  ]);
+  assert.deepEqual(mappings[1], [
+    "<C-o>",
+    "action",
+    "bobNavigationJumpBack",
+    {},
+    { context: "normal" },
+  ]);
+  assert.deepEqual(mappings[2], [
+    "<C-i>",
+    "action",
+    "bobNavigationJumpForward",
+    {},
+    { context: "normal" },
   ]);
   assert.equal(mappings.some(([key]) => key === "\\p"), false);
+  assert.equal(mappings.some(([key]) => key === "<Tab>" || key === "Tab"), false);
+  assert.ok(actions.has("bobNavigationJumpBack"));
+  assert.ok(actions.has("bobNavigationJumpForward"));
 
   actions.get("bobNavigationToggleCurrentTabPin")(null, { repeat: 5 });
   assert.equal(firstToggleCount, 1);

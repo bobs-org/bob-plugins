@@ -752,6 +752,11 @@
   color: var(--text-accent);
 }
 
+.bob-cnp-property-value-row.is-invalid .bob-cnp-row-icon,
+.bob-cnp-property-value-row.is-invalid .bob-cnp-row-title {
+  color: var(--text-error);
+}
+
 .bob-cnp-priority-value-row {
   border-left: 2px solid
     color-mix(in srgb, var(--text-accent) 42%, transparent);

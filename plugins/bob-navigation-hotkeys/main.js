@@ -15104,7 +15104,7 @@ const BULLET_PROPERTY_STAGE_TWO_HINTS = [
   { keys: ["esc"], label: "Dismiss" },
 ];
 
-function getBulletPropertyStageTwoHints(hasPriorityRoll, rollPreview) {
+function getBulletPropertyStageTwoHints(hasPriorityRoll, rollPreview, options = {}) {
   const hints = !hasPriorityRoll
     ? [...BULLET_PROPERTY_STAGE_TWO_HINTS]
     : [
@@ -15115,11 +15115,16 @@ function getBulletPropertyStageTwoHints(hasPriorityRoll, rollPreview) {
         ],
       ];
   if (rollPreview && rollPreview.footerLabel) {
-    return [
-      ...hints.slice(0, -1),
-      { keys: ["^↵"], label: rollPreview.footerLabel },
-      hints[hints.length - 1],
-    ];
+    hints.splice(hints.length - 1, 0, {
+      keys: ["^↵"],
+      label: rollPreview.footerLabel,
+    });
+  }
+  if (options && options.skipReason === true) {
+    hints.splice(hints.length - 1, 0, {
+      keys: ["⇧↵"],
+      label: "Skip reason",
+    });
   }
   return hints;
 }
@@ -23061,6 +23066,298 @@ function createBulletPropertyTypedDateItem(query, baseDate, currentValue) {
   });
 }
 
+const TYPED_SCHEDULE_ERROR_INVALID = "invalid date";
+const TYPED_SCHEDULE_ERROR_NEGATIVE = "negative offset";
+const TYPED_SCHEDULE_ERROR_OVERFLOW = "overflow offset";
+const TYPED_SCHEDULE_ERROR_AMBIGUOUS = "ambiguous input";
+const TYPED_SCHEDULE_MAX_COUNT_DIGITS = 5;
+const TYPED_SCHEDULE_WEEKDAY_INDEX = Object.freeze({
+  sun: 0,
+  sunday: 0,
+  mon: 1,
+  monday: 1,
+  tue: 2,
+  tuesday: 2,
+  wed: 3,
+  wednesday: 3,
+  thu: 4,
+  thursday: 4,
+  fri: 5,
+  friday: 5,
+  sat: 6,
+  saturday: 6,
+});
+
+function freezeTypedScheduleResult(date, reason, valid, error) {
+  return Object.freeze({
+    date: valid && date instanceof Date ? getLocalDateStart(date) : null,
+    reason: String(reason || ""),
+    valid: valid === true,
+    error: valid ? null : error || null,
+  });
+}
+
+function parseTypedScheduleCount(text) {
+  const digits = String(text || "");
+  if (!/^\d+$/.test(digits)) {
+    return { error: TYPED_SCHEDULE_ERROR_INVALID };
+  }
+  if (digits.length > TYPED_SCHEDULE_MAX_COUNT_DIGITS) {
+    return { error: TYPED_SCHEDULE_ERROR_OVERFLOW };
+  }
+  const count = Number.parseInt(digits, 10);
+  if (!Number.isInteger(count) || count < 0) {
+    return { error: TYPED_SCHEDULE_ERROR_OVERFLOW };
+  }
+  return { count };
+}
+
+function typedScheduleDateOrError(date) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+    return { error: TYPED_SCHEDULE_ERROR_OVERFLOW };
+  }
+  const year = date.getFullYear();
+  if (year < 1 || year > 9999) {
+    return { error: TYPED_SCHEDULE_ERROR_OVERFLOW };
+  }
+  return { date: getLocalDateStart(date) };
+}
+
+function parseTypedScheduleMonthDay(monthText, dayText, baseDate) {
+  let year = baseDate.getFullYear();
+  if (!isValidDateParts(String(year), monthText, dayText)) {
+    return { error: TYPED_SCHEDULE_ERROR_INVALID };
+  }
+  let date = new Date(
+    year,
+    parseIntegerText(monthText) - 1,
+    parseIntegerText(dayText),
+  );
+  if (compareLocalDates(date, baseDate) <= 0) {
+    year += 1;
+    if (!isValidDateParts(String(year), monthText, dayText)) {
+      return { error: TYPED_SCHEDULE_ERROR_INVALID };
+    }
+    date = new Date(
+      year,
+      parseIntegerText(monthText) - 1,
+      parseIntegerText(dayText),
+    );
+  }
+  return typedScheduleDateOrError(date);
+}
+
+function applyTypedScheduleUnit(baseDate, count, unit) {
+  if (unit === "d") {
+    return typedScheduleDateOrError(addLocalDateDays(baseDate, count));
+  }
+  if (unit === "w") {
+    return typedScheduleDateOrError(addLocalDateDays(baseDate, count * 7));
+  }
+  return typedScheduleDateOrError(addLocalDateMonths(baseDate, count));
+}
+
+function matchTypedSchedulePrefix(text) {
+  const patterns = [
+    { kind: "iso", re: /^(\d{4})-(\d{2})-(\d{2})/ },
+    { kind: "month-day", re: /^(\d{1,2})[/-](\d{1,2})/ },
+    { kind: "unit", re: /^([+-]?)(\d+)([dwm])/i },
+    { kind: "days", re: /^([+-]?)(\d+)/ },
+    {
+      kind: "weekday",
+      re: /^(sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tue|wed|thu|fri|sat)/i,
+    },
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.re.exec(text);
+    if (!match) {
+      continue;
+    }
+    const token = match[0];
+    const restRaw = text.slice(token.length);
+    if (restRaw !== "" && !/^\s/.test(restRaw)) {
+      return Object.freeze({ kind: "attached", token, rest: restRaw });
+    }
+    return Object.freeze({
+      kind: pattern.kind,
+      token,
+      rest: restRaw.trim(),
+      match,
+    });
+  }
+  return null;
+}
+
+// Conservative Task Card date grammar. An inline reason is the remainder
+// after a complete recognized date token and whitespace; it is never parsed
+// as further commands. Unrecognized input returns valid=false with no error
+// so ordinary preset filtering can keep the query.
+function resolveTypedSchedule(query, baseDate) {
+  const text = String(query || "").trim();
+  const start = getLocalDateStart(
+    baseDate instanceof Date ? baseDate : new Date(),
+  );
+  if (!text) {
+    return freezeTypedScheduleResult(null, "", false, null);
+  }
+
+  const prefix = matchTypedSchedulePrefix(text);
+  if (!prefix) {
+    return freezeTypedScheduleResult(null, "", false, null);
+  }
+  if (prefix.kind === "attached") {
+    return freezeTypedScheduleResult(
+      null,
+      "",
+      false,
+      TYPED_SCHEDULE_ERROR_AMBIGUOUS,
+    );
+  }
+
+  const reason = prefix.rest;
+  if (prefix.kind === "iso") {
+    const yearText = prefix.match[1];
+    const monthText = prefix.match[2];
+    const dayText = prefix.match[3];
+    if (!isValidDateParts(yearText, monthText, dayText)) {
+      return freezeTypedScheduleResult(
+        null,
+        reason,
+        false,
+        TYPED_SCHEDULE_ERROR_INVALID,
+      );
+    }
+    const resolved = typedScheduleDateOrError(
+      new Date(
+        parseIntegerText(yearText),
+        parseIntegerText(monthText) - 1,
+        parseIntegerText(dayText),
+      ),
+    );
+    if (resolved.error) {
+      return freezeTypedScheduleResult(null, reason, false, resolved.error);
+    }
+    return freezeTypedScheduleResult(resolved.date, reason, true, null);
+  }
+
+  if (prefix.kind === "month-day") {
+    const resolved = parseTypedScheduleMonthDay(
+      prefix.match[1],
+      prefix.match[2],
+      start,
+    );
+    if (resolved.error) {
+      return freezeTypedScheduleResult(null, reason, false, resolved.error);
+    }
+    return freezeTypedScheduleResult(resolved.date, reason, true, null);
+  }
+
+  if (prefix.kind === "unit" || prefix.kind === "days") {
+    const sign = prefix.match[1] || "";
+    const countText = prefix.match[2];
+    const unit = prefix.kind === "unit" ? prefix.match[3].toLowerCase() : "d";
+    if (sign === "-") {
+      return freezeTypedScheduleResult(
+        null,
+        reason,
+        false,
+        TYPED_SCHEDULE_ERROR_NEGATIVE,
+      );
+    }
+    if (prefix.kind === "days" && sign === "+") {
+      return freezeTypedScheduleResult(
+        null,
+        reason,
+        false,
+        TYPED_SCHEDULE_ERROR_AMBIGUOUS,
+      );
+    }
+    const parsedCount = parseTypedScheduleCount(countText);
+    if (parsedCount.error) {
+      return freezeTypedScheduleResult(null, reason, false, parsedCount.error);
+    }
+    const resolved = applyTypedScheduleUnit(start, parsedCount.count, unit);
+    if (resolved.error) {
+      return freezeTypedScheduleResult(null, reason, false, resolved.error);
+    }
+    return freezeTypedScheduleResult(resolved.date, reason, true, null);
+  }
+
+  const weekday =
+    TYPED_SCHEDULE_WEEKDAY_INDEX[String(prefix.token || "").toLowerCase()];
+  if (!Number.isInteger(weekday)) {
+    return freezeTypedScheduleResult(
+      null,
+      reason,
+      false,
+      TYPED_SCHEDULE_ERROR_INVALID,
+    );
+  }
+  const resolved = typedScheduleDateOrError(
+    addLocalDateDays(start, getDaysUntilWeekday(start, weekday, false)),
+  );
+  if (resolved.error) {
+    return freezeTypedScheduleResult(null, reason, false, resolved.error);
+  }
+  return freezeTypedScheduleResult(resolved.date, reason, true, null);
+}
+
+function createTypedScheduleValueItem(resolved, baseDate, currentValue) {
+  if (!resolved) {
+    return null;
+  }
+  const reason = String(resolved.reason || "");
+  if (resolved.valid === true && resolved.date instanceof Date) {
+    const date = getLocalDateStart(resolved.date);
+    const value = formatBulletPropertyDate(date);
+    const weekday = getBulletPropertyDateWeekday(date);
+    const relative = formatRelativeDayOffset(
+      getLocalDayOffset(baseDate, date),
+    );
+    const yearRollover =
+      date.getFullYear() !== getLocalDateStart(baseDate).getFullYear();
+    const label = `Use ${weekday} ${value}`;
+    const detailParts = [relative];
+    if (yearRollover) {
+      detailParts.push(String(date.getFullYear()));
+    }
+    if (reason) {
+      detailParts.push(reason);
+    }
+    return {
+      kind: "value",
+      value,
+      label,
+      detail: detailParts.join(" · "),
+      current: value === currentValue,
+      dynamic: true,
+      typedSchedule: true,
+      valid: true,
+      inlineReason: reason,
+      yearRollover,
+      weekday,
+      relative,
+      searchText: `${label} ${detailParts.join(" ")}`,
+    };
+  }
+  if (resolved.error) {
+    return {
+      kind: "value",
+      value: "",
+      label: "Invalid date",
+      detail: resolved.error,
+      current: false,
+      dynamic: true,
+      typedSchedule: true,
+      valid: false,
+      error: resolved.error,
+      inlineReason: reason,
+      searchText: `invalid date ${resolved.error}`,
+    };
+  }
+  return null;
+}
+
 function getLocalTaskDependencyIdentifier(task, filePath = "") {
   if (!task) {
     return "";
@@ -27619,6 +27916,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.clearLocalTaskMarks();
 
     const isDateProperty = property.values === "date";
+    const isScheduledProperty =
+      isDateProperty &&
+      normalizeBulletPropertyName(property.name) === "scheduled";
     const isPriorityProperty = property.values === "priority";
     const items = createBulletPropertyValueItems(
       propertyItem,
@@ -27686,7 +27986,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           : "list-checks",
       inputLabel: `Filter ${property.name} values`,
       placeholder: isDateProperty
-        ? "Type date, +3d, or 6/24"
+        ? this.taskCardEnabled && isScheduledProperty
+          ? "Type 3, 3d, mon, +3d, or 6/24"
+          : "Type date, +3d, or 6/24"
         : isPriorityProperty
           ? "Filter priorities"
           : "Filter values",
@@ -27697,6 +27999,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       footerHints: getBulletPropertyStageTwoHints(
         Boolean(priorityRollLevel),
         this.getRollPreviewForDateProperty(property.name),
+        {
+          skipReason: this.taskCardEnabled && isScheduledProperty,
+        },
       ),
       getSubtitle: () => {
         const scope = this.isCountedSession()
@@ -27722,13 +28027,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.renderValueItem(item, rowEl, query),
       openItem:
         normalizeBulletPropertyName(property.name) === "scheduled"
-          ? (item) => {
-              if (item.priorityRoll) {
-                return this.maybeOfferPinnedRollWorkLog(item);
-              }
-              this.showScheduleReasonStage(item);
-              return false;
-            }
+          ? (item) => this.commitScheduledDateItem(item)
           : (item) => this.maybeOfferPriorityWorkLog(item),
     });
 
@@ -27860,6 +28159,46 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       from: this.getPendingScheduleFrom(),
       to: item.value,
     });
+  }
+
+  // Freeze a scheduled date pick and either skip the reason prompt (inline
+  // reason, Shift+Enter blank-reason) or open the existing reason stage.
+  // Invalid typed previews never write. Pinned rolls keep their deterministic
+  // reason and skip this path.
+  commitScheduledDateItem(item, options = {}) {
+    if (!item) {
+      return false;
+    }
+    if (item.priorityRoll) {
+      return this.maybeOfferPinnedRollWorkLog(item);
+    }
+    if (item.typedSchedule && item.valid === false) {
+      return false;
+    }
+    const skipReason = this.taskCardEnabled && options.skipReason === true;
+    const inlineReason =
+      this.taskCardEnabled && !skipReason
+        ? String(item.inlineReason || "")
+        : "";
+    const normalizedInline = normalizeScheduleReasonText(inlineReason);
+    if (skipReason || !normalizedInline.empty) {
+      this.pendingScheduleReason = Object.freeze({
+        dateItem: item,
+        from: this.getPendingScheduleFrom(),
+        to: item.value,
+      });
+      return this.confirmScheduleReason(
+        skipReason
+          ? Object.freeze({
+              reason: "",
+              empty: true,
+              hasInlineField: false,
+            })
+          : normalizedInline,
+      );
+    }
+    this.showScheduleReasonStage(item);
+    return false;
   }
 
   // Free-text prompt shown after a `scheduled` date is chosen, mirroring the
@@ -28225,10 +28564,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
               },
             ]
           : [];
-    const scheduleSummary =
+    let scheduleSummary =
       scheduleLog && scheduleLog.to
         ? `scheduled → ${normalizeBulletPropertyValue(scheduleLog.to)}`
         : "";
+    if (this.taskCardEnabled && scheduleLog) {
+      const reasonText = normalizeScheduleReasonText(scheduleLog.reason);
+      if (!reasonText.empty) {
+        scheduleSummary = scheduleSummary
+          ? `${scheduleSummary} · ${reasonText.reason}`
+          : reasonText.reason;
+      }
+    }
     return await this.offerSchedulingWorkLogOrDispatch({
       targets,
       scheduleSummary,
@@ -30172,10 +30519,31 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return items;
     }
 
+    const currentValue = this.selectedPropertyItem.currentValue || "";
+    const isScheduledProperty =
+      normalizeBulletPropertyName(this.selectedPropertyItem.property.name) ===
+      "scheduled";
+    if (this.taskCardEnabled && isScheduledProperty) {
+      const typedItem = createTypedScheduleValueItem(
+        resolveTypedSchedule(this.getRawQuery(), this.valueBaseDate),
+        this.valueBaseDate,
+        currentValue,
+      );
+      if (!typedItem) {
+        return items;
+      }
+      return [
+        typedItem,
+        ...items.filter(
+          (item) => !typedItem.value || item.value !== typedItem.value,
+        ),
+      ];
+    }
+
     const typedItem = createBulletPropertyTypedDateItem(
       this.getRawQuery(),
       this.valueBaseDate,
-      this.selectedPropertyItem.currentValue || "",
+      currentValue,
     );
     if (!typedItem) {
       return items;
@@ -30390,6 +30758,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       item.priorityRoll ? "is-priority-roll" : "",
       item.current ? "is-current" : "",
       item.dynamic ? "is-dynamic" : "",
+      item.typedSchedule && item.valid === false ? "is-invalid" : "",
     );
 
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
@@ -30397,11 +30766,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       rowIcon,
       item.priorityRoll
         ? "dices"
-        : item.current
-          ? "check-circle-2"
-          : item.dynamic
-            ? "calendar-plus"
-            : "circle",
+        : item.typedSchedule && item.valid === false
+          ? "alert-triangle"
+          : item.current
+            ? "check-circle-2"
+            : item.dynamic
+              ? "calendar-plus"
+              : "circle",
     );
 
     const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
@@ -32919,6 +33290,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
                     this.selectedPropertyItem.property.name,
                   )
                 : null,
+              { skipReason: this.taskCardEnabled },
             ),
           });
           event.preventDefault();
@@ -32938,6 +33310,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
                     this.selectedPropertyItem.property.name,
                   )
                 : null,
+              { skipReason: this.taskCardEnabled },
             ),
           });
           rerolled = true;
@@ -32955,6 +33328,44 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         event.stopPropagation();
         return;
       }
+    }
+
+    if (
+      this.taskCardEnabled &&
+      this.stage === "value" &&
+      this.selectedPropertyItem &&
+      this.selectedPropertyItem.property &&
+      this.selectedPropertyItem.property.values === "date" &&
+      normalizeBulletPropertyName(this.selectedPropertyItem.property.name) ===
+        "scheduled" &&
+      event &&
+      event.key === "Enter" &&
+      event.shiftKey === true &&
+      event.ctrlKey !== true &&
+      event.metaKey !== true &&
+      event.altKey !== true
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.opening) {
+        return;
+      }
+      const item = this.visibleItems[this.selectedIndex];
+      if (!item) {
+        return;
+      }
+      this.opening = true;
+      Promise.resolve(this.commitScheduledDateItem(item, { skipReason: true }))
+        .then((applied) => {
+          if (applied === true) {
+            this.close();
+          }
+        })
+        .catch(() => false)
+        .finally(() => {
+          this.opening = false;
+        });
+      return;
     }
 
     super.handleKeydown(event);
@@ -51576,6 +51987,8 @@ module.exports.helpers = {
   createPriorityRollDateItem,
   createBulletPropertyValueItems,
   parseBulletPropertyTypedDate,
+  resolveTypedSchedule,
+  createTypedScheduleValueItem,
   formatBulletPropertyDate,
   cleanTaskDisplayText,
   getOpenLocalTasks,

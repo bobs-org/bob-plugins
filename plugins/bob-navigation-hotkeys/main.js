@@ -33844,11 +33844,63 @@ function resolveReviewAnchorTarget(remaining, anchor, direction) {
   });
 }
 
+// After the one-step landing, move `repeat - 1` further indexes on the
+// same walk list (full queue for a cursor hit or no-origin fallback;
+// remaining for an anchor). Absent or invalid `repeat` is 1.
+function applyReviewJumpRepeat(step, walkList, direction, repeatRaw) {
+  if (!step || step.kind !== "jump") {
+    return step;
+  }
+  const repeat = normalizeVimRepeat(repeatRaw);
+  if (repeat <= 1) {
+    return Object.freeze({
+      kind: "jump",
+      entry: step.entry,
+      rank: step.rank,
+      total: step.total,
+      wrapped: step.wrapped,
+      originTier: step.originTier,
+    });
+  }
+  const list = Array.isArray(walkList) ? walkList : [];
+  if (list.length === 0) {
+    return Object.freeze({ kind: "empty" });
+  }
+  const wantKey = reviewQueueEntryKey(step.entry);
+  const firstIndex = list.findIndex(
+    (entry) =>
+      entry === step.entry || reviewQueueEntryKey(entry) === wantKey,
+  );
+  if (firstIndex < 0) {
+    return Object.freeze({
+      kind: "jump",
+      entry: step.entry,
+      rank: step.rank,
+      total: step.total,
+      wrapped: step.wrapped,
+      originTier: step.originTier,
+    });
+  }
+  const extra = repeat - 1;
+  const raw = firstIndex + direction * extra;
+  const rem = raw % list.length;
+  const finalIndex = rem < 0 ? rem + list.length : rem;
+  return Object.freeze({
+    kind: "jump",
+    entry: list[finalIndex],
+    rank: finalIndex + 1,
+    total: list.length,
+    wrapped: Boolean(step.wrapped) || raw < 0 || raw >= list.length,
+    originTier: step.originTier,
+  });
+}
+
 // Pure jump position over a freshly read queue. Returns `{ kind: "empty" }`
 // or `{ kind: "jump", entry, rank, total, wrapped, originTier }`
 // (`rank` is 1-based). `endpoint` ("first"/"last") selects that queue
 // endpoint with full-queue rank/total, `wrapped: false`, and a null origin,
-// ignoring cursor and anchor. `direction` is +1 (next) or -1 (prev);
+// ignoring cursor, anchor, and `repeat`. `direction` is +1 (next) or -1
+// (prev); `repeat` is the total number of queue steps (default 1).
 // `cursor` is `{ path, line, text }` with a 1-based line; `stamped` (or
 // `anchor`) is the walk anchor from the last landing or Alt+F write (the
 // Tasks cache lags, so handled keys are skipped by key). Origin resolves
@@ -33857,7 +33909,8 @@ function resolveReviewAnchorTarget(remaining, anchor, direction) {
 // successor (`]s`) or last surviving predecessor (`[s`), wrapping with
 // the notice; else the first or last entry. Legacy `{ keys, rank, count }`
 // anchors without before/after keys keep the rank-skip behavior forward,
-// mirrored backward.
+// mirrored backward. Extra counted steps continue from that one-step
+// landing on the same walk list; `originTier` stays the one-step origin.
 function planReviewJump(queue, options = {}) {
   const list = Array.isArray(queue) ? queue.slice() : [];
   const direction = options.direction < 0 ? -1 : 1;
@@ -33879,6 +33932,8 @@ function planReviewJump(queue, options = {}) {
       originTier: null,
     });
   }
+  const finish = (step, walkList) =>
+    applyReviewJumpRepeat(step, walkList, direction, options.repeat);
   const anchor =
     options.anchor && typeof options.anchor === "object"
       ? options.anchor
@@ -33930,14 +33985,17 @@ function planReviewJump(queue, options = {}) {
       index = 0;
       wrapped = true;
     }
-    return Object.freeze({
-      kind: "jump",
-      entry: list[index],
-      rank: index + 1,
-      total: list.length,
-      wrapped,
-      originTier: reviewEntryMachineTier(list[cursorIndex]) || null,
-    });
+    return finish(
+      {
+        kind: "jump",
+        entry: list[index],
+        rank: index + 1,
+        total: list.length,
+        wrapped,
+        originTier: reviewEntryMachineTier(list[cursorIndex]) || null,
+      },
+      list,
+    );
   }
   if (anchor && (handledKeys.size > 0 || hasAnchorShape)) {
     const remaining = list.filter(
@@ -33959,14 +34017,17 @@ function planReviewJump(queue, options = {}) {
         anchor && typeof anchor.tier === "string" && anchor.tier
           ? String(anchor.tier).trim().toLowerCase() || null
           : null;
-      return Object.freeze({
-        kind: "jump",
-        entry: resolved.entry,
-        rank: resolved.rank,
-        total: resolved.total,
-        wrapped: resolved.wrapped,
-        originTier,
-      });
+      return finish(
+        {
+          kind: "jump",
+          entry: resolved.entry,
+          rank: resolved.rank,
+          total: resolved.total,
+          wrapped: resolved.wrapped,
+          originTier,
+        },
+        remaining,
+      );
     }
     if (Number.isInteger(anchor.rank)) {
       const skip = Math.max(
@@ -33981,53 +34042,68 @@ function planReviewJump(queue, options = {}) {
       if (direction < 0) {
         const at = Math.min(skip - 1, remaining.length - 1);
         if (at >= 0) {
-          return Object.freeze({
+          return finish(
+            {
+              kind: "jump",
+              entry: remaining[at],
+              rank: at + 1,
+              total: remaining.length,
+              wrapped: false,
+              originTier,
+            },
+            remaining,
+          );
+        }
+        return finish(
+          {
             kind: "jump",
-            entry: remaining[at],
-            rank: at + 1,
+            entry: remaining[remaining.length - 1],
+            rank: remaining.length,
+            total: remaining.length,
+            wrapped: true,
+            originTier,
+          },
+          remaining,
+        );
+      }
+      if (skip < remaining.length) {
+        return finish(
+          {
+            kind: "jump",
+            entry: remaining[skip],
+            rank: skip + 1,
             total: remaining.length,
             wrapped: false,
             originTier,
-          });
-        }
-        return Object.freeze({
+          },
+          remaining,
+        );
+      }
+      return finish(
+        {
           kind: "jump",
-          entry: remaining[remaining.length - 1],
-          rank: remaining.length,
+          entry: remaining[0],
+          rank: 1,
           total: remaining.length,
           wrapped: true,
           originTier,
-        });
-      }
-      if (skip < remaining.length) {
-        return Object.freeze({
-          kind: "jump",
-          entry: remaining[skip],
-          rank: skip + 1,
-          total: remaining.length,
-          wrapped: false,
-          originTier,
-        });
-      }
-      return Object.freeze({
-        kind: "jump",
-        entry: remaining[0],
-        rank: 1,
-        total: remaining.length,
-        wrapped: true,
-        originTier,
-      });
+        },
+        remaining,
+      );
     }
   }
   const index = direction < 0 ? list.length - 1 : 0;
-  return Object.freeze({
-    kind: "jump",
-    entry: list[index],
-    rank: index + 1,
-    total: list.length,
-    wrapped: false,
-    originTier: null,
-  });
+  return finish(
+    {
+      kind: "jump",
+      entry: list[index],
+      rank: index + 1,
+      total: list.length,
+      wrapped: false,
+      originTier: null,
+    },
+    list,
+  );
 }
 
 // Resolve a queue entry to a 0-based line without writing: the entry's
@@ -37230,13 +37306,45 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return { ok: true, stale: false };
   }
 
+  // Capture a Vim count for `]s` / `[s` before any await. An explicit
+  // `options.repeat` is the whole count and skips Vim. Endpoint jumps
+  // ignore a pending prefix. Otherwise a Vim-normal editor with an
+  // explicit prefix is N queue steps; reset that state immediately so
+  // CodeMirror cannot drop it across the landing await.
+  consumePendingReviewJumpRepeat(options, endpoint) {
+    if (options && options.repeat !== undefined && options.repeat !== null) {
+      return normalizeVimRepeat(options.repeat);
+    }
+    if (endpoint) {
+      return 1;
+    }
+    try {
+      const view = this.getActiveMarkdownView();
+      const editor = view && view.editor;
+      if (!editor || !this.isVimNormalModeEditor(editor, view)) {
+        return 1;
+      }
+      const cm = this.resolveVimCodeMirror(editor, view);
+      const pending = getPendingVimRepeat(cm);
+      if (!pending.explicit) {
+        return 1;
+      }
+      resetPendingVimInputState(cm, "counted-review-jump");
+      return normalizeVimRepeat(pending.repeat);
+    } catch {
+      return 1;
+    }
+  }
+
   // Vault-wide jump to the next (direction +1) or previous (direction -1)
   // task due for freshness review. From a queued task go to the following
   // (or preceding) entry; from a just-stamped task go to the entry after
   // its remembered rank tuple; otherwise go to the first (or last) entry.
   // Wraps with a Notice; an empty queue shows the refreshed-today count.
   // With `options.endpoint` ("first"/"last") jump to that queue endpoint
-  // instead, ignoring cursor and anchor, without a boundary preamble.
+  // instead, ignoring cursor, anchor, and a typed count, without a
+  // boundary preamble. A Vim count on a relative jump is N queue steps
+  // in one landing.
   async jumpToDueTask(direction, options = {}) {
     const api = this.requireFreshnessApi();
     if (!api) {
@@ -37249,6 +37357,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         : "";
     const endpoint =
       endpointRaw === "first" || endpointRaw === "last" ? endpointRaw : null;
+    const repeat = this.consumePendingReviewJumpRepeat(options, endpoint);
     let queue = this.readFreshnessQueue(api);
     if (queue.length === 0) {
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
@@ -37267,6 +37376,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       anchor,
       todayText,
       endpoint,
+      repeat,
     });
     if (plan.kind === "empty") {
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
@@ -37282,6 +37392,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         anchor,
         todayText,
         endpoint,
+        repeat,
       });
       if (plan.kind === "empty") {
         new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));

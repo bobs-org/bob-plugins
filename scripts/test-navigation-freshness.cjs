@@ -51,6 +51,19 @@ function queueEntry(overrides = {}) {
   };
 }
 
+function numberedQueue(count) {
+  return Array.from({ length: count }, (_, index) =>
+    queueEntry({
+      key: `t${index}.md:1`,
+      path: `t${index}.md`,
+      line: 1,
+      originalMarkdown: `- [ ] #task t${index}`,
+      state: "new",
+      rank: index + 1,
+    }),
+  );
+}
+
 function threeQueue() {
   return [
     queueEntry({
@@ -1318,6 +1331,174 @@ test("lowercase steps continue from an endpoint anchor", () => {
   assert.equal(wrapped.wrapped, true);
 });
 
+test("counted review jump repeat 1 matches omitted repeat", () => {
+  const queue = threeQueue();
+  const cases = [
+    {
+      direction: 1,
+      cursor: { path: "a.md", line: 3, text: "- [ ] #task Buy milk" },
+    },
+    {
+      direction: 1,
+      cursor: { path: "c.md", line: 5, text: "unrelated cursor text" },
+    },
+    {
+      direction: 1,
+      cursor: { path: "elsewhere.md", line: 1, text: "- [ ] #task Other" },
+    },
+    {
+      direction: 1,
+      stamped: { keys: ["a.md:3"], rank: 1, count: 1 },
+    },
+    {
+      direction: 1,
+      anchor: helpers.buildReviewAnchor(queue, ["a.md:3"], 1),
+    },
+  ];
+  for (const options of cases) {
+    const baseline = helpers.planReviewJump(queue, options);
+    for (const repeat of [undefined, 1, 0, -3, Number.NaN]) {
+      const counted = helpers.planReviewJump(queue, { ...options, repeat });
+      assert.equal(counted.kind, baseline.kind);
+      assert.equal(counted.entry && counted.entry.key, baseline.entry && baseline.entry.key);
+      assert.equal(counted.rank, baseline.rank);
+      assert.equal(counted.total, baseline.total);
+      assert.equal(counted.wrapped, baseline.wrapped);
+      assert.equal(counted.originTier, baseline.originTier);
+    }
+  }
+});
+
+test("counted review jump from the first entry lands N steps ahead", () => {
+  const queue = numberedQueue(12);
+  const cursor = { path: "t0.md", line: 1, text: "- [ ] #task t0" };
+  const plan = helpers.planReviewJump(queue, {
+    direction: 1,
+    cursor,
+    repeat: 10,
+  });
+  assert.equal(plan.kind, "jump");
+  assert.equal(plan.entry.key, "t10.md:1");
+  assert.equal(plan.rank, 11);
+  assert.equal(plan.total, 12);
+  assert.equal(plan.wrapped, false);
+  assert.equal(plan.originTier, "new");
+});
+
+test("counted review jump from the last entry wraps past the start", () => {
+  const queue = numberedQueue(5);
+  const plan = helpers.planReviewJump(queue, {
+    direction: 1,
+    cursor: { path: "t4.md", line: 1, text: "- [ ] #task t4" },
+    repeat: 2,
+  });
+  assert.equal(plan.entry.key, "t1.md:1");
+  assert.equal(plan.rank, 2);
+  assert.equal(plan.wrapped, true);
+});
+
+test("counted review jump larger than the queue wraps once", () => {
+  const queue = numberedQueue(3);
+  const cursor = { path: "t0.md", line: 1, text: "- [ ] #task t0" };
+  const forward = helpers.planReviewJump(queue, {
+    direction: 1,
+    cursor,
+    repeat: 5,
+  });
+  assert.equal(forward.entry.key, "t2.md:1");
+  assert.equal(forward.rank, 3);
+  assert.equal(forward.total, 3);
+  assert.equal(forward.wrapped, true);
+
+  const backward = helpers.planReviewJump(queue, {
+    direction: -1,
+    cursor,
+    repeat: 5,
+  });
+  assert.equal(backward.entry.key, "t1.md:1");
+  assert.equal(backward.rank, 2);
+  assert.equal(backward.wrapped, true);
+});
+
+test("counted review jump on a one-entry queue stays there", () => {
+  const queue = numberedQueue(1);
+  const cursor = { path: "t0.md", line: 1, text: "- [ ] #task t0" };
+  for (const repeat of [1, 10]) {
+    const plan = helpers.planReviewJump(queue, {
+      direction: 1,
+      cursor,
+      repeat,
+    });
+    assert.equal(plan.entry.key, "t0.md:1");
+    assert.equal(plan.rank, 1);
+    assert.equal(plan.total, 1);
+    assert.equal(plan.wrapped, true);
+  }
+});
+
+test("counted review jump with no origin lands on the Nth entry", () => {
+  const queue = numberedQueue(12);
+  const plan = helpers.planReviewJump(queue, { direction: 1, repeat: 10 });
+  assert.equal(plan.entry.key, "t9.md:1");
+  assert.equal(plan.rank, 10);
+  assert.equal(plan.total, 12);
+  assert.equal(plan.wrapped, false);
+
+  const short = helpers.planReviewJump(numberedQueue(4), {
+    direction: 1,
+    repeat: 10,
+  });
+  assert.equal(short.entry.key, "t1.md:1");
+  assert.equal(short.rank, 2);
+  assert.equal(short.wrapped, true);
+});
+
+test("counted review jump from a shaped anchor takes N surviving successors", () => {
+  const queue = numberedQueue(5);
+  const anchor = helpers.buildReviewAnchor(queue, ["t0.md:1"], 1);
+  const plan = helpers.planReviewJump(queue, {
+    direction: 1,
+    anchor,
+    repeat: 3,
+  });
+  assert.equal(plan.entry.key, "t3.md:1");
+  assert.equal(plan.rank, 3);
+  assert.equal(plan.total, 4);
+  assert.equal(plan.wrapped, false);
+
+  const wrappedAnchor = helpers.buildReviewAnchor(queue, ["t4.md:1"], 5);
+  const wrapped = helpers.planReviewJump(queue, {
+    direction: 1,
+    anchor: wrappedAnchor,
+    repeat: 3,
+  });
+  assert.equal(wrapped.entry.key, "t2.md:1");
+  assert.equal(wrapped.rank, 3);
+  assert.equal(wrapped.total, 4);
+  assert.equal(wrapped.wrapped, true);
+});
+
+test("counted review jump does not change endpoint selection", () => {
+  const queue = numberedQueue(12);
+  const first = helpers.planReviewJump(queue, {
+    endpoint: "first",
+    repeat: 10,
+    cursor: { path: "t5.md", line: 1, text: "- [ ] #task t5" },
+  });
+  assert.equal(first.entry.key, "t0.md:1");
+  assert.equal(first.rank, 1);
+  assert.equal(first.wrapped, false);
+  assert.equal(first.originTier, null);
+
+  const last = helpers.planReviewJump(queue, {
+    endpoint: "last",
+    repeat: 10,
+  });
+  assert.equal(last.entry.key, "t11.md:1");
+  assert.equal(last.rank, 12);
+  assert.equal(last.wrapped, false);
+});
+
 test("a stamped endpoint that moved is stale and cannot land from old text", () => {
   const queue = mixedTierQueue();
   const first = queue[0];
@@ -1372,6 +1553,44 @@ function endpointMethodHarness({ queues, landings }) {
     return landings[Math.min(seen.landCalls.length, landings.length) - 1];
   };
   return { plugin, seen };
+}
+
+function vimReviewEditor(options = {}) {
+  const path = options.path || "t0.md";
+  const lineText = options.text || "- [ ] #task t0";
+  const line = Number.isInteger(options.line) ? options.line : 0;
+  const inputState = {
+    keyBuffer: [],
+    prefixRepeat: Array.isArray(options.prefixRepeat)
+      ? options.prefixRepeat.slice()
+      : [],
+    motionRepeat: [],
+    reason: "",
+    getRepeat: () => null,
+  };
+  const cm = {
+    getCursor: () => ({ line, ch: 0 }),
+    state: {
+      vim: {
+        mode: options.mode || "normal",
+        inputState,
+      },
+    },
+  };
+  const editor = {
+    cm: { cm },
+    getCursor: () => ({ line, ch: 0 }),
+    getLine: (index) => (index === line ? lineText : ""),
+    getValue: () => lineText,
+  };
+  return { editor, inputState, path };
+}
+
+function attachVimReviewView(plugin, vim, filePath) {
+  plugin.getActiveMarkdownView = () => ({
+    editor: vim.editor,
+    file: { path: filePath || vim.path, extension: "md" },
+  });
 }
 
 test("stale endpoint target reselects the same endpoint in the new queue", async () => {
@@ -1538,4 +1757,173 @@ test("onload registers first/last commands routed to the shared jump", () => {
   const prev = commands.find((item) => item.id === "jump-to-prev-due-task");
   assert.ok(next);
   assert.ok(prev);
+});
+
+test("jumpToDueTask consumes a pending Vim prefix as N review steps", async () => {
+  const queue = numberedQueue(12);
+  const vim = vimReviewEditor({
+    prefixRepeat: ["1", "0"],
+    path: "t0.md",
+    text: "- [ ] #task t0",
+  });
+  const { plugin, seen } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  attachVimReviewView(plugin, vim);
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.deepEqual(seen.landEntries, ["t10.md:1"]);
+  assert.equal(notices.length, 1);
+  assert.match(notices.at(-1), /^Review 11\/12 · /);
+  assert.deepEqual(vim.inputState.prefixRepeat, []);
+  assert.equal(vim.inputState.reason, "counted-review-jump");
+});
+
+test("registered next-due-task callback reads the pending Vim prefix", async () => {
+  const queue = numberedQueue(12);
+  const vim = vimReviewEditor({
+    prefixRepeat: ["1", "0"],
+    path: "t0.md",
+    text: "- [ ] #task t0",
+  });
+  const { plugin, seen } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  attachVimReviewView(plugin, vim);
+  const commands = [];
+  plugin.addCommand = (command) => commands.push(command);
+  plugin.registerEvent = () => {};
+  plugin.registerVimMappingsWhenReady = () => {};
+  plugin.registerVimJumpHistoryVaultEvents = () => {};
+  plugin.registerOpenTaskJumpInputListeners = () => {};
+  plugin.registerReviewRefreshInputListeners = () => {};
+  plugin.registerCountedTransclusionToggleInputListeners = () => {};
+  plugin.registerCountedBulletPropertyInputListeners = () => {};
+  plugin.registerCountedTaskMoveInputListeners = () => {};
+  plugin.registerCountedLaneToggleInputListeners = () => {};
+  plugin.registerClearSearchHighlightInputListeners = () => {};
+  plugin.app.workspace.onLayoutReady = () => {};
+  plugin.onload();
+  const next = commands.find((item) => item.id === "jump-to-next-due-task");
+  notices.length = 0;
+  assert.equal(await next.callback(), true);
+  assert.deepEqual(seen.landEntries, ["t10.md:1"]);
+  assert.deepEqual(vim.inputState.prefixRepeat, []);
+  assert.equal(vim.inputState.reason, "counted-review-jump");
+});
+
+test("explicit jumpToDueTask repeat skips the Vim prefix", async () => {
+  const queue = numberedQueue(12);
+  const vim = vimReviewEditor({
+    prefixRepeat: ["1", "0"],
+    path: "t0.md",
+    text: "- [ ] #task t0",
+  });
+  const { plugin, seen } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  attachVimReviewView(plugin, vim);
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(1, { repeat: 2 }), true);
+  assert.deepEqual(seen.landEntries, ["t2.md:1"]);
+  assert.deepEqual(vim.inputState.prefixRepeat, ["1", "0"]);
+  assert.equal(vim.inputState.reason, "");
+});
+
+test("non-normal editor with a pending prefix still jumps one entry", async () => {
+  const queue = numberedQueue(12);
+  const vim = vimReviewEditor({
+    mode: "insert",
+    prefixRepeat: ["1", "0"],
+    path: "t0.md",
+    text: "- [ ] #task t0",
+  });
+  const { plugin, seen } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  attachVimReviewView(plugin, vim);
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.deepEqual(seen.landEntries, ["t1.md:1"]);
+  assert.deepEqual(vim.inputState.prefixRepeat, ["1", "0"]);
+  assert.equal(vim.inputState.reason, "");
+});
+
+test("stale counted replan reuses the captured repeat", async () => {
+  const queue = numberedQueue(12);
+  const vim = vimReviewEditor({
+    prefixRepeat: ["1", "0"],
+    path: "t0.md",
+    text: "- [ ] #task t0",
+  });
+  const { plugin, seen } = endpointMethodHarness({
+    queues: [queue, queue],
+    landings: [{ ok: false, stale: true }, { ok: true, stale: false }],
+  });
+  attachVimReviewView(plugin, vim);
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.deepEqual(seen.landEntries, ["t10.md:1", "t10.md:1"]);
+  assert.equal(notices.length, 1);
+  assert.deepEqual(vim.inputState.prefixRepeat, []);
+  assert.equal(vim.inputState.reason, "counted-review-jump");
+});
+
+test("endpoint jump with a pending prefix still lands on the endpoint", async () => {
+  const queue = numberedQueue(12);
+  const vim = vimReviewEditor({
+    prefixRepeat: ["1", "0"],
+    path: "t5.md",
+    text: "- [ ] #task t5",
+  });
+  const { plugin, seen } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  attachVimReviewView(plugin, vim);
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(1, { endpoint: "first" }), true);
+  assert.deepEqual(seen.landEntries, ["t0.md:1"]);
+  assert.deepEqual(vim.inputState.prefixRepeat, ["1", "0"]);
+  assert.equal(vim.inputState.reason, "");
+});
+
+test("counted forward landing on ROTTEN keeps the boundary preamble", async () => {
+  const queue = mixedTierQueue();
+  const vim = vimReviewEditor({
+    prefixRepeat: ["4"],
+    path: "n.md",
+    text: "- [ ] #task New",
+  });
+  const { plugin } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  attachVimReviewView(plugin, vim);
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.ok(notices.at(-1).startsWith("ROTTEN next — 4 commitments still due\n"));
+  assert.match(notices.at(-1), /Review 5\/5 · ROTTEN /);
+
+  const endpoint = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  attachVimReviewView(
+    endpoint.plugin,
+    vimReviewEditor({
+      prefixRepeat: ["4"],
+      path: "n.md",
+      text: "- [ ] #task New",
+    }),
+  );
+  notices.length = 0;
+  assert.equal(await endpoint.plugin.jumpToDueTask(-1, { endpoint: "last" }), true);
+  assert.match(notices.at(-1), /^Review 5\/5 · ROTTEN /);
+  assert.ok(!notices.at(-1).includes("Commitments done"));
+  assert.ok(!notices.at(-1).includes("ROTTEN next"));
 });

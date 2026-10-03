@@ -29104,6 +29104,7 @@ function isCtrlKey(event, key) {
 // Tasks fields, so the risky part lives in one place.
 
 const REVIEW_FRESHNESS_API_REQUIRED_NOTICE = "Bob Ledger Tools api v3 required";
+const REVIEW_FRESHNESS_KEEP_REQUIRED_NOTICE = "Bob Ledger Tools keep support required";
 const REVIEW_QUEUE_CHANGED_NOTICE = "Review queue changed — try again";
 
 // The ledger-tools freshness namespace, or null when it is absent or older
@@ -30115,21 +30116,57 @@ function freshStampRefusalNotice(refusal) {
   if (refusal === "closed") {
     return "Task is closed · not reviewed";
   }
+  if (refusal === "stamp") {
+    return "Could not update task; no tasks were updated";
+  }
   return "Cursor is not on a task or Task Link";
 }
 
-// Pure stamp plan over 0-based `targetLines`: classify every target first so
-// one refusal refuses the whole batch with the note unchanged, then stamp
-// each line through the injected `stamper` (`api.freshness.stampLine` in the
-// plugin, identity by default). Returns `{ ok, refusal, content, stamped }`
-// where `stamped` is `[{ line, before, after }]`.
+// Pure stamp plan over 0-based targets: classify every target first so one
+// refusal refuses the whole batch with the note unchanged, then stamp each
+// line through the injected `stamper`. Each target is a 0-based line index
+// (legacy) or `{ line, path, raw, counted }` with the pre-write 0-based
+// line, the note path, the pre-write raw text, and the exact-eligibility
+// decision (`docs/freshness.md` §2a). The stamper runs as
+// `stamper(before, dateText, decision)` where `decision` is
+// `{ counted, path, line, raw }` (legacy index targets decide
+// `{ counted: false }` with no path/raw); keep stampers pass `counted`
+// through to `api.freshness.keepLine`, while legacy stampers ignore the
+// third argument. A throwing stamper refuses the batch (`stamp`) with no
+// partial write, so a missing/throwing v5 `keepLine` fails without writing
+// instead of falling back to the now-resetting generic stamper. Returns
+// `{ ok, refusal, content, stamped }` where `stamped` is
+// `[{ line, before, after, counted }]`.
 function planFreshStampBatch(content, targetLines, stamper, dateText) {
   const text = String(content || "");
   const { lines, lineEnding } = splitMarkdownContent(text);
   const apply = typeof stamper === "function" ? stamper : (line) => line;
-  const indices = Array.isArray(targetLines) ? targetLines : [];
-  for (const lineIndex of indices) {
-    const check = classifyFreshStampTarget(lines[lineIndex]);
+  const rawTargets = Array.isArray(targetLines) ? targetLines : [];
+  const targets = rawTargets.map((target) => {
+    if (target !== null && typeof target === "object") {
+      const line = Math.floor(numericOrDefault(target.line, Number.NaN));
+      return Object.freeze({
+        line,
+        path:
+          target.path === undefined || target.path === null
+            ? null
+            : String(target.path),
+        raw:
+          target.raw === undefined || target.raw === null
+            ? null
+            : String(target.raw),
+        counted: target.counted === true,
+      });
+    }
+    return Object.freeze({
+      line: Math.floor(numericOrDefault(target, Number.NaN)),
+      path: null,
+      raw: null,
+      counted: false,
+    });
+  });
+  for (const target of targets) {
+    const check = classifyFreshStampTarget(lines[target.line]);
     if (!check.ok) {
       return Object.freeze({
         ok: false,
@@ -30141,11 +30178,17 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
   }
   const next = lines.slice();
   const stamped = [];
-  for (const lineIndex of indices) {
-    const before = String(lines[lineIndex] || "");
+  for (const target of targets) {
+    const before = String(lines[target.line] || "");
+    const decision = Object.freeze({
+      counted: target.counted,
+      path: target.path,
+      line: target.line,
+      raw: target.raw === null ? before : target.raw,
+    });
     let after;
     try {
-      after = String(apply(before, dateText) ?? before);
+      after = String(apply(before, dateText, decision) ?? before);
     } catch (error) {
       return Object.freeze({
         ok: false,
@@ -30154,8 +30197,15 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
         stamped: Object.freeze([]),
       });
     }
-    next[lineIndex] = after;
-    stamped.push(Object.freeze({ line: lineIndex, before, after }));
+    next[target.line] = after;
+    stamped.push(
+      Object.freeze({
+        line: target.line,
+        before,
+        after,
+        counted: target.counted,
+      }),
+    );
   }
   return Object.freeze({
     ok: true,
@@ -30178,10 +30228,72 @@ function freshStampLineHasToday(rawLine, dateText) {
   );
 }
 
+// First valid `[keeps:: N]` semantic count (1-999) on the line, or 0.
+// Mirrors the ledger-tools `freshnessParseKeepsValue` first-valid rule
+// without placing anything; used only to measure actual increments for
+// the `kept N×` notice tail.
+function parseKeepsCount(lineText) {
+  const text = String(lineText || "");
+  const pattern = /(?:\[keeps\s*::\s*([^\]\n]*)\]|\((?:keeps)\s*::\s*([^)\n]*)\))/g;
+  let match = pattern.exec(text);
+  while (match) {
+    const raw = String(match[1] ?? match[2] ?? "").trim();
+    if (/^[+-]?\d+$/.test(raw)) {
+      const number = Number(raw);
+      if (Number.isSafeInteger(number) && number >= 1 && number <= 999) {
+        return number;
+      }
+    }
+    match = pattern.exec(text);
+  }
+  return 0;
+}
+
+// How many stamped entries actually incremented their streak: a counted
+// entry whose after-line keeps is exactly one above the before-line keeps
+// (saturating at 999). Uncounted preserves, same-day counted preserves,
+// and stale-cache mismatches never inflate this number. Never promises
+// `next review asks`: no decision card exists yet.
+function countFreshStampKept(stamped) {
+  let kept = 0;
+  for (const entry of Array.isArray(stamped) ? stamped : []) {
+    if (!entry || entry.counted !== true) {
+      continue;
+    }
+    const beforeKeeps = parseKeepsCount(entry.before);
+    const afterKeeps = parseKeepsCount(entry.after);
+    if (afterKeeps > 0 && afterKeeps === Math.min(beforeKeeps + 1, 999)) {
+      kept += 1;
+    }
+  }
+  return kept;
+}
+
+// Deduplicate stamp targets to one write per source task: the first entry
+// wins for each `path + 0-based line` identity. Duplicate Task Links
+// resolving to the same source line stamp and count once, never twice.
+function deduplicateFreshStampTargets(targets) {
+  const seen = new Set();
+  const kept = [];
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (!target || typeof target !== "object") {
+      continue;
+    }
+    const key = `${String(target.path || "")}::${Math.floor(numericOrDefault(target.line, Number.NaN))}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    kept.push(target);
+  }
+  return Object.freeze(kept);
+}
+
 // `Fresh ✓ 1 task · 22 due (3 new) · ✓ 13 today` from the pre-write counts
 // adjusted by the change (the Tasks cache lags, so post-write counts would
 // still show the old queue). With a budget the tail reads `✓ 13/15`; once
 // the budget is met and no NEW task remains, ` · done for today` is added.
+// With `kept > 0` actual streak increments, the tail gains ` · kept N×`.
 function buildFreshStampNotice(details = {}) {
   const changed = Math.max(
     0,
@@ -30212,7 +30324,10 @@ function buildFreshStampNotice(details = {}) {
     budget !== null && refreshedAfter >= budget && newAfter === 0
       ? " · done for today"
       : "";
-  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}`;
+  const keptRaw = Math.floor(numericOrDefault(details.kept, 0));
+  const keptTail =
+    Number.isInteger(keptRaw) && keptRaw > 0 ? ` · kept ${keptRaw}×` : "";
+  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}`;
 }
 
 // Match stamped `{ path, line, raw }` refs (0-based lines) against a
@@ -30262,6 +30377,69 @@ function matchFreshStampRefs(queueBefore, refs) {
     count: keys.length,
     newCount,
   });
+}
+
+// True when the freshness api can count keeps: namespace v5 with the sole
+// increment helper. A v5 namespace missing `keepLine` must fail without
+// writing (never fall back to the now-resetting generic stamper); a
+// pre-v5 namespace stamps uncounted through the old stamper.
+function freshnessSupportsKeeps(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) &&
+      Number(freshnessApi.version) >= 5 &&
+      typeof freshnessApi.keepLine === "function"
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+// Strict keep-counting eligibility for one explicit keep (`docs/freshness.md`
+// §2a): `ref` (`{ path, line, raw }` with the pre-write 0-based editor line)
+// authorizes counting only when the pre-write queue holds exactly one row
+// with `entry.path === path`, `entry.line === editorLine + 1`,
+// `entry.originalMarkdown === rawLine`, `lane === 'ready'`, and
+// `tier in {'rotten','returned'}`. Line-only or raw-only matches, age,
+// glyph, bucket alone, block ID alone, a changed line number, or a selected
+// DOM row never authorize. Anything else stamps uncounted through
+// `keepLine` and preserves the streak. Returns `{ ok, entry, reason }`
+// with `reason` one of `ok`, `missing`, `ambiguous`, `lane`, or `tier`.
+function matchFreshStampExactEntry(queueBefore, ref) {
+  const missing = (reason) =>
+    Object.freeze({ ok: false, entry: null, reason });
+  const list = Array.isArray(queueBefore) ? queueBefore : [];
+  if (!ref || typeof ref !== "object") {
+    return missing("missing");
+  }
+  const refPath = String(ref.path || "");
+  const refLine = Math.floor(numericOrDefault(ref.line, Number.NaN));
+  const refRaw = String(ref.raw || "");
+  if (!Number.isInteger(refLine) || !refRaw) {
+    return missing("missing");
+  }
+  const candidates = list.filter(
+    (entry) =>
+      Boolean(entry) &&
+      String(entry.path || "") === refPath &&
+      Number(entry.line) === refLine + 1 &&
+      String(entry.originalMarkdown || "") === refRaw,
+  );
+  if (candidates.length === 0) {
+    return missing("missing");
+  }
+  if (candidates.length > 1) {
+    return missing("ambiguous");
+  }
+  const entry = candidates[0];
+  if (entry.lane !== "ready") {
+    return Object.freeze({ ok: false, entry, reason: "lane" });
+  }
+  const tier = reviewEntryMachineTier(entry);
+  if (tier !== "rotten" && tier !== "returned") {
+    return Object.freeze({ ok: false, entry, reason: "tier" });
+  }
+  return Object.freeze({ ok: true, entry, reason: "ok" });
 }
 
 // Alt+F (wantShift false) / Alt+Shift+F (wantShift true). CodeMirror Vim
@@ -32784,17 +32962,35 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (!api) {
       return false;
     }
+    // Explicit keeps always go through `keepLine` when the namespace can
+    // count (`docs/freshness.md` §2a) — including uncounted ones, so the
+    // streak is preserved rather than reset. A v5 namespace missing
+    // `keepLine` fails without writing; only pre-v5 namespaces fall back
+    // to the old uncounted stamper. No card interception happens here:
+    // counting ships while the decision card does not exist yet.
+    if (!freshnessSupportsKeeps(api) && Number(api.version) >= 5) {
+      new Notice(REVIEW_FRESHNESS_KEEP_REQUIRED_NOTICE);
+      return false;
+    }
     const dateText = this.laneReleaseDateText(options);
-    const stamper = (line) => {
-      try {
-        if (api && typeof api.stampLine === "function") {
-          return String(api.stampLine(line, dateText) ?? line);
-        }
-      } catch (error) {
-        // A failed stamp leaves the line unchanged below.
-      }
-      return String(line);
-    };
+    const keepSupported = freshnessSupportsKeeps(api);
+    const stamper = keepSupported
+      ? (line, date, decision) =>
+          String(
+            api.keepLine(line, date, {
+              counted: Boolean(decision && decision.counted),
+            }) ?? line,
+          )
+      : (line) => {
+          try {
+            if (api && typeof api.stampLine === "function") {
+              return String(api.stampLine(line, dateText) ?? line);
+            }
+          } catch (error) {
+            // A failed stamp leaves the line unchanged below.
+          }
+          return String(line);
+        };
     if (isObsidianTaskAtLine(content, cursor.line)) {
       return await this.refreshTaskFreshnessOnTasks(cm, cursor, content, {
         countExplicit,
@@ -32838,9 +33034,34 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       activeView && activeView.file ? activeView.file.path : null;
     const queueBefore = this.readFreshnessQueue(api);
     const countsBefore = this.readFreshnessCounts(api);
+    // Resolve every target exactly against the pre-write queue: only an
+    // exact due-Ready ROTTEN/RETURNED row counts (`docs/freshness.md` §2a).
+    // Every other explicit keep still goes through `keepLine` uncounted so
+    // the streak is preserved, never reset.
+    const contentLines = splitMarkdownContent(content).lines;
+    const keepTargets = deduplicateFreshStampTargets(
+      session.targets.map((target) => ({
+        path: filePath,
+        line: target.line,
+        rawLine: target.rawLine,
+      })),
+    ).map((target) => {
+      const raw = String(contentLines[target.line] || "");
+      const exact = matchFreshStampExactEntry(queueBefore, {
+        path: target.path,
+        line: target.line,
+        raw,
+      });
+      return Object.freeze({
+        line: target.line,
+        path: target.path,
+        raw,
+        counted: exact.ok,
+      });
+    });
     const plan = planFreshStampBatch(
       content,
-      session.targets.map((target) => target.line),
+      keepTargets,
       options.stamper,
       options.dateText,
     );
@@ -32940,7 +33161,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     const queueBefore = this.readFreshnessQueue(api);
     const countsBefore = this.readFreshnessCounts(api);
-    const groups = groupLinkPickerTargetsByNote(resolution.targets);
+    // Duplicate references to the same source target stamp and count once:
+    // dedupe before planning so a repeated Task Link cannot inflate keeps.
+    const deduped = deduplicateFreshStampTargets(resolution.targets);
+    const groups = groupLinkPickerTargetsByNote(deduped);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -32949,9 +33173,24 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     const refs = [];
     const stampedAll = [];
     for (const group of groups) {
+      const groupLines = splitMarkdownContent(group.content).lines;
+      const keepTargets = group.session.targets.map((target) => {
+        const raw = String(groupLines[target.line] || "");
+        const exact = matchFreshStampExactEntry(queueBefore, {
+          path: group.path,
+          line: target.line,
+          raw,
+        });
+        return Object.freeze({
+          line: target.line,
+          path: group.path,
+          raw,
+          counted: exact.ok,
+        });
+      });
       const plan = planFreshStampBatch(
         group.content,
-        group.session.targets.map((target) => target.line),
+        keepTargets,
         options.stamper,
         options.dateText,
       );
@@ -33025,6 +33264,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       const status = getObsidianTaskCheckboxStatus(entry.after);
       return status !== "/" && status !== "*";
     }).length;
+    // Only actual streak increments tail the notice; preserves, same-day
+    // repeats, and stale-cache mismatches report no `kept N×`.
+    const kept = countFreshStampKept(stamped);
     new Notice(
       buildFreshStampNotice({
         changed,
@@ -33035,6 +33277,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           counts.budget === undefined || counts.budget === null
             ? null
             : counts.budget,
+        kept,
       }),
     );
   }
@@ -45610,6 +45853,11 @@ module.exports.helpers = {
   freshStampLineHasToday,
   buildFreshStampNotice,
   matchFreshStampRefs,
+  matchFreshStampExactEntry,
+  freshnessSupportsKeeps,
+  parseKeepsCount,
+  countFreshStampKept,
+  deduplicateFreshStampTargets,
   isReviewRefreshKeydown,
   identityFreshStampLine,
   applyFreshStampLine,

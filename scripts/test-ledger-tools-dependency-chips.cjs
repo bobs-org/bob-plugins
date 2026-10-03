@@ -150,6 +150,7 @@ const {
   dependencyChipModel,
   buildDependencyChipElement,
   dependencyChipLineOwnedByTask,
+  dependencyChipLineOwnedByTaskAtDoc,
   dependencyReadingOwnText,
   dependencyReadingAnchorOwner,
   dependencyReadingLabelElement,
@@ -190,9 +191,12 @@ test("DP parse vectors", () => {
     ["DP28", "⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line"],
     ["DP29", "> - ⛓️ **DEPENDS ON:** [[#^a]]", {}, "not-a-line"],
     // DP30 shares DP1's line shape (accept); its Work Log context is
-    // pinned by the Rust discovery test, and chips exclude it through
-    // the owning-line rules below.
+    // pinned by the Rust discovery test, and chips render on it now
+    // that ownership is only "first direct child of a #task" (DP20
+    // still has no chips: its parent is the Work Log entry, not a task).
     ["DP30", "- ⛓️ **DEPENDS ON:** [[#^a]]", {}, "accept", 1],
+    // DP31: prose-only line (label plus prose, no link) is malformed.
+    ["DP31", "- ⛓️ **DEPENDS ON:** needs review", {}, "malformed"],
   ];
   for (const [id, line, opts, verdict, count] of cases) {
     const parsed = parseDependencyLine(line, opts);
@@ -489,6 +493,40 @@ test("decoration skips paragraphs, grandchildren, and Work Log lines", () => {
   );
 });
 
+test("decoration renders chips on DP30 and still skips DP20", () => {
+  const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
+  const plugin = depPluginWithTasks([], tasks);
+  // DP30: the line is the first direct child of a #task which is itself
+  // nested under a Work Log entry — its owner is a real task, so chips
+  // render (contract DP30; Rust pins the ownership).
+  const dp30 = ["- 🛠️ **WORK LOG**", "  - [ ] #task Inner ^inner", "    - ⛓️ **DEPENDS ON:** [[#^a]]"];
+  assert.equal(plugin.buildDependencyChipDecorations(makeDepView({ lines: dp30 })).adds.length, 1, "DP30 chips");
+  // DP20: the line hangs directly off the Work Log entry (its parent is
+  // the entry, not a #task), so it still gets no chips.
+  const dp20 = ["- [ ] #task T ^t", "  - 🛠️ **WORK LOG**", "    - ⛓️ **DEPENDS ON:** [[#^a]]"];
+  assert.equal(plugin.buildDependencyChipDecorations(makeDepView({ lines: dp20 })).adds.length, 0, "DP20 no chips");
+});
+
+test("ownership check reads O(depth) lines, not the whole note", () => {
+  const filler = [];
+  for (let index = 0; index < 4996; index += 1) {
+    filler.push("- filler " + index);
+  }
+  const lines = [...filler, "- 🛠️ **WORK LOG**", "  - [ ] #task Inner ^inner", "    - ⛓️ **DEPENDS ON:** [[#^a]]"];
+  const doc = makeDepDoc(lines);
+  let reads = 0;
+  const counting = {
+    line(number) {
+      reads += 1;
+      return doc.line(number);
+    },
+  };
+  // The candidate is the last of ~5000 lines; ownership walks only from
+  // the candidate up to its parent item (contract §7.4).
+  assert.equal(dependencyChipLineOwnedByTaskAtDoc(counting, lines.length), true);
+  assert.ok(reads <= 10, "reads " + reads + " lines, not the note");
+});
+
 test("widget identity covers the line and the interactive flag", () => {
   const task = "- [ ] #task T ^t";
   const line = "  - ⛓️ **DEPENDS ON:** [[#^a]]";
@@ -629,6 +667,8 @@ function fakeReadingDoc() {
         node.handlers[name] = handler;
       },
       querySelectorAll: (selector) => {
+        // Document order, like the real DOM: children are pushed in
+        // reverse so the pop visits the first child first.
         const out = [];
         const stack = [node];
         while (stack.length > 0) {
@@ -639,9 +679,10 @@ function fakeReadingDoc() {
           if (selector === "li" && current.tagName === "LI") {
             out.push(current);
           }
-          for (const child of current.childNodes || []) {
-            if (child.nodeType === 1) {
-              stack.push(child);
+          const kids = current.childNodes || [];
+          for (let index = kids.length - 1; index >= 0; index -= 1) {
+            if (kids[index].nodeType === 1) {
+              stack.push(kids[index]);
             }
           }
         }
@@ -701,6 +742,18 @@ function readingTaskLi(fixture, parent, text) {
   const nested = el("ul");
   taskLi.appendChild(nested);
   return { taskLi, nested };
+}
+
+function readingProseLi(fixture, parentList, text) {
+  // Builds one plain prose row inside an existing nested list, as Reading
+  // view renders a non-Depends-On child: it counts toward the section's
+  // list-item order without carrying chips.
+  const { doc, el } = fixture;
+  const li = el("li");
+  li.ownerDocument = doc;
+  li.appendChild(doc.createTextNode(text));
+  parentList.appendChild(li);
+  return li;
 }
 
 function readingDepRow(fixture, blockIds) {
@@ -944,9 +997,13 @@ test("reading view actions carry the derived 0-based line", async () => {
   const plugin = new LedgerToolsPlugin(app, {});
   plugin.dependencyChipsEnabled = true;
   const fixture = fakeReadingDoc();
-  const { li, anchors } = readingDepRow(fixture, ["a"]);
-  // The section spans the whole note: the 0-based line is the section
-  // start plus the row's offset in the section (contract §9).
+  // The fixture renders the whole section: the task row, its prose child
+  // row, and its Depends-On row, in document order (contract §9).
+  const { nested } = readingTaskLi(fixture, fixture.root, "#task T ");
+  readingProseLi(fixture, nested, "prose");
+  const { li, anchors } = readingDepLi(fixture, nested, ["a"]);
+  // The section spans the whole note: the k-th rendered list item is the
+  // k-th list-item line in the section range (contract §9).
   const section = { lineStart: 0, lineEnd: 2 };
   plugin.renderDependencyChipsIn(fixture.root, {
     sourcePath: "a.md",
@@ -1036,19 +1093,13 @@ test("reading view renders no chips on malformed, grandchild, Work Log, or block
       middle.appendChild(inner);
       return readingDepLi(fixture, inner, ["a"]).li;
     },
-    // DP20: the row hangs directly off a Work Log entry.
+    // DP20: the row hangs directly off a Work Log entry (its parent
+    // is the entry, not a #task), so it still gets no chips.
     worklog: (fixture) => {
       const { root } = fixture;
       const { nested } = readingTaskLi(fixture, root, "#task Make appt ");
       const { nested: workNested } = readingTaskLi(fixture, nested, "🛠️ WORK LOG");
       return readingDepLi(fixture, workNested, ["a"]).li;
-    },
-    // DP30: the owning task nests under a Work Log entry.
-    worklogOwner: (fixture) => {
-      const { root } = fixture;
-      const { nested: outer } = readingTaskLi(fixture, root, "🛠️ WORK LOG");
-      const { nested } = readingTaskLi(fixture, outer, "#task Make appt ");
-      return readingDepLi(fixture, nested, ["a"]).li;
     },
     // DP29: the row sits inside a blockquote.
     blockquote: (fixture) => {
@@ -1067,50 +1118,20 @@ test("reading view renders no chips on malformed, grandchild, Work Log, or block
   }
 });
 
-test("reading view hides actions when two tasks share one Depends-On line", async () => {
+test("reading view renders chips on DP30 (owner is a task under a Work Log entry)", () => {
   const tasks = [depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" })];
-  const seen = { open: [], remove: [] };
-  const navApi = {
-    version: 1,
-    openDependencyStage: (ref) => {
-      seen.open.push(ref);
-      return Promise.resolve({ ok: true });
-    },
-    removeDependency: (parentRef, target) => {
-      seen.remove.push([parentRef, target]);
-      return Promise.resolve({ ok: true });
-    },
-  };
-  const noteText = [
-    "- [ ] #task One ^one",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
-    "- [ ] #task Two ^two",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
-  ].join("\n");
-  const plugin = readingVaultApp(tasks, navApi, noteText);
-  const section = { lineStart: 0, lineEnd: 3 };
-  // The block ids match twice: no unique line, so no actions.
-  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["a"], section), null);
-  for (let round = 0; round < 2; round += 1) {
-    const fixture = fakeReadingDoc();
-    const { li } = readingDepRow(fixture, ["a"]);
-    plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md", getSectionInfo: () => section });
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
-    const classes = collectReadingClasses(li).join(" ");
-    assert.ok(classes.indexOf("bob-dep-chip") !== -1, "chips still render on round " + round);
-    assert.equal(classes.indexOf("bob-dep-chip-remove"), -1, "no remove on ambiguity");
-    assert.equal(classes.indexOf("bob-dep-add"), -1, "no add on ambiguity");
-  }
-  assert.deepEqual(seen.remove, []);
-  assert.deepEqual(seen.open, []);
+  const plugin = depPluginWithTasks([], tasks);
+  const fixture = fakeReadingDoc();
+  const { nested: outer } = readingTaskLi(fixture, fixture.root, "🛠️ WORK LOG");
+  const { nested } = readingTaskLi(fixture, outer, "#task Make appt ");
+  const { li } = readingDepLi(fixture, nested, ["a"]);
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md" });
+  assert.ok(li.className.indexOf("bob-dep-row") !== -1, "DP30 row decorated");
+  assert.ok(collectReadingClasses(li).join(" ").indexOf("bob-dep-chip") !== -1, "DP30 chips render");
 });
 
-test("reading view second-row remove sends the second line", async () => {
-  const tasks = [
-    depTask({ blockId: "a", symbol: " ", description: "Alpha", path: "a.md" }),
-    depTask({ blockId: "b", symbol: " ", description: "Beta", path: "a.md" }),
-  ];
+test("reading view second-row remove sends the second line when two tasks share a prerequisite", async () => {
+  const tasks = [depTask({ blockId: "x", symbol: " ", description: "Shared", path: "a.md" })];
   const seen = { open: [], remove: [] };
   const navApi = {
     version: 1,
@@ -1125,15 +1146,29 @@ test("reading view second-row remove sends the second line", async () => {
   };
   const noteText = [
     "- [ ] #task One ^one",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^x]]",
     "- [ ] #task Two ^two",
-    "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+    "  - ⛓️ **DEPENDS ON:** [[#^x]]",
   ].join("\n");
   const plugin = readingVaultApp(tasks, navApi, noteText);
-  const fixture = fakeReadingDoc();
-  const { li } = readingDepRow(fixture, ["b"]);
   const section = { lineStart: 0, lineEnd: 3 };
-  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["b"], section), 3);
+  // Without row context the identical lines stay ambiguous: no unique
+  // line, so no actions.
+  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["x"], section), null);
+  // With row context each rendered li maps to its own source line by
+  // order (contract §9): the first row resolves to the second note line
+  // and the second row to the fourth, even with identical block ids.
+  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["x"], section, { rowIndex: 1, rowCount: 4 }), 1);
+  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["x"], section, { rowIndex: 3, rowCount: 4 }), 3);
+  // A disagreeing rendered/section count hides the actions.
+  assert.equal(await plugin.dependencyReadingLineFor("a.md", ["x"], section, { rowIndex: 0, rowCount: 1 }), null);
+  // The fixture renders the whole section: both task rows with their
+  // Depends-On rows, in document order.
+  const fixture = fakeReadingDoc();
+  const first = readingTaskLi(fixture, fixture.root, "#task One ");
+  readingDepLi(fixture, first.nested, ["x"]);
+  const second = readingTaskLi(fixture, fixture.root, "#task Two ");
+  const { li } = readingDepLi(fixture, second.nested, ["x"]);
   plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md", getSectionInfo: () => section });
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
@@ -1142,7 +1177,7 @@ test("reading view second-row remove sends the second line", async () => {
   remove.handlers.click({});
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(seen.remove[0][0], { path: "a.md", line: 3 });
-  assert.deepEqual(seen.remove[0][1], { path: "a.md", blockId: "b" });
+  assert.deepEqual(seen.remove[0][1], { path: "a.md", blockId: "x" });
 });
 
 test("chip lookup index builds once per freshness memo", () => {

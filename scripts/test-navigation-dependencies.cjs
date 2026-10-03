@@ -159,6 +159,8 @@ test("DP parse vectors accept, empty, malformed, and not-a-line", () => {
     // itself), so the caller passes `isDirectChildOfTask: true` and the
     // line parses as `accept(1)`.
     ["DP30", "  - ⛓️ **DEPENDS ON:** [[#^a]]", { isDirectChildOfTask: true }, "accept", 1, true],
+    // DP31: prose-only line (label plus prose, no link) is malformed.
+    ["DP31", "  - ⛓️ **DEPENDS ON:** needs review", {}, "malformed", 0, false],
   ];
   for (const [id, line, options, verdict, count, canonical] of cases) {
     const parsed = helpers.parseDependencyLine(line, options);

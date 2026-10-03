@@ -2905,9 +2905,9 @@ function isTaskDependencyLine(lineText) {
 
 // A malformed Depends-On line (contract R10) is refused by
 // Ctrl+Shift+Enter with the dependency notice instead of deleting the
-// link token. Covers DP15 (half-typed link) and DP16 (trailing prose):
-// the list marker and bold label shape are present but
-// `isTaskDependencyLine` is false. DP23 (bare note link), DP25
+// link token. Covers DP15 (half-typed link), DP16 (trailing prose), and
+// DP31 (prose-only line, no link): the list marker and bold label shape
+// are present but `isTaskDependencyLine` is false. DP23 (bare note link), DP25
 // (heading link), and DP26 (separator-only) are malformed per the
 // contract but stay guard-true through `isTaskDependencyLine` instead,
 // so this stays false for them. Every not-a-line vector stays false

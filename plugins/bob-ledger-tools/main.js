@@ -6291,8 +6291,10 @@ function dependencyChipIsTaskLine(text) {
   return /#task(?![A-Za-z0-9_/-])/.test(line);
 }
 
-// a direct child of a `#task` list item and not inside a Work Log entry
-// (contract DP19/DP20). `lineTexts` holds every note line; `lineIndex` is
+// a direct child of a `#task` list item (contract DP19/DP20/DP30:
+// DP20's parent is the Work Log entry, not a `#task`, so it is already
+// excluded; a DP30 line owned by a task nested under a Work Log entry
+// counts). `lineTexts` holds every note line; `lineIndex` is
 // the 0-based index of the candidate. Never throws.
 function dependencyChipLineOwnedByTask(lineTexts, lineIndex) {
   try {
@@ -6327,21 +6329,8 @@ function dependencyChipLineOwnedByTask(lineTexts, lineIndex) {
     if (parent === -1 || !isTaskLine(lineTexts[parent])) {
       return false;
     }
-    // DP20: reject lines nested under a Work Log entry anywhere above.
-    let width = widthOf(lineTexts[parent]);
-    for (let index = parent; index >= 0; index -= 1) {
-      const text = String(lineTexts[index] || "");
-      if (!text.trim()) {
-        continue;
-      }
-      const w = widthOf(text);
-      if (w < width || index === parent) {
-        width = Math.min(width, w);
-        if (/WORK LOG/.test(text)) {
-          return false;
-        }
-      }
-    }
+    // Ownership walks only from the candidate up to its parent item, so
+    // the scan stays O(depth) (contract §7.4).
     return true;
   } catch (error) {
     return false;
@@ -6399,24 +6388,8 @@ function dependencyChipLineOwnedByTaskAtDoc(doc, lineNumber) {
     if (parent === -1 || !dependencyChipIsTaskLine(parentText)) {
       return false;
     }
-    // DP20: reject lines nested under a Work Log entry anywhere above.
-    let width = dependencyChipIndentWidth(parentText);
-    for (let number = parent; number >= 1; number -= 1) {
-      const text = readLine(number);
-      if (text === null) {
-        return true;
-      }
-      if (!text.trim()) {
-        continue;
-      }
-      const w = dependencyChipIndentWidth(text);
-      if (w < width || number === parent) {
-        width = Math.min(width, w);
-        if (/WORK LOG/.test(text)) {
-          return false;
-        }
-      }
-    }
+    // Ownership walks only from the candidate up to its parent item, so
+    // the scan stays O(depth) (contract §7.4).
     return true;
   } catch (error) {
     return true;
@@ -6536,34 +6509,6 @@ function dependencyReadingOwningTask(li, root) {
     return owner;
   } catch (error) {
     return null;
-  }
-}
-
-// True when a Reading-view Depends-On row sits under a Work Log entry
-// (contract DP20/DP30): any ancestor list item above the row whose own
-// text is a Work Log label. Never throws.
-function dependencyReadingWorkLogAncestor(li, root) {
-  try {
-    let node = li && li.parentNode ? li.parentNode : null;
-    let guard = 0;
-    while (node && node !== root && guard < 100) {
-      guard += 1;
-      try {
-        const tag = String((node.tagName || node.nodeName) || "").toUpperCase();
-        if (tag === "LI" && node !== li) {
-          const own = dependencyReadingOwnText(node);
-          if (/^\s*(?:🛠️\s*)?\**\s*WORK LOG(?![A-Za-z0-9_])/.test(own)) {
-            return true;
-          }
-        }
-      } catch (error) {
-        // Keep walking.
-      }
-      node = node.parentNode || null;
-    }
-    return false;
-  } catch (error) {
-    return false;
   }
 }
 
@@ -13725,7 +13670,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         return builder.finish();
       }
       const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
-      // Depends-On ownership (DP19/DP20) walks ancestors with line
+      // Depends-On ownership (DP19/DP20/DP30) walks ancestors with line
       // lookups, touching only visible ranges (contract §7.4) instead of
       // copying every document line. When line access is unavailable the
       // ownership check fails open.
@@ -13763,10 +13708,12 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               if (line.text.indexOf("DEPENDS ON") !== -1 || line.text.indexOf("DEPENDENCIES") !== -1) {
                 const parsed = parseDependencyLine(line.text);
                 if (parsed && (parsed.verdict === "accept" || parsed.verdict === "empty")) {
-                  // DP19/DP20: only a direct child of a #task line gets
-                  // chips — never paragraphs, grandchildren, or Work Log
-                  // lines. Ancestors walk with line lookups (contract
-                  // §7.4); fails open when line access is unavailable.
+                  // DP19/DP20/DP30: only a direct child of a #task line
+                  // gets chips — never paragraphs, grandchildren, or Work
+                  // Log lines. A DP30 line owned by a task nested under a
+                  // Work Log entry counts. Ancestors walk with line
+                  // lookups (contract §7.4); fails open when line access
+                  // is unavailable.
                   let owned = true;
                   try {
                     if (typeof line.number === "number") {
@@ -13929,15 +13876,13 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           // Owning-line rules, as in Live Preview
           // (`dependencyChipLineOwnedByTask`, contract DP16/DP19/DP20/
           // DP29/DP30): the row's parent list must hang directly off a
-          // `#task` item, the row must sit outside Work Log entries, and
-          // its own text must parse as the label shape (never chips on
-          // malformed, grandchild, Work Log, or blockquoted rows).
-          // Blockquotes and code reach here through
+          // `#task` item (DP20 hangs off the Work Log entry instead, so
+          // it never counts; a DP30 row owned by a task nested under a
+          // Work Log entry counts), and its own text must parse as the
+          // label shape (never chips on malformed, grandchild, Work Log,
+          // or blockquoted rows). Blockquotes and code reach here through
           // `dependencyExcludedAncestor` above.
           if (!dependencyReadingOwningTask(li, el)) {
-            continue;
-          }
-          if (dependencyReadingWorkLogAncestor(li, el)) {
             continue;
           }
           if (!dependencyReadingRowShapeOk(li)) {
@@ -14144,9 +14089,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
           }
           // Actions carry the derived 0-based note line (contract §9) and
           // stay hidden when the line cannot be derived.
-          // The 0-based line is the section's line start from
-          // `ctx.getSectionInfo(el)` plus the row's offset in the
-          // section; without section info the actions stay hidden.
+          // The 0-based line maps this row's index among the section's
+          // rendered list items to the same index among the section's
+          // list-item lines; without section info, or when the counts
+          // disagree, the actions stay hidden.
           let readingSection = null;
           try {
             if (ctx && typeof ctx.getSectionInfo === "function") {
@@ -14159,9 +14105,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
             const self = this;
             const pending = readingActions.slice();
             const blockIds = pending.map((action) => String((action.chip && action.chip.blockId) || ""));
+            const rowHint = { rowIndex: items.indexOf(li), rowCount: items.length };
             try {
               Promise.resolve()
-                .then(() => self.dependencyReadingLineFor(path, blockIds, readingSection))
+                .then(() => self.dependencyReadingLineFor(path, blockIds, readingSection, rowHint))
                 .then((line) => {
                   try {
                     if (!Number.isInteger(line)) {
@@ -14390,13 +14337,16 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
   }
 
   // 0-based note line of the Depends-On row rendered in Reading view
-  // (contract §9): the section's line start from
-  // `ctx.getSectionInfo(el)` plus the row's offset in the section. The
-  // row is the section's only owned, accepted Depends-On line whose
-  // link block ids match in order; null when the line cannot be derived
-  // uniquely (no match, or two tasks with identical lines), in which
-  // case chip actions stay hidden. Never throws.
-  async dependencyReadingLineFor(path, blockIds, section) {
+  // (contract §9): the k-th list item in the rendered section element,
+  // in document order, is the k-th list-item line in the section range
+  // (skipping fenced lines). `rowHint` carries the row's index and the
+  // rendered item count from the caller; when the counts disagree the
+  // line cannot be derived and chip actions stay hidden. Without a hint
+  // the row is the section's only owned, accepted Depends-On line whose
+  // link block ids match in order, or null when it cannot be derived
+  // uniquely (no match, or two tasks with identical lines). Never
+  // throws.
+  async dependencyReadingLineFor(path, blockIds, section, rowHint) {
     try {
       const want = (Array.isArray(blockIds) ? blockIds : []).map((id) => String(id || ""));
       if (!path || want.length === 0) {
@@ -14423,37 +14373,69 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       const lines = text.split("\n");
       const low = Math.max(0, lineStart);
       const high = Math.min(lines.length - 1, lineEnd);
-      const matches = [];
-      for (let index = low; index <= high; index += 1) {
+      const isWantedLine = (index) => {
         let parsed = null;
         try {
           parsed = parseDependencyLine(lines[index]);
         } catch (error) {
-          continue;
+          return false;
         }
         if (!parsed || parsed.verdict !== "accept") {
-          continue;
+          return false;
         }
         const have = (parsed.targets || []).map((target) => String(target.blockId || ""));
         if (have.length !== want.length || !have.every((id, at) => id === want[at])) {
-          continue;
+          return false;
         }
         // Ownership, as in Live Preview: only a direct child of a
-        // `#task` line counts, never a grandchild, a Work Log line, or
-        // (per DP30) a line whose owner nests under a Work Log entry.
+        // `#task` line counts, never a grandchild or a Work Log line
+        // (contract DP19/DP20/DP30).
         let owned = true;
         try {
           owned = dependencyChipLineOwnedByTask(lines, index);
         } catch (error) {
           owned = false;
         }
-        if (!owned) {
-          continue;
+        return owned;
+      };
+      const hinted = rowHint && Number.isInteger(rowHint.rowIndex) && Number.isInteger(rowHint.rowCount);
+      if (hinted) {
+        let fenced = null;
+        try {
+          fenced = planFencedLines(lines, low, high);
+        } catch (error) {
+          fenced = new Set();
         }
-        matches.push(index);
+        const itemLines = [];
+        for (let index = low; index <= high; index += 1) {
+          if (fenced.has(index)) {
+            continue;
+          }
+          if (!dependencyChipHasMarker(lines[index])) {
+            continue;
+          }
+          itemLines.push(index);
+        }
+        // The rendered list and the section's list-item lines must agree:
+        // an unusual list hides the actions rather than misfiring.
+        if (rowHint.rowCount !== itemLines.length) {
+          return null;
+        }
+        if (rowHint.rowIndex < 0 || rowHint.rowIndex >= itemLines.length) {
+          return null;
+        }
+        const mapped = itemLines[rowHint.rowIndex];
+        return isWantedLine(mapped) ? mapped : null;
+      }
+      const matches = [];
+      for (let index = low; index <= high; index += 1) {
+        if (isWantedLine(index)) {
+          matches.push(index);
+        }
       }
       // Two tasks with identical Depends-On lines share every block id:
-      // the row cannot be told apart, so actions stay hidden.
+      // the row cannot be told apart without row context, so actions
+      // stay hidden.
       return matches.length === 1 ? matches[0] : null;
     } catch (error) {
       return null;
@@ -17230,7 +17212,6 @@ module.exports.helpers = {
   dependencyReadingOwnText,
   dependencyReadingAnchorOwner,
   dependencyReadingOwningTask,
-  dependencyReadingWorkLogAncestor,
   dependencyReadingRowShapeOk,
   dependencyChipLineOwnedByTaskAtDoc,
   dependencyReadingLabelElement,

@@ -3026,13 +3026,22 @@ function isTaskDependencyLine(lineText) {
   }
   // Malformed lines (contract R10: DP15 half-typed, DP16 trailing prose)
   // are still managed lines: guard them exactly like accepted ones, so
-  // every malformed vector (DP15, DP16, DP23, DP25, DP26) behaves the
-  // same way. Only the not-a-line vectors stay unguarded (DP24 rejected
-  // above; DP27 lowercase label has no label match; DP28 no marker).
-  // Like the Rust parser, link brackets mark the residue as malformed
-  // rather than a new shape.
+  // every malformed vector (DP15, DP16, DP23, DP25, DP26, DP31) behaves
+  // the same way. Only the not-a-line vectors stay unguarded (DP24
+  // rejected above; DP27 lowercase label has no label match; DP28 no
+  // marker). Like the Rust parser, link brackets mark the residue as
+  // malformed rather than a new shape.
   if (/\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/.test(body) && /(\[\[|\]\])/.test(body)) {
     return true;
+  }
+  // DP31 (prose-only line): the label shape leads the line but prose
+  // follows with no block link. Guard it like the other malformed
+  // vectors so the cycler never strikes or reformats it.
+  if (/^[ \t]*(?:⛓️?|🔗)?[ \t]*\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/u.test(body)) {
+    const afterLabel = body.replace(/^[ \t]*(?:⛓️?|🔗)?[ \t]*\*\*(?:DEPENDS ON|DEPENDENCIES):\*\*/u, "");
+    if (/[^\s•·,]/.test(afterLabel)) {
+      return true;
+    }
   }
   return false;
 }

@@ -6679,8 +6679,8 @@ test("cycler freshness: getFreshnessStampLine degrades when ledger-tools is miss
 // compat (bob-cli-3n.5): Depends-On line recogniser, contract DP vectors
 // (docs/task-dependencies.md section 11.1). `line` is the candidate line on
 // its own. The boolean guards the line: every `accept`/`empty` shape and
-// every `malformed` vector (DP15, DP16, DP23, DP25, DP26) stays guarded,
-// while every `not-a-line` vector (DP24, DP27, DP28, DP29) stays
+// every `malformed` vector (DP15, DP16, DP23, DP25, DP26, DP31) stays
+// guarded, while every `not-a-line` vector (DP24, DP27, DP28, DP29) stays
 // unguarded. DP18/DP19/DP20/DP21/DP30 share an accept line shape —
 // parentage, fenced code, and Work Log ancestry are hooks projection
 // concerns, so the shape stays guarded here.
@@ -6706,8 +6706,12 @@ test("Depends-On line recogniser covers the contract DP vectors", () => {
     ["DP16", "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review"],
     ["DP17", "  - ⛓️ **DEPENDS ON:**"],
     // DP18/DP19/DP20 share DP1's shape; the context makes them
-    // not-a-line for projection, but the shape stays guarded here.
+    // not-a-line for projection, but the shape stays guarded here: this
+    // guard is line-level and never sees nesting, so a grandchild
+    // (DP19) or a Work Log child (DP20) still counts as a managed line.
     ["DP18-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP19-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    ["DP20-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
     ["DP21", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
     ["DP22", "  - ⛓️ **DEPENDS ON:** [[#^a|swarm]]"],
     // DP23/DP25/DP26 are malformed per the contract but keep the guarded
@@ -6718,6 +6722,9 @@ test("Depends-On line recogniser covers the contract DP vectors", () => {
     // DP30 shares DP1's shape; its Work Log context is pinned by the
     // Rust discovery test and the hooks, not by this shape guard.
     ["DP30-shape", "  - ⛓️ **DEPENDS ON:** [[#^a]]"],
+    // DP31 is malformed (prose-only, no link) but guarded exactly like
+    // the other malformed vectors: the cycler never strikes it.
+    ["DP31", "  - ⛓️ **DEPENDS ON:** needs review"],
   ];
   for (const [id, line] of guarded) {
     assert.equal(helpers.isTaskDependencyLine(line), true, id + ": " + line);

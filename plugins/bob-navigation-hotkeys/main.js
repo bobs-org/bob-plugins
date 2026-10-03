@@ -30363,6 +30363,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.vimJumpBridgeDiagnosticShown = false;
     this.vimJumpSuppressNativeMirror = false;
     this.vimJumpPendingDestinationDeferred = null;
+    this.pendingTaskMoveJumpCompletion = null;
+    this.pendingTaskMoveJumpLandingId = null;
+    this.taskMoveLandingSeq = 0;
     this.dashLocation = null;
     this.pendingRestoreDeferred = null;
     this.pendingDashTasksDeferred = null;
@@ -30709,6 +30712,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     if (this.vimJumpHistory) {
       clearVimJumpHistory(this.vimJumpHistory);
     }
+    this.cancelPendingTaskMoveJump();
     this.cancelPendingVimJumpDestination();
   }
 
@@ -40205,6 +40209,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
+    // A genuine native jump supersedes any pending move landing without
+    // losing its own mirrored entry.
+    try {
+      this.cancelPendingTaskMoveJump();
+    } catch (error) {
+      // Best-effort cancellation only.
+    }
     this.ensureVimJumpHistory();
     return recordVimJumpTransition(
       this.vimJumpHistory,
@@ -40245,6 +40256,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   async traverseVimJumpHistory(direction, count, cm) {
+    try {
+      this.cancelPendingTaskMoveJump();
+    } catch (error) {
+      // Best-effort cancellation only.
+    }
     this.ensureVimJumpHistory();
     const state = this.vimJumpHistory;
     if (state.entries.length === 0) {
@@ -40508,7 +40524,77 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     this.vimJumpOperationToken += 1;
   }
 
+  createVimJumpContextWithOrigin(origin) {
+    this.ensureVimJumpHistory();
+    const normalized = normalizeVimJumpLocation(origin);
+    if (!normalized) {
+      return null;
+    }
+
+    const token = ++this.vimJumpOperationToken;
+    return Object.freeze({
+      origin: Object.freeze({ ...normalized }),
+      token,
+    });
+  }
+
+  enqueueVimJumpContextTransition(jumpContext, destination, options = {}) {
+    const normalizedOrigin = normalizeVimJumpLocation(
+      jumpContext && jumpContext.origin,
+    );
+    const normalizedDestination = normalizeVimJumpLocation(destination);
+    if (!normalizedOrigin || !normalizedDestination) {
+      return Promise.resolve(false);
+    }
+
+    if (vimJumpLocationsEqual(normalizedOrigin, normalizedDestination)) {
+      return Promise.resolve(false);
+    }
+
+    const expectedPath =
+      options && typeof options.expectedPath === "string"
+        ? options.expectedPath
+        : null;
+    // Serialize with traversal so overlapping navigations cannot race the index.
+    return this.enqueueVimJumpOperation(() => {
+      if (jumpContext.token !== this.vimJumpOperationToken) {
+        // A newer navigation began while this destination was settling.
+        // Drop the stale context rather than racing the history index.
+        return false;
+      }
+
+      if (expectedPath) {
+        try {
+          const active = this.getActiveMarkdownView();
+          if (!active || !active.file || active.file.path !== expectedPath) {
+            return false;
+          }
+        } catch (error) {
+          return false;
+        }
+      }
+
+      this.ensureVimJumpHistory();
+      const recorded = recordVimJumpTransition(
+        this.vimJumpHistory,
+        normalizedOrigin,
+        normalizedDestination,
+      );
+      // Advance the token so a late duplicate callback for the same context
+      // cannot record twice.
+      if (recorded) {
+        this.vimJumpOperationToken += 1;
+      }
+      return recorded;
+    });
+  }
+
   beginVimLinkJump(cm) {
+    try {
+      this.cancelPendingTaskMoveJump();
+    } catch (error) {
+      // Best-effort cancellation only.
+    }
     this.ensureVimJumpHistory();
     let origin = null;
     try {
@@ -40529,15 +40615,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       origin = null;
     }
 
-    if (!normalizeVimJumpLocation(origin)) {
-      return null;
-    }
-
-    const token = ++this.vimJumpOperationToken;
-    return Object.freeze({
-      origin: Object.freeze({ ...origin }),
-      token,
-    });
+    return this.createVimJumpContextWithOrigin(origin);
   }
 
   async finishVimLinkJump(jumpContext, expectedPath) {
@@ -40588,26 +40666,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     // Serialize with traversal so overlapping link opens cannot race the index.
-    return this.enqueueVimJumpOperation(() => {
-      if (jumpContext.token !== this.vimJumpOperationToken) {
-        // A newer navigation began while this destination was settling.
-        // Drop the stale context rather than racing the history index.
-        return false;
-      }
-
-      this.ensureVimJumpHistory();
-      const recorded = recordVimJumpTransition(
-        this.vimJumpHistory,
-        normalizedOrigin,
-        destination,
-      );
-      // Advance the token so a late duplicate callback for the same context
-      // cannot record twice.
-      if (recorded) {
-        this.vimJumpOperationToken += 1;
-      }
-      return recorded;
-    });
+    return this.enqueueVimJumpContextTransition(jumpContext, destination);
   }
 
   getLeafViewState(leaf) {
@@ -42793,11 +42852,37 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       return false;
     }
 
-    await this.focusTaskMoveDestination(destinationFile, {
-      line: plan.destinationLine,
-      text: plan.destinationAnchorText,
-      blockId: plan.destinationBlockId,
-    });
+    let vimJumpContext = null;
+    try {
+      vimJumpContext = this.createVimJumpContextWithOrigin({
+        path: session.sourcePath,
+        line: finalCursor.line,
+        ch: finalCursor.ch,
+      });
+    } catch (error) {
+      vimJumpContext = null;
+    }
+    try {
+      if (vimJumpContext) {
+        await this.focusTaskMoveDestination(
+          destinationFile,
+          {
+            line: plan.destinationLine,
+            text: plan.destinationAnchorText,
+            blockId: plan.destinationBlockId,
+          },
+          vimJumpContext,
+        );
+      } else {
+        await this.focusTaskMoveDestination(destinationFile, {
+          line: plan.destinationLine,
+          text: plan.destinationAnchorText,
+          blockId: plan.destinationBlockId,
+        });
+      }
+    } catch (error) {
+      // Destination navigation and history are best-effort after commit.
+    }
     const count = session.discovery.actualCount;
     const destinationName =
       destinationFile.basename ||
@@ -42811,46 +42896,288 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  async focusTaskMoveDestination(file, anchor) {
+  async focusTaskMoveDestination(file, anchor, vimJumpContext = null) {
     this.captureActiveFilePosition();
 
     const destinationName =
       file.basename || getVaultPathBasenameWithoutExtension(file.path);
-    const opened = await this.openMarkdownFileWithLeafReuse(
-      file,
-      `Moved tasks, but could not open ${destinationName}`,
-    );
+    let opened = false;
+    try {
+      opened = await this.openMarkdownFileWithLeafReuse(
+        file,
+        `Moved tasks, but could not open ${destinationName}`,
+      );
+    } catch (error) {
+      opened = false;
+    }
     if (!opened) {
       return false;
     }
 
-    return this.jumpOrDeferTaskMoveDestination(file.path, anchor);
+    const hasMoveContext =
+      vimJumpContext &&
+      vimJumpContext.origin &&
+      normalizeVimJumpLocation(vimJumpContext.origin);
+    if (!hasMoveContext) {
+      return this.jumpOrDeferTaskMoveDestination(file.path, anchor);
+    }
+
+    if (vimJumpContext.token !== this.vimJumpOperationToken) {
+      return false;
+    }
+
+    let settleCompletion = null;
+    const completionPromise = new Promise((resolve) => {
+      settleCompletion = resolve;
+    });
+    const completion = {
+      resolve: (result) => {
+        try {
+          settleCompletion(result);
+        } catch (error) {
+          // Best-effort settle only.
+        }
+      },
+      token: vimJumpContext.token,
+    };
+
+    try {
+      this.jumpOrDeferTaskMoveDestination(
+        file.path,
+        anchor,
+        TASK_MOVE_DESTINATION_JUMP_RETRIES,
+        completion,
+      );
+    } catch (error) {
+      try {
+        settleCompletion({ ok: false, reason: "error" });
+      } catch (ignoredError) {
+        // Best-effort settle only.
+      }
+    }
+
+    let landing = null;
+    try {
+      landing = await completionPromise;
+    } catch (error) {
+      landing = { ok: false, reason: "error" };
+    }
+
+    if (!landing || !landing.ok || !landing.destination) {
+      return Boolean(landing && landing.ok);
+    }
+
+    try {
+      await this.enqueueVimJumpContextTransition(
+        vimJumpContext,
+        landing.destination,
+        { expectedPath: file.path },
+      );
+    } catch (error) {
+      // History is best-effort after a committed move.
+    }
+    return true;
   }
 
   jumpOrDeferTaskMoveDestination(
     path,
     anchor,
     retriesRemaining = TASK_MOVE_DESTINATION_JUMP_RETRIES,
+    completion = null,
   ) {
+    let retries = retriesRemaining;
+    let completionHolder = completion;
+    if (
+      retries !== null &&
+      typeof retries === "object" &&
+      completionHolder === null
+    ) {
+      completionHolder = retries;
+      retries = TASK_MOVE_DESTINATION_JUMP_RETRIES;
+    }
+    retries = Math.max(
+      0,
+      Math.floor(numericOrDefault(retries, TASK_MOVE_DESTINATION_JUMP_RETRIES)),
+    );
+
     this.cancelPendingTaskMoveJump();
 
-    if (this.jumpToActiveTaskMoveDestination(path, anchor)) {
+    let landing = null;
+    if (
+      completionHolder &&
+      typeof completionHolder === "object" &&
+      typeof completionHolder.resolve === "function" &&
+      typeof completionHolder.token === "number"
+    ) {
+      this.taskMoveLandingSeq = Math.floor(
+        numericOrDefault(this.taskMoveLandingSeq, 0),
+      ) + 1;
+      landing = {
+        id: this.taskMoveLandingSeq,
+        completion: completionHolder,
+        token: completionHolder.token,
+        path,
+      };
+      this.pendingTaskMoveJumpLandingId = landing.id;
+      this.pendingTaskMoveJumpCompletion = landing;
+    } else if (typeof completionHolder === "function") {
+      this.taskMoveLandingSeq = Math.floor(
+        numericOrDefault(this.taskMoveLandingSeq, 0),
+      ) + 1;
+      landing = {
+        id: this.taskMoveLandingSeq,
+        completion: { resolve: completionHolder, token: this.vimJumpOperationToken },
+        token: this.vimJumpOperationToken,
+        path,
+      };
+      this.pendingTaskMoveJumpLandingId = landing.id;
+      this.pendingTaskMoveJumpCompletion = landing;
+    } else {
+      this.pendingTaskMoveJumpLandingId = null;
+      this.pendingTaskMoveJumpCompletion = null;
+    }
+
+    return this.attemptTaskMoveDestination(path, anchor, retries, landing);
+  }
+
+  attemptTaskMoveDestination(path, anchor, retriesRemaining, landing) {
+    const retries = Math.max(
+      0,
+      Math.floor(numericOrDefault(retriesRemaining, 0)),
+    );
+
+    if (landing && landing.token !== this.vimJumpOperationToken) {
+      const settled = landing.completion;
+      if (this.pendingTaskMoveJumpLandingId === landing.id) {
+        this.pendingTaskMoveJumpLandingId = null;
+        this.pendingTaskMoveJumpCompletion = null;
+      }
+      try {
+        if (settled && typeof settled.resolve === "function") {
+          settled.resolve({ ok: false, reason: "superseded" });
+        } else if (typeof settled === "function") {
+          settled(null, { ok: false, reason: "superseded" });
+        }
+      } catch (error) {
+        // Best-effort settle only.
+      }
+      return false;
+    }
+
+    let placed = false;
+    try {
+      placed = this.jumpToActiveTaskMoveDestination(
+        path,
+        anchor,
+        landing ? { suppressNativeMirror: true } : null,
+      );
+    } catch (error) {
+      placed = false;
+    }
+
+    if (placed) {
+      let snapshot = null;
+      try {
+        const view = this.getActiveMarkdownView();
+        if (view && view.file && view.file.path === path && view.editor) {
+          const cursor = normalizePosition(view.editor.getCursor());
+          if (cursor) {
+            snapshot = { path, line: cursor.line, ch: cursor.ch };
+          }
+        }
+      } catch (error) {
+        snapshot = null;
+      }
+
+      if (landing) {
+        const settled = landing.completion;
+        if (this.pendingTaskMoveJumpLandingId === landing.id) {
+          this.pendingTaskMoveJumpLandingId = null;
+          this.pendingTaskMoveJumpCompletion = null;
+        }
+        try {
+          if (settled && typeof settled.resolve === "function") {
+            settled.resolve({ ok: true, destination: snapshot });
+          } else if (typeof settled === "function") {
+            settled(null, { ok: true, destination: snapshot });
+          }
+        } catch (error) {
+          // Best-effort settle only.
+        }
+      }
       return true;
     }
 
-    if (retriesRemaining <= 0) {
+    if (retries <= 0) {
+      if (landing) {
+        const settled = landing.completion;
+        if (this.pendingTaskMoveJumpLandingId === landing.id) {
+          this.pendingTaskMoveJumpLandingId = null;
+          this.pendingTaskMoveJumpCompletion = null;
+        }
+        try {
+          if (settled && typeof settled.resolve === "function") {
+            settled.resolve({ ok: false, reason: "exhausted" });
+          } else if (typeof settled === "function") {
+            settled(null, { ok: false, reason: "exhausted" });
+          }
+        } catch (error) {
+          // Best-effort settle only.
+        }
+      }
       return false;
     }
 
     this.pendingTaskMoveJumpDeferred = deferToNextFrame(() => {
       this.pendingTaskMoveJumpDeferred = null;
-      this.jumpOrDeferTaskMoveDestination(path, anchor, retriesRemaining - 1);
+      if (landing) {
+        if (
+          this.pendingTaskMoveJumpLandingId !== landing.id ||
+          landing.token !== this.vimJumpOperationToken
+        ) {
+          if (this.pendingTaskMoveJumpLandingId === landing.id) {
+            this.pendingTaskMoveJumpLandingId = null;
+            this.pendingTaskMoveJumpCompletion = null;
+          }
+          try {
+            const settled = landing.completion;
+            if (settled && typeof settled.resolve === "function") {
+              settled.resolve({ ok: false, reason: "superseded" });
+            } else if (typeof settled === "function") {
+              settled(null, { ok: false, reason: "superseded" });
+            }
+          } catch (error) {
+            // Best-effort settle only.
+          }
+          return;
+        }
+      }
+      try {
+        this.attemptTaskMoveDestination(path, anchor, retries - 1, landing);
+      } catch (error) {
+        if (landing) {
+          const settled = landing.completion;
+          if (this.pendingTaskMoveJumpLandingId === landing.id) {
+            this.pendingTaskMoveJumpLandingId = null;
+            this.pendingTaskMoveJumpCompletion = null;
+          }
+          try {
+            if (settled && typeof settled.resolve === "function") {
+              settled.resolve({ ok: false, reason: "error" });
+            } else if (typeof settled === "function") {
+              settled(null, { ok: false, reason: "error" });
+            }
+          } catch (ignoredError) {
+            // Best-effort settle only.
+          }
+        }
+      }
     });
 
     return false;
   }
 
-  jumpToActiveTaskMoveDestination(path, anchor) {
+  jumpToActiveTaskMoveDestination(path, anchor, options = null) {
     const view = this.getActiveMarkdownView();
     if (
       !view ||
@@ -42866,8 +43193,23 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       view.editor.getValue(),
       anchor,
     );
-    if (!setEditorCursor(view.editor, { line: resolved.line, ch: 0 })) {
-      return false;
+    const suppress =
+      options &&
+      typeof options === "object" &&
+      options.suppressNativeMirror === true;
+    let previousSuppress = false;
+    if (suppress) {
+      previousSuppress = this.vimJumpSuppressNativeMirror;
+      this.vimJumpSuppressNativeMirror = true;
+    }
+    try {
+      if (!setEditorCursor(view.editor, { line: resolved.line, ch: 0 })) {
+        return false;
+      }
+    } finally {
+      if (suppress) {
+        this.vimJumpSuppressNativeMirror = previousSuppress;
+      }
     }
 
     scheduleOpenTaskJumpCenter(this, view.editor, resolved.line, 0);
@@ -42877,6 +43219,21 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   cancelPendingTaskMoveJump() {
     cancelDeferred(this.pendingTaskMoveJumpDeferred);
     this.pendingTaskMoveJumpDeferred = null;
+    const pending = this.pendingTaskMoveJumpCompletion;
+    this.pendingTaskMoveJumpCompletion = null;
+    this.pendingTaskMoveJumpLandingId = null;
+    if (pending && pending.completion) {
+      try {
+        const settled = pending.completion;
+        if (settled && typeof settled.resolve === "function") {
+          settled.resolve({ ok: false, reason: "cancelled" });
+        } else if (typeof settled === "function") {
+          settled(null, { ok: false, reason: "cancelled" });
+        }
+      } catch (error) {
+        // Best-effort settle only.
+      }
+    }
   }
 
   async createProjectNoteFromTask(editor, view) {

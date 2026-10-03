@@ -4114,6 +4114,42 @@ function formatFreshnessDecayCapturedAge(createdValue, todayText) {
   }
 }
 
+// Stable snapshot of the task's child block: the lines strictly below the
+// task line that belong to its subtree (Schedule Log preimages included).
+// Reuses `findCurrentBulletChildBlock`; never writes a new parser. Never
+// throws.
+function snapshotFreshnessDecayChildBlock(content, taskLine) {
+  try {
+    const lines = String(content || "").split(/\r?\n/);
+    const index = Math.floor(Number(taskLine));
+    if (!Number.isInteger(index) || index < 0 || index >= lines.length) {
+      return "";
+    }
+    const block = findCurrentBulletChildBlock(lines, index);
+    const start = Math.max(0, block.startLine);
+    const end = Math.max(start, Math.min(lines.length, block.endLineExclusive));
+    return lines.slice(start, end).join("\n");
+  } catch (error) {
+    return "";
+  }
+}
+
+// Stable serialization of the priority-ladder config consumed by
+// `planFreshnessDecayCard` (levels, windows, roll limits, decay on/off).
+// `"null"` when absent. Never throws.
+function serializeFreshnessDecayPriorityProperty(property) {
+  try {
+    if (!property) {
+      return "null";
+    }
+    return JSON.stringify(property, (key, value) =>
+      value instanceof Map ? Array.from(value.entries()) : value,
+    );
+  } catch (error) {
+    return "__unserializable__";
+  }
+}
+
 // The first configured priority-ladder property (`values === "priority"`),
 // or null. Priority validity resolves against this loader, never a second
 // hard-coded table. Never throws.
@@ -34664,10 +34700,12 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   // Decision card: open, revalidate, and commit (`docs/freshness.md` §2a).
   // The card opens for one exact, due, at-limit source task and writes
   // nothing until approval. Every approval revalidates the task line,
-  // the local day, the decay config, and the trigger eligibility, then
-  // reuses the previewed plan/date through the existing transactional
-  // writers — one source-note decision is one undo step. Stale inputs
-  // write nothing and rebuild for a fresh choice.
+  // the local day, the decay config, the trigger eligibility, the plan
+  // inputs (keeps, interval, scheduled and priority values), the task's
+  // child block (Schedule Log preimages), and the priority ladder
+  // config, then reuses the previewed plan/date through the existing
+  // transactional writers — one source-note decision is one undo step.
+  // Stale inputs write nothing and rebuild for a fresh choice.
 
   // Normalized decay policy from the ledger api, with counting defaults
   // when the namespace is old or throwing. Never throws.
@@ -34759,6 +34797,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       if (!plan || plan.valid !== true) {
         return null;
       }
+      const childBlock = snapshotFreshnessDecayChildBlock(
+        String(content || ""),
+        line,
+      );
+      const priorityConfig = serializeFreshnessDecayPriorityProperty(property);
       const taskText = cleanTaskDisplayText(raw);
       const noteBase = String(filePath || "").split("/").pop() || String(filePath || "");
       const createdField = findBulletPropertyField(raw, "created");
@@ -34784,6 +34827,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         intervalDays,
         currentScheduled,
         currentValue,
+        childBlock,
+        priorityConfig,
         decay,
         plan,
         rows: buildFreshnessDecayCardRows(plan),
@@ -34851,9 +34896,11 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
   // Revalidate the previewed plan against live state immediately before
   // commit: the task line, the local day, the decay config, the trigger
-  // eligibility, and the plan inputs (keeps, interval, scheduled and
-  // priority values). Child-log positions are recomputed at commit, so a
-  // log edit elsewhere never misplaces an entry. Returns `{ ok, live }`.
+  // eligibility, the plan inputs (keeps, interval, scheduled and priority
+  // values), the task's child block (Schedule Log preimages), and the
+  // priority ladder config. Child-log insertion positions are still
+  // recomputed at commit; any child-log content change is stale and
+  // rebuilds for a fresh choice. Returns `{ ok, live }`.
   revalidateFreshnessDecayCard(cardCtx) {
     const stale = (reason) => ({ ok: false, reason, live: null });
     try {
@@ -34920,6 +34967,18 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         cardCtx.currentValue
       ) {
         return stale("priority");
+      }
+      if (
+        serializeFreshnessDecayPriorityProperty(property) !==
+        cardCtx.priorityConfig
+      ) {
+        return stale("priority-config");
+      }
+      if (
+        snapshotFreshnessDecayChildBlock(liveContent, cardCtx.line) !==
+        cardCtx.childBlock
+      ) {
+        return stale("child-log");
       }
       return {
         ok: true,
@@ -48291,6 +48350,8 @@ module.exports.helpers = {
   freshnessDecayRewordCursorCh,
   formatFreshnessDecayCapturedAge,
   findFreshnessDecayPriorityProperty,
+  snapshotFreshnessDecayChildBlock,
+  serializeFreshnessDecayPriorityProperty,
   resolveFreshnessDecayIntervalDays,
   buildFreshnessDecayCardRows,
   FreshnessDecayCardModal,

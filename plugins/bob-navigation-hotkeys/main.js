@@ -1716,16 +1716,19 @@ function isDependencyLineWriterSeparators(linkSpan) {
 // Rewrite a managed dependency navigation bullet to the current label while
 // preserving its existing indentation and list marker, so a legacy bullet can be
 // normalized in place without disturbing tab-indented or non-dash markers.
-function getTaskIdentityByBlockId(content) {
+function getTaskIdentityByBlockId(content, lineContexts = null, sourceLines = null) {
   const identities = new Map();
   const text = String(content || "");
-  text.split(/\r?\n/).forEach((line, lineIndex) => {
-    if (!isObsidianTaskAtLine(text, lineIndex)) {
-      return;
+  const lines = sourceLines || text.split(/\r?\n/);
+  const contexts = lineContexts || getMarkdownLineContextsForLines(lines);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    if (!isObsidianTaskAtLine(text, lineIndex, contexts, lines)) {
+      continue;
     }
+    const line = lines[lineIndex];
     const blockId = getTrailingBlockId(line);
     if (!blockId) {
-      return;
+      continue;
     }
     const idField = findBulletPropertyField(line, "id");
     identities.set(
@@ -1734,7 +1737,7 @@ function getTaskIdentityByBlockId(content) {
         ? normalizeBulletPropertyValue(idField.value) || blockId
         : blockId,
     );
-  });
+  }
   return identities;
 }
 
@@ -3564,8 +3567,15 @@ function collectDependencyNavigationBullets(
   content,
   parentLine,
   additionalManagedIds = [],
+  prepared = null,
 ) {
-  const lines = String(content || "").split(/\r?\n/);
+  const text = String(content || "");
+  const lines = prepared && Array.isArray(prepared.lines)
+    ? prepared.lines
+    : text.split(/\r?\n/);
+  const contexts = prepared && prepared.contexts
+    ? prepared.contexts
+    : getMarkdownLineContextsForLines(lines);
   const parentIndex = Math.floor(numericOrDefault(parentLine, Number.NaN));
 
   const emptyCollection = (reason) =>
@@ -3587,12 +3597,14 @@ function collectDependencyNavigationBullets(
     return emptyCollection("parent-out-of-range");
   }
 
-  if (!isObsidianTaskAtLine(content, parentIndex)) {
+  if (!isObsidianTaskAtLine(text, parentIndex, contexts, lines)) {
     return emptyCollection("not-task");
   }
 
   const block = findCurrentBulletChildBlock(lines, parentIndex);
-  const contexts = getMarkdownLineContexts(content);
+  if (block.endLineExclusive <= block.startLine) {
+    return emptyCollection(null);
+  }
   const lineIndices = [];
   const blockIds = [];
   const targets = [];
@@ -3610,7 +3622,18 @@ function collectDependencyNavigationBullets(
       dependencyNavigationTargetKey,
     ),
   );
-  const taskIdentities = getTaskIdentityByBlockId(content);
+  let taskIdentities = null;
+  const getTaskIdentities = () => {
+    if (taskIdentities) {
+      return taskIdentities;
+    }
+    if (prepared && prepared.entries) {
+      taskIdentities = getDependencySnapshotIdentities(prepared);
+      return taskIdentities;
+    }
+    taskIdentities = getTaskIdentityByBlockId(text, contexts, lines);
+    return taskIdentities;
+  };
 
   const rememberTarget = (target) => {
     const normalized = normalizeBulletPropertyValue(target.blockId);
@@ -3672,7 +3695,7 @@ function collectDependencyNavigationBullets(
         legacy,
         managedIds,
         managedTargetKeys,
-        taskIdentities,
+        getTaskIdentities(),
       )
     ) {
       continue;
@@ -3698,6 +3721,25 @@ function collectDependencyNavigationBullets(
     endLineExclusive: block.endLineExclusive,
     reason: null,
   });
+}
+
+function getCachedDependencyCollection(snapshot, content, parentLine, additionalManagedIds = []) {
+  const normalizedIds = Array.isArray(additionalManagedIds) ? additionalManagedIds : [];
+  if (snapshot && snapshot.collections && normalizedIds.length === 0) {
+    const at = Math.floor(numericOrDefault(parentLine, Number.NaN));
+    if (snapshot.collections.has(at)) {
+      return snapshot.collections.get(at);
+    }
+    const built = collectDependencyNavigationBullets(snapshot.text, at, [], snapshot);
+    snapshot.collections.set(at, built);
+    return built;
+  }
+  return collectDependencyNavigationBullets(
+    content,
+    parentLine,
+    normalizedIds,
+    snapshot || null,
+  );
 }
 
 // True when the task line carries a `[scheduled:: YYYY-MM-DD]` date after
@@ -3851,12 +3893,13 @@ function findOwningTaskLine(lines, line) {
     ? lines
     : String(lines || "").split(/\r?\n/);
   const content = sourceLines.join("\n");
+  const contexts = getMarkdownLineContextsForLines(sourceLines);
   let current = Math.floor(numericOrDefault(line, Number.NaN));
   if (!Number.isFinite(current) || current < 0 || current >= sourceLines.length) {
     return null;
   }
   while (Number.isFinite(current) && current >= 0) {
-    if (isObsidianTaskAtLine(content, current)) {
+    if (isObsidianTaskAtLine(content, current, contexts, sourceLines)) {
       return current;
     }
     const parent = findNearestParentListItem(sourceLines, current);
@@ -15447,13 +15490,13 @@ function getMarkdownLineContext(content, targetLine) {
   return Object.freeze({ valid: false, inFrontmatter: false, inFence: false });
 }
 
-function getMarkdownLineContexts(content) {
-  const { lines } = splitMarkdownContent(content);
+function getMarkdownLineContextsForLines(lines) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
   const contexts = [];
-  let inFrontmatter = startsWithFrontmatter(lines);
+  let inFrontmatter = startsWithFrontmatter(sourceLines);
   let inFence = null;
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const line = String(lines[lineIndex] || "");
+  for (let lineIndex = 0; lineIndex < sourceLines.length; lineIndex += 1) {
+    const line = String(sourceLines[lineIndex] || "");
     if (inFrontmatter) {
       contexts.push(
         Object.freeze({ valid: true, inFrontmatter: true, inFence: false }),
@@ -15485,6 +15528,125 @@ function getMarkdownLineContexts(content) {
     );
   }
   return Object.freeze(contexts);
+}
+
+function getMarkdownLineContexts(content) {
+  return getMarkdownLineContextsForLines(splitMarkdownContent(content).lines);
+}
+
+// Short-lived per-note parse snapshot shared by one dependency stage build.
+// Tied to exact note content: lines, Markdown contexts, scanned task entries
+// (with forward-carried sections), lazily built block-id identities, and a
+// per-parent dependency-collection cache. Never reuse across changed editor
+// content, write-planner intermediate content, or reopened stages.
+function createDependencyNoteSnapshot(content) {
+  const text = String(content || "");
+  const { lines, lineEnding } = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContextsForLines(lines);
+  let currentSection = null;
+  const entries = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    const rawLine = String(lines[line] || "");
+    const sectionMatch = DEPENDENCY_STAGE_SECTION_RE.exec(rawLine);
+    if (sectionMatch) {
+      const heading = (sectionMatch[1] || "").trim() || null;
+      currentSection = heading;
+    }
+    const context = contexts[line] || {};
+    if (!context.valid || context.inFrontmatter || context.inFence) {
+      continue;
+    }
+    if (isObsidianTaskLine(rawLine)) {
+      const match = OBSIDIAN_TASK_LINE_RE.exec(rawLine);
+      const status = match ? match[1] : " ";
+      const idField = findBulletPropertyField(rawLine, "id");
+      entries.push(
+        Object.freeze({
+          line,
+          rawLine,
+          isTask: true,
+          status,
+          open: OPEN_OBSIDIAN_TASK_STATUSES.has(status),
+          blocked: status === "?",
+          text: cleanTaskDisplayText(rawLine),
+          blockId: getTrailingBlockId(rawLine),
+          idField: idField
+            ? normalizeBulletPropertyValue(idField.value)
+            : null,
+          hidden: hasWholeTaskTag(rawLine, PROJECT_HIDE_TAG),
+          section: currentSection,
+        }),
+      );
+      continue;
+    }
+    const blockId = getTrailingBlockId(rawLine);
+    if (blockId) {
+      entries.push(
+        Object.freeze({
+          line,
+          rawLine,
+          isTask: false,
+          status: null,
+          open: false,
+          blocked: false,
+          text: rawLine.trim(),
+          blockId,
+          idField: null,
+          hidden: false,
+          section: currentSection,
+        }),
+      );
+    }
+  }
+  return {
+    text,
+    lines,
+    lineEnding,
+    contexts,
+    entries: Object.freeze(entries),
+    identities: null,
+    collections: new Map(),
+  };
+}
+
+function getDependencySnapshotIdentities(snapshot) {
+  if (!snapshot) {
+    return new Map();
+  }
+  if (snapshot.identities) {
+    return snapshot.identities;
+  }
+  const identities = new Map();
+  for (const entry of snapshot.entries) {
+    if (!entry.isTask || !entry.blockId) {
+      continue;
+    }
+    identities.set(
+      entry.blockId,
+      entry.idField || entry.blockId,
+    );
+  }
+  snapshot.identities = identities;
+  return identities;
+}
+
+function dependencySnapshotKey(additionalManagedIds) {
+  if (!additionalManagedIds || additionalManagedIds.length === 0) {
+    return "";
+  }
+  try {
+    return JSON.stringify(
+      normalizeDependencyNavigationTargets(additionalManagedIds).map(
+        dependencyNavigationTargetKey,
+      ),
+    );
+  } catch (_error) {
+    return `count:${additionalManagedIds.length}`;
+  }
+}
+
+function vaultStageYield() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 // Whole-note dependency operations must reject task-shaped examples in YAML
@@ -21457,85 +21619,45 @@ function findDependencyStageSection(lines, line) {
 
 // Every `#task` line in one note, open or closed, plus non-task block-id
 // carriers (for the "not a task" CURRENT state). Fenced code and frontmatter
-// are skipped through the shared line contexts.
+// are skipped through the shared line contexts. Sections are carried forward
+// during the single scan instead of searching backward per task.
 function scanDependencyStageNoteTasks(content) {
-  const text = String(content || "");
-  const { lines } = splitMarkdownContent(text);
-  const contexts = getMarkdownLineContexts(text);
-  const entries = [];
-  for (let line = 0; line < lines.length; line += 1) {
-    const rawLine = String(lines[line] || "");
-    const context = contexts[line] || {};
-    if (!context.valid || context.inFrontmatter || context.inFence) {
-      continue;
-    }
-    if (isObsidianTaskLine(rawLine)) {
-      const match = OBSIDIAN_TASK_LINE_RE.exec(rawLine);
-      const status = match ? match[1] : " ";
-      const idField = findBulletPropertyField(rawLine, "id");
-      entries.push(
-        Object.freeze({
-          line,
-          rawLine,
-          isTask: true,
-          status,
-          open: OPEN_OBSIDIAN_TASK_STATUSES.has(status),
-          blocked: status === "?",
-          text: cleanTaskDisplayText(rawLine),
-          blockId: getTrailingBlockId(rawLine),
-          idField: idField
-            ? normalizeBulletPropertyValue(idField.value)
-            : null,
-          hidden: hasWholeTaskTag(rawLine, PROJECT_HIDE_TAG),
-          section: findDependencyStageSection(lines, line),
-        }),
-      );
-    } else {
-      const blockId = getTrailingBlockId(rawLine);
-      if (blockId) {
-        entries.push(
-          Object.freeze({
-            line,
-            rawLine,
-            isTask: false,
-            status: null,
-            open: false,
-            blocked: false,
-            text: rawLine.trim(),
-            blockId,
-            idField: null,
-            hidden: false,
-            section: findDependencyStageSection(lines, line),
-          }),
-        );
-      }
-    }
-  }
-  return Object.freeze(entries);
+  return createDependencyNoteSnapshot(content).entries;
 }
 
-// The vault-wide RESULTS pool (`docs/task-dependencies.md` §6.2): open
-// tasks passing the `#task` global filter, including `ref/`, inbox,
-// Blocked, and `#hide`. `notes` is `[{path, content}]`; open editor buffers
-// must already override the cache in that list, so unsaved edits count.
-function collectVaultDependencyCandidates(notes, options = {}) {
+function createDependencySnapshotMap(notes) {
+  const snapshots = new Map();
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (!note) {
+      continue;
+    }
+    const path = normalizeVaultRelativePath(note.path || "");
+    if (!path) {
+      continue;
+    }
+    if (!snapshots.has(path)) {
+      snapshots.set(path, createDependencyNoteSnapshot(note.content));
+    } else {
+      snapshots.set(path, createDependencyNoteSnapshot(note.content));
+    }
+  }
+  return snapshots;
+}
+
+function collectVaultDependencyCandidatesFromSnapshots(snapshots, options = {}) {
   const dependentPath = normalizeVaultRelativePath(options.dependentPath || "");
   const dependentLines =
     options.dependentLines instanceof Set
       ? options.dependentLines
       : new Set(options.dependentLines || []);
   const out = [];
-  for (const note of Array.isArray(notes) ? notes : []) {
-    if (!note) {
-      continue;
-    }
-    const path = normalizeVaultRelativePath(note.path || "");
+  for (const [path, snapshot] of snapshots) {
     if (!path || isDependencyStageExcludedPath(path)) {
       continue;
     }
     const route = dependencyStageRouteOf(path);
     const noteName = dependencyStageBasenameOf(path);
-    for (const entry of scanDependencyStageNoteTasks(note.content)) {
+    for (const entry of snapshot.entries) {
       if (!entry.isTask || !entry.open) {
         continue;
       }
@@ -21567,10 +21689,7 @@ function collectVaultDependencyCandidates(notes, options = {}) {
   return Object.freeze(out);
 }
 
-// Lookup over everything — including closed, archived, hidden, and missing
-// targets — so CURRENT rows can still be removed
-// (`docs/task-dependencies.md` §6.2).
-function indexDependencyStageNotes(notes) {
+function indexDependencyStageNotesFromSnapshots(snapshots) {
   const byKey = new Map();
   const byBlockId = new Map();
   const byIdField = new Map();
@@ -21592,11 +21711,7 @@ function indexDependencyStageNotes(notes) {
     }
     return record;
   };
-  for (const note of Array.isArray(notes) ? notes : []) {
-    if (!note) {
-      continue;
-    }
-    const path = normalizeVaultRelativePath(note.path || "");
+  for (const [path, snapshot] of snapshots) {
     if (!path) {
       continue;
     }
@@ -21605,11 +21720,29 @@ function indexDependencyStageNotes(notes) {
       basenames.set(basename, []);
     }
     basenames.get(basename).push(path);
-    for (const entry of scanDependencyStageNoteTasks(note.content)) {
+    for (const entry of snapshot.entries) {
       register(path, entry);
     }
   }
   return Object.freeze({ byKey, byBlockId, byIdField, basenames });
+}
+
+// The vault-wide RESULTS pool (`docs/task-dependencies.md` §6.2): open
+// tasks passing the `#task` global filter, including `ref/`, inbox,
+// Blocked, and `#hide`. `notes` is `[{path, content}]`; open editor buffers
+// must already override the cache in that list, so unsaved edits count.
+function collectVaultDependencyCandidates(notes, options = {}) {
+  return collectVaultDependencyCandidatesFromSnapshots(
+    createDependencySnapshotMap(notes),
+    options,
+  );
+}
+
+// Lookup over everything — including closed, archived, hidden, and missing
+// targets — so CURRENT rows can still be removed
+// (`docs/task-dependencies.md` §6.2).
+function indexDependencyStageNotes(notes) {
+  return indexDependencyStageNotesFromSnapshots(createDependencySnapshotMap(notes));
 }
 
 // Resolve one Depends-On line link to its note path: same-note links stay
@@ -21645,14 +21778,18 @@ function resolveDependencyStageLinkTarget(linkNote, blockId, parentPath, index) 
 // everything, so closed, archived, hidden, and missing targets stay
 // removable. Returns `{ok, rows}` or `{ok: false, reason}` for a malformed
 // line (left alone, never projected).
-function resolveDependencyStageCurrent(content, parentLine, parentPath, index) {
+function resolveDependencyStageCurrent(content, parentLine, parentPath, index, snapshot = null) {
   const text = String(content || "");
-  const lines = text.split(/\r?\n/);
+  const lines = snapshot && Array.isArray(snapshot.lines)
+    ? snapshot.lines
+    : text.split(/\r?\n/);
   const at = Math.floor(numericOrDefault(parentLine, Number.NaN));
   if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
     return Object.freeze({ ok: false, reason: "parent-out-of-range", rows: [] });
   }
-  const collection = collectDependencyNavigationBullets(text, at);
+  const collection = snapshot
+    ? getCachedDependencyCollection(snapshot, text, at)
+    : collectDependencyNavigationBullets(text, at);
   if (collection.reason) {
     return Object.freeze({ ok: false, reason: collection.reason, rows: [] });
   }
@@ -21749,7 +21886,7 @@ function resolveDependencyStageCurrent(content, parentLine, parentPath, index) {
 // Dependency edges for cycle guards: each open task's Depends-On line links
 // plus its `[dependsOn::]` field ids, resolved to `path blockId` keys.
 // Unresolvable links are skipped: they never block and never guard.
-function collectDependencyStageEdges(notes, index) {
+function collectDependencyStageEdgesFromSnapshots(snapshots, index) {
   const edges = new Map();
   const add = (from, to) => {
     if (!from || !to || from === to) {
@@ -21762,35 +21899,24 @@ function collectDependencyStageEdges(notes, index) {
       edges.get(from).push(to);
     }
   };
-  const noteList = Array.isArray(notes) ? notes : [];
-  for (const note of noteList) {
-    if (!note) {
+  for (const [path, snapshot] of snapshots) {
+    if (!path || !snapshot) {
       continue;
     }
-    const path = normalizeVaultRelativePath(note.path || "");
-    if (!path) {
-      continue;
-    }
-    const text = String(note.content || "");
-    const lines = text.split(/\r?\n/);
-    const contexts = getMarkdownLineContexts(text);
-    for (let line = 0; line < lines.length; line += 1) {
-      if (!isObsidianTaskAtLine(text, line, contexts, lines)) {
+    const { lines, contexts, text } = snapshot;
+    for (const entry of snapshot.entries) {
+      if (!entry.isTask || !entry.open) {
         continue;
       }
-      if (!isOpenObsidianTaskLine(lines[line])) {
-        continue;
-      }
+      const line = entry.line;
       const rawLine = String(lines[line] || "");
-      const selfBlockId = getTrailingBlockId(rawLine);
-      const selfIdField = findBulletPropertyField(rawLine, "id");
+      const selfBlockId = entry.blockId;
+      const selfIdField = entry.idField;
       const from =
         (selfBlockId && dependencyStageRowKey(path, selfBlockId)) ||
-        (selfIdField &&
-          normalizeBulletPropertyValue(selfIdField.value) &&
-          `id:${normalizeBulletPropertyValue(selfIdField.value)}`) ||
+        (selfIdField && `id:${selfIdField}`) ||
         `${path}#line:${line}`;
-      const collection = collectDependencyNavigationBullets(text, line);
+      const collection = getCachedDependencyCollection(snapshot, text, line);
       if (!collection.reason) {
         for (const target of collection.targets) {
           const targetPath = resolveDependencyStageLinkTarget(
@@ -21816,6 +21942,10 @@ function collectDependencyStageEdges(notes, index) {
     }
   }
   return edges;
+}
+
+function collectDependencyStageEdges(notes, index) {
+  return collectDependencyStageEdgesFromSnapshots(createDependencySnapshotMap(notes), index);
 }
 
 // Whether linking `fromKey` to `toKey` would create a cycle: `toKey` already
@@ -22464,7 +22594,7 @@ function mergeStageCacheEdges(edges, cacheTasks, index) {
 function locateStageDisplayText(content, displayText) {
   const text = String(content || "");
   const lines = text.split(/\r?\n/);
-  const contexts = getMarkdownLineContexts(text);
+  const contexts = getMarkdownLineContextsForLines(lines);
   const want = String(displayText || "");
   const matches = [];
   for (let line = 0; line < lines.length; line += 1) {
@@ -22502,7 +22632,7 @@ function editorSelectionSpansTasks(cm, content) {
     }
     const text = String(content || "");
     const lines = text.split(/\r?\n/);
-    const contexts = getMarkdownLineContexts(text);
+    const contexts = getMarkdownLineContextsForLines(lines);
     for (const selection of cm.listSelections() || []) {
       const anchor = selection && selection.anchor;
       const head = selection && selection.head;
@@ -22784,6 +22914,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.initialProperty = context.initialProperty || null;
     this.propertyItems = [];
     this.vaultStage = null;
+    this.vaultStageRefreshId = 0;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and
@@ -25213,10 +25344,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
 
   // Dismissing the modal mid-prompt is a clean cancel: no writes happen until
   // the final block ID is confirmed, so just drop the pending batch state.
+  // Invalidate any pending vault-stage refresh so it never paints into the
+  // closed modal.
   onClose() {
     if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
       this.plugin.activeBulletPropertyPicker = null;
     }
+    this.vaultStageRefreshId = -1;
     this.clearPendingBatch();
     super.onClose();
   }
@@ -36633,21 +36767,26 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     );
     const cache = this.readStageTasksCache();
     const dependentLines = new Set(parents);
-    let candidates = collectVaultDependencyCandidates(notes, {
+    const snapshots = createDependencySnapshotMap(notes);
+    const ownerSnapshot = ownerPath ? snapshots.get(ownerPath) : null;
+    let candidates = collectVaultDependencyCandidatesFromSnapshots(snapshots, {
       dependentPath: ownerPath,
       dependentLines,
     });
+    // An authoritative Warm cache is ready even when it holds zero tasks:
+    // open-buffer tasks still participate, and no full-vault fallback runs
+    // merely because the task array is empty.
     let cacheReady = false;
-    if (cache.ready && cache.tasks.length > 0) {
+    if (cache.ready) {
       candidates = mergeStageCacheCandidates(cache.tasks, notes, {
         dependentPath: ownerPath,
         dependentLines,
       });
       cacheReady = true;
     }
-    const index = indexDependencyStageNotes(notes);
+    const index = indexDependencyStageNotesFromSnapshots(snapshots);
     registerStageCacheRecords(index, cache.ready ? cache.tasks : []);
-    const edges = collectDependencyStageEdges(notes, index);
+    const edges = collectDependencyStageEdgesFromSnapshots(snapshots, index);
     mergeStageCacheEdges(edges, cache.ready ? cache.tasks : [], index);
     // Open prerequisite counts for the BLOCKED badge (`docs/task-dependencies.md`
     // §6.3, DC7/DC8): every Blocked candidate counts from its own Depends-On
@@ -36674,15 +36813,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     candidates = candidates.map((candidate) => {
       let openPrereqs = null;
       if (candidate.blocked) {
-        const ownContent = contentByPath.get(
-          normalizeVaultRelativePath(candidate.path || ""),
-        );
+        const candidatePath = normalizeVaultRelativePath(candidate.path || "");
+        const ownSnapshot = snapshots.get(candidatePath) || null;
+        const ownContent = contentByPath.get(candidatePath);
         if (ownContent !== undefined && Number.isInteger(candidate.line)) {
           const resolved = resolveDependencyStageCurrent(
             ownContent,
             candidate.line,
-            normalizeVaultRelativePath(candidate.path || ""),
+            candidatePath,
             index,
+            ownSnapshot,
           );
           if (resolved.ok) {
             openPrereqs = resolved.rows.filter((row) => row.open).length;
@@ -36723,6 +36863,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         parentLine,
         ownerPath,
         index,
+        ownerSnapshot,
       );
       for (const row of resolved.ok ? resolved.rows : []) {
         const key =
@@ -36770,6 +36911,167 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         displayText: cleanTaskDisplayText(parentText) || null,
         text: cleanTaskDisplayText(parentText) || null,
       }),
+      parentLines: Object.freeze(parents.slice()),
+      sourceValueSets: Array.isArray(args.dependencyValueSets)
+        ? args.dependencyValueSets
+        : null,
+      title,
+      openCount,
+      poolSize: candidates.length,
+      refreshOf: null,
+    };
+  }
+
+  buildVaultDependencyStageFromSnapshots(snapshots, args = {}, cache = null) {
+    const ownerPath = normalizeVaultRelativePath(args.filePath || "");
+    const text = String(args.content || "");
+    const lines = text.split(/\r?\n/);
+    const parents = (Array.isArray(args.parentLines) ? args.parentLines : [])
+      .map((line) => Math.floor(numericOrDefault(line, Number.NaN)))
+      .filter((line) => Number.isFinite(line) && line >= 0 && line < lines.length);
+    const primary = parents.length > 0 ? parents[0] : -1;
+    const resolvedCache = cache || { ready: false, tasks: [] };
+    const dependentLines = new Set(parents);
+    const ownerSnapshot = ownerPath ? snapshots.get(ownerPath) : null;
+    let candidates = collectVaultDependencyCandidatesFromSnapshots(snapshots, {
+      dependentPath: ownerPath,
+      dependentLines,
+    });
+    let cacheReady = false;
+    if (resolvedCache.ready) {
+      const notes = [...snapshots].map(([path, snapshot]) => ({
+        path,
+        content: snapshot.text,
+      }));
+      candidates = mergeStageCacheCandidates(resolvedCache.tasks, notes, {
+        dependentPath: ownerPath,
+        dependentLines,
+      });
+      cacheReady = true;
+    }
+    const files = new Map(
+      [...snapshots].map(([path, snapshot]) => [path, String(snapshot.text || "")]),
+    );
+    const index = indexDependencyStageNotesFromSnapshots(snapshots);
+    registerStageCacheRecords(index, resolvedCache.ready ? resolvedCache.tasks : []);
+    const edges = collectDependencyStageEdgesFromSnapshots(snapshots, index);
+    mergeStageCacheEdges(edges, resolvedCache.ready ? resolvedCache.tasks : [], index);
+    const contentByPath = files;
+    const edgeOpenCount = (candidate) => {
+      const key =
+        candidate.path && candidate.blockId
+          ? dependencyStageRowKey(candidate.path, candidate.blockId)
+          : null;
+      const targets = (key && edges.get(key)) || [];
+      let openPrereqs = 0;
+      for (const target of targets) {
+        const record = index.byKey.get(target);
+        if (record && record.open) {
+          openPrereqs += 1;
+        }
+      }
+      return openPrereqs;
+    };
+    candidates = candidates.map((candidate) => {
+      let openPrereqs = null;
+      if (candidate.blocked) {
+        const candidatePath = normalizeVaultRelativePath(candidate.path || "");
+        const ownSnapshot = snapshots.get(candidatePath) || null;
+        const ownContent = contentByPath.get(candidatePath);
+        if (ownContent !== undefined && Number.isInteger(candidate.line)) {
+          const resolved = resolveDependencyStageCurrent(
+            ownContent,
+            candidate.line,
+            candidatePath,
+            index,
+            ownSnapshot,
+          );
+          if (resolved.ok) {
+            openPrereqs = resolved.rows.filter((row) => row.open).length;
+          }
+        }
+      }
+      if (openPrereqs === null) {
+        openPrereqs = edgeOpenCount(candidate);
+      }
+      let scheduledDate = null;
+      if (candidate.blocked && openPrereqs === 0) {
+        const ownContent = contentByPath.get(
+          normalizeVaultRelativePath(candidate.path || ""),
+        );
+        const ownLines =
+          ownContent !== undefined ? String(ownContent).split(/\r?\n/) : [];
+        const ownLine =
+          (candidate.rawLine !== undefined && candidate.rawLine !== null
+            ? String(candidate.rawLine)
+            : ownLines[candidate.line] !== undefined
+              ? String(ownLines[candidate.line])
+              : "");
+        const field = findBulletPropertyField(ownLine, "scheduled");
+        const raw = field ? String(field.value || "").trim() : "";
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw) && dependencyParentHasFutureSchedule(ownLine)) {
+          scheduledDate = raw;
+        }
+      }
+      return Object.freeze({ ...candidate, openCount: openPrereqs, scheduledDate });
+    });
+    const currentRows = [];
+    const linkedKeys = new Set();
+    for (const parentLine of parents) {
+      const resolved = resolveDependencyStageCurrent(
+        text,
+        parentLine,
+        ownerPath,
+        index,
+        ownerSnapshot,
+      );
+      for (const row of resolved.ok ? resolved.rows : []) {
+        const key =
+          row.path && row.blockId
+            ? dependencyStageRowKey(row.path, row.blockId)
+            : `missing:${normalizeVaultRelativePath(row.path || "")}#^${row.blockId || ""}`;
+        if (row.path && row.blockId) {
+          linkedKeys.add(key);
+        }
+        if (!currentRows.some((entry) => entry.dedupeKey === key)) {
+          currentRows.push({ ...row, dedupeKey: key });
+        }
+      }
+    }
+    const current = currentRows.map(({ dedupeKey, ...row }) => Object.freeze(row));
+    const openCount = current.filter((row) => row.open).length;
+    let dependentKey = null;
+    let parentText = "";
+    if (primary >= 0) {
+      parentText = String(lines[primary] || "");
+      const parentBlockId = getTrailingBlockId(parentText);
+      const parentIdField = findBulletPropertyField(parentText, "id");
+      const parentIdValue =
+        parentIdField && normalizeBulletPropertyValue(parentIdField.value);
+      dependentKey =
+        (parentBlockId && dependencyStageRowKey(ownerPath, parentBlockId)) ||
+        (parentIdValue ? `id:${parentIdValue}` : null);
+    }
+    const title =
+      parents.length > 1
+        ? `⛓ Depends on · ${formatCountLabel(parents.length, "task")}`
+        : `⛓ Depends on · ${cleanTaskDisplayText(parentText).slice(0, 48)}`;
+    return {
+      candidates,
+      current: Object.freeze(current),
+      linkedKeys,
+      edges,
+      files,
+      index,
+      cacheReady,
+      dependent: Object.freeze({
+        path: ownerPath,
+        line: primary,
+        key: dependentKey,
+        displayText: cleanTaskDisplayText(parentText) || null,
+        text: cleanTaskDisplayText(parentText) || null,
+      }),
+      parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)
         ? args.dependencyValueSets
         : null,
@@ -36782,15 +37084,26 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
   // One-time vault scan for stages that opened while the Tasks cache was
   // not Warm. Open buffers override the scan; the already-open stage keeps
-  // its marks across the refresh.
+  // its marks across the refresh. Reads and snapshot preparation run in
+  // bounded chunks with a real event-loop yield between batches, tied to a
+  // request generation so dismissal, stage leaves, or a newer request
+  // abandons obsolete work before painting.
   async refreshVaultDependencyStage(modal, stage) {
+    const requestId = (this._vaultDependencyRefreshSeq =
+      (this._vaultDependencyRefreshSeq || 0) + 1);
+    if (modal) {
+      modal.vaultStageRefreshId = requestId;
+    }
+    const isLive = () =>
+      Boolean(
+        modal &&
+          modal.vaultStage === stage &&
+          modal.vaultStageRefreshId === requestId &&
+          typeof modal.isLocalTaskStage === "function" &&
+          modal.isLocalTaskStage(),
+      );
     try {
-      if (
-        !modal ||
-        modal.vaultStage !== stage ||
-        typeof modal.isLocalTaskStage !== "function" ||
-        !modal.isLocalTaskStage()
-      ) {
+      if (!isLive()) {
         return;
       }
       const vault = this.app && this.app.vault;
@@ -36801,45 +37114,104 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       ) {
         return;
       }
-      const notes = [];
-      for (const file of vault.getMarkdownFiles() || []) {
+      const files = vault.getMarkdownFiles() || [];
+      const snapshots = new Map();
+      let batchStart = Date.now();
+      for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+        const file = files[fileIndex];
         if (!file || !file.path || !/\.md$/i.test(file.path)) {
           continue;
         }
+        if (!isLive()) {
+          return;
+        }
+        let content = null;
         try {
-          notes.push({
-            path: file.path,
-            content: String((await vault.cachedRead(file)) || ""),
-          });
+          content = String((await vault.cachedRead(file)) || "");
         } catch (_readError) {
-          continue;
+          content = null;
+        }
+        if (!isLive()) {
+          return;
+        }
+        if (content !== null) {
+          const path = normalizeVaultRelativePath(file.path || "");
+          if (path) {
+            try {
+              snapshots.set(path, createDependencyNoteSnapshot(content));
+            } catch (_parseError) {
+              // Best effort: skip unparsable notes, keep the sync pool.
+            }
+          }
+        }
+        const elapsed = Date.now() - batchStart;
+        const atBatchEnd = (fileIndex + 1) % 12 === 0 || elapsed >= 10;
+        if (atBatchEnd && fileIndex + 1 < files.length) {
+          await vaultStageYield();
+          batchStart = Date.now();
+          if (!isLive()) {
+            return;
+          }
         }
       }
-      if (modal.vaultStage !== stage || !modal.isLocalTaskStage()) {
+      if (!isLive()) {
         return;
       }
       for (const [path, content] of this.collectStageBufferNotes()) {
-        const at = notes.findIndex(
-          (note) => normalizeVaultRelativePath(note.path || "") === path,
-        );
-        if (at === -1) {
-          notes.push({ path, content });
-        } else {
-          notes[at].content = content;
+        if (!isLive()) {
+          return;
+        }
+        const normalized = normalizeVaultRelativePath(path || "");
+        if (!normalized) {
+          continue;
+        }
+        try {
+          snapshots.set(normalized, createDependencyNoteSnapshot(content));
+        } catch (_parseError) {
+          // Best effort: keep any vault-scan snapshot already prepared.
+        }
+        if (snapshots.size % 12 === 0) {
+          await vaultStageYield();
+          if (!isLive()) {
+            return;
+          }
         }
       }
+      if (!isLive()) {
+        return;
+      }
+      const parentLines = Array.isArray(stage.parentLines) && stage.parentLines.length > 0
+        ? stage.parentLines.slice()
+        : [stage.dependent.line];
       const request = {
         filePath: stage.dependent.path,
         content:
           modal.editor && typeof modal.editor.getValue === "function"
             ? String(modal.editor.getValue() || "")
             : "",
-        parentLines: [stage.dependent.line],
+        parentLines,
         dependencyValueSets: stage.sourceValueSets,
       };
-      const fresh = this.buildVaultDependencyStageFromNotes(notes, request);
+      // The owner buffer may have changed while the scan yielded: rebuild
+      // only that snapshot so CURRENT rows match the live editor text.
+      try {
+        snapshots.set(
+          normalizeVaultRelativePath(request.filePath || ""),
+          createDependencyNoteSnapshot(request.content),
+        );
+      } catch (_parseError) {
+        // Best effort: keep the buffer snapshot already prepared.
+      }
+      const fresh = this.buildVaultDependencyStageFromSnapshots(
+        snapshots,
+        request,
+        { ready: false, tasks: [] },
+      );
       fresh.refreshOf = stage;
       fresh.cacheReady = true;
+      if (!isLive()) {
+        return;
+      }
       modal.applyVaultStageItems(fresh);
     } catch (_error) {
       // Best effort: the sync pool stays in place.
@@ -43855,11 +44227,18 @@ module.exports.helpers = {
   isDependencyStageExcludedPath,
   findDependencyStageSection,
   scanDependencyStageNoteTasks,
+  createDependencyNoteSnapshot,
+  createDependencySnapshotMap,
   collectVaultDependencyCandidates,
+  collectVaultDependencyCandidatesFromSnapshots,
   indexDependencyStageNotes,
+  indexDependencyStageNotesFromSnapshots,
   resolveDependencyStageLinkTarget,
   resolveDependencyStageCurrent,
   collectDependencyStageEdges,
+  collectDependencyStageEdgesFromSnapshots,
+  getMarkdownLineContextsForLines,
+  vaultStageYield,
   findDependencyStageCycle,
   compareDependencyStageCanonical,
   planDependencyStageView,

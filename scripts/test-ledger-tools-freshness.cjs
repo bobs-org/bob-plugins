@@ -564,6 +564,7 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     pendingInterval: 1,
     nextInterval: 1,
     rottenDailyBudget: null,
+    decay: { enabled: true, keeps: 3, enter: null },
   });
   assert.equal(freshnessBlock({}), undefined);
   assert.deepEqual(freshnessBlock({ freshness: { interval: 3 } }), {
@@ -631,8 +632,15 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
         pendingInterval: coerced.config.pendingInterval,
         nextInterval: coerced.config.nextInterval,
         rottenDailyBudget: coerced.config.rottenDailyBudget,
+        decay: coerced.config.decay,
       },
-      { interval: 7, pendingInterval: 1, nextInterval: 1, rottenDailyBudget: null },
+      {
+        interval: 7,
+        pendingInterval: 1,
+        nextInterval: 1,
+        rottenDailyBudget: null,
+        decay: { enabled: true, keeps: 3, enter: null },
+      },
     );
   }
   // Lane intervals: absent or null mean the default 1, false turns
@@ -872,7 +880,7 @@ function withMissingConfig(run) {
   }
 }
 
-test("freshness namespace v4 keeps every member on rotten vocabulary", () => {
+test("freshness namespace v5 keeps every member on rotten vocabulary", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -892,11 +900,12 @@ test("freshness namespace v4 keeps every member on rotten vocabulary", () => {
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 4);
+      assert.equal(freshness.version, 5);
       for (const key of [
         "config",
         "stampLine",
         "setRefreshLine",
+        "keepLine",
         "state",
         "bucket",
         "reviewModel",
@@ -911,15 +920,23 @@ test("freshness namespace v4 keeps every member on rotten vocabulary", () => {
       ]) {
         assert.equal(typeof freshness[key], "function", `freshness ${key}`);
       }
-      assert.deepEqual(freshness.config(), {
-        interval: 7,
-        pendingInterval: 1,
-        nextInterval: 1,
-        rottenDailyBudget: null,
-        intervalFromConfig: false,
-        invalid: false,
-        deprecatedStaleBudget: false,
-      });
+      const apiConfig = freshness.config();
+      assert.deepEqual(
+        { ...apiConfig, active: "wall-clock" },
+        {
+          interval: 7,
+          pendingInterval: 1,
+          nextInterval: 1,
+          rottenDailyBudget: null,
+          intervalFromConfig: false,
+          invalid: false,
+          deprecatedStaleBudget: false,
+          decay: { enabled: true, keeps: 3, enter: null },
+          activeFrom: "2026-10-19",
+          active: "wall-clock",
+        },
+      );
+      assert.equal(typeof apiConfig.active, "boolean");
       assert.equal(freshness.state(tasks[0]), "new");
       assert.equal(freshness.bucket(tasks[0]), "new");
       assert.equal(freshness.isDue(tasks[0]), true);
@@ -1599,6 +1616,7 @@ test("config snapshot caches the parse and invalidates explicitly", () => {
           pendingInterval: 1,
           nextInterval: 1,
           rottenDailyBudget: null,
+          decay: { enabled: true, keeps: 3, enter: null },
           intervalFromConfig: false,
         },
         invalid: false,

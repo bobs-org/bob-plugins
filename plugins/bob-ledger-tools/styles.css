@@ -270,6 +270,22 @@ a.bob-plan-ready:hover {
   font-weight: 450;
 }
 
+/* Folded keep-streak pips: filled dots, about 0.34em with 0.14em gaps.
+   Faint on every tone — never green on `today` — subdued orange in a
+   `due` capsule. No red, extra border, empty progress dots, or
+   achievement styling. */
+.bob-fresh-mark-dots {
+  font-size: 0.85em;
+  letter-spacing: 0.14em;
+  margin-inline-end: -0.14em;
+  color: var(--text-faint, var(--text-muted));
+  font-weight: 400;
+}
+
+.bob-fresh-mark[data-tone="due"] .bob-fresh-mark-dots {
+  color: color-mix(in srgb, var(--color-orange, #d9822b) 65%, var(--text-faint, var(--text-muted)));
+}
+
 .bob-fresh-mark[data-tone="today"] {
   --bob-fresh-color: var(--task-status-next, var(--color-green, #3f8f5f));
 }
@@ -301,7 +317,7 @@ a.bob-plan-ready:hover {
 /* Leftover Dataview pills while marks are on are non-canonical stamps,
    so flag them for repair (press Alt+F). Full opacity plus a dashed
    orange border. Scoped to Live Preview under `body.bob-fresh-marks`. */
-body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> .dataview.inline-field-key:is([data-dv-norm-key="fresh"], [data-dv-norm-key="refresh"])) {
+body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> .dataview.inline-field-key:is([data-dv-norm-key="fresh"], [data-dv-norm-key="refresh"], [data-dv-norm-key="keeps"])) {
   opacity: 1;
   border-style: dashed;
   border-color: color-mix(in srgb, var(--color-orange, #d9822b) 55%, transparent);

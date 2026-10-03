@@ -4050,6 +4050,32 @@ function freshnessFirstValidRefresh(line) {
   return null;
 }
 
+// A `[keeps:: N]` value: a decimal integer 1-999, nothing else.
+// Absence means 0 and writers omit zero. Mirrors `parse_keeps_value`
+// in `src/native/freshness/placement.rs`.
+function freshnessParseKeepsValue(value) {
+  const trimmed = String(value || "").trim();
+  if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+    return null;
+  }
+  const number = Number(trimmed);
+  if (!Number.isSafeInteger(number) || number < 1 || number > 999) {
+    return null;
+  }
+  return number;
+}
+
+function freshnessFirstValidKeeps(line) {
+  const fields = freshnessInlineFields(line, "keeps");
+  for (const field of fields) {
+    const count = freshnessParseKeepsValue(field.value);
+    if (count !== null) {
+      return count;
+    }
+  }
+  return null;
+}
+
 // The scan floor: the start of the task body, or the end of a leading
 // `#task` global-filter token. The suffix scan never moves left of it.
 // Quote markers are detection-only: the floor is shifted back into the
@@ -4178,8 +4204,10 @@ function freshnessTrailingFieldKey(trimmed) {
 // Byte offset where the trailing Tasks suffix starts. The suffix starts
 // at the leftmost Tasks element (a Tasks-key field, a trailing tag, or
 // `^id`) of the run scanned from the end of the line. `fresh` /
-// `refresh` fields extend the run but are not part of the suffix.
-// Returns the trimmed length when there is no suffix.
+// `refresh` / `keeps` fields extend the run but are not part of the
+// suffix. `keeps` is a run-extending non-Tasks key: it is never added
+// to the Tasks key registry. Returns the trimmed length when there is
+// no suffix.
 function freshnessTasksSuffixStart(line) {
   const text = String(line || "");
   const floor = freshnessScanFloor(text);
@@ -4224,7 +4252,11 @@ function freshnessTasksSuffixStart(line) {
       cursor = freshnessTrimEndTo(text.slice(0, field.start), field.start);
       continue;
     }
-    if (field.key === "fresh" || field.key === "refresh") {
+    if (
+      field.key === "fresh" ||
+      field.key === "refresh" ||
+      field.key === "keeps"
+    ) {
       cursor = freshnessTrimEndTo(text.slice(0, field.start), field.start);
       continue;
     }
@@ -4234,14 +4266,17 @@ function freshnessTasksSuffixStart(line) {
   return leftmost === null ? trimmedLen : leftmost;
 }
 
-// Remove every `fresh` and `refresh` field from `text`, collapsing the
-// whitespace each removal leaves to a single space.
+// Remove every `fresh`, `refresh`, and `keeps` field from `text`,
+// collapsing the whitespace each removal leaves to a single space.
 function freshnessRemoveFields(text) {
   const ranges = [];
   for (const field of freshnessInlineFields(text, "fresh")) {
     ranges.push([field.start, field.end]);
   }
   for (const field of freshnessInlineFields(text, "refresh")) {
+    ranges.push([field.start, field.end]);
+  }
+  for (const field of freshnessInlineFields(text, "keeps")) {
     ranges.push([field.start, field.end]);
   }
   if (ranges.length === 0) {
@@ -4267,10 +4302,17 @@ function freshnessRemoveFields(text) {
   return output;
 }
 
-// Rebuild `line` with `[fresh:: dateText]` (and `[refresh:: N]` when
-// kept) immediately before the Tasks suffix. The suffix bytes themselves
-// are never changed.
-function freshnessRebuildWithoutFields(line, dateText, keptRefresh) {
+// Rebuild `line` with `[fresh:: dateText]` (plus `[refresh:: N]` and
+// `[keeps:: N]` when kept) immediately before the Tasks suffix.
+// Output order is `fresh`, optional `refresh`, optional `keeps`, then
+// the existing Tasks suffix, tags, and block ID. The suffix bytes
+// themselves are never changed.
+function freshnessRebuildWithoutFields(
+  line,
+  dateText,
+  keptRefresh,
+  keptKeeps,
+) {
   const text = String(line || "");
   const trimmedLen = text.replace(/[ \t\n\r]+$/, "").length;
   const suffixStart = Math.min(freshnessTasksSuffixStart(text), trimmedLen);
@@ -4282,6 +4324,9 @@ function freshnessRebuildWithoutFields(line, dateText, keptRefresh) {
   let output = head + " [fresh:: " + dateText + "]";
   if (keptRefresh !== null && keptRefresh !== undefined) {
     output += " [refresh:: " + keptRefresh + "]";
+  }
+  if (keptKeeps !== null && keptKeeps !== undefined) {
+    output += " [keeps:: " + keptKeeps + "]";
   }
   if (suffix !== "") {
     output += " " + suffix;
@@ -4298,10 +4343,12 @@ function freshnessNormalizeDateText(dateText) {
 }
 
 // Stamp `line` with `dateText`, keeping the first valid existing
-// `[refresh:: N]` if there is one. Refusals (not a task, recurring,
+// `[refresh:: N]` if there is one. Every generic human stamp clears
+// `keeps`: the line is rewritten without any `keeps` field, even when
+// `dateText` already equals today. Refusals (not a task, recurring,
 // done/cancelled) return the line unchanged with a reason. A line
-// already stamped with `dateText` in canonical position is
-// byte-identical with `changed: false`.
+// already stamped with `dateText` in canonical position — and with no
+// `keeps` to clear — is byte-identical with `changed: false`.
 function freshnessStampLine(line, dateText) {
   const text = String(line || "");
   const day = freshnessNormalizeDateText(dateText);
@@ -4319,6 +4366,54 @@ function freshnessStampLine(line, dateText) {
     text,
     day,
     freshnessFirstValidRefresh(text),
+    null,
+  );
+  return { line: output, changed: output !== text, refused: null };
+}
+
+// The sole increment helper (`docs/freshness.md` §2a): stamp `line`
+// with `dateText` while counting one due-Ready bare keep. `options`
+// carries `{ counted }`: a counted keep increments the valid semantic
+// streak by one (saturating at 999; absence means 0 so the first
+// counted keep writes 1), while an uncounted keep preserves the valid
+// semantic value. Both paths canonicalize and repair
+// malformed/duplicate placement. A valid prior `fresh < today` is
+// independently required before incrementing, even when `counted` is
+// true, so NEW and same-day lines never inflate under stale caches or
+// repeated events — those stamp and preserve instead. Refusals match
+// the generic stamper. Rust reads, clears, and reports `keeps`; it has
+// no increment path.
+function freshnessKeepLine(line, dateText, options) {
+  const text = String(line || "");
+  const day = freshnessNormalizeDateText(dateText);
+  const status = freshnessTaskStatus(text);
+  if (status === null) {
+    return { line: text, changed: false, refused: "not_task" };
+  }
+  if (freshnessIsClosedStatus(status)) {
+    return { line: text, changed: false, refused: "closed" };
+  }
+  if (freshnessHasRepeatField(text)) {
+    return { line: text, changed: false, refused: "recurring" };
+  }
+  const counted =
+    options !== null &&
+    options !== undefined &&
+    typeof options === "object" &&
+    Boolean(options.counted);
+  const read = readFreshness(text, day);
+  const priorValid = read.fresh !== null && read.fresh < day;
+  let keptKeeps = null;
+  if (counted && priorValid) {
+    keptKeeps = Math.min(read.keeps + 1, 999);
+  } else if (read.keeps > 0) {
+    keptKeeps = read.keeps;
+  }
+  const output = freshnessRebuildWithoutFields(
+    text,
+    day,
+    freshnessFirstValidRefresh(text),
+    keptKeeps,
   );
   return { line: output, changed: output !== text, refused: null };
 }
@@ -4347,7 +4442,7 @@ function freshnessSetRefreshLine(line, days, dateText) {
   if (freshnessHasRepeatField(text)) {
     return { line: text, changed: false, refused: "recurring" };
   }
-  const output = freshnessRebuildWithoutFields(text, day, edit);
+  const output = freshnessRebuildWithoutFields(text, day, edit, null);
   return { line: output, changed: output !== text, refused: null };
 }
 
@@ -4357,14 +4452,18 @@ function freshnessPushLint(lints, code) {
   }
 }
 
-// Read the `fresh` / `refresh` fields on `line`: the latest valid
-// `fresh` date not after `todayText` (a future date is treated as none),
-// the first valid `[refresh:: N]`, and lint codes in first-seen order.
+// Read the `fresh` / `refresh` / `keeps` fields on `line`: the latest
+// valid `fresh` date not after `todayText` (a future date is treated
+// as none), the first valid `[refresh:: N]`, the first valid
+// `[keeps:: N]` semantic count (0 when absent or when no value is
+// valid), and lint codes in first-seen order. Mirrors `read_freshness`
+// in `src/native/freshness/placement.rs`.
 function readFreshness(line, todayText) {
   const text = String(line || "");
   const today = freshnessNormalizeDateText(todayText);
   const freshFields = freshnessInlineFields(text, "fresh");
   const refreshFields = freshnessInlineFields(text, "refresh");
+  const keepsFields = freshnessInlineFields(text, "keeps");
   const lints = [];
 
   let best = null;
@@ -4396,6 +4495,23 @@ function readFreshness(line, todayText) {
     freshnessPushLint(lints, "refresh_invalid");
   }
 
+  let keeps = null;
+  let keepsInvalidSeen = false;
+  for (const field of keepsFields) {
+    const count = freshnessParseKeepsValue(field.value);
+    if (count === null) {
+      keepsInvalidSeen = true;
+    } else if (keeps === null) {
+      keeps = count;
+    }
+  }
+  if (keepsInvalidSeen) {
+    freshnessPushLint(lints, "keeps_invalid");
+  }
+  if (keepsFields.length > 1) {
+    freshnessPushLint(lints, "keeps_duplicate");
+  }
+
   const suffixStart = freshnessTasksSuffixStart(text);
   const trimmedLen = text.replace(/[ \t\n\r]+$/, "").length;
   if (suffixStart < trimmedLen) {
@@ -4403,21 +4519,40 @@ function readFreshness(line, todayText) {
       freshnessInlineFields(text, name).some(
         (field) => field.start >= suffixStart,
       );
-    if (misplaced("fresh") || misplaced("refresh")) {
+    if (misplaced("fresh") || misplaced("refresh") || misplaced("keeps")) {
       freshnessPushLint(lints, "fresh_misplaced");
     }
   }
 
-  return { fresh: best, refresh, lints };
+  return { fresh: best, refresh, keeps: keeps === null ? 0 : keeps, lints };
 }
 
 // --- Task freshness: config -------------------------------------------------
 // Beside `planCapsBlock` / `coercePlanCaps`: the `freshness:` block in
 // `~/.config/bob/config.yml` (`interval`, `pending_interval`,
-// `next_interval`, `rotten_daily_budget`).
+// `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §2 in bob-cli (freshness namespace v4).
+// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v5).
+
+// The day the keep-streak decision machinery activates, in the vault's
+// local calendar (`docs/freshness.md` §2a). Rollout policy, not an
+// editable config knob: before this day agents count and show pips
+// only — no cards, leaf, decision skip, or "next review asks" promise.
+// Mirrors `decay_active_from` in `src/native/config/freshness.rs`.
+const FRESHNESS_DECAY_ACTIVE_FROM = "2026-10-19";
+
+// Whether the keep-streak decision machinery is active for `todayText`:
+// `todayText` is on or after the activation date. Mirrors
+// `decay_active` in `src/native/config/freshness.rs`.
+function freshnessDecayActive(todayText) {
+  try {
+    const today = freshnessNormalizeDateText(todayText);
+    return today >= FRESHNESS_DECAY_ACTIVE_FROM;
+  } catch (error) {
+    return false;
+  }
+}
 
 function defaultFreshnessConfig() {
   return {
@@ -4425,7 +4560,80 @@ function defaultFreshnessConfig() {
     pendingInterval: 1,
     nextInterval: 1,
     rottenDailyBudget: null,
+    decay: { enabled: true, keeps: 3, enter: null },
   };
+}
+
+// Normalize the `freshness.decay` value: absent, null, `true`, or an
+// empty mapping means enabled with 3 keeps; `false` disables asking
+// while keeping counting and display; a mapping may set `keeps`
+// (integer 0-999) and `enter` (a nonempty priority label). Anything
+// else is invalid under the freshness failure contract. Mirrors
+// `parse_decay_config` in `src/native/config/freshness.rs`.
+function coerceFreshnessDecay(raw) {
+  const defaults = () => ({ enabled: true, keeps: 3, enter: null });
+  if (raw === undefined || raw === null || raw === true) {
+    return { decay: defaults(), invalid: false };
+  }
+  if (raw === false) {
+    return { decay: { enabled: false, keeps: 3, enter: null }, invalid: false };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { decay: defaults(), invalid: true };
+  }
+  let keeps = 3;
+  const keepsRaw = raw.keeps;
+  if (keepsRaw !== undefined && keepsRaw !== null) {
+    if (
+      typeof keepsRaw !== "number" ||
+      !Number.isInteger(keepsRaw) ||
+      keepsRaw < 0 ||
+      keepsRaw > 999
+    ) {
+      return { decay: defaults(), invalid: true };
+    }
+    keeps = keepsRaw;
+  }
+  let enter = null;
+  const enterRaw = raw.enter;
+  if (enterRaw !== undefined && enterRaw !== null) {
+    if (typeof enterRaw !== "string" || enterRaw.trim() === "") {
+      return { decay: defaults(), invalid: true };
+    }
+    enter = enterRaw.trim();
+  }
+  return { decay: { enabled: true, keeps, enter }, invalid: false };
+}
+
+// Whether a choice is due for a Ready-lane row in `tier` with `keeps`
+// counted keeps under `config` on `todayText`: active rollout,
+// enabled decay, Ready lane, rotten/returned tier, keeps at or over
+// the limit. The annotation means a choice is due, not permission to
+// execute an action. Mirrors `decide_for` in
+// `src/native/freshness/state.rs`.
+function freshnessDecideFor(lane, tier, keeps, todayText, config) {
+  try {
+    const dueTier = tier === "rotten" || tier === "returned";
+    if (!dueTier || lane !== "ready") {
+      return false;
+    }
+    const decay =
+      config && config.decay && typeof config.decay === "object"
+        ? config.decay
+        : { enabled: true, keeps: 3 };
+    if (!decay.enabled) {
+      return false;
+    }
+    if (!freshnessDecayActive(todayText)) {
+      return false;
+    }
+    const limit =
+      Number.isInteger(decay.keeps) && decay.keeps >= 0 ? decay.keeps : 3;
+    const count = Number.isInteger(keeps) && keeps >= 0 ? keeps : 0;
+    return count >= limit;
+  } catch (error) {
+    return false;
+  }
 }
 
 // The raw `freshness:` block out of a parsed config file, or undefined
@@ -4551,6 +4759,14 @@ function coerceFreshnessConfig(block) {
   if (nextCoerced.invalid) {
     invalid = true;
   }
+  // Keep-streak policy: absent, null, `true`, or `{}` means enabled
+  // with 3 keeps; `false` keeps counting/display but never asks;
+  // `keeps` 0-999 and a nonempty `enter` label otherwise. Mirrors
+  // `parse_decay_config` in `src/native/config/freshness.rs`.
+  const decayCoerced = coerceFreshnessDecay(block.decay);
+  if (decayCoerced.invalid) {
+    invalid = true;
+  }
   // Like Rust, any invalid value falls back to the full default block.
   if (invalid) {
     return {
@@ -4566,6 +4782,7 @@ function coerceFreshnessConfig(block) {
       rottenDailyBudget: budget,
       intervalFromConfig,
       deprecatedStaleBudget,
+      decay: decayCoerced.decay,
     },
     invalid: false,
   };
@@ -4769,7 +4986,9 @@ function freshnessEvaluateValidScheduled(value) {
 // out of scope, see S13; lane rows keep a null state), tier
 // ("new"|"pending"|"next"|"returned"|"rotten"|null), lane
 // ("ready"|"pending"|"next"|null), fresh, intervalDays,
-// intervalSource, dueOn, daysOverdue, lints }`.
+// intervalSource, dueOn, daysOverdue, keeps (the valid `[keeps:: N]`
+// semantic count, 0 when absent), decide (a choice is due — never
+// permission to act), lints }`.
 // Mirrors `evaluate` in `src/native/freshness/state.rs`; `state` stays
 // exactly as before so buckets never move.
 function freshnessEvaluate(row, todayText, config) {
@@ -4870,6 +5089,13 @@ function freshnessEvaluate(row, todayText, config) {
     tier = "rotten";
   }
 
+  // A choice is due — never permission to act — for Ready due rows at
+  // or over the keep limit once the rollout is active. Mirrors the
+  // `decide` computation in `evaluate` in
+  // `src/native/freshness/state.rs`.
+  const keeps = read.keeps;
+  const decide = freshnessDecideFor(lane, tier, keeps, today, config);
+
   // Lane rows use the lane due date; an unwalked lane falls back to
   // the Ready-chain interval with no due date (L4).
   if (lane === "pending" || lane === "next") {
@@ -4888,6 +5114,8 @@ function freshnessEvaluate(row, todayText, config) {
       intervalSource: interval.source,
       dueOn,
       daysOverdue,
+      keeps,
+      decide,
       lints,
     };
   }
@@ -4902,6 +5130,8 @@ function freshnessEvaluate(row, todayText, config) {
       intervalSource: interval.source,
       dueOn: null,
       daysOverdue: null,
+      keeps,
+      decide,
       lints,
     };
   }
@@ -4916,6 +5146,8 @@ function freshnessEvaluate(row, todayText, config) {
       intervalSource: interval.source,
       dueOn: null,
       daysOverdue: null,
+      keeps,
+      decide,
       lints,
     };
   }
@@ -4931,6 +5163,8 @@ function freshnessEvaluate(row, todayText, config) {
       intervalSource: interval.source,
       dueOn: scheduled,
       daysOverdue: freshDateDiffDays(scheduled, today),
+      keeps,
+      decide,
       lints,
     };
   }
@@ -4946,6 +5180,8 @@ function freshnessEvaluate(row, todayText, config) {
       intervalSource: interval.source,
       dueOn,
       daysOverdue: freshDateDiffDays(dueOn, today),
+      keeps,
+      decide,
       lints,
     };
   }
@@ -4960,6 +5196,8 @@ function freshnessEvaluate(row, todayText, config) {
     intervalSource: interval.source,
     dueOn,
     daysOverdue: null,
+    keeps,
+    decide,
     lints,
   };
 }
@@ -5083,8 +5321,9 @@ function freshnessComparePathLine(a, b) {
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
 // blockId, state (null for lane rows), bucket, tier (machine),
 // tierLabel, lane, created, fresh, dueOn, daysOverdue, interval,
-// intervalSource, rank, tierRank, tierTotal }` with 1-based `line`
-// (Tasks' `lineNumber` is 0-based).
+// intervalSource, keeps, decide, rank, tierRank, tierTotal }` with
+// 1-based `line` (Tasks' `lineNumber` is 0-based). `decide` means a
+// choice is due, not permission to execute an action.
 function freshnessQueue(rows, todayText, config) {
   const list = Array.isArray(rows) ? rows : [];
   const entries = [];
@@ -5123,6 +5362,8 @@ function freshnessQueue(rows, todayText, config) {
       daysOverdue: evaluated.daysOverdue,
       interval: evaluated.intervalDays,
       intervalSource: evaluated.intervalSource,
+      keeps: evaluated.keeps,
+      decide: evaluated.decide,
       rank: 0,
       tierRank: 0,
       tierTotal: 0,
@@ -5183,10 +5424,11 @@ function freshnessIsExcludedCountPath(path) {
 }
 
 // Whole-vault counts: `{ due, new, resurfaced, rotten, fresh,
-// pendingDue, nextDue, walk, refreshedToday, upkeepToday, budget,
-// budgetMet }`. `due` stays Ready-only; `walk` is the full queue
-// length. `refreshedToday` counts tasks of any status outside
-// `_templates` / `_conflicts` whose `fresh` equals today;
+// pendingDue, nextDue, walk, decide, refreshedToday, upkeepToday,
+// budget, budgetMet }`. `due` stays Ready-only; `walk` is the full
+// queue length; `decide` counts the rows where a choice is due (never
+// permission to act). `refreshedToday` counts tasks of any status
+// outside `_templates` / `_conflicts` whose `fresh` equals today;
 // `upkeepToday` counts those whose status symbol is neither `/` nor
 // `*`. `budgetMet` compares the budget against upkeep, with zero NEW.
 // Mirrors `counts` in `src/native/freshness/state.rs`.
@@ -5201,6 +5443,7 @@ function freshnessCounts(rows, todayText, config) {
   let pendingDue = 0;
   let nextDue = 0;
   let walk = 0;
+  let decide = 0;
   let refreshedToday = 0;
   let upkeepToday = 0;
 
@@ -5209,6 +5452,9 @@ function freshnessCounts(rows, todayText, config) {
       continue;
     }
     const evaluated = freshnessEvaluate(row, today, config);
+    if (evaluated.decide) {
+      decide += 1;
+    }
     if (
       !freshnessIsExcludedCountPath(row.path) &&
       evaluated.fresh === today
@@ -5273,6 +5519,7 @@ function freshnessCounts(rows, todayText, config) {
     pendingDue,
     nextDue,
     walk,
+    decide,
     refreshedToday,
     upkeepToday,
     budget,
@@ -5285,8 +5532,10 @@ const FRESHNESS_LINT_MESSAGES = {
   fresh_future: "fresh date is in the future",
   fresh_duplicate: "more than one fresh field; the latest valid date wins",
   fresh_misplaced:
-    "fresh/refresh sits inside the Tasks suffix; the next stamp repairs it",
+    "fresh/refresh/keeps sits inside the Tasks suffix; the next stamp repairs it",
   refresh_invalid: "refresh is not an integer 1-365",
+  keeps_invalid: "keeps is not an integer 1-999",
+  keeps_duplicate: "more than one keeps field; the first valid count wins",
   task_refresh_invalid: "task_refresh is not an integer 1-365",
   freshness_stale_daily_budget_deprecated:
     "freshness.stale_daily_budget is deprecated; use freshness.rotten_daily_budget",
@@ -5318,7 +5567,7 @@ function freshnessCollectLints(rows, todayText, config) {
 // `freshnessCounts` result; `mostOverdue` is the queue's largest
 // `daysOverdue` (or null when nothing is due). The meter shows
 // upkeep (`upkeepToday`); ROTTEN includes RETURNED, as on the chip.
-// Mirrors `docs/freshness.md` §4 (freshness namespace v4).
+// Mirrors `docs/freshness.md` §4 (freshness namespace v5).
 function freshnessStatusView(counts, options = {}) {
   const tasksAvailable = options.tasksAvailable !== false;
   if (!tasksAvailable) {
@@ -5584,9 +5833,39 @@ function freshnessMarkFoldRefresh(text, freshField) {
   }
 }
 
+// The single folded `[keeps:: N]` after the last folded fresh/refresh
+// field, or null when the line's keeps field is absent,
+// paren-wrapped, non-adjacent, duplicated, or invalid. Only one valid
+// square-bracketed keeps field folds, exactly one space after
+// `afterField`. Noncanonical keeps fields stay visible Dataview pills
+// with repair styling. Never throws.
+function freshnessMarkFoldKeeps(text, afterField) {
+  try {
+    const fields = freshnessInlineFields(text, "keeps");
+    if (fields.length !== 1) {
+      return null;
+    }
+    const field = fields[0];
+    if (text[field.start] !== "[") {
+      return null;
+    }
+    if (field.start !== afterField.end + 1 || text[afterField.end] !== " ") {
+      return null;
+    }
+    const count = freshnessParseKeepsValue(field.value);
+    if (count === null) {
+      return null;
+    }
+    return { field, count };
+  } catch (error) {
+    return null;
+  }
+}
+
 // Shared core for both source detectors: one square-bracketed fresh field
-// with a strict, non-future date, plus adjacent refresh folding. Returns
-// the fresh field and fold, or null. Never throws.
+// with a strict, non-future date, plus adjacent refresh folding and
+// adjacent keeps folding. Returns the fresh field, folds, and date, or
+// null. Never throws.
 function freshnessMarkSourceCore(text, today) {
   try {
     const freshFields = freshnessInlineFields(text, "fresh");
@@ -5602,7 +5881,22 @@ function freshnessMarkSourceCore(text, today) {
       return null;
     }
     const fold = freshnessMarkFoldRefresh(text, freshField);
-    return { freshField, fold, date };
+    const anchor = fold === null ? freshField : fold.field;
+    const keepsFold = freshnessMarkFoldKeeps(text, anchor);
+    return { freshField, fold, keepsFold, date };
+  } catch (error) {
+    return null;
+  }
+}
+
+// The folded keeps count on a mark source: the valid semantic streak
+// (1-999), or null when no keeps field folds into the mark.
+function freshnessMarkSourceKeeps(core) {
+  try {
+    if (!core || !core.keepsFold) {
+      return null;
+    }
+    return core.keepsFold.count;
   } catch (error) {
     return null;
   }
@@ -5638,8 +5932,13 @@ function freshnessMarkSource(line, todayText) {
         return null;
       }
     }
-    const fieldEnd =
-      core.fold === null ? core.freshField.end : core.fold.field.end;
+    const lastFold =
+      core.keepsFold !== null && core.keepsFold !== undefined
+        ? core.keepsFold.field
+        : core.fold === null
+          ? core.freshField
+          : core.fold.field;
+    const fieldEnd = lastFold.end;
     const fieldStart = core.freshField.start;
     return {
       fieldStart,
@@ -5648,6 +5947,7 @@ function freshnessMarkSource(line, todayText) {
       text: line.slice(fieldStart, fieldEnd),
       fresh: core.date,
       refresh: core.fold === null ? null : core.fold.days,
+      keeps: freshnessMarkSourceKeeps(core),
     };
   } catch (error) {
     return null;
@@ -5667,8 +5967,13 @@ function freshnessMarkSourceInText(text, todayText) {
     if (core === null) {
       return null;
     }
-    const fieldEnd =
-      core.fold === null ? core.freshField.end : core.fold.field.end;
+    const lastFold =
+      core.keepsFold !== null && core.keepsFold !== undefined
+        ? core.keepsFold.field
+        : core.fold === null
+          ? core.freshField
+          : core.fold.field;
+    const fieldEnd = lastFold.end;
     const fieldStart = core.freshField.start;
     return {
       fieldStart,
@@ -5676,6 +5981,7 @@ function freshnessMarkSourceInText(text, todayText) {
       text: text.slice(fieldStart, fieldEnd),
       fresh: core.date,
       refresh: core.fold === null ? null : core.fold.days,
+      keeps: freshnessMarkSourceKeeps(core),
     };
   } catch (error) {
     return null;
@@ -5759,11 +6065,15 @@ function freshnessMarkReason(status, row, today) {
 }
 
 // Wrap `freshnessEvaluate` for one memo row: `{ state, tier, lane,
-// dueOn, scheduled, status, reason, intervalDays, intervalSource }`.
+// dueOn, scheduled, status, reason, intervalDays, intervalSource,
+// keeps, decide, decayKeeps, decayEnabled, decayActive }`.
 // A null `state` with a null `tier` and a reason means out of scope;
 // a lane `tier` (pending/next) means due in the walk; an in-walk
 // lane with a null tier and no reason is stamped today (M10). An
-// evaluator `"new"` is treated as unresolved (null). Never throws.
+// evaluator `"new"` is treated as unresolved (null). `keeps` is the
+// valid streak and `decide` whether a choice is due (never permission
+// to act); both join model equality and consensus so ambiguous
+// rendered matches stay neutral. Never throws.
 function freshnessMarkResolution(row, todayText, config) {
   try {
     if (!row || typeof row !== "object") {
@@ -5803,6 +6113,10 @@ function freshnessMarkResolution(row, todayText, config) {
         reason = freshnessMarkReason(status, row, today);
       }
     }
+    const decay =
+      config && config.decay && typeof config.decay === "object"
+        ? config.decay
+        : { enabled: true, keeps: 3 };
     return {
       state: evaluated.state,
       tier: evaluated.tier || null,
@@ -5813,6 +6127,12 @@ function freshnessMarkResolution(row, todayText, config) {
       reason,
       intervalDays: evaluated.intervalDays,
       intervalSource: evaluated.intervalSource,
+      keeps: evaluated.keeps,
+      decide: evaluated.decide,
+      decayKeeps:
+        Number.isInteger(decay.keeps) && decay.keeps >= 0 ? decay.keeps : 3,
+      decayEnabled: decay.enabled !== false,
+      decayActive: freshnessDecayActive(today),
     };
   } catch (error) {
     return null;
@@ -5852,11 +6172,64 @@ function freshnessMarkValidInterval(input) {
   return { days: 7, source: "default" };
 }
 
+// The dot cap for a keep threshold: thresholds 1-2 use the threshold
+// itself, while larger, custom, and zero thresholds cap at three to
+// keep line width bounded. Overflow renders as `+N`; the exact count
+// is always in accessible text. Never throws.
+function freshnessMarkDotCap(limit) {
+  try {
+    if (limit === 1 || limit === 2) {
+      return limit;
+    }
+    return 3;
+  } catch (error) {
+    return 3;
+  }
+}
+
+// The tooltip keeps line for a nonzero streak, or null when there is
+// no streak to report. Wording is truthful about the rollout: the
+// "asks" clause appears only when the card is active and decay is on;
+// before activation or with decay off the line counts only. The leaf
+// and the `Alt+F to decide` key hint stay gated behind the compatible
+// nav card capability (absent until the decision-card phase), so this
+// line never changes the key hint. Proper singulars; an explicit
+// sentence for threshold zero. Never throws.
+function freshnessMarkKeepsLine(keeps, options) {
+  try {
+    if (!Number.isInteger(keeps) || keeps <= 0) {
+      return null;
+    }
+    const head =
+      "Kept " + keeps + (keeps === 1 ? " review in a row" : " reviews in a row");
+    const settings =
+      options && typeof options === "object" ? options : {};
+    if (!settings.active) {
+      return head;
+    }
+    if (!settings.enabled) {
+      return head + " · decay off";
+    }
+    if (settings.limit === 0) {
+      return head + " · Bob asks every review";
+    }
+    return head + " · Bob asks at " + settings.limit;
+  } catch (error) {
+    return null;
+  }
+}
+
 // The render model for one mark: `{ text, fresh, ageDays, label,
 // intervalDays, intervalSource, intervalLabel, remaining, tone, glyph
-// ("check" | "ring" | "refresh"), resolved, tooltip }`. When resolved
-// the model uses the resolution's interval, otherwise `input.interval`.
-// Bad sources yield null. Never throws.
+// ("check" | "ring" | "refresh"), resolved, keeps, decide, dots,
+// overflow, tooltip }`. When resolved the model uses the resolution's
+// interval, otherwise `input.interval`. `keeps` is the folded streak
+// (the resolution's evaluated count when resolved, else the source's
+// folded count) and `decide` whether a choice is due; both join model
+// equality and consensus. Dots render for any nonzero streak —
+// including resting and unresolved marks, quietly — but never a
+// decision glyph: out-of-scope/closed tasks show historical dots and
+// no leaf. Bad sources yield null. Never throws.
 function freshnessMarkModel(input) {
   try {
     const args = input && typeof input === "object" ? input : null;
@@ -5990,8 +6363,46 @@ function freshnessMarkModel(input) {
         line3 = "Alt+F to confirm";
       }
     }
-    const tooltip =
-      line3 !== null ? line1 + "\n" + line2 + "\n" + line3 : line1 + "\n" + line2;
+    // Folded keep streak: the resolution's evaluated count when
+    // resolved (so consensus sees the row's count), else the source's
+    // folded count. Unresolved marks show historical dots quietly with
+    // counting-only wording and never decide.
+    const keeps =
+      resolution &&
+      Number.isInteger(resolution.keeps) &&
+      resolution.keeps >= 0
+        ? resolution.keeps
+        : Number.isInteger(source.keeps) && source.keeps > 0
+          ? source.keeps
+          : 0;
+    const decide = Boolean(resolution && resolution.decide);
+    const limit =
+      resolution && Number.isInteger(resolution.decayKeeps)
+        ? resolution.decayKeeps
+        : 3;
+    const cap = freshnessMarkDotCap(limit);
+    const shown = Math.min(keeps, cap);
+    const dots = keeps > 0 ? "•".repeat(shown) : null;
+    const overflow = keeps > cap ? "+" + (keeps - cap) : null;
+    const keepsLine =
+      resolution && resolution.decayActive !== undefined
+        ? freshnessMarkKeepsLine(keeps, {
+            active: resolution.decayActive,
+            enabled: resolution.decayEnabled !== false,
+            limit,
+          })
+        : freshnessMarkKeepsLine(keeps, {
+            active: false,
+            enabled: true,
+            limit,
+          });
+    let tooltip = line1 + "\n" + line2;
+    if (keepsLine !== null) {
+      tooltip += "\n" + keepsLine;
+    }
+    if (line3 !== null) {
+      tooltip += "\n" + line3;
+    }
     return {
       text: source.text,
       fresh,
@@ -6004,6 +6415,10 @@ function freshnessMarkModel(input) {
       tone,
       glyph,
       resolved: resolution !== null,
+      keeps,
+      decide,
+      dots,
+      overflow,
       tooltip,
     };
   } catch (error) {
@@ -6102,6 +6517,24 @@ function buildFreshnessMarkElement(doc, model, options) {
     label.setAttribute("class", "bob-fresh-mark-label");
     label.appendChild(doc.createTextNode(String(model.label || "")));
     span.appendChild(label);
+    // Folded keep pips: filled dots (about 0.34em with 0.14em gaps via
+    // CSS), capped per threshold with `+N` overflow. The dots are
+    // aria-hidden; the exact count lives in the accessible tooltip
+    // text. Dots stay faint on every tone — never green on `today`,
+    // subdued orange in a `due` capsule — with no red, border, or
+    // achievement styling.
+    if (typeof model.dots === "string" && model.dots !== "") {
+      const pips = doc.createElement("span");
+      pips.setAttribute("class", "bob-fresh-mark-dots");
+      pips.setAttribute("aria-hidden", "true");
+      pips.appendChild(
+        doc.createTextNode(
+          model.dots +
+            (typeof model.overflow === "string" ? model.overflow : ""),
+        ),
+      );
+      span.appendChild(pips);
+    }
     if (model.intervalLabel !== null && model.intervalLabel !== undefined) {
       const suffix = doc.createElement("span");
       suffix.setAttribute("class", "bob-fresh-mark-interval");
@@ -7701,7 +8134,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3, freshness namespace v4): memoized
+    // Task freshness (api v3, freshness namespace v5): memoized
     // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
@@ -7871,12 +8304,14 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Task freshness (freshness namespace v4: tiered walk
+      // Task freshness (freshness namespace v5: tiered walk
       // NEW → PENDING → NEXT → RETURNED → ROTTEN with daily lane
       // review; `state`/`bucket`/`counts`/`config` keep the rotten
       // vocabulary; the removed `stale_daily_budget` key still parses
-      // for one release with a deprecation lint. Top-level api stays
-      // v3).
+      // for one release with a deprecation lint. Keep streaks
+      // (`keeps`, `decay`, `decide`) mirror `docs/freshness.md`
+      // §§2a/4/7/11-12; `keepLine` is the sole increment helper and
+      // every generic stamper clears. Top-level api stays v3).
       // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
       // member is synchronous, never awaits and never throws. Missing
       // or old freshness namespaces degrade vault queries to the
@@ -7884,12 +8319,14 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // optional chaining, since optional chaining alone does not
       // catch a throwing api.
       freshness: Object.freeze({
-        version: 4,
+        version: 5,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),
         setRefreshLine: (line, days, dateText) =>
           this.apiFreshnessSetRefreshLine(line, days, dateText),
+        keepLine: (line, dateText, options) =>
+          this.apiFreshnessKeepLine(line, dateText, options),
         state: (task) => this.apiFreshnessState(task),
         bucket: (task) => this.apiFreshnessBucket(task),
         reviewModel: () => this.freshnessReviewModel(),
@@ -11124,7 +11561,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }
   }
 
-  // --- NEW/ROTTEN review chips (freshness namespace v4) ----------------  // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
+  // --- NEW/ROTTEN review chips (freshness namespace v5) ----------------  // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the
   // rotten summary): the same widget pattern as the READY badge — one
   // anchor per component, detached nodes pruned, refreshed on the same
   // debounce paths, subscriptions dropped when the component unloads.
@@ -11253,7 +11690,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }, 150);
   }
 
-  // --- Task freshness (freshness namespace v4) --------------------------
+  // --- Task freshness (freshness namespace v5) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
   // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -11655,6 +12092,10 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         snapshot.config.nextInterval !== undefined
           ? snapshot.config.nextInterval
           : 1;
+      const rawDecay =
+        snapshot.config.decay && typeof snapshot.config.decay === "object"
+          ? snapshot.config.decay
+          : { enabled: true, keeps: 3, enter: null };
       return {
         interval: snapshot.config.interval,
         pendingInterval,
@@ -11665,6 +12106,19 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         deprecatedStaleBudget: Boolean(
           snapshot.config.deprecatedStaleBudget,
         ),
+        decay: {
+          enabled: rawDecay.enabled !== false,
+          keeps:
+            Number.isInteger(rawDecay.keeps) && rawDecay.keeps >= 0
+              ? rawDecay.keeps
+              : 3,
+          enter:
+            typeof rawDecay.enter === "string" && rawDecay.enter !== ""
+              ? rawDecay.enter
+              : null,
+        },
+        activeFrom: FRESHNESS_DECAY_ACTIVE_FROM,
+        active: freshnessDecayActive(this.freshnessTodayText()),
       };
     } catch (error) {
       return {
@@ -11675,6 +12129,9 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         intervalFromConfig: false,
         invalid: false,
         deprecatedStaleBudget: false,
+        decay: { enabled: true, keeps: 3, enter: null },
+        activeFrom: FRESHNESS_DECAY_ACTIVE_FROM,
+        active: false,
       };
     }
   }
@@ -11694,6 +12151,16 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       const day =
         parseFreshDateStrict(dateText) || this.freshnessTodayText();
       return freshnessSetRefreshLine(line, days, day).line;
+    } catch (error) {
+      return String(line || "");
+    }
+  }
+
+  apiFreshnessKeepLine(line, dateText, options) {
+    try {
+      const day =
+        parseFreshDateStrict(dateText) || this.freshnessTodayText();
+      return freshnessKeepLine(line, day, options).line;
     } catch (error) {
       return String(line || "");
     }
@@ -17170,7 +17637,14 @@ module.exports.helpers = {
   freshnessTasksSuffixStart,
   freshnessStampLine,
   freshnessSetRefreshLine,
+  freshnessKeepLine,
+  freshnessParseKeepsValue,
+  freshnessFirstValidKeeps,
   readFreshness,
+  FRESHNESS_DECAY_ACTIVE_FROM,
+  freshnessDecayActive,
+  coerceFreshnessDecay,
+  freshnessDecideFor,
   defaultFreshnessConfig,
   freshnessBlock,
   coerceFreshnessConfig,
@@ -17199,9 +17673,13 @@ module.exports.helpers = {
   setReviewAnchorContent,
   freshnessRowFromTask,
   freshnessTaskStatus,
+  freshnessMarkFoldKeeps,
+  freshnessMarkSourceKeeps,
   freshnessMarkSource,
   freshnessMarkSourceInText,
   freshnessMarkResolution,
+  freshnessMarkDotCap,
+  freshnessMarkKeepsLine,
   freshnessMarkModel,
   freshnessMarkConsensus,
   freshnessShortDate,

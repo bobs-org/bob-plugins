@@ -6766,7 +6766,7 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
     }
     let waiting = 0;
     for (const chip of finalChips) {
-      if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked" || chip.state === "broken" || chip.state === "not-task") {
+      if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked") {
         waiting += 1;
       }
       if (chip.state === "done-collapsed") {
@@ -6776,7 +6776,7 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
     if (doneCount > 3) {
       waiting = 0;
       for (const chip of chips) {
-        if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked" || chip.state === "broken" || chip.state === "not-task") {
+        if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked") {
           waiting += 1;
         }
       }
@@ -14119,7 +14119,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       }
       let waiting = 0;
       for (const chip of chips) {
-        if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked" || chip.state === "broken" || chip.state === "not-task") {
+        if (chip.state === "todo" || chip.state === "next" || chip.state === "in-progress" || chip.state === "blocked") {
           waiting += 1;
         }
       }

@@ -4091,13 +4091,17 @@ function canonicalDependencyLink(target, sourcePath, markdownFiles) {
     return Object.freeze({ note: "", text: `[[#^${ref.blockId}]]` });
   }
   const basename = ref.path.split("/").pop().replace(/\.md$/i, "");
+  // Archive targets always keep the explicit `done/` path form (contract
+  // §3): basename links do not search `done/`, so the short form would
+  // stop resolving.
+  const isArchiveTarget = /^done\//i.test(ref.path);
   const rivals = paths.filter(
     (entry) =>
       entry !== ref.path &&
       entry.split("/").pop().replace(/\.md$/i, "").toLowerCase() ===
         basename.toLowerCase(),
   );
-  if (rivals.length === 0) {
+  if (rivals.length === 0 && !isArchiveTarget) {
     return Object.freeze({ note: basename, text: `[[${basename}#^${ref.blockId}]]` });
   }
   const full = ref.path.replace(/\.md$/i, "");

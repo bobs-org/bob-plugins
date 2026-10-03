@@ -415,6 +415,27 @@ test("DW12-DW14 link form is the shortest unambiguous form", () => {
   );
 });
 
+// Contract §3: archive links keep the explicit `done/` path form even when
+// the basename is unique, because basename links do not search `done/`.
+test("archive targets keep the explicit done/ path form", () => {
+  assert.deepEqual(
+    helpers.canonicalDependencyLink(
+      { path: "done/cash.md", blockId: "x" },
+      "Tasks.md",
+      ["Tasks.md", "done/cash.md"],
+    ).text,
+    "[[done/cash#^x]]",
+  );
+  assert.deepEqual(
+    helpers.canonicalDependencyLink(
+      { path: "done/2026/sweep.md", blockId: "y" },
+      "Tasks.md",
+      ["Tasks.md", "done/2026/sweep.md"],
+    ).text,
+    "[[done/2026/sweep#^y]]",
+  );
+});
+
 // DW15: an existing `[id::]` is preferred over the canonical id.
 test("DW15 an existing id is never rewritten", () => {
   const content = [

@@ -266,13 +266,26 @@ test("DC chip model vectors", () => {
   assert.equal(model.chips[0].state, "cancelled");
   assert.notEqual(model.chips[0].symbol, "✓");
 
+  // DC7: a missing target never blocks (R4) and never counts as waiting.
   model = dependencyChipModel(lineFor("missing"), "a.md", depLookup([]));
   assert.equal(model.chips[0].state, "broken");
   assert.ok(model.chips[0].text.indexOf("^missing") !== -1);
-  assert.equal(model.summary, "waiting on 1");
+  assert.equal(model.summary, "✓ all clear");
 
+  // DC8: a non-task block never blocks (R5) and never counts as waiting.
   model = dependencyChipModel(lineFor("nt"), "a.md", depLookup([["nt", { isTask: false, path: "a.md" }]]));
   assert.equal(model.chips[0].state, "not-task");
+  assert.equal(model.summary, "✓ all clear");
+
+  // DC7/DC8 beside an open prerequisite: only the open one counts.
+  model = dependencyChipModel(
+    "- ⛓️ **DEPENDS ON:** [[#^a]] • [[#^missing]] • [[#^nt]]",
+    "a.md",
+    depLookup([
+      ["a", depTask({ blockId: "a", symbol: " ", description: "Open" })],
+      ["nt", { isTask: false, path: "a.md" }],
+    ]),
+  );
   assert.equal(model.summary, "waiting on 1");
 
   model = dependencyChipModel(

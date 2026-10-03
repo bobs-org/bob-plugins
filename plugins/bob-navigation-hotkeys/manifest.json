@@ -1,7 +1,7 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "1.62.0",
+  "version": "1.63.0",
   "minAppVersion": "1.8.7",
   "description": "Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates. Ctrl+Enter on scheduled takes the recommended roll, decay, or cancel from the previewed ladder, including counted and Task Link batches. On a prioritized task the scheduled row opens first and selected. Scheduling a Pending or Next task offers an optional Work Log summary recorded as a dated entry under a WORK LOG child. A pinned Cancel row closes tasks as Cancelled with an optional reason kept in a first-child Cancel Log.",
   "author": "Bryan",

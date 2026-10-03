@@ -3465,14 +3465,17 @@ test("mirror scheduler keeps the first baseline and maps the owner across a burs
   });
   snapshot = plugin.pendingDependencyMirrorSnapshot;
   // The burst baseline never resets, the removed text refreshes against the
-  // latest content, and the owner follows its anchor down one line.
+  // latest content, the edited line tracks the latest change (the inserted
+  // header), and the owner follows its baseline anchor down one line.
   assert.equal(snapshot.oldContent, oldContent);
   assert.equal(
     snapshot.removedText,
     helpers.findRemovedLineText(oldContent, newerContent),
   );
   assert.equal(snapshot.ownerPos, ownerPos + 9);
-  assert.equal(snapshot.editedLine, 2);
+  assert.equal(snapshot.editedLine, 0);
+  assert.equal(snapshot.ownerLine, 1);
+  assert.equal(snapshot.baselineEditedLine, 1);
   clearTimeout(plugin.pendingDependencyMirror);
   plugin.pendingDependencyMirror = null;
   plugin.pendingDependencyMirrorSnapshot = null;

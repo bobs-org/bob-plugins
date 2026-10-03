@@ -62,8 +62,7 @@ const {
   validateBulletPropertyConfig,
   BulletPropertyPickerModal,
 } = helpers;
-const fs = require("node:fs");
-const path = require("node:path");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Picker-harness stubs (nav-mirror-stage): the real modal, picker, and
 // writer paths with an async vault/editor stub and a stubbed Tasks plugin,
@@ -1279,8 +1278,8 @@ test("stage batch with a stale row refuses and reopens", async () => {
   assert.doesNotMatch(editor.content, /DEPENDS ON/);
 });
 
-// A counted same-note stage add fans out through the counted session in one
-// call: every source task gains the link together.
+// A counted same-note stage add runs the real write: every source task gains
+// the link together in the editor bytes, with no stubbed writer.
 test("stage counted add applies to every source task", async () => {
   const content = [
     "- [ ] #task First ^first",
@@ -1289,6 +1288,10 @@ test("stage counted add applies to every source task", async () => {
   ].join("\n");
   const { plugin } = stubPlugin({ "Tasks.md": content });
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
   const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
   modal.taskSession = {
     explicit: true,
@@ -1296,17 +1299,6 @@ test("stage counted add applies to every source task", async () => {
       { line: 0, rawLine: "- [ ] #task First ^first" },
       { line: 1, rawLine: "- [ ] #task Second ^second" },
     ],
-  };
-  const calls = [];
-  plugin.applyCountedLocalTaskDependency = async (
-    callEditor,
-    cursor,
-    filePath,
-    session,
-    task,
-  ) => {
-    calls.push({ cursor, filePath, session, task });
-    return true;
   };
   const item = {
     path: "Tasks.md",
@@ -1318,64 +1310,116 @@ test("stage counted add applies to every source task", async () => {
   };
   const applied = await modal.chooseCountedTaskDependency(item);
   assert.equal(applied, true);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].filePath, "Tasks.md");
-  assert.equal(calls[0].session.targets.length, 2);
-  assert.equal(calls[0].task, item);
+  const links = editor.content.match(/⛓️ \*\*DEPENDS ON:\*\* \[\[#\^target\]\]/g) || [];
+  assert.equal(links.length, 2, `both sources link the target:\n${editor.content}`);
+  assert.equal(editor.undoGroups, 1);
 });
 
 // Two marked rows whose links close a cycle are guarded on the post-batch
-// graph: the batch refuses and nothing is written.
+// graph through the real marking-flow executor: the batch refuses, nothing
+// is written, and both rows stay guarded.
 test("stage batch cycle of two marked rows writes nothing", async () => {
-  const content = "- [ ] #task Dependent ^d\n";
+  const content = [
+    "- [ ] #task Dependent ^d",
+    "- [ ] #task Alpha ^a",
+    "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+    "- [ ] #task Beta ^b",
+    "  - ⛓️ **DEPENDS ON:** [[#^d]]",
+  ].join("\n");
   const { plugin } = stubPlugin({ "Tasks.md": content });
   const editor = new TransactionEditor(content, { line: 0, ch: 0 });
   const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
-  const dependentKey = dependencyStageRowKey("Tasks.md", "d");
-  const aKey = dependencyStageRowKey("Tasks.md", "a");
-  const bKey = dependencyStageRowKey("Tasks.md", "b");
-  modal.vaultStage = {
-    dependent: { key: dependentKey },
-    edges: new Map([
-      [aKey, [bKey]],
-      [bKey, [dependentKey]],
-    ]),
-    files: new Map([["Tasks.md", content]]),
-  };
-  const writes = [];
-  plugin.applyDependencyEdit = async () => {
-    writes.push(true);
-    return { ok: true, notice: "⛓ Dependencies updated" };
+  const batch = {
+    propertyName: "dependsOn",
+    cursorLineText: "- [ ] #task Dependent ^d",
+    removals: [],
+    readyAdditions: [
+      {
+        markKey: "Tasks.md#1",
+        path: "Tasks.md",
+        line: 1,
+        rawLine: "- [ ] #task Alpha ^a",
+        displayText: "Alpha",
+        existingIdField: null,
+        blockId: "a",
+      },
+      {
+        markKey: "Tasks.md#3",
+        path: "Tasks.md",
+        line: 3,
+        rawLine: "- [ ] #task Beta ^b",
+        displayText: "Beta",
+        existingIdField: null,
+        blockId: "b",
+      },
+    ],
+    promptQueue: [],
+    promptIndex: 0,
+    confirmedById: new Map(),
+    reservedIds: new Set(),
+    hasVault: false,
   };
   const before = notices.length;
-  const applied = await modal.commitVaultRefs(
-    [
-      { path: "Tasks.md", blockId: "a" },
-      { path: "Tasks.md", blockId: "b" },
-    ],
-    [],
-    { stale: 0, other: 0 },
-  );
+  const applied = await modal.executeDependencyBatch(batch);
   assert.equal(applied, false);
-  assert.equal(writes.length, 0);
   assert.match(notices[before], /cycle/);
   assert.equal(editor.content, content);
+  assert.equal(editor.undoGroups, 0);
+  // Both rows stay guarded on the post-batch graph.
+  const notes = [{ path: "Tasks.md", content }];
+  const index = indexDependencyStageNotes(notes);
+  const edges = collectDependencyStageEdges(notes, index);
+  const pool = collectVaultDependencyCandidates(notes, {
+    dependentPath: "Tasks.md",
+    dependentLines: new Set([0]),
+  });
+  const view = planDependencyStageView({
+    current: [],
+    candidates: pool,
+    query: "",
+    dependent: { path: "Tasks.md", line: 0, key: dependencyStageRowKey("Tasks.md", "d") },
+    edges,
+    linkedKeys: new Set(),
+  });
+  for (const blockId of ["a", "b"]) {
+    const row = view.find((entry) => entry.blockId === blockId);
+    assert.ok(row, `${blockId} reaches the stage`);
+    assert.equal(row.disabled, true, `${blockId} stays guarded`);
+    assert.match(row.disabledReason, /cycle/);
+  }
 });
 
 // The `edit-task-dependencies` palette command ships with no default
-// hotkey: it opens only from the palette (or a user-bound chord).
+// hotkey: capture the real `addCommand` registration and assert it carries
+// no `hotkeys`, so it opens only from the palette (or a user-bound chord).
 test("stage edit-task-dependencies registers with no default hotkey", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "main.js"),
-    "utf8",
-  );
-  const anchor = source.indexOf('id: "edit-task-dependencies"');
-  assert.ok(anchor >= 0, "edit-task-dependencies is registered");
-  const blockEnd = source.indexOf("});", anchor);
-  assert.ok(blockEnd > anchor, "registration block closes");
-  const block = source.slice(anchor, blockEnd);
-  assert.doesNotMatch(block, /hotkeys/);
-  assert.match(block, /openDependencyStageAtCursor/);
+  const { plugin } = stubPlugin({ "Tasks.md": "- [ ] #task T ^t\n" });
+  const registered = [];
+  plugin.addCommand = (command) => {
+    registered.push(command);
+    return command;
+  };
+  plugin.addRibbonIcon = () => ({});
+  plugin.registerEvent = () => {};
+  plugin.registerDomEvent = () => {};
+  plugin.registerInterval = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.registerVimMappingsWhenReady = () => {};
+  plugin.register = () => {};
+  plugin.registerOpenTaskJumpInputListeners = () => {};
+  plugin.registerReviewRefreshInputListeners = () => {};
+  plugin.registerCountedTransclusionToggleInputListeners = () => {};
+  plugin.registerCountedBulletPropertyInputListeners = () => {};
+  plugin.registerCountedTaskMoveInputListeners = () => {};
+  plugin.registerCountedLaneToggleInputListeners = () => {};
+  plugin.registerClearSearchHighlightInputListeners = () => {};
+  plugin.app.workspace.onLayoutReady = () => {};
+  plugin.app.workspace.on = () => ({});
+  plugin.app.workspace.getActiveFile = () => null;
+  plugin.onload();
+  const entry = registered.find((command) => command.id === "edit-task-dependencies");
+  assert.ok(entry, "edit-task-dependencies is registered");
+  assert.equal(entry.hotkeys, undefined);
 });
 
 // The BLOCKED `🔒 waits on N` badge counts open prerequisites only: one
@@ -1472,4 +1516,440 @@ test("stage cycle tooltip shows task descriptions", () => {
     rowTitles(rowEl).includes("Beta → Alpha"),
     `cycle tooltip reads Beta → Alpha, got ${JSON.stringify(rowTitles(rowEl))}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// nav-mirror-stage-fixes: the hand-edit mirror resolves its owner in burst
+// baseline coordinates and maps forward, so an insertion above the owner in
+// the same burst never re-aims the lookup at the next sibling.
+// ---------------------------------------------------------------------------
+
+function mirrorOffsetOfLine(content, line) {
+  const lines = String(content).split("\n");
+  let offset = 0;
+  for (let index = 0; index < Math.min(line, lines.length - 1); index += 1) {
+    offset += lines[index].length + 1;
+  }
+  return offset;
+}
+
+function mirrorFakeDoc(content) {
+  return {
+    toString: () => String(content),
+    lineAt: (offset) => {
+      const text = String(content);
+      const at = Math.max(0, Math.min(offset, text.length));
+      return { number: text.slice(0, at).split("\n").length };
+    },
+  };
+}
+
+function mirrorDeletionUpdate(before, after, fromA, toA) {
+  return {
+    docChanged: true,
+    view: null,
+    state: { doc: mirrorFakeDoc(after) },
+    startState: { doc: mirrorFakeDoc(before) },
+    changes: {
+      iterChangedRanges: (callback) => callback(fromA, toA, fromA, fromA),
+      mapPos: (pos) => {
+        if (pos <= fromA) {
+          return pos;
+        }
+        if (pos >= toA) {
+          return pos - (toA - fromA);
+        }
+        return fromA;
+      },
+    },
+  };
+}
+
+function mirrorInsertionUpdate(before, after, at, insertedLength) {
+  return {
+    docChanged: true,
+    view: null,
+    state: { doc: mirrorFakeDoc(after) },
+    startState: { doc: mirrorFakeDoc(before) },
+    changes: {
+      iterChangedRanges: (callback) => callback(at, at, at, at + insertedLength),
+      mapPos: (pos) => (pos < at ? pos : pos + insertedLength),
+    },
+  };
+}
+
+function mirrorBurstNote() {
+  return [
+    "# Notes",
+    "- [?] #task P [dependsOn:: Tasks__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task S [dependsOn:: Tasks__b] ^s",
+    "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+    "- [x] #task A [id:: Tasks__a] ^a",
+    "- [x] #task B [id:: Tasks__b] ^b",
+  ].join("\n");
+}
+
+async function runMirrorBurst(initial, updates, finalContent) {
+  const { plugin } = stubPlugin({ "Tasks.md": initial });
+  const editor = new TransactionEditor(initial, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: "Tasks.md" },
+  });
+  for (const [content, update] of updates) {
+    editor.content = content;
+    plugin.scheduleDependencyHandEditMirrorFromUpdate(update);
+  }
+  editor.content = finalContent;
+  await sleep(1000);
+  if (plugin.pendingDependencyMirror) {
+    clearTimeout(plugin.pendingDependencyMirror);
+    plugin.pendingDependencyMirror = null;
+  }
+  plugin.pendingDependencyMirrorSnapshot = null;
+  return { plugin, editor };
+}
+
+function taskLine(content, blockId) {
+  return String(content)
+    .split("\n")
+    .find((line) => line.includes(`^${blockId}`));
+}
+
+// Deleting P's Depends-On line and then inserting a line under the heading
+// in the same burst clears P's field: the owner stays P in baseline
+// coordinates instead of sliding to the next sibling S.
+test("stage mirror burst keeps the baseline owner across an insertion above", async () => {
+  const initial = mirrorBurstNote();
+  const initialLines = initial.split("\n");
+  // Update 1: delete P's Depends-On line (line 2) wholesale.
+  const deleteFrom = mirrorOffsetOfLine(initial, 2);
+  const deleteTo = mirrorOffsetOfLine(initial, 3);
+  const mid = [...initialLines.slice(0, 2), ...initialLines.slice(3)].join("\n");
+  // Update 2: insert a bullet under the heading (line 1 of the mid content).
+  const inserted = "- new bullet\n";
+  const insertAt = mirrorOffsetOfLine(mid, 1);
+  const finalContent = `${mid.split("\n").slice(0, 1).join("\n")}\n${inserted}${mid.split("\n").slice(1).join("\n")}`;
+  const { editor } = await runMirrorBurst(
+    initial,
+    [
+      [mid, mirrorDeletionUpdate(initial, mid, deleteFrom, deleteTo)],
+      [finalContent, mirrorInsertionUpdate(mid, finalContent, insertAt, inserted.length)],
+    ],
+    finalContent,
+  );
+  assert.match(editor.content, /- new bullet/);
+  const parent = taskLine(editor.content, "p");
+  assert.ok(parent, "P survives the burst");
+  assert.doesNotMatch(parent, /dependsOn/, `P's field is cleared:\n${editor.content}`);
+  assert.match(editor.content, /- \[ \] #task P \^p$/m);
+  assert.match(editor.content, /⛓️ \*\*DEPENDS ON:\*\* \[\[#\^b\]\]/, "S keeps its line");
+});
+
+// Selecting the Depends-On line text (not a vim `dd`) and deleting it,
+// then inserting above in the same burst, still clears P's field.
+test("stage mirror burst clears on a text-only line deletion", async () => {
+  const initial = mirrorBurstNote();
+  const initialLines = initial.split("\n");
+  // Update 1: delete only the line text, leaving an empty line behind.
+  const deleteFrom = mirrorOffsetOfLine(initial, 2);
+  const deleteTo = deleteFrom + initialLines[2].length;
+  const midLines = initialLines.slice();
+  midLines[2] = "";
+  const mid = midLines.join("\n");
+  // Update 2: insert a bullet under the heading.
+  const inserted = "- new bullet\n";
+  const insertAt = mirrorOffsetOfLine(mid, 1);
+  const finalContent = `${mid.split("\n").slice(0, 1).join("\n")}\n${inserted}${mid.split("\n").slice(1).join("\n")}`;
+  const { editor } = await runMirrorBurst(
+    initial,
+    [
+      [mid, mirrorDeletionUpdate(initial, mid, deleteFrom, deleteTo)],
+      [finalContent, mirrorInsertionUpdate(mid, finalContent, insertAt, inserted.length)],
+    ],
+    finalContent,
+  );
+  const parent = taskLine(editor.content, "p");
+  assert.ok(parent, "P survives the burst");
+  assert.doesNotMatch(parent, /dependsOn/, `P's field is cleared:\n${editor.content}`);
+  assert.match(editor.content, /⛓️ \*\*DEPENDS ON:\*\* \[\[#\^b\]\]/, "S keeps its line");
+});
+
+// A lone vim `dd` of P's Depends-On line clears P's field (kept behaviour).
+test("stage mirror vim dd clears the deleted line's owner", async () => {
+  const initial = mirrorBurstNote();
+  const initialLines = initial.split("\n");
+  const deleteFrom = mirrorOffsetOfLine(initial, 2);
+  const deleteTo = mirrorOffsetOfLine(initial, 3);
+  const mid = [...initialLines.slice(0, 2), ...initialLines.slice(3)].join("\n");
+  const { editor } = await runMirrorBurst(
+    initial,
+    [[mid, mirrorDeletionUpdate(initial, mid, deleteFrom, deleteTo)]],
+    mid,
+  );
+  const parent = taskLine(editor.content, "p");
+  assert.ok(parent, "P survives the deletion");
+  assert.doesNotMatch(parent, /dependsOn/, `P's field is cleared:\n${editor.content}`);
+  assert.match(editor.content, /⛓️ \*\*DEPENDS ON:\*\* \[\[#\^b\]\]/, "S keeps its line");
+});
+
+// ---------------------------------------------------------------------------
+// nav-mirror-stage-fixes: BLOCKED badges never show `waits on 0`.
+// ---------------------------------------------------------------------------
+
+function blockedStageView(content, query, dependentLine = 0) {
+  const notes = [{ path: "Tasks.md", content }];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.collectStageBufferNotes = () => [];
+  plugin.readStageTasksCache = () => ({ ready: false, tasks: [] });
+  const stage = plugin.buildVaultDependencyStageFromNotes(notes, {
+    filePath: "Tasks.md",
+    content,
+    parentLines: [dependentLine],
+  });
+  return planDependencyStageView({
+    current: [],
+    candidates: stage.candidates,
+    query,
+    dependent: {
+      path: "Tasks.md",
+      line: dependentLine,
+      key: dependencyStageRowKey("Tasks.md", "owner"),
+    },
+    edges: stage.edges,
+    linkedKeys: new Set(),
+  });
+}
+
+// A Blocked task with no `^blockId` counts its open prerequisite from its
+// own Depends-On line: one open target reads `waits on 1`, never `waits on 0`.
+test("stage badge counts open prerequisites without a block id", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "- [?] #task Noid blocked [id:: noid-id]",
+    "  - ⛓️ **DEPENDS ON:** [[#^alpha]]",
+    "- [ ] #task Alpha ^alpha",
+  ].join("\n");
+  const view = blockedStageView(content, "Noid");
+  const row = view.find((entry) => entry.displayText === "Noid blocked");
+  assert.ok(row, "the block-id-less task reaches the stage");
+  assert.equal(row.stageSection, "blocked");
+  assert.equal(row.waitsOn, 1);
+  assert.equal(row.blockedBadge, "🔒 waits on 1");
+});
+
+// A Blocked task with no open prerequisite but a future `scheduled` date
+// reads `🔒 scheduled YYYY-MM-DD`.
+test("stage badge names the future scheduled date with no open prerequisite", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "- [?] #task Sched [scheduled:: 2999-01-01] ^sched",
+  ].join("\n");
+  const view = blockedStageView(content, "Sched");
+  const row = view.find((entry) => entry.blockId === "sched");
+  assert.ok(row, "the scheduled task reaches the stage");
+  assert.equal(row.stageSection, "blocked");
+  assert.equal(row.waitsOn, null);
+  assert.equal(row.blockedBadge, "🔒 scheduled 2999-01-01");
+});
+
+// A Blocked task with no open prerequisite and no future schedule reads
+// `🔒 blocked`.
+test("stage badge reads blocked with nothing waiting and no schedule", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "- [?] #task Stuck ^stuck",
+  ].join("\n");
+  const view = blockedStageView(content, "Stuck");
+  const row = view.find((entry) => entry.blockId === "stuck");
+  assert.ok(row, "the stuck task reaches the stage");
+  assert.equal(row.stageSection, "blocked");
+  assert.equal(row.waitsOn, null);
+  assert.equal(row.blockedBadge, "🔒 blocked");
+});
+
+// ---------------------------------------------------------------------------
+// nav-mirror-stage-fixes: every stale path refuses with `changed — reopen`
+// and reopens the stage fresh, writing nothing.
+// ---------------------------------------------------------------------------
+
+function stubReopen(plugin) {
+  const reopened = [];
+  plugin.openBulletPropertyPicker = async (reopenEditor, options) => {
+    reopened.push(options);
+    return true;
+  };
+  return reopened;
+}
+
+// A stale cross-note batch row refuses the whole batch before any write and
+// reopens the stage fresh: no partial commit, no skip count.
+test("stage vault batch with a stale row refuses and reopens", async () => {
+  const owner = "- [ ] #task Parent ^parent";
+  const target = "- [ ] #task Target ^target";
+  const { plugin, store } = stubPlugin({ "Tasks.md": owner, "Other.md": target });
+  const editor = new TransactionEditor(owner, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.vaultStage = { files: new Map() };
+  const reopened = stubReopen(plugin);
+  store.set("Other.md", "- [ ] #task Target edited ^target");
+  const batch = {
+    propertyName: "dependsOn",
+    cursorLineText: owner,
+    removals: [],
+    readyAdditions: [
+      {
+        markKey: "Other.md#0",
+        path: "Other.md",
+        line: 0,
+        rawLine: target,
+        displayText: "Target",
+        existingIdField: null,
+        blockId: "target",
+      },
+    ],
+    promptQueue: [],
+    promptIndex: 0,
+    confirmedById: new Map(),
+    reservedIds: new Set(),
+    hasVault: true,
+  };
+  const before = notices.length;
+  const applied = await modal.executeVaultDependencyBatch(batch);
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+  assert.equal(reopened[0].initialProperty, "dependsOn");
+  assert.equal(editor.content, owner);
+  assert.equal(editor.undoGroups, 0);
+  assert.equal(store.get("Other.md"), "- [ ] #task Target edited ^target");
+});
+
+// A stale counted vault target refuses with `changed — reopen` and reopens
+// the stage fresh instead of reporting "Selected dependency changed".
+test("stage counted vault add with a stale target refuses and reopens", async () => {
+  const content = [
+    "- [ ] #task First ^first",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = stubReopen(plugin);
+  modal.taskSession = {
+    explicit: true,
+    targets: [{ line: 0, rawLine: "- [ ] #task First ^first" }],
+  };
+  editor.content = [
+    "- [ ] #task First ^first",
+    "- [ ] #task Target edited ^target",
+  ].join("\n");
+  const before = notices.length;
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Tasks.md",
+    line: 1,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    blockId: "target",
+  });
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+  assert.doesNotMatch(editor.content, /DEPENDS ON/);
+});
+
+// A stale vault-commit write refuses with `changed — reopen` and reopens
+// the stage fresh instead of reporting the writer reason.
+test("stage vault commit with a stale write refuses and reopens", async () => {
+  const content = "- [ ] #task Parent ^parent\n";
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = stubReopen(plugin);
+  plugin.applyDependencyEdit = async () => ({ ok: false, reason: "stale-editor" });
+  const before = notices.length;
+  const applied = await modal.commitVaultRefs(
+    [{ path: "Tasks.md", blockId: "target" }],
+    [],
+    { stale: 0, other: 0 },
+  );
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+  assert.equal(editor.content, content);
+});
+
+// The `+ id` single guard refuses a changed target and reopens fresh.
+test("stage vault single +id guard refuses a stale target", async () => {
+  const owner = "- [ ] #task Parent ^parent";
+  const target = "- [ ] #task Target";
+  const { plugin, store } = stubPlugin({ "Tasks.md": owner, "Other.md": target });
+  const editor = new TransactionEditor(owner, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = stubReopen(plugin);
+  modal.pendingVaultSingle = {
+    snapshot: {
+      path: "Other.md",
+      line: 0,
+      rawLine: target,
+      displayText: "Target",
+    },
+    reservedIds: new Set(),
+  };
+  store.set("Other.md", "- [ ] #task Target edited");
+  const before = notices.length;
+  const applied = await modal.confirmVaultSingleBlockId({ id: "zz-fresh", valid: true });
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+});
+
+// The counted `+ id` guard refuses a changed target and reopens fresh.
+test("stage vault counted +id guard refuses a stale target", async () => {
+  const owner = "- [ ] #task First ^first";
+  const target = "- [ ] #task Target";
+  const { plugin, store } = stubPlugin({ "Tasks.md": owner, "Other.md": target });
+  const editor = new TransactionEditor(owner, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = stubReopen(plugin);
+  modal.pendingVaultCounted = {
+    snapshot: {
+      path: "Other.md",
+      line: 0,
+      rawLine: target,
+      displayText: "Target",
+    },
+    session: null,
+    reservedIds: new Set(),
+  };
+  store.set("Other.md", "- [ ] #task Target edited");
+  const before = notices.length;
+  const applied = await modal.confirmVaultCountedBlockId({ id: "zz-fresh", valid: true });
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+});
+
+// The same-note `+ id` guard refuses a changed target and reopens fresh.
+test("stage single +id guard refuses a stale target", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const reopened = stubReopen(plugin);
+  modal.pendingTask = { line: 1, rawLine: "- [ ] #task Target" };
+  editor.content = [
+    "- [ ] #task Parent ^parent",
+    "- [ ] #task Target edited",
+  ].join("\n");
+  const before = notices.length;
+  const applied = await modal.confirmSingleBlockId({ id: "zz-fresh", valid: true });
+  assert.equal(applied, false);
+  assert.match(notices[before], /changed — reopen/);
+  assert.equal(reopened.length, 1);
+  assert.equal(editor.undoGroups, 0);
 });

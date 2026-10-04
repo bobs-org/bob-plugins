@@ -173,6 +173,7 @@ bob-plugins/
     build-plugins.mjs           # deterministic source-fragment build and staleness check
     check-split-parity.mjs      # compare a generated plugin with its recorded source base
     navigation-hotkeys-harness.cjs # shared navigation hotkeys test harness
+    task-status-cycler-harness.cjs # shared task-status-cycler test harness
     test-plugin-build.cjs       # focused build-contract coverage
     validate-manifests.mjs      # manifest + main.js sanity checks
     migrate-dependency-lines.mjs # dry-run-first Depends-On line migration
@@ -266,7 +267,10 @@ guarded counted writes, deletion behavior,
 child-picker presentation metadata, the tab-pin Vim mapping, and
 pinned-tab-preserving sibling closes. The navigation hotkeys tests are the per-area
 `scripts/test-navigation-hotkeys-*.cjs` files and they share
-`scripts/navigation-hotkeys-harness.cjs`. It also
+`scripts/navigation-hotkeys-harness.cjs`. The task-status-cycler tests are the
+per-area `scripts/test-task-status-cycler-*.cjs` files and they share
+`scripts/task-status-cycler-harness.cjs`. Run the cycler suite on its own with
+`node --test scripts/test-task-status-cycler-*.cjs`. It also
 guards the distinct Vim mapping ownership: Bob
 Ledger Tools uses `\p` for Pomodoro increments, while Bob Navigation Hotkeys
 uses `\s` for toggling the current tab pin.

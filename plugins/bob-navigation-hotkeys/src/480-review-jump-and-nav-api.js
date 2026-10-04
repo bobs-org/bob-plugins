@@ -282,7 +282,7 @@ function formatReviewJumpNoticeFromView(entry, rank, total, options = {}) {
     const actionHint =
       typeof presentation.actionHint === "string" ? presentation.actionHint : "";
     const lines = [detail ? `${head} · ${detail}` : head];
-    if (actionHint) {
+    if (actionHint && options.omitActionHint !== true) {
       lines.push(actionHint);
     }
     const wrapped =
@@ -365,13 +365,13 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
       detail = "closeout";
     }
     const lines = [detail ? `${head} · ${detail}` : head];
-    if (tier === "pending") {
+    if (options.omitActionHint !== true && tier === "pending") {
       lines.push("Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
-    } else if (tier === "next") {
+    } else if (options.omitActionHint !== true && tier === "next") {
       lines.push("Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
-    } else if (tier === "pre") {
+    } else if (options.omitActionHint !== true && tier === "pre") {
       lines.push("Ctrl+Alt+F done → next · ]s skip");
-    } else if (tier === "post") {
+    } else if (options.omitActionHint !== true && tier === "post") {
       lines.push("Alt+F done · closes the review");
     }
     const wrapped =
@@ -888,8 +888,9 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
   }
 }
 
-// nav api v1 (`docs/task-dependencies.md` §9). Both members return Promises
-// resolving to `{ok, reason?}` and never throw. `openDependencyStage`
+// nav api v2 (`docs/task-dependencies.md` §9). Dependency calls return Promises
+// resolving to `{ok, reason?}` and never throw; checklist claim synchronously
+// declines with null or returns a settled Promise. `openDependencyStage`
 // opens today's Depends on stage for the owning task of `ref` (`ref`:
 // `{path, line}` — any line of the task block or its Depends-On line);
 // `nav-stage` swaps in the vault-wide stage. `removeDependency` removes one
@@ -916,7 +917,7 @@ function createDependencyNavApi(plugin) {
   // leaf and `Alt+F to decide`. Removed again on unload (see `onunload`)
   // so marks degrade to counting pips instead of an absent card.
   return Object.freeze({
-    version: 1,
+    version: 2,
     ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
@@ -932,6 +933,21 @@ function createDependencyNavApi(plugin) {
         plugin.removeDependencyByRef(parentRef || {}, target || {}),
       );
     },
+    claimReviewWalkCompletion(editor) {
+      try {
+        if (!plugin || typeof plugin.claimReviewWalkCtrlEnter !== "function") {
+          return null;
+        }
+        const result = plugin.claimReviewWalkCtrlEnter(editor);
+        if (!result || typeof result.then !== "function") {
+          return null;
+        }
+        return Promise.resolve(result)
+          .then(shape)
+          .catch(() => ({ ok: false, reason: "api-failed" }));
+      } catch (error) {
+        return null;
+      }
+    },
   });
 }
-

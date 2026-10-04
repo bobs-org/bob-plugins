@@ -1,5 +1,5 @@
 // Tests for the nav-model Depends-On model, single-transaction writer, and
-// nav api v1 (bob-cli-3n.6). `docs/task-dependencies.md` §§2-3, 5-6, 9 and
+// nav api v2 (bob-cli-3n.6). `docs/task-dependencies.md` §§2-3, 5-6, 9 and
 // §11 (DP parse vectors, DW write vectors) in bob-cli are authoritative;
 // vectors are copied from those sections.
 const assert = require("node:assert/strict");
@@ -804,11 +804,13 @@ test("dependency notices follow the contract shapes", () => {
   );
 });
 
-// nav api v1: frozen, versioned, never throws.
-test("nav api v1 resolves results and never throws", async () => {
+// nav api v2: frozen, versioned, never throws.
+test("nav api v2 resolves results and never throws", async () => {
   const api = helpers.createDependencyNavApi(null);
-  assert.equal(api.version, 1);
+  assert.equal(api.version, 2);
   assert.equal(Object.isFrozen(api), true);
+  assert.equal(typeof api.claimReviewWalkCompletion, "function");
+  assert.equal(api.claimReviewWalkCompletion({}), null);
   assert.deepEqual(await api.openDependencyStage(null), {
     ok: false,
     reason: "unavailable",
@@ -850,5 +852,26 @@ test("nav api v1 resolves results and never throws", async () => {
   assert.deepEqual(
     await refusing.removeDependency({ path: "Tasks.md", line: 0 }, { blockId: "a" }),
     { ok: false, reason: "stale" },
+  );
+
+  let receivedEditor = null;
+  const claiming = helpers.createDependencyNavApi({
+    claimReviewWalkCtrlEnter(editor) {
+      receivedEditor = editor;
+      return Promise.resolve({ ok: true });
+    },
+  });
+  const editor = {};
+  assert.deepEqual(await claiming.claimReviewWalkCompletion(editor), { ok: true });
+  assert.equal(receivedEditor, editor);
+  assert.equal(
+    helpers.createDependencyNavApi({ claimReviewWalkCtrlEnter: () => false })
+      .claimReviewWalkCompletion(editor),
+    null,
+  );
+  assert.equal(
+    helpers.createDependencyNavApi({ claimReviewWalkCtrlEnter() { throw new Error("boom"); } })
+      .claimReviewWalkCompletion(editor),
+    null,
   );
 });

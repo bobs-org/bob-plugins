@@ -52,6 +52,7 @@
   "510-plugin-link-commit-and-lane.js",
   "520-plugin-lane-links-and-review.js",
   "530-plugin-freshness-refresh-and-decay.js",
+  "535-plugin-review-checklist-walk.js",
   "540-plugin-decay-picker-and-cancel.js",
   "550-plugin-cancel-and-counted-property.js",
   "560-plugin-counted-priority-and-roll.js",

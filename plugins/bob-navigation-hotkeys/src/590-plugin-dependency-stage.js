@@ -833,7 +833,7 @@ class BobNavigationHotkeysDependencyStageMixin {
     return this.openBulletPropertyPicker(editor);
   }
 
-  // nav api v1: open the vault-wide Depends on stage for the owning task
+  // nav api v2: open the vault-wide Depends on stage for the owning task
   // of `ref` (nav-stage; `docs/task-dependencies.md` §6).
   async openDependencyStageForRef(ref = {}) {
     try {
@@ -870,7 +870,7 @@ class BobNavigationHotkeysDependencyStageMixin {
     }
   }
 
-  // nav api v1: remove one prerequisite through the single-transaction
+  // nav api v2: remove one prerequisite through the single-transaction
   // writer. Re-reads the dependent and refuses with a notice when stale.
   async removeDependencyByRef(parentRef = {}, target = {}) {
     try {

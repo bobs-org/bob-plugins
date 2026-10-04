@@ -7658,6 +7658,10 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
+    if (this.claimReviewWalkCtrlEnter(view.editor)) {
+      return;
+    }
+
     const taskStatus = this.getActiveTaskStatus(view.editor);
     const activeFile = view.file || this.app.workspace.getActiveFile();
     const openPomodoroContext =
@@ -9004,6 +9008,31 @@ class TaskStatusCyclerCommandsMixin {
 }
 // ---- src/160-plugin-completion.js ----
 class TaskStatusCyclerCompletionMixin {
+  // Nav api v2 may claim Ctrl+Enter only on the current PRE/POST walk
+  // landing (D2); ordinary task toggles remain owned by this plugin.
+  claimReviewWalkCtrlEnter(editor) {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      if (
+        !api ||
+        !(Number(api.version) >= 2) ||
+        typeof api.claimReviewWalkCompletion !== "function"
+      ) {
+        return false;
+      }
+      const result = api.claimReviewWalkCompletion(editor);
+      if (!result || typeof result.then !== "function") {
+        return false;
+      }
+      void result.catch(() => false);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   handleToggleOpenDoneCommand(checking, editor, view) {
     if (!(view instanceof MarkdownView)) {
       return false;

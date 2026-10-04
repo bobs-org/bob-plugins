@@ -325,10 +325,11 @@ class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     this.reviewAnchor = null;
+    this.reviewLanding = null;
     // At most one review-walk decision card at a time; the guard also
     // prevents nested cards.
     this.activeFreshnessDecayCard = null;
-    // nav api v1 (`docs/task-dependencies.md` §9): frozen, versioned, never
+    // nav api v2 (`docs/task-dependencies.md` §9): frozen, versioned, never
     // throws. bob-ledger-tools feature-detects `api?.version >= 1`.
     this.api = createDependencyNavApi(this);
     this.registerOpenTaskJumpInputListeners();

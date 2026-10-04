@@ -321,6 +321,13 @@ class BobNavigationHotkeysLaneReviewMixin {
         return { ok: false, stale: false };
       }
       scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
+      this.reviewLanding = Object.freeze({
+        path,
+        text: entry.originalMarkdown,
+        key: reviewQueueEntryKey(entry),
+        tier: reviewEntryMachineTier(entry) || null,
+        day: this.laneReleaseDateText({}),
+      });
       return { ok: true, stale: false };
     }
     const opened = await openMarkdownFileWithLeafReuse(
@@ -334,6 +341,13 @@ class BobNavigationHotkeysLaneReviewMixin {
     this.jumpOrDeferTaskMoveDestination(path, {
       line: resolved.line,
       text: entry.originalMarkdown,
+    });
+    this.reviewLanding = Object.freeze({
+      path,
+      text: entry.originalMarkdown,
+      key: reviewQueueEntryKey(entry),
+      tier: reviewEntryMachineTier(entry) || null,
+      day: this.laneReleaseDateText({}),
     });
     return { ok: true, stale: false };
   }

@@ -9,6 +9,7 @@ const {
   attachActiveMarkdownView,
   registerTaskToggleVimAction,
   flushAsyncActions,
+  installTasksCloseCommand,
 } = require("./task-status-cycler-harness.cjs");
 
 test("direct open/done transitions include incomplete statuses without broadening excluded statuses", () => {
@@ -749,6 +750,102 @@ test("Ctrl+Enter closing the local line over an already-closed target does not w
   assert.equal(finalizeCalls, 0);
 });
 
+test("Ctrl+Enter hands off a claimed walk landing before Pomodoro handling", async () => {
+  const source = "## Pomodoros\n- [ ] Focus\n\t- [ ] #task #gtd #pre Check weather";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 2, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  let calls = 0;
+  let receivedEditor = null;
+  plugin.app.plugins = {
+    plugins: {
+      "bob-navigation-hotkeys": {
+        api: {
+          version: 2,
+          claimReviewWalkCompletion(candidate) {
+            calls += 1;
+            receivedEditor = candidate;
+            return Promise.resolve({ ok: true });
+          },
+        },
+      },
+    },
+  };
+  const tasks = installTasksCloseCommand(plugin, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+
+  assert.equal(calls, 1);
+  assert.equal(receivedEditor, editor);
+  assert.equal(editor.getValue(), source);
+  assert.deepEqual(tasks.executed, []);
+});
+
+test("Ctrl+Enter falls through unchanged when nav declines, is old, missing, or throws", async () => {
+  const cases = [
+    { name: "no plugin", api: null },
+    { name: "api v1", api: { version: 1, claimReviewWalkCompletion: () => Promise.resolve() } },
+    { name: "missing version", api: { claimReviewWalkCompletion: () => Promise.resolve() } },
+    { name: "no member", api: { version: 2 } },
+    { name: "non-promise decline", api: { version: 2, claimReviewWalkCompletion: () => null } },
+    { name: "throw", api: { version: 2, claimReviewWalkCompletion() { throw new Error("no claim"); } } },
+  ];
+
+  let baseline = null;
+  for (const item of cases) {
+    const source = "- [ ] #task Example";
+    const harness = createInMemoryObsidianApp({ "Daily.md": source });
+    const editor = createTextEditor(source, { line: 0, ch: 4 });
+    const plugin = new TaskStatusCyclerPlugin();
+    attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+    plugin.app.plugins = {
+      plugins: item.api
+        ? { "bob-navigation-hotkeys": { api: item.api } }
+        : {},
+    };
+    const tasks = installTasksCloseCommand(plugin, editor);
+    const action = registerTaskToggleVimAction(plugin);
+
+    action({});
+    await flushAsyncActions();
+
+    const result = { text: editor.getValue(), commands: tasks.executed };
+    if (baseline === null) baseline = result;
+    assert.deepEqual(result, baseline, item.name);
+    assert.match(result.text, /^- \[x\] #task Example/);
+    assert.deepEqual(result.commands, [tasks.doneCommand]);
+  }
+});
+
+test("Ctrl+Enter consumes a rejected nav claim without an unhandled rejection", async () => {
+  const source = "- [ ] #task Example";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  plugin.app.plugins = {
+    plugins: {
+      "bob-navigation-hotkeys": {
+        api: {
+          version: 2,
+          claimReviewWalkCompletion: () => Promise.reject(new Error("claim failed")),
+        },
+      },
+    },
+  };
+  const tasks = installTasksCloseCommand(plugin, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+
+  assert.equal(editor.getValue(), source);
+  assert.deepEqual(tasks.executed, []);
+});
+
 test("Ctrl+Enter on an unresolvable embedded transclusion still closes the local line without error", async () => {
   const blockers = "- [ ] #task ![[Missing#^nope]] [created:: 2026-08-07]";
   const harness = createInMemoryObsidianApp({ "Blockers.md": blockers });
@@ -878,4 +975,3 @@ test("Ctrl+Enter with a transcluded task line still uses the Tasks-plugin comman
     }
   }
 });
-

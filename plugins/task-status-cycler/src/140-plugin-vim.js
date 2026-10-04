@@ -132,6 +132,10 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
+    if (this.claimReviewWalkCtrlEnter(view.editor)) {
+      return;
+    }
+
     const taskStatus = this.getActiveTaskStatus(view.editor);
     const activeFile = view.file || this.app.workspace.getActiveFile();
     const openPomodoroContext =

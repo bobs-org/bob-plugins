@@ -22,6 +22,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysLinkCommitLaneMixin,
   BobNavigationHotkeysLaneReviewMixin,
   BobNavigationHotkeysFreshnessDecayMixin,
+  BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysDecayCancelMixin,
   BobNavigationHotkeysCancelPropertyMixin,
   BobNavigationHotkeysCountedRollMixin,

@@ -4533,40 +4533,22 @@ function readFreshness(line, todayText) {
 // `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v5).
-
-// The day the keep-streak decision machinery activates, in the vault's
-// local calendar (`docs/freshness.md` §2a). Rollout policy, not an
-// editable config knob: before this day agents count and show pips
-// only — no cards, leaf, decision skip, or "next review asks" promise.
-// Mirrors `decay_active_from` in `src/native/config/freshness.rs`.
-const FRESHNESS_DECAY_ACTIVE_FROM = "2026-10-19";
-
-// Whether the keep-streak decision machinery is active for `todayText`:
-// `todayText` is on or after the activation date. Mirrors
-// `decay_active` in `src/native/config/freshness.rs`.
-function freshnessDecayActive(todayText) {
-  try {
-    const today = freshnessNormalizeDateText(todayText);
-    return today >= FRESHNESS_DECAY_ACTIVE_FROM;
-  } catch (error) {
-    return false;
-  }
-}
+// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v6).
 
 // Whether the compatible review-walk decision card is present: nav exposes
-// `api.freshnessDecayCard.version >= 1` (decision-card phase). The leaf, the
-// `Alt+F to decide` key hint, and the "asks" promise stay gated behind it so
-// a mixed-version session degrades to counting pips with truthful
-// counting-only wording — never a promise the installed nav cannot keep.
-// Never throws.
+// `api.freshnessDecayCard.version >= 2` (ungated handler contract). Version
+// 1 still gated by date and cannot fulfill an immediate-availability
+// promise. The leaf, the `Alt+F to decide` key hint, and the "asks"
+// promise stay gated behind it so a mixed-version session degrades to
+// counting pips with truthful counting-only wording — never a promise
+// the installed nav cannot keep. Never throws.
 function freshnessDecayCardCapable(app) {
   try {
     const plugins = app && app.plugins && app.plugins.plugins;
     const holder = plugins ? plugins["bob-navigation-hotkeys"] : null;
     const api = holder ? holder.api : null;
     const card = api ? api.freshnessDecayCard : null;
-    return Boolean(card) && Number(card.version) >= 1;
+    return Boolean(card) && Number(card.version) >= 2;
   } catch (error) {
     return false;
   }
@@ -4626,12 +4608,11 @@ function coerceFreshnessDecay(raw) {
 }
 
 // Whether a choice is due for a Ready-lane row in `tier` with `keeps`
-// counted keeps under `config` on `todayText`: active rollout,
-// enabled decay, Ready lane, rotten/returned tier, keeps at or over
-// the limit. The annotation means a choice is due, not permission to
-// execute an action. Mirrors `decide_for` in
-// `src/native/freshness/state.rs`.
-function freshnessDecideFor(lane, tier, keeps, todayText, config) {
+// counted keeps under `config`: enabled decay, Ready lane,
+// rotten/returned tier, keeps at or over the limit. The annotation
+// means a choice is due, not permission to execute an action. Mirrors
+// `decide_for` in `src/native/freshness/state.rs`.
+function freshnessDecideFor(lane, tier, keeps, config) {
   try {
     const dueTier = tier === "rotten" || tier === "returned";
     if (!dueTier || lane !== "ready") {
@@ -4642,9 +4623,6 @@ function freshnessDecideFor(lane, tier, keeps, todayText, config) {
         ? config.decay
         : { enabled: true, keeps: 3 };
     if (!decay.enabled) {
-      return false;
-    }
-    if (!freshnessDecayActive(todayText)) {
       return false;
     }
     const limit =
@@ -5275,11 +5253,10 @@ function freshnessEvaluate(row, todayText, config) {
   }
 
   // A choice is due — never permission to act — for Ready due rows at
-  // or over the keep limit once the rollout is active. Mirrors the
-  // `decide` computation in `evaluate` in
-  // `src/native/freshness/state.rs`.
+  // or over the keep limit. Mirrors the `decide` computation in
+  // `evaluate` in `src/native/freshness/state.rs`.
   const keeps = read.keeps;
-  const decide = freshnessDecideFor(lane, tier, keeps, today, config);
+  const decide = freshnessDecideFor(lane, tier, keeps, config);
 
   // Lane rows use the lane due date; an unwalked lane falls back to
   // the Ready-chain interval with no due date (L4). Lane tracker rows
@@ -7258,8 +7235,7 @@ function freshnessMarkReason(status, row, today) {
 
 // Wrap `freshnessEvaluate` for one memo row: `{ state, tier, lane,
 // dueOn, scheduled, status, reason, intervalDays, intervalSource,
-// keeps, decide, decayKeeps, decayEnabled, decayActive,
-// decayCardCapable }`.
+// keeps, decide, decayKeeps, decayEnabled, decayCardCapable }`.
 // A null `state` with a null `tier` and a reason means out of scope;
 // a lane `tier` (pending/next) means due in the walk; an in-walk
 // lane with a null tier and no reason is stamped today (M10). An
@@ -7335,7 +7311,6 @@ function freshnessMarkResolution(row, todayText, config, options) {
       decayKeeps:
         Number.isInteger(decay.keeps) && decay.keeps >= 0 ? decay.keeps : 3,
       decayEnabled: decay.enabled !== false,
-      decayActive: freshnessDecayActive(today),
       decayCardCapable: Boolean(
         options && typeof options === "object" && options.cardCapable === true,
       ),
@@ -7400,12 +7375,11 @@ function freshnessMarkDotCap(limit) {
 }
 
 // The tooltip keeps line for a nonzero streak, or null when there is
-// no streak to report. Wording is truthful about the rollout: the
-// "asks" clause appears only when the rollout is active, decay is on,
-// and the compatible nav decision card is installed; before activation,
-// with decay off, or in a mixed-version session the line counts only.
-// Proper singulars; an explicit sentence for threshold zero. Never
-// throws.
+// no streak to report. Wording is truthful about card availability:
+// the "asks" clause appears only when decay is on and the compatible
+// nav decision card is installed; with decay off or in a mixed-version
+// session the line counts only. Proper singulars; an explicit sentence
+// for threshold zero. Never throws.
 function freshnessMarkKeepsLine(keeps, options) {
   try {
     if (!Number.isInteger(keeps) || keeps <= 0) {
@@ -7439,10 +7413,10 @@ function freshnessMarkKeepsLine(keeps, options) {
 // the source's folded count) and `decide` whether a choice is due;
 // both join model equality and consensus. Dots render for any nonzero
 // streak — including resting and unresolved marks, quietly — but the
-// decision glyph appears only for an active, enabled, capable due
-// choice: out-of-scope/closed tasks, pre-activation rows, decay-off
-// rows, and mixed-version sessions (no compatible nav card) show
-// historical dots and no leaf. Bad sources yield null. Never throws.
+// decision glyph appears only for an enabled, capable due choice:
+// out-of-scope/closed tasks, decay-off rows, and mixed-version
+// sessions (no compatible nav card) show historical dots and no leaf.
+// Bad sources yield null. Never throws.
 function freshnessMarkModel(input) {
   try {
     const args = input && typeof input === "object" ? input : null;
@@ -7568,17 +7542,16 @@ function freshnessMarkModel(input) {
           ? "Review lease ended " + shortNext + " · " + every
           : "Next review " + shortNext + " · " + every;
     }
-    // The leaf replaces `refresh` only for an active, enabled, capable
-    // due choice (`docs/freshness.md` §2a): the rollout is active, decay
-    // is on, the resolution says a choice is due, and the compatible nav
-    // decision card is installed. Everything else keeps its existing
-    // glyph and counting-only wording.
+    // The leaf replaces `refresh` only for an enabled, capable due
+    // choice (`docs/freshness.md` §2a): decay is on, the resolution says
+    // a choice is due, and the compatible nav decision card is
+    // installed. Everything else keeps its existing glyph and
+    // counting-only wording.
     const cardCapable = Boolean(resolution && resolution.decayCardCapable);
     const showDecision =
       tone === "due" &&
       Boolean(resolution && resolution.decide) &&
       cardCapable &&
-      Boolean(resolution && resolution.decayActive) &&
       resolution.decayEnabled !== false;
     if (showDecision) {
       glyph = "leaf";
@@ -7615,9 +7588,9 @@ function freshnessMarkModel(input) {
     const dots = keeps > 0 ? "•".repeat(shown) : null;
     const overflow = keeps > cap ? "+" + (keeps - cap) : null;
     const keepsLine =
-      resolution && resolution.decayActive !== undefined
+      resolution != null
         ? freshnessMarkKeepsLine(keeps, {
-            active: resolution.decayActive && cardCapable,
+            active: cardCapable,
             enabled: resolution.decayEnabled !== false,
             limit,
           })
@@ -9410,7 +9383,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3, freshness namespace v5): memoized
+    // Task freshness (api v3, freshness namespace v6): memoized
     // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
@@ -9600,16 +9573,17 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Task freshness (freshness namespace v5: tiered walk
-      // NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES →
-      // ROTTEN with daily lane review; `state`/`bucket`/`counts`/
-      // `config` keep the rotten vocabulary; the removed
-      // `stale_daily_budget` key still parses for one release with a
-      // deprecation lint. Keep streaks (`keeps`, `decay`, `decide`)
-      // mirror `docs/freshness.md` §§2a/4/7/11-12; `keepLine` is the
-      // sole increment helper and every generic stamper clears.
-      // Tracker review rides the same namespace with the explicit
-      // `trackerReview` capability (no namespace bump): exact `^ref`
+      // Task freshness (freshness namespace v6: date-independent
+      // decide/config contract; counting and `keepLine` remain
+      // available from v5. Tiered walk NEW → PROJECTS → PENDING →
+      // NEXT → RETURNED → REFERENCES → ROTTEN with daily lane review;
+      // `state`/`bucket`/`counts`/`config` keep the rotten vocabulary;
+      // the removed `stale_daily_budget` key still parses for one
+      // release with a deprecation lint. Keep streaks (`keeps`,
+      // `decay`, `decide`) mirror `docs/freshness.md` §§2a/4/7/11-12;
+      // `keepLine` is the sole increment helper and every generic
+      // stamper clears. Tracker review rides the same namespace with
+      // the explicit `trackerReview` capability: exact `^ref`
       // trackers bypass `#hide`, visible `^prj` rows use the ordinary
       // predicate, and the PROJECTS/REFERENCES tiers walk with
       // `projectsDue`/`referencesDue` and the seven-key `byTier`
@@ -9624,7 +9598,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 5,
+        version: 6,
         trackerReview: true,
         referenceReview: true,
         config: () => this.apiFreshnessConfig(),
@@ -13692,7 +13666,7 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
     }, 150);
   }
 
-  // --- Task freshness (freshness namespace v5) --------------------------
+  // --- Task freshness (freshness namespace v6) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
   // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -14129,8 +14103,6 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
               ? rawDecay.enter
               : null,
         },
-        activeFrom: FRESHNESS_DECAY_ACTIVE_FROM,
-        active: freshnessDecayActive(this.freshnessTodayText()),
       };
     } catch (error) {
       return {
@@ -14144,8 +14116,6 @@ module.exports = class BobLedgerToolsPlugin extends Plugin {
         invalid: false,
         deprecatedStaleBudget: false,
         decay: { enabled: true, keeps: 3, enter: null },
-        activeFrom: FRESHNESS_DECAY_ACTIVE_FROM,
-        active: false,
       };
     }
   }
@@ -20343,8 +20313,6 @@ module.exports.helpers = {
   freshnessParseKeepsValue,
   freshnessFirstValidKeeps,
   readFreshness,
-  FRESHNESS_DECAY_ACTIVE_FROM,
-  freshnessDecayActive,
   freshnessDecayCardCapable,
   coerceFreshnessDecay,
   freshnessDecideFor,

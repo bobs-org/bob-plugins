@@ -2,8 +2,9 @@
 // Drives `refreshTaskFreshness` → `maybeOpenFreshnessDecayCard` →
 // `applyFreshnessDecayCardChoice` / `revalidateFreshnessDecayCard` / the
 // `applyFreshnessDecayCard*` adapters with a fake editor and the real ledger
-// keep/stamp placers. "Today" is pinned on/after activation (2026-10-19)
-// through the plugin date hooks; never the wall clock.
+// keep/stamp placers. "Today" is pinned through the plugin date hooks
+// (including dates before the former 2026-10-19 gate); never the wall
+// clock.
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
@@ -257,7 +258,7 @@ function makeEditor(initial, cursorLine = 0) {
   return editor;
 }
 
-function freshnessV5(queue, counts, overrides = {}) {
+function freshnessCapable(queue, counts, overrides = {}) {
   const decayState = {
     enabled: true,
     keeps: 3,
@@ -265,7 +266,7 @@ function freshnessV5(queue, counts, overrides = {}) {
     ...(overrides.decay || {}),
   };
   return {
-    version: 5,
+    version: 6,
     queue: () => queue.map((entry) => ({ ...entry })),
     counts: () => ({ ...counts }),
     stampLine: realStamp,
@@ -329,7 +330,7 @@ function singleAtLimitFixture({ dateText = DATE, line = ROTTEN_AT_LIMIT } = {}) 
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([entry], BASE_COUNTS),
+    freshness: freshnessCapable([entry], BASE_COUNTS),
     dateText,
   });
   return { editor, plugin, entry, content, line };
@@ -366,9 +367,24 @@ test("dismissing the card writes nothing and does not advance", async () => {
   assert.equal(plugin.jumpCalls, 0);
 });
 
-// --- 2. before activation the same task stamps counted with no card ---
+// --- 2. early dates still open the card; older namespaces fall back ---
 
-test("before activation the same task stamps counted and no card opens", async () => {
+test("early dates open the card and write nothing", async () => {
+  clearNotices();
+  openedModals.length = 0;
+  const { editor, plugin, content } = singleAtLimitFixture({
+    dateText: BEFORE,
+  });
+  const ok = await plugin.refreshTaskFreshness(editor, { dateText: BEFORE });
+  assert.equal(ok, true);
+  assert.equal(editor.state.lines.join("\n"), content);
+  assert.equal(editor.state.transactions.length, 0);
+  assert.equal(editor.state.replaceRanges.length, 0);
+  assert.ok(plugin.activeFreshnessDecayCard);
+  assert.equal(plugin.openedCards.length, 1);
+});
+
+test("namespace v5 with decide true stamps counted and opens no card", async () => {
   clearNotices();
   openedModals.length = 0;
   const line = ROTTEN_AT_LIMIT;
@@ -377,12 +393,14 @@ test("before activation the same task stamps counted and no card opens", async (
     line: 3,
     originalMarkdown: line,
     keeps: 3,
-    decide: false,
+    decide: true,
   });
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([entry], BASE_COUNTS),
+    freshness: freshnessCapable([entry], BASE_COUNTS, {
+      extra: { version: 5 },
+    }),
     dateText: BEFORE,
   });
   const ok = await plugin.refreshTaskFreshness(editor, { dateText: BEFORE });
@@ -499,7 +517,7 @@ test("Not now stamps, clears keeps, and advances exactly once", async () => {
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([entry], BASE_COUNTS),
+    freshness: freshnessCapable([entry], BASE_COUNTS),
     dateText: DATE,
   });
   const opened = await plugin.refreshTaskFreshness(editor, {
@@ -539,7 +557,7 @@ test("Keep counts once and saturates at 999 without reset", async () => {
     const plugin = makePlugin({
       filePath: "a.md",
       editor,
-      freshness: freshnessV5([entry], BASE_COUNTS),
+      freshness: freshnessCapable([entry], BASE_COUNTS),
       dateText: DATE,
     });
     await plugin.refreshTaskFreshness(editor, { dateText: DATE });
@@ -562,7 +580,7 @@ test("Reword stamps, clears, logs, and never advances", async () => {
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([entry], BASE_COUNTS),
+    freshness: freshnessCapable([entry], BASE_COUNTS),
     dateText: DATE,
   });
   await plugin.refreshTaskFreshness(editor, {
@@ -592,7 +610,7 @@ test("Drop cancels with the dropped-after-keeps reason and keeps history", async
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([entry], BASE_COUNTS),
+    freshness: freshnessCapable([entry], BASE_COUNTS),
     dateText: DATE,
   });
   await plugin.refreshTaskFreshness(editor, { dateText: DATE });
@@ -625,7 +643,7 @@ test("Less often at 90+ opens the picker and dismiss writes nothing", async () =
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([entry], BASE_COUNTS),
+    freshness: freshnessCapable([entry], BASE_COUNTS),
     dateText: DATE,
   });
   await plugin.refreshTaskFreshness(editor, { dateText: DATE });
@@ -655,7 +673,7 @@ test("counted session skips at-limit and counts below-limit", async () => {
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5(
+    freshness: freshnessCapable(
       [
         rottenEntry({ key: "a.md:1", line: 1, originalMarkdown: atLimit, keeps: 3, decide: true }),
         rottenEntry({ key: "a.md:2", line: 2, originalMarkdown: below, keeps: 1, decide: false, rank: 2, tierRank: 2, tierTotal: 2 }),
@@ -675,6 +693,36 @@ test("counted session skips at-limit and counts below-limit", async () => {
   assert.match(notices[notices.length - 1], /1 needs a decision/);
 });
 
+test("counted session skips at-limit on an early date", async () => {
+  clearNotices();
+  const atLimit = ROTTEN_AT_LIMIT;
+  const below = "- [ ] #task Walk dog [fresh:: 2026-09-29] [keeps:: 1]";
+  const content = [atLimit, below].join("\n");
+  const editor = makeEditor(content, 0);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable(
+      [
+        rottenEntry({ key: "a.md:1", line: 1, originalMarkdown: atLimit, keeps: 3, decide: true }),
+        rottenEntry({ key: "a.md:2", line: 2, originalMarkdown: below, keeps: 1, decide: false, rank: 2, tierRank: 2, tierTotal: 2 }),
+      ],
+      BASE_COUNTS,
+    ),
+    dateText: BEFORE,
+  });
+  const ok = await plugin.refreshTaskFreshness(editor, {
+    dateText: BEFORE,
+    countExplicit: true,
+    additionalTaskCount: 1,
+  });
+  assert.equal(ok, true);
+  assert.equal(editor.state.lines[0], atLimit);
+  assert.match(editor.state.lines[1], /\[keeps:: 2\]/);
+  assert.match(editor.state.lines[1], /\[fresh:: 2026-10-18\]/);
+  assert.match(notices[notices.length - 1], /1 needs a decision/);
+});
+
 test("counted session with every target skipped writes nothing", async () => {
   clearNotices();
   const content = [ROTTEN_AT_LIMIT, ROTTEN_AT_LIMIT].join("\n");
@@ -682,7 +730,7 @@ test("counted session with every target skipped writes nothing", async () => {
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5(
+    freshness: freshnessCapable(
       [
         rottenEntry({ key: "a.md:1", line: 1, originalMarkdown: ROTTEN_AT_LIMIT, decide: true }),
         rottenEntry({ key: "a.md:2", line: 2, originalMarkdown: ROTTEN_AT_LIMIT, decide: true, rank: 2 }),

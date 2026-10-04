@@ -2,8 +2,8 @@
 // the leaf signal, `data-decide`, the `Alt+F to decide` key hint, and
 // the capability-gated "asks" promise. `docs/freshness.md` §§2a/11-12
 // is authoritative: display decision affordances appear only when the
-// compatible nav card is present, the rollout is active, decay is on,
-// and resolution establishes a due Ready choice. Mixed-version sessions
+// compatible nav card is present (capability v2), decay is on, and
+// resolution establishes a due Ready choice. Mixed-version sessions
 // (no card) degrade to counting pips with truthful counting-only
 // wording and never reset on explicit keep.
 const assert = require("node:assert/strict");
@@ -81,8 +81,6 @@ Module._load = originalLoad;
 
 const {
   buildFreshnessMarkElement,
-  FRESHNESS_DECAY_ACTIVE_FROM,
-  freshnessDecayActive,
   freshnessDecayCardCapable,
   freshnessMarkModel,
   freshnessMarkResolution,
@@ -174,7 +172,18 @@ const DUE_LINE =
 
 // --- Capability detection ---
 
-test("capability: nav card v1 is capable", () => {
+test("capability: nav card v2 is capable", () => {
+  const app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": { api: { freshnessDecayCard: { version: 2 } } },
+      },
+    },
+  };
+  assert.equal(freshnessDecayCardCapable(app), true);
+});
+
+test("capability: nav card v1 is not capable", () => {
   const app = {
     plugins: {
       plugins: {
@@ -182,7 +191,7 @@ test("capability: nav card v1 is capable", () => {
       },
     },
   };
-  assert.equal(freshnessDecayCardCapable(app), true);
+  assert.equal(freshnessDecayCardCapable(app), false);
 });
 
 test("capability: absent nav, missing api, and old versions are not capable", () => {
@@ -249,14 +258,12 @@ test("leaf: the same row without the card keeps refresh and counting words", () 
   assert.ok(!model.tooltip.includes("Bob asks at"));
 });
 
-test("leaf: pre-activation rows never leaf even when capable", () => {
-  assert.equal(FRESHNESS_DECAY_ACTIVE_FROM, "2026-10-19");
-  assert.equal(freshnessDecayActive(BEFORE_DAY), false);
+test("leaf: early dates still leaf when capable", () => {
   const model = markModel(DUE_LINE, { today: BEFORE_DAY, cardCapable: true });
-  assert.equal(model.decide, false);
-  assert.equal(model.glyph, "refresh");
-  assert.ok(!model.tooltip.includes("Alt+F to decide"));
-  assert.ok(!model.tooltip.includes("Bob asks at"));
+  assert.equal(model.decide, true);
+  assert.equal(model.glyph, "leaf");
+  assert.ok(model.tooltip.includes("Alt+F to decide"));
+  assert.ok(model.tooltip.includes("Bob asks at 3"));
 });
 
 test("leaf: decay-off rows never leaf even when capable", () => {

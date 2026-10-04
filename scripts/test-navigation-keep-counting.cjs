@@ -282,6 +282,26 @@ test("keeps support needs namespace v5 with keepLine", () => {
   );
 });
 
+test("decay decisions need namespace v6 with keepLine", () => {
+  assert.equal(helpers.freshnessSupportsDecayDecisions(null), false);
+  assert.equal(helpers.freshnessSupportsDecayDecisions({}), false);
+  assert.equal(
+    helpers.freshnessSupportsDecayDecisions({
+      version: 5,
+      keepLine: () => {},
+    }),
+    false,
+  );
+  assert.equal(helpers.freshnessSupportsDecayDecisions({ version: 6 }), false);
+  assert.equal(
+    helpers.freshnessSupportsDecayDecisions({
+      version: 6,
+      keepLine: () => {},
+    }),
+    true,
+  );
+});
+
 // --- per-target decisions ---------------------------------------------------
 
 test("batch forwards per-target counted decisions to the stamper", () => {
@@ -531,6 +551,10 @@ function freshnessV5(queue, counts) {
       ledgerHelpers.freshnessSetRefreshLine(line, days, dateText || DATE).line,
     keepLine: realKeep,
   };
+}
+
+function freshnessV6(queue, counts) {
+  return { ...freshnessV5(queue, counts), version: 6 };
 }
 
 const BASE_COUNTS = {
@@ -1002,6 +1026,39 @@ function linkQueue() {
     }),
   ];
 }
+
+test("Task Link session skips an at-limit decide target", async () => {
+  clearNotices();
+  const atLimit =
+    "- [ ] #task Linked keep [fresh:: 2026-09-20] [keeps:: 3] ^abc";
+  const noteMap = new Map([["Target.md", atLimit]]);
+  const plugin = makeLinkPlugin({
+    cursorContent: LINK_LINE,
+    cursorLine: 0,
+    noteMap,
+    freshness: freshnessV6(
+      [
+        rottenEntry({
+          key: "Target.md:1",
+          path: "Target.md",
+          line: 1,
+          originalMarkdown: atLimit,
+          keeps: 3,
+          decide: true,
+          text: "Linked keep",
+        }),
+      ],
+      BASE_COUNTS,
+    ),
+  });
+  const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
+    dateText: DATE,
+  });
+  assert.equal(ok, true);
+  assert.equal(noteMap.get("Target.md"), atLimit);
+  assert.equal(plugin.writes.length, 0);
+  assert.match(notices[notices.length - 1], /needs a decision/);
+});
 
 test("Task Link refresh counts one exact target", async () => {
   clearNotices();

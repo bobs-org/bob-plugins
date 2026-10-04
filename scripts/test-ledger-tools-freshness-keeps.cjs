@@ -1,13 +1,14 @@
 // Tests for the keep-streak ledger-marks phase (bob-cli-3v.2):
-// `api.freshness.keepLine` (freshness namespace v5), keeps-aware
-// placement/config/evaluation, and folded keep pips.
+// `api.freshness.keepLine` (freshness namespace v5 counting; v6
+// date-independent decide/config), keeps-aware placement/config/
+// evaluation, and folded keep pips.
 // `docs/freshness.md` §§2a/4/7/11-12 plus the machine-readable K/C/D/B
 // vectors in `tests/fixtures/freshness_keeps/vectors.json` (bob-cli)
 // are authoritative; the vectors below mirror that fixture's K
-// placement, C config, D decide, and B boundary cases verbatim, with
-// D = `2026-10-08` and activation `2026-10-19`. The increment and MK
-// display cases have no fixture entry (Rust has no increment path),
-// so they are pinned here.
+// placement, C config, D decide, and B immediate-availability cases
+// verbatim, with D = `2026-10-08`. The increment and MK display cases
+// have no fixture entry (Rust has no increment path), so they are
+// pinned here.
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
@@ -86,9 +87,7 @@ const {
   coerceFreshnessConfig,
   coerceFreshnessDecay,
   defaultFreshnessConfig,
-  FRESHNESS_DECAY_ACTIVE_FROM,
   freshnessCounts,
-  freshnessDecayActive,
   freshnessDecideFor,
   freshnessEvaluate,
   freshnessFirstValidKeeps,
@@ -523,14 +522,34 @@ test("invalid decay shapes fail the freshness config contract", () => {
   }
 });
 
-// --- B boundary vectors: 2026-10-19 activation from both sides ---
+// --- B immediate-availability vectors: at-limit Ready due rows decide ---
 
-test("activation constant pins 2026-10-19 and both date sides", () => {
-  assert.equal(FRESHNESS_DECAY_ACTIVE_FROM, "2026-10-19");
-  assert.equal(freshnessDecayActive("2026-10-18"), false);
-  assert.equal(freshnessDecayActive("2026-10-19"), true);
-  assert.equal(freshnessDecayActive("2026-10-20"), true);
-  assert.equal(freshnessDecayActive("not-a-date"), false);
+test("B: at-limit Ready due rows decide on every local day", () => {
+  const row = { lane: "ready", tier: "rotten", keeps: 3 };
+  for (const day of [
+    "2026-10-04",
+    "2026-10-08",
+    "2026-10-18",
+    "2026-10-19",
+    "2026-10-20",
+  ]) {
+    assert.equal(
+      freshnessDecideFor(row.lane, row.tier, row.keeps, {
+        decay: { ...DECAY_DEFAULT },
+      }),
+      true,
+      day,
+    );
+    const evaluated = freshnessEvaluate(
+      sRow({
+        rawLine: "- [ ] #task A [fresh:: 2026-09-20] [keeps:: 3]",
+      }),
+      day,
+      CFG,
+    );
+    assert.equal(evaluated.tier, "rotten", day);
+    assert.equal(evaluated.decide, true, day);
+  }
 });
 
 // --- D decide vectors (mirror the fixture's decide cases) ---
@@ -539,13 +558,13 @@ function decideRow({ lane = "ready", tier = "rotten", keeps = 3 } = {}) {
   return { lane, tier, keeps };
 }
 
-test("D1 pre-activation: count and show pips only", () => {
+test("D1 early date: an at-limit Ready due row decides", () => {
   const row = decideRow();
   assert.equal(
-    freshnessDecideFor(row.lane, row.tier, row.keeps, D, {
+    freshnessDecideFor(row.lane, row.tier, row.keeps, {
       decay: { ...DECAY_DEFAULT },
     }),
-    false,
+    true,
   );
 });
 
@@ -557,7 +576,7 @@ test("D2 at limit decides; D3 below limit stamps without a card", () => {
     [below, false],
   ]) {
     assert.equal(
-      freshnessDecideFor(row.lane, row.tier, row.keeps, ACTIVE_DAY, {
+      freshnessDecideFor(row.lane, row.tier, row.keeps, {
         decay: { ...DECAY_DEFAULT },
       }),
       expected,
@@ -567,13 +586,13 @@ test("D2 at limit decides; D3 below limit stamps without a card", () => {
 
 test("D4 returned counts as due; D5 NEW never decides", () => {
   assert.equal(
-    freshnessDecideFor("ready", "returned", 5, ACTIVE_DAY, {
+    freshnessDecideFor("ready", "returned", 5, {
       decay: { ...DECAY_DEFAULT },
     }),
     true,
   );
   assert.equal(
-    freshnessDecideFor("ready", "new", 0, ACTIVE_DAY, {
+    freshnessDecideFor("ready", "new", 0, {
       decay: { enabled: true, keeps: 0, enter: null },
     }),
     false,
@@ -582,7 +601,7 @@ test("D4 returned counts as due; D5 NEW never decides", () => {
 
 test("D6 zero limit asks on every due Ready re-confirmation", () => {
   assert.equal(
-    freshnessDecideFor("ready", "rotten", 0, ACTIVE_DAY, {
+    freshnessDecideFor("ready", "rotten", 0, {
       decay: { enabled: true, keeps: 0, enter: null },
     }),
     true,
@@ -591,13 +610,13 @@ test("D6 zero limit asks on every due Ready re-confirmation", () => {
 
 test("D7 off never asks; D8 lane rows never decide", () => {
   assert.equal(
-    freshnessDecideFor("ready", "rotten", 9, ACTIVE_DAY, {
+    freshnessDecideFor("ready", "rotten", 9, {
       decay: { enabled: false, keeps: 3, enter: null },
     }),
     false,
   );
   assert.equal(
-    freshnessDecideFor("next", "next", 9, ACTIVE_DAY, {
+    freshnessDecideFor("next", "next", 9, {
       decay: { ...DECAY_DEFAULT },
     }),
     false,
@@ -648,12 +667,12 @@ test("evaluator, queue, and counts carry keeps and decide", () => {
   );
   assert.equal(counts.decide, 1);
   assert.equal(counts.rotten, 2);
-  const quiet = freshnessCounts(
+  const early = freshnessCounts(
     [sRow({ rawLine: line }), sRow({ rawLine: atLimit.rawLine })],
     D,
     CFG,
   );
-  assert.equal(quiet.decide, 0);
+  assert.equal(early.decide, 1);
 });
 
 // --- MK display vectors: folded pips with truthful annotations ---

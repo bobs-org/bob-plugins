@@ -1,9 +1,9 @@
 // Tests for the decision-card phase (bob-cli-3v.5) on the nav side: the
-// activation guard, the trigger/skip partition, the card rows, the modal
-// interaction (Esc writes nothing, repeats/bubbles/double-callbacks cannot
-// approve twice), and the capability lifecycle. `docs/freshness.md` §2a
-// and the epic plan's "Decision planner and card" section are
-// authoritative.
+// date-free availability guard, the trigger/skip partition, the card
+// rows, the modal interaction (Esc writes nothing, repeats/bubbles/
+// double-callbacks cannot approve twice), and the capability lifecycle.
+// `docs/freshness.md` §2a and the epic plan's "Decision planner and
+// card" section are authoritative.
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
@@ -72,7 +72,6 @@ const {
   freshnessDecayCardActive,
   freshnessDecayRewordCursorCh,
   FreshnessDecayCardModal,
-  FRESHNESS_DECAY_ACTIVE_FROM,
   FRESHNESS_DECAY_CARD_VERSION,
   isFreshnessDecayDecisionEntry,
   partitionFreshStampDecisionSkips,
@@ -80,23 +79,14 @@ const {
   validateBulletPropertyConfig,
 } = helpers;
 
-// --- Activation guard ---
+// --- Availability guard ---
 
-test("activation: the boundary is 2026-10-19 in the vault local calendar", () => {
-  assert.equal(FRESHNESS_DECAY_ACTIVE_FROM, "2026-10-19");
-  assert.equal(freshnessDecayCardActive("2026-10-18", { enabled: true }), false);
-  assert.equal(freshnessDecayCardActive("2026-10-19", { enabled: true }), true);
-  assert.equal(freshnessDecayCardActive("2026-10-20", { enabled: true }), true);
-});
-
-test("activation: decay off never asks, even after the boundary", () => {
-  assert.equal(
-    freshnessDecayCardActive("2026-10-20", { enabled: false }),
-    false,
-  );
-  assert.equal(freshnessDecayCardActive("2026-10-20", null), true);
-  assert.equal(freshnessDecayCardActive("not-a-date", { enabled: true }), false);
-  assert.equal(freshnessDecayCardActive("", { enabled: true }), false);
+test("availability: decay on (or absent) may ask; decay off never asks", () => {
+  assert.equal(freshnessDecayCardActive({ enabled: true }), true);
+  assert.equal(freshnessDecayCardActive({ enabled: false }), false);
+  assert.equal(freshnessDecayCardActive(null), true);
+  assert.equal(freshnessDecayCardActive(undefined), true);
+  assert.equal(freshnessDecayCardActive({}), true);
 });
 
 // --- Trigger entries ---
@@ -141,6 +131,20 @@ test("partition: empty and malformed input stamps nothing and skips nothing", ()
     stamp: [],
     skipped: [],
   });
+});
+
+test("partition: enabled false stamps decision rows (older namespace fallback)", () => {
+  const skipTarget = { line: 1, path: "a.md", raw: "y", counted: true };
+  const stampTarget = { line: 0, path: "a.md", raw: "x", counted: false };
+  const part = partitionFreshStampDecisionSkips(
+    [
+      resolvedTarget(skipTarget, okMatch({ decide: true })),
+      resolvedTarget(stampTarget, { ok: false, entry: null, reason: "tier" }),
+    ],
+    { enabled: false },
+  );
+  assert.deepEqual(part.skipped, []);
+  assert.deepEqual(part.stamp, [skipTarget, stampTarget]);
 });
 
 test("skip wording: singular, plural, and all-skipped notices", () => {
@@ -460,7 +464,7 @@ test("capability: the nav api exposes the card while loaded", () => {
   const api = createDependencyNavApi({});
   assert.equal(api.version, 1);
   assert.equal(api.freshnessDecayCard.version, FRESHNESS_DECAY_CARD_VERSION);
-  assert.ok(FRESHNESS_DECAY_CARD_VERSION >= 1);
+  assert.ok(FRESHNESS_DECAY_CARD_VERSION >= 2);
 });
 
 test("capability: unload drops the card so marks stop promising it", () => {

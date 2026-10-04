@@ -3944,41 +3944,33 @@ function planFreshnessDecayCard(options = {}) {
 // Decision card and review-walk integration (`docs/freshness.md` §2a,
 // decision-card phase). The trigger is a single source-task
 // Alt+F/Alt+Shift+F with exact eligibility and a pre-write `decide`
-// row once the rollout is active; the press opens the card and writes
-// nothing. Counted source sessions and all Task Link sessions never
-// open cards: exact at-limit targets skip without changing
-// fresh/count. Pure unless noted; never throws.
-
-// The day the keep-streak decision machinery activates, in the vault's
-// local calendar. Rollout policy, not an editable config knob.
-// Mirrors `decay_active_from` in `src/native/config/freshness.rs` and
-// `FRESHNESS_DECAY_ACTIVE_FROM` in bob-ledger-tools.
-const FRESHNESS_DECAY_ACTIVE_FROM = "2026-10-19";
+// row; the press opens the card and writes nothing. Counted source
+// sessions and all Task Link sessions never open cards: exact
+// at-limit targets skip without changing fresh/count. Pure unless
+// noted; never throws.
 
 // The review-walk decision-card capability ledger-tools feature-detects
-// (`api.freshnessDecayCard.version >= 1`). Exposed on the plugin api at
+// (`api.freshnessDecayCard.version >= 2`). Exposed on the plugin api at
 // load; removed again on unload so marks cannot promise an absent card.
-// Bumped only for a breaking card-contract change.
-const FRESHNESS_DECAY_CARD_VERSION = 1;
+// Version 2 is the ungated handler contract: cards are available as
+// soon as decay is enabled. Bumped only for a breaking card-contract
+// change.
+const FRESHNESS_DECAY_CARD_VERSION = 2;
 const FRESHNESS_DECAY_CARD_CAPABILITY = Object.freeze({
   version: FRESHNESS_DECAY_CARD_VERSION,
 });
 
-// Whether the decision machinery may ask for `todayText` under `decay`
-// (`{ enabled }`): the rollout date is reached and decay is not off.
-// `decay: false` keeps counting/display but never asks or skips. The
-// per-row `decide` flag already encodes this; this predicate covers
-// callers without a resolved row. Never throws.
-function freshnessDecayCardActive(todayText, decay) {
+// Whether the decision machinery may ask under `decay` (`{ enabled }`):
+// decay is not off. `decay: false` keeps counting/display but never
+// asks or skips. The per-row `decide` flag already encodes this; this
+// predicate covers callers without a resolved row. Availability is
+// never chosen by a calendar date. Never throws.
+function freshnessDecayCardActive(decay) {
   try {
-    const today = normalizeBulletPropertyValue(todayText);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
-      return false;
-    }
     if (decay && typeof decay === "object" && decay.enabled === false) {
       return false;
     }
-    return today >= FRESHNESS_DECAY_ACTIVE_FROM;
+    return true;
   } catch (error) {
     return false;
   }
@@ -3999,14 +3991,18 @@ function isFreshnessDecayDecisionEntry(entry) {
 // `matchFreshStampExactEntry` result. An exact, due, at-limit row skips
 // without changing fresh/count; everything else stamps (counted only
 // when exactly eligible). Skip is a named decision outcome, not a
-// swallowed write failure. Returns `{ stamp, skipped }`. Never throws.
-function partitionFreshStampDecisionSkips(resolved) {
+// swallowed write failure. Pass `{ enabled: false }` to stamp every
+// target (older freshness namespaces fall back to counting). Returns
+// `{ stamp, skipped }`. Never throws.
+function partitionFreshStampDecisionSkips(resolved, options) {
   try {
+    const skipDecisions = !options || options.enabled !== false;
     const stamp = [];
     const skipped = [];
     for (const item of Array.isArray(resolved) ? resolved : []) {
       const match = item ? item.match : null;
       if (
+        skipDecisions &&
         match &&
         match.ok === true &&
         isFreshnessDecayDecisionEntry(match.entry)
@@ -34878,6 +34874,22 @@ function freshnessSupportsKeeps(freshnessApi) {
   }
 }
 
+// True when the freshness api can intercept cards and skip decision
+// targets: namespace v6 with the sole increment helper. A v5
+// namespace still counts through `keepLine` but falls back to the
+// counted keep path instead of opening a card or skipping. Never throws.
+function freshnessSupportsDecayDecisions(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) &&
+      Number(freshnessApi.version) >= 6 &&
+      typeof freshnessApi.keepLine === "function"
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
 // Strict keep-counting eligibility for one explicit keep (`docs/freshness.md`
 // §2a): `ref` (`{ path, line, raw }` with the pre-write 0-based editor line)
 // authorizes counting only when the pre-write queue holds exactly one row
@@ -37763,6 +37775,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     // nothing. A press moving below-limit to limit simply stamps; the next
     // due press asks.
     if (
+      freshnessSupportsDecayDecisions(api) &&
       options.countExplicit !== true &&
       resolved.length === 1 &&
       resolved[0].match.ok === true &&
@@ -37845,7 +37858,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     // Batch path: counted sessions skip exact at-limit targets without
     // changing fresh/count; skipped tasks stay due for the walk later.
-    const partition = partitionFreshStampDecisionSkips(resolved);
+    // Older freshness namespaces fall back to counting every target.
+    const partition = partitionFreshStampDecisionSkips(resolved, {
+      enabled: freshnessSupportsDecayDecisions(api),
+    });
     const keepTargets = partition.stamp;
     const skipTail = formatFreshStampSkipTail(partition.skipped.length);
     if (keepTargets.length === 0 && partition.skipped.length > 0) {
@@ -38018,15 +38034,21 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         }),
       };
     });
+    const skipDecisions = freshnessSupportsDecayDecisions(api);
     const linkSkipped = linkResolved.reduce(
       (count, item) =>
         count +
-        partitionFreshStampDecisionSkips(item.resolved).skipped.length,
+        partitionFreshStampDecisionSkips(item.resolved, {
+          enabled: skipDecisions,
+        }).skipped.length,
       0,
     );
     const linkStamped = linkResolved.reduce(
       (count, item) =>
-        count + partitionFreshStampDecisionSkips(item.resolved).stamp.length,
+        count +
+        partitionFreshStampDecisionSkips(item.resolved, {
+          enabled: skipDecisions,
+        }).stamp.length,
       0,
     );
     const linkSkipTail = formatFreshStampSkipTail(linkSkipped);
@@ -38036,7 +38058,9 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     }
     const stampTargetsByGroup = linkResolved.map(({ group, resolved }) => ({
       group,
-      targets: partitionFreshStampDecisionSkips(resolved).stamp,
+      targets: partitionFreshStampDecisionSkips(resolved, {
+        enabled: skipDecisions,
+      }).stamp,
     }));
     for (const { targets } of stampTargetsByGroup) {
       for (const target of targets) {
@@ -38241,7 +38265,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
   buildFreshnessDecayCardCtx(cm, cursor, content, filePath, resolved, queueBefore, options) {
     try {
       const api = getReviewFreshnessApi(this.app);
-      if (!api || !freshnessSupportsKeeps(api)) {
+      if (!api || !freshnessSupportsDecayDecisions(api)) {
         return null;
       }
       const settings = options && typeof options === "object" ? options : {};
@@ -38410,7 +38434,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         return stale("local-day");
       }
       const api = getReviewFreshnessApi(this.app);
-      if (!api || !freshnessSupportsKeeps(api)) {
+      if (!api || !freshnessSupportsDecayDecisions(api)) {
         return stale("freshness-api");
       }
       const decay = this.readFreshnessDecayPolicy(api);
@@ -51588,6 +51612,7 @@ module.exports.helpers = {
   matchFreshStampRefs,
   matchFreshStampExactEntry,
   freshnessSupportsKeeps,
+  freshnessSupportsDecayDecisions,
   parseKeepsCount,
   countFreshStampKept,
   deduplicateFreshStampTargets,
@@ -51828,7 +51853,6 @@ module.exports.helpers = {
   planFreshnessDecayLessOften,
   planFreshnessDecayExplicitLevelPicks,
   planFreshnessDecayCard,
-  FRESHNESS_DECAY_ACTIVE_FROM,
   FRESHNESS_DECAY_CARD_VERSION,
   FRESHNESS_DECAY_CARD_CAPABILITY,
   freshnessDecayCardActive,

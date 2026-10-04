@@ -886,7 +886,7 @@ function withMissingConfig(run) {
   }
 }
 
-test("freshness namespace v5 keeps every member on rotten vocabulary", () => {
+test("freshness namespace v6 keeps every member on rotten vocabulary", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -906,7 +906,7 @@ test("freshness namespace v5 keeps every member on rotten vocabulary", () => {
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 5);
+      assert.equal(freshness.version, 6);
       for (const key of [
         "config",
         "stampLine",
@@ -928,24 +928,25 @@ test("freshness namespace v5 keeps every member on rotten vocabulary", () => {
         assert.equal(typeof freshness[key], "function", `freshness ${key}`);
       }
       const apiConfig = freshness.config();
-      assert.deepEqual(
-        { ...apiConfig, active: "wall-clock" },
-        {
-          interval: 7,
-          pendingInterval: 1,
-          nextInterval: 1,
-          projectInterval: null,
-          referenceInterval: null,
-          rottenDailyBudget: null,
-          intervalFromConfig: false,
-          invalid: false,
-          deprecatedStaleBudget: false,
-          decay: { enabled: true, keeps: 3, enter: null },
-          activeFrom: "2026-10-19",
-          active: "wall-clock",
-        },
-      );
-      assert.equal(typeof apiConfig.active, "boolean");
+      assert.deepEqual(apiConfig, {
+        interval: 7,
+        pendingInterval: 1,
+        nextInterval: 1,
+        projectInterval: null,
+        referenceInterval: null,
+        rottenDailyBudget: null,
+        intervalFromConfig: false,
+        invalid: false,
+        deprecatedStaleBudget: false,
+        decay: { enabled: true, keeps: 3, enter: null },
+      });
+      assert.equal(apiConfig.activeFrom, undefined);
+      assert.equal(apiConfig.active, undefined);
+      assert.deepEqual(Object.keys(apiConfig.decay).sort(), [
+        "enabled",
+        "enter",
+        "keeps",
+      ]);
       assert.equal(freshness.state(tasks[0]), "new");
       assert.equal(freshness.bucket(tasks[0]), "new");
       assert.equal(freshness.isDue(tasks[0]), true);

@@ -36112,7 +36112,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "set-bullet-property",
-      name: "Set bullet property",
+      name: "Task card (set properties)",
       editorCallback: (editor) => this.openBulletPropertyPicker(editor),
     });
 

@@ -21,6 +21,60 @@ versioned, validated, and reviewed independently of the vault. The plugins are d
 Versions are tracked **per plugin** — there is no lockstep release. Each plugin's authoritative version lives in its own
 `plugins/<id>/manifest.json` (e.g. `bob-navigation-hotkeys` is ahead of the others at `2.0.0`).
 
+## Task Card
+
+`Ctrl+Shift+P` (`bob-navigation-hotkeys:set-bullet-property`, palette **Task card
+(set properties)**) opens the **Task Card** as its first screen when the plugin
+setting allows it. Classic filtered properties stay permanently available as
+search mode. Screenshots are omitted until an interactive Obsidian pass records
+light, dark, and narrow layouts.
+
+| Gesture | Outcome |
+| --- | --- |
+| `1`–`4` | Set that configured P-level and its frozen displayed date |
+| `0` | Clear priority to implicit P0; keep the scheduled date |
+| `Ctrl+Enter` | Apply the cached recommendation (`Cmd+Enter` alias) |
+| `Ctrl+R` | Regenerate recommendation and priority previews; no write |
+| `Enter` | Open the selected action; Schedule is the default |
+| `b` | Blocked by (Depends on) |
+| `f` | Review every (Refresh) |
+| `x` | Cancel-reason stage; never cancels on the key alone |
+| `Alt+N` | Commit to Next or release to Ready |
+| `Ctrl+D` | Delete the selected property (default selection is Schedule) |
+| `/` or type | Classic search; unbound letters stay filter-safe (`p`, `s`, `d`, …) |
+| Backspace on empty / Back | Return to the card without writing |
+| Escape | Close; discard uncommitted state |
+
+**Scope and previews.** The header shows the cleaned task text, note, lane,
+priority, schedule, dependency counts, and review interval. Counted sessions
+name N+1 scope and mixed values. Task Links say `via Task Link` and name target
+notes. Each P-level shows its exact ISO date; batches show a span plus
+per-target disclosure. Same-level `2` on P2 is a deliberate re-pick that resets
+the roll streak. Custom list properties stay in More and in search.
+
+**Logs.** Blank reason writes `🤷 no reason given` only for targets that already
+keep a Schedule Log. Blank Work summary writes no Work Log. Priority picks keep
+their deterministic 🎲 reason and only offer Work summary when a Next/Pending
+target qualifies.
+
+**Deliberate changes from the old first screen.** Bare Enter on an unprioritized
+task opens Schedule, not the lane. `Ctrl+D` with default focus clears Schedule.
+Alt+N remains the fastest lane gesture.
+
+**Undo.** One local/count edit is undoable. Cross-note Task Link writes do not
+undo from the daily note with a single Ctrl+Z.
+
+**Setting and rollback.** Plugin setting **Ctrl+Shift+P Task Card**: Automatic
+(classic list through 2026-10-18, Task Card from 2026-10-19), Task Card, or
+Classic list. Explicit Classic always uses the documented search path. Explicit
+Task Card is the pilot opt-in. Absent/null follows the date and is not persisted
+as false. The rollback setting stays. Direct Depends-On, chip, palette
+dependency, and decay **Less often** entries still skip the card. The decay card
+accepts `x` as an alias for `d` Drop.
+
+**Search compatibility.** After the first unbound character, every character
+belongs to the search input, including digits and `b`/`f`/`x`.
+
 Bob Ledger Tools expands editor snippets with Tab or the **Expand Bob snippet** command.
 Date calculation uses local calendar days: `d[-]<N>` (e.g. `d0` -> `2026-08-16`, `d1` ->
 `2026-08-17`, `d-1` -> `2026-08-15`) expands to the bare ISO date, while `D[-]<N>` (e.g.

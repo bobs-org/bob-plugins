@@ -526,6 +526,17 @@ test("classic property picker stays on the generic modal width", () => {
   assert.match(flattenText(modal.contentEl), /Set bullet property|Filter/);
 });
 
+test("palette command is named Task card (set properties)", () => {
+  const source = require("fs").readFileSync(
+    require("path").join(__dirname, "../plugins/bob-navigation-hotkeys/main.js"),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /id: "set-bullet-property"[\s\S]{0,80}name: "Task card \(set properties\)"/,
+  );
+});
+
 test("opt-in Task Card opens the compact card with dialog semantics and a close control", () => {
   const { modal, editor } = openPropertyPicker({ taskCard: true });
   assert.equal(modal.stage, "task-card");

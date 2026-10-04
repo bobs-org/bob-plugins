@@ -38,7 +38,7 @@ const INLINE_DEPENDS_ON_FIELD_RE = /\[dependsOn::([ \t]*)([^\]\n]*?)([ \t]*)\]/g
 const TASKS_INLINE_FIELD_RE = /[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g;
 const TASKS_EMOJI_DATE_RE =
   /[ \t]*(?:[\u2600-\u27BF]|\uD83C[\uD000-\uDFFF]|\uD83D[\uD000-\uDFFF]|\uD83E[\uD000-\uDFFF])\s*\d{4}-\d{2}-\d{2}/g;
-// Keep these Pomodoro ledger recognizers in sync with bob-ledger-tools/main.js.
+// Keep these Pomodoro ledger recognizers in sync with plugins/bob-ledger-tools/src/010-load-and-constants.js.
 const POMODOROS_HEADING_RE = /^##\s+Pomodoros(?:\s.*)?$/;
 const LEVEL_TWO_HEADING_RE = /^##\s+/;
 const LEDGER_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[([ /xX-])\]\s+)/;
@@ -102,7 +102,7 @@ const WORK_LOG_PARENT_RE = new RegExp(
 const WORK_LOG_ENTRY_EMPHASIS = "*";
 const WORK_LOG_ENTRY_SEPARATOR = " — ";
 // Daily Notes core-plugin lookup and filename-format parsing, mirroring
-// bob-ledger-tools/main.js. Kept as an independent copy for the same reason
+// plugins/bob-ledger-tools/src/010-load-and-constants.js. Kept as an independent copy for the same reason
 // as the Schedule Log constants above: plugins are deployed separately and
 // must not import each other's main.js.
 const DAILY_NOTES_COMMAND_ID = "daily-notes";

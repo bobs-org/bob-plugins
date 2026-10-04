@@ -130,11 +130,38 @@ function createDependencyStubs(mode) {
     setIcon(...args) {
       calls.push(["setIcon", args.length]);
     },
+    normalizePath(value) {
+      return String(value ?? "");
+    },
+    parseYaml() {
+      return {};
+    },
   };
-  const codeMirror = {
+  const codeMirrorView = {
     EditorView: class EditorView {},
+    keymap: {},
+    ViewPlugin: {},
+    Decoration: {},
+    WidgetType: class WidgetType {},
   };
-  return { calls, obsidian, codeMirror, mode };
+  let effectSeq = 0;
+  const codeMirrorState = {
+    Prec: {},
+    StateEffect: {
+      define() {
+        effectSeq += 1;
+        calls.push(["StateEffect.define", effectSeq]);
+        return { id: effectSeq };
+      },
+    },
+    RangeSetBuilder: class RangeSetBuilder {},
+  };
+  const codeMirrorLanguage = {
+    syntaxTree() {
+      return null;
+    },
+  };
+  return { calls, obsidian, codeMirrorView, codeMirrorState, codeMirrorLanguage, mode };
 }
 
 function loadIsolated(source, filename, mode) {
@@ -152,6 +179,8 @@ function loadIsolated(source, filename, mode) {
       isMain: Boolean(isMain),
     });
     if (request === "obsidian") return dependencyStubs.obsidian;
+    if (request === "@codemirror/state") return dependencyStubs.codeMirrorState;
+    if (request === "@codemirror/language") return dependencyStubs.codeMirrorLanguage;
     if (request === "@codemirror/view") {
       if (mode === "missing-codemirror") {
         const error = new Error("Cannot find module '@codemirror/view'");
@@ -159,7 +188,7 @@ function loadIsolated(source, filename, mode) {
         error.request = request;
         throw error;
       }
-      return dependencyStubs.codeMirror;
+      return dependencyStubs.codeMirrorView;
     }
     return Reflect.apply(originalLoad, this, [request, parent, isMain]);
   };

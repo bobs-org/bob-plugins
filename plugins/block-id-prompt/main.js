@@ -71,7 +71,7 @@ const COMPACT_TIME_RANGE_RE =
 const CANONICAL_BLOCK_LINK_PREFIX = "#^";
 const SCAN_DEBOUNCE_MS = 75;
 const EDIT_SUPPRESS_MS = 250;
-// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`:
+// Recognizes the same task-level `scheduled` forms as `bob task reconcile`:
 // `[scheduled:: YYYY-MM-DD]` and `(scheduled:: YYYY-MM-DD)`, anywhere on the
 // line and in any field order. The captured value is validated separately so
 // a malformed date still counts toward "more than one recognized field".

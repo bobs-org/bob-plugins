@@ -190,7 +190,7 @@ function buildBlockedDependentRecoveryPlan(
   options = {},
 ) {
   // A Blocked dependent that still carries a strictly future `scheduled` date
-  // stays Blocked: reopening it would fight `bob task-status-hooks`, which
+  // stays Blocked: reopening it would fight `bob task reconcile`, which
   // re-blocks future-scheduled tasks. Callers that close tasks through the
   // vault pass their own date via `options.today`; it defaults to today.
   const today =
@@ -507,4 +507,3 @@ function restoreReopenedTaskReferencesInText(
   const text = sourceLines.map((line) => `${line.text}${line.ending}`).join("");
   return { text, changed: text !== String(sourceText || ""), restored };
 }
-

@@ -376,7 +376,7 @@ function getTaskStatusForLine(lineText, lineNumber = 0) {
 const BLOCKED_TASK_STATUS_SYMBOL = "?";
 const SOURCE_STATUS_CYCLE = [BLOCKED_TASK_STATUS_SYMBOL, ...FIXED_SYMBOLS];
 
-// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`
+// Recognizes the same task-level `scheduled` forms as `bob task reconcile`
 // and `plugins/block-id-prompt/main.js`: `[scheduled:: YYYY-MM-DD]` and
 // `(scheduled:: YYYY-MM-DD)`, anywhere on the line and in any field order.
 // The captured value is validated separately so a malformed or duplicate
@@ -953,7 +953,6 @@ function applyBlockedStatusRetirementToSourceText(sourceText, taskLine, todayDat
 
   return { text: nextText, removedDate: plan.removedDate };
 }
-
 // ---- src/030-task-toggles.js ----
 function isOpenDoneTaskStatus(taskStatus) {
   return !!taskStatus && OPEN_DONE_TASK_SYMBOLS.has(taskStatus.symbol);
@@ -4549,7 +4548,7 @@ function buildBlockedDependentRecoveryPlan(
   options = {},
 ) {
   // A Blocked dependent that still carries a strictly future `scheduled` date
-  // stays Blocked: reopening it would fight `bob task-status-hooks`, which
+  // stays Blocked: reopening it would fight `bob task reconcile`, which
   // re-blocks future-scheduled tasks. Callers that close tasks through the
   // vault pass their own date via `options.today`; it defaults to today.
   const today =
@@ -4866,7 +4865,6 @@ function restoreReopenedTaskReferencesInText(
   const text = sourceLines.map((line) => `${line.text}${line.ending}`).join("");
   return { text, changed: text !== String(sourceText || ""), restored };
 }
-
 // ---- src/090-source-and-formatting.js ----
 function getLineTextFromSourceText(sourceText, lineNumber) {
   const lineIndex = Math.floor(Number(lineNumber));

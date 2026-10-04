@@ -4,7 +4,7 @@
 const BLOCKED_TASK_STATUS_SYMBOL = "?";
 const SOURCE_STATUS_CYCLE = [BLOCKED_TASK_STATUS_SYMBOL, ...FIXED_SYMBOLS];
 
-// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`
+// Recognizes the same task-level `scheduled` forms as `bob task reconcile`
 // and `plugins/block-id-prompt/main.js`: `[scheduled:: YYYY-MM-DD]` and
 // `(scheduled:: YYYY-MM-DD)`, anywhere on the line and in any field order.
 // The captured value is validated separately so a malformed or duplicate
@@ -581,4 +581,3 @@ function applyBlockedStatusRetirementToSourceText(sourceText, taskLine, todayDat
 
   return { text: nextText, removedDate: plan.removedDate };
 }
-

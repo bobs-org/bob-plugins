@@ -373,6 +373,7 @@ function fakeKey(overrides = {}) {
     altKey: false,
     ctrlKey: false,
     metaKey: false,
+    shiftKey: false,
     repeat: false,
     preventDefault: () => {},
     stopPropagation: () => {},
@@ -390,13 +391,14 @@ test("modal: Enter approves once; later keys cannot approve again", () => {
   assert.deepEqual(chosen, ["notNow"]);
 });
 
-test("modal: letter keys, Alt+F, and 1-4 activate the same actions as click", () => {
+test("modal: letter keys, Alt+F, Ctrl+Alt+F, and 1-4 activate the same actions as click", () => {
   for (const [keyEvent, action] of [
     [fakeKey({ key: "l" }), "lessOften"],
     [fakeKey({ key: "E" }), "reword"],
     [fakeKey({ key: "d" }), "drop"],
     [fakeKey({ key: "x" }), "drop"],
     [fakeKey({ key: "f", code: "KeyF", altKey: true }), "keep"],
+    [fakeKey({ key: "f", code: "KeyF", altKey: true, ctrlKey: true }), "keep"],
   ]) {
     const opened = openTestCard();
     opened.modal.handleKey(keyEvent);
@@ -422,8 +424,33 @@ test("modal: key repeat and modified keys never approve", () => {
   repeated.modal.handleKey(
     fakeKey({ key: "f", code: "KeyF", altKey: true, repeat: true }),
   );
+  repeated.modal.handleKey(
+    fakeKey({
+      key: "f",
+      code: "KeyF",
+      altKey: true,
+      ctrlKey: true,
+      repeat: true,
+    }),
+  );
   repeated.modal.handleKey(fakeKey({ key: "l", repeat: true }));
   repeated.modal.handleKey(fakeKey({ key: "l", ctrlKey: true }));
+  // Retired Alt+Shift+F and extra-modifier F chords stay unconsumed.
+  repeated.modal.handleKey(
+    fakeKey({ key: "F", code: "KeyF", altKey: true, shiftKey: true }),
+  );
+  repeated.modal.handleKey(
+    fakeKey({
+      key: "F",
+      code: "KeyF",
+      altKey: true,
+      ctrlKey: true,
+      shiftKey: true,
+    }),
+  );
+  repeated.modal.handleKey(
+    fakeKey({ key: "f", code: "KeyF", altKey: true, metaKey: true }),
+  );
   assert.deepEqual(repeated.chosen, []);
   assert.equal(repeated.modal.settled, false);
   assert.equal(repeated.modal.isOpen, true);

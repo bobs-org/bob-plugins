@@ -1,5 +1,5 @@
 // Tests for PRE/POST checklist complete-and-advance in bob-navigation-hotkeys
-// (bob-cli-48.5): Alt+F / Alt+Shift+F complete through cycler API v2, counted
+// (bob-cli-48.5): Alt+F / Ctrl+Alt+F complete through cycler API v2, counted
 // and Task Link batches skip checklist rows, missing gates write nothing.
 const assert = require("node:assert/strict");
 const Module = require("node:module");
@@ -289,7 +289,7 @@ function freshnessV7(queue, counts = {}) {
           label: "PRE",
           detail: "checklist",
           compact: "checklist",
-          actionHint: "Alt+Shift+F done → next · ]s skip",
+          actionHint: "Ctrl+Alt+F done → next · ]s skip",
         };
       }
       if (tier === "post") {
@@ -350,7 +350,7 @@ test("Alt+F on PRE stays with remaining PRE count and never stamps", async () =>
   assert.equal(editor.state.cursor.line, 0);
 });
 
-test("Alt+Shift+F completes seven PRE rows from a stale cache", async () => {
+test("Ctrl+Alt+F completes seven PRE rows from a stale cache", async () => {
   for (const insertAbove of [false, true]) {
     clearNotices();
     const editor = makeEditor(sevenContent(), 0);
@@ -384,7 +384,7 @@ test("Alt+Shift+F completes seven PRE rows from a stale cache", async () => {
   }
 });
 
-test("Alt+Shift+F completes seven PRE rows from a refreshed cache", async () => {
+test("Ctrl+Alt+F completes seven PRE rows from a refreshed cache", async () => {
   for (const insertAbove of [false, true]) {
     clearNotices();
     const editor = makeEditor(sevenContent(), 0);

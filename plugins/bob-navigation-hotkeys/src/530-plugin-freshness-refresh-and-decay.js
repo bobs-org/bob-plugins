@@ -679,7 +679,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
   }
 
-  // Successful Alt+Shift+F outcomes advance exactly once after commit —
+  // Successful Ctrl+Alt+F outcomes advance exactly once after commit —
   // except Reword, which leaves focus for editing, and failed or
   // dismissed secondary pickers, which stay due.
   async maybeAdvanceFreshnessDecayWalk(cardCtx, action) {

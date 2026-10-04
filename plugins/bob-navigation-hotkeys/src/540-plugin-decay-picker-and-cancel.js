@@ -109,7 +109,7 @@ class BobNavigationHotkeysDecayCancelMixin {
 
   // Reword (E): stamp and clear, then put the cursor at the end of the
   // task body before metadata for editing. Stays on this task even for
-  // Alt+Shift+F — no walk advance.
+  // Ctrl+Alt+F — no walk advance.
   async applyFreshnessDecayCardReword(cardCtx, live) {
     try {
       const stamper = this.getFreshnessStampLine();
@@ -237,12 +237,12 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
   }
 
-  // Capture-phase fallback so Alt+F / Alt+Shift+F reach the counted refresh
+  // Capture-phase fallback so Alt+F / Ctrl+Alt+F reach the counted refresh
   // route while Vim normal mode is active. CodeMirror Vim swallows Alt
   // chords before Obsidian's hotkey dispatcher runs, so the hotkeys below
   // only cover insert mode and non-Vim editing. A pending numeric Vim prefix
-  // is "N additional tasks", mirroring the counted Alt+N route, and the
-  // Shift of the chord selects refresh-and-advance.
+  // is "N additional tasks", mirroring the counted Alt+N route, and
+  // Ctrl+Alt+F selects refresh-and-advance.
   registerReviewRefreshInputListeners() {
     this.handledReviewRefreshEvents = new WeakSet();
     const keydownHandler = (event) =>
@@ -297,7 +297,7 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     resetPendingVimInputState(cm, "review-freshness-refresh");
     void this.refreshTaskFreshness(view.editor, {
-      advance: event.shiftKey === true,
+      advance: isReviewRefreshKeydown(event, true),
       countExplicit: pendingRepeat.explicit,
       additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
     }).catch(() => false);

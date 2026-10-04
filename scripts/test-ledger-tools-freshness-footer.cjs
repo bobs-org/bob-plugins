@@ -315,7 +315,7 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
     { todayText: D },
   );
   assert.equal(pre.detail, "checklist");
-  assert.equal(pre.actionHint, "Alt+Shift+F done → next · ]s skip");
+  assert.equal(pre.actionHint, "Ctrl+Alt+F done → next · ]s skip");
   const post = freshnessReviewEntryView(
     queueEntry({ tier: "post", tierLabel: "POST", lane: "ready" }),
     { todayText: D },

@@ -459,7 +459,7 @@ function planFreshnessDecayCard(options = {}) {
 
 // Decision card and review-walk integration (`docs/freshness.md` §2a,
 // decision-card phase). The trigger is a single source-task
-// Alt+F/Alt+Shift+F with exact eligibility and a pre-write `decide`
+// Alt+F/Ctrl+Alt+F with exact eligibility and a pre-write `decide`
 // row; the press opens the card and writes nothing. Counted source
 // sessions and all Task Link sessions never open cards: exact
 // at-limit targets skip without changing fresh/count. Pure unless

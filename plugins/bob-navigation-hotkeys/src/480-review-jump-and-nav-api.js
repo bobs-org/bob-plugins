@@ -370,7 +370,7 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
     } else if (tier === "next") {
       lines.push("Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (tier === "pre") {
-      lines.push("Alt+Shift+F done → next · ]s skip");
+      lines.push("Ctrl+Alt+F done → next · ]s skip");
     } else if (tier === "post") {
       lines.push("Alt+F done · closes the review");
     }
@@ -844,15 +844,16 @@ function matchFreshStampExactEntry(queueBefore, ref) {
   return Object.freeze({ ok: true, entry, reason: "ok" });
 }
 
-// Alt+F (wantShift false) / Alt+Shift+F (wantShift true). CodeMirror Vim
+// Alt+F (wantAdvance false) / Ctrl+Alt+F (wantAdvance true). CodeMirror Vim
 // swallows Alt chords in normal mode, so these run on the capture-phase
 // fallback like the counted lane toggle; the hotkeys below cover insert
-// mode and non-Vim editing.
-function isReviewRefreshKeydown(event, wantShift) {
-  if (!event || event.ctrlKey || event.metaKey || !event.altKey) {
+// mode and non-Vim editing. Shift and Meta are never part of a supported
+// refresh chord: Alt+Shift+F is retired.
+function isReviewRefreshKeydown(event, wantAdvance) {
+  if (!event || event.metaKey || event.shiftKey || !event.altKey) {
     return false;
   }
-  if (Boolean(event.shiftKey) !== Boolean(wantShift)) {
+  if (Boolean(event.ctrlKey) !== Boolean(wantAdvance)) {
     return false;
   }
   return event.code === "KeyF" || event.key === "f" || event.key === "F";

@@ -44,7 +44,7 @@ function isCtrlKey(event, key) {
 
 // ---------------------------------------------------------------------------
 // freshness review (nav-review): vault-wide due-task jumps (Ctrl+Alt+J/K,
-// `]s` / `[s` via the vimrc) and Alt+F / Alt+Shift+F refresh.
+// `]s` / `[s` via the vimrc) and Alt+F / Ctrl+Alt+F refresh.
 //
 // Reads come from `api.freshness.queue()` / `api.freshness.counts()` on
 // bob-ledger-tools (api `version >= 3`); writes go through
@@ -746,7 +746,7 @@ function matchReviewChecklistCursor(queue, cursor) {
 }
 
 // Walk anchor: where the walk is. Recorded on every successful landing
-// and every Alt+F / Alt+Shift+F stamp. Holds the handled entry keys, the
+// and every Alt+F / Ctrl+Alt+F stamp. Holds the handled entry keys, the
 // handled task's path/line/tier, and the ordered keys after and before
 // them in the queue they came from, so `]s` after an Alt+N release,
 // Ctrl+Shift+Enter, or a roll continues from the successor (and `[s` from

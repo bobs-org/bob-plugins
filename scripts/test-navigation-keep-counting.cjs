@@ -1239,26 +1239,8 @@ test("multi-note write failure rolls back the first note", async () => {
 
 // --- physical-key dispatch ----------------------------------------------------
 
-test("one physical key through two routes stamps once", async () => {
-  clearNotices();
-  const editor = makeEditor(["# Tasks", "", ROTTEN_LINE].join("\n"), 2);
-  const plugin = makePlugin({
-    filePath: "a.md",
-    editor,
-    freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
-  });
-  plugin.laneReleaseDateText = () => DATE;
-  plugin.handledReviewRefreshEvents = new WeakSet();
-  plugin.getFocusedMarkdownEditorView = () => plugin.view;
-  plugin.isVimNormalModeEditor = () => true;
-  plugin.resolveVimCodeMirror = () => ({});
-  let refreshCalls = 0;
-  const inner = plugin.refreshTaskFreshness.bind(plugin);
-  plugin.refreshTaskFreshness = async (...args) => {
-    refreshCalls += 1;
-    return inner(...args);
-  };
-  const event = {
+function reviewRefreshKeyEvent(overrides = {}) {
+  return {
     repeat: false,
     ctrlKey: false,
     metaKey: false,
@@ -1269,18 +1251,152 @@ test("one physical key through two routes stamps once", async () => {
     preventDefault: () => {},
     stopPropagation: () => {},
     stopImmediatePropagation: () => {},
+    ...overrides,
   };
+}
+
+function attachReviewRefreshCapture(plugin, cm = {}) {
+  plugin.laneReleaseDateText = () => DATE;
+  plugin.handledReviewRefreshEvents = new WeakSet();
+  plugin.getFocusedMarkdownEditorView = () => plugin.view;
+  plugin.isVimNormalModeEditor = () => true;
+  plugin.resolveVimCodeMirror = () => cm;
+}
+
+test("one physical key through two routes stamps once", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_LINE].join("\n"), 2);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
+  });
+  attachReviewRefreshCapture(plugin);
+  const seen = [];
+  let pending = null;
+  const inner = plugin.refreshTaskFreshness.bind(plugin);
+  plugin.refreshTaskFreshness = async (...args) => {
+    seen.push(args[1] || {});
+    pending = inner(...args);
+    return pending;
+  };
+  const event = reviewRefreshKeyEvent();
   // The capture listener is registered on both window and document, so one
   // physical key reaches the handler twice with the same event object.
   assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), true);
   assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(refreshCalls, 1);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].advance, false);
+  await pending;
   // A racing second route (hotkey dispatcher) with the lagging queue still
   // preserves the same-day streak instead of double-counting.
   const ok = await inner(editor, { dateText: DATE });
   assert.equal(ok, true);
   assert.match(editor.state.lines[2], /\[keeps:: 3\]/);
   assert.doesNotMatch(notices[notices.length - 1], /kept \d+×/);
+});
+
+test("Ctrl+Alt+F capture advances once and consumes a Vim prefix", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_LINE].join("\n"), 2);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
+  });
+  const cm = {
+    getCursor: () => ({ line: 2, ch: 0 }),
+    state: {
+      vim: {
+        inputState: {
+          prefixRepeat: ["3"],
+          motionRepeat: [],
+          keyBuffer: [],
+          reason: "",
+        },
+      },
+    },
+  };
+  attachReviewRefreshCapture(plugin, cm);
+  const seen = [];
+  let advances = 0;
+  plugin.jumpToDueTask = async () => {
+    advances += 1;
+    return true;
+  };
+  const inner = plugin.refreshTaskFreshness.bind(plugin);
+  let pending = null;
+  plugin.refreshTaskFreshness = async (...args) => {
+    seen.push(args[1] || {});
+    pending = inner(...args);
+    return pending;
+  };
+  const event = reviewRefreshKeyEvent({ ctrlKey: true });
+  assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), true);
+  assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);
+  await pending;
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].advance, true);
+  assert.equal(seen[0].countExplicit, true);
+  assert.equal(seen[0].additionalTaskCount, 3);
+  assert.deepEqual(cm.state.vim.inputState.prefixRepeat, []);
+  assert.equal(cm.state.vim.inputState.reason, "review-freshness-refresh");
+  assert.equal(advances, 1);
+  assert.match(editor.state.lines[2], /\[keeps:: 3\]/);
+});
+
+test("obsolete and extra-modifier F chords stay unconsumed", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_LINE].join("\n"), 2);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
+  });
+  const cm = {
+    getCursor: () => ({ line: 2, ch: 0 }),
+    state: {
+      vim: {
+        inputState: {
+          prefixRepeat: ["2"],
+          motionRepeat: [],
+          keyBuffer: [],
+          reason: "",
+        },
+      },
+    },
+  };
+  attachReviewRefreshCapture(plugin, cm);
+  let refreshCalls = 0;
+  plugin.refreshTaskFreshness = async () => {
+    refreshCalls += 1;
+    return true;
+  };
+  const rejected = [
+    reviewRefreshKeyEvent({ shiftKey: true, key: "F" }),
+    reviewRefreshKeyEvent({ ctrlKey: true, shiftKey: true, key: "F" }),
+    reviewRefreshKeyEvent({ metaKey: true }),
+    reviewRefreshKeyEvent({ ctrlKey: true, metaKey: true }),
+    reviewRefreshKeyEvent({ altKey: false, ctrlKey: true }),
+    reviewRefreshKeyEvent({ code: "KeyG", key: "g" }),
+    reviewRefreshKeyEvent({ repeat: true }),
+    reviewRefreshKeyEvent({ repeat: true, ctrlKey: true }),
+  ];
+  for (const event of rejected) {
+    assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);
+  }
+  plugin.getFocusedMarkdownEditorView = () => null;
+  assert.equal(
+    plugin.handleReviewRefreshPhysicalKeydown(reviewRefreshKeyEvent()),
+    false,
+  );
+  assert.equal(
+    plugin.handleReviewRefreshPhysicalKeydown(
+      reviewRefreshKeyEvent({ ctrlKey: true }),
+    ),
+    false,
+  );
+  assert.equal(refreshCalls, 0);
+  assert.deepEqual(cm.state.vim.inputState.prefixRepeat, ["2"]);
+  assert.equal(editor.state.lines[2], ROTTEN_LINE);
 });

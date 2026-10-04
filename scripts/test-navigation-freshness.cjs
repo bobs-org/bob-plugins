@@ -559,7 +559,7 @@ test("stamped refs match the pre-write queue by line or text", () => {
   assert.equal(moved.newCount, 0);
 });
 
-test("review refresh keydown matches Alt+F with and without Shift", () => {
+test("review refresh keydown matches Alt+F in place and Ctrl+Alt+F to advance", () => {
   const down = (overrides = {}) => ({
     ctrlKey: false,
     metaKey: false,
@@ -572,15 +572,27 @@ test("review refresh keydown matches Alt+F with and without Shift", () => {
   assert.equal(helpers.isReviewRefreshKeydown(down(), false), true);
   assert.equal(helpers.isReviewRefreshKeydown(down(), true), false);
   assert.equal(
-    helpers.isReviewRefreshKeydown(down({ shiftKey: true, key: "F" }), true),
+    helpers.isReviewRefreshKeydown(down({ ctrlKey: true }), true),
     true,
+  );
+  assert.equal(
+    helpers.isReviewRefreshKeydown(down({ ctrlKey: true }), false),
+    false,
+  );
+  // Retired Alt+Shift+F and extra Shift on the new chord stay unmatched.
+  assert.equal(
+    helpers.isReviewRefreshKeydown(down({ shiftKey: true, key: "F" }), true),
+    false,
   );
   assert.equal(
     helpers.isReviewRefreshKeydown(down({ shiftKey: true, key: "F" }), false),
     false,
   );
   assert.equal(
-    helpers.isReviewRefreshKeydown(down({ ctrlKey: true }), false),
+    helpers.isReviewRefreshKeydown(
+      down({ ctrlKey: true, shiftKey: true, key: "F" }),
+      true,
+    ),
     false,
   );
   assert.equal(
@@ -588,11 +600,41 @@ test("review refresh keydown matches Alt+F with and without Shift", () => {
     false,
   );
   assert.equal(
+    helpers.isReviewRefreshKeydown(down({ ctrlKey: true, metaKey: true }), true),
+    false,
+  );
+  assert.equal(
     helpers.isReviewRefreshKeydown(down({ altKey: false }), false),
     false,
   );
   assert.equal(
+    helpers.isReviewRefreshKeydown(down({ altKey: false, ctrlKey: true }), true),
+    false,
+  );
+  assert.equal(
     helpers.isReviewRefreshKeydown(down({ code: "KeyG", key: "g" }), false),
+    false,
+  );
+  // macOS Option can emit a non-ASCII `key` while `code` stays KeyF.
+  assert.equal(
+    helpers.isReviewRefreshKeydown(down({ key: "ƒ" }), false),
+    true,
+  );
+  assert.equal(
+    helpers.isReviewRefreshKeydown(down({ ctrlKey: true, key: "ƒ" }), true),
+    true,
+  );
+  // Fall back to `key` when `code` is missing.
+  assert.equal(
+    helpers.isReviewRefreshKeydown(down({ code: "", key: "f" }), false),
+    true,
+  );
+  assert.equal(
+    helpers.isReviewRefreshKeydown(down({ code: undefined, key: "F" }), false),
+    true,
+  );
+  assert.equal(
+    helpers.isReviewRefreshKeydown(down({ code: "", key: "g" }), false),
     false,
   );
 });
@@ -1741,6 +1783,24 @@ test("onload registers first/last commands routed to the shared jump", () => {
   assert.equal(last.name, "Jump to last task due for freshness review");
   assert.equal(first.hotkeys, undefined);
   assert.equal(last.hotkeys, undefined);
+  const confirm = commands.find((item) => item.id === "refresh-task-freshness");
+  const advance = commands.find(
+    (item) => item.id === "refresh-task-freshness-and-advance",
+  );
+  assert.ok(confirm);
+  assert.ok(advance);
+  assert.deepEqual(confirm.hotkeys, [{ modifiers: ["Alt"], key: "F" }]);
+  assert.deepEqual(advance.hotkeys, [{ modifiers: ["Ctrl", "Alt"], key: "F" }]);
+  const refreshCalls = [];
+  plugin.refreshTaskFreshness = (editor, options) => {
+    refreshCalls.push({ editor, options });
+    return true;
+  };
+  const editor = { id: "advance-editor" };
+  assert.equal(advance.editorCallback(editor), true);
+  assert.deepEqual(refreshCalls, [
+    { editor, options: { advance: true } },
+  ]);
   // Both route through the shared jump with an explicit endpoint, never the
   // relative fallback (forward would map to first, backward to last).
   const calls = [];
@@ -2007,7 +2067,7 @@ test("fallback notices name PRE checklist and POST closeout", () => {
   const pre = checklistEntry();
   assert.equal(
     helpers.buildReviewJumpNotice(pre, 1, 8, { todayText: "2026-10-08" }),
-    "Review 1/8 · PRE 1/7 · checklist\nAlt+Shift+F done → next · ]s skip",
+    "Review 1/8 · PRE 1/7 · checklist\nCtrl+Alt+F done → next · ]s skip",
   );
   const post = checklistEntry({
     key: "gtd_daily.md:20",

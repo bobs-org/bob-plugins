@@ -488,7 +488,7 @@ class BobNavigationHotkeysLaneReviewMixin {
     return true;
   }
 
-  // Alt+F (advance false) / Alt+Shift+F (advance true): stamp the cursor
+  // Alt+F (advance false) / Ctrl+Alt+F (advance true): stamp the cursor
   // task, or a dedicated Task Link's target, plus the next N tasks when
   // counted, and change nothing else. Targets are discovered like Alt+N's;
   // the write goes through `api.freshness.stampLine` only (see the

@@ -203,7 +203,7 @@ function freshnessReviewEntryView(entry, options = {}) {
     if (tier === "pre") {
       detail = "checklist";
       compact = "checklist";
-      actionHint = "Alt+Shift+F done → next · ]s skip";
+      actionHint = "Ctrl+Alt+F done → next · ]s skip";
     } else if (tier === "post") {
       detail = "closeout";
       compact = "closeout";

@@ -3949,7 +3949,7 @@ function planFreshnessDecayCard(options = {}) {
 
 // Decision card and review-walk integration (`docs/freshness.md` §2a,
 // decision-card phase). The trigger is a single source-task
-// Alt+F/Alt+Shift+F with exact eligibility and a pre-write `decide`
+// Alt+F/Ctrl+Alt+F with exact eligibility and a pre-write `decide`
 // row; the press opens the card and writes nothing. Counted source
 // sessions and all Task Link sessions never open cards: exact
 // at-limit targets skip without changing fresh/count. Pure unless
@@ -4570,9 +4570,12 @@ class FreshnessDecayCardModal extends Modal {
       this.close();
       return;
     }
-    // The opening Alt+F (and any held-key repeat) must not approve: only a
-    // fresh, non-repeat Alt+F press chooses Keep.
-    if (event.altKey && (event.code === "KeyF" || event.key === "f" || event.key === "F")) {
+    // The opening refresh chord (and any held-key repeat) must not approve:
+    // only a fresh, non-repeat supported Alt+F / Ctrl+Alt+F press chooses Keep.
+    if (
+      isReviewRefreshKeydown(event, false) ||
+      isReviewRefreshKeydown(event, true)
+    ) {
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) {
@@ -15926,7 +15929,7 @@ class LaneReleaseSummaryModal extends Modal {
   }
 }
 
-// Alt+F / Alt+Shift+F summary stage for Pending tasks. This is deliberately
+// Alt+F / Ctrl+Alt+F summary stage for Pending tasks. This is deliberately
 // separate from both lane release and scheduling: the refresh gesture only
 // stamps the task and optionally prepends a Work Log entry.
 class FreshnessRefreshSummaryModal extends Modal {
@@ -33574,7 +33577,7 @@ function isCtrlKey(event, key) {
 
 // ---------------------------------------------------------------------------
 // freshness review (nav-review): vault-wide due-task jumps (Ctrl+Alt+J/K,
-// `]s` / `[s` via the vimrc) and Alt+F / Alt+Shift+F refresh.
+// `]s` / `[s` via the vimrc) and Alt+F / Ctrl+Alt+F refresh.
 //
 // Reads come from `api.freshness.queue()` / `api.freshness.counts()` on
 // bob-ledger-tools (api `version >= 3`); writes go through
@@ -34276,7 +34279,7 @@ function matchReviewChecklistCursor(queue, cursor) {
 }
 
 // Walk anchor: where the walk is. Recorded on every successful landing
-// and every Alt+F / Alt+Shift+F stamp. Holds the handled entry keys, the
+// and every Alt+F / Ctrl+Alt+F stamp. Holds the handled entry keys, the
 // handled task's path/line/tier, and the ordered keys after and before
 // them in the queue they came from, so `]s` after an Alt+N release,
 // Ctrl+Shift+Enter, or a roll continues from the successor (and `[s` from
@@ -34894,7 +34897,7 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
     } else if (tier === "next") {
       lines.push("Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (tier === "pre") {
-      lines.push("Alt+Shift+F done → next · ]s skip");
+      lines.push("Ctrl+Alt+F done → next · ]s skip");
     } else if (tier === "post") {
       lines.push("Alt+F done · closes the review");
     }
@@ -35368,15 +35371,16 @@ function matchFreshStampExactEntry(queueBefore, ref) {
   return Object.freeze({ ok: true, entry, reason: "ok" });
 }
 
-// Alt+F (wantShift false) / Alt+Shift+F (wantShift true). CodeMirror Vim
+// Alt+F (wantAdvance false) / Ctrl+Alt+F (wantAdvance true). CodeMirror Vim
 // swallows Alt chords in normal mode, so these run on the capture-phase
 // fallback like the counted lane toggle; the hotkeys below cover insert
-// mode and non-Vim editing.
-function isReviewRefreshKeydown(event, wantShift) {
-  if (!event || event.ctrlKey || event.metaKey || !event.altKey) {
+// mode and non-Vim editing. Shift and Meta are never part of a supported
+// refresh chord: Alt+Shift+F is retired.
+function isReviewRefreshKeydown(event, wantAdvance) {
+  if (!event || event.metaKey || event.shiftKey || !event.altKey) {
     return false;
   }
-  if (Boolean(event.shiftKey) !== Boolean(wantShift)) {
+  if (Boolean(event.ctrlKey) !== Boolean(wantAdvance)) {
     return false;
   }
   return event.code === "KeyF" || event.key === "f" || event.key === "F";
@@ -35620,7 +35624,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.addCommand({
       id: "refresh-task-freshness-and-advance",
       name: "Refresh task freshness and jump to the next due task",
-      hotkeys: [{ modifiers: ["Alt", "Shift"], key: "F" }],
+      hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "F" }],
       editorCallback: (editor) =>
         this.refreshTaskFreshness(editor, { advance: true }),
     });
@@ -38017,7 +38021,7 @@ class BobNavigationHotkeysLaneReviewMixin {
     return true;
   }
 
-  // Alt+F (advance false) / Alt+Shift+F (advance true): stamp the cursor
+  // Alt+F (advance false) / Ctrl+Alt+F (advance true): stamp the cursor
   // task, or a dedicated Task Link's target, plus the next N tasks when
   // counted, and change nothing else. Targets are discovered like Alt+N's;
   // the write goes through `api.freshness.stampLine` only (see the
@@ -39133,7 +39137,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
   }
 
-  // Successful Alt+Shift+F outcomes advance exactly once after commit —
+  // Successful Ctrl+Alt+F outcomes advance exactly once after commit —
   // except Reword, which leaves focus for editing, and failed or
   // dismissed secondary pickers, which stay due.
   async maybeAdvanceFreshnessDecayWalk(cardCtx, action) {
@@ -39534,7 +39538,7 @@ class BobNavigationHotkeysDecayCancelMixin {
 
   // Reword (E): stamp and clear, then put the cursor at the end of the
   // task body before metadata for editing. Stays on this task even for
-  // Alt+Shift+F — no walk advance.
+  // Ctrl+Alt+F — no walk advance.
   async applyFreshnessDecayCardReword(cardCtx, live) {
     try {
       const stamper = this.getFreshnessStampLine();
@@ -39662,12 +39666,12 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
   }
 
-  // Capture-phase fallback so Alt+F / Alt+Shift+F reach the counted refresh
+  // Capture-phase fallback so Alt+F / Ctrl+Alt+F reach the counted refresh
   // route while Vim normal mode is active. CodeMirror Vim swallows Alt
   // chords before Obsidian's hotkey dispatcher runs, so the hotkeys below
   // only cover insert mode and non-Vim editing. A pending numeric Vim prefix
-  // is "N additional tasks", mirroring the counted Alt+N route, and the
-  // Shift of the chord selects refresh-and-advance.
+  // is "N additional tasks", mirroring the counted Alt+N route, and
+  // Ctrl+Alt+F selects refresh-and-advance.
   registerReviewRefreshInputListeners() {
     this.handledReviewRefreshEvents = new WeakSet();
     const keydownHandler = (event) =>
@@ -39722,7 +39726,7 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     resetPendingVimInputState(cm, "review-freshness-refresh");
     void this.refreshTaskFreshness(view.editor, {
-      advance: event.shiftKey === true,
+      advance: isReviewRefreshKeydown(event, true),
       countExplicit: pendingRepeat.explicit,
       additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
     }).catch(() => false);

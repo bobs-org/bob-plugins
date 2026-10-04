@@ -108,9 +108,12 @@ class FreshnessDecayCardModal extends Modal {
       this.close();
       return;
     }
-    // The opening Alt+F (and any held-key repeat) must not approve: only a
-    // fresh, non-repeat Alt+F press chooses Keep.
-    if (event.altKey && (event.code === "KeyF" || event.key === "f" || event.key === "F")) {
+    // The opening refresh chord (and any held-key repeat) must not approve:
+    // only a fresh, non-repeat supported Alt+F / Ctrl+Alt+F press chooses Keep.
+    if (
+      isReviewRefreshKeydown(event, false) ||
+      isReviewRefreshKeydown(event, true)
+    ) {
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) {

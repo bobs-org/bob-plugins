@@ -159,7 +159,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.addCommand({
       id: "refresh-task-freshness-and-advance",
       name: "Refresh task freshness and jump to the next due task",
-      hotkeys: [{ modifiers: ["Alt", "Shift"], key: "F" }],
+      hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "F" }],
       editorCallback: (editor) =>
         this.refreshTaskFreshness(editor, { advance: true }),
     });

@@ -631,7 +631,7 @@ class LaneReleaseSummaryModal extends Modal {
   }
 }
 
-// Alt+F / Alt+Shift+F summary stage for Pending tasks. This is deliberately
+// Alt+F / Ctrl+Alt+F summary stage for Pending tasks. This is deliberately
 // separate from both lane release and scheduling: the refresh gesture only
 // stamps the task and optionally prepends a Work Log entry.
 class FreshnessRefreshSummaryModal extends Modal {

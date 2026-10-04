@@ -195,3 +195,88 @@ test("parity comparator identifies changed helper and plugin methods", async () 
   assert.ok(mismatches.includes("helpers.helper source differs"));
   assert.ok(mismatches.includes("default export.prototype.method source differs"));
 });
+
+test("parity comparator accepts a mixin-split helper class but not a changed method or superclass", async () => {
+  const { comparePluginExports } = await parityModule;
+  function exportWith(Helper) {
+    class Plugin {}
+    Plugin.helpers = { Picker: Helper };
+    return Plugin;
+  }
+  class BaseParent {}
+  const base = exportWith(
+    class Picker extends BaseParent {
+      constructor() {
+        super();
+        this.stage = "card";
+      }
+      first() {
+        return 1;
+      }
+      second() {
+        return 2;
+      }
+    },
+  );
+  function splitPicker(Parent, secondBody) {
+    const Picker = class Picker extends Parent {
+      constructor() {
+        super();
+        this.stage = "card";
+      }
+      first() {
+        return 1;
+      }
+    };
+    Object.defineProperty(Picker.prototype, "second", {
+      value: secondBody,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    return Picker;
+  }
+  const options = { additionalSplitHelpers: ["Picker"] };
+
+  class BuiltParent {}
+  Object.defineProperty(BuiltParent, "name", { value: "BaseParent" });
+  const split = exportWith(
+    splitPicker(BuiltParent, {
+      second() {
+        return 2;
+      },
+    }.second),
+  );
+  assert.deepEqual(comparePluginExports(base, split, options), []);
+  assert.ok(
+    comparePluginExports(base, split).includes("helpers.Picker source differs"),
+    "without --split-helper the whole class source is compared",
+  );
+
+  const changed = exportWith(
+    splitPicker(BuiltParent, {
+      second() {
+        return 3;
+      },
+    }.second),
+  );
+  assert.ok(
+    comparePluginExports(base, changed, options).includes(
+      "helpers.Picker.prototype.second source differs",
+    ),
+  );
+
+  class OtherParent {}
+  const reparented = exportWith(
+    splitPicker(OtherParent, {
+      second() {
+        return 2;
+      },
+    }.second),
+  );
+  assert.ok(
+    comparePluginExports(base, reparented, options).includes(
+      "helpers.Picker superclass differs (base: BaseParent; built: OtherParent)",
+    ),
+  );
+});

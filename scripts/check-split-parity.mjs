@@ -30,6 +30,16 @@ function compareClassMethods(name, left, right, { skipConstructorSource = false 
     return [`${name} is not a class/function on both sides`];
   }
 
+  if (skipConstructorSource) {
+    // String(prototype.constructor) is the whole class body, which a mixin split
+    // legitimately shrinks; still require the same superclass so super resolves alike.
+    const leftParent = Object.getPrototypeOf(left)?.name;
+    const rightParent = Object.getPrototypeOf(right)?.name;
+    if (leftParent !== rightParent) {
+      mismatches.push(`${name} superclass differs (base: ${leftParent}; built: ${rightParent})`);
+    }
+  }
+
   const leftKeys = Reflect.ownKeys(left.prototype);
   const rightKeys = Reflect.ownKeys(right.prototype);
   if (!sameKeys(leftKeys, rightKeys)) {
@@ -94,7 +104,10 @@ export function comparePluginExports(baseExport, builtExport, options = {}) {
         mismatches.push(`${label} type differs (base: ${typeof left}; built: ${typeof right})`);
       } else if (typeof left === "function") {
         if (additionalSplitHelpers.has(key)) {
-          mismatches.push(...compareClassMethods(label, left, right));
+          if (left.name !== right.name) {
+            mismatches.push(`${label} class name differs (base: ${left.name}; built: ${right.name})`);
+          }
+          mismatches.push(...compareClassMethods(label, left, right, { skipConstructorSource: true }));
         } else if (String(left) !== String(right)) {
           mismatches.push(`${label} source differs`);
         }

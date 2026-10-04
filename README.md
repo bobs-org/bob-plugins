@@ -225,7 +225,8 @@ node scripts/check-split-parity.mjs --plugin bob-navigation-hotkeys --base <git-
 The parity checker compares the exported helpers, plugin prototype methods and
 descriptors, and module-load dependency calls. Use repeatable `--split-helper <name>`
 arguments for exported helper classes intentionally split into methods across source
-fragments.
+fragments; those classes must keep their name, superclass, and every own prototype
+method, but their whole-class source text is not compared.
 
 Each plugin folder contains the files Obsidian reads when loading a plugin:
 
@@ -244,8 +245,8 @@ Each plugin folder contains the files Obsidian reads when loading a plugin:
   }
   ```
 
-- **`main.js`** — the plugin code (CommonJS: `require(...)` / `module.exports`).
-- **`styles.css`** — optional plugin CSS (currently `block-id-prompt`, `bob-navigation-hotkeys`, and `task-status-cycler` ship one).
+- **`main.js`** — the plugin code (CommonJS: `require(...)` / `module.exports`), generated from `src/` for plugins with `src/fragments.json`.
+- **`styles.css`** — optional plugin CSS (currently `block-id-prompt`, `bob-ledger-tools`, `bob-navigation-hotkeys`, and `task-status-cycler` ship one).
 
 ### Validation
 

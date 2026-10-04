@@ -16044,6 +16044,8 @@ function formatSchedulingWorkLogDateSpan(dates) {
 class FilteredPickerModal extends Modal {
   constructor(app, options) {
     super(app);
+    // Obsidian's Modal does not expose isOpen; the picker owns this state.
+    this.isOpen = false;
     this.selectedIndex = 0;
     this.opening = false;
     this.closeBeforeOpenItem = false;
@@ -16051,6 +16053,27 @@ class FilteredPickerModal extends Modal {
     this.items = [];
     this.visibleItems = [];
     this.applyOptions(options);
+  }
+
+  open() {
+    if (this.isOpen) {
+      return this;
+    }
+    this.isOpen = true;
+    try {
+      return super.open();
+    } catch (error) {
+      this.isOpen = false;
+      throw error;
+    }
+  }
+
+  close() {
+    if (!this.isOpen) {
+      return this;
+    }
+    this.isOpen = false;
+    return super.close();
   }
 
   applyOptions(options = {}) {
@@ -16101,6 +16124,9 @@ class FilteredPickerModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    if (typeof contentEl.removeAttribute === "function") {
+      contentEl.removeAttribute("tabindex");
+    }
     this.modalEl.addClass("bob-cnp-modal");
     contentEl.addClass("bob-cnp");
 
@@ -26343,11 +26369,11 @@ function renderTaskCardView(container, model, options = {}) {
       options.onClose();
     }
   });
-  // The button's own Enter/Space activation stays native; every other key
-  // reaches the card resolver, so q and Ctrl+] close from here too.
+  // Preserve native Enter/Space activation; every other key bubbles to the
+  // card-level router.
   closeButton.addEventListener("keydown", (event) => {
-    if (event && event.key !== "Enter" && event.key !== " ") {
-      routeCardKeydown(event);
+    if (isCardActivationKey(event)) {
+      event.stopPropagation();
     }
   });
   const meta = container.createDiv({
@@ -26397,11 +26423,6 @@ function renderTaskCardView(container, model, options = {}) {
     });
     errorEl.setAttribute("role", "alert");
   }
-  const routeCardKeydown = (event) => {
-    if (typeof options.onKeydown === "function") {
-      options.onKeydown(event);
-    }
-  };
   const isCardActivationKey = (event) =>
     Boolean(event) &&
     (event.key === "Enter" || event.key === " ") &&
@@ -26428,6 +26449,9 @@ function renderTaskCardView(container, model, options = {}) {
       if (event && typeof event.preventDefault === "function") {
         event.preventDefault();
       }
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
       if (typeof options.onApplyRecommendation === "function") {
         options.onApplyRecommendation();
       }
@@ -26443,7 +26467,6 @@ function renderTaskCardView(container, model, options = {}) {
         activateRecommendation(event);
         return;
       }
-      routeCardKeydown(event);
     });
     const bannerMain = banner.createDiv({ cls: "bob-task-card-banner-main" });
     appendTaskCardKeycap(bannerMain, "Ctrl+Enter");
@@ -26588,7 +26611,6 @@ function renderTaskCardView(container, model, options = {}) {
           }
           return;
         }
-        routeCardKeydown(event);
       });
       priorityRadios.push(levelEl);
       if (level.key) {
@@ -26661,8 +26683,6 @@ function renderTaskCardView(container, model, options = {}) {
         if (priorityRadios[next] && typeof priorityRadios[next].focus === "function") {
           priorityRadios[next].focus();
         }
-      } else {
-        routeCardKeydown(event);
       }
     });
     priorityRadios.push(zeroEl);
@@ -26768,10 +26788,12 @@ function renderTaskCardView(container, model, options = {}) {
       moreRow.addEventListener("click", openProperty);
       moreRow.addEventListener("keydown", (event) => {
         if (event && (event.key === "Enter" || event.key === " ")) {
+          if (typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
           openProperty(event);
           return;
         }
-        routeCardKeydown(event);
       });
       moreRow.createSpan({
         cls: "bob-task-card-more-name",
@@ -26841,9 +26863,6 @@ function renderTaskCardView(container, model, options = {}) {
     options.onFocusList(listEl);
   } else if (listEl && typeof listEl.focus === "function") {
     listEl.focus();
-  }
-  if (typeof options.onKeydown === "function") {
-    listEl.addEventListener("keydown", options.onKeydown);
   }
   return Object.freeze({
     titleId,
@@ -27034,6 +27053,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.contentEl.empty();
     this.contentEl.addClass("bob-cnp");
     this.contentEl.addClass("bob-task-card-root");
+    this.contentEl.setAttribute("tabindex", "-1");
     this.modalEl.addClass("bob-cnp-modal");
     this.applyTaskCardChrome({ wide: false });
     this.modalEl.setAttribute("role", "dialog");
@@ -27066,7 +27086,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       onOpenProperty: (propertyName) => {
         void this.dispatchTaskCardIntent({ type: "open-property", propertyName });
       },
-      onKeydown: (event) => this.handleTaskCardKeydown(event),
       onFocusList: (listEl) => {
         this.taskCardListEl = listEl;
         if (listEl && typeof listEl.focus === "function") {
@@ -27346,7 +27365,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         this.openTaskCardStage(() => this.showLaneReleaseReasonStage(item));
         return false;
       }
-      return await this.plugin.applyLaneToggleFromPicker(this);
+      this.ensureTaskCardStageChrome();
+      const applied = await this.plugin.applyLaneToggleFromPicker(this);
+      if (applied !== true && this.isOpen && this.stage === TASK_CARD_PENDING_STAGE) {
+        this.returnHome({ rebuild: true });
+      }
+      return applied;
     }
     return false;
   }
@@ -27455,6 +27479,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.returnToTaskCard({ rebuild: true });
       return false;
     }
+    this.ensureTaskCardStageChrome();
     const deleted = await this.deletePropertyItem(item);
     if (deleted !== true && this.isOpen) {
       this.returnToTaskCard({ rebuild: true });
@@ -27495,6 +27520,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return;
     }
     this.closeChordBound = true;
+    if (!this.taskCardKeyRouterBound && this.contentEl) {
+      this.taskCardKeyRouterBound = true;
+      this.contentEl.addEventListener("keydown", (event) => {
+        if (
+          this.stage === "task-card" &&
+          !(event && event.defaultPrevented)
+        ) {
+          this.handleTaskCardKeydown(event);
+        }
+      });
+    }
     this.modalEl.addEventListener("keydown", (event) => {
       if (
         !event ||
@@ -27518,6 +27554,18 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.contentEl.addClass("bob-cnp");
       this.applyTaskCardChrome({ wide: false });
       this.renderTaskCard();
+      const openingList = this.taskCardListEl;
+      window.setTimeout(() => {
+        if (
+          this.isOpen &&
+          this.stage === "task-card" &&
+          this.taskCardListEl === openingList &&
+          openingList &&
+          typeof openingList.focus === "function"
+        ) {
+          openingList.focus();
+        }
+      }, 0);
       return;
     }
     super.onOpen();
@@ -27552,6 +27600,25 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     super.renderAll(options);
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
     this.addTaskCardBackButton();
+    this.deferStageInputFocus();
+  }
+
+  deferStageInputFocus() {
+    const stage = this.stage;
+    const openingInput = this.inputEl;
+    if (!openingInput || typeof openingInput.focus !== "function") {
+      return;
+    }
+    window.setTimeout(() => {
+      if (
+        this.isOpen &&
+        this.stage === stage &&
+        this.stage !== "task-card" &&
+        this.inputEl === openingInput
+      ) {
+        openingInput.focus();
+      }
+    }, 0);
   }
 
   addTaskCardBackButton() {
@@ -28196,6 +28263,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!plan || !plan.dateItem) {
       return;
     }
+    this.ensureTaskCardStageChrome();
     this.stage = "schedule-review";
     this.pendingScheduleReview = Object.freeze({
       ...plan,
@@ -28481,6 +28549,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (!pending || typeof pending.resume !== "function") {
       return;
     }
+    this.ensureTaskCardStageChrome();
     this.stage = "schedule-work-log";
     this.pendingScheduleWorkLog = pending;
     this.clearLocalTaskMarks();

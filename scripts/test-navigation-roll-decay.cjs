@@ -2,9 +2,9 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
 
-const { ModalStub } = require("./modal-harness.cjs");
+const { ModalStub, defer } = require("./modal-harness.cjs");
 
-global.window = { setTimeout: (callback) => callback() };
+global.window = { setTimeout: defer };
 
 const notices = [];
 

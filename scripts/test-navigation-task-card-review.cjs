@@ -2,9 +2,9 @@
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
-const { ElementStub, ModalStub } = require("./modal-harness.cjs");
+const { ElementStub, ModalStub, defer, pressKey: harnessPressKey } = require("./modal-harness.cjs");
 
-global.window = { setTimeout: (callback) => callback() };
+global.window = { setTimeout: defer };
 
 const openedModals = [];
 const originalLoad = Module._load;
@@ -163,14 +163,7 @@ function makeEditor(content) {
 }
 
 function dispatchCardKey(modal, key, modifiers = {}) {
-  const list = modal.taskCardListEl;
-  list.listeners.keydown({
-    key,
-    target: list,
-    ...modifiers,
-    preventDefault() {},
-    stopPropagation() {},
-  });
+  harnessPressKey(modal, key, modifiers);
 }
 
 function typeQuery(modal, text) {

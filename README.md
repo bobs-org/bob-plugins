@@ -45,6 +45,10 @@ light, dark, and narrow layouts.
 | Escape, `q`, `Q` | Close; discard uncommitted state (`q` never closes while a text field is focused) |
 | `Ctrl+]` | Close from the card or from any stage it opened, including a focused date, reason, or Work summary field; nothing is written |
 
+Any card gesture that writes closes the card. On a Next or Pending task, a
+priority-level or recommendation gesture first opens the **Schedule task** Work
+summary stage.
+
 **Scope and previews.** The header shows the cleaned task text, note, lane,
 priority, schedule, dependency counts, and review interval. Counted sessions
 name N+1 scope and mixed values. Task Links say `via Task Link` and name target

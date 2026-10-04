@@ -3,9 +3,9 @@
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
-const { ElementStub, ModalStub } = require("./modal-harness.cjs");
+const { ElementStub, ModalStub, defer } = require("./modal-harness.cjs");
 
-global.window = { setTimeout: (callback) => callback() };
+global.window = { setTimeout: defer };
 
 const openedModals = [];
 const originalLoad = Module._load;
@@ -131,7 +131,7 @@ test("Pending refresh modal previews the dated Work Log and confirms once", () =
     },
   );
   modal.open();
-  assert.equal(modal.isOpen, true);
+  assert.equal(modal.attached, true);
   assert.match(flattenText(modal.contentEl), /Refresh 3 tasks/);
   assert.match(flattenText(modal.contentEl), /1 of 3 tasks qualify/);
   assert.match(flattenText(modal.contentEl), /nothing written yet/);
@@ -154,7 +154,7 @@ test("Pending refresh modal previews the dated Work Log and confirms once", () =
   });
   modal.submit();
   assert.deepEqual(results, ["Checked the API :: field"]);
-  assert.equal(modal.isOpen, false);
+  assert.equal(modal.attached, false);
 });
 
 test("dismissing the Pending refresh modal cancels without a summary", () => {
@@ -172,5 +172,5 @@ test("dismissing the Pending refresh modal cancels without a summary", () => {
     stopPropagation() {},
   });
   assert.deepEqual(results, [null]);
-  assert.equal(modal.isOpen, false);
+  assert.equal(modal.attached, false);
 });

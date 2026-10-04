@@ -4,9 +4,9 @@ const { spawnSync } = require("node:child_process");
 const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
-const { ElementStub, ModalStub } = require("./modal-harness.cjs");
+const { ElementStub, ModalStub, defer, pressKey } = require("./modal-harness.cjs");
 
-global.window = { setTimeout: (callback) => callback() };
+global.window = { setTimeout: defer };
 
 const openedModals = [];
 const originalLoad = Module._load;
@@ -176,14 +176,7 @@ function makeEditor(content) {
 }
 
 function dispatchCardKey(modal, key, modifiers = {}) {
-  const list = modal.taskCardListEl;
-  list.listeners.keydown({
-    key,
-    target: list,
-    ...modifiers,
-    preventDefault() {},
-    stopPropagation() {},
-  });
+  pressKey(modal, key, modifiers);
 }
 
 function typeQuery(modal, text) {

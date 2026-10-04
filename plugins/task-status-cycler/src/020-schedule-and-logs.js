@@ -159,7 +159,7 @@ function findTaskChildBlockEndLine(lines, parentLine) {
 
 // Managed "schedule log" child bullet grammar: `- 🗓️ **SCHEDULE LOG**`, the
 // emoji-less `- **SCHEDULE LOG**`, and the legacy `- **Schedule log:**`
-// spelling. Mirrors plugins/bob-navigation-hotkeys/main.js's
+// spelling. Mirrors plugins/bob-navigation-hotkeys/src/010-requires-and-config.js's
 // SCHEDULE_LOG_PARENT_RE and plugins/block-id-prompt/main.js and must stay
 // compatible; kept as an independent copy since plugins are deployed
 // separately and must not import each other's main.js.

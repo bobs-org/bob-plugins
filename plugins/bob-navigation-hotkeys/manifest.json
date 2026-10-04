@@ -1,7 +1,7 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "minAppVersion": "1.8.7",
   "description": "Ctrl+Shift+P always opens the Task Card, a focused first screen with exact P-level previews; Esc, q, or Ctrl+] close it without writing, and its More section opens a property's value stage. Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates. Ctrl+Enter on the card takes the recommended roll, decay, or cancel from the previewed ladder, including counted and Task Link batches. Scheduling a date opens one combined Reason and Work summary review; a Pending or Next task can record an optional Work Log summary as a dated entry under a WORK LOG child. A Cancel action closes tasks as Cancelled with an optional reason kept in a first-child Cancel Log. Alt+F and Alt+Shift+F ask for an optional Work Log summary before refreshing Pending tasks.",
   "author": "Bryan",

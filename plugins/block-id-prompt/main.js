@@ -79,7 +79,7 @@ const SCHEDULED_FIELD_RE = /\[scheduled::([^\]\n]*)\]|\(scheduled::([^)\n]*)\)/g
 const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DAYS_IN_MONTH = Object.freeze([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]);
 // Managed "schedule log" child bullet, mirroring
-// bob-navigation-hotkeys/main.js's SCHEDULE_LOG_PARENT_RE: `🗓️ **SCHEDULE LOG**`,
+// plugins/bob-navigation-hotkeys/src/010-requires-and-config.js's SCHEDULE_LOG_PARENT_RE: `🗓️ **SCHEDULE LOG**`,
 // the emoji-less `**SCHEDULE LOG**`, and the legacy `**Schedule log:**` spelling.
 // Kept as an independent copy here since plugins are deployed separately and
 // must not import each other's main.js.
@@ -1625,7 +1625,7 @@ function findChildBlockEndLine(lines, parentLine) {
 // Scanning backward from `childLine`, the nearest earlier list item whose
 // indent is strictly smaller. Non-list lines with a smaller indent are
 // skipped rather than stopping the search, matching
-// bob-navigation-hotkeys/main.js's findNearestParentListItem.
+// plugins/bob-navigation-hotkeys/src/020-config-load-and-tasks.js's findNearestParentListItem.
 function findNearestParentListItemLine(lines, childLine) {
   if (!Number.isInteger(childLine) || childLine <= 0) {
     return null;

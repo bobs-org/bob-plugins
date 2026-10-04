@@ -175,7 +175,7 @@ function scheduledRecoveryNoticeParts(counts = {}) {
       `${formatCountLabel(
         counts.deferred,
         "task",
-      )} deferred to bob task-status-hooks`,
+      )} deferred to bob task reconcile`,
     );
   }
   return Object.freeze(parts);

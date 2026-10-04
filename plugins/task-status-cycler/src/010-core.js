@@ -47,6 +47,9 @@ const STANDALONE_BLOCK_ID_SUFFIX_RE = "(?=$|[ \\t])";
 const MARKDOWN_EXTENSION_RE = /\.md$/i;
 const OPEN_DONE_TASK_SYMBOLS = new Set([" ", "*", "/", "x"]);
 const CLOSABLE_TASK_SYMBOLS = new Set([" ", "*", "/"]);
+// completeTaskAtCursor closes these through Tasks, including `[?]` which
+// Ctrl+Enter still refuses. Checklist rows (PRE/POST) start in this set.
+const COMPLETE_AT_CURSOR_OPEN_SYMBOLS = new Set([" ", "*", "/", "?"]);
 const URI_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const TASK_CHECKBOX_MARKER_RE =
   /^([ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+)\[[^\]\n]\]([ \t]*)(.*)$/;

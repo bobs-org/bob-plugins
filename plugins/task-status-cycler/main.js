@@ -49,6 +49,9 @@ const STANDALONE_BLOCK_ID_SUFFIX_RE = "(?=$|[ \\t])";
 const MARKDOWN_EXTENSION_RE = /\.md$/i;
 const OPEN_DONE_TASK_SYMBOLS = new Set([" ", "*", "/", "x"]);
 const CLOSABLE_TASK_SYMBOLS = new Set([" ", "*", "/"]);
+// completeTaskAtCursor closes these through Tasks, including `[?]` which
+// Ctrl+Enter still refuses. Checklist rows (PRE/POST) start in this set.
+const COMPLETE_AT_CURSOR_OPEN_SYMBOLS = new Set([" ", "*", "/", "?"]);
 const URI_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const TASK_CHECKBOX_MARKER_RE =
   /^([ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+)\[[^\]\n]\]([ \t]*)(.*)$/;
@@ -6182,9 +6185,10 @@ class TaskStatusCyclerPlugin extends Plugin {
     // Cross-plugin surface (plugins never import one another's `main.js`).
     // Keep the shape additive: bump `version` whenever a method is added.
     this.api = Object.freeze({
-      version: 1,
+      version: 2,
       recoverBlockedDependents: (closedIdentities, context) =>
         this.recoverBlockedDependents(closedIdentities, context),
+      completeTaskAtCursor: (editor) => this.completeTaskAtCursor(editor),
     });
 
     this.addCommand({
@@ -9069,6 +9073,61 @@ class TaskStatusCyclerCompletionMixin {
     );
   }
 
+  // Cross-plugin close for checklist rows (API v2). Always goes through the
+  // Tasks `set-status-symbol-to-x` command so recurrence fires; never stamps
+  // and never falls back to writing `[x]` raw. Callers await the result.
+  async completeTaskAtCursor(editor) {
+    const taskStatus =
+      editor && typeof editor.getCursor === "function"
+        ? this.getActiveTaskStatus(editor)
+        : null;
+    if (
+      !taskStatus ||
+      !this.lineMatchesTasksGlobalFilter(taskStatus.lineText)
+    ) {
+      return { ok: false, reason: "not-task" };
+    }
+    if (!COMPLETE_AT_CURSOR_OPEN_SYMBOLS.has(taskStatus.symbol)) {
+      return { ok: false, reason: "not-open" };
+    }
+
+    const commandId = this.commandIdForSymbol("x");
+    if (
+      !this.app ||
+      !this.app.commands ||
+      !this.app.commands.commands ||
+      !this.app.commands.commands[commandId]
+    ) {
+      return { ok: false, reason: "tasks-command-missing" };
+    }
+
+    const activeFile =
+      this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null;
+    const activePath = activeFile && activeFile.path;
+    const identity = closedTaskIdentity(activePath, taskStatus.lineText);
+    const beforeLineCount = this.getEditorLineCount(editor);
+
+    if (
+      !this.applyTasksCommandAndMaybeStamp(editor, taskStatus, "x", {
+        stamp: false,
+      })
+    ) {
+      return { ok: false, reason: "not-closed" };
+    }
+
+    const lineDelta = this.getEditorLineCount(editor) - beforeLineCount;
+    if (this.closedTaskLineAfterTasksWrite(editor, taskStatus.line, lineDelta) === null) {
+      return { ok: false, reason: "not-closed" };
+    }
+
+    if (identity) {
+      await this.finalizeClosedTasks([identity], { editor, activePath });
+    }
+    return { ok: true, lineDelta };
+  }
+
   async toggleActiveTranscludedTaskOpenDone(editor, activeFile) {
     const activePath = activeFile && activeFile.path;
     const candidate = this.getActiveLineTranscludedTaskTarget(editor, activePath);
@@ -10563,11 +10622,10 @@ class TaskStatusCyclerEditorEditsMixin {
     return true;
   }
 
-  setActiveCheckboxStatus(editor, taskStatus, nextSymbol) {
-    if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
-      return false;
-    }
-
+  // Shared Tasks-command write used by Ctrl+Enter (stamp follow-up) and
+  // completeTaskAtCursor (never stamps). Returns whether the command ran.
+  applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol, options = {}) {
+    const stamp = options.stamp !== false;
     const commandId = this.commandIdForSymbol(nextSymbol);
     const beforeLineCount =
       editor && typeof editor.lineCount === "function"
@@ -10584,6 +10642,7 @@ class TaskStatusCyclerEditorEditsMixin {
       // never stamps. A recurrence insert or an onCompletion delete changes
       // the line count, so those never stamp a different task.
       if (
+        stamp &&
         beforeLineCount !== null &&
         typeof editor.lineCount === "function" &&
         editor.lineCount() === beforeLineCount &&
@@ -10592,6 +10651,40 @@ class TaskStatusCyclerEditorEditsMixin {
       ) {
         this.stampFreshnessOnEditorLine(editor, taskStatus.line);
       }
+      return true;
+    }
+    return false;
+  }
+
+  closedTaskLineAfterTasksWrite(editor, originalLine, lineDelta) {
+    if (!editor || typeof editor.getLine !== "function") {
+      return null;
+    }
+    const candidates = [originalLine];
+    if (lineDelta) {
+      const offsetLine = originalLine + lineDelta;
+      if (offsetLine !== originalLine) {
+        candidates.push(offsetLine);
+      }
+    }
+    for (const line of candidates) {
+      if (typeof line !== "number" || line < 0) {
+        continue;
+      }
+      const status = getTaskStatusForLine(editor.getLine(line), line);
+      if (status && status.symbol === "x") {
+        return line;
+      }
+    }
+    return null;
+  }
+
+  setActiveCheckboxStatus(editor, taskStatus, nextSymbol) {
+    if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
+      return false;
+    }
+
+    if (this.applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol)) {
       return true;
     }
 

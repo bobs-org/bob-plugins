@@ -296,7 +296,7 @@ const POMODORO_LEDGER_TOP_LEVEL_LINE_RE = /^-[ \t]+\[([^\]])\](?:[ \t]+(.*))?$/;
 // whose checkbox is not closed (`x`, `X`, or `-`). This is deliberately
 // broader than `isPomodoroNavigationTaskLine` above — it has no placeholder/
 // time-range requirement and it recognizes `[*]`/`[?]` as open — because it
-// mirrors `pomodoro::open_ledger_task`, the exact rule `bob task-status-hooks`
+// mirrors `pomodoro::open_ledger_task`, the exact rule `bob task reconcile`
 // uses to decide which Pomodoro entries seed its promotion graph.
 function isOpenPomodoroLedgerEntryLine(lineText) {
   const match = POMODORO_LEDGER_TOP_LEVEL_LINE_RE.exec(String(lineText || ""));

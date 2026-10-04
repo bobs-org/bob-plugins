@@ -6299,7 +6299,187 @@ test("strike and unstrike helpers are idempotent, alias-preserving, and marker-a
   );
 });
 
-test("recovery api is frozen at version 1 and recovers without striking references", async () => {
+function createCompleteAtCursorPlugin(editor, { path = "gtd_daily.md" } = {}) {
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.referenceMutationQueue = Promise.resolve();
+  plugin.app = {
+    workspace: {
+      getActiveFile: () => ({ path }),
+    },
+    commands: {
+      commands: {},
+      executeCommandById: () => false,
+    },
+  };
+  plugin.getFreshnessStampLine = () => (line, dateText) =>
+    `${line} [fresh:: ${dateText}]`;
+  return plugin;
+}
+
+function installTasksCloseCommand(plugin, editor, { insertAbove = false } = {}) {
+  const doneCommand = "obsidian-tasks-plugin:set-status-symbol-to-x";
+  const executed = [];
+  plugin.app.commands = {
+    commands: { [doneCommand]: {} },
+    executeCommandById: (commandId) => {
+      executed.push(commandId);
+      const cursor = editor.getCursor();
+      const current = editor.getLine(cursor.line);
+      const closed = current.replace(/\[[^\]\n]\]/, "[x]");
+      const replacement = insertAbove
+        ? `${current.replace(/\[[^\]\n]\]/, "[ ]")}\n${closed}`
+        : closed;
+      editor.replaceRange(
+        replacement,
+        { line: cursor.line, ch: 0 },
+        { line: cursor.line, ch: current.length },
+      );
+      return true;
+    },
+  };
+  return { doneCommand, executed };
+}
+
+test("completeTaskAtCursor closes each open symbol through the Tasks command", async () => {
+  for (const symbol of [" ", "*", "/", "?"]) {
+    const editor = createTextEditor(
+      `- [${symbol}] #task Brush teeth ^chore`,
+      { line: 0, ch: 4 },
+    );
+    const plugin = createCompleteAtCursorPlugin(editor);
+    const { doneCommand, executed } = installTasksCloseCommand(plugin, editor);
+    const finalized = [];
+    plugin.finalizeClosedTasks = async (identities) => {
+      finalized.push(identities);
+      return { reopened: 0, retired: 0, recoveryFailures: [], retirementFailures: [] };
+    };
+
+    const result = await plugin.completeTaskAtCursor(editor);
+    assert.deepEqual(result, { ok: true, lineDelta: 0 }, symbol);
+    assert.deepEqual(executed, [doneCommand], symbol);
+    assert.equal(editor.getLine(0), "- [x] #task Brush teeth ^chore", symbol);
+    assert.ok(!editor.getValue().includes("[fresh::"), symbol);
+    assert.deepEqual(
+      finalized,
+      [[{ path: "gtd_daily.md", blockId: "chore" }]],
+      symbol,
+    );
+  }
+});
+
+test("completeTaskAtCursor insert-above reports lineDelta 1 and never stamps", async () => {
+  const editor = createTextEditor(
+    "- [ ] #task Brush teeth [repeat:: every day when done] ^chore",
+    { line: 0, ch: 4 },
+  );
+  const plugin = createCompleteAtCursorPlugin(editor);
+  const { doneCommand, executed } = installTasksCloseCommand(plugin, editor, {
+    insertAbove: true,
+  });
+  let stampCalls = 0;
+  plugin.getFreshnessStampLine = () => (line, dateText) => {
+    stampCalls += 1;
+    return `${line} [fresh:: ${dateText}]`;
+  };
+  const finalized = [];
+  plugin.finalizeClosedTasks = async (identities) => {
+    finalized.push(identities);
+    return { reopened: 0, retired: 0, recoveryFailures: [], retirementFailures: [] };
+  };
+
+  const result = await plugin.completeTaskAtCursor(editor);
+  assert.deepEqual(result, { ok: true, lineDelta: 1 });
+  assert.deepEqual(executed, [doneCommand]);
+  assert.equal(stampCalls, 0);
+  assert.equal(editor.lineCount(), 2);
+  assert.equal(
+    editor.getLine(0),
+    "- [ ] #task Brush teeth [repeat:: every day when done] ^chore",
+  );
+  assert.equal(
+    editor.getLine(1),
+    "- [x] #task Brush teeth [repeat:: every day when done] ^chore",
+  );
+  assert.ok(!editor.getValue().includes("[fresh::"));
+  assert.deepEqual(finalized, [[{ path: "gtd_daily.md", blockId: "chore" }]]);
+});
+
+test("completeTaskAtCursor refuses closed, cancelled, and non-task lines", async () => {
+  for (const [lineText, reason] of [
+    ["- [x] #task Already done ^chore", "not-open"],
+    ["- [-] #task Cancelled ^chore", "not-open"],
+    ["- [ ] plain checkbox", "not-task"],
+    ["Just a paragraph with #task in it", "not-task"],
+  ]) {
+    const editor = createTextEditor(lineText, { line: 0, ch: 0 });
+    const plugin = createCompleteAtCursorPlugin(editor);
+    const { executed } = installTasksCloseCommand(plugin, editor);
+    const result = await plugin.completeTaskAtCursor(editor);
+    assert.deepEqual(result, { ok: false, reason }, lineText);
+    assert.deepEqual(executed, [], lineText);
+    assert.equal(editor.getValue(), lineText, lineText);
+  }
+});
+
+test("completeTaskAtCursor refuses a missing Tasks command with no write", async () => {
+  const editor = createTextEditor("- [ ] #task Brush teeth ^chore", { line: 0, ch: 4 });
+  const plugin = createCompleteAtCursorPlugin(editor);
+  let wrote = false;
+  const originalReplace = editor.replaceRange;
+  editor.replaceRange = (...args) => {
+    wrote = true;
+    return originalReplace(...args);
+  };
+  let finalized = 0;
+  plugin.finalizeClosedTasks = async () => {
+    finalized += 1;
+  };
+
+  const result = await plugin.completeTaskAtCursor(editor);
+  assert.deepEqual(result, { ok: false, reason: "tasks-command-missing" });
+  assert.equal(wrote, false);
+  assert.equal(finalized, 0);
+  assert.equal(editor.getLine(0), "- [ ] #task Brush teeth ^chore");
+});
+
+test("Ctrl+Enter still refuses [?] while completeTaskAtCursor closes it", async () => {
+  const lineText = "- [?] #task Brush teeth ^chore";
+  const editor = createTextEditor(lineText, { line: 0, ch: 4 });
+  const plugin = createCompleteAtCursorPlugin(editor);
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "gtd_daily.md" },
+  });
+  assert.equal(plugin.handleToggleOpenDoneCommand(true, editor, view), false);
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, editor, view), false);
+  assert.equal(editor.getValue(), lineText);
+
+  installTasksCloseCommand(plugin, editor);
+  const result = await plugin.completeTaskAtCursor(editor);
+  assert.deepEqual(result, { ok: true, lineDelta: 0 });
+  assert.equal(editor.getLine(0), "- [x] #task Brush teeth ^chore");
+});
+
+test("completeTaskAtCursor reports not-closed when Tasks does not write [x]", async () => {
+  const editor = createTextEditor("- [ ] #task Brush teeth ^chore", { line: 0, ch: 4 });
+  const plugin = createCompleteAtCursorPlugin(editor);
+  const doneCommand = "obsidian-tasks-plugin:set-status-symbol-to-x";
+  plugin.app.commands = {
+    commands: { [doneCommand]: {} },
+    executeCommandById: () => true,
+  };
+  let finalized = 0;
+  plugin.finalizeClosedTasks = async () => {
+    finalized += 1;
+  };
+
+  const result = await plugin.completeTaskAtCursor(editor);
+  assert.deepEqual(result, { ok: false, reason: "not-closed" });
+  assert.equal(finalized, 0);
+  assert.equal(editor.getLine(0), "- [ ] #task Brush teeth ^chore");
+});
+
+test("recovery api is frozen at version 2 and recovers without striking references", async () => {
   const plugin = new TaskStatusCyclerPlugin();
   plugin.addCommand = () => {};
   plugin.registerEvent = () => {};
@@ -6312,9 +6492,10 @@ test("recovery api is frozen at version 1 and recovers without striking referenc
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 1);
+  assert.equal(plugin.api.version, 2);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.recoverBlockedDependents, "function");
+  assert.equal(typeof plugin.api.completeTaskAtCursor, "function");
 
   const harness = createInMemoryObsidianApp({
     "Daily.md": "## Pomodoros\n- [ ] Focus\n\t- ![[Tasks#^root]]",

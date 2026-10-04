@@ -349,11 +349,10 @@ class TaskStatusCyclerEditorEditsMixin {
     return true;
   }
 
-  setActiveCheckboxStatus(editor, taskStatus, nextSymbol) {
-    if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
-      return false;
-    }
-
+  // Shared Tasks-command write used by Ctrl+Enter (stamp follow-up) and
+  // completeTaskAtCursor (never stamps). Returns whether the command ran.
+  applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol, options = {}) {
+    const stamp = options.stamp !== false;
     const commandId = this.commandIdForSymbol(nextSymbol);
     const beforeLineCount =
       editor && typeof editor.lineCount === "function"
@@ -370,6 +369,7 @@ class TaskStatusCyclerEditorEditsMixin {
       // never stamps. A recurrence insert or an onCompletion delete changes
       // the line count, so those never stamp a different task.
       if (
+        stamp &&
         beforeLineCount !== null &&
         typeof editor.lineCount === "function" &&
         editor.lineCount() === beforeLineCount &&
@@ -378,6 +378,40 @@ class TaskStatusCyclerEditorEditsMixin {
       ) {
         this.stampFreshnessOnEditorLine(editor, taskStatus.line);
       }
+      return true;
+    }
+    return false;
+  }
+
+  closedTaskLineAfterTasksWrite(editor, originalLine, lineDelta) {
+    if (!editor || typeof editor.getLine !== "function") {
+      return null;
+    }
+    const candidates = [originalLine];
+    if (lineDelta) {
+      const offsetLine = originalLine + lineDelta;
+      if (offsetLine !== originalLine) {
+        candidates.push(offsetLine);
+      }
+    }
+    for (const line of candidates) {
+      if (typeof line !== "number" || line < 0) {
+        continue;
+      }
+      const status = getTaskStatusForLine(editor.getLine(line), line);
+      if (status && status.symbol === "x") {
+        return line;
+      }
+    }
+    return null;
+  }
+
+  setActiveCheckboxStatus(editor, taskStatus, nextSymbol) {
+    if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
+      return false;
+    }
+
+    if (this.applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol)) {
       return true;
     }
 

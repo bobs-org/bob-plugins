@@ -68,6 +68,61 @@ class TaskStatusCyclerCompletionMixin {
     );
   }
 
+  // Cross-plugin close for checklist rows (API v2). Always goes through the
+  // Tasks `set-status-symbol-to-x` command so recurrence fires; never stamps
+  // and never falls back to writing `[x]` raw. Callers await the result.
+  async completeTaskAtCursor(editor) {
+    const taskStatus =
+      editor && typeof editor.getCursor === "function"
+        ? this.getActiveTaskStatus(editor)
+        : null;
+    if (
+      !taskStatus ||
+      !this.lineMatchesTasksGlobalFilter(taskStatus.lineText)
+    ) {
+      return { ok: false, reason: "not-task" };
+    }
+    if (!COMPLETE_AT_CURSOR_OPEN_SYMBOLS.has(taskStatus.symbol)) {
+      return { ok: false, reason: "not-open" };
+    }
+
+    const commandId = this.commandIdForSymbol("x");
+    if (
+      !this.app ||
+      !this.app.commands ||
+      !this.app.commands.commands ||
+      !this.app.commands.commands[commandId]
+    ) {
+      return { ok: false, reason: "tasks-command-missing" };
+    }
+
+    const activeFile =
+      this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null;
+    const activePath = activeFile && activeFile.path;
+    const identity = closedTaskIdentity(activePath, taskStatus.lineText);
+    const beforeLineCount = this.getEditorLineCount(editor);
+
+    if (
+      !this.applyTasksCommandAndMaybeStamp(editor, taskStatus, "x", {
+        stamp: false,
+      })
+    ) {
+      return { ok: false, reason: "not-closed" };
+    }
+
+    const lineDelta = this.getEditorLineCount(editor) - beforeLineCount;
+    if (this.closedTaskLineAfterTasksWrite(editor, taskStatus.line, lineDelta) === null) {
+      return { ok: false, reason: "not-closed" };
+    }
+
+    if (identity) {
+      await this.finalizeClosedTasks([identity], { editor, activePath });
+    }
+    return { ok: true, lineDelta };
+  }
+
   async toggleActiveTranscludedTaskOpenDone(editor, activeFile) {
     const activePath = activeFile && activeFile.path;
     const candidate = this.getActiveLineTranscludedTaskTarget(editor, activePath);

@@ -958,6 +958,138 @@ test("selected-property deletion uses the existing writer; other card rows stay 
   assert.equal(next.editor.writes(), 0);
 });
 
+test("failed deletions keep the card: 0 on unprioritized and Ctrl+D on unscheduled write nothing", async () => {
+  const bare = "- [ ] #task Plain work ^plain";
+  const zero = openPropertyPicker({ taskCard: true, content: bare });
+  zero.plugin.deleteBulletPropertyValue = async () => {
+    throw new Error("no writer call expected");
+  };
+  dispatchCardKey(zero.modal, "0");
+  await nextTurn();
+  assert.equal(zero.modal.isOpen, true);
+  assert.equal(zero.modal.stage, "task-card");
+  assert.equal(zero.editor.writes(), 0);
+
+  const unscheduled = openPropertyPicker({
+    taskCard: true,
+    content: "- [ ] #task Plain work [priority:: medium] ^plain",
+  });
+  unscheduled.plugin.deleteBulletPropertyValue = async () => {
+    throw new Error("no writer call expected");
+  };
+  assert.equal(unscheduled.modal.taskCardSelectedRowId, "schedule");
+  dispatchCardKey(unscheduled.modal, "d", { ctrlKey: true });
+  await nextTurn();
+  assert.equal(unscheduled.modal.isOpen, true);
+  assert.equal(unscheduled.modal.stage, "task-card");
+  assert.equal(unscheduled.editor.writes(), 0);
+  assert.ok(unscheduled.modal.taskCardListEl, "card list is rendered again");
+});
+
+test("a refused deletion rebuilds the card from the refreshed line", async () => {
+  const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
+  const refreshed = "- [ ] #task Ship report [priority:: high] [scheduled:: 2026-10-12] ^ship";
+  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  plugin.deleteBulletPropertyValue = async () => ({ deleted: false, line: refreshed });
+  dispatchCardKey(modal, "0");
+  await nextTurn();
+  assert.equal(modal.isOpen, true);
+  assert.equal(modal.stage, "task-card");
+  assert.equal(modal.lineText, refreshed);
+  assert.equal(modal.taskCardModel.kind, "task-card");
+  assert.equal(modal.taskCardModel.priorityStrip.levels.find((level) => level.value === "high") ? "high" : "", "high");
+});
+
+test("0 deletes only priority and keeps the scheduled field byte-for-byte", async () => {
+  const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
+  let current = content;
+  const editor = {
+    getValue: () => current,
+    getLine: (line) => (line === 0 ? current : null),
+    replaceRange(text) {
+      current = text;
+    },
+    writes: () => 0,
+  };
+  const { modal, plugin } = openPropertyPicker({ taskCard: true, content, editor });
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Areas/Work_ship.md" } });
+  dispatchCardKey(modal, "0");
+  await nextTurn();
+  await nextTurn();
+  assert.doesNotMatch(current, /priority::/);
+  assert.match(current, /\[scheduled:: 2026-10-12\]/);
+  assert.equal(modal.isOpen, false);
+});
+
+test("card keys pressed on a priority radio or the banner reach the resolver exactly once", async () => {
+  const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
+  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  let writes = 0;
+  plugin.setBulletPriorityValue = async () => {
+    writes += 1;
+    return true;
+  };
+  const radios = byClass(modal.contentEl, "bob-task-card-level");
+  const keyEvent = (key, extra = {}) => ({
+    key,
+    target: radios[0],
+    preventDefault() {},
+    stopPropagation() {},
+    ...extra,
+  });
+  radios[0].listeners.keydown(keyEvent("2"));
+  radios[0].listeners.keydown(keyEvent("2", { repeat: true }));
+  await nextTurn();
+  assert.equal(writes, 1);
+  assert.equal(modal.isOpen, false);
+
+  const other = openPropertyPicker({ taskCard: true, content });
+  const seen = [];
+  const original = other.modal.handleTaskCardKeydown.bind(other.modal);
+  other.modal.handleTaskCardKeydown = (event) => {
+    seen.push(event.key);
+    original(event);
+  };
+  const banner = byClass(other.modal.contentEl, "bob-task-card-banner")[0];
+  assert.ok(banner, "banner renders");
+  banner.listeners.keydown({ key: "r", ctrlKey: true, preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(seen, ["r"]);
+  dispatchCardKey(other.modal, "r", { ctrlKey: true });
+  assert.deepEqual(seen, ["r", "r"]);
+  other.modal.close();
+});
+
+test("held or composing Enter on a radio or the banner never writes", async () => {
+  const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
+  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  let writes = 0;
+  plugin.setBulletPriorityValue = async () => { writes += 1; return true; };
+  plugin.setBulletPropertyValue = async () => { writes += 1; return true; };
+  const radio = byClass(modal.contentEl, "bob-task-card-level")[1];
+  const banner = byClass(modal.contentEl, "bob-task-card-banner")[0];
+  const press = (element, extra) =>
+    element.listeners.keydown({
+      key: "Enter",
+      preventDefault() {},
+      stopPropagation() {},
+      ...extra,
+    });
+  press(radio, { repeat: true });
+  press(radio, { isComposing: true });
+  press(radio, { keyCode: 229 });
+  press(banner, { repeat: true });
+  press(banner, { isComposing: true });
+  press(banner, { keyCode: 229 });
+  await nextTurn();
+  assert.equal(writes, 0);
+  assert.equal(modal.isOpen, true);
+  assert.equal(modal.stage, "task-card");
+
+  press(radio, {});
+  await nextTurn();
+  assert.equal(writes, 1);
+});
+
 test("Task Card automatic activation uses the local October 19 boundary and explicit overrides", () => {
   const { taskCardDefaultEnabled, taskCardPilotEnabled } = helpers;
   const before = new Date(2026, 9, 18, 23, 59);

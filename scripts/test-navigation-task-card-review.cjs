@@ -350,6 +350,36 @@ test("planScheduleReview opens for a bare date and skips when reason is known wi
   assert.match(inlinePending.effects.join(" "), /Work Log/);
 });
 
+test("planScheduleReview counts unique tasks when Task Links repeat a target", () => {
+  const duplicate = [
+    { line: 0, path: "Note.md", rawLine: "- [/] #task Pending ^a" },
+    { line: 4, path: "Note.md", rawLine: "- [/] #task Pending ^a" },
+  ];
+  const plan = planScheduleReview({
+    dateItem: { value: "2026-10-06" },
+    to: "2026-10-06",
+    reason: "",
+    reasonSupplied: false,
+    targets: duplicate,
+    baseDate: BASE_DATE,
+  });
+  assert.equal(plan.totalCount, 1);
+  assert.equal(plan.eligibleCount, 1);
+  assert.equal(plan.isBatch, false);
+  assert.equal(plan.title, "Schedule task");
+
+  const distinct = planScheduleReview({
+    dateItem: { value: "2026-10-06" },
+    to: "2026-10-06",
+    reason: "",
+    reasonSupplied: false,
+    targets: [...duplicate, { line: 6, path: "Note.md", rawLine: "- [ ] #task Ready ^b" }],
+    baseDate: BASE_DATE,
+  });
+  assert.equal(distinct.totalCount, 2);
+  assert.equal(distinct.title, "Schedule 2 tasks");
+});
+
 test("bare date on Ready opens a reason-only review and writes nothing until Enter", async () => {
   const captured = [];
   const { modal, plugin } = openScheduleStage({

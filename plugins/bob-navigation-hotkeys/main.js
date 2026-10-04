@@ -18689,7 +18689,7 @@ function planScheduleReview(options = {}) {
   const targets = freezeSchedulingWorkLogTargets(options.targets);
   const totalIdentities = collectSchedulingWorkLogTargetIdentities(targets);
   const eligibleIdentities = collectSchedulingWorkLogEligibleIdentities(targets);
-  const totalCount = Math.max(totalIdentities.size, targets.length);
+  const totalCount = totalIdentities.size || targets.length;
   const eligibleCount = eligibleIdentities.size;
   const needsWorkLog = eligibleCount > 0;
   const needsReason = !reasonSupplied;
@@ -26010,9 +26010,6 @@ function resolveTaskCardKey(model, event) {
   if (!modified && key.length === 1 && /[^\u0000-\u001f\u007f]/u.test(key)) {
     return Object.freeze({ type: "open-search", query: key });
   }
-  if (model.mode === "search") {
-    return Object.freeze({ type: "delegate-to-search", key });
-  }
   return null;
 }
 
@@ -26581,6 +26578,19 @@ function renderTaskCardView(container, model, options = {}) {
     });
     errorEl.setAttribute("role", "alert");
   }
+  const routeCardKeydown = (event) => {
+    if (typeof options.onKeydown === "function") {
+      options.onKeydown(event);
+    }
+  };
+  const isCardActivationKey = (event) =>
+    Boolean(event) &&
+    (event.key === "Enter" || event.key === " ") &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey;
+  const isHeldOrComposingKey = (event) =>
+    event.repeat === true || event.isComposing === true || event.keyCode === 229;
   const recommendation = model && model.recommendation;
   if (recommendation && recommendation.available) {
     const preview = recommendation.preview || {};
@@ -26605,9 +26615,16 @@ function renderTaskCardView(container, model, options = {}) {
     };
     banner.addEventListener("click", activateRecommendation);
     banner.addEventListener("keydown", (event) => {
-      if (event && (event.key === "Enter" || event.key === " ")) {
+      if (isCardActivationKey(event)) {
+        if (isHeldOrComposingKey(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         activateRecommendation(event);
+        return;
       }
+      routeCardKeydown(event);
     });
     const bannerMain = banner.createDiv({ cls: "bob-task-card-banner-main" });
     appendTaskCardKeycap(bannerMain, "Ctrl+Enter");
@@ -26744,13 +26761,15 @@ function renderTaskCardView(container, model, options = {}) {
           }
           return;
         }
-        if (event && (event.key === "Enter" || event.key === " ")) {
+        if (isCardActivationKey(event)) {
           event.preventDefault();
           event.stopPropagation();
-          if (typeof options.onSelectPriority === "function") {
+          if (!isHeldOrComposingKey(event) && typeof options.onSelectPriority === "function") {
             options.onSelectPriority(level);
           }
+          return;
         }
+        routeCardKeydown(event);
       });
       priorityRadios.push(levelEl);
       if (level.key) {
@@ -26805,10 +26824,10 @@ function renderTaskCardView(container, model, options = {}) {
       }
     });
     zeroEl.addEventListener("keydown", (event) => {
-      if (event && (event.key === "Enter" || event.key === " ")) {
+      if (isCardActivationKey(event)) {
         event.preventDefault();
         event.stopPropagation();
-        if (typeof options.onClearPriority === "function") {
+        if (!isHeldOrComposingKey(event) && typeof options.onClearPriority === "function") {
           options.onClearPriority();
         }
       } else if (event && ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"].includes(event.key)) {
@@ -26823,6 +26842,8 @@ function renderTaskCardView(container, model, options = {}) {
         if (priorityRadios[next] && typeof priorityRadios[next].focus === "function") {
           priorityRadios[next].focus();
         }
+      } else {
+        routeCardKeydown(event);
       }
     });
     priorityRadios.push(zeroEl);
@@ -27347,11 +27368,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     ) || null;
   }
 
-  taskCardRowAction(rowId) {
-    const row = (this.taskCardModel && this.taskCardModel.rows || []).find((item) => item.id === rowId);
-    return row ? row.action : "";
-  }
-
   ensureTaskCardStageChrome() {
     if (this.stage !== "task-card") {
       return;
@@ -27369,7 +27385,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.renderTaskCard();
   }
 
-  returnToTaskCard() {
+  returnToTaskCard(options = {}) {
     this.pendingScheduleReason = null;
     this.pendingScheduleReview = null;
     this.pendingCancel = null;
@@ -27385,7 +27401,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.scheduleReviewSummaryEl = null;
     this.clearLocalTaskMarks();
     this.taskCardQuery = "";
-    this.showTaskCard();
+    this.showTaskCard(options.rebuild === true ? { rebuild: true } : {});
   }
 
   handleTaskCardKeydown(event) {
@@ -27452,12 +27468,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.taskCardDispatching = true;
     try {
       let result = false;
-      if (intent.type === "move-selection") {
-        const rows = orderedTaskCardRows(this.taskCardModel);
-        const index = rows.findIndex((row) => row.id === this.taskCardSelectedRowId);
-        const delta = intent.direction === "previous" ? -1 : 1;
-        if (rows.length) this.selectTaskCardRow(rows[(Math.max(0, index) + delta + rows.length) % rows.length].id);
-      } else if (intent.type === "refresh-previews") {
+      if (intent.type === "refresh-previews") {
         this.refreshTaskCardPreviews();
       } else if (intent.type === "apply-recommendation") {
         result = await this.applyTaskCardRecommendation();
@@ -27472,10 +27483,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         result = await this.deleteTaskCardProperty(intent.propertyName);
       } else if (intent.type === "open-action") {
         result = await this.openTaskCardAction(intent.rowId, intent.action);
-      } else if (intent.type === "open-search") {
-        this.showSearchFromCard(intent.query);
-      } else if (intent.type === "back") {
-        this.returnToTaskCard();
       }
       if (result === true && this.isOpen) this.close();
       return result;
@@ -27589,16 +27596,32 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       new Notice("This action has no deletable property");
       return false;
     }
+    if (!this.isLinkSession() && !this.isCountedSession()) {
+      const item = this.getTaskCardPropertyItem(propertyName);
+      if (!item || item.kind !== "property" || !item.defined) {
+        new Notice(
+          item && item.target && item.target.kind === "project-frontmatter"
+            ? `${propertyName} is not set on this project`
+            : `${propertyName} is not set on this bullet`,
+        );
+        return false;
+      }
+    }
     this.ensureTaskCardStageChrome();
     this.showPropertyStage({ clearQuery: true, selectPropertyName: propertyName });
     const index = this.visibleItems.findIndex((item) => item && item.kind === "property" && item.property && item.property.name === propertyName);
     if (index < 0) {
       new Notice(`${propertyName} is not a deletable property`);
+      this.returnToTaskCard({ rebuild: true });
       return false;
     }
     this.selectedIndex = index;
     this.renderResults();
-    return await this.deleteSelectedProperty();
+    const deleted = await this.deleteSelectedProperty();
+    if (deleted !== true && this.isOpen && this.stage !== "task-card") {
+      this.returnToTaskCard({ rebuild: true });
+    }
+    return deleted;
   }
 
   async applyTaskCardRecommendation() {
@@ -35992,10 +36015,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       this.taskCardSettingsTab.display();
     }
     return true;
-  }
-
-  async setTaskCardPilotEnabled(enabled) {
-    return this.setTaskCardPreference(enabled === true ? "task-card" : "classic");
   }
 
   onload() {

@@ -4,14 +4,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
-    // Ctrl+] closes from every stage, including a focused date, filter,
+    // Ctrl+[ closes from every stage, including a focused date, filter,
     // reason, or Work summary field. Closing discards uncommitted state and
     // writes nothing, exactly as Escape does.
     if (
       event &&
       event.isComposing !== true &&
       event.keyCode !== 229 &&
-      isCtrlRightBracketKeydown(event)
+      isCtrlLeftBracketKeydown(event)
     ) {
       event.preventDefault();
       event.stopPropagation();

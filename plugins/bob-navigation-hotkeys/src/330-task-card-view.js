@@ -521,7 +521,7 @@ function renderTaskCardView(container, model, options = {}) {
     cls: "bob-task-card-footer bob-key-card-footer",
   });
   footer.createSpan({
-    text: "Ctrl+D clear selected property · Esc / q / Ctrl+] close",
+    text: "Ctrl+D clear selected property · Esc / q / Ctrl+[ close",
   });
   if (typeof options.onFocusList === "function") {
     options.onFocusList(listEl);

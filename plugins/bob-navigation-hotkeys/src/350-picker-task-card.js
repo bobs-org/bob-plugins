@@ -537,7 +537,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.showTaskCard({ rebuild: true });
   }
 
-  // Ctrl+] closes the modal from any focused element inside it. The date,
+  // Ctrl+[ closes the modal from any focused element inside it. The date,
   // filter, reason, and Work summary fields reach `handleKeydown`; this
   // catches the rest (the Back button, a card row) as the event bubbles.
   bindCloseChord() {
@@ -565,7 +565,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         !event ||
         event.isComposing === true ||
         event.keyCode === 229 ||
-        !isCtrlRightBracketKeydown(event)
+        !isCtrlLeftBracketKeydown(event)
       ) {
         return;
       }

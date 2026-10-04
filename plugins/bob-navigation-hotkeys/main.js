@@ -26891,7 +26891,7 @@ function renderTaskCardView(container, model, options = {}) {
     cls: "bob-task-card-footer bob-key-card-footer",
   });
   footer.createSpan({
-    text: "Ctrl+D clear selected property · Esc / q / Ctrl+] close",
+    text: "Ctrl+D clear selected property · Esc / q / Ctrl+[ close",
   });
   if (typeof options.onFocusList === "function") {
     options.onFocusList(listEl);
@@ -27546,7 +27546,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.showTaskCard({ rebuild: true });
   }
 
-  // Ctrl+] closes the modal from any focused element inside it. The date,
+  // Ctrl+[ closes the modal from any focused element inside it. The date,
   // filter, reason, and Work summary fields reach `handleKeydown`; this
   // catches the rest (the Back button, a card row) as the event bubbles.
   bindCloseChord() {
@@ -27574,7 +27574,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         !event ||
         event.isComposing === true ||
         event.keyCode === 229 ||
-        !isCtrlRightBracketKeydown(event)
+        !isCtrlLeftBracketKeydown(event)
       ) {
         return;
       }
@@ -32997,14 +32997,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
-    // Ctrl+] closes from every stage, including a focused date, filter,
+    // Ctrl+[ closes from every stage, including a focused date, filter,
     // reason, or Work summary field. Closing discards uncommitted state and
     // writes nothing, exactly as Escape does.
     if (
       event &&
       event.isComposing !== true &&
       event.keyCode !== 229 &&
-      isCtrlRightBracketKeydown(event)
+      isCtrlLeftBracketKeydown(event)
     ) {
       event.preventDefault();
       event.stopPropagation();
@@ -33452,22 +33452,22 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
 ]);
 // ---- src/470-keydown-and-freshness.js ----
 
-// Ctrl+] closes the Task Card and every stage its modal opens. Matches the
-// requested chord only: Ctrl alone (no Alt, Meta, or Shift), so it stays
-// distinct from the Ctrl+[ detector in `isClearSearchHighlightEscapeKeydown`.
-function isCtrlRightBracketKeydown(event) {
+// Ctrl+[ closes the Task Card and every stage its modal opens. Matches the
+// requested chord only: Ctrl alone (no Alt, Meta, or Shift). This is the
+// modal's own close path; it does not synthesize Escape or go through Vim.
+function isCtrlLeftBracketKeydown(event) {
   return (
     Boolean(event) &&
     event.ctrlKey === true &&
     event.altKey !== true &&
     event.metaKey !== true &&
     event.shiftKey !== true &&
-    (event.code === "BracketRight" || event.key === "]")
+    (event.code === "BracketLeft" || event.key === "[")
   );
 }
 
 // The keys that close the Task Card without writing: Escape, bare q / Q
-// (Shift allowed for Q; never Ctrl, Meta, or Alt), and Ctrl+]. Composition
+// (Shift allowed for Q; never Ctrl, Meta, or Alt), and Ctrl+[. Composition
 // and text-field focus are the caller's guards.
 function isTaskCardCloseKeydown(event) {
   if (!event) {
@@ -33481,7 +33481,7 @@ function isTaskCardCloseKeydown(event) {
   return (
     (key === "Escape" && !ctrl && !meta && !alt && !shift) ||
     (key.toLowerCase() === "q" && !ctrl && !meta && !alt) ||
-    isCtrlRightBracketKeydown(event)
+    isCtrlLeftBracketKeydown(event)
   );
 }
 

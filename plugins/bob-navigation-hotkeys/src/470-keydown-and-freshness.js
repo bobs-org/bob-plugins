@@ -1,20 +1,20 @@
 
-// Ctrl+] closes the Task Card and every stage its modal opens. Matches the
-// requested chord only: Ctrl alone (no Alt, Meta, or Shift), so it stays
-// distinct from the Ctrl+[ detector in `isClearSearchHighlightEscapeKeydown`.
-function isCtrlRightBracketKeydown(event) {
+// Ctrl+[ closes the Task Card and every stage its modal opens. Matches the
+// requested chord only: Ctrl alone (no Alt, Meta, or Shift). This is the
+// modal's own close path; it does not synthesize Escape or go through Vim.
+function isCtrlLeftBracketKeydown(event) {
   return (
     Boolean(event) &&
     event.ctrlKey === true &&
     event.altKey !== true &&
     event.metaKey !== true &&
     event.shiftKey !== true &&
-    (event.code === "BracketRight" || event.key === "]")
+    (event.code === "BracketLeft" || event.key === "[")
   );
 }
 
 // The keys that close the Task Card without writing: Escape, bare q / Q
-// (Shift allowed for Q; never Ctrl, Meta, or Alt), and Ctrl+]. Composition
+// (Shift allowed for Q; never Ctrl, Meta, or Alt), and Ctrl+[. Composition
 // and text-field focus are the caller's guards.
 function isTaskCardCloseKeydown(event) {
   if (!event) {
@@ -28,7 +28,7 @@ function isTaskCardCloseKeydown(event) {
   return (
     (key === "Escape" && !ctrl && !meta && !alt && !shift) ||
     (key.toLowerCase() === "q" && !ctrl && !meta && !alt) ||
-    isCtrlRightBracketKeydown(event)
+    isCtrlLeftBracketKeydown(event)
   );
 }
 

@@ -329,7 +329,7 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
   assert.match(text, /Cancel/);
   assert.match(text, /effort/);
   assert.match(text, /Ctrl\+D clear selected property/);
-  assert.match(text, /Esc \/ q \/ Ctrl\+\] close/);
+  assert.match(text, /Esc \/ q \/ Ctrl\+\[ close/);
   assert.doesNotMatch(text, /type to search/i);
   assert.equal(byClass(root, "bob-task-card-close").length, 1);
   assert.equal(byClass(root, "bob-task-card-banner").length, 1);
@@ -1309,7 +1309,7 @@ function closeKeyEvent(key, extra = {}) {
   return event;
 }
 
-const CTRL_RIGHT_BRACKET = { key: "]", code: "BracketRight", ctrlKey: true };
+const CTRL_LEFT_BRACKET = { key: "[", code: "BracketLeft", ctrlKey: true };
 
 function pressStageKey(modal, element, key, extra = {}) {
   element.focus();
@@ -1319,14 +1319,14 @@ function pressStageKey(modal, element, key, extra = {}) {
   return event;
 }
 
-test("Escape, q, Q, and Ctrl+] close the card without writing", async () => {
+test("Escape, q, Q, and Ctrl+[ close the card without writing", async () => {
   for (const [key, modifiers] of [
     ["Escape", {}],
     ["q", {}],
     ["Q", { shiftKey: true }],
-    ["]", { ctrlKey: true, code: "BracketRight" }],
-    ["]", { ctrlKey: true }],
-    ["x", { ctrlKey: true, code: "BracketRight" }],
+    ["[", { ctrlKey: true, code: "BracketLeft" }],
+    ["[", { ctrlKey: true }],
+    ["x", { ctrlKey: true, code: "BracketLeft" }],
   ]) {
     const { modal, editor, plugin } = openPropertyPicker();
     plugin.activeBulletPropertyPicker = modal;
@@ -1354,7 +1354,7 @@ test("Escape, q, Q, and Ctrl+] close the card without writing", async () => {
   }
 });
 
-test("Ctrl+Q, Meta+Q, Alt+Q, and Ctrl+[ do not close the card", () => {
+test("Ctrl+Q, Meta+Q, Alt+Q, and Ctrl+] do not close the card", () => {
   const { modal } = openPropertyPicker();
   for (const extra of [
     { ctrlKey: true },
@@ -1366,10 +1366,11 @@ test("Ctrl+Q, Meta+Q, Alt+Q, and Ctrl+[ do not close the card", () => {
     dispatchCardKey(modal, "Q", extra);
     assert.equal(modal.isOpen, true, JSON.stringify(extra));
   }
-  dispatchCardKey(modal, "[", { ctrlKey: true, code: "BracketLeft" });
-  dispatchCardKey(modal, "]", { ctrlKey: true, altKey: true });
-  dispatchCardKey(modal, "]", { ctrlKey: true, shiftKey: true });
-  dispatchCardKey(modal, "]", {});
+  dispatchCardKey(modal, "]", { ctrlKey: true, code: "BracketRight" });
+  dispatchCardKey(modal, "[", { ctrlKey: true, altKey: true });
+  dispatchCardKey(modal, "[", { ctrlKey: true, shiftKey: true });
+  dispatchCardKey(modal, "[", { ctrlKey: true, metaKey: true });
+  dispatchCardKey(modal, "[", {});
   assert.equal(modal.isOpen, true);
   assert.equal(modal.stage, "task-card");
 });
@@ -1384,7 +1385,7 @@ test("repeated close keys and a second close() are harmless", async () => {
   };
   dispatchCardKey(modal, "q");
   dispatchCardKey(modal, "q", { repeat: true });
-  dispatchCardKey(modal, "]", { ctrlKey: true });
+  dispatchCardKey(modal, "[", { ctrlKey: true });
   modal.close();
   modal.close();
   await nextTurn();
@@ -1397,7 +1398,7 @@ test("composition never closes the card or a stage", () => {
   const { modal } = openPropertyPicker();
   for (const extra of [{ isComposing: true }, { keyCode: 229 }]) {
     dispatchCardKey(modal, "q", extra);
-    dispatchCardKey(modal, "]", { ctrlKey: true, ...extra });
+    dispatchCardKey(modal, "[", { ctrlKey: true, ...extra });
     dispatchCardKey(modal, "Escape", extra);
   }
   assert.equal(modal.isOpen, true);
@@ -1405,7 +1406,7 @@ test("composition never closes the card or a stage", () => {
   dispatchCardKey(modal, "Enter");
   assert.equal(modal.stage, "value");
   for (const extra of [{ isComposing: true }, { keyCode: 229 }]) {
-    pressStageKey(modal, modal.inputEl, "]", { ctrlKey: true, ...extra });
+    pressStageKey(modal, modal.inputEl, "[", { ctrlKey: true, ...extra });
   }
   assert.equal(modal.isOpen, true);
 });
@@ -1422,7 +1423,7 @@ test("q typed into a stage's text field never closes the modal", () => {
   assert.equal(modal.stage, "value");
 });
 
-test("Ctrl+] closes from a focused date field without writing", () => {
+test("Ctrl+[ closes from a focused date field without writing", () => {
   const { modal, editor, plugin } = openPropertyPicker();
   let written = 0;
   plugin.setBulletPropertyValue = async () => {
@@ -1432,7 +1433,7 @@ test("Ctrl+] closes from a focused date field without writing", () => {
   dispatchCardKey(modal, "Enter");
   assert.equal(modal.stage, "value");
   modal.inputEl.value = "3 waiting on API";
-  const event = pressStageKey(modal, modal.inputEl, "]", { ctrlKey: true, code: "BracketRight" });
+  const event = pressStageKey(modal, modal.inputEl, "[", CTRL_LEFT_BRACKET);
   assert.equal(event.prevented, true);
   assert.equal(event.stopped, true);
   assert.equal(modal.isOpen, false);
@@ -1440,7 +1441,7 @@ test("Ctrl+] closes from a focused date field without writing", () => {
   assert.equal(editor.writes(), 0);
 });
 
-test("Ctrl+] closes the schedule review from its Reason and Work summary fields", async () => {
+test("Ctrl+[ closes the schedule review from its Reason and Work summary fields", async () => {
   for (const field of ["reason", "summary"]) {
     const { modal, editor } = openPropertyPicker({
       content: "- [/] #task Pending work [priority:: medium] [scheduled:: 2026-10-12] ^pending",
@@ -1458,13 +1459,63 @@ test("Ctrl+] closes the schedule review from its Reason and Work summary fields"
     const q = pressStageKey(modal, element, "q");
     assert.equal(q.prevented, false);
     assert.equal(modal.isOpen, true);
-    const event = pressStageKey(modal, element, "]", { ctrlKey: true, code: "BracketRight" });
+    const event = pressStageKey(modal, element, "[", CTRL_LEFT_BRACKET);
     assert.equal(event.prevented, true);
     assert.equal(event.stopped, true);
     assert.equal(modal.isOpen, false);
     assert.equal(modal.pendingScheduleReview, null);
     assert.equal(editor.writes(), 0);
   }
+});
+
+test("Ctrl+[ closes the summary-only schedule-work-log stage without writing", async () => {
+  const { modal, editor, plugin } = openPropertyPicker({
+    content: "- [/] #task Pending work [priority:: medium] [scheduled:: 2026-10-06] ^pending",
+  });
+  let written = 0;
+  plugin.setBulletPriorityValue = async () => {
+    written += 1;
+    return true;
+  };
+  dispatchCardKey(modal, "1");
+  await nextTurn();
+  assert.equal(modal.stage, "schedule-work-log");
+  modal.inputEl.value = "typed but uncommitted";
+  const q = pressStageKey(modal, modal.inputEl, "q");
+  assert.equal(q.prevented, false);
+  assert.equal(modal.isOpen, true);
+  const event = pressStageKey(modal, modal.inputEl, "[", CTRL_LEFT_BRACKET);
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.equal(modal.isOpen, false);
+  assert.equal(modal.pendingScheduleWorkLog, null);
+  assert.equal(written, 0);
+  assert.equal(editor.writes(), 0);
+});
+
+test("Ctrl+[ closes the lane-release Work summary without writing", async () => {
+  const { modal, editor, plugin } = openPropertyPicker({
+    content: "- [/] #task Release me [priority:: medium] ^release",
+  });
+  let written = 0;
+  plugin.applyLaneToggleFromPicker = async () => {
+    written += 1;
+    return true;
+  };
+  dispatchCardKey(modal, "n", { altKey: true });
+  await nextTurn();
+  assert.equal(modal.stage, "lane-release-reason");
+  modal.inputEl.value = "typed but uncommitted";
+  const q = pressStageKey(modal, modal.inputEl, "q");
+  assert.equal(q.prevented, false);
+  assert.equal(modal.isOpen, true);
+  const event = pressStageKey(modal, modal.inputEl, "[", CTRL_LEFT_BRACKET);
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.equal(modal.isOpen, false);
+  assert.equal(modal.pendingLaneRelease, null);
+  assert.equal(written, 0);
+  assert.equal(editor.writes(), 0);
 });
 
 test("q closes from a focused More row and from the Close button", () => {
@@ -1487,28 +1538,46 @@ test("q closes from a focused More row and from the Close button", () => {
   assert.equal(modal.stage, "task-card");
 });
 
-test("Ctrl+] closes from the Back button and the modal frame", () => {
-  const { modal } = openPropertyPicker();
-  dispatchCardKey(modal, "Enter");
-  assert.equal(modal.stage, "value");
-  assert.equal(typeof modal.modalEl.listeners.keydown, "function");
-  const event = closeKeyEvent("]", { ctrlKey: true, code: "BracketRight" });
-  modal.modalEl.listeners.keydown(event);
+test("Ctrl+[ closes from focused card controls, the Back button, and the modal frame", () => {
+  const { modal, editor } = openPropertyPicker();
+  const more = byClass(modal.contentEl, "bob-task-card-more-row")[0];
+  const event = pressStageKey(modal, more, "[", CTRL_LEFT_BRACKET);
   assert.equal(event.prevented, true);
   assert.equal(event.stopped, true);
   assert.equal(modal.isOpen, false);
+  assert.equal(editor.writes(), 0);
 
-  const other = openPropertyPicker();
-  other.modal.modalEl.listeners.keydown(closeKeyEvent("]", { ctrlKey: true, isComposing: true }));
-  other.modal.modalEl.listeners.keydown(closeKeyEvent("q"));
-  assert.equal(other.modal.isOpen, true);
+  const staged = openPropertyPicker();
+  dispatchCardKey(staged.modal, "Enter");
+  assert.equal(staged.modal.stage, "value");
+  const back = byClass(staged.modal.contentEl, "bob-task-card-back")[0];
+  assert.ok(back);
+  const backEvent = pressStageKey(staged.modal, back, "[", CTRL_LEFT_BRACKET);
+  assert.equal(backEvent.prevented, true);
+  assert.equal(backEvent.stopped, true);
+  assert.equal(staged.modal.isOpen, false);
+  assert.equal(staged.editor.writes(), 0);
+
+  const framed = openPropertyPicker();
+  framed.modal.modalEl.focus();
+  const frameEvent = pressKey(framed.modal, "[", CTRL_LEFT_BRACKET);
+  assert.equal(frameEvent.defaultPrevented, true);
+  assert.equal(frameEvent.propagationStopped, true);
+  assert.equal(framed.modal.isOpen, false);
+
+  const composing = openPropertyPicker();
+  composing.modal.modalEl.focus();
+  pressKey(composing.modal, "[", { ctrlKey: true, isComposing: true });
+  pressKey(composing.modal, "q");
+  assert.equal(composing.modal.isOpen, true);
 });
 
-test("a More stage, a refresh stage, and a cancel stage close on Ctrl+] and Escape", () => {
+test("a More stage, a refresh stage, a cancel stage, and a dependency field close on Ctrl+[ and Escape", () => {
   const stages = [
     (modal) => byClass(modal.contentEl, "bob-task-card-more-row")[0].listeners.click({ preventDefault() {} }),
     (modal) => dispatchCardKey(modal, "f"),
     (modal) => dispatchCardKey(modal, "x"),
+    (modal) => dispatchCardKey(modal, "b"),
   ];
   for (const open of stages) {
     for (const close of ["ctrl-bracket", "escape"]) {
@@ -1516,9 +1585,9 @@ test("a More stage, a refresh stage, and a cancel stage close on Ctrl+] and Esca
       open(modal);
       assert.notEqual(modal.stage, "task-card");
       if (close === "escape") {
-        modal.dispatchKey({ key: "Escape" });
+        pressKey(modal, "Escape");
       } else {
-        modal.handleKeydown(closeKeyEvent("]", { ctrlKey: true, target: modal.inputEl }));
+        pressStageKey(modal, modal.inputEl, "[", CTRL_LEFT_BRACKET);
       }
       assert.equal(modal.isOpen, false, `${modal.stage} ${close}`);
       assert.equal(editor.writes(), 0);
@@ -1526,12 +1595,12 @@ test("a More stage, a refresh stage, and a cancel stage close on Ctrl+] and Esca
   }
 });
 
-test("a resolving Task Link closes on Escape, q, and Ctrl+] and swallows every other key", async () => {
+test("a resolving Task Link closes on Escape, q, and Ctrl+[ and swallows every other key", async () => {
   for (const [key, extra] of [
     ["Escape", {}],
     ["q", {}],
     ["Q", { shiftKey: true }],
-    ["]", { ctrlKey: true, code: "BracketRight" }],
+    ["[", { ctrlKey: true, code: "BracketLeft" }],
   ]) {
     const content = "- [[Tasks/Alpha#^alpha]]";
     const editor = makeEditor(content);
@@ -1562,7 +1631,7 @@ test("a resolving Task Link closes on Escape, q, and Ctrl+] and swallows every o
   }
 });
 
-test("a direct dependency stage closes on Ctrl+] but keeps q as typed text", () => {
+test("a direct dependency stage closes on Ctrl+[ but keeps q as typed text", () => {
   const content = "- [ ] #task Parent [priority:: medium] ^parent";
   const editor = makeEditor(content);
   editor.getCursor = () => ({ line: 0, ch: 0 });
@@ -1578,13 +1647,13 @@ test("a direct dependency stage closes on Ctrl+] but keeps q as typed text", () 
   const q = pressStageKey(modal, modal.inputEl, "q");
   assert.equal(q.prevented, false);
   assert.equal(modal.isOpen, true);
-  const event = pressStageKey(modal, modal.inputEl, "]", { ctrlKey: true, code: "BracketRight" });
+  const event = pressStageKey(modal, modal.inputEl, "[", CTRL_LEFT_BRACKET);
   assert.equal(event.prevented, true);
   assert.equal(modal.isOpen, false);
   assert.equal(editor.writes(), 0);
 });
 
-test("q and Ctrl+] are not global closes: other modals and the decay card ignore them", () => {
+test("q and Ctrl+[ are not global closes: other modals and the decay card ignore them", () => {
   const app = {};
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = app;
@@ -1592,7 +1661,7 @@ test("q and Ctrl+] are not global closes: other modals and the decay card ignore
   child.open();
   assert.equal(child.inputEl.focused, true);
   child.inputEl.listeners.keydown(closeKeyEvent("q", { target: child.inputEl }));
-  child.inputEl.listeners.keydown(closeKeyEvent("]", { ctrlKey: true, target: child.inputEl }));
+  child.inputEl.listeners.keydown(closeKeyEvent("[", { ctrlKey: true, target: child.inputEl }));
   assert.equal(child.isOpen, true);
 
   const card = new FreshnessDecayCardModal({}, {
@@ -1602,7 +1671,7 @@ test("q and Ctrl+] are not global closes: other modals and the decay card ignore
   });
   card.open();
   card.contentEl.listeners.keydown(closeKeyEvent("q"));
-  card.contentEl.listeners.keydown(closeKeyEvent("]", { ctrlKey: true }));
+  card.contentEl.listeners.keydown(closeKeyEvent("[", { ctrlKey: true }));
   assert.equal(card.attached, true);
   assert.equal(card.settled, false);
 });

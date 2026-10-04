@@ -333,15 +333,15 @@ test("priority, recommendation, navigation, action, deletion, and search keys re
   assert.equal(key(fourLevelModel, "9").type, "unavailable");
 });
 
-test("Escape, bare q, and Ctrl+] close the card; nothing else does", () => {
+test("Escape, bare q, and Ctrl+[ close the card; nothing else does", () => {
   const model = makeModel();
   const close = Object.freeze({ type: "close-card" });
   assert.deepEqual(key(model, "Escape"), close);
   assert.deepEqual(key(model, "q"), close);
   assert.deepEqual(key(model, "Q"), close);
   assert.deepEqual(key(model, "Q", { shiftKey: true }), close);
-  assert.deepEqual(key(model, "]", { ctrlKey: true }), close);
-  assert.deepEqual(key(model, "x", { ctrlKey: true, code: "BracketRight" }), close);
+  assert.deepEqual(key(model, "[", { ctrlKey: true }), close);
+  assert.deepEqual(key(model, "x", { ctrlKey: true, code: "BracketLeft" }), close);
   assert.deepEqual(key(model, "q", { repeat: true }), close);
   for (const modifiers of [
     { ctrlKey: true },
@@ -360,11 +360,11 @@ test("Escape, bare q, and Ctrl+] close the card; nothing else does", () => {
     { ctrlKey: true, altKey: true },
     { ctrlKey: true, metaKey: true },
   ]) {
-    assert.equal(key(model, "]", modifiers), null);
+    assert.equal(key(model, "[", modifiers), null);
   }
-  // Ctrl+[ is the Escape alias the plugin handles elsewhere; it is not ours.
-  assert.equal(key(model, "[", { ctrlKey: true }), null);
-  assert.equal(key(model, "x", { ctrlKey: true, code: "BracketLeft" }), null);
+  // Ctrl+] is the previous close chord; it is no longer ours.
+  assert.equal(key(model, "]", { ctrlKey: true }), null);
+  assert.equal(key(model, "x", { ctrlKey: true, code: "BracketRight" }), null);
 });
 
 test("close keys never fire during composition or inside a text field", () => {
@@ -372,7 +372,9 @@ test("close keys never fire during composition or inside a text field", () => {
   for (const event of [
     { key: "q", isComposing: true },
     { key: "q", keyCode: 229 },
-    { key: "]", ctrlKey: true, isComposing: true },
+    { key: "[", ctrlKey: true, isComposing: true },
+    { key: "[", ctrlKey: true, inTextInput: true },
+    { key: "[", ctrlKey: true, target: { tagName: "INPUT" } },
     { key: "Escape", keyCode: 229 },
     { key: "q", inTextInput: true },
     { key: "q", target: { tagName: "INPUT" } },

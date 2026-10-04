@@ -1,0 +1,23 @@
+[
+  "010-core.js",
+  "020-schedule-and-logs.js",
+  "030-task-toggles.js",
+  "040-sections.js",
+  "050-picker-and-links.js",
+  "060-pomodoro.js",
+  "070-block-links.js",
+  "080-dependencies.js",
+  "090-source-and-formatting.js",
+  "100-editor-and-modal.js",
+  "110-plugin-lifecycle.js",
+  "120-plugin-dependency-ids.js",
+  "130-plugin-references.js",
+  "140-plugin-vim.js",
+  "150-plugin-commands.js",
+  "160-plugin-completion.js",
+  "170-plugin-pomodoro.js",
+  "180-plugin-editor-edits.js",
+  "190-plugin-targets.js",
+  "200-install-methods.js",
+  "210-exports.js"
+]

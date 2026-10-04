@@ -4061,6 +4061,83 @@ function formatFreshStampSkippedNotice(skipped) {
   }
 }
 
+function formatFreshStampChecklistSkipTail(skipped) {
+  try {
+    const count = Math.floor(numericOrDefault(skipped, Number.NaN));
+    if (!Number.isInteger(count) || count <= 0) {
+      return "";
+    }
+    return ` · skipped ${count} checklist`;
+  } catch (error) {
+    return "";
+  }
+}
+
+function formatFreshStampChecklistSkippedNotice(skipped) {
+  try {
+    const count = Math.floor(numericOrDefault(skipped, Number.NaN));
+    if (!Number.isInteger(count) || count <= 0) {
+      return "Could not update task; no tasks were updated";
+    }
+    return `skipped ${count} checklist`;
+  } catch (error) {
+    return "Could not update task; no tasks were updated";
+  }
+}
+
+function isReviewChecklistStampItem(item, queue) {
+  try {
+    const fromMatch = item && item.match && item.match.entry;
+    if (
+      fromMatch &&
+      reviewIsChecklistTier(reviewEntryMachineTier(fromMatch))
+    ) {
+      return true;
+    }
+    const target = item && item.target;
+    if (!target) {
+      return false;
+    }
+    const entry = matchReviewChecklistCursor(queue, {
+      path: target.path,
+      line: Number(target.line) + 1,
+      text: String(target.raw || ""),
+    });
+    return Boolean(entry);
+  } catch (error) {
+    return false;
+  }
+}
+
+function partitionFreshStampChecklistSkips(resolved, queue) {
+  try {
+    const stamp = [];
+    const skipped = [];
+    for (const item of Array.isArray(resolved) ? resolved : []) {
+      if (isReviewChecklistStampItem(item, queue)) {
+        skipped.push(item.target);
+      } else {
+        stamp.push(item);
+      }
+    }
+    return Object.freeze({
+      stamp: Object.freeze(stamp),
+      skipped: Object.freeze(skipped),
+    });
+  } catch (error) {
+    const targets = [];
+    for (const item of Array.isArray(resolved) ? resolved : []) {
+      if (item) {
+        targets.push(item);
+      }
+    }
+    return Object.freeze({
+      stamp: Object.freeze(targets),
+      skipped: Object.freeze([]),
+    });
+  }
+}
+
 // Cursor placement for Reword: the end of the task body, before trailing
 // metadata (`[key:: v]` / `(key:: v)` fields, `#tags`, `^block-id`), so
 // editing starts on the wording and the count restarts from the commit.
@@ -33511,6 +33588,10 @@ function isCtrlKey(event, key) {
 const REVIEW_FRESHNESS_API_REQUIRED_NOTICE = "Bob Ledger Tools api v3 required";
 const REVIEW_FRESHNESS_KEEP_REQUIRED_NOTICE = "Bob Ledger Tools keep support required";
 const REVIEW_QUEUE_CHANGED_NOTICE = "Review queue changed — try again";
+const REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE =
+  "Checklist rows close by completion — update bob-ledger-tools";
+const REVIEW_CHECKLIST_UPDATE_CYCLER_NOTICE =
+  "Checklist rows close by completion — update task-status-cycler";
 
 // The ledger-tools freshness namespace, or null when it is absent or older
 // than api `version >= 3`. Never throws.
@@ -33556,22 +33637,64 @@ function reviewFreshnessSupportsTrackers(freshnessApi) {
   }
 }
 
+// PRE/POST checklist walk (ledger-tools freshness namespace v7) requires
+// `api.freshness.version >= 7` and `checklistTiers === true`. Without it
+// the rows still walk when a queue carries `pre`/`post`, but Alt+F
+// refuses instead of completing.
+function reviewFreshnessSupportsChecklistTiers(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) &&
+      Number(freshnessApi.version) >= 7 &&
+      freshnessApi.checklistTiers === true
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+// Cycler completion API (v2 `completeTaskAtCursor`), or null.
+function getReviewCyclerApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins ? plugins["task-status-cycler"] : null;
+    const api = holder ? holder.api : null;
+    if (
+      !api ||
+      Number(api.version) < 2 ||
+      typeof api.completeTaskAtCursor !== "function"
+    ) {
+      return null;
+    }
+    return api;
+  } catch (error) {
+    return null;
+  }
+}
+
+function reviewIsChecklistTier(tier) {
+  return tier === "pre" || tier === "post";
+}
+
 // Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
-// and `references` tracker tiers), else the legacy v3 `state` mapping
-// (`resurfaced` reads as the RETURNED tier). Returns "".
+// and `references` tracker tiers and v7 `pre`/`post` checklist tiers),
+// else the legacy v3 `state` mapping (`resurfaced` reads as the RETURNED
+// tier). Returns "".
 function reviewEntryMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
       ? entry.tier.trim().toLowerCase()
       : "";
   if (
+    tier === "pre" ||
     tier === "new" ||
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
     tier === "returned" ||
     tier === "references" ||
-    tier === "rotten"
+    tier === "rotten" ||
+    tier === "post"
   ) {
     return tier;
   }
@@ -33611,6 +33734,7 @@ function reviewEntryHasTierRanks(entry) {
 
 function reviewIsCommitmentTier(tier) {
   return (
+    tier === "pre" ||
     tier === "new" ||
     tier === "projects" ||
     tier === "pending" ||
@@ -34053,13 +34177,111 @@ function reviewQueueEntryKey(entry) {
   return `${path}:${line}`;
 }
 
+// True when `anchor` was recorded on `todayText` (YYYY-MM-DD). A missing
+// day on either side is treated as current so legacy anchors still walk.
+function reviewAnchorIsCurrentDay(anchor, todayText) {
+  if (!anchor || typeof anchor !== "object") {
+    return false;
+  }
+  const day = typeof anchor.day === "string" ? anchor.day.trim() : "";
+  if (!day) {
+    return true;
+  }
+  const today = typeof todayText === "string" ? todayText.trim() : "";
+  if (!today) {
+    return true;
+  }
+  return day === today;
+}
+
+// Among unhandled entries in the cursor's file, match
+// `originalMarkdown === cursorText` first. Several matches prefer the
+// cursor line, then the nearest. Fall back to the line number only when
+// no text matches. Returns a 0-based queue index or -1.
+function findReviewCursorIndex(list, cursor, handledKeys) {
+  if (!cursor || typeof cursor !== "object") {
+    return -1;
+  }
+  const rows = Array.isArray(list) ? list : [];
+  const cursorPath = String(cursor.path || "");
+  const cursorLine = Math.floor(numericOrDefault(cursor.line, Number.NaN));
+  const cursorText = String(cursor.text || "");
+  const handled =
+    handledKeys instanceof Set
+      ? handledKeys
+      : new Set(Array.isArray(handledKeys) ? handledKeys : []);
+  const candidates = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const entry = rows[index];
+    if (!entry || String(entry.path || "") !== cursorPath) {
+      continue;
+    }
+    if (handled.has(reviewQueueEntryKey(entry))) {
+      continue;
+    }
+    candidates.push({
+      index,
+      line: Number(entry.line),
+      text: String(entry.originalMarkdown || ""),
+    });
+  }
+  if (candidates.length === 0) {
+    return -1;
+  }
+  if (cursorText) {
+    const textHits = candidates.filter((item) => item.text === cursorText);
+    if (textHits.length === 1) {
+      return textHits[0].index;
+    }
+    if (textHits.length > 1) {
+      if (Number.isInteger(cursorLine)) {
+        const onLine = textHits.find((item) => item.line === cursorLine);
+        if (onLine) {
+          return onLine.index;
+        }
+        let nearest = textHits[0];
+        let nearestDist = Math.abs(nearest.line - cursorLine);
+        for (const item of textHits.slice(1)) {
+          const dist = Math.abs(item.line - cursorLine);
+          if (
+            dist < nearestDist ||
+            (dist === nearestDist && item.index < nearest.index)
+          ) {
+            nearest = item;
+            nearestDist = dist;
+          }
+        }
+        return nearest.index;
+      }
+      return textHits[0].index;
+    }
+  }
+  if (Number.isInteger(cursorLine)) {
+    const lineHit = candidates.find((item) => item.line === cursorLine);
+    if (lineHit) {
+      return lineHit.index;
+    }
+  }
+  return -1;
+}
+
+function matchReviewChecklistCursor(queue, cursor) {
+  const list = Array.isArray(queue) ? queue : [];
+  const index = findReviewCursorIndex(list, cursor, new Set());
+  if (index < 0) {
+    return null;
+  }
+  const entry = list[index];
+  return reviewIsChecklistTier(reviewEntryMachineTier(entry)) ? entry : null;
+}
+
 // Walk anchor: where the walk is. Recorded on every successful landing
 // and every Alt+F / Alt+Shift+F stamp. Holds the handled entry keys, the
 // handled task's path/line/tier, and the ordered keys after and before
 // them in the queue they came from, so `]s` after an Alt+N release,
 // Ctrl+Shift+Enter, or a roll continues from the successor (and `[s` from
 // the predecessor) instead of restarting at rank 1.
-function buildReviewAnchor(queue, handledKeys, fallbackRank) {
+function buildReviewAnchor(queue, handledKeys, fallbackRank, day) {
   const list = Array.isArray(queue) ? queue.slice() : [];
   const keys = list.map((entry) => reviewQueueEntryKey(entry));
   const handled = new Set(Array.isArray(handledKeys) ? handledKeys : []);
@@ -34082,6 +34304,8 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank) {
       : Number.isInteger(fallbackRank)
         ? fallbackRank
         : at + 1;
+  const dayText =
+    typeof day === "string" && day.trim() ? day.trim() : null;
   return Object.freeze({
     keys: Object.freeze(Array.from(handled)),
     rank,
@@ -34089,14 +34313,15 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank) {
     path: holder && typeof holder.path === "string" ? holder.path : "",
     line: holder && Number.isInteger(holder.line) ? holder.line : null,
     tier: reviewEntryMachineTier(holder) || null,
+    day: dayText,
     afterKeys: Object.freeze(afterKeys),
     beforeKeys: Object.freeze(beforeKeys),
   });
 }
 
 // Remaining walk counts after excluding handled keys: `{ commitments,
-// rotten }`. Commitments are the NEW/PROJECTS/PENDING/NEXT/RETURNED/
-// REFERENCES tiers.
+// rotten, post, pre }`. Commitments are the PRE/NEW/PROJECTS/PENDING/
+// NEXT/RETURNED/REFERENCES tiers. POST is the closing tier.
 function reviewWalkRemaining(queue, excludedKeys) {
   const excluded =
     excludedKeys instanceof Set
@@ -34104,29 +34329,37 @@ function reviewWalkRemaining(queue, excludedKeys) {
       : new Set(Array.isArray(excludedKeys) ? excludedKeys : []);
   let commitments = 0;
   let rotten = 0;
+  let post = 0;
+  let pre = 0;
   for (const entry of Array.isArray(queue) ? queue : []) {
     if (excluded.has(reviewQueueEntryKey(entry))) {
       continue;
     }
     const tier = reviewEntryMachineTier(entry);
-    if (reviewIsCommitmentTier(tier)) {
+    if (tier === "pre") {
+      pre += 1;
+      commitments += 1;
+    } else if (reviewIsCommitmentTier(tier)) {
       commitments += 1;
     } else if (tier === "rotten") {
       rotten += 1;
+    } else if (tier === "post") {
+      post += 1;
     }
   }
-  return Object.freeze({ commitments, rotten });
+  return Object.freeze({ commitments, rotten, post, pre });
 }
 
 // Boundary line prepended when a forward step leaves a commitment tier
-// for ROTTEN, or null when no boundary applies:
+// for ROTTEN or (ROTTEN empty) POST, or null when no boundary applies:
 // - `Commitments done \u2014 {n} ROTTEN left` when none remain;
 // - `ROTTEN next \u2014 {m} commitments still due` otherwise.
+// Into ROTTEN, append ` · ]S closes the review` when POST remains.
 // A step from an unknown origin only shows the done line (when zero
 // remain); a step within ROTTEN never shows one.
 function buildReviewBoundaryNotice(options = {}) {
   const dest = String(options.destTier || "").trim().toLowerCase();
-  if (dest !== "rotten") {
+  if (dest !== "rotten" && dest !== "post") {
     return null;
   }
   const origin =
@@ -34144,16 +34377,26 @@ function buildReviewBoundaryNotice(options = {}) {
   const rotten = Number.isInteger(options.rottenLeft)
     ? options.rottenLeft
     : null;
+  const postLeft = Number.isInteger(options.postLeft)
+    ? options.postLeft
+    : 0;
   if (commitments === null) {
     return null;
   }
+  let line = null;
   if (commitments === 0) {
-    return `Commitments done \u2014 ${rotten === null ? 0 : rotten} ROTTEN left`;
-  }
-  if (origin === null) {
+    line = `Commitments done \u2014 ${rotten === null ? 0 : rotten} ROTTEN left`;
+  } else if (origin === null) {
+    return null;
+  } else if (dest === "rotten") {
+    line = `ROTTEN next \u2014 ${commitments} commitments still due`;
+  } else {
     return null;
   }
-  return `ROTTEN next \u2014 ${commitments} commitments still due`;
+  if (dest === "rotten" && postLeft > 0) {
+    return `${line} · ]S closes the review`;
+  }
+  return line;
 }
 
 // Resolve one anchor step over `remaining` (the queue minus the handled
@@ -34279,6 +34522,21 @@ function applyReviewJumpRepeat(step, walkList, direction, repeatRaw) {
 // mirrored backward. Extra counted steps continue from that one-step
 // landing on the same walk list; `originTier` stays the one-step origin.
 // ---- src/480-review-jump-and-nav-api.js ----
+function reviewLineChecklistKind(line) {
+  const tokens = String(line || "").toLowerCase().match(/#[^\s#]+/g) || [];
+  const tags = new Set(tokens);
+  if (!tags.has("#gtd")) {
+    return null;
+  }
+  if (tags.has("#pre")) {
+    return "pre";
+  }
+  if (tags.has("#post")) {
+    return "post";
+  }
+  return null;
+}
+
 function planReviewJump(queue, options = {}) {
   const list = Array.isArray(queue) ? queue.slice() : [];
   const direction = options.direction < 0 ? -1 : 1;
@@ -34302,12 +34560,17 @@ function planReviewJump(queue, options = {}) {
   }
   const finish = (step, walkList) =>
     applyReviewJumpRepeat(step, walkList, direction, options.repeat);
-  const anchor =
+  const todayText =
+    options && typeof options.todayText === "string" ? options.todayText : "";
+  let anchor =
     options.anchor && typeof options.anchor === "object"
       ? options.anchor
       : options.stamped && typeof options.stamped === "object"
         ? options.stamped
         : null;
+  if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
+    anchor = null;
+  }
   const handledKeys = new Set(
     anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
   );
@@ -34322,27 +34585,9 @@ function planReviewJump(queue, options = {}) {
   // not a live queue entry, even when the lagging Tasks cache still
   // lists it: handled keys never match here, so the anchor below
   // continues the walk instead of stepping from a stale position.
-  let cursorIndex = -1;
-  if (cursor) {
-    const cursorPath = String(cursor.path || "");
-    const cursorLine = Math.floor(numericOrDefault(cursor.line, Number.NaN));
-    const cursorText = String(cursor.text || "");
-    cursorIndex = list.findIndex((entry) => {
-      if (!entry || String(entry.path || "") !== cursorPath) {
-        return false;
-      }
-      if (handledKeys.has(reviewQueueEntryKey(entry))) {
-        return false;
-      }
-      if (Number.isInteger(cursorLine) && Number(entry.line) === cursorLine) {
-        return true;
-      }
-      return (
-        Boolean(cursorText) &&
-        String(entry.originalMarkdown || "") === cursorText
-      );
-    });
-  }
+  // Identity is text-first so a recurrence insert above the cursor
+  // cannot make `]s` skip the next chore.
+  const cursorIndex = findReviewCursorIndex(list, cursor, handledKeys);
   if (cursorIndex >= 0) {
     let index = cursorIndex + direction;
     let wrapped = false;
@@ -34638,12 +34883,20 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
         overdue === null || overdue < 1
           ? `due today${every}`
           : `rotten ${overdue}d${every}`;
+    } else if (tier === "pre") {
+      detail = "checklist";
+    } else if (tier === "post") {
+      detail = "closeout";
     }
     const lines = [detail ? `${head} · ${detail}` : head];
     if (tier === "pending") {
       lines.push("Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (tier === "next") {
       lines.push("Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+    } else if (tier === "pre") {
+      lines.push("Alt+Shift+F done → next · ]s skip");
+    } else if (tier === "post") {
+      lines.push("Alt+F done · closes the review");
     }
     const wrapped =
       options && options.wrapped === true ? " · wrapped around" : "";
@@ -34665,6 +34918,25 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
   const wrapped =
     options && options.wrapped === true ? " · wrapped around" : "";
   return `Review ${rank}/${total} · ${detail}${wrapped}`;
+}
+
+function formatReviewPostLandingTail(remaining) {
+  const counts = remaining && typeof remaining === "object" ? remaining : {};
+  const commitments = Number.isInteger(counts.commitments)
+    ? counts.commitments
+    : 0;
+  const rotten = Number.isInteger(counts.rotten) ? counts.rotten : 0;
+  return ` · ${commitments} commitments due · ${rotten} ROTTEN left`;
+}
+
+function appendReviewPostLandingTail(notice, remaining) {
+  const tail = formatReviewPostLandingTail(remaining);
+  const lines = String(notice || "").split("\n");
+  if (lines.length === 0 || (lines.length === 1 && !lines[0])) {
+    return tail.trim();
+  }
+  lines[0] = `${lines[0]}${tail}`;
+  return lines.join("\n");
 }
 
 // `Nothing due for review · ✓ 12 today` (the upkeep meter: tasks
@@ -37653,11 +37925,14 @@ class BobNavigationHotkeysLaneReviewMixin {
       return false;
     }
     const cursor = this.getReviewJumpCursor();
-    const anchor =
+    const todayText = this.laneReleaseDateText({});
+    let anchor =
       options.fromStamp !== undefined
         ? options.fromStamp
         : this.reviewAnchor || null;
-    const todayText = this.laneReleaseDateText({});
+    if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
+      anchor = null;
+    }
     let plan = planReviewJump(queue, {
       direction: step,
       cursor,
@@ -37701,6 +37976,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       queue,
       [reviewQueueEntryKey(plan.entry)],
       plan.rank,
+      todayText,
     );
     let notice = buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
       wrapped: plan.wrapped,
@@ -37712,24 +37988,30 @@ class BobNavigationHotkeysLaneReviewMixin {
               api.reviewEntryView(noticeEntry, noticeOptions)
           : null,
     });
-    // A forward step out of the commitments into ROTTEN names the
-    // boundary (v4 tier entries only; v3 keeps the plain jump notice).
-    // Endpoint jumps never carry the relative-walk boundary preamble.
+    const destTier = reviewEntryMachineTier(plan.entry);
+    const handled = new Set(
+      anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
+    );
+    const remaining = reviewWalkRemaining(queue, handled);
+    // A forward step out of the commitments into ROTTEN or POST names
+    // the boundary (v4 tier entries only; v3 keeps the plain jump
+    // notice). Endpoint jumps never carry the relative-walk boundary
+    // preamble. Landing on POST always appends remaining counts.
     if (!endpoint && step > 0 && reviewFreshnessSupportsTiers(api)) {
-      const handled = new Set(
-        anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
-      );
-      const remaining = reviewWalkRemaining(queue, handled);
       const boundary = buildReviewBoundaryNotice({
         originTier:
           plan && typeof plan.originTier === "string" ? plan.originTier : null,
-        destTier: reviewEntryMachineTier(plan.entry),
+        destTier,
         commitmentsLeft: remaining.commitments,
         rottenLeft: remaining.rotten,
+        postLeft: remaining.post,
       });
       if (boundary) {
         notice = `${boundary}\n${notice}`;
       }
+    }
+    if (destTier === "post") {
+      notice = appendReviewPostLandingTail(notice, remaining);
     }
     new Notice(notice);
     return true;
@@ -37939,6 +38221,31 @@ class BobNavigationHotkeysLaneReviewMixin {
         match,
       });
     });
+    if (options.countExplicit !== true && resolved.length === 1) {
+      const cursorRef = {
+        path: filePath,
+        line: cursor.line + 1,
+        text: String(contentLines[cursor.line] || ""),
+      };
+      const checklist = matchReviewChecklistCursor(queueBefore, cursorRef);
+      if (checklist) {
+        return await this.completeReviewChecklistRow(cm, {
+          api,
+          queueBefore,
+          entry: checklist,
+          filePath,
+          dateText: options.dateText,
+          advance: options.advance === true,
+        });
+      }
+      if (
+        reviewLineChecklistKind(contentLines[cursor.line]) &&
+        !reviewFreshnessSupportsChecklistTiers(api)
+      ) {
+        new Notice(REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE);
+        return false;
+      }
+    }
     // Single source-task trigger: one requested target outside a counted
     // session, exact eligible with a due choice, opens the card and writes
     // nothing. A press moving below-limit to limit simply stamps; the next
@@ -38028,13 +38335,33 @@ class BobNavigationHotkeysLaneReviewMixin {
     // Batch path: counted sessions skip exact at-limit targets without
     // changing fresh/count; skipped tasks stay due for the walk later.
     // Older freshness namespaces fall back to counting every target.
-    const partition = partitionFreshStampDecisionSkips(resolved, {
+    // PRE/POST checklist rows skip too — they close by completion, never
+    // by a stamp.
+    const checklistPart = partitionFreshStampChecklistSkips(
+      resolved,
+      queueBefore,
+    );
+    const partition = partitionFreshStampDecisionSkips(checklistPart.stamp, {
       enabled: freshnessSupportsDecayDecisions(api),
     });
     const keepTargets = partition.stamp;
-    const skipTail = formatFreshStampSkipTail(partition.skipped.length);
-    if (keepTargets.length === 0 && partition.skipped.length > 0) {
-      new Notice(formatFreshStampSkippedNotice(partition.skipped.length));
+    const skipTail =
+      formatFreshStampSkipTail(partition.skipped.length) +
+      formatFreshStampChecklistSkipTail(checklistPart.skipped.length);
+    if (
+      keepTargets.length === 0 &&
+      (partition.skipped.length > 0 || checklistPart.skipped.length > 0)
+    ) {
+      if (partition.skipped.length > 0) {
+        new Notice(
+          formatFreshStampSkippedNotice(partition.skipped.length) +
+            formatFreshStampChecklistSkipTail(checklistPart.skipped.length),
+        );
+      } else {
+        new Notice(
+          formatFreshStampChecklistSkippedNotice(checklistPart.skipped.length),
+        );
+      }
       return true;
     }
     for (const target of keepTargets) {
@@ -38207,33 +38534,42 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       };
     });
     const skipDecisions = freshnessSupportsDecayDecisions(api);
-    const linkSkipped = linkResolved.reduce(
-      (count, item) =>
-        count +
-        partitionFreshStampDecisionSkips(item.resolved, {
-          enabled: skipDecisions,
-        }).skipped.length,
+    let linkDecisionSkipped = 0;
+    let linkChecklistSkipped = 0;
+    const stampTargetsByGroup = [];
+    for (const { group, resolved } of linkResolved) {
+      const checklistPart = partitionFreshStampChecklistSkips(
+        resolved,
+        queueBefore,
+      );
+      linkChecklistSkipped += checklistPart.skipped.length;
+      const partition = partitionFreshStampDecisionSkips(checklistPart.stamp, {
+        enabled: skipDecisions,
+      });
+      linkDecisionSkipped += partition.skipped.length;
+      stampTargetsByGroup.push({ group, targets: partition.stamp });
+    }
+    const linkStamped = stampTargetsByGroup.reduce(
+      (count, item) => count + item.targets.length,
       0,
     );
-    const linkStamped = linkResolved.reduce(
-      (count, item) =>
-        count +
-        partitionFreshStampDecisionSkips(item.resolved, {
-          enabled: skipDecisions,
-        }).stamp.length,
-      0,
-    );
-    const linkSkipTail = formatFreshStampSkipTail(linkSkipped);
-    if (linkStamped === 0 && linkSkipped > 0) {
-      new Notice(formatFreshStampSkippedNotice(linkSkipped));
+    const linkSkipTail =
+      formatFreshStampSkipTail(linkDecisionSkipped) +
+      formatFreshStampChecklistSkipTail(linkChecklistSkipped);
+    if (
+      linkStamped === 0 &&
+      (linkDecisionSkipped > 0 || linkChecklistSkipped > 0)
+    ) {
+      if (linkDecisionSkipped > 0) {
+        new Notice(
+          formatFreshStampSkippedNotice(linkDecisionSkipped) +
+            formatFreshStampChecklistSkipTail(linkChecklistSkipped),
+        );
+      } else {
+        new Notice(formatFreshStampChecklistSkippedNotice(linkChecklistSkipped));
+      }
       return true;
     }
-    const stampTargetsByGroup = linkResolved.map(({ group, resolved }) => ({
-      group,
-      targets: partitionFreshStampDecisionSkips(resolved, {
-        enabled: skipDecisions,
-      }).stamp,
-    }));
     for (const { targets } of stampTargetsByGroup) {
       for (const target of targets) {
         const check = classifyFreshStampTarget(target.raw);
@@ -38335,7 +38671,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     const matched = matchFreshStampRefs(queueBefore, refs);
     this.reviewAnchor =
       matched.count > 0
-        ? buildReviewAnchor(queueBefore, matched.keys, matched.rank)
+        ? buildReviewAnchor(queueBefore, matched.keys, matched.rank, dateText)
         : null;
     const changed = stamped.filter(
       (entry) => entry.after !== entry.before,
@@ -38785,7 +39121,12 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       ]);
       this.reviewAnchor =
         matched.count > 0
-          ? buildReviewAnchor(cardCtx.queueBefore, matched.keys, matched.rank)
+          ? buildReviewAnchor(
+              cardCtx.queueBefore,
+              matched.keys,
+              matched.rank,
+              cardCtx.dateText,
+            )
           : null;
     } catch (error) {
       this.reviewAnchor = null;
@@ -38975,6 +39316,110 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+  }
+
+  async completeReviewChecklistRow(cm, options = {}) {
+    const api = options.api;
+    const entry = options.entry;
+    const queueBefore = Array.isArray(options.queueBefore) ? options.queueBefore : [];
+    const filePath = options.filePath;
+    const advance = options.advance === true;
+    const todayText =
+      typeof options.dateText === "string" && options.dateText
+        ? options.dateText
+        : this.laneReleaseDateText({});
+    const tier = reviewEntryMachineTier(entry);
+    if (!reviewFreshnessSupportsChecklistTiers(api)) {
+      new Notice(REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE);
+      return false;
+    }
+    const cycler = getReviewCyclerApi(this.app);
+    if (!cycler) {
+      new Notice(REVIEW_CHECKLIST_UPDATE_CYCLER_NOTICE);
+      return false;
+    }
+    const prior =
+      this.reviewAnchor &&
+      reviewAnchorIsCurrentDay(this.reviewAnchor, todayText) &&
+      Array.isArray(this.reviewAnchor.keys)
+        ? this.reviewAnchor.keys
+        : [];
+    const handled = new Set(prior);
+    handled.add(reviewQueueEntryKey(entry));
+    let nextPlan = null;
+    if (advance && tier !== "post") {
+      nextPlan = planReviewJump(queueBefore, {
+        direction: 1,
+        cursor: { path: filePath, line: entry.line, text: entry.originalMarkdown },
+        anchor: buildReviewAnchor(queueBefore, Array.from(handled), entry.rank, todayText),
+        todayText,
+      });
+    }
+    let result;
+    try {
+      result = await cycler.completeTaskAtCursor(cm);
+    } catch (error) {
+      new Notice("Not completed — not-closed");
+      return false;
+    }
+    if (!result || result.ok !== true) {
+      new Notice(`Not completed — ${result && result.reason ? result.reason : "not-closed"}`);
+      return false;
+    }
+    this.reviewAnchor = buildReviewAnchor(
+      queueBefore, Array.from(handled), entry.rank, todayText,
+    );
+    const remaining = reviewWalkRemaining(queueBefore, handled);
+    const taskText =
+      entry && typeof entry.text === "string" && entry.text.trim()
+        ? entry.text.trim()
+        : "task";
+    if (tier === "post") {
+      const prefix = remaining.commitments > 0
+        ? `${remaining.commitments} commitments still due · `
+        : "";
+      new Notice(`${prefix}Review closed — ${remaining.rotten} ROTTEN left for later`);
+      return true;
+    }
+    if (!advance) {
+      new Notice(`✓ Done · ${remaining.pre} PRE left`);
+      return true;
+    }
+    const doneLine = `✓ Done · ${taskText}`;
+    if (!nextPlan || nextPlan.kind !== "jump") {
+      new Notice(doneLine);
+      return true;
+    }
+    const landed = await this.landOnReviewQueueEntry(nextPlan.entry);
+    if (!landed.ok) {
+      new Notice(doneLine);
+      return true;
+    }
+    this.reviewAnchor = buildReviewAnchor(
+      queueBefore, [reviewQueueEntryKey(nextPlan.entry)], nextPlan.rank, todayText,
+    );
+    let landingNotice = buildReviewJumpNotice(
+      nextPlan.entry, nextPlan.rank, nextPlan.total, {
+        wrapped: nextPlan.wrapped,
+        todayText,
+        trackers: reviewFreshnessSupportsTrackers(api),
+        reviewEntryView:
+          api && typeof api.reviewEntryView === "function"
+            ? (noticeEntry, noticeOptions) => api.reviewEntryView(noticeEntry, noticeOptions)
+            : null,
+      },
+    );
+    const destTier = reviewEntryMachineTier(nextPlan.entry);
+    const boundary = buildReviewBoundaryNotice({
+      originTier: tier, destTier,
+      commitmentsLeft: remaining.commitments,
+      rottenLeft: remaining.rotten, postLeft: remaining.post,
+    });
+    if (destTier === "post") {
+      landingNotice = appendReviewPostLandingTail(landingNotice, remaining);
+    }
+    new Notice([doneLine, boundary, landingNotice].filter(Boolean).join("\n"));
+    return true;
   }
 }
 // ---- src/540-plugin-decay-picker-and-cancel.js ----
@@ -51850,11 +52295,19 @@ module.exports.helpers = {
   buildLaneToggleNotice,
   readLaneBudgets,
   getReviewFreshnessApi,
+  getReviewCyclerApi,
   reviewFreshnessSupportsTiers,
   reviewFreshnessSupportsTrackers,
+  reviewFreshnessSupportsChecklistTiers,
   reviewEntryMachineTier,
   reviewEntryTierLabel,
   reviewQueueEntryKey,
+  reviewIsChecklistTier,
+  reviewIsCommitmentTier,
+  reviewAnchorIsCurrentDay,
+  findReviewCursorIndex,
+  matchReviewChecklistCursor,
+  reviewLineChecklistKind,
   buildReviewAnchor,
   reviewWalkRemaining,
   buildReviewBoundaryNotice,
@@ -51862,6 +52315,8 @@ module.exports.helpers = {
   resolveReviewQueueLine,
   formatReviewJumpNoticeFromView,
   buildReviewJumpNotice,
+  formatReviewPostLandingTail,
+  appendReviewPostLandingTail,
   buildReviewEmptyNotice,
   classifyFreshStampTarget,
   freshStampRefusalNotice,
@@ -52120,6 +52575,10 @@ module.exports.helpers = {
   partitionFreshStampDecisionSkips,
   formatFreshStampSkipTail,
   formatFreshStampSkippedNotice,
+  formatFreshStampChecklistSkipTail,
+  formatFreshStampChecklistSkippedNotice,
+  isReviewChecklistStampItem,
+  partitionFreshStampChecklistSkips,
   freshnessDecayRewordCursorCh,
   formatFreshnessDecayCapturedAge,
   findFreshnessDecayPriorityProperty,

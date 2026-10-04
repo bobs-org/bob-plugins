@@ -571,6 +571,83 @@ function formatFreshStampSkippedNotice(skipped) {
   }
 }
 
+function formatFreshStampChecklistSkipTail(skipped) {
+  try {
+    const count = Math.floor(numericOrDefault(skipped, Number.NaN));
+    if (!Number.isInteger(count) || count <= 0) {
+      return "";
+    }
+    return ` · skipped ${count} checklist`;
+  } catch (error) {
+    return "";
+  }
+}
+
+function formatFreshStampChecklistSkippedNotice(skipped) {
+  try {
+    const count = Math.floor(numericOrDefault(skipped, Number.NaN));
+    if (!Number.isInteger(count) || count <= 0) {
+      return "Could not update task; no tasks were updated";
+    }
+    return `skipped ${count} checklist`;
+  } catch (error) {
+    return "Could not update task; no tasks were updated";
+  }
+}
+
+function isReviewChecklistStampItem(item, queue) {
+  try {
+    const fromMatch = item && item.match && item.match.entry;
+    if (
+      fromMatch &&
+      reviewIsChecklistTier(reviewEntryMachineTier(fromMatch))
+    ) {
+      return true;
+    }
+    const target = item && item.target;
+    if (!target) {
+      return false;
+    }
+    const entry = matchReviewChecklistCursor(queue, {
+      path: target.path,
+      line: Number(target.line) + 1,
+      text: String(target.raw || ""),
+    });
+    return Boolean(entry);
+  } catch (error) {
+    return false;
+  }
+}
+
+function partitionFreshStampChecklistSkips(resolved, queue) {
+  try {
+    const stamp = [];
+    const skipped = [];
+    for (const item of Array.isArray(resolved) ? resolved : []) {
+      if (isReviewChecklistStampItem(item, queue)) {
+        skipped.push(item.target);
+      } else {
+        stamp.push(item);
+      }
+    }
+    return Object.freeze({
+      stamp: Object.freeze(stamp),
+      skipped: Object.freeze(skipped),
+    });
+  } catch (error) {
+    const targets = [];
+    for (const item of Array.isArray(resolved) ? resolved : []) {
+      if (item) {
+        targets.push(item);
+      }
+    }
+    return Object.freeze({
+      stamp: Object.freeze(targets),
+      skipped: Object.freeze([]),
+    });
+  }
+}
+
 // Cursor placement for Reword: the end of the task body, before trailing
 // metadata (`[key:: v]` / `(key:: v)` fields, `#tags`, `^block-id`), so
 // editing starts on the wording and the count restarts from the commit.

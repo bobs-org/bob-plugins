@@ -80,33 +80,42 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       };
     });
     const skipDecisions = freshnessSupportsDecayDecisions(api);
-    const linkSkipped = linkResolved.reduce(
-      (count, item) =>
-        count +
-        partitionFreshStampDecisionSkips(item.resolved, {
-          enabled: skipDecisions,
-        }).skipped.length,
+    let linkDecisionSkipped = 0;
+    let linkChecklistSkipped = 0;
+    const stampTargetsByGroup = [];
+    for (const { group, resolved } of linkResolved) {
+      const checklistPart = partitionFreshStampChecklistSkips(
+        resolved,
+        queueBefore,
+      );
+      linkChecklistSkipped += checklistPart.skipped.length;
+      const partition = partitionFreshStampDecisionSkips(checklistPart.stamp, {
+        enabled: skipDecisions,
+      });
+      linkDecisionSkipped += partition.skipped.length;
+      stampTargetsByGroup.push({ group, targets: partition.stamp });
+    }
+    const linkStamped = stampTargetsByGroup.reduce(
+      (count, item) => count + item.targets.length,
       0,
     );
-    const linkStamped = linkResolved.reduce(
-      (count, item) =>
-        count +
-        partitionFreshStampDecisionSkips(item.resolved, {
-          enabled: skipDecisions,
-        }).stamp.length,
-      0,
-    );
-    const linkSkipTail = formatFreshStampSkipTail(linkSkipped);
-    if (linkStamped === 0 && linkSkipped > 0) {
-      new Notice(formatFreshStampSkippedNotice(linkSkipped));
+    const linkSkipTail =
+      formatFreshStampSkipTail(linkDecisionSkipped) +
+      formatFreshStampChecklistSkipTail(linkChecklistSkipped);
+    if (
+      linkStamped === 0 &&
+      (linkDecisionSkipped > 0 || linkChecklistSkipped > 0)
+    ) {
+      if (linkDecisionSkipped > 0) {
+        new Notice(
+          formatFreshStampSkippedNotice(linkDecisionSkipped) +
+            formatFreshStampChecklistSkipTail(linkChecklistSkipped),
+        );
+      } else {
+        new Notice(formatFreshStampChecklistSkippedNotice(linkChecklistSkipped));
+      }
       return true;
     }
-    const stampTargetsByGroup = linkResolved.map(({ group, resolved }) => ({
-      group,
-      targets: partitionFreshStampDecisionSkips(resolved, {
-        enabled: skipDecisions,
-      }).stamp,
-    }));
     for (const { targets } of stampTargetsByGroup) {
       for (const target of targets) {
         const check = classifyFreshStampTarget(target.raw);
@@ -208,7 +217,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     const matched = matchFreshStampRefs(queueBefore, refs);
     this.reviewAnchor =
       matched.count > 0
-        ? buildReviewAnchor(queueBefore, matched.keys, matched.rank)
+        ? buildReviewAnchor(queueBefore, matched.keys, matched.rank, dateText)
         : null;
     const changed = stamped.filter(
       (entry) => entry.after !== entry.before,
@@ -658,7 +667,12 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       ]);
       this.reviewAnchor =
         matched.count > 0
-          ? buildReviewAnchor(cardCtx.queueBefore, matched.keys, matched.rank)
+          ? buildReviewAnchor(
+              cardCtx.queueBefore,
+              matched.keys,
+              matched.rank,
+              cardCtx.dateText,
+            )
           : null;
     } catch (error) {
       this.reviewAnchor = null;
@@ -848,5 +862,109 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+  }
+
+  async completeReviewChecklistRow(cm, options = {}) {
+    const api = options.api;
+    const entry = options.entry;
+    const queueBefore = Array.isArray(options.queueBefore) ? options.queueBefore : [];
+    const filePath = options.filePath;
+    const advance = options.advance === true;
+    const todayText =
+      typeof options.dateText === "string" && options.dateText
+        ? options.dateText
+        : this.laneReleaseDateText({});
+    const tier = reviewEntryMachineTier(entry);
+    if (!reviewFreshnessSupportsChecklistTiers(api)) {
+      new Notice(REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE);
+      return false;
+    }
+    const cycler = getReviewCyclerApi(this.app);
+    if (!cycler) {
+      new Notice(REVIEW_CHECKLIST_UPDATE_CYCLER_NOTICE);
+      return false;
+    }
+    const prior =
+      this.reviewAnchor &&
+      reviewAnchorIsCurrentDay(this.reviewAnchor, todayText) &&
+      Array.isArray(this.reviewAnchor.keys)
+        ? this.reviewAnchor.keys
+        : [];
+    const handled = new Set(prior);
+    handled.add(reviewQueueEntryKey(entry));
+    let nextPlan = null;
+    if (advance && tier !== "post") {
+      nextPlan = planReviewJump(queueBefore, {
+        direction: 1,
+        cursor: { path: filePath, line: entry.line, text: entry.originalMarkdown },
+        anchor: buildReviewAnchor(queueBefore, Array.from(handled), entry.rank, todayText),
+        todayText,
+      });
+    }
+    let result;
+    try {
+      result = await cycler.completeTaskAtCursor(cm);
+    } catch (error) {
+      new Notice("Not completed — not-closed");
+      return false;
+    }
+    if (!result || result.ok !== true) {
+      new Notice(`Not completed — ${result && result.reason ? result.reason : "not-closed"}`);
+      return false;
+    }
+    this.reviewAnchor = buildReviewAnchor(
+      queueBefore, Array.from(handled), entry.rank, todayText,
+    );
+    const remaining = reviewWalkRemaining(queueBefore, handled);
+    const taskText =
+      entry && typeof entry.text === "string" && entry.text.trim()
+        ? entry.text.trim()
+        : "task";
+    if (tier === "post") {
+      const prefix = remaining.commitments > 0
+        ? `${remaining.commitments} commitments still due · `
+        : "";
+      new Notice(`${prefix}Review closed — ${remaining.rotten} ROTTEN left for later`);
+      return true;
+    }
+    if (!advance) {
+      new Notice(`✓ Done · ${remaining.pre} PRE left`);
+      return true;
+    }
+    const doneLine = `✓ Done · ${taskText}`;
+    if (!nextPlan || nextPlan.kind !== "jump") {
+      new Notice(doneLine);
+      return true;
+    }
+    const landed = await this.landOnReviewQueueEntry(nextPlan.entry);
+    if (!landed.ok) {
+      new Notice(doneLine);
+      return true;
+    }
+    this.reviewAnchor = buildReviewAnchor(
+      queueBefore, [reviewQueueEntryKey(nextPlan.entry)], nextPlan.rank, todayText,
+    );
+    let landingNotice = buildReviewJumpNotice(
+      nextPlan.entry, nextPlan.rank, nextPlan.total, {
+        wrapped: nextPlan.wrapped,
+        todayText,
+        trackers: reviewFreshnessSupportsTrackers(api),
+        reviewEntryView:
+          api && typeof api.reviewEntryView === "function"
+            ? (noticeEntry, noticeOptions) => api.reviewEntryView(noticeEntry, noticeOptions)
+            : null,
+      },
+    );
+    const destTier = reviewEntryMachineTier(nextPlan.entry);
+    const boundary = buildReviewBoundaryNotice({
+      originTier: tier, destTier,
+      commitmentsLeft: remaining.commitments,
+      rottenLeft: remaining.rotten, postLeft: remaining.post,
+    });
+    if (destTier === "post") {
+      landingNotice = appendReviewPostLandingTail(landingNotice, remaining);
+    }
+    new Notice([doneLine, boundary, landingNotice].filter(Boolean).join("\n"));
+    return true;
   }
 }

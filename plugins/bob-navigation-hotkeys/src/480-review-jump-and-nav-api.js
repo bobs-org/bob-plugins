@@ -1,3 +1,18 @@
+function reviewLineChecklistKind(line) {
+  const tokens = String(line || "").toLowerCase().match(/#[^\s#]+/g) || [];
+  const tags = new Set(tokens);
+  if (!tags.has("#gtd")) {
+    return null;
+  }
+  if (tags.has("#pre")) {
+    return "pre";
+  }
+  if (tags.has("#post")) {
+    return "post";
+  }
+  return null;
+}
+
 function planReviewJump(queue, options = {}) {
   const list = Array.isArray(queue) ? queue.slice() : [];
   const direction = options.direction < 0 ? -1 : 1;
@@ -21,12 +36,17 @@ function planReviewJump(queue, options = {}) {
   }
   const finish = (step, walkList) =>
     applyReviewJumpRepeat(step, walkList, direction, options.repeat);
-  const anchor =
+  const todayText =
+    options && typeof options.todayText === "string" ? options.todayText : "";
+  let anchor =
     options.anchor && typeof options.anchor === "object"
       ? options.anchor
       : options.stamped && typeof options.stamped === "object"
         ? options.stamped
         : null;
+  if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
+    anchor = null;
+  }
   const handledKeys = new Set(
     anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
   );
@@ -41,27 +61,9 @@ function planReviewJump(queue, options = {}) {
   // not a live queue entry, even when the lagging Tasks cache still
   // lists it: handled keys never match here, so the anchor below
   // continues the walk instead of stepping from a stale position.
-  let cursorIndex = -1;
-  if (cursor) {
-    const cursorPath = String(cursor.path || "");
-    const cursorLine = Math.floor(numericOrDefault(cursor.line, Number.NaN));
-    const cursorText = String(cursor.text || "");
-    cursorIndex = list.findIndex((entry) => {
-      if (!entry || String(entry.path || "") !== cursorPath) {
-        return false;
-      }
-      if (handledKeys.has(reviewQueueEntryKey(entry))) {
-        return false;
-      }
-      if (Number.isInteger(cursorLine) && Number(entry.line) === cursorLine) {
-        return true;
-      }
-      return (
-        Boolean(cursorText) &&
-        String(entry.originalMarkdown || "") === cursorText
-      );
-    });
-  }
+  // Identity is text-first so a recurrence insert above the cursor
+  // cannot make `]s` skip the next chore.
+  const cursorIndex = findReviewCursorIndex(list, cursor, handledKeys);
   if (cursorIndex >= 0) {
     let index = cursorIndex + direction;
     let wrapped = false;
@@ -357,12 +359,20 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
         overdue === null || overdue < 1
           ? `due today${every}`
           : `rotten ${overdue}d${every}`;
+    } else if (tier === "pre") {
+      detail = "checklist";
+    } else if (tier === "post") {
+      detail = "closeout";
     }
     const lines = [detail ? `${head} · ${detail}` : head];
     if (tier === "pending") {
       lines.push("Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (tier === "next") {
       lines.push("Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+    } else if (tier === "pre") {
+      lines.push("Alt+Shift+F done → next · ]s skip");
+    } else if (tier === "post") {
+      lines.push("Alt+F done · closes the review");
     }
     const wrapped =
       options && options.wrapped === true ? " · wrapped around" : "";
@@ -384,6 +394,25 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
   const wrapped =
     options && options.wrapped === true ? " · wrapped around" : "";
   return `Review ${rank}/${total} · ${detail}${wrapped}`;
+}
+
+function formatReviewPostLandingTail(remaining) {
+  const counts = remaining && typeof remaining === "object" ? remaining : {};
+  const commitments = Number.isInteger(counts.commitments)
+    ? counts.commitments
+    : 0;
+  const rotten = Number.isInteger(counts.rotten) ? counts.rotten : 0;
+  return ` · ${commitments} commitments due · ${rotten} ROTTEN left`;
+}
+
+function appendReviewPostLandingTail(notice, remaining) {
+  const tail = formatReviewPostLandingTail(remaining);
+  const lines = String(notice || "").split("\n");
+  if (lines.length === 0 || (lines.length === 1 && !lines[0])) {
+    return tail.trim();
+  }
+  lines[0] = `${lines[0]}${tail}`;
+  return lines.join("\n");
 }
 
 // `Nothing due for review · ✓ 12 today` (the upkeep meter: tasks

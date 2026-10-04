@@ -396,11 +396,14 @@ class BobNavigationHotkeysLaneReviewMixin {
       return false;
     }
     const cursor = this.getReviewJumpCursor();
-    const anchor =
+    const todayText = this.laneReleaseDateText({});
+    let anchor =
       options.fromStamp !== undefined
         ? options.fromStamp
         : this.reviewAnchor || null;
-    const todayText = this.laneReleaseDateText({});
+    if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
+      anchor = null;
+    }
     let plan = planReviewJump(queue, {
       direction: step,
       cursor,
@@ -444,6 +447,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       queue,
       [reviewQueueEntryKey(plan.entry)],
       plan.rank,
+      todayText,
     );
     let notice = buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
       wrapped: plan.wrapped,
@@ -455,24 +459,30 @@ class BobNavigationHotkeysLaneReviewMixin {
               api.reviewEntryView(noticeEntry, noticeOptions)
           : null,
     });
-    // A forward step out of the commitments into ROTTEN names the
-    // boundary (v4 tier entries only; v3 keeps the plain jump notice).
-    // Endpoint jumps never carry the relative-walk boundary preamble.
+    const destTier = reviewEntryMachineTier(plan.entry);
+    const handled = new Set(
+      anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
+    );
+    const remaining = reviewWalkRemaining(queue, handled);
+    // A forward step out of the commitments into ROTTEN or POST names
+    // the boundary (v4 tier entries only; v3 keeps the plain jump
+    // notice). Endpoint jumps never carry the relative-walk boundary
+    // preamble. Landing on POST always appends remaining counts.
     if (!endpoint && step > 0 && reviewFreshnessSupportsTiers(api)) {
-      const handled = new Set(
-        anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
-      );
-      const remaining = reviewWalkRemaining(queue, handled);
       const boundary = buildReviewBoundaryNotice({
         originTier:
           plan && typeof plan.originTier === "string" ? plan.originTier : null,
-        destTier: reviewEntryMachineTier(plan.entry),
+        destTier,
         commitmentsLeft: remaining.commitments,
         rottenLeft: remaining.rotten,
+        postLeft: remaining.post,
       });
       if (boundary) {
         notice = `${boundary}\n${notice}`;
       }
+    }
+    if (destTier === "post") {
+      notice = appendReviewPostLandingTail(notice, remaining);
     }
     new Notice(notice);
     return true;
@@ -682,6 +692,31 @@ class BobNavigationHotkeysLaneReviewMixin {
         match,
       });
     });
+    if (options.countExplicit !== true && resolved.length === 1) {
+      const cursorRef = {
+        path: filePath,
+        line: cursor.line + 1,
+        text: String(contentLines[cursor.line] || ""),
+      };
+      const checklist = matchReviewChecklistCursor(queueBefore, cursorRef);
+      if (checklist) {
+        return await this.completeReviewChecklistRow(cm, {
+          api,
+          queueBefore,
+          entry: checklist,
+          filePath,
+          dateText: options.dateText,
+          advance: options.advance === true,
+        });
+      }
+      if (
+        reviewLineChecklistKind(contentLines[cursor.line]) &&
+        !reviewFreshnessSupportsChecklistTiers(api)
+      ) {
+        new Notice(REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE);
+        return false;
+      }
+    }
     // Single source-task trigger: one requested target outside a counted
     // session, exact eligible with a due choice, opens the card and writes
     // nothing. A press moving below-limit to limit simply stamps; the next
@@ -771,13 +806,33 @@ class BobNavigationHotkeysLaneReviewMixin {
     // Batch path: counted sessions skip exact at-limit targets without
     // changing fresh/count; skipped tasks stay due for the walk later.
     // Older freshness namespaces fall back to counting every target.
-    const partition = partitionFreshStampDecisionSkips(resolved, {
+    // PRE/POST checklist rows skip too — they close by completion, never
+    // by a stamp.
+    const checklistPart = partitionFreshStampChecklistSkips(
+      resolved,
+      queueBefore,
+    );
+    const partition = partitionFreshStampDecisionSkips(checklistPart.stamp, {
       enabled: freshnessSupportsDecayDecisions(api),
     });
     const keepTargets = partition.stamp;
-    const skipTail = formatFreshStampSkipTail(partition.skipped.length);
-    if (keepTargets.length === 0 && partition.skipped.length > 0) {
-      new Notice(formatFreshStampSkippedNotice(partition.skipped.length));
+    const skipTail =
+      formatFreshStampSkipTail(partition.skipped.length) +
+      formatFreshStampChecklistSkipTail(checklistPart.skipped.length);
+    if (
+      keepTargets.length === 0 &&
+      (partition.skipped.length > 0 || checklistPart.skipped.length > 0)
+    ) {
+      if (partition.skipped.length > 0) {
+        new Notice(
+          formatFreshStampSkippedNotice(partition.skipped.length) +
+            formatFreshStampChecklistSkipTail(checklistPart.skipped.length),
+        );
+      } else {
+        new Notice(
+          formatFreshStampChecklistSkippedNotice(checklistPart.skipped.length),
+        );
+      }
       return true;
     }
     for (const target of keepTargets) {

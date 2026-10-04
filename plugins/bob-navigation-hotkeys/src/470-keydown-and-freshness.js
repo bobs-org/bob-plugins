@@ -58,6 +58,10 @@ function isCtrlKey(event, key) {
 const REVIEW_FRESHNESS_API_REQUIRED_NOTICE = "Bob Ledger Tools api v3 required";
 const REVIEW_FRESHNESS_KEEP_REQUIRED_NOTICE = "Bob Ledger Tools keep support required";
 const REVIEW_QUEUE_CHANGED_NOTICE = "Review queue changed — try again";
+const REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE =
+  "Checklist rows close by completion — update bob-ledger-tools";
+const REVIEW_CHECKLIST_UPDATE_CYCLER_NOTICE =
+  "Checklist rows close by completion — update task-status-cycler";
 
 // The ledger-tools freshness namespace, or null when it is absent or older
 // than api `version >= 3`. Never throws.
@@ -103,22 +107,64 @@ function reviewFreshnessSupportsTrackers(freshnessApi) {
   }
 }
 
+// PRE/POST checklist walk (ledger-tools freshness namespace v7) requires
+// `api.freshness.version >= 7` and `checklistTiers === true`. Without it
+// the rows still walk when a queue carries `pre`/`post`, but Alt+F
+// refuses instead of completing.
+function reviewFreshnessSupportsChecklistTiers(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) &&
+      Number(freshnessApi.version) >= 7 &&
+      freshnessApi.checklistTiers === true
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+// Cycler completion API (v2 `completeTaskAtCursor`), or null.
+function getReviewCyclerApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins ? plugins["task-status-cycler"] : null;
+    const api = holder ? holder.api : null;
+    if (
+      !api ||
+      Number(api.version) < 2 ||
+      typeof api.completeTaskAtCursor !== "function"
+    ) {
+      return null;
+    }
+    return api;
+  } catch (error) {
+    return null;
+  }
+}
+
+function reviewIsChecklistTier(tier) {
+  return tier === "pre" || tier === "post";
+}
+
 // Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
-// and `references` tracker tiers), else the legacy v3 `state` mapping
-// (`resurfaced` reads as the RETURNED tier). Returns "".
+// and `references` tracker tiers and v7 `pre`/`post` checklist tiers),
+// else the legacy v3 `state` mapping (`resurfaced` reads as the RETURNED
+// tier). Returns "".
 function reviewEntryMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
       ? entry.tier.trim().toLowerCase()
       : "";
   if (
+    tier === "pre" ||
     tier === "new" ||
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
     tier === "returned" ||
     tier === "references" ||
-    tier === "rotten"
+    tier === "rotten" ||
+    tier === "post"
   ) {
     return tier;
   }
@@ -158,6 +204,7 @@ function reviewEntryHasTierRanks(entry) {
 
 function reviewIsCommitmentTier(tier) {
   return (
+    tier === "pre" ||
     tier === "new" ||
     tier === "projects" ||
     tier === "pending" ||
@@ -600,13 +647,111 @@ function reviewQueueEntryKey(entry) {
   return `${path}:${line}`;
 }
 
+// True when `anchor` was recorded on `todayText` (YYYY-MM-DD). A missing
+// day on either side is treated as current so legacy anchors still walk.
+function reviewAnchorIsCurrentDay(anchor, todayText) {
+  if (!anchor || typeof anchor !== "object") {
+    return false;
+  }
+  const day = typeof anchor.day === "string" ? anchor.day.trim() : "";
+  if (!day) {
+    return true;
+  }
+  const today = typeof todayText === "string" ? todayText.trim() : "";
+  if (!today) {
+    return true;
+  }
+  return day === today;
+}
+
+// Among unhandled entries in the cursor's file, match
+// `originalMarkdown === cursorText` first. Several matches prefer the
+// cursor line, then the nearest. Fall back to the line number only when
+// no text matches. Returns a 0-based queue index or -1.
+function findReviewCursorIndex(list, cursor, handledKeys) {
+  if (!cursor || typeof cursor !== "object") {
+    return -1;
+  }
+  const rows = Array.isArray(list) ? list : [];
+  const cursorPath = String(cursor.path || "");
+  const cursorLine = Math.floor(numericOrDefault(cursor.line, Number.NaN));
+  const cursorText = String(cursor.text || "");
+  const handled =
+    handledKeys instanceof Set
+      ? handledKeys
+      : new Set(Array.isArray(handledKeys) ? handledKeys : []);
+  const candidates = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const entry = rows[index];
+    if (!entry || String(entry.path || "") !== cursorPath) {
+      continue;
+    }
+    if (handled.has(reviewQueueEntryKey(entry))) {
+      continue;
+    }
+    candidates.push({
+      index,
+      line: Number(entry.line),
+      text: String(entry.originalMarkdown || ""),
+    });
+  }
+  if (candidates.length === 0) {
+    return -1;
+  }
+  if (cursorText) {
+    const textHits = candidates.filter((item) => item.text === cursorText);
+    if (textHits.length === 1) {
+      return textHits[0].index;
+    }
+    if (textHits.length > 1) {
+      if (Number.isInteger(cursorLine)) {
+        const onLine = textHits.find((item) => item.line === cursorLine);
+        if (onLine) {
+          return onLine.index;
+        }
+        let nearest = textHits[0];
+        let nearestDist = Math.abs(nearest.line - cursorLine);
+        for (const item of textHits.slice(1)) {
+          const dist = Math.abs(item.line - cursorLine);
+          if (
+            dist < nearestDist ||
+            (dist === nearestDist && item.index < nearest.index)
+          ) {
+            nearest = item;
+            nearestDist = dist;
+          }
+        }
+        return nearest.index;
+      }
+      return textHits[0].index;
+    }
+  }
+  if (Number.isInteger(cursorLine)) {
+    const lineHit = candidates.find((item) => item.line === cursorLine);
+    if (lineHit) {
+      return lineHit.index;
+    }
+  }
+  return -1;
+}
+
+function matchReviewChecklistCursor(queue, cursor) {
+  const list = Array.isArray(queue) ? queue : [];
+  const index = findReviewCursorIndex(list, cursor, new Set());
+  if (index < 0) {
+    return null;
+  }
+  const entry = list[index];
+  return reviewIsChecklistTier(reviewEntryMachineTier(entry)) ? entry : null;
+}
+
 // Walk anchor: where the walk is. Recorded on every successful landing
 // and every Alt+F / Alt+Shift+F stamp. Holds the handled entry keys, the
 // handled task's path/line/tier, and the ordered keys after and before
 // them in the queue they came from, so `]s` after an Alt+N release,
 // Ctrl+Shift+Enter, or a roll continues from the successor (and `[s` from
 // the predecessor) instead of restarting at rank 1.
-function buildReviewAnchor(queue, handledKeys, fallbackRank) {
+function buildReviewAnchor(queue, handledKeys, fallbackRank, day) {
   const list = Array.isArray(queue) ? queue.slice() : [];
   const keys = list.map((entry) => reviewQueueEntryKey(entry));
   const handled = new Set(Array.isArray(handledKeys) ? handledKeys : []);
@@ -629,6 +774,8 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank) {
       : Number.isInteger(fallbackRank)
         ? fallbackRank
         : at + 1;
+  const dayText =
+    typeof day === "string" && day.trim() ? day.trim() : null;
   return Object.freeze({
     keys: Object.freeze(Array.from(handled)),
     rank,
@@ -636,14 +783,15 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank) {
     path: holder && typeof holder.path === "string" ? holder.path : "",
     line: holder && Number.isInteger(holder.line) ? holder.line : null,
     tier: reviewEntryMachineTier(holder) || null,
+    day: dayText,
     afterKeys: Object.freeze(afterKeys),
     beforeKeys: Object.freeze(beforeKeys),
   });
 }
 
 // Remaining walk counts after excluding handled keys: `{ commitments,
-// rotten }`. Commitments are the NEW/PROJECTS/PENDING/NEXT/RETURNED/
-// REFERENCES tiers.
+// rotten, post, pre }`. Commitments are the PRE/NEW/PROJECTS/PENDING/
+// NEXT/RETURNED/REFERENCES tiers. POST is the closing tier.
 function reviewWalkRemaining(queue, excludedKeys) {
   const excluded =
     excludedKeys instanceof Set
@@ -651,29 +799,37 @@ function reviewWalkRemaining(queue, excludedKeys) {
       : new Set(Array.isArray(excludedKeys) ? excludedKeys : []);
   let commitments = 0;
   let rotten = 0;
+  let post = 0;
+  let pre = 0;
   for (const entry of Array.isArray(queue) ? queue : []) {
     if (excluded.has(reviewQueueEntryKey(entry))) {
       continue;
     }
     const tier = reviewEntryMachineTier(entry);
-    if (reviewIsCommitmentTier(tier)) {
+    if (tier === "pre") {
+      pre += 1;
+      commitments += 1;
+    } else if (reviewIsCommitmentTier(tier)) {
       commitments += 1;
     } else if (tier === "rotten") {
       rotten += 1;
+    } else if (tier === "post") {
+      post += 1;
     }
   }
-  return Object.freeze({ commitments, rotten });
+  return Object.freeze({ commitments, rotten, post, pre });
 }
 
 // Boundary line prepended when a forward step leaves a commitment tier
-// for ROTTEN, or null when no boundary applies:
+// for ROTTEN or (ROTTEN empty) POST, or null when no boundary applies:
 // - `Commitments done \u2014 {n} ROTTEN left` when none remain;
 // - `ROTTEN next \u2014 {m} commitments still due` otherwise.
+// Into ROTTEN, append ` · ]S closes the review` when POST remains.
 // A step from an unknown origin only shows the done line (when zero
 // remain); a step within ROTTEN never shows one.
 function buildReviewBoundaryNotice(options = {}) {
   const dest = String(options.destTier || "").trim().toLowerCase();
-  if (dest !== "rotten") {
+  if (dest !== "rotten" && dest !== "post") {
     return null;
   }
   const origin =
@@ -691,16 +847,26 @@ function buildReviewBoundaryNotice(options = {}) {
   const rotten = Number.isInteger(options.rottenLeft)
     ? options.rottenLeft
     : null;
+  const postLeft = Number.isInteger(options.postLeft)
+    ? options.postLeft
+    : 0;
   if (commitments === null) {
     return null;
   }
+  let line = null;
   if (commitments === 0) {
-    return `Commitments done \u2014 ${rotten === null ? 0 : rotten} ROTTEN left`;
-  }
-  if (origin === null) {
+    line = `Commitments done \u2014 ${rotten === null ? 0 : rotten} ROTTEN left`;
+  } else if (origin === null) {
+    return null;
+  } else if (dest === "rotten") {
+    line = `ROTTEN next \u2014 ${commitments} commitments still due`;
+  } else {
     return null;
   }
-  return `ROTTEN next \u2014 ${commitments} commitments still due`;
+  if (dest === "rotten" && postLeft > 0) {
+    return `${line} · ]S closes the review`;
+  }
+  return line;
 }
 
 // Resolve one anchor step over `remaining` (the queue minus the handled

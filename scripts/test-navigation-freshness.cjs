@@ -753,10 +753,12 @@ test("references tier walks with commitment rank and reference notice", () => {
   assert.deepEqual(helpers.reviewWalkRemaining(queue, new Set()), {
     commitments: 1,
     rotten: 1,
+    post: 0,
+    pre: 0,
   });
   assert.deepEqual(
     helpers.reviewWalkRemaining(queue, new Set(["r.md:1"])),
-    { commitments: 0, rotten: 1 },
+    { commitments: 0, rotten: 1, post: 0, pre: 0 },
   );
   // Stepping REFERENCES → ROTTEN crosses the boundary.
   assert.equal(
@@ -1091,7 +1093,7 @@ test("advance across NEXT to RETURNED to ROTTEN lands the boundary", () => {
   const toRotten = helpers.planReviewJump(queue, { direction: 1, anchor: afterReturned });
   assert.equal(toRotten.entry.key, "o.md:1");
   const remaining = helpers.reviewWalkRemaining(queue, new Set(afterReturned.keys));
-  assert.deepEqual(remaining, { commitments: 0, rotten: 1 });
+  assert.deepEqual(remaining, { commitments: 0, rotten: 1, post: 0, pre: 0 });
   assert.equal(
     helpers.buildReviewBoundaryNotice({
       originTier: toRotten.originTier,
@@ -1926,4 +1928,272 @@ test("counted forward landing on ROTTEN keeps the boundary preamble", async () =
   assert.match(notices.at(-1), /^Review 5\/5 · ROTTEN /);
   assert.ok(!notices.at(-1).includes("Commitments done"));
   assert.ok(!notices.at(-1).includes("ROTTEN next"));
+});
+
+function checklistEntry(overrides = {}) {
+  return {
+    key: "gtd_daily.md:1",
+    path: "gtd_daily.md",
+    line: 1,
+    originalMarkdown: "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done]",
+    text: "Brush teeth",
+    state: null,
+    bucket: null,
+    tier: "pre",
+    tierLabel: "PRE",
+    lane: "ready",
+    fresh: null,
+    dueOn: null,
+    daysOverdue: null,
+    interval: 1,
+    rank: 1,
+    tierRank: 1,
+    tierTotal: 7,
+    ...overrides,
+  };
+}
+
+test("PRE and POST are machine tiers; PRE is a commitment", () => {
+  assert.equal(helpers.reviewEntryMachineTier({ tier: "pre" }), "pre");
+  assert.equal(helpers.reviewEntryMachineTier({ tier: "post" }), "post");
+  assert.equal(helpers.reviewIsCommitmentTier("pre"), true);
+  assert.equal(helpers.reviewIsCommitmentTier("post"), false);
+  assert.equal(helpers.reviewIsChecklistTier("pre"), true);
+  assert.equal(helpers.reviewIsChecklistTier("post"), true);
+  assert.equal(helpers.reviewIsChecklistTier("rotten"), false);
+  assert.equal(
+    helpers.reviewFreshnessSupportsChecklistTiers({
+      version: 7,
+      checklistTiers: true,
+    }),
+    true,
+  );
+  assert.equal(
+    helpers.reviewFreshnessSupportsChecklistTiers({ version: 7 }),
+    false,
+  );
+  assert.equal(
+    helpers.reviewFreshnessSupportsChecklistTiers({
+      version: 6,
+      checklistTiers: true,
+    }),
+    false,
+  );
+  assert.equal(
+    helpers.getReviewCyclerApi({
+      plugins: {
+        plugins: {
+          "task-status-cycler": {
+            api: { version: 2, completeTaskAtCursor: () => {} },
+          },
+        },
+      },
+    }) !== null,
+    true,
+  );
+  assert.equal(
+    helpers.getReviewCyclerApi({
+      plugins: {
+        plugins: {
+          "task-status-cycler": { api: { version: 1 } },
+        },
+      },
+    }),
+    null,
+  );
+});
+
+test("fallback notices name PRE checklist and POST closeout", () => {
+  const pre = checklistEntry();
+  assert.equal(
+    helpers.buildReviewJumpNotice(pre, 1, 8, { todayText: "2026-10-08" }),
+    "Review 1/8 · PRE 1/7 · checklist\nAlt+Shift+F done → next · ]s skip",
+  );
+  const post = checklistEntry({
+    key: "gtd_daily.md:20",
+    line: 20,
+    originalMarkdown: "- [ ] #task #gtd #post Morning review [repeat:: every day when done]",
+    text: "Morning review",
+    tier: "post",
+    tierLabel: "POST",
+    rank: 8,
+    tierRank: 1,
+    tierTotal: 1,
+  });
+  assert.equal(
+    helpers.buildReviewJumpNotice(post, 8, 8, { todayText: "2026-10-08" }),
+    "Review 8/8 · POST 1/1 · closeout\nAlt+F done · closes the review",
+  );
+  assert.equal(
+    helpers.appendReviewPostLandingTail(
+      helpers.buildReviewJumpNotice(post, 8, 85, { todayText: "2026-10-08" }),
+      { commitments: 0, rotten: 70 },
+    ),
+    "Review 8/85 · POST 1/1 · closeout · 0 commitments due · 70 ROTTEN left\nAlt+F done · closes the review",
+  );
+});
+
+test("text-first cursor matching does not skip Pills after an above-insert", () => {
+  const brush =
+    "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done]";
+  const pills =
+    "- [ ] #task #gtd #pre Take pills [repeat:: every day when done]";
+  const queue = [
+    checklistEntry({
+      key: "gtd_daily.md:1",
+      line: 1,
+      originalMarkdown: brush,
+      text: "Brush teeth",
+      tierRank: 1,
+    }),
+    checklistEntry({
+      key: "gtd_daily.md:2",
+      line: 2,
+      originalMarkdown: pills,
+      text: "Take pills",
+      rank: 2,
+      tierRank: 2,
+    }),
+  ];
+  const plan = helpers.planReviewJump(queue, {
+    direction: 1,
+    cursor: { path: "gtd_daily.md", line: 2, text: brush },
+  });
+  assert.equal(plan.kind, "jump");
+  assert.equal(plan.entry.key, "gtd_daily.md:2");
+  assert.equal(plan.rank, 2);
+});
+
+test("day-scoped anchors from another day are ignored", () => {
+  const queue = ["a", "b", "c"].map((stem, index) =>
+    queueEntry({
+      key: `${stem}.md:1`,
+      path: `${stem}.md`,
+      line: 1,
+      originalMarkdown: `- [ ] #task ${stem}`,
+      state: "rotten",
+      rank: index + 1,
+    }),
+  );
+  const yesterday = helpers.buildReviewAnchor(queue, ["a.md:1"], 1, "2026-10-07");
+  assert.equal(yesterday.day, "2026-10-07");
+  assert.equal(helpers.reviewAnchorIsCurrentDay(yesterday, "2026-10-08"), false);
+  const ignored = helpers.planReviewJump(queue, {
+    direction: 1,
+    anchor: yesterday,
+    todayText: "2026-10-08",
+    cursor: { path: "elsewhere.md", line: 1, text: "nope" },
+  });
+  assert.equal(ignored.entry.key, "a.md:1");
+  const today = helpers.buildReviewAnchor(queue, ["a.md:1"], 1, "2026-10-08");
+  const current = helpers.planReviewJump(queue, {
+    direction: 1,
+    anchor: today,
+    todayText: "2026-10-08",
+  });
+  assert.equal(current.entry.key, "b.md:1");
+  const legacy = helpers.buildReviewAnchor(queue, ["a.md:1"], 1);
+  assert.equal(legacy.day, null);
+  assert.equal(helpers.reviewAnchorIsCurrentDay(legacy, "2026-10-08"), true);
+});
+
+test("boundary into ROTTEN appends ]S when POST remains; into POST names commitments done", () => {
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "returned", destTier: "rotten",
+      commitmentsLeft: 0, rottenLeft: 4, postLeft: 1,
+    }),
+    "Commitments done — 4 ROTTEN left · ]S closes the review",
+  );
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "next", destTier: "rotten",
+      commitmentsLeft: 2, rottenLeft: 4, postLeft: 1,
+    }),
+    "ROTTEN next — 2 commitments still due · ]S closes the review",
+  );
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "returned", destTier: "post",
+      commitmentsLeft: 0, rottenLeft: 0, postLeft: 1,
+    }),
+    "Commitments done — 0 ROTTEN left",
+  );
+  const queue = [
+    checklistEntry({
+      key: "n.md:1", path: "n.md", line: 1, tier: "next", tierLabel: "NEXT",
+      originalMarkdown: "- [*] #task Next", text: "Next",
+      rank: 1, tierRank: 1, tierTotal: 1,
+    }),
+    checklistEntry({
+      key: "gtd_daily.md:20", path: "gtd_daily.md", line: 20, tier: "post",
+      tierLabel: "POST",
+      originalMarkdown: "- [ ] #task #gtd #post Morning review",
+      text: "Morning review",
+      rank: 2, tierRank: 1, tierTotal: 1,
+    }),
+  ];
+  const afterNext = helpers.buildReviewAnchor(queue, ["n.md:1"], 1, "2026-10-08");
+  const toPost = helpers.planReviewJump(queue, {
+    direction: 1, anchor: afterNext, todayText: "2026-10-08",
+  });
+  assert.equal(toPost.entry.key, "gtd_daily.md:20");
+  const remaining = helpers.reviewWalkRemaining(queue, new Set(afterNext.keys));
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: toPost.originTier,
+      destTier: "post",
+      commitmentsLeft: remaining.commitments,
+      rottenLeft: remaining.rotten,
+      postLeft: remaining.post,
+    }),
+    "Commitments done — 0 ROTTEN left",
+  );
+});
+
+test("]S reaches POST with 77 ROTTEN rows and a null budget", async () => {
+  const rotten = Array.from({ length: 77 }, (_, index) =>
+    queueEntry({
+      key: `r${index}.md:1`,
+      path: `r${index}.md`,
+      line: 1,
+      originalMarkdown: `- [ ] #task rotten ${index}`,
+      state: null,
+      tier: "rotten",
+      tierLabel: "ROTTEN",
+      rank: index + 1,
+      tierRank: index + 1,
+      tierTotal: 77,
+      daysOverdue: 3,
+      interval: 7,
+    }),
+  );
+  const post = checklistEntry({
+    key: "gtd_daily.md:20",
+    line: 20,
+    originalMarkdown: "- [ ] #task #gtd #post Morning review [repeat:: every day when done]",
+    text: "Morning review",
+    tier: "post",
+    tierLabel: "POST",
+    rank: 78,
+    tierRank: 1,
+    tierTotal: 1,
+  });
+  const queue = [...rotten, post];
+  const { plugin } = endpointMethodHarness({
+    queues: [queue],
+    landings: [{ ok: true, stale: false }],
+  });
+  plugin.readFreshnessCounts = () => ({
+    upkeepToday: 0,
+    refreshedToday: 0,
+    budget: null,
+  });
+  notices.length = 0;
+  assert.equal(await plugin.jumpToDueTask(-1, { endpoint: "last" }), true);
+  assert.equal(plugin.reviewAnchor.keys[0], "gtd_daily.md:20");
+  const notice = notices.at(-1);
+  assert.match(notice, /^Review 78\/78 · POST 1\/1 · closeout/);
+  assert.match(notice, /0 commitments due · 77 ROTTEN left/);
+  assert.ok(!notice.includes("Commitments done"));
 });

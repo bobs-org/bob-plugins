@@ -99,6 +99,10 @@ class BobLedgerToolsTodayLocationMixin {
   }
 
   refreshTodayCacheForVaultEvent(file, now = new Date()) {
+    const workspace = this.app && this.app.workspace;
+    if (workspace && workspace.layoutReady === false) {
+      return false;
+    }
     const changedPath =
       file && typeof file.path === "string" ? file.path : null;
     if (!changedPath) {

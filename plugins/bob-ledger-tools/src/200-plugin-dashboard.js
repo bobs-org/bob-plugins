@@ -564,6 +564,10 @@ class BobLedgerToolsDashboardMixin {
 
   refreshDashboardCollectionsForFileEvent(file, oldPath) {
     try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && workspace.layoutReady === false) {
+        return false;
+      }
       const path =
         file && typeof file.path === "string"
           ? file.path

@@ -30,6 +30,14 @@ class BobLedgerToolsPlugin extends Plugin {
     this.noteReadyMemo = null;
     this.noteReadyFrontGen = 0;
     this.noteReadyFrontByPath = new Map();
+    // Eligibility is built once (or when marked dirty), then maintained
+    // incrementally. Vault create/delete/rename events are ignored until
+    // layout ready so Obsidian's startup scan cannot storm the snapshot.
+    this.noteReadyEligibilityReady = false;
+    this.noteReadyEligibilityDirty = false;
+    this.noteReadyEligibilityEntriesCache = null;
+    this.noteReadyEligibilityEntriesGen = -1;
+    this.noteReadyResolvedSeen = false;
     // Shared NEW/ROTTEN review chips (dashboard and rotten summary use
     // the same live models). Mirrors `readyWidgets` below.
     this.reviewWidgets = new Set();
@@ -336,6 +344,10 @@ class BobLedgerToolsPlugin extends Plugin {
         metadataCache.on("resolved", () => {
           this.refreshTodayCacheFromDaily();
           this.scheduleDashboardCollectionsRefresh();
+          if (!this.noteReadyResolvedSeen) {
+            this.noteReadyResolvedSeen = true;
+            this.noteReadyEligibilityDirty = true;
+          }
           try {
             void this.dashboardCollectionsEnsureBaseContracts();
           } catch (error) {
@@ -450,6 +462,7 @@ class BobLedgerToolsPlugin extends Plugin {
     }
 
     this.app.workspace.onLayoutReady(() => {
+      this.noteReadyEligibilityDirty = true;
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
@@ -536,6 +549,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.freshnessTasksGen = 0;
     this.noteReadyMemo = null;
     this.noteReadyFrontGen = 0;
+    this.noteReadyEligibilityReady = false;
+    this.noteReadyEligibilityDirty = false;
+    this.noteReadyEligibilityEntriesCache = null;
+    this.noteReadyEligibilityEntriesGen = -1;
+    this.noteReadyResolvedSeen = false;
     if (this.noteReadyFrontByPath instanceof Map) {
       this.noteReadyFrontByPath.clear();
     }

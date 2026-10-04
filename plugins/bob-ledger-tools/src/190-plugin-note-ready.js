@@ -122,13 +122,52 @@ class BobLedgerToolsNoteReadyMixin {
     }
   }
 
+  // Eligibility entries for a snapshot. The full vault walk runs only
+  // when the map has never been built or is marked dirty. Otherwise
+  // the maintained map is projected, cached by `noteReadyFrontGen`.
+  noteReadyEligibilityEntries() {
+    try {
+      if (!this.noteReadyEligibilityReady || this.noteReadyEligibilityDirty) {
+        const result = this.noteReadyRefreshEligibility();
+        this.noteReadyEligibilityReady = true;
+        this.noteReadyEligibilityDirty = false;
+        const entries =
+          result && Array.isArray(result.entries) ? result.entries : [];
+        this.noteReadyEligibilityEntriesCache = entries;
+        this.noteReadyEligibilityEntriesGen = this.noteReadyFrontGen || 0;
+        return entries;
+      }
+      const frontGen = this.noteReadyFrontGen || 0;
+      if (
+        this.noteReadyEligibilityEntriesGen === frontGen &&
+        Array.isArray(this.noteReadyEligibilityEntriesCache)
+      ) {
+        return this.noteReadyEligibilityEntriesCache;
+      }
+      const map = this.noteReadyFrontByPath;
+      const entries =
+        map instanceof Map
+          ? Array.from(map.values(), (built) => built.entry)
+          : [];
+      this.noteReadyEligibilityEntriesCache = entries;
+      this.noteReadyEligibilityEntriesGen = frontGen;
+      return entries;
+    } catch (error) {
+      return [];
+    }
+  }
+
   // Single-path eligibility update for a changed file. Returns true
-  // when the fingerprint changed.
+  // when the fingerprint changed. Until the first full build, skip
+  // partial-map writes: the next scan already includes the file.
   refreshNoteReadyForChangedFile(file) {
     try {
       const path =
         file && typeof file.path === "string" ? file.path : null;
       if (!path) {
+        return false;
+      }
+      if (!this.noteReadyEligibilityReady) {
         return false;
       }
       if (!(this.noteReadyFrontByPath instanceof Map)) {
@@ -139,10 +178,9 @@ class BobLedgerToolsNoteReadyMixin {
         this.noteFrontmatter(file),
       );
       const previous = this.noteReadyFrontByPath.get(path);
-      const changed =
-        (previous && previous.fingerprint) !==
-        (built && built.fingerprint);
-      if (!changed) {
+      const before = previous ? previous.fingerprint : null;
+      const after = built ? built.fingerprint : null;
+      if (before === after) {
         return false;
       }
       if (built) {
@@ -167,6 +205,9 @@ class BobLedgerToolsNoteReadyMixin {
     try {
       const key = String(path || "");
       if (!key) {
+        return false;
+      }
+      if (!this.noteReadyEligibilityReady) {
         return false;
       }
       if (
@@ -203,6 +244,10 @@ class BobLedgerToolsNoteReadyMixin {
 
   refreshNoteReadyForVaultEvent(event, file, oldPath) {
     try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && workspace.layoutReady === false) {
+        return false;
+      }
       if (event === "delete") {
         return this.refreshNoteReadyForDeletedPath(
           file && file.path,
@@ -248,7 +293,7 @@ class BobLedgerToolsNoteReadyMixin {
       defaultSource,
       Boolean(loaded.invalid),
     ]);
-    const eligibility = this.noteReadyRefreshEligibility();
+    const eligibilityEntries = this.noteReadyEligibilityEntries();
     const frontGen = this.noteReadyFrontGen || 0;
     const tasksGen = this.freshnessTasksGen || 0;
     let freshnessMemo = null;
@@ -400,7 +445,7 @@ class BobLedgerToolsNoteReadyMixin {
       }
     }
     const evaluated = noteReadyEvaluate({
-      notes: eligibility.entries,
+      notes: eligibilityEntries,
       rows,
       defaultCap,
       defaultSource,
@@ -638,12 +683,9 @@ class BobLedgerToolsNoteReadyMixin {
     }
   }
 
-  // --- Per-note Ready cap views (ledger-views) ------------------------
-  // Live `renderCrowdedChip`, the `bob-ready-notes` ranked-bar block,
-  // the `## Tasks` heading chip (Live Preview widget plus Reading
-  // view), and one consolidated live-refresh fan-out. All members are
-  // synchronous, never throw, and follow the widget-Set pattern with
-  // unload cleanup.
+  // --- Per-note Ready cap heading helpers -----------------------------
+  // `## Tasks` heading chip lookup. Crowded-chip view methods live on
+  // BobLedgerToolsReadyNotesMixin.
 
   noteReadyHeadingEntryForPath(path) {
     try {
@@ -677,305 +719,6 @@ class BobLedgerToolsNoteReadyMixin {
       mobileDefault = false;
     }
     return { invalid, mobileDefault };
-  }
-
-  paintCrowdedChipElement(host, model, options = {}) {
-    try {
-      if (!host || typeof host.createEl !== "function") {
-        return null;
-      }
-      const sourcePath =
-        typeof options.sourcePath === "string" ? options.sourcePath : "";
-      const safe =
-        model && typeof model === "object"
-          ? model
-          : noteReadyCrowdedChipModel(null);
-      const anchor = host.createEl("a", {
-        cls:
-          `bob-plan-chip bob-plan-crowded` +
-          `${safe.over ? " bob-plan-over" : ""}` +
-          `${safe.placeholder ? " bob-plan-unavailable" : ""}` +
-          `${safe.calm ? " bob-plan-calm" : ""}`,
-        title: safe.tooltip,
-        href: "crowded",
-      });
-      const countModel = {
-        count: safe.placeholder ? null : safe.crowded,
-        cap: safe.placeholder ? null : safe.crowded,
-        over: Boolean(safe.over),
-        placeholder: Boolean(safe.placeholder),
-        tooltip: safe.tooltip,
-        aria: safe.aria,
-      };
-      setReadyAnchorContent(
-        anchor,
-        countModel,
-        { kind: "crowded", label: NOTE_READY_CROWDED_LABEL },
-      );
-      // Value span shows the chip value (`4`, `0 ✓`, `–`): rewrite it
-      // from the count/cap fraction the shared routine writes.
-      try {
-        const valueSpan = findReadySpan(anchor, READY_VALUE_CLS);
-        if (valueSpan) {
-          setReadySpanText(valueSpan, safe.valueText);
-        }
-      } catch (error) {
-        // Value rewrite is best-effort only.
-      }
-      // `↗` arrow span with aria-hidden, appended once and preserved
-      // across in-place refreshes.
-      try {
-        let arrow = null;
-        if (typeof anchor.querySelector === "function") {
-          arrow = anchor.querySelector(".bob-plan-crowded-arrow");
-        }
-        if (!arrow && Array.isArray(anchor.children)) {
-          arrow = anchor.children.find(
-            (child) =>
-              child &&
-              child.attrs &&
-              child.attrs.class &&
-              String(child.attrs.class).indexOf("bob-plan-crowded-arrow") !==
-                -1,
-          );
-        }
-        if (!arrow && typeof anchor.createSpan === "function") {
-          arrow = anchor.createSpan({
-            cls: "bob-plan-crowded-arrow",
-            text: NOTE_READY_CROWDED_ARROW,
-          });
-        } else if (!arrow && typeof anchor.createEl === "function") {
-          arrow = anchor.createEl("span", {
-            cls: "bob-plan-crowded-arrow",
-            text: NOTE_READY_CROWDED_ARROW,
-          });
-        }
-        if (arrow && typeof arrow.setAttribute === "function") {
-          arrow.setAttribute("aria-hidden", "true");
-        }
-      } catch (error) {
-        // Arrow is best-effort only.
-      }
-      if (anchor && typeof anchor.setAttribute === "function") {
-        anchor.setAttribute("aria-label", safe.aria);
-        anchor.setAttribute("role", "link");
-        try {
-          if (!anchor.hasAttribute("tabindex")) {
-            anchor.setAttribute("tabindex", "0");
-          }
-        } catch (error) {
-          // tabindex is best-effort only.
-        }
-      }
-      const open = (event) => {
-        if (event && typeof event.preventDefault === "function") {
-          event.preventDefault();
-        }
-        try {
-          const workspace = this.app && this.app.workspace;
-          if (
-            workspace &&
-            typeof workspace.openLinkText === "function"
-          ) {
-            const newLeaf = Boolean(
-              event && (event.ctrlKey || event.metaKey),
-            );
-            workspace.openLinkText("crowded", sourcePath, newLeaf);
-          }
-        } catch (error) {
-          // The chip still shows the count without the navigation.
-        }
-      };
-      if (anchor && typeof anchor.addEventListener === "function") {
-        anchor.addEventListener("click", open);
-        anchor.addEventListener("keydown", (event) => {
-          if (event && (event.key === "Enter" || event.key === " ")) {
-            open(event);
-          }
-        });
-        anchor.addEventListener("mouseover", (event) => {
-          try {
-            const workspace = this.app && this.app.workspace;
-            if (workspace && typeof workspace.trigger === "function") {
-              workspace.trigger("hover-link", {
-                event,
-                source: "bob-plan",
-                hoverParent: host,
-                targetEl: anchor,
-                linktext: "crowded",
-                sourcePath,
-              });
-            }
-          } catch (error) {
-            // Hover preview is best-effort only.
-          }
-        });
-      }
-      return anchor;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  renderCrowdedChip(host, options = {}) {
-    try {
-      if (!host || typeof host.createEl !== "function") {
-        return null;
-      }
-      const sourcePath =
-        typeof options.sourcePath === "string" ? options.sourcePath : "";
-      const component = options.component || null;
-      if (!this.crowdedWidgets) {
-        this.crowdedWidgets = new Set();
-      }
-      if (component) {
-        for (const widget of Array.from(this.crowdedWidgets)) {
-          if (widget.component === component) {
-            try {
-              if (widget.el && widget.el.parentNode) {
-                widget.el.parentNode.removeChild(widget.el);
-              } else if (
-                widget.el &&
-                typeof widget.el.remove === "function"
-              ) {
-                widget.el.remove();
-              }
-            } catch (error) {
-              // Best-effort removal only.
-            }
-            this.crowdedWidgets.delete(widget);
-          }
-        }
-      }
-      for (const widget of Array.from(this.crowdedWidgets)) {
-        try {
-          const el = widget.el;
-          const detached =
-            !el ||
-            (typeof el.isConnected === "boolean" &&
-              el.isConnected === false &&
-              (!el.parentNode || el.parentNode === null));
-          if (detached && (!el.parentNode || el.parentNode === null)) {
-            if (!host.contains || !host.contains(el)) {
-              this.crowdedWidgets.delete(widget);
-            }
-          }
-        } catch (error) {
-          // Keep the widget on inspection failure.
-        }
-      }
-      let snapshot = null;
-      try {
-        snapshot = this.noteReadyEnsureSnapshot(new Date());
-      } catch (error) {
-        snapshot = null;
-      }
-      const model = noteReadyCrowdedChipModel(snapshot);
-      const anchor = this.paintCrowdedChipElement(host, model, {
-        sourcePath,
-      });
-      if (!anchor) {
-        return null;
-      }
-      const widget = { el: anchor, sourcePath, component };
-      this.crowdedWidgets.add(widget);
-      if (component && typeof component.register === "function") {
-        try {
-          component.register(() => {
-            this.crowdedWidgets.delete(widget);
-          });
-        } catch (error) {
-          // The widget still refreshes with the batch; only the
-          // component-owned unregister is skipped.
-        }
-      }
-      return anchor;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  refreshCrowdedChips(now = new Date()) {
-    if (!this.crowdedWidgets || this.crowdedWidgets.size === 0) {
-      return false;
-    }
-    let refreshed = false;
-    let snapshot = null;
-    try {
-      snapshot = this.noteReadyEnsureSnapshot(now);
-    } catch (error) {
-      snapshot = null;
-    }
-    const model = noteReadyCrowdedChipModel(snapshot);
-    for (const widget of Array.from(this.crowdedWidgets)) {
-      try {
-        const el = widget.el;
-        const parent = el && el.parentNode ? el.parentNode : null;
-        if (!parent || typeof parent.createEl !== "function") {
-          if (!el || !el.isConnected) {
-            this.crowdedWidgets.delete(widget);
-          }
-          continue;
-        }
-        const countModel = {
-          count: model.placeholder ? null : model.crowded,
-          cap: model.placeholder ? null : model.crowded,
-          over: Boolean(model.over),
-          placeholder: Boolean(model.placeholder),
-          tooltip: model.tooltip,
-          aria: model.aria,
-        };
-        // In-place refresh: keep the anchor (and its listeners) and
-        // rewrite spans, title, aria, and state classes without
-        // flicker. Never assigns `.text` on the live element.
-        setReadyAnchorContent(el, countModel, {
-          kind: "crowded",
-          label: NOTE_READY_CROWDED_LABEL,
-        });
-        try {
-          const valueSpan = findReadySpan(el, READY_VALUE_CLS);
-          if (valueSpan) {
-            setReadySpanText(valueSpan, model.valueText);
-          }
-        } catch (error) {
-          // One stale widget never breaks the others.
-        }
-        try {
-          if (el && typeof el.setAttribute === "function") {
-            el.setAttribute("title", model.tooltip);
-            el.setAttribute("aria-label", model.aria);
-          }
-        } catch (error) {
-          // Best-effort label refresh only.
-        }
-        refreshed = true;
-      } catch (error) {
-        // One stale widget never breaks the others.
-      }
-    }
-    return refreshed;
-  }
-
-  scheduleCrowdedRefresh() {
-    if (
-      this.crowdedRefreshTimer !== null &&
-      this.crowdedRefreshTimer !== undefined
-    ) {
-      return;
-    }
-    const schedule =
-      typeof window !== "undefined" &&
-      typeof window.setTimeout === "function"
-        ? window.setTimeout
-        : setTimeout;
-    this.crowdedRefreshTimer = schedule(() => {
-      this.crowdedRefreshTimer = null;
-      try {
-        this.refreshCrowdedChips(new Date());
-      } catch (error) {
-        // Best-effort refresh only.
-      }
-    }, 150);
   }
 
 }

@@ -208,7 +208,9 @@ function makeNoteReadyApp({
         return {};
       },
       offref: () => {},
-      onLayoutReady: () => {},
+      onLayoutReady: (callback) => {
+        handlers.onLayoutReady = callback;
+      },
       getActiveFile: () => null,
       trigger: (event) => triggers.push(event),
     },
@@ -247,6 +249,16 @@ function loadPlugin(options = {}) {
   const plugin = new LedgerToolsPlugin(makeNoteReadyApp(options), {});
   plugin.onload();
   return plugin;
+}
+
+function countMarkdownWalks(app) {
+  const original = app.vault.getMarkdownFiles.bind(app.vault);
+  const counter = { scans: 0 };
+  app.vault.getMarkdownFiles = () => {
+    counter.scans += 1;
+    return original();
+  };
+  return counter;
 }
 
 function projectFiles(extra = {}) {
@@ -949,18 +961,23 @@ test("throwing Tasks guards never throw", () => {
 // --- Memoization and invalidation -------------------------------------------------
 
 test("snapshot reuses the memo without reparsing or re-walking", () => {
-  const plugin = loadPlugin({
+  const app = makeNoteReadyApp({
     tasks: countedTasks("sase.md", 6),
     files: projectFiles(),
   });
+  const walks = countMarkdownWalks(app);
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
   const first = plugin.api.noteReady.snapshot();
   const gen = plugin.noteReadyFrontGen;
+  assert.equal(walks.scans, 1);
   assert.equal(plugin.api.noteReady.snapshot(), first);
   assert.equal(plugin.noteReadyFrontGen, gen);
   assert.deepEqual(
     plugin.api.noteReady.snapshot().notes,
     first.notes,
   );
+  assert.equal(walks.scans, 1, "a memo hit must not re-walk the vault");
 });
 
 test("a task edit rebuilds through the cache-update handler", () => {
@@ -1063,6 +1080,128 @@ test("a config edit flows through the stat cache", () => {
     assert.equal(plugin.api.noteReady.forNote("sase.md").state, "room");
   });
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("untyped and non-markdown vault events are no-ops", () => {
+  const triggers = [];
+  const files = projectFiles({ "daily.md": { type: "daily" } });
+  const app = makeNoteReadyApp({
+    tasks: countedTasks("sase.md", 2),
+    files,
+    triggers,
+  });
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  plugin.api.noteReady.snapshot();
+  const gen = plugin.noteReadyFrontGen;
+  const before = triggers.length;
+  assert.equal(
+    plugin.refreshNoteReadyForChangedFile({ path: "daily.md" }),
+    false,
+  );
+  assert.equal(
+    plugin.refreshNoteReadyForChangedFile({ path: "clip.pdf" }),
+    false,
+  );
+  assert.equal(
+    plugin.refreshNoteReadyForVaultEvent("create", { path: "daily.md" }),
+    false,
+  );
+  assert.equal(
+    plugin.refreshNoteReadyForVaultEvent("create", { path: "clip.pdf" }),
+    false,
+  );
+  assert.equal(plugin.noteReadyFrontGen, gen);
+  assert.equal(triggers.length, before);
+  assert.ok(!triggers.includes(TODAY_RELOAD_EVENT));
+});
+
+test("memo hits never re-walk the vault", () => {
+  const tasks = countedTasks("sase.md", 6);
+  const app = makeNoteReadyApp({
+    tasks,
+    files: projectFiles(),
+  });
+  const walks = countMarkdownWalks(app);
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  plugin.api.noteReady.snapshot();
+  assert.equal(walks.scans, 1);
+  const task = tasks[0];
+  for (let index = 0; index < 200; index += 1) {
+    plugin.api.noteReady.snapshot();
+    plugin.api.noteReady.forNote("sase.md");
+    plugin.api.noteReady.counted(task);
+    plugin.api.noteReady.inCrowdedNote(task);
+    plugin.api.noteReady.groupLabel(task);
+  }
+  assert.equal(walks.scans, 1);
+});
+
+test("the startup storm is linear", () => {
+  const handlers = {};
+  const files = {};
+  const typed = [];
+  for (let index = 0; index < 5000; index += 1) {
+    const path = `note-${String(index).padStart(4, "0")}.md`;
+    if (index % 500 === 0) {
+      files[path] = { type: "[[project]]" };
+      typed.push(path);
+    } else {
+      files[path] = {};
+    }
+  }
+  const app = makeNoteReadyApp({
+    tasks: countedTasks(typed[0], 1),
+    files,
+    handlers,
+  });
+  app.workspace.layoutReady = false;
+  const walks = countMarkdownWalks(app);
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  const gen = plugin.noteReadyFrontGen;
+  for (const path of Object.keys(files)) {
+    assert.equal(
+      plugin.refreshNoteReadyForVaultEvent("create", { path }),
+      false,
+    );
+  }
+  assert.equal(walks.scans, 0);
+  assert.equal(plugin.noteReadyFrontGen, gen);
+  app.workspace.layoutReady = true;
+  assert.equal(typeof handlers.onLayoutReady, "function");
+  handlers.onLayoutReady();
+  const snapshot = plugin.api.noteReady.snapshot();
+  assert.equal(walks.scans, 1);
+  assert.equal(snapshot.available, true);
+  for (const path of typed) {
+    assert.ok(plugin.api.noteReady.forNote(path), path);
+  }
+  assert.equal(plugin.api.noteReady.forNote("note-0001.md"), null);
+});
+
+test("the first resolved event forces one rebuild and later ones do not", () => {
+  const handlers = {};
+  const app = makeNoteReadyApp({
+    tasks: countedTasks("sase.md", 2),
+    files: projectFiles(),
+    handlers,
+  });
+  const walks = countMarkdownWalks(app);
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  plugin.api.noteReady.snapshot();
+  assert.equal(walks.scans, 1);
+  assert.equal(typeof handlers["metadata:resolved"], "function");
+  handlers["metadata:resolved"]();
+  plugin.api.noteReady.snapshot();
+  assert.equal(walks.scans, 2);
+  handlers["metadata:resolved"]();
+  handlers["metadata:resolved"]();
+  plugin.api.noteReady.snapshot();
+  plugin.api.noteReady.forNote("sase.md");
+  assert.equal(walks.scans, 2);
 });
 
 test("noteReadyEvaluate is pure and mirrors the Rust totals", () => {

@@ -10,7 +10,6 @@ const { ElementStub, ModalStub } = require("./modal-harness.cjs");
 global.window = { setTimeout: (callback) => callback() };
 
 const openedModals = [];
-const settingStubs = [];
 const originalLoad = Module._load;
 function parseTestYaml(text) {
   const result = {};
@@ -27,50 +26,6 @@ function parseTestYaml(text) {
   return result;
 }
 
-class DropdownStub {
-  constructor() {
-    this.options = {};
-    this.value = "";
-    this.disabled = false;
-  }
-  addOption(value, label) {
-    this.options[value] = label;
-    return this;
-  }
-  setValue(value) {
-    this.value = value;
-    return this;
-  }
-  setDisabled(disabled) {
-    this.disabled = disabled;
-    return this;
-  }
-  onChange(callback) {
-    this.change = callback;
-    return this;
-  }
-}
-
-class SettingStub {
-  constructor(container) {
-    this.container = container;
-    settingStubs.push(this);
-  }
-  setName(name) {
-    this.name = name;
-    return this;
-  }
-  setDesc(description) {
-    this.description = description;
-    return this;
-  }
-  addDropdown(callback) {
-    this.dropdown = new DropdownStub();
-    callback(this.dropdown);
-    return this;
-  }
-}
-
 Module._load = function loadWithModalHarness(request, parent, isMain) {
   if (request === "obsidian") {
     return {
@@ -83,14 +38,6 @@ Module._load = function loadWithModalHarness(request, parent, isMain) {
       },
       Notice: class {},
       Plugin: class {},
-      PluginSettingTab: class {
-        constructor(app, plugin) {
-          this.app = app;
-          this.plugin = plugin;
-          this.containerEl = new ElementStub();
-        }
-      },
-      Setting: SettingStub,
       parseYaml: parseTestYaml,
     };
   }
@@ -256,7 +203,6 @@ function openPropertyPicker(options = {}) {
       propertyContext: { isObsidianTask: true },
       baseDate: BASE_DATE,
       random: sequence([0.1, 0.35, 0.6, 0.8, 0.95, 0.2, 0.45, 0.7]),
-      taskCard: options.taskCard === true,
       taskSession: options.taskSession || null,
       linkSession: options.linkSession || null,
       ...options.context,
@@ -332,7 +278,6 @@ function openTaskCardLinkWriter(options = {}) {
       filePath: "2026/20261003.md",
       propertyContext: { isObsidianTask: false },
       linkSession: session,
-      taskCard: true,
       baseDate: BASE_DATE,
       random: () => 0,
     },
@@ -370,7 +315,9 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
   assert.match(text, /Review every…/);
   assert.match(text, /Cancel/);
   assert.match(text, /effort/);
-  assert.match(text, /type to search/);
+  assert.match(text, /Ctrl\+D clear selected property/);
+  assert.match(text, /Esc \/ q \/ Ctrl\+\] close/);
+  assert.doesNotMatch(text, /type to search/i);
   assert.equal(byClass(root, "bob-task-card-close").length, 1);
   assert.equal(byClass(root, "bob-task-card-banner").length, 1);
   assert.equal(byClass(root, "bob-task-card-strip").length, 1);
@@ -382,7 +329,6 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
     "review-every",
     "lane",
     "cancel",
-    "more-properties",
   ]);
   const list = byClass(root, "bob-task-card-actions")[0];
   assert.equal(list.attributes.role, "listbox");
@@ -518,12 +464,80 @@ test("counted and linked cards disclose mixed values and Task Link notes", () =>
   assert.match(linkedText, /Beta/);
 });
 
-test("classic property picker stays on the generic modal width", () => {
-  const { modal } = openPropertyPicker({ taskCard: false });
-  assert.equal(modal.stage, "properties");
-  assert.ok(modal.modalEl.classes.includes("bob-cnp-modal"));
-  assert.ok(!modal.modalEl.classes.includes("bob-task-card-modal"));
-  assert.match(flattenText(modal.contentEl), /Set bullet property|Filter/);
+const CLASSIC_LIST_TEXT = /Set bullet property|Filter properties|Filter bullet properties|No matching properties/;
+
+function assertNoClassicList(modal) {
+  assert.doesNotMatch(flattenText(modal.contentEl), CLASSIC_LIST_TEXT);
+  assert.notEqual(modal.title, "Set bullet property");
+  assert.notEqual(modal.placeholder, "Filter properties");
+  assert.notEqual(modal.stage, "properties");
+  // The property list footer was Navigate / Move / Choose / Delete / Dismiss.
+  assert.doesNotMatch(flattenText(modal.contentEl), /↵ Choose|\^D Delete/);
+}
+
+test("Ctrl+Shift+P always opens the Task Card, never the classic property list", () => {
+  const { modal } = openPropertyPicker();
+  assert.equal(modal.stage, "task-card");
+  assert.equal(modal.hasTaskCard, true);
+  assert.ok(modal.modalEl.classes.includes("bob-task-card-modal"));
+  assertNoClassicList(modal);
+  assert.match(flattenText(modal.contentEl), /Schedule…/);
+  assert.equal(modal.inputEl, null);
+});
+
+test("the plugin carries no Task Card pilot setting, date gate, or classic preference", () => {
+  const source = require("fs").readFileSync(
+    require("path").join(__dirname, "../plugins/bob-navigation-hotkeys/main.js"),
+    "utf8",
+  );
+  for (const name of [
+    "taskCardDefaultEnabled",
+    "taskCardPilotEnabled",
+    "taskCardPreferenceValue",
+    "mergeTaskCardPilotPreference",
+    "TaskCardPilotSettingTab",
+    "isTaskCardPilotEnabled",
+    "loadTaskCardSettings",
+    "setTaskCardPreference",
+    "showSearchFromCard",
+    "open-search",
+    "Set bullet property",
+    "Filter properties",
+  ]) {
+    assert.equal(source.includes(name), false, `${name} must be gone`);
+  }
+  const plugin = new NavigationHotkeysPlugin();
+  assert.equal(typeof plugin.isTaskCardPilotEnabled, "undefined");
+  assert.equal(typeof plugin.addSettingTab, "undefined");
+});
+
+test("a leftover persisted taskCard flag is ignored and never rewritten", async () => {
+  for (const taskCard of [true, false, null, "unexpected"]) {
+    const content = "- [ ] #task Ship report [priority:: medium] ^ship";
+    const editor = makeEditor(content);
+    editor.getCursor = () => ({ line: 0, ch: 0 });
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.app = {};
+    plugin.getFreshnessApi = () => freshnessApi();
+    plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+    let loaded = 0;
+    let saved = 0;
+    plugin.loadData = async () => {
+      loaded += 1;
+      return { taskCard };
+    };
+    plugin.saveData = async () => {
+      saved += 1;
+    };
+    openedModals.length = 0;
+    assert.equal(plugin.openBulletPropertyPicker(editor, { config: buildConfig() }), true);
+    const modal = plugin.activeBulletPropertyPicker;
+    assert.equal(modal.stage, "task-card");
+    assertNoClassicList(modal);
+    modal.close();
+    assert.equal(loaded, 0);
+    assert.equal(saved, 0);
+  }
 });
 
 test("palette command is named Task card (set properties)", () => {
@@ -537,8 +551,8 @@ test("palette command is named Task card (set properties)", () => {
   );
 });
 
-test("opt-in Task Card opens the compact card with dialog semantics and a close control", () => {
-  const { modal, editor } = openPropertyPicker({ taskCard: true });
+test("Task Card opens the compact card with dialog semantics and a close control", () => {
+  const { modal, editor } = openPropertyPicker();
   assert.equal(modal.stage, "task-card");
   assert.ok(modal.modalEl.classes.includes("bob-cnp-modal"));
   assert.ok(modal.modalEl.classes.includes("bob-task-card-modal"));
@@ -554,25 +568,32 @@ test("opt-in Task Card opens the compact card with dialog semantics and a close 
   assert.equal(modal.isOpen, false);
 });
 
-test("search transition keeps compact width, seeds the query, and Back restores the card", () => {
-  const { modal } = openPropertyPicker({ taskCard: true });
-  modal.showSearchFromCard("pr");
-  assert.equal(modal.stage, "properties");
-  assert.equal(modal.cardViewMode, "search");
+test("a More row opens that property's value stage, never a filter list, and Back restores the card", () => {
+  const { modal, editor } = openPropertyPicker();
+  const rows = byClass(modal.contentEl, "bob-task-card-more-row");
+  assert.equal(rows.length, 1);
+  assert.match(flattenText(rows[0]), /effort/);
+  rows[0].listeners.click({ preventDefault() {} });
+  assert.equal(modal.stage, "value");
+  assert.equal(modal.selectedPropertyItem.property.name, "effort");
+  assert.equal(modal.title, "effort");
   assert.ok(modal.modalEl.classes.includes("bob-task-card-modal"));
-  assert.equal(modal.inputEl.value, "pr");
-  assert.equal(modal.inputEl.attributes.role, "combobox");
-  assert.match(flattenText(modal.contentEl), /priority/i);
-  assert.ok(byClass(modal.contentEl, "bob-task-card-back").length >= 1);
+  assert.equal(modal.inputEl.value, "");
+  assert.deepEqual(
+    modal.items.map((item) => item.value),
+    ["small", "large"],
+  );
+  assertNoClassicList(modal);
   const back = byClass(modal.contentEl, "bob-task-card-back")[0];
+  assert.ok(back);
   back.listeners.click({ preventDefault() {} });
   assert.equal(modal.stage, "task-card");
   assert.match(flattenText(modal.contentEl), /Schedule…/);
+  assert.equal(editor.writes(), 0);
 });
 
 test("card focus is synchronous; action keys and Back route through the existing stages", () => {
   const { modal } = openPropertyPicker({
-    taskCard: true,
     content: "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship",
   });
   assert.equal(modal.taskCardListEl.focused, true);
@@ -592,10 +613,14 @@ test("card focus is synchronous; action keys and Back route through the existing
   assert.equal(modal.stage, "task-card");
   assert.equal(modal.taskCardListEl.focused, true);
 
-  dispatchCardKey(modal, "p");
-  assert.equal(modal.cardViewMode, "search");
-  assert.equal(modal.inputEl.value, "p");
-  assert.equal(byClass(modal.contentEl, "bob-task-card-back").length, 1);
+  for (const key of ["p", "/", "z", "5", "6", "9"]) {
+    const result = dispatchCardKey(modal, key);
+    assert.equal(modal.stage, "task-card", `${key} must not leave the card`);
+    assertNoClassicList(modal);
+    assert.equal(modal.inputEl, null);
+    assert.equal(result.stopped, key === "5" || key === "6" || key === "9");
+  }
+  assert.equal(byClass(modal.contentEl, "bob-task-card-back").length, 0);
 });
 
 test("Task Card action keys enter the retained property, refresh, dependency, cancel, and lane stages", async () => {
@@ -653,18 +678,16 @@ test("Task Card action keys enter the retained property, refresh, dependency, ca
     assert.ok(modal.contentEl.children.length > 0);
   }
 
-  const configuredList = openPropertyPicker({ taskCard: true });
-  configuredList.modal.showSearchFromCard("effort");
-  const effortIndex = configuredList.modal.visibleItems.findIndex(
-    (item) => item.property && item.property.name === "effort",
-  );
-  assert.notEqual(effortIndex, -1);
-  await configuredList.modal.openItemAtIndex(effortIndex);
+  const configuredList = openPropertyPicker();
+  byClass(configuredList.modal.contentEl, "bob-task-card-more-row")[0].listeners.click({
+    preventDefault() {},
+  });
+  await nextTurn();
   configuredList.modal.renderAll();
   assert.equal(configuredList.modal.stage, "value");
   assert.equal(configuredList.modal.selectedPropertyItem.property.name, "effort");
 
-  const blockId = openPropertyPicker({ taskCard: true });
+  const blockId = openPropertyPicker();
   blockId.modal.ensureTaskCardStageChrome();
   blockId.modal.inputEl.select = () => {};
   blockId.modal.showBlockIdStage({
@@ -692,7 +715,6 @@ test("Task Link opens focused while resolving and consumes keys without replay",
   });
 
   const resolving = plugin.openLinkPicker(editor, {
-    taskCard: true,
     config: buildConfig(),
     baseDate: BASE_DATE,
   });
@@ -742,12 +764,10 @@ test("Task Link count replacement and source edits invalidate old resolutions", 
   plugin.resolveLinkPickerTargets = () => new Promise((resolve) => pending.push(resolve));
 
   const firstResolution = plugin.openLinkPicker(editor, {
-    taskCard: true,
     config: buildConfig(),
   });
   const firstModal = plugin.activeBulletPropertyPicker;
   const countedResolution = plugin.openLinkPicker(editor, {
-    taskCard: true,
     config: buildConfig(),
     countExplicit: true,
     additionalTaskCount: 1,
@@ -778,7 +798,7 @@ test("Task Link resolution failure and plugin unload close their shells", async 
   failed.app = {};
   failed.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
   failed.resolveLinkPickerTargets = async () => ({ error: "target read failed", targets: null });
-  const failure = failed.openLinkPicker(editor, { taskCard: true, config: buildConfig() });
+  const failure = failed.openLinkPicker(editor, { config: buildConfig() });
   const failedModal = failed.activeBulletPropertyPicker;
   assert.equal(failedModal.linkResolving, true);
   assert.equal(await failure, false);
@@ -790,7 +810,7 @@ test("Task Link resolution failure and plugin unload close their shells", async 
   unloading.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
   let resolveTargets;
   unloading.resolveLinkPickerTargets = () => new Promise((resolve) => { resolveTargets = resolve; });
-  const pendingResolution = unloading.openLinkPicker(editor, { taskCard: true, config: buildConfig() });
+  const pendingResolution = unloading.openLinkPicker(editor, { config: buildConfig() });
   const unloadingModal = unloading.activeBulletPropertyPicker;
   unloading.onunload();
   resolveTargets({ error: null, targets: [] });
@@ -799,14 +819,12 @@ test("Task Link resolution failure and plugin unload close their shells", async 
   assert.equal(unloading.activeBulletPropertyPicker, null);
 });
 
-test("Task Card pilot preserves direct Depends on entry", () => {
+test("direct Depends on entry opens the dependency stage without painting the card or the list", () => {
   const content = "- [ ] #task Parent [priority:: medium] ^parent";
   const editor = makeEditor(content);
   editor.getCursor = () => ({ line: 0, ch: 0 });
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {};
-  plugin.taskCardSettingsLoaded = true;
-  plugin.taskCardData = { taskCard: true };
   plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
 
   assert.equal(plugin.openBulletPropertyPicker(editor, {
@@ -815,14 +833,53 @@ test("Task Card pilot preserves direct Depends on entry", () => {
   }), true);
   const modal = plugin.activeBulletPropertyPicker;
   assert.ok(modal);
-  assert.equal(modal.taskCardEnabled, false);
-  assert.notEqual(modal.stage, "task-card");
+  assert.equal(modal.hasTaskCard, false);
+  assert.equal(modal.directStage, true);
+  assert.equal(modal.stage, "value");
+  assert.equal(modal.selectedPropertyItem.property.values, "local_task_id");
+  assert.ok(!modal.modalEl.classes.includes("bob-task-card-modal"));
+  assert.equal(byClass(modal.contentEl, "bob-task-card").length, 0);
+  assert.equal(byClass(modal.contentEl, "bob-task-card-back").length, 0);
+  assertNoClassicList(modal);
+  assert.equal(editor.writes(), 0);
   modal.close();
+});
+
+test("a direct stage for an unconfigured property closes instead of leaving an empty modal", () => {
+  const content = "- [ ] #task Parent [priority:: medium] ^parent";
+  const editor = makeEditor(content);
+  editor.getCursor = () => ({ line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  assert.equal(plugin.openBulletPropertyPicker(editor, {
+    config: buildConfig(),
+    initialProperty: "noSuchProperty",
+  }), false);
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+  assert.equal(editor.writes(), 0);
+});
+
+test("a refused direct stage closes instead of landing on a card or a list", () => {
+  const content = "- [ ] #task Parent [priority:: medium] ^parent";
+  const editor = makeEditor(content);
+  editor.getCursor = () => ({ line: 0, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  assert.equal(plugin.openBulletPropertyPicker(editor, {
+    config: buildConfig(),
+    initialProperty: "dependsOn",
+  }), true);
+  const modal = plugin.activeBulletPropertyPicker;
+  modal.returnHome();
+  assert.equal(modal.isOpen, false);
+  assert.equal(editor.writes(), 0);
 });
 
 test("priority gesture writes the frozen date and duplicate dispatch is single-flight", async () => {
   const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
-  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const { modal, plugin } = openPropertyPicker({ content });
   const preview = modal.taskCardModel.priorityStrip.levels[1];
   let writes = 0;
   let writtenContext = null;
@@ -841,7 +898,7 @@ test("priority gesture writes the frozen date and duplicate dispatch is single-f
   assert.equal(writtenContext.precomputedRoll.offset, preview.targetPreviews[0].offset);
   assert.equal(modal.isOpen, false);
 
-  const clicked = openPropertyPicker({ taskCard: true, content });
+  const clicked = openPropertyPicker({ content });
   let clickWrites = 0;
   clicked.plugin.setBulletPriorityValue = async () => { clickWrites += 1; return true; };
   const secondLevel = byClass(clicked.modal.contentEl, "bob-task-card-level")[1];
@@ -853,7 +910,7 @@ test("priority gesture writes the frozen date and duplicate dispatch is single-f
 
 test("pending priority action passes its card preview through the Work Log adapter", async () => {
   const content = "- [/] #task Pending work [priority:: medium] ^pending";
-  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const { modal, plugin } = openPropertyPicker({ content });
   const preview = modal.taskCardModel.priorityStrip.levels[1];
   let writtenContext = null;
   plugin.setBulletPriorityValue = async (...args) => {
@@ -938,7 +995,7 @@ test("Task Link transaction reports a cleanup failure without implying global un
 
 test("selected-property deletion uses the existing writer; other card rows stay non-deletable", async () => {
   const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
-  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const { modal, plugin } = openPropertyPicker({ content });
   let deleted = null;
   plugin.deleteBulletPropertyValue = async (_editor, _cursor, propertyName) => {
     deleted = propertyName;
@@ -949,7 +1006,7 @@ test("selected-property deletion uses the existing writer; other card rows stay 
   assert.equal(deleted, "scheduled");
   assert.equal(modal.isOpen, false);
 
-  const next = openPropertyPicker({ taskCard: true, content });
+  const next = openPropertyPicker({ content });
   dispatchCardKey(next.modal, "ArrowDown");
   assert.equal(next.modal.taskCardSelectedRowId, "depends-on");
   dispatchCardKey(next.modal, "d", { ctrlKey: true });
@@ -960,7 +1017,7 @@ test("selected-property deletion uses the existing writer; other card rows stay 
 
 test("failed deletions keep the card: 0 on unprioritized and Ctrl+D on unscheduled write nothing", async () => {
   const bare = "- [ ] #task Plain work ^plain";
-  const zero = openPropertyPicker({ taskCard: true, content: bare });
+  const zero = openPropertyPicker({ content: bare });
   zero.plugin.deleteBulletPropertyValue = async () => {
     throw new Error("no writer call expected");
   };
@@ -971,7 +1028,6 @@ test("failed deletions keep the card: 0 on unprioritized and Ctrl+D on unschedul
   assert.equal(zero.editor.writes(), 0);
 
   const unscheduled = openPropertyPicker({
-    taskCard: true,
     content: "- [ ] #task Plain work [priority:: medium] ^plain",
   });
   unscheduled.plugin.deleteBulletPropertyValue = async () => {
@@ -989,7 +1045,7 @@ test("failed deletions keep the card: 0 on unprioritized and Ctrl+D on unschedul
 test("a refused deletion rebuilds the card from the refreshed line", async () => {
   const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
   const refreshed = "- [ ] #task Ship report [priority:: high] [scheduled:: 2026-10-12] ^ship";
-  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const { modal, plugin } = openPropertyPicker({ content });
   plugin.deleteBulletPropertyValue = async () => ({ deleted: false, line: refreshed });
   dispatchCardKey(modal, "0");
   await nextTurn();
@@ -1011,7 +1067,7 @@ test("0 deletes only priority and keeps the scheduled field byte-for-byte", asyn
     },
     writes: () => 0,
   };
-  const { modal, plugin } = openPropertyPicker({ taskCard: true, content, editor });
+  const { modal, plugin } = openPropertyPicker({ content, editor });
   plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Areas/Work_ship.md" } });
   dispatchCardKey(modal, "0");
   await nextTurn();
@@ -1023,7 +1079,7 @@ test("0 deletes only priority and keeps the scheduled field byte-for-byte", asyn
 
 test("card keys pressed on a priority radio or the banner reach the resolver exactly once", async () => {
   const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
-  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const { modal, plugin } = openPropertyPicker({ content });
   let writes = 0;
   plugin.setBulletPriorityValue = async () => {
     writes += 1;
@@ -1043,7 +1099,7 @@ test("card keys pressed on a priority radio or the banner reach the resolver exa
   assert.equal(writes, 1);
   assert.equal(modal.isOpen, false);
 
-  const other = openPropertyPicker({ taskCard: true, content });
+  const other = openPropertyPicker({ content });
   const seen = [];
   const original = other.modal.handleTaskCardKeydown.bind(other.modal);
   other.modal.handleTaskCardKeydown = (event) => {
@@ -1061,7 +1117,7 @@ test("card keys pressed on a priority radio or the banner reach the resolver exa
 
 test("held or composing Enter on a radio or the banner never writes", async () => {
   const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
-  const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
+  const { modal, plugin } = openPropertyPicker({ content });
   let writes = 0;
   plugin.setBulletPriorityValue = async () => { writes += 1; return true; };
   plugin.setBulletPropertyValue = async () => { writes += 1; return true; };
@@ -1090,92 +1146,312 @@ test("held or composing Enter on a radio or the banner never writes", async () =
   assert.equal(writes, 1);
 });
 
-test("Task Card automatic activation uses the local October 19 boundary and explicit overrides", () => {
-  const { taskCardDefaultEnabled, taskCardPilotEnabled } = helpers;
-  const before = new Date(2026, 9, 18, 23, 59);
-  const boundary = new Date(2026, 9, 19, 0, 0);
-  assert.equal(taskCardDefaultEnabled(before), false);
-  assert.equal(taskCardDefaultEnabled(boundary), true);
-  assert.equal(taskCardPilotEnabled({}, true, before), false);
-  assert.equal(taskCardPilotEnabled({ taskCard: null }, true, before), false);
-  assert.equal(taskCardPilotEnabled({}, true, boundary), true);
-  assert.equal(taskCardPilotEnabled({ taskCard: null }, true, boundary), true);
-  assert.equal(taskCardPilotEnabled({ taskCard: false }, true, boundary), false);
-  assert.equal(taskCardPilotEnabled({ taskCard: true }, true, before), true);
-  assert.equal(taskCardPilotEnabled({ taskCard: true }, false, boundary), false);
-  assert.equal(taskCardPilotEnabled({ taskCard: "unexpected" }, true, boundary), false);
+// Keyboard fixtures for the close keys. `target` decides whether a handler
+// sees a text field; stopped/prevented record what a handler consumed.
+function closeKeyEvent(key, extra = {}) {
+  const event = {
+    key,
+    prevented: false,
+    stopped: false,
+    preventDefault() { event.prevented = true; },
+    stopPropagation() { event.stopped = true; },
+    ...extra,
+  };
+  return event;
+}
+
+const CTRL_RIGHT_BRACKET = { key: "]", code: "BracketRight", ctrlKey: true };
+
+function pressStageKey(modal, element, key, extra = {}) {
+  const event = closeKeyEvent(key, { target: element, ...extra });
+  element.listeners.keydown(event);
+  return event;
+}
+
+test("Escape, q, Q, and Ctrl+] close the card without writing", async () => {
+  for (const [key, modifiers] of [
+    ["Escape", {}],
+    ["q", {}],
+    ["Q", { shiftKey: true }],
+    ["]", { ctrlKey: true, code: "BracketRight" }],
+    ["]", { ctrlKey: true }],
+    ["x", { ctrlKey: true, code: "BracketRight" }],
+  ]) {
+    const { modal, editor, plugin } = openPropertyPicker();
+    plugin.activeBulletPropertyPicker = modal;
+    let written = 0;
+    for (const name of [
+      "setBulletPriorityValue",
+      "setBulletPropertyValue",
+      "deleteBulletPropertyValue",
+      "applyLaneToggleFromPicker",
+      "applyTaskCancelFromPicker",
+    ]) {
+      plugin[name] = async () => {
+        written += 1;
+        return true;
+      };
+    }
+    const event = closeKeyEvent(key, { target: modal.taskCardListEl, ...modifiers });
+    modal.taskCardListEl.listeners.keydown(event);
+    await nextTurn();
+    assert.equal(modal.isOpen, false, `${key} ${JSON.stringify(modifiers)}`);
+    assert.equal(event.prevented, true);
+    assert.equal(event.stopped, true);
+    assert.equal(editor.writes(), 0);
+    assert.equal(written, 0);
+    assert.equal(plugin.activeBulletPropertyPicker, null);
+  }
 });
 
-test("Task Card Automatic, Task Card, and Classic preferences preserve unrelated data", async () => {
-  const { taskCardPilotEnabled, taskCardPreferenceValue, mergeTaskCardPilotPreference } = helpers;
-  assert.equal(taskCardPreferenceValue({ taskCard: true }), "task-card");
-  assert.equal(taskCardPreferenceValue({ taskCard: false }), "classic");
-  assert.equal(taskCardPreferenceValue({ taskCard: null }), "automatic");
-  assert.deepEqual(
-    mergeTaskCardPilotPreference({ unrelated: { kept: true }, taskCard: false }, "automatic"),
-    { unrelated: { kept: true } },
-  );
-  assert.deepEqual(
-    mergeTaskCardPilotPreference({ unrelated: { kept: true } }, "classic"),
-    { unrelated: { kept: true }, taskCard: false },
-  );
+test("Ctrl+Q, Meta+Q, Alt+Q, and Ctrl+[ do not close the card", () => {
+  const { modal } = openPropertyPicker();
+  for (const extra of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { altKey: true },
+    { ctrlKey: true, shiftKey: true },
+  ]) {
+    dispatchCardKey(modal, "q", extra);
+    dispatchCardKey(modal, "Q", extra);
+    assert.equal(modal.isOpen, true, JSON.stringify(extra));
+  }
+  dispatchCardKey(modal, "[", { ctrlKey: true, code: "BracketLeft" });
+  dispatchCardKey(modal, "]", { ctrlKey: true, altKey: true });
+  dispatchCardKey(modal, "]", { ctrlKey: true, shiftKey: true });
+  dispatchCardKey(modal, "]", {});
+  assert.equal(modal.isOpen, true);
+  assert.equal(modal.stage, "task-card");
+});
 
+test("repeated close keys and a second close() are harmless", async () => {
+  const { modal, editor } = openPropertyPicker();
+  dispatchCardKey(modal, "q");
+  dispatchCardKey(modal, "q", { repeat: true });
+  dispatchCardKey(modal, "]", { ctrlKey: true });
+  modal.close();
+  modal.close();
+  await nextTurn();
+  assert.equal(modal.isOpen, false);
+  assert.equal(editor.writes(), 0);
+});
+
+test("composition never closes the card or a stage", () => {
+  const { modal } = openPropertyPicker();
+  for (const extra of [{ isComposing: true }, { keyCode: 229 }]) {
+    dispatchCardKey(modal, "q", extra);
+    dispatchCardKey(modal, "]", { ctrlKey: true, ...extra });
+    dispatchCardKey(modal, "Escape", extra);
+  }
+  assert.equal(modal.isOpen, true);
+
+  dispatchCardKey(modal, "Enter");
+  assert.equal(modal.stage, "value");
+  for (const extra of [{ isComposing: true }, { keyCode: 229 }]) {
+    pressStageKey(modal, modal.inputEl, "]", { ctrlKey: true, ...extra });
+  }
+  assert.equal(modal.isOpen, true);
+});
+
+test("q typed into a stage's text field never closes the modal", () => {
+  const { modal } = openPropertyPicker();
+  dispatchCardKey(modal, "Enter");
+  assert.equal(modal.stage, "value");
+  for (const key of ["q", "Q"]) {
+    const event = pressStageKey(modal, modal.inputEl, key);
+    assert.equal(event.prevented, false);
+  }
+  assert.equal(modal.isOpen, true);
+  assert.equal(modal.stage, "value");
+});
+
+test("Ctrl+] closes from a focused date field without writing", () => {
+  const { modal, editor, plugin } = openPropertyPicker();
+  let written = 0;
+  plugin.setBulletPropertyValue = async () => {
+    written += 1;
+    return true;
+  };
+  dispatchCardKey(modal, "Enter");
+  assert.equal(modal.stage, "value");
+  modal.inputEl.value = "3 waiting on API";
+  const event = pressStageKey(modal, modal.inputEl, "]", { ctrlKey: true, code: "BracketRight" });
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.equal(modal.isOpen, false);
+  assert.equal(written, 0);
+  assert.equal(editor.writes(), 0);
+});
+
+test("Ctrl+] closes the schedule review from its Reason and Work summary fields", async () => {
+  for (const field of ["reason", "summary"]) {
+    const { modal, editor } = openPropertyPicker({
+      content: "- [/] #task Pending work [priority:: medium] [scheduled:: 2026-10-12] ^pending",
+    });
+    dispatchCardKey(modal, "Enter");
+    modal.inputEl.value = "3";
+    modal.inputEl.listeners.input();
+    modal.inputEl.listeners.keydown(closeKeyEvent("Enter", { target: modal.inputEl }));
+    await nextTurn();
+    assert.equal(modal.stage, "schedule-review");
+    const element =
+      field === "reason" ? modal.scheduleReviewReasonEl : modal.scheduleReviewSummaryEl;
+    assert.ok(element, field);
+    element.value = "typed but uncommitted";
+    const q = pressStageKey(modal, element, "q");
+    assert.equal(q.prevented, false);
+    assert.equal(modal.isOpen, true);
+    const event = pressStageKey(modal, element, "]", { ctrlKey: true, code: "BracketRight" });
+    assert.equal(event.prevented, true);
+    assert.equal(event.stopped, true);
+    assert.equal(modal.isOpen, false);
+    assert.equal(modal.pendingScheduleReview, null);
+    assert.equal(editor.writes(), 0);
+  }
+});
+
+test("q closes from a focused More row and from the Close button", () => {
+  for (const pick of [
+    (modal) => byClass(modal.contentEl, "bob-task-card-more-row")[0],
+    (modal) => byClass(modal.contentEl, "bob-task-card-close")[0],
+  ]) {
+    const { modal, editor } = openPropertyPicker();
+    const element = pick(modal);
+    const event = closeKeyEvent("q", { target: element });
+    element.listeners.keydown(event);
+    assert.equal(modal.isOpen, false);
+    assert.equal(event.prevented, true);
+    assert.equal(editor.writes(), 0);
+  }
+  const { modal } = openPropertyPicker();
+  const row = byClass(modal.contentEl, "bob-task-card-more-row")[0];
+  row.listeners.keydown(closeKeyEvent("z", { target: row }));
+  row.listeners.keydown(closeKeyEvent("/", { target: row }));
+  assert.equal(modal.isOpen, true);
+  assert.equal(modal.stage, "task-card");
+});
+
+test("Ctrl+] closes from the Back button and the modal frame", () => {
+  const { modal } = openPropertyPicker();
+  dispatchCardKey(modal, "Enter");
+  assert.equal(modal.stage, "value");
+  assert.equal(typeof modal.modalEl.listeners.keydown, "function");
+  const event = closeKeyEvent("]", { ctrlKey: true, code: "BracketRight" });
+  modal.modalEl.listeners.keydown(event);
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.equal(modal.isOpen, false);
+
+  const other = openPropertyPicker();
+  other.modal.modalEl.listeners.keydown(closeKeyEvent("]", { ctrlKey: true, isComposing: true }));
+  other.modal.modalEl.listeners.keydown(closeKeyEvent("q"));
+  assert.equal(other.modal.isOpen, true);
+});
+
+test("a More stage, a refresh stage, and a cancel stage close on Ctrl+] and Escape", () => {
+  const stages = [
+    (modal) => byClass(modal.contentEl, "bob-task-card-more-row")[0].listeners.click({ preventDefault() {} }),
+    (modal) => dispatchCardKey(modal, "f"),
+    (modal) => dispatchCardKey(modal, "x"),
+  ];
+  for (const open of stages) {
+    for (const close of ["ctrl-bracket", "escape"]) {
+      const { modal, editor } = openPropertyPicker();
+      open(modal);
+      assert.notEqual(modal.stage, "task-card");
+      if (close === "escape") {
+        modal.dispatchKey({ key: "Escape" });
+      } else {
+        modal.handleKeydown(closeKeyEvent("]", { ctrlKey: true, target: modal.inputEl }));
+      }
+      assert.equal(modal.isOpen, false, `${modal.stage} ${close}`);
+      assert.equal(editor.writes(), 0);
+    }
+  }
+});
+
+test("a resolving Task Link closes on Escape, q, and Ctrl+] and swallows every other key", async () => {
+  for (const [key, extra] of [
+    ["Escape", {}],
+    ["q", {}],
+    ["Q", { shiftKey: true }],
+    ["]", { ctrlKey: true, code: "BracketRight" }],
+  ]) {
+    const content = "- [[Tasks/Alpha#^alpha]]";
+    const editor = makeEditor(content);
+    editor.getCursor = () => ({ line: 0, ch: 0 });
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.app = {};
+    plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
+    let resolveTargets;
+    plugin.resolveLinkPickerTargets = () => new Promise((resolve) => {
+      resolveTargets = resolve;
+    });
+    const resolving = plugin.openLinkPicker(editor, { config: buildConfig(), baseDate: BASE_DATE });
+    const modal = plugin.activeBulletPropertyPicker;
+    assert.equal(modal.linkResolving, true);
+    assert.equal(modal.stage, "task-card");
+    assertNoClassicList(modal);
+    for (const swallowed of ["z", "/", "5", "Enter", "x"]) {
+      const result = dispatchCardKey(modal, swallowed);
+      assert.deepEqual(result, { prevented: true, stopped: true });
+      assert.equal(modal.isOpen, true, swallowed);
+    }
+    const event = closeKeyEvent(key, { target: modal.taskCardListEl, ...extra });
+    modal.taskCardListEl.listeners.keydown(event);
+    assert.equal(modal.isOpen, false, key);
+    assert.equal(editor.writes(), 0);
+    resolveTargets({ error: null, targets: [] });
+    assert.equal(await resolving, false);
+  }
+});
+
+test("a direct dependency stage closes on Ctrl+] but keeps q as typed text", () => {
+  const content = "- [ ] #task Parent [priority:: medium] ^parent";
+  const editor = makeEditor(content);
+  editor.getCursor = () => ({ line: 0, ch: 0 });
   const plugin = new NavigationHotkeysPlugin();
-  plugin.taskCardSettingsGeneration = 1;
-  plugin.taskCardSettingsLoaded = false;
-  plugin.taskCardPluginUnloading = false;
-  plugin.loadData = async () => ({ unrelated: "preserved", taskCard: true });
-  await plugin.loadTaskCardSettings();
-  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 3)), true);
-  let saved = null;
-  plugin.saveData = async (data) => { saved = data; };
-  await plugin.setTaskCardPreference("classic");
-  assert.deepEqual(saved, { unrelated: "preserved", taskCard: false });
-  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 19)), false);
-  await plugin.setTaskCardPreference("automatic");
-  assert.deepEqual(saved, { unrelated: "preserved" });
-  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 18)), false);
-  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 19)), true);
-
-  const tab = new helpers.TaskCardPilotSettingTab({}, plugin);
-  tab.display();
-  const setting = settingStubs.at(-1);
-  assert.equal(setting.name, "Ctrl+Shift+P Task Card");
-  assert.match(setting.description, /2026-10-19/);
-  assert.deepEqual(setting.dropdown.options, {
-    automatic: "Automatic",
-    "task-card": "Task Card",
-    classic: "Classic list",
-  });
-  assert.equal(setting.dropdown.value, "automatic");
-  assert.equal(setting.dropdown.disabled, false);
-
-  const unreadable = new NavigationHotkeysPlugin();
-  unreadable.taskCardSettingsGeneration = 1;
-  unreadable.taskCardSettingsLoaded = false;
-  unreadable.taskCardPluginUnloading = false;
-  unreadable.loadData = async () => { throw new Error("unreadable"); };
-  assert.equal(await unreadable.loadTaskCardSettings(), false);
-  assert.equal(unreadable.taskCardSettingsLoaded, false);
-  assert.equal(unreadable.isTaskCardPilotEnabled(new Date(2026, 9, 19)), false);
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  assert.equal(plugin.openBulletPropertyPicker(editor, {
+    config: buildConfig(),
+    initialProperty: "dependsOn",
+  }), true);
+  const modal = plugin.activeBulletPropertyPicker;
+  assert.equal(modal.stage, "value");
+  const q = pressStageKey(modal, modal.inputEl, "q");
+  assert.equal(q.prevented, false);
+  assert.equal(modal.isOpen, true);
+  const event = pressStageKey(modal, modal.inputEl, "]", { ctrlKey: true, code: "BracketRight" });
+  assert.equal(event.prevented, true);
+  assert.equal(modal.isOpen, false);
+  assert.equal(editor.writes(), 0);
 });
 
-test("Task Card mode is fixed for an open modal across the activation boundary", () => {
-  const beforeActivation = openPropertyPicker({
-    taskCard: helpers.taskCardPilotEnabled({}, true, new Date(2026, 9, 18)),
+test("q and Ctrl+] are not global closes: other modals and the decay card ignore them", () => {
+  const app = {};
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = app;
+  const child = new ChildNotePickerModal(app, plugin, [], { basename: "Parent" });
+  child.open();
+  child.inputEl.listeners.keydown(closeKeyEvent("q", { target: child.inputEl }));
+  child.inputEl.listeners.keydown(closeKeyEvent("]", { ctrlKey: true, target: child.inputEl }));
+  assert.equal(child.isOpen, true);
+
+  const card = new FreshnessDecayCardModal({}, {
+    rows: [
+      { key: "1", label: "Not now", detail: "stamp only", action: "notNow", available: true },
+    ],
   });
-  assert.equal(beforeActivation.modal.taskCardEnabled, false);
-  assert.equal(
-    helpers.taskCardPilotEnabled({}, true, new Date(2026, 9, 19)),
-    true,
-  );
-  assert.equal(beforeActivation.modal.taskCardEnabled, false);
-  assert.equal(beforeActivation.modal.stage, "properties");
+  card.open();
+  card.contentEl.listeners.keydown(closeKeyEvent("q"));
+  card.contentEl.listeners.keydown(closeKeyEvent("]", { ctrlKey: true }));
+  assert.equal(card.isOpen, true);
+  assert.equal(card.settled, false);
 });
 
 test("missing freshness API disables Review every with an honest reason", () => {
   const { modal } = openPropertyPicker({
-    taskCard: true,
     freshnessApi: null,
   });
   assert.match(flattenText(modal.contentEl), /Freshness API/);
@@ -1244,18 +1520,16 @@ test("decay card keeps its classes and shares key-card tokens", () => {
   assert.ok(byClass(card.contentEl, "bob-key-card-row").length >= 1);
 });
 
-test("decay card adds the X drop hint at the Task Card activation boundary", () => {
+test("decay card footer always names the X drop alias; the trial date is not this gate", () => {
   const createCard = (now) => new FreshnessDecayCardModal({}, {
     rows: [
       { key: "D", action: "drop", label: "Drop", detail: "cancel", available: true },
     ],
     now,
   });
-  const before = createCard(new Date(2026, 9, 18));
-  before.open();
-  assert.doesNotMatch(flattenText(before.contentEl), /D \/ X drops/);
-
-  const boundary = createCard(new Date(2026, 9, 19));
-  boundary.open();
-  assert.match(flattenText(boundary.contentEl), /D \/ X drops/);
+  for (const now of [new Date(2026, 9, 3), new Date(2026, 9, 18), new Date(2026, 9, 19), undefined]) {
+    const card = createCard(now);
+    card.open();
+    assert.match(flattenText(card.contentEl), /D \/ X drops/);
+  }
 });

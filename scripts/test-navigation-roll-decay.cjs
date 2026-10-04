@@ -2,6 +2,10 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
 
+const { ModalStub } = require("./modal-harness.cjs");
+
+global.window = { setTimeout: (callback) => callback() };
+
 const notices = [];
 
 function parseTestYaml(text) {
@@ -32,28 +36,7 @@ const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
-    class TestModal {
-      constructor(app) {
-        this.app = app;
-        this.isOpen = false;
-        this.modalEl = { removeClass: () => {} };
-        this.contentEl = { empty: () => {} };
-      }
-      open() {
-        this.isOpen = true;
-        return this;
-      }
-      close() {
-        if (!this.isOpen) {
-          return this;
-        }
-        this.isOpen = false;
-        if (typeof this.onClose === "function") {
-          this.onClose();
-        }
-        return this;
-      }
-    }
+    class TestModal extends ModalStub {}
     class TestNotice {
       constructor(message) {
         notices.push(String(message));
@@ -798,7 +781,7 @@ test("picker-single recognizes the recommended-roll keypress", () => {
   assert.equal(helpers.isRecommendedRollKeydown(null), false);
 });
 
-test("picker-single footers carry the recommended-roll hints", () => {
+test("picker-single stage-two footers carry the recommended-roll hints", () => {
   const baseDate = new Date(2026, 8, 30);
   const property = decayProperty();
   const roll = helpers.planPriorityRollRecommendation({
@@ -812,41 +795,9 @@ test("picker-single footers carry the recommended-roll hints", () => {
   const preview = helpers.buildPriorityRollPreviewModel(roll, baseDate);
   assert.equal(preview.footerLabel, "Roll P2");
 
-  const stageOne = helpers.getBulletPropertyStageOneHints(preview);
-  assert.deepEqual(
-    stageOne.map((hint) => `${hint.keys.join("+")} ${hint.label}`),
-    [
-      "↑+↓ Navigate",
-      "^N+^P Move",
-      "↵ Choose",
-      "^↵ Roll P2",
-      "^R Re-roll",
-      "^D Delete",
-      "esc Dismiss",
-    ],
-  );
-
-  const cancelPreview = helpers.buildPriorityRollPreviewModel(
-    { kind: "cancel", level: { label: "P4" }, streak: 1 },
-    baseDate,
-  );
-  const cancelHints = helpers.getBulletPropertyStageOneHints(cancelPreview);
-  assert.deepEqual(
-    cancelHints.map((hint) => `${hint.keys.join("+")} ${hint.label}`),
-    [
-      "↑+↓ Navigate",
-      "^N+^P Move",
-      "↵ Choose",
-      "^↵ Cancel task",
-      "^D Delete",
-      "esc Dismiss",
-    ],
-  );
-
-  assert.deepEqual(
-    helpers.getBulletPropertyStageOneHints(null).map((hint) => hint.label),
-    ["Navigate", "Move", "Choose", "Delete", "Dismiss"],
-  );
+  // The property-list footer is gone with the list; the card's own footer
+  // names the keys that remain.
+  assert.equal(helpers.getBulletPropertyStageOneHints, undefined);
 
   const stageTwo = helpers.getBulletPropertyStageTwoHints(true, preview);
   assert.deepEqual(
@@ -909,10 +860,6 @@ test("picker-single shares one roll between the preview and the pinned row", () 
     null,
   );
 
-  assert.equal(
-    helpers.getPriorityRollFilterText(roll, baseDate),
-    "roll P2 roll roll 1/1",
-  );
   assert.equal(
     helpers.getPriorityRollCurrentLabel({
       kind: "decay",
@@ -1762,16 +1709,12 @@ test("picker-links takes a single recommended roll with Ctrl+Enter", async () =>
   assert.equal(await harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.ok(picker.isLinkSession());
-  const preview = picker.getStageOneRollPreview();
+  const preview = picker.taskCardModel.recommendation.preview;
   assert.equal(preview.action, "P2 roll");
   assert.equal(preview.footerLabel, "Roll P2");
   assert.match(preview.ariaLabel, /Ctrl\+Enter: P2 roll/);
 
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.kind === "property" && item.property.name === "scheduled",
-  );
-  assert.notEqual(scheduledIndex, -1);
-  picker.selectedIndex = scheduledIndex;
+  selectRollPropertyRow(picker, "scheduled");
   picker.handleKeydown({
     key: "Enter",
     ctrlKey: true,
@@ -1800,12 +1743,9 @@ test("picker-links shows no pinned roll row in stage two", async () => {
   });
   assert.equal(await harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledItem = picker.visibleItems.find(
-    (item) => item.kind === "property" && item.property.name === "scheduled",
-  );
-  assert.ok(scheduledItem);
-  picker.showValueStage(scheduledItem);
+  await picker.openTaskCardAction("schedule");
   assert.equal(picker.stage, "value");
+  assert.equal(picker.selectedPropertyItem.property.name, "scheduled");
   assert.equal(
     picker.items.some((item) => item && item.priorityRoll),
     false,
@@ -1838,7 +1778,7 @@ test("picker-links decays and cancels a single Task Link", async () => {
   });
   assert.equal(await decayHarness.open(), true);
   const decayPicker = decayHarness.plugin.activeBulletPropertyPicker;
-  assert.equal(decayPicker.getStageOneRollPreview().action, "P2 → P3");
+  assert.equal(decayPicker.taskCardModel.recommendation.preview.action, "P2 → P3");
   assert.equal(await decayPicker.applyLinkRecommendedRoll(), true);
   assert.match(
     decayEditor.content,
@@ -1864,7 +1804,7 @@ test("picker-links decays and cancels a single Task Link", async () => {
   });
   assert.equal(await cancelHarness.open(), true);
   const cancelPicker = cancelHarness.plugin.activeBulletPropertyPicker;
-  assert.equal(cancelPicker.getStageOneRollPreview().action, "Cancel task");
+  assert.equal(cancelPicker.taskCardModel.recommendation.preview.action, "Cancel task");
   assert.equal(await cancelPicker.applyLinkRecommendedRoll(), true);
   assert.match(
     cancelHarness.notes["Tasks.md"],
@@ -1913,7 +1853,7 @@ test("picker-links applies a mixed batch across two notes", async () => {
     true,
   );
   const picker = harness.plugin.activeBulletPropertyPicker;
-  const preview = picker.getStageOneRollPreview();
+  const preview = picker.taskCardModel.recommendation.preview;
   assert.equal(preview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
   assert.equal(preview.dateText, "2026-10-08 → 2026-10-31");
   assert.equal(preview.footerLabel, "Apply 3 recommendations");
@@ -2117,13 +2057,17 @@ async function flushRollWrites(plugin, beforeNoticeCount) {
   }
 }
 
+// The Task Card is the only surface: the schedule row is the card's
+// `scheduled` action, and it is the row the card opens on.
 function selectRollPropertyRow(picker, name) {
-  const index = picker.visibleItems.findIndex(
-    (item) => item && item.kind === "property" && item.property.name === name,
-  );
-  assert.notEqual(index, -1, `missing ${name} row`);
-  picker.selectedIndex = index;
-  return index;
+  assert.equal(name, "scheduled");
+  assert.equal(picker.stage, "task-card");
+  picker.selectTaskCardRow("schedule");
+  assert.equal(picker.taskCardSelectedRowId, "schedule");
+}
+
+function rollCtrlR() {
+  return { key: "r", ctrlKey: true, preventDefault() {}, stopPropagation() {} };
 }
 
 test("picker-single Ctrl+Enter rolls a P2 task in one undo group", async () => {
@@ -2158,10 +2102,9 @@ test("picker-single opens on scheduled so Ctrl+Enter rolls with no navigation", 
   assert.equal(harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.priorityRollRecommendation.kind, "roll");
-  assert.equal(picker.selectedIndex, 0);
-  const first = picker.visibleItems[0];
-  assert.equal(first.kind, "property");
-  assert.equal(first.property.name, "scheduled");
+  assert.equal(picker.stage, "task-card");
+  assert.equal(picker.taskCardSelectedRowId, "schedule");
+  assert.equal(picker.taskCardModel.recommendation.available, true);
   const before = notices.length;
   picker.handleKeydown(rollCtrlEnter());
   await flushRollWrites(harness.plugin, before);
@@ -2192,9 +2135,9 @@ test("picker-single opens a ^prj task on scheduled for an immediate roll", async
   assert.equal(harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.priorityRollRecommendation.kind, "roll");
-  assert.equal(picker.selectedIndex, 0);
-  assert.equal(picker.visibleItems[0].kind, "property");
-  assert.equal(picker.visibleItems[0].property.name, "scheduled");
+  assert.equal(picker.stage, "task-card");
+  assert.equal(picker.taskCardSelectedRowId, "schedule");
+  assert.equal(picker.taskCardModel.recommendation.available, true);
   const before = notices.length;
   picker.handleKeydown(rollCtrlEnter());
   await flushRollWrites(harness.plugin, before);
@@ -2216,9 +2159,9 @@ test("picker-counted opens on scheduled for an immediate mixed batch", async () 
   assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 2 }), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.isCountedSession(), true);
-  assert.equal(picker.selectedIndex, 0);
-  assert.equal(picker.visibleItems[0].kind, "property");
-  assert.equal(picker.visibleItems[0].property.name, "scheduled");
+  assert.equal(picker.stage, "task-card");
+  assert.equal(picker.taskCardSelectedRowId, "schedule");
+  assert.equal(picker.taskCardModel.recommendation.available, true);
   const before = notices.length;
   picker.handleKeydown(rollCtrlEnter());
   await flushRollWrites(harness.plugin, before);
@@ -2256,9 +2199,9 @@ test("picker-links opens on scheduled for an immediate roll", async () => {
   assert.equal(await harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.isLinkSession(), true);
-  assert.equal(picker.selectedIndex, 0);
-  assert.equal(picker.visibleItems[0].kind, "property");
-  assert.equal(picker.visibleItems[0].property.name, "scheduled");
+  assert.equal(picker.stage, "task-card");
+  assert.equal(picker.taskCardSelectedRowId, "schedule");
+  assert.equal(picker.taskCardModel.recommendation.available, true);
   const before = notices.length;
   picker.handleKeydown(rollCtrlEnter());
   await flushRollWrites(harness.plugin, before);
@@ -2337,11 +2280,7 @@ test("picker-single Ctrl+Enter in stage two writes the recommended roll", async 
   });
   assert.equal(harness.open(), true);
   let picker = harness.plugin.activeBulletPropertyPicker;
-  const propertyIndex = picker.visibleItems.findIndex(
-    (item) => item && item.kind === "property" && item.property.name === "scheduled",
-  );
-  assert.notEqual(propertyIndex, -1);
-  await picker.openItemAtIndex(propertyIndex);
+  await picker.openTaskCardAction("schedule");
   picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.stage, "value");
   const pinned = picker.items.find((item) => item && item.priorityRoll);
@@ -2365,7 +2304,7 @@ test("picker-single Ctrl+Enter in stage two writes the recommended roll", async 
   assert.match(harness.editor.content, /🎲 P2 roll · in \*\*8\*\* \(8–30\) days/);
 });
 
-test("picker-single Enter opens the date list and Ctrl+Enter on priority acts like Enter", async () => {
+test("picker-single Enter opens the date stage; Ctrl+Enter takes the recommendation", async () => {
   const content = "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a";
   const harness = createRollPickerHarness({ content });
   assert.equal(harness.open(), true);
@@ -2376,41 +2315,33 @@ test("picker-single Enter opens the date list and Ctrl+Enter on priority acts li
     setTimeout(resolve, 0);
   });
   assert.equal(picker.stage, "value");
+  assert.equal(picker.selectedPropertyItem.property.name, "scheduled");
   assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
   assert.equal(harness.editor.content, content);
-
-  const second = createRollPickerHarness({ content });
-  assert.equal(second.open(), true);
-  const secondPicker = second.plugin.activeBulletPropertyPicker;
-  selectRollPropertyRow(secondPicker, "priority");
-  secondPicker.handleKeydown(rollCtrlEnter());
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  assert.equal(secondPicker.stage, "value");
-  assert.equal(second.plugin.activeBulletPropertyPicker, secondPicker);
-  assert.equal(second.editor.content, content);
-  assert.equal(second.editor.undoGroups, 0);
+  assert.equal(harness.editor.undoGroups, 0);
 });
 
-test("picker-single P0 and closed tasks have no preview and Ctrl+Enter acts like Enter", async () => {
+test("picker-single P0 and closed tasks have no preview and Ctrl+Enter writes nothing", async () => {
   for (const content of [
     "- [ ] #task D [scheduled:: 2026-10-01] ^d",
     "- [x] #task E [priority:: medium] [scheduled:: 2026-10-01] ^e",
   ]) {
+    notices.length = 0;
     const harness = createRollPickerHarness({ content });
     assert.equal(harness.open(), true);
     const picker = harness.plugin.activeBulletPropertyPicker;
     assert.equal(picker.priorityRollRecommendation, null);
-    assert.equal(picker.getStageOneRollPreview(), null);
+    assert.equal(picker.taskCardModel.recommendation, null);
     selectRollPropertyRow(picker, "scheduled");
     picker.handleKeydown(rollCtrlEnter());
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
-    assert.equal(picker.stage, "value", content);
+    assert.equal(picker.stage, "task-card", content);
+    assert.match(notices.at(-1), /No recommendation is available/, content);
     assert.equal(harness.plugin.activeBulletPropertyPicker, picker, content);
     assert.equal(harness.editor.content, content, content);
+    assert.equal(harness.editor.undoGroups, 0, content);
   }
 });
 
@@ -2462,11 +2393,12 @@ test("picker-single stale tasks refuse and re-render the decay preview", async (
     ].join("\n"),
   );
   assert.equal(harness.plugin.activeBulletPropertyPicker, picker);
-  assert.equal(picker.stage, "properties");
+  assert.equal(picker.stage, "task-card");
   assert.equal(picker.priorityRollRecommendation.kind, "decay");
+  assert.equal(picker.taskCardModel.recommendation.source.kind, "decay");
 });
 
-test("picker-single Ctrl+R in stage one re-rolls the recommendation date", async () => {
+test("picker-single Ctrl+R on the card re-rolls the recommendation date", async () => {
   const values = [0, 0.5];
   let index = 0;
   const harness = createRollPickerHarness({
@@ -2479,13 +2411,12 @@ test("picker-single Ctrl+R in stage one re-rolls the recommendation date", async
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.priorityRollRecommendation.date, "2026-10-08");
   selectRollPropertyRow(picker, "scheduled");
-  picker.handleKeydown({
-    key: "r",
-    ctrlKey: true,
-    preventDefault() {},
-    stopPropagation() {},
+  picker.handleKeydown(rollCtrlR());
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
   });
   assert.equal(picker.priorityRollRecommendation.date, "2026-10-19");
+  assert.equal(picker.taskCardModel.recommendation.source.date, "2026-10-19");
 });
 
 test("picker-single Ctrl+R in stage two keeps the pinned row and recommendation together", async () => {
@@ -2499,10 +2430,7 @@ test("picker-single Ctrl+R in stage two keeps the pinned row and recommendation 
     true,
   );
   let picker = harness.plugin.activeBulletPropertyPicker;
-  const propertyIndex = picker.visibleItems.findIndex(
-    (item) => item && item.kind === "property" && item.property.name === "scheduled",
-  );
-  await picker.openItemAtIndex(propertyIndex);
+  await picker.openTaskCardAction("schedule");
   picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.priorityRollRecommendation.date, "2026-10-08");
   assert.equal(

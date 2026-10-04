@@ -1,6 +1,5 @@
 const obsidian = require("obsidian");
-const { MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, parseYaml } = obsidian;
-const PluginSettingTabBase = PluginSettingTab || class {};
+const { MarkdownView, Modal, Notice, Plugin, parseYaml } = obsidian;
 const { EditorView } = require("@codemirror/view");
 
 const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
@@ -4392,10 +4391,6 @@ class FreshnessDecayCardModal extends Modal {
       typeof settings.onChoose === "function" ? settings.onChoose : null;
     this.onDismiss =
       typeof settings.onDismiss === "function" ? settings.onDismiss : null;
-    this.rolloutNow =
-      settings.now instanceof Date && Number.isFinite(settings.now.getTime())
-        ? new Date(settings.now.getTime())
-        : new Date();
     this.settled = false;
     this.rowEls = [];
   }
@@ -4471,9 +4466,7 @@ class FreshnessDecayCardModal extends Modal {
     });
     contentEl.createDiv({
       cls: "bob-decay-card-footer bob-key-card-footer",
-      text: taskCardDefaultEnabled(this.rolloutNow)
-        ? "Esc changes nothing · D / X drops · 1–4 pick a P-level instead"
-        : "Esc changes nothing · 1–4 pick a P-level instead",
+      text: "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     window.setTimeout(() => {
@@ -15095,14 +15088,6 @@ const POMODORO_ENTRY_MOVE_HINTS = [
   { keys: ["esc"], label: "Dismiss" },
 ];
 
-const BULLET_PROPERTY_STAGE_ONE_HINTS = [
-  { keys: ["↑", "↓"], label: "Navigate" },
-  { keys: ["^N", "^P"], label: "Move" },
-  { keys: ["↵"], label: "Choose" },
-  { keys: ["^D"], label: "Delete" },
-  { keys: ["esc"], label: "Dismiss" },
-];
-
 const BULLET_PROPERTY_STAGE_TWO_HINTS = [
   { keys: ["↑", "↓"], label: "Navigate" },
   { keys: ["^N", "^P"], label: "Move" },
@@ -15135,23 +15120,6 @@ function getBulletPropertyStageTwoHints(hasPriorityRoll, rollPreview, options = 
   return hints;
 }
 
-// Stage-one footer with the recommended-roll hint: `^↵ <label>` after Choose,
-// plus `^R Re-roll` for dated recommendations (roll and decay). An
-// unactionable or absent preview keeps the base hints.
-function getBulletPropertyStageOneHints(rollPreview) {
-  if (!rollPreview || !rollPreview.footerLabel) {
-    return BULLET_PROPERTY_STAGE_ONE_HINTS;
-  }
-  const hints = [
-    ...BULLET_PROPERTY_STAGE_ONE_HINTS.slice(0, 3),
-    { keys: ["^↵"], label: rollPreview.footerLabel },
-  ];
-  if (rollPreview.dateValue) {
-    hints.push({ keys: ["^R"], label: "Re-roll" });
-  }
-  return [...hints, ...BULLET_PROPERTY_STAGE_ONE_HINTS.slice(3)];
-}
-
 // Ctrl+Enter (or Cmd+Enter on macOS) takes the recommended roll. Alt and
 // Shift variants are never a recommended roll.
 function isRecommendedRollKeydown(event) {
@@ -15165,16 +15133,6 @@ function isRecommendedRollKeydown(event) {
     return false;
   }
   return event.ctrlKey === true || event.metaKey === true;
-}
-
-// Extra stage-one filter text for the `scheduled` row so typing `roll` or
-// `decay` lands on it: the word itself plus the preview's action and meta.
-function getPriorityRollFilterText(recommendation, baseDate) {
-  const preview = buildPriorityRollPreviewModel(recommendation, baseDate);
-  if (!preview) {
-    return "";
-  }
-  return `roll ${preview.action || ""} ${preview.meta || ""}`.trim();
 }
 
 // The task's current level label for a recommendation: the roll/cancel level,
@@ -15408,19 +15366,6 @@ function getCancelReasonHints(options = {}) {
   return [
     { keys: ["↵"], label: enter },
     { keys: ["esc"], label: "Keep open" },
-  ];
-}
-
-// Footer hints for the schedule-log reason prompt: Enter always confirms the
-// stage (writing the date, plus a log entry when a reason was typed), while
-// Esc cancels the date write too.
-function getBulletPropertyScheduleReasonHints(options = {}) {
-  return [
-    {
-      keys: ["↵"],
-      label: options.empty ? (options.fallback ? "Log without a reason" : "Skip reason") : "Log reason",
-    },
-    { keys: ["esc"], label: "Cancel" },
   ];
 }
 
@@ -24567,36 +24512,6 @@ function planDependencyStageView(args = {}) {
   return Object.freeze(out);
 }
 
-// The summary pill on the Depends on row: `⛓ 2 · 1 open` / `⛓ none`
-// (`docs/task-dependencies.md` §6.1). Missing links count as waiting: they
-// are removable prerequisites, never silent.
-function formatDependencyStagePill(openCount, totalCount) {
-  const total = Math.max(0, Math.floor(numericOrDefault(totalCount, 0)));
-  if (total === 0) {
-    return "⛓ none";
-  }
-  const open = Math.max(0, Math.floor(numericOrDefault(openCount, 0)));
-  return `⛓ ${total} · ${open} open`;
-}
-
-// Row state for the Depends on picker row: total prerequisites and how many
-// are still open, resolved through the sync pool lookup.
-function describeDependencyRowState(content, parentLine, parentPath, index) {
-  const resolved = resolveDependencyStageCurrent(
-    content,
-    parentLine,
-    parentPath,
-    index,
-  );
-  const rows = resolved.ok ? resolved.rows : [];
-  const open = rows.filter((row) => row.open).length;
-  return Object.freeze({
-    total: rows.length,
-    open,
-    pill: formatDependencyStagePill(open, rows.length),
-  });
-}
-
 // Normalize one Tasks cache task to pool shape, or null when it carries no
 // usable location. Field names differ across Tasks versions, so every known
 // alias is tried; the vault scan covers whatever falls through.
@@ -24993,67 +24908,6 @@ function createBulletPropertyValueItems(propertyItem, baseDate) {
     dynamic: false,
     searchText: value,
   }));
-}
-
-// Stage-one display policy: on a prioritized task the associated
-// date-property row opens first so the previewed recommendation is one
-// Ctrl+Enter away. Presence of a configured priority value controls the
-// promotion — not an existing schedule date or a valid recommendation — and
-// every other row keeps its relative order and identity. Non-task bullets
-// and tasks without priority keep the existing menu order.
-function promoteScheduledRowForPrioritizedTask(
-  config,
-  propertyItems,
-  options = {},
-) {
-  const items = Array.isArray(propertyItems) ? propertyItems : [];
-  if (options && options.isTask === false) {
-    return items;
-  }
-  const properties =
-    config && Array.isArray(config.properties) ? config.properties : [];
-  for (const property of properties) {
-    if (!property || property.values !== "priority") {
-      continue;
-    }
-    const priorityName = normalizeBulletPropertyName(property.name);
-    const priorityRow = items.find(
-      (item) =>
-        item &&
-        item.kind === "property" &&
-        (item.property === property ||
-          normalizeBulletPropertyName(
-            item.property && item.property.name,
-          ) === priorityName) &&
-        item.defined,
-    );
-    if (!priorityRow) {
-      continue;
-    }
-    const schedulesName = normalizeBulletPropertyName(property.schedules);
-    if (!schedulesName) {
-      continue;
-    }
-    const scheduleIndex = items.findIndex(
-      (item) =>
-        item &&
-        item.kind === "property" &&
-        normalizeBulletPropertyName(item.property && item.property.name) ===
-          schedulesName,
-    );
-    if (scheduleIndex === -1) {
-      continue;
-    }
-    if (scheduleIndex === 0) {
-      return items;
-    }
-    return [
-      items[scheduleIndex],
-      ...items.slice(0, scheduleIndex),
-      ...items.slice(scheduleIndex + 1),
-    ];
-  }
-  return items;
 }
 
 function taskCardSessionContext(context = {}) {
@@ -25714,23 +25568,6 @@ function planTaskCard(context = {}) {
       targetCount: laneDescription ? laneDescription.count : session.targetCount,
       deletable: false,
     }),
-    row({
-      id: "more-properties",
-      kind: "disclosure",
-      action: "more-properties",
-      label: "More properties",
-      enabled: propertyProjections.some(
-        (item) =>
-          item.propertyName !== (scheduleProperty && scheduleProperty.name) &&
-          item.propertyName !== (priorityProperty && priorityProperty.name) &&
-          item.propertyName !== (dependencyProperty && dependencyProperty.name),
-      ),
-      unavailableReason: propertyProjections.length > 0
-        ? null
-        : "No additional properties are configured",
-      targetCount: session.targetCount,
-      deletable: false,
-    }),
   ]);
   const selectedRowId = rows.some((item) => item.id === context.selectedRowId)
     ? context.selectedRowId
@@ -25768,7 +25605,6 @@ function planTaskCard(context = {}) {
   });
   return Object.freeze({
     kind: "task-card",
-    mode: context.mode === "search" ? "search" : "card",
     session: Object.freeze({
       type: session.type,
       targetCount: session.targetCount,
@@ -25791,7 +25627,6 @@ function planTaskCard(context = {}) {
     rows,
     selectedRowId,
     inputActive: context.inputActive === true,
-    query: String(context.query || ""),
     schedule: scheduleProjection,
     priorityStrip,
     recommendation,
@@ -25870,9 +25705,6 @@ function resolveTaskCardKey(model, event) {
   const shift = event.shiftKey === true;
   const alt = event.altKey === true;
   const modified = ctrl || meta || shift || alt;
-  if (model.mode === "search") {
-    return Object.freeze({ type: "delegate-to-search", key });
-  }
   const repeatedAction = event.repeat === true;
   const rows = Array.isArray(model.rows) ? model.rows : [];
   const selected = rows.find((row) => row.id === model.selectedRowId) || null;
@@ -25952,10 +25784,7 @@ function resolveTaskCardKey(model, event) {
   if (!modified && /^[1-9]$/.test(key)) {
     const level = model.priorityStrip?.levels?.find((item) => item.key === key);
     if (!level) {
-      if (!model.priorityStrip?.propertyName || Number(key) <= 4) {
-        return unavailable("set-priority", "Priority level is not configured");
-      }
-      return Object.freeze({ type: "open-search", query: key });
+      return unavailable("set-priority", "Priority level is not configured");
     }
     if (!level.available) {
       return unavailable("set-priority", level.unavailableReason || "Priority level is unavailable");
@@ -25996,19 +25825,11 @@ function resolveTaskCardKey(model, event) {
   if (!modified && key === "Enter") {
     return taskCardIntentForRow(selected);
   }
-  if (!modified && key === "Escape") {
+  if (isTaskCardCloseKeydown(event)) {
     return Object.freeze({ type: "close-card" });
   }
   if (!modified && key === "Backspace") {
-    return String(model.query || "")
-      ? Object.freeze({ type: "search-key", key: "Backspace" })
-      : Object.freeze({ type: "back" });
-  }
-  if (!modified && key === "/") {
-    return Object.freeze({ type: "open-search", query: "" });
-  }
-  if (!modified && key.length === 1 && /[^\u0000-\u001f\u007f]/u.test(key)) {
-    return Object.freeze({ type: "open-search", query: key });
+    return Object.freeze({ type: "back" });
   }
   return null;
 }
@@ -26019,7 +25840,6 @@ const TASK_CARD_ROW_ORDER = Object.freeze([
   "review-every",
   "lane",
   "cancel",
-  "more-properties",
 ]);
 
 const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
@@ -26028,7 +25848,6 @@ const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   "review-every": "f",
   lane: "Alt+N",
   cancel: "x",
-  "more-properties": "",
 });
 
 function getTaskCardLaneChipLabel(status) {
@@ -26362,9 +26181,6 @@ function orderedTaskCardRows(model) {
     if (!row) {
       continue;
     }
-    if (id === "more-properties" && !(model.moreProperties || []).length) {
-      continue;
-    }
     const presented = presentTaskCardRow(row);
     ordered.push(
       Object.freeze({
@@ -26529,6 +26345,13 @@ function renderTaskCardView(container, model, options = {}) {
     }
     if (typeof options.onClose === "function") {
       options.onClose();
+    }
+  });
+  // The button's own Enter/Space activation stays native; every other key
+  // reaches the card resolver, so q and Ctrl+] close from here too.
+  closeButton.addEventListener("keydown", (event) => {
+    if (event && event.key !== "Enter" && event.key !== " ") {
+      routeCardKeydown(event);
     }
   });
   const meta = container.createDiv({
@@ -26950,7 +26773,9 @@ function renderTaskCardView(container, model, options = {}) {
       moreRow.addEventListener("keydown", (event) => {
         if (event && (event.key === "Enter" || event.key === " ")) {
           openProperty(event);
+          return;
         }
+        routeCardKeydown(event);
       });
       moreRow.createSpan({
         cls: "bob-task-card-more-name",
@@ -27014,7 +26839,7 @@ function renderTaskCardView(container, model, options = {}) {
     cls: "bob-task-card-footer bob-key-card-footer",
   });
   footer.createSpan({
-    text: "type to search · Ctrl+D clear selected property · Esc close",
+    text: "Ctrl+D clear selected property · Esc / q / Ctrl+] close",
   });
   if (typeof options.onFocusList === "function") {
     options.onFocusList(listEl);
@@ -27031,22 +26856,31 @@ function renderTaskCardView(container, model, options = {}) {
   });
 }
 
+// Between the Task Card and the stage it opens the modal borrows the filtered
+// picker chrome for one synchronous step. These options paint no title,
+// rows, or hints, so no frame can show a property list.
+const TASK_CARD_PENDING_STAGE = "stage-pending";
+
+function taskCardNeutralStageOptions() {
+  return {
+    items: [],
+    title: "",
+    headerIcon: "list-checks",
+    inputLabel: "Filter",
+    placeholder: "",
+    resultsLabel: "Task Card stage",
+    emptyText: "",
+    footerHints: [],
+    getSubtitle: () => "",
+    filterItem: () => true,
+    renderItem: () => {},
+    openItem: () => false,
+  };
+}
+
 class BulletPropertyPickerModal extends FilteredPickerModal {
   constructor(app, plugin, editor, cursor, lineText, config, context = {}) {
-    super(app, {
-      items: [],
-      title: "Set bullet property",
-      headerIcon: "tags",
-      inputLabel: "Filter bullet properties",
-      placeholder: "Filter properties",
-      resultsLabel: "Bullet properties",
-      emptyText: "No matching properties",
-      footerHints: BULLET_PROPERTY_STAGE_ONE_HINTS,
-      getSubtitle: () => "",
-      filterItem: () => true,
-      renderItem: () => {},
-      openItem: () => false,
-    });
+    super(app, taskCardNeutralStageOptions());
 
     this.plugin = plugin;
     this.editor = editor;
@@ -27058,19 +26892,23 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.taskSession = context.taskSession || null;
     this.linkSession = context.linkSession || null;
     this.bulletSubtitle = truncateBulletPropertySubtitle(lineText);
-    this.stage = "properties";
+    this.stage = TASK_CARD_PENDING_STAGE;
     this.selectedPropertyItem = null;
     this.pendingTask = null;
     this.markedLines = new Set();
     this.taskItemsByLine = new Map();
     this.priorityRandom =
       typeof context.random === "function" ? context.random : Math.random;
-    this.taskCardEnabled = context.taskCard === true;
+    // The Task Card is this modal's home surface. A direct stage (the
+    // `initialProperty: "dependsOn"` skip, the decay Less often picker) opens
+    // its value stage without ever painting the card, so it has no card to
+    // return to: Back, empty-Backspace and refused stages close it instead.
+    this.directStage =
+      Boolean(context.initialProperty) || context.directStage === true;
+    this.hasTaskCard = !this.directStage;
     this.linkResolving = context.linkResolving === true;
-    this.cardViewMode = this.taskCardEnabled ? "card" : "classic";
     this.taskCardModel = null;
     this.taskCardSelectedRowId = "schedule";
-    this.taskCardQuery = "";
     this.taskCardListEl = null;
     this.fixedValueBaseDate =
       context.baseDate instanceof Date
@@ -27109,25 +26947,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.refreshPriorityRollRecommendation();
     this.refreshCountedRollBatch();
     this.refreshLinkRollBatch();
-    if (this.taskCardEnabled) {
+    if (!this.linkResolving) {
+      this.refreshPropertyItems();
+    }
+    if (this.hasTaskCard) {
       this.showTaskCard({ rebuild: true });
-    } else if (this.linkResolving) {
-      this.applyOptions({
-        items: [],
-        title: "Resolving Task Link",
-        headerIcon: "link",
-        inputLabel: "Task Link status",
-        placeholder: "Resolving linked tasks…",
-        resultsLabel: "Task Link status",
-        emptyText: "Resolving linked tasks…",
-        footerHints: [{ keys: ["esc"], label: "Close" }],
-        getSubtitle: () => "nothing written yet",
-        filterItem: () => false,
-        renderItem: () => {},
-        openItem: () => false,
-      });
-    } else {
-      this.showPropertyStage({ clearQuery: false });
     }
   }
 
@@ -27143,7 +26967,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       typeof this.modalEl.removeClass === "function"
         ? (name) => this.modalEl.removeClass(name)
         : () => {};
-    if (this.taskCardEnabled) {
+    if (this.hasTaskCard) {
       add("bob-task-card-modal");
       if (options.wide) {
         add("bob-task-card-wide");
@@ -27178,16 +27002,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       freshnessApi: this.getTaskCardFreshnessApi(),
       frozenRecommendation: this.getTaskCardFrozenRecommendation(),
       selectedRowId: this.taskCardSelectedRowId,
-      mode: this.cardViewMode === "search" ? "search" : "card",
-      query: this.inputEl
-        ? this.inputEl.value
-        : this.taskCardQuery || "",
     };
   }
 
   showTaskCard(options = {}) {
-    this.taskCardEnabled = true;
-    this.cardViewMode = "card";
     this.stage = "task-card";
     this.selectedPropertyItem = null;
     this.pendingTask = null;
@@ -27202,7 +27020,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.taskCardModel = Object.freeze({
         ...this.taskCardModel,
         selectedRowId: this.taskCardSelectedRowId,
-        mode: "card",
       });
     }
     this.applyTaskCardChrome({ wide: false });
@@ -27211,23 +27028,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       this.modalEl.addClass("bob-cnp-modal");
       this.contentEl.addClass("bob-cnp");
       this.renderTaskCard();
-    }
-  }
-
-  showSearchFromCard(query = "") {
-    this.taskCardEnabled = true;
-    this.cardViewMode = "search";
-    this.taskCardQuery = String(query || "");
-    this.stage = "properties";
-    FilteredPickerModal.prototype.onOpen.call(this);
-    this.showPropertyStage({
-      clearQuery: false,
-      seedQuery: this.taskCardQuery,
-      fromTaskCard: true,
-    });
-    this.applyTaskCardChrome({ wide: false });
-    if (this.inputEl && typeof this.inputEl.focus === "function") {
-      this.inputEl.focus();
     }
   }
 
@@ -27268,7 +27068,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       },
       onRefreshPreviews: () => this.refreshTaskCardPreviews(),
       onOpenProperty: (propertyName) => {
-        this.showSearchFromCard(propertyName);
+        void this.dispatchTaskCardIntent({ type: "open-property", propertyName });
       },
       onKeydown: (event) => this.handleTaskCardKeydown(event),
       onFocusList: (listEl) => {
@@ -27368,13 +27168,38 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     ) || null;
   }
 
+  // Swaps the card for the filtered-picker chrome a value, reason, or review
+  // stage paints into. The caller opens that stage in the same synchronous
+  // step; `openTaskCardStage` returns to the card when nothing took over.
   ensureTaskCardStageChrome() {
     if (this.stage !== "task-card") {
       return;
     }
-    this.stage = "properties";
+    this.stage = TASK_CARD_PENDING_STAGE;
+    this.applyOptions(taskCardNeutralStageOptions());
     FilteredPickerModal.prototype.onOpen.call(this);
     this.applyTaskCardChrome({ wide: false });
+  }
+
+  openTaskCardStage(open) {
+    this.ensureTaskCardStageChrome();
+    try {
+      open();
+    } finally {
+      if (this.isOpen && this.stage === TASK_CARD_PENDING_STAGE) {
+        this.returnToTaskCard();
+      }
+    }
+  }
+
+  // Where a refused or stale stage lands: back on the card, or closed when
+  // this modal was opened straight into a stage and never had a card.
+  returnHome(options = {}) {
+    if (this.hasTaskCard) {
+      this.returnToTaskCard(options);
+    } else if (this.isOpen) {
+      this.close();
+    }
   }
 
   selectTaskCardRow(rowId) {
@@ -27400,7 +27225,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.scheduleReviewReasonEl = null;
     this.scheduleReviewSummaryEl = null;
     this.clearLocalTaskMarks();
-    this.taskCardQuery = "";
     this.showTaskCard(options.rebuild === true ? { rebuild: true } : {});
   }
 
@@ -27418,7 +27242,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     if (this.linkResolving) {
       stop();
-      if (event.key === "Escape") this.close();
+      if (isTaskCardCloseKeydown(event)) this.close();
       return;
     }
     const model = this.taskCardModel;
@@ -27437,10 +27261,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       const delta = intent.direction === "previous" ? -1 : 1;
       const next = (Math.max(0, current) + delta + rows.length) % rows.length;
       this.selectTaskCardRow(rows[next].id);
-      return;
-    }
-    if (intent.type === "open-search") {
-      this.showSearchFromCard(intent.query);
       return;
     }
     if (intent.type === "back") {
@@ -27483,6 +27303,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         result = await this.deleteTaskCardProperty(intent.propertyName);
       } else if (intent.type === "open-action") {
         result = await this.openTaskCardAction(intent.rowId, intent.action);
+      } else if (intent.type === "open-property") {
+        result = await this.openTaskCardProperty(intent.propertyName);
       }
       if (result === true && this.isOpen) this.close();
       return result;
@@ -27492,11 +27314,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   async openTaskCardAction(rowId, action) {
-    if (rowId === "more-properties") {
-      this.showSearchFromCard("");
-      return false;
-    }
-    this.ensureTaskCardStageChrome();
     if (action === "schedule" || rowId === "schedule") {
       const scheduleRow = (this.taskCardModel && this.taskCardModel.rows || []).find((row) => row.id === "schedule");
       const item = this.getTaskCardPropertyItem(scheduleRow && scheduleRow.propertyName || "scheduled");
@@ -27505,34 +27322,56 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return false;
       }
       this.valueBaseDate = this.fixedValueBaseDate || this.valueBaseDate;
-      this.showValueStage(item);
+      this.openTaskCardStage(() => this.showValueStage(item));
       return false;
     }
-    this.showPropertyStage({ clearQuery: true });
+    this.refreshPropertyItems();
+    const findItem = (predicate) =>
+      this.propertyItems.find((candidate) => candidate && predicate(candidate));
     if (rowId === "depends-on" || action === "dependencies") {
-      const item = this.propertyItems.find((candidate) => candidate && candidate.property && candidate.property.values === "local_task_id");
-      if (item) this.showValueStage(item);
+      const item = findItem((candidate) => candidate.property && candidate.property.values === "local_task_id");
+      if (item) this.openTaskCardStage(() => this.showValueStage(item));
       return false;
     }
     if (rowId === "review-every" || action === "refresh") {
-      const item = this.propertyItems.find((candidate) => candidate && candidate.kind === "refresh-interval");
-      if (item) this.showRefreshValueStage(item);
+      const item = findItem((candidate) => candidate.kind === "refresh-interval");
+      if (item) this.openTaskCardStage(() => this.showRefreshValueStage(item));
       return false;
     }
     if (rowId === "cancel" || action === "cancel") {
-      const item = this.propertyItems.find((candidate) => candidate && candidate.kind === "cancel-task");
-      if (item) this.showCancelReasonStage(item);
+      const item = findItem((candidate) => candidate.kind === "cancel-task");
+      if (item) this.openTaskCardStage(() => this.showCancelReasonStage(item));
       return false;
     }
     if (rowId === "lane" || action === "toggle-lane") {
-      const item = this.propertyItems.find((candidate) => candidate && candidate.kind === "lane-toggle");
+      const item = findItem((candidate) => candidate.kind === "lane-toggle");
       if (!item) return false;
       if (item.needsReason) {
-        this.showLaneReleaseReasonStage(item);
+        this.openTaskCardStage(() => this.showLaneReleaseReasonStage(item));
         return false;
       }
       return await this.plugin.applyLaneToggleFromPicker(this);
     }
+    return false;
+  }
+
+  // A More-section row opens that property's existing value stage; the
+  // `scheduled` property takes the same schedule commit path as its card row.
+  async openTaskCardProperty(propertyName) {
+    this.refreshPropertyItems();
+    const wanted = normalizeBulletPropertyName(propertyName);
+    const item = this.propertyItems.find(
+      (candidate) =>
+        candidate &&
+        candidate.kind === "property" &&
+        candidate.property &&
+        normalizeBulletPropertyName(candidate.property.name) === wanted,
+    );
+    if (!item) {
+      new Notice(`${propertyName || "Property"} is not available`);
+      return false;
+    }
+    this.openTaskCardStage(() => this.showValueStage(item));
     return false;
   }
 
@@ -27607,18 +27446,21 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         return false;
       }
     }
-    this.ensureTaskCardStageChrome();
-    this.showPropertyStage({ clearQuery: true, selectPropertyName: propertyName });
-    const index = this.visibleItems.findIndex((item) => item && item.kind === "property" && item.property && item.property.name === propertyName);
-    if (index < 0) {
+    this.refreshPropertyItems();
+    const item = this.propertyItems.find(
+      (candidate) =>
+        candidate &&
+        candidate.kind === "property" &&
+        candidate.property &&
+        candidate.property.name === propertyName,
+    );
+    if (!item) {
       new Notice(`${propertyName} is not a deletable property`);
       this.returnToTaskCard({ rebuild: true });
       return false;
     }
-    this.selectedIndex = index;
-    this.renderResults();
-    const deleted = await this.deleteSelectedProperty();
-    if (deleted !== true && this.isOpen && this.stage !== "task-card") {
+    const deleted = await this.deletePropertyItem(item);
+    if (deleted !== true && this.isOpen) {
       this.returnToTaskCard({ rebuild: true });
     }
     return deleted;
@@ -27645,7 +27487,35 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.showTaskCard({ rebuild: true });
   }
 
+  // Ctrl+] closes the modal from any focused element inside it. The date,
+  // filter, reason, and Work summary fields reach `handleKeydown`; this
+  // catches the rest (the Back button, a card row) as the event bubbles.
+  bindCloseChord() {
+    if (
+      this.closeChordBound ||
+      !this.modalEl ||
+      typeof this.modalEl.addEventListener !== "function"
+    ) {
+      return;
+    }
+    this.closeChordBound = true;
+    this.modalEl.addEventListener("keydown", (event) => {
+      if (
+        !event ||
+        event.isComposing === true ||
+        event.keyCode === 229 ||
+        !isCtrlRightBracketKeydown(event)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.close();
+    });
+  }
+
   onOpen() {
+    this.bindCloseChord();
     if (this.stage === "task-card") {
       this.contentEl.empty();
       this.modalEl.addClass("bob-cnp-modal");
@@ -27656,9 +27526,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     super.onOpen();
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
-    if (this.linkResolving && this.inputEl && typeof this.inputEl.focus === "function") {
-      this.inputEl.focus();
-    }
   }
 
   onClose() {
@@ -27688,12 +27555,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     super.renderAll(options);
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
-    this.wireTaskCardSearchAria();
     this.addTaskCardBackButton();
   }
 
   addTaskCardBackButton() {
-    if (!this.taskCardEnabled || this.stage === "task-card" || !this.headerEl) {
+    if (!this.hasTaskCard || this.stage === "task-card" || !this.headerEl) {
       return;
     }
     if (this.taskCardBackHeaderEl === this.headerEl && this.taskCardBackButtonEl) {
@@ -27710,35 +27576,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
     this.taskCardBackHeaderEl = this.headerEl;
     this.taskCardBackButtonEl = back;
-  }
-
-  wireTaskCardSearchAria() {
-    if (
-      !this.taskCardEnabled ||
-      this.cardViewMode !== "search" ||
-      !this.inputEl ||
-      !this.resultsEl
-    ) {
-      return;
-    }
-    const resultsId = "bob-task-card-search-results";
-    this.resultsEl.setAttribute("id", resultsId);
-    this.inputEl.setAttribute("role", "combobox");
-    this.inputEl.setAttribute("aria-autocomplete", "list");
-    this.inputEl.setAttribute("aria-controls", resultsId);
-    this.inputEl.setAttribute("aria-expanded", "true");
-    const options = Array.isArray(this.resultsEl.children)
-      ? this.resultsEl.children.filter(
-          (child) => child && child.attributes && child.attributes.role === "option",
-        )
-      : [];
-    options.forEach((row, index) => {
-      const id = `bob-task-card-search-option-${index}`;
-      row.setAttribute("id", id);
-      if (row.classes && row.classes.includes("is-selected")) {
-        this.inputEl.setAttribute("aria-activedescendant", id);
-      }
-    });
   }
 
   isCountedSession() {
@@ -27775,13 +27612,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return formatCountLabel(this.taskSession.actualCount, "task");
   }
 
-  showPropertyStage(options = {}) {
-    this.stage = "properties";
-    this.selectedPropertyItem = null;
-    this.pendingTask = null;
-    this.clearPendingBatch();
-    this.clearLocalTaskMarks();
-    this.selectedIndex = 0;
+  // The property rows the card's actions and its More section open stages
+  // for. Built without painting: no stage lists them.
+  buildPropertyItems() {
     let items;
     if (this.isLinkSession()) {
       const aggregate = createLinkPickerPropertyItems(
@@ -27915,138 +27748,13 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       });
       propertyItems = [...propertyItems, cancelItem];
     }
-    // Prioritized tasks open on the schedule row so the previewed
-    // recommendation is one Ctrl+Enter away. Counted and link sessions
-    // aggregate real targets; single mode needs a real task line so plain
-    // bullets carrying priority-like metadata keep the existing order.
-    {
-      const isTaskContext =
-        this.isLinkSession() || this.isCountedSession()
-          ? true
-          : Boolean(
-              this.propertyContext && this.propertyContext.isObsidianTask,
-            );
-      propertyItems = promoteScheduledRowForPrioritizedTask(
-        this.config,
-        propertyItems,
-        { isTask: isTaskContext },
-      );
-    }
-    propertyItems = this.withDependencyPropertyPills(propertyItems);
-    this.applyOptions({
-      items: propertyItems,
-      title: "Set bullet property",
-      headerIcon: "tags",
-      inputLabel: "Filter bullet properties",
-      placeholder: "Filter properties",
-      resultsLabel: "Bullet properties",
-      emptyText: "No matching properties",
-      footerHints: getBulletPropertyStageOneHints(
-        this.getStageOneRollPreview(),
-      ),
-      getSubtitle: (visibleItems, allItems) => {
-        const countText =
-          visibleItems.length === allItems.length
-            ? ""
-            : `Showing ${visibleItems.length} of ${allItems.length} · `;
-        return `${countText}${this.getTaskSessionSubtitle()}`;
-      },
-      filterItem: (item, query) => {
-        if (item && item.kind === "lane-toggle") {
-          return fuzzyMatchesText(
-            `lane commit release next ready ${item.detail || ""} ${item.title || ""} ${item.mode || ""}`,
-            query,
-          );
-        }
-        if (item && item.kind === "refresh-interval") {
-          return fuzzyMatchesText(item.searchText || "", query);
-        }
-        if (item && item.kind === "cancel-task") {
-          return fuzzyMatchesText(item.searchText || "", query);
-        }
-        const rollFilterText =
-          item &&
-          item.kind === "property" &&
-          item.property.values === "date"
-            ? this.getRollFilterTextForDateProperty(item.property.name)
-            : "";
-        return fuzzyMatchesText(
-          `${item.property.name} ${item.currentLabel || ""} ${
-            item.currentValue || ""
-          } ${
-            item.currentLabels ? item.currentLabels.join(" ") : ""
-          } ${
-            item.currentValues ? item.currentValues.join(" ") : ""
-          } ${item.valueState || ""} ${rollFilterText}`,
-          query,
-        );
-      },
-      renderItem: (item, rowEl, query) => {
-        if (item && item.kind === "lane-toggle") {
-          this.renderLaneToggleItem(item, rowEl, query);
-          return;
-        }
-        if (item && item.kind === "refresh-interval") {
-          this.renderRefreshRowItem(item, rowEl, query);
-          return;
-        }
-        if (item && item.kind === "cancel-task") {
-          this.renderCancelTaskItem(item, rowEl, query);
-          return;
-        }
-        this.renderPropertyItem(item, rowEl, query);
-      },
-      openItem: async (item) => {
-        if (item && item.kind === "lane-toggle") {
-          if (item.needsReason) {
-            this.showLaneReleaseReasonStage(item);
-            return false;
-          }
-          const applied = await this.plugin.applyLaneToggleFromPicker(this);
-          return applied === true;
-        }
-        if (item && item.kind === "refresh-interval") {
-          this.showRefreshValueStage(item);
-          return false;
-        }
-        if (item && item.kind === "cancel-task") {
-          if (item.recurring) {
-            new Notice(
-              "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
-            );
-            return false;
-          }
-          this.showCancelReasonStage(item);
-          return false;
-        }
-        this.showValueStage(item);
-        return false;
-      },
-    });
+    return propertyItems;
+  }
 
+  refreshPropertyItems() {
+    const propertyItems = this.buildPropertyItems();
     this.propertyItems = Array.isArray(propertyItems) ? propertyItems : [];
-    this.applyTaskCardChrome({ wide: false });
-    if (this.resultsEl) {
-      this.renderAll({ clearQuery: options.clearQuery !== false });
-      if (options.seedQuery && this.inputEl) {
-        this.inputEl.value = options.seedQuery;
-        this.renderResults();
-      }
-      const wantedPropertyName =
-        options.selectPropertyName || this.initialProperty;
-      if (wantedPropertyName) {
-        const selectedIndex = this.visibleItems.findIndex(
-          (item) =>
-            item &&
-            item.property &&
-            item.property.name === wantedPropertyName,
-        );
-        if (selectedIndex !== -1 && selectedIndex !== this.selectedIndex) {
-          this.selectedIndex = selectedIndex;
-          this.renderResults();
-        }
-      }
-    }
+    return this.propertyItems;
   }
 
   showValueStage(propertyItem) {
@@ -28073,11 +27781,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         .applyLaneToggleFromPicker(this)
         .then((applied) => {
           if (applied !== true) {
-            this.showPropertyStage({ clearQuery: false });
+            this.returnHome();
           }
         })
         .catch(() => {
-          this.showPropertyStage({ clearQuery: false });
+          this.returnHome();
         });
       return;
     }
@@ -28116,7 +27824,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           }
         }
         new Notice("No linked task to edit dependencies for");
-        this.showPropertyStage({ clearQuery: false });
+        this.returnHome();
         return;
       }
       const validation = this.isCountedSession()
@@ -28131,14 +27839,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           );
       if (!validation.valid) {
         new Notice(validation.message || validation.error);
-        this.showPropertyStage({ clearQuery: false });
+        this.returnHome();
         return;
       }
       if (!tryDependencyId(this.filePath, "task")) {
         new Notice(
           "Dependencies are unavailable: this note path cannot be encoded as a dependency ID",
         );
-        this.showPropertyStage({ clearQuery: false });
+        this.returnHome();
         return;
       }
       this.showLocalTaskValueStage(propertyItem);
@@ -28217,7 +27925,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
           : "list-checks",
       inputLabel: `Filter ${property.name} values`,
       placeholder: isDateProperty
-        ? this.taskCardEnabled && isScheduledProperty
+        ? isScheduledProperty
           ? "Type 3, 3d, mon, +3d, or 6/24"
           : "Type date, +3d, or 6/24"
         : isPriorityProperty
@@ -28231,7 +27939,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         Boolean(priorityRollLevel),
         this.getRollPreviewForDateProperty(property.name),
         {
-          skipReason: this.taskCardEnabled && isScheduledProperty,
+          skipReason: isScheduledProperty,
         },
       ),
       getSubtitle: () => {
@@ -28426,11 +28134,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return [];
   }
 
-  // Freeze a scheduled date pick and either skip the reason prompt (inline
-  // reason, Shift+Enter blank-reason) or open the existing reason stage.
+  // Freeze a scheduled date pick and route it through the combined review:
+  // one optional Reason plus Work summary form that commits nothing until
+  // Enter, or an immediate write when an inline reason or Shift+Enter
+  // blank-reason makes the Reason known and no Work Log target qualifies.
   // Invalid typed previews never write. Pinned rolls keep their deterministic
-  // reason and skip this path. With the Task Card enabled, unknown reasons
-  // and remaining Work Log opportunities share one uncommitted review.
+  // reason and skip this path.
   commitScheduledDateItem(item, options = {}) {
     if (!item) {
       return false;
@@ -28441,37 +28150,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     if (item.typedSchedule && item.valid === false) {
       return false;
     }
-    const skipReason = this.taskCardEnabled && options.skipReason === true;
-    const inlineReason =
-      this.taskCardEnabled && !skipReason
-        ? String(item.inlineReason || "")
-        : "";
-    const normalizedInline = normalizeScheduleReasonText(inlineReason);
-    const reasonSupplied = skipReason || !normalizedInline.empty;
-    if (this.taskCardEnabled) {
-      return this.openScheduleReviewOrDispatch(item, {
-        reason: skipReason ? "" : normalizedInline.reason,
-        reasonSupplied,
-      });
-    }
-    if (reasonSupplied) {
-      this.pendingScheduleReason = Object.freeze({
-        dateItem: item,
-        from: this.getPendingScheduleFrom(),
-        to: item.value,
-      });
-      return this.confirmScheduleReason(
-        skipReason
-          ? Object.freeze({
-              reason: "",
-              empty: true,
-              hasInlineField: false,
-            })
-          : normalizedInline,
-      );
-    }
-    this.showScheduleReasonStage(item);
-    return false;
+    const skipReason = options.skipReason === true;
+    const normalizedInline = normalizeScheduleReasonText(
+      skipReason ? "" : String(item.inlineReason || ""),
+    );
+    return this.openScheduleReviewOrDispatch(item, {
+      reason: skipReason ? "" : normalizedInline.reason,
+      reasonSupplied: skipReason || !normalizedInline.empty,
+    });
   }
 
   // Task Card explicit-date review: one optional Reason field plus Work
@@ -28506,144 +28192,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     this.showScheduleReviewStage(plan);
     return false;
-  }
-
-  // Free-text prompt shown after a `scheduled` date is chosen, mirroring the
-  // block-ID stage: nothing is written until this prompt is confirmed (Enter,
-  // empty or not) or the modal is dismissed (Esc, a clean cancel of the date
-  // too — see onClose's contract).
-  showScheduleReasonStage(dateItem) {
-    this.stage = "reason";
-    this.pendingScheduleReason = Object.freeze({
-      dateItem,
-      from: this.getPendingScheduleFrom(),
-      to: dateItem.value,
-    });
-    this.clearLocalTaskMarks();
-    this.selectedIndex = 0;
-    this.applyOptions({
-      items: [],
-      title: "Reason",
-      headerIcon: "message-square-quote",
-      inputLabel: "Schedule reason",
-      placeholder: "Why this date? (↵ to skip)",
-      resultsLabel: "Schedule reason preview",
-      emptyText: "Type a reason",
-      footerHints: getBulletPropertyScheduleReasonHints({
-        empty: true,
-        fallback: this.willLogWithoutReason(),
-      }),
-      getSubtitle: () => this.getScheduleReasonSubtitle(),
-      filterItem: () => true,
-      renderItem: (item, rowEl, query) =>
-        this.renderScheduleReasonPreviewItem(item, rowEl, query),
-      openItem: (item) => this.confirmScheduleReason(item),
-    });
-
-    if (this.resultsEl) {
-      this.renderAll({ clearQuery: true });
-    }
-  }
-
-  getScheduleReasonSubtitle() {
-    const pending = this.pendingScheduleReason;
-    if (!pending) {
-      return "";
-    }
-
-    const transitionText = pending.from
-      ? `${pending.from}${SCHEDULE_LOG_TRANSITION}${pending.to}`
-      : pending.to;
-    const parts = [transitionText];
-    const validation = validateProjectScheduledDate(pending.to);
-    if (validation.valid) {
-      const date = projectScheduleLocalDate(validation);
-      parts.push(getBulletPropertyDateWeekday(date));
-      parts.push(
-        formatRelativeDayOffset(getLocalDayOffset(this.valueBaseDate, date)),
-      );
-    }
-    parts.push("nothing written yet");
-    return parts.filter(Boolean).join(" · ");
-  }
-
-  renderScheduleReasonPreviewItem(item, rowEl, query) {
-    const state = item.empty ? (item.fallback ? "fallback" : "empty") : item.hasInlineField ? "warning" : "valid";
-    addElementClasses(rowEl, "bob-cnp-schedule-reason-row", `is-${state}`);
-
-    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-    applyIcon(
-      rowIcon,
-      item.empty
-        ? "minus-circle"
-        : item.hasInlineField
-          ? "alert-triangle"
-          : "check-circle-2",
-    );
-
-    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-    const pending = this.pendingScheduleReason;
-
-    if (item.empty && !item.fallback) {
-      appendHighlighted(titleEl, "No reason", query);
-      textEl.createDiv({
-        cls: "bob-cnp-row-meta",
-        text: `scheduled → ${
-          pending ? pending.to : ""
-        } only; no schedule log entry`,
-      });
-      return;
-    }
-
-    appendHighlighted(
-      titleEl,
-      formatScheduleLogEntryText({
-        from: pending ? pending.from : "",
-        to: pending ? pending.to : "",
-        reason: item.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : item.reason,
-      }),
-      query,
-    );
-
-    if (item.hasInlineField) {
-      textEl.createDiv({
-        cls: "bob-cnp-row-meta",
-        text: '"::" creates a Dataview inline field on this bullet',
-      });
-    }
-
-    textEl.createDiv({
-      cls: "bob-cnp-schedule-reason-preview",
-      text: item.counted
-        ? item.empty
-          ? `Appends to every counted task that already has a ${SCHEDULE_LOG_MARKER_TEXT}`
-          : `Appends to every counted task, adding a ${SCHEDULE_LOG_MARKER_TEXT} where missing`
-        : item.parentExists
-          ? `Appends to the existing ${SCHEDULE_LOG_MARKER_TEXT} on this task`
-          : `Adds a ${SCHEDULE_LOG_MARKER_TEXT} child bullet to this task`,
-    });
-  }
-
-  confirmScheduleReason(item) {
-    const pending = this.pendingScheduleReason;
-    if (!pending || !item) {
-      return false;
-    }
-
-    // The payload is supplied even for an empty input: a task that already keeps
-    // a log records the change anyway, and planScheduleLogEntry is what decides
-    // that per task (per target, in a counted session).
-    const scheduleLog = {
-      from: pending.from,
-      to: pending.to,
-      reason: item.empty ? "" : item.reason,
-      fallbackReason: SCHEDULE_LOG_SKIPPED_REASON_TEXT,
-    };
-    return this.maybeOfferSchedulingWorkLog(
-      pending.dateItem,
-      scheduleLog,
-    );
   }
 
   // Combined Task Card review: Reason plus optional Work summary in one
@@ -28904,11 +28452,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       new Notice("Task changed while the picker was open; nothing was written");
       this.pendingScheduleReview = null;
       this.pendingScheduleReason = null;
-      if (this.taskCardEnabled) {
-        this.returnToTaskCard();
-      } else {
-        this.showPropertyStage({ clearQuery: false });
-      }
+      this.returnHome();
       return false;
     }
     const reason = normalizeScheduleReasonText(this.getScheduleReviewReasonText());
@@ -28927,11 +28471,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
     this.pendingScheduleReview = null;
     this.pendingScheduleReason = null;
-    if (this.taskCardEnabled) {
-      this.returnToTaskCard();
-    } else {
-      this.showPropertyStage({ clearQuery: false });
-    }
+    this.returnHome();
     return false;
   }
 
@@ -29053,10 +28593,10 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return true;
     }
     // Refusals must not carry a stale summary forward: drop the frozen action
-    // and return to property selection with fresh recommendations.
+    // and return to the card with fresh recommendations.
     this.pendingScheduleWorkLog = null;
     this.pendingScheduleReason = null;
-    this.showPropertyStage({ clearQuery: false });
+    this.returnHome({ rebuild: true });
     return false;
   }
 
@@ -29105,56 +28645,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     });
     this.showSchedulingWorkLogStage(pending);
     return false;
-  }
-
-  // Explicit-date entry point (called from confirmScheduleReason): retains
-  // the Schedule Log reason payload, then offers the Work Log stage when any
-  // target qualifies.
-  async maybeOfferSchedulingWorkLog(dateItem, scheduleLog) {
-    const targets = this.isLinkSession()
-      ? Array.isArray(this.linkSession.resolved)
-        ? this.linkSession.resolved
-        : []
-      : this.isCountedSession() && this.taskSession
-        ? this.taskSession.targets
-        : this.cursor && Number.isInteger(this.cursor.line)
-          ? [
-              {
-                line: this.cursor.line,
-                rawLine: getEditorLine(this.editor, this.cursor.line) ?? this.lineText,
-              },
-            ]
-          : [];
-    let scheduleSummary =
-      scheduleLog && scheduleLog.to
-        ? `scheduled → ${normalizeBulletPropertyValue(scheduleLog.to)}`
-        : "";
-    if (this.taskCardEnabled && scheduleLog) {
-      const reasonText = normalizeScheduleReasonText(scheduleLog.reason);
-      if (!reasonText.empty) {
-        scheduleSummary = scheduleSummary
-          ? `${scheduleSummary} · ${reasonText.reason}`
-          : reasonText.reason;
-      }
-    }
-    return await this.offerSchedulingWorkLogOrDispatch({
-      targets,
-      scheduleSummary,
-      dispatch: async (summary) =>
-        await this.applySelectedValue(dateItem, {
-          scheduleLog,
-          schedulingWorkLog: summary
-            ? {
-                summary,
-                dateText: formatBulletPropertyDate(
-                  this.valueBaseDate instanceof Date
-                    ? this.valueBaseDate
-                    : getLocalDateStart(new Date()),
-                ),
-              }
-            : null,
-        }),
-    });
   }
 
   // Pinned roll row in the `scheduled` stage: deterministic Schedule Log
@@ -29998,11 +29488,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return buildLinkRollPreviewModel(batch, this.valueBaseDate);
   }
 
-  getLinkRollFilterTextForDateProperty(datePropertyName) {
-    const preview = this.getLinkRollPreviewForDateProperty(datePropertyName);
-    return preview && preview.searchText ? preview.searchText : "";
-  }
-
   hasLinkRollBatchForDateProperty(datePropertyName) {
     const batch = this.getLinkRollBatchForDateProperty(datePropertyName);
     if (!batch) {
@@ -30013,17 +29498,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     );
   }
 
-  getLinkStageOneRollPreview() {
-    if (!this.linkRollBatch) {
-      return null;
-    }
-    return buildLinkRollPreviewModel(
-      this.linkRollBatch,
-      this.valueBaseDate,
-    );
-  }
-
-  // Ctrl+R in stage one re-rolls every pre-rolled link date. Only dated
+  // Ctrl+R re-rolls every pre-rolled link date. Only dated
   // targets (roll and decay) have one.
   rerollLinkRollBatch() {
     const cached = this.linkRollBatch;
@@ -30068,14 +29543,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return buildBatchPriorityRollPreviewModel(batch);
   }
 
-  getCountedStageOneRollPreview() {
-    if (!this.countedRollBatch) {
-      return null;
-    }
-    return buildBatchPriorityRollPreviewModel(this.countedRollBatch);
-  }
-
-  // Ctrl+R in stage one re-rolls every pre-rolled counted date. Only dated
+  // Ctrl+R re-rolls every pre-rolled counted date. Only dated
   // targets (roll and decay) have one.
   rerollCountedRollBatch() {
     const cached = this.countedRollBatch;
@@ -30126,43 +29594,8 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return buildPriorityRollPreviewModel(recommendation, this.valueBaseDate);
   }
 
-  getRollFilterTextForDateProperty(datePropertyName) {
-    if (this.isLinkSession()) {
-      return this.getLinkRollFilterTextForDateProperty(datePropertyName);
-    }
-    if (this.isCountedSession()) {
-      const batch = this.getCountedRollBatchForDateProperty(datePropertyName);
-      if (!batch) {
-        return "";
-      }
-      const preview = buildBatchPriorityRollPreviewModel(batch);
-      return preview && preview.searchText ? preview.searchText : "roll";
-    }
-    return getPriorityRollFilterText(
-      this.getScheduledRollRecommendation(datePropertyName),
-      this.valueBaseDate,
-    );
-  }
-
-  getStageOneRollPreview() {
-    if (this.isLinkSession()) {
-      return this.getLinkStageOneRollPreview();
-    }
-    if (this.isCountedSession()) {
-      return this.getCountedStageOneRollPreview();
-    }
-    if (!this.priorityRollRecommendation) {
-      return null;
-    }
-    return buildPriorityRollPreviewModel(
-      this.priorityRollRecommendation,
-      this.valueBaseDate,
-    );
-  }
-
-  // Ctrl+R in stage one re-rolls the recommendation's date. Only dated
-  // recommendations (roll and decay) have one; nothing else uses Ctrl+R in
-  // stage one.
+  // Ctrl+R in the schedule stage re-rolls the recommendation's date. Only
+  // dated recommendations (roll and decay) have one.
   rerollPriorityRollRecommendation() {
     const cached = this.priorityRollRecommendation;
     if (!cached || !cached.date) {
@@ -30196,7 +29629,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // Ctrl+Enter takes the previewed recommendation and closes the picker.
   // Before writing, the recommendation is recomputed from the live note: when
   // the kind, the from or to level, or the target line differs from the
-  // preview, nothing is written and stage one re-renders with the fresh
+  // preview, nothing is written and the card re-renders with the fresh
   // recommendation. Ctrl+Enter honours `opening`, so it never double-fires.
   async applyRecommendedRoll() {
     const cached = this.priorityRollRecommendation;
@@ -30217,7 +29650,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         new Notice("Task changed while the picker was open; nothing was written");
         this.priorityRollRecommendation = fresh || null;
         this.priorityRollRecommendationReady = true;
-        this.showPropertyStage({ clearQuery: false });
+        this.returnHome({ rebuild: true });
         return false;
       }
       if (cached.kind === "roll" || cached.kind === "decay") {
@@ -30452,7 +29885,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     const previous = this.items[rollIndex];
-    // The pinned row mirrors the stage-one recommendation for a roll, so
+    // The pinned row mirrors the card's recommendation for a roll, so
     // Ctrl+R re-rolls both together and keeps the shared date in sync.
     const shared =
       this.selectedPropertyItem && this.selectedPropertyItem.property
@@ -30540,6 +29973,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
+    this.pendingScheduleReview = null;
     this.pendingCancel = null;
     this.pendingLaneRelease = null;
     this.pendingScheduleWorkLog = null;
@@ -30556,6 +29990,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.vaultStageRefreshId = -1;
     this.clearPendingBatch();
     super.onClose();
+  }
+
+  isScheduledValueStage() {
+    return Boolean(
+      this.stage === "value" &&
+        this.selectedPropertyItem &&
+        this.selectedPropertyItem.property &&
+        this.selectedPropertyItem.property.values === "date" &&
+        normalizeBulletPropertyName(this.selectedPropertyItem.property.name) ===
+          "scheduled",
+    );
   }
 
   isLocalTaskStage() {
@@ -30838,38 +30283,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     return `${head} · ${parts.join(" · ")}`;
   }
 
-  withDependencyPropertyPills(propertyItems) {
-    const items = Array.isArray(propertyItems) ? propertyItems : [];
-    if (
-      this.isLinkSession() ||
-      this.isCountedSession() ||
-      !this.plugin ||
-      typeof this.plugin.describeDependencyRowPill !== "function"
-    ) {
-      return items;
-    }
-    let changed = false;
-    const next = items.map((item) => {
-      if (
-        !item ||
-        item.kind !== "property" ||
-        !item.property ||
-        item.property.values !== "local_task_id" ||
-        !item.dependencyEligible
-      ) {
-        return item;
-      }
-      const pill = this.plugin.describeDependencyRowPill(
-        this.filePath,
-        this.cursor ? this.cursor.line : NaN,
-        this.getEditorContent(),
-      );
-      changed = true;
-      return { ...item, dependencyPill: pill };
-    });
-    return changed ? next : items;
-  }
-
   // The note whose content seeds `+ id` suggestions and uniqueness checks:
   // the target's own note for vault-wide rows, else the dependent's note.
   getBlockIdStageContent() {
@@ -31064,23 +30477,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       ];
     }
 
-    if (this.stage === "reason") {
-      const normalized = normalizeScheduleReasonText(this.getRawQuery());
-      const parentExists = Boolean(
-        findScheduleLogParent(this.getEditorContent(), this.cursor.line),
-      );
-      return [
-        Object.freeze({
-          kind: "schedule-reason-preview",
-          ...normalized,
-          parentExists,
-          counted: this.isCountedSession(),
-          fallback: normalized.empty && this.willLogWithoutReason(),
-          searchText: normalized.reason,
-        }),
-      ];
-    }
-
     if (this.stage === "blockid") {
       // Uniqueness is checked against the target's note: cross-note `+ id`
       // rows prompt for an id that must be fresh in that note, not this one.
@@ -31112,7 +30508,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     const isScheduledProperty =
       normalizeBulletPropertyName(this.selectedPropertyItem.property.name) ===
       "scheduled";
-    if (this.taskCardEnabled && isScheduledProperty) {
+    if (isScheduledProperty) {
       const typedItem = createTypedScheduleValueItem(
         resolveTypedSchedule(this.getRawQuery(), this.valueBaseDate),
         this.valueBaseDate,
@@ -31149,15 +30545,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   // as the user types, mirroring refreshLocalTaskFooter.
   renderResults() {
     super.renderResults();
-    this.wireTaskCardSearchAria();
-    if (this.stage === "reason") {
-      const item = (this.visibleItems || [])[0];
-      this.footerHints = getBulletPropertyScheduleReasonHints({
-        empty: Boolean(item && item.empty),
-        fallback: Boolean(item && item.fallback),
-      });
-      this.renderFooter();
-    }
     if (this.stage === "cancel-reason") {
       const item = (this.visibleItems || [])[0];
       const pending = this.pendingCancel;
@@ -31190,161 +30577,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         hasWorkLog: Boolean(pending && pending.needsWorkLog),
       });
       this.renderFooter();
-    }
-  }
-
-  renderLaneToggleItem(item, rowEl, query) {
-    addElementClasses(rowEl, "bob-cnp-property-row", "is-undefined");
-
-    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-    applyIcon(rowIcon, item.mode === "release" ? "arrow-down-to-line" : "arrow-up-to-line");
-
-    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-    appendHighlighted(titleEl, item.title || "Lane", query);
-
-    const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    appendHighlighted(pathEl, item.detail || "lane", query);
-
-    rowEl.createDiv({
-      cls: "bob-cnp-pill bob-cnp-property-pill",
-      text: item.mode === "release" ? "release" : "commit",
-    });
-  }
-
-  renderCancelTaskItem(item, rowEl, query) {
-    addElementClasses(
-      rowEl,
-      "bob-cnp-property-row",
-      "bob-cnp-cancel-row",
-      item.recurring ? "is-muted" : "is-danger",
-    );
-
-    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-    applyIcon(rowIcon, "ban");
-
-    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-    appendHighlighted(titleEl, item.title || "Cancel task", query);
-
-    const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    appendHighlighted(pathEl, item.detail || "", query);
-
-    rowEl.createDiv({
-      cls: `bob-cnp-pill bob-cnp-property-pill${item.recurring ? " is-muted" : ""}`,
-      text: "cancel",
-    });
-  }
-
-  renderRefreshRowItem(item, rowEl, query) {
-    addElementClasses(rowEl, "bob-cnp-property-row", "is-undefined");
-
-    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-    applyIcon(rowIcon, "refresh-ccw");
-
-    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-    appendHighlighted(titleEl, item.title || "Refresh every", query);
-
-    const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    appendHighlighted(pathEl, item.detail || "refresh", query);
-
-    rowEl.createDiv({
-      cls: "bob-cnp-pill bob-cnp-property-pill",
-      text: "refresh",
-    });
-  }
-
-  renderPropertyItem(item, rowEl, query) {
-    addElementClasses(
-      rowEl,
-      "bob-cnp-property-row",
-      item.defined ? "is-defined" : "is-undefined",
-    );
-
-    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-    applyIcon(rowIcon, item.defined ? "check-circle-2" : "plus-circle");
-
-    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-    appendHighlighted(titleEl, item.property.name, query);
-
-    const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    // The Depends on row shows the summary pill (`⛓ 2 · 1 open` / `⛓ none`)
-    // instead of the raw `[dependsOn::]` ids (`docs/task-dependencies.md` §6.1).
-    const propertyStateText = item.dependencyPill
-      ? item.dependencyPill
-      : item.linkDependency && item.detailText
-        ? item.detailText
-        : item.mixed
-          ? `Mixed across ${item.definedCount} of ${item.targetCount} tasks`
-          : item.defined
-            ? `Current value: ${item.currentLabel}`
-            : "Not set";
-    pathEl.setText(propertyStateText);
-
-    // The `scheduled` row carries the recommended roll preview: a third line
-    // with the ^↵ key, the action, the date it will write, and a meta pill.
-    // Counted sessions show one batch line for all targets.
-    if (
-      item.kind === "property" &&
-      item.property.values === "date"
-    ) {
-      const rollPreview = this.getRollPreviewForDateProperty(
-        item.property.name,
-      );
-      if (rollPreview) {
-        const previewEl = textEl.createDiv({
-          cls: `bob-cnp-roll-preview is-${rollPreview.kind}`,
-          attr: { "aria-label": rollPreview.ariaLabel },
-        });
-        previewEl.createEl("kbd", {
-          cls: "bob-cnp-kbd bob-cnp-roll-kbd",
-          text: "^↵",
-        });
-        const rollIconEl = previewEl.createSpan({
-          cls: "bob-cnp-roll-icon",
-        });
-        applyIcon(rollIconEl, rollPreview.icon);
-        previewEl.createSpan({
-          cls: "bob-cnp-roll-action",
-          text: rollPreview.action,
-        });
-        if (rollPreview.dateText) {
-          previewEl.createSpan({
-            cls: "bob-cnp-roll-date",
-            text: rollPreview.dateText,
-          });
-        }
-        if (rollPreview.meta) {
-          previewEl.createSpan({
-            cls: `bob-cnp-roll-meta is-${rollPreview.metaTone}`,
-            text: rollPreview.meta,
-          });
-        }
-      }
-    }
-
-    if (item.dependencyPill) {
-      rowEl.createDiv({
-        cls: "bob-cnp-pill bob-cnp-property-pill",
-        text: item.dependencyPill,
-      });
-    } else if (item.mixed) {
-      rowEl.createDiv({
-        cls: "bob-cnp-pill bob-cnp-property-pill",
-        text: "mixed",
-      });
-    } else if (item.defined) {
-      rowEl.createDiv({
-        cls: "bob-cnp-pill bob-cnp-property-pill",
-        text: `${item.property.name} · ${item.currentLabel}`,
-      });
-    } else {
-      rowEl.createDiv({
-        cls: "bob-cnp-pill bob-cnp-property-pill is-muted",
-        text: "not set",
-      });
     }
   }
 
@@ -33505,7 +32737,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         new Notice("Task changed while the picker was open; nothing was written");
         this.countedRollBatch = fresh;
         this.countedRollBatchReady = true;
-        this.showPropertyStage({ clearQuery: false });
+        this.returnHome({ rebuild: true });
         return false;
       }
       return await this.maybeOfferCountedRecommendedWorkLog(cached);
@@ -33584,7 +32816,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         new Notice("Task changed while the picker was open; nothing was written");
         this.linkRollBatch = fresh;
         this.linkRollBatchReady = true;
-        this.showPropertyStage({ clearQuery: false });
+        this.returnHome({ rebuild: true });
         return false;
       }
       return await this.maybeOfferLinkRecommendedWorkLog(cached);
@@ -33641,10 +32873,22 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
   }
 
   handleKeydown(event) {
-    if (this.linkResolving && event) {
+    if (this.stage === "task-card") {
+      this.handleTaskCardKeydown(event);
+      return;
+    }
+    // Ctrl+] closes from every stage, including a focused date, filter,
+    // reason, or Work summary field. Closing discards uncommitted state and
+    // writes nothing, exactly as Escape does.
+    if (
+      event &&
+      event.isComposing !== true &&
+      event.keyCode !== 229 &&
+      isCtrlRightBracketKeydown(event)
+    ) {
       event.preventDefault();
       event.stopPropagation();
-      if (event.key === "Escape") this.close();
+      this.close();
       return;
     }
     if (this.stage === "schedule-review" && event) {
@@ -33688,7 +32932,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       }
     }
     if (
-      this.taskCardEnabled &&
+      this.hasTaskCard &&
       this.stage !== "task-card" &&
       event &&
       event.key === "Backspace" &&
@@ -33706,25 +32950,14 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // does today; other stages keep their existing key handling untouched.
     // Counted and link sessions use their batch recommendation through the
     // same gesture.
-    if (
-      isRecommendedRollKeydown(event) &&
-      (this.stage === "properties" || this.stage === "value")
-    ) {
+    if (isRecommendedRollKeydown(event) && this.stage === "value") {
       event.preventDefault();
       event.stopPropagation();
       if (!this.opening) {
         const rollPropertyName =
-          this.stage === "properties"
-            ? (() => {
-                const item = this.visibleItems[this.selectedIndex];
-                return item && item.kind === "property"
-                  ? item.property.name
-                  : "";
-              })()
-            : this.selectedPropertyItem &&
-                this.selectedPropertyItem.property
-              ? this.selectedPropertyItem.property.name
-              : "";
+          this.selectedPropertyItem && this.selectedPropertyItem.property
+            ? this.selectedPropertyItem.property.name
+            : "";
         if (
           rollPropertyName &&
           this.hasCountedRollBatchForDateProperty(rollPropertyName)
@@ -33821,98 +33054,6 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       return;
     }
 
-    if (this.stage === "properties" && isCtrlKey(event, "d")) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (this.opening) {
-        return;
-      }
-      this.opening = true;
-      Promise.resolve()
-        .then(() => this.deleteSelectedProperty())
-        .then((deleted) => {
-          if (deleted) {
-            this.close();
-          }
-        })
-        .catch(() => {
-          new Notice("Could not delete bullet property");
-        })
-        .finally(() => {
-          this.opening = false;
-        });
-      return;
-    }
-
-    if (this.stage === "properties" && isCtrlKey(event, "r")) {
-      if (this.isLinkSession()) {
-        if (this.rerollLinkRollBatch()) {
-          event.preventDefault();
-          event.stopPropagation();
-          this.applyOptions({
-            footerHints: getBulletPropertyStageOneHints(
-              this.getStageOneRollPreview(),
-            ),
-          });
-          const scheduledIndex = this.visibleItems.findIndex(
-            (item) =>
-              item &&
-              item.kind === "property" &&
-              this.hasLinkRollBatchForDateProperty(item.property.name),
-          );
-          if (scheduledIndex !== -1) {
-            this.selectedIndex = scheduledIndex;
-          }
-          if (this.resultsEl) {
-            this.renderAll({ clearQuery: false });
-          }
-        }
-      } else if (this.isCountedSession()) {
-        if (this.rerollCountedRollBatch()) {
-          event.preventDefault();
-          event.stopPropagation();
-          this.applyOptions({
-            footerHints: getBulletPropertyStageOneHints(
-              this.getStageOneRollPreview(),
-            ),
-          });
-          const scheduledIndex = this.visibleItems.findIndex(
-            (item) =>
-              item &&
-              item.kind === "property" &&
-              this.hasCountedRollBatchForDateProperty(item.property.name),
-          );
-          if (scheduledIndex !== -1) {
-            this.selectedIndex = scheduledIndex;
-          }
-          if (this.resultsEl) {
-            this.renderAll({ clearQuery: false });
-          }
-        }
-      } else if (this.rerollPriorityRollRecommendation()) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.applyOptions({
-          footerHints: getBulletPropertyStageOneHints(
-            this.getStageOneRollPreview(),
-          ),
-        });
-        const scheduledIndex = this.visibleItems.findIndex(
-          (item) =>
-            item &&
-            item.kind === "property" &&
-            this.getScheduledRollRecommendation(item.property.name),
-        );
-        if (scheduledIndex !== -1) {
-          this.selectedIndex = scheduledIndex;
-        }
-        if (this.resultsEl) {
-          this.renderAll({ clearQuery: false });
-        }
-      }
-      return;
-    }
-
     if (this.stage === "value" && isCtrlKey(event, "r")) {
       if (this.isLinkSession()) {
         // Link sessions keep no pinned roll row: re-roll the batch so the
@@ -33928,7 +33069,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
                     this.selectedPropertyItem.property.name,
                   )
                 : null,
-              { skipReason: this.taskCardEnabled },
+              { skipReason: this.isScheduledValueStage() },
             ),
           });
           event.preventDefault();
@@ -33948,7 +33089,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
                     this.selectedPropertyItem.property.name,
                   )
                 : null,
-              { skipReason: this.taskCardEnabled },
+              { skipReason: this.isScheduledValueStage() },
             ),
           });
           rerolled = true;
@@ -33969,13 +33110,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     }
 
     if (
-      this.taskCardEnabled &&
-      this.stage === "value" &&
-      this.selectedPropertyItem &&
-      this.selectedPropertyItem.property &&
-      this.selectedPropertyItem.property.values === "date" &&
-      normalizeBulletPropertyName(this.selectedPropertyItem.property.name) ===
-        "scheduled" &&
+      this.isScheduledValueStage() &&
       event &&
       event.key === "Enter" &&
       event.shiftKey === true &&
@@ -34009,8 +33144,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     super.handleKeydown(event);
   }
 
-  async deleteSelectedProperty() {
-    const item = this.visibleItems[this.selectedIndex];
+  async deletePropertyItem(item) {
     if (!item || item.kind !== "property") {
       return false;
     }
@@ -34056,10 +33190,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       if (result && result.line) {
         this.lineText = result.line;
         this.bulletSubtitle = truncateBulletPropertySubtitle(result.line);
-        this.showPropertyStage({
-          clearQuery: false,
-          selectPropertyName: propertyName,
-        });
+        this.refreshPropertyItems();
       }
       return false;
     }
@@ -34165,6 +33296,39 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       },
     );
   }
+}
+
+// Ctrl+] closes the Task Card and every stage its modal opens. Matches the
+// requested chord only: Ctrl alone (no Alt, Meta, or Shift), so it stays
+// distinct from the Ctrl+[ detector in `isClearSearchHighlightEscapeKeydown`.
+function isCtrlRightBracketKeydown(event) {
+  return (
+    Boolean(event) &&
+    event.ctrlKey === true &&
+    event.altKey !== true &&
+    event.metaKey !== true &&
+    event.shiftKey !== true &&
+    (event.code === "BracketRight" || event.key === "]")
+  );
+}
+
+// The keys that close the Task Card without writing: Escape, bare q / Q
+// (Shift allowed for Q; never Ctrl, Meta, or Alt), and Ctrl+]. Composition
+// and text-field focus are the caller's guards.
+function isTaskCardCloseKeydown(event) {
+  if (!event) {
+    return false;
+  }
+  const key = String(event.key || "");
+  const ctrl = event.ctrlKey === true;
+  const meta = event.metaKey === true;
+  const alt = event.altKey === true;
+  const shift = event.shiftKey === true;
+  return (
+    (key === "Escape" && !ctrl && !meta && !alt && !shift) ||
+    (key.toLowerCase() === "q" && !ctrl && !meta && !alt) ||
+    isCtrlRightBracketKeydown(event)
+  );
 }
 
 function isCtrlKey(event, key) {
@@ -35851,183 +35015,9 @@ function createDependencyNavApi(plugin) {
   });
 }
 
-function taskCardDefaultEnabled(now = new Date()) {
-  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
-    return false;
-  }
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const day = now.getDate();
-  return (
-    year > 2026 ||
-    (year === 2026 && (month > 10 || (month === 10 && day >= 19)))
-  );
-}
-
-function taskCardPilotEnabled(savedData, loaded = true, now = new Date()) {
-  if (loaded !== true) {
-    return false;
-  }
-  const data =
-    savedData && typeof savedData === "object" && !Array.isArray(savedData)
-      ? savedData
-      : {};
-  if (data.taskCard === true) {
-    return true;
-  }
-  if (data.taskCard === false) {
-    return false;
-  }
-  if (data.taskCard === undefined || data.taskCard === null) {
-    return taskCardDefaultEnabled(now);
-  }
-  return false;
-}
-
-function taskCardPreferenceValue(savedData) {
-  const data =
-    savedData && typeof savedData === "object" && !Array.isArray(savedData)
-      ? savedData
-      : {};
-  if (data.taskCard === true) {
-    return "task-card";
-  }
-  if (data.taskCard === false || (data.taskCard !== undefined && data.taskCard !== null)) {
-    return "classic";
-  }
-  return "automatic";
-}
-
-function mergeTaskCardPilotPreference(savedData, preference) {
-  const base = savedData && typeof savedData === "object" && !Array.isArray(savedData)
-    ? savedData
-    : {};
-  const next = { ...base };
-  if (preference === "automatic" || preference === null) {
-    delete next.taskCard;
-    return next;
-  }
-  if (preference === true || preference === "task-card") {
-    next.taskCard = true;
-    return next;
-  }
-  if (preference === false || preference === "classic") {
-    next.taskCard = false;
-    return next;
-  }
-  return null;
-}
-
-class TaskCardPilotSettingTab extends PluginSettingTabBase {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-
-  display() {
-    const container = this.containerEl;
-    if (!container || typeof container.empty !== "function" || typeof Setting !== "function") {
-      return;
-    }
-    container.empty();
-    if (typeof container.createEl === "function") {
-      container.createEl("h2", { text: "Bob Navigation Hotkeys" });
-    }
-    new Setting(container)
-      .setName("Ctrl+Shift+P Task Card")
-      .setDesc("Automatic uses the classic list through 2026-10-18 and the Task Card from 2026-10-19. Choose Task Card or Classic list to override the date.")
-      .addDropdown((dropdown) => {
-        dropdown
-          .addOption("automatic", "Automatic")
-          .addOption("task-card", "Task Card")
-          .addOption("classic", "Classic list")
-          .setValue(taskCardPreferenceValue(this.plugin.taskCardData));
-        if (typeof dropdown.setDisabled === "function") {
-          dropdown.setDisabled(!this.plugin.taskCardSettingsLoaded);
-        }
-        dropdown.onChange((preference) => {
-          void this.plugin.setTaskCardPreference(preference);
-        });
-      });
-  }
-}
-
 module.exports = class BobNavigationHotkeysPlugin extends Plugin {
-  isTaskCardPilotEnabled(now = new Date()) {
-    return taskCardPilotEnabled(
-      this.taskCardData,
-      this.taskCardSettingsLoaded === true,
-      now,
-    );
-  }
-
-  async loadTaskCardSettings() {
-    const generation = this.taskCardSettingsGeneration;
-    let saved = null;
-    let loadSucceeded = false;
-    try {
-      if (typeof this.loadData === "function") {
-        saved = await this.loadData();
-        loadSucceeded = true;
-      }
-    } catch (_error) {
-      saved = null;
-    }
-    if (generation !== this.taskCardSettingsGeneration || this.taskCardPluginUnloading) {
-      return false;
-    }
-    if (!loadSucceeded) {
-      this.taskCardData = {};
-      this.taskCardSettingsLoaded = false;
-      if (this.taskCardSettingsTab && typeof this.taskCardSettingsTab.display === "function") {
-        this.taskCardSettingsTab.display();
-      }
-      return false;
-    }
-    this.taskCardData = saved && typeof saved === "object" && !Array.isArray(saved)
-      ? { ...saved }
-      : {};
-    this.taskCardSettingsLoaded = true;
-    if (this.taskCardSettingsTab && typeof this.taskCardSettingsTab.display === "function") {
-      this.taskCardSettingsTab.display();
-    }
-    return true;
-  }
-
-  async setTaskCardPreference(preference) {
-    if (!this.taskCardSettingsLoaded || typeof this.saveData !== "function") {
-      new Notice("Task Card settings are not available yet");
-      return false;
-    }
-    const next = mergeTaskCardPilotPreference(this.taskCardData, preference);
-    if (!next) {
-      new Notice("Choose Automatic, Task Card, or Classic list");
-      return false;
-    }
-    try {
-      await this.saveData(next);
-    } catch (_error) {
-      new Notice("Could not save Task Card setting");
-      return false;
-    }
-    this.taskCardData = next;
-    if (this.taskCardSettingsTab && typeof this.taskCardSettingsTab.display === "function") {
-      this.taskCardSettingsTab.display();
-    }
-    return true;
-  }
-
   onload() {
-    this.taskCardSettingsGeneration = 1;
-    this.taskCardSettingsLoaded = false;
-    this.taskCardData = {};
     this.taskCardPluginUnloading = false;
-    this.taskCardSettingsTab = null;
-    void this.loadTaskCardSettings();
-    if (typeof this.addSettingTab === "function" && PluginSettingTab) {
-      this.taskCardSettingsTab = new TaskCardPilotSettingTab(this.app, this);
-      this.addSettingTab(this.taskCardSettingsTab);
-    }
     this.currentFilePath = null;
     this.alternateFilePath = null;
     this.filePositions = new Map();
@@ -36389,7 +35379,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
-    this.taskCardSettingsGeneration = (this.taskCardSettingsGeneration || 0) + 1;
     this.linkPickerRequestToken = (this.linkPickerRequestToken || 0) + 1;
     if (this.activeBulletPropertyPicker) {
       try {
@@ -36915,11 +35904,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         propertyContext: { ...basePropertyContext, isObsidianTask: false },
         linkSession,
         linkResolving: true,
-        taskCard: !options.initialProperty && (
-          Object.prototype.hasOwnProperty.call(options, "taskCard")
-            ? options.taskCard === true
-            : this.isTaskCardPilotEnabled()
-        ),
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -36986,11 +35970,8 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     picker.refreshPriorityRollRecommendation();
     picker.refreshCountedRollBatch();
     picker.refreshLinkRollBatch();
-    if (picker.taskCardEnabled) {
-      picker.showTaskCard({ rebuild: true });
-    } else {
-      picker.showPropertyStage({ clearQuery: true });
-    }
+    picker.refreshPropertyItems();
+    picker.showTaskCard({ rebuild: true });
     return true;
   }
 
@@ -39825,6 +38806,7 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         {
           filePath: cardCtx.filePath,
           baseDate: getLocalDateStart(new Date()),
+          directStage: true,
         },
       );
       picker.showRefreshValueStage({
@@ -40959,11 +39941,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
         propertyContext,
         taskSession,
         initialProperty: options.initialProperty || null,
-        taskCard: !options.initialProperty && (
-          Object.prototype.hasOwnProperty.call(options, "taskCard")
-            ? options.taskCard === true
-            : this.isTaskCardPilotEnabled()
-        ),
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -40987,9 +39964,13 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
           item.property &&
           item.property.name === options.initialProperty,
       );
-      if (wanted) {
-        picker.showValueStage(wanted);
+      if (!wanted) {
+        // A direct stage has no card or list to fall back on.
+        picker.close();
+        new Notice(`${options.initialProperty} is not configured`);
+        return false;
       }
+      picker.showValueStage(wanted);
     }
     return true;
   }
@@ -41650,10 +40631,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       Boolean(fresh.unavailableReason) !== Boolean(cached.unavailableReason)
     ) {
       new Notice("Task changed while the picker was open; nothing was written");
-      if (picker.showPropertyStage) {
+      if (picker.returnHome) {
         picker.countedRollBatch = fresh;
         picker.countedRollBatchReady = true;
-        picker.showPropertyStage({ clearQuery: false });
+        picker.returnHome({ rebuild: true });
       }
       return false;
     }
@@ -42005,10 +40986,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       Boolean(fresh.unavailableReason) !== Boolean(cached.unavailableReason)
     ) {
       new Notice("Task changed while the picker was open; nothing was written");
-      if (picker.showPropertyStage) {
+      if (picker.returnHome) {
         picker.linkRollBatch = fresh;
         picker.linkRollBatchReady = true;
-        picker.showPropertyStage({ clearQuery: false });
+        picker.returnHome({ rebuild: true });
       }
       return false;
     }
@@ -44564,29 +43545,6 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       modal.applyVaultStageItems(fresh);
     } catch (_error) {
       // Best effort: the sync pool stays in place.
-    }
-  }
-
-  describeDependencyRowPill(filePath, parentLine, content) {
-    try {
-      const notes = [];
-      for (const [path, noteContent] of this.collectStageBufferNotes()) {
-        notes.push({ path, content: noteContent });
-      }
-      const ownerPath = normalizeVaultRelativePath(filePath || "");
-      if (!notes.some((note) => normalizeVaultRelativePath(note.path || "") === ownerPath)) {
-        notes.push({ path: ownerPath, content: String(content || "") });
-      }
-      const index = indexDependencyStageNotes(notes);
-      const state = describeDependencyRowState(
-        String(content || ""),
-        parentLine,
-        ownerPath,
-        index,
-      );
-      return state.pill;
-    } catch (_error) {
-      return "⛓ none";
     }
   }
 
@@ -52576,14 +51534,8 @@ module.exports.helpers = {
   buildTaskCardPriorityPreviews,
   planTaskCard,
   resolveTaskCardKey,
-  taskCardDefaultEnabled,
-  taskCardPilotEnabled,
-  taskCardPreferenceValue,
-  mergeTaskCardPilotPreference,
-  TaskCardPilotSettingTab,
   renderTaskCardView,
   orderedTaskCardRows,
-  promoteScheduledRowForPrioritizedTask,
   discoverCountedObsidianTaskTargets,
   parseLinkPickerTaskLink,
   discoverLinkPickerTargets,
@@ -52797,8 +51749,6 @@ module.exports.helpers = {
   findDependencyStageCycle,
   compareDependencyStageCanonical,
   planDependencyStageView,
-  formatDependencyStagePill,
-  describeDependencyRowState,
   resolveDependencyStageEntry,
   normalizeStageCacheTask,
   mergeStageCacheCandidates,
@@ -52856,9 +51806,7 @@ module.exports.helpers = {
   buildPriorityDecayScheduleLogPayload,
   isSamePriorityRollTarget,
   isRecommendedRollKeydown,
-  getBulletPropertyStageOneHints,
   getBulletPropertyStageTwoHints,
-  getPriorityRollFilterText,
   getPriorityRollCurrentLabel,
   createPriorityRollDateItemFromRecommendation,
   planNextPriorityRollHint,
@@ -52902,7 +51850,6 @@ module.exports.helpers = {
   planLinkRollBatchSummary,
   buildLinkRollPreviewModel,
   buildPriorityRollPreviewModel,
-  getBulletPropertyScheduleReasonHints,
   getCancelTaskRowTitle,
   getCancelReasonHints,
   getCancelPlanBudgetChip,

@@ -5,6 +5,9 @@ const Module = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { ModalStub } = require("./modal-harness.cjs");
+
+global.window = global.window || { setTimeout: (callback) => callback() };
 
 const notices = [];
 
@@ -36,28 +39,7 @@ function parseTestYaml(text) {
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
-    class TestModal {
-      constructor(app) {
-        this.app = app;
-        this.isOpen = false;
-        this.modalEl = { removeClass: () => {} };
-        this.contentEl = { empty: () => {} };
-      }
-      open() {
-        this.isOpen = true;
-        return this;
-      }
-      close() {
-        if (!this.isOpen) {
-          return this;
-        }
-        this.isOpen = false;
-        if (typeof this.onClose === "function") {
-          this.onClose();
-        }
-        return this;
-      }
-    }
+    class TestModal extends ModalStub {}
     class TestNotice {
       constructor(message) {
         notices.push(String(message));
@@ -4094,19 +4076,20 @@ function createPriorityPickerConfig() {
   });
 }
 
-async function choosePriorityLevel(harness, label) {
-  assert.equal(harness.open(), true);
+// The Task Card is the only surface: a priority level is chosen from its
+// strip (keys 1-4), not from a property list.
+async function choosePriorityLevel(harness, label, openOptions = {}) {
+  assert.equal(harness.open(openOptions), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
-  const propertyIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "priority",
-  );
-  assert.notEqual(propertyIndex, -1);
-  await picker.openItemAtIndex(propertyIndex);
-  const levelIndex = picker.visibleItems.findIndex(
+  const level = picker.taskCardModel.priorityStrip.levels.find(
     (item) => item.label === label,
   );
-  assert.notEqual(levelIndex, -1);
-  await picker.openItemAtIndex(levelIndex);
+  assert.ok(level, `missing ${label} level`);
+  await picker.dispatchTaskCardIntent({
+    type: "set-priority",
+    key: level.key,
+    value: level.value,
+  });
   return picker;
 }
 
@@ -4207,26 +4190,58 @@ function nodeHasClass(className) {
   return (node) => node.classes && node.classes.includes(className);
 }
 
-async function openBulletPropertyValueStage(harness, propertyName, options = {}) {
-  assert.equal(harness.open(options), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const propertyIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === propertyName,
-  );
-  assert.notEqual(propertyIndex, -1);
-  await picker.openItemAtIndex(propertyIndex);
+// A property's value stage, opened the way the Task Card opens it: the
+// schedule row for `scheduled`, a More row for every other property.
+async function openPropertyStage(picker, propertyName) {
+  assert.equal(picker.stage, "task-card");
+  await picker.openTaskCardProperty(propertyName);
+  assert.equal(picker.stage, "value", `${propertyName} did not open a value stage`);
   return picker;
 }
 
-// Complete the reason-stage prompt through the same openItemAtIndex entry
-// point production code uses. The test harness never calls onOpen(), so
-// resultsEl stays unset and renderAll() never refreshes visibleItems; refresh
-// it manually here the way renderResults() would.
-async function confirmScheduleReasonStage(picker, reasonText = "") {
-  assert.equal(picker.stage, "reason");
-  picker.inputEl = { value: reasonText };
+async function openBulletPropertyValueStage(harness, propertyName, options = {}) {
+  assert.equal(harness.open(options), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  return await openPropertyStage(picker, propertyName);
+}
+
+// One of the card's action rows (schedule, depends-on, review-every, cancel,
+// lane), dispatched the way a keypress or click dispatches it.
+async function runCardAction(picker, rowId) {
+  assert.equal(picker.stage, "task-card");
+  const row = picker.taskCardModel.rows.find((item) => item.id === rowId);
+  assert.ok(row, `missing ${rowId} card row`);
+  assert.equal(row.enabled, true, `${rowId} card row is disabled`);
+  return await picker.dispatchTaskCardIntent({
+    type: "open-action",
+    rowId,
+    action: row.action,
+  });
+}
+
+function findPropertyItem(picker, propertyName) {
+  return picker.propertyItems.find(
+    (item) =>
+      item && item.kind === "property" && item.property.name === propertyName,
+  );
+}
+
+// Complete the combined schedule review (Reason plus optional Work summary)
+// the way Enter does: confirm, and close when the commit applied.
+async function confirmScheduleReasonStage(picker, reasonText = "", summaryText) {
+  assert.equal(picker.stage, "schedule-review");
+  if (picker.scheduleReviewReasonEl) {
+    picker.scheduleReviewReasonEl.value = reasonText;
+  }
+  if (summaryText !== undefined && picker.scheduleReviewSummaryEl) {
+    picker.scheduleReviewSummaryEl.value = summaryText;
+  }
   picker.visibleItems = picker.getFilteredItems();
-  return await picker.openItemAtIndex(0);
+  const applied = await picker.confirmScheduleReview();
+  if (applied === true) {
+    picker.close();
+  }
+  return applied;
 }
 
 test("priority notice relative day helpers handle offsets ranges and icons", () => {
@@ -4769,11 +4784,8 @@ test("priority picker writes priority then rolled schedule in one guarded edit",
     random: () => 0,
   });
 
-  const picker = await choosePriorityLevel(harness, "P1");
+  await choosePriorityLevel(harness, "P1");
 
-  assert.equal(picker.headerIcon, "signal-high");
-  assert.equal(picker.placeholder, "Filter priorities");
-  assert.equal(picker.resultsLabel, "priority levels");
   assert.match(
     harness.editor.content,
     /- \[\?\] #task One \[priority:: high\] \[scheduled:: 2026-08-05\] \^one/,
@@ -4844,14 +4856,7 @@ test("counted priority writes keep the rolled date right of the priority", async
     random: () => 0.5,
   });
 
-  assert.equal(harness.open({ countExplicit: true }), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  await picker.openItemAtIndex(
-    picker.visibleItems.findIndex((item) => item.property.name === "priority"),
-  );
-  await picker.openItemAtIndex(
-    picker.visibleItems.findIndex((item) => item.label === "P1"),
-  );
+  await choosePriorityLevel(harness, "P1", { countExplicit: true });
 
   assert.equal(
     harness.editor.content,
@@ -4906,19 +4911,10 @@ test("counted priority picker rolls an independent schedule for every task", asy
     random: () => rolls.shift(),
   });
 
-  assert.equal(
-    harness.open({ countExplicit: true, additionalTaskCount: 2 }),
-    true,
-  );
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const propertyIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "priority",
-  );
-  await picker.openItemAtIndex(propertyIndex);
-  const levelIndex = picker.visibleItems.findIndex(
-    (item) => item.label === "P1",
-  );
-  await picker.openItemAtIndex(levelIndex);
+  await choosePriorityLevel(harness, "P1", {
+    countExplicit: true,
+    additionalTaskCount: 2,
+  });
 
   assert.equal(harness.editor.transactions.length, 1);
   const lines = harness.editor.content.split("\n");
@@ -5247,18 +5243,21 @@ test("scheduled picker pins a priority roll only for configured current prioriti
 });
 
 test("Ctrl+R replaces only the pinned priority roll and keeps it selected", async () => {
-  const rolls = [0, 1];
+  // Opening the card and the stage draw the first roll (0); Ctrl+R draws 1.
+  let rerolling = false;
   const harness = createBulletPropertyPickerHarness({
     config: createPriorityPickerConfig(),
     content: "- [ ] #task One [priority:: high] ^one",
     baseDate: new Date(2026, 7, 3),
-    random: () => rolls.shift(),
+    random: () => (rerolling ? 1 : 0),
   });
   const picker = await openBulletPropertyValueStage(harness, "scheduled");
   const unchangedItems = picker.items.slice(1);
+  assert.equal(picker.items[0].value, "2026-08-05");
   let prevented = false;
   let stopped = false;
 
+  rerolling = true;
   picker.handleKeydown({
     key: "r",
     ctrlKey: true,
@@ -5307,7 +5306,7 @@ test("choosing a priority roll writes immediately with a deterministic reason in
   const picker = await openBulletPropertyValueStage(rolled, "scheduled");
   assert.equal(picker.visibleItems[0].priorityRoll, true);
   await picker.openItemAtIndex(0);
-  assert.notEqual(picker.stage, "reason");
+  assert.notEqual(picker.stage, "schedule-review");
   const rolledStatus = helpers.getObsidianTaskCheckboxStatus(
     rolled.editor.content.split("\n")[0],
   );
@@ -5320,7 +5319,7 @@ test("choosing a priority roll writes immediately with a deterministic reason in
     ].join("\n"),
   );
 
-  // A non-roll row still enters the reason stage, and confirming it empty
+  // A non-roll row still enters the combined review, and confirming it empty
   // writes the date with no log. This task has no 🗓️ **SCHEDULE LOG** marker,
   // so this also doubles as the regression guard for the escape hatch: an
   // empty reason never creates a log on a task that didn't already have one.
@@ -5331,7 +5330,7 @@ test("choosing a priority roll writes immediately with a deterministic reason in
   );
   assert.notEqual(presetIndex, -1);
   await presetPicker.openItemAtIndex(presetIndex);
-  assert.equal(presetPicker.stage, "reason");
+  assert.equal(presetPicker.stage, "schedule-review");
   await confirmScheduleReasonStage(presetPicker);
   assert.equal(
     preset.editor.content,
@@ -5444,11 +5443,7 @@ test("bullet property picker close lifecycle clears tracking for fresh sessions"
     [1],
   );
 
-  const propertyIndex = secondPicker.visibleItems.findIndex(
-    (item) => item.property && item.property.name === "p",
-  );
-  assert.notEqual(propertyIndex, -1);
-  await secondPicker.openItemAtIndex(propertyIndex);
+  await openPropertyStage(secondPicker, "p");
   assert.equal(plugin.activeBulletPropertyPicker, secondPicker);
   await secondPicker.openItemAtIndex(0);
   assert.equal(plugin.activeBulletPropertyPicker, null);
@@ -9746,64 +9741,53 @@ function buildScheduleReasonConfig() {
   });
 }
 
-test("choosing a scheduled date enters the reason stage without writing anything", () => {
-  const config = buildScheduleReasonConfig();
-  const lineText = "- [ ] #task Ship the thing ^ship";
+// A bare picker on one task, opened straight onto the schedule value stage
+// (the stage the card's schedule row opens). Nothing is painted until a stage
+// needs chrome, so these tests exercise state and items, not layout.
+function openBareScheduleStage(lineText, config = buildScheduleReasonConfig()) {
   const editor = new TestEditor(lineText);
-  const cursor = { line: 0, ch: 0 };
   const picker = new helpers.BulletPropertyPickerModal(
     {},
     {},
     editor,
-    cursor,
+    { line: 0, ch: 0 },
     lineText,
     config,
     { filePath: "Tasks.md" },
   );
-
-  const scheduledItem = picker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  assert.ok(scheduledItem);
-  picker.showValueStage(scheduledItem);
+  picker.showValueStage(findPropertyItem(picker, "scheduled"));
   assert.equal(picker.stage, "value");
+  return { editor, picker };
+}
+
+test("choosing a scheduled date enters the combined review without writing anything", () => {
+  const lineText = "- [ ] #task Ship the thing ^ship";
+  const { editor, picker } = openBareScheduleStage(lineText);
 
   const dateItem = picker.items.find((item) => item.kind === "value");
   assert.ok(dateItem);
   const opened = picker.openItem(dateItem);
   assert.equal(opened, false);
-  assert.equal(picker.stage, "reason");
+  assert.equal(picker.stage, "schedule-review");
   assert.deepEqual(picker.pendingScheduleReason, {
     dateItem,
     from: "",
     to: dateItem.value,
   });
   assert.equal(editor.content, lineText);
+  assert.equal(typeof picker.showScheduleReasonStage, "undefined");
 });
 
-test("choosing a priority level does not enter the reason stage", async () => {
+test("choosing a priority level does not enter the schedule review", async () => {
   const harness = createBulletPropertyPickerHarness({
     config: createPriorityPickerConfig(),
     content: "- [ ] #task Ship the thing ^ship",
     baseDate: new Date(2026, 7, 3),
     random: () => 0,
   });
-  assert.equal(harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
+  const picker = await choosePriorityLevel(harness, "P1");
 
-  const priorityItem = picker.items.find(
-    (item) => item.property.name === "priority",
-  );
-  assert.ok(priorityItem);
-  picker.showValueStage(priorityItem);
-
-  const levelItem = picker.items.find(
-    (item) => item.priorityLevel && item.label === "P1",
-  );
-  assert.ok(levelItem);
-  await picker.openItem(levelItem);
-
-  assert.equal(picker.stage, "value");
+  assert.notEqual(picker.stage, "schedule-review");
   assert.equal(picker.pendingScheduleReason, null);
   assert.equal(
     harness.editor.content,
@@ -9833,7 +9817,7 @@ test("confirming an empty reason on a task with an existing schedule log appends
   assert.notEqual(dateIndex, -1);
   const dateValue = picker.visibleItems[dateIndex].value;
   await picker.openItemAtIndex(dateIndex);
-  assert.equal(picker.stage, "reason");
+  assert.equal(picker.stage, "schedule-review");
 
   await confirmScheduleReasonStage(picker, "");
 
@@ -9863,7 +9847,7 @@ test("confirming an empty reason on a task with no schedule log writes only the 
   assert.notEqual(dateIndex, -1);
   const dateValue = picker.visibleItems[dateIndex].value;
   await picker.openItemAtIndex(dateIndex);
-  assert.equal(picker.stage, "reason");
+  assert.equal(picker.stage, "schedule-review");
 
   await confirmScheduleReasonStage(picker, "");
 
@@ -9875,238 +9859,97 @@ test("confirming an empty reason on a task with no schedule log writes only the 
   assert.doesNotMatch(notices.at(-1), /schedule log/);
 });
 
-test("reason stage getFilteredItems always returns exactly one synthetic item", () => {
-  const config = buildScheduleReasonConfig();
-  const lineText = "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship";
-  const editor = new TestEditor(lineText);
-  const cursor = { line: 0, ch: 0 };
-  const picker = new helpers.BulletPropertyPickerModal(
-    {},
-    {},
-    editor,
-    cursor,
-    lineText,
-    config,
-    { filePath: "Tasks.md" },
+test("review stage getFilteredItems always returns exactly one synthetic preview item", () => {
+  const { picker } = openBareScheduleStage(
+    "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship",
   );
-  const scheduledItem = picker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  picker.showValueStage(scheduledItem);
-  const dateItem = picker.items.find((item) => item.kind === "value");
-  picker.openItem(dateItem);
-  assert.equal(picker.stage, "reason");
+  picker.openItem(picker.items.find((item) => item.kind === "value"));
+  assert.equal(picker.stage, "schedule-review");
 
-  picker.inputEl = { value: "" };
+  const reasonEl = picker.scheduleReviewReasonEl;
+  assert.ok(reasonEl, "the review paints its Reason field");
+  reasonEl.value = "";
   const emptyItems = picker.getFilteredItems();
   assert.equal(emptyItems.length, 1);
-  assert.equal(emptyItems[0].empty, true);
+  assert.equal(emptyItems[0].reasonEmpty, true);
 
-  picker.inputEl = { value: "waiting on the API review to land" };
+  reasonEl.value = "waiting on the API review to land";
   const typedItems = picker.getFilteredItems();
   assert.equal(typedItems.length, 1);
-  assert.equal(typedItems[0].empty, false);
+  assert.equal(typedItems[0].reasonEmpty, false);
   assert.equal(typedItems[0].reason, "waiting on the API review to land");
 
-  picker.inputEl = { value: "blocked:: x" };
+  reasonEl.value = "blocked:: x";
   const warningItems = picker.getFilteredItems();
   assert.equal(warningItems.length, 1);
-  assert.equal(warningItems[0].hasInlineField, true);
+  assert.equal(warningItems[0].reasonHasInlineField, true);
 });
 
-test("the preview row previews the entry it will write", () => {
-  const config = buildScheduleReasonConfig();
-
+test("the review preview row previews the entry it will write", () => {
   const markedLines = [
     "- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship",
     "  - 🗓️ **SCHEDULE LOG**",
     "    - *2026-08-06 → 2026-08-13* — was out sick",
   ];
-  const markedEditor = new TestEditor(markedLines.join("\n"));
-  const markedPicker = new helpers.BulletPropertyPickerModal(
-    {},
-    {},
-    markedEditor,
-    { line: 0, ch: 0 },
-    markedLines[0],
-    config,
-    { filePath: "Tasks.md" },
-  );
-  const markedScheduledItem = markedPicker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  markedPicker.showValueStage(markedScheduledItem);
-  markedPicker.showScheduleReasonStage({ value: "2026-08-20" });
-  markedPicker.inputEl = { value: "" };
-  const markedItem = markedPicker.getFilteredItems()[0];
-  assert.equal(markedItem.empty, true);
-  assert.equal(markedItem.fallback, true);
-  assert.equal(markedItem.parentExists, true);
+  const previewFor = (lines, value) => {
+    const { picker } = openBareScheduleStage(lines.join("\n"));
+    picker.openItem({ kind: "value", value, label: value, searchText: value });
+    assert.equal(picker.stage, "schedule-review");
+    picker.scheduleReviewReasonEl.value = "";
+    return picker.getFilteredItems()[0];
+  };
 
-  const unmarkedLines = ["- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship"];
-  const unmarkedEditor = new TestEditor(unmarkedLines.join("\n"));
-  const unmarkedPicker = new helpers.BulletPropertyPickerModal(
-    {},
-    {},
-    unmarkedEditor,
-    { line: 0, ch: 0 },
-    unmarkedLines[0],
-    config,
-    { filePath: "Tasks.md" },
+  const marked = previewFor(markedLines, "2026-08-20");
+  assert.equal(marked.reasonEmpty, true);
+  assert.equal(marked.reasonFallback, true);
+  assert.equal(marked.parentExists, true);
+
+  const unmarked = previewFor(
+    ["- [ ] #task Ship the thing [scheduled:: 2026-08-13] ^ship"],
+    "2026-08-20",
   );
-  const unmarkedScheduledItem = unmarkedPicker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  unmarkedPicker.showValueStage(unmarkedScheduledItem);
-  unmarkedPicker.showScheduleReasonStage({ value: "2026-08-20" });
-  unmarkedPicker.inputEl = { value: "" };
-  const unmarkedItem = unmarkedPicker.getFilteredItems()[0];
-  assert.equal(unmarkedItem.empty, true);
-  assert.equal(unmarkedItem.fallback, false);
-  assert.equal(unmarkedItem.parentExists, false);
+  assert.equal(unmarked.reasonEmpty, true);
+  assert.equal(unmarked.reasonFallback, false);
+  assert.equal(unmarked.parentExists, false);
 
   // Marker exists but the picked date equals the current one: still no
   // fallback, since a generated entry never claims a change that did not
   // happen.
-  const sameDatePicker = new helpers.BulletPropertyPickerModal(
-    {},
-    {},
-    markedEditor,
-    { line: 0, ch: 0 },
-    markedLines[0],
-    config,
-    { filePath: "Tasks.md" },
-  );
-  const sameDateScheduledItem = sameDatePicker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  sameDatePicker.showValueStage(sameDateScheduledItem);
-  sameDatePicker.showScheduleReasonStage({ value: "2026-08-13" });
-  sameDatePicker.inputEl = { value: "" };
-  const sameDateItem = sameDatePicker.getFilteredItems()[0];
-  assert.equal(sameDateItem.empty, true);
-  assert.equal(sameDateItem.fallback, false);
+  const sameDate = previewFor(markedLines, "2026-08-13");
+  assert.equal(sameDate.reasonEmpty, true);
+  assert.equal(sameDate.reasonFallback, false);
 });
 
-test("the reason-stage footer hint flips between Skip reason and Log reason as the user types", () => {
-  const config = buildScheduleReasonConfig();
-  const lineText = "- [ ] #task Ship the thing ^ship";
-  const editor = new TestEditor(lineText);
-  const cursor = { line: 0, ch: 0 };
-  const picker = new helpers.BulletPropertyPickerModal(
-    {},
-    {},
-    editor,
-    cursor,
-    lineText,
-    config,
-    { filePath: "Tasks.md" },
-  );
-  const scheduledItem = picker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  picker.showValueStage(scheduledItem);
-  const dateItem = picker.items.find((item) => item.kind === "value");
-  picker.openItem(dateItem);
-  assert.equal(picker.stage, "reason");
-
-  // renderResults() drives real DOM rendering through the base class; stub it
-  // out here so only this subclass override's post-super.renderResults()
-  // footer-hint logic (the thing under test) actually runs.
-  const originalRenderResults = helpers.FilteredPickerModal.prototype.renderResults;
-  helpers.FilteredPickerModal.prototype.renderResults = function stubbedRenderResults() {
-    this.visibleItems = this.getFilteredItems();
-  };
-  try {
-    picker.inputEl = { value: "" };
-    picker.renderResults();
-    assert.match(
-      picker.footerHints.find((hint) => hint.keys.includes("↵")).label,
-      /^Skip reason$/,
-    );
-
-    picker.inputEl = { value: "waiting on the API review to land" };
-    picker.renderResults();
-    assert.match(
-      picker.footerHints.find((hint) => hint.keys.includes("↵")).label,
-      /^Log reason$/,
-    );
-  } finally {
-    helpers.FilteredPickerModal.prototype.renderResults = originalRenderResults;
-  }
-
-  // A task that already keeps a log still gets "Log without a reason" instead
-  // of "Skip reason", since ↵ on an empty input still writes something.
-  const markedLines = [
+test("the review footer flips between Skip optional logs and Apply schedule as the Reason changes", () => {
+  const { picker } = openBareScheduleStage(
     "- [ ] #task Ship the thing ^ship",
-    "  - 🗓️ **SCHEDULE LOG**",
-    "    - *2026-08-06* — was out sick",
-  ];
-  const markedEditor = new TestEditor(markedLines.join("\n"));
-  const markedPicker = new helpers.BulletPropertyPickerModal(
-    {},
-    {},
-    markedEditor,
-    { line: 0, ch: 0 },
-    markedLines[0],
-    config,
-    { filePath: "Tasks.md" },
   );
-  const markedScheduledItem = markedPicker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  markedPicker.showValueStage(markedScheduledItem);
-  const markedDateItem = markedPicker.items.find((item) => item.kind === "value");
-  markedPicker.openItem(markedDateItem);
-  assert.equal(markedPicker.stage, "reason");
-  helpers.FilteredPickerModal.prototype.renderResults = function stubbedRenderResults() {
-    this.visibleItems = this.getFilteredItems();
-  };
-  try {
-    markedPicker.inputEl = { value: "" };
-    markedPicker.renderResults();
-    assert.match(
-      markedPicker.footerHints.find((hint) => hint.keys.includes("↵")).label,
-      /^Log without a reason$/,
-    );
+  picker.openItem({ kind: "value", value: "2026-08-20", label: "x", searchText: "x" });
+  assert.equal(picker.stage, "schedule-review");
+  const enterLabel = () =>
+    picker.footerHints.find((hint) => hint.keys.includes("↵")).label;
 
-    markedPicker.inputEl = { value: "waiting on the API review to land" };
-    markedPicker.renderResults();
-    assert.match(
-      markedPicker.footerHints.find((hint) => hint.keys.includes("↵")).label,
-      /^Log reason$/,
-    );
-  } finally {
-    helpers.FilteredPickerModal.prototype.renderResults = originalRenderResults;
-  }
+  picker.scheduleReviewReasonEl.value = "";
+  picker.renderResults();
+  assert.equal(enterLabel(), "Skip optional logs");
+
+  picker.scheduleReviewReasonEl.value = "waiting on the API review to land";
+  picker.renderResults();
+  assert.equal(enterLabel(), "Apply schedule");
 });
 
-test("closing the picker during the reason stage clears pendingScheduleReason and writes nothing", () => {
-  const config = buildScheduleReasonConfig();
+test("closing the picker during the review clears pending schedule state and writes nothing", () => {
   const lineText = "- [ ] #task Ship the thing ^ship";
-  const editor = new TestEditor(lineText);
-  const cursor = { line: 0, ch: 0 };
-  const picker = new helpers.BulletPropertyPickerModal(
-    {},
-    {},
-    editor,
-    cursor,
-    lineText,
-    config,
-    { filePath: "Tasks.md" },
-  );
-  const scheduledItem = picker.items.find(
-    (item) => item.property.name === "scheduled",
-  );
-  picker.showValueStage(scheduledItem);
-  const dateItem = picker.items.find((item) => item.kind === "value");
-  picker.openItem(dateItem);
-  assert.equal(picker.stage, "reason");
+  const { editor, picker } = openBareScheduleStage(lineText);
+  picker.openItem(picker.items.find((item) => item.kind === "value"));
+  assert.equal(picker.stage, "schedule-review");
   assert.ok(picker.pendingScheduleReason);
+  assert.ok(picker.pendingScheduleReview);
 
   picker.onClose();
 
   assert.equal(picker.pendingScheduleReason, null);
+  assert.equal(picker.pendingScheduleReview, null);
   assert.equal(editor.content, lineText);
 });
 
@@ -16618,12 +16461,7 @@ async function openLinkPickerValueStage(harness, propertyName, options = {}) {
   assert.equal(await harness.open(options), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.ok(picker.isLinkSession());
-  const propertyIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === propertyName,
-  );
-  assert.notEqual(propertyIndex, -1);
-  await picker.openItemAtIndex(propertyIndex);
-  return picker;
+  return await openPropertyStage(picker, propertyName);
 }
 
 test("parseLinkPickerTaskLink recognizes dedicated Task Link bullets", () => {
@@ -16939,7 +16777,7 @@ test("link mode defers to a future date, blocks the task, and prunes today", asy
   );
   assert.notEqual(dateIndex, -1);
   await picker.openItemAtIndex(dateIndex);
-  assert.equal(picker.stage, "reason");
+  assert.equal(picker.stage, "schedule-review");
   await confirmScheduleReasonStage(picker, "defer it");
   assert.match(
     taskEditor.content,
@@ -16970,7 +16808,7 @@ test("bare Ctrl+Shift+P on a #task line keeps the existing task behavior", () =>
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.isLinkSession(), false);
   assert.ok(
-    picker.items.some((item) => item.property.name === "energy"),
+    picker.propertyItems.some((item) => item.property.name === "energy"),
   );
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
@@ -17406,12 +17244,12 @@ test("Ctrl+Shift+P shows a pinned lane row that commits immediately", async () =
     true,
   );
   const picker = harness.plugin.activeBulletPropertyPicker;
-  assert.ok(picker.visibleItems.length > 0);
-  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
-  assert.equal(picker.visibleItems[0].property.name, "lane");
-  assert.equal(picker.visibleItems[0].detail, "lane · commit to Next");
+  assert.ok(picker.propertyItems.length > 0);
+  assert.equal(picker.propertyItems[0].kind, "lane-toggle");
+  assert.equal(picker.propertyItems[0].property.name, "lane");
+  assert.equal(picker.propertyItems[0].detail, "lane · commit to Next");
   harness.plugin.app.plugins = { plugins: {} };
-  await picker.openItemAtIndex(0);
+  await runCardAction(picker, "lane");
   assert.equal(
     harness.linkEditor.content,
     "- [*] #task Ship it [scheduled:: 2026-09-30] ^me",
@@ -17435,10 +17273,10 @@ test("Ctrl+Shift+P link mode shows the lane row with release detail", async () =
   assert.equal(await harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.isLinkSession(), true);
-  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
-  assert.equal(picker.visibleItems[0].detail, "lane · release to Ready");
+  assert.equal(picker.propertyItems[0].kind, "lane-toggle");
+  assert.equal(picker.propertyItems[0].detail, "lane · release to Ready");
   harness.plugin.app.plugins = { plugins: {} };
-  await picker.openItemAtIndex(0);
+  await runCardAction(picker, "lane");
   assert.equal(taskEditor.content, "- [ ] #task Ship it ^a1");
   assert.match(notices.at(-1), /→ Ready · 1 task/);
 });
@@ -17456,9 +17294,9 @@ test("Ctrl+Shift+P lane release with In Progress goes through the reason stage",
     true,
   );
   const picker = harness.plugin.activeBulletPropertyPicker;
-  assert.equal(picker.visibleItems[0].kind, "lane-toggle");
-  assert.equal(picker.visibleItems[0].needsReason, true);
-  await picker.openItemAtIndex(0);
+  assert.equal(picker.propertyItems[0].kind, "lane-toggle");
+  assert.equal(picker.propertyItems[0].needsReason, true);
+  await runCardAction(picker, "lane");
   assert.equal(picker.stage, "lane-release-reason");
   // Escape leaves everything untouched.
   picker.close();
@@ -18018,7 +17856,7 @@ test("cancel project conversion carries the log and reports it", () => {
 // ---------------------------------------------------------------------------
 
 function cancelRowIndex(picker) {
-  return picker.visibleItems.findIndex((item) => item.kind === "cancel-task");
+  return picker.propertyItems.findIndex((item) => item.kind === "cancel-task");
 }
 
 // Complete the cancel reason-stage prompt through the same openItemAtIndex
@@ -18083,355 +17921,27 @@ test("getCancelReasonHints labels Enter per state and Esc as Keep open", () => {
   ]);
 });
 
-test("Ctrl+Shift+P pins the Cancel row last on an open task", () => {
+test("the Cancel property item and the card's cancel row describe an open task", () => {
   const harness = openCancelReasonStage({
     content: "- [ ] #task Ship it [priority:: high] ^ship",
   });
   const picker = harness.plugin.activeBulletPropertyPicker;
-  assert.ok(picker.visibleItems.length > 1);
+  assert.ok(picker.propertyItems.length > 1);
   const index = cancelRowIndex(picker);
   assert.notEqual(index, -1);
-  assert.equal(index, picker.visibleItems.length - 1);
-  const row = picker.visibleItems[index];
-  assert.equal(row.property.name, "cancel");
-  assert.equal(row.title, "Cancel task");
-  assert.equal(row.detail, "Ready → Cancelled · asks why");
-  assert.equal(row.recurring, false);
-  // The prioritized task opens on the schedule row, with the lane toggle next.
-  assert.equal(picker.visibleItems[0].kind, "property");
-  assert.equal(picker.visibleItems[0].property.name, "scheduled");
-  assert.equal(picker.selectedIndex, 0);
-  assert.equal(picker.visibleItems[1].kind, "lane-toggle");
+  assert.equal(index, picker.propertyItems.length - 1);
+  const item = picker.propertyItems[index];
+  assert.equal(item.property.name, "cancel");
+  assert.equal(item.title, "Cancel task");
+  assert.equal(item.detail, "Ready → Cancelled · asks why");
+  assert.equal(item.recurring, false);
+  // The card owns the surface: its cancel row is enabled and no list opens.
+  assert.equal(picker.stage, "task-card");
+  const row = picker.taskCardModel.rows.find((entry) => entry.id === "cancel");
+  assert.equal(row.enabled, true);
+  assert.equal(picker.taskCardSelectedRowId, "schedule");
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
-});
-
-function stageOneRowNames(picker) {
-  return picker.visibleItems.map((item) =>
-    item && item.kind === "property" ? item.property.name : item.kind,
-  );
-}
-
-function openPriorityPicker(harnessOptions = {}, openOptions = {}, extra = {}) {
-  const harness = createBulletPropertyPickerHarness({
-    config: createPriorityPickerConfig(),
-    baseDate: new Date(2026, 7, 3),
-    random: () => 0,
-    ...harnessOptions,
-  });
-  if (extra.freshnessApi) {
-    harness.plugin.getFreshnessApi = () => extra.freshnessApi;
-  }
-  assert.equal(harness.open(openOptions), true);
-  return harness;
-}
-
-test("scheduled-first puts scheduled first on a prioritized task", () => {
-  for (const content of [
-    "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
-    "- [ ] #task A [priority:: medium] ^a",
-  ]) {
-    const harness = openPriorityPicker({ content });
-    const picker = harness.plugin.activeBulletPropertyPicker;
-    assert.equal(picker.selectedIndex, 0, content);
-    assert.equal(picker.visibleItems[0].kind, "property", content);
-    assert.equal(picker.visibleItems[0].property.name, "scheduled", content);
-    assert.deepEqual(
-      stageOneRowNames(picker),
-      ["scheduled", "lane-toggle", "priority", "cancel-task"],
-      content,
-    );
-    picker.close();
-    harness.plugin.activeBulletPropertyPicker = null;
-  }
-});
-
-test("scheduled-first honors configuration order for the remaining rows", () => {
-  const priorityFirst = helpers.validateBulletPropertyConfig({
-    properties: [
-      {
-        name: "priority",
-        values: "priority",
-        schedules: "scheduled",
-        levels: [
-          { label: "P1", value: "high", min_days: 2, max_days: 7 },
-          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
-        ],
-      },
-      { name: "scheduled", values: "date" },
-    ],
-  });
-  const harness = openPriorityPicker(
-    {
-      config: priorityFirst,
-      content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
-    },
-  );
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  assert.deepEqual(stageOneRowNames(picker), [
-    "scheduled",
-    "lane-toggle",
-    "priority",
-    "cancel-task",
-  ]);
-  picker.close();
-  harness.plugin.activeBulletPropertyPicker = null;
-
-  const withExtra = helpers.validateBulletPropertyConfig({
-    properties: [
-      { name: "scheduled", values: "date" },
-      {
-        name: "priority",
-        values: "priority",
-        schedules: "scheduled",
-        levels: [
-          { label: "P1", value: "high", min_days: 2, max_days: 7 },
-          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
-        ],
-      },
-      { name: "energy", values: ["high", "low"] },
-    ],
-  });
-  const extra = openPriorityPicker({
-    config: withExtra,
-    content: "- [ ] #task A [priority:: medium] [energy:: high] ^a",
-  });
-  const extraPicker = extra.plugin.activeBulletPropertyPicker;
-  assert.deepEqual(stageOneRowNames(extraPicker), [
-    "scheduled",
-    "lane-toggle",
-    "priority",
-    "energy",
-    "cancel-task",
-  ]);
-  extraPicker.close();
-  extra.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first keeps lane, refresh, and cancel rows in place", () => {
-  const harness = openPriorityPicker(
-    {
-      content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
-    },
-    {},
-    {
-      freshnessApi: {
-        setRefreshLine: () => {},
-        config: () => ({ interval: 7 }),
-      },
-    },
-  );
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  assert.deepEqual(stageOneRowNames(picker), [
-    "scheduled",
-    "lane-toggle",
-    "refresh-interval",
-    "priority",
-    "cancel-task",
-  ]);
-  assert.equal(picker.selectedIndex, 0);
-  picker.close();
-  harness.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first leaves unprioritized tasks and plain bullets alone", () => {
-  const scheduledOnly = openPriorityPicker({
-    content: "- [ ] #task A [scheduled:: 2026-09-01] ^a",
-  });
-  const scheduledPicker = scheduledOnly.plugin.activeBulletPropertyPicker;
-  assert.deepEqual(stageOneRowNames(scheduledPicker), [
-    "lane-toggle",
-    "scheduled",
-    "priority",
-    "cancel-task",
-  ]);
-  scheduledPicker.close();
-  scheduledOnly.plugin.activeBulletPropertyPicker = null;
-
-  const bare = openPriorityPicker({ content: "- [ ] #task A ^a" });
-  const barePicker = bare.plugin.activeBulletPropertyPicker;
-  assert.equal(barePicker.visibleItems[0].kind, "lane-toggle");
-  barePicker.close();
-  bare.plugin.activeBulletPropertyPicker = null;
-
-  const plain = openPriorityPicker({
-    content: "- just a bullet [priority:: medium]",
-  });
-  const plainPicker = plain.plugin.activeBulletPropertyPicker;
-  assert.deepEqual(stageOneRowNames(plainPicker), ["priority", "scheduled"]);
-  plainPicker.close();
-  plain.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first promotes on unconfigured and closed priorities", () => {
-  const unconfigured = openPriorityPicker({
-    content: "- [ ] #task A [priority:: highest] [scheduled:: 2026-09-01] ^a",
-  });
-  const unconfiguredPicker = unconfigured.plugin.activeBulletPropertyPicker;
-  assert.equal(unconfiguredPicker.visibleItems[0].property.name, "scheduled");
-  assert.equal(unconfiguredPicker.selectedIndex, 0);
-  assert.equal(unconfiguredPicker.priorityRollRecommendation, null);
-  unconfiguredPicker.close();
-  unconfigured.plugin.activeBulletPropertyPicker = null;
-
-  const closed = openPriorityPicker({
-    content: "- [x] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
-  });
-  const closedPicker = closed.plugin.activeBulletPropertyPicker;
-  assert.deepEqual(stageOneRowNames(closedPicker), ["scheduled", "priority"]);
-  assert.equal(closedPicker.selectedIndex, 0);
-  closedPicker.close();
-  closed.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first filtering still hides the schedule row normally", () => {
-  const harness = openPriorityPicker({
-    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
-  });
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const unfiltered = stageOneRowNames(picker);
-  assert.equal(unfiltered[0], "scheduled");
-
-  picker.inputEl = { value: "zzzz" };
-  assert.deepEqual(picker.getFilteredItems(), []);
-
-  picker.inputEl = { value: "e" };
-  assert.deepEqual(
-    picker.getFilteredItems().map((item) =>
-      item && item.kind === "property" ? item.property.name : item.kind,
-    ),
-    unfiltered,
-  );
-  picker.inputEl = null;
-  picker.close();
-  harness.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first keeps an explicit selectPropertyName rebuild", () => {
-  const harness = openPriorityPicker({
-    content: "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a",
-  });
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  picker.resultsEl = {};
-  picker.renderResults = () => {};
-  picker.renderAll = function (options = {}) {
-    if (options.clearQuery !== false && this.inputEl) {
-      this.inputEl.value = "";
-    }
-    this.visibleItems = this.getFilteredItems();
-  };
-  picker.showPropertyStage({ selectPropertyName: "priority", clearQuery: false });
-  const priorityIndex = picker.visibleItems.findIndex(
-    (item) => item && item.kind === "property" && item.property.name === "priority",
-  );
-  assert.notEqual(priorityIndex, -1);
-  assert.equal(picker.selectedIndex, priorityIndex);
-  picker.close();
-  harness.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first promotes a prioritized ^prj task", () => {
-  const harness = openPriorityPicker({
-    content: [
-      "---",
-      "type: [[project]]",
-      "scheduled: 2026-08-05",
-      "---",
-      "- [ ] #task Ship [priority:: medium] ^prj",
-    ].join("\n"),
-    cursor: { line: 4, ch: 0 },
-    file: { path: "projects/Ship.md", basename: "Ship", extension: "md" },
-  });
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  assert.equal(picker.visibleItems[0].kind, "property");
-  assert.equal(picker.visibleItems[0].property.name, "scheduled");
-  assert.equal(picker.selectedIndex, 0);
-  picker.close();
-  harness.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first promotes a mixed counted batch but not a plain one", () => {
-  const priorityFirst = helpers.validateBulletPropertyConfig({
-    properties: [
-      {
-        name: "priority",
-        values: "priority",
-        schedules: "scheduled",
-        levels: [
-          { label: "P1", value: "high", min_days: 2, max_days: 7 },
-          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
-        ],
-      },
-      { name: "scheduled", values: "date" },
-    ],
-  });
-  const mixed = openPriorityPicker(
-    {
-      config: priorityFirst,
-      content: [
-        "- [ ] #task A [priority:: medium] ^a",
-        "- [ ] #task B ^b",
-        "- [ ] #task C [scheduled:: 2026-09-01] ^c",
-      ].join("\n"),
-    },
-    { countExplicit: true, additionalTaskCount: 2 },
-  );
-  const mixedPicker = mixed.plugin.activeBulletPropertyPicker;
-  assert.equal(mixedPicker.isCountedSession(), true);
-  const priorityRow = mixedPicker.visibleItems.find(
-    (item) => item && item.kind === "property" && item.property.name === "priority",
-  );
-  assert.equal(priorityRow.valueState, "mixed");
-  assert.equal(priorityRow.currentValue, "");
-  assert.deepEqual(stageOneRowNames(mixedPicker), [
-    "scheduled",
-    "lane-toggle",
-    "priority",
-    "cancel-task",
-  ]);
-  assert.equal(mixedPicker.selectedIndex, 0);
-  mixedPicker.close();
-  mixed.plugin.activeBulletPropertyPicker = null;
-
-  const plain = openPriorityPicker(
-    {
-      content: "- [ ] #task A ^a\n- [ ] #task B [scheduled:: 2026-09-01] ^b",
-    },
-    { countExplicit: true, additionalTaskCount: 1 },
-  );
-  const plainPicker = plain.plugin.activeBulletPropertyPicker;
-  assert.equal(plainPicker.visibleItems[0].kind, "lane-toggle");
-  plainPicker.close();
-  plain.plugin.activeBulletPropertyPicker = null;
-});
-
-test("scheduled-first promotes a prioritized Task Link session", async () => {
-  const harness = createLinkPickerHarness({
-    linkContent: "- [[Tasks#^a1]]",
-    notes: {
-      "Tasks.md": "- [ ] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a1",
-    },
-  });
-  assert.equal(await harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  assert.equal(picker.isLinkSession(), true);
-  assert.equal(picker.visibleItems[0].kind, "property");
-  assert.equal(picker.visibleItems[0].property.name, "scheduled");
-  assert.equal(picker.selectedIndex, 0);
-  picker.close();
-  harness.plugin.activeBulletPropertyPicker = null;
-
-  const plain = createLinkPickerHarness({
-    linkContent: "- [[Tasks#^b1]]",
-    notes: {
-      "Tasks.md": "- [ ] #task B [scheduled:: 2026-09-01] ^b1",
-    },
-  });
-  assert.equal(await plain.open(), true);
-  const plainPicker = plain.plugin.activeBulletPropertyPicker;
-  assert.equal(plainPicker.visibleItems[0].kind, "lane-toggle");
-  plainPicker.close();
-  plain.plugin.activeBulletPropertyPicker = null;
 });
 
 test("Cancel row hides on closed tasks, plain bullets, and all-closed sessions", () => {
@@ -18474,40 +17984,17 @@ test("Cancel row reports skipped closed targets in a counted session", () => {
   const picker = harness.plugin.activeBulletPropertyPicker;
   const index = cancelRowIndex(picker);
   assert.notEqual(index, -1);
-  assert.equal(index, picker.visibleItems.length - 1);
-  assert.equal(picker.visibleItems[index].title, "Cancel 2 tasks");
+  assert.equal(index, picker.propertyItems.length - 1);
+  assert.equal(picker.propertyItems[index].title, "Cancel 2 tasks");
   assert.equal(
-    picker.visibleItems[index].detail,
+    picker.propertyItems[index].detail,
     "2 tasks → Cancelled · 1 already closed",
   );
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
 });
 
-test("Cancel filter synonyms reach the row and other text does not", () => {
-  const harness = openCancelReasonStage({
-    content: "- [ ] #task Ship it ^ship",
-  });
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const row = picker.visibleItems[cancelRowIndex(picker)];
-  for (const query of [
-    "can",
-    "cancelled",
-    "canceled",
-    "drop",
-    "obsolete",
-    "wontfix",
-    "close",
-    "❌",
-  ]) {
-    assert.equal(picker.filterItem(row, query), true, query);
-  }
-  assert.equal(picker.filterItem(row, "zzz-no-such-property"), false);
-  picker.close();
-  harness.plugin.activeBulletPropertyPicker = null;
-});
-
-test("choosing the Cancel row on a recurring task refuses and stays", async () => {
+test("the card refuses the cancel row on a recurring task and stays on the card", async () => {
   notices.length = 0;
   const harness = openCancelReasonStage({
     content: "- [ ] #task Ship it 🔁 ^ship",
@@ -18516,15 +18003,17 @@ test("choosing the Cancel row on a recurring task refuses and stays", async () =
   const index = cancelRowIndex(picker);
   assert.notEqual(index, -1);
   assert.equal(
-    picker.visibleItems[index].detail,
+    picker.propertyItems[index].detail,
     "recurring · use Obsidian Tasks",
   );
-  await picker.openItemAtIndex(index);
-  assert.equal(picker.stage, "properties");
-  assert.match(
-    notices.at(-1),
-    /Recurring tasks are cancelled with Obsidian Tasks.*no tasks were updated/,
+  const row = picker.taskCardModel.rows.find((entry) => entry.id === "cancel");
+  assert.equal(row.enabled, false);
+  const handled = await picker.dispatchTaskCardIntent(
+    helpers.resolveTaskCardKey(picker.taskCardModel, { key: "x" }),
   );
+  assert.equal(handled, false);
+  assert.equal(picker.stage, "task-card");
+  assert.ok(notices.length > 0);
   assert.equal(
     harness.editor.content,
     "- [ ] #task Ship it 🔁 ^ship",
@@ -18658,7 +18147,7 @@ test("Esc from the cancel reason stage writes nothing", async () => {
     content: "- [ ] #task Ship it ^ship",
   });
   const picker = harness.plugin.activeBulletPropertyPicker;
-  await picker.openItemAtIndex(cancelRowIndex(picker));
+  await runCardAction(picker, "cancel");
   assert.equal(picker.stage, "cancel-reason");
   picker.close();
   harness.plugin.activeBulletPropertyPicker = null;
@@ -18672,7 +18161,7 @@ test("single cancel writes [-], stamp, and first-child log in one transaction", 
     content: "- [ ] #task Ship it [priority:: high] ^ship",
   });
   const picker = harness.plugin.activeBulletPropertyPicker;
-  await picker.openItemAtIndex(cancelRowIndex(picker));
+  await runCardAction(picker, "cancel");
   await confirmCancelReasonStage(picker, "Superseded by [[other]]");
   assert.deepEqual(harness.editor.content.split("\n"), [
     "- [-] #task Ship it [priority:: high] [cancelled:: 2026-08-03] ^ship",
@@ -18692,9 +18181,7 @@ test("empty reason writes no log unless one already exists", async () => {
   const plain = openCancelReasonStage({
     content: "- [ ] #task Ship it ^ship",
   });
-  await plain.plugin.activeBulletPropertyPicker.openItemAtIndex(
-    cancelRowIndex(plain.plugin.activeBulletPropertyPicker),
-  );
+  await runCardAction(plain.plugin.activeBulletPropertyPicker, "cancel");
   await confirmCancelReasonStage(plain.plugin.activeBulletPropertyPicker, "");
   assert.equal(
     plain.editor.content,
@@ -18711,9 +18198,7 @@ test("empty reason writes no log unless one already exists", async () => {
       "    - *2026-08-01* — first reason",
     ].join("\n"),
   });
-  await logged.plugin.activeBulletPropertyPicker.openItemAtIndex(
-    cancelRowIndex(logged.plugin.activeBulletPropertyPicker),
-  );
+  await runCardAction(logged.plugin.activeBulletPropertyPicker, "cancel");
   await confirmCancelReasonStage(logged.plugin.activeBulletPropertyPicker, "");
   assert.deepEqual(logged.editor.content.split("\n"), [
     "- [-] #task Ship it [cancelled:: 2026-08-03] ^ship",
@@ -18730,7 +18215,7 @@ test("stale single preimage refuses with nothing written", async () => {
     content: "- [ ] #task Ship it ^ship",
   });
   const picker = harness.plugin.activeBulletPropertyPicker;
-  await picker.openItemAtIndex(cancelRowIndex(picker));
+  await runCardAction(picker, "cancel");
   harness.editor.content = "- [ ] #task Ship it, edited ^ship";
   await confirmCancelReasonStage(picker, "too late");
   assert.match(
@@ -18753,7 +18238,7 @@ test("cancel writes [-] with no NOW chip", async () => {
     content: "- [*] #task Ship it ^ship",
   });
   const picker = harness.plugin.activeBulletPropertyPicker;
-  await picker.openItemAtIndex(cancelRowIndex(picker));
+  await runCardAction(picker, "cancel");
   await confirmCancelReasonStage(picker, "obsolete");
   assert.match(harness.editor.content, /\[-]/);
   assert.match(notices.at(-1), /Cancelled task/);
@@ -18781,9 +18266,7 @@ test("TSC recovery runs with cancelled identities; a missing API still succeeds"
     },
   });
   notices.length = 0;
-  await withApi.plugin.activeBulletPropertyPicker.openItemAtIndex(
-    cancelRowIndex(withApi.plugin.activeBulletPropertyPicker),
-  );
+  await runCardAction(withApi.plugin.activeBulletPropertyPicker, "cancel");
   await confirmCancelReasonStage(
     withApi.plugin.activeBulletPropertyPicker,
     "obsolete",
@@ -18798,9 +18281,7 @@ test("TSC recovery runs with cancelled identities; a missing API still succeeds"
   const withoutApi = openCancelReasonStage({
     content: "- [ ] #task Ship it ^ship",
   });
-  await withoutApi.plugin.activeBulletPropertyPicker.openItemAtIndex(
-    cancelRowIndex(withoutApi.plugin.activeBulletPropertyPicker),
-  );
+  await runCardAction(withoutApi.plugin.activeBulletPropertyPicker, "cancel");
   await confirmCancelReasonStage(
     withoutApi.plugin.activeBulletPropertyPicker,
     "obsolete",
@@ -18828,9 +18309,7 @@ test("a throwing TSC API is skipped silently with no chip", async () => {
       },
     },
   });
-  await harness.plugin.activeBulletPropertyPicker.openItemAtIndex(
-    cancelRowIndex(harness.plugin.activeBulletPropertyPicker),
-  );
+  await runCardAction(harness.plugin.activeBulletPropertyPicker, "cancel");
   await confirmCancelReasonStage(
     harness.plugin.activeBulletPropertyPicker,
     "obsolete",
@@ -18849,7 +18328,7 @@ test("counted cancel skips closed targets and reports them", async () => {
     { countExplicit: true, additionalTaskCount: 2 },
   );
   const picker = harness.plugin.activeBulletPropertyPicker;
-  await picker.openItemAtIndex(cancelRowIndex(picker));
+  await runCardAction(picker, "cancel");
   assert.equal(picker.getCancelReasonSubtitle(), "2 tasks → Cancelled · Mon 2026-08-03 · nothing written yet");
   await confirmCancelReasonStage(picker, "obsolete");
   assert.deepEqual(harness.editor.content.split("\n"), [
@@ -18901,7 +18380,7 @@ test("same-file cancel folds today's Pomodoro prune into one transaction", async
     true,
   );
   const picker = plugin.activeBulletPropertyPicker;
-  await picker.openItemAtIndex(cancelRowIndex(picker));
+  await runCardAction(picker, "cancel");
   picker.inputEl = { value: "done" };
   picker.visibleItems = picker.getFilteredItems();
   await picker.openItemAtIndex(0);
@@ -18955,8 +18434,8 @@ test("link session cancels the target and removes the invoking link bullet", asy
   assert.equal(picker.isLinkSession(), true);
   const index = cancelRowIndex(picker);
   assert.notEqual(index, -1);
-  assert.equal(picker.visibleItems[index].title, "Cancel linked task");
-  await picker.openItemAtIndex(index);
+  assert.equal(picker.propertyItems[index].title, "Cancel linked task");
+  await runCardAction(picker, "cancel");
   assert.equal(picker.stage, "cancel-reason");
   picker.inputEl = { value: "superseded" };
   picker.visibleItems = picker.getFilteredItems();
@@ -19752,38 +19231,46 @@ test("scheduling Work Log eligibility requires Pending or Next #task lines", () 
   );
 });
 
-test("single Pending explicit date offers Work Log after the reason and writes both logs", async () => {
-  notices.length = 0;
-  const baseDate = new Date(2026, 9, 2);
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content: "- [/] #task Pending work ^a",
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
-  assert.equal(harness.open(), true);
+// Open the card's schedule row, pick one preset date, and land on the
+// combined Reason / Work summary review. Nothing is written yet.
+async function openSchedulingReview(harness, dateValue, openOptions = {}) {
+  assert.equal(harness.open(openOptions), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  assert.notEqual(scheduledIndex, -1);
-  await picker.openItemAtIndex(scheduledIndex);
+  await picker.openTaskCardAction("schedule");
   assert.equal(picker.stage, "value");
   const dateItem = picker.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-10-05",
+    (item) => item.kind === "value" && item.value === dateValue,
   );
-  assert.ok(dateItem);
+  assert.ok(dateItem, `no ${dateValue} date item`);
   await picker.openItem(dateItem);
-  assert.equal(picker.stage, "reason");
+  assert.equal(picker.stage, "schedule-review");
+  return picker;
+}
+
+function schedulingReviewHarness(content, extra = {}) {
+  return createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content,
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 9, 2),
+    ...extra,
+  });
+}
+
+test("single Pending explicit date opens one review and writes both logs", async () => {
+  notices.length = 0;
+  const harness = schedulingReviewHarness("- [/] #task Pending work ^a");
+  const picker = await openSchedulingReview(harness, "2026-10-05");
   assert.equal(harness.editor.content, "- [/] #task Pending work ^a");
-  await confirmScheduleReasonStage(picker, "replan");
-  assert.equal(picker.stage, "schedule-work-log");
-  assert.equal(harness.editor.content, "- [/] #task Pending work ^a");
-  assert.match(picker.getSchedulingWorkLogSubtitle(), /scheduled → 2026-10-05/);
-  assert.match(picker.getSchedulingWorkLogSubtitle(), /nothing written yet/);
-  await confirmSchedulingWorkLogStage(picker, "Did the thing");
+  assert.ok(picker.scheduleReviewReasonEl, "Reason field");
+  assert.ok(picker.scheduleReviewSummaryEl, "Work summary field");
+  assert.equal(picker.pendingScheduleReview.needsWorkLog, true);
+  assert.equal(picker.pendingScheduleReview.eligibleCount, 1);
+  assert.equal(picker.stage === "schedule-work-log", false);
+  await confirmScheduleReasonStage(picker, "replan", "Did the thing");
   assert.match(harness.editor.content, /\[scheduled:: 2026-10-05\]/);
   assert.match(harness.editor.content, /🗓️ \*\*SCHEDULE LOG\*\*/);
+  assert.match(harness.editor.content, /\*2026-10-05\* — replan/);
   assert.match(harness.editor.content, /\*2026-10-02\* — Did the thing/);
   assert.match(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
   assert.match(notices.at(-1), /1 Work Log/);
@@ -19792,26 +19279,10 @@ test("single Pending explicit date offers Work Log after the reason and writes b
 test("single Next blank and whitespace summaries schedule without a Work Log", async () => {
   for (const summary of ["", "   "]) {
     notices.length = 0;
-    const baseDate = new Date(2026, 9, 2);
-    const harness = createBulletPropertyPickerHarness({
-      config: schedulingWorkLogConfig(),
-      content: "- [*] #task Next work ^a",
-      cursor: { line: 0, ch: 0 },
-      baseDate,
-    });
-    assert.equal(harness.open(), true);
-    const picker = harness.plugin.activeBulletPropertyPicker;
-    const scheduledIndex = picker.visibleItems.findIndex(
-      (item) => item.property.name === "scheduled",
-    );
-    await picker.openItemAtIndex(scheduledIndex);
-    const dateItem = picker.visibleItems.find(
-      (item) => item.kind === "value" && item.value === "2026-10-05",
-    );
-    await picker.openItem(dateItem);
-    await confirmScheduleReasonStage(picker, "");
-    assert.equal(picker.stage, "schedule-work-log");
-    await confirmSchedulingWorkLogStage(picker, summary);
+    const harness = schedulingReviewHarness("- [*] #task Next work ^a");
+    const picker = await openSchedulingReview(harness, "2026-10-05");
+    assert.ok(picker.scheduleReviewSummaryEl);
+    await confirmScheduleReasonStage(picker, "", summary);
     assert.match(harness.editor.content, /\[scheduled:: 2026-10-05\]/);
     assert.doesNotMatch(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
     assert.doesNotMatch(notices.at(-1) || "", /Work Log/);
@@ -19819,75 +19290,32 @@ test("single Next blank and whitespace summaries schedule without a Work Log", a
   }
 });
 
-test("Escape at the reason and Work Log stages writes nothing", async () => {
-  const baseDate = new Date(2026, 9, 2);
+test("Escape at the review writes nothing, with or without typed text", async () => {
   const content = "- [/] #task Pending work ^a";
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content,
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
-  assert.equal(harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  await picker.openItemAtIndex(scheduledIndex);
-  const dateItem = picker.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-10-05",
-  );
-  await picker.openItem(dateItem);
-  assert.equal(picker.stage, "reason");
+  const harness = schedulingReviewHarness(content);
+  const picker = await openSchedulingReview(harness, "2026-10-05");
   picker.close();
   assert.equal(harness.editor.content, content);
 
-  const harness2 = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content,
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
-  assert.equal(harness2.open(), true);
-  const picker2 = harness2.plugin.activeBulletPropertyPicker;
-  const scheduledIndex2 = picker2.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  await picker2.openItemAtIndex(scheduledIndex2);
-  const dateItem2 = picker2.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-10-05",
-  );
-  await picker2.openItem(dateItem2);
-  await confirmScheduleReasonStage(picker2, "replan");
-  assert.equal(picker2.stage, "schedule-work-log");
+  const harness2 = schedulingReviewHarness(content);
+  const picker2 = await openSchedulingReview(harness2, "2026-10-05");
+  picker2.scheduleReviewReasonEl.value = "replan";
+  picker2.scheduleReviewSummaryEl.value = "Did work";
   assert.equal(harness2.editor.content, content);
   picker2.close();
   assert.equal(harness2.editor.content, content);
+  assert.equal(picker2.pendingScheduleReview, null);
 });
 
-test("Ready and Blocked explicit dates keep the existing flow with no Work Log prompt", async () => {
+test("Ready and Blocked explicit dates review the Reason with no Work summary field", async () => {
   for (const status of [" ", "?"]) {
     notices.length = 0;
-    const baseDate = new Date(2026, 9, 2);
-    const harness = createBulletPropertyPickerHarness({
-      config: schedulingWorkLogConfig(),
-      content: `- [${status}] #task Task ^a`,
-      cursor: { line: 0, ch: 0 },
-      baseDate,
-    });
-    assert.equal(harness.open(), true);
-    const picker = harness.plugin.activeBulletPropertyPicker;
-    const scheduledIndex = picker.visibleItems.findIndex(
-      (item) => item.property.name === "scheduled",
-    );
-    await picker.openItemAtIndex(scheduledIndex);
-    const dateItem = picker.visibleItems.find(
-      (item) => item.kind === "value" && item.value === "2026-10-05",
-    );
-    await picker.openItem(dateItem);
-    assert.equal(picker.stage, "reason");
+    const harness = schedulingReviewHarness(`- [${status}] #task Task ^a`);
+    const picker = await openSchedulingReview(harness, "2026-10-05");
+    assert.ok(picker.scheduleReviewReasonEl);
+    assert.equal(picker.scheduleReviewSummaryEl, null);
+    assert.equal(picker.pendingScheduleReview.needsWorkLog, false);
     await confirmScheduleReasonStage(picker, "replan");
-    assert.notEqual(picker.stage, "schedule-work-log");
     assert.match(harness.editor.content, /\[scheduled:: 2026-10-05\]/);
     assert.doesNotMatch(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
   }
@@ -19895,77 +19323,27 @@ test("Ready and Blocked explicit dates keep the existing flow with no Work Log p
 
 test("future scheduling on Pending marks Blocked but still writes the Work Log", async () => {
   notices.length = 0;
-  const baseDate = new Date(2026, 9, 2);
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content: "- [/] #task Pending work ^a",
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
-  assert.equal(harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  await picker.openItemAtIndex(scheduledIndex);
-  const dateItem = picker.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-11-02",
-  );
-  assert.ok(dateItem);
-  await picker.openItem(dateItem);
-  await confirmScheduleReasonStage(picker, "later");
-  assert.equal(picker.stage, "schedule-work-log");
-  await confirmSchedulingWorkLogStage(picker, "Did prep");
+  const harness = schedulingReviewHarness("- [/] #task Pending work ^a");
+  const picker = await openSchedulingReview(harness, "2026-11-02");
+  await confirmScheduleReasonStage(picker, "later", "Did prep");
   assert.match(harness.editor.content, /- \[\?\] #task Pending work/);
   assert.match(harness.editor.content, /\*2026-10-02\* — Did prep/);
 });
 
 test("today date on Pending still offers the Work Log", async () => {
-  const baseDate = new Date(2026, 9, 2);
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content: "- [/] #task Pending work ^a",
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
-  assert.equal(harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  await picker.openItemAtIndex(scheduledIndex);
-  const dateItem = picker.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-10-02",
-  );
-  assert.ok(dateItem);
-  await picker.openItem(dateItem);
-  await confirmScheduleReasonStage(picker, "");
-  assert.equal(picker.stage, "schedule-work-log");
-  await confirmSchedulingWorkLogStage(picker, "Worked today");
+  const harness = schedulingReviewHarness("- [/] #task Pending work ^a");
+  const picker = await openSchedulingReview(harness, "2026-10-02");
+  assert.ok(picker.scheduleReviewSummaryEl);
+  await confirmScheduleReasonStage(picker, "", "Worked today");
   assert.match(harness.editor.content, /\*2026-10-02\* — Worked today/);
 });
 
 test("priority pick on Pending freezes its roll and offers the Work Log", async () => {
   notices.length = 0;
-  const baseDate = new Date(2026, 9, 2);
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content: "- [/] #task Pending work ^a",
-    cursor: { line: 0, ch: 0 },
-    baseDate,
+  const harness = schedulingReviewHarness("- [/] #task Pending work ^a", {
     random: () => 0,
   });
-  assert.equal(harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const propertyIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "priority",
-  );
-  await picker.openItemAtIndex(propertyIndex);
-  const levelItem = picker.visibleItems.find(
-    (item) => item.priorityLevel && item.label === "P1",
-  );
-  assert.ok(levelItem);
-  await picker.openItem(levelItem);
+  const picker = await choosePriorityLevel(harness, "P1");
   assert.equal(picker.stage, "schedule-work-log");
   assert.equal(harness.editor.content, "- [/] #task Pending work ^a");
   const frozen = String(picker.pendingScheduleWorkLog.scheduleSummary || "");
@@ -19979,35 +19357,21 @@ test("priority pick on Pending freezes its roll and offers the Work Log", async 
 
 test("counted mixed statuses share one summary only on Pending and Next", async () => {
   notices.length = 0;
-  const baseDate = new Date(2026, 9, 2);
   const content = [
     "- [/] #task Pending one ^a",
     "- [*] #task Next two ^b",
     "- [ ] #task Ready three ^c",
     "- [?] #task Blocked four ^d",
   ].join("\n");
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content,
-    cursor: { line: 0, ch: 0 },
-    baseDate,
+  const harness = schedulingReviewHarness(content);
+  const picker = await openSchedulingReview(harness, "2026-10-02", {
+    countExplicit: true,
+    additionalTaskCount: 3,
   });
-  assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 3 }), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  await picker.openItemAtIndex(scheduledIndex);
-  const dateItem = picker.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-10-02",
-  );
-  assert.ok(dateItem);
-  await picker.openItem(dateItem);
-  await confirmScheduleReasonStage(picker, "batch");
-  assert.equal(picker.stage, "schedule-work-log");
-  assert.match(picker.getSchedulingWorkLogSubtitle(), /2 of 4 tasks qualify/);
+  assert.ok(picker.scheduleReviewSummaryEl);
+  assert.equal(picker.pendingScheduleReview.eligibleCount, 2);
   const beforeUndo = harness.editor.undoGroups;
-  await confirmSchedulingWorkLogStage(picker, "Shared work");
+  await confirmScheduleReasonStage(picker, "batch", "Shared work");
   assert.equal(harness.editor.undoGroups, beforeUndo + 1);
   const after = harness.editor.content;
   assert.equal((after.match(/\*2026-10-02\* — Shared work/g) || []).length, 2);
@@ -20101,81 +19465,40 @@ test("scheduling Work Log ownership keeps nested logs and CRLF endings", () => {
 });
 
 test("scheduling Work Log warns on :: and preserves Markdown", async () => {
-  const baseDate = new Date(2026, 9, 2);
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content: "- [/] #task Pending ^a",
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
-  assert.equal(harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  await picker.openItemAtIndex(scheduledIndex);
-  const dateItem = picker.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-10-05",
-  );
-  await picker.openItem(dateItem);
-  await confirmScheduleReasonStage(picker, "r");
-  picker.inputEl = { value: "did :: field" };
+  const harness = schedulingReviewHarness("- [/] #task Pending ^a");
+  const picker = await openSchedulingReview(harness, "2026-10-05");
+  picker.scheduleReviewReasonEl.value = "r";
+  picker.scheduleReviewSummaryEl.value = "did :: field";
   const preview = picker.getFilteredItems()[0];
-  assert.equal(preview.hasInlineField, true);
-  await confirmSchedulingWorkLogStage(picker, "did :: field");
+  assert.equal(preview.summaryHasInlineField, true);
+  await confirmScheduleReasonStage(picker, "r", "did :: field");
   assert.match(harness.editor.content, /did :: field/);
 });
 
-test("stale task while prompting refuses with no scheduling or log writes", async () => {
+test("stale task while reviewing refuses with no scheduling or log writes", async () => {
   notices.length = 0;
-  const baseDate = new Date(2026, 9, 2);
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content: "- [/] #task Pending ^a",
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
-  assert.equal(harness.open(), true);
-  const picker = harness.plugin.activeBulletPropertyPicker;
-  const scheduledIndex = picker.visibleItems.findIndex(
-    (item) => item.property.name === "scheduled",
-  );
-  await picker.openItemAtIndex(scheduledIndex);
-  const dateItem = picker.visibleItems.find(
-    (item) => item.kind === "value" && item.value === "2026-10-05",
-  );
-  await picker.openItem(dateItem);
-  await confirmScheduleReasonStage(picker, "replan");
-  assert.equal(picker.stage, "schedule-work-log");
+  const harness = schedulingReviewHarness("- [/] #task Pending ^a");
+  const picker = await openSchedulingReview(harness, "2026-10-05");
   harness.editor.content = "- [/] #task Changed ^a";
-  await confirmSchedulingWorkLogStage(picker, "Late work");
+  await confirmScheduleReasonStage(picker, "replan", "Late work");
   assert.equal(harness.editor.content, "- [/] #task Changed ^a");
   assert.doesNotMatch(harness.editor.content, /SCHEDULE LOG/);
   assert.doesNotMatch(harness.editor.content, /WORK LOG/);
   assert.match(notices.at(-1), /changed|stale|no tasks were updated/i);
+  assert.equal(picker.stage, "task-card");
+  assert.equal(picker.isOpen, true);
 });
 
-test("scheduling prompt never leaks into lane, cancel, or dependency rows", async () => {
-  const baseDate = new Date(2026, 9, 2);
-  const harness = createBulletPropertyPickerHarness({
-    config: schedulingWorkLogConfig(),
-    content: "- [/] #task Pending ^a",
-    cursor: { line: 0, ch: 0 },
-    baseDate,
-  });
+test("scheduling prompts never leak into lane or cancel stages", async () => {
+  const harness = schedulingReviewHarness("- [/] #task Pending ^a");
   assert.equal(harness.open(), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
-  const laneIndex = picker.visibleItems.findIndex((item) => item.kind === "lane-toggle");
-  if (laneIndex !== -1) {
-    await picker.openItemAtIndex(laneIndex);
-    assert.notEqual(picker.stage, "schedule-work-log");
-    picker.showPropertyStage({ clearQuery: false });
-  }
-  const cancelIndex = picker.visibleItems.findIndex((item) => item.kind === "cancel-task");
-  if (cancelIndex !== -1) {
-    await picker.openItemAtIndex(cancelIndex);
-    assert.notEqual(picker.stage, "schedule-work-log");
-  }
+  await runCardAction(picker, "lane");
+  assert.equal(picker.stage, "lane-release-reason");
+  picker.returnToTaskCard();
+  await runCardAction(picker, "cancel");
+  assert.equal(picker.stage, "cancel-reason");
+  assert.equal(harness.editor.content, "- [/] #task Pending ^a");
 });
 
 function createTaskMoveVimHistoryHarness(options = {}) {

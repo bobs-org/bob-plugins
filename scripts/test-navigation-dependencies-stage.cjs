@@ -46,8 +46,6 @@ const {
   findDependencyStageCycle,
   compareDependencyStageCanonical,
   planDependencyStageView,
-  formatDependencyStagePill,
-  describeDependencyRowState,
   resolveDependencyStageEntry,
   dependencyStageRowKey,
   normalizeStageCacheTask,
@@ -594,26 +592,6 @@ test("stage view disables cycles and unencodable targets, keeps +id rows", () =>
   const noid = view.find((row) => row.blockId === "noid");
   assert.ok(noid && !noid.disabled, "+id rows stay enabled");
   assert.equal(noid.badgeId, "noid", "the badge shows the block id");
-});
-
-test("stage pill replaces raw ids with open counts", () => {
-  assert.equal(formatDependencyStagePill(0, 0), "⛓ none");
-  assert.equal(formatDependencyStagePill(1, 2), "⛓ 2 · 1 open");
-  const notes = [
-    {
-      path: "body.md",
-      content: [
-        "- [?] #task Dependent ^dependent",
-        "  - ⛓️ **DEPENDS ON:** [[#^open-one]] • [[#^gone]]",
-        "- [ ] #task Open one ^open-one",
-      ].join("\n"),
-    },
-  ];
-  const index = indexDependencyStageNotes(notes);
-  const state = describeDependencyRowState(notes[0].content, 0, "body.md", index);
-  assert.equal(state.total, 2);
-  assert.equal(state.open, 2);
-  assert.equal(state.pill, "⛓ 2 · 2 open");
 });
 
 test("stage cache tasks normalize across Tasks shapes, buffers win", () => {

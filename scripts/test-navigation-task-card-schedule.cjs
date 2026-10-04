@@ -232,7 +232,6 @@ function openPropertyPicker(options = {}) {
       propertyContext: { isObsidianTask: true },
       baseDate: options.baseDate || BASE_DATE,
       random: sequence([0.1, 0.35, 0.6, 0.8, 0.95, 0.2, 0.45, 0.7]),
-      taskCard: options.taskCard !== false,
       taskSession: options.taskSession || null,
       linkSession: options.linkSession || null,
       ...options.context,
@@ -464,28 +463,15 @@ test("invalid typed dates render an error preview and do not write", async () =>
   assert.equal(modal.stage, "value");
 });
 
-test("classic mode keeps the old parser and serial reason prompt", async () => {
-  const { modal } = openPropertyPicker({
-    taskCard: false,
-    content: "- [ ] #task Classic ^classic",
-  });
-  assert.equal(modal.stage, "properties");
-  const scheduledIndex = modal.visibleItems.findIndex(
-    (item) => item.property && item.property.name === "scheduled",
-  );
-  await modal.openItemAtIndex(scheduledIndex);
-  typeQuery(modal, "3");
-  assert.equal(
-    modal.visibleItems.some((item) => item.typedSchedule),
-    false,
-  );
-  typeQuery(modal, "+3d");
-  const classicTyped = modal.visibleItems[0];
-  assert.equal(classicTyped.dynamic, true);
-  assert.equal(classicTyped.value, "2026-10-06");
-  assert.equal(classicTyped.typedSchedule, undefined);
-  await modal.openItem(classicTyped);
-  assert.equal(modal.stage, "reason");
+test("the card's schedule stage always uses the concise resolver", () => {
+  const { modal } = openScheduleStage();
+  assert.equal(modal.placeholder, "Type 3, 3d, mon, +3d, or 6/24");
+  for (const query of ["3", "3d", "mon"]) {
+    typeQuery(modal, query);
+    const typed = modal.visibleItems[0];
+    assert.equal(typed.typedSchedule, true, query);
+    assert.equal(typed.valid, true, query);
+  }
 });
 
 test("tomorrow stays a preset filter and is not stolen as a typed date", () => {

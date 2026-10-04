@@ -117,7 +117,7 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
   assert.equal(model.selectedRowId, "schedule");
   assert.deepEqual(
     model.rows.map((row) => row.id),
-    ["schedule", "depends-on", "review-every", "cancel", "lane", "more-properties"],
+    ["schedule", "depends-on", "review-every", "cancel", "lane"],
   );
   assert.ok(model.rows.find((row) => row.id === "schedule").enabled);
   assert.ok(model.rows.find((row) => row.id === "depends-on").enabled);
@@ -312,8 +312,8 @@ test("priority, recommendation, navigation, action, deletion, and search keys re
   assert.equal(key(model, "x").action, "cancel");
   assert.equal(key(model, "n", { altKey: true }).action, "toggle-lane");
   assert.equal(key(model, "d", { ctrlKey: true }).propertyName, "scheduled");
-  assert.deepEqual(key(model, "/"), { type: "open-search", query: "" });
-  assert.deepEqual(key(model, "z"), { type: "open-search", query: "z" });
+  assert.equal(key(model, "/"), null);
+  assert.equal(key(model, "z"), null);
   assert.equal(key(model, "Escape").type, "close-card");
   assert.equal(key(model, "Backspace").type, "back");
   assert.equal(key(model, "q", { ctrlKey: true }), null);
@@ -327,10 +327,69 @@ test("priority, recommendation, navigation, action, deletion, and search keys re
     ),
   };
   const fourLevelModel = makeModel({ config: fourLevelConfig });
-  assert.deepEqual(key(fourLevelModel, "5"), { type: "open-search", query: "5" });
+  const unconfigured = key(fourLevelModel, "5");
+  assert.equal(unconfigured.type, "unavailable");
+  assert.match(unconfigured.reason, /not configured/);
+  assert.equal(key(fourLevelModel, "9").type, "unavailable");
 });
 
-test("unavailable actions, search mode, input composition, and repeats stay safe", () => {
+test("Escape, bare q, and Ctrl+] close the card; nothing else does", () => {
+  const model = makeModel();
+  const close = Object.freeze({ type: "close-card" });
+  assert.deepEqual(key(model, "Escape"), close);
+  assert.deepEqual(key(model, "q"), close);
+  assert.deepEqual(key(model, "Q"), close);
+  assert.deepEqual(key(model, "Q", { shiftKey: true }), close);
+  assert.deepEqual(key(model, "]", { ctrlKey: true }), close);
+  assert.deepEqual(key(model, "x", { ctrlKey: true, code: "BracketRight" }), close);
+  assert.deepEqual(key(model, "q", { repeat: true }), close);
+  for (const modifiers of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { altKey: true },
+    { ctrlKey: true, shiftKey: true },
+  ]) {
+    assert.equal(key(model, "q", modifiers), null);
+    assert.equal(key(model, "Q", modifiers), null);
+  }
+  for (const modifiers of [
+    {},
+    { metaKey: true },
+    { altKey: true },
+    { ctrlKey: true, shiftKey: true },
+    { ctrlKey: true, altKey: true },
+    { ctrlKey: true, metaKey: true },
+  ]) {
+    assert.equal(key(model, "]", modifiers), null);
+  }
+  // Ctrl+[ is the Escape alias the plugin handles elsewhere; it is not ours.
+  assert.equal(key(model, "[", { ctrlKey: true }), null);
+  assert.equal(key(model, "x", { ctrlKey: true, code: "BracketLeft" }), null);
+});
+
+test("close keys never fire during composition or inside a text field", () => {
+  const model = makeModel();
+  for (const event of [
+    { key: "q", isComposing: true },
+    { key: "q", keyCode: 229 },
+    { key: "]", ctrlKey: true, isComposing: true },
+    { key: "Escape", keyCode: 229 },
+    { key: "q", inTextInput: true },
+    { key: "q", target: { tagName: "INPUT" } },
+    { key: "q", target: { tagName: "textarea" } },
+    { key: "q", target: { tagName: "SELECT" } },
+    { key: "q", target: { tagName: "DIV", isContentEditable: true } },
+    { key: "Q", shiftKey: true, target: { tagName: "INPUT" } },
+  ]) {
+    assert.equal(helpers.resolveTaskCardKey(model, event), null);
+  }
+  assert.equal(
+    helpers.resolveTaskCardKey(makeModel(), { key: "q", target: { tagName: "DIV" } }).type,
+    "close-card",
+  );
+});
+
+test("unavailable actions, input composition, and repeats stay safe", () => {
   const noApi = makeModel({ freshnessApi: null });
   const refreshRow = noApi.rows.find((row) => row.id === "review-every");
   assert.equal(refreshRow.enabled, false);
@@ -373,9 +432,6 @@ test("unavailable actions, search mode, input composition, and repeats stay safe
   assert.equal(unconfiguredValue.priorityStrip.targets[0].currentValue, "urgent");
   assert.equal(key(unconfiguredValue, "1").type, "set-priority");
 
-  const searchModel = makeModel({ mode: "search" });
-  assert.deepEqual(key(searchModel, "2"), { type: "delegate-to-search", key: "2" });
-  assert.deepEqual(key(searchModel, "Enter"), { type: "delegate-to-search", key: "Enter" });
   assert.equal(key(noApi, "2", { repeat: true }).type, "ignored");
   assert.equal(key(noApi, "Enter", { ctrlKey: true, repeat: true }).type, "ignored");
   assert.equal(key(noApi, "ArrowDown", { repeat: true }).type, "move-selection");

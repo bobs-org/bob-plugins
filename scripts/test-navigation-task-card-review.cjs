@@ -222,7 +222,6 @@ function openPropertyPicker(options = {}) {
       propertyContext: { isObsidianTask: true },
       baseDate: options.baseDate || BASE_DATE,
       random: sequence([0.1, 0.35, 0.6, 0.8, 0.95, 0.2, 0.45, 0.7]),
-      taskCard: options.taskCard !== false,
       taskSession: options.taskSession || null,
       linkSession: options.linkSession || null,
       ...options.context,
@@ -725,7 +724,7 @@ test("priority picks still skip the combined review and keep Work Log-only promp
   assert.notEqual(modal.stage, "reason");
 });
 
-test("search reached from an enabled card still uses the combined review", async () => {
+test("a typed date from the card's schedule row uses the combined review", async () => {
   const captured = [];
   const { modal, plugin } = openPropertyPicker({
     content: "- [ ] #task Ready work ^ready",
@@ -734,36 +733,31 @@ test("search reached from an enabled card still uses the combined review", async
     captured.push({ value, reason: options.scheduleLog.reason });
     return true;
   };
-  modal.showSearchFromCard("");
-  assert.equal(modal.stage, "properties");
-  assert.equal(modal.cardViewMode, "search");
-  const scheduledIndex = modal.visibleItems.findIndex(
-    (item) => item.property && item.property.name === "scheduled",
-  );
-  await modal.openItemAtIndex(scheduledIndex);
+  dispatchCardKey(modal, "Enter");
+  assert.equal(modal.stage, "value");
   typeQuery(modal, "3");
   pressKey(modal.inputEl, "Enter");
   await nextTurn();
   assert.equal(modal.stage, "schedule-review");
   assert.ok(modal.scheduleReviewReasonEl);
   assert.equal(modal.scheduleReviewSummaryEl, null);
-  await confirmReview(modal, { reason: "from search" });
+  await confirmReview(modal, { reason: "from the card" });
   await nextTurn();
   assert.equal(captured.length, 1);
-  assert.equal(captured[0].reason, "from search");
+  assert.equal(captured[0].reason, "from the card");
 });
 
-test("classic mode keeps serial reason then Work Log prompts", async () => {
+test("scheduling a Pending task goes straight to the combined review, never serial prompts", async () => {
   const { modal } = openPropertyPicker({
-    taskCard: false,
     content: "- [/] #task Pending work ^pending",
   });
-  assert.equal(modal.stage, "properties");
-  const scheduledIndex = modal.visibleItems.findIndex(
-    (item) => item.property && item.property.name === "scheduled",
-  );
-  await modal.openItemAtIndex(scheduledIndex);
+  dispatchCardKey(modal, "Enter");
   typeQuery(modal, "+3d");
-  await modal.openItem(modal.visibleItems[0]);
-  assert.equal(modal.stage, "reason");
+  pressKey(modal.inputEl, "Enter");
+  await nextTurn();
+  assert.equal(modal.stage, "schedule-review");
+  assert.ok(modal.scheduleReviewReasonEl);
+  assert.ok(modal.scheduleReviewSummaryEl);
+  assert.equal(typeof modal.showScheduleReasonStage, "undefined");
+  assert.equal(typeof modal.confirmScheduleReason, "undefined");
 });

@@ -391,6 +391,7 @@ test("modal: letter keys, Alt+F, and 1-4 activate the same actions as click", ()
     [fakeKey({ key: "l" }), "lessOften"],
     [fakeKey({ key: "E" }), "reword"],
     [fakeKey({ key: "d" }), "drop"],
+    [fakeKey({ key: "x" }), "drop"],
     [fakeKey({ key: "f", code: "KeyF", altKey: true }), "keep"],
   ]) {
     const opened = openTestCard();

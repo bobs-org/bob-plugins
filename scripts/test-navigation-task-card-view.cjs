@@ -10,6 +10,7 @@ const { ElementStub, ModalStub } = require("./modal-harness.cjs");
 global.window = { setTimeout: (callback) => callback() };
 
 const openedModals = [];
+const settingStubs = [];
 const originalLoad = Module._load;
 function parseTestYaml(text) {
   const result = {};
@@ -26,6 +27,50 @@ function parseTestYaml(text) {
   return result;
 }
 
+class DropdownStub {
+  constructor() {
+    this.options = {};
+    this.value = "";
+    this.disabled = false;
+  }
+  addOption(value, label) {
+    this.options[value] = label;
+    return this;
+  }
+  setValue(value) {
+    this.value = value;
+    return this;
+  }
+  setDisabled(disabled) {
+    this.disabled = disabled;
+    return this;
+  }
+  onChange(callback) {
+    this.change = callback;
+    return this;
+  }
+}
+
+class SettingStub {
+  constructor(container) {
+    this.container = container;
+    settingStubs.push(this);
+  }
+  setName(name) {
+    this.name = name;
+    return this;
+  }
+  setDesc(description) {
+    this.description = description;
+    return this;
+  }
+  addDropdown(callback) {
+    this.dropdown = new DropdownStub();
+    callback(this.dropdown);
+    return this;
+  }
+}
+
 Module._load = function loadWithModalHarness(request, parent, isMain) {
   if (request === "obsidian") {
     return {
@@ -38,6 +83,14 @@ Module._load = function loadWithModalHarness(request, parent, isMain) {
       },
       Notice: class {},
       Plugin: class {},
+      PluginSettingTab: class {
+        constructor(app, plugin) {
+          this.app = app;
+          this.plugin = plugin;
+          this.containerEl = new ElementStub();
+        }
+      },
+      Setting: SettingStub,
       parseYaml: parseTestYaml,
     };
   }
@@ -211,6 +264,82 @@ function openPropertyPicker(options = {}) {
   );
   modal.open();
   return { modal, editor, plugin };
+}
+
+function openTaskCardLinkWriter(options = {}) {
+  const notes = {
+    "Tasks/Alpha.md": "- [ ] #task Alpha [priority:: medium] [scheduled:: 2026-10-12] ^alpha",
+    "Tasks/Beta.md": "- [ ] #task Beta [priority:: medium] [scheduled:: 2026-10-13] ^beta",
+  };
+  const files = new Map(
+    Object.keys(notes).map((path) => [path, { path, basename: path.split("/").pop(), extension: "md" }]),
+  );
+  const writeAttempts = [];
+  let failedPathWrite = false;
+  const app = {
+    vault: {
+      getAbstractFileByPath: (path) => files.get(path) || null,
+      getMarkdownFiles: () => [...files.values()],
+      cachedRead: async (file) => notes[file.path] ?? null,
+      read: async (file) => notes[file.path] ?? null,
+      process: async (file, transform) => {
+        writeAttempts.push(file.path);
+        if (options.failWritePath === file.path && !failedPathWrite) {
+          failedPathWrite = true;
+          throw new Error("injected note write failure");
+        }
+        notes[file.path] = transform(notes[file.path]);
+      },
+    },
+    workspace: { getLeavesOfType: () => [] },
+  };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = app;
+  plugin.getFreshnessApi = () => freshnessApi();
+  plugin.getOpenMarkdownEditorForPath = () => null;
+  const resolved = ["Alpha", "Beta"].map((name) => {
+    const path = `Tasks/${name}.md`;
+    const rawLine = notes[path];
+    return {
+      path,
+      file: files.get(path),
+      content: rawLine,
+      line: 0,
+      rawLine,
+      blockId: name.toLowerCase(),
+      displayText: name,
+    };
+  });
+  const source = "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]";
+  const editor = makeEditor(source);
+  const session = {
+    kind: "task-link",
+    valid: true,
+    requestedCount: 2,
+    actualCount: 2,
+    clamped: false,
+    targets: [{ line: 0 }, { line: 1 }],
+    resolved,
+  };
+  const modal = new BulletPropertyPickerModal(
+    app,
+    plugin,
+    editor,
+    { line: 0, ch: 0 },
+    source.split("\n")[0],
+    buildConfig(),
+    {
+      filePath: "2026/20261003.md",
+      propertyContext: { isObsidianTask: false },
+      linkSession: session,
+      taskCard: true,
+      baseDate: BASE_DATE,
+      random: () => 0,
+    },
+  );
+  plugin.activeBulletPropertyPicker = modal;
+  modal.open();
+  return { app, editor, files, modal, notes, plugin, writeAttempts };
 }
 
 test("styles share key-card tokens and compact Task Card dimensions", () => {
@@ -458,6 +587,87 @@ test("card focus is synchronous; action keys and Back route through the existing
   assert.equal(byClass(modal.contentEl, "bob-task-card-back").length, 1);
 });
 
+test("Task Card action keys enter the retained property, refresh, dependency, cancel, and lane stages", async () => {
+  const scenarios = [
+    {
+      key: "Enter",
+      content: "- [ ] #task Schedule me [priority:: medium] [scheduled:: 2026-10-12] ^schedule",
+      check(modal) {
+        assert.equal(modal.stage, "value");
+        assert.equal(modal.selectedPropertyItem.property.name, "scheduled");
+      },
+    },
+    {
+      key: "b",
+      content: "- [ ] #task Add a dependency [priority:: medium] ^dependency",
+      check(modal) {
+        assert.equal(modal.stage, "value");
+        assert.equal(modal.selectedPropertyItem.property.values, "local_task_id");
+      },
+    },
+    {
+      key: "f",
+      content: "- [ ] #task Change review [priority:: medium] ^refresh",
+      check(modal) {
+        assert.equal(modal.stage, "value");
+        assert.equal(modal.selectedPropertyItem.kind, "refresh-interval");
+      },
+    },
+    {
+      key: "x",
+      content: "- [ ] #task Cancel me [priority:: medium] ^cancel",
+      check(modal) {
+        assert.equal(modal.stage, "cancel-reason");
+      },
+    },
+    {
+      key: "n",
+      modifiers: { altKey: true },
+      content: "- [/] #task Release me [priority:: medium] ^release",
+      check(modal) {
+        assert.equal(modal.stage, "lane-release-reason");
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const { modal } = openPropertyPicker({
+      taskCard: true,
+      content: scenario.content,
+    });
+    dispatchCardKey(modal, scenario.key, scenario.modifiers || {});
+    await nextTurn();
+    modal.renderAll();
+    scenario.check(modal);
+    assert.ok(modal.contentEl.children.length > 0);
+  }
+
+  const configuredList = openPropertyPicker({ taskCard: true });
+  configuredList.modal.showSearchFromCard("effort");
+  const effortIndex = configuredList.modal.visibleItems.findIndex(
+    (item) => item.property && item.property.name === "effort",
+  );
+  assert.notEqual(effortIndex, -1);
+  await configuredList.modal.openItemAtIndex(effortIndex);
+  configuredList.modal.renderAll();
+  assert.equal(configuredList.modal.stage, "value");
+  assert.equal(configuredList.modal.selectedPropertyItem.property.name, "effort");
+
+  const blockId = openPropertyPicker({ taskCard: true });
+  blockId.modal.ensureTaskCardStageChrome();
+  blockId.modal.inputEl.select = () => {};
+  blockId.modal.showBlockIdStage({
+    path: "Tasks/Other.md",
+    line: 2,
+    rawLine: "- [ ] #task A dependency target",
+    displayText: "A dependency target",
+    existingIdField: "",
+  });
+  blockId.modal.renderAll();
+  assert.equal(blockId.modal.stage, "blockid");
+  assert.ok(blockId.modal.inputEl);
+});
+
 test("Task Link opens focused while resolving and consumes keys without replay", async () => {
   const content = "- [[Tasks/Alpha#^alpha]]";
   const editor = makeEditor(content);
@@ -648,6 +858,73 @@ test("pending priority action passes its card preview through the Work Log adapt
   assert.equal(writtenContext.precomputedRoll.offset, preview.targetPreviews[0].offset);
 });
 
+test("Task Link priority action refuses a stale cross-note preflight before writes", async () => {
+  const fixture = openTaskCardLinkWriter();
+  const betaBefore = fixture.notes["Tasks/Beta.md"];
+  fixture.notes["Tasks/Alpha.md"] += " — edited elsewhere";
+
+  dispatchCardKey(fixture.modal, "2");
+  await nextTurn();
+
+  assert.equal(fixture.writeAttempts.length, 0);
+  assert.match(fixture.notes["Tasks/Alpha.md"], /edited elsewhere/);
+  assert.equal(fixture.notes["Tasks/Beta.md"], betaBefore);
+  assert.equal(fixture.modal.isOpen, true);
+});
+
+test("Task Link priority action rolls back earlier note writes after a later write fails", async () => {
+  const fixture = openTaskCardLinkWriter({ failWritePath: "Tasks/Beta.md" });
+  const alphaBefore = fixture.notes["Tasks/Alpha.md"];
+  const betaBefore = fixture.notes["Tasks/Beta.md"];
+
+  dispatchCardKey(fixture.modal, "2");
+  await nextTurn();
+
+  assert.deepEqual(fixture.writeAttempts, [
+    "Tasks/Alpha.md",
+    "Tasks/Beta.md",
+    "Tasks/Alpha.md",
+  ]);
+  assert.equal(fixture.notes["Tasks/Alpha.md"], alphaBefore);
+  assert.equal(fixture.notes["Tasks/Beta.md"], betaBefore);
+  assert.equal(fixture.modal.isOpen, true);
+});
+
+test("Task Link transaction reports a cleanup failure without implying global undo", async () => {
+  const fixture = openTaskCardLinkWriter();
+  const dailyPath = "2026/20261003.md";
+  const dailyBefore = "## Pomodoros\n- [ ] Current\n  - [[Tasks/Alpha#^alpha]]";
+  fixture.files.set(dailyPath, { path: dailyPath, basename: "20261003.md", extension: "md" });
+  fixture.notes[dailyPath] = dailyBefore;
+  const alpha = fixture.notes["Tasks/Alpha.md"];
+  const alphaAfter = alpha.replace("[priority:: medium]", "[priority:: low]");
+  const alphaFile = fixture.files.get("Tasks/Alpha.md");
+  fixture.plugin.writeDeferredPomodoroCleanup = async () => false;
+
+  const receipt = await fixture.plugin.commitLinkPickerNoteWrites(
+    [{
+      group: { path: "Tasks/Alpha.md", file: alphaFile, content: alpha },
+      plan: { content: alphaAfter },
+    }],
+    {
+      pomodoroSnapshot: {
+        dailyPath,
+        file: fixture.files.get(dailyPath),
+        content: dailyBefore,
+      },
+      dailyCleanupPlan: {
+        changed: true,
+        content: dailyBefore.replace("  - [[Tasks/Alpha#^alpha]]", ""),
+      },
+    },
+  );
+
+  assert.deepEqual(receipt, { ok: true, reason: null, pomodoroPruneFailed: true });
+  assert.equal(fixture.notes["Tasks/Alpha.md"], alphaAfter);
+  assert.equal(fixture.notes[dailyPath], dailyBefore);
+  assert.deepEqual(fixture.writeAttempts, ["Tasks/Alpha.md"]);
+});
+
 test("selected-property deletion uses the existing writer; other card rows stay non-deletable", async () => {
   const content = "- [ ] #task Ship report [priority:: medium] [scheduled:: 2026-10-12] ^ship";
   const { modal, plugin } = openPropertyPicker({ taskCard: true, content });
@@ -670,13 +947,33 @@ test("selected-property deletion uses the existing writer; other card rows stay 
   assert.equal(next.editor.writes(), 0);
 });
 
-test("Task Card pilot preference fails closed and preserves other plugin data", async () => {
-  const { taskCardPilotEnabled, mergeTaskCardPilotPreference } = helpers;
-  assert.equal(taskCardPilotEnabled({ taskCard: true }, false), false);
-  assert.equal(taskCardPilotEnabled({}, true), false);
-  assert.equal(taskCardPilotEnabled({ taskCard: true }, true), true);
+test("Task Card automatic activation uses the local October 19 boundary and explicit overrides", () => {
+  const { taskCardDefaultEnabled, taskCardPilotEnabled } = helpers;
+  const before = new Date(2026, 9, 18, 23, 59);
+  const boundary = new Date(2026, 9, 19, 0, 0);
+  assert.equal(taskCardDefaultEnabled(before), false);
+  assert.equal(taskCardDefaultEnabled(boundary), true);
+  assert.equal(taskCardPilotEnabled({}, true, before), false);
+  assert.equal(taskCardPilotEnabled({ taskCard: null }, true, before), false);
+  assert.equal(taskCardPilotEnabled({}, true, boundary), true);
+  assert.equal(taskCardPilotEnabled({ taskCard: null }, true, boundary), true);
+  assert.equal(taskCardPilotEnabled({ taskCard: false }, true, boundary), false);
+  assert.equal(taskCardPilotEnabled({ taskCard: true }, true, before), true);
+  assert.equal(taskCardPilotEnabled({ taskCard: true }, false, boundary), false);
+  assert.equal(taskCardPilotEnabled({ taskCard: "unexpected" }, true, boundary), false);
+});
+
+test("Task Card Automatic, Task Card, and Classic preferences preserve unrelated data", async () => {
+  const { taskCardPilotEnabled, taskCardPreferenceValue, mergeTaskCardPilotPreference } = helpers;
+  assert.equal(taskCardPreferenceValue({ taskCard: true }), "task-card");
+  assert.equal(taskCardPreferenceValue({ taskCard: false }), "classic");
+  assert.equal(taskCardPreferenceValue({ taskCard: null }), "automatic");
   assert.deepEqual(
-    mergeTaskCardPilotPreference({ unrelated: { kept: true } }, false),
+    mergeTaskCardPilotPreference({ unrelated: { kept: true }, taskCard: false }, "automatic"),
+    { unrelated: { kept: true } },
+  );
+  assert.deepEqual(
+    mergeTaskCardPilotPreference({ unrelated: { kept: true } }, "classic"),
     { unrelated: { kept: true }, taskCard: false },
   );
 
@@ -686,20 +983,51 @@ test("Task Card pilot preference fails closed and preserves other plugin data", 
   plugin.taskCardPluginUnloading = false;
   plugin.loadData = async () => ({ unrelated: "preserved", taskCard: true });
   await plugin.loadTaskCardSettings();
-  assert.equal(plugin.isTaskCardPilotEnabled(), true);
+  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 3)), true);
   let saved = null;
   plugin.saveData = async (data) => { saved = data; };
-  await plugin.setTaskCardPilotEnabled(false);
+  await plugin.setTaskCardPreference("classic");
   assert.deepEqual(saved, { unrelated: "preserved", taskCard: false });
-  assert.equal(plugin.isTaskCardPilotEnabled(), false);
+  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 19)), false);
+  await plugin.setTaskCardPreference("automatic");
+  assert.deepEqual(saved, { unrelated: "preserved" });
+  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 18)), false);
+  assert.equal(plugin.isTaskCardPilotEnabled(new Date(2026, 9, 19)), true);
+
+  const tab = new helpers.TaskCardPilotSettingTab({}, plugin);
+  tab.display();
+  const setting = settingStubs.at(-1);
+  assert.equal(setting.name, "Ctrl+Shift+P Task Card");
+  assert.match(setting.description, /2026-10-19/);
+  assert.deepEqual(setting.dropdown.options, {
+    automatic: "Automatic",
+    "task-card": "Task Card",
+    classic: "Classic list",
+  });
+  assert.equal(setting.dropdown.value, "automatic");
+  assert.equal(setting.dropdown.disabled, false);
 
   const unreadable = new NavigationHotkeysPlugin();
   unreadable.taskCardSettingsGeneration = 1;
   unreadable.taskCardSettingsLoaded = false;
   unreadable.taskCardPluginUnloading = false;
   unreadable.loadData = async () => { throw new Error("unreadable"); };
-  await unreadable.loadTaskCardSettings();
-  assert.equal(unreadable.isTaskCardPilotEnabled(), false);
+  assert.equal(await unreadable.loadTaskCardSettings(), false);
+  assert.equal(unreadable.taskCardSettingsLoaded, false);
+  assert.equal(unreadable.isTaskCardPilotEnabled(new Date(2026, 9, 19)), false);
+});
+
+test("Task Card mode is fixed for an open modal across the activation boundary", () => {
+  const beforeActivation = openPropertyPicker({
+    taskCard: helpers.taskCardPilotEnabled({}, true, new Date(2026, 9, 18)),
+  });
+  assert.equal(beforeActivation.modal.taskCardEnabled, false);
+  assert.equal(
+    helpers.taskCardPilotEnabled({}, true, new Date(2026, 9, 19)),
+    true,
+  );
+  assert.equal(beforeActivation.modal.taskCardEnabled, false);
+  assert.equal(beforeActivation.modal.stage, "properties");
 });
 
 test("missing freshness API disables Review every with an honest reason", () => {
@@ -771,4 +1099,20 @@ test("decay card keeps its classes and shares key-card tokens", () => {
   assert.ok(byClass(card.contentEl, "bob-decay-card-key").length >= 1);
   assert.ok(byClass(card.contentEl, "bob-key-card-key").length >= 1);
   assert.ok(byClass(card.contentEl, "bob-key-card-row").length >= 1);
+});
+
+test("decay card adds the X drop hint at the Task Card activation boundary", () => {
+  const createCard = (now) => new FreshnessDecayCardModal({}, {
+    rows: [
+      { key: "D", action: "drop", label: "Drop", detail: "cancel", available: true },
+    ],
+    now,
+  });
+  const before = createCard(new Date(2026, 9, 18));
+  before.open();
+  assert.doesNotMatch(flattenText(before.contentEl), /D \/ X drops/);
+
+  const boundary = createCard(new Date(2026, 9, 19));
+  boundary.open();
+  assert.match(flattenText(boundary.contentEl), /D \/ X drops/);
 });

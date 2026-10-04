@@ -4392,6 +4392,10 @@ class FreshnessDecayCardModal extends Modal {
       typeof settings.onChoose === "function" ? settings.onChoose : null;
     this.onDismiss =
       typeof settings.onDismiss === "function" ? settings.onDismiss : null;
+    this.rolloutNow =
+      settings.now instanceof Date && Number.isFinite(settings.now.getTime())
+        ? new Date(settings.now.getTime())
+        : new Date();
     this.settled = false;
     this.rowEls = [];
   }
@@ -4467,7 +4471,9 @@ class FreshnessDecayCardModal extends Modal {
     });
     contentEl.createDiv({
       cls: "bob-decay-card-footer bob-key-card-footer",
-      text: "Esc changes nothing · 1–4 pick a P-level instead",
+      text: taskCardDefaultEnabled(this.rolloutNow)
+        ? "Esc changes nothing · D / X drops · 1–4 pick a P-level instead"
+        : "Esc changes nothing · 1–4 pick a P-level instead",
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     window.setTimeout(() => {
@@ -4527,7 +4533,7 @@ class FreshnessDecayCardModal extends Modal {
       this.choose("reword");
       return;
     }
-    if (key === "d") {
+    if (key === "d" || key === "x") {
       event.preventDefault();
       event.stopPropagation();
       this.choose("drop");
@@ -35822,17 +35828,71 @@ function createDependencyNavApi(plugin) {
   });
 }
 
-function taskCardPilotEnabled(savedData, loaded = true) {
-  return loaded === true && Boolean(
-    savedData && typeof savedData === "object" && !Array.isArray(savedData) && savedData.taskCard === true,
+function taskCardDefaultEnabled(now = new Date()) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    return false;
+  }
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  return (
+    year > 2026 ||
+    (year === 2026 && (month > 10 || (month === 10 && day >= 19)))
   );
 }
 
-function mergeTaskCardPilotPreference(savedData, enabled) {
+function taskCardPilotEnabled(savedData, loaded = true, now = new Date()) {
+  if (loaded !== true) {
+    return false;
+  }
+  const data =
+    savedData && typeof savedData === "object" && !Array.isArray(savedData)
+      ? savedData
+      : {};
+  if (data.taskCard === true) {
+    return true;
+  }
+  if (data.taskCard === false) {
+    return false;
+  }
+  if (data.taskCard === undefined || data.taskCard === null) {
+    return taskCardDefaultEnabled(now);
+  }
+  return false;
+}
+
+function taskCardPreferenceValue(savedData) {
+  const data =
+    savedData && typeof savedData === "object" && !Array.isArray(savedData)
+      ? savedData
+      : {};
+  if (data.taskCard === true) {
+    return "task-card";
+  }
+  if (data.taskCard === false || (data.taskCard !== undefined && data.taskCard !== null)) {
+    return "classic";
+  }
+  return "automatic";
+}
+
+function mergeTaskCardPilotPreference(savedData, preference) {
   const base = savedData && typeof savedData === "object" && !Array.isArray(savedData)
     ? savedData
     : {};
-  return { ...base, taskCard: enabled === true };
+  const next = { ...base };
+  if (preference === "automatic" || preference === null) {
+    delete next.taskCard;
+    return next;
+  }
+  if (preference === true || preference === "task-card") {
+    next.taskCard = true;
+    return next;
+  }
+  if (preference === false || preference === "classic") {
+    next.taskCard = false;
+    return next;
+  }
+  return null;
 }
 
 class TaskCardPilotSettingTab extends PluginSettingTabBase {
@@ -35851,34 +35911,54 @@ class TaskCardPilotSettingTab extends PluginSettingTabBase {
       container.createEl("h2", { text: "Bob Navigation Hotkeys" });
     }
     new Setting(container)
-      .setName("Task Card pilot")
-      .setDesc("Open Ctrl+Shift+P in Task Card mode. Turn off to use the classic property list.")
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.isTaskCardPilotEnabled());
-        if (typeof toggle.setDisabled === "function") {
-          toggle.setDisabled(!this.plugin.taskCardSettingsLoaded);
+      .setName("Ctrl+Shift+P Task Card")
+      .setDesc("Automatic uses the classic list through 2026-10-18 and the Task Card from 2026-10-19. Choose Task Card or Classic list to override the date.")
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("automatic", "Automatic")
+          .addOption("task-card", "Task Card")
+          .addOption("classic", "Classic list")
+          .setValue(taskCardPreferenceValue(this.plugin.taskCardData));
+        if (typeof dropdown.setDisabled === "function") {
+          dropdown.setDisabled(!this.plugin.taskCardSettingsLoaded);
         }
-        toggle.onChange((enabled) => {
-          void this.plugin.setTaskCardPilotEnabled(enabled);
+        dropdown.onChange((preference) => {
+          void this.plugin.setTaskCardPreference(preference);
         });
       });
   }
 }
 
 module.exports = class BobNavigationHotkeysPlugin extends Plugin {
-  isTaskCardPilotEnabled() {
-    return taskCardPilotEnabled(this.taskCardData, this.taskCardSettingsLoaded === true);
+  isTaskCardPilotEnabled(now = new Date()) {
+    return taskCardPilotEnabled(
+      this.taskCardData,
+      this.taskCardSettingsLoaded === true,
+      now,
+    );
   }
 
   async loadTaskCardSettings() {
     const generation = this.taskCardSettingsGeneration;
     let saved = null;
+    let loadSucceeded = false;
     try {
-      saved = typeof this.loadData === "function" ? await this.loadData() : null;
+      if (typeof this.loadData === "function") {
+        saved = await this.loadData();
+        loadSucceeded = true;
+      }
     } catch (_error) {
       saved = null;
     }
     if (generation !== this.taskCardSettingsGeneration || this.taskCardPluginUnloading) {
+      return false;
+    }
+    if (!loadSucceeded) {
+      this.taskCardData = {};
+      this.taskCardSettingsLoaded = false;
+      if (this.taskCardSettingsTab && typeof this.taskCardSettingsTab.display === "function") {
+        this.taskCardSettingsTab.display();
+      }
       return false;
     }
     this.taskCardData = saved && typeof saved === "object" && !Array.isArray(saved)
@@ -35891,12 +35971,16 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
     return true;
   }
 
-  async setTaskCardPilotEnabled(enabled) {
+  async setTaskCardPreference(preference) {
     if (!this.taskCardSettingsLoaded || typeof this.saveData !== "function") {
       new Notice("Task Card settings are not available yet");
       return false;
     }
-    const next = mergeTaskCardPilotPreference(this.taskCardData, enabled);
+    const next = mergeTaskCardPilotPreference(this.taskCardData, preference);
+    if (!next) {
+      new Notice("Choose Automatic, Task Card, or Classic list");
+      return false;
+    }
     try {
       await this.saveData(next);
     } catch (_error) {
@@ -35908,6 +35992,10 @@ module.exports = class BobNavigationHotkeysPlugin extends Plugin {
       this.taskCardSettingsTab.display();
     }
     return true;
+  }
+
+  async setTaskCardPilotEnabled(enabled) {
+    return this.setTaskCardPreference(enabled === true ? "task-card" : "classic");
   }
 
   onload() {
@@ -52469,7 +52557,9 @@ module.exports.helpers = {
   buildTaskCardPriorityPreviews,
   planTaskCard,
   resolveTaskCardKey,
+  taskCardDefaultEnabled,
   taskCardPilotEnabled,
+  taskCardPreferenceValue,
   mergeTaskCardPilotPreference,
   TaskCardPilotSettingTab,
   renderTaskCardView,

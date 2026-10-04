@@ -42,6 +42,24 @@ function freshnessLaneForRow(statusSymbol, isTodo) {
   return null;
 }
 
+// Exact, case-insensitive checklist tags from the Tasks tag list. PRE
+// wins when both tags are present; prefixes, subtags, and tag text in a
+// description never qualify.
+function freshnessChecklistForTags(tags) {
+  const tokens = new Set(
+    (Array.isArray(tags) ? tags : [])
+      .filter((tag) => typeof tag === "string")
+      .map((tag) => tag.trim().toLowerCase()),
+  );
+  if (!tokens.has("#gtd")) {
+    return null;
+  }
+  if (tokens.has("#pre")) {
+    return "pre";
+  }
+  return tokens.has("#post") ? "post" : null;
+}
+
 // Lane interval for one lane: the configured `pendingInterval` /
 // `nextInterval` (absent means the default 1); null means that lane is
 // not walked (`false` off-switch).
@@ -218,15 +236,22 @@ function freshnessEvaluate(row, todayText, config) {
     freshnessPushLint(lints, note.lint);
   }
 
-  let symbol = null;
+  let writtenSymbol = null;
   try {
-    if (
-      safe.statusSymbol !== undefined &&
-      safe.statusSymbol !== null &&
-      String(safe.statusSymbol) !== ""
-    ) {
-      symbol = String(safe.statusSymbol)[0];
-    } else {
+    writtenSymbol = freshnessTaskStatus(safe.rawLine || "");
+  } catch (error) {
+    writtenSymbol = null;
+  }
+  if (
+    (writtenSymbol === null || writtenSymbol === undefined) &&
+    typeof safe.statusSymbol === "string" &&
+    safe.statusSymbol !== ""
+  ) {
+    writtenSymbol = String(safe.statusSymbol)[0];
+  }
+  let symbol = writtenSymbol;
+  try {
+    if (symbol === null || symbol === undefined || symbol === "") {
       symbol = freshnessTaskStatus(safe.rawLine || "");
     }
   } catch (error) {
@@ -237,7 +262,14 @@ function freshnessEvaluate(row, todayText, config) {
   } else {
     symbol = String(symbol)[0];
   }
-  const lane = freshnessLaneForRow(symbol, Boolean(safe.isTodo));
+  const checklist =
+    safe.checklist === "pre" || safe.checklist === "post"
+      ? safe.checklist
+      : null;
+  const lane =
+    checklist !== null && writtenSymbol === "?"
+      ? null
+      : freshnessLaneForRow(symbol, Boolean(safe.isTodo));
   const laneDays =
     lane === "pending" || lane === "next"
       ? freshnessLaneIntervalDays(config, lane)
@@ -281,6 +313,16 @@ function freshnessEvaluate(row, todayText, config) {
     !safe.isDailyNote &&
     !safe.isToday;
 
+  // Checklist visibility shares the established lane predicate, with
+  // recurring, daily-note, and Today exclusions deliberately lifted.
+  // The status must be the symbol actually written on the task line.
+  const checklistScheduled = freshnessEvaluateValidScheduled(safe.scheduled);
+  const checklistScope =
+    checklist !== null &&
+    [" ", "*", "/", "?"].includes(writtenSymbol) &&
+    Boolean(safe.laneVisible) &&
+    !(checklistScheduled !== null && checklistScheduled > today);
+
   // Ordinary lane due arithmetic uses the lane interval only.
   // Trackers never use it here; their lane arithmetic lives below.
   const effectiveLaneDays = laneDays;
@@ -302,6 +344,7 @@ function freshnessEvaluate(row, todayText, config) {
 
   const inScope =
     Boolean(safe.isTodo) &&
+    lane === "ready" &&
     Boolean(safe.laneVisible) &&
     !safe.recurring &&
     !safe.isDailyNote &&
@@ -369,7 +412,9 @@ function freshnessEvaluate(row, todayText, config) {
     (state === "new" || state === "resurfaced" || state === "rotten");
   const trackerLaneDueRow = trackerLaneEligible && trackerLaneDue;
   let tier = null;
-  if (isPrj && (trackerReadyDue || trackerLaneDueRow)) {
+  if (checklistScope) {
+    tier = checklist;
+  } else if (isPrj && (trackerReadyDue || trackerLaneDueRow)) {
     tier = "projects";
   } else if (isRef && (trackerReadyDue || trackerLaneDueRow)) {
     tier = "references";
@@ -408,15 +453,16 @@ function freshnessEvaluate(row, todayText, config) {
         fresh,
         intervalDays: interval.days,
         intervalSource: interval.source,
-        dueOn: trackerLaneDueOn,
-        daysOverdue,
+        dueOn: checklistScope ? null : trackerLaneDueOn,
+        daysOverdue: checklistScope ? null : daysOverdue,
         keeps,
         decide,
         lints,
       };
     }
-    let dueOn = fresh === null ? null : laneDueOn;
-    let daysOverdue = fresh === null ? null : laneDaysOverdue;
+    let dueOn = checklistScope || fresh === null ? null : laneDueOn;
+    let daysOverdue =
+      checklistScope || fresh === null ? null : laneDaysOverdue;
     if (laneDays === null) {
       dueOn = null;
       daysOverdue = null;
@@ -439,7 +485,7 @@ function freshnessEvaluate(row, todayText, config) {
   if (state === null) {
     return {
       state: null,
-      tier: null,
+      tier: checklistScope ? tier : null,
       lane,
       fresh,
       intervalDays: interval.days,
@@ -480,8 +526,8 @@ function freshnessEvaluate(row, todayText, config) {
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
-      dueOn: scheduled,
-      daysOverdue: freshDateDiffDays(scheduled, today),
+      dueOn: checklistScope ? null : scheduled,
+      daysOverdue: checklistScope ? null : freshDateDiffDays(scheduled, today),
       keeps,
       decide,
       lints,
@@ -497,8 +543,8 @@ function freshnessEvaluate(row, todayText, config) {
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
-      dueOn,
-      daysOverdue: freshDateDiffDays(dueOn, today),
+      dueOn: checklistScope ? null : dueOn,
+      daysOverdue: checklistScope ? null : freshDateDiffDays(dueOn, today),
       keeps,
       decide,
       lints,
@@ -513,7 +559,7 @@ function freshnessEvaluate(row, todayText, config) {
     fresh,
     intervalDays: interval.days,
     intervalSource: interval.source,
-    dueOn,
+    dueOn: checklistScope ? null : dueOn,
     daysOverdue: null,
     keeps,
     decide,
@@ -568,17 +614,19 @@ function freshnessRowKey(row) {
   return path + ":" + row.line;
 }
 
-// Walk tier order: NEW → PROJECTS → PENDING → NEXT → RETURNED →
-// REFERENCES → ROTTEN. Mirrors the `Tier` ordering in
+// Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED →
+// REFERENCES → ROTTEN → POST. Mirrors the `Tier` ordering in
 // `src/native/freshness/state.rs`.
 const FRESHNESS_TIER_ORDER = {
-  new: 0,
-  projects: 1,
-  pending: 2,
-  next: 3,
-  returned: 4,
-  references: 5,
-  rotten: 6,
+  pre: 0,
+  new: 1,
+  projects: 2,
+  pending: 3,
+  next: 4,
+  returned: 5,
+  references: 6,
+  rotten: 7,
+  post: 8,
 };
 
 // Tracking-task identity: the parsed, exact trailing block ID `prj`
@@ -596,6 +644,9 @@ function freshnessTrackerFromBlockId(blockId) {
 }
 
 function freshnessTierLabel(tier) {
+  if (tier === "pre") {
+    return "PRE";
+  }
   if (tier === "new") {
     return "NEW";
   }
@@ -616,6 +667,9 @@ function freshnessTierLabel(tier) {
   }
   if (tier === "rotten") {
     return "ROTTEN";
+  }
+  if (tier === "post") {
+    return "POST";
   }
   return "";
 }
@@ -657,4 +711,3 @@ function freshnessComparePathLine(a, b) {
   }
   return a.line - b.line;
 }
-

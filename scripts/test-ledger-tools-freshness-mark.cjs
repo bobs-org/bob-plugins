@@ -192,6 +192,23 @@ test("M3 boundary: ROTTEN due capsule with Alt+F hint", () => {
   );
 });
 
+test("checklist marks replace stamp hints with their completion tier", () => {
+  const pre = markModel(
+    "- [ ] #task #gtd #pre Chore [fresh:: 2026-10-01]",
+    { checklist: "pre" },
+  );
+  assert.equal(pre.decide, false);
+  assert.match(pre.tooltip, /PRE checklist · complete to resolve/);
+  assert.doesNotMatch(pre.tooltip, /Alt\+F to (?:confirm|decide)/);
+
+  const post = markModel(
+    "- [ ] #task #gtd #post Morning review [fresh:: 2026-10-01]",
+    { checklist: "post" },
+  );
+  assert.match(post.tooltip, /POST closeout · complete to close review/);
+  assert.doesNotMatch(post.tooltip, /Alt\+F to (?:confirm|decide)/);
+});
+
 test("M4 yesterday uses the yesterday relative", () => {
   const model = markModel("- [ ] #task T [fresh:: 2026-10-07]");
   assert.equal(model.label, "1d");

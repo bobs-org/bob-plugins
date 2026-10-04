@@ -262,8 +262,9 @@ if (WidgetType && typeof WidgetType === "function") {
 
 // Adapt one Tasks-plugin task to a freshness evaluation row. `context`
 // is `{ list, todayDay, noteRefreshRawFor(path), isToday(task) }`.
-// Carries `statusSymbol` (from the task status, else the line) and
-// `created` (canonical `YYYY-MM-DD` from `createdDate`/`created`,
+// Carries exact `checklist` tier tags and the status symbol as written
+// on the line (null when the line cannot provide one), plus `created`
+// (canonical `YYYY-MM-DD` from `createdDate`/`created`,
 // else the inline `created` field, else null) for the tiered walk.
 // Never throws: missing fields degrade to an out-of-scope row.
 function freshnessRowFromTask(task, index, context) {
@@ -281,7 +282,8 @@ function freshnessRowFromTask(task, index, context) {
         originalMarkdown: "",
         blockId: null,
         tracker: null,
-        statusSymbol: " ",
+        checklist: null,
+        statusSymbol: null,
         isTodo: false,
         recurring: false,
         laneVisible: false,
@@ -390,6 +392,22 @@ function freshnessRowFromTask(task, index, context) {
     } catch (error) {
       scheduled = null;
     }
+    // Tasks normally supplies the scheduled date on the task object,
+    // which `planLaneVisible` already checks. Preserve that exclusion
+    // when adapting cached Markdown rows whose object omitted it.
+    try {
+      const todayDay = safeContext.todayDay;
+      const scheduledDay = freshnessDayNumberForDateText(scheduled);
+      if (
+        Number.isInteger(todayDay) &&
+        scheduledDay !== null &&
+        scheduledDay > todayDay
+      ) {
+        laneVisible = false;
+      }
+    } catch (error) {
+      // Keep the existing visibility result on malformed dates.
+    }
     let noteRefreshRaw = undefined;
     try {
       noteRefreshRaw =
@@ -399,23 +417,12 @@ function freshnessRowFromTask(task, index, context) {
     } catch (error) {
       noteRefreshRaw = undefined;
     }
-    let statusSymbol = "";
+    const checklist = freshnessChecklistForTags(task.tags);
+    let statusSymbol = null;
     try {
-      statusSymbol = planTaskStatusSymbol(task) || "";
+      statusSymbol = freshnessTaskStatus(rawLine);
     } catch (error) {
-      statusSymbol = "";
-    }
-    if (!statusSymbol) {
-      try {
-        statusSymbol = freshnessTaskStatus(rawLine) || "";
-      } catch (error) {
-        statusSymbol = "";
-      }
-    }
-    if (!statusSymbol) {
-      statusSymbol = isTodo ? " " : "?";
-    } else {
-      statusSymbol = String(statusSymbol)[0];
+      statusSymbol = null;
     }
     let created = null;
     try {
@@ -457,6 +464,7 @@ function freshnessRowFromTask(task, index, context) {
       originalMarkdown: rawLine,
       blockId,
       tracker,
+      checklist,
       statusSymbol,
       isTodo,
       recurring,
@@ -477,7 +485,8 @@ function freshnessRowFromTask(task, index, context) {
       originalMarkdown: "",
       blockId: null,
       tracker: null,
-      statusSymbol: " ",
+      checklist: null,
+      statusSymbol: null,
       isTodo: false,
       recurring: false,
       laneVisible: false,
@@ -539,4 +548,3 @@ function freshnessMemoReviewChanged(
 
 // __FRESHNESS_A2_END__
 // __FRESHNESS_A1_END__
-

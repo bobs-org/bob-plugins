@@ -11,7 +11,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3, freshness namespace v6): memoized
+    // Task freshness (api v3, freshness namespace v7): memoized
     // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
@@ -209,10 +209,12 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Task freshness (freshness namespace v6: date-independent
-      // decide/config contract; counting and `keepLine` remain
-      // available from v5. Tiered walk NEW → PROJECTS → PENDING →
-      // NEXT → RETURNED → REFERENCES → ROTTEN with daily lane review;
+      // Task freshness (freshness namespace v7 adds checklist tiers to
+      // the same read-time queue without changing buckets or stamps;
+      // date-independent decide/config, counting, and `keepLine` remain
+      // available from v5. Tiered walk PRE → NEW → PROJECTS → PENDING
+      // → NEXT → RETURNED → REFERENCES
+      // → ROTTEN → POST with daily lane review;
       // `state`/`bucket`/`counts`/`config` keep the rotten vocabulary;
       // the removed `stale_daily_budget` key still parses for one
       // release with a deprecation lint. Keep streaks (`keeps`,
@@ -222,7 +224,8 @@ class BobLedgerToolsPlugin extends Plugin {
       // the explicit `trackerReview` capability: exact `^ref`
       // trackers bypass `#hide`, visible `^prj` rows use the ordinary
       // predicate, and the PROJECTS/REFERENCES tiers walk with
-      // `projectsDue`/`referencesDue` and the seven-key `byTier`
+      // `projectsDue`/`referencesDue` and `checklistTiers` advertises
+      // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
       // histogram. The explicit `referenceReview` capability tells
       // consumers the queue may carry `references` entries.
       // Top-level api stays v3).
@@ -234,9 +237,10 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 6,
+        version: 7,
         trackerReview: true,
         referenceReview: true,
+        checklistTiers: true,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),

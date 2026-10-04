@@ -1,5 +1,5 @@
 // Tests for the compact persistent review footer and shared
-// `freshnessReviewEntryView` presentation (freshness namespace v5).
+// `freshnessReviewEntryView` presentation (freshness namespace v7).
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
@@ -291,6 +291,74 @@ test("footer groups omit every zero tier and keep walk order", () => {
   );
 });
 
+test("PRE and POST groups bracket the nine-tier queue and expose completion hints", () => {
+  const groups = freshnessFooterGroups({
+    walk: 3,
+    byTier: {
+      pre: 1,
+      new: 0,
+      projects: 0,
+      pending: 0,
+      next: 0,
+      returned: 0,
+      references: 0,
+      rotten: 1,
+      post: 1,
+    },
+  });
+  assert.deepEqual(groups.map(({ key, label }) => `${key}:${label}`), [
+    "pre:PRE", "rotten:ROTTEN", "post:POST",
+  ]);
+
+  const pre = freshnessReviewEntryView(
+    queueEntry({ tier: "pre", tierLabel: "PRE", state: null, bucket: null, lane: "ready" }),
+    { todayText: D },
+  );
+  assert.equal(pre.detail, "checklist");
+  assert.equal(pre.actionHint, "Alt+Shift+F done → next · ]s skip");
+  const post = freshnessReviewEntryView(
+    queueEntry({ tier: "post", tierLabel: "POST", lane: "ready" }),
+    { todayText: D },
+  );
+  assert.equal(post.detail, "closeout");
+  assert.equal(post.actionHint, "Alt+F done · closes the review");
+
+  const currentPre = queueEntry({
+    tier: "pre",
+    tierLabel: "PRE",
+    lane: "ready",
+    state: null,
+    bucket: null,
+    rank: 1,
+    tierRank: 1,
+    tierTotal: 1,
+  });
+  const view = freshnessFooterView(
+    {
+      counts: {
+        walk: 2,
+        byTier: {
+          pre: 1,
+          new: 0,
+          projects: 0,
+          pending: 0,
+          next: 0,
+          returned: 0,
+          references: 0,
+          rotten: 0,
+          post: 1,
+        },
+      },
+      queue: [currentPre, queueEntry({ key: "post", tier: "post", tierLabel: "POST" })],
+      tasksAvailable: true,
+    },
+    { current: currentPre, todayText: D },
+  );
+  assert.equal(view.commitments, 1, "PRE contributes to commitments");
+  assert.equal(view.groupsText, "PRE 1 · POST 1");
+  assert.equal(view.current.actionHint, pre.actionHint);
+});
+
 test("a NEW-state tracker appears only in its walk tier", () => {
   const groups = freshnessFooterGroups({
     new: 1,
@@ -536,7 +604,7 @@ test("NEW and commitments take precedence over a met budget", () => {
   assert.equal(view.contextText.includes("budget"), false);
 });
 
-test("reviewEntryView compact and detail cover all seven tiers", () => {
+test("reviewEntryView compact and detail cover the original freshness tiers", () => {
   const today = { todayText: D };
   assert.deepEqual(freshnessReviewEntryView(null), {
     ok: false,

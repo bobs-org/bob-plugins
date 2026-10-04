@@ -92,6 +92,8 @@ const {
   freshnessStatusView,
   freshnessSetRefreshLine,
   freshnessStampLine,
+  freshnessRowFromTask,
+  freshnessTaskStatus,
   formatLocalDate,
   loadFreshnessConfig,
   readFreshness,
@@ -886,7 +888,7 @@ function withMissingConfig(run) {
   }
 }
 
-test("freshness namespace v6 keeps every member on rotten vocabulary", () => {
+test("freshness namespace v7 advertises checklist tiers without changing buckets", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -906,7 +908,8 @@ test("freshness namespace v6 keeps every member on rotten vocabulary", () => {
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 6);
+      assert.equal(freshness.version, 7);
+      assert.equal(freshness.checklistTiers, true);
       for (const key of [
         "config",
         "stampLine",
@@ -971,6 +974,33 @@ test("freshness namespace v6 keeps every member on rotten vocabulary", () => {
         freshness.stampLine("- [ ] #task Buy milk", "2026-10-08"),
         "- [ ] #task Buy milk [fresh:: 2026-10-08]",
       );
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("checklist rows report tier and rank while keeping the READY bucket null", () => {
+  withMissingConfig(() => {
+    const task = makeFreshnessTask({
+      tags: ["#task", "#gtd", "#pre"],
+      recurrence: { rule: "every day" },
+      path: "gtd_daily.md",
+      lineNumber: 0,
+      description: "Brush teeth",
+      originalMarkdown:
+        "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done]",
+    });
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [task] }), {});
+    plugin.onload();
+    try {
+      const freshness = plugin.api.freshness;
+      assert.equal(freshness.tier(task), "pre");
+      assert.equal(freshness.isDue(task), true);
+      assert.equal(freshness.rank(task), 0);
+      assert.equal(freshness.state(task), null);
+      assert.equal(freshness.bucket(task), null);
+      assert.deepEqual(freshness.queue().map((entry) => entry.tier), ["pre"]);
     } finally {
       plugin.onunload();
     }
@@ -1155,10 +1185,10 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     status.text,
-    "⟳ 3 new · 0 projects · 10 pending · 15 next · 0 references · 20 rotten · ✓ 12 today",
+    "⟳ 0 pre · 3 new · 0 projects · 10 pending · 15 next · 0 references · 20 rotten · 0 post · ✓ 12 today",
   );
   assert.equal(status.mode, "new");
-  assert.match(status.tooltip, /Walk 48 · NEW 3 · PROJECTS 0 · PENDING 10 · NEXT 15/);
+  assert.match(status.tooltip, /Walk 48 · PRE 0 · NEW 3 · PROJECTS 0 · PENDING 10 · NEXT 15/);
   assert.match(status.tooltip, /RETURNED 2 · REFERENCES 0 · ROTTEN 18/);
   assert.match(status.tooltip, /oldest 11d overdue/);
   assert.match(status.tooltip, /✓ 12 today/);
@@ -1180,7 +1210,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     budgeted.text,
-    "⟳ 0 new · 0 projects · 0 pending · 0 next · 0 references · 5 rotten · ✓ 12/15 today",
+    "⟳ 0 pre · 0 new · 0 projects · 0 pending · 0 next · 0 references · 5 rotten · 0 post · ✓ 12/15 today",
   );
   assert.equal(budgeted.mode, "due");
   assert.match(budgeted.tooltip, /RETURNED 1 · REFERENCES 0 · ROTTEN 4/);
@@ -1209,7 +1239,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     tiered.text,
-    "⟳ 0 new · 1 projects · 0 pending · 0 next · 1 references · 1 rotten · ✓ 0 today",
+    "⟳ 0 pre · 0 new · 1 projects · 0 pending · 0 next · 1 references · 1 rotten · 0 post · ✓ 0 today",
   );
   assert.match(tiered.tooltip, /REFERENCES 1/);
   assert.equal(tiered.mode, "due");
@@ -2438,7 +2468,7 @@ test("tracking review: lane ^prj keeps its lane with the Ready cadence", () => {
   assert.equal(evaluated.intervalSource, "default");
 });
 
-test("tracking counts decouple states from the seven-key tier histogram", () => {
+test("tracking counts decouple states from the nine-key tier histogram", () => {
   const emptyPrj = sRow({
     rawLine: "- [ ] #task Project ^prj",
     blockId: "prj",
@@ -2473,13 +2503,15 @@ test("tracking counts decouple states from the seven-key tier histogram", () => 
   assert.equal(report.byTier.references, 1);
   assert.equal(
     report.walk,
-    report.byTier.new +
+    report.byTier.pre +
+      report.byTier.new +
       report.byTier.projects +
       report.byTier.pending +
       report.byTier.next +
       report.byTier.returned +
       report.byTier.references +
-      report.byTier.rotten,
+      report.byTier.rotten +
+      report.byTier.post,
   );
 });
 
@@ -2647,7 +2679,7 @@ test("references walk with the reference cadence in every lane", () => {
   assert.equal(laneRef.lane, "pending");
   assert.equal(laneRef.state, null);
   assert.equal(laneRef.tier, "references");
-  // Seven-tier order with stable ties, and the walk sums the histogram.
+  // Nine-tier order with stable ties, and the walk sums the histogram.
   const rows = [
     sRow({ path: "g.md", line: 1, rawLine: "- [ ] #task Ordinary" }),
     sRow({ path: "f.md", line: 1, rawLine: "- [ ] #task P ^prj", blockId: "prj" }),
@@ -2668,9 +2700,183 @@ test("references walk with the reference cadence in every lane", () => {
     ["new", "projects", "pending", "next", "returned", "references", "rotten"],
   );
   const report = freshnessCounts(rows, D, cfg);
-  assert.equal(report.walk, report.byTier.references + report.byTier.projects + report.byTier.new + report.byTier.pending + report.byTier.next + report.byTier.returned + report.byTier.rotten);
+  assert.equal(report.walk, report.byTier.pre + report.byTier.new + report.byTier.projects + report.byTier.pending + report.byTier.next + report.byTier.returned + report.byTier.references + report.byTier.rotten + report.byTier.post);
   assert.equal(report.referencesDue, 1);
   assert.equal(report.byTier.references, 1);
+});
+
+function checklistTaskRow(line, tags, overrides = {}) {
+  const symbol = freshnessTaskStatus(line);
+  const statusType =
+    symbol === " " || symbol === "?"
+      ? "TODO"
+      : symbol === "/"
+        ? "IN_PROGRESS"
+        : symbol === "*"
+          ? "ON_HOLD"
+          : symbol === "x" || symbol === "X" || symbol === "-"
+            ? "DONE"
+            : "NON_TASK";
+  const task = {
+    status: { type: statusType, symbol: symbol || "" },
+    tags,
+    path: overrides.path || "gtd_daily.md",
+    lineNumber: Number.isInteger(overrides.lineNumber) ? overrides.lineNumber : 0,
+    description: line,
+    originalMarkdown: line,
+    isBlocked: () => Boolean(overrides.blocked),
+    ...(overrides.recurrence ? { recurrence: overrides.recurrence } : {}),
+    ...(overrides.scheduledDate ? { scheduledDate: overrides.scheduledDate } : {}),
+  };
+  return freshnessRowFromTask(task, task.lineNumber, {
+    list: [task],
+    todayDay: 20261008,
+    isToday: () => Boolean(overrides.isToday),
+  });
+}
+
+test("CL1-CL7: exact checklist scope, precedence, and unchanged state buckets", () => {
+  const cl1 = checklistTaskRow(
+    "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-01]",
+    ["#task", "#gtd", "#pre"],
+    { recurrence: { rule: "every day" } },
+  );
+  assert.equal(cl1.statusSymbol, " ");
+  assert.equal(cl1.checklist, "pre");
+  const cl1Eval = helpers.freshnessEvaluate(cl1, D, CFG);
+  assert.equal(cl1Eval.tier, "pre");
+  assert.equal(cl1Eval.lane, "ready");
+  assert.equal(cl1Eval.state, null);
+  assert.equal(helpers.freshnessBucketForState(cl1Eval.state), null);
+  assert.equal(cl1Eval.dueOn, null);
+
+  const cl2 = checklistTaskRow(
+    "- [?] #task #gtd #pre Check weather [repeat:: every day when done] [scheduled:: 2026-10-08]",
+    ["#task", "#gtd", "#pre"],
+  );
+  const cl2Eval = helpers.freshnessEvaluate(cl2, D, CFG);
+  assert.equal(cl2.statusSymbol, "?");
+  assert.equal(cl2Eval.tier, "pre");
+  assert.equal(cl2Eval.lane, null);
+  assert.equal(freshnessQueue([cl2], D, CFG).length, 1);
+
+  const excluded = [
+    checklistTaskRow("- [?] #task #gtd #pre Blocked", ["#task", "#gtd", "#pre"], { blocked: true }),
+    checklistTaskRow("- [ ] #task #gtd #pre Tomorrow [scheduled:: 2026-10-09]", ["#task", "#gtd", "#pre"]),
+    checklistTaskRow("- [ ] #task #gtd #pre Hidden #hide", ["#task", "#gtd", "#pre", "#hide"]),
+    checklistTaskRow("- [ ] #task #gtd #pre Template", ["#task", "#gtd", "#pre"], { path: "_templates/daily.md" }),
+  ];
+  assert.deepEqual(excluded.map((row) => helpers.freshnessEvaluate(row, D, CFG).tier), [null, null, null, null]);
+  assert.equal(freshnessQueue(excluded, D, CFG).length, 0);
+
+  const todayAndDaily = [
+    sRow({ checklist: "pre", recurring: true, path: "gtd_daily.md", rawLine: "- [ ] #task #gtd #pre Daily" }),
+    sRow({ checklist: "pre", isDailyNote: true, path: "2026/20261008.md", rawLine: "- [ ] #task #gtd #pre Daily note" }),
+    sRow({ checklist: "pre", isToday: true, rawLine: "- [ ] #task #gtd #pre Today" }),
+  ];
+  assert.deepEqual(todayAndDaily.map((row) => helpers.freshnessEvaluate(row, D, CFG).tier), ["pre", "pre", "pre"]);
+
+  for (const [tags, expected] of [
+    [["#pre"], null],
+    [["#gtd", "#pressed_juice"], null],
+    [["#gtd/pre"], null],
+    [["#GTD", "#Pre"], "pre"],
+    [["#gtd", "#pre", "#post"], "pre"],
+    [["#gtd", "#post"], "post"],
+  ]) {
+    const row = checklistTaskRow("- [ ] #task tagged", tags);
+    assert.equal(row.checklist, expected, JSON.stringify(tags));
+    assert.equal(
+      helpers.freshnessEvaluate(row, D, CFG).tier,
+      expected || "new",
+    );
+  }
+
+  const cl7 = checklistTaskRow(
+    "- [ ] #task #gtd #post Write retro",
+    ["#task", "#gtd", "#post"],
+  );
+  const cl7Eval = helpers.freshnessEvaluate(cl7, D, CFG);
+  assert.equal(cl7Eval.tier, "post");
+  assert.equal(cl7Eval.state, "new");
+  assert.equal(helpers.freshnessBucketForState(cl7Eval.state), "new");
+  assert.equal(cl7Eval.dueOn, null);
+
+  const noWrittenStatus = checklistTaskRow(
+    "not a task line",
+    ["#task", "#gtd", "#pre"],
+  );
+  assert.equal(noWrittenStatus.statusSymbol, null);
+  assert.equal(helpers.freshnessEvaluate(noWrittenStatus, D, CFG).tier, null);
+});
+
+test("CL8-CL12: nine tier order, checklist-only due counts, and completion semantics", () => {
+  const rows = [
+    sRow({ path: "a.md", line: 1, checklist: "pre", recurring: true, rawLine: "- [ ] #task #gtd #pre Pre" }),
+    sRow({ path: "b.md", line: 1, rawLine: "- [ ] #task New" }),
+    sRow({ path: "c.md", line: 1, blockId: "prj", rawLine: "- [ ] #task Project [fresh:: 2026-10-01] ^prj" }),
+    laneRow("d.md", 1, "/", "2026-10-07", null),
+    laneRow("e.md", 1, "*", "2026-10-07", null),
+    sRow({ path: "f.md", line: 1, rawLine: "- [ ] #task Returned [fresh:: 2026-10-05] [scheduled:: 2026-10-07]", scheduled: "2026-10-07" }),
+    sRow({ path: "g.md", line: 1, blockId: "ref", rawLine: "- [ ] #task Reference [fresh:: 2026-10-01] ^ref" }),
+    sRow({ path: "h.md", line: 1, rawLine: "- [ ] #task Rotten [fresh:: 2026-10-01]" }),
+    sRow({ path: "i.md", line: 1, checklist: "post", rawLine: "- [ ] #task #gtd #post Post" }),
+  ];
+  const queue = freshnessQueue(rows, D, CFG);
+  assert.deepEqual(queue.map((entry) => entry.tier), [
+    "pre", "new", "projects", "pending", "next", "returned", "references", "rotten", "post",
+  ]);
+  assert.equal(queue[0].lane, "ready");
+  assert.equal(queue.at(-1).lane, "ready");
+  const counts = freshnessCounts(rows, D, CFG);
+  assert.equal(counts.preDue, 1);
+  assert.equal(counts.postDue, 1);
+  assert.equal(counts.walk, 9);
+  assert.equal(counts.walk, Object.values(counts.byTier).reduce((sum, count) => sum + count, 0));
+  assert.equal(counts.byTier.pre, 1);
+  assert.equal(counts.byTier.post, 1);
+
+  const recurring = "- [ ] #task #gtd #pre Water plants [fresh:: 2026-10-08] [keeps:: 3] [repeat:: every day]";
+  assert.equal(freshnessStampLine(recurring, D).refused, "recurring");
+  assert.equal(helpers.freshnessKeepLine(recurring, D).refused, "recurring");
+  const recurringRow = sRow({
+    checklist: "pre",
+    recurring: true,
+    rawLine: recurring,
+  });
+  const recurringEval = helpers.freshnessEvaluate(recurringRow, D, CFG);
+  assert.equal(recurringEval.tier, "pre");
+  assert.equal(recurringEval.keeps, 3);
+  assert.equal(recurringEval.decide, false);
+
+  const completed = checklistTaskRow(
+    "- [x] #task #gtd #pre Chore [completion:: 2026-10-08]",
+    ["#task", "#gtd", "#pre"],
+  );
+  const nextOccurrence = checklistTaskRow(
+    "- [ ] #task #gtd #pre Chore [repeat:: every day when done] [scheduled:: 2026-10-09]",
+    ["#task", "#gtd", "#pre"],
+  );
+  assert.equal(helpers.freshnessEvaluate(completed, D, CFG).tier, null);
+  assert.equal(helpers.freshnessEvaluate(nextOccurrence, D, CFG).tier, null);
+
+  const nextChecklist = checklistTaskRow("- [*] #task #gtd #pre Next", ["#task", "#gtd", "#pre"]);
+  assert.equal(helpers.freshnessEvaluate(nextChecklist, D, CFG).tier, "pre");
+  assert.equal(helpers.freshnessEvaluate(nextChecklist, D, CFG).lane, "next");
+  const refChecklist = checklistTaskRow(
+    "- [ ] #task #gtd #post Reference ^ref",
+    ["#task", "#gtd", "#post"],
+    { lineNumber: 1 },
+  );
+  refChecklist.blockId = "ref";
+  assert.equal(helpers.freshnessEvaluate(refChecklist, D, CFG).tier, "post");
+
+  const missingWhenDone = checklistTaskRow(
+    "- [ ] #task #gtd #pre Daily [repeat:: every day]",
+    ["#task", "#gtd", "#pre"],
+    { recurrence: { rule: "every day" } },
+  );
+  assert.equal(helpers.freshnessEvaluate(missingWhenDone, D, CFG).tier, "pre");
 });
 
 test("referenceReview capability advertises the references tier", () => {

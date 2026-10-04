@@ -741,7 +741,11 @@ function freshnessMarkModel(input) {
     }
     let line3 = null;
     if (tone === "due") {
-      if (tier === "pending" || tier === "next") {
+      if (tier === "pre") {
+        line3 = "PRE checklist · complete to resolve";
+      } else if (tier === "post") {
+        line3 = "POST closeout · complete to close review";
+      } else if (tier === "pending" || tier === "next") {
         line3 = "Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
       } else if (showDecision) {
         line3 = "Alt+F to decide";
@@ -949,4 +953,3 @@ function buildFreshnessMarkElement(doc, model, options) {
     return null;
   }
 }
-

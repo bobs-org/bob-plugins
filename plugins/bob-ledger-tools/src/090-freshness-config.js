@@ -4,7 +4,7 @@
 // `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v6).
+// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v7).
 
 // Whether the compatible review-walk decision card is present: nav exposes
 // `api.freshnessDecayCard.version >= 2` (ungated handler contract). Version
@@ -335,4 +335,3 @@ function loadFreshnessConfig(options = {}) {
   const coerced = coerceFreshnessConfig(freshnessBlock(parsed));
   return { config: coerced.config, invalid: coerced.invalid, configPath };
 }
-

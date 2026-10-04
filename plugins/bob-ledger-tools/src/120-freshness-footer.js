@@ -1,4 +1,5 @@
 const FRESHNESS_FOOTER_TIERS = [
+  "pre",
   "new",
   "projects",
   "pending",
@@ -6,9 +7,11 @@ const FRESHNESS_FOOTER_TIERS = [
   "returned",
   "references",
   "rotten",
+  "post",
 ];
 
 const FRESHNESS_FOOTER_COMMITMENT_TIERS = [
+  "pre",
   "new",
   "projects",
   "pending",
@@ -36,13 +39,15 @@ function freshnessReviewMachineTier(entry) {
       ? entry.tier.trim().toLowerCase()
       : "";
   if (
+    tier === "pre" ||
     tier === "new" ||
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
     tier === "returned" ||
     tier === "references" ||
-    tier === "rotten"
+    tier === "rotten" ||
+    tier === "post"
   ) {
     return tier;
   }
@@ -195,7 +200,15 @@ function freshnessReviewEntryView(entry, options = {}) {
     let detail = "";
     let compact = "";
     let actionHint = "";
-    if (tier === "projects") {
+    if (tier === "pre") {
+      detail = "checklist";
+      compact = "checklist";
+      actionHint = "Alt+Shift+F done → next · ]s skip";
+    } else if (tier === "post") {
+      detail = "closeout";
+      compact = "closeout";
+      actionHint = "Alt+F done · closes the review";
+    } else if (tier === "projects") {
       detail = freshnessReviewTrackerDetail(entry, "Empty project");
       compact = "Empty project";
     } else if (tier === "references") {
@@ -248,6 +261,7 @@ function freshnessFooterTierCount(counts, key, legacy) {
 function freshnessFooterReadTiers(counts) {
   const safe = counts && typeof counts === "object" ? counts : {};
   const tiers = {
+    pre: freshnessFooterTierCount(safe, "pre", safe.preDue),
     new: freshnessFooterTierCount(safe, "new", safe.new),
     projects: freshnessFooterTierCount(safe, "projects", safe.projectsDue),
     pending: freshnessFooterTierCount(safe, "pending", safe.pendingDue),
@@ -255,6 +269,7 @@ function freshnessFooterReadTiers(counts) {
     returned: freshnessFooterTierCount(safe, "returned", safe.resurfaced),
     references: freshnessFooterTierCount(safe, "references", safe.referencesDue),
     rotten: freshnessFooterTierCount(safe, "rotten", safe.rotten),
+    post: freshnessFooterTierCount(safe, "post", safe.postDue),
   };
   const walk =
     Number.isInteger(safe.walk) && safe.walk >= 0
@@ -885,4 +900,3 @@ function freshnessFooterPaint(el, view) {
   freshnessFooterFit(el, parts, view);
   return parts;
 }
-

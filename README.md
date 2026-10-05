@@ -173,9 +173,16 @@ bob-plugins/
     build-plugins.mjs           # deterministic source-fragment build and staleness check
     check-split-parity.mjs      # compare a generated plugin with its recorded source base
     block-id-prompt-harness.cjs # shared block-id-prompt test harness
+    ledger-tools-harness.cjs # shared ledger-tools test harness
     navigation-hotkeys-harness.cjs # shared navigation hotkeys test harness
     task-status-cycler-harness.cjs # shared task-status-cycler test harness
     test-block-id-prompt-*.cjs  # per-area block-id-prompt coverage
+    test-ledger-tools-freshness-placement.cjs  # placement vectors, stamping/refusals, reader lints
+    test-ledger-tools-freshness-states.cjs  # state vectors, config coercion/loading, interval precedence
+    test-ledger-tools-freshness-namespace.cjs  # public namespace, invalidation/events, status bar, synchronous API
+    test-ledger-tools-freshness-review-model.cjs  # bucket partition, calendar dates, model/chips, memo/config/cache identity
+    test-ledger-tools-freshness-queue.cjs  # Q1/Q2, L1-L5, R1/R2, missing-created ordering, upkeep/meter
+    test-ledger-tools-freshness-tracking.cjs  # tracker intervals/counts/queue, checklist vectors, reference capability
     test-plugin-build.cjs       # focused build-contract coverage
     validate-manifests.mjs      # manifest + main.js sanity checks
     migrate-dependency-lines.mjs # dry-run-first Depends-On line migration
@@ -279,7 +286,18 @@ per-area `scripts/test-task-status-cycler-*.cjs` files and they share
 are the per-area `scripts/test-block-id-prompt-*.cjs` files and they share
 `scripts/block-id-prompt-harness.cjs`. Run that suite on its own with
 `node --test scripts/test-block-id-prompt-*.cjs`. The split preserves the
-original 179 cases. `npm test` also
+original 179 cases. The ledger-tools freshness tests are the per-area
+`scripts/test-ledger-tools-freshness-placement.cjs`,
+`scripts/test-ledger-tools-freshness-states.cjs`,
+`scripts/test-ledger-tools-freshness-namespace.cjs`,
+`scripts/test-ledger-tools-freshness-review-model.cjs`,
+`scripts/test-ledger-tools-freshness-queue.cjs`, and
+`scripts/test-ledger-tools-freshness-tracking.cjs` files and they share
+`scripts/ledger-tools-harness.cjs`. Run that suite on its own with
+`node --test scripts/test-ledger-tools-freshness-placement.cjs scripts/test-ledger-tools-freshness-states.cjs scripts/test-ledger-tools-freshness-namespace.cjs scripts/test-ledger-tools-freshness-review-model.cjs scripts/test-ledger-tools-freshness-queue.cjs scripts/test-ledger-tools-freshness-tracking.cjs`.
+(A `freshness-*.cjs` glob would also match the pre-existing `footer`,
+`mark`, `mark-surfaces`, `keeps`, and `decision-card` suites, so the six
+files are listed explicitly.) The split preserves the original 57 cases. `npm test` also
 guards the distinct Vim mapping ownership: Bob
 Ledger Tools uses `\p` for Pomodoro increments, while Bob Navigation Hotkeys
 uses `\s` for toggling the current tab pin.

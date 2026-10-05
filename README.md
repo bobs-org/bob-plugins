@@ -172,8 +172,10 @@ bob-plugins/
   scripts/
     build-plugins.mjs           # deterministic source-fragment build and staleness check
     check-split-parity.mjs      # compare a generated plugin with its recorded source base
+    block-id-prompt-harness.cjs # shared block-id-prompt test harness
     navigation-hotkeys-harness.cjs # shared navigation hotkeys test harness
     task-status-cycler-harness.cjs # shared task-status-cycler test harness
+    test-block-id-prompt-*.cjs  # per-area block-id-prompt coverage
     test-plugin-build.cjs       # focused build-contract coverage
     validate-manifests.mjs      # manifest + main.js sanity checks
     migrate-dependency-lines.mjs # dry-run-first Depends-On line migration
@@ -273,7 +275,11 @@ pinned-tab-preserving sibling closes. The navigation hotkeys tests are the per-a
 `scripts/navigation-hotkeys-harness.cjs`. The task-status-cycler tests are the
 per-area `scripts/test-task-status-cycler-*.cjs` files and they share
 `scripts/task-status-cycler-harness.cjs`. Run the cycler suite on its own with
-`node --test scripts/test-task-status-cycler-*.cjs`. It also
+`node --test scripts/test-task-status-cycler-*.cjs`. The block-id-prompt tests
+are the per-area `scripts/test-block-id-prompt-*.cjs` files and they share
+`scripts/block-id-prompt-harness.cjs`. Run that suite on its own with
+`node --test scripts/test-block-id-prompt-*.cjs`. The split preserves the
+original 179 cases. `npm test` also
 guards the distinct Vim mapping ownership: Bob
 Ledger Tools uses `\p` for Pomodoro increments, while Bob Navigation Hotkeys
 uses `\s` for toggling the current tab pin.

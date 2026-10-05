@@ -175,6 +175,8 @@ bob-plugins/
     block-id-prompt-harness.cjs # shared block-id-prompt test harness
     ledger-tools-harness.cjs # shared ledger-tools test harness
     navigation-hotkeys-harness.cjs # shared navigation hotkeys test harness
+    navigation-dependencies-stage-harness.cjs # shared navigation dependencies-stage test harness
+    test-navigation-dependencies-stage-*.cjs # per-area navigation dependencies-stage coverage
     task-status-cycler-harness.cjs # shared task-status-cycler test harness
     test-block-id-prompt-*.cjs  # per-area block-id-prompt coverage
     test-ledger-tools-freshness-placement.cjs  # placement vectors, stamping/refusals, reader lints
@@ -297,7 +299,24 @@ original 179 cases. The ledger-tools freshness tests are the per-area
 `node --test scripts/test-ledger-tools-freshness-placement.cjs scripts/test-ledger-tools-freshness-states.cjs scripts/test-ledger-tools-freshness-namespace.cjs scripts/test-ledger-tools-freshness-review-model.cjs scripts/test-ledger-tools-freshness-queue.cjs scripts/test-ledger-tools-freshness-tracking.cjs`.
 (A `freshness-*.cjs` glob would also match the pre-existing `footer`,
 `mark`, `mark-surfaces`, `keeps`, and `decision-card` suites, so the six
-files are listed explicitly.) The split preserves the original 57 cases. `npm test` also
+files are listed explicitly.) The split preserves the original 57 cases.
+
+The navigation dependencies-stage suite uses the six per-area files
+`scripts/test-navigation-dependencies-stage-ranker-and-pool.cjs`,
+`scripts/test-navigation-dependencies-stage-entry-and-view.cjs`,
+`scripts/test-navigation-dependencies-stage-writes.cjs`,
+`scripts/test-navigation-dependencies-stage-mirror-and-badge.cjs`,
+`scripts/test-navigation-dependencies-stage-stale-guards.cjs`, and
+`scripts/test-navigation-dependencies-stage-performance.cjs`. They share
+`scripts/navigation-dependencies-stage-harness.cjs`. Run them together with:
+
+```sh
+node --test scripts/test-navigation-dependencies-stage-ranker-and-pool.cjs scripts/test-navigation-dependencies-stage-entry-and-view.cjs scripts/test-navigation-dependencies-stage-writes.cjs scripts/test-navigation-dependencies-stage-mirror-and-badge.cjs scripts/test-navigation-dependencies-stage-stale-guards.cjs scripts/test-navigation-dependencies-stage-performance.cjs
+```
+
+The split preserves the original 61 cases.
+
+`npm test` also
 guards the distinct Vim mapping ownership: Bob
 Ledger Tools uses `\p` for Pomodoro increments, while Bob Navigation Hotkeys
 uses `\s` for toggling the current tab pin.

@@ -1,0 +1,19 @@
+[
+  "010-core.js",
+  "020-markers-and-references.js",
+  "030-tasks-and-dependencies.js",
+  "040-editor-pomodoro-and-logs.js",
+  "050-source-discovery-and-edits.js",
+  "060-link-cleanup-and-deletion.js",
+  "070-daily-and-activation-plans.js",
+  "080-picker-ui-and-task-link-modal.js",
+  "090-prompt-modals.js",
+  "100-plugin-lifecycle.js",
+  "110-plugin-block-id-submit.js",
+  "120-plugin-pomodoro-links.js",
+  "130-plugin-task-link-open-and-notices.js",
+  "140-plugin-target-plans-and-rewrites.js",
+  "150-plugin-reference-files.js",
+  "160-install-methods.js",
+  "170-exports.js"
+]

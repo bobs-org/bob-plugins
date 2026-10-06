@@ -1,4 +1,48 @@
 class TaskStatusCyclerCompletionMixin {
+  // Nav api v3 `reviewWalk` for the review-walk auto-advance: the frozen
+  // `{ capture, continue }` pair, or null when nav is missing, old, or
+  // malformed. Never throws.
+  getReviewWalkApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      if (!api || !(Number(api.version) >= 3)) {
+        return null;
+      }
+      const walk = api.reviewWalk;
+      if (!walk || !(Number(walk.version) >= 1)) {
+        return null;
+      }
+      if (
+        typeof walk.capture !== "function" ||
+        typeof walk.continue !== "function"
+      ) {
+        return null;
+      }
+      return walk;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Settle one captured walk origin without ever throwing. `capture` and
+  // `continue` never throw per the nav api v3 contract, but a stale mock
+  // must not break the toggle.
+  continueReviewWalkSilently(walk, origin, outcome) {
+    try {
+      if (!walk || !origin) {
+        return;
+      }
+      const result = walk.continue(origin, outcome);
+      if (result && typeof result.catch === "function") {
+        result.catch(() => undefined);
+      }
+    } catch (error) {
+      // Best effort: the toggle already landed.
+    }
+  }
+
   // Nav api v2 may claim Ctrl+Enter only on the current PRE/POST walk
   // landing (D2); ordinary task toggles remain owned by this plugin.
   claimReviewWalkCtrlEnter(editor) {

@@ -136,6 +136,26 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
+    // Nav api v3 review-walk auto-advance: after the checklist claim
+    // declines, capture before the ordinary close. A busy origin swallows
+    // the key with no write (double-press safety); a null origin behaves
+    // exactly as today.
+    const walk = this.getReviewWalkApi();
+    let reviewOrigin = null;
+    if (walk) {
+      try {
+        reviewOrigin = walk.capture(view.editor);
+      } catch (error) {
+        reviewOrigin = null;
+      }
+      if (reviewOrigin && reviewOrigin.busy) {
+        return;
+      }
+    }
+    const settleReviewOrigin = (outcome) => {
+      this.continueReviewWalkSilently(walk, reviewOrigin, outcome);
+    };
+
     const taskStatus = this.getActiveTaskStatus(view.editor);
     const activeFile = view.file || this.app.workspace.getActiveFile();
     const openPomodoroContext =
@@ -143,6 +163,7 @@ class TaskStatusCyclerVimMixin {
         ? this.getActivePomodoroTaskContext(view.editor, taskStatus)
         : null;
     if (openPomodoroContext) {
+      settleReviewOrigin(null);
       void this.completeActivePomodoroTask(
         view.editor,
         activeFile,
@@ -157,6 +178,7 @@ class TaskStatusCyclerVimMixin {
         ? this.getActivePomodoroTaskContext(view.editor, taskStatus, "x")
         : null;
     if (donePomodoroContext) {
+      settleReviewOrigin(null);
       void this.reopenActivePomodoroTask(
         view.editor,
         activeFile,
@@ -183,6 +205,7 @@ class TaskStatusCyclerVimMixin {
         // root-only, and Done targets reopen root-only. A plain link that does
         // not resolve to a task falls back to Pomodoro completion; an embedded
         // link that does not resolve keeps the keypress consumed as a no-op.
+        settleReviewOrigin(null);
         void this.handleActiveTaskBlockLinkOpenDone(view.editor, activeFile)
           .then((result) => {
             if (result && result.resolved) return true;
@@ -196,6 +219,7 @@ class TaskStatusCyclerVimMixin {
         return;
       }
 
+      settleReviewOrigin(null);
       void this.completeActivePomodoroTask(
         view.editor,
         activeFile,
@@ -206,6 +230,25 @@ class TaskStatusCyclerVimMixin {
     }
 
     if (this.isOpenDoneTaskStatus(taskStatus)) {
+      if (reviewOrigin) {
+        // `closing` is read before the write; the chained toggle already
+        // awaits transclusion propagation and finalizeClosedTasks, so the
+        // walk continues only after both ran. A rejected toggle settles
+        // with null so the gesture lock is always released.
+        const closing = isTranscludedCompletionClosableStatus(taskStatus);
+        void this.toggleActiveCheckboxOpenDoneAndPropagate(
+          view.editor,
+          activeFile,
+          taskStatus,
+        ).then(
+          (wrote) =>
+            settleReviewOrigin(
+              wrote === true && closing ? { kind: "complete" } : null,
+            ),
+          () => settleReviewOrigin(null),
+        );
+        return;
+      }
       void this.toggleActiveCheckboxOpenDoneAndPropagate(
         view.editor,
         activeFile,
@@ -216,6 +259,7 @@ class TaskStatusCyclerVimMixin {
 
     // Outside an open Pomodoro's child range, resolve a selected task block
     // link once and choose the established reopen or close path from its status.
+    settleReviewOrigin(null);
     void this.handleActiveTaskBlockLinkOpenDone(
       view.editor,
       activeFile,

@@ -910,6 +910,403 @@ test("Ctrl+Enter on a task line inside a fenced code block does not propagate to
   assert.equal(harness.getSource("Source.md"), sourceBefore);
 });
 
+function installReviewWalkV3(plugin, { origin = { seq: 7 }, onContinue } = {}) {
+  const calls = { capture: 0, continued: [] };
+  let captureEditor = null;
+  plugin.app.plugins = {
+    plugins: {
+      "bob-navigation-hotkeys": {
+        api: {
+          version: 3,
+          claimReviewWalkCompletion: () => null,
+          reviewWalk: {
+            version: 1,
+            capture(candidate) {
+              calls.capture += 1;
+              captureEditor = candidate;
+              return origin;
+            },
+            continue(captured, outcome) {
+              calls.continued.push({ origin: captured, outcome });
+              if (onContinue) {
+                return onContinue(captured, outcome);
+              }
+              return Promise.resolve({ ok: true, advanced: false });
+            },
+          },
+        },
+      },
+    },
+  };
+  return {
+    calls,
+    captureEditor: () => captureEditor,
+  };
+}
+
+async function settleWalkChains(plugin) {
+  await flushAsyncActions();
+  await plugin.referenceMutationQueue;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await flushAsyncActions();
+}
+
+test("getReviewWalkApi only accepts nav api v3 with a well-formed reviewWalk and never throws", () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  const reviewWalk = {
+    version: 1,
+    capture: () => null,
+    continue: () => Promise.resolve({ ok: false }),
+  };
+  const valid = { version: 3, reviewWalk };
+
+  const cases = [
+    { name: "no app", app: null, expected: null },
+    { name: "no plugins", app: {}, expected: null },
+    { name: "no nav plugin", app: { plugins: { plugins: {} } }, expected: null },
+    {
+      name: "null api",
+      app: { plugins: { plugins: { "bob-navigation-hotkeys": {} } } },
+      expected: null,
+    },
+    {
+      name: "api v2",
+      app: {
+        plugins: {
+          plugins: { "bob-navigation-hotkeys": { api: { version: 2, reviewWalk } } },
+        },
+      },
+      expected: null,
+    },
+    {
+      name: "missing version",
+      app: {
+        plugins: {
+          plugins: { "bob-navigation-hotkeys": { api: { reviewWalk } } },
+        },
+      },
+      expected: null,
+    },
+    {
+      name: "missing reviewWalk",
+      app: {
+        plugins: {
+          plugins: { "bob-navigation-hotkeys": { api: { version: 3 } } },
+        },
+      },
+      expected: null,
+    },
+    {
+      name: "reviewWalk version 0",
+      app: {
+        plugins: {
+          plugins: {
+            "bob-navigation-hotkeys": {
+              api: { version: 3, reviewWalk: { ...reviewWalk, version: 0 } },
+            },
+          },
+        },
+      },
+      expected: null,
+    },
+    {
+      name: "missing capture",
+      app: {
+        plugins: {
+          plugins: {
+            "bob-navigation-hotkeys": {
+              api: {
+                version: 3,
+                reviewWalk: { version: 1, continue: reviewWalk.continue },
+              },
+            },
+          },
+        },
+      },
+      expected: null,
+    },
+    {
+      name: "missing continue",
+      app: {
+        plugins: {
+          plugins: {
+            "bob-navigation-hotkeys": {
+              api: {
+                version: 3,
+                reviewWalk: { version: 1, capture: reviewWalk.capture },
+              },
+            },
+          },
+        },
+      },
+      expected: null,
+    },
+  ];
+
+  for (const item of cases) {
+    plugin.app = item.app;
+    assert.equal(plugin.getReviewWalkApi(), item.expected, item.name);
+  }
+
+  plugin.app = {
+    plugins: { plugins: { "bob-navigation-hotkeys": { api: valid } } },
+  };
+  assert.equal(plugin.getReviewWalkApi(), valid.reviewWalk);
+
+  plugin.app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          get api() {
+            throw new Error("unavailable");
+          },
+        },
+      },
+    },
+  };
+  assert.equal(plugin.getReviewWalkApi(), null);
+});
+
+test("Ctrl+Enter close continues the walk with complete after finalize ran", async () => {
+  const source = "- [ ] #task Ship the walk ^ship";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const tasks = installTasksCloseCommand(plugin, editor);
+  const origin = { seq: 7 };
+  const order = [];
+  const walk = installReviewWalkV3(plugin, {
+    origin,
+    onContinue(captured, outcome) {
+      assert.equal(captured, origin);
+      assert.deepEqual(outcome, { kind: "complete" });
+      assert.deepEqual(order, ["finalize"]);
+      order.push("continue");
+      return Promise.resolve({ ok: true, advanced: true });
+    },
+  });
+  const realFinalize = plugin.finalizeClosedTasks.bind(plugin);
+  plugin.finalizeClosedTasks = async (...args) => {
+    order.push("finalize");
+    return realFinalize(...args);
+  };
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await settleWalkChains(plugin);
+
+  assert.match(editor.getValue(), /^- \[x\] #task Ship the walk \^ship/);
+  assert.deepEqual(tasks.executed, [tasks.doneCommand]);
+  assert.equal(walk.captureEditor(), editor);
+  assert.deepEqual(order, ["finalize", "continue"]);
+  assert.equal(walk.calls.continued.length, 1);
+});
+
+test("Ctrl+Enter close continues only after transclusion propagation landed", async () => {
+  const blockers = "- [ ] #task ![[Source#^target]] [created:: 2026-08-07]";
+  const harness = createInMemoryObsidianApp({
+    "Blockers.md": blockers,
+    "Source.md": "- [ ] #task Source task [id:: target] ^target",
+  });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(blockers, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Blockers.md");
+  const origin = { seq: 3 };
+  const seen = [];
+  const walk = installReviewWalkV3(plugin, {
+    origin,
+    onContinue(captured, outcome) {
+      seen.push({
+        source: harness.getSource("Source.md"),
+        outcome,
+      });
+      assert.equal(captured, origin);
+      return Promise.resolve({ ok: true, advanced: true });
+    },
+  });
+  const realFinalize = plugin.finalizeClosedTasks.bind(plugin);
+  plugin.finalizeClosedTasks = async (...args) => {
+    seen.push({ finalized: true });
+    return realFinalize(...args);
+  };
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await settleWalkChains(plugin);
+
+  assert.match(editor.getValue(), /^- \[x\] #task !\[\[Source#\^target\]\]/);
+  assert.match(
+    harness.getSource("Source.md"),
+    /^- \[x\] #task Source task \[id:: target\]/,
+  );
+  const continued = seen.filter((entry) => entry.outcome);
+  const finalized = seen.filter((entry) => entry.finalized);
+  assert.equal(continued.length, 1);
+  assert.equal(finalized.length, 1);
+  assert.ok(seen.indexOf(finalized[0]) < seen.indexOf(continued[0]));
+  assert.deepEqual(continued[0].outcome, { kind: "complete" });
+  assert.match(continued[0].source, /^- \[x\] #task Source task \[id:: target\]/);
+  assert.equal(walk.calls.capture, 1);
+  assert.equal(walk.calls.continued.length, 1);
+});
+
+test("Ctrl+Enter reopen settles the walk with null", async () => {
+  const source = "- [x] #task Reopen me ^rlink";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  harness.app.commands = { commands: {}, executeCommandById: () => false };
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const origin = { seq: 11 };
+  const walk = installReviewWalkV3(plugin, { origin });
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await settleWalkChains(plugin);
+
+  assert.match(editor.getValue(), /^- \[ \] #task Reopen me/);
+  assert.equal(walk.calls.continued.length, 1);
+  assert.equal(walk.calls.continued[0].origin, origin);
+  assert.equal(walk.calls.continued[0].outcome, null);
+});
+
+test("Ctrl+Enter swallows the key with no write while the walk is busy", async () => {
+  const source = "- [ ] #task Stay put";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const tasks = installTasksCloseCommand(plugin, editor);
+  const walk = installReviewWalkV3(plugin, { origin: { busy: true } });
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await settleWalkChains(plugin);
+
+  assert.equal(editor.getValue(), source);
+  assert.deepEqual(tasks.executed, []);
+  assert.equal(walk.calls.continued.length, 0);
+});
+
+test("Ctrl+Enter with a null capture behaves exactly like today", async () => {
+  const source = "- [ ] #task Plain close";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const tasks = installTasksCloseCommand(plugin, editor);
+  const walk = installReviewWalkV3(plugin, { origin: null });
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await settleWalkChains(plugin);
+
+  assert.match(editor.getValue(), /^- \[x\] #task Plain close/);
+  assert.deepEqual(tasks.executed, [tasks.doneCommand]);
+  assert.equal(walk.calls.capture, 1);
+  assert.equal(walk.calls.continued.length, 0);
+});
+
+test("Ctrl+Enter with nav v2 or no nav keeps today's behavior", async () => {
+  const setups = [
+    { name: "no nav plugin", plugins: {} },
+    {
+      name: "nav v2",
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: { version: 2, claimReviewWalkCompletion: () => null },
+        },
+      },
+    },
+  ];
+
+  for (const setup of setups) {
+    const source = "- [ ] #task Legacy close";
+    const harness = createInMemoryObsidianApp({ "Daily.md": source });
+    const editor = createTextEditor(source, { line: 0, ch: 4 });
+    const plugin = new TaskStatusCyclerPlugin();
+    attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+    const tasks = installTasksCloseCommand(plugin, editor);
+    plugin.app.plugins = { plugins: setup.plugins };
+    assert.equal(plugin.getReviewWalkApi(), null, setup.name);
+    const action = registerTaskToggleVimAction(plugin);
+
+    action({});
+    await settleWalkChains(plugin);
+
+    assert.match(editor.getValue(), /^- \[x\] #task Legacy close/, setup.name);
+    assert.deepEqual(tasks.executed, [tasks.doneCommand], setup.name);
+  }
+});
+
+test("Ctrl+Enter lets the checklist claim win before capturing", async () => {
+  const source = "## Pomodoros\n- [ ] Focus\n\t- [ ] #task #gtd #pre Check weather";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 2, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const tasks = installTasksCloseCommand(plugin, editor);
+  let claimCalls = 0;
+  let captureCalls = 0;
+  plugin.app.plugins = {
+    plugins: {
+      "bob-navigation-hotkeys": {
+        api: {
+          version: 3,
+          claimReviewWalkCompletion: () => {
+            claimCalls += 1;
+            return Promise.resolve({ ok: true });
+          },
+          reviewWalk: {
+            version: 1,
+            capture: () => {
+              captureCalls += 1;
+              return { seq: 1 };
+            },
+            continue: () => {
+              assert.fail("claimed keys must never continue the walk");
+              return Promise.resolve({ ok: false });
+            },
+          },
+        },
+      },
+    },
+  };
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+
+  assert.equal(claimCalls, 1);
+  assert.equal(captureCalls, 0);
+  assert.equal(editor.getValue(), source);
+  assert.deepEqual(tasks.executed, []);
+});
+
+test("Ctrl+Enter settles the walk with null when the toggle rejects", async () => {
+  const source = "- [ ] #task Broken toggle";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  const origin = { seq: 5 };
+  const walk = installReviewWalkV3(plugin, { origin });
+  plugin.toggleActiveCheckboxOpenDoneAndPropagate = async () => {
+    throw new Error("toggle failed");
+  };
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await settleWalkChains(plugin);
+
+  assert.equal(editor.getValue(), source);
+  assert.equal(walk.calls.continued.length, 1);
+  assert.equal(walk.calls.continued[0].origin, origin);
+  assert.equal(walk.calls.continued[0].outcome, null);
+});
+
 test("Ctrl+Enter with a transcluded task line still uses the Tasks-plugin command for the local write", async () => {
   const originalWindow = global.window;
   const actions = new Map();

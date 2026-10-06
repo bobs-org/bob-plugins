@@ -15,121 +15,6 @@ const REVIEW_GESTURE_LOCK_MS = 3000;
 const REVIEW_ADVANCE_SETTLE_MS = 350;
 const REVIEW_WALK_BUSY = Object.freeze({ busy: true });
 
-function reviewAdvanceLineTaskStatus(line) {
-  try {
-    const status = getObsidianTaskCheckboxStatus(line);
-    return typeof status === "string" ? status.toLowerCase() : null;
-  } catch (error) {
-    return null;
-  }
-}
-
-function reviewAdvanceLineIsClosed(line) {
-  const status = reviewAdvanceLineTaskStatus(line);
-  return status === "x" || status === "-";
-}
-
-// First `YYYY-MM-DD` value of one inline `[field:: date]` / `(field:: date)`
-// on the line, or null. Compared as strings: both sides are validated
-// `YYYY-MM-DD`, so lexicographic order is calendar order.
-function reviewAdvanceLineInlineDate(line, field) {
-  try {
-    const pattern = new RegExp(
-      `[\\[(]\\s*${field}\\s*::\\s*(\\d{4}-\\d{2}-\\d{2})`,
-      "i",
-    );
-    const match = pattern.exec(String(line || ""));
-    return match ? match[1] : null;
-  } catch (error) {
-    return null;
-  }
-}
-
-function reviewAdvanceLineDependsOnIds(line) {
-  const ids = new Set();
-  try {
-    const pattern = /[\[(]\s*dependsOn\s*::([^\]\)\n]*)[\]\)]/gi;
-    let match = pattern.exec(String(line || ""));
-    while (match) {
-      for (const segment of String(match[1] || "").split(",")) {
-        for (const part of String(segment || "").split(/\s+/)) {
-          const id = part.trim();
-          if (id) {
-            ids.add(id);
-          }
-        }
-      }
-      match = pattern.exec(String(line || ""));
-    }
-  } catch (error) {
-    // An unparseable line simply carries no ids below.
-  }
-  return ids;
-}
-
-// Pure outcome predicate: did this gesture's committed write take its row
-// out of today's walk? `tier` is the landing's machine tier, `outcome` one
-// of the `{ kind }` shapes below, and `todayText` is `YYYY-MM-DD`. When in
-// doubt this returns false: a missed advance costs one `]s`, while a wrong
-// advance loses context.
-function reviewOutcomeResolves(tier, outcome, todayText) {
-  try {
-    if (!outcome || typeof outcome !== "object") {
-      return false;
-    }
-    const kind = String(outcome.kind || "");
-    const checklist = tier === "pre" || tier === "post";
-    if (kind === "complete") {
-      return true;
-    }
-    if (kind === "lane" || kind === "link-today") {
-      return !checklist;
-    }
-    if (kind !== "card") {
-      return false;
-    }
-    const before = String(outcome.beforeLine ?? "");
-    const after = String(outcome.afterLine ?? "");
-    if (!after || after === before) {
-      return false;
-    }
-    if (reviewAdvanceLineIsClosed(after)) {
-      return true;
-    }
-    const day =
-      typeof todayText === "string" && /^\d{4}-\d{2}-\d{2}$/.test(todayText.trim())
-        ? todayText.trim()
-        : "";
-    const scheduled = reviewAdvanceLineInlineDate(after, "scheduled");
-    if (scheduled && day && scheduled > day) {
-      return true;
-    }
-    if (checklist) {
-      const beforeIds = reviewAdvanceLineDependsOnIds(before);
-      for (const id of reviewAdvanceLineDependsOnIds(after)) {
-        if (!beforeIds.has(id)) {
-          return true;
-        }
-      }
-      return false;
-    }
-    const fresh = reviewAdvanceLineInlineDate(after, "fresh");
-    return Boolean(fresh && day && fresh === day);
-  } catch (error) {
-    return false;
-  }
-}
-
-// Second line of a stopped advance: `]s → {LABEL}[ · {c} commitments due]`.
-// Shared with the PRE group-end notice so both read the same.
-function formatReviewAdvanceStopLine(options = {}) {
-  const nextLabel = String(options.nextLabel || "").trim();
-  const commitments = Number.isInteger(options.commitments)
-    ? Math.max(0, options.commitments)
-    : 0;
-  return `]s → ${nextLabel}${commitments > 0 ? ` · ${commitments} commitments due` : ""}`;
-}
-
 // nav api v3 `reviewWalk` (`docs/task-dependencies.md` §9). Synchronous
 // `capture` never throws (null off a landing, REVIEW_WALK_BUSY while
 // locked, otherwise a frozen origin that took the gesture lock); async
@@ -260,7 +145,8 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   }
 
   // Accumulate today's answered keys (the accumulator resets on day
-  // change). Never throws.
+  // change). Accepts `{ key, text }` refs and plain string keys (stored
+  // without text). Never throws.
   addReviewAnsweredKeys(keys, dayText) {
     try {
       const day = String(dayText || "");
@@ -269,16 +155,31 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         typeof this.reviewAnsweredKeys !== "object" ||
         this.reviewAnsweredKeys.day !== day
       ) {
-        this.reviewAnsweredKeys = { day, keys: new Set() };
+        this.reviewAnsweredKeys = { day, keys: new Set(), texts: new Map() };
       }
       const set =
         this.reviewAnsweredKeys.keys instanceof Set
           ? this.reviewAnsweredKeys.keys
           : new Set();
       this.reviewAnsweredKeys.keys = set;
-      for (const key of Array.isArray(keys) ? keys : []) {
-        if (typeof key === "string" && key) {
+      const texts =
+        this.reviewAnsweredKeys.texts instanceof Map
+          ? this.reviewAnsweredKeys.texts
+          : new Map();
+      this.reviewAnsweredKeys.texts = texts;
+      for (const item of Array.isArray(keys) ? keys : []) {
+        if (typeof item === "string" && item) {
+          set.add(item);
+        } else if (item && typeof item === "object") {
+          const key = typeof item.key === "string" ? item.key : "";
+          if (!key) {
+            continue;
+          }
           set.add(key);
+          const text = typeof item.text === "string" ? item.text : "";
+          if (text) {
+            texts.set(key, text);
+          }
         }
       }
     } catch (error) {
@@ -345,9 +246,30 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       const queueBefore = this.readFreshnessQueue(
         getReviewFreshnessApi(this.app),
       );
-      const found = queueBefore.find(
-        (candidate) => reviewQueueEntryKey(candidate) === landing.key,
-      );
+      let found = null;
+      try {
+        const textIndex = findReviewResumeIndex(queueBefore, {
+          path: landing.path,
+          text: landing.text,
+          line: cursor.line + 1,
+        });
+        if (textIndex >= 0) {
+          found = queueBefore[textIndex];
+        }
+      } catch (error) {
+        found = null;
+      }
+      if (!found) {
+        found = queueBefore.find(
+          (candidate) => {
+            try {
+              return reviewQueueEntryKey(candidate) === landing.key;
+            } catch (error) {
+              return false;
+            }
+          },
+        );
+      }
       if (!found) {
         return null;
       }
@@ -361,10 +283,23 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         Array.isArray(anchor.keys)
           ? anchor.keys.slice()
           : [];
+      const priorKeyTexts =
+        anchor &&
+        reviewAnchorIsCurrentDay(anchor, todayText) &&
+        anchor.keyTexts &&
+        typeof anchor.keyTexts === "object"
+          ? Object.freeze({ ...anchor.keyTexts })
+          : Object.freeze({});
       const taskText =
         found && typeof found.text === "string" && found.text.trim()
           ? found.text.trim()
           : "task";
+      let rowKey = landing.key;
+      try {
+        rowKey = reviewQueueEntryKey(found);
+      } catch (error) {
+        rowKey = landing.key;
+      }
       return Object.freeze({
         seq: this.reviewGestureSeq,
         epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
@@ -373,6 +308,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         line: cursor.line,
         text: landing.text,
         key: landing.key,
+        rowKey,
         tier: landing.tier || null,
         taskText,
         rank: Number.isInteger(found.rank) ? found.rank : null,
@@ -380,6 +316,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           queueBefore.map((row) => Object.freeze({ ...(row || {}) })),
         ),
         priorKeys: Object.freeze(priorKeys),
+        priorKeyTexts,
       });
     } catch (error) {
       return null;
@@ -454,37 +391,39 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       this.reviewLanding = null;
       const handledRefs =
         input && Array.isArray(input.handledRefs) ? input.handledRefs : [];
-      let matchedKeys = [];
-      try {
-        const matched = matchFreshStampRefs(origin.queueBefore, handledRefs);
-        matchedKeys = Array.isArray(matched.keys) ? matched.keys : [];
-      } catch (error) {
-        matchedKeys = [];
-      }
-      const handled = new Set(
-        [origin.key]
-          .concat(Array.isArray(origin.priorKeys) ? origin.priorKeys : [])
-          .concat(matchedKeys),
+      const answerKeys = collectReviewAnswerKeys(
+        origin,
+        handledRefs,
+        this.reviewAnsweredKeys,
+        todayText,
       );
-      try {
-        const stored = this.reviewAnsweredKeys;
-        if (
-          stored &&
-          typeof stored === "object" &&
-          stored.day === todayText &&
-          stored.keys instanceof Set
-        ) {
-          for (const key of stored.keys) {
-            handled.add(key);
-          }
-        }
-      } catch (error) {
-        // The accumulator is advisory; the handled set above still walks.
-      }
-      this.addReviewAnsweredKeys(Array.from(handled), todayText);
+      const positionKeys = Array.isArray(answerKeys.positionKeys)
+        ? answerKeys.positionKeys
+        : [];
+      const excludeKeys = Array.isArray(answerKeys.excludeKeys)
+        ? answerKeys.excludeKeys
+        : [];
+      const handled =
+        answerKeys.handled instanceof Set
+          ? answerKeys.handled
+          : new Set(positionKeys.concat(excludeKeys));
+      this.addReviewAnsweredKeys(
+        Array.isArray(answerKeys.answeredRefs) ? answerKeys.answeredRefs : [],
+        todayText,
+      );
       const before = Array.isArray(origin.queueBefore) ? origin.queueBefore : [];
+      const originRowKey =
+        typeof origin.rowKey === "string" && origin.rowKey
+          ? origin.rowKey
+          : origin.key;
       const landedEntry = before.find(
-        (row) => reviewQueueEntryKey(row) === origin.key,
+        (row) => {
+          try {
+            return reviewQueueEntryKey(row) === originRowKey;
+          } catch (error) {
+            return false;
+          }
+        },
       );
       const entryRank = Number.isInteger(origin.rank)
         ? origin.rank
@@ -493,9 +432,10 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           : 1;
       const anchor = buildReviewAnchor(
         before,
-        Array.from(handled),
+        positionKeys,
         entryRank,
         todayText,
+        { excludeKeys },
       );
       this.reviewAnchor = anchor;
       const remaining = reviewWalkRemaining(before, handled);
@@ -964,9 +904,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           : null,
     });
     const destTier = reviewEntryMachineTier(plan.entry);
-    const handled = new Set(
-      anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
-    );
+    const handled = reviewVerifiedHandledKeys(queue, anchor);
     const remaining = reviewWalkRemaining(queue, handled);
     // A forward step out of the commitments into ROTTEN or POST names
     // the boundary (v4 tier entries only; v3 keeps the plain jump

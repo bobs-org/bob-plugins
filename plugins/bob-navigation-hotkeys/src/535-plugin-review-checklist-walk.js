@@ -205,14 +205,37 @@ class BobNavigationHotkeysChecklistWalkMixin {
       Array.isArray(this.reviewAnchor.keys)
         ? this.reviewAnchor.keys
         : [];
-    const handled = new Set(prior);
-    handled.add(reviewQueueEntryKey(entry));
+    const priorKeyTexts =
+      this.reviewAnchor &&
+      reviewAnchorIsCurrentDay(this.reviewAnchor, todayText) &&
+      this.reviewAnchor.keyTexts &&
+      typeof this.reviewAnchor.keyTexts === "object"
+        ? this.reviewAnchor.keyTexts
+        : {};
+    let verifiedPrior = [];
+    try {
+      verifiedPrior = verifyReviewKeyRefs(
+        queueBefore,
+        prior.map((key) => ({
+          key,
+          text:
+            typeof priorKeyTexts[key] === "string" ? priorKeyTexts[key] : "",
+        })),
+      );
+    } catch (error) {
+      verifiedPrior = [];
+    }
+    const entryKey = reviewQueueEntryKey(entry);
+    const positionSet = new Set([entryKey]);
+    const handled = new Set([...positionSet, ...verifiedPrior]);
+    const scanHandled = new Set(prior);
+    scanHandled.add(entryKey);
     let nextPlan = null;
     if (advance && tier !== "post" && !withinGroup) {
       nextPlan = planReviewJump(queueBefore, {
         direction: 1,
         cursor: { path: filePath, line: entry.line, text: entry.originalMarkdown },
-        anchor: buildReviewAnchor(queueBefore, Array.from(handled), entry.rank, todayText),
+        anchor: buildReviewAnchor(queueBefore, Array.from(positionSet), entry.rank, todayText, { excludeKeys: verifiedPrior }),
         todayText,
       });
     }
@@ -229,7 +252,10 @@ class BobNavigationHotkeysChecklistWalkMixin {
     }
 
     this.reviewLanding = null;
-    this.addReviewAnsweredKeys([reviewQueueEntryKey(entry)], todayText);
+    this.addReviewAnsweredKeys(
+      [{ key: entryKey, text: entry.originalMarkdown }],
+      todayText,
+    );
     // The pre-landing cursor for the `<C-o>` jump record: the completed row.
     const jumpOrigin = {
       path: filePath,
@@ -243,7 +269,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
     const groupWalk = withinGroup && tier === "pre" || tier === "post";
     let liveGroup = { after: [], before: [] };
     if (groupWalk) {
-      const scan = reviewChecklistGroupScan(queueBefore, entry, handled);
+      const scan = reviewChecklistGroupScan(queueBefore, entry, scanHandled);
       const liveEntries = await this.filterLiveReviewEntries(
         scan.after.concat(scan.before),
         cm,
@@ -259,18 +285,20 @@ class BobNavigationHotkeysChecklistWalkMixin {
       const liveGroupKeys = new Set(
         liveGroup.after.concat(liveGroup.before).map((row) => reviewQueueEntryKey(row)),
       );
-      const scanned = reviewChecklistGroupScan(queueBefore, entry, handled);
+      const scanned = reviewChecklistGroupScan(queueBefore, entry, scanHandled);
       for (const row of scanned.after.concat(scanned.before)) {
         if (!liveGroupKeys.has(reviewQueueEntryKey(row))) {
+          positionSet.add(reviewQueueEntryKey(row));
           handled.add(reviewQueueEntryKey(row));
         }
       }
     }
     this.reviewAnchor = buildReviewAnchor(
       queueBefore,
-      Array.from(handled),
+      Array.from(positionSet),
       entry.rank,
       todayText,
+      { excludeKeys: verifiedPrior },
     );
     const remaining = reviewWalkRemaining(queueBefore, handled);
 
@@ -329,9 +357,10 @@ class BobNavigationHotkeysChecklistWalkMixin {
     if (withinGroup && tier === "pre") {
       const anchor = buildReviewAnchor(
         queueBefore,
-        Array.from(handled),
+        Array.from(positionSet),
         entry.rank,
         todayText,
+        { excludeKeys: verifiedPrior },
       );
       const next = planReviewJump(queueBefore, {
         direction: 1,

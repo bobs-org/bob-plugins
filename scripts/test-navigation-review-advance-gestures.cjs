@@ -1005,3 +1005,119 @@ test("Ctrl+Shift+M off a landing behaves exactly as today", async () => {
   assert.equal(notices.length, 1);
   assert.match(notices[0], /Moved 1 task to Area/);
 });
+
+test("answer, move, answer stays in queue order past an accumulator alias", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["A", "B", "C", "D"]), activePath: "walk.md" });
+  const { plugin, editor, queueState } = fixture;
+  await land(fixture, "first");
+  const firstKey = plugin.reviewLanding.key;
+  const firstText = plugin.reviewLanding.text;
+
+  // 1. Answer row A with a lane commit; the accumulator records A's key.
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "an origin is captured");
+  const answered = await plugin.continueReviewWalkAfter(origin, {
+    kind: "lane",
+    handledRefs: [{ path: "walk.md", line: 0, raw: firstText }],
+    notice: "Ready · 1 task",
+  });
+  assert.deepEqual(answered, { ok: true, advanced: true, stopped: false });
+  assert.equal(plugin.reviewLanding.key, "walk.md:2", "lands on B");
+  clearNotices();
+
+  // 2. A 2-line move above a later row shifts lines: A is truly gone and
+  // C inherits A's old line key with different text.
+  const bRow = queueState.find((row) => row.text === "B");
+  const cRow = queueState.find((row) => row.text === "C");
+  const dRow = queueState.find((row) => row.text === "D");
+  queueState.splice(
+    0,
+    queueState.length,
+    { ...bRow },
+    { ...cRow, line: 1, key: firstKey, rank: 1, tierRank: 1, tierTotal: 3 },
+    { ...dRow },
+  );
+
+  // 3. Answer the landed row B; the advance must land on C, not past it.
+  plugin.advanceReviewClock(400);
+  const second = plugin.captureReviewGesture(editor);
+  assert.ok(second && !second.busy, "the landed row is captured");
+  const advanced = await plugin.continueReviewWalkAfter(second, {
+    kind: "lane",
+    handledRefs: [{ path: "walk.md", line: bRow.line - 1, raw: bRow.originalMarkdown }],
+    notice: "Ready · 1 task",
+  });
+  assert.deepEqual(advanced, { ok: true, advanced: true, stopped: false });
+  assert.equal(
+    plugin.reviewLanding.text,
+    cRow.originalMarkdown,
+    "the aliased row is still visited",
+  );
+  clearNotices();
+
+  // A later ]s still visits D.
+  plugin.advanceReviewClock(400);
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.equal(plugin.reviewLanding.text, dRow.originalMarkdown, "D follows C");
+});
+
+test("a move park ignores a stale accumulator alias", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["A", "B", "C", "D", "E"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  // Seed an accumulator key that now names a different row.
+  plugin.addReviewAnsweredKeys([{ key: "walk.md:4", text: "- [*] #task stale" }], DATE);
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "an origin is captured");
+  assert.equal(plugin.parkReviewWalkAfterMove(origin, []), true, "the park lands");
+  assert.equal(plugin.reviewLanding, null, "the landing is consumed");
+  const anchor = plugin.reviewAnchor;
+  assert.ok(anchor && anchor.resumeNext, "a resume is parked");
+  assert.equal(anchor.resumeNext.text, markFor("next", "B"), "resume skips to B, not past D");
+  plugin.advanceReviewClock(400);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.equal(plugin.reviewLanding.text, markFor("next", "B"), "the next ]s lands on B");
+});
+
+test("a re-indexed origin still advances from the landed row", async () => {
+  const rows = [
+    laneEntry({ tier: "next", path: "walk.md", line: 2, text: "A", rank: 1, tierRank: 1, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 3, text: "B", rank: 2, tierRank: 2, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 4, text: "C", rank: 3, tierRank: 3, tierTotal: 3 }),
+  ];
+  const fixture = makePlugin({ rows, activePath: "walk.md" });
+  const { plugin } = fixture;
+  const editor = fixture.editors.get("walk.md");
+  // The note opens with one filler line above the queue rows.
+  editor.setCursor(1, 0);
+  await land(fixture, "first");
+  assert.equal(plugin.reviewLanding.key, "walk.md:2", "landed on A");
+
+  // A line above is removed: every row shifts up, so landing.key walk.md:2
+  // now names B while the cursor still sits on A's text.
+  const lines = editor.content.split("\n");
+  lines.splice(0, 1);
+  editor.content = lines.join("\n");
+  editor.setCursor(0, 0);
+  const aRow = fixture.queueState.find((row) => row.text === "A");
+  const bRow = fixture.queueState.find((row) => row.text === "B");
+  const cRow = fixture.queueState.find((row) => row.text === "C");
+  fixture.queueState.splice(
+    0,
+    fixture.queueState.length,
+    { ...aRow, line: 1, key: "walk.md:1" },
+    { ...bRow, line: 2, key: "walk.md:2" },
+    { ...cRow, line: 3, key: "walk.md:3" },
+  );
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "the landed row is captured by text");
+  assert.equal(origin.rowKey, "walk.md:1", "the origin follows the text, not the stale key");
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "lane",
+    handledRefs: [{ path: "walk.md", line: 0, raw: aRow.originalMarkdown }],
+    notice: "Ready · 1 task",
+  });
+  assert.deepEqual(result, { ok: true, advanced: true, stopped: false });
+  assert.equal(plugin.reviewLanding.text, bRow.originalMarkdown, "advances to B, not past it");
+});

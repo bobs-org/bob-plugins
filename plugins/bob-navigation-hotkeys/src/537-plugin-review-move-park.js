@@ -80,13 +80,14 @@ function findReviewResumeIndex(list, ref) {
   }
 }
 
-function buildReviewMoveAnchor(queueBefore, handledKeys, fallbackRank, day) {
+function buildReviewMoveAnchor(queueBefore, handledKeys, fallbackRank, day, options = {}) {
   try {
     const anchor = buildReviewAnchor(
       queueBefore,
       handledKeys,
       fallbackRank,
       day,
+      options && typeof options === "object" ? options : {},
     );
     if (!anchor || typeof anchor !== "object") {
       return null;
@@ -102,9 +103,16 @@ function buildReviewMoveAnchor(queueBefore, handledKeys, fallbackRank, day) {
     let resumeNext = null;
     try {
       const afterKeys = Array.isArray(anchor.afterKeys) ? anchor.afterKeys : [];
-      if (afterKeys.length > 0) {
-        const found = list.find((entry) => keyOf(entry) === afterKeys[0]);
-        resumeNext = found ? reviewResumeRef(found) : null;
+      const handledSet = new Set(Array.isArray(anchor.keys) ? anchor.keys : []);
+      for (const key of afterKeys) {
+        if (handledSet.has(key)) {
+          continue;
+        }
+        const found = list.find((entry) => keyOf(entry) === key);
+        if (found) {
+          resumeNext = reviewResumeRef(found);
+          break;
+        }
       }
     } catch (error) {
       resumeNext = null;
@@ -218,42 +226,28 @@ class BobNavigationHotkeysReviewMoveMixin {
       }
       this.reviewLanding = null;
       const refs = Array.isArray(handledRefs) ? handledRefs : [];
-      let matchedKeys = [];
-      try {
-        const matched = matchFreshStampRefs(origin.queueBefore, refs);
-        matchedKeys = Array.isArray(matched.keys) ? matched.keys : [];
-      } catch (error) {
-        matchedKeys = [];
-      }
-      const handled = new Set(
-        [origin.key]
-          .concat(Array.isArray(origin.priorKeys) ? origin.priorKeys : [])
-          .concat(matchedKeys),
+      const answerKeys = collectReviewAnswerKeys(
+        origin,
+        refs,
+        this.reviewAnsweredKeys,
+        todayText,
       );
-      try {
-        const stored = this.reviewAnsweredKeys;
-        if (
-          stored &&
-          typeof stored === "object" &&
-          stored.day === todayText &&
-          stored.keys instanceof Set
-        ) {
-          for (const key of stored.keys) {
-            handled.add(key);
-          }
-        }
-      } catch (error) {
-        // The accumulator is advisory; the handled set above still walks.
-      }
+      const positionKeys = Array.isArray(answerKeys.positionKeys)
+        ? answerKeys.positionKeys
+        : [];
+      const excludeKeys = Array.isArray(answerKeys.excludeKeys)
+        ? answerKeys.excludeKeys
+        : [];
       try {
         const before = Array.isArray(origin.queueBefore)
           ? origin.queueBefore
           : [];
         const anchor = buildReviewMoveAnchor(
           before,
-          Array.from(handled),
+          positionKeys,
           origin.rank,
           origin.day,
+          { excludeKeys },
         );
         if (anchor !== null) {
           this.reviewAnchor = anchor;

@@ -1069,3 +1069,149 @@ test("api: reviewWalk v3 is frozen with version 1, degrades null, never throws",
     "a malformed origin refuses without throwing",
   );
 });
+
+test("walk identity: a stale accumulator key never moves the anchor", () => {
+  const { buildReviewAnchor, planReviewJump, reviewVerifiedHandledKeys } = helpers;
+  const before = [
+    laneEntry({ tier: "next", path: "a.md", line: 1, text: "A1", rank: 1, tierRank: 1, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "a.md", line: 2, text: "A2", rank: 2, tierRank: 2, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "a.md", line: 3, text: "A3", rank: 3, tierRank: 3, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "b.md", line: 4, text: "B1", rank: 4, tierRank: 4, tierTotal: 6 }),
+    laneEntry({ tier: "next", path: "b.md", line: 5, text: "B2", rank: 5, tierRank: 5, tierTotal: 6 }),
+    laneEntry({ tier: "next", path: "b.md", line: 6, text: "B3", rank: 6, tierRank: 6, tierTotal: 6 }),
+  ];
+  const anchor = buildReviewAnchor(before, ["a.md:1"], 1, DATE, {
+    excludeKeys: ["b.md:5"],
+  });
+  assert.ok(anchor, "an anchor is built");
+  // A line shift re-keys the live queue: b.md:5 now names a different row.
+  const live = before.map((row) => ({ ...row }));
+  live[4] = { ...live[4], originalMarkdown: markFor("next", "B2 shifted") };
+  const verified = reviewVerifiedHandledKeys(live, anchor);
+  assert.ok(verified.has("a.md:1"), "the answered row stays handled");
+  assert.ok(!verified.has("b.md:5"), "the stale key does not exclude its new row");
+  const plan = planReviewJump(live, { direction: 1, cursor: null, anchor, todayText: DATE });
+  assert.equal(plan.kind, "jump");
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "A2"), "lands on row 2");
+  assert.equal(plan.rank, 1, "rank 1 of the remaining rows");
+});
+
+test("walk identity: a lagging answered row stays excluded", () => {
+  const { buildReviewAnchor, planReviewJump } = helpers;
+  const before = nextQueue(["One", "Two", "Three"]);
+  const anchor = buildReviewAnchor(before, ["walk.md:1"], 1, DATE, { excludeKeys: [] });
+  assert.ok(anchor, "an anchor is built");
+  // The post-write cache still lists the answered row with its pre-write text.
+  const plan = planReviewJump(before.map((row) => ({ ...row })), {
+    direction: 1,
+    cursor: null,
+    anchor,
+    todayText: DATE,
+  });
+  assert.equal(plan.kind, "jump");
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "Two"), "lands on the next live row");
+});
+
+test("walk identity: a line-shifting answer lands on the true successor by text", () => {
+  const { buildReviewAnchor, planReviewJump } = helpers;
+  const pre = ["R1", "R2", "R3", "R4", "R5", "R6"].map((text, index) =>
+    laneEntry({ tier: "next", path: "a.md", line: index + 1, text, rank: index + 1, tierRank: index + 1, tierTotal: 6 }),
+  );
+  const anchor = buildReviewAnchor(pre, ["a.md:2"], 2, DATE, { excludeKeys: [] });
+  assert.ok(anchor, "an anchor is built");
+  // The answered row is removed and every later row shifts up one line,
+  // so each old line key now names the row after it.
+  const post = [pre[0], pre[2], pre[3], pre[4], pre[5]].map((row, index) => ({
+    ...row,
+    line: index + 1,
+    key: `a.md:${index + 1}`,
+    rank: index + 1,
+    tierRank: index + 1,
+    tierTotal: 5,
+  }));
+  const plan = planReviewJump(post, { direction: 1, cursor: null, anchor, todayText: DATE });
+  assert.equal(plan.kind, "jump");
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "R3"), "lands on the true successor, not R4");
+});
+
+test("walk identity: legacy anchors without text resolve as before", () => {
+  const { buildReviewAnchor, planReviewJump } = helpers;
+  const rows = [
+    { key: "walk.md:1", path: "walk.md", line: 1, rank: 1 },
+    { key: "walk.md:2", path: "walk.md", line: 2, rank: 2 },
+    { key: "walk.md:3", path: "walk.md", line: 3, rank: 3 },
+  ];
+  const anchor = buildReviewAnchor(rows, ["walk.md:1"], 1, DATE);
+  assert.ok(anchor, "a textless anchor is built");
+  assert.deepEqual(anchor.keyTexts, {}, "no texts recorded");
+  const plan = planReviewJump(rows.map((row) => ({ ...row })), {
+    direction: 1,
+    cursor: null,
+    anchor,
+    todayText: DATE,
+  });
+  assert.equal(plan.kind, "jump");
+  assert.equal(plan.entry.key, "walk.md:2", "key-only resolution lands next");
+
+  const handBuilt = { keys: ["walk.md:1"], afterKeys: ["walk.md:2", "walk.md:3"], beforeKeys: [] };
+  const handPlan = planReviewJump(rows.map((row) => ({ ...row })), {
+    direction: 1,
+    cursor: null,
+    anchor: handBuilt,
+    todayText: DATE,
+  });
+  assert.equal(handPlan.entry.key, "walk.md:2", "hand-built anchors keep the key-only path");
+});
+
+test("walk identity: matchFreshStampRefs prefers text over line", () => {
+  const { matchFreshStampRefs } = helpers;
+  const queue = [
+    laneEntry({ tier: "next", path: "walk.md", line: 3, text: "Target", rank: 1, tierRank: 1, tierTotal: 2 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 7, text: "Other", rank: 2, tierRank: 2, tierTotal: 2 }),
+  ];
+  // The ref's line (0-based 6 -> line 7) now holds "Other", which ranks
+  // earlier than nothing here but the text names "Target" elsewhere.
+  const matched = matchFreshStampRefs(queue, [
+    { path: "walk.md", line: 6, raw: markFor("next", "Target") },
+  ]);
+  assert.deepEqual(matched.keys, ["walk.md:3"], "the same-text row wins over the line hit");
+});
+
+test("walk identity: collectReviewAnswerKeys separates position from exclusion", () => {
+  const { collectReviewAnswerKeys } = helpers;
+  const queue = nextQueue(["One", "Two", "Three"]);
+  const origin = {
+    key: "walk.md:1",
+    rowKey: "walk.md:1",
+    priorKeys: ["walk.md:2", "walk.md:3"],
+    priorKeyTexts: {
+      "walk.md:2": markFor("next", "Two"),
+      "walk.md:3": "stale text",
+    },
+    queueBefore: queue.map((row) => ({ ...row })),
+  };
+  const stored = {
+    day: DATE,
+    keys: new Set(["walk.md:2", "walk.md:3"]),
+    texts: new Map([
+      ["walk.md:2", markFor("next", "Two")],
+      ["walk.md:3", "other stale text"],
+    ]),
+  };
+  const result = collectReviewAnswerKeys(
+    origin,
+    [{ path: "walk.md", line: 0, raw: markFor("next", "One") }],
+    stored,
+    DATE,
+  );
+  assert.deepEqual(new Set(result.positionKeys), new Set(["walk.md:1"]), "position is the origin plus matched refs");
+  assert.ok(result.excludeKeys.includes("walk.md:2"), "verified priors are excluded");
+  assert.ok(!result.excludeKeys.includes("walk.md:3"), "unverified keys are dropped");
+  assert.ok(result.handled.has("walk.md:1") && result.handled.has("walk.md:2"), "handled covers both");
+  assert.ok(!result.handled.has("walk.md:3"), "dropped keys stay in the walk");
+  const answered = new Map(result.answeredRefs.map((ref) => [ref.key, ref.text]));
+  assert.equal(answered.get("walk.md:1"), markFor("next", "One"), "answered refs carry line text");
+
+  const failed = collectReviewAnswerKeys(null, null, null, DATE);
+  assert.deepEqual(failed.positionKeys, [], "garbage input never throws");
+});

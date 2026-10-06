@@ -745,50 +745,6 @@ function matchReviewChecklistCursor(queue, cursor) {
   return reviewIsChecklistTier(reviewEntryMachineTier(entry)) ? entry : null;
 }
 
-// Walk anchor: where the walk is. Recorded on every successful landing
-// and every Alt+F / Ctrl+Alt+F stamp. Holds the handled entry keys, the
-// handled task's path/line/tier, and the ordered keys after and before
-// them in the queue they came from, so `]s` after an Alt+N release,
-// Ctrl+Shift+Enter, or a roll continues from the successor (and `[s` from
-// the predecessor) instead of restarting at rank 1.
-function buildReviewAnchor(queue, handledKeys, fallbackRank, day) {
-  const list = Array.isArray(queue) ? queue.slice() : [];
-  const keys = list.map((entry) => reviewQueueEntryKey(entry));
-  const handled = new Set(Array.isArray(handledKeys) ? handledKeys : []);
-  const positions = [];
-  keys.forEach((key, index) => {
-    if (handled.has(key)) {
-      positions.push(index);
-    }
-  });
-  if (positions.length === 0) {
-    return null;
-  }
-  const at = Math.max(...positions);
-  const holder = list[at];
-  const afterKeys = keys.slice(at + 1);
-  const beforeKeys = keys.slice(0, at).filter((key) => !handled.has(key));
-  const rank =
-    holder && Number.isInteger(holder.rank)
-      ? holder.rank
-      : Number.isInteger(fallbackRank)
-        ? fallbackRank
-        : at + 1;
-  const dayText =
-    typeof day === "string" && day.trim() ? day.trim() : null;
-  return Object.freeze({
-    keys: Object.freeze(Array.from(handled)),
-    rank,
-    count: handled.size,
-    path: holder && typeof holder.path === "string" ? holder.path : "",
-    line: holder && Number.isInteger(holder.line) ? holder.line : null,
-    tier: reviewEntryMachineTier(holder) || null,
-    day: dayText,
-    afterKeys: Object.freeze(afterKeys),
-    beforeKeys: Object.freeze(beforeKeys),
-  });
-}
-
 // Remaining walk counts after excluding handled keys: `{ commitments,
 // rotten, post, pre }`. Commitments are the PRE/NEW/PROJECTS/PENDING/
 // NEXT/RETURNED/REFERENCES tiers. POST is the closing tier.
@@ -867,61 +823,6 @@ function buildReviewBoundaryNotice(options = {}) {
     return `${line} · ]S closes the review`;
   }
   return line;
-}
-
-// Resolve one anchor step over `remaining` (the queue minus the handled
-// keys). Forward takes the first surviving `afterKeys` entry, backward
-// the last surviving `beforeKeys` entry, wrapping to the first/last
-// remaining entry. Ranks count over `remaining` (1-based).
-function resolveReviewAnchorTarget(remaining, anchor, direction) {
-  const rest = Array.isArray(remaining) ? remaining : [];
-  if (rest.length === 0) {
-    return null;
-  }
-  const atRest = (key) =>
-    rest.findIndex((entry) => reviewQueueEntryKey(entry) === key);
-  if (direction < 0) {
-    const before = anchor && Array.isArray(anchor.beforeKeys)
-      ? anchor.beforeKeys
-      : [];
-    for (let index = before.length - 1; index >= 0; index -= 1) {
-      const found = atRest(before[index]);
-      if (found >= 0) {
-        return Object.freeze({
-          entry: rest[found],
-          rank: found + 1,
-          total: rest.length,
-          wrapped: false,
-        });
-      }
-    }
-    return Object.freeze({
-      entry: rest[rest.length - 1],
-      rank: rest.length,
-      total: rest.length,
-      wrapped: true,
-    });
-  }
-  const after = anchor && Array.isArray(anchor.afterKeys)
-    ? anchor.afterKeys
-    : [];
-  for (const key of after) {
-    const found = atRest(key);
-    if (found >= 0) {
-      return Object.freeze({
-        entry: rest[found],
-        rank: found + 1,
-        total: rest.length,
-        wrapped: false,
-      });
-    }
-  }
-  return Object.freeze({
-    entry: rest[0],
-    rank: 1,
-    total: rest.length,
-    wrapped: true,
-  });
 }
 
 // After the one-step landing, move `repeat - 1` further indexes on the

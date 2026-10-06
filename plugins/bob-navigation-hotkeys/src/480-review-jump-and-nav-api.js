@@ -47,9 +47,7 @@ function planReviewJump(queue, options = {}) {
   if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
     anchor = null;
   }
-  const handledKeys = new Set(
-    anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
-  );
+  const handledKeys = reviewVerifiedHandledKeys(list, anchor);
   const hasAnchorShape =
     Boolean(anchor) &&
     (Array.isArray(anchor.afterKeys) || Array.isArray(anchor.beforeKeys));
@@ -742,55 +740,6 @@ function buildFreshStampNotice(details = {}) {
     ? ` · ${formatCountLabel(workLogWrittenCount, "Work Log")}`
     : "";
   return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}${workLogTail}`;
-}
-
-// Match stamped `{ path, line, raw }` refs (0-based lines) against a
-// pre-write queue read: the keys still present, the highest pre-write rank,
-// and how many were NEW. Every queued entry is due, so `count` is also the
-// number of due tasks just stamped.
-function matchFreshStampRefs(queueBefore, refs) {
-  const list = Array.isArray(queueBefore) ? queueBefore : [];
-  const targets = Array.isArray(refs) ? refs : [];
-  const keys = [];
-  let rank = 0;
-  let newCount = 0;
-  for (const ref of targets) {
-    if (!ref || typeof ref !== "object") {
-      continue;
-    }
-    const refPath = String(ref.path || "");
-    const refLine = Math.floor(numericOrDefault(ref.line, Number.NaN));
-    const refRaw = String(ref.raw || "");
-    const foundIndex = list.findIndex((entry) => {
-      if (!entry || String(entry.path || "") !== refPath) {
-        return false;
-      }
-      if (Number.isInteger(refLine) && Number(entry.line) === refLine + 1) {
-        return true;
-      }
-      return Boolean(refRaw) && String(entry.originalMarkdown || "") === refRaw;
-    });
-    if (foundIndex < 0) {
-      continue;
-    }
-    const found = list[foundIndex];
-    keys.push(reviewQueueEntryKey(found));
-    const foundRank = Number.isInteger(found.rank)
-      ? found.rank
-      : foundIndex + 1;
-    if (foundRank > rank) {
-      rank = foundRank;
-    }
-    if (found.state === "new") {
-      newCount += 1;
-    }
-  }
-  return Object.freeze({
-    keys: Object.freeze(keys),
-    rank,
-    count: keys.length,
-    newCount,
-  });
 }
 
 // True when the freshness api can count keeps: namespace v5 with the sole

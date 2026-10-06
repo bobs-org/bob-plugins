@@ -332,7 +332,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.reviewLandingEpoch = 0;
     this.reviewGestureSeq = 0;
     this.reviewWalkLock = null;
-    this.reviewAnsweredKeys = { day: null, keys: new Set() };
+    this.reviewAnsweredKeys = { day: null, keys: new Set(), texts: new Map() };
     // At most one review-walk decision card at a time; the guard also
     // prevents nested cards.
     this.activeFreshnessDecayCard = null;

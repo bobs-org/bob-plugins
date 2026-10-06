@@ -724,13 +724,35 @@ function insertTaskMoveBlocks(content, blocks, destinationKind) {
       ? nonblankBody[0]
       : -1;
 
+  const lineContexts = getMarkdownLineContextsForLines(source.lines);
+  const isPlaceholderLine = (lineIndex) =>
+    PROJECT_SOURCE_TASK_LINE_RE.test(source.lines[lineIndex]) &&
+    String(source.lines[lineIndex] || "").includes(PROJECT_TASKS_PLACEHOLDER);
+  let sectionHasRealTask = false;
+  for (let index = headerIndex + 1; index < sectionEnd; index += 1) {
+    if (index === placeholderIndex || isPlaceholderLine(index)) {
+      continue;
+    }
+    if (isObsidianTaskAtLine(text, index, lineContexts, source.lines)) {
+      sectionHasRealTask = true;
+      break;
+    }
+  }
+
   let nextLines;
   let insertedLine;
   if (placeholderIndex !== -1) {
-    nextLines = source.lines
-      .slice(0, placeholderIndex)
-      .concat(movedLines, source.lines.slice(placeholderIndex + 1));
-    insertedLine = placeholderIndex;
+    const prefix = source.lines.slice(0, placeholderIndex);
+    const needsSeparator =
+      prefix.length > 0 &&
+      String(prefix[prefix.length - 1] || "").trim() !== "";
+    const separator = needsSeparator ? [""] : [];
+    nextLines = prefix.concat(
+      separator,
+      movedLines,
+      source.lines.slice(placeholderIndex + 1),
+    );
+    insertedLine = placeholderIndex + separator.length;
   } else {
     let insertAt = sectionEnd;
     while (
@@ -740,8 +762,12 @@ function insertTaskMoveBlocks(content, blocks, destinationKind) {
       insertAt -= 1;
     }
     const insertion = [];
-    if (insertAt === headerIndex + 1) {
-      insertion.push("");
+    if (!sectionHasRealTask) {
+      if (insertAt === headerIndex + 1) {
+        insertion.push("");
+      } else if (String(source.lines[insertAt - 1] || "").trim() !== "") {
+        insertion.push("");
+      }
     }
     insertion.push(...movedLines);
     nextLines = source.lines

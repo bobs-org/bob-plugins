@@ -733,6 +733,32 @@ test("convertProjectNoteToTask restores the parent task, rewrites links, and tra
   assert.match(notices.at(-1), /Converted .* into a task in Health/);
 });
 
+test("convertProjectNoteToTask separates the restored task from a count-only parent section", async () => {
+  notices.length = 0;
+  const harness = createProjectReversalHarness({
+    projectContent: workedExampleProjectNote(),
+    parentContent: workedExampleParentNote({ tasks: ["Task count: 0"] }),
+  });
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(
+      harness.editor,
+      harness.view,
+    ),
+    true,
+  );
+  const lines = harness.contents["Health.md"].split("\n");
+  assert.equal(harness.focused.length, 1);
+  const anchor = harness.focused[0].anchor;
+  assert.match(
+    lines[anchor.line],
+    /^[-*] \[.\] #task Build a gym habit.*\^gym-habit$/,
+  );
+  assert.equal(lines[anchor.line - 1], "");
+  assert.equal(lines[anchor.line - 2], "Task count: 0");
+  assert.equal(lines[anchor.line], anchor.text);
+  assert.deepEqual(harness.trashCalls, ["Health_gym_habit.md"]);
+});
+
 test("createProjectNoteFromTask dispatches reverse only on a real ^prj line", async () => {
   notices.length = 0;
   const forward = createProjectReversalHarness({

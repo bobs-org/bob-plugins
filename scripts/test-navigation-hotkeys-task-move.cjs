@@ -942,3 +942,314 @@ test("runtime task move guards destination, auxiliary, and rollback failures", a
   assert.match(rollbackFailure.notice, /recoverable duplicates.*Dest\.md/);
 });
 
+test("task move insertion separates the section's first task from preamble and placeholders", () => {
+  const first = "- [ ] #task Moved ^moved";
+  const moved = [[first]];
+  const cases = [
+    {
+      name: "bare empty heading at EOF",
+      destination: ["## Tasks"].join("\n"),
+      expected: ["## Tasks", "", first].join("\n"),
+    },
+    {
+      name: "bare empty heading before another heading",
+      destination: ["## Tasks", "## Notes", "Keep"].join("\n"),
+      expected: ["## Tasks", "", first, "## Notes", "Keep"].join("\n"),
+    },
+    {
+      name: "count-only section at EOF",
+      destination: ["## Tasks", "Task count: 0", ""].join("\n"),
+      expected: ["## Tasks", "Task count: 0", "", first, ""].join("\n"),
+    },
+    {
+      name: "count-only section before another heading",
+      destination: ["## Tasks", "Task count: 0", "", "## Notes", "Keep"].join("\n"),
+      expected: ["## Tasks", "Task count: 0", "", first, "", "## Notes", "Keep"].join(
+        "\n",
+      ),
+    },
+    {
+      name: "count-only section without a terminal newline",
+      destination: ["## Tasks", "Task count: 0"].join("\n"),
+      expected: ["## Tasks", "Task count: 0", "", first].join("\n"),
+    },
+    {
+      name: "inline-code count preamble",
+      destination: ["## Tasks", "`Task count: 2`", ""].join("\n"),
+      expected: ["## Tasks", "`Task count: 2`", "", first, ""].join("\n"),
+    },
+    {
+      name: "closed fenced preamble holding a fake task",
+      destination: ["## Tasks", "```dataview", "- [ ] #task fake", "```", ""].join("\n"),
+      expected: ["## Tasks", "```dataview", "- [ ] #task fake", "```", "", first, ""].join(
+        "\n",
+      ),
+    },
+    {
+      name: "whitespace-only blank after the preamble",
+      destination: ["## Tasks", "Task count: 0", "   ", ""].join("\n"),
+      expected: ["## Tasks", "Task count: 0", "", first, "   ", ""].join("\n"),
+    },
+    {
+      name: "un-separated placeholder replacement",
+      destination: ["## Tasks", "- [ ] #task (REPLACE WITH TASK DESCRIPTION)", ""].join("\n"),
+      expected: ["## Tasks", "", first, ""].join("\n"),
+    },
+    {
+      name: "placeholder replacement keeps its existing blank",
+      destination: ["## Tasks", "", "- [ ] #task (REPLACE WITH TASK DESCRIPTION)", ""].join(
+        "\n",
+      ),
+      expected: ["## Tasks", "", first, ""].join("\n"),
+    },
+    {
+      name: "count preamble plus placeholder keeps the template and separates the move",
+      destination: ["## Tasks", "Task count: 0", "- [ ] #task (REPLACE WITH TASK DESCRIPTION)", ""].join(
+        "\n",
+      ),
+      expected: [
+        "## Tasks",
+        "Task count: 0",
+        "- [ ] #task (REPLACE WITH TASK DESCRIPTION)",
+        "",
+        first,
+        "",
+      ].join("\n"),
+    },
+  ];
+  for (const { name, destination, expected } of cases) {
+    const result = helpers.insertTaskMoveBlocks(destination, moved, "project");
+    assert.equal(result.valid, true, name);
+    assert.equal(result.content, expected, name);
+    assert.equal(result.content.split(/\r?\n/)[result.insertedLine], first, name);
+  }
+
+  const crlfDestination = ["## Tasks", "Task count: 0", "", ""].join("\r\n");
+  const crlfResult = helpers.insertTaskMoveBlocks(crlfDestination, moved, "project");
+  assert.equal(crlfResult.valid, true);
+  assert.equal(
+    crlfResult.content,
+    ["## Tasks", "Task count: 0", "", first, "", ""].join("\r\n"),
+  );
+  assert.equal(crlfResult.content.split(/\r?\n/)[crlfResult.insertedLine], first);
+
+  const areaResult = helpers.insertTaskMoveBlocks(
+    ["## Tasks", "Task count: 0", ""].join("\n"),
+    moved,
+    "area",
+  );
+  assert.equal(areaResult.valid, true);
+  assert.equal(
+    areaResult.content,
+    ["## Tasks", "Task count: 0", "", first, ""].join("\n"),
+  );
+  assert.equal(areaResult.content.split(/\r?\n/)[areaResult.insertedLine], first);
+});
+
+test("task move insertion keeps populated sections compact and second moves stable", () => {
+  const moved = [["- [ ] #task Moved ^moved"]];
+  for (const existing of [
+    "- [ ] #task Existing ^existing",
+    "- [x] #task Done ^done",
+    "- [/] #task Pending ^pending",
+  ]) {
+    const result = helpers.insertTaskMoveBlocks(
+      ["## Tasks", "", existing, ""].join("\n"),
+      moved,
+      "project",
+    );
+    assert.equal(result.valid, true, existing);
+    assert.equal(
+      result.content,
+      ["## Tasks", "", existing, "- [ ] #task Moved ^moved", ""].join("\n"),
+      existing,
+    );
+    assert.equal(
+      result.content.split(/\r?\n/)[result.insertedLine],
+      "- [ ] #task Moved ^moved",
+      existing,
+    );
+  }
+
+  const withChildren = helpers.insertTaskMoveBlocks(
+    ["## Tasks", "", "- [ ] #task Parent ^parent", "  child", ""].join("\n"),
+    moved,
+    "project",
+  );
+  assert.equal(
+    withChildren.content,
+    [
+      "## Tasks",
+      "",
+      "- [ ] #task Parent ^parent",
+      "  child",
+      "- [ ] #task Moved ^moved",
+      "",
+    ].join("\n"),
+  );
+
+  const firstMove = helpers.insertTaskMoveBlocks(
+    ["## Tasks", "Task count: 0", ""].join("\n"),
+    moved,
+    "project",
+  );
+  const secondMove = helpers.insertTaskMoveBlocks(
+    firstMove.content,
+    [["- [ ] #task Again ^again"]],
+    "project",
+  );
+  assert.equal(
+    secondMove.content,
+    [
+      "## Tasks",
+      "Task count: 0",
+      "",
+      "- [ ] #task Moved ^moved",
+      "- [ ] #task Again ^again",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(
+    secondMove.content.split(/\r?\n/)[secondMove.insertedLine],
+    "- [ ] #task Again ^again",
+  );
+});
+
+test("task move planning separates a counted move into a count-only section", () => {
+  const source = [
+    "- [ ] #task One ^one",
+    "  child one",
+    "",
+    "  continuation one",
+    "- [ ] #task Two ^two",
+    "- [ ] #task Stay ^stay",
+  ].join("\n");
+  const destination = [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "Task count: 0",
+    "",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 1);
+  assert.equal(discovery.valid, true);
+  assert.equal(discovery.actualCount, 2);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Projects/Dest.md",
+    sourceContent: source,
+    destinationContent: destination,
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const nextSource = plan.changes.get("Source.md").after;
+  assert.equal(nextSource, "- [ ] #task Stay ^stay");
+  const nextDestination = plan.changes.get("Projects/Dest.md").after;
+  assert.equal(nextDestination, [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "Task count: 0",
+    "",
+    "- [ ] #task One [id:: Projects__Dest__one] ^one",
+    "  child one",
+    "",
+    "  continuation one",
+    "- [ ] #task Two [id:: Projects__Dest__two] ^two",
+    "",
+  ].join("\n"));
+  assert.equal(
+    nextDestination.split("\n")[plan.destinationLine],
+    plan.destinationAnchorText,
+  );
+  assert.equal(
+    plan.destinationAnchorText,
+    "- [ ] #task One [id:: Projects__Dest__one] ^one",
+  );
+  assert.equal(plan.destinationBlockId, "one");
+});
+
+test("runtime counted move into a count-only section focuses the first moved task", async () => {
+  notices.length = 0;
+  const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+  const destinationFile = { path: "Dest.md", basename: "Dest", extension: "md" };
+  const sourceContent = [
+    "- [ ] #task One ^one",
+    "  child one",
+    "- [ ] #task Two ^two",
+    "- [ ] #task Stay ^stay",
+  ].join("\n");
+  const destinationContent = [
+    "---",
+    "type: \"[[project]]\"",
+    "status: wip",
+    "---",
+    "## Tasks",
+    "Task count: 0",
+    "",
+  ].join("\n");
+  const sourceEditor = new TransactionEditor(sourceContent, { line: 0, ch: 3 });
+  const destinationEditor = new TransactionEditor(destinationContent, { line: 6, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.filePositions = new Map();
+  plugin.app = {
+    vault: {
+      getMarkdownFiles: () => [sourceFile, destinationFile],
+      cachedRead: async () => "",
+      process: async () => {
+        throw new Error("open editors should not use vault.process");
+      },
+    },
+    workspace: {},
+  };
+  plugin.getActiveMarkdownView = () => ({ file: sourceFile, editor: sourceEditor });
+  plugin.getOpenMarkdownEditorForPath = (path) =>
+    path === sourceFile.path
+      ? sourceEditor
+      : path === destinationFile.path
+        ? destinationEditor
+        : null;
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 1);
+  assert.equal(discovery.actualCount, 2);
+  const session = {
+    sourceFile,
+    sourcePath: sourceFile.path,
+    editor: sourceEditor,
+    sourceContent,
+    cursor: { line: 0, ch: 3 },
+    scroll: null,
+    discovery,
+  };
+  assert.equal(await plugin.commitTaskMoveSession(session, { file: destinationFile }), true);
+  assert.equal(sourceEditor.content, "- [ ] #task Stay ^stay");
+  const destLines = destinationEditor.content.split("\n");
+  const firstMovedLine = destLines.findIndex((line) => line.includes("^one"));
+  assert.notEqual(firstMovedLine, -1);
+  assert.equal(destLines[firstMovedLine - 1], "");
+  assert.equal(destLines[firstMovedLine], "- [ ] #task One [id:: Dest__one] ^one");
+  assert.deepEqual(destLines.slice(firstMovedLine, firstMovedLine + 3), [
+    "- [ ] #task One [id:: Dest__one] ^one",
+    "  child one",
+    "- [ ] #task Two [id:: Dest__two] ^two",
+  ]);
+  assert.match(notices.at(-1), /Moved 2 tasks to Dest/);
+
+  const focusEditor = new TransactionEditor(destinationEditor.content, { line: 0, ch: 0 });
+  const { plugin: focusPlugin } = createTaskMoveDestinationFocusHarness({
+    getActiveMarkdownView: () => ({ file: destinationFile, editor: focusEditor }),
+  });
+  assert.equal(
+    await focusPlugin.focusTaskMoveDestination(destinationFile, {
+      line: firstMovedLine,
+      text: destLines[firstMovedLine],
+      blockId: "one",
+    }),
+    true,
+  );
+  assert.deepEqual(focusEditor.getCursor(), { line: firstMovedLine, ch: 0 });
+});
+

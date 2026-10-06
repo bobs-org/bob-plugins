@@ -369,11 +369,16 @@ class BlockIdPromptPlugin extends Plugin {
       return;
     }
 
+    if (source.kind === "link-task-pomodoro") {
+      // A cancelled block-ID prompt stays: settle without advancing.
+      this.settleLinkReviewOrigin(source, null);
+      return;
+    }
+
     if (
       source.kind === "direct-add" ||
       source.kind === "direct-rename" ||
-      source.kind === "link-block" ||
-      source.kind === "link-task-pomodoro"
+      source.kind === "link-block"
     ) {
       return;
     }

@@ -242,7 +242,71 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
   }
 
-  reportPomodoroLinkOutcome(plan, pomodoroPlan) {
+  // nav api v3 `reviewWalk` feature detection (same contract as the
+  // task-status-cycler lookup): the nav version check plus a versioned
+  // reviewWalk member with callable capture and continue. Never throws;
+  // null means today's behavior.
+  getReviewWalkApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      if (!api || !(Number(api.version) >= 3)) {
+        return null;
+      }
+      const walk = api.reviewWalk;
+      if (!walk || !(Number(walk.version) >= 1)) {
+        return null;
+      }
+      if (
+        typeof walk.capture !== "function" ||
+        typeof walk.continue !== "function"
+      ) {
+        return null;
+      }
+      return walk;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Idempotent review origin settle: nulls the stored origin and continues
+  // exactly once. A null outcome settles the gesture lock without advancing
+  // and shows nothing. Never throws.
+  settleLinkReviewOrigin(source, outcome) {
+    try {
+      const origin = source && source.reviewOrigin;
+      if (!origin) {
+        return;
+      }
+      source.reviewOrigin = null;
+      const walk = this.getReviewWalkApi();
+      if (!walk) {
+        if (outcome && typeof outcome.notice === "string" && outcome.notice) {
+          new Notice(outcome.notice);
+        }
+        return;
+      }
+      void walk.continue(origin, outcome);
+    } catch (error) {
+      // Best effort: never throw out of a settle path.
+    }
+  }
+
+  // Review-walk link success: the "Linked · …" text becomes the first line
+  // of nav's composed landing toast via continue; off a landing it is shown
+  // as today. Failures never reach here: they keep their own notices and
+  // the toggle's finally (or the prompt cancel) settles with null.
+  reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan) {
+    const text = this.formatPomodoroLinkOutcome(plan, pomodoroPlan);
+    if (source && source.reviewOrigin) {
+      this.settleLinkReviewOrigin(source, { kind: "link-today", notice: text });
+    } else {
+      new Notice(text);
+    }
+  }
+
+  formatPomodoroLinkOutcome(plan, pomodoroPlan) {
     const base = plan.statusChanged
       ? "Linked · Next"
       : `Linked · stays ${laneStatusName(plan.newStatus)}`;
@@ -255,9 +319,11 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
     const suffix = chips.length ? ` · ${chips.join(" · ")}` : "";
 
-    new Notice(
-      `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}`,
-    );
+    return `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}`;
+  }
+
+  reportPomodoroLinkOutcome(plan, pomodoroPlan) {
+    new Notice(this.formatPomodoroLinkOutcome(plan, pomodoroPlan));
   }
 
   reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {

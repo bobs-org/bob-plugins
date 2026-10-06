@@ -2,12 +2,15 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   Plugin,
+  noticeMessages,
   resetNotices,
   lastNotice,
   localDate,
   WORK_LOG_DATE,
   createEditor,
   sourceForPomodoroLink,
+  createTaskModeHarness,
+  LINKED_DAILY,
 } = require("./block-id-prompt-harness.cjs");
 
 test("direct unlink without a daily note keeps the Next lane and reports it", async () => {
@@ -401,4 +404,67 @@ test("In Progress unlink reports retryable partial failure when cleanup succeeds
     lastNotice(),
     "Removed 1 open Pomodoro link, but task stays In Progress and work summary was not logged",
   );
+});
+
+// --- Review-walk auto-advance (bip-link-today, block-id-prompt 1.22.0) ---
+
+function installMockReviewWalk(plugin, calls) {
+  const origin = { seq: 7 };
+  const api = {
+    version: 3,
+    reviewWalk: {
+      version: 1,
+      capture(editor) {
+        calls.push(["capture", editor]);
+        return origin;
+      },
+      continue(passedOrigin, outcome) {
+        calls.push(["continue", passedOrigin, outcome]);
+        return Promise.resolve(
+          Object.freeze({ ok: true, advanced: true, stopped: false }),
+        );
+      },
+    },
+  };
+  plugin.app = plugin.app || {};
+  plugin.app.plugins = { plugins: { "bob-navigation-hotkeys": { api } } };
+  return { api, origin };
+}
+
+function reviewContinueCalls(calls) {
+  return calls.filter((entry) => entry[0] === "continue");
+}
+
+test("review-walk: unlink settles with null and keeps its notice", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: LINKED_DAILY,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(lastNotice(), "Unlinked · stays Next");
+  assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
+});
+
+test("review-walk: Work-summary unlink path settles with null", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [/] #task Ship it ^ship",
+    dailyContent: LINKED_DAILY,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+  let openedSource = null;
+  h.plugin.openWorkSummaryPrompt = (source) => {
+    openedSource = source;
+  };
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.ok(openedSource);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(noticeMessages, []);
+  assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
 });

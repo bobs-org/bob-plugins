@@ -14,84 +14,123 @@ class BlockIdPromptPomodoroLinksMixin {
       return;
     }
 
-    const markdownView =
-      view instanceof MarkdownView
-        ? view
-        : this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!(markdownView instanceof MarkdownView) || !editor) {
-      new Notice("No active Markdown task selected");
+    // Review-walk auto-advance (nav api v3): capture the landing before the
+    // toggle reads anything. BUSY swallows the key with no write. The origin
+    // rides on the link source into the block-ID prompt for the no-ID link;
+    // a successful link continues with its "Linked · …" text, and every
+    // other path settles with null below (unlink, Work-summary unlink,
+    // prompt cancel, and failures stay).
+    const walk = this.getReviewWalkApi();
+    const origin = walk ? walk.capture(editor) : null;
+    if (origin && origin.busy) {
       return;
     }
 
-    const file = markdownView.file || this.app.workspace.getActiveFile();
-    if (!(file instanceof TFile) || file.extension !== "md") {
-      new Notice("No active Markdown task selected");
-      return;
-    }
-
-    const resolved = this.resolvePomodoroLinkTaskFromEditor(editor);
-    if (resolved.error) {
-      if (resolved.error === NO_OPEN_TASK_NOTICE) {
-        await this.startTaskLinkOpen(editor, file);
-        return;
+    let promptHandoff = false;
+    let originSource = null;
+    const attachLinkReviewOrigin = (source) => {
+      if (origin && source && !source.reviewOrigin) {
+        source.reviewOrigin = origin;
+        originSource = source;
       }
-
-      new Notice(resolved.error);
-      return;
-    }
-
-    const { task } = resolved;
-    const source = {
-      kind: "link-task-pomodoro",
-      editor,
-      file,
-      sourcePath: file.path,
-      line: task.line,
-      task: { ...task },
     };
 
-    // Lane-preserving toggle: link presence decides, never the checkbox. A
-    // task without a block ID is never linked; a task linked only under a
-    // completed Pomodoro counts as unlinked and gets linked again.
-    if (task.existingId) {
-      const linked = await this.pomodoroTaskLinkPresence(source, task.existingId);
-      if (linked === "blocked") {
+    try {
+      const markdownView =
+        view instanceof MarkdownView
+          ? view
+          : this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (!(markdownView instanceof MarkdownView) || !editor) {
+        new Notice("No active Markdown task selected");
         return;
       }
 
-      if (linked) {
-        if (task.status === "/") {
-          this.openWorkSummaryPrompt(source);
+      const file = markdownView.file || this.app.workspace.getActiveFile();
+      if (!(file instanceof TFile) || file.extension !== "md") {
+        new Notice("No active Markdown task selected");
+        return;
+      }
+
+      const resolved = this.resolvePomodoroLinkTaskFromEditor(editor);
+      if (resolved.error) {
+        if (resolved.error === NO_OPEN_TASK_NOTICE) {
+          await this.startTaskLinkOpen(editor, file);
           return;
         }
 
+        new Notice(resolved.error);
+        return;
+      }
+
+      const { task } = resolved;
+      const source = {
+        kind: "link-task-pomodoro",
+        editor,
+        file,
+        sourcePath: file.path,
+        line: task.line,
+        task: { ...task },
+      };
+      attachLinkReviewOrigin(source);
+
+      // Lane-preserving toggle: link presence decides, never the checkbox. A
+      // task without a block ID is never linked; a task linked only under a
+      // completed Pomodoro counts as unlinked and gets linked again.
+      if (task.existingId) {
+        const linked = await this.pomodoroTaskLinkPresence(source, task.existingId);
+        if (linked === "blocked") {
+          return;
+        }
+
+        if (linked) {
+          if (task.status === "/") {
+            this.openWorkSummaryPrompt(source);
+            return;
+          }
+
+          this.promptOpen = true;
+          try {
+            await this.applyPomodoroTaskUnlink(source);
+          } finally {
+            this.promptOpen = false;
+          }
+          return;
+        }
+      }
+
+      if (task.existingId) {
         this.promptOpen = true;
         try {
-          await this.applyPomodoroTaskUnlink(source);
+          await this.completePomodoroTaskLink(source, task.existingId);
         } finally {
           this.promptOpen = false;
         }
         return;
       }
-    }
 
-    if (task.existingId) {
-      this.promptOpen = true;
-      try {
-        await this.completePomodoroTaskLink(source, task.existingId);
-      } finally {
-        this.promptOpen = false;
+      // A task without a block ID is never linked: prompt for one, then link.
+      // Ready and Blocked become Next; Next and In Progress stay unchanged.
+      const promptSource = {
+        ...source,
+        previewText: task.displayText,
+        prefillId: false,
+      };
+      attachLinkReviewOrigin(promptSource);
+      this.openBlockIdPrompt(promptSource);
+      promptHandoff = this.promptOpen === true;
+    } finally {
+      if (!promptHandoff) {
+        if (originSource) {
+          this.settleLinkReviewOrigin(originSource, null);
+        } else if (origin && walk) {
+          try {
+            void walk.continue(origin, null);
+          } catch (error) {
+            // Best effort: never throw out of a settle path.
+          }
+        }
       }
-      return;
     }
-
-    // A task without a block ID is never linked: prompt for one, then link.
-    // Ready and Blocked become Next; Next and In Progress stay unchanged.
-    this.openBlockIdPrompt({
-      ...source,
-      previewText: task.displayText,
-      prefillId: false,
-    });
   }
 
   // Whether the task's block ID currently has a live link under any open
@@ -489,7 +528,7 @@ class BlockIdPromptPomodoroLinksMixin {
         );
       }
 
-      this.reportPomodoroLinkOutcome(plan, pomodoroPlan, isNewId);
+      this.reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan);
       return true;
     }
 
@@ -506,7 +545,7 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    this.reportPomodoroLinkOutcome(plan, pomodoroPlan, isNewId);
+    this.reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan);
     return true;
   }
 

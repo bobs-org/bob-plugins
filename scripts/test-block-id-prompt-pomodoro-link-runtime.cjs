@@ -576,3 +576,193 @@ test("canceling the Pomodoro block-ID modal leaves the note untouched", () => {
 
   assert.equal(editor.getValue(), before);
 });
+
+// --- Review-walk auto-advance (bip-link-today, block-id-prompt 1.22.0) ---
+
+function installMockReviewWalk(plugin, calls, { busy = false } = {}) {
+  const origin = busy ? { busy: true } : { seq: 7 };
+  const api = {
+    version: 3,
+    reviewWalk: {
+      version: 1,
+      capture(editor) {
+        calls.push(["capture", editor]);
+        return origin;
+      },
+      continue(passedOrigin, outcome) {
+        calls.push(["continue", passedOrigin, outcome]);
+        return Promise.resolve(
+          Object.freeze({ ok: true, advanced: true, stopped: false }),
+        );
+      },
+    },
+  };
+  plugin.app = plugin.app || {};
+  plugin.app.plugins = { plugins: { "bob-navigation-hotkeys": { api } } };
+  return { api, origin };
+}
+
+function reviewContinueCalls(calls) {
+  return calls.filter((entry) => entry[0] === "continue");
+}
+
+test("review-walk: existing-ID link hands its Linked notice to continue with no separate notice", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
+  assert.equal(calls[0][0], "capture");
+  assert.equal(calls[0][1], h.editor);
+  assert.deepEqual(reviewContinueCalls(calls), [
+    ["continue", origin, { kind: "link-today", notice: "Linked · stays Next" }],
+  ]);
+  assert.deepEqual(noticeMessages, []);
+});
+
+test("review-walk: prompted-ID link continues after submit", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  installMockReviewWalk(h.plugin, calls);
+  let promptedWith = null;
+  h.plugin.openBlockIdPrompt = (source) => {
+    promptedWith = source;
+    h.plugin.promptOpen = true;
+  };
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.ok(promptedWith);
+  assert.ok(promptedWith.reviewOrigin);
+  assert.deepEqual(reviewContinueCalls(calls), []);
+  assert.deepEqual(noticeMessages, []);
+
+  const origin = promptedWith.reviewOrigin;
+  h.plugin.promptOpen = false;
+  const result = await h.plugin.submitPomodoroTaskLinkBlockId(promptedWith, "ship");
+
+  assert.equal(result, true);
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.deepEqual(reviewContinueCalls(calls), [
+    ["continue", origin, { kind: "link-today", notice: "Linked · stays Next" }],
+  ]);
+  assert.deepEqual(noticeMessages, []);
+});
+
+test("review-walk: prompt cancel settles with null", () => {
+  resetNotices();
+  const plugin = new Plugin();
+  const calls = [];
+  const { origin } = installMockReviewWalk(plugin, calls);
+  const source = { kind: "link-task-pomodoro", reviewOrigin: origin };
+
+  plugin.cancelBlockIdPrompt(source);
+
+  assert.equal(source.reviewOrigin, null);
+  assert.deepEqual(calls, [["continue", origin, null]]);
+  assert.deepEqual(noticeMessages, []);
+});
+
+test("review-walk: BUSY swallows the key with no write", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  installMockReviewWalk(h.plugin, calls, { busy: true });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(noticeMessages, []);
+  assert.deepEqual(reviewContinueCalls(calls), []);
+});
+
+test("review-walk: failed link keeps its notice and settles with null", async () => {
+  const h = createTaskModeHarness({
+    taskContent: ["- [*] #task Ship it ^ship", "- [*] #task Also uses it ^ship"].join(
+      "\n",
+    ),
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(lastNotice(), "Block ID 'ship' is duplicated in this note");
+  assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
+  assert.deepEqual(h.writes, []);
+});
+
+test("review-walk: partial link keeps its notice and never continues with an outcome", async () => {
+  const plannedDaily = ["## Pomodoros", "- [ ] Current (10:00-10:25)"].join("\n");
+  const staleDaily = plannedDaily.replace("Current", "Current NOW");
+  const h = createTaskModeHarness({
+    taskContent: "- [?] #task Ship it [scheduled:: 2026-08-20] ^ship",
+    dailyContent: plannedDaily,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+  let readCount = 0;
+  h.plugin.app.vault.read = async () => {
+    readCount += 1;
+    return readCount <= 2 ? plannedDaily : staleDaily;
+  };
+  h.plugin.app.vault.modify = async () => {
+    throw new Error("should not be called");
+  };
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(
+    lastNotice(),
+    "Task unscheduled, set Next, but Daily.md could not be updated",
+  );
+  assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
+});
+
+test("review-walk: no nav or nav v2 keeps today's notices", async () => {
+  const noNav = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  assert.equal(noNav.plugin.getReviewWalkApi(), null);
+  await noNav.plugin.openPomodoroTaskLink(noNav.editor, noNav.view);
+  assert.equal(lastNotice(), "Linked · stays Next");
+
+  const v2 = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  v2.plugin.app.plugins = {
+    plugins: { "bob-navigation-hotkeys": { api: { version: 2 } } },
+  };
+  assert.equal(v2.plugin.getReviewWalkApi(), null);
+  await v2.plugin.openPomodoroTaskLink(v2.editor, v2.view);
+  assert.equal(lastNotice(), "Linked · stays Next");
+
+  const noContinue = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  noContinue.plugin.app.plugins = {
+    plugins: {
+      "bob-navigation-hotkeys": {
+        api: { version: 3, reviewWalk: { version: 1, capture() {} } },
+      },
+    },
+  };
+  assert.equal(noContinue.plugin.getReviewWalkApi(), null);
+  await noContinue.plugin.openPomodoroTaskLink(noContinue.editor, noContinue.view);
+  assert.equal(lastNotice(), "Linked · stays Next");
+});

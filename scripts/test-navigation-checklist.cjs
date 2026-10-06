@@ -252,6 +252,18 @@ function makePlugin({ filePath, editor, freshness, cycler }) {
     vault: { getAbstractFileByPath: () => file },
   };
   plugin.reviewAnchor = null;
+  plugin.reviewLanding = null;
+  plugin.reviewLandingEpoch = 0;
+  plugin.reviewGestureSeq = 0;
+  plugin.reviewWalkLock = null;
+  plugin.reviewAnsweredKeys = { day: null, keys: new Set() };
+  // Human-paced presses: the gesture lock settles ~350 ms after each
+  // advance, so rapid test presses tick the clock past the settle window.
+  const clock = { now: Date.now() };
+  plugin.reviewAdvanceNow = () => clock.now;
+  plugin.advanceReviewClock = (ms) => {
+    clock.now += ms;
+  };
   plugin.view = view;
   plugin.laneReleaseDateText = () => DATE;
   return plugin;
@@ -369,6 +381,7 @@ test("Ctrl+Alt+F completes seven PRE rows from a stale cache", async () => {
         dateText: DATE,
         advance: true,
       });
+      plugin.advanceReviewClock(400);
       assert.equal(ok, true, `${insertAbove ? "insert" : "in-place"} step ${index}`);
       assert.match(notices.at(-1), /✓ Done · /);
       if (index < CHORES.length - 1) {
@@ -405,6 +418,7 @@ test("Ctrl+Alt+F completes seven PRE rows from a refreshed cache", async () => {
         dateText: DATE,
         advance: true,
       });
+      plugin.advanceReviewClock(400);
       assert.equal(ok, true, `refresh ${insertAbove} ${index}`);
       const remaining = CHORES.slice(index + 1);
       const lines = editor.state.lines;

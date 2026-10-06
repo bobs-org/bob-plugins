@@ -888,9 +888,11 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
   }
 }
 
-// nav api v2 (`docs/task-dependencies.md` §9). Dependency calls return Promises
+// nav api v3 (`docs/task-dependencies.md` §9). Dependency calls return Promises
 // resolving to `{ok, reason?}` and never throw; checklist claim synchronously
-// declines with null or returns a settled Promise. `openDependencyStage`
+// declines with null or returns a settled Promise; `reviewWalk` is the
+// review-walk auto-advance contract (`capture`/`continue`, version 1).
+// `openDependencyStage`
 // opens today's Depends on stage for the owning task of `ref` (`ref`:
 // `{path, line}` — any line of the task block or its Depends-On line);
 // `nav-stage` swaps in the vault-wide stage. `removeDependency` removes one
@@ -917,8 +919,9 @@ function createDependencyNavApi(plugin) {
   // leaf and `Alt+F to decide`. Removed again on unload (see `onunload`)
   // so marks degrade to counting pips instead of an absent card.
   return Object.freeze({
-    version: 2,
+    version: 3,
     ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
+    reviewWalk: createReviewWalkApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

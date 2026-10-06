@@ -326,10 +326,17 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.reviewAnchor = null;
     this.reviewLanding = null;
+    // Review-walk auto-advance (`docs/freshness.md` §6): the landing epoch
+    // and gesture sequence make stale callbacks refuse, and the lock
+    // swallows double presses while an answer is in flight or settling.
+    this.reviewLandingEpoch = 0;
+    this.reviewGestureSeq = 0;
+    this.reviewWalkLock = null;
+    this.reviewAnsweredKeys = { day: null, keys: new Set() };
     // At most one review-walk decision card at a time; the guard also
     // prevents nested cards.
     this.activeFreshnessDecayCard = null;
-    // nav api v2 (`docs/task-dependencies.md` §9): frozen, versioned, never
+    // nav api v3 (`docs/task-dependencies.md` §9): frozen, versioned, never
     // throws. bob-ledger-tools feature-detects `api?.version >= 1`.
     this.api = createDependencyNavApi(this);
     this.registerOpenTaskJumpInputListeners();

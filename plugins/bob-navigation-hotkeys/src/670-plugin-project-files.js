@@ -621,6 +621,18 @@ class BobNavigationHotkeysProjectFileMixin {
   }
 
   trackOpenedFile(file) {
+    // A landing ends when another note opens: the next gesture is no
+    // longer "on the row `]s` just landed on".
+    try {
+      const landing = this.reviewLanding;
+      const openedPath =
+        file && typeof file.path === "string" ? file.path : null;
+      if (landing && openedPath !== landing.path) {
+        this.reviewLanding = null;
+      }
+    } catch (error) {
+      // Best effort: the capture guard rechecks the landing anyway.
+    }
     if (!this.isMarkdownFile(file)) {
       this.clearDashScrollCaptureTarget();
       return;

@@ -270,238 +270,6 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
   }
 
-  // Land on one queue entry without writing: resolve its line in the target
-  // note, then put the cursor there and center it. Same-note landings write
-  // the cursor directly; cross-note landings reuse the leaf-reuse open plus
-  // the shared jump-or-defer retry so the cursor lands after the new leaf
-  // renders. Returns `{ ok, stale }`; `stale` means the queue moved and the
-  // caller should rebuild once and try again.
-  async landOnReviewQueueEntry(entry) {
-    const path = entry && typeof entry.path === "string" ? entry.path : "";
-    if (!path) {
-      return { ok: false, stale: true };
-    }
-    const activeView = this.getActiveMarkdownView();
-    const activeEditor = activeView && activeView.editor;
-    const sameNote = Boolean(
-      activeView &&
-        activeView.file &&
-        activeView.file.path === path &&
-        activeEditor &&
-        typeof activeEditor.getValue === "function",
-    );
-    let content = null;
-    let file =
-      activeView && activeView.file && activeView.file.path === path
-        ? activeView.file
-        : null;
-    if (sameNote) {
-      content = String(activeEditor.getValue() || "");
-    } else {
-      const vault = this.app && this.app.vault;
-      file =
-        file ||
-        (vault && typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(path)
-          : null);
-      if (!file) {
-        return { ok: false, stale: true };
-      }
-      content = await this.readLinkPickerNoteContent(path, file);
-      if (content === null) {
-        return { ok: false, stale: true };
-      }
-    }
-    const resolved = resolveReviewQueueLine(content, entry);
-    if (!resolved.ok) {
-      return { ok: false, stale: true };
-    }
-    if (sameNote) {
-      if (!setEditorCursor(activeEditor, { line: resolved.line, ch: 0 })) {
-        return { ok: false, stale: false };
-      }
-      scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
-      this.reviewLanding = Object.freeze({
-        path,
-        text: entry.originalMarkdown,
-        key: reviewQueueEntryKey(entry),
-        tier: reviewEntryMachineTier(entry) || null,
-        day: this.laneReleaseDateText({}),
-      });
-      return { ok: true, stale: false };
-    }
-    const opened = await openMarkdownFileWithLeafReuse(
-      this,
-      file,
-      `Review jump, but could not open ${path}`,
-    );
-    if (!opened) {
-      return { ok: false, stale: false };
-    }
-    this.jumpOrDeferTaskMoveDestination(path, {
-      line: resolved.line,
-      text: entry.originalMarkdown,
-    });
-    this.reviewLanding = Object.freeze({
-      path,
-      text: entry.originalMarkdown,
-      key: reviewQueueEntryKey(entry),
-      tier: reviewEntryMachineTier(entry) || null,
-      day: this.laneReleaseDateText({}),
-    });
-    return { ok: true, stale: false };
-  }
-
-  // Capture a Vim count for `]s` / `[s` before any await. An explicit
-  // `options.repeat` is the whole count and skips Vim. Endpoint jumps
-  // ignore a pending prefix. Otherwise a Vim-normal editor with an
-  // explicit prefix is N queue steps; reset that state immediately so
-  // CodeMirror cannot drop it across the landing await.
-  consumePendingReviewJumpRepeat(options, endpoint) {
-    if (options && options.repeat !== undefined && options.repeat !== null) {
-      return normalizeVimRepeat(options.repeat);
-    }
-    if (endpoint) {
-      return 1;
-    }
-    try {
-      const view = this.getActiveMarkdownView();
-      const editor = view && view.editor;
-      if (!editor || !this.isVimNormalModeEditor(editor, view)) {
-        return 1;
-      }
-      const cm = this.resolveVimCodeMirror(editor, view);
-      const pending = getPendingVimRepeat(cm);
-      if (!pending.explicit) {
-        return 1;
-      }
-      resetPendingVimInputState(cm, "counted-review-jump");
-      return normalizeVimRepeat(pending.repeat);
-    } catch {
-      return 1;
-    }
-  }
-
-  // Vault-wide jump to the next (direction +1) or previous (direction -1)
-  // task due for freshness review. From a queued task go to the following
-  // (or preceding) entry; from a just-stamped task go to the entry after
-  // its remembered rank tuple; otherwise go to the first (or last) entry.
-  // Wraps with a Notice; an empty queue shows the refreshed-today count.
-  // With `options.endpoint` ("first"/"last") jump to that queue endpoint
-  // instead, ignoring cursor, anchor, and a typed count, without a
-  // boundary preamble. A Vim count on a relative jump is N queue steps
-  // in one landing.
-  async jumpToDueTask(direction, options = {}) {
-    const api = this.requireFreshnessApi();
-    if (!api) {
-      return false;
-    }
-    const step = direction < 0 ? -1 : 1;
-    const endpointRaw =
-      options && typeof options.endpoint === "string"
-        ? options.endpoint.trim().toLowerCase()
-        : "";
-    const endpoint =
-      endpointRaw === "first" || endpointRaw === "last" ? endpointRaw : null;
-    const repeat = this.consumePendingReviewJumpRepeat(options, endpoint);
-    let queue = this.readFreshnessQueue(api);
-    if (queue.length === 0) {
-      new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
-      return false;
-    }
-    const cursor = this.getReviewJumpCursor();
-    const todayText = this.laneReleaseDateText({});
-    let anchor =
-      options.fromStamp !== undefined
-        ? options.fromStamp
-        : this.reviewAnchor || null;
-    if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
-      anchor = null;
-    }
-    let plan = planReviewJump(queue, {
-      direction: step,
-      cursor,
-      stamped: anchor,
-      anchor,
-      todayText,
-      endpoint,
-      repeat,
-    });
-    if (plan.kind === "empty") {
-      new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
-      return false;
-    }
-    let landed = await this.landOnReviewQueueEntry(plan.entry);
-    if (!landed.ok && landed.stale) {
-      queue = this.readFreshnessQueue(api);
-      plan = planReviewJump(queue, {
-        direction: step,
-        cursor,
-        stamped: anchor,
-        anchor,
-        todayText,
-        endpoint,
-        repeat,
-      });
-      if (plan.kind === "empty") {
-        new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
-        return false;
-      }
-      landed = await this.landOnReviewQueueEntry(plan.entry);
-    }
-    if (!landed.ok) {
-      new Notice(
-        landed.stale ? REVIEW_QUEUE_CHANGED_NOTICE : "Could not jump to task",
-      );
-      return false;
-    }
-    // The walk anchor follows every successful landing, so a later
-    // release, roll, or stamp continues from here.
-    this.reviewAnchor = buildReviewAnchor(
-      queue,
-      [reviewQueueEntryKey(plan.entry)],
-      plan.rank,
-      todayText,
-    );
-    let notice = buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
-      wrapped: plan.wrapped,
-      todayText,
-      trackers: reviewFreshnessSupportsTrackers(api),
-      reviewEntryView:
-        api && typeof api.reviewEntryView === "function"
-          ? (noticeEntry, noticeOptions) =>
-              api.reviewEntryView(noticeEntry, noticeOptions)
-          : null,
-    });
-    const destTier = reviewEntryMachineTier(plan.entry);
-    const handled = new Set(
-      anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
-    );
-    const remaining = reviewWalkRemaining(queue, handled);
-    // A forward step out of the commitments into ROTTEN or POST names
-    // the boundary (v4 tier entries only; v3 keeps the plain jump
-    // notice). Endpoint jumps never carry the relative-walk boundary
-    // preamble. Landing on POST always appends remaining counts.
-    if (!endpoint && step > 0 && reviewFreshnessSupportsTiers(api)) {
-      const boundary = buildReviewBoundaryNotice({
-        originTier:
-          plan && typeof plan.originTier === "string" ? plan.originTier : null,
-        destTier,
-        commitmentsLeft: remaining.commitments,
-        rottenLeft: remaining.rotten,
-        postLeft: remaining.post,
-      });
-      if (boundary) {
-        notice = `${boundary}\n${notice}`;
-      }
-    }
-    if (destTier === "post") {
-      notice = appendReviewPostLandingTail(notice, remaining);
-    }
-    new Notice(notice);
-    return true;
-  }
-
   // Alt+F (advance false) / Ctrl+Alt+F (advance true): stamp the cursor
   // task, or a dedicated Task Link's target, plus the next N tasks when
   // counted, and change nothing else. Targets are discovered like Alt+N's;
@@ -512,6 +280,11 @@ class BobNavigationHotkeysLaneReviewMixin {
   // rollback. With `advance`, jump to the next due task afterwards,
   // skipping every key just stamped.
   async refreshTaskFreshness(cm, options = {}) {
+    // While an answer is in flight or settling, Alt+F / Ctrl+Alt+F are
+    // swallowed silently with no write.
+    if (this.reviewWalkBusy()) {
+      return false;
+    }
     const advance = options.advance === true;
     const cursor = getEditorCursor(cm);
     if (!cursor) {
@@ -714,14 +487,22 @@ class BobNavigationHotkeysLaneReviewMixin {
       };
       const checklist = matchReviewChecklistCursor(queueBefore, cursorRef);
       if (checklist) {
-        return await this.completeReviewChecklistRow(cm, {
-          api,
-          queueBefore,
-          entry: checklist,
-          filePath,
-          dateText: options.dateText,
-          advance: options.advance === true,
-        });
+        // The checklist completion holds the gesture lock, like the claim.
+        this.takeReviewWalkLock(REVIEW_GESTURE_LOCK_MS);
+        let completed = false;
+        try {
+          completed = await this.completeReviewChecklistRow(cm, {
+            api,
+            queueBefore,
+            entry: checklist,
+            filePath,
+            dateText: options.dateText,
+            advance: options.advance === true,
+          });
+          return completed;
+        } finally {
+          this.settleReviewWalkLock(completed === true);
+        }
       }
       if (
         reviewLineChecklistKind(contentLines[cursor.line]) &&
@@ -801,7 +582,9 @@ class BobNavigationHotkeysLaneReviewMixin {
           return false;
         }
       }
-      this.finishFreshStamp(
+      // Ctrl+Alt+F advances through the shared tail with the stamp text
+      // as its preamble, giving one composed toast.
+      const fallbackPreamble = this.finishFreshStamp(
         queueBefore,
         countsBefore,
         fallbackPlan.stamped.map((entry) => ({
@@ -811,9 +594,14 @@ class BobNavigationHotkeysLaneReviewMixin {
         })),
         fallbackPlan.stamped,
         options.dateText,
+        { deferNotice: options.advance === true },
       );
       if (options.advance === true) {
-        return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
+        return await this.jumpToDueTask(1, {
+          fromStamp: this.reviewAnchor,
+          fromAdvance: true,
+          preamble: fallbackPreamble,
+        });
       }
       return true;
     }
@@ -918,7 +706,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         return false;
       }
     }
-    this.finishFreshStamp(
+    // Ctrl+Alt+F advances through the shared tail with the stamp text
+    // as its preamble, giving one composed toast.
+    const stampPreamble = this.finishFreshStamp(
       queueBefore,
       countsBefore,
       plan.stamped.map((entry) => ({
@@ -928,10 +718,18 @@ class BobNavigationHotkeysLaneReviewMixin {
       })),
       plan.stamped,
       options.dateText,
-      { skipTail, workLogWrittenCount: plan.workLogWrittenCount },
+      {
+        skipTail,
+        workLogWrittenCount: plan.workLogWrittenCount,
+        deferNotice: options.advance === true,
+      },
     );
     if (options.advance === true) {
-      return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
+      return await this.jumpToDueTask(1, {
+        fromStamp: this.reviewAnchor,
+        fromAdvance: true,
+        preamble: stampPreamble,
+      });
     }
     return true;
   }

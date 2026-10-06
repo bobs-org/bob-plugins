@@ -489,7 +489,7 @@ test("modal: a double callback applies once", () => {
 
 test("capability: the nav api exposes the card while loaded", () => {
   const api = createDependencyNavApi({});
-  assert.equal(api.version, 2);
+  assert.equal(api.version, 3);
   assert.equal(Object.isFrozen(api), true);
   assert.equal(typeof api.claimReviewWalkCompletion, "function");
   assert.equal(api.freshnessDecayCard.version, FRESHNESS_DECAY_CARD_VERSION);
@@ -498,7 +498,7 @@ test("capability: the nav api exposes the card while loaded", () => {
 
 test("capability: unload drops the card so marks stop promising it", () => {
   const api = createDependencyNavApi(null);
-  assert.equal(api.version, 2);
+  assert.equal(api.version, 3);
   assert.equal(Object.isFrozen(api), true);
   assert.equal(api.claimReviewWalkCompletion({}), null);
   assert.equal(api.freshnessDecayCard, undefined);

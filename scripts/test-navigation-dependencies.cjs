@@ -804,10 +804,10 @@ test("dependency notices follow the contract shapes", () => {
   );
 });
 
-// nav api v2: frozen, versioned, never throws.
-test("nav api v2 resolves results and never throws", async () => {
+// nav api v3: frozen, versioned, never throws.
+test("nav api v3 resolves results and never throws", async () => {
   const api = helpers.createDependencyNavApi(null);
-  assert.equal(api.version, 2);
+  assert.equal(api.version, 3);
   assert.equal(Object.isFrozen(api), true);
   assert.equal(typeof api.claimReviewWalkCompletion, "function");
   assert.equal(api.claimReviewWalkCompletion({}), null);

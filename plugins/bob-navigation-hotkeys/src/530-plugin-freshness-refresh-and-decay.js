@@ -195,16 +195,26 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         return false;
       }
     }
-    this.finishFreshStamp(
+    // Ctrl+Alt+F advances through the shared tail with the stamp text
+    // as its preamble, giving one composed toast.
+    const linkPreamble = this.finishFreshStamp(
       queueBefore,
       countsBefore,
       refs,
       stampedAll,
       options.dateText,
-      { skipTail: linkSkipTail, workLogWrittenCount },
+      {
+        skipTail: linkSkipTail,
+        workLogWrittenCount,
+        deferNotice: options.advance === true,
+      },
     );
     if (options.advance === true) {
-      return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
+      return await this.jumpToDueTask(1, {
+        fromStamp: this.reviewAnchor,
+        fromAdvance: true,
+        preamble: linkPreamble,
+      });
     }
     return true;
   }
@@ -212,7 +222,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
   // Remember the walk anchor for the session (the Tasks cache lags, so
   // the jump reads the queue fresh but continues from the handled entry's
   // surviving successor or predecessor), then show the adjusted-counts
-  // Notice on the upkeep meter.
+  // Notice on the upkeep meter. With `extra.deferNotice`, return the text
+  // instead of showing it, so the shared advance tail can compose one
+  // toast from the preamble and the landing.
   finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText, extra = {}) {
     const matched = matchFreshStampRefs(queueBefore, refs);
     this.reviewAnchor =
@@ -252,7 +264,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     const kept = countFreshStampKept(stamped);
     const skipTail =
       extra && typeof extra.skipTail === "string" ? extra.skipTail : "";
-    new Notice(
+    const message =
       buildFreshStampNotice({
         changed,
         dueAfter: Math.max(0, dueBefore - matched.count),
@@ -264,8 +276,12 @@ class BobNavigationHotkeysFreshnessDecayMixin {
             : counts.budget,
         kept,
         workLogWrittenCount: extra && extra.workLogWrittenCount,
-      }) + skipTail,
-    );
+      }) + skipTail;
+    if (extra && extra.deferNotice === true) {
+      return message;
+    }
+    new Notice(message);
+    return undefined;
   }
 
   // Decision card: open, revalidate, and commit (`docs/freshness.md` §2a).
@@ -681,11 +697,16 @@ class BobNavigationHotkeysFreshnessDecayMixin {
 
   // Successful Ctrl+Alt+F outcomes advance exactly once after commit —
   // except Reword, which leaves focus for editing, and failed or
-  // dismissed secondary pickers, which stay due.
+  // dismissed secondary pickers, which stay due. The decay notice stays
+  // its own toast; the tail lands with anchor-only planning, the lock,
+  // and jump recording, and no preamble of its own.
   async maybeAdvanceFreshnessDecayWalk(cardCtx, action) {
     try {
       if (cardCtx && cardCtx.advance === true && action !== "reword") {
-        return await this.jumpToDueTask(1, { fromStamp: this.reviewAnchor });
+        return await this.jumpToDueTask(1, {
+          fromStamp: this.reviewAnchor,
+          fromAdvance: true,
+        });
       }
     } catch (error) {
       return false;

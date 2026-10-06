@@ -35,11 +35,11 @@ function formatReviewChecklistGroupEndNotice(options = {}) {
   const lines = [`✓ Done · ${taskText} · ${ending}`];
   const nextLabel = String(options.nextLabel || "").trim();
   if (nextLabel) {
-    const commitments = Number.isInteger(options.commitments)
-      ? Math.max(0, options.commitments)
-      : 0;
     lines.push(
-      `]s → ${nextLabel}${commitments > 0 ? ` · ${commitments} commitments due` : ""}`,
+      formatReviewAdvanceStopLine({
+        nextLabel,
+        commitments: options.commitments,
+      }),
     );
   }
   return lines.join("\n");
@@ -64,6 +64,11 @@ function formatReviewClosedNotice(options = {}) {
 class BobNavigationHotkeysChecklistWalkMixin {
   claimReviewWalkCtrlEnter(editor) {
     try {
+      // While an answer is in flight or settling, the claim is swallowed
+      // silently: the cycler treats the settled Promise as consumed.
+      if (this.reviewWalkBusy()) {
+        return Promise.resolve({ ok: false, reason: "busy" });
+      }
       const landing = this.reviewLanding;
       if (!landing) {
         return null;
@@ -110,6 +115,8 @@ class BobNavigationHotkeysChecklistWalkMixin {
       ) {
         return null;
       }
+      // The completion holds the gesture lock, settling afterwards.
+      this.takeReviewWalkLock(REVIEW_GESTURE_LOCK_MS);
       return Promise.resolve(
         this.completeReviewChecklistRow(editor, {
           api,
@@ -121,10 +128,16 @@ class BobNavigationHotkeysChecklistWalkMixin {
           withinGroup: true,
         }),
       )
-        .then((ok) =>
-          ok === true ? { ok: true } : { ok: false, reason: "not-completed" },
-        )
-        .catch(() => ({ ok: false, reason: "not-completed" }));
+        .then((ok) => {
+          this.settleReviewWalkLock(ok === true);
+          return ok === true
+            ? { ok: true }
+            : { ok: false, reason: "not-completed" };
+        })
+        .catch(() => {
+          this.settleReviewWalkLock(false);
+          return { ok: false, reason: "not-completed" };
+        });
     } catch (error) {
       return null;
     }
@@ -216,6 +229,13 @@ class BobNavigationHotkeysChecklistWalkMixin {
     }
 
     this.reviewLanding = null;
+    this.addReviewAnsweredKeys([reviewQueueEntryKey(entry)], todayText);
+    // The pre-landing cursor for the `<C-o>` jump record: the completed row.
+    const jumpOrigin = {
+      path: filePath,
+      line: Number.isInteger(entry.line) ? entry.line - 1 : 0,
+      ch: 0,
+    };
     const taskText =
       entry && typeof entry.text === "string" && entry.text.trim()
         ? entry.text.trim()
@@ -258,7 +278,9 @@ class BobNavigationHotkeysChecklistWalkMixin {
       for (const successor of liveGroup.after) {
         let landed;
         try {
-          landed = await this.landOnReviewQueueEntry(successor);
+          landed = await this.landOnReviewQueueEntry(successor, {
+            jumpOrigin,
+          });
         } catch (error) {
           landed = { ok: false, stale: true };
         }
@@ -355,7 +377,9 @@ class BobNavigationHotkeysChecklistWalkMixin {
       new Notice(doneLine);
       return true;
     }
-    const landed = await this.landOnReviewQueueEntry(nextPlan.entry);
+    const landed = await this.landOnReviewQueueEntry(nextPlan.entry, {
+      jumpOrigin,
+    });
     if (!landed.ok) {
       new Notice(doneLine);
       return true;

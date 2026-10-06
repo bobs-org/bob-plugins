@@ -189,6 +189,17 @@ function makePlugin({ queue, chores, posts, content, complete, cyclerVersion = 2
   };
   plugin.reviewAnchor = null;
   plugin.reviewLanding = null;
+  plugin.reviewLandingEpoch = 0;
+  plugin.reviewGestureSeq = 0;
+  plugin.reviewWalkLock = null;
+  plugin.reviewAnsweredKeys = { day: null, keys: new Set() };
+  // Human-paced presses: the gesture lock settles ~350 ms after each
+  // advance, so rapid test presses tick the clock past the settle window.
+  const clock = { now: Date.now() };
+  plugin.reviewAdvanceNow = () => clock.now;
+  plugin.advanceReviewClock = (ms) => {
+    clock.now += ms;
+  };
   plugin.view = view;
   plugin.laneReleaseDateText = () => DATE;
   plugin.api = helpers.createDependencyNavApi(plugin);
@@ -308,6 +319,7 @@ test("seven Ctrl+Enter presses walk PRE with stale queues and either recurrence 
     for (let index = 0; index < CHORES.length; index += 1) {
       if (refreshed) refreshQueueFromEditor(fixture);
       assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+      fixture.plugin.advanceReviewClock(400);
       if (index < CHORES.length - 1) {
         assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), new RegExp(`#pre ${CHORES[index + 1]}`));
       }

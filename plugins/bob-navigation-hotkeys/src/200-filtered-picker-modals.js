@@ -576,6 +576,23 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
     ) {
       this.plugin.activeTaskMoveDestinationPicker = null;
     }
+    // Review-walk auto-advance (nav-gestures): the picker uses
+    // `closeBeforeOpenItem`, so this runs before the commit. Dismissing the
+    // picker settles without advancing; a started commit settles itself.
+    const plugin = this.plugin;
+    const origin = this.session ? this.session.reviewOrigin : null;
+    if (plugin && origin) {
+      setTimeout(() => {
+        try {
+          if (plugin.taskMoveReviewCommitStarted === true) {
+            return;
+          }
+          void plugin.continueReviewWalkAfter(origin, null);
+        } catch (error) {
+          // Settle is best effort after close.
+        }
+      }, 0);
+    }
     super.onClose();
   }
 }

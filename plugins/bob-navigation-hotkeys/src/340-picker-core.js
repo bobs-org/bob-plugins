@@ -54,6 +54,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;
+    // Review-walk auto-advance (nav-gestures): the landing origin captured
+    // when the card opened, the cursor line it was captured on, and that
+    // line's text before any write. `reviewSettleDeferred` lets the cancel
+    // route close the picker first and settle after its notice.
+    this.reviewOrigin = context.reviewOrigin || null;
+    this.reviewLineIndex = Number.isInteger(context.reviewLineIndex)
+      ? context.reviewLineIndex
+      : null;
+    this.reviewBeforeLine =
+      typeof context.reviewBeforeLine === "string"
+        ? context.reviewBeforeLine
+        : "";
+    this.reviewSettleDeferred = false;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and

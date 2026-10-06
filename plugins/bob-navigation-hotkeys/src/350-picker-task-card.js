@@ -611,7 +611,84 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     this.vaultStageRefreshId = -1;
     this.clearPendingBatch();
+    // Review-walk auto-advance (nav-gestures): normal commits show their
+    // rich card before this close, so settling here lands the walk toast
+    // after it. The cancel route defers and settles after its own notice.
+    if (this.reviewOrigin && this.reviewSettleDeferred !== true) {
+      const picker = this;
+      setTimeout(() => {
+        try {
+          picker.settleReviewOrigin();
+        } catch (error) {
+          // Settle is best effort after close.
+        }
+      }, 0);
+    }
     super.onClose();
+  }
+
+  // Idempotent: read the after-line from the editor at the captured line
+  // and continue the walk. Esc, `q`, refusals, and no-op writes read an
+  // unchanged line, which stays; every committing write is judged from the
+  // line after the write. Never throws.
+  settleReviewOrigin() {
+    const origin = this.reviewOrigin;
+    this.reviewOrigin = null;
+    if (!origin) {
+      return;
+    }
+    try {
+      const plugin = this.plugin;
+      if (!plugin || typeof plugin.continueReviewWalkAfter !== "function") {
+        return;
+      }
+      const beforeLine =
+        typeof this.reviewBeforeLine === "string" ? this.reviewBeforeLine : "";
+      let afterLine = "";
+      try {
+        const live =
+          this.editor && Number.isInteger(this.reviewLineIndex)
+            ? getEditorLine(this.editor, this.reviewLineIndex)
+            : null;
+        afterLine = typeof live === "string" ? live : "";
+      } catch (error) {
+        afterLine = "";
+      }
+      let handledRefs = [
+        { path: this.filePath || null, line: this.reviewLineIndex, raw: beforeLine },
+      ];
+      try {
+        const session = this.taskSession;
+        if (
+          session &&
+          session.explicit === true &&
+          Array.isArray(session.targets) &&
+          session.targets.length > 0
+        ) {
+          handledRefs = session.targets
+            .filter((target) => target && Number.isInteger(target.line))
+            .map((target) => ({
+              path: this.filePath || null,
+              line: target.line,
+              raw: String(target.rawLine ?? ""),
+            }));
+        }
+      } catch (error) {
+        // Keep the single cursor-task ref.
+      }
+      void plugin.continueReviewWalkAfter(origin, {
+        kind: "card",
+        beforeLine,
+        afterLine,
+        handledRefs,
+      });
+    } catch (error) {
+      try {
+        void this.plugin.continueReviewWalkAfter(origin, null);
+      } catch (ignoredError) {
+        // Best effort only.
+      }
+    }
   }
 
   renderAll(options = {}) {

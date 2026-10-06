@@ -16720,6 +16720,23 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
     ) {
       this.plugin.activeTaskMoveDestinationPicker = null;
     }
+    // Review-walk auto-advance (nav-gestures): the picker uses
+    // `closeBeforeOpenItem`, so this runs before the commit. Dismissing the
+    // picker settles without advancing; a started commit settles itself.
+    const plugin = this.plugin;
+    const origin = this.session ? this.session.reviewOrigin : null;
+    if (plugin && origin) {
+      setTimeout(() => {
+        try {
+          if (plugin.taskMoveReviewCommitStarted === true) {
+            return;
+          }
+          void plugin.continueReviewWalkAfter(origin, null);
+        } catch (error) {
+          // Settle is best effort after close.
+        }
+      }, 0);
+    }
     super.onClose();
   }
 }
@@ -27064,6 +27081,19 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;
+    // Review-walk auto-advance (nav-gestures): the landing origin captured
+    // when the card opened, the cursor line it was captured on, and that
+    // line's text before any write. `reviewSettleDeferred` lets the cancel
+    // route close the picker first and settle after its notice.
+    this.reviewOrigin = context.reviewOrigin || null;
+    this.reviewLineIndex = Number.isInteger(context.reviewLineIndex)
+      ? context.reviewLineIndex
+      : null;
+    this.reviewBeforeLine =
+      typeof context.reviewBeforeLine === "string"
+        ? context.reviewBeforeLine
+        : "";
+    this.reviewSettleDeferred = false;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and
@@ -27700,7 +27730,84 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     this.vaultStageRefreshId = -1;
     this.clearPendingBatch();
+    // Review-walk auto-advance (nav-gestures): normal commits show their
+    // rich card before this close, so settling here lands the walk toast
+    // after it. The cancel route defers and settles after its own notice.
+    if (this.reviewOrigin && this.reviewSettleDeferred !== true) {
+      const picker = this;
+      setTimeout(() => {
+        try {
+          picker.settleReviewOrigin();
+        } catch (error) {
+          // Settle is best effort after close.
+        }
+      }, 0);
+    }
     super.onClose();
+  }
+
+  // Idempotent: read the after-line from the editor at the captured line
+  // and continue the walk. Esc, `q`, refusals, and no-op writes read an
+  // unchanged line, which stays; every committing write is judged from the
+  // line after the write. Never throws.
+  settleReviewOrigin() {
+    const origin = this.reviewOrigin;
+    this.reviewOrigin = null;
+    if (!origin) {
+      return;
+    }
+    try {
+      const plugin = this.plugin;
+      if (!plugin || typeof plugin.continueReviewWalkAfter !== "function") {
+        return;
+      }
+      const beforeLine =
+        typeof this.reviewBeforeLine === "string" ? this.reviewBeforeLine : "";
+      let afterLine = "";
+      try {
+        const live =
+          this.editor && Number.isInteger(this.reviewLineIndex)
+            ? getEditorLine(this.editor, this.reviewLineIndex)
+            : null;
+        afterLine = typeof live === "string" ? live : "";
+      } catch (error) {
+        afterLine = "";
+      }
+      let handledRefs = [
+        { path: this.filePath || null, line: this.reviewLineIndex, raw: beforeLine },
+      ];
+      try {
+        const session = this.taskSession;
+        if (
+          session &&
+          session.explicit === true &&
+          Array.isArray(session.targets) &&
+          session.targets.length > 0
+        ) {
+          handledRefs = session.targets
+            .filter((target) => target && Number.isInteger(target.line))
+            .map((target) => ({
+              path: this.filePath || null,
+              line: target.line,
+              raw: String(target.rawLine ?? ""),
+            }));
+        }
+      } catch (error) {
+        // Keep the single cursor-task ref.
+      }
+      void plugin.continueReviewWalkAfter(origin, {
+        kind: "card",
+        beforeLine,
+        afterLine,
+        handledRefs,
+      });
+    } catch (error) {
+      try {
+        void this.plugin.continueReviewWalkAfter(origin, null);
+      } catch (ignoredError) {
+        // Best effort only.
+      }
+    }
   }
 
   renderAll(options = {}) {
@@ -37095,17 +37202,50 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         }
       }
     }
+    // Review-walk auto-advance (nav-gestures): capture after the pending
+    // Vim count is consumed and before dispatch. While the gesture lock is
+    // held the key is swallowed with no write.
+    let reviewOrigin = null;
+    try {
+      if (typeof this.captureReviewGesture === "function") {
+        const captured = this.captureReviewGesture(cm);
+        if (captured && captured.busy === true) {
+          return false;
+        }
+        reviewOrigin = captured || null;
+      }
+    } catch (error) {
+      reviewOrigin = null;
+    }
+    const settleLaneReview = (outcome) => {
+      if (!reviewOrigin) {
+        return;
+      }
+      const origin = reviewOrigin;
+      reviewOrigin = null;
+      try {
+        void this.continueReviewWalkAfter(origin, outcome);
+      } catch (error) {
+        // `continueReviewWalkAfter` never throws; best effort only.
+      }
+    };
     const onTask = isObsidianTaskAtLine(content, cursor.line);
     if (onTask) {
+      const origin = reviewOrigin;
+      reviewOrigin = null;
       return await this.toggleTaskLaneOnTasks(cm, cursor, content, {
         countExplicit,
         additionalTaskCount,
         summary: options.summary,
         dateText: options.dateText,
         skipReleasePrompt: options.skipReleasePrompt,
+        reviewOrigin: origin,
       });
     }
     if (parseLinkPickerTaskLink(lineText)) {
+      // Task Link mode never matches a landing: settle without advancing
+      // before going there.
+      settleLaneReview(null);
       return await this.toggleTaskLaneOnLinks(cm, cursor, content, {
         countExplicit,
         additionalTaskCount,
@@ -37115,6 +37255,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         skipReleasePrompt: options.skipReleasePrompt,
       });
     }
+    settleLaneReview(null);
     new Notice("Cursor is not on a task or Task Link");
     return false;
   }
@@ -37391,7 +37532,42 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     return true;
   }
 
+  // Review-walk auto-advance (nav-gestures): the origin rides in on
+  // `options.reviewOrigin` and is settled exactly once — `null` on every
+  // refusal, cancel, or failure, and the lane outcome on success.
   async toggleTaskLaneOnTasks(cm, cursor, content, options = {}) {
+    const reviewOrigin =
+      options && options.reviewOrigin ? options.reviewOrigin : null;
+    let reviewSettled = false;
+    const settleTaskLaneReview = (outcome) => {
+      if (reviewSettled || !reviewOrigin) {
+        return;
+      }
+      reviewSettled = true;
+      try {
+        void this.continueReviewWalkAfter(reviewOrigin, outcome);
+      } catch (error) {
+        // `continueReviewWalkAfter` never throws; best effort only.
+      }
+    };
+    try {
+      return await this.toggleTaskLaneOnTasksWrite(cm, cursor, content, {
+        ...options,
+        reviewSettle: settleTaskLaneReview,
+        reviewOrigin,
+      });
+    } finally {
+      settleTaskLaneReview(null);
+    }
+  }
+
+  async toggleTaskLaneOnTasksWrite(cm, cursor, content, options = {}) {
+    const settleTaskLaneReview =
+      options && typeof options.reviewSettle === "function"
+        ? options.reviewSettle
+        : null;
+    const reviewOrigin =
+      options && options.reviewOrigin ? options.reviewOrigin : null;
     const session = discoverCountedObsidianTaskTargets(
       content,
       cursor.line,
@@ -37543,17 +37719,35 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     const releasedPendingCount = plan.released.filter(
       (entry) => entry.fromStatus === "/",
     ).length;
-    new Notice(
-      buildLaneToggleNotice({
-        mode: plan.mode,
-        changedTaskCount: plan.changedTaskCount,
-        blockedSkipped: plan.blockedSkipped,
-        unlinkedFromToday: removedPomodoroLinkCount,
-        releasedNextCount,
-        releasedPendingCount,
-        laneBudgets,
-      }),
-    );
+    const laneNoticeText = buildLaneToggleNotice({
+      mode: plan.mode,
+      changedTaskCount: plan.changedTaskCount,
+      blockedSkipped: plan.blockedSkipped,
+      unlinkedFromToday: removedPomodoroLinkCount,
+      releasedNextCount,
+      releasedPendingCount,
+      laneBudgets,
+    });
+    if (settleTaskLaneReview && reviewOrigin) {
+      // The separate Pomodoro-prune warning stays its own notice; the lane
+      // text becomes the advance preamble.
+      const sourceLines = String(content || "").split(/\r?\n/);
+      settleTaskLaneReview({
+        kind: "lane",
+        handledRefs: session.targets
+          .filter((target) => target && Number.isInteger(target.line))
+          .map((target) =>
+            Object.freeze({
+              path: filePath,
+              line: target.line,
+              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
+            }),
+          ),
+        notice: laneNoticeText,
+      });
+    } else {
+      new Notice(laneNoticeText);
+    }
     return true;
   }
 }
@@ -41563,6 +41757,16 @@ class BobNavigationHotkeysCancelPropertyMixin {
   // recover them later), then show exactly one Cancelled notice card after
   // recovery settles.
   async finishTaskCancelNotice(picker, details = {}) {
+    // Review-walk auto-advance (nav-gestures): the cancel card must precede
+    // the landing toast, but this route closes the picker before its notice.
+    // Defer the modal's own settle and settle after the notice instead.
+    if (picker) {
+      try {
+        picker.reviewSettleDeferred = true;
+      } catch (error) {
+        // A picker without review state simply has nothing to defer.
+      }
+    }
     if (picker && typeof picker.close === "function") {
       try {
         picker.close();
@@ -41623,11 +41827,21 @@ class BobNavigationHotkeysCancelPropertyMixin {
         pomodoroPruneFailed: details.pomodoroPruneFailed,
       }),
     );
+    // The deferred review settle runs after the cancel card, so the landing
+    // toast follows it. Pickers without review state no-op here.
+    try {
+      if (picker && typeof picker.settleReviewOrigin === "function") {
+        picker.settleReviewOrigin();
+      }
+    } catch (error) {
+      // Settle is best effort after the notice.
+    }
     return true;
   }
 
   openBulletPropertyPicker(cm, options = {}) {
     const activePicker = this.activeBulletPropertyPicker;
+    const hadActivePicker = Boolean(activePicker);
     if (activePicker) {
       const incomingCountExplicit = Boolean(
         options.countExplicit === true ||
@@ -41745,6 +41959,27 @@ class BobNavigationHotkeysCancelPropertyMixin {
     }
     const filePath = activeView.file.path;
 
+    // Review-walk auto-advance (nav-gestures): capture on the plain
+    // task-line path only — not the Depends-On redirect's outer call or a
+    // direct stage (`initialProperty`), not Task Link bullets (routed to the
+    // link picker above), and not when a picker was already open. While the
+    // gesture lock is held the key is swallowed with no write.
+    let reviewOrigin = null;
+    if (
+      !options.initialProperty &&
+      !hadActivePicker &&
+      typeof this.captureReviewGesture === "function"
+    ) {
+      try {
+        const captured = this.captureReviewGesture(cm);
+        if (captured && captured.busy === true) {
+          return true;
+        }
+        reviewOrigin = captured || null;
+      } catch (error) {
+        reviewOrigin = null;
+      }
+    }
     const picker = new BulletPropertyPickerModal(
       this.app,
       this,
@@ -41759,6 +41994,9 @@ class BobNavigationHotkeysCancelPropertyMixin {
         initialProperty: options.initialProperty || null,
         random: options.random,
         baseDate: options.baseDate,
+        reviewOrigin,
+        reviewLineIndex: cursor.line,
+        reviewBeforeLine: lineText,
       },
     );
     this.activeBulletPropertyPicker = picker;
@@ -49963,6 +50201,23 @@ class BobNavigationHotkeysNotesMoveMixin {
       typeof editor.getScrollInfo === "function"
         ? editor.getScrollInfo()
         : null;
+    // Review-walk auto-advance (nav-gestures): capture when the frozen
+    // session is built. While the gesture lock is held the key is swallowed
+    // with no write. The Pomodoro bullet and entry contexts use different
+    // pickers and never match a landing, so only this task path captures.
+    let reviewOrigin = null;
+    try {
+      if (typeof this.captureReviewGesture === "function") {
+        const captured = this.captureReviewGesture(editor);
+        if (captured && captured.busy === true) {
+          return true;
+        }
+        reviewOrigin = captured || null;
+      }
+    } catch (error) {
+      reviewOrigin = null;
+    }
+    this.taskMoveReviewCommitStarted = false;
     const session = Object.freeze({
       sourceFile,
       sourcePath: sourceFile.path,
@@ -49977,6 +50232,7 @@ class BobNavigationHotkeysNotesMoveMixin {
       countExplicit: options.countExplicit === true,
       discovery,
       ranges: ranges.ranges,
+      reviewOrigin,
     });
     const picker = new TaskMoveDestinationPickerModal(
       this.app,
@@ -50509,7 +50765,44 @@ class BobNavigationHotkeysMoveCommitMixin {
     return true;
   }
 
+  // Review-walk auto-advance (nav-gestures): the origin rides in on
+  // `session.reviewOrigin` and is settled exactly once — `null` on every
+  // refusal or failure, and the move outcome on a resolving success.
+  // `taskMoveReviewCommitStarted` is set synchronously so the picker's
+  // `onClose` (which ran before this commit) knows not to settle.
   async commitTaskMoveSession(session, destinationEntry) {
+    const reviewOrigin =
+      session && session.reviewOrigin ? session.reviewOrigin : null;
+    this.taskMoveReviewCommitStarted = true;
+    let reviewSettled = false;
+    const settleMoveReview = (outcome) => {
+      if (reviewSettled || !reviewOrigin) {
+        return;
+      }
+      reviewSettled = true;
+      try {
+        void this.continueReviewWalkAfter(reviewOrigin, outcome);
+      } catch (error) {
+        // `continueReviewWalkAfter` never throws; best effort only.
+      }
+    };
+    try {
+      return await this.commitTaskMoveSessionWrite(session, destinationEntry, {
+        reviewOrigin,
+        reviewSettle: settleMoveReview,
+      });
+    } finally {
+      settleMoveReview(null);
+    }
+  }
+
+  async commitTaskMoveSessionWrite(session, destinationEntry, moveOptions = {}) {
+    const settleMoveReview =
+      moveOptions && typeof moveOptions.reviewSettle === "function"
+        ? moveOptions.reviewSettle
+        : null;
+    const reviewOrigin =
+      moveOptions && moveOptions.reviewOrigin ? moveOptions.reviewOrigin : null;
     const destinationFile = destinationEntry && destinationEntry.file;
     const activeView = this.getActiveMarkdownView();
     if (
@@ -50658,36 +50951,51 @@ class BobNavigationHotkeysMoveCommitMixin {
       return false;
     }
 
-    let vimJumpContext = null;
-    try {
-      vimJumpContext = this.createVimJumpContextWithOrigin({
-        path: session.sourcePath,
-        line: finalCursor.line,
-        ch: finalCursor.ch,
-      });
-    } catch (error) {
-      vimJumpContext = null;
-    }
-    try {
-      if (vimJumpContext) {
-        await this.focusTaskMoveDestination(
-          destinationFile,
-          {
+    // Review-walk auto-advance (nav-gestures): from a lane/other landing
+    // the move advances instead of focusing the destination, and the cursor
+    // stays in the source note. Otherwise keep today's behavior and settle
+    // without advancing.
+    const reviewTier =
+      reviewOrigin && typeof reviewOrigin.tier === "string"
+        ? reviewOrigin.tier
+        : "";
+    const reviewAdvances =
+      Boolean(settleMoveReview) &&
+      Boolean(reviewOrigin) &&
+      reviewTier !== "pre" &&
+      reviewTier !== "post";
+    if (!reviewAdvances) {
+      let vimJumpContext = null;
+      try {
+        vimJumpContext = this.createVimJumpContextWithOrigin({
+          path: session.sourcePath,
+          line: finalCursor.line,
+          ch: finalCursor.ch,
+        });
+      } catch (error) {
+        vimJumpContext = null;
+      }
+      try {
+        if (vimJumpContext) {
+          await this.focusTaskMoveDestination(
+            destinationFile,
+            {
+              line: plan.destinationLine,
+              text: plan.destinationAnchorText,
+              blockId: plan.destinationBlockId,
+            },
+            vimJumpContext,
+          );
+        } else {
+          await this.focusTaskMoveDestination(destinationFile, {
             line: plan.destinationLine,
             text: plan.destinationAnchorText,
             blockId: plan.destinationBlockId,
-          },
-          vimJumpContext,
-        );
-      } else {
-        await this.focusTaskMoveDestination(destinationFile, {
-          line: plan.destinationLine,
-          text: plan.destinationAnchorText,
-          blockId: plan.destinationBlockId,
-        });
+          });
+        }
+      } catch (error) {
+        // Destination navigation and history are best-effort after commit.
       }
-    } catch (error) {
-      // Destination navigation and history are best-effort after commit.
     }
     const count = session.discovery.actualCount;
     const destinationName =
@@ -50696,9 +51004,26 @@ class BobNavigationHotkeysMoveCommitMixin {
     const clamped = session.discovery.clamped
       ? ` (requested ${session.discovery.requestedCount}; reached end of note)`
       : "";
-    new Notice(
-      `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}`,
-    );
+    const moveNoticeText =
+      `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}`;
+    if (reviewAdvances) {
+      const sourceLines = String(session.sourceContent || "").split(/\r?\n/);
+      settleMoveReview({
+        kind: "move",
+        handledRefs: (session.discovery.targets || [])
+          .filter((target) => target && Number.isInteger(target.line))
+          .map((target) =>
+            Object.freeze({
+              path: session.sourcePath,
+              line: target.line,
+              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
+            }),
+          ),
+        notice: moveNoticeText,
+      });
+      return true;
+    }
+    new Notice(moveNoticeText);
     return true;
   }
 

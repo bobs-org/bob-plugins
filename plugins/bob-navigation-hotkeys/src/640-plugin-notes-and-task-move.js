@@ -688,6 +688,23 @@ class BobNavigationHotkeysNotesMoveMixin {
       typeof editor.getScrollInfo === "function"
         ? editor.getScrollInfo()
         : null;
+    // Review-walk auto-advance (nav-gestures): capture when the frozen
+    // session is built. While the gesture lock is held the key is swallowed
+    // with no write. The Pomodoro bullet and entry contexts use different
+    // pickers and never match a landing, so only this task path captures.
+    let reviewOrigin = null;
+    try {
+      if (typeof this.captureReviewGesture === "function") {
+        const captured = this.captureReviewGesture(editor);
+        if (captured && captured.busy === true) {
+          return true;
+        }
+        reviewOrigin = captured || null;
+      }
+    } catch (error) {
+      reviewOrigin = null;
+    }
+    this.taskMoveReviewCommitStarted = false;
     const session = Object.freeze({
       sourceFile,
       sourcePath: sourceFile.path,
@@ -702,6 +719,7 @@ class BobNavigationHotkeysNotesMoveMixin {
       countExplicit: options.countExplicit === true,
       discovery,
       ranges: ranges.ranges,
+      reviewOrigin,
     });
     const picker = new TaskMoveDestinationPickerModal(
       this.app,

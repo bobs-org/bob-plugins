@@ -327,17 +327,50 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         }
       }
     }
+    // Review-walk auto-advance (nav-gestures): capture after the pending
+    // Vim count is consumed and before dispatch. While the gesture lock is
+    // held the key is swallowed with no write.
+    let reviewOrigin = null;
+    try {
+      if (typeof this.captureReviewGesture === "function") {
+        const captured = this.captureReviewGesture(cm);
+        if (captured && captured.busy === true) {
+          return false;
+        }
+        reviewOrigin = captured || null;
+      }
+    } catch (error) {
+      reviewOrigin = null;
+    }
+    const settleLaneReview = (outcome) => {
+      if (!reviewOrigin) {
+        return;
+      }
+      const origin = reviewOrigin;
+      reviewOrigin = null;
+      try {
+        void this.continueReviewWalkAfter(origin, outcome);
+      } catch (error) {
+        // `continueReviewWalkAfter` never throws; best effort only.
+      }
+    };
     const onTask = isObsidianTaskAtLine(content, cursor.line);
     if (onTask) {
+      const origin = reviewOrigin;
+      reviewOrigin = null;
       return await this.toggleTaskLaneOnTasks(cm, cursor, content, {
         countExplicit,
         additionalTaskCount,
         summary: options.summary,
         dateText: options.dateText,
         skipReleasePrompt: options.skipReleasePrompt,
+        reviewOrigin: origin,
       });
     }
     if (parseLinkPickerTaskLink(lineText)) {
+      // Task Link mode never matches a landing: settle without advancing
+      // before going there.
+      settleLaneReview(null);
       return await this.toggleTaskLaneOnLinks(cm, cursor, content, {
         countExplicit,
         additionalTaskCount,
@@ -347,6 +380,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         skipReleasePrompt: options.skipReleasePrompt,
       });
     }
+    settleLaneReview(null);
     new Notice("Cursor is not on a task or Task Link");
     return false;
   }
@@ -623,7 +657,42 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     return true;
   }
 
+  // Review-walk auto-advance (nav-gestures): the origin rides in on
+  // `options.reviewOrigin` and is settled exactly once — `null` on every
+  // refusal, cancel, or failure, and the lane outcome on success.
   async toggleTaskLaneOnTasks(cm, cursor, content, options = {}) {
+    const reviewOrigin =
+      options && options.reviewOrigin ? options.reviewOrigin : null;
+    let reviewSettled = false;
+    const settleTaskLaneReview = (outcome) => {
+      if (reviewSettled || !reviewOrigin) {
+        return;
+      }
+      reviewSettled = true;
+      try {
+        void this.continueReviewWalkAfter(reviewOrigin, outcome);
+      } catch (error) {
+        // `continueReviewWalkAfter` never throws; best effort only.
+      }
+    };
+    try {
+      return await this.toggleTaskLaneOnTasksWrite(cm, cursor, content, {
+        ...options,
+        reviewSettle: settleTaskLaneReview,
+        reviewOrigin,
+      });
+    } finally {
+      settleTaskLaneReview(null);
+    }
+  }
+
+  async toggleTaskLaneOnTasksWrite(cm, cursor, content, options = {}) {
+    const settleTaskLaneReview =
+      options && typeof options.reviewSettle === "function"
+        ? options.reviewSettle
+        : null;
+    const reviewOrigin =
+      options && options.reviewOrigin ? options.reviewOrigin : null;
     const session = discoverCountedObsidianTaskTargets(
       content,
       cursor.line,
@@ -775,17 +844,35 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     const releasedPendingCount = plan.released.filter(
       (entry) => entry.fromStatus === "/",
     ).length;
-    new Notice(
-      buildLaneToggleNotice({
-        mode: plan.mode,
-        changedTaskCount: plan.changedTaskCount,
-        blockedSkipped: plan.blockedSkipped,
-        unlinkedFromToday: removedPomodoroLinkCount,
-        releasedNextCount,
-        releasedPendingCount,
-        laneBudgets,
-      }),
-    );
+    const laneNoticeText = buildLaneToggleNotice({
+      mode: plan.mode,
+      changedTaskCount: plan.changedTaskCount,
+      blockedSkipped: plan.blockedSkipped,
+      unlinkedFromToday: removedPomodoroLinkCount,
+      releasedNextCount,
+      releasedPendingCount,
+      laneBudgets,
+    });
+    if (settleTaskLaneReview && reviewOrigin) {
+      // The separate Pomodoro-prune warning stays its own notice; the lane
+      // text becomes the advance preamble.
+      const sourceLines = String(content || "").split(/\r?\n/);
+      settleTaskLaneReview({
+        kind: "lane",
+        handledRefs: session.targets
+          .filter((target) => target && Number.isInteger(target.line))
+          .map((target) =>
+            Object.freeze({
+              path: filePath,
+              line: target.line,
+              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
+            }),
+          ),
+        notice: laneNoticeText,
+      });
+    } else {
+      new Notice(laneNoticeText);
+    }
     return true;
   }
 }

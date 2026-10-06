@@ -139,6 +139,16 @@ class BobNavigationHotkeysCancelPropertyMixin {
   // recover them later), then show exactly one Cancelled notice card after
   // recovery settles.
   async finishTaskCancelNotice(picker, details = {}) {
+    // Review-walk auto-advance (nav-gestures): the cancel card must precede
+    // the landing toast, but this route closes the picker before its notice.
+    // Defer the modal's own settle and settle after the notice instead.
+    if (picker) {
+      try {
+        picker.reviewSettleDeferred = true;
+      } catch (error) {
+        // A picker without review state simply has nothing to defer.
+      }
+    }
     if (picker && typeof picker.close === "function") {
       try {
         picker.close();
@@ -199,11 +209,21 @@ class BobNavigationHotkeysCancelPropertyMixin {
         pomodoroPruneFailed: details.pomodoroPruneFailed,
       }),
     );
+    // The deferred review settle runs after the cancel card, so the landing
+    // toast follows it. Pickers without review state no-op here.
+    try {
+      if (picker && typeof picker.settleReviewOrigin === "function") {
+        picker.settleReviewOrigin();
+      }
+    } catch (error) {
+      // Settle is best effort after the notice.
+    }
     return true;
   }
 
   openBulletPropertyPicker(cm, options = {}) {
     const activePicker = this.activeBulletPropertyPicker;
+    const hadActivePicker = Boolean(activePicker);
     if (activePicker) {
       const incomingCountExplicit = Boolean(
         options.countExplicit === true ||
@@ -321,6 +341,27 @@ class BobNavigationHotkeysCancelPropertyMixin {
     }
     const filePath = activeView.file.path;
 
+    // Review-walk auto-advance (nav-gestures): capture on the plain
+    // task-line path only — not the Depends-On redirect's outer call or a
+    // direct stage (`initialProperty`), not Task Link bullets (routed to the
+    // link picker above), and not when a picker was already open. While the
+    // gesture lock is held the key is swallowed with no write.
+    let reviewOrigin = null;
+    if (
+      !options.initialProperty &&
+      !hadActivePicker &&
+      typeof this.captureReviewGesture === "function"
+    ) {
+      try {
+        const captured = this.captureReviewGesture(cm);
+        if (captured && captured.busy === true) {
+          return true;
+        }
+        reviewOrigin = captured || null;
+      } catch (error) {
+        reviewOrigin = null;
+      }
+    }
     const picker = new BulletPropertyPickerModal(
       this.app,
       this,
@@ -335,6 +376,9 @@ class BobNavigationHotkeysCancelPropertyMixin {
         initialProperty: options.initialProperty || null,
         random: options.random,
         baseDate: options.baseDate,
+        reviewOrigin,
+        reviewLineIndex: cursor.line,
+        reviewBeforeLine: lineText,
       },
     );
     this.activeBulletPropertyPicker = picker;

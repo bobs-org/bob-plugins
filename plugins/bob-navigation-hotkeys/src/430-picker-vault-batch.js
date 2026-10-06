@@ -234,18 +234,28 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
     if (!dependencyTask || !item.valid) {
       return false;
     }
-    const applied = await this.plugin.applyCountedLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.filePath,
-      this.taskSession,
-      dependencyTask,
-      { confirmedBlockId: item.id },
-    );
-    if (applied) {
-      this.clearPendingBatch();
+    const countedConfirmAction = { label: "add 2 prerequisites" };
+    const countedConfirmWrite = async () => {
+      const applied = await this.plugin.applyCountedLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.taskSession,
+        dependencyTask,
+        { confirmedBlockId: item.id },
+      );
+      if (applied) {
+        this.clearPendingBatch();
+      }
+      return applied;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(
+        countedConfirmAction,
+        countedConfirmWrite,
+      );
     }
-    return applied;
+    return await countedConfirmWrite();
   }
 
   // Record one confirmed block ID and either advance to the next prompt (modal
@@ -330,35 +340,64 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       ? normalizeBulletPropertyValue(confirmedIdField.value)
       : "";
 
-    const linked = this.plugin.setLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.selectedPropertyItem.property.name,
-      depValue,
-      {
-        showNotice: false,
-        linkBlockId: item.id,
-        filePath: this.filePath,
-        pendingTargetLine: {
-          line: task.line,
-          expected: targetLine,
-          text: updatedLine,
-        },
+    const singleConfirmArgs = {
+      showNotice: false,
+      linkBlockId: item.id,
+      filePath: this.filePath,
+      pendingTargetLine: {
+        line: task.line,
+        expected: targetLine,
+        text: updatedLine,
       },
-    );
-    if (!linked) {
-      return false;
+    };
+    let armed = false;
+    try {
+      armed =
+        typeof this.isInboxRouteArmed === "function" &&
+        this.isInboxRouteArmed() === true &&
+        typeof this.runInboxRoutedCommit === "function";
+    } catch (error) {
+      armed = false;
     }
+    if (!armed) {
+      const linked = this.plugin.setLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.selectedPropertyItem.property.name,
+        depValue,
+        singleConfirmArgs,
+      );
+      if (!linked) {
+        return false;
+      }
 
-    new Notice(`Added ^${item.id} + linked dependency + navigation link`);
-    return true;
+      new Notice(`Added ^${item.id} + linked dependency + navigation link`);
+      return true;
+    }
+    const singleConfirmAction = { label: "add 1 prerequisite" };
+    const singleConfirmWrite = async () => {
+      const linked = await this.plugin.setLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.selectedPropertyItem.property.name,
+        depValue,
+        singleConfirmArgs,
+      );
+      if (!linked) {
+        return false;
+      }
+
+      new Notice(`Added ^${item.id} + linked dependency + navigation link`);
+      return true;
+    };
+    return this.runInboxRoutedCommit(singleConfirmAction, singleConfirmWrite);
   }
 
   // Execution phase: re-guard the cursor bullet, apply each target's edits,
   // rewrite the `[dependsOn:: ...]` list once, then reconcile navigation
   // bullets. Target-line edits are single-line replaces, so target indices stay
   // stable; only the nav reconciliation shifts lines and re-reads as it goes.
-  async executeDependencyBatch(batch) {
+  async executeDependencyBatchWithoutInboxRoute(batch) {
     const parentValidation = validateDependencyParentForEditor(
       this.editor,
       this.cursor,
@@ -626,4 +665,12 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
   // A stale target or dependent refuses with `changed — reopen` and then
   // reopens the stage fresh (`docs/task-dependencies.md` §6.4). Best-effort:
   // harness stubs without a picker opener just keep the refusal.
+  async executeDependencyBatch(batch) {
+    const inboxAction = { label: "add 2 prerequisites" };
+    const inboxWrite = async () => await this.executeDependencyBatchWithoutInboxRoute(batch);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
 }

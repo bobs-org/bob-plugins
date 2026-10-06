@@ -26364,6 +26364,7 @@ function planTaskCard(context = {}) {
     refreshDescription,
     rows,
     baseDate,
+    inboxRoute: context.inboxRoute || null,
   });
   const timeline = buildTaskCardTimeline({
     recommendation,
@@ -26795,6 +26796,9 @@ function buildTaskCardHeader(details = {}) {
     ),
   );
   const chips = [];
+  if (details.inboxRoute) {
+    chips.push("Inbox");
+  }
   if (session.type === "linked") {
     chips.push("via Task Link");
   }
@@ -26832,6 +26836,10 @@ function buildTaskCardHeader(details = {}) {
     title: fullTitle || "Task Card",
     fullTitle: fullTitle || "Task Card",
     note: note || "",
+    inboxRouted: Boolean(details.inboxRoute),
+    inboxTooltip: details.inboxRoute
+      ? "Answers ask where this task goes first"
+      : null,
     lane,
     laneMixed: lane === "mixed",
     priority,
@@ -27205,10 +27213,26 @@ function renderTaskCardView(container, model, options = {}) {
               text === headerModel.schedule.label
             ? " is-today"
             : "";
-      meta.createSpan({
-        cls: `bob-task-card-chip${laneClass}${dateTone}`,
+      const isInboxChip = text === "Inbox";
+      const chipEl = meta.createSpan({
+        cls: `bob-task-card-chip${laneClass}${dateTone}${isInboxChip ? " is-muted" : ""}`,
         text,
       });
+      if (isInboxChip && chipEl) {
+        try {
+          const tooltip =
+            headerModel.inboxTooltip ||
+            "Answers ask where this task goes first";
+          if (typeof chipEl.setAttribute === "function") {
+            chipEl.setAttribute("title", tooltip);
+            chipEl.setAttribute("aria-label", `Inbox. ${tooltip}`);
+          } else {
+            chipEl.title = tooltip;
+          }
+        } catch (error) {
+          // Tooltip is best-effort.
+        }
+      }
     }
   }
   if (headerModel.error) {
@@ -27758,6 +27782,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         ? context.reviewBeforeLine
         : "";
     this.reviewSettleDeferred = false;
+    this.inboxRoute = context.inboxRoute || null;
+    this.inboxRouteCommitInFlight = false;
+    this.inboxRouteResult = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and
@@ -27821,6 +27848,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       lineText: this.lineText,
       cursorLine: this.cursor ? this.cursor.line : 0,
       filePath: this.filePath,
+      inboxRoute: this.inboxRoute || null,
       propertyContext: this.propertyContext,
       taskSession: this.taskSession,
       linkSession: this.linkSession,
@@ -28179,7 +28207,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         return false;
       }
       this.ensureTaskCardStageChrome();
-      const applied = await this.plugin.applyLaneToggleFromPicker(this);
+      const applied = await this.applyInboxRoutedLaneToggle();
       if (applied !== true && this.pickerOpen && this.stage === TASK_CARD_PENDING_STAGE) {
         this.returnHome({ rebuild: true });
       }
@@ -28733,8 +28761,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
         this.showLaneReleaseReasonStage(propertyItem);
         return;
       }
-      void this.plugin
-        .applyLaneToggleFromPicker(this)
+      void this.applyInboxRoutedLaneToggle()
         .then((applied) => {
           if (applied !== true) {
             this.returnHome();
@@ -28988,19 +29015,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
   // Custom refresh entry: when the value-stage query itself is an integer
   // 1-365 with no matching preset row selected, apply it directly.
   applyRefreshCustomFromQuery(query) {
-    const custom = parseRefreshCustomValue(query);
-    if (custom === null) {
-      return false;
-    }
-    return this.plugin.applyRefreshIntervalFromPicker(
-      this,
-      Object.freeze({
-        kind: "value",
-        value: custom,
-        label: `${custom} days`,
-        refreshDays: custom,
-      }),
-    );
+    return this.applyInboxRoutedRefreshCustom(query);
   }
 
   // The scheduled value a picked date replaces: frontmatter for a ^prj task,
@@ -30175,7 +30190,7 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     if (!pending || !item) {
       return false;
     }
-    return this.plugin.applyLaneToggleFromPicker(this, {
+    return this.applyInboxRoutedLaneToggle({
       summary: item.empty ? "" : item.reason,
       dateText: pending.dateText,
     });
@@ -30690,37 +30705,38 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       recommendation.schedulesName,
       liveContext,
     );
-    const nextHint = planNextPriorityRollHint(property, recommendation);
-    const rollOption = {
-      kind: "roll",
-      fromLevel: getPriorityRollCurrentLabel(recommendation),
-      step: recommendation.step,
-      limit: recommendation.limit,
-      next: nextHint ? nextHint.next : null,
-      nextLabel: nextHint ? nextHint.nextLabel : "",
-    };
-    const levelIndex = normalizePriorityLevelIndex(
-      property,
-      recommendation.level,
-    );
+    // Project-frontmatter writers stay unwrapped (task-card-gate).
     if (scheduledTarget.kind === "project-frontmatter") {
-      const liveScheduled =
+      const liveScheduledDirect =
         liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
           ? liveContext.frontmatter.scheduledValue
           : "";
+      const nextHintDirect = planNextPriorityRollHint(property, recommendation);
+      const rollOptionDirect = {
+        kind: "roll",
+        fromLevel: getPriorityRollCurrentLabel(recommendation),
+        step: recommendation.step,
+        limit: recommendation.limit,
+        next: nextHintDirect ? nextHintDirect.next : null,
+        nextLabel: nextHintDirect ? nextHintDirect.nextLabel : "",
+      };
+      const levelIndexDirect = normalizePriorityLevelIndex(
+        property,
+        recommendation.level,
+      );
       return await this.plugin.setProjectNoteScheduledValue(
         this.editor,
         this.cursor,
         this.filePath,
         this.lineText,
-        liveScheduled,
+        liveScheduledDirect,
         recommendation.date,
         {
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
             level: recommendation.level,
             rolledDays: recommendation.offset,
-            from: liveScheduled,
+            from: liveScheduledDirect,
             to: recommendation.date,
           }),
           schedulingWorkLog,
@@ -30728,12 +30744,12 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             buildPriorityNoticeModel({
               property,
               level: recommendation.level,
-              levelIndex,
+              levelIndex: levelIndexDirect,
               baseDate: this.valueBaseDate,
               scheduledValues: [outcome.scheduled || recommendation.date],
               taskCount: 1,
               scope: "project",
-              roll: rollOption,
+              roll: rollOptionDirect,
               outcome: {
                 ...outcome,
                 scheduleLoggedTaskCount:
@@ -30746,52 +30762,76 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         },
       );
     }
-    const scheduledField = findBulletPropertyField(
-      liveLine,
-      recommendation.schedulesName,
-    );
-    return await this.plugin.setBulletPropertyValue(
-      this.editor,
-      this.cursor,
-      recommendation.schedulesName,
-      recommendation.date,
-      {
-        filePath: this.filePath,
-        expectedLine: this.lineText,
-        scheduleLog: buildPriorityRollScheduleLog({
-          source: "scheduled",
-          level: recommendation.level,
-          rolledDays: recommendation.offset,
-          from: scheduledField ? scheduledField.value : "",
-          to: recommendation.date,
-        }),
-        schedulingWorkLog,
-        buildNotice: (outcome) =>
-          buildPriorityNoticeModel({
-            property,
+    const rollAction = {
+      label: recommendation.date
+        ? `roll to ${recommendation.date}`
+        : `set ${recommendation.level || "priority"}`,
+    };
+    const rollWrite = async () => {
+      const nextHint = planNextPriorityRollHint(property, recommendation);
+      const rollOption = {
+        kind: "roll",
+        fromLevel: getPriorityRollCurrentLabel(recommendation),
+        step: recommendation.step,
+        limit: recommendation.limit,
+        next: nextHint ? nextHint.next : null,
+        nextLabel: nextHint ? nextHint.nextLabel : "",
+      };
+      const levelIndex = normalizePriorityLevelIndex(
+        property,
+        recommendation.level,
+      );
+      const scheduledField = findBulletPropertyField(
+        liveLine,
+        recommendation.schedulesName,
+      );
+      return await this.plugin.setBulletPropertyValue(
+        this.editor,
+        this.cursor,
+        recommendation.schedulesName,
+        recommendation.date,
+        {
+          filePath: this.filePath,
+          expectedLine: this.lineText,
+          scheduleLog: buildPriorityRollScheduleLog({
+            source: "scheduled",
             level: recommendation.level,
-            levelIndex,
-            baseDate: this.valueBaseDate,
-            scheduledValues: [recommendation.date],
-            taskCount: 1,
-            scope: "task",
-            roll: rollOption,
-            outcome: {
-              blockedTaskCount: outcome.blocked ? 1 : 0,
-              recoveryCounts: outcome.recoveryCounts,
-              scheduleLoggedTaskCount:
-                outcome.scheduleLogOutcome === "added" ||
-                outcome.scheduleLogOutcome === "created"
-                  ? 1
-                  : 0,
-              schedulingWorkLogWrittenCount:
-                outcome.schedulingWorkLogWrittenCount || 0,
-              removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
-              pomodoroPruneFailed: outcome.pomodoroPruneFailed,
-            },
+            rolledDays: recommendation.offset,
+            from: scheduledField ? scheduledField.value : "",
+            to: recommendation.date,
           }),
-      },
-    );
+          schedulingWorkLog,
+          buildNotice: (outcome) =>
+            buildPriorityNoticeModel({
+              property,
+              level: recommendation.level,
+              levelIndex,
+              baseDate: this.valueBaseDate,
+              scheduledValues: [recommendation.date],
+              taskCount: 1,
+              scope: "task",
+              roll: rollOption,
+              outcome: {
+                blockedTaskCount: outcome.blocked ? 1 : 0,
+                recoveryCounts: outcome.recoveryCounts,
+                scheduleLoggedTaskCount:
+                  outcome.scheduleLogOutcome === "added" ||
+                  outcome.scheduleLogOutcome === "created"
+                    ? 1
+                    : 0,
+                schedulingWorkLogWrittenCount:
+                  outcome.schedulingWorkLogWrittenCount || 0,
+                removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
+                pomodoroPruneFailed: outcome.pomodoroPruneFailed,
+              },
+            }),
+        },
+      );
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(rollAction, rollWrite);
+    }
+    return await rollWrite();
   }
 
   async applyRecommendedDecayWrite(recommendation, schedulingWorkLog = null) {
@@ -30807,33 +30847,43 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       this.getEditorContent(),
       this.cursor.line,
     );
-    return await this.plugin.setBulletPriorityValue(
-      this.editor,
-      this.cursor,
-      this.filePath,
-      this.lineText,
-      property,
-      recommendation.toLevel,
-      {
-        propertyContext: liveContext,
-        baseDate: this.valueBaseDate,
-        random: this.priorityRandom,
-        precomputedRoll: {
-          date: recommendation.date,
-          offset: recommendation.offset,
+    const decayAction = {
+      label: recommendation.toLevel
+        ? `decay to ${recommendation.toLevel.label || recommendation.toLevel.value || "next"}`
+        : "decay",
+    };
+    const decayWrite = async () =>
+      await this.plugin.setBulletPriorityValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        property,
+        recommendation.toLevel,
+        {
+          propertyContext: liveContext,
+          baseDate: this.valueBaseDate,
+          random: this.priorityRandom,
+          precomputedRoll: {
+            date: recommendation.date,
+            offset: recommendation.offset,
+          },
+          scheduleReasonOverride: recommendation.reason,
+          schedulingWorkLog,
+          noticeRoll: {
+            kind: "decay",
+            fromLevel: getPriorityRollCurrentLabel(recommendation),
+            step: null,
+            limit: recommendation.limit,
+            next: nextHint ? nextHint.next : null,
+            nextLabel: nextHint ? nextHint.nextLabel : "",
+          },
         },
-        scheduleReasonOverride: recommendation.reason,
-        schedulingWorkLog,
-        noticeRoll: {
-          kind: "decay",
-          fromLevel: getPriorityRollCurrentLabel(recommendation),
-          step: null,
-          limit: recommendation.limit,
-          next: nextHint ? nextHint.next : null,
-          nextLabel: nextHint ? nextHint.nextLabel : "",
-        },
-      },
-    );
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(decayAction, decayWrite);
+    }
+    return await decayWrite();
   }
 
   async applyRecommendedCancelWrite(recommendation) {
@@ -31887,23 +31937,32 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
           }
         : null;
 
-    return this.plugin.setLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.selectedPropertyItem.property.name,
-      resolved.value,
-      {
-        linkBlockId: resolved.linkBlockId,
-        filePath: this.filePath,
-        pendingTargetLine,
-      },
-    );
+    const dependencyAction = { label: "add 1 prerequisite" };
+    const dependencyWrite = async () =>
+      await this.plugin.setLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.selectedPropertyItem.property.name,
+        resolved.value,
+        {
+          linkBlockId: resolved.linkBlockId,
+          filePath: this.filePath,
+          pendingTargetLine,
+        },
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(
+        dependencyAction,
+        dependencyWrite,
+      );
+    }
+    return await dependencyWrite();
   }
 
 }
 // ---- src/420-picker-counted-dependency.js ----
 class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
-  chooseCountedTaskDependency(item) {
+  async chooseCountedTaskDependency(item) {
     if (!item) {
       return false;
     }
@@ -31953,13 +32012,19 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       return false;
     }
 
-    return this.plugin.applyCountedLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.filePath,
-      this.taskSession,
-      item,
-    );
+    const countedAction = { label: "add 2 prerequisites" };
+    const countedWrite = async () =>
+      await this.plugin.applyCountedLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.taskSession,
+        item,
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(countedAction, countedWrite);
+    }
+    return await countedWrite();
   }
 
   // Counted (`N<Ctrl+Shift+P>`) vault-wide commits: the existing
@@ -32008,7 +32073,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // (cross-note, or a target whose note is gone) plans every source on one
   // working copy bottom-up and commits once, so a missing target is always
   // removable.
-  async removeCountedDependency(item) {
+  async removeCountedDependencyWithoutInboxRoute(item) {
     const sessionValidation = validateCountedTaskSession(
       this.getEditorContent(),
       this.taskSession,
@@ -32233,7 +32298,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // plans every source on one working copy bottom-up, refuses before any
   // write when any source fails to plan, then commits once; the notice
   // counts only sources that actually changed.
-  async applyVaultCountedDependencyRef(snapshot) {
+  async applyVaultCountedDependencyRefWithoutInboxRoute(snapshot) {
     const sessionValidation = validateCountedTaskSession(
       this.getEditorContent(),
       this.taskSession,
@@ -32542,6 +32607,22 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // fresh line snapshots (or drop as stale), and every prompt target lands
   // in the stage files so `+ id` suggestions validate against the right
   // note. Empty queues execute straight through.
+  async applyVaultCountedDependencyRef(snapshot) {
+    const inboxAction = { label: "edit dependencies" };
+    const inboxWrite = async () => await this.applyVaultCountedDependencyRefWithoutInboxRoute(snapshot);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
+  async removeCountedDependency(item) {
+    const inboxAction = { label: "remove 1 prerequisite" };
+    const inboxWrite = async () => await this.removeCountedDependencyWithoutInboxRoute(item);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
 }
 // ---- src/430-picker-vault-batch.js ----
 class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
@@ -32780,18 +32861,28 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
     if (!dependencyTask || !item.valid) {
       return false;
     }
-    const applied = await this.plugin.applyCountedLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.filePath,
-      this.taskSession,
-      dependencyTask,
-      { confirmedBlockId: item.id },
-    );
-    if (applied) {
-      this.clearPendingBatch();
+    const countedConfirmAction = { label: "add 2 prerequisites" };
+    const countedConfirmWrite = async () => {
+      const applied = await this.plugin.applyCountedLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.taskSession,
+        dependencyTask,
+        { confirmedBlockId: item.id },
+      );
+      if (applied) {
+        this.clearPendingBatch();
+      }
+      return applied;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(
+        countedConfirmAction,
+        countedConfirmWrite,
+      );
     }
-    return applied;
+    return await countedConfirmWrite();
   }
 
   // Record one confirmed block ID and either advance to the next prompt (modal
@@ -32876,35 +32967,64 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       ? normalizeBulletPropertyValue(confirmedIdField.value)
       : "";
 
-    const linked = this.plugin.setLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.selectedPropertyItem.property.name,
-      depValue,
-      {
-        showNotice: false,
-        linkBlockId: item.id,
-        filePath: this.filePath,
-        pendingTargetLine: {
-          line: task.line,
-          expected: targetLine,
-          text: updatedLine,
-        },
+    const singleConfirmArgs = {
+      showNotice: false,
+      linkBlockId: item.id,
+      filePath: this.filePath,
+      pendingTargetLine: {
+        line: task.line,
+        expected: targetLine,
+        text: updatedLine,
       },
-    );
-    if (!linked) {
-      return false;
+    };
+    let armed = false;
+    try {
+      armed =
+        typeof this.isInboxRouteArmed === "function" &&
+        this.isInboxRouteArmed() === true &&
+        typeof this.runInboxRoutedCommit === "function";
+    } catch (error) {
+      armed = false;
     }
+    if (!armed) {
+      const linked = this.plugin.setLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.selectedPropertyItem.property.name,
+        depValue,
+        singleConfirmArgs,
+      );
+      if (!linked) {
+        return false;
+      }
 
-    new Notice(`Added ^${item.id} + linked dependency + navigation link`);
-    return true;
+      new Notice(`Added ^${item.id} + linked dependency + navigation link`);
+      return true;
+    }
+    const singleConfirmAction = { label: "add 1 prerequisite" };
+    const singleConfirmWrite = async () => {
+      const linked = await this.plugin.setLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.selectedPropertyItem.property.name,
+        depValue,
+        singleConfirmArgs,
+      );
+      if (!linked) {
+        return false;
+      }
+
+      new Notice(`Added ^${item.id} + linked dependency + navigation link`);
+      return true;
+    };
+    return this.runInboxRoutedCommit(singleConfirmAction, singleConfirmWrite);
   }
 
   // Execution phase: re-guard the cursor bullet, apply each target's edits,
   // rewrite the `[dependsOn:: ...]` list once, then reconcile navigation
   // bullets. Target-line edits are single-line replaces, so target indices stay
   // stable; only the nav reconciliation shifts lines and re-reads as it goes.
-  async executeDependencyBatch(batch) {
+  async executeDependencyBatchWithoutInboxRoute(batch) {
     const parentValidation = validateDependencyParentForEditor(
       this.editor,
       this.cursor,
@@ -33172,6 +33292,14 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
   // A stale target or dependent refuses with `changed — reopen` and then
   // reopens the stage fresh (`docs/task-dependencies.md` §6.4). Best-effort:
   // harness stubs without a picker opener just keep the refusal.
+  async executeDependencyBatch(batch) {
+    const inboxAction = { label: "add 2 prerequisites" };
+    const inboxWrite = async () => await this.executeDependencyBatchWithoutInboxRoute(batch);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
 }
 // ---- src/440-picker-vault-commit.js ----
 class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
@@ -33193,6 +33321,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       }
       void plugin.openBulletPropertyPicker(editor, {
         initialProperty: "dependsOn",
+        inboxRoute: this.inboxRoute || null,
       });
     } catch (_reopenError) {
       // Best-effort reopen only.
@@ -33214,27 +33343,34 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       new Notice("⛓ Could not remove dependency (missing link target)");
       return false;
     }
-    const outcome = await this.plugin.applyDependencyEdit({
-      editor: this.editor,
-      parentPath: ownerPath,
-      parentLine: this.cursor.line,
-      add: [],
-      remove: [
-        { path: normalizeVaultRelativePath(item.path || ownerPath), blockId },
-      ],
-    });
-    if (!outcome.ok) {
-      if (outcome.reason === "stale-editor") {
-        // `applyDependencyEdit` already showed `changed — reopen`: only
-        // reopen the stage fresh, without a second notice (§6.4).
-        this.reopenDependencyStageFresh();
+    const removeAction = { label: "remove 1 prerequisite" };
+    const removeWrite = async () => {
+      const outcome = await this.plugin.applyDependencyEdit({
+        editor: this.editor,
+        parentPath: ownerPath,
+        parentLine: this.cursor.line,
+        add: [],
+        remove: [
+          { path: normalizeVaultRelativePath(item.path || ownerPath), blockId },
+        ],
+      });
+      if (!outcome.ok) {
+        if (outcome.reason === "stale-editor") {
+          // `applyDependencyEdit` already showed `changed — reopen`: only
+          // reopen the stage fresh, without a second notice (§6.4).
+          this.reopenDependencyStageFresh();
+          return false;
+        }
+        new Notice(`⛓ Could not remove dependency (${outcome.reason})`);
         return false;
       }
-      new Notice(`⛓ Could not remove dependency (${outcome.reason})`);
-      return false;
+      new Notice(outcome.notice || "⛓ Dependency removed");
+      return true;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(removeAction, removeWrite);
     }
-    new Notice(outcome.notice || "⛓ Dependency removed");
-    return true;
+    return await removeWrite();
   }
 
   // Vault-wide single add: re-read the target note and refuse when the
@@ -33463,37 +33599,48 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         }
       }
     }
-    const outcome = await this.plugin.applyDependencyEdit({
-      editor: this.editor,
-      parentPath: ownerPath,
-      parentLine: this.cursor.line,
-      add: addRefs,
-      remove: removeRefs,
-    });
-    if (!outcome.ok) {
-      // A stale write refuses and reopens the stage fresh, exactly like the
-      // same-note `executeDependencyBatch` (§6.4). `applyDependencyEdit`
-      // already showed `changed — reopen`, so only reopen here.
-      if (outcome.reason === "stale-editor") {
-        this.reopenDependencyStageFresh();
+    const count = (Array.isArray(addRefs) ? addRefs.length : 0) +
+      (Array.isArray(removeRefs) ? removeRefs.length : 0);
+    const vaultAction = {
+      label: count > 1 ? `add ${count} prerequisites` : "edit dependencies",
+    };
+    const vaultWrite = async () => {
+      const outcome = await this.plugin.applyDependencyEdit({
+        editor: this.editor,
+        parentPath: ownerPath,
+        parentLine: this.cursor.line,
+        add: addRefs,
+        remove: removeRefs,
+      });
+      if (!outcome.ok) {
+        // A stale write refuses and reopens the stage fresh, exactly like the
+        // same-note `executeDependencyBatch` (§6.4). `applyDependencyEdit`
+        // already showed `changed — reopen`, so only reopen here.
+        if (outcome.reason === "stale-editor") {
+          this.reopenDependencyStageFresh();
+          return false;
+        }
+        new Notice(dependencyPlanFailureNotice(outcome.reason, "update"));
         return false;
       }
-      new Notice(dependencyPlanFailureNotice(outcome.reason, "update"));
-      return false;
+      const skipped = (counters.stale || 0) + (counters.other || 0);
+      new Notice(
+        (outcome.notice || "⛓ Dependencies updated") +
+          (skipped > 0 ? ` (${skipped} skipped)` : ""),
+      );
+      return true;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(vaultAction, vaultWrite);
     }
-    const skipped = (counters.stale || 0) + (counters.other || 0);
-    new Notice(
-      (outcome.notice || "⛓ Dependencies updated") +
-        (skipped > 0 ? ` (${skipped} skipped)` : ""),
-    );
-    return true;
+    return await vaultWrite();
   }
 
   // Batch executor for stages containing cross-note rows: every target is
   // re-read fresh (a stale row refuses the whole batch before any write),
   // `+ id` prompts were collected up front, and the whole batch commits
   // once.
-  async executeVaultDependencyBatch(batch, seedCounters = null) {
+  async executeVaultDependencyBatchWithoutInboxRoute(batch, seedCounters = null) {
     const parentValidation = validateDependencyParentForEditor(
       this.editor,
       this.cursor,
@@ -33715,6 +33862,21 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     }
   }
 
+  describeInboxRouteCountedRollAction(cached) {
+    try {
+      const count =
+        cached && Number.isInteger(cached.actionableCount)
+          ? cached.actionableCount
+          : 0;
+      return {
+        label:
+          count > 1 ? `apply ${count} rolls` : "apply recommendation",
+      };
+    } catch (error) {
+      return { label: "apply recommendation" };
+    }
+  }
+
   async maybeOfferCountedRecommendedWorkLog(cached) {
     const entries = Array.isArray(cached.entries) ? cached.entries : [];
     const schedulingEntries = entries.filter(
@@ -33724,8 +33886,21 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         (entry.recommendation.kind === "roll" ||
           entry.recommendation.kind === "decay"),
     );
+    const countedAction = this.describeInboxRouteCountedRollAction(cached);
+    const runCountedRoll = async (schedulingWorkLog) =>
+      await this.plugin.applyCountedRecommendedRoll(this, {
+        schedulingWorkLog: schedulingWorkLog || null,
+      });
+    const runRoutedCountedRoll = async (schedulingWorkLog) => {
+      if (typeof this.runInboxRoutedCommit === "function") {
+        return await this.runInboxRoutedCommit(countedAction, () =>
+          runCountedRoll(schedulingWorkLog),
+        );
+      }
+      return await runCountedRoll(schedulingWorkLog);
+    };
     if (schedulingEntries.length === 0) {
-      return await this.plugin.applyCountedRecommendedRoll(this);
+      return await runRoutedCountedRoll(null);
     }
     const targets = schedulingEntries.map((entry) => ({
       line: entry.line,
@@ -33733,7 +33908,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     }));
     const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
     if (eligible.size === 0) {
-      return await this.plugin.applyCountedRecommendedRoll(this);
+      return await runRoutedCountedRoll(null);
     }
     const dates = schedulingEntries
       .map((entry) => entry.recommendation && entry.recommendation.date)
@@ -33743,8 +33918,8 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       targets,
       scheduleSummary,
       dispatch: async (summary) =>
-        await this.plugin.applyCountedRecommendedRoll(this, {
-          schedulingWorkLog: summary
+        await runRoutedCountedRoll(
+          summary
             ? {
                 summary,
                 dateText: formatBulletPropertyDate(
@@ -33754,7 +33929,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
                 ),
               }
             : null,
-        }),
+        ),
     });
   }
 
@@ -33841,6 +34016,14 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     });
   }
 
+  async executeVaultDependencyBatch(batch, seedCounters = null) {
+    const inboxAction = { label: "add 2 prerequisites" };
+    const inboxWrite = async () => await this.executeVaultDependencyBatchWithoutInboxRoute(batch, seedCounters);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
 }
 // ---- src/450-picker-keydown.js ----
 class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
@@ -34130,44 +34313,108 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       );
       return false;
     }
+    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    if (
+      !this.isLinkSession() &&
+      !this.isCountedSession() &&
+      item.target &&
+      item.target.kind === "project-frontmatter"
+    ) {
+      const direct = await this.plugin.deleteProjectNoteScheduledValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        item.currentValue,
+      );
+      if (!direct || direct.deleted !== true) {
+        if (direct && direct.line) {
+          this.lineText = direct.line;
+          this.bulletSubtitle = truncateBulletPropertySubtitle(direct.line);
+          this.refreshPropertyItems();
+        }
+        return false;
+      }
+      return true;
+    }
 
-    const result = await (this.isLinkSession()
-      ? this.plugin.deleteLinkPickerPropertyValue(this, item)
-      : this.isCountedSession()
-        ? this.plugin.deleteCountedBulletPropertyValue(
-            this.editor,
-            this.cursor,
-            this.filePath,
-            this.taskSession,
-            propertyName,
-          )
-        : item.target.kind === "project-frontmatter"
-          ? await this.plugin.deleteProjectNoteScheduledValue(
+    const action = { label: `clear ${propertyName}` };
+    const write = async () => {
+      const result = await (this.isLinkSession()
+        ? this.plugin.deleteLinkPickerPropertyValue(this, item)
+        : this.isCountedSession()
+          ? this.plugin.deleteCountedBulletPropertyValue(
               this.editor,
               this.cursor,
               this.filePath,
-              this.lineText,
-              item.currentValue,
-            )
-          : this.plugin.deleteBulletPropertyValue(
-              this.editor,
-              this.cursor,
+              this.taskSession,
               propertyName,
-              {
-                filePath: this.filePath,
-                expectedLine: this.lineText,
-              },
-            ));
-    if (!result || result.deleted !== true) {
-      if (result && result.line) {
-        this.lineText = result.line;
-        this.bulletSubtitle = truncateBulletPropertySubtitle(result.line);
-        this.refreshPropertyItems();
+            )
+          : item.target.kind === "project-frontmatter"
+            ? await this.plugin.deleteProjectNoteScheduledValue(
+                this.editor,
+                this.cursor,
+                this.filePath,
+                this.lineText,
+                item.currentValue,
+              )
+            : this.plugin.deleteBulletPropertyValue(
+                this.editor,
+                this.cursor,
+                propertyName,
+                {
+                  filePath: this.filePath,
+                  expectedLine: this.lineText,
+                },
+              ));
+      if (!result || result.deleted !== true) {
+        if (result && result.line) {
+          this.lineText = result.line;
+          this.bulletSubtitle = truncateBulletPropertySubtitle(result.line);
+          this.refreshPropertyItems();
+        }
+        return false;
       }
-      return false;
-    }
 
-    return true;
+      return true;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(action, write);
+    }
+    return await write();
+  }
+
+  describeInboxRouteSelectedValueAction(item) {
+    try {
+      const selected = this.selectedPropertyItem;
+      if (!selected) {
+        return { label: "apply" };
+      }
+      if (selected.kind === "refresh-interval") {
+        const days =
+          (item && (item.refreshDays ?? item.value)) || selected.days || "";
+        return { label: days ? `review every ${days}d` : "review every" };
+      }
+      const propertyName =
+        (selected.property && selected.property.name) || "property";
+      if (selected.property && selected.property.values === "priority") {
+        const level =
+          (item && (item.label || item.value)) ||
+          (item && item.priorityLevel && item.priorityLevel.label) ||
+          "";
+        return { label: level ? `set ${level}` : `set ${propertyName}` };
+      }
+      if (propertyName === "scheduled" || propertyName === "scheduledDate") {
+        const date = (item && (item.value || item.label)) || "";
+        return { label: date ? `schedule ${date}` : "schedule" };
+      }
+      const value = (item && (item.value ?? item.label)) || "";
+      return {
+        label: value ? `set ${propertyName} ${value}` : `set ${propertyName}`,
+      };
+    } catch (error) {
+      return { label: "apply" };
+    }
   }
 
   async applySelectedValue(item, options = {}) {
@@ -34175,8 +34422,56 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       return false;
     }
 
+    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    const selectedTarget =
+      this.selectedPropertyItem && this.selectedPropertyItem.target;
+    if (
+      !this.isLinkSession() &&
+      !this.isCountedSession() &&
+      selectedTarget &&
+      selectedTarget.kind === "project-frontmatter"
+    ) {
+      if (this.selectedPropertyItem.kind === "refresh-interval") {
+        return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
+      }
+      const schedulingWorkLogDirect =
+        options.schedulingWorkLog || options.workLog || null;
+      if (this.selectedPropertyItem.property.values === "priority") {
+        return await this.plugin.setBulletPriorityValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.lineText,
+          this.selectedPropertyItem.property,
+          item.priorityLevel,
+          {
+            propertyContext: this.propertyContext,
+            baseDate: this.valueBaseDate,
+            random: this.priorityRandom,
+            schedulingWorkLog: schedulingWorkLogDirect,
+            precomputedRoll: options.precomputedRoll,
+          },
+        );
+      }
+      return await this.plugin.setProjectNoteScheduledValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        this.selectedPropertyItem.currentValue,
+        item.value,
+        { scheduleLog: options.scheduleLog, schedulingWorkLog: schedulingWorkLogDirect },
+      );
+    }
+
     if (this.selectedPropertyItem.kind === "refresh-interval") {
-      return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
+      const refreshAction = this.describeInboxRouteSelectedValueAction(item);
+      const refreshWrite = async () =>
+        await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
+      if (typeof this.runInboxRoutedCommit === "function") {
+        return await this.runInboxRoutedCommit(refreshAction, refreshWrite);
+      }
+      return await refreshWrite();
     }
 
     const schedulingWorkLog =
@@ -34193,80 +34488,528 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       );
     }
 
-    if (this.isCountedSession()) {
-      if (this.selectedPropertyItem.property.values === "priority") {
-        return await this.plugin.setCountedBulletPriorityValue(
+    const selectedAction = this.describeInboxRouteSelectedValueAction(item);
+    const selectedWrite = async () => {
+      if (this.isCountedSession()) {
+        if (this.selectedPropertyItem.property.values === "priority") {
+          return await this.plugin.setCountedBulletPriorityValue(
+            this.editor,
+            this.cursor,
+            this.filePath,
+            this.taskSession,
+            this.selectedPropertyItem.property,
+            item.priorityLevel,
+            {
+              baseDate: this.valueBaseDate,
+              random: this.priorityRandom,
+              schedulingWorkLog,
+              precomputedRollByLine: options.precomputedRollByLine,
+              precomputedScheduledValueByLine:
+                options.precomputedScheduledValueByLine,
+              rollByLine: options.rollByLine,
+              scheduledValueByLine: options.scheduledValueByLine,
+            },
+          );
+        }
+        return await this.plugin.setCountedBulletPropertyValue(
           this.editor,
           this.cursor,
           this.filePath,
           this.taskSession,
+          this.selectedPropertyItem.property.name,
+          item.value,
+          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+        );
+      }
+
+      if (this.selectedPropertyItem.property.values === "priority") {
+        return await this.plugin.setBulletPriorityValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.lineText,
           this.selectedPropertyItem.property,
           item.priorityLevel,
           {
+            propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
             schedulingWorkLog,
-            precomputedRollByLine: options.precomputedRollByLine,
-            precomputedScheduledValueByLine:
-              options.precomputedScheduledValueByLine,
-            rollByLine: options.rollByLine,
-            scheduledValueByLine: options.scheduledValueByLine,
+            precomputedRoll: options.precomputedRoll,
           },
         );
       }
-      return await this.plugin.setCountedBulletPropertyValue(
+
+      if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
+        return await this.plugin.setProjectNoteScheduledValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.lineText,
+          this.selectedPropertyItem.currentValue,
+          item.value,
+          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+        );
+      }
+
+      return await this.plugin.setBulletPropertyValue(
         this.editor,
         this.cursor,
-        this.filePath,
-        this.taskSession,
         this.selectedPropertyItem.property.name,
         item.value,
-        { scheduleLog: options.scheduleLog, schedulingWorkLog },
-      );
-    }
-
-    if (this.selectedPropertyItem.property.values === "priority") {
-      return await this.plugin.setBulletPriorityValue(
-        this.editor,
-        this.cursor,
-        this.filePath,
-        this.lineText,
-        this.selectedPropertyItem.property,
-        item.priorityLevel,
         {
-          propertyContext: this.propertyContext,
-          baseDate: this.valueBaseDate,
-          random: this.priorityRandom,
+          filePath: this.filePath,
+          expectedLine: this.lineText,
+          scheduleLog: options.scheduleLog,
           schedulingWorkLog,
-          precomputedRoll: options.precomputedRoll,
         },
       );
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(selectedAction, selectedWrite);
     }
-
-    if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
-      return await this.plugin.setProjectNoteScheduledValue(
-        this.editor,
-        this.cursor,
-        this.filePath,
-        this.lineText,
-        this.selectedPropertyItem.currentValue,
-        item.value,
-        { scheduleLog: options.scheduleLog, schedulingWorkLog },
-      );
+    return await selectedWrite();
+  }
+}
+// ---- src/455-picker-inbox-route-gate.js ----
+// Task Card inbox-route gate (task-card-gate): one helper,
+// `runInboxRoutedCommit(action, write)`, that routes every non-closing
+// single and counted Task Card commit on an inbox task through the route
+// picker (prompt, write, move, settle the walk once). Armed only when
+// `openBulletPropertyPicker` attached `inboxRoute` context (inbox note +
+// open #task, never link sessions). Closing actions, unarmed pickers, and
+// re-entrant nested writers bypass with `await write()`. Cancel restores
+// the card with nothing written; stay restores and runs today's write;
+// move writes then moves via `plugin.commitInboxRoute`, settling exactly
+// once with a `route` walk outcome. Never throws.
+class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
+  isInboxRouteArmed() {
+    try {
+      if (!this.inboxRoute || typeof this.inboxRoute !== "object") {
+        return false;
+      }
+      if (typeof this.isLinkSession === "function" && this.isLinkSession()) {
+        return false;
+      }
+      if (!this.filePath) {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
     }
+  }
 
-    return await this.plugin.setBulletPropertyValue(
-      this.editor,
-      this.cursor,
-      this.selectedPropertyItem.property.name,
-      item.value,
-      {
-        filePath: this.filePath,
-        expectedLine: this.lineText,
-        scheduleLog: options.scheduleLog,
-        schedulingWorkLog,
+  isInboxRouteClosingAction(action) {
+    try {
+      if (!action || typeof action !== "object") {
+        return false;
+      }
+      if (action.closing === true) {
+        return true;
+      }
+      if (action.id === "cancel" || action.kind === "cancel" || action.kind === "cancel-task") {
+        return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  inboxRouteSuspendPair() {
+    const modalEl = this.modalEl || null;
+    let focusTarget = null;
+    try {
+      focusTarget =
+        this.stage === "task-card" ? this.taskCardListEl : this.inputEl;
+    } catch (error) {
+      focusTarget = null;
+    }
+    let fallbackActive = null;
+    try {
+      fallbackActive =
+        typeof document !== "undefined" && document.activeElement
+          ? document.activeElement
+          : null;
+    } catch (error) {
+      fallbackActive = null;
+    }
+    return {
+      isAlive: () => {
+        try {
+          return this.pickerOpen !== false;
+        } catch (error) {
+          return false;
+        }
       },
-    );
+      hide: () => {
+        try {
+          if (modalEl && typeof modalEl.addClass === "function") {
+            modalEl.addClass("bob-task-card-suspended");
+          } else if (modalEl && modalEl.classList) {
+            modalEl.classList.add("bob-task-card-suspended");
+          }
+        } catch (error) {
+          // Suspension is visual only.
+        }
+      },
+      restore: () => {
+        try {
+          if (modalEl && typeof modalEl.removeClass === "function") {
+            modalEl.removeClass("bob-task-card-suspended");
+          } else if (modalEl && modalEl.classList) {
+            modalEl.classList.remove("bob-task-card-suspended");
+          }
+        } catch (error) {
+          // Restore is best-effort.
+        }
+        try {
+          const target = focusTarget || fallbackActive;
+          if (target && typeof target.focus === "function") {
+            target.focus();
+          }
+        } catch (error) {
+          // Focus restore never throws.
+        }
+      },
+    };
+  }
+
+  captureInboxRouteTargets() {
+    try {
+      const session = this.taskSession;
+      if (
+        session &&
+        session.explicit === true &&
+        Array.isArray(session.targets) &&
+        session.targets.length > 0
+      ) {
+        const startLine = session.targets[0].line;
+        return {
+          startLine: Number.isInteger(startLine) ? startLine : null,
+          additionalTaskCount: Math.max(0, session.targets.length - 1),
+          expected: captureInboxRouteExpected(
+            session.targets.map((target) => ({
+              line: target.line,
+              rawLine: target.rawLine,
+              raw: target.rawLine,
+            })),
+          ),
+        };
+      }
+      const line = Number.isInteger(this.reviewLineIndex)
+        ? this.reviewLineIndex
+        : this.cursor && Number.isInteger(this.cursor.line)
+          ? this.cursor.line
+          : null;
+      const raw =
+        typeof this.reviewBeforeLine === "string" && this.reviewBeforeLine
+          ? this.reviewBeforeLine
+          : typeof this.lineText === "string"
+            ? this.lineText
+            : "";
+      if (line === null) {
+        return { startLine: null, additionalTaskCount: 0, expected: [] };
+      }
+      return {
+        startLine: line,
+        additionalTaskCount: 0,
+        expected: captureInboxRouteExpected([{ line, rawLine: raw, raw }]),
+      };
+    } catch (error) {
+      return { startLine: null, additionalTaskCount: 0, expected: [] };
+    }
+  }
+
+  inboxRouteCardFallbackRefs() {
+    try {
+      const session = this.taskSession;
+      if (
+        session &&
+        session.explicit === true &&
+        Array.isArray(session.targets) &&
+        session.targets.length > 0
+      ) {
+        return session.targets
+          .filter((target) => target && Number.isInteger(target.line))
+          .map((target) => ({
+            path: this.filePath || null,
+            line: target.line,
+            raw: String(target.rawLine ?? ""),
+          }));
+      }
+      return [
+        {
+          path: this.filePath || null,
+          line: this.reviewLineIndex,
+          raw:
+            typeof this.reviewBeforeLine === "string"
+              ? this.reviewBeforeLine
+              : "",
+        },
+      ];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async runInboxRoutedCommit(action, write) {
+    const runWrite = typeof write === "function" ? write : async () => false;
+    try {
+      if (
+        !this.isInboxRouteArmed() ||
+        this.isInboxRouteClosingAction(action) ||
+        this.inboxRouteCommitInFlight === true
+      ) {
+        return await runWrite();
+      }
+    } catch (error) {
+      try {
+        return await runWrite();
+      } catch (ignoredError) {
+        return false;
+      }
+    }
+    const plugin = this.plugin;
+    if (
+      !plugin ||
+      typeof plugin.promptInboxRoute !== "function" ||
+      typeof plugin.commitInboxRoute !== "function"
+    ) {
+      return await runWrite();
+    }
+    let actionLabel = "apply";
+    try {
+      actionLabel = formatInboxRouteActionLabel(action);
+    } catch (error) {
+      actionLabel = "apply";
+    }
+    const captured = this.captureInboxRouteTargets();
+    if (captured.startLine === null || captured.expected.length === 0) {
+      return await runWrite();
+    }
+    const { startLine, additionalTaskCount, expected } = captured;
+    const sourcePath = this.filePath;
+    this.reviewSettleDeferred = true;
+    this.inboxRouteCommitInFlight = true;
+    let route = { kind: "cancel" };
+    try {
+      const suspend = this.inboxRouteSuspendPair();
+      route = await plugin.promptInboxRoute({
+        editor: this.editor,
+        sourcePath,
+        startLine,
+        additionalTaskCount,
+        actionLabel,
+        reservedBlockIds: new Set(),
+        suspend,
+        cancelLabel: "back",
+      });
+    } catch (error) {
+      route = { kind: "cancel" };
+    }
+    if (!route || route.kind === "cancel") {
+      this.inboxRouteCommitInFlight = false;
+      this.reviewSettleDeferred = false;
+      try {
+        if (this.modalEl && typeof this.modalEl.removeClass === "function") {
+          this.modalEl.removeClass("bob-task-card-suspended");
+        } else if (this.modalEl && this.modalEl.classList) {
+          this.modalEl.classList.remove("bob-task-card-suspended");
+        }
+      } catch (error) {
+        // Best-effort restore only.
+      }
+      try {
+        const focusTarget =
+          this.stage === "task-card" ? this.taskCardListEl : this.inputEl;
+        if (focusTarget && typeof focusTarget.focus === "function") {
+          focusTarget.focus();
+        }
+      } catch (error) {
+        // Focus restore never throws.
+      }
+      return false;
+    }
+    if (route.kind === "stay") {
+      let result = false;
+      try {
+        result = await runWrite();
+      } finally {
+        this.inboxRouteCommitInFlight = false;
+        this.reviewSettleDeferred = false;
+      }
+      return result;
+    }
+    if (!route || route.kind !== "move" || !route.path) {
+      this.inboxRouteCommitInFlight = false;
+      this.reviewSettleDeferred = false;
+      return false;
+    }
+    let result = false;
+    try {
+      result = await runWrite();
+    } catch (error) {
+      this.inboxRouteCommitInFlight = false;
+      this.reviewSettleDeferred = false;
+      return false;
+    }
+    const committed =
+      result === true ||
+      (result &&
+        typeof result === "object" &&
+        (result.deleted === true ||
+          result.ok === true ||
+          result.applied === true));
+    if (!committed) {
+      this.inboxRouteCommitInFlight = false;
+      this.reviewSettleDeferred = false;
+      return result;
+    }
+    let move = null;
+    try {
+      move = await plugin.commitInboxRoute({
+        editor: this.editor,
+        sourcePath,
+        startLine,
+        additionalTaskCount,
+        expected,
+        destinationPath: route.path,
+      });
+    } catch (error) {
+      move = null;
+    }
+    if (!move) {
+      move = {
+        ok: false,
+        reason: "route-failed",
+        notice: "",
+        handledRefs: [],
+        destinationName: "",
+        destinationPath: route.path,
+      };
+    }
+    this.inboxRouteResult = move;
+    this.inboxRouteCommitInFlight = false;
+    const origin = this.reviewOrigin || null;
+    const inboxName =
+      (this.inboxRoute && this.inboxRoute.inboxName) ||
+      getVaultPathBasenameWithoutExtension(sourcePath) ||
+      "inbox";
+    if (origin && typeof plugin.continueReviewWalkAfter === "function") {
+      this.reviewOrigin = null;
+      this.reviewSettleDeferred = false;
+      try {
+        if (move.ok === true) {
+          void plugin.continueReviewWalkAfter(origin, {
+            kind: "route",
+            handledRefs: Array.isArray(move.handledRefs)
+              ? move.handledRefs
+              : [],
+            notice: String(move.notice || ""),
+          });
+        } else {
+          let afterLine = "";
+          try {
+            const live =
+              this.editor && Number.isInteger(this.reviewLineIndex)
+                ? getEditorLine(this.editor, this.reviewLineIndex)
+                : null;
+            afterLine = typeof live === "string" ? live : "";
+          } catch (error) {
+            afterLine = "";
+          }
+          const partial = String(
+            move.notice || `Not moved · still in ${inboxName}`,
+          );
+          void plugin.continueReviewWalkAfter(origin, {
+            kind: "card",
+            beforeLine:
+              typeof this.reviewBeforeLine === "string"
+                ? this.reviewBeforeLine
+                : "",
+            afterLine,
+            handledRefs: this.inboxRouteCardFallbackRefs(),
+            notice: partial,
+          });
+        }
+      } catch (error) {
+        // Settle is best-effort after the move.
+      }
+      return result;
+    }
+    this.reviewSettleDeferred = false;
+    try {
+      if (move.ok === true) {
+        new Notice(String(move.notice || ""));
+      } else {
+        new Notice(String(move.notice || `Not moved · still in ${inboxName}`));
+      }
+    } catch (error) {
+      // Notices are best-effort off the walk.
+    }
+    return result;
+  }
+
+  describeInboxRouteLaneAction() {
+    try {
+      const content =
+        typeof this.getEditorContent === "function"
+          ? this.getEditorContent()
+          : "";
+      if (this.isCountedSession && this.isCountedSession()) {
+        return { label: "toggle lane" };
+      }
+      const line =
+        this.cursor && Number.isInteger(this.cursor.line)
+          ? String(
+              (splitMarkdownContent(content).lines[this.cursor.line] || ""),
+            )
+          : String(this.lineText || "");
+      const status = getObsidianTaskCheckboxStatus(line);
+      if (status === "*") {
+        return { label: "commit to Next" };
+      }
+      if (status === "/" || status === " ") {
+        return { label: "release to Ready" };
+      }
+      return { label: "toggle lane" };
+    } catch (error) {
+      return { label: "toggle lane" };
+    }
+  }
+
+  async applyInboxRoutedLaneToggle(options = {}) {
+    const action = this.describeInboxRouteLaneAction();
+    const write = async () =>
+      await this.plugin.applyLaneToggleFromPicker(this, options);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(action, write);
+    }
+    return await write();
+  }
+
+  async applyInboxRoutedRefreshCustom(query) {
+    const custom = parseRefreshCustomValue(query);
+    if (custom === null) {
+      return false;
+    }
+    const action = { label: `review every ${custom}d` };
+    const write = async () =>
+      await this.plugin.applyRefreshIntervalFromPicker(
+        this,
+        Object.freeze({
+          kind: "value",
+          value: custom,
+          label: `${custom} days`,
+          refreshDays: custom,
+        }),
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(action, write);
+    }
+    return await write();
   }
 }
 // ---- src/460-install-picker-mixins.js ----
@@ -34301,6 +35044,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
   BulletPropertyPickerKeydownMixin,
+  BulletPropertyPickerInboxRouteGateMixin,
 ]);
 // ---- src/470-keydown-and-freshness.js ----
 
@@ -43347,6 +44091,50 @@ class BobNavigationHotkeysCancelPropertyMixin {
     return true;
   }
 
+  computeInboxRouteContext(details = {}) {
+    try {
+      const filePath = normalizeVaultRelativePath(details.filePath || "");
+      if (!filePath) {
+        return null;
+      }
+      if (typeof this.isInboxNotePath === "function") {
+        if (this.isInboxNotePath(filePath) !== true) {
+          return null;
+        }
+      } else {
+        return null;
+      }
+      const taskSession = details.taskSession || null;
+      let firstRaw = "";
+      if (
+        taskSession &&
+        taskSession.explicit === true &&
+        Array.isArray(taskSession.targets) &&
+        taskSession.targets.length > 0
+      ) {
+        const first = taskSession.targets[0];
+        firstRaw = String((first && (first.rawLine ?? first.raw)) || "");
+      } else {
+        const content = String(details.content || "");
+        const cursor = details.cursor;
+        if (!cursor || !Number.isInteger(cursor.line)) {
+          return null;
+        }
+        const lines = splitMarkdownContent(content).lines;
+        firstRaw = String(lines[cursor.line] || "");
+      }
+      if (!isOpenObsidianTaskLine(firstRaw)) {
+        return null;
+      }
+      return Object.freeze({
+        sourcePath: filePath,
+        inboxName: getVaultPathBasenameWithoutExtension(filePath) || "inbox",
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
   openBulletPropertyPicker(cm, options = {}) {
     let activePicker = this.activeBulletPropertyPicker;
     if (
@@ -43476,6 +44264,24 @@ class BobNavigationHotkeysCancelPropertyMixin {
       return false;
     }
     const filePath = activeView.file.path;
+    // Inbox routing (task-card-gate): arm once per card. Armed when the
+    // file is an inbox note and the cursor task (counted: the first
+    // target) is an open #task. Never armed for link sessions, non-task
+    // bullets, or closed tasks. Pickers constructed elsewhere (the
+    // decision card's Less often stage) never receive it.
+    let inboxRoute = options.inboxRoute || null;
+    if (!inboxRoute) {
+      try {
+        inboxRoute = this.computeInboxRouteContext({
+          filePath,
+          content,
+          cursor,
+          taskSession,
+        });
+      } catch (error) {
+        inboxRoute = null;
+      }
+    }
 
     // Review-walk auto-advance (nav-gestures): capture on the plain
     // task-line path only — not the Depends-On redirect's outer call or a
@@ -43515,6 +44321,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         reviewOrigin,
         reviewLineIndex: cursor.line,
         reviewBeforeLine: lineText,
+        inboxRoute,
       },
     );
     this.activeBulletPropertyPicker = picker;

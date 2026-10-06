@@ -38,6 +38,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       lineText: this.lineText,
       cursorLine: this.cursor ? this.cursor.line : 0,
       filePath: this.filePath,
+      inboxRoute: this.inboxRoute || null,
       propertyContext: this.propertyContext,
       taskSession: this.taskSession,
       linkSession: this.linkSession,
@@ -396,7 +397,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         return false;
       }
       this.ensureTaskCardStageChrome();
-      const applied = await this.plugin.applyLaneToggleFromPicker(this);
+      const applied = await this.applyInboxRoutedLaneToggle();
       if (applied !== true && this.pickerOpen && this.stage === TASK_CARD_PENDING_STAGE) {
         this.returnHome({ rebuild: true });
       }

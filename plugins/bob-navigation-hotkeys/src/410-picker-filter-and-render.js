@@ -537,17 +537,26 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
           }
         : null;
 
-    return this.plugin.setLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.selectedPropertyItem.property.name,
-      resolved.value,
-      {
-        linkBlockId: resolved.linkBlockId,
-        filePath: this.filePath,
-        pendingTargetLine,
-      },
-    );
+    const dependencyAction = { label: "add 1 prerequisite" };
+    const dependencyWrite = async () =>
+      await this.plugin.setLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.selectedPropertyItem.property.name,
+        resolved.value,
+        {
+          linkBlockId: resolved.linkBlockId,
+          filePath: this.filePath,
+          pendingTargetLine,
+        },
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(
+        dependencyAction,
+        dependencyWrite,
+      );
+    }
+    return await dependencyWrite();
   }
 
 }

@@ -17,6 +17,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       }
       void plugin.openBulletPropertyPicker(editor, {
         initialProperty: "dependsOn",
+        inboxRoute: this.inboxRoute || null,
       });
     } catch (_reopenError) {
       // Best-effort reopen only.
@@ -38,27 +39,34 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       new Notice("⛓ Could not remove dependency (missing link target)");
       return false;
     }
-    const outcome = await this.plugin.applyDependencyEdit({
-      editor: this.editor,
-      parentPath: ownerPath,
-      parentLine: this.cursor.line,
-      add: [],
-      remove: [
-        { path: normalizeVaultRelativePath(item.path || ownerPath), blockId },
-      ],
-    });
-    if (!outcome.ok) {
-      if (outcome.reason === "stale-editor") {
-        // `applyDependencyEdit` already showed `changed — reopen`: only
-        // reopen the stage fresh, without a second notice (§6.4).
-        this.reopenDependencyStageFresh();
+    const removeAction = { label: "remove 1 prerequisite" };
+    const removeWrite = async () => {
+      const outcome = await this.plugin.applyDependencyEdit({
+        editor: this.editor,
+        parentPath: ownerPath,
+        parentLine: this.cursor.line,
+        add: [],
+        remove: [
+          { path: normalizeVaultRelativePath(item.path || ownerPath), blockId },
+        ],
+      });
+      if (!outcome.ok) {
+        if (outcome.reason === "stale-editor") {
+          // `applyDependencyEdit` already showed `changed — reopen`: only
+          // reopen the stage fresh, without a second notice (§6.4).
+          this.reopenDependencyStageFresh();
+          return false;
+        }
+        new Notice(`⛓ Could not remove dependency (${outcome.reason})`);
         return false;
       }
-      new Notice(`⛓ Could not remove dependency (${outcome.reason})`);
-      return false;
+      new Notice(outcome.notice || "⛓ Dependency removed");
+      return true;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(removeAction, removeWrite);
     }
-    new Notice(outcome.notice || "⛓ Dependency removed");
-    return true;
+    return await removeWrite();
   }
 
   // Vault-wide single add: re-read the target note and refuse when the
@@ -287,37 +295,48 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         }
       }
     }
-    const outcome = await this.plugin.applyDependencyEdit({
-      editor: this.editor,
-      parentPath: ownerPath,
-      parentLine: this.cursor.line,
-      add: addRefs,
-      remove: removeRefs,
-    });
-    if (!outcome.ok) {
-      // A stale write refuses and reopens the stage fresh, exactly like the
-      // same-note `executeDependencyBatch` (§6.4). `applyDependencyEdit`
-      // already showed `changed — reopen`, so only reopen here.
-      if (outcome.reason === "stale-editor") {
-        this.reopenDependencyStageFresh();
+    const count = (Array.isArray(addRefs) ? addRefs.length : 0) +
+      (Array.isArray(removeRefs) ? removeRefs.length : 0);
+    const vaultAction = {
+      label: count > 1 ? `add ${count} prerequisites` : "edit dependencies",
+    };
+    const vaultWrite = async () => {
+      const outcome = await this.plugin.applyDependencyEdit({
+        editor: this.editor,
+        parentPath: ownerPath,
+        parentLine: this.cursor.line,
+        add: addRefs,
+        remove: removeRefs,
+      });
+      if (!outcome.ok) {
+        // A stale write refuses and reopens the stage fresh, exactly like the
+        // same-note `executeDependencyBatch` (§6.4). `applyDependencyEdit`
+        // already showed `changed — reopen`, so only reopen here.
+        if (outcome.reason === "stale-editor") {
+          this.reopenDependencyStageFresh();
+          return false;
+        }
+        new Notice(dependencyPlanFailureNotice(outcome.reason, "update"));
         return false;
       }
-      new Notice(dependencyPlanFailureNotice(outcome.reason, "update"));
-      return false;
+      const skipped = (counters.stale || 0) + (counters.other || 0);
+      new Notice(
+        (outcome.notice || "⛓ Dependencies updated") +
+          (skipped > 0 ? ` (${skipped} skipped)` : ""),
+      );
+      return true;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(vaultAction, vaultWrite);
     }
-    const skipped = (counters.stale || 0) + (counters.other || 0);
-    new Notice(
-      (outcome.notice || "⛓ Dependencies updated") +
-        (skipped > 0 ? ` (${skipped} skipped)` : ""),
-    );
-    return true;
+    return await vaultWrite();
   }
 
   // Batch executor for stages containing cross-note rows: every target is
   // re-read fresh (a stale row refuses the whole batch before any write),
   // `+ id` prompts were collected up front, and the whole batch commits
   // once.
-  async executeVaultDependencyBatch(batch, seedCounters = null) {
+  async executeVaultDependencyBatchWithoutInboxRoute(batch, seedCounters = null) {
     const parentValidation = validateDependencyParentForEditor(
       this.editor,
       this.cursor,
@@ -539,6 +558,21 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     }
   }
 
+  describeInboxRouteCountedRollAction(cached) {
+    try {
+      const count =
+        cached && Number.isInteger(cached.actionableCount)
+          ? cached.actionableCount
+          : 0;
+      return {
+        label:
+          count > 1 ? `apply ${count} rolls` : "apply recommendation",
+      };
+    } catch (error) {
+      return { label: "apply recommendation" };
+    }
+  }
+
   async maybeOfferCountedRecommendedWorkLog(cached) {
     const entries = Array.isArray(cached.entries) ? cached.entries : [];
     const schedulingEntries = entries.filter(
@@ -548,8 +582,21 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         (entry.recommendation.kind === "roll" ||
           entry.recommendation.kind === "decay"),
     );
+    const countedAction = this.describeInboxRouteCountedRollAction(cached);
+    const runCountedRoll = async (schedulingWorkLog) =>
+      await this.plugin.applyCountedRecommendedRoll(this, {
+        schedulingWorkLog: schedulingWorkLog || null,
+      });
+    const runRoutedCountedRoll = async (schedulingWorkLog) => {
+      if (typeof this.runInboxRoutedCommit === "function") {
+        return await this.runInboxRoutedCommit(countedAction, () =>
+          runCountedRoll(schedulingWorkLog),
+        );
+      }
+      return await runCountedRoll(schedulingWorkLog);
+    };
     if (schedulingEntries.length === 0) {
-      return await this.plugin.applyCountedRecommendedRoll(this);
+      return await runRoutedCountedRoll(null);
     }
     const targets = schedulingEntries.map((entry) => ({
       line: entry.line,
@@ -557,7 +604,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     }));
     const eligible = collectSchedulingWorkLogEligibleOriginalLines(targets);
     if (eligible.size === 0) {
-      return await this.plugin.applyCountedRecommendedRoll(this);
+      return await runRoutedCountedRoll(null);
     }
     const dates = schedulingEntries
       .map((entry) => entry.recommendation && entry.recommendation.date)
@@ -567,8 +614,8 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       targets,
       scheduleSummary,
       dispatch: async (summary) =>
-        await this.plugin.applyCountedRecommendedRoll(this, {
-          schedulingWorkLog: summary
+        await runRoutedCountedRoll(
+          summary
             ? {
                 summary,
                 dateText: formatBulletPropertyDate(
@@ -578,7 +625,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
                 ),
               }
             : null,
-        }),
+        ),
     });
   }
 
@@ -665,4 +712,12 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     });
   }
 
+  async executeVaultDependencyBatch(batch, seedCounters = null) {
+    const inboxAction = { label: "add 2 prerequisites" };
+    const inboxWrite = async () => await this.executeVaultDependencyBatchWithoutInboxRoute(batch, seedCounters);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
 }

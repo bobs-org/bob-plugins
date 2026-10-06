@@ -221,6 +221,50 @@ class BobNavigationHotkeysCancelPropertyMixin {
     return true;
   }
 
+  computeInboxRouteContext(details = {}) {
+    try {
+      const filePath = normalizeVaultRelativePath(details.filePath || "");
+      if (!filePath) {
+        return null;
+      }
+      if (typeof this.isInboxNotePath === "function") {
+        if (this.isInboxNotePath(filePath) !== true) {
+          return null;
+        }
+      } else {
+        return null;
+      }
+      const taskSession = details.taskSession || null;
+      let firstRaw = "";
+      if (
+        taskSession &&
+        taskSession.explicit === true &&
+        Array.isArray(taskSession.targets) &&
+        taskSession.targets.length > 0
+      ) {
+        const first = taskSession.targets[0];
+        firstRaw = String((first && (first.rawLine ?? first.raw)) || "");
+      } else {
+        const content = String(details.content || "");
+        const cursor = details.cursor;
+        if (!cursor || !Number.isInteger(cursor.line)) {
+          return null;
+        }
+        const lines = splitMarkdownContent(content).lines;
+        firstRaw = String(lines[cursor.line] || "");
+      }
+      if (!isOpenObsidianTaskLine(firstRaw)) {
+        return null;
+      }
+      return Object.freeze({
+        sourcePath: filePath,
+        inboxName: getVaultPathBasenameWithoutExtension(filePath) || "inbox",
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
   openBulletPropertyPicker(cm, options = {}) {
     let activePicker = this.activeBulletPropertyPicker;
     if (
@@ -350,6 +394,24 @@ class BobNavigationHotkeysCancelPropertyMixin {
       return false;
     }
     const filePath = activeView.file.path;
+    // Inbox routing (task-card-gate): arm once per card. Armed when the
+    // file is an inbox note and the cursor task (counted: the first
+    // target) is an open #task. Never armed for link sessions, non-task
+    // bullets, or closed tasks. Pickers constructed elsewhere (the
+    // decision card's Less often stage) never receive it.
+    let inboxRoute = options.inboxRoute || null;
+    if (!inboxRoute) {
+      try {
+        inboxRoute = this.computeInboxRouteContext({
+          filePath,
+          content,
+          cursor,
+          taskSession,
+        });
+      } catch (error) {
+        inboxRoute = null;
+      }
+    }
 
     // Review-walk auto-advance (nav-gestures): capture on the plain
     // task-line path only — not the Depends-On redirect's outer call or a
@@ -389,6 +451,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         reviewOrigin,
         reviewLineIndex: cursor.line,
         reviewBeforeLine: lineText,
+        inboxRoute,
       },
     );
     this.activeBulletPropertyPicker = picker;

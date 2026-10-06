@@ -441,37 +441,38 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       recommendation.schedulesName,
       liveContext,
     );
-    const nextHint = planNextPriorityRollHint(property, recommendation);
-    const rollOption = {
-      kind: "roll",
-      fromLevel: getPriorityRollCurrentLabel(recommendation),
-      step: recommendation.step,
-      limit: recommendation.limit,
-      next: nextHint ? nextHint.next : null,
-      nextLabel: nextHint ? nextHint.nextLabel : "",
-    };
-    const levelIndex = normalizePriorityLevelIndex(
-      property,
-      recommendation.level,
-    );
+    // Project-frontmatter writers stay unwrapped (task-card-gate).
     if (scheduledTarget.kind === "project-frontmatter") {
-      const liveScheduled =
+      const liveScheduledDirect =
         liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
           ? liveContext.frontmatter.scheduledValue
           : "";
+      const nextHintDirect = planNextPriorityRollHint(property, recommendation);
+      const rollOptionDirect = {
+        kind: "roll",
+        fromLevel: getPriorityRollCurrentLabel(recommendation),
+        step: recommendation.step,
+        limit: recommendation.limit,
+        next: nextHintDirect ? nextHintDirect.next : null,
+        nextLabel: nextHintDirect ? nextHintDirect.nextLabel : "",
+      };
+      const levelIndexDirect = normalizePriorityLevelIndex(
+        property,
+        recommendation.level,
+      );
       return await this.plugin.setProjectNoteScheduledValue(
         this.editor,
         this.cursor,
         this.filePath,
         this.lineText,
-        liveScheduled,
+        liveScheduledDirect,
         recommendation.date,
         {
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
             level: recommendation.level,
             rolledDays: recommendation.offset,
-            from: liveScheduled,
+            from: liveScheduledDirect,
             to: recommendation.date,
           }),
           schedulingWorkLog,
@@ -479,12 +480,12 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             buildPriorityNoticeModel({
               property,
               level: recommendation.level,
-              levelIndex,
+              levelIndex: levelIndexDirect,
               baseDate: this.valueBaseDate,
               scheduledValues: [outcome.scheduled || recommendation.date],
               taskCount: 1,
               scope: "project",
-              roll: rollOption,
+              roll: rollOptionDirect,
               outcome: {
                 ...outcome,
                 scheduleLoggedTaskCount:
@@ -497,52 +498,76 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         },
       );
     }
-    const scheduledField = findBulletPropertyField(
-      liveLine,
-      recommendation.schedulesName,
-    );
-    return await this.plugin.setBulletPropertyValue(
-      this.editor,
-      this.cursor,
-      recommendation.schedulesName,
-      recommendation.date,
-      {
-        filePath: this.filePath,
-        expectedLine: this.lineText,
-        scheduleLog: buildPriorityRollScheduleLog({
-          source: "scheduled",
-          level: recommendation.level,
-          rolledDays: recommendation.offset,
-          from: scheduledField ? scheduledField.value : "",
-          to: recommendation.date,
-        }),
-        schedulingWorkLog,
-        buildNotice: (outcome) =>
-          buildPriorityNoticeModel({
-            property,
+    const rollAction = {
+      label: recommendation.date
+        ? `roll to ${recommendation.date}`
+        : `set ${recommendation.level || "priority"}`,
+    };
+    const rollWrite = async () => {
+      const nextHint = planNextPriorityRollHint(property, recommendation);
+      const rollOption = {
+        kind: "roll",
+        fromLevel: getPriorityRollCurrentLabel(recommendation),
+        step: recommendation.step,
+        limit: recommendation.limit,
+        next: nextHint ? nextHint.next : null,
+        nextLabel: nextHint ? nextHint.nextLabel : "",
+      };
+      const levelIndex = normalizePriorityLevelIndex(
+        property,
+        recommendation.level,
+      );
+      const scheduledField = findBulletPropertyField(
+        liveLine,
+        recommendation.schedulesName,
+      );
+      return await this.plugin.setBulletPropertyValue(
+        this.editor,
+        this.cursor,
+        recommendation.schedulesName,
+        recommendation.date,
+        {
+          filePath: this.filePath,
+          expectedLine: this.lineText,
+          scheduleLog: buildPriorityRollScheduleLog({
+            source: "scheduled",
             level: recommendation.level,
-            levelIndex,
-            baseDate: this.valueBaseDate,
-            scheduledValues: [recommendation.date],
-            taskCount: 1,
-            scope: "task",
-            roll: rollOption,
-            outcome: {
-              blockedTaskCount: outcome.blocked ? 1 : 0,
-              recoveryCounts: outcome.recoveryCounts,
-              scheduleLoggedTaskCount:
-                outcome.scheduleLogOutcome === "added" ||
-                outcome.scheduleLogOutcome === "created"
-                  ? 1
-                  : 0,
-              schedulingWorkLogWrittenCount:
-                outcome.schedulingWorkLogWrittenCount || 0,
-              removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
-              pomodoroPruneFailed: outcome.pomodoroPruneFailed,
-            },
+            rolledDays: recommendation.offset,
+            from: scheduledField ? scheduledField.value : "",
+            to: recommendation.date,
           }),
-      },
-    );
+          schedulingWorkLog,
+          buildNotice: (outcome) =>
+            buildPriorityNoticeModel({
+              property,
+              level: recommendation.level,
+              levelIndex,
+              baseDate: this.valueBaseDate,
+              scheduledValues: [recommendation.date],
+              taskCount: 1,
+              scope: "task",
+              roll: rollOption,
+              outcome: {
+                blockedTaskCount: outcome.blocked ? 1 : 0,
+                recoveryCounts: outcome.recoveryCounts,
+                scheduleLoggedTaskCount:
+                  outcome.scheduleLogOutcome === "added" ||
+                  outcome.scheduleLogOutcome === "created"
+                    ? 1
+                    : 0,
+                schedulingWorkLogWrittenCount:
+                  outcome.schedulingWorkLogWrittenCount || 0,
+                removedPomodoroLinkCount: outcome.removedPomodoroLinkCount,
+                pomodoroPruneFailed: outcome.pomodoroPruneFailed,
+              },
+            }),
+        },
+      );
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(rollAction, rollWrite);
+    }
+    return await rollWrite();
   }
 
   async applyRecommendedDecayWrite(recommendation, schedulingWorkLog = null) {
@@ -558,33 +583,43 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       this.getEditorContent(),
       this.cursor.line,
     );
-    return await this.plugin.setBulletPriorityValue(
-      this.editor,
-      this.cursor,
-      this.filePath,
-      this.lineText,
-      property,
-      recommendation.toLevel,
-      {
-        propertyContext: liveContext,
-        baseDate: this.valueBaseDate,
-        random: this.priorityRandom,
-        precomputedRoll: {
-          date: recommendation.date,
-          offset: recommendation.offset,
+    const decayAction = {
+      label: recommendation.toLevel
+        ? `decay to ${recommendation.toLevel.label || recommendation.toLevel.value || "next"}`
+        : "decay",
+    };
+    const decayWrite = async () =>
+      await this.plugin.setBulletPriorityValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        property,
+        recommendation.toLevel,
+        {
+          propertyContext: liveContext,
+          baseDate: this.valueBaseDate,
+          random: this.priorityRandom,
+          precomputedRoll: {
+            date: recommendation.date,
+            offset: recommendation.offset,
+          },
+          scheduleReasonOverride: recommendation.reason,
+          schedulingWorkLog,
+          noticeRoll: {
+            kind: "decay",
+            fromLevel: getPriorityRollCurrentLabel(recommendation),
+            step: null,
+            limit: recommendation.limit,
+            next: nextHint ? nextHint.next : null,
+            nextLabel: nextHint ? nextHint.nextLabel : "",
+          },
         },
-        scheduleReasonOverride: recommendation.reason,
-        schedulingWorkLog,
-        noticeRoll: {
-          kind: "decay",
-          fromLevel: getPriorityRollCurrentLabel(recommendation),
-          step: null,
-          limit: recommendation.limit,
-          next: nextHint ? nextHint.next : null,
-          nextLabel: nextHint ? nextHint.nextLabel : "",
-        },
-      },
-    );
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(decayAction, decayWrite);
+    }
+    return await decayWrite();
   }
 
   async applyRecommendedCancelWrite(recommendation) {

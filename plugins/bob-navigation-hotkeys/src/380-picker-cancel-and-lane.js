@@ -374,7 +374,7 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     if (!pending || !item) {
       return false;
     }
-    return this.plugin.applyLaneToggleFromPicker(this, {
+    return this.applyInboxRoutedLaneToggle({
       summary: item.empty ? "" : item.reason,
       dateText: pending.dateText,
     });

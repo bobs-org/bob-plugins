@@ -111,6 +111,9 @@ function buildTaskCardHeader(details = {}) {
     ),
   );
   const chips = [];
+  if (details.inboxRoute) {
+    chips.push("Inbox");
+  }
   if (session.type === "linked") {
     chips.push("via Task Link");
   }
@@ -148,6 +151,10 @@ function buildTaskCardHeader(details = {}) {
     title: fullTitle || "Task Card",
     fullTitle: fullTitle || "Task Card",
     note: note || "",
+    inboxRouted: Boolean(details.inboxRoute),
+    inboxTooltip: details.inboxRoute
+      ? "Answers ask where this task goes first"
+      : null,
     lane,
     laneMixed: lane === "mixed",
     priority,

@@ -285,44 +285,108 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       );
       return false;
     }
+    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    if (
+      !this.isLinkSession() &&
+      !this.isCountedSession() &&
+      item.target &&
+      item.target.kind === "project-frontmatter"
+    ) {
+      const direct = await this.plugin.deleteProjectNoteScheduledValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        item.currentValue,
+      );
+      if (!direct || direct.deleted !== true) {
+        if (direct && direct.line) {
+          this.lineText = direct.line;
+          this.bulletSubtitle = truncateBulletPropertySubtitle(direct.line);
+          this.refreshPropertyItems();
+        }
+        return false;
+      }
+      return true;
+    }
 
-    const result = await (this.isLinkSession()
-      ? this.plugin.deleteLinkPickerPropertyValue(this, item)
-      : this.isCountedSession()
-        ? this.plugin.deleteCountedBulletPropertyValue(
-            this.editor,
-            this.cursor,
-            this.filePath,
-            this.taskSession,
-            propertyName,
-          )
-        : item.target.kind === "project-frontmatter"
-          ? await this.plugin.deleteProjectNoteScheduledValue(
+    const action = { label: `clear ${propertyName}` };
+    const write = async () => {
+      const result = await (this.isLinkSession()
+        ? this.plugin.deleteLinkPickerPropertyValue(this, item)
+        : this.isCountedSession()
+          ? this.plugin.deleteCountedBulletPropertyValue(
               this.editor,
               this.cursor,
               this.filePath,
-              this.lineText,
-              item.currentValue,
-            )
-          : this.plugin.deleteBulletPropertyValue(
-              this.editor,
-              this.cursor,
+              this.taskSession,
               propertyName,
-              {
-                filePath: this.filePath,
-                expectedLine: this.lineText,
-              },
-            ));
-    if (!result || result.deleted !== true) {
-      if (result && result.line) {
-        this.lineText = result.line;
-        this.bulletSubtitle = truncateBulletPropertySubtitle(result.line);
-        this.refreshPropertyItems();
+            )
+          : item.target.kind === "project-frontmatter"
+            ? await this.plugin.deleteProjectNoteScheduledValue(
+                this.editor,
+                this.cursor,
+                this.filePath,
+                this.lineText,
+                item.currentValue,
+              )
+            : this.plugin.deleteBulletPropertyValue(
+                this.editor,
+                this.cursor,
+                propertyName,
+                {
+                  filePath: this.filePath,
+                  expectedLine: this.lineText,
+                },
+              ));
+      if (!result || result.deleted !== true) {
+        if (result && result.line) {
+          this.lineText = result.line;
+          this.bulletSubtitle = truncateBulletPropertySubtitle(result.line);
+          this.refreshPropertyItems();
+        }
+        return false;
       }
-      return false;
-    }
 
-    return true;
+      return true;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(action, write);
+    }
+    return await write();
+  }
+
+  describeInboxRouteSelectedValueAction(item) {
+    try {
+      const selected = this.selectedPropertyItem;
+      if (!selected) {
+        return { label: "apply" };
+      }
+      if (selected.kind === "refresh-interval") {
+        const days =
+          (item && (item.refreshDays ?? item.value)) || selected.days || "";
+        return { label: days ? `review every ${days}d` : "review every" };
+      }
+      const propertyName =
+        (selected.property && selected.property.name) || "property";
+      if (selected.property && selected.property.values === "priority") {
+        const level =
+          (item && (item.label || item.value)) ||
+          (item && item.priorityLevel && item.priorityLevel.label) ||
+          "";
+        return { label: level ? `set ${level}` : `set ${propertyName}` };
+      }
+      if (propertyName === "scheduled" || propertyName === "scheduledDate") {
+        const date = (item && (item.value || item.label)) || "";
+        return { label: date ? `schedule ${date}` : "schedule" };
+      }
+      const value = (item && (item.value ?? item.label)) || "";
+      return {
+        label: value ? `set ${propertyName} ${value}` : `set ${propertyName}`,
+      };
+    } catch (error) {
+      return { label: "apply" };
+    }
   }
 
   async applySelectedValue(item, options = {}) {
@@ -330,8 +394,56 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       return false;
     }
 
+    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    const selectedTarget =
+      this.selectedPropertyItem && this.selectedPropertyItem.target;
+    if (
+      !this.isLinkSession() &&
+      !this.isCountedSession() &&
+      selectedTarget &&
+      selectedTarget.kind === "project-frontmatter"
+    ) {
+      if (this.selectedPropertyItem.kind === "refresh-interval") {
+        return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
+      }
+      const schedulingWorkLogDirect =
+        options.schedulingWorkLog || options.workLog || null;
+      if (this.selectedPropertyItem.property.values === "priority") {
+        return await this.plugin.setBulletPriorityValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.lineText,
+          this.selectedPropertyItem.property,
+          item.priorityLevel,
+          {
+            propertyContext: this.propertyContext,
+            baseDate: this.valueBaseDate,
+            random: this.priorityRandom,
+            schedulingWorkLog: schedulingWorkLogDirect,
+            precomputedRoll: options.precomputedRoll,
+          },
+        );
+      }
+      return await this.plugin.setProjectNoteScheduledValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        this.selectedPropertyItem.currentValue,
+        item.value,
+        { scheduleLog: options.scheduleLog, schedulingWorkLog: schedulingWorkLogDirect },
+      );
+    }
+
     if (this.selectedPropertyItem.kind === "refresh-interval") {
-      return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
+      const refreshAction = this.describeInboxRouteSelectedValueAction(item);
+      const refreshWrite = async () =>
+        await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
+      if (typeof this.runInboxRoutedCommit === "function") {
+        return await this.runInboxRoutedCommit(refreshAction, refreshWrite);
+      }
+      return await refreshWrite();
     }
 
     const schedulingWorkLog =
@@ -348,79 +460,86 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       );
     }
 
-    if (this.isCountedSession()) {
-      if (this.selectedPropertyItem.property.values === "priority") {
-        return await this.plugin.setCountedBulletPriorityValue(
+    const selectedAction = this.describeInboxRouteSelectedValueAction(item);
+    const selectedWrite = async () => {
+      if (this.isCountedSession()) {
+        if (this.selectedPropertyItem.property.values === "priority") {
+          return await this.plugin.setCountedBulletPriorityValue(
+            this.editor,
+            this.cursor,
+            this.filePath,
+            this.taskSession,
+            this.selectedPropertyItem.property,
+            item.priorityLevel,
+            {
+              baseDate: this.valueBaseDate,
+              random: this.priorityRandom,
+              schedulingWorkLog,
+              precomputedRollByLine: options.precomputedRollByLine,
+              precomputedScheduledValueByLine:
+                options.precomputedScheduledValueByLine,
+              rollByLine: options.rollByLine,
+              scheduledValueByLine: options.scheduledValueByLine,
+            },
+          );
+        }
+        return await this.plugin.setCountedBulletPropertyValue(
           this.editor,
           this.cursor,
           this.filePath,
           this.taskSession,
+          this.selectedPropertyItem.property.name,
+          item.value,
+          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+        );
+      }
+
+      if (this.selectedPropertyItem.property.values === "priority") {
+        return await this.plugin.setBulletPriorityValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.lineText,
           this.selectedPropertyItem.property,
           item.priorityLevel,
           {
+            propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
             schedulingWorkLog,
-            precomputedRollByLine: options.precomputedRollByLine,
-            precomputedScheduledValueByLine:
-              options.precomputedScheduledValueByLine,
-            rollByLine: options.rollByLine,
-            scheduledValueByLine: options.scheduledValueByLine,
+            precomputedRoll: options.precomputedRoll,
           },
         );
       }
-      return await this.plugin.setCountedBulletPropertyValue(
+
+      if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
+        return await this.plugin.setProjectNoteScheduledValue(
+          this.editor,
+          this.cursor,
+          this.filePath,
+          this.lineText,
+          this.selectedPropertyItem.currentValue,
+          item.value,
+          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+        );
+      }
+
+      return await this.plugin.setBulletPropertyValue(
         this.editor,
         this.cursor,
-        this.filePath,
-        this.taskSession,
         this.selectedPropertyItem.property.name,
         item.value,
-        { scheduleLog: options.scheduleLog, schedulingWorkLog },
-      );
-    }
-
-    if (this.selectedPropertyItem.property.values === "priority") {
-      return await this.plugin.setBulletPriorityValue(
-        this.editor,
-        this.cursor,
-        this.filePath,
-        this.lineText,
-        this.selectedPropertyItem.property,
-        item.priorityLevel,
         {
-          propertyContext: this.propertyContext,
-          baseDate: this.valueBaseDate,
-          random: this.priorityRandom,
+          filePath: this.filePath,
+          expectedLine: this.lineText,
+          scheduleLog: options.scheduleLog,
           schedulingWorkLog,
-          precomputedRoll: options.precomputedRoll,
         },
       );
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(selectedAction, selectedWrite);
     }
-
-    if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
-      return await this.plugin.setProjectNoteScheduledValue(
-        this.editor,
-        this.cursor,
-        this.filePath,
-        this.lineText,
-        this.selectedPropertyItem.currentValue,
-        item.value,
-        { scheduleLog: options.scheduleLog, schedulingWorkLog },
-      );
-    }
-
-    return await this.plugin.setBulletPropertyValue(
-      this.editor,
-      this.cursor,
-      this.selectedPropertyItem.property.name,
-      item.value,
-      {
-        filePath: this.filePath,
-        expectedLine: this.lineText,
-        scheduleLog: options.scheduleLog,
-        schedulingWorkLog,
-      },
-    );
+    return await selectedWrite();
   }
 }

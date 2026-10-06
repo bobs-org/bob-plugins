@@ -29,4 +29,5 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
   BulletPropertyPickerKeydownMixin,
+  BulletPropertyPickerInboxRouteGateMixin,
 ]);

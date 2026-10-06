@@ -198,8 +198,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
         this.showLaneReleaseReasonStage(propertyItem);
         return;
       }
-      void this.plugin
-        .applyLaneToggleFromPicker(this)
+      void this.applyInboxRoutedLaneToggle()
         .then((applied) => {
           if (applied !== true) {
             this.returnHome();
@@ -453,19 +452,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
   // Custom refresh entry: when the value-stage query itself is an integer
   // 1-365 with no matching preset row selected, apply it directly.
   applyRefreshCustomFromQuery(query) {
-    const custom = parseRefreshCustomValue(query);
-    if (custom === null) {
-      return false;
-    }
-    return this.plugin.applyRefreshIntervalFromPicker(
-      this,
-      Object.freeze({
-        kind: "value",
-        value: custom,
-        label: `${custom} days`,
-        refreshDays: custom,
-      }),
-    );
+    return this.applyInboxRoutedRefreshCustom(query);
   }
 
   // The scheduled value a picked date replaces: frontmatter for a ^prj task,

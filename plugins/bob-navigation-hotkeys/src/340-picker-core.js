@@ -67,6 +67,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
         ? context.reviewBeforeLine
         : "";
     this.reviewSettleDeferred = false;
+    this.inboxRoute = context.inboxRoute || null;
+    this.inboxRouteCommitInFlight = false;
+    this.inboxRouteResult = null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and

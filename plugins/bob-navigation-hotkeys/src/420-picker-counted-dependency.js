@@ -1,5 +1,5 @@
 class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
-  chooseCountedTaskDependency(item) {
+  async chooseCountedTaskDependency(item) {
     if (!item) {
       return false;
     }
@@ -49,13 +49,19 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       return false;
     }
 
-    return this.plugin.applyCountedLocalTaskDependency(
-      this.editor,
-      this.cursor,
-      this.filePath,
-      this.taskSession,
-      item,
-    );
+    const countedAction = { label: "add 2 prerequisites" };
+    const countedWrite = async () =>
+      await this.plugin.applyCountedLocalTaskDependency(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.taskSession,
+        item,
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(countedAction, countedWrite);
+    }
+    return await countedWrite();
   }
 
   // Counted (`N<Ctrl+Shift+P>`) vault-wide commits: the existing
@@ -104,7 +110,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // (cross-note, or a target whose note is gone) plans every source on one
   // working copy bottom-up and commits once, so a missing target is always
   // removable.
-  async removeCountedDependency(item) {
+  async removeCountedDependencyWithoutInboxRoute(item) {
     const sessionValidation = validateCountedTaskSession(
       this.getEditorContent(),
       this.taskSession,
@@ -329,7 +335,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // plans every source on one working copy bottom-up, refuses before any
   // write when any source fails to plan, then commits once; the notice
   // counts only sources that actually changed.
-  async applyVaultCountedDependencyRef(snapshot) {
+  async applyVaultCountedDependencyRefWithoutInboxRoute(snapshot) {
     const sessionValidation = validateCountedTaskSession(
       this.getEditorContent(),
       this.taskSession,
@@ -638,4 +644,20 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // fresh line snapshots (or drop as stale), and every prompt target lands
   // in the stage files so `+ id` suggestions validate against the right
   // note. Empty queues execute straight through.
+  async applyVaultCountedDependencyRef(snapshot) {
+    const inboxAction = { label: "edit dependencies" };
+    const inboxWrite = async () => await this.applyVaultCountedDependencyRefWithoutInboxRoute(snapshot);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
+  async removeCountedDependency(item) {
+    const inboxAction = { label: "remove 1 prerequisite" };
+    const inboxWrite = async () => await this.removeCountedDependencyWithoutInboxRoute(item);
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(inboxAction, inboxWrite);
+    }
+    return await inboxWrite();
+  }
 }

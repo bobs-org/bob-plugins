@@ -46,6 +46,7 @@
   "430-picker-vault-batch.js",
   "440-picker-vault-commit.js",
   "450-picker-keydown.js",
+  "455-picker-inbox-route-gate.js",
   "460-install-picker-mixins.js",
   "470-keydown-and-freshness.js",
   "480-review-jump-and-nav-api.js",

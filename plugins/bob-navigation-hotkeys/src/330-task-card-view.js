@@ -122,10 +122,26 @@ function renderTaskCardView(container, model, options = {}) {
               text === headerModel.schedule.label
             ? " is-today"
             : "";
-      meta.createSpan({
-        cls: `bob-task-card-chip${laneClass}${dateTone}`,
+      const isInboxChip = text === "Inbox";
+      const chipEl = meta.createSpan({
+        cls: `bob-task-card-chip${laneClass}${dateTone}${isInboxChip ? " is-muted" : ""}`,
         text,
       });
+      if (isInboxChip && chipEl) {
+        try {
+          const tooltip =
+            headerModel.inboxTooltip ||
+            "Answers ask where this task goes first";
+          if (typeof chipEl.setAttribute === "function") {
+            chipEl.setAttribute("title", tooltip);
+            chipEl.setAttribute("aria-label", `Inbox. ${tooltip}`);
+          } else {
+            chipEl.title = tooltip;
+          }
+        } catch (error) {
+          // Tooltip is best-effort.
+        }
+      }
     }
   }
   if (headerModel.error) {

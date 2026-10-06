@@ -563,6 +563,7 @@ function planTaskCard(context = {}) {
     refreshDescription,
     rows,
     baseDate,
+    inboxRoute: context.inboxRoute || null,
   });
   const timeline = buildTaskCardTimeline({
     recommendation,

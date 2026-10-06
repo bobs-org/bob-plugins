@@ -1,3 +1,52 @@
+// Render the shared signal-bar mark at the start of a Task Card level
+// label. The glyph is decorative with an inherited color because the
+// P-label is already visible. The P0 chip gets no glyph. Without the
+// ledger api, or when render returns null, the label is unchanged.
+function renderTaskCardLevelGlyph(labelEl, value, options) {
+  try {
+    const settings = options && typeof options === "object" ? options : {};
+    const api =
+      settings.priorityMarks || getLedgerPriorityMarksApi(settings.app);
+    if (!api || typeof api.render !== "function") {
+      return false;
+    }
+    if (typeof value !== "string" || value === "") {
+      return false;
+    }
+    if (!labelEl || typeof labelEl.createSpan !== "function") {
+      return false;
+    }
+    const host = labelEl.createSpan({ cls: "bob-task-card-level-glyph" });
+    let rendered = null;
+    try {
+      rendered = api.render(host, value, {
+        decorative: true,
+        inheritColor: true,
+      });
+    } catch (error) {
+      rendered = null;
+    }
+    if (!rendered) {
+      try {
+        if (typeof host.remove === "function") {
+          host.remove();
+        } else if (labelEl && Array.isArray(labelEl.children)) {
+          const index = labelEl.children.indexOf(host);
+          if (index >= 0) {
+            labelEl.children.splice(index, 1);
+          }
+        }
+      } catch (error) {
+        // Glyph cleanup never throws.
+      }
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function renderTaskCardView(container, model, options = {}) {
   if (!container) {
     return null;
@@ -281,10 +330,9 @@ function renderTaskCardView(container, model, options = {}) {
         appendTaskCardKeycap(levelEl, level.key);
       }
       const body = levelEl.createDiv({ cls: "bob-task-card-level-body" });
-      body.createDiv({
-        cls: "bob-task-card-level-label",
-        text: level.label,
-      });
+      const labelEl = body.createDiv({ cls: "bob-task-card-level-label" });
+      renderTaskCardLevelGlyph(labelEl, level.value, options);
+      labelEl.appendText(level.label ?? "");
       body.createDiv({
         cls: "bob-task-card-level-date",
         text: dateLabel || (level.available ? "" : level.unavailableReason || ""),

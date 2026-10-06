@@ -854,3 +854,173 @@ test("a counted priority batch writes one entry per task using each task's own p
     ].join("\n"),
   );
 });
+
+test("priority notice models carry the stored level value for the glyph", () => {
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+  const model = helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[0],
+    levelIndex: 0,
+    baseDate: new Date(2026, 7, 3),
+    scheduledValues: ["2026-08-06"],
+    taskCount: 1,
+    scope: "task",
+  });
+  assert.equal(model.levelValue, "high");
+  assert.equal(model.iconName, "signal-high");
+
+  const batch = helpers.buildBatchPriorityRollNoticeModel(
+    { counts: { roll: 1 }, actionableCount: 1 },
+    { baseDate: new Date(2026, 7, 3), scheduledValues: ["2026-08-06"] },
+  );
+  assert.equal(batch.levelValue, "");
+  assert.equal(batch.iconName, "dices");
+});
+
+test("ledger priority mark lookup guards version and render", () => {
+  const marks = { version: 1, render: () => null };
+  const app = { plugins: { plugins: { "bob-ledger-tools": { api: { priorityMarks: marks } } } } };
+  assert.equal(helpers.getLedgerPriorityMarksApi(app), marks);
+  assert.equal(helpers.getLedgerPriorityMarksApi(undefined), null);
+  assert.equal(helpers.getLedgerPriorityMarksApi(null), null);
+  assert.equal(helpers.getLedgerPriorityMarksApi({}), null);
+  assert.equal(
+    helpers.getLedgerPriorityMarksApi({ plugins: { plugins: {} } }),
+    null,
+  );
+  assert.equal(
+    helpers.getLedgerPriorityMarksApi({
+      plugins: { plugins: { "bob-ledger-tools": {} } },
+    }),
+    null,
+  );
+  assert.equal(
+    helpers.getLedgerPriorityMarksApi({
+      plugins: {
+        plugins: { "bob-ledger-tools": { api: { priorityMarks: { version: 0, render: () => null } } } },
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    helpers.getLedgerPriorityMarksApi({
+      plugins: {
+        plugins: { "bob-ledger-tools": { api: { priorityMarks: { version: 1 } } } },
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    helpers.getLedgerPriorityMarksApi({
+      plugins: {
+        plugins: { "bob-ledger-tools": { api: null } },
+      },
+    }),
+    null,
+  );
+});
+
+function makeNoticeStubPriorityMarks(calls, renderImpl) {
+  return {
+    version: 1,
+    model: (value) => ({ value }),
+    render: (host, value, options) => {
+      calls.push({ value, options });
+      if (renderImpl) {
+        return renderImpl(host, value, options);
+      }
+      const el = host.createSpan({ cls: "bob-priority-mark-stub" });
+      el.setAttr("data-priority", value);
+      return el;
+    },
+  };
+}
+
+function makeNoticeModel() {
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+  return helpers.buildPriorityNoticeModel({
+    property,
+    level: property.levels[2],
+    levelIndex: 2,
+    baseDate: new Date(2026, 7, 3),
+    scheduledValues: ["2026-08-06"],
+    taskCount: 1,
+    scope: "task",
+  });
+}
+
+test("priority notice header reuses the shared mark when available", () => {
+  const model = makeNoticeModel();
+  assert.equal(model.levelValue, "low");
+  const calls = [];
+  const root = createFragmentNode();
+  helpers.renderPriorityNoticeFragment(model, root, {
+    priorityMarks: makeNoticeStubPriorityMarks(calls),
+  });
+
+  assert.deepEqual(calls, [
+    { value: "low", options: { decorative: true, inheritColor: true } },
+  ]);
+  const icon = findFragmentNode(root, nodeHasClass("bob-nh-notice-icon"));
+  assert.ok(icon);
+  const glyph = findFragmentNode(root, nodeHasClass("bob-nh-notice-glyph"));
+  assert.ok(glyph);
+  assert.equal(
+    findFragmentNode(glyph, nodeHasClass("bob-priority-mark-stub")).attrs["data-priority"],
+    "low",
+  );
+  assert.equal(model.iconName, "signal-low");
+});
+
+test("priority notice keeps the Lucide icon without a usable mark api", () => {
+  const variants = [
+    undefined,
+    {},
+    { app: {} },
+    { priorityMarks: null },
+    { priorityMarks: { version: 1 } },
+    { priorityMarks: { version: 1, render: () => null } },
+    {
+      priorityMarks: {
+        version: 1,
+        render: () => { throw new Error("glyph failed"); },
+      },
+    },
+  ];
+  for (const noticeOptions of variants) {
+    const root = createFragmentNode();
+    if (noticeOptions === undefined) {
+      helpers.renderPriorityNoticeFragment(makeNoticeModel(), root);
+    } else {
+      helpers.renderPriorityNoticeFragment(makeNoticeModel(), root, noticeOptions);
+    }
+    assert.equal(
+      findFragmentNode(root, nodeHasClass("bob-nh-notice-glyph")),
+      null,
+    );
+    assert.ok(findFragmentNode(root, nodeHasClass("bob-nh-notice-icon")));
+  }
+
+  const batchRoot = createFragmentNode();
+  const property = createPriorityPickerConfig().properties.find(
+    (item) => item.name === "priority",
+  );
+  const batchModel = helpers.buildBatchPriorityRollNoticeModel(
+    { counts: { roll: 1 }, actionableCount: 1 },
+    { baseDate: new Date(2026, 7, 3), scheduledValues: ["2026-08-06"] },
+  );
+  assert.equal(property.levels[0].value, "high");
+  const batchCalls = [];
+  helpers.renderPriorityNoticeFragment(batchModel, batchRoot, {
+    priorityMarks: makeNoticeStubPriorityMarks(batchCalls),
+  });
+  assert.deepEqual(batchCalls, []);
+  assert.equal(
+    findFragmentNode(batchRoot, nodeHasClass("bob-nh-notice-glyph")),
+    null,
+  );
+});

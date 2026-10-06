@@ -89,6 +89,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.modalEl.setAttribute("aria-modal", "true");
     this.modalEl.setAttribute("aria-labelledby", "bob-task-card-title");
     const rendered = renderTaskCardView(this.contentEl, this.taskCardModel, {
+      app: this.app,
       onClose: () => this.close(),
       onSelectRow: (rowId) => {
         this.taskCardSelectedRowId = rowId;

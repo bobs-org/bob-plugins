@@ -83,6 +83,7 @@ function buildPriorityNoticeModel(options = {}) {
   const model = {
     iconName: getPriorityLevelIconName(levelIndex),
     levelIndex,
+    levelValue,
     pill,
     countPill: scope === "counted" ? formatCountLabel(taskCount, "task") : "",
     receipt: `[${propertyName}:: ${levelValue}]`,
@@ -182,6 +183,7 @@ function buildBatchPriorityRollNoticeModel(batch, options = {}) {
   const model = {
     iconName: "dices",
     levelIndex: null,
+    levelValue: "",
     pill,
     countPill: "",
     receipt: "[priority]",
@@ -211,7 +213,89 @@ function buildBatchPriorityRollNoticeModel(batch, options = {}) {
   return Object.freeze(model);
 }
 
-function renderPriorityNoticeFragment(model, root) {
+// Guarded lookup of the shared ledger-tools priority-mark renderer,
+// mirroring getCancelPlanBudgetChip. Returns api.priorityMarks only when
+// it is version 1 or newer with a render function, else null.
+function getLedgerPriorityMarksApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const api =
+      plugins &&
+      plugins["bob-ledger-tools"] &&
+      plugins["bob-ledger-tools"].api;
+    const marks = api && api.priorityMarks;
+    if (!marks || typeof marks !== "object") {
+      return null;
+    }
+    if (typeof marks.version !== "number" || marks.version < 1) {
+      return null;
+    }
+    if (typeof marks.render !== "function") {
+      return null;
+    }
+    return marks;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Render the shared signal-bar mark into iconEl for a priority notice
+// header. The mark is decorative with an inherited color so the existing
+// --bob-nh-level-color icon color still applies. Returns true when the
+// mark rendered, false when the caller should keep the Lucide icon.
+function renderPriorityNoticeMarkIcon(iconEl, model, noticeOptions) {
+  try {
+    const settings =
+      noticeOptions && typeof noticeOptions === "object" ? noticeOptions : {};
+    const api = settings.priorityMarks || getLedgerPriorityMarksApi(settings.app);
+    if (!api || typeof api.render !== "function") {
+      return false;
+    }
+    const value = model && model.levelValue;
+    if (typeof value !== "string" || value === "") {
+      return false;
+    }
+    if (!iconEl || typeof iconEl.createSpan !== "function") {
+      return false;
+    }
+    const host = iconEl.createSpan({ cls: "bob-nh-notice-glyph" });
+    let rendered = null;
+    try {
+      rendered = api.render(host, value, {
+        decorative: true,
+        inheritColor: true,
+      });
+    } catch (error) {
+      rendered = null;
+    }
+    if (!rendered) {
+      detachNoticeGlyphHost(iconEl, host);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function detachNoticeGlyphHost(iconEl, host) {
+  try {
+    if (host && typeof host.remove === "function") {
+      host.remove();
+      return;
+    }
+    if (iconEl && Array.isArray(iconEl.children) && host) {
+      const index = iconEl.children.indexOf(host);
+      if (index >= 0) {
+        iconEl.children.splice(index, 1);
+      }
+    }
+  } catch (error) {
+    // Glyph cleanup never throws.
+  }
+}
+
+function renderPriorityNoticeFragment(model, root, noticeOptions = {}) {
   const levelClass =
     Number.isInteger(model.levelIndex) &&
     model.levelIndex >= 0 &&
@@ -224,7 +308,9 @@ function renderPriorityNoticeFragment(model, root) {
   });
   const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
   const iconEl = headerEl.createSpan({ cls: "bob-nh-notice-icon" });
-  applyIcon(iconEl, model.iconName);
+  if (!renderPriorityNoticeMarkIcon(iconEl, model, noticeOptions)) {
+    applyIcon(iconEl, model.iconName);
+  }
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.pill });
   if (model.countPill) {
     headerEl.createSpan({ cls: "bob-nh-notice-count", text: model.countPill });
@@ -302,7 +388,7 @@ function showPriorityNotice(model, options = {}) {
       showBulletPropertyNotice(fallbackText, options);
       return;
     }
-    renderPriorityNoticeFragment(model, fragment);
+    renderPriorityNoticeFragment(model, fragment, options);
     showBulletPropertyNotice(fragment, options);
   } catch (error) {
     showBulletPropertyNotice(fallbackText, options);

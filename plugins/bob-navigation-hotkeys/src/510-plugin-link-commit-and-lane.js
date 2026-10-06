@@ -236,13 +236,16 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
           pomodoroPruneFailed,
         },
       });
-      showPriorityNotice({
-        ...model,
-        text: `${model.text} · ${viaLinks}`,
-        countPill: model.countPill
-          ? `${model.countPill} ${viaLinks}`
-          : viaLinks,
-      });
+      showPriorityNotice(
+        {
+          ...model,
+          text: `${model.text} · ${viaLinks}`,
+          countPill: model.countPill
+            ? `${model.countPill} ${viaLinks}`
+            : viaLinks,
+        },
+        { app: this.app },
+      );
       return true;
     }
 

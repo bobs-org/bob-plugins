@@ -1762,3 +1762,77 @@ test("decay card footer always names the X drop alias; the trial date is not thi
     assert.match(flattenText(card.contentEl), /D \/ X drops/);
   }
 });
+
+test("task card level chips reuse the shared priority mark when available", () => {
+  const calls = [];
+  const priorityMarks = {
+    version: 1,
+    model: (value) => ({ value }),
+    render: (host, value, options) => {
+      calls.push({ value, options });
+      const el = host.createSpan({ cls: "bob-priority-mark-stub" });
+      el.setAttribute("data-priority", value);
+      return el;
+    },
+  };
+  const model = makeModel();
+  const levelValues = (model.priorityStrip.levels || []).map((level) => level.value);
+  assert.ok(levelValues.length > 0);
+  const root = new ElementStub();
+  renderTaskCardView(root, model, { priorityMarks });
+
+  const glyphs = byClass(root, "bob-task-card-level-glyph");
+  assert.equal(glyphs.length, levelValues.length);
+  assert.deepEqual(
+    calls.map((call) => call.value),
+    levelValues,
+  );
+  for (const call of calls) {
+    assert.deepEqual(call.options, { decorative: true, inheritColor: true });
+  }
+  const labels = byClass(root, "bob-task-card-level-label");
+  assert.equal(labels.length, levelValues.length + 1);
+  for (const label of labels.slice(0, levelValues.length)) {
+    assert.equal(label.children[0].classes.includes("bob-task-card-level-glyph"), true);
+  }
+  const p0Label = labels[labels.length - 1];
+  assert.ok(!p0Label.children.some((child) => child.classes.includes("bob-task-card-level-glyph")));
+  const text = flattenText(root);
+  for (const level of model.priorityStrip.levels) {
+    assert.match(text, new RegExp(level.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+});
+
+test("task card labels are unchanged without the priority mark api", () => {
+  const model = makeModel();
+  const expected = flattenText((() => {
+    const root = new ElementStub();
+    renderTaskCardView(root, model);
+    return root;
+  })());
+
+  for (const options of [
+    undefined,
+    {},
+    { app: {} },
+    { priorityMarks: null },
+    { priorityMarks: { version: 0, render: () => { throw new Error("unused"); } } },
+    { priorityMarks: { version: 1 } },
+    { priorityMarks: { version: 1, render: () => null } },
+    {
+      priorityMarks: {
+        version: 1,
+        render: () => { throw new Error("glyph failed"); },
+      },
+    },
+  ]) {
+    const root = new ElementStub();
+    if (options === undefined) {
+      renderTaskCardView(root, model);
+    } else {
+      renderTaskCardView(root, model, options);
+    }
+    assert.equal(byClass(root, "bob-task-card-level-glyph").length, 0);
+    assert.equal(flattenText(root), expected);
+  }
+});

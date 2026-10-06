@@ -328,7 +328,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         scheduledValues,
         outcome,
       }),
-      options,
+      { ...(options || {}), app: this.app },
     );
     return true;
   }
@@ -921,7 +921,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           removedPomodoroLinkCount,
           pomodoroPruneFailed,
         }),
-        options,
+        { ...(options || {}), app: this.app },
       );
     } else {
       const pomodoroPruneSuffix =

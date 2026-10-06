@@ -484,7 +484,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           removedPomodoroLinkCount,
           pomodoroPruneFailed,
         }),
-        options,
+        { ...(options || {}), app: this.app },
       );
     } else {
       const scheduleLogSuffix =

@@ -262,7 +262,7 @@ class BobNavigationHotkeysCountedRollMixin {
           pomodoroPruneFailed,
         },
       }),
-      options,
+      { ...(options || {}), app: this.app },
     );
     return true;
   }
@@ -618,7 +618,7 @@ class BobNavigationHotkeysCountedRollMixin {
           skippedClosedCount: cancelPlan ? cancelPlan.skippedClosedCount : 0,
         },
       }),
-      options,
+      { ...(options || {}), app: this.app },
     );
     if (postPruneDailyContent !== null) {
       try {

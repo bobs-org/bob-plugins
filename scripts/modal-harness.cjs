@@ -236,6 +236,8 @@ function pressKey(modal, key, modifiers = {}) {
 class ModalStub {
   constructor(app) {
     this.app = app;
+    // Mirror Obsidian >= 1.14 native Modal: isOpen owns open/close.
+    this.isOpen = false;
     this.attached = false;
     this.modalEl = new ElementStub();
     this.contentEl = new ElementStub();
@@ -243,7 +245,8 @@ class ModalStub {
   }
 
   open() {
-    if (this.attached) return this;
+    if (this.isOpen) return this;
+    this.isOpen = true;
     this.attached = true;
     body.appendChild(this.modalEl);
     this.onOpen();
@@ -254,6 +257,8 @@ class ModalStub {
   }
 
   close() {
+    if (!this.isOpen) return this;
+    this.isOpen = false;
     const parent = this.modalEl.parent;
     if (parent) parent.children = parent.children.filter((child) => child !== this.modalEl);
     this.modalEl.parent = null;

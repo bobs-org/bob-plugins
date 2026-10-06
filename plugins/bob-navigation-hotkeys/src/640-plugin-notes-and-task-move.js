@@ -480,7 +480,17 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openPomodoroBulletMovePicker(editor, view, options = {}) {
-    const activePicker = this.activeTaskMoveDestinationPicker;
+    let activePicker = this.activeTaskMoveDestinationPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeTaskMoveDestinationPicker === activePicker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      activePicker = null;
+    }
     if (activePicker) {
       const incomingCountExplicit = options.countExplicit === true;
       const activeCountExplicit = Boolean(
@@ -556,7 +566,17 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openPomodoroEntryMovePicker(editor, view, options = {}) {
-    const activePicker = this.activeTaskMoveDestinationPicker;
+    let activePicker = this.activeTaskMoveDestinationPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeTaskMoveDestinationPicker === activePicker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      activePicker = null;
+    }
     if (activePicker) {
       const incomingCountExplicit = options.countExplicit === true;
       const activeCountExplicit = Boolean(
@@ -631,7 +651,17 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openTaskMoveDestinationPicker(editor, view, options = {}) {
-    const activePicker = this.activeTaskMoveDestinationPicker;
+    let activePicker = this.activeTaskMoveDestinationPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeTaskMoveDestinationPicker === activePicker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      activePicker = null;
+    }
     if (activePicker) {
       const incomingCountExplicit = options.countExplicit === true;
       const activeCountExplicit = Boolean(

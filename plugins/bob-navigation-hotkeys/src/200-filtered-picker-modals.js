@@ -1,8 +1,9 @@
 class FilteredPickerModal extends Modal {
   constructor(app, options) {
     super(app);
-    // Obsidian's Modal does not expose isOpen; the picker owns this state.
-    this.isOpen = false;
+    // Obsidian >= 1.14 Modal owns isOpen; writing it before super.open()
+    // turns open() into a no-op, so the picker tracks its own flag.
+    this.pickerOpen = false;
     this.selectedIndex = 0;
     this.opening = false;
     this.closeBeforeOpenItem = false;
@@ -13,23 +14,23 @@ class FilteredPickerModal extends Modal {
   }
 
   open() {
-    if (this.isOpen) {
+    if (this.pickerOpen) {
       return this;
     }
-    this.isOpen = true;
+    this.pickerOpen = true;
     try {
       return super.open();
     } catch (error) {
-      this.isOpen = false;
+      this.pickerOpen = false;
       throw error;
     }
   }
 
   close() {
-    if (!this.isOpen) {
+    if (!this.pickerOpen) {
       return this;
     }
-    this.isOpen = false;
+    this.pickerOpen = false;
     return super.close();
   }
 
@@ -121,7 +122,7 @@ class FilteredPickerModal extends Modal {
 
     const openingInput = this.inputEl;
     window.setTimeout(() => {
-      if (this.isOpen && this.inputEl === openingInput && openingInput && typeof openingInput.focus === "function") {
+      if (this.pickerOpen && this.inputEl === openingInput && openingInput && typeof openingInput.focus === "function") {
         openingInput.focus();
       }
     }, 0);
@@ -351,6 +352,24 @@ class FilteredPickerModal extends Modal {
       this.opening = false;
     }
   }
+}
+
+// A registered active picker is stale when it never opened (pickerOpen false)
+// or its container is detached (isConnected === false, checked strictly so
+// stubs without isConnected behave as before). Stale slots fail open: the
+// next key drops the dead picker and opens a fresh one instead of swallowing.
+function isStaleRegisteredPicker(picker) {
+  if (!picker) {
+    return false;
+  }
+  if (picker.pickerOpen === false) {
+    return true;
+  }
+  const container = picker.containerEl;
+  if (container && container.isConnected === false) {
+    return true;
+  }
+  return false;
 }
 
 function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {

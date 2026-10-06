@@ -422,7 +422,17 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Keys pressed while resolution is pending are consumed by the shell and
   // never replayed after the linked session becomes ready.
   async openLinkPicker(cm, options = {}) {
-    const activePicker = this.activeBulletPropertyPicker;
+    let activePicker = this.activeBulletPropertyPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeBulletPropertyPicker === activePicker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      activePicker = null;
+    }
     const incomingCountExplicit = options.countExplicit === true;
     if (activePicker) {
       const activeCountExplicit = Boolean(
@@ -524,7 +534,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const stillCurrent =
       requestToken === this.linkPickerRequestToken &&
       this.activeBulletPropertyPicker === picker &&
-      picker.isOpen === true &&
+      picker.pickerOpen === true &&
       picker.linkResolutionToken === requestToken &&
       this.taskCardPluginUnloading !== true;
     if (!stillCurrent) {

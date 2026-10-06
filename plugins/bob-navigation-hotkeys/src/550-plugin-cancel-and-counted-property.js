@@ -222,7 +222,17 @@ class BobNavigationHotkeysCancelPropertyMixin {
   }
 
   openBulletPropertyPicker(cm, options = {}) {
-    const activePicker = this.activeBulletPropertyPicker;
+    let activePicker = this.activeBulletPropertyPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeBulletPropertyPicker === activePicker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      activePicker = null;
+    }
     const hadActivePicker = Boolean(activePicker);
     if (activePicker) {
       const incomingCountExplicit = Boolean(

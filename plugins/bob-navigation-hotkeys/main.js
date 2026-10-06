@@ -16145,8 +16145,9 @@ function formatSchedulingWorkLogDateSpan(dates) {
 class FilteredPickerModal extends Modal {
   constructor(app, options) {
     super(app);
-    // Obsidian's Modal does not expose isOpen; the picker owns this state.
-    this.isOpen = false;
+    // Obsidian >= 1.14 Modal owns isOpen; writing it before super.open()
+    // turns open() into a no-op, so the picker tracks its own flag.
+    this.pickerOpen = false;
     this.selectedIndex = 0;
     this.opening = false;
     this.closeBeforeOpenItem = false;
@@ -16157,23 +16158,23 @@ class FilteredPickerModal extends Modal {
   }
 
   open() {
-    if (this.isOpen) {
+    if (this.pickerOpen) {
       return this;
     }
-    this.isOpen = true;
+    this.pickerOpen = true;
     try {
       return super.open();
     } catch (error) {
-      this.isOpen = false;
+      this.pickerOpen = false;
       throw error;
     }
   }
 
   close() {
-    if (!this.isOpen) {
+    if (!this.pickerOpen) {
       return this;
     }
-    this.isOpen = false;
+    this.pickerOpen = false;
     return super.close();
   }
 
@@ -16265,7 +16266,7 @@ class FilteredPickerModal extends Modal {
 
     const openingInput = this.inputEl;
     window.setTimeout(() => {
-      if (this.isOpen && this.inputEl === openingInput && openingInput && typeof openingInput.focus === "function") {
+      if (this.pickerOpen && this.inputEl === openingInput && openingInput && typeof openingInput.focus === "function") {
         openingInput.focus();
       }
     }, 0);
@@ -16495,6 +16496,24 @@ class FilteredPickerModal extends Modal {
       this.opening = false;
     }
   }
+}
+
+// A registered active picker is stale when it never opened (pickerOpen false)
+// or its container is detached (isConnected === false, checked strictly so
+// stubs without isConnected behave as before). Stale slots fail open: the
+// next key drops the dead picker and opens a fresh one instead of swallowing.
+function isStaleRegisteredPicker(picker) {
+  if (!picker) {
+    return false;
+  }
+  if (picker.pickerOpen === false) {
+    return true;
+  }
+  const container = picker.containerEl;
+  if (container && container.isConnected === false) {
+    return true;
+  }
+  return false;
 }
 
 function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {
@@ -27186,7 +27205,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       });
     }
     this.applyTaskCardChrome({ wide: false });
-    if (this.isOpen && this.contentEl && this.modalEl) {
+    if (this.pickerOpen && this.contentEl && this.modalEl) {
       this.contentEl.empty();
       this.modalEl.addClass("bob-cnp-modal");
       this.contentEl.addClass("bob-cnp");
@@ -27349,7 +27368,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     try {
       open();
     } finally {
-      if (this.isOpen && this.stage === TASK_CARD_PENDING_STAGE) {
+      if (this.pickerOpen && this.stage === TASK_CARD_PENDING_STAGE) {
         this.returnToTaskCard();
       }
     }
@@ -27360,7 +27379,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   returnHome(options = {}) {
     if (this.hasTaskCard) {
       this.returnToTaskCard(options);
-    } else if (this.isOpen) {
+    } else if (this.pickerOpen) {
       this.close();
     }
   }
@@ -27469,7 +27488,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       } else if (intent.type === "open-property") {
         result = await this.openTaskCardProperty(intent.propertyName);
       }
-      if (result === true && this.isOpen) this.close();
+      if (result === true && this.pickerOpen) this.close();
       return result;
     } finally {
       this.taskCardDispatching = false;
@@ -27515,7 +27534,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       }
       this.ensureTaskCardStageChrome();
       const applied = await this.plugin.applyLaneToggleFromPicker(this);
-      if (applied !== true && this.isOpen && this.stage === TASK_CARD_PENDING_STAGE) {
+      if (applied !== true && this.pickerOpen && this.stage === TASK_CARD_PENDING_STAGE) {
         this.returnHome({ rebuild: true });
       }
       return applied;
@@ -27629,7 +27648,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     this.ensureTaskCardStageChrome();
     const deleted = await this.deletePropertyItem(item);
-    if (deleted !== true && this.isOpen) {
+    if (deleted !== true && this.pickerOpen) {
       this.returnToTaskCard({ rebuild: true });
     }
     return deleted;
@@ -27705,7 +27724,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       const openingList = this.taskCardListEl;
       window.setTimeout(() => {
         if (
-          this.isOpen &&
+          this.pickerOpen &&
           this.stage === "task-card" &&
           this.taskCardListEl === openingList &&
           openingList &&
@@ -27836,7 +27855,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     window.setTimeout(() => {
       if (
-        this.isOpen &&
+        this.pickerOpen &&
         this.stage === stage &&
         this.stage !== "task-card" &&
         this.inputEl === openingInput
@@ -36411,7 +36430,17 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Keys pressed while resolution is pending are consumed by the shell and
   // never replayed after the linked session becomes ready.
   async openLinkPicker(cm, options = {}) {
-    const activePicker = this.activeBulletPropertyPicker;
+    let activePicker = this.activeBulletPropertyPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeBulletPropertyPicker === activePicker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      activePicker = null;
+    }
     const incomingCountExplicit = options.countExplicit === true;
     if (activePicker) {
       const activeCountExplicit = Boolean(
@@ -36513,7 +36542,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     const stillCurrent =
       requestToken === this.linkPickerRequestToken &&
       this.activeBulletPropertyPicker === picker &&
-      picker.isOpen === true &&
+      picker.pickerOpen === true &&
       picker.linkResolutionToken === requestToken &&
       this.taskCardPluginUnloading !== true;
     if (!stillCurrent) {
@@ -41840,7 +41869,17 @@ class BobNavigationHotkeysCancelPropertyMixin {
   }
 
   openBulletPropertyPicker(cm, options = {}) {
-    const activePicker = this.activeBulletPropertyPicker;
+    let activePicker = this.activeBulletPropertyPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeBulletPropertyPicker === activePicker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      activePicker = null;
+    }
     const hadActivePicker = Boolean(activePicker);
     if (activePicker) {
       const incomingCountExplicit = Boolean(
@@ -49993,7 +50032,17 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openPomodoroBulletMovePicker(editor, view, options = {}) {
-    const activePicker = this.activeTaskMoveDestinationPicker;
+    let activePicker = this.activeTaskMoveDestinationPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeTaskMoveDestinationPicker === activePicker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      activePicker = null;
+    }
     if (activePicker) {
       const incomingCountExplicit = options.countExplicit === true;
       const activeCountExplicit = Boolean(
@@ -50069,7 +50118,17 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openPomodoroEntryMovePicker(editor, view, options = {}) {
-    const activePicker = this.activeTaskMoveDestinationPicker;
+    let activePicker = this.activeTaskMoveDestinationPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeTaskMoveDestinationPicker === activePicker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      activePicker = null;
+    }
     if (activePicker) {
       const incomingCountExplicit = options.countExplicit === true;
       const activeCountExplicit = Boolean(
@@ -50144,7 +50203,17 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openTaskMoveDestinationPicker(editor, view, options = {}) {
-    const activePicker = this.activeTaskMoveDestinationPicker;
+    let activePicker = this.activeTaskMoveDestinationPicker;
+    if (
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
+    ) {
+      if (this.activeTaskMoveDestinationPicker === activePicker) {
+        this.activeTaskMoveDestinationPicker = null;
+      }
+      activePicker = null;
+    }
     if (activePicker) {
       const incomingCountExplicit = options.countExplicit === true;
       const activeCountExplicit = Boolean(

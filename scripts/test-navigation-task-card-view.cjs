@@ -101,7 +101,7 @@ function nextTurn() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-test("Modal harness models Obsidian attachment and non-idempotent close", () => {
+test("Modal harness models Obsidian 1.14 attachment and idempotent close", () => {
   let opens = 0;
   let closes = 0;
   class LifecycleModal extends ModalStub {
@@ -109,15 +109,18 @@ test("Modal harness models Obsidian attachment and non-idempotent close", () => 
     onClose() { closes += 1; }
   }
   const modal = new LifecycleModal({});
-  assert.equal(Object.hasOwn(modal, "isOpen"), false);
+  assert.equal(Object.hasOwn(modal, "isOpen"), true);
+  assert.equal(modal.isOpen, false);
   modal.open();
   modal.open();
   assert.equal(modal.attached, true);
+  assert.equal(modal.isOpen, true);
   assert.equal(opens, 1);
   modal.close();
   modal.close();
   assert.equal(modal.attached, false);
-  assert.equal(closes, 2);
+  assert.equal(modal.isOpen, false);
+  assert.equal(closes, 1);
 });
 
 function sequence(values) {

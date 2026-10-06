@@ -67,7 +67,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       });
     }
     this.applyTaskCardChrome({ wide: false });
-    if (this.isOpen && this.contentEl && this.modalEl) {
+    if (this.pickerOpen && this.contentEl && this.modalEl) {
       this.contentEl.empty();
       this.modalEl.addClass("bob-cnp-modal");
       this.contentEl.addClass("bob-cnp");
@@ -230,7 +230,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     try {
       open();
     } finally {
-      if (this.isOpen && this.stage === TASK_CARD_PENDING_STAGE) {
+      if (this.pickerOpen && this.stage === TASK_CARD_PENDING_STAGE) {
         this.returnToTaskCard();
       }
     }
@@ -241,7 +241,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   returnHome(options = {}) {
     if (this.hasTaskCard) {
       this.returnToTaskCard(options);
-    } else if (this.isOpen) {
+    } else if (this.pickerOpen) {
       this.close();
     }
   }
@@ -350,7 +350,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       } else if (intent.type === "open-property") {
         result = await this.openTaskCardProperty(intent.propertyName);
       }
-      if (result === true && this.isOpen) this.close();
+      if (result === true && this.pickerOpen) this.close();
       return result;
     } finally {
       this.taskCardDispatching = false;
@@ -396,7 +396,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       }
       this.ensureTaskCardStageChrome();
       const applied = await this.plugin.applyLaneToggleFromPicker(this);
-      if (applied !== true && this.isOpen && this.stage === TASK_CARD_PENDING_STAGE) {
+      if (applied !== true && this.pickerOpen && this.stage === TASK_CARD_PENDING_STAGE) {
         this.returnHome({ rebuild: true });
       }
       return applied;
@@ -510,7 +510,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     this.ensureTaskCardStageChrome();
     const deleted = await this.deletePropertyItem(item);
-    if (deleted !== true && this.isOpen) {
+    if (deleted !== true && this.pickerOpen) {
       this.returnToTaskCard({ rebuild: true });
     }
     return deleted;
@@ -586,7 +586,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       const openingList = this.taskCardListEl;
       window.setTimeout(() => {
         if (
-          this.isOpen &&
+          this.pickerOpen &&
           this.stage === "task-card" &&
           this.taskCardListEl === openingList &&
           openingList &&
@@ -717,7 +717,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     window.setTimeout(() => {
       if (
-        this.isOpen &&
+        this.pickerOpen &&
         this.stage === stage &&
         this.stage !== "task-card" &&
         this.inputEl === openingInput

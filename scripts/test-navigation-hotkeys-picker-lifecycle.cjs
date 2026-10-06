@@ -761,3 +761,129 @@ test("Pomodoro bullet move picker = cancellation, invalid rows, and stale-conten
   assert.equal(staleHarness.editor.transactions.length, 0);
   assert.equal(notices.at(-1), "Source note is no longer active; nothing was moved");
 });
+
+test("native isOpen regression: pickers attach, close clears slot, reopen works", () => {
+  {
+    const { open, plugin } = createBulletPropertyPickerHarness();
+    assert.equal(open(), true);
+    const first = plugin.activeBulletPropertyPicker;
+    assert.equal(first.pickerOpen, true);
+    assert.equal(first.isOpen, true);
+    assert.equal(first.attached, true);
+    assert.ok(first.contentEl.children.length > 0);
+    assert.ok(first.modalEl.parent !== null);
+
+    first.close();
+    assert.equal(plugin.activeBulletPropertyPicker, null);
+    assert.equal(first.pickerOpen, false);
+    assert.equal(first.isOpen, false);
+
+    assert.equal(open(), true);
+    const second = plugin.activeBulletPropertyPicker;
+    assert.notEqual(second, first);
+    assert.equal(second.pickerOpen, true);
+    assert.equal(second.isOpen, true);
+    assert.equal(second.attached, true);
+    assert.ok(second.contentEl.children.length > 0);
+    second.close();
+    assert.equal(plugin.activeBulletPropertyPicker, null);
+  }
+
+  {
+    const { editor, plugin, view } = createTaskMovePickerHarness();
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    const first = plugin.activeTaskMoveDestinationPicker;
+    assert.equal(first.pickerOpen, true);
+    assert.equal(first.isOpen, true);
+    assert.equal(first.attached, true);
+    assert.ok(first.contentEl.children.length > 0);
+    assert.ok(first.modalEl.parent !== null);
+
+    first.close();
+    assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+    assert.equal(first.pickerOpen, false);
+    assert.equal(first.isOpen, false);
+
+    editor.cursor = { line: 1, ch: 0 };
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    const second = plugin.activeTaskMoveDestinationPicker;
+    assert.notEqual(second, first);
+    assert.equal(second.pickerOpen, true);
+    assert.equal(second.isOpen, true);
+    assert.equal(second.attached, true);
+    second.close();
+    assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+  }
+});
+
+test("stale registered pickers fail open on the next key", () => {
+  {
+    const { editor, config, open, plugin } = createBulletPropertyPickerHarness();
+    assert.equal(open(), true);
+    const live = plugin.activeBulletPropertyPicker;
+    live.close();
+    assert.equal(plugin.activeBulletPropertyPicker, null);
+
+    const stale = new helpers.BulletPropertyPickerModal(
+      {},
+      plugin,
+      editor,
+      { line: 0, ch: 0 },
+      "- [ ] #task One",
+      config,
+      { filePath: "Tasks.md", propertyContext: { valid: true } },
+    );
+    assert.equal(stale.pickerOpen, false);
+    plugin.activeBulletPropertyPicker = stale;
+
+    assert.equal(open(), true);
+    const fresh = plugin.activeBulletPropertyPicker;
+    assert.notEqual(fresh, stale);
+    assert.equal(fresh.pickerOpen, true);
+    assert.equal(fresh.attached, true);
+    assert.ok(fresh.contentEl.children.length > 0);
+
+    fresh.containerEl = { isConnected: false };
+    assert.equal(open(), true);
+    const refetched = plugin.activeBulletPropertyPicker;
+    assert.notEqual(refetched, fresh);
+    assert.equal(refetched.pickerOpen, true);
+    assert.equal(refetched.attached, true);
+    refetched.close();
+    assert.equal(plugin.activeBulletPropertyPicker, null);
+  }
+
+  {
+    const { editor, plugin, view } = createTaskMovePickerHarness();
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    const live = plugin.activeTaskMoveDestinationPicker;
+    const destinations = live.items;
+    const session = live.session;
+    live.close();
+    assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+
+    const stale = new helpers.TaskMoveDestinationPickerModal(
+      {},
+      plugin,
+      destinations,
+      session,
+    );
+    assert.equal(stale.pickerOpen, false);
+    plugin.activeTaskMoveDestinationPicker = stale;
+
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    const fresh = plugin.activeTaskMoveDestinationPicker;
+    assert.notEqual(fresh, stale);
+    assert.equal(fresh.pickerOpen, true);
+    assert.equal(fresh.attached, true);
+
+    fresh.containerEl = { isConnected: false };
+    assert.equal(plugin.openTaskMoveDestinationPicker(editor, view), true);
+    const refetched = plugin.activeTaskMoveDestinationPicker;
+    assert.notEqual(refetched, fresh);
+    assert.equal(refetched.pickerOpen, true);
+    assert.equal(refetched.attached, true);
+    refetched.close();
+    assert.equal(plugin.activeTaskMoveDestinationPicker, null);
+  }
+});

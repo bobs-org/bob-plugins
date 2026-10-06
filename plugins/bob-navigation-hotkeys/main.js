@@ -17070,6 +17070,143 @@ class YankPathPickerModal extends FilteredPickerModal {
   }
 }
 
+// ---- src/205-inbox-route-picker-modal.js ----
+// Inbox route picker modal (route-core): asks where an inbox task goes as
+// the last step before a Ctrl+Shift+P or Ctrl+Shift+Enter write. Built on
+// `FilteredPickerModal` and reuses the Ctrl+Shift+M destination rows so the
+// two pickers look like siblings. Resolves a promise exactly once with
+// `{ kind: "move", file }`, `{ kind: "stay" }`, or `{ kind: "cancel" }`;
+// closing without a choice means cancel. `↵` preflights the move first: a
+// refusal keeps the picker open with a Notice so another destination can be
+// chosen. `⇧↵` applies in place (stay) and `Esc` / `Ctrl+[` backs out.
+// Uses the default `closeBeforeOpenItem: false` and closes itself after
+// resolving. Registers in the shared `activeTaskMoveDestinationPicker`
+// guard, so Ctrl+Shift+M and a second route cannot open on top of it.
+class InboxRoutePickerModal extends FilteredPickerModal {
+  constructor(app, plugin, options = {}) {
+    const destinations = Array.isArray(options.destinations)
+      ? options.destinations
+      : [];
+    const actionLabel = formatInboxRouteActionLabel(options.actionLabel);
+    const backLabel = options.cancelLabel === "cancel" ? "cancel" : "back";
+    super(app, {
+      items: destinations,
+      title: `Route out of ${options.inboxName || "inbox"}`,
+      headerIcon: "inbox",
+      inputLabel: "Filter route destinations",
+      placeholder: "Where does this go? Filter areas and open projects",
+      resultsLabel: "Route destinations",
+      emptyText: "No matching areas or open projects",
+      getSubtitle: () =>
+        formatInboxRouteTaskSubtitle({
+          taskText: options.taskText,
+          count: options.count,
+          actionLabel,
+        }),
+      filterItem: (entry, query) =>
+        childNoteMatchesQuery(entry.file, entry.noteInfo, query),
+      renderItem: (entry, rowEl, query) =>
+        renderTypedNotePickerRow(entry.file, entry.noteInfo, rowEl, query),
+      closeBeforeOpenItem: false,
+      footerHints: [
+        { keys: ["↵"], label: `move & ${actionLabel}` },
+        { keys: ["⇧", "↵"], label: "keep in inbox" },
+        { keys: ["esc"], label: backLabel },
+      ],
+      openItem: (entry) => this.chooseRouteDestination(entry),
+    });
+    this.inboxRoutePlugin = plugin;
+    this.inboxRouteSettled = false;
+    this.inboxRouteResolve = null;
+    this.inboxRouteResult = new Promise((resolve) => {
+      this.inboxRouteResolve = resolve;
+    });
+    this.inboxRoutePreflight =
+      typeof options.preflight === "function" ? options.preflight : null;
+  }
+
+  waitForRoute() {
+    return this.inboxRouteResult;
+  }
+
+  settleRoute(outcome) {
+    if (this.inboxRouteSettled) {
+      return;
+    }
+    this.inboxRouteSettled = true;
+    let result = { kind: "cancel" };
+    if (outcome && outcome.kind === "move" && outcome.file) {
+      result = { kind: "move", file: outcome.file };
+    } else if (outcome && outcome.kind === "stay") {
+      result = { kind: "stay" };
+    }
+    try {
+      this.inboxRouteResolve(result);
+    } catch (error) {
+      // The awaiting gate owns recovery; the resolve is best-effort.
+    }
+    if (this.pickerOpen) {
+      try {
+        this.close();
+      } catch (error) {
+        // Closing is best-effort after resolving.
+      }
+    }
+  }
+
+  async chooseRouteDestination(entry) {
+    if (!entry || !entry.file) {
+      return false;
+    }
+    let check = { ok: true, reason: null };
+    try {
+      if (this.inboxRoutePreflight) {
+        check = (await this.inboxRoutePreflight(entry.file)) || check;
+      }
+    } catch (error) {
+      check = { ok: false, reason: "Route preflight failed" };
+    }
+    if (!check || check.ok !== true) {
+      new Notice(
+        check && check.reason ? check.reason : "Destination is no longer eligible",
+      );
+      return false;
+    }
+    this.settleRoute({ kind: "move", file: entry.file });
+    return true;
+  }
+
+  chooseRouteStay() {
+    this.settleRoute({ kind: "stay" });
+  }
+
+  handleKeydown(event) {
+    if (event && event.key === "Enter" && event.shiftKey === true) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.chooseRouteStay();
+      return;
+    }
+    if (event && isCtrlKey(event, "[")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.settleRoute({ kind: "cancel" });
+      return;
+    }
+    super.handleKeydown(event);
+  }
+
+  onClose() {
+    if (
+      this.inboxRoutePlugin &&
+      this.inboxRoutePlugin.activeTaskMoveDestinationPicker === this
+    ) {
+      this.inboxRoutePlugin.activeTaskMoveDestinationPicker = null;
+    }
+    this.settleRoute({ kind: "cancel" });
+    super.onClose();
+  }
+}
 // ---- src/210-rename-and-line-context.js ----
 class RenameCurrentFileModal extends Modal {
   constructor(app, plugin, file) {
@@ -21242,6 +21379,354 @@ function planProjectScheduledUpdate(
   });
 }
 
+// ---- src/255-inbox-route.js ----
+// Inbox routing core (route-core): pure, Obsidian-free helpers for routing
+// tasks out of inbox notes. Nothing here touches the vault, the editor, or
+// the walk; the plugin mixin (`655-plugin-inbox-route.js`) and the route
+// picker modal (`205-inbox-route-picker-modal.js`) consume these. Nothing
+// here throws.
+const INBOX_NOTE_PATH = "inbox.md";
+
+const INBOX_ROUTE_TASK_SUBTITLE_LIMIT = 80;
+
+// A note is an inbox note when it is the inbox note itself (`inbox.md` at
+// the vault root) or an area note whose frontmatter `parent` resolves to
+// it. Only direct children count: a project filed under an inbox is not an
+// inbox note. `inboxFile` is the vault file for `inbox.md` (null when the
+// vault has none) and `pointsToInbox(frontmatter)` resolves the note's
+// `parent` field against it. Never cached across gestures.
+function classifyInboxNote(note, inboxFile, pointsToInbox) {
+  try {
+    const path = normalizeVaultRelativePath(note && note.path);
+    if (!path) {
+      return false;
+    }
+    if (path === INBOX_NOTE_PATH) {
+      return true;
+    }
+    if (
+      !inboxFile ||
+      normalizeVaultRelativePath(inboxFile.path) !== INBOX_NOTE_PATH ||
+      typeof pointsToInbox !== "function"
+    ) {
+      return false;
+    }
+    const info = getChildNoteInfo(note && note.frontmatter);
+    if (!info || info.kind !== "area") {
+      return false;
+    }
+    return pointsToInbox(note && note.frontmatter) === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Identity text for one task line: the display description with inline
+// fields, status, and block ID stripped, so a re-discovered line still
+// matches after an action rewrote its metadata.
+function normalizeInboxRouteTaskIdentity(line) {
+  try {
+    return cleanTaskDisplayText(line);
+  } catch (error) {
+    return String(line || "").trim();
+  }
+}
+
+// Snapshot the pre-gesture identity of route targets
+// (`discoverMovableObsidianTaskTargets` rows): `{ line, raw, blockId, text }`.
+function captureInboxRouteExpected(targets) {
+  const list = Array.isArray(targets) ? targets : [];
+  return Object.freeze(
+    list.map((target) => {
+      const raw = String((target && (target.rawLine ?? target.raw)) || "");
+      let blockId = null;
+      try {
+        blockId = getTrailingBlockId(raw);
+      } catch (error) {
+        blockId = null;
+      }
+      return Object.freeze({
+        line: target && Number.isInteger(target.line) ? target.line : null,
+        raw,
+        blockId,
+        text: normalizeInboxRouteTaskIdentity(raw),
+      });
+    }),
+  );
+}
+
+// Verify re-discovered route targets against the pre-gesture snapshot: same
+// count, and the same block ID when one existed, otherwise the same task
+// description. Never guesses: any mismatch refuses.
+function verifyInboxRouteTargets(expected, rediscovered) {
+  try {
+    const want = Array.isArray(expected) ? expected : [];
+    const got = Array.isArray(rediscovered) ? rediscovered : [];
+    if (want.length === 0 || want.length !== got.length) {
+      return false;
+    }
+    for (let index = 0; index < want.length; index += 1) {
+      const entry = want[index] || {};
+      const found = got[index] || {};
+      const raw = String(found.rawLine ?? found.raw ?? "");
+      if (!raw) {
+        return false;
+      }
+      const wantId = entry.blockId || null;
+      if (wantId) {
+        let gotId = null;
+        try {
+          gotId = getTrailingBlockId(raw);
+        } catch (error) {
+          gotId = null;
+        }
+        if (gotId !== wantId) {
+          return false;
+        }
+        continue;
+      }
+      if (normalizeInboxRouteTaskIdentity(raw) !== String(entry.text || "")) {
+        return false;
+      }
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Route destinations are the task-move destinations minus every inbox note.
+// The source and template notes are dropped too, so a raw file list still
+// routes safely. `isInbox(path, entry)` mirrors `isInboxNotePath`.
+function filterInboxRouteDestinations(destinations, isInbox, sourcePath) {
+  const source = normalizeVaultRelativePath(sourcePath || "");
+  const test = typeof isInbox === "function" ? isInbox : null;
+  return Object.freeze(
+    (Array.isArray(destinations) ? destinations : []).filter((entry) => {
+      const path = normalizeVaultRelativePath(entry && entry.file && entry.file.path);
+      if (!path) {
+        return false;
+      }
+      if (source && path === source) {
+        return false;
+      }
+      if (TASK_MOVE_TEMPLATE_PATHS.has(path)) {
+        return false;
+      }
+      if (test) {
+        let inbox = false;
+        try {
+          inbox = test(path, entry) === true;
+        } catch (error) {
+          inbox = true;
+        }
+        if (inbox) {
+          return false;
+        }
+      }
+      return true;
+    }),
+  );
+}
+
+// Preflight a route against live source content and a destination snapshot:
+// destination still an area or open project, a `## Tasks` section where a
+// project needs one, and no block-ID collision, counting block IDs the
+// pending action is about to assign (`reservedBlockIds`). Wraps
+// `planTaskMoveAcrossFiles` with empty `otherContents` and adds the
+// reserved-ID collision check. Returns `{ ok, reason }`.
+function preflightInboxRoute(options = {}) {
+  try {
+    const reserved =
+      options.reservedBlockIds instanceof Set
+        ? options.reservedBlockIds
+        : new Set(options.reservedBlockIds || []);
+    if (reserved.size > 0) {
+      const destinationIds = collectTaskMoveBlockIds(options.destinationContent);
+      for (const id of reserved) {
+        if (id && destinationIds.has(id)) {
+          return Object.freeze({
+            ok: false,
+            reason: `Destination already contains block ID: ${id}`,
+          });
+        }
+      }
+    }
+    const plan = planTaskMoveAcrossFiles({
+      sourcePath: options.sourcePath,
+      destinationPath: options.destinationPath,
+      sourceContent: options.sourceContent,
+      destinationContent: options.destinationContent,
+      otherContents: new Map(),
+      targets: options.targets,
+      stampLine: options.stampLine,
+      freshDateText: options.freshDateText,
+    });
+    if (!plan.valid) {
+      return Object.freeze({ ok: false, reason: plan.error });
+    }
+    return Object.freeze({ ok: true, reason: null });
+  } catch (error) {
+    return Object.freeze({ ok: false, reason: "Route preflight failed" });
+  }
+}
+
+// Short lower-case action label for the route picker subtitle and footer,
+// for example `set P2`, `schedule Fri Oct 9`, or `link to today`. Gates
+// pass `{ label }` (or a plain string); `{ verb, detail }` composes.
+function formatInboxRouteActionLabel(action) {
+  if (typeof action === "string") {
+    const text = action.trim();
+    return text || "apply";
+  }
+  if (action && typeof action === "object") {
+    if (typeof action.label === "string" && action.label.trim()) {
+      return action.label.trim();
+    }
+    const verb = String(action.verb || "").trim();
+    const detail = String(action.detail || "").trim();
+    if (verb && detail) {
+      return `${verb} ${detail}`;
+    }
+    if (verb) {
+      return verb;
+    }
+  }
+  return "apply";
+}
+
+// Move notice appended after a routed action: `Moved to <dest>`,
+// counted `Moved <N> tasks to <dest>`.
+function formatInboxRouteMoveNotice(options = {}) {
+  const name = String(options.destinationName || "destination");
+  const count = Math.max(1, Math.floor(numericOrDefault(options.count, 1)) || 1);
+  if (count === 1) {
+    return `Moved to ${name}`;
+  }
+  return `Moved ${count} tasks to ${name}`;
+}
+
+function truncateInboxRouteText(text, limit = INBOX_ROUTE_TASK_SUBTITLE_LIMIT) {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  if (cleaned.length <= limit) {
+    return cleaned || "(untitled task)";
+  }
+  return `${cleaned.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+}
+
+// Picker subtitle: `<task text, cleaned and truncated> · then <action>`,
+// counted `<N> tasks · then <action>`.
+function formatInboxRouteTaskSubtitle(options = {}) {
+  const count = Math.max(1, Math.floor(numericOrDefault(options.count, 1)) || 1);
+  const head =
+    count === 1
+      ? truncateInboxRouteText(options.taskText)
+      : `${count} tasks`;
+  return `${head} · then ${formatInboxRouteActionLabel(options.actionLabel)}`;
+}
+
+// nav `inboxRoute` v1 (`docs/task-dependencies.md` §9, additive): the
+// inbox-routing contract for Ctrl+Shift+P and Ctrl+Shift+Enter gates.
+// `api.version` stays 3; consumers feature-detect
+// `api.inboxRoute?.version >= 1`. `isInboxNote` is sync and never throws;
+// `prompt` and `commit` return Promises that never reject. With a null plugin
+// (after unload), `isInboxNote` returns false, `prompt` resolves
+// `{ kind: "stay" }` (today's behavior), and `commit` resolves
+// `{ ok: false, reason: "unavailable" }`.
+function createInboxRouteApi(plugin) {
+  const safeIsInboxNote = (path) => {
+    try {
+      if (!plugin || typeof plugin.isInboxNotePath !== "function") {
+        return false;
+      }
+      return plugin.isInboxNotePath(path) === true;
+    } catch (error) {
+      return false;
+    }
+  };
+  const safePrompt = (request) => {
+    try {
+      if (!plugin || typeof plugin.promptInboxRoute !== "function") {
+        return Promise.resolve({ kind: "stay" });
+      }
+      return Promise.resolve(plugin.promptInboxRoute(request || {})).then(
+        (outcome) => {
+          if (
+            outcome &&
+            outcome.kind === "move" &&
+            typeof outcome.path === "string" &&
+            outcome.path
+          ) {
+            return {
+              kind: "move",
+              path: outcome.path,
+              name: String(outcome.name || ""),
+            };
+          }
+          if (outcome && outcome.kind === "stay") {
+            return { kind: "stay" };
+          }
+          return { kind: "cancel" };
+        },
+        () => ({ kind: "stay" }),
+      );
+    } catch (error) {
+      return Promise.resolve({ kind: "stay" });
+    }
+  };
+  const safeCommit = (request) => {
+    const unavailable = () =>
+      Object.freeze({
+        ok: false,
+        name: "",
+        count: 0,
+        notice: "",
+        handledRefs: Object.freeze([]),
+        reason: "unavailable",
+      });
+    try {
+      if (!plugin || typeof plugin.commitInboxRoute !== "function") {
+        return Promise.resolve(unavailable());
+      }
+      return Promise.resolve(plugin.commitInboxRoute(request || {})).then(
+        (result) => {
+          if (result && result.ok === true) {
+            return Object.freeze({
+              ok: true,
+              name: String(result.destinationName || result.name || ""),
+              count: Math.max(
+                0,
+                Math.floor(numericOrDefault(result.count, 0)) || 0,
+              ),
+              notice: String(result.notice || ""),
+              handledRefs: Object.freeze(
+                Array.isArray(result.handledRefs) ? result.handledRefs : [],
+              ),
+              reason: null,
+            });
+          }
+          return Object.freeze({
+            ok: false,
+            name: "",
+            count: 0,
+            notice: String((result && result.notice) || ""),
+            handledRefs: Object.freeze([]),
+            reason: String((result && result.reason) || "route-failed"),
+          });
+        },
+        () => unavailable(),
+      );
+    } catch (error) {
+      return Promise.resolve(unavailable());
+    }
+  };
+  return Object.freeze({
+    version: 1,
+    isInboxNote: safeIsInboxNote,
+    prompt: safePrompt,
+    commit: safeCommit,
+  });
+}
 // ---- src/260-project-schedules.js ----
 function planProjectScheduledDelete(content, cursorLine, options = {}) {
   const context = getProjectNotePropertyContext(content, cursorLine, options);
@@ -35614,6 +36099,7 @@ function createDependencyNavApi(plugin) {
     version: 3,
     ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
     reviewWalk: createReviewWalkApi(plugin),
+    inboxRoute: createInboxRouteApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
@@ -41166,7 +41652,7 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
     if (kind === "complete") {
       return true;
     }
-    if (kind === "lane" || kind === "link-today") {
+    if (kind === "lane" || kind === "link-today" || kind === "route") {
       return !checklist;
     }
     if (kind !== "card") {
@@ -51870,6 +52356,10 @@ class BobNavigationHotkeysMoveCommitMixin {
     }
   }
 
+  // Ctrl+Shift+M commit: the shared `planAndWriteTaskMoveFiles` core
+  // (in `655-plugin-inbox-route.js`) plans, writes, and rolls back and
+  // returns a structured result; this wrapper keeps the move's park, focus,
+  // and notice behavior. A move never advances the walk.
   async commitTaskMoveSessionWrite(session, destinationEntry, moveOptions = {}) {
     const reviewPark =
       moveOptions && typeof moveOptions.reviewPark === "function"
@@ -51889,141 +52379,26 @@ class BobNavigationHotkeysMoveCommitMixin {
       new Notice("Source task note is no longer active; nothing was moved");
       return false;
     }
-    if (
-      destinationFile.path === session.sourcePath ||
-      TASK_MOVE_TEMPLATE_PATHS.has(destinationFile.path)
-    ) {
-      new Notice("Selected task destination is not eligible");
-      return false;
-    }
-    if (String(session.editor.getValue() || "") !== session.sourceContent) {
-      new Notice("A selected task changed while the destination picker was open");
-      return false;
-    }
 
-    const vault = this.app && this.app.vault;
-    if (
-      !vault ||
-      typeof vault.getMarkdownFiles !== "function" ||
-      typeof vault.process !== "function"
-    ) {
-      new Notice("Vault content updates are unavailable");
-      return false;
-    }
-
-    const snapshots = new Map();
-    const filesByPath = new Map();
-    try {
-      for (const file of vault.getMarkdownFiles()) {
-        if (!this.isMarkdownFile(file)) {
-          continue;
-        }
-        const snapshot = await this.getTaskMoveFileSnapshot(file);
-        snapshots.set(file.path, snapshot.content);
-        filesByPath.set(file.path, file);
-      }
-    } catch (error) {
-      new Notice("Could not read every affected note; nothing was moved");
-      return false;
-    }
-    if (
-      snapshots.get(session.sourcePath) !== session.sourceContent ||
-      !snapshots.has(destinationFile.path)
-    ) {
-      new Notice("Task move source or destination changed; nothing was moved");
-      return false;
-    }
-
-    const destinationContent = snapshots.get(destinationFile.path);
-    const otherContents = new Map(snapshots);
-    otherContents.delete(session.sourcePath);
-    otherContents.delete(destinationFile.path);
-    const plan = planTaskMoveAcrossFiles({
+    const result = await this.planAndWriteTaskMoveFiles({
       sourcePath: session.sourcePath,
-      destinationPath: destinationFile.path,
       sourceContent: session.sourceContent,
-      destinationContent,
-      otherContents,
+      editor: session.editor,
+      cursor: session.cursor,
       targets: session.discovery.targets,
-      stampLine: this.getFreshnessStampLine(),
-      freshDateText: this.getFreshnessDateText(),
+      destinationPath: destinationFile.path,
     });
-    if (!plan.valid) {
-      new Notice(`${plan.error}; nothing was moved`);
-      return false;
-    }
-
-    const sourceChange = plan.changes.get(session.sourcePath);
-    const sourceLines = splitMarkdownContent(sourceChange.after).lines;
-    const sourceLine = Math.min(
-      plan.nextSourceLine,
-      Math.max(sourceLines.length - 1, 0),
-    );
-    const finalCursor = {
-      line: sourceLine,
-      ch: Math.min(
-        session.cursor.ch,
-        String(sourceLines[sourceLine] || "").length,
-      ),
-    };
-    const auxiliaryPaths = Array.from(plan.changes.keys())
-      .filter(
-        (path) =>
-          path !== destinationFile.path && path !== session.sourcePath,
-      )
-      .sort();
-    const writeOrder = [
-      destinationFile.path,
-      ...auxiliaryPaths,
-      session.sourcePath,
-    ];
-    const written = [];
-    try {
-      for (const path of writeOrder) {
-        const change = plan.changes.get(path);
-        if (!change || change.before === change.after) {
-          continue;
-        }
-        if (
-          path === session.sourcePath &&
-          (this.getActiveMarkdownView()?.editor !== session.editor ||
-            String(session.editor.getValue() || "") !== change.before)
-        ) {
-          throw new Error("Source editor changed before final removal");
-        }
-        const file = filesByPath.get(path);
-        if (!this.isMarkdownFile(file)) {
-          throw new Error(`Affected Markdown file disappeared: ${path}`);
-        }
-        written.push(
-          await this.writeTaskMoveChange(
-            path,
-            change,
-            file,
-            session,
-            path === session.sourcePath ? finalCursor : null,
-          ),
-        );
-      }
-    } catch (error) {
-      if (
-        error &&
-        error.taskMoveAppliedEntry &&
-        !written.some((entry) => entry.path === error.taskMoveAppliedEntry.path)
-      ) {
-        written.push(error.taskMoveAppliedEntry);
-      }
-      const failedRollbacks = await this.rollbackTaskMoveChanges(written);
+    if (!result || result.ok !== true) {
       this.restoreTaskMoveSourceContext(session);
-      if (failedRollbacks.length > 0) {
-        new Notice(
-          `Task move could not finish; recoverable duplicates may need repair in ${failedRollbacks.join(", ")}`,
-        );
-      } else {
-        new Notice("Task move failed; completed writes were rolled back and source tasks were retained");
-      }
+      new Notice(
+        result && result.reason
+          ? result.reason
+          : "Task move failed; completed writes were rolled back and source tasks were retained",
+      );
       return false;
     }
+    const plan = result.plan;
+    const finalCursor = result.finalCursor;
 
     // Review-walk (nav-gestures): a move never advances. Park the walk
     // before focusing, because the destination's `file-open` runs
@@ -52057,7 +52432,7 @@ class BobNavigationHotkeysMoveCommitMixin {
     try {
       if (vimJumpContext) {
         await this.focusTaskMoveDestination(
-          destinationFile,
+          result.destinationFile,
           {
             line: plan.destinationLine,
             text: plan.destinationAnchorText,
@@ -52066,7 +52441,7 @@ class BobNavigationHotkeysMoveCommitMixin {
           vimJumpContext,
         );
       } else {
-        await this.focusTaskMoveDestination(destinationFile, {
+        await this.focusTaskMoveDestination(result.destinationFile, {
           line: plan.destinationLine,
           text: plan.destinationAnchorText,
           blockId: plan.destinationBlockId,
@@ -52076,9 +52451,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       // Destination navigation and history are best-effort after commit.
     }
     const count = session.discovery.actualCount;
-    const destinationName =
-      destinationFile.basename ||
-      getVaultPathBasenameWithoutExtension(destinationFile.path);
+    const destinationName = result.destinationName;
     const clamped = session.discovery.clamped
       ? ` (requested ${session.discovery.requestedCount}; reached end of note)`
       : "";
@@ -52427,6 +52800,580 @@ class BobNavigationHotkeysMoveCommitMixin {
       }
     }
   }
+}
+// ---- src/655-plugin-inbox-route.js ----
+// Inbox routing core (route-core): the plugin side of inbox routing. Owns
+// the shared move plan-and-write core (Ctrl+Shift+M keeps its park, focus,
+// and notice in `650-plugin-move-commit.js`), the inbox-note classifier,
+// the route prompt, and the routed move commit. `promptInboxRoute` and
+// `commitInboxRoute` never throw and never reject: every failure resolves
+// to a cancel or a structured `{ ok: false }` result with nothing written.
+class BobNavigationHotkeysInboxRouteMixin {
+
+  // Shared move plan-and-write core: snapshots the vault, plans with
+  // `planTaskMoveAcrossFiles`, writes destination, auxiliary, then source
+  // with rollback, and leaves the source editor on `nextSourceLine`.
+  // Returns `{ ok: true, plan, destinationFile, destinationName,
+  // nextSourceLine }` or `{ ok: false, reason }` where `reason` is the exact
+  // user-facing notice text. Never parks the walk and never opens or
+  // focuses the destination; callers own settle and navigation.
+  async planAndWriteTaskMoveFiles(options = {}) {
+    const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+    const destinationPath = normalizeVaultRelativePath(options.destinationPath);
+    const sourceContent = String(options.sourceContent || "");
+    const targets = Array.isArray(options.targets) ? options.targets : [];
+    const editor =
+      options.editor && typeof options.editor.getValue === "function"
+        ? options.editor
+        : null;
+    const cursor = options.cursor && typeof options.cursor === "object"
+      ? options.cursor
+      : { line: 0, ch: 0 };
+    if (!sourcePath || !destinationPath) {
+      return { ok: false, reason: "Task move source and destination are invalid" };
+    }
+    if (
+      destinationPath === sourcePath ||
+      TASK_MOVE_TEMPLATE_PATHS.has(destinationPath)
+    ) {
+      return { ok: false, reason: "Selected task destination is not eligible" };
+    }
+    if (editor && String(editor.getValue() || "") !== sourceContent) {
+      return { ok: false, reason: "A selected task changed while the destination picker was open" };
+    }
+
+    const vault = this.app && this.app.vault;
+    if (
+      !vault ||
+      typeof vault.getMarkdownFiles !== "function" ||
+      typeof vault.process !== "function"
+    ) {
+      return { ok: false, reason: "Vault content updates are unavailable" };
+    }
+
+    const snapshots = new Map();
+    const filesByPath = new Map();
+    try {
+      for (const file of vault.getMarkdownFiles()) {
+        if (!this.isMarkdownFile(file)) {
+          continue;
+        }
+        const snapshot = await this.getTaskMoveFileSnapshot(file);
+        snapshots.set(file.path, snapshot.content);
+        filesByPath.set(file.path, file);
+      }
+    } catch (error) {
+      return { ok: false, reason: "Could not read every affected note; nothing was moved" };
+    }
+    const destinationFile = filesByPath.get(destinationPath) || null;
+    if (!this.isMarkdownFile(destinationFile)) {
+      return { ok: false, reason: "Source task note is no longer active; nothing was moved" };
+    }
+    if (
+      snapshots.get(sourcePath) !== sourceContent ||
+      !snapshots.has(destinationPath)
+    ) {
+      return { ok: false, reason: "Task move source or destination changed; nothing was moved" };
+    }
+
+    const destinationContent = snapshots.get(destinationPath);
+    const otherContents = new Map(snapshots);
+    otherContents.delete(sourcePath);
+    otherContents.delete(destinationPath);
+    const plan = planTaskMoveAcrossFiles({
+      sourcePath,
+      destinationPath,
+      sourceContent,
+      destinationContent,
+      otherContents,
+      targets,
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
+    });
+    if (!plan.valid) {
+      return { ok: false, reason: `${plan.error}; nothing was moved` };
+    }
+
+    const sourceChange = plan.changes.get(sourcePath);
+    const sourceLines = splitMarkdownContent(sourceChange.after).lines;
+    const sourceLine = Math.min(
+      plan.nextSourceLine,
+      Math.max(sourceLines.length - 1, 0),
+    );
+    const finalCursor = {
+      line: sourceLine,
+      ch: Math.min(
+        Math.max(numericOrDefault(cursor.ch, 0), 0),
+        String(sourceLines[sourceLine] || "").length,
+      ),
+    };
+    const auxiliaryPaths = Array.from(plan.changes.keys())
+      .filter(
+        (path) =>
+          path !== destinationPath && path !== sourcePath,
+      )
+      .sort();
+    const writeOrder = [
+      destinationPath,
+      ...auxiliaryPaths,
+      sourcePath,
+    ];
+    const sessionLike = { sourcePath, editor };
+    const written = [];
+    try {
+      for (const path of writeOrder) {
+        const change = plan.changes.get(path);
+        if (!change || change.before === change.after) {
+          continue;
+        }
+        if (
+          path === sourcePath &&
+          editor &&
+          (this.getActiveMarkdownView?.()?.editor !== editor ||
+            String(editor.getValue() || "") !== change.before)
+        ) {
+          throw new Error("Source editor changed before final removal");
+        }
+        const file = filesByPath.get(path);
+        if (!this.isMarkdownFile(file)) {
+          throw new Error(`Affected Markdown file disappeared: ${path}`);
+        }
+        written.push(
+          await this.writeTaskMoveChange(
+            path,
+            change,
+            file,
+            sessionLike,
+            path === sourcePath ? finalCursor : null,
+          ),
+        );
+      }
+    } catch (error) {
+      if (
+        error &&
+        error.taskMoveAppliedEntry &&
+        !written.some((entry) => entry.path === error.taskMoveAppliedEntry.path)
+      ) {
+        written.push(error.taskMoveAppliedEntry);
+      }
+      const failedRollbacks = await this.rollbackTaskMoveChanges(written);
+      if (failedRollbacks.length > 0) {
+        return {
+          ok: false,
+          reason: `Task move could not finish; recoverable duplicates may need repair in ${failedRollbacks.join(", ")}`,
+        };
+      }
+      return {
+        ok: false,
+        reason: "Task move failed; completed writes were rolled back and source tasks were retained",
+      };
+    }
+
+    const destinationName =
+      destinationFile.basename ||
+      getVaultPathBasenameWithoutExtension(destinationFile.path);
+    return {
+      ok: true,
+      reason: null,
+      plan,
+      destinationFile,
+      destinationName,
+      nextSourceLine: sourceLine,
+      finalCursor,
+    };
+  }
+
+  getInboxNoteFile() {
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.getMarkdownFiles !== "function") {
+        return null;
+      }
+      return (
+        vault
+          .getMarkdownFiles()
+          .find(
+            (file) =>
+              normalizeVaultRelativePath(file && file.path) === INBOX_NOTE_PATH,
+          ) || null
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Sync, never throws: is this vault path an inbox note?
+  isInboxNotePath(path) {
+    try {
+      const normalized = normalizeVaultRelativePath(path);
+      if (!normalized) {
+        return false;
+      }
+      if (normalized === INBOX_NOTE_PATH) {
+        return true;
+      }
+      const inboxFile = this.getInboxNoteFile();
+      if (!inboxFile) {
+        return false;
+      }
+      const vault = this.app && this.app.vault;
+      const files =
+        vault && typeof vault.getMarkdownFiles === "function"
+          ? vault.getMarkdownFiles()
+          : [];
+      const file =
+        files.find(
+          (entry) =>
+            normalizeVaultRelativePath(entry && entry.path) === normalized,
+        ) || null;
+      if (!file) {
+        return false;
+      }
+      const frontmatter =
+        this.app &&
+        this.app.metadataCache &&
+        typeof this.app.metadataCache.getFileCache === "function"
+          ? this.app.metadataCache.getFileCache(file)?.frontmatter
+          : null;
+      return (
+        classifyInboxNote({ path: normalized, frontmatter }, inboxFile, (fm) => {
+          try {
+            return this.frontmatterFieldPointsToFile(
+              fm,
+              "parent",
+              inboxFile,
+              normalized,
+            );
+          } catch (error) {
+            return false;
+          }
+        }) === true
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Open the route picker for one inbox task (or counted run). Resolves
+  // `{ kind: "move", path, name }`, `{ kind: "stay" }` (apply in place), or
+  // `{ kind: "cancel" }` (nothing written). `suspend` is an optional
+  // `{ hide(), restore(), isAlive?() }` pair the Task Card passes in while
+  // the picker suspends its modal. Never rejects.
+  async promptInboxRoute(request = {}) {
+    try {
+      const editor =
+        request.editor && typeof request.editor.getValue === "function"
+          ? request.editor
+          : null;
+      const sourcePath = normalizeVaultRelativePath(
+        request.sourcePath ?? request.path,
+      );
+      if (!editor || !sourcePath) {
+        return { kind: "cancel" };
+      }
+      const startLine = Number.isInteger(request.startLine)
+        ? request.startLine
+        : Number.isInteger(request.line)
+          ? request.line
+          : null;
+      if (startLine === null) {
+        return { kind: "cancel" };
+      }
+      const additionalRaw =
+        request.additionalTaskCount ??
+        (Number.isInteger(request.count) ? request.count - 1 : 0);
+      const additionalTaskCount = Math.max(
+        0,
+        Math.floor(numericOrDefault(additionalRaw, 0)),
+      );
+      const count = additionalTaskCount + 1;
+      const actionLabel = formatInboxRouteActionLabel(request.actionLabel);
+      const suspend =
+        request.suspend && typeof request.suspend === "object"
+          ? request.suspend
+          : null;
+      if (suspend && typeof suspend.isAlive === "function") {
+        let alive = true;
+        try {
+          alive = suspend.isAlive() !== false;
+        } catch (error) {
+          alive = false;
+        }
+        if (!alive) {
+          return { kind: "cancel" };
+        }
+      }
+      const active = this.activeTaskMoveDestinationPicker;
+      if (active) {
+        if (!isStaleRegisteredPicker(active)) {
+          return { kind: "cancel" };
+        }
+        try {
+          active.close();
+        } catch (error) {
+          // A stale picker never blocks routing.
+        }
+        if (this.activeTaskMoveDestinationPicker === active) {
+          this.activeTaskMoveDestinationPicker = null;
+        }
+      }
+      if (this.isInboxNotePath(sourcePath) !== true) {
+        return { kind: "cancel" };
+      }
+      const sourceContent = String(editor.getValue() || "");
+      const discovery = discoverMovableObsidianTaskTargets(
+        sourceContent,
+        startLine,
+        additionalTaskCount,
+      );
+      const firstLine =
+        discovery.valid && discovery.targets.length > 0
+          ? discovery.targets[0].rawLine
+          : String(splitMarkdownContent(sourceContent).lines[startLine] || "");
+      const taskText = cleanTaskDisplayText(firstLine);
+      const inboxName = getVaultPathBasenameWithoutExtension(sourcePath);
+      const vault = this.app && this.app.vault;
+      const markdownFiles =
+        vault && typeof vault.getMarkdownFiles === "function"
+          ? vault.getMarkdownFiles()
+          : [];
+      const destinations = filterInboxRouteDestinations(
+        collectTaskMoveDestinations(
+          markdownFiles,
+          sourcePath,
+          (file) => getFileChildNoteInfo(this.app, file, new Date()),
+        ),
+        (path) => this.isInboxNotePath(path),
+        sourcePath,
+      );
+      const reserved =
+        request.reservedBlockIds instanceof Set
+          ? request.reservedBlockIds
+          : new Set(request.reservedBlockIds || []);
+      const picker = new InboxRoutePickerModal(this.app, this, {
+        destinations,
+        inboxName,
+        taskText,
+        count,
+        actionLabel,
+        cancelLabel: request.cancelLabel,
+        preflight: async (file) => {
+          try {
+            const liveContent = String(editor.getValue() || "");
+            const live = discoverMovableObsidianTaskTargets(
+              liveContent,
+              startLine,
+              additionalTaskCount,
+            );
+            if (!live.valid) {
+              return { ok: false, reason: live.error };
+            }
+            const snapshot = await this.getTaskMoveFileSnapshot(file);
+            return preflightInboxRoute({
+              sourcePath,
+              sourceContent: liveContent,
+              destinationPath: file.path,
+              destinationContent: snapshot.content,
+              targets: live.targets,
+              reservedBlockIds: reserved,
+            });
+          } catch (error) {
+            return { ok: false, reason: "Route preflight failed" };
+          }
+        },
+      });
+      this.activeTaskMoveDestinationPicker = picker;
+      if (suspend && typeof suspend.hide === "function") {
+        try {
+          suspend.hide();
+        } catch (error) {
+          // Suspension is visual only; the route still prompts.
+        }
+      }
+      try {
+        picker.open();
+      } catch (error) {
+        if (this.activeTaskMoveDestinationPicker === picker) {
+          this.activeTaskMoveDestinationPicker = null;
+        }
+        if (suspend && typeof suspend.restore === "function") {
+          try {
+            suspend.restore();
+          } catch (ignoredError) {
+            // Restore is best-effort after a failed open.
+          }
+        }
+        return { kind: "cancel" };
+      }
+      let outcome = null;
+      try {
+        outcome = await picker.waitForRoute();
+      } catch (error) {
+        outcome = { kind: "cancel" };
+      }
+      if (suspend && typeof suspend.restore === "function") {
+        try {
+          suspend.restore();
+        } catch (error) {
+          // Restore is best-effort after the route resolves.
+        }
+      }
+      if (outcome && outcome.kind === "stay") {
+        return { kind: "stay" };
+      }
+      if (outcome && outcome.kind === "move" && outcome.file) {
+        const file = outcome.file;
+        return {
+          kind: "move",
+          path: file.path,
+          name:
+            file.basename ||
+            getVaultPathBasenameWithoutExtension(file.path),
+        };
+      }
+      return { kind: "cancel" };
+    } catch (error) {
+      return { kind: "cancel" };
+    }
+  }
+
+  // Routed move commit: re-reads the live editor, re-discovers the routed
+  // tasks, verifies them against the pre-gesture `expected`
+  // (`captureInboxRouteExpected` rows), and moves them with the shared
+  // core. Unlike Ctrl+Shift+M, a routed move does not focus the destination
+  // or park the walk; the cursor stays in the inbox note on the line the
+  // move leaves it on. Resolves `{ ok, count, destinationName,
+  // destinationPath, notice, handledRefs, reason? }` and never throws.
+  // `handledRefs` are the routed rows' pre-gesture `{ path, line, raw }`.
+  async commitInboxRoute(request = {}) {
+    const inboxNameFor = (sourcePath) =>
+      getVaultPathBasenameWithoutExtension(sourcePath) || "inbox";
+    const fail = (reason, sourcePath, destinationPath) => {
+      const inboxName = sourcePath ? inboxNameFor(sourcePath) : "inbox";
+      const text = String(reason || "Inbox route failed; nothing was moved");
+      return Object.freeze({
+        ok: false,
+        count: 0,
+        destinationName: "",
+        destinationPath: String(destinationPath || ""),
+        notice: `Not moved: ${text} · still in ${inboxName}`,
+        handledRefs: Object.freeze([]),
+        reason: text,
+      });
+    };
+    try {
+      const editor =
+        request.editor && typeof request.editor.getValue === "function"
+          ? request.editor
+          : null;
+      const sourcePath = normalizeVaultRelativePath(
+        request.sourcePath ?? request.path,
+      );
+      const destinationPath = normalizeVaultRelativePath(
+        request.destinationPath ?? (request.destination && request.destination.path),
+      );
+      const expected = Array.isArray(request.expected) ? request.expected : [];
+      if (!editor || !sourcePath || !destinationPath || expected.length === 0) {
+        return fail(
+          "Routed tasks could not be verified; nothing was moved",
+          sourcePath,
+          destinationPath,
+        );
+      }
+      const startLine = Number.isInteger(request.startLine)
+        ? request.startLine
+        : Number.isInteger(request.line)
+          ? request.line
+          : null;
+      if (startLine === null) {
+        return fail(
+          "Routed tasks could not be verified; nothing was moved",
+          sourcePath,
+          destinationPath,
+        );
+      }
+      const additionalTaskCount = Math.max(
+        0,
+        Math.floor(numericOrDefault(request.additionalTaskCount, expected.length - 1)),
+      );
+      const liveContent = String(editor.getValue() || "");
+      const rediscovery = discoverMovableObsidianTaskTargets(
+        liveContent,
+        startLine,
+        additionalTaskCount,
+      );
+      if (!rediscovery.valid) {
+        return fail(
+          "Routed tasks changed; nothing was moved",
+          sourcePath,
+          destinationPath,
+        );
+      }
+      if (!verifyInboxRouteTargets(expected, rediscovery.targets)) {
+        return fail(
+          "Routed tasks changed; nothing was moved",
+          sourcePath,
+          destinationPath,
+        );
+      }
+      let cursor = null;
+      try {
+        cursor =
+          typeof editor.getCursor === "function"
+            ? normalizePosition(editor.getCursor())
+            : getEditorCursor(editor);
+      } catch (error) {
+        cursor = null;
+      }
+      const result = await this.planAndWriteTaskMoveFiles({
+        sourcePath,
+        sourceContent: liveContent,
+        editor,
+        cursor: cursor || { line: startLine, ch: 0 },
+        targets: rediscovery.targets,
+        destinationPath,
+      });
+      if (!result || result.ok !== true) {
+        return fail(
+          (result && result.reason) || "Task move failed; nothing was moved",
+          sourcePath,
+          destinationPath,
+        );
+      }
+      const count = rediscovery.actualCount;
+      const handledRefs = Object.freeze(
+        expected
+          .filter(
+            (entry) =>
+              entry &&
+              Number.isInteger(entry.line) &&
+              typeof entry.raw === "string",
+          )
+          .map((entry) =>
+            Object.freeze({
+              path: sourcePath,
+              line: entry.line,
+              raw: entry.raw,
+            }),
+          ),
+      );
+      return Object.freeze({
+        ok: true,
+        count,
+        destinationName: result.destinationName,
+        destinationPath,
+        notice: formatInboxRouteMoveNotice({
+          count,
+          destinationName: result.destinationName,
+        }),
+        handledRefs,
+        reason: null,
+      });
+    } catch (error) {
+      return fail("Inbox route failed; nothing was moved", "", "");
+    }
+  }
+
 }
 // ---- src/660-plugin-project-notes.js ----
 class BobNavigationHotkeysProjectNoteMixin {
@@ -54581,6 +55528,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysLeafMixin,
   BobNavigationHotkeysNotesMoveMixin,
   BobNavigationHotkeysMoveCommitMixin,
+  BobNavigationHotkeysInboxRouteMixin,
   BobNavigationHotkeysProjectNoteMixin,
   BobNavigationHotkeysProjectFileMixin,
   BobNavigationHotkeysLinkParseMixin,
@@ -54593,6 +55541,7 @@ module.exports.helpers = {
   FreshnessRefreshSummaryModal,
   ChildNotePickerModal,
   TaskMoveDestinationPickerModal,
+  InboxRoutePickerModal,
   PomodoroBulletMovePickerModal,
   PomodoroEntryMovePickerModal,
   BulletPropertyPickerModal,
@@ -54953,6 +55902,17 @@ module.exports.helpers = {
   rewriteTaskMoveBlockLinks,
   rewriteTaskMoveReferences,
   planTaskMoveAcrossFiles,
+  INBOX_NOTE_PATH,
+  classifyInboxNote,
+  normalizeInboxRouteTaskIdentity,
+  captureInboxRouteExpected,
+  verifyInboxRouteTargets,
+  filterInboxRouteDestinations,
+  preflightInboxRoute,
+  formatInboxRouteActionLabel,
+  formatInboxRouteMoveNotice,
+  formatInboxRouteTaskSubtitle,
+  createInboxRouteApi,
   resolveTaskMoveDestinationLine,
   createCountedBulletPropertyItems,
   validateDependencyParentForEditor,

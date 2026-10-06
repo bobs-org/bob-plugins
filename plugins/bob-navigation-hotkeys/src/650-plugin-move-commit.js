@@ -393,6 +393,10 @@ class BobNavigationHotkeysMoveCommitMixin {
     }
   }
 
+  // Ctrl+Shift+M commit: the shared `planAndWriteTaskMoveFiles` core
+  // (in `655-plugin-inbox-route.js`) plans, writes, and rolls back and
+  // returns a structured result; this wrapper keeps the move's park, focus,
+  // and notice behavior. A move never advances the walk.
   async commitTaskMoveSessionWrite(session, destinationEntry, moveOptions = {}) {
     const reviewPark =
       moveOptions && typeof moveOptions.reviewPark === "function"
@@ -412,141 +416,26 @@ class BobNavigationHotkeysMoveCommitMixin {
       new Notice("Source task note is no longer active; nothing was moved");
       return false;
     }
-    if (
-      destinationFile.path === session.sourcePath ||
-      TASK_MOVE_TEMPLATE_PATHS.has(destinationFile.path)
-    ) {
-      new Notice("Selected task destination is not eligible");
-      return false;
-    }
-    if (String(session.editor.getValue() || "") !== session.sourceContent) {
-      new Notice("A selected task changed while the destination picker was open");
-      return false;
-    }
 
-    const vault = this.app && this.app.vault;
-    if (
-      !vault ||
-      typeof vault.getMarkdownFiles !== "function" ||
-      typeof vault.process !== "function"
-    ) {
-      new Notice("Vault content updates are unavailable");
-      return false;
-    }
-
-    const snapshots = new Map();
-    const filesByPath = new Map();
-    try {
-      for (const file of vault.getMarkdownFiles()) {
-        if (!this.isMarkdownFile(file)) {
-          continue;
-        }
-        const snapshot = await this.getTaskMoveFileSnapshot(file);
-        snapshots.set(file.path, snapshot.content);
-        filesByPath.set(file.path, file);
-      }
-    } catch (error) {
-      new Notice("Could not read every affected note; nothing was moved");
-      return false;
-    }
-    if (
-      snapshots.get(session.sourcePath) !== session.sourceContent ||
-      !snapshots.has(destinationFile.path)
-    ) {
-      new Notice("Task move source or destination changed; nothing was moved");
-      return false;
-    }
-
-    const destinationContent = snapshots.get(destinationFile.path);
-    const otherContents = new Map(snapshots);
-    otherContents.delete(session.sourcePath);
-    otherContents.delete(destinationFile.path);
-    const plan = planTaskMoveAcrossFiles({
+    const result = await this.planAndWriteTaskMoveFiles({
       sourcePath: session.sourcePath,
-      destinationPath: destinationFile.path,
       sourceContent: session.sourceContent,
-      destinationContent,
-      otherContents,
+      editor: session.editor,
+      cursor: session.cursor,
       targets: session.discovery.targets,
-      stampLine: this.getFreshnessStampLine(),
-      freshDateText: this.getFreshnessDateText(),
+      destinationPath: destinationFile.path,
     });
-    if (!plan.valid) {
-      new Notice(`${plan.error}; nothing was moved`);
-      return false;
-    }
-
-    const sourceChange = plan.changes.get(session.sourcePath);
-    const sourceLines = splitMarkdownContent(sourceChange.after).lines;
-    const sourceLine = Math.min(
-      plan.nextSourceLine,
-      Math.max(sourceLines.length - 1, 0),
-    );
-    const finalCursor = {
-      line: sourceLine,
-      ch: Math.min(
-        session.cursor.ch,
-        String(sourceLines[sourceLine] || "").length,
-      ),
-    };
-    const auxiliaryPaths = Array.from(plan.changes.keys())
-      .filter(
-        (path) =>
-          path !== destinationFile.path && path !== session.sourcePath,
-      )
-      .sort();
-    const writeOrder = [
-      destinationFile.path,
-      ...auxiliaryPaths,
-      session.sourcePath,
-    ];
-    const written = [];
-    try {
-      for (const path of writeOrder) {
-        const change = plan.changes.get(path);
-        if (!change || change.before === change.after) {
-          continue;
-        }
-        if (
-          path === session.sourcePath &&
-          (this.getActiveMarkdownView()?.editor !== session.editor ||
-            String(session.editor.getValue() || "") !== change.before)
-        ) {
-          throw new Error("Source editor changed before final removal");
-        }
-        const file = filesByPath.get(path);
-        if (!this.isMarkdownFile(file)) {
-          throw new Error(`Affected Markdown file disappeared: ${path}`);
-        }
-        written.push(
-          await this.writeTaskMoveChange(
-            path,
-            change,
-            file,
-            session,
-            path === session.sourcePath ? finalCursor : null,
-          ),
-        );
-      }
-    } catch (error) {
-      if (
-        error &&
-        error.taskMoveAppliedEntry &&
-        !written.some((entry) => entry.path === error.taskMoveAppliedEntry.path)
-      ) {
-        written.push(error.taskMoveAppliedEntry);
-      }
-      const failedRollbacks = await this.rollbackTaskMoveChanges(written);
+    if (!result || result.ok !== true) {
       this.restoreTaskMoveSourceContext(session);
-      if (failedRollbacks.length > 0) {
-        new Notice(
-          `Task move could not finish; recoverable duplicates may need repair in ${failedRollbacks.join(", ")}`,
-        );
-      } else {
-        new Notice("Task move failed; completed writes were rolled back and source tasks were retained");
-      }
+      new Notice(
+        result && result.reason
+          ? result.reason
+          : "Task move failed; completed writes were rolled back and source tasks were retained",
+      );
       return false;
     }
+    const plan = result.plan;
+    const finalCursor = result.finalCursor;
 
     // Review-walk (nav-gestures): a move never advances. Park the walk
     // before focusing, because the destination's `file-open` runs
@@ -580,7 +469,7 @@ class BobNavigationHotkeysMoveCommitMixin {
     try {
       if (vimJumpContext) {
         await this.focusTaskMoveDestination(
-          destinationFile,
+          result.destinationFile,
           {
             line: plan.destinationLine,
             text: plan.destinationAnchorText,
@@ -589,7 +478,7 @@ class BobNavigationHotkeysMoveCommitMixin {
           vimJumpContext,
         );
       } else {
-        await this.focusTaskMoveDestination(destinationFile, {
+        await this.focusTaskMoveDestination(result.destinationFile, {
           line: plan.destinationLine,
           text: plan.destinationAnchorText,
           blockId: plan.destinationBlockId,
@@ -599,9 +488,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       // Destination navigation and history are best-effort after commit.
     }
     const count = session.discovery.actualCount;
-    const destinationName =
-      destinationFile.basename ||
-      getVaultPathBasenameWithoutExtension(destinationFile.path);
+    const destinationName = result.destinationName;
     const clamped = session.discovery.clamped
       ? ` (requested ${session.discovery.requestedCount}; reached end of note)`
       : "";

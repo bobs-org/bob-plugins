@@ -71,7 +71,7 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
     if (kind === "complete") {
       return true;
     }
-    if (kind === "lane" || kind === "link-today") {
+    if (kind === "lane" || kind === "link-today" || kind === "route") {
       return !checklist;
     }
     if (kind !== "card") {

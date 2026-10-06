@@ -1,7 +1,7 @@
 {
   "id": "bob-navigation-hotkeys",
   "name": "Bob Navigation Hotkeys",
-  "version": "2.8.0",
+  "version": "2.9.0",
   "minAppVersion": "1.8.7",
   "description": "Ctrl+Shift+P always opens the Task Card, a focused first screen with exact P-level previews; Esc, q, or Ctrl+[ close it without writing, and its More section opens a property's value stage. Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates. Ctrl+Enter on the card takes the recommended roll, decay, or cancel from the previewed ladder, including counted and Task Link batches. Scheduling a date opens one combined Reason and Work summary review; a Pending or Next task can record an optional Work Log summary as a dated entry under a WORK LOG child. A Cancel action closes tasks as Cancelled with an optional reason kept in a first-child Cancel Log. Alt+F and Ctrl+Alt+F ask for an optional Work Log summary before refreshing Pending tasks. Ctrl+Enter on the PRE/POST row the review walk just landed on completes it and advances within the group when another live row remains (nav api v3). The Task Card level strip and priority notices render the shared signal-bar priority mark through the bob-ledger-tools api.priorityMarks v1 namespace, falling back to the Lucide signal icons without it.",
   "author": "Bryan",

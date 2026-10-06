@@ -2082,3 +2082,11 @@
     flex-wrap: wrap;
   }
 }
+
+/* Inbox routing (route-core): while the route picker is open from the Task
+   Card, the card's modal is visually suspended so only one dimmed modal
+   shows. The Task Card gate (task-card-gate) toggles this class around
+   `promptInboxRoute`; the route picker itself reuses the `bob-cnp` styles. */
+.bob-task-card-suspended {
+  display: none !important;
+}

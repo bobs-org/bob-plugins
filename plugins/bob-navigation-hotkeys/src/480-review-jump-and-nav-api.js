@@ -899,6 +899,7 @@ function createDependencyNavApi(plugin) {
     version: 3,
     ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
     reviewWalk: createReviewWalkApi(plugin),
+    inboxRoute: createInboxRouteApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

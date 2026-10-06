@@ -6482,15 +6482,6 @@ function freshnessFooterView(memo, options = {}) {
     if (!Number.isInteger(read.walk) || read.walk <= 0) {
       return freshnessFooterHiddenView();
     }
-    const groups = freshnessFooterGroups(counts);
-    const groupsText = groups
-      .map((group) => group.label + " " + group.count)
-      .join(" · ");
-    const meter =
-      read.budget !== null
-        ? read.upkeep + "/" + read.budget
-        : String(read.upkeep);
-    const meterText = "✓ " + meter + " today";
     const navAvailable = options.navAvailable !== false;
     const action = navAvailable ? "jump" : "review";
     const hintDefault = navAvailable ? "]s next" : "open review";
@@ -6528,6 +6519,18 @@ function freshnessFooterView(memo, options = {}) {
         }
       }
     }
+    const allGroups = freshnessFooterGroups(counts);
+    const groups = current
+      ? allGroups.filter((group) => group.key !== current.tier)
+      : allGroups.slice();
+    const groupsText = groups
+      .map((group) => group.label + " " + group.count)
+      .join(" · ");
+    const meter =
+      read.budget !== null
+        ? read.upkeep + "/" + read.budget
+        : String(read.upkeep);
+    const meterText = "✓ " + meter + " today";
     const dueText = current
       ? "Review " + current.rank + "/" + current.total
       : "Review " + read.walk + " due";

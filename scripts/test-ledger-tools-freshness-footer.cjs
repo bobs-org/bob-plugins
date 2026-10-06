@@ -355,7 +355,7 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
     { current: currentPre, todayText: D },
   );
   assert.equal(view.commitments, 1, "PRE contributes to commitments");
-  assert.equal(view.groupsText, "PRE 1 · POST 1");
+  assert.equal(view.groupsText, "POST 1");
   assert.equal(view.current.actionHint, pre.actionHint);
 });
 

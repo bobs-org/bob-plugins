@@ -6217,11 +6217,11 @@ function freshnessReviewEntryView(entry, options = {}) {
     if (tier === "pre") {
       detail = "checklist";
       compact = "checklist";
-      actionHint = "Ctrl+Alt+F done → next · ]s skip";
+      actionHint = "Ctrl+Enter done · ]s skip";
     } else if (tier === "post") {
       detail = "closeout";
       compact = "closeout";
-      actionHint = "Alt+F done · closes the review";
+      actionHint = "Ctrl+Enter done · closes the review";
     } else if (tier === "projects") {
       detail = freshnessReviewTrackerDetail(entry, "Empty project");
       compact = "Empty project";
@@ -6233,8 +6233,8 @@ function freshnessReviewEntryView(entry, options = {}) {
       compact = detail;
       actionHint =
         tier === "pending"
-          ? "Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today"
-          : "Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
+          ? "Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today"
+          : "Still next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
     } else if (tier === "returned") {
       const since =
         entry && typeof entry.dueOn === "string" && entry.dueOn

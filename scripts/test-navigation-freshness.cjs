@@ -675,7 +675,7 @@ test("tier-aware jump notices name each tier", () => {
       }),
       2, 5, today,
     ),
-    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
   );
   assert.equal(
     helpers.buildReviewJumpNotice(
@@ -687,7 +687,7 @@ test("tier-aware jump notices name each tier", () => {
       }),
       3, 5, today,
     ),
-    "Review 3/5 · NEXT 1/2 · never confirmed\nStill next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+    "Review 3/5 · NEXT 1/2 · never confirmed\nStill next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
   );
   assert.equal(
     helpers.buildReviewJumpNotice(
@@ -881,14 +881,14 @@ test("jump notices use reviewEntryView when provided and keep the fallback", () 
     detail: "confirmed yesterday",
     compact: "confirmed yesterday",
     actionHint:
-      "Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+      "Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
   });
   assert.equal(
     helpers.buildReviewJumpNotice(v4(), 2, 5, {
       todayText: "2026-10-08",
       reviewEntryView,
     }),
-    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
   );
   assert.equal(
     helpers.buildReviewJumpNotice(v4(), 2, 5, {
@@ -896,7 +896,7 @@ test("jump notices use reviewEntryView when provided and keep the fallback", () 
       wrapped: true,
       reviewEntryView,
     }),
-    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today · wrapped around",
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today · wrapped around",
   );
   assert.equal(
     helpers.buildReviewJumpNotice(v4(), 2, 5, {
@@ -904,7 +904,7 @@ test("jump notices use reviewEntryView when provided and keep the fallback", () 
         throw new Error("boom");
       },
     }),
-    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
+    "Review 2/5 · PENDING 2/3 · confirmed yesterday\nStill pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today",
   );
   const project = v4({
     tier: "projects",
@@ -946,7 +946,7 @@ test("tier notices fall back without tier ranks and wrap on the last line", () =
   };
   assert.equal(
     helpers.buildReviewJumpNotice(lane, 2, 4, { todayText: "2026-10-08", wrapped: true }),
-    "Review 2/4 · PENDING 3/3 · confirmed 7 days ago\nStill pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today · wrapped around",
+    "Review 2/4 · PENDING 3/3 · confirmed 7 days ago\nStill pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today · wrapped around",
   );
 });
 
@@ -2067,7 +2067,7 @@ test("fallback notices name PRE checklist and POST closeout", () => {
   const pre = checklistEntry();
   assert.equal(
     helpers.buildReviewJumpNotice(pre, 1, 8, { todayText: "2026-10-08" }),
-    "Review 1/8 · PRE 1/7 · checklist\nCtrl+Alt+F done → next · ]s skip",
+    "Review 1/8 · PRE 1/7 · checklist\nCtrl+Enter done · ]s skip",
   );
   const post = checklistEntry({
     key: "gtd_daily.md:20",
@@ -2082,14 +2082,14 @@ test("fallback notices name PRE checklist and POST closeout", () => {
   });
   assert.equal(
     helpers.buildReviewJumpNotice(post, 8, 8, { todayText: "2026-10-08" }),
-    "Review 8/8 · POST 1/1 · closeout\nAlt+F done · closes the review",
+    "Review 8/8 · POST 1/1 · closeout\nCtrl+Enter done · closes the review",
   );
   assert.equal(
     helpers.appendReviewPostLandingTail(
       helpers.buildReviewJumpNotice(post, 8, 85, { todayText: "2026-10-08" }),
       { commitments: 0, rotten: 70 },
     ),
-    "Review 8/85 · POST 1/1 · closeout · 0 commitments due · 70 ROTTEN left\nAlt+F done · closes the review",
+    "Review 8/85 · POST 1/1 · closeout · 0 commitments due · 70 ROTTEN left\nCtrl+Enter done · closes the review",
   );
 });
 

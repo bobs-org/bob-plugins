@@ -366,13 +366,13 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
     }
     const lines = [detail ? `${head} · ${detail}` : head];
     if (options.omitActionHint !== true && tier === "pending") {
-      lines.push("Still pending? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+      lines.push("Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (options.omitActionHint !== true && tier === "next") {
-      lines.push("Still next? Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+      lines.push("Still next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (options.omitActionHint !== true && tier === "pre") {
-      lines.push("Ctrl+Alt+F done → next · ]s skip");
+      lines.push("Ctrl+Enter done · ]s skip");
     } else if (options.omitActionHint !== true && tier === "post") {
-      lines.push("Alt+F done · closes the review");
+      lines.push("Ctrl+Enter done · closes the review");
     }
     const wrapped =
       options && options.wrapped === true ? " · wrapped around" : "";

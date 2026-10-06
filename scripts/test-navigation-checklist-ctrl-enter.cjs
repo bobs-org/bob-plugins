@@ -151,8 +151,8 @@ function freshnessApi(queueState, options = {}) {
       label: item.tier.toUpperCase(),
       detail: item.tier === "pre" ? "checklist" : "closeout",
       actionHint: item.tier === "pre"
-        ? "Ctrl+Alt+F done → next · ]s skip"
-        : "Alt+F done · closes the review",
+        ? "Ctrl+Enter done · ]s skip"
+        : "Ctrl+Enter done · closes the review",
     }),
   };
 }

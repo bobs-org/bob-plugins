@@ -301,7 +301,7 @@ function freshnessV7(queue, counts = {}) {
           label: "PRE",
           detail: "checklist",
           compact: "checklist",
-          actionHint: "Ctrl+Alt+F done → next · ]s skip",
+          actionHint: "Ctrl+Enter done · ]s skip",
         };
       }
       if (tier === "post") {
@@ -311,7 +311,7 @@ function freshnessV7(queue, counts = {}) {
           label: "POST",
           detail: "closeout",
           compact: "closeout",
-          actionHint: "Alt+F done · closes the review",
+          actionHint: "Ctrl+Enter done · closes the review",
         };
       }
       return { ok: false };

@@ -315,13 +315,13 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
     { todayText: D },
   );
   assert.equal(pre.detail, "checklist");
-  assert.equal(pre.actionHint, "Ctrl+Alt+F done → next · ]s skip");
+  assert.equal(pre.actionHint, "Ctrl+Enter done · ]s skip");
   const post = freshnessReviewEntryView(
     queueEntry({ tier: "post", tierLabel: "POST", lane: "ready" }),
     { todayText: D },
   );
   assert.equal(post.detail, "closeout");
-  assert.equal(post.actionHint, "Alt+F done · closes the review");
+  assert.equal(post.actionHint, "Ctrl+Enter done · closes the review");
 
   const currentPre = queueEntry({
     tier: "pre",
@@ -519,7 +519,7 @@ test("current-task context uses shared ranks and compact wording", () => {
   assert.equal(view.contextText, "PENDING 1/2");
   assert.equal(view.detailText, "confirmed yesterday");
   assert.equal(view.hintText, "");
-  assert.equal(view.current.actionHint.includes("Alt+F keep"), true);
+  assert.equal(view.current.actionHint.includes("Ctrl+Alt+F keep"), true);
 });
 
 test("only ROTTEN remaining names commitments done or a met budget", () => {

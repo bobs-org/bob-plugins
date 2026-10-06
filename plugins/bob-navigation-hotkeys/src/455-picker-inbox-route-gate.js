@@ -148,6 +148,171 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
     }
   }
 
+  inboxRouteIsAlive(suspend) {
+    try {
+      if (this.pickerOpen === false) {
+        return false;
+      }
+      if (suspend && typeof suspend.isAlive === "function") {
+        try {
+          if (suspend.isAlive() === false) {
+            return false;
+          }
+        } catch (error) {
+          return false;
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async captureInboxRouteWriteSnapshot() {
+    let editorContent = null;
+    try {
+      editorContent =
+        this.editor && typeof this.editor.getValue === "function"
+          ? String(this.editor.getValue() || "")
+          : null;
+    } catch (error) {
+      editorContent = null;
+    }
+    const vaultContents = new Map();
+    try {
+      const plugin = this.plugin;
+      const vault = plugin && plugin.app && plugin.app.vault;
+      if (vault && typeof vault.getMarkdownFiles === "function") {
+        const files = vault.getMarkdownFiles() || [];
+        for (const file of files) {
+          if (!file || typeof file.path !== "string") {
+            continue;
+          }
+          let content = null;
+          try {
+            if (
+              plugin &&
+              typeof plugin.getTaskMoveFileSnapshot === "function" &&
+              typeof plugin.isMarkdownFile === "function"
+            ) {
+              try {
+                if (plugin.isMarkdownFile(file) !== true) {
+                  continue;
+                }
+              } catch (ignoredError) {
+                // Fall through to a direct read.
+              }
+              const snapshot = await plugin.getTaskMoveFileSnapshot(file);
+              content = String(snapshot && snapshot.content !== undefined ? snapshot.content : "");
+            } else if (typeof vault.cachedRead === "function") {
+              content = String((await vault.cachedRead(file)) || "");
+            } else if (typeof vault.read === "function") {
+              content = String((await vault.read(file)) || "");
+            } else {
+              continue;
+            }
+          } catch (error) {
+            continue;
+          }
+          vaultContents.set(file.path, content);
+        }
+      }
+    } catch (error) {
+      // Vault snapshot is best-effort; editor content still guards the common case.
+    }
+    return { editorContent, vaultContents };
+  }
+
+  async didInboxRouteWriteChange(before) {
+    try {
+      let afterEditor = null;
+      try {
+        afterEditor =
+          this.editor && typeof this.editor.getValue === "function"
+            ? String(this.editor.getValue() || "")
+            : null;
+      } catch (error) {
+        afterEditor = null;
+      }
+      if (
+        before &&
+        before.editorContent !== null &&
+        afterEditor !== null &&
+        afterEditor !== before.editorContent
+      ) {
+        return true;
+      }
+      const plugin = this.plugin;
+      const vault = plugin && plugin.app && plugin.app.vault;
+      if (
+        vault &&
+        typeof vault.getMarkdownFiles === "function" &&
+        before &&
+        before.vaultContents instanceof Map
+      ) {
+        const files = vault.getMarkdownFiles() || [];
+        for (const file of files) {
+          if (!file || typeof file.path !== "string") {
+            continue;
+          }
+          if (!before.vaultContents.has(file.path)) {
+            continue;
+          }
+          let content = null;
+          let readOk = false;
+          try {
+            if (
+              plugin &&
+              typeof plugin.getTaskMoveFileSnapshot === "function"
+            ) {
+              const snapshot = await plugin.getTaskMoveFileSnapshot(file);
+              content = String(snapshot && snapshot.content !== undefined ? snapshot.content : "");
+              readOk = true;
+            } else if (typeof vault.cachedRead === "function") {
+              content = String((await vault.cachedRead(file)) || "");
+              readOk = true;
+            } else if (typeof vault.read === "function") {
+              content = String((await vault.read(file)) || "");
+              readOk = true;
+            }
+          } catch (error) {
+            continue;
+          }
+          if (readOk && content !== before.vaultContents.get(file.path)) {
+            return true;
+          }
+        }
+      }
+      // When neither the editor nor any snapshotted vault file changed, the
+      // action wrote zero bytes: a genuine no-op even when the writer
+      // returned a truthy "unchanged" success. A genuine auxiliary-file
+      // action changes at least one vault file, so it still counts.
+      return false;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  settleInboxRouteDeadOrigin() {
+    try {
+      const origin = this.reviewOrigin || null;
+      if (!origin) {
+        return;
+      }
+      this.reviewOrigin = null;
+      const plugin = this.plugin;
+      if (plugin && typeof plugin.continueReviewWalkAfter === "function") {
+        try {
+          void plugin.continueReviewWalkAfter(origin, null);
+        } catch (error) {
+          // Settle is best-effort after close.
+        }
+      }
+    } catch (error) {
+      // Never throws out of a dead-card path.
+    }
+  }
+
   inboxRouteCardFallbackRefs() {
     try {
       const session = this.taskSession;
@@ -219,9 +384,9 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
     const sourcePath = this.filePath;
     this.reviewSettleDeferred = true;
     this.inboxRouteCommitInFlight = true;
+    const suspend = this.inboxRouteSuspendPair();
     let route = { kind: "cancel" };
     try {
-      const suspend = this.inboxRouteSuspendPair();
       route = await plugin.promptInboxRoute({
         editor: this.editor,
         sourcePath,
@@ -235,37 +400,61 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
     } catch (error) {
       route = { kind: "cancel" };
     }
+    // Lifetime recheck: closing the Task Card or unloading nav while the
+    // route is pending cancels that route. A delayed prompt or preflight
+    // result after close must never write. Settle the captured origin once
+    // so the walk lock is released without advancing.
+    if (this.inboxRouteIsAlive(suspend) !== true) {
+      this.inboxRouteCommitInFlight = false;
+      this.reviewSettleDeferred = false;
+      this.settleInboxRouteDeadOrigin();
+      return false;
+    }
     if (!route || route.kind === "cancel") {
       this.inboxRouteCommitInFlight = false;
       this.reviewSettleDeferred = false;
+      // Ordinary route Esc restores the still-live card/stage with its
+      // input and focus intact; nothing was written.
       try {
-        if (this.modalEl && typeof this.modalEl.removeClass === "function") {
-          this.modalEl.removeClass("bob-task-card-suspended");
-        } else if (this.modalEl && this.modalEl.classList) {
-          this.modalEl.classList.remove("bob-task-card-suspended");
+        if (typeof suspend.restore === "function") {
+          suspend.restore();
+        } else {
+          if (this.modalEl && typeof this.modalEl.removeClass === "function") {
+            this.modalEl.removeClass("bob-task-card-suspended");
+          } else if (this.modalEl && this.modalEl.classList) {
+            this.modalEl.classList.remove("bob-task-card-suspended");
+          }
+          try {
+            const focusTarget =
+              this.stage === "task-card" ? this.taskCardListEl : this.inputEl;
+            if (focusTarget && typeof focusTarget.focus === "function") {
+              focusTarget.focus();
+            }
+          } catch (focusError) {
+            // Focus restore never throws.
+          }
         }
       } catch (error) {
         // Best-effort restore only.
-      }
-      try {
-        const focusTarget =
-          this.stage === "task-card" ? this.taskCardListEl : this.inputEl;
-        if (focusTarget && typeof focusTarget.focus === "function") {
-          focusTarget.focus();
-        }
-      } catch (error) {
-        // Focus restore never throws.
       }
       return false;
     }
     if (route.kind === "stay") {
       let result = false;
       try {
+        if (this.inboxRouteIsAlive(suspend) !== true) {
+          this.inboxRouteCommitInFlight = false;
+          this.reviewSettleDeferred = false;
+          this.settleInboxRouteDeadOrigin();
+          return false;
+        }
         result = await runWrite();
       } finally {
         this.inboxRouteCommitInFlight = false;
         this.reviewSettleDeferred = false;
       }
+      // A stay that wrote nothing still preserves today's settlement: the
+      // cleared deferral lets onClose settle normally as a card outcome.
       return result;
     }
     if (!route || route.kind !== "move" || !route.path) {
@@ -273,13 +462,31 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
       this.reviewSettleDeferred = false;
       return false;
     }
+    // Snapshot before the write so a truthy "unchanged" writer result
+    // cannot move. Public writer return behavior is preserved; the route
+    // boundary independently verifies that at least one byte changed in
+    // the editor or any vault note (task line, children, or auxiliary
+    // dependency/Pomodoro files).
+    const writeSnapshot = await this.captureInboxRouteWriteSnapshot();
     let result = false;
     try {
+      if (this.inboxRouteIsAlive(suspend) !== true) {
+        this.inboxRouteCommitInFlight = false;
+        this.reviewSettleDeferred = false;
+        this.settleInboxRouteDeadOrigin();
+        return false;
+      }
       result = await runWrite();
     } catch (error) {
       this.inboxRouteCommitInFlight = false;
       this.reviewSettleDeferred = false;
       return false;
+    }
+    if (this.inboxRouteIsAlive(suspend) !== true) {
+      this.inboxRouteCommitInFlight = false;
+      this.reviewSettleDeferred = false;
+      this.settleInboxRouteDeadOrigin();
+      return result === true ? true : result;
     }
     const committed =
       result === true ||
@@ -289,6 +496,20 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
           result.ok === true ||
           result.applied === true));
     if (!committed) {
+      this.inboxRouteCommitInFlight = false;
+      this.reviewSettleDeferred = false;
+      return result;
+    }
+    let wroteAny = true;
+    try {
+      wroteAny = await this.didInboxRouteWriteChange(writeSnapshot);
+    } catch (error) {
+      wroteAny = true;
+    }
+    if (wroteAny !== true) {
+      // All-unchanged/no-eligible results never move, even when the writer
+      // reported success. Clear the deferral so today's card settlement
+      // applies; the caller still sees its ordinary truthy result.
       this.inboxRouteCommitInFlight = false;
       this.reviewSettleDeferred = false;
       return result;

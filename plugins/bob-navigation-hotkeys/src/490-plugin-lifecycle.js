@@ -378,6 +378,34 @@ class BobNavigationHotkeysPlugin extends Plugin {
         this.activeBulletPropertyPicker = null;
       }
     }
+    // Inbox routing lifetime: unloading nav while a route is pending
+    // cancels that route immediately, restoring/releasing its modal state
+    // and clearing the shared destination-picker guard.
+    if (this.activeTaskMoveDestinationPicker) {
+      try {
+        const active = this.activeTaskMoveDestinationPicker;
+        if (active && typeof active.settleRoute === "function") {
+          try {
+            active.close();
+          } catch (cancelError) {
+            try {
+              active.settleRoute({ kind: "cancel" });
+            } catch (ignoredError) {
+              // Cancel is best-effort during unload.
+            }
+          }
+        } else if (active && typeof active.close === "function") {
+          try {
+            active.close();
+          } catch (ignoredError) {
+            // Close is best-effort during unload.
+          }
+        }
+      } catch (_error) {
+        // Cancellation never blocks unload.
+      }
+      this.activeTaskMoveDestinationPicker = null;
+    }
     // Drop the decision-card capability first so ledger-tools marks stop
     // promising a leaf the moment this plugin unloads (mixed-version and
     // disable/enable sessions degrade to counting pips without a reset).

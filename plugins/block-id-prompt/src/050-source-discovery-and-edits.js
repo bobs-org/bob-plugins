@@ -427,6 +427,21 @@ function collectFutureOpenPomodoroRanges(lines, context) {
   return ranges;
 }
 
+// Post-route re-guard for Ctrl+Shift+Enter: revalidate after the route
+// prompt's await, before any plan/write. Refuses drift without writes.
+function revalidatePomodoroToggleSourceAfterRoute(source, options = {}) {
+  try {
+    if (!source || !source.editor || typeof source.editor.getLine !== "function") return false;
+    if ((source.editor.getLine(source.line) || "") !== source.task.rawLine) return false;
+    const content = String(source.editor.getValue() || "");
+    if (options.isNewId && options.newId) return blockTokenMatches(content, options.newId).length === 0;
+    if (source.task && source.task.existingId) return blockTokenMatches(content, source.task.existingId).length === 1;
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function collectAllOpenPomodoroRanges(lines, section) {
   const ranges = [];
   if (!Array.isArray(lines) || !section) {

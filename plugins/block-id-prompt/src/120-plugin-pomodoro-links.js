@@ -84,7 +84,10 @@ class BlockIdPromptPomodoroLinksMixin {
 
         if (linked) {
           if (task.status === "/") {
+            // Work summary handoff: retain the walk origin until the
+            // prompted unlink resolves, like the block-ID path below.
             this.openWorkSummaryPrompt(source);
+            promptHandoff = this.promptOpen === true;
             return;
           }
 
@@ -397,7 +400,18 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
-    return this.applyPomodoroTaskLink(source, newId, true);
+    try {
+      const result = await this.applyPomodoroTaskLink(source, newId, true);
+      if (result === false && source && source.inboxRouteCancelled === true) {
+        source.inboxRouteCancelled = false;
+        this.settleLinkReviewOrigin(source, null);
+        return "route-cancelled";
+      }
+      return result;
+    } catch (error) {
+      this.settleLinkReviewOrigin(source, null);
+      return false;
+    }
   }
 
   openWorkSummaryPrompt(source) {
@@ -409,8 +423,8 @@ class BlockIdPromptPomodoroLinksMixin {
     new WorkSummaryPromptModal(this.app, this, source).open();
   }
 
-  cancelWorkSummaryPrompt(_source) {
-    // Cancellation intentionally leaves the selected task and daily note untouched.
+  cancelWorkSummaryPrompt(source) {
+    this.settleLinkReviewOrigin(source, null);
   }
 
   // Work Log prompt submit for an In Progress unlink: a blank summary
@@ -423,16 +437,31 @@ class BlockIdPromptPomodoroLinksMixin {
       ? options.workLogDate || localTodayParts(this.now())
       : null;
     if (source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
-      return this.applyTaskLinkOpen(source, {
+      try {
+        return await this.applyTaskLinkOpen(source, {
+          workSummary: normalizedSummary,
+          workLogDate,
+        });
+      } catch (error) {
+        return false;
+      }
+    }
+
+    try {
+      const result = await this.applyPomodoroTaskUnlink(source, {
         workSummary: normalizedSummary,
         workLogDate,
       });
+      if (result === false && source && source.inboxRouteCancelled === true) {
+        source.inboxRouteCancelled = false;
+        this.settleLinkReviewOrigin(source, null);
+        return "route-cancelled";
+      }
+      return result;
+    } catch (error) {
+      this.settleLinkReviewOrigin(source, null);
+      return false;
     }
-
-    return this.applyPomodoroTaskUnlink(source, {
-      workSummary: normalizedSummary,
-      workLogDate,
-    });
   }
 
   // Shared core for both the existing-ID (completePomodoroTaskLink) and
@@ -452,8 +481,9 @@ class BlockIdPromptPomodoroLinksMixin {
     }
 
     // Inbox routing gate (link-toggle-gate): on an inbox task, ask where
-    // the task goes before writing. Cancel writes nothing (false keeps a
-    // prompt modal open, like every other refusal); stay is today's
+    // the task goes before writing. Cancel writes nothing and flags the
+    // source so the block-ID/Work-summary submit can cancel the whole
+    // toggle (truthy sentinel closes the original modal); stay is today's
     // behavior; move links first and routes after the write commits.
     const routeGate = await this.gatePomodoroToggleInboxRoute(
       source,
@@ -461,6 +491,12 @@ class BlockIdPromptPomodoroLinksMixin {
       isNewId ? [id] : [],
     );
     if (!routeGate || routeGate.kind === "cancel") {
+      if (source) source.inboxRouteCancelled = true;
+      return false;
+    }
+    if (source) source.inboxRouteCancelled = false;
+    if (revalidatePomodoroToggleSourceAfterRoute(source, { isNewId, newId: isNewId ? id : null }) !== true) {
+      new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
       return false;
     }
 
@@ -596,13 +632,20 @@ class BlockIdPromptPomodoroLinksMixin {
 
     // Inbox routing gate (link-toggle-gate): same contract as the link
     // gate above, with the unlink action label. Unlink assigns no block
-    // ID, so nothing is reserved.
+    // ID, so nothing is reserved. Cancel flags for whole-toggle
+    // cancellation; stay/move re-guard below before any write.
     const routeGate = await this.gatePomodoroToggleInboxRoute(
       source,
       "unlink from today",
       [],
     );
     if (!routeGate || routeGate.kind === "cancel") {
+      if (source) source.inboxRouteCancelled = true;
+      return false;
+    }
+    if (source) source.inboxRouteCancelled = false;
+    if (revalidatePomodoroToggleSourceAfterRoute(source, {}) !== true) {
+      new Notice(`Unlink blocked: selected task changed in ${source.sourcePath}`);
       return false;
     }
 
@@ -822,6 +865,16 @@ class BlockIdPromptPomodoroLinksMixin {
       this.reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan);
       return true;
     }
+    // No-op guard: only a real task/ledger change may lead to the routed
+    // move. A missing write (both plans unchanged) stays in place with
+    // today's outcome, never moving.
+    const linkWroteAny =
+      (plan && plan.hasChanges === true) ||
+      (pomodoroPlan && pomodoroPlan.hasChanges === true);
+    if (linkWroteAny !== true) {
+      this.reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan);
+      return true;
+    }
     const linkText = this.formatPomodoroLinkOutcome(plan, pomodoroPlan);
     const commit = await this.commitPomodoroToggleInboxRoute(source, routeGate.path, [
       { line: source.line, raw: source.task.rawLine, blockId },
@@ -868,6 +921,16 @@ class BlockIdPromptPomodoroLinksMixin {
       status,
     );
     if (!routeGate || routeGate.kind !== "move") {
+      new Notice(unlinkText);
+      return true;
+    }
+    // No-op guard: only a real ledger/Work Log change may move. An unlink
+    // that removed nothing and wrote no log stays with today's outcome.
+    const unlinkWroteAny =
+      (cleanupPlan &&
+        (cleanupPlan.hasChanges === true || cleanupPlan.removedCount > 0)) ||
+      (workLogPlan && workLogPlan.hasChanges === true);
+    if (unlinkWroteAny !== true) {
       new Notice(unlinkText);
       return true;
     }

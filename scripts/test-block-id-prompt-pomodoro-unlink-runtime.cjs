@@ -657,22 +657,82 @@ test("inbox-route: non-inbox unlink never prompts", async () => {
   );
 });
 
-test("review-walk: Work-summary unlink path settles with null", async () => {
+test("review-walk: Work-summary unlink path retains origin until submit", async () => {
   const h = createTaskModeHarness({
     taskContent: "- [/] #task Ship it ^ship",
     dailyContent: LINKED_DAILY,
   });
   const calls = [];
-  const { origin } = installMockReviewWalk(h.plugin, calls);
+  installMockReviewWalk(h.plugin, calls);
   let openedSource = null;
   h.plugin.openWorkSummaryPrompt = (source) => {
     openedSource = source;
+    h.plugin.promptOpen = true;
   };
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.ok(openedSource);
+  assert.ok(openedSource.reviewOrigin);
   assert.deepEqual(h.writes, []);
   assert.deepEqual(noticeMessages, []);
-  assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
+  assert.deepEqual(reviewContinueCalls(calls), []);
+});
+
+test("inbox-route: unlink source drift during route prompt refuses without writes", async () => {
+  const routeCalls = [];
+  const { plugin, editor, source } = installUnlinkPlugin(routeCalls, {
+    taskContent: "- [ ] #task Ship it ^ship",
+    prompt: (request) => {
+      editor.replaceRange("- [ ] #task Replacement ^other\n", { line: 0, ch: 0 }, { line: 0, ch: 0 });
+      return { kind: "move", path: "health.md", name: "health" };
+    },
+  });
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+  assert.equal(result, false);
+  assert.ok(String(editor.getValue() || "").includes("Ship it ^ship"));
+  assert.ok(String(editor.getValue() || "").includes("- [ ] #task Replacement ^other"));
+  assert.deepEqual(routeCalls.filter((e) => e[0] === "commit"), []);
+});
+
+test("inbox-route: Work-summary route cancel returns sentinel and settles null once", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [/] #task Ship it ^ship",
+    dailyContent: LINKED_DAILY,
+    taskPath: "mac_inbox.md",
+  });
+  const calls = [];
+  installMockReviewWalk(h.plugin, calls);
+  const routeCalls = [];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["mac_inbox.md"],
+    promptOutcome: { kind: "cancel" },
+  });
+  const source = sourceForPomodoroLink(h.editor, "mac_inbox.md", 0);
+  const origin = { seq: 99 };
+  source.reviewOrigin = origin;
+  const before = h.editor.getValue();
+  const result = await h.plugin.submitPomodoroWorkSummary(source, "Did work");
+  assert.equal(result, "route-cancelled");
+  assert.equal(h.editor.getValue(), before);
+  const continues = calls.filter((e) => e[0] === "continue");
+  assert.equal(continues.length, 1);
+  assert.deepEqual(continues[0][2], null);
+});
+
+test("inbox-route: unlink no-op with move never commits", async () => {
+  const routeCalls = [];
+  const { plugin, source } = installUnlinkPlugin(routeCalls, {
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+    commitResult: { ok: true, name: "health", count: 1, notice: "", handledRefs: [], reason: null },
+  });
+  const result = await plugin.finishPomodoroUnlinkWithInboxRoute(
+    source,
+    { hasChanges: false, removedCount: 0 },
+    { hasChanges: false },
+    "*",
+    { kind: "move", path: "health.md", name: "health" },
+  );
+  assert.equal(result, true);
+  assert.deepEqual(routeCalls.filter((e) => e[0] === "commit"), []);
 });

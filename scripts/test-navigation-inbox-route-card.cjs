@@ -430,6 +430,36 @@ test("task-card-gate negative rows never prompt", async () => {
     assert.equal(result, false);
     assert.equal(calls.commitRequest, undefined);
   }
+  // A truthy unchanged writer (e.g. Refresh unchanged) never moves.
+  {
+    const { picker, editor, calls } = gatePicker({ routeMode: "move" });
+    const before = String(editor.getValue() || "");
+    const result = await picker.runInboxRoutedCommit({ label: "review every 30d" }, async () => true);
+    assert.equal(result, true);
+    assert.equal(String(editor.getValue() || ""), before);
+    assert.equal(calls.commitRequest, undefined);
+    assert.equal(picker.inboxRouteResult, null);
+    assert.equal(picker.reviewSettleDeferred, false);
+  }
+  // Closing the card while awaiting the route writes nothing.
+  {
+    const { picker, editor, calls } = gatePicker({ routeMode: "move", reviewOrigin: { key: "row-9", seq: 9, epoch: 9 } });
+    let wrote = false;
+    picker.plugin.promptInboxRoute = async () => {
+      picker.pickerOpen = false;
+      return { kind: "move", path: "Health.md", name: "Health" };
+    };
+    const before = String(editor.getValue() || "");
+    const result = await picker.runInboxRoutedCommit({ label: "set P2" }, async () => {
+      wrote = true;
+      return true;
+    });
+    assert.equal(result, false);
+    assert.equal(wrote, false);
+    assert.equal(String(editor.getValue() || ""), before);
+    assert.equal(calls.continue.length, 1);
+    assert.equal(calls.continue[0].outcome, null);
+  }
 });
 
 test("task-card-gate counted sessions capture N targets", async () => {
@@ -450,7 +480,10 @@ test("task-card-gate counted sessions capture N targets", async () => {
   });
   picker.reviewLineIndex = 0;
   picker.reviewBeforeLine = "- [ ] #task First";
-  const result = await picker.runInboxRoutedCommit({ label: "apply 3 rolls" }, async () => true);
+  const result = await picker.runInboxRoutedCommit({ label: "apply 3 rolls" }, async () => {
+    picker.editor.content += "#route-test\n";
+    return true;
+  });
   assert.equal(result, true);
   assert.equal(calls.promptRequest.additionalTaskCount, 2);
   assert.equal(calls.commitRequest.expected.length, 3);
@@ -461,7 +494,10 @@ test("task-card-gate walk: move advances once with Moved first", async () => {
   clearNotices();
   const origin = { key: "row-1", seq: 1, epoch: 1 };
   const { picker, calls } = gatePicker({ routeMode: "move", reviewOrigin: origin });
-  const result = await picker.runInboxRoutedCommit({ label: "set P2" }, async () => true);
+  const result = await picker.runInboxRoutedCommit({ label: "set P2" }, async () => {
+    picker.editor.content += "#route-test\n";
+    return true;
+  });
   assert.equal(result, true);
   assert.equal(calls.continue.length, 1);
   assert.equal(calls.continue[0].outcome.kind, "route");
@@ -477,7 +513,10 @@ test("task-card-gate walk: move failure falls back to card with partial", async 
     reviewOrigin: origin,
     commitOk: false,
   });
-  const result = await picker.runInboxRoutedCommit({ label: "set P2" }, async () => true);
+  const result = await picker.runInboxRoutedCommit({ label: "set P2" }, async () => {
+    picker.editor.content += "#route-test\n";
+    return true;
+  });
   assert.equal(result, true);
   assert.equal(calls.continue.length, 1);
   assert.equal(calls.continue[0].outcome.kind, "card");
@@ -490,6 +529,7 @@ test("task-card-gate walk: exactly one settle per origin", async () => {
   const { picker, calls } = gatePicker({ routeMode: "move", reviewOrigin: origin });
   const slowWrite = async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
+    picker.editor.content += "#route-test\n";
     return true;
   };
   const result = await picker.runInboxRoutedCommit({ label: "set P2" }, slowWrite);

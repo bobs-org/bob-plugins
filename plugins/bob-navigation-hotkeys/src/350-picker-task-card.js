@@ -611,6 +611,28 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
       this.plugin.activeBulletPropertyPicker = null;
     }
+    // Inbox routing lifetime: closing the Task Card while a route is
+    // pending cancels that route immediately. The route picker settles
+    // cancel, clears the shared destination-picker guard, and the gate's
+    // post-prompt lifetime recheck settles the captured origin once.
+    try {
+      const active =
+        this.plugin && this.plugin.activeTaskMoveDestinationPicker;
+      if (active && typeof active.settleRoute === "function") {
+        try {
+          active.close();
+        } catch (cancelError) {
+          try {
+            active.settleRoute({ kind: "cancel" });
+          } catch (ignoredError) {
+            // Cancel is best-effort during close.
+          }
+        }
+      }
+    } catch (error) {
+      // Cancellation never blocks card close.
+    }
+    this.pickerOpen = false;
     this.vaultStageRefreshId = -1;
     this.clearPendingBatch();
     // Review-walk auto-advance (nav-gestures): normal commits show their

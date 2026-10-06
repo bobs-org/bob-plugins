@@ -101,6 +101,26 @@ function ensureDependencyChipsRefresh() {
   }
   return dependencyChipsRefresh;
 }
+// Priority marks (bob-cli-4p ledger-marks): a StateEffect the
+// consolidated live-refresh fan-out dispatches so Live Preview
+// priority widgets rebuild without a doc change. Defined lazily on
+// first dispatch so requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite
+// shares one stub effect type across every eager define).
+let priorityMarksRefresh = null;
+function ensurePriorityMarksRefresh() {
+  if (priorityMarksRefresh) {
+    return priorityMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      priorityMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    priorityMarksRefresh = null;
+  }
+  return priorityMarksRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;

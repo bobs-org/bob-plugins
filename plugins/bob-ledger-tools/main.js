@@ -103,6 +103,26 @@ function ensureDependencyChipsRefresh() {
   }
   return dependencyChipsRefresh;
 }
+// Priority marks (bob-cli-4p ledger-marks): a StateEffect the
+// consolidated live-refresh fan-out dispatches so Live Preview
+// priority widgets rebuild without a doc change. Defined lazily on
+// first dispatch so requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite
+// shares one stub effect type across every eager define).
+let priorityMarksRefresh = null;
+function ensurePriorityMarksRefresh() {
+  if (priorityMarksRefresh) {
+    return priorityMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      priorityMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    priorityMarksRefresh = null;
+  }
+  return priorityMarksRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;
@@ -7873,6 +7893,469 @@ function buildFreshnessMarkElement(doc, model, options) {
     return null;
   }
 }
+// ---- src/135-priority-marks.js ----
+// --- Task priority marks: pure mark-core ----------------------------------
+// Owned by the `### Priority marks` display contract in bob-cli
+// `docs/projects.md`. Pure helpers only: canonical-field source
+// detection, the lenient ladder-config reader, the mark model and
+// tooltip, a listener-free DOM builder, and the Live Preview widget.
+// Every helper is synchronous and never throws; bad input yields
+// null. Mirrors the freshness-mark code paths in
+// `130-freshness-marks.js` and reuses `freshnessTaskStatus` and
+// `freshnessMarkPosInCode` (code exclusion) from the sibling
+// fragments. The glyph is chosen by stored Tasks value, never by
+// ladder position, so marks stay truthful without config.
+
+// The five stored Tasks priority values. Anything else (including
+// `P2`, `urgent`, and uppercase spellings) is non-canonical and gets
+// no mark.
+const PRIORITY_MARK_VALUES = ["highest", "high", "medium", "low", "lowest"];
+
+// Bars filled per stored value on the 4-bar signal staircase.
+const PRIORITY_MARK_FILLED = {
+  high: 4,
+  medium: 3,
+  low: 2,
+  lowest: 1,
+  highest: 0,
+};
+
+// Capitalize a stored value for tooltip text (`high` -> `High`).
+// Never throws.
+function priorityMarkCapitalized(value) {
+  try {
+    const text = String(value || "");
+    if (text === "") {
+      return "";
+    }
+    return text.slice(0, 1).toUpperCase() + text.slice(1).toLowerCase();
+  } catch (error) {
+    return "";
+  }
+}
+
+// The single canonical `[priority:: value]` / `(priority:: value)`
+// field on `line`, or null. Canonical means: exactly one
+// `/priority\s*::/gi` occurrence on the line, the key exactly
+// `priority`, a matching bracket pair, padding spaces only, and a
+// lowercase stored value. (A dedicated matcher, not
+// `freshnessInlineFields`, because the canonical form allows padding
+// spaces inside the brackets.) Returns `{ value, fieldStart,
+// fieldEnd }` with UTF-16 offsets, or null. Never throws.
+function priorityMarkCanonicalField(line) {
+  try {
+    const text = String(line || "");
+    if (text === "") {
+      return null;
+    }
+    const occurrences = text.match(/priority\s*::/gi) || [];
+    if (occurrences.length !== 1) {
+      return null;
+    }
+    const pattern = new RegExp(
+      "\\[ *priority:: *(highest|high|medium|low|lowest) *\\]" +
+        "|\\( *priority:: *(highest|high|medium|low|lowest) *\\)",
+      "g",
+    );
+    const match = pattern.exec(text);
+    if (!match) {
+      return null;
+    }
+    // Defensive: the single-occurrence gate above already rules out
+    // a second field, but never fold when two match.
+    if (pattern.exec(text) !== null) {
+      return null;
+    }
+    const value =
+      match[1] !== undefined ? match[1] : match[2];
+    return {
+      value,
+      fieldStart: match.index,
+      fieldEnd: match.index + match[0].length,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// A Live Preview task line's priority-mark source, or null when the
+// line gets no mark. `fieldStart`/`fieldEnd` are UTF-16 offsets of
+// the field text, excluding the folded space. Never throws.
+function priorityMarkSource(lineText) {
+  try {
+    if (typeof lineText !== "string") {
+      return null;
+    }
+    if (freshnessTaskStatus(lineText) === null) {
+      return null;
+    }
+    const found = priorityMarkCanonicalField(lineText);
+    if (found === null) {
+      return null;
+    }
+    return {
+      value: found.value,
+      fieldStart: found.fieldStart,
+      fieldEnd: found.fieldEnd,
+      foldSpace:
+        found.fieldStart > 0 && lineText[found.fieldStart - 1] === " ",
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// A rendered-view text node's priority-mark source (`foldSpace`
+// never applies, so it is omitted). Skips the task-line check
+// because Tasks may have split off the suffix. Never throws.
+function priorityMarkSourceInText(text) {
+  try {
+    if (typeof text !== "string") {
+      return null;
+    }
+    const found = priorityMarkCanonicalField(text);
+    if (found === null) {
+      return null;
+    }
+    return {
+      value: found.value,
+      fieldStart: found.fieldStart,
+      fieldEnd: found.fieldEnd,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// Lenient ladder-config reader: the first `properties[]` entry with
+// `name === "priority"` and `values === "priority"`. Keeps levels
+// with a non-empty string label, a scalar value, and integer
+// `0 <= min_days <= max_days`; skips bad levels and never shows
+// Notices (nav owns config validation). Returns a frozen list of
+// frozen `{ label, value, minDays, maxDays }`, or null when the
+// ladder is unknown (missing, unreadable, or invalid config, no
+// matching entry, no valid levels, or mobile). Never throws.
+function coercePriorityLadder(parsedYaml) {
+  try {
+    if (
+      !parsedYaml ||
+      typeof parsedYaml !== "object" ||
+      Array.isArray(parsedYaml)
+    ) {
+      return null;
+    }
+    const properties = parsedYaml.properties;
+    if (!Array.isArray(properties)) {
+      return null;
+    }
+    let entry = null;
+    for (const candidate of properties) {
+      try {
+        if (
+          candidate &&
+          typeof candidate === "object" &&
+          !Array.isArray(candidate) &&
+          candidate.name === "priority" &&
+          candidate.values === "priority"
+        ) {
+          entry = candidate;
+          break;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    if (entry === null) {
+      return null;
+    }
+    const rawLevels = entry.levels;
+    if (!Array.isArray(rawLevels)) {
+      return null;
+    }
+    const kept = [];
+    for (const raw of rawLevels) {
+      try {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          continue;
+        }
+        const label = raw.label;
+        if (typeof label !== "string" || label.trim() === "") {
+          continue;
+        }
+        const rawValue = raw.value;
+        if (
+          rawValue === null ||
+          rawValue === undefined ||
+          typeof rawValue === "object"
+        ) {
+          continue;
+        }
+        const value = String(rawValue);
+        if (value === "") {
+          continue;
+        }
+        const minRaw =
+          raw.min_days !== undefined ? raw.min_days : raw.minDays;
+        const maxRaw =
+          raw.max_days !== undefined ? raw.max_days : raw.maxDays;
+        if (
+          typeof minRaw !== "number" ||
+          typeof maxRaw !== "number" ||
+          !Number.isInteger(minRaw) ||
+          !Number.isInteger(maxRaw) ||
+          minRaw < 0 ||
+          maxRaw < 0 ||
+          minRaw > maxRaw
+        ) {
+          continue;
+        }
+        kept.push(
+          Object.freeze({
+            label: label.trim(),
+            value,
+            minDays: minRaw,
+            maxDays: maxRaw,
+          }),
+        );
+      } catch (error) {
+        continue;
+      }
+    }
+    if (kept.length === 0) {
+      return null;
+    }
+    return Object.freeze(kept);
+  } catch (error) {
+    return null;
+  }
+}
+
+// The `Rolls …` tooltip line for a ladder level: equal bounds read
+// `Rolls 5 days ahead`, 1-1 reads `Rolls 1 day ahead`. Never throws.
+function priorityMarkRollsLine(minDays, maxDays) {
+  try {
+    if (minDays === maxDays) {
+      return minDays === 1
+        ? "Rolls 1 day ahead"
+        : "Rolls " + minDays + " days ahead";
+    }
+    return "Rolls " + minDays + "\u2013" + maxDays + " days ahead";
+  } catch (error) {
+    return "Rolls ahead";
+  }
+}
+
+// The render model for one mark: `{ value, glyph ("bars" |
+// "urgent"), filled, label, tooltip, key }`. The glyph is chosen by
+// stored Tasks value, never by ladder position; labels and windows
+// come from the ladder. `label` is null when the value is off the
+// ladder or the ladder is unknown. The tooltip never contains `::`,
+// because Dataview's reading-view pass re-scans `innerHTML` for
+// inline fields. Bad values yield null. Never throws.
+function priorityMarkModel(value, ladder) {
+  try {
+    if (PRIORITY_MARK_VALUES.indexOf(value) === -1) {
+      return null;
+    }
+    const glyph = value === "highest" ? "urgent" : "bars";
+    const filled = PRIORITY_MARK_FILLED[value];
+    const levels = Array.isArray(ladder) ? ladder : null;
+    let entry = null;
+    if (levels !== null) {
+      for (const level of levels) {
+        try {
+          if (level && level.value === value) {
+            entry = level;
+            break;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    }
+    const capitalized = priorityMarkCapitalized(value);
+    const hint = "Ctrl+Shift+P to change";
+    let label = null;
+    let tooltip;
+    if (entry !== null) {
+      label = entry.label;
+      tooltip =
+        label +
+        " \u00b7 " +
+        capitalized +
+        " priority\n" +
+        priorityMarkRollsLine(entry.minDays, entry.maxDays) +
+        "\n" +
+        hint;
+    } else if (levels !== null && levels.length > 0) {
+      const first = levels[0] && levels[0].label;
+      const last = levels[levels.length - 1] && levels[levels.length - 1].label;
+      const range =
+        levels.length === 1 || first === last
+          ? String(first)
+          : String(first) + "\u2013" + String(last);
+      tooltip =
+        capitalized + " priority\nNot on the " + range + " ladder\n" + hint;
+    } else {
+      tooltip = capitalized + " priority\n" + hint;
+    }
+    const model = {
+      value,
+      glyph,
+      filled,
+      label,
+      tooltip,
+      key: "",
+    };
+    try {
+      model.key = JSON.stringify([value, glyph, filled, label, tooltip]);
+    } catch (error) {
+      model.key = String(value) + "|" + String(label);
+    }
+    return Object.freeze(model);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Listener-free mark element, so it survives Dataview's innerHTML
+// round-trip. Produces
+// `span.bob-priority-mark[data-priority][data-fold-space]`
+// containing `span.bob-priority-mark-glyph` (the glyph itself is
+// drawn by the single CSS-mask definition). `decorative` means
+// `aria-hidden="true"` with no label (for surfaces that already
+// show a P-label). `inheritColor` sets
+// `data-inherit-color="true"`, so the ink becomes `currentColor`.
+// `doc` provides `createElement` and `createTextNode` so tests can
+// pass a fake document. Never throws: bad input yields null.
+function buildPriorityMarkElement(doc, model, options) {
+  try {
+    if (!doc || !model || typeof model !== "object") {
+      return null;
+    }
+    if (PRIORITY_MARK_VALUES.indexOf(model.value) === -1) {
+      return null;
+    }
+    if (model.glyph !== "bars" && model.glyph !== "urgent") {
+      return null;
+    }
+    if (typeof doc.createElement !== "function") {
+      return null;
+    }
+    const settings =
+      options && typeof options === "object" ? options : {};
+    const foldSpace = Boolean(settings.foldSpace);
+    const decorative = Boolean(settings.decorative);
+    const inheritColor = Boolean(settings.inheritColor);
+    const span = doc.createElement("span");
+    span.setAttribute("class", "bob-priority-mark");
+    span.setAttribute("data-priority", String(model.value));
+    span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
+    if (inheritColor) {
+      span.setAttribute("data-inherit-color", "true");
+    }
+    if (decorative) {
+      span.setAttribute("aria-hidden", "true");
+    } else {
+      span.setAttribute("role", "img");
+      span.setAttribute("aria-label", String(model.tooltip || ""));
+      span.setAttribute("data-tooltip-position", "top");
+    }
+    const glyph = doc.createElement("span");
+    glyph.setAttribute("class", "bob-priority-mark-glyph");
+    glyph.setAttribute("aria-hidden", "true");
+    span.appendChild(glyph);
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Live Preview widget for one priority mark. `eq` compares a model
+// key, so unchanged marks never flicker. `toDOM` builds the
+// listener-free element and adds the reveal-on-click listener only.
+// Defined only when `WidgetType` exists; otherwise null and the
+// extension is not registered.
+let PriorityMarkWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  PriorityMarkWidget = class extends WidgetType {
+    constructor(model, foldSpace) {
+      super();
+      this.model = model;
+      this.foldSpace = Boolean(foldSpace);
+      let key = "";
+      try {
+        key =
+          String((model && model.key) || JSON.stringify(model)) +
+          "|" +
+          (this.foldSpace ? "1" : "0");
+      } catch (error) {
+        key =
+          String((model && model.value) || "") +
+          "|" +
+          (this.foldSpace ? "1" : "0");
+      }
+      this.key = key;
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof PriorityMarkWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildPriorityMarkElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+        { foldSpace: this.foldSpace },
+      );
+      // In tests `document` is undefined and the caller passes a fake
+      // doc via `buildPriorityMarkElement` directly; never throw here.
+      if (!dom) {
+        const fallback =
+          typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        return fallback;
+      }
+      try {
+        const self = this;
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let anchor = null;
+            try {
+              anchor =
+                view && typeof view.posAtDOM === "function"
+                  ? view.posAtDOM(dom)
+                  : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (typeof anchor === "number") {
+              view.dispatch({
+                selection: { anchor: anchor + (self.foldSpace ? 1 : 0) },
+              });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+          } catch (error) {
+            // Reveal is best-effort; the mark itself still renders.
+          }
+        });
+      } catch (error) {
+        // A listener-free mark still renders.
+      }
+      return dom;
+    }
+  };
+}
 // ---- src/140-dependency-model.js ----
 // Dependency chips (bob-cli-3n chips): pure Depends-On grammar.
 // `docs/task-dependencies.md` §§2, 7, 11.1 (DP vectors) is authoritative.
@@ -9550,6 +10033,10 @@ class BobLedgerToolsPlugin extends Plugin {
     // Tasks-memo index lives on the freshness memo itself.
     this.dependencyChipsEnabled = true;
     this.dependencyChipsTimer = null;
+    // Priority marks (bob-cli-4p ledger-marks): session toggle plus
+    // a cached priority-ladder snapshot.
+    this.priorityMarksEnabled = true;
+    this.priorityLadderCache = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -9778,6 +10265,14 @@ class BobLedgerToolsPlugin extends Plugin {
         renderChip: (host, options = {}) =>
           this.dashboardCollectionsRenderChip(host, options),
       }),
+      // Task priority marks (bob-cli-4p ledger-marks, priorityMarks
+      // namespace v1): display-only signal-bar glyphs for canonical
+      // `[priority:: …]` fields, per the `### Priority marks`
+      // display contract in bob-cli `docs/projects.md`. Additive:
+      // top-level api stays v3. Every member is synchronous and
+      // never throws: guard calls with try/catch as well as
+      // optional chaining.
+      priorityMarks: this.priorityMarksApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -9975,6 +10470,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupFreshnessStatusBar();
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
+    this.setupPriorityMarks();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
@@ -10153,6 +10649,20 @@ class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-dep-chips");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    this.priorityLadderCache = null;
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-priority-marks");
       }
     } catch (error) {
       // Body class cleanup is best-effort.
@@ -16284,6 +16794,1002 @@ class BobLedgerToolsFreshnessMarkRenderMixin {
   // __FRESHNESS_E1_END__
 
 }
+// ---- src/265-plugin-priority-marks.js ----
+// --- Task priority marks: Live Preview, rendered views, toggle, api --------
+// `BobLedgerToolsPriorityMarksMixin`, installed in
+// `310-install-methods.js` after the freshness-mark render mixin.
+// Mirrors `250-plugin-freshness-mark-model.js` (setup, extension,
+// toggle) and `260-plugin-freshness-mark-render.js` (rebuild,
+// decorations, post-processor, refresh), but the model is pure:
+// `priorityMarkModel(value, ladder)` needs no memo rows, only the
+// cached ladder snapshot below. Every method is synchronous and
+// never throws.
+class BobLedgerToolsPriorityMarksMixin {
+  setupPriorityMarks() {
+    try {
+      if (typeof this.priorityMarksEnabled !== "boolean") {
+        this.priorityMarksEnabled = true;
+      }
+      try {
+        if (
+          typeof document !== "undefined" &&
+          document &&
+          document.body &&
+          document.body.classList &&
+          typeof document.body.classList.add === "function"
+        ) {
+          if (this.priorityMarksEnabled) {
+            document.body.classList.add("bob-priority-marks");
+          } else {
+            document.body.classList.remove("bob-priority-marks");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-priority-marks",
+            name: "Toggle task priority marks",
+            callback: () => this.togglePriorityMarks(),
+          });
+        }
+      } catch (error) {
+        // The toggle is best-effort.
+      }
+      try {
+        const extension = this.createPriorityMarkExtension();
+        if (
+          extension &&
+          typeof this.registerEditorExtension === "function"
+        ) {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview marks are best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderPriorityMarksIn(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Rendered-view marks are best-effort.
+      }
+    } catch (error) {
+      // Marks setup never throws.
+    }
+  }
+
+  priorityMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          PriorityMarkWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createPriorityMarkExtension() {
+    try {
+      if (!this.priorityMarksAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const MarkPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildPriorityMarkDecorations(view);
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+        }
+
+        update(u) {
+          try {
+            if (plugin.priorityMarkShouldRebuild(u)) {
+              this.decorations =
+                plugin.buildPriorityMarkDecorations(u.view);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(MarkPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  priorityMarkShouldRebuild(u) {
+    try {
+      if (!u || typeof u !== "object") {
+        return false;
+      }
+      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        return true;
+      }
+      try {
+        const refresh = ensurePriorityMarksRefresh();
+        const transactions = u.transactions || [];
+        for (const transaction of transactions) {
+          try {
+            const effects =
+              transaction && transaction.effects !== undefined
+                ? transaction.effects
+                : null;
+            if (!effects) {
+              continue;
+            }
+            const list = Array.isArray(effects) ? effects : [effects];
+            for (const effect of list) {
+              try {
+                if (!effect) {
+                  continue;
+                }
+                if (effect === refresh) {
+                  return true;
+                }
+                if (
+                  refresh &&
+                  typeof effect.is === "function" &&
+                  effect.is(refresh)
+                ) {
+                  return true;
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        // Effect scan is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && u.startState && u.state) {
+          let before = null;
+          let after = null;
+          try {
+            before = u.startState.field(editorLivePreviewField);
+          } catch (error) {
+            before = null;
+          }
+          try {
+            after = u.state.field(editorLivePreviewField);
+          } catch (error) {
+            after = null;
+          }
+          if (before !== after) {
+            return true;
+          }
+        }
+        if (editorInfoField && u.startState && u.state) {
+          let beforePath = null;
+          let afterPath = null;
+          try {
+            const beforeInfo = u.startState.field(editorInfoField);
+            beforePath =
+              beforeInfo && beforeInfo.file ? beforeInfo.file.path : null;
+          } catch (error) {
+            beforePath = null;
+          }
+          try {
+            const afterInfo = u.state.field(editorInfoField);
+            afterPath =
+              afterInfo && afterInfo.file ? afterInfo.file.path : null;
+          } catch (error) {
+            afterPath = null;
+          }
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Cached priority ladder snapshot: `{ path, statKey, checkedAt,
+  // ladder }`. Reads `planConfigPath()` through the same optional
+  // `fs` / `parseYaml` / `Platform.isDesktopApp` guards as
+  // `loadFreshnessConfig`; the file is stat-checked at most once
+  // per 60-second tick and reparsed only on change. Mobile and a
+  // missing or unparsable file yield a null ladder (tooltips omit
+  // P-labels instead of guessing). Never throws.
+  priorityLadderSnapshot(now = new Date()) {
+    const fallback = () => ({ ladder: null });
+    try {
+      const configPath =
+        typeof planConfigPath === "function" ? planConfigPath() : "";
+      const cached = this.priorityLadderCache;
+      let nowMs = NaN;
+      try {
+        nowMs =
+          now instanceof Date
+            ? now.getTime()
+            : Number.isFinite(Number(now))
+              ? Number(now)
+              : Date.now();
+      } catch (error) {
+        nowMs = Date.now();
+      }
+      if (
+        cached &&
+        cached.path === configPath &&
+        Number.isFinite(nowMs) &&
+        Number.isFinite(cached.checkedAt) &&
+        nowMs - cached.checkedAt < 60 * 1000
+      ) {
+        return { ladder: cached.ladder };
+      }
+      // Mobile has no config file: unknown ladder, cached like any
+      // other key so the check stays cheap.
+      try {
+        const platform =
+          typeof Platform !== "undefined" ? Platform : null;
+        if (platform && platform.isDesktopApp === false) {
+          this.priorityLadderCache = {
+            path: configPath,
+            statKey: "mobile",
+            checkedAt: nowMs,
+            ladder: null,
+          };
+          return { ladder: null };
+        }
+      } catch (error) {
+        // Fall through to the file read.
+      }
+      // One stat per check: missing-file errors become part of the
+      // key so creation and deletion invalidate like edits do.
+      let statKey = null;
+      try {
+        const fsModule =
+          typeof planRequireOptionalNodeModule === "function"
+            ? planRequireOptionalNodeModule("fs")
+            : null;
+        if (fsModule && typeof fsModule.statSync === "function") {
+          try {
+            const stat = fsModule.statSync(configPath);
+            const mtime =
+              stat && typeof stat.mtimeMs === "number"
+                ? stat.mtimeMs
+                : String(stat && stat.mtime);
+            statKey = mtime + ":" + String(stat && stat.size);
+          } catch (statError) {
+            statKey =
+              "missing:" +
+              String((statError && statError.code) || "error");
+          }
+        }
+      } catch (error) {
+        statKey = null;
+      }
+      if (
+        cached &&
+        cached.path === configPath &&
+        statKey !== null &&
+        cached.statKey === statKey
+      ) {
+        cached.checkedAt = nowMs;
+        return { ladder: cached.ladder };
+      }
+      let ladder = null;
+      try {
+        const fsModule =
+          typeof planRequireOptionalNodeModule === "function"
+            ? planRequireOptionalNodeModule("fs")
+            : null;
+        if (
+          fsModule &&
+          typeof fsModule.readFileSync === "function" &&
+          typeof parseYaml === "function"
+        ) {
+          const raw = fsModule.readFileSync(configPath, "utf8");
+          ladder = coercePriorityLadder(parseYaml(raw));
+        }
+      } catch (error) {
+        ladder = null;
+      }
+      this.priorityLadderCache = {
+        path: configPath,
+        statKey,
+        checkedAt: nowMs,
+        ladder,
+      };
+      return { ladder };
+    } catch (error) {
+      return fallback();
+    }
+  }
+
+  buildPriorityMarkDecorations(view) {
+    try {
+      if (!this.priorityMarksEnabled) {
+        return Decoration.none;
+      }
+      if (!Decoration || !RangeSetBuilder || !PriorityMarkWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) {
+        return Decoration.none;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!filePath) {
+        return Decoration.none;
+      }
+      let ladder = null;
+      try {
+        ladder = this.priorityLadderSnapshot().ladder;
+      } catch (error) {
+        ladder = null;
+      }
+      const ranges = (view && view.visibleRanges) || [];
+      let selectionRanges = [];
+      try {
+        selectionRanges =
+          (view.state.selection && view.state.selection.ranges) || [];
+      } catch (error) {
+        selectionRanges = [];
+      }
+      let tree = null;
+      try {
+        if (syntaxTree && typeof syntaxTree === "function" && view.state) {
+          tree = syntaxTree(view.state);
+        } else if (
+          syntaxTree &&
+          typeof syntaxTree.resolveInner === "function"
+        ) {
+          tree = syntaxTree;
+        }
+      } catch (error) {
+        tree = null;
+      }
+      const builder = new RangeSetBuilder();
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") {
+        return builder.finish();
+      }
+      const docLength =
+        typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      for (const range of ranges) {
+        try {
+          if (!range || typeof range.from !== "number") {
+            continue;
+          }
+          let pos = Math.max(0, range.from);
+          const end = Math.min(
+            typeof range.to === "number" ? range.to : docLength,
+            docLength,
+          );
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try {
+              line = doc.lineAt(pos);
+            } catch (error) {
+              break;
+            }
+            if (!line || typeof line.text !== "string") {
+              break;
+            }
+            try {
+              if (line.text.indexOf("priority::") !== -1) {
+                const source = priorityMarkSource(line.text);
+                if (source) {
+                  const absFrom = line.from + source.fieldStart;
+                  const absTo = line.from + source.fieldEnd;
+                  let revealed = false;
+                  for (const selection of selectionRanges) {
+                    try {
+                      if (
+                        selection &&
+                        typeof selection.from === "number" &&
+                        typeof selection.to === "number" &&
+                        selection.from <= absTo &&
+                        selection.to >= absFrom
+                      ) {
+                        revealed = true;
+                        break;
+                      }
+                    } catch (error) {
+                      continue;
+                    }
+                  }
+                  if (!revealed) {
+                    let inCode = false;
+                    try {
+                      if (tree) {
+                        inCode = freshnessMarkPosInCode(tree, absFrom);
+                      }
+                    } catch (error) {
+                      inCode = false;
+                    }
+                    if (!inCode) {
+                      const model = priorityMarkModel(source.value, ladder);
+                      if (model) {
+                        const from =
+                          line.from +
+                          source.fieldStart -
+                          (source.foldSpace ? 1 : 0);
+                        builder.add(
+                          from,
+                          absTo,
+                          Decoration.replace({
+                            widget: new PriorityMarkWidget(
+                              model,
+                              source.foldSpace,
+                            ),
+                          }),
+                        );
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              // One bad line never breaks the build.
+            }
+            if (typeof line.to !== "number" || line.to >= end) {
+              break;
+            }
+            if (line.to < pos) {
+              break;
+            }
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  priorityMarkExcludedAncestor(node, root) {
+    try {
+      let current = node && node.parentNode ? node.parentNode : null;
+      let guard = 0;
+      while (current && current !== root && guard < 100) {
+        guard += 1;
+        try {
+          const tag =
+            current.tagName || current.nodeName
+              ? String(current.tagName || current.nodeName)
+              : "";
+          if (
+            tag === "CODE" ||
+            tag === "code" ||
+            tag === "PRE" ||
+            tag === "pre"
+          ) {
+            return true;
+          }
+          let classText = "";
+          try {
+            if (
+              current.classList &&
+              typeof current.classList.contains === "function"
+            ) {
+              if (current.classList.contains("bob-priority-mark")) {
+                return true;
+              }
+              if (current.classList.contains("bob-fresh-mark")) {
+                return true;
+              }
+              if (
+                current.classList.contains("dataview") &&
+                current.classList.contains("inline-field")
+              ) {
+                return true;
+              }
+            }
+            if (typeof current.className === "string") {
+              classText = current.className;
+            } else if (typeof current.getAttribute === "function") {
+              classText = current.getAttribute("class") || "";
+            }
+          } catch (error) {
+            classText = "";
+          }
+          if (
+            classText &&
+            classText.indexOf("bob-priority-mark") !== -1
+          ) {
+            return true;
+          }
+          if (
+            classText &&
+            classText.indexOf("bob-fresh-mark") !== -1
+          ) {
+            return true;
+          }
+          if (
+            classText &&
+            classText.indexOf("dataview") !== -1 &&
+            classText.indexOf("inline-field") !== -1
+          ) {
+            return true;
+          }
+        } catch (error) {
+          // Keep walking on per-ancestor failure.
+        }
+        current = current.parentNode || null;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The nearest `li` ancestor of `node` (up to `root`), or null.
+  // Rendered-view marks need a `task-list-item` one. Never throws.
+  priorityMarkNearestLi(node, root) {
+    try {
+      let current = node && node.parentNode ? node.parentNode : null;
+      let guard = 0;
+      while (current && current !== root && guard < 100) {
+        guard += 1;
+        try {
+          const tag = String(
+            current.tagName || current.nodeName || "",
+          ).toUpperCase();
+          if (tag === "LI") {
+            return current;
+          }
+        } catch (error) {
+          // Keep walking on per-ancestor failure.
+        }
+        current = current.parentNode || null;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Whether `li` carries the `task-list-item` class. Never throws.
+  priorityMarkLiIsTask(li) {
+    try {
+      if (!li) {
+        return false;
+      }
+      if (
+        li.classList &&
+        typeof li.classList.contains === "function" &&
+        li.classList.contains("task-list-item")
+      ) {
+        return true;
+      }
+      const classText =
+        typeof li.className === "string"
+          ? li.className
+          : typeof li.getAttribute === "function"
+            ? li.getAttribute("class") || ""
+            : "";
+      return (
+        typeof classText === "string" &&
+        classText.split(/\s+/).indexOf("task-list-item") !== -1
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  renderPriorityMarksIn(el, ctx) {
+    try {
+      if (!this.priorityMarksEnabled) {
+        return;
+      }
+      if (!el || !ctx) {
+        return;
+      }
+      let ladder = null;
+      try {
+        ladder = this.priorityLadderSnapshot().ladder;
+      } catch (error) {
+        ladder = null;
+      }
+      const textNodes = [];
+      try {
+        const docNode =
+          (el.ownerDocument && el.ownerDocument) ||
+          (typeof document !== "undefined" ? document : null);
+        const showText =
+          (docNode &&
+            docNode.defaultView &&
+            docNode.defaultView.NodeFilter &&
+            docNode.defaultView.NodeFilter.SHOW_TEXT) ||
+          (typeof NodeFilter !== "undefined" ? NodeFilter.SHOW_TEXT : 4);
+        let walker = null;
+        try {
+          const creator =
+            docNode && typeof docNode.createTreeWalker === "function"
+              ? docNode
+              : typeof document !== "undefined" &&
+                  typeof document.createTreeWalker === "function"
+                ? document
+                : null;
+          if (creator) {
+            walker = creator.createTreeWalker(el, showText, {
+              acceptNode: (node) => {
+                try {
+                  if (this.priorityMarkExcludedAncestor(node, el)) {
+                    return 2;
+                  }
+                  return 1;
+                } catch (error) {
+                  return 1;
+                }
+              },
+            });
+          }
+        } catch (error) {
+          walker = null;
+        }
+        if (walker) {
+          let current = null;
+          try {
+            current = walker.nextNode();
+          } catch (error) {
+            current = null;
+          }
+          let guard = 0;
+          while (current && guard < 10000) {
+            guard += 1;
+            try {
+              const value =
+                typeof current.nodeValue === "string"
+                  ? current.nodeValue
+                  : typeof current.textContent === "string"
+                    ? current.textContent
+                    : "";
+              if (value.indexOf("priority::") !== -1) {
+                textNodes.push(current);
+              }
+            } catch (error) {
+              // Skip unreadable nodes.
+            }
+            try {
+              current = walker.nextNode();
+            } catch (error) {
+              break;
+            }
+          }
+        } else {
+          const stack = [el];
+          let guard = 0;
+          while (stack.length > 0 && guard < 10000) {
+            guard += 1;
+            const top = stack.pop();
+            try {
+              const children = (top && top.childNodes) || [];
+              for (let index = children.length - 1; index >= 0; index -= 1) {
+                const child = children[index];
+                if (!child) {
+                  continue;
+                }
+                const nodeType = child.nodeType;
+                if (nodeType === 3) {
+                  const value =
+                    typeof child.nodeValue === "string"
+                      ? child.nodeValue
+                      : typeof child.textContent === "string"
+                        ? child.textContent
+                        : "";
+                  if (
+                    value.indexOf("priority::") !== -1 &&
+                    !this.priorityMarkExcludedAncestor(child, el)
+                  ) {
+                    textNodes.push(child);
+                  }
+                } else if (nodeType === 1) {
+                  if (!this.priorityMarkExcludedAncestor(child, el)) {
+                    const tag = String(child.tagName || child.nodeName || "");
+                    if (
+                      tag !== "CODE" &&
+                      tag !== "code" &&
+                      tag !== "PRE" &&
+                      tag !== "pre"
+                    ) {
+                      stack.push(child);
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        return;
+      }
+      for (const textNode of textNodes) {
+        try {
+          if (!textNode || !textNode.parentNode) {
+            continue;
+          }
+          if (this.priorityMarkExcludedAncestor(textNode, el)) {
+            continue;
+          }
+          const li = this.priorityMarkNearestLi(textNode, el);
+          if (!this.priorityMarkLiIsTask(li)) {
+            continue;
+          }
+          const value =
+            typeof textNode.nodeValue === "string"
+              ? textNode.nodeValue
+              : typeof textNode.textContent === "string"
+                ? textNode.textContent
+                : "";
+          if (!value || value.indexOf("priority::") === -1) {
+            continue;
+          }
+          const source = priorityMarkSourceInText(value);
+          if (!source) {
+            continue;
+          }
+          const model = priorityMarkModel(source.value, ladder);
+          if (!model) {
+            continue;
+          }
+          const parent = textNode.parentNode;
+          if (!parent) {
+            continue;
+          }
+          const docNode =
+            textNode.ownerDocument ||
+            (typeof document !== "undefined" ? document : null);
+          if (!docNode) {
+            continue;
+          }
+          const beforeText = value.slice(0, source.fieldStart);
+          const afterText = value.slice(source.fieldEnd);
+          const markEl = buildPriorityMarkElement(docNode, model, {
+            foldSpace: false,
+          });
+          if (!markEl) {
+            continue;
+          }
+          try {
+            if (beforeText) {
+              parent.insertBefore(
+                docNode.createTextNode(beforeText),
+                textNode,
+              );
+            }
+            parent.insertBefore(markEl, textNode);
+            if (afterText) {
+              parent.insertBefore(
+                docNode.createTextNode(afterText),
+                textNode,
+              );
+            }
+            parent.removeChild(textNode);
+          } catch (error) {
+            continue;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Rendered-view marks never throw.
+    }
+  }
+
+  togglePriorityMarks() {
+    try {
+      this.priorityMarksEnabled = !this.priorityMarksEnabled;
+      const enabled = this.priorityMarksEnabled;
+      try {
+        if (
+          typeof document !== "undefined" &&
+          document &&
+          document.body &&
+          document.body.classList
+        ) {
+          if (enabled) {
+            if (typeof document.body.classList.add === "function") {
+              document.body.classList.add("bob-priority-marks");
+            }
+          } else if (typeof document.body.classList.remove === "function") {
+            document.body.classList.remove("bob-priority-marks");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        this.refreshPriorityMarkEditors();
+      } catch (error) {
+        // Editor refresh is best-effort.
+      }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // Tasks re-render is best-effort.
+      }
+      try {
+        new Notice(
+          enabled ? "Priority marks on" : "Priority marks off",
+        );
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.priorityMarksEnabled;
+    }
+  }
+
+  refreshPriorityMarkEditors() {
+    try {
+      const refresh = ensurePriorityMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      for (const leaf of leaves) {
+        try {
+          const cm =
+            leaf && leaf.view && leaf.view.editor
+              ? leaf.view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function" && refresh) {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  // Additive `api.priorityMarks` v1 namespace: `{ version: 1,
+  // model(value), render(host, value, options) }`. Synchronous and
+  // never throwing; `render` appends to `host` and returns the
+  // element, or null for non-Tasks values. The top-level api stays
+  // v3.
+  priorityMarksApi() {
+    try {
+      const plugin = this;
+      return Object.freeze({
+        version: 1,
+        model: (value) => {
+          try {
+            let ladder = null;
+            try {
+              ladder = plugin.priorityLadderSnapshot().ladder;
+            } catch (error) {
+              ladder = null;
+            }
+            return priorityMarkModel(value, ladder);
+          } catch (error) {
+            return null;
+          }
+        },
+        render: (host, value, options) => {
+          try {
+            if (!host || typeof host.appendChild !== "function") {
+              return null;
+            }
+            if (PRIORITY_MARK_VALUES.indexOf(value) === -1) {
+              return null;
+            }
+            const docNode =
+              (host.ownerDocument && host.ownerDocument) ||
+              (typeof document !== "undefined" ? document : null);
+            if (!docNode) {
+              return null;
+            }
+            let ladder = null;
+            try {
+              ladder = plugin.priorityLadderSnapshot().ladder;
+            } catch (error) {
+              ladder = null;
+            }
+            const model = priorityMarkModel(value, ladder);
+            if (!model) {
+              return null;
+            }
+            const settings =
+              options && typeof options === "object" ? options : {};
+            const el = buildPriorityMarkElement(docNode, model, {
+              foldSpace: false,
+              decorative: Boolean(settings.decorative),
+              inheritColor: Boolean(settings.inheritColor),
+            });
+            if (!el) {
+              return null;
+            }
+            host.appendChild(el);
+            return el;
+          } catch (error) {
+            return null;
+          }
+        },
+      });
+    } catch (error) {
+      return Object.freeze({
+        version: 1,
+        model: () => null,
+        render: () => null,
+      });
+    }
+  }
+}
 // ---- src/270-plugin-dependency-model.js ----
 class BobLedgerToolsDependencyModelMixin {
   // --- Dependency chips (bob-cli-3n chips) ------------------------------
@@ -18638,6 +20144,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
+  BobLedgerToolsPriorityMarksMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsTodayLocationMixin,
@@ -20649,6 +22156,13 @@ module.exports.helpers = {
   freshnessShortDate,
   buildFreshnessMarkElement,
   freshnessMarkPosInCode,
+  PRIORITY_MARK_VALUES,
+  priorityMarkSource,
+  priorityMarkSourceInText,
+  coercePriorityLadder,
+  priorityMarkModel,
+  buildPriorityMarkElement,
+  ensurePriorityMarksRefresh,
   parseDependencyLine,
   dependencyChipLineOwnedByTask,
   dependencyReadingOwnText,

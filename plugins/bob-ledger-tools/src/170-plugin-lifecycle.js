@@ -60,6 +60,10 @@ class BobLedgerToolsPlugin extends Plugin {
     // Tasks-memo index lives on the freshness memo itself.
     this.dependencyChipsEnabled = true;
     this.dependencyChipsTimer = null;
+    // Priority marks (bob-cli-4p ledger-marks): session toggle plus
+    // a cached priority-ladder snapshot.
+    this.priorityMarksEnabled = true;
+    this.priorityLadderCache = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -288,6 +292,14 @@ class BobLedgerToolsPlugin extends Plugin {
         renderChip: (host, options = {}) =>
           this.dashboardCollectionsRenderChip(host, options),
       }),
+      // Task priority marks (bob-cli-4p ledger-marks, priorityMarks
+      // namespace v1): display-only signal-bar glyphs for canonical
+      // `[priority:: …]` fields, per the `### Priority marks`
+      // display contract in bob-cli `docs/projects.md`. Additive:
+      // top-level api stays v3. Every member is synchronous and
+      // never throws: guard calls with try/catch as well as
+      // optional chaining.
+      priorityMarks: this.priorityMarksApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -485,6 +497,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupFreshnessStatusBar();
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
+    this.setupPriorityMarks();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
@@ -663,6 +676,20 @@ class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-dep-chips");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    this.priorityLadderCache = null;
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-priority-marks");
       }
     } catch (error) {
       // Body class cleanup is best-effort.

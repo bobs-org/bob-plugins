@@ -275,11 +275,18 @@ test("predicate: reviewOutcomeResolves across tiers and kinds", () => {
   const { reviewOutcomeResolves: resolves } = helpers;
   assert.equal(resolves("next", { kind: "complete" }, DATE), true);
   assert.equal(resolves("pre", { kind: "complete" }, DATE), true);
-  for (const kind of ["lane", "link-today", "move"]) {
+  for (const kind of ["lane", "link-today"]) {
     assert.equal(resolves("next", { kind }, DATE), true, `${kind} lane`);
     assert.equal(resolves("rotten", { kind }, DATE), true, `${kind} rotten`);
     assert.equal(resolves("pre", { kind }, DATE), false, `${kind} pre`);
     assert.equal(resolves("post", { kind }, DATE), false, `${kind} post`);
+  }
+  for (const tier of ["next", "rotten", "pre", "post"]) {
+    assert.equal(
+      resolves(tier, { kind: "move" }, DATE),
+      false,
+      "a move never resolves a landing",
+    );
   }
   assert.equal(resolves("next", null, DATE), false);
   assert.equal(resolves("next", { kind: "bogus" }, DATE), false);
@@ -402,6 +409,131 @@ test("predicate: reviewOutcomeResolves across tiers and kinds", () => {
     true,
     "paren scheduled fields parse",
   );
+});
+
+test("findReviewResumeIndex identifies rows by path and text", () => {
+  const { findReviewResumeIndex } = helpers;
+  const rows = nextQueue(["One", "Two"]);
+  const twoRef = { path: "walk.md", line: 2, text: markFor("next", "Two") };
+  assert.equal(findReviewResumeIndex(rows, twoRef), 1, "a unique hit");
+
+  const dupes = [
+    laneEntry({ tier: "next", path: "walk.md", line: 1, text: "Same", rank: 1, tierRank: 1, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 5, text: "Same", rank: 2, tierRank: 2, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 9, text: "Same", rank: 3, tierRank: 3, tierTotal: 3 }),
+  ];
+  assert.equal(
+    findReviewResumeIndex(dupes, { path: "walk.md", line: 6, text: markFor("next", "Same") }),
+    1,
+    "duplicate texts pick the nearest line",
+  );
+  assert.equal(
+    findReviewResumeIndex(dupes, { path: "walk.md", line: 3, text: markFor("next", "Same") }),
+    0,
+    "ties pick the lower index",
+  );
+
+  const cross = [
+    laneEntry({ tier: "next", path: "a.md", line: 1, text: "One", rank: 1, tierRank: 1, tierTotal: 2 }),
+    laneEntry({ tier: "next", path: "b.md", line: 1, text: "One", rank: 2, tierRank: 2, tierTotal: 2 }),
+  ];
+  assert.equal(
+    findReviewResumeIndex(cross, { path: "b.md", line: 1, text: markFor("next", "One") }),
+    1,
+    "other paths are ignored",
+  );
+
+  assert.equal(findReviewResumeIndex(rows, { path: "walk.md", line: 1, text: "- [ ] missing" }), -1, "a miss");
+  assert.equal(findReviewResumeIndex(null, null), -1, "garbage input");
+  assert.equal(findReviewResumeIndex(rows, null), -1, "a null ref");
+  assert.equal(findReviewResumeIndex(rows, { path: "", line: 1, text: "" }), -1, "an empty ref");
+});
+
+test("buildReviewMoveAnchor parks text-identified resume neighbours", () => {
+  const { buildReviewMoveAnchor } = helpers;
+  const before = nextQueue(["One", "Two", "Three"]);
+  const keyOf = (text) => before.find((row) => row.text === text).key;
+
+  const first = buildReviewMoveAnchor(before, [keyOf("One")], 1, DATE);
+  assert.ok(first, "an anchor is built");
+  assert.equal(first.resumeNext.text, markFor("next", "Two"), "resumeNext skips to Two");
+  assert.equal(first.resumePrev, null, "no predecessor at the head");
+
+  const middle = buildReviewMoveAnchor(before, [keyOf("Two")], 2, DATE);
+  assert.equal(middle.resumeNext.text, markFor("next", "Three"));
+  assert.equal(middle.resumePrev.text, markFor("next", "One"));
+
+  const last = buildReviewMoveAnchor(before, [keyOf("Three")], 3, DATE);
+  assert.equal(last.resumeNext, null, "no successor at the tail");
+  assert.equal(last.resumePrev.text, markFor("next", "Two"));
+
+  assert.equal(buildReviewMoveAnchor(before, [], 1, DATE), null, "null when nothing is handled");
+});
+
+test("planReviewJump with a move anchor resumes at the walk neighbour", () => {
+  const { buildReviewMoveAnchor, planReviewJump } = helpers;
+  const before = nextQueue(["One", "Two", "Three"]);
+  const keyOf = (text) => before.find((row) => row.text === text).key;
+  const anchor = buildReviewMoveAnchor(before, [keyOf("One")], 1, DATE);
+  assert.ok(anchor && anchor.resumeNext, "the move anchor carries a resume");
+
+  const refreshed = [
+    { ...before[1], line: 1, key: "walk.md:1" },
+    { ...before[2], line: 2, key: "walk.md:2" },
+  ];
+  let plan = planReviewJump(refreshed, { direction: 1, cursor: null, anchor, todayText: DATE });
+  assert.equal(plan.kind, "jump", "a refreshed-cache shift jumps");
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "Two"), "to the successor");
+
+  plan = planReviewJump(before.map((row) => ({ ...row })), { direction: 1, cursor: null, anchor, todayText: DATE });
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "Two"), "a stale cache goes to the successor");
+
+  const movedMiddle = buildReviewMoveAnchor(before, [keyOf("Two")], 2, DATE);
+  const afterMiddle = [
+    { ...before[0], line: 1, key: "walk.md:1" },
+    { ...before[2], line: 2, key: "walk.md:3" },
+  ];
+  plan = planReviewJump(afterMiddle, { direction: -1, cursor: null, anchor: movedMiddle, todayText: DATE });
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "One"), "direction -1 goes to the predecessor");
+
+  const other = laneEntry({ tier: "next", path: "Other.md", line: 1, text: "Else", rank: 9, tierRank: 9, tierTotal: 9 });
+  const withOther = [{ ...other }, ...refreshed.map((row) => ({ ...row }))];
+  plan = planReviewJump(withOther, {
+    direction: 1,
+    cursor: { path: "Other.md", line: 1, text: "a stale line" },
+    anchor,
+    todayText: DATE,
+  });
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "Two"), "a line-fallback cursor hit is ignored");
+
+  const liveThree = [...refreshed.map((row) => ({ ...row })), { ...other }];
+  const threeRow = liveThree.find((row) => row.text === "Three");
+  const textHit = planReviewJump(liveThree, {
+    direction: 1,
+    cursor: { path: threeRow.path, line: threeRow.line, text: threeRow.originalMarkdown },
+    anchor: buildReviewMoveAnchor(before, [keyOf("One")], 1, DATE),
+    todayText: DATE,
+  });
+  assert.equal(textHit.entry.originalMarkdown, other.originalMarkdown, "a real text cursor hit still wins");
+
+  plan = planReviewJump(refreshed, {
+    direction: 1,
+    cursor: { path: "walk.md", line: 1, text: markFor("next", "Two") },
+    anchor,
+    todayText: DATE,
+  });
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "Two"), "a cursor on the resume row lands on it");
+
+  const gone = [{ ...before[2], line: 1, key: "walk.md:3" }];
+  plan = planReviewJump(gone, { direction: 1, cursor: null, anchor, todayText: DATE });
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "Three"), "a missing resume row falls back");
+
+  const legacy = helpers.buildReviewAnchor(before, [keyOf("One")], 1, DATE);
+  assert.ok(legacy && !("resumeNext" in legacy), "the legacy anchor has no resume fields");
+  plan = planReviewJump(before.map((row) => ({ ...row })), { direction: 1, cursor: null, anchor: legacy, todayText: DATE });
+  assert.equal(plan.entry.originalMarkdown, markFor("next", "Two"), "anchors without resume fields plan as before");
+  const endpoint = planReviewJump(refreshed, { direction: 1, cursor: null, anchor, todayText: DATE, endpoint: "last" });
+  assert.equal(endpoint.entry.originalMarkdown, markFor("next", "Three"), "endpoint jumps ignore the resume");
 });
 
 test("capture: null off a landing", async () => {

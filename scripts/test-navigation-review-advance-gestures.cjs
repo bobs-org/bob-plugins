@@ -1,5 +1,5 @@
-// nav-gestures review auto-advance: Alt+N commit/release, Task Card
-// committing stages, and Ctrl+Shift+M move advance from a landing
+// nav-gestures review auto-advance: Alt+N and Task Card commits advance
+// from a landing; Ctrl+Shift+M never advances and parks the walk
 // (docs/freshness.md §6).
 const assert = require("node:assert/strict");
 const Module = require("node:module");
@@ -723,7 +723,7 @@ function openMovePicker(fixture) {
   return picker;
 }
 
-test("Ctrl+Shift+M from a landing advances instead of focusing the destination", async () => {
+test("Ctrl+Shift+M from a landing follows the task and never advances", async () => {
   const fixture = makePlugin({
     rows: nextQueue(["One", "Two"], "Source.md"),
     activePath: "Source.md",
@@ -741,12 +741,17 @@ test("Ctrl+Shift+M from a landing advances instead of focusing the destination",
   await picker.openItemAtIndex(0);
   await flushAll(fixture.plugin);
 
-  assert.equal(focusCalls.length, 0, "the destination is not focused");
+  assert.equal(focusCalls.length, 1, "the destination is focused");
+  assert.match(String(focusCalls[0][0] && focusCalls[0][0].path), /Area\.md/, "for Area.md");
   assert.doesNotMatch(fixture.editor.content, /#task One/);
-  assert.equal(fixture.plugin.reviewLanding.key, "Source.md:2");
-  assert.equal(notices.length, 1, `one composed toast, saw: ${JSON.stringify(notices)}`);
+  assert.equal(fixture.plugin.reviewLanding, null);
+  assert.equal(fixture.plugin.reviewWalkBusy(), false);
+  assert.equal(fixture.plugin.reviewAnchor.resumeNext.text, "- [*] #task Two");
+  assert.equal(fixture.plugin.reviewAnchor.resumePrev, null);
+  assert.equal(fixture.plugin.reviewAnsweredKeys.keys.size, 0);
+  assert.equal(notices.length, 1, `the plain notice only, saw: ${JSON.stringify(notices)}`);
   assert.match(notices[0], /Moved 1 task to Area/);
-  assert.match(notices[0], /Review \d+\/\d+/);
+  assert.doesNotMatch(notices[0], /Review \d+\/\d+/);
 });
 
 test("Ctrl+Shift+M from a checklist landing keeps the destination focus", async () => {
@@ -760,7 +765,6 @@ test("Ctrl+Shift+M from a checklist landing keeps the destination focus", async 
     areaPaths: ["Area.md"],
   });
   await land(fixture, "first");
-  const landedKey = fixture.plugin.reviewLanding.key;
   const focusCalls = [];
   fixture.plugin.focusTaskMoveDestination = async (...args) => {
     focusCalls.push(args);
@@ -772,13 +776,195 @@ test("Ctrl+Shift+M from a checklist landing keeps the destination focus", async 
   await flushAll(fixture.plugin);
 
   assert.equal(focusCalls.length, 1, "the destination is focused");
-  assert.equal(fixture.plugin.reviewLanding.key, landedKey);
+  assert.equal(fixture.plugin.reviewLanding, null, "the landing is consumed");
   assert.equal(notices.length, 1, `the plain notice only, saw: ${JSON.stringify(notices)}`);
   assert.match(notices[0], /Moved 1 task to Area/);
   assert.doesNotMatch(notices[0], /Review \d+\/\d+/);
 });
 
-test("dismissing the move picker frees the lock", async () => {
+test("]s after a landed move resumes at the successor despite the line shift", async () => {
+  const twoMarkdown = "- [*] #task Two";
+  // Refreshed cache: Two shifted to line 1 with a colliding handled key.
+  {
+    const fixture = makePlugin({
+      rows: nextQueue(["One", "Two", "Three"], "Source.md"),
+      activePath: "Source.md",
+      areaPaths: ["Area.md"],
+    });
+    await land(fixture, "first");
+    fixture.plugin.focusTaskMoveDestination = async () => true;
+    const picker = openMovePicker(fixture);
+    await picker.openItemAtIndex(0);
+    await flushAll(fixture.plugin);
+    const two = fixture.queueState.find((row) => row.text === "Two");
+    const three = fixture.queueState.find((row) => row.text === "Three");
+    fixture.queueState.splice(
+      0,
+      fixture.queueState.length,
+      { ...two, line: 1, key: "Source.md:1", rank: 1, tierRank: 1, tierTotal: 2 },
+      { ...three, line: 2, key: "Source.md:2", rank: 2, tierRank: 2, tierTotal: 2 },
+    );
+    await fixture.plugin.app.workspace
+      .getLeaf()
+      .openFile(fixture.plugin.app.vault.getAbstractFileByPath("Area.md"));
+    clearNotices();
+    assert.equal(await fixture.plugin.jumpToDueTask(1), true);
+    assert.equal(fixture.plugin.reviewLanding.text, twoMarkdown, "refreshed lands on Two, not Three");
+  }
+  // Stale cache: the queue still lists the moved row.
+  {
+    const fixture = makePlugin({
+      rows: nextQueue(["One", "Two", "Three"], "Source.md"),
+      activePath: "Source.md",
+      areaPaths: ["Area.md"],
+    });
+    await land(fixture, "first");
+    fixture.plugin.focusTaskMoveDestination = async () => true;
+    const picker = openMovePicker(fixture);
+    await picker.openItemAtIndex(0);
+    await flushAll(fixture.plugin);
+    await fixture.plugin.app.workspace
+      .getLeaf()
+      .openFile(fixture.plugin.app.vault.getAbstractFileByPath("Area.md"));
+    clearNotices();
+    assert.equal(await fixture.plugin.jumpToDueTask(1), true);
+    assert.equal(fixture.plugin.reviewLanding.text, twoMarkdown, "stale lands on Two");
+  }
+  // <C-o> seam: the cursor sits on the resume row in the source note.
+  {
+    const fixture = makePlugin({
+      rows: nextQueue(["One", "Two", "Three"], "Source.md"),
+      activePath: "Source.md",
+      areaPaths: ["Area.md"],
+    });
+    await land(fixture, "first");
+    fixture.plugin.focusTaskMoveDestination = async () => true;
+    const picker = openMovePicker(fixture);
+    await picker.openItemAtIndex(0);
+    await flushAll(fixture.plugin);
+    const two = fixture.queueState.find((row) => row.text === "Two");
+    const three = fixture.queueState.find((row) => row.text === "Three");
+    fixture.queueState.splice(
+      0,
+      fixture.queueState.length,
+      { ...two, line: 1, key: "Source.md:1", rank: 1, tierRank: 1, tierTotal: 2 },
+      { ...three, line: 2, key: "Source.md:2", rank: 2, tierRank: 2, tierTotal: 2 },
+    );
+    fixture.editors.get("Source.md").setCursor(0, 0);
+    clearNotices();
+    assert.equal(await fixture.plugin.jumpToDueTask(1), true);
+    assert.equal(fixture.plugin.reviewLanding.text, twoMarkdown, "the seam lands on Two");
+  }
+});
+
+test("[s after a landed move resumes at the predecessor", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two", "Three"], "Source.md"),
+    activePath: "Source.md",
+    areaPaths: ["Area.md"],
+  });
+  await land(fixture, "first");
+  assert.equal(await fixture.plugin.jumpToDueTask(1), true, "lands on the middle row");
+  assert.equal(fixture.plugin.reviewLanding.text, "- [*] #task Two");
+  clearNotices();
+  fixture.plugin.focusTaskMoveDestination = async () => true;
+  const picker = openMovePicker(fixture);
+  await picker.openItemAtIndex(0);
+  await flushAll(fixture.plugin);
+  const one = fixture.queueState.find((row) => row.text === "One");
+  const three = fixture.queueState.find((row) => row.text === "Three");
+  fixture.queueState.splice(
+    0,
+    fixture.queueState.length,
+    { ...one, line: 1, key: "Source.md:1", rank: 1, tierRank: 1, tierTotal: 2 },
+    { ...three, line: 2, key: "Source.md:2", rank: 2, tierRank: 2, tierTotal: 2 },
+  );
+  await fixture.plugin.app.workspace
+    .getLeaf()
+    .openFile(fixture.plugin.app.vault.getAbstractFileByPath("Area.md"));
+  clearNotices();
+  assert.equal(await fixture.plugin.jumpToDueTask(-1), true);
+  assert.equal(fixture.plugin.reviewLanding.text, "- [*] #task One");
+});
+
+test("a counted move from a landing resumes past every moved target", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two", "Three"], "Source.md"),
+    activePath: "Source.md",
+    areaPaths: ["Area.md"],
+  });
+  await land(fixture, "first");
+  fixture.plugin.focusTaskMoveDestination = async () => true;
+  assert.equal(
+    fixture.plugin.openTaskMoveDestinationPicker(fixture.editor, fixture.view(), {
+      additionalTaskCount: 1,
+      countExplicit: true,
+    }),
+    true,
+  );
+  const picker = fixture.plugin.activeTaskMoveDestinationPicker;
+  assert.ok(picker, "the counted move picker opened");
+  await picker.openItemAtIndex(0);
+  await flushAll(fixture.plugin);
+  assert.equal(fixture.plugin.reviewAnchor.resumeNext.text, "- [*] #task Three");
+  const three = fixture.queueState.find((row) => row.text === "Three");
+  fixture.queueState.splice(0, fixture.queueState.length, {
+    ...three,
+    line: 1,
+    key: "Source.md:1",
+    rank: 1,
+    tierRank: 1,
+    tierTotal: 1,
+  });
+  await fixture.plugin.app.workspace
+    .getLeaf()
+    .openFile(fixture.plugin.app.vault.getAbstractFileByPath("Area.md"));
+  clearNotices();
+  assert.equal(await fixture.plugin.jumpToDueTask(1), true);
+  assert.equal(fixture.plugin.reviewLanding.text, "- [*] #task Three");
+});
+
+test("a stale landing is not parked", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two"], "Source.md"),
+    activePath: "Source.md",
+    areaPaths: ["Area.md"],
+  });
+  await land(fixture, "first");
+  const focusCalls = [];
+  fixture.plugin.focusTaskMoveDestination = async (...args) => {
+    focusCalls.push(args);
+    return true;
+  };
+  const picker = openMovePicker(fixture);
+  fixture.plugin.reviewLanding = null;
+  await picker.openItemAtIndex(0);
+  await flushAll(fixture.plugin);
+
+  assert.ok(!fixture.plugin.reviewAnchor || !fixture.plugin.reviewAnchor.resumeNext, "the anchor has no resumeNext");
+  assert.equal(focusCalls.length, 1, "the destination is still focused");
+  assert.equal(notices.length, 1, `the plain notice only, saw: ${JSON.stringify(notices)}`);
+  assert.match(notices[0], /Moved 1 task to Area/);
+  assert.equal(fixture.plugin.reviewWalkBusy(), false, "the lock is free");
+});
+
+test("Ctrl+Shift+M while the gesture lock is held is swallowed", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two"], "Source.md"),
+    activePath: "Source.md",
+    areaPaths: ["Area.md"],
+  });
+  await land(fixture, "first");
+  const content = fixture.editor.content;
+  assert.ok(fixture.plugin.captureReviewGesture(fixture.editor), "capture takes the lock");
+
+  assert.equal(fixture.plugin.openTaskMoveDestinationPicker(fixture.editor), true);
+  assert.ok(fixture.plugin.activeTaskMoveDestinationPicker == null, "no picker opens");
+  assert.equal(fixture.editor.content, content);
+  assert.deepEqual(notices, []);
+});
+
+test("dismissing the move picker stays and frees the lock", async () => {
   const fixture = makePlugin({
     rows: nextQueue(["One", "Two"], "Source.md"),
     activePath: "Source.md",
@@ -815,6 +1001,7 @@ test("Ctrl+Shift+M off a landing behaves exactly as today", async () => {
 
   assert.equal(focusCalls.length, 1);
   assert.equal(fixture.plugin.reviewLanding, null);
+  assert.equal(fixture.plugin.reviewAnchor, null, "the anchor is untouched");
   assert.equal(notices.length, 1);
   assert.match(notices[0], /Moved 1 task to Area/);
 });

@@ -718,10 +718,11 @@ class BobNavigationHotkeysNotesMoveMixin {
       typeof editor.getScrollInfo === "function"
         ? editor.getScrollInfo()
         : null;
-    // Review-walk auto-advance (nav-gestures): capture when the frozen
-    // session is built. While the gesture lock is held the key is swallowed
-    // with no write. The Pomodoro bullet and entry contexts use different
-    // pickers and never match a landing, so only this task path captures.
+    // Review-walk (nav-gestures): a landed move captures so the commit can
+    // consume the landing and park the walk; a move never advances. While
+    // the gesture lock is held the key is swallowed with no write. The
+    // Pomodoro bullet and entry contexts use different pickers and never
+    // match a landing, so only this task path captures.
     let reviewOrigin = null;
     try {
       if (typeof this.captureReviewGesture === "function") {

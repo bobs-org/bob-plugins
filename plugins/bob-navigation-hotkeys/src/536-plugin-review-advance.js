@@ -82,7 +82,7 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
     if (kind === "complete") {
       return true;
     }
-    if (kind === "lane" || kind === "link-today" || kind === "move") {
+    if (kind === "lane" || kind === "link-today") {
       return !checklist;
     }
     if (kind !== "card") {

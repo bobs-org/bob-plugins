@@ -16739,9 +16739,9 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
     ) {
       this.plugin.activeTaskMoveDestinationPicker = null;
     }
-    // Review-walk auto-advance (nav-gestures): the picker uses
-    // `closeBeforeOpenItem`, so this runs before the commit. Dismissing the
-    // picker settles without advancing; a started commit settles itself.
+    // Review-walk (nav-gestures): the picker uses `closeBeforeOpenItem`,
+    // so this runs before the commit. Dismissing settles without advancing;
+    // a started commit parks or settles itself.
     const plugin = this.plugin;
     const origin = this.session ? this.session.reviewOrigin : null;
     if (plugin && origin) {
@@ -34710,6 +34710,24 @@ function planReviewJump(queue, options = {}) {
     options.cursor && typeof options.cursor === "object"
       ? options.cursor
       : null;
+  const resume = planReviewResume(list, anchor, cursor, direction);
+  const resumeRef = resume && resume.resumeRef ? resume.resumeRef : null;
+  const resumeIndex = resume && Number.isInteger(resume.resumeIndex) ? resume.resumeIndex : -1;
+  const resumeJump = (at) =>
+    finish(
+      {
+        kind: "jump",
+        entry: list[at],
+        rank: at + 1,
+        total: list.length,
+        wrapped: false,
+        originTier: anchor && typeof anchor.tier === "string" ? anchor.tier : null,
+      },
+      list,
+    );
+  if (resumeRef && resumeIndex >= 0 && resume && resume.cursorOnResume === true) {
+    return resumeJump(resumeIndex);
+  }
   // The cursor on a just-handled (stamped, released, or rolled) task is
   // not a live queue entry, even when the lagging Tasks cache still
   // lists it: handled keys never match here, so the anchor below
@@ -34718,26 +34736,36 @@ function planReviewJump(queue, options = {}) {
   // cannot make `]s` skip the next chore.
   const cursorIndex = findReviewCursorIndex(list, cursor, handledKeys);
   if (cursorIndex >= 0) {
-    let index = cursorIndex + direction;
-    let wrapped = false;
-    if (index < 0) {
-      index = list.length - 1;
-      wrapped = true;
-    } else if (index >= list.length) {
-      index = 0;
-      wrapped = true;
+    if (
+      !resumeRef ||
+      (cursor &&
+        list[cursorIndex] &&
+        list[cursorIndex].originalMarkdown === cursor.text)
+    ) {
+      let index = cursorIndex + direction;
+      let wrapped = false;
+      if (index < 0) {
+        index = list.length - 1;
+        wrapped = true;
+      } else if (index >= list.length) {
+        index = 0;
+        wrapped = true;
+      }
+      return finish(
+        {
+          kind: "jump",
+          entry: list[index],
+          rank: index + 1,
+          total: list.length,
+          wrapped,
+          originTier: reviewEntryMachineTier(list[cursorIndex]) || null,
+        },
+        list,
+      );
     }
-    return finish(
-      {
-        kind: "jump",
-        entry: list[index],
-        rank: index + 1,
-        total: list.length,
-        wrapped,
-        originTier: reviewEntryMachineTier(list[cursorIndex]) || null,
-      },
-      list,
-    );
+  }
+  if (resumeRef && resumeIndex >= 0) {
+    return resumeJump(resumeIndex);
   }
   if (anchor && (handledKeys.size > 0 || hasAnchorShape)) {
     const remaining = list.filter(
@@ -39904,7 +39932,7 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
     if (kind === "complete") {
       return true;
     }
-    if (kind === "lane" || kind === "link-today" || kind === "move") {
+    if (kind === "lane" || kind === "link-today") {
       return !checklist;
     }
     if (kind !== "card") {
@@ -40812,6 +40840,281 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     }
     new Notice(notice);
     return true;
+  }
+}
+// ---- src/537-plugin-review-move-park.js ----
+// A Ctrl+Shift+M move never advances the walk. A move that started on a
+// landing consumes the landing and parks the walk on a text-identified
+// resume, so the next `]s`/`[s` continues at the moved row's walk neighbour
+// despite the line shift.
+function reviewResumeRef(entry) {
+  try {
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
+    const path = typeof entry.path === "string" ? entry.path : "";
+    const text =
+      typeof entry.originalMarkdown === "string" ? entry.originalMarkdown : "";
+    if (!path || !text) {
+      return null;
+    }
+    const line = Number.isInteger(entry.line) ? entry.line : null;
+    return Object.freeze({
+      path,
+      line,
+      text,
+      key: reviewQueueEntryKey(entry),
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function findReviewResumeIndex(list, ref) {
+  try {
+    const rows = Array.isArray(list) ? list : null;
+    if (!rows || !ref || typeof ref !== "object") {
+      return -1;
+    }
+    const refPath = typeof ref.path === "string" ? ref.path : "";
+    const refText = typeof ref.text === "string" ? ref.text : "";
+    if (!refPath || !refText) {
+      return -1;
+    }
+    const refLine = Number.isInteger(ref.line) ? ref.line : null;
+    const hits = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const entry = rows[index];
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      if (String(entry.path || "") !== refPath) {
+        continue;
+      }
+      if (String(entry.originalMarkdown || "") !== refText) {
+        continue;
+      }
+      hits.push({
+        index,
+        line: Number.isInteger(entry.line) ? entry.line : null,
+      });
+    }
+    if (hits.length === 0) {
+      return -1;
+    }
+    if (hits.length === 1) {
+      return hits[0].index;
+    }
+    if (refLine === null) {
+      return hits[0].index;
+    }
+    let nearest = hits[0];
+    let nearestDist =
+      nearest.line === null ? Number.MAX_SAFE_INTEGER : Math.abs(nearest.line - refLine);
+    for (const hit of hits.slice(1)) {
+      const dist =
+        hit.line === null ? Number.MAX_SAFE_INTEGER : Math.abs(hit.line - refLine);
+      if (dist < nearestDist || (dist === nearestDist && hit.index < nearest.index)) {
+        nearest = hit;
+        nearestDist = dist;
+      }
+    }
+    return nearest.index;
+  } catch (error) {
+    return -1;
+  }
+}
+
+function buildReviewMoveAnchor(queueBefore, handledKeys, fallbackRank, day) {
+  try {
+    const anchor = buildReviewAnchor(
+      queueBefore,
+      handledKeys,
+      fallbackRank,
+      day,
+    );
+    if (!anchor || typeof anchor !== "object") {
+      return null;
+    }
+    const list = Array.isArray(queueBefore) ? queueBefore : [];
+    const keyOf = (entry) => {
+      try {
+        return reviewQueueEntryKey(entry);
+      } catch (error) {
+        return "";
+      }
+    };
+    let resumeNext = null;
+    try {
+      const afterKeys = Array.isArray(anchor.afterKeys) ? anchor.afterKeys : [];
+      if (afterKeys.length > 0) {
+        const found = list.find((entry) => keyOf(entry) === afterKeys[0]);
+        resumeNext = found ? reviewResumeRef(found) : null;
+      }
+    } catch (error) {
+      resumeNext = null;
+    }
+    let resumePrev = null;
+    try {
+      const beforeKeys = Array.isArray(anchor.beforeKeys) ? anchor.beforeKeys : [];
+      if (beforeKeys.length > 0) {
+        const found = list.find(
+          (entry) => keyOf(entry) === beforeKeys[beforeKeys.length - 1],
+        );
+        resumePrev = found ? reviewResumeRef(found) : null;
+      }
+    } catch (error) {
+      resumePrev = null;
+    }
+    return Object.freeze({
+      ...anchor,
+      keys: anchor.keys,
+      afterKeys: anchor.afterKeys,
+      beforeKeys: anchor.beforeKeys,
+      resumeNext,
+      resumePrev,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function planReviewResume(list, anchor, cursor, direction) {
+  try {
+    const rows = Array.isArray(list) ? list : [];
+    if (!anchor || typeof anchor !== "object") {
+      return Object.freeze({
+        resumeRef: null,
+        resumeIndex: -1,
+        cursorOnResume: false,
+        requireTextHit: false,
+      });
+    }
+    const rawRef = direction < 0 ? anchor.resumePrev : anchor.resumeNext;
+    const resumeRef =
+      rawRef && typeof rawRef === "object" ? rawRef : null;
+    if (!resumeRef) {
+      return Object.freeze({
+        resumeRef: null,
+        resumeIndex: -1,
+        cursorOnResume: false,
+        requireTextHit: false,
+      });
+    }
+    const resumeIndex = findReviewResumeIndex(rows, resumeRef);
+    let cursorOnResume = false;
+    try {
+      if (
+        resumeIndex >= 0 &&
+        cursor &&
+        typeof cursor === "object" &&
+        String(cursor.path || "") === String(resumeRef.path || "") &&
+        String(cursor.text || "") === String(resumeRef.text || "")
+      ) {
+        cursorOnResume = true;
+      }
+    } catch (error) {
+      cursorOnResume = false;
+    }
+    return Object.freeze({
+      resumeRef,
+      resumeIndex,
+      cursorOnResume,
+      requireTextHit: true,
+    });
+  } catch (error) {
+    return Object.freeze({
+      resumeRef: null,
+      resumeIndex: -1,
+      cursorOnResume: false,
+      requireTextHit: false,
+    });
+  }
+}
+
+class BobNavigationHotkeysReviewMoveMixin {
+  parkReviewWalkAfterMove(origin, handledRefs) {
+    try {
+      const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
+      const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
+      let todayText = "";
+      try {
+        todayText = this.laneReleaseDateText({});
+      } catch (error) {
+        todayText = "";
+      }
+      const stale =
+        !origin ||
+        typeof origin !== "object" ||
+        origin.seq !== seq ||
+        origin.epoch !== epoch ||
+        !this.reviewLanding ||
+        this.reviewLanding.key !== origin.key ||
+        todayText !== origin.day;
+      if (stale) {
+        try {
+          if (origin && typeof origin === "object" && origin.seq === seq) {
+            this.settleReviewWalkLock(false);
+          }
+        } catch (error) {
+          // Best effort only.
+        }
+        return false;
+      }
+      this.reviewLanding = null;
+      const refs = Array.isArray(handledRefs) ? handledRefs : [];
+      let matchedKeys = [];
+      try {
+        const matched = matchFreshStampRefs(origin.queueBefore, refs);
+        matchedKeys = Array.isArray(matched.keys) ? matched.keys : [];
+      } catch (error) {
+        matchedKeys = [];
+      }
+      const handled = new Set(
+        [origin.key]
+          .concat(Array.isArray(origin.priorKeys) ? origin.priorKeys : [])
+          .concat(matchedKeys),
+      );
+      try {
+        const stored = this.reviewAnsweredKeys;
+        if (
+          stored &&
+          typeof stored === "object" &&
+          stored.day === todayText &&
+          stored.keys instanceof Set
+        ) {
+          for (const key of stored.keys) {
+            handled.add(key);
+          }
+        }
+      } catch (error) {
+        // The accumulator is advisory; the handled set above still walks.
+      }
+      try {
+        const before = Array.isArray(origin.queueBefore)
+          ? origin.queueBefore
+          : [];
+        const anchor = buildReviewMoveAnchor(
+          before,
+          Array.from(handled),
+          origin.rank,
+          origin.day,
+        );
+        if (anchor !== null) {
+          this.reviewAnchor = anchor;
+        }
+      } catch (error) {
+        // Keep the previous anchor on a planning failure.
+      }
+      try {
+        this.settleReviewWalkLock(false);
+      } catch (error) {
+        // Best effort only.
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 }
 // ---- src/540-plugin-decay-picker-and-cancel.js ----
@@ -50270,10 +50573,11 @@ class BobNavigationHotkeysNotesMoveMixin {
       typeof editor.getScrollInfo === "function"
         ? editor.getScrollInfo()
         : null;
-    // Review-walk auto-advance (nav-gestures): capture when the frozen
-    // session is built. While the gesture lock is held the key is swallowed
-    // with no write. The Pomodoro bullet and entry contexts use different
-    // pickers and never match a landing, so only this task path captures.
+    // Review-walk (nav-gestures): a landed move captures so the commit can
+    // consume the landing and park the walk; a move never advances. While
+    // the gesture lock is held the key is swallowed with no write. The
+    // Pomodoro bullet and entry contexts use different pickers and never
+    // match a landing, so only this task path captures.
     let reviewOrigin = null;
     try {
       if (typeof this.captureReviewGesture === "function") {
@@ -50834,11 +51138,11 @@ class BobNavigationHotkeysMoveCommitMixin {
     return true;
   }
 
-  // Review-walk auto-advance (nav-gestures): the origin rides in on
-  // `session.reviewOrigin` and is settled exactly once — `null` on every
-  // refusal or failure, and the move outcome on a resolving success.
-  // `taskMoveReviewCommitStarted` is set synchronously so the picker's
-  // `onClose` (which ran before this commit) knows not to settle.
+  // Review-walk (nav-gestures): the origin rides in on
+  // `session.reviewOrigin` and is settled exactly once — parked on success,
+  // settled without advancing on every refusal or failure. A move never
+  // advances. `taskMoveReviewCommitStarted` is set synchronously so the
+  // picker's `onClose` (which ran before this commit) knows not to settle.
   async commitTaskMoveSession(session, destinationEntry) {
     const reviewOrigin =
       session && session.reviewOrigin ? session.reviewOrigin : null;
@@ -50855,10 +51159,21 @@ class BobNavigationHotkeysMoveCommitMixin {
         // `continueReviewWalkAfter` never throws; best effort only.
       }
     };
+    const parkMoveReview = (handledRefs) => {
+      if (reviewSettled || !reviewOrigin) {
+        return;
+      }
+      reviewSettled = true;
+      try {
+        this.parkReviewWalkAfterMove(reviewOrigin, handledRefs);
+      } catch (error) {
+        // `parkReviewWalkAfterMove` never throws; best effort only.
+      }
+    };
     try {
       return await this.commitTaskMoveSessionWrite(session, destinationEntry, {
         reviewOrigin,
-        reviewSettle: settleMoveReview,
+        reviewPark: parkMoveReview,
       });
     } finally {
       settleMoveReview(null);
@@ -50866,9 +51181,9 @@ class BobNavigationHotkeysMoveCommitMixin {
   }
 
   async commitTaskMoveSessionWrite(session, destinationEntry, moveOptions = {}) {
-    const settleMoveReview =
-      moveOptions && typeof moveOptions.reviewSettle === "function"
-        ? moveOptions.reviewSettle
+    const reviewPark =
+      moveOptions && typeof moveOptions.reviewPark === "function"
+        ? moveOptions.reviewPark
         : null;
     const reviewOrigin =
       moveOptions && moveOptions.reviewOrigin ? moveOptions.reviewOrigin : null;
@@ -51020,51 +51335,55 @@ class BobNavigationHotkeysMoveCommitMixin {
       return false;
     }
 
-    // Review-walk auto-advance (nav-gestures): from a lane/other landing
-    // the move advances instead of focusing the destination, and the cursor
-    // stays in the source note. Otherwise keep today's behavior and settle
-    // without advancing.
-    const reviewTier =
-      reviewOrigin && typeof reviewOrigin.tier === "string"
-        ? reviewOrigin.tier
-        : "";
-    const reviewAdvances =
-      Boolean(settleMoveReview) &&
-      Boolean(reviewOrigin) &&
-      reviewTier !== "pre" &&
-      reviewTier !== "post";
-    if (!reviewAdvances) {
-      let vimJumpContext = null;
-      try {
-        vimJumpContext = this.createVimJumpContextWithOrigin({
-          path: session.sourcePath,
-          line: finalCursor.line,
-          ch: finalCursor.ch,
-        });
-      } catch (error) {
-        vimJumpContext = null;
-      }
-      try {
-        if (vimJumpContext) {
-          await this.focusTaskMoveDestination(
-            destinationFile,
-            {
-              line: plan.destinationLine,
-              text: plan.destinationAnchorText,
-              blockId: plan.destinationBlockId,
-            },
-            vimJumpContext,
-          );
-        } else {
-          await this.focusTaskMoveDestination(destinationFile, {
+    // Review-walk (nav-gestures): a move never advances. Park the walk
+    // before focusing, because the destination's `file-open` runs
+    // `trackOpenedFile`, which would clear the landing and make the park
+    // read stale. Then always focus the destination and show the plain
+    // move notice.
+    if (reviewOrigin && reviewPark) {
+      const sourceLines = String(session.sourceContent || "").split(/\r?\n/);
+      reviewPark(
+        (session.discovery.targets || [])
+          .filter((target) => target && Number.isInteger(target.line))
+          .map((target) =>
+            Object.freeze({
+              path: session.sourcePath,
+              line: target.line,
+              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
+            }),
+          ),
+      );
+    }
+    let vimJumpContext = null;
+    try {
+      vimJumpContext = this.createVimJumpContextWithOrigin({
+        path: session.sourcePath,
+        line: finalCursor.line,
+        ch: finalCursor.ch,
+      });
+    } catch (error) {
+      vimJumpContext = null;
+    }
+    try {
+      if (vimJumpContext) {
+        await this.focusTaskMoveDestination(
+          destinationFile,
+          {
             line: plan.destinationLine,
             text: plan.destinationAnchorText,
             blockId: plan.destinationBlockId,
-          });
-        }
-      } catch (error) {
-        // Destination navigation and history are best-effort after commit.
+          },
+          vimJumpContext,
+        );
+      } else {
+        await this.focusTaskMoveDestination(destinationFile, {
+          line: plan.destinationLine,
+          text: plan.destinationAnchorText,
+          blockId: plan.destinationBlockId,
+        });
       }
+    } catch (error) {
+      // Destination navigation and history are best-effort after commit.
     }
     const count = session.discovery.actualCount;
     const destinationName =
@@ -51075,23 +51394,6 @@ class BobNavigationHotkeysMoveCommitMixin {
       : "";
     const moveNoticeText =
       `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}`;
-    if (reviewAdvances) {
-      const sourceLines = String(session.sourceContent || "").split(/\r?\n/);
-      settleMoveReview({
-        kind: "move",
-        handledRefs: (session.discovery.targets || [])
-          .filter((target) => target && Number.isInteger(target.line))
-          .map((target) =>
-            Object.freeze({
-              path: session.sourcePath,
-              line: target.line,
-              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
-            }),
-          ),
-        notice: moveNoticeText,
-      });
-      return true;
-    }
     new Notice(moveNoticeText);
     return true;
   }
@@ -53576,6 +53878,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysFreshnessDecayMixin,
   BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysReviewAdvanceMixin,
+  BobNavigationHotkeysReviewMoveMixin,
   BobNavigationHotkeysDecayCancelMixin,
   BobNavigationHotkeysCancelPropertyMixin,
   BobNavigationHotkeysCountedRollMixin,
@@ -53886,6 +54189,10 @@ module.exports.helpers = {
   matchReviewChecklistCursor,
   reviewLineChecklistKind,
   buildReviewAnchor,
+  reviewResumeRef,
+  findReviewResumeIndex,
+  buildReviewMoveAnchor,
+  planReviewResume,
   reviewWalkRemaining,
   buildReviewBoundaryNotice,
   planReviewJump,

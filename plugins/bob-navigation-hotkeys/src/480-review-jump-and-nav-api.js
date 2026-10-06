@@ -57,6 +57,24 @@ function planReviewJump(queue, options = {}) {
     options.cursor && typeof options.cursor === "object"
       ? options.cursor
       : null;
+  const resume = planReviewResume(list, anchor, cursor, direction);
+  const resumeRef = resume && resume.resumeRef ? resume.resumeRef : null;
+  const resumeIndex = resume && Number.isInteger(resume.resumeIndex) ? resume.resumeIndex : -1;
+  const resumeJump = (at) =>
+    finish(
+      {
+        kind: "jump",
+        entry: list[at],
+        rank: at + 1,
+        total: list.length,
+        wrapped: false,
+        originTier: anchor && typeof anchor.tier === "string" ? anchor.tier : null,
+      },
+      list,
+    );
+  if (resumeRef && resumeIndex >= 0 && resume && resume.cursorOnResume === true) {
+    return resumeJump(resumeIndex);
+  }
   // The cursor on a just-handled (stamped, released, or rolled) task is
   // not a live queue entry, even when the lagging Tasks cache still
   // lists it: handled keys never match here, so the anchor below
@@ -65,26 +83,36 @@ function planReviewJump(queue, options = {}) {
   // cannot make `]s` skip the next chore.
   const cursorIndex = findReviewCursorIndex(list, cursor, handledKeys);
   if (cursorIndex >= 0) {
-    let index = cursorIndex + direction;
-    let wrapped = false;
-    if (index < 0) {
-      index = list.length - 1;
-      wrapped = true;
-    } else if (index >= list.length) {
-      index = 0;
-      wrapped = true;
+    if (
+      !resumeRef ||
+      (cursor &&
+        list[cursorIndex] &&
+        list[cursorIndex].originalMarkdown === cursor.text)
+    ) {
+      let index = cursorIndex + direction;
+      let wrapped = false;
+      if (index < 0) {
+        index = list.length - 1;
+        wrapped = true;
+      } else if (index >= list.length) {
+        index = 0;
+        wrapped = true;
+      }
+      return finish(
+        {
+          kind: "jump",
+          entry: list[index],
+          rank: index + 1,
+          total: list.length,
+          wrapped,
+          originTier: reviewEntryMachineTier(list[cursorIndex]) || null,
+        },
+        list,
+      );
     }
-    return finish(
-      {
-        kind: "jump",
-        entry: list[index],
-        rank: index + 1,
-        total: list.length,
-        wrapped,
-        originTier: reviewEntryMachineTier(list[cursorIndex]) || null,
-      },
-      list,
-    );
+  }
+  if (resumeRef && resumeIndex >= 0) {
+    return resumeJump(resumeIndex);
   }
   if (anchor && (handledKeys.size > 0 || hasAnchorShape)) {
     const remaining = list.filter(

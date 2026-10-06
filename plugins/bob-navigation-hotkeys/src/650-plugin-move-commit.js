@@ -351,11 +351,11 @@ class BobNavigationHotkeysMoveCommitMixin {
     return true;
   }
 
-  // Review-walk auto-advance (nav-gestures): the origin rides in on
-  // `session.reviewOrigin` and is settled exactly once — `null` on every
-  // refusal or failure, and the move outcome on a resolving success.
-  // `taskMoveReviewCommitStarted` is set synchronously so the picker's
-  // `onClose` (which ran before this commit) knows not to settle.
+  // Review-walk (nav-gestures): the origin rides in on
+  // `session.reviewOrigin` and is settled exactly once — parked on success,
+  // settled without advancing on every refusal or failure. A move never
+  // advances. `taskMoveReviewCommitStarted` is set synchronously so the
+  // picker's `onClose` (which ran before this commit) knows not to settle.
   async commitTaskMoveSession(session, destinationEntry) {
     const reviewOrigin =
       session && session.reviewOrigin ? session.reviewOrigin : null;
@@ -372,10 +372,21 @@ class BobNavigationHotkeysMoveCommitMixin {
         // `continueReviewWalkAfter` never throws; best effort only.
       }
     };
+    const parkMoveReview = (handledRefs) => {
+      if (reviewSettled || !reviewOrigin) {
+        return;
+      }
+      reviewSettled = true;
+      try {
+        this.parkReviewWalkAfterMove(reviewOrigin, handledRefs);
+      } catch (error) {
+        // `parkReviewWalkAfterMove` never throws; best effort only.
+      }
+    };
     try {
       return await this.commitTaskMoveSessionWrite(session, destinationEntry, {
         reviewOrigin,
-        reviewSettle: settleMoveReview,
+        reviewPark: parkMoveReview,
       });
     } finally {
       settleMoveReview(null);
@@ -383,9 +394,9 @@ class BobNavigationHotkeysMoveCommitMixin {
   }
 
   async commitTaskMoveSessionWrite(session, destinationEntry, moveOptions = {}) {
-    const settleMoveReview =
-      moveOptions && typeof moveOptions.reviewSettle === "function"
-        ? moveOptions.reviewSettle
+    const reviewPark =
+      moveOptions && typeof moveOptions.reviewPark === "function"
+        ? moveOptions.reviewPark
         : null;
     const reviewOrigin =
       moveOptions && moveOptions.reviewOrigin ? moveOptions.reviewOrigin : null;
@@ -537,51 +548,55 @@ class BobNavigationHotkeysMoveCommitMixin {
       return false;
     }
 
-    // Review-walk auto-advance (nav-gestures): from a lane/other landing
-    // the move advances instead of focusing the destination, and the cursor
-    // stays in the source note. Otherwise keep today's behavior and settle
-    // without advancing.
-    const reviewTier =
-      reviewOrigin && typeof reviewOrigin.tier === "string"
-        ? reviewOrigin.tier
-        : "";
-    const reviewAdvances =
-      Boolean(settleMoveReview) &&
-      Boolean(reviewOrigin) &&
-      reviewTier !== "pre" &&
-      reviewTier !== "post";
-    if (!reviewAdvances) {
-      let vimJumpContext = null;
-      try {
-        vimJumpContext = this.createVimJumpContextWithOrigin({
-          path: session.sourcePath,
-          line: finalCursor.line,
-          ch: finalCursor.ch,
-        });
-      } catch (error) {
-        vimJumpContext = null;
-      }
-      try {
-        if (vimJumpContext) {
-          await this.focusTaskMoveDestination(
-            destinationFile,
-            {
-              line: plan.destinationLine,
-              text: plan.destinationAnchorText,
-              blockId: plan.destinationBlockId,
-            },
-            vimJumpContext,
-          );
-        } else {
-          await this.focusTaskMoveDestination(destinationFile, {
+    // Review-walk (nav-gestures): a move never advances. Park the walk
+    // before focusing, because the destination's `file-open` runs
+    // `trackOpenedFile`, which would clear the landing and make the park
+    // read stale. Then always focus the destination and show the plain
+    // move notice.
+    if (reviewOrigin && reviewPark) {
+      const sourceLines = String(session.sourceContent || "").split(/\r?\n/);
+      reviewPark(
+        (session.discovery.targets || [])
+          .filter((target) => target && Number.isInteger(target.line))
+          .map((target) =>
+            Object.freeze({
+              path: session.sourcePath,
+              line: target.line,
+              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
+            }),
+          ),
+      );
+    }
+    let vimJumpContext = null;
+    try {
+      vimJumpContext = this.createVimJumpContextWithOrigin({
+        path: session.sourcePath,
+        line: finalCursor.line,
+        ch: finalCursor.ch,
+      });
+    } catch (error) {
+      vimJumpContext = null;
+    }
+    try {
+      if (vimJumpContext) {
+        await this.focusTaskMoveDestination(
+          destinationFile,
+          {
             line: plan.destinationLine,
             text: plan.destinationAnchorText,
             blockId: plan.destinationBlockId,
-          });
-        }
-      } catch (error) {
-        // Destination navigation and history are best-effort after commit.
+          },
+          vimJumpContext,
+        );
+      } else {
+        await this.focusTaskMoveDestination(destinationFile, {
+          line: plan.destinationLine,
+          text: plan.destinationAnchorText,
+          blockId: plan.destinationBlockId,
+        });
       }
+    } catch (error) {
+      // Destination navigation and history are best-effort after commit.
     }
     const count = session.discovery.actualCount;
     const destinationName =
@@ -592,23 +607,6 @@ class BobNavigationHotkeysMoveCommitMixin {
       : "";
     const moveNoticeText =
       `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}`;
-    if (reviewAdvances) {
-      const sourceLines = String(session.sourceContent || "").split(/\r?\n/);
-      settleMoveReview({
-        kind: "move",
-        handledRefs: (session.discovery.targets || [])
-          .filter((target) => target && Number.isInteger(target.line))
-          .map((target) =>
-            Object.freeze({
-              path: session.sourcePath,
-              line: target.line,
-              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
-            }),
-          ),
-        notice: moveNoticeText,
-      });
-      return true;
-    }
     new Notice(moveNoticeText);
     return true;
   }

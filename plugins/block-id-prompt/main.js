@@ -5568,6 +5568,19 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
+    // Inbox routing gate (link-toggle-gate): on an inbox task, ask where
+    // the task goes before writing. Cancel writes nothing (false keeps a
+    // prompt modal open, like every other refusal); stay is today's
+    // behavior; move links first and routes after the write commits.
+    const routeGate = await this.gatePomodoroToggleInboxRoute(
+      source,
+      "link to today",
+      isNewId ? [id] : [],
+    );
+    if (!routeGate || routeGate.kind === "cancel") {
+      return false;
+    }
+
     const dailyFile = this.resolveTodayDailyFile();
     if (!dailyFile) {
       new Notice("Task link blocked: today's daily note could not be found");
@@ -5645,8 +5658,13 @@ class BlockIdPromptPomodoroLinksMixin {
         );
       }
 
-      this.reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan);
-      return true;
+      return this.finishPomodoroLinkWithInboxRoute(
+        source,
+        plan,
+        pomodoroPlan,
+        routeGate,
+        id,
+      );
     }
 
     if (plan.hasChanges) {
@@ -5662,8 +5680,13 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    this.reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan);
-    return true;
+    return this.finishPomodoroLinkWithInboxRoute(
+      source,
+      plan,
+      pomodoroPlan,
+      routeGate,
+      id,
+    );
   }
 
   // Lane-preserving unlink: remove the task's links under today's open
@@ -5686,6 +5709,18 @@ class BlockIdPromptPomodoroLinksMixin {
         new Notice(`Block ID '${source.task.existingId}' is duplicated in this note`);
         return false;
       }
+    }
+
+    // Inbox routing gate (link-toggle-gate): same contract as the link
+    // gate above, with the unlink action label. Unlink assigns no block
+    // ID, so nothing is reserved.
+    const routeGate = await this.gatePomodoroToggleInboxRoute(
+      source,
+      "unlink from today",
+      [],
+    );
+    if (!routeGate || routeGate.kind === "cancel") {
+      return false;
     }
 
     const taskFile = source.file || this.resolveTaskFile(source.sourcePath);
@@ -5762,8 +5797,13 @@ class BlockIdPromptPomodoroLinksMixin {
           }
 
           setEditorCursorIfPossible(source.editor, originalCursor);
-          this.reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan || {}, status);
-          return true;
+          return this.finishPomodoroUnlinkWithInboxRoute(
+            source,
+            cleanupPlan,
+            workLogPlan || {},
+            status,
+            routeGate,
+          );
         }
       }
     }
@@ -5802,7 +5842,184 @@ class BlockIdPromptPomodoroLinksMixin {
     }
 
     setEditorCursorIfPossible(source.editor, originalCursor);
-    this.reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan || {}, status);
+    return this.finishPomodoroUnlinkWithInboxRoute(
+      source,
+      cleanupPlan,
+      workLogPlan || {},
+      status,
+      routeGate,
+    );
+  }
+
+  // nav `inboxRoute` v1 gate for Ctrl+Shift+Enter (link-toggle-gate). Only
+  // the cursor-task toggle (`link-task-pomodoro`) routes; task-link mode
+  // keeps today's behavior. Resolves `{ kind: "stay" }` (today's behavior,
+  // also when nav lacks the api or the note is not an inbox note),
+  // `{ kind: "move", path, name }`, or `{ kind: "cancel" }` (nothing is
+  // written). Never throws.
+  async gatePomodoroToggleInboxRoute(source, actionLabel, reservedBlockIds) {
+    try {
+      if (!source || source.kind !== "link-task-pomodoro") {
+        return { kind: "stay" };
+      }
+      const route = this.getInboxRouteApi();
+      if (!route) {
+        return { kind: "stay" };
+      }
+      let isInbox = false;
+      try {
+        isInbox = route.isInboxNote(source.sourcePath) === true;
+      } catch (error) {
+        isInbox = false;
+      }
+      if (!isInbox) {
+        return { kind: "stay" };
+      }
+      const outcome = await route.prompt({
+        editor: source.editor,
+        path: source.sourcePath,
+        line: source.line,
+        actionLabel,
+        reservedBlockIds: Array.isArray(reservedBlockIds) ? reservedBlockIds : [],
+      });
+      if (
+        outcome &&
+        outcome.kind === "move" &&
+        typeof outcome.path === "string" &&
+        outcome.path
+      ) {
+        return {
+          kind: "move",
+          path: outcome.path,
+          name: String(outcome.name || ""),
+        };
+      }
+      if (outcome && outcome.kind === "stay") {
+        return { kind: "stay" };
+      }
+      return { kind: "cancel" };
+    } catch (error) {
+      return { kind: "stay" };
+    }
+  }
+
+  // Routed move commit for Ctrl+Shift+Enter (link-toggle-gate): re-reads,
+  // verifies, and moves with nav's shared core. Resolves nav's commit
+  // result, or null when the api is gone. Never throws.
+  async commitPomodoroToggleInboxRoute(source, destinationPath, expected) {
+    try {
+      const route = this.getInboxRouteApi();
+      if (!route) {
+        return null;
+      }
+      return await route.commit({
+        editor: source.editor,
+        path: source.sourcePath,
+        line: source.line,
+        expected,
+        destinationPath,
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Post-write finish for a routed link: one composed toast
+  // (`<link text> · moved to <dest>`) continued with a `route` walk
+  // outcome when the move committed, otherwise today's outcome plus the
+  // partial notice. Returns true like today's link success.
+  async finishPomodoroLinkWithInboxRoute(
+    source,
+    plan,
+    pomodoroPlan,
+    routeGate,
+    blockId,
+  ) {
+    if (!routeGate || routeGate.kind !== "move") {
+      this.reportPomodoroLinkOutcomeOrContinue(source, plan, pomodoroPlan);
+      return true;
+    }
+    const linkText = this.formatPomodoroLinkOutcome(plan, pomodoroPlan);
+    const commit = await this.commitPomodoroToggleInboxRoute(source, routeGate.path, [
+      { line: source.line, raw: source.task.rawLine, blockId },
+    ]);
+    if (commit && commit.ok === true) {
+      const text = `${linkText} · moved to ${commit.name || routeGate.name || "destination"}`;
+      if (source && source.reviewOrigin) {
+        this.settleLinkReviewOrigin(source, {
+          kind: "route",
+          notice: text,
+          handledRefs: commit.handledRefs,
+        });
+      } else {
+        new Notice(text);
+      }
+      return true;
+    }
+    const partial =
+      (commit && (commit.notice || commit.reason)) || "Inbox route failed";
+    if (source && source.reviewOrigin) {
+      this.settleLinkReviewOrigin(source, { kind: "link-today", notice: linkText });
+    } else {
+      new Notice(linkText);
+    }
+    new Notice(partial);
+    return true;
+  }
+
+  // Post-write finish for a routed unlink: one composed toast
+  // (`<unlink text> · moved to <dest>`) continued with a `route` walk
+  // outcome when the move committed, otherwise today's outcome (a null
+  // walk settle via the caller, which stays) plus the partial notice.
+  // Returns true like today's unlink success.
+  async finishPomodoroUnlinkWithInboxRoute(
+    source,
+    cleanupPlan,
+    workLogPlan,
+    status,
+    routeGate,
+  ) {
+    const unlinkText = this.formatPomodoroUnlinkOutcome(
+      cleanupPlan,
+      workLogPlan || {},
+      status,
+    );
+    if (!routeGate || routeGate.kind !== "move") {
+      new Notice(unlinkText);
+      return true;
+    }
+    const existingId = source.task && source.task.existingId;
+    const expected = existingId
+      ? [{ line: source.line, raw: source.task.rawLine, blockId: existingId }]
+      : [
+          {
+            line: source.line,
+            raw: source.task.rawLine,
+            text: cleanTaskDisplayText(source.task.rawLine),
+          },
+        ];
+    const commit = await this.commitPomodoroToggleInboxRoute(
+      source,
+      routeGate.path,
+      expected,
+    );
+    if (commit && commit.ok === true) {
+      const text = `${unlinkText} · moved to ${commit.name || routeGate.name || "destination"}`;
+      if (source && source.reviewOrigin) {
+        this.settleLinkReviewOrigin(source, {
+          kind: "route",
+          notice: text,
+          handledRefs: commit.handledRefs,
+        });
+      } else {
+        new Notice(text);
+      }
+      return true;
+    }
+    const partial =
+      (commit && (commit.notice || commit.reason)) || "Inbox route failed";
+    new Notice(unlinkText);
+    new Notice(partial);
     return true;
   }
 
@@ -6080,6 +6297,35 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
   }
 
+  // nav `inboxRoute` v1 feature detection (link-toggle-gate,
+  // block-id-prompt 1.23.0): the nav version check plus a versioned
+  // inboxRoute member with callable isInboxNote, prompt, and commit.
+  // Never throws; null means today's behavior.
+  getInboxRouteApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      if (!api || !(Number(api.version) >= 3)) {
+        return null;
+      }
+      const route = api.inboxRoute;
+      if (!route || !(Number(route.version) >= 1)) {
+        return null;
+      }
+      if (
+        typeof route.isInboxNote !== "function" ||
+        typeof route.prompt !== "function" ||
+        typeof route.commit !== "function"
+      ) {
+        return null;
+      }
+      return route;
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Idempotent review origin settle: nulls the stored origin and continues
   // exactly once. A null outcome settles the gesture lock without advancing
   // and shows nothing. Never throws.
@@ -6136,11 +6382,13 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     new Notice(this.formatPomodoroLinkOutcome(plan, pomodoroPlan));
   }
 
-  reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {
+  formatPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {
     const logged = workLogPlan.workLogEntryAdded ? " · Work Log updated" : "";
-    new Notice(
-      `Unlinked · stays ${laneStatusName(status)}${logged}${this.planBudgetNoticeSuffix(cleanupPlan && cleanupPlan.content)}`,
-    );
+    return `Unlinked · stays ${laneStatusName(status)}${logged}${this.planBudgetNoticeSuffix(cleanupPlan && cleanupPlan.content)}`;
+  }
+
+  reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {
+    new Notice(this.formatPomodoroUnlinkOutcome(cleanupPlan, workLogPlan, status));
   }
 
   reportPomodoroUnlinkPartialFailure(cleanupPlan, status, workLogSummary) {

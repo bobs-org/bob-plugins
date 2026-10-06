@@ -235,6 +235,52 @@ function createTaskLinkHarness({
   return { plugin, editor, file, view, store, writes, replaceCalls, state };
 }
 
+// Stub nav `inboxRoute` v1 api for link-toggle-gate tests (block-id-prompt
+// 1.23.0). Merges into any existing `bob-navigation-hotkeys` holder (for
+// example a mock reviewWalk), so walk + route tests can combine. `calls`
+// records `["isInboxNote", path]`, `["prompt", request]`, and
+// `["commit", request]` in order. `inboxPaths` controls isInboxNote;
+// `prompt`/`commit` are outcomes or functions returning them.
+function installMockInboxRoute(plugin, calls, options = {}) {
+  const inboxPaths = new Set(options.inboxPaths || []);
+  const route = {
+    version: 1,
+    isInboxNote(path) {
+      calls.push(["isInboxNote", path]);
+      return inboxPaths.has(path);
+    },
+    async prompt(request) {
+      calls.push(["prompt", request]);
+      if (typeof options.prompt === "function") {
+        return options.prompt(request);
+      }
+      return options.promptOutcome || { kind: "stay" };
+    },
+    async commit(request) {
+      calls.push(["commit", request]);
+      if (typeof options.commit === "function") {
+        return options.commit(request);
+      }
+      return (
+        options.commitResult || {
+          ok: false,
+          name: "",
+          count: 0,
+          notice: "",
+          handledRefs: [],
+          reason: "route-failed",
+        }
+      );
+    },
+  };
+  plugin.app = plugin.app || {};
+  plugin.app.plugins = plugin.app.plugins || { plugins: {} };
+  const holder = plugin.app.plugins.plugins["bob-navigation-hotkeys"] || {};
+  holder.api = { ...(holder.api || {}), version: 3, inboxRoute: route };
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"] = holder;
+  return route;
+}
+
 const NEXT_TASK = "- [*] #task Ship it ^ship";
 const DAILY_WITH_LINKS = [
   "## Pomodoros",
@@ -268,6 +314,7 @@ module.exports = {
   selectTaskLink,
   deleteTaskLink,
   createTaskLinkHarness,
+  installMockInboxRoute,
   NEXT_TASK,
   DAILY_WITH_LINKS,
 };

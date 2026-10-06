@@ -10,6 +10,7 @@ const {
   createEditor,
   sourceForPomodoroLink,
   createTaskModeHarness,
+  installMockInboxRoute,
   LINKED_DAILY,
 } = require("./block-id-prompt-harness.cjs");
 
@@ -447,6 +448,213 @@ test("review-walk: unlink settles with null and keeps its notice", async () => {
 
   assert.equal(lastNotice(), "Unlinked · stays Next");
   assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
+});
+
+// --- Inbox routing gate (link-toggle-gate, block-id-prompt 1.23.0) ---
+
+function installUnlinkRoute(plugin, routeCalls, options = {}) {
+  installMockInboxRoute(plugin, routeCalls, { inboxPaths: ["Tasks.md"], ...options });
+}
+
+function unlinkDaily() {
+  return ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^ship]]"].join("\n");
+}
+
+function installUnlinkPlugin(routeCalls, routeOptions) {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? unlinkDaily() : null),
+      modify: async () => {},
+    },
+  };
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
+  plugin.suppressEditorScans = () => {};
+  installUnlinkRoute(plugin, routeCalls, routeOptions);
+  return { plugin, editor, source };
+}
+
+test("inbox-route: unlink cancel writes nothing", async () => {
+  const routeCalls = [];
+  const { plugin, editor, source } = installUnlinkPlugin(routeCalls, {
+    promptOutcome: { kind: "cancel" },
+  });
+  const before = editor.getValue();
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, false);
+  assert.equal(editor.getValue(), before);
+  assert.deepEqual(noticeMessages, []);
+  assert.equal(
+    routeCalls.filter((entry) => entry[0] === "prompt").length,
+    1,
+  );
+  assert.deepEqual(
+    routeCalls.filter((entry) => entry[0] === "commit"),
+    [],
+  );
+});
+
+test("inbox-route: unlink stay matches today and never commits", async () => {
+  const routeCalls = [];
+  const { plugin, source } = installUnlinkPlugin(routeCalls, {
+    promptOutcome: { kind: "stay" },
+  });
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, true);
+  assert.equal(lastNotice(), "Unlinked · stays Next");
+  const [promptCall] = routeCalls.filter((entry) => entry[0] === "prompt");
+  assert.equal(promptCall[1].actionLabel, "unlink from today");
+  assert.deepEqual(promptCall[1].reservedBlockIds, []);
+  assert.deepEqual(
+    routeCalls.filter((entry) => entry[0] === "commit"),
+    [],
+  );
+});
+
+test("inbox-route: unlink move unlinks, then moves, with one composed toast and a route continue", async () => {
+  resetNotices();
+  const editor = createEditor("- [*] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? unlinkDaily() : null),
+      modify: async () => {},
+    },
+  };
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
+  plugin.suppressEditorScans = () => {};
+  const walkCalls = [];
+  const { origin } = installMockReviewWalk(plugin, walkCalls);
+  const routeCalls = [];
+  installUnlinkRoute(plugin, routeCalls, {
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+    commitResult: {
+      ok: true,
+      name: "health",
+      count: 1,
+      notice: "",
+      handledRefs: [{ path: "Tasks.md", line: 0, raw: "- [*] #task Ship it ^ship" }],
+      reason: null,
+    },
+  });
+  source.reviewOrigin = origin;
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  const [commitCall] = routeCalls.filter((entry) => entry[0] === "commit");
+  assert.equal(commitCall[1].destinationPath, "health.md");
+  assert.deepEqual(commitCall[1].expected, [
+    { line: 0, raw: "- [*] #task Ship it ^ship", blockId: "ship" },
+  ]);
+  assert.deepEqual(
+    walkCalls.filter((entry) => entry[0] === "continue"),
+    [
+      [
+        "continue",
+        origin,
+        {
+          kind: "route",
+          notice: "Unlinked · stays Next · moved to health",
+          handledRefs: [{ path: "Tasks.md", line: 0, raw: "- [*] #task Ship it ^ship" }],
+        },
+      ],
+    ],
+  );
+  assert.deepEqual(noticeMessages, []);
+});
+
+test("inbox-route: In Progress unlink with a Work summary routes", async () => {
+  resetNotices();
+  const editor = createEditor("- [/] #task Ship it ^ship");
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.app = {
+    vault: {
+      read: async (file) => (file.path === "Daily.md" ? unlinkDaily() : null),
+      modify: async () => {},
+    },
+  };
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
+  plugin.suppressEditorScans = () => {};
+  plugin.now = () => localDate(2026, 8, 15);
+  const routeCalls = [];
+  installUnlinkRoute(plugin, routeCalls, {
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+    commitResult: {
+      ok: true,
+      name: "health",
+      count: 1,
+      notice: "",
+      handledRefs: [],
+      reason: null,
+    },
+  });
+
+  const result = await plugin.submitPomodoroWorkSummary(source, "Finished cleanup");
+
+  assert.equal(result, true);
+  const [promptCall] = routeCalls.filter((entry) => entry[0] === "prompt");
+  assert.equal(promptCall[1].actionLabel, "unlink from today");
+  assert.equal(
+    lastNotice(),
+    "Unlinked · stays In Progress · Work Log updated · moved to health",
+  );
+});
+
+test("inbox-route: unlink move failure gives the partial notice and stays", async () => {
+  const routeCalls = [];
+  const { plugin, source } = installUnlinkPlugin(routeCalls, {
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+    commitResult: {
+      ok: false,
+      name: "",
+      count: 0,
+      notice: "Not moved: health is closed · still in Tasks",
+      handledRefs: [],
+      reason: "health is closed",
+    },
+  });
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, true);
+  assert.deepEqual(noticeMessages, [
+    "Unlinked · stays Next",
+    "Not moved: health is closed · still in Tasks",
+  ]);
+});
+
+test("inbox-route: non-inbox unlink never prompts", async () => {
+  const routeCalls = [];
+  const { plugin, source } = installUnlinkPlugin(routeCalls, { inboxPaths: [] });
+
+  const result = await plugin.applyPomodoroTaskUnlink(source);
+
+  assert.equal(result, true);
+  assert.equal(lastNotice(), "Unlinked · stays Next");
+  assert.deepEqual(
+    routeCalls.filter((entry) => entry[0] === "prompt"),
+    [],
+  );
 });
 
 test("review-walk: Work-summary unlink path settles with null", async () => {

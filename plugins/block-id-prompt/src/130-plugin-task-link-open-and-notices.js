@@ -270,6 +270,35 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
   }
 
+  // nav `inboxRoute` v1 feature detection (link-toggle-gate,
+  // block-id-prompt 1.23.0): the nav version check plus a versioned
+  // inboxRoute member with callable isInboxNote, prompt, and commit.
+  // Never throws; null means today's behavior.
+  getInboxRouteApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      if (!api || !(Number(api.version) >= 3)) {
+        return null;
+      }
+      const route = api.inboxRoute;
+      if (!route || !(Number(route.version) >= 1)) {
+        return null;
+      }
+      if (
+        typeof route.isInboxNote !== "function" ||
+        typeof route.prompt !== "function" ||
+        typeof route.commit !== "function"
+      ) {
+        return null;
+      }
+      return route;
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Idempotent review origin settle: nulls the stored origin and continues
   // exactly once. A null outcome settles the gesture lock without advancing
   // and shows nothing. Never throws.
@@ -326,11 +355,13 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     new Notice(this.formatPomodoroLinkOutcome(plan, pomodoroPlan));
   }
 
-  reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {
+  formatPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {
     const logged = workLogPlan.workLogEntryAdded ? " · Work Log updated" : "";
-    new Notice(
-      `Unlinked · stays ${laneStatusName(status)}${logged}${this.planBudgetNoticeSuffix(cleanupPlan && cleanupPlan.content)}`,
-    );
+    return `Unlinked · stays ${laneStatusName(status)}${logged}${this.planBudgetNoticeSuffix(cleanupPlan && cleanupPlan.content)}`;
+  }
+
+  reportPomodoroUnlinkOutcome(cleanupPlan, workLogPlan = {}, status) {
+    new Notice(this.formatPomodoroUnlinkOutcome(cleanupPlan, workLogPlan, status));
   }
 
   reportPomodoroUnlinkPartialFailure(cleanupPlan, status, workLogSummary) {

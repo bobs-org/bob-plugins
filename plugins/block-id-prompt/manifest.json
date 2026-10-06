@@ -1,9 +1,9 @@
 {
   "id": "block-id-prompt",
   "name": "Block ID Prompt",
-  "version": "1.22.0",
+  "version": "1.23.0",
   "minAppVersion": "1.8.7",
-  "description": "Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines.",
+  "description": "Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, Ctrl+Shift+Enter asks where the task goes before linking or unlinking, then moves it with the toggle applied (nav inboxRoute v1).",
   "author": "Bryan",
   "isDesktopOnly": false
 }

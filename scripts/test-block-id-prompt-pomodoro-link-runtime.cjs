@@ -11,6 +11,7 @@ const {
   createTFile,
   createMarkdownView,
   createTaskModeHarness,
+  installMockInboxRoute,
   LINKED_DAILY,
   UNLINKED_DAILY,
 } = require("./block-id-prompt-harness.cjs");
@@ -729,6 +730,256 @@ test("review-walk: partial link keeps its notice and never continues with an out
     "Task unscheduled, set Next, but Daily.md could not be updated",
   );
   assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
+});
+
+// --- Inbox routing gate (link-toggle-gate, block-id-prompt 1.23.0) ---
+
+function installLinkRouteHarness({ taskContent, dailyContent, routeOptions }) {
+  const h = createTaskModeHarness({ taskContent, dailyContent });
+  const routeCalls = [];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["Tasks.md"],
+    ...routeOptions,
+  });
+  return { h, routeCalls };
+}
+
+function routePromptCalls(routeCalls) {
+  return routeCalls.filter((entry) => entry[0] === "prompt");
+}
+
+function routeCommitCalls(routeCalls) {
+  return routeCalls.filter((entry) => entry[0] === "commit");
+}
+
+test("inbox-route: getInboxRouteApi detects the v1 namespace and rejects partial shapes", () => {
+  const missing = new Plugin();
+  assert.equal(missing.getInboxRouteApi(), null);
+
+  const v2 = new Plugin();
+  v2.app = { plugins: { plugins: { "bob-navigation-hotkeys": { api: { version: 2 } } } } };
+  assert.equal(v2.getInboxRouteApi(), null);
+
+  const noNamespace = new Plugin();
+  noNamespace.app = {
+    plugins: { plugins: { "bob-navigation-hotkeys": { api: { version: 3 } } } },
+  };
+  assert.equal(noNamespace.getInboxRouteApi(), null);
+
+  const partial = new Plugin();
+  partial.app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: { version: 3, inboxRoute: { version: 1, isInboxNote() {} } },
+        },
+      },
+    },
+  };
+  assert.equal(partial.getInboxRouteApi(), null);
+
+  const calls = [];
+  const full = new Plugin();
+  full.app = { plugins: { plugins: {} } };
+  const route = installMockInboxRoute(full, calls, { inboxPaths: ["Tasks.md"] });
+  assert.equal(full.getInboxRouteApi(), route);
+});
+
+test("inbox-route: non-inbox notes and task-link mode never prompt", async () => {
+  const { h, routeCalls } = installLinkRouteHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+    routeOptions: { inboxPaths: [] },
+  });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(lastNotice(), "Linked · stays Next");
+  assert.deepEqual(routePromptCalls(routeCalls), []);
+  assert.deepEqual(routeCommitCalls(routeCalls), []);
+
+  const gateOnly = new Plugin();
+  const gateCalls = [];
+  installMockInboxRoute(gateOnly, gateCalls, { inboxPaths: ["Tasks.md"] });
+  const stayed = await gateOnly.gatePomodoroToggleInboxRoute(
+    { kind: "task-link-open", sourcePath: "Tasks.md" },
+    "link to today",
+    [],
+  );
+  assert.deepEqual(stayed, { kind: "stay" });
+  assert.deepEqual(gateCalls, []);
+});
+
+test("inbox-route: cancel writes nothing and settles once", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+  const routeCalls = [];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "cancel" },
+  });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(noticeMessages, []);
+  assert.deepEqual(reviewContinueCalls(calls), [["continue", origin, null]]);
+  assert.equal(routePromptCalls(routeCalls).length, 1);
+  assert.deepEqual(routeCommitCalls(routeCalls), []);
+});
+
+test("inbox-route: stay matches today", async () => {
+  const { h, routeCalls } = installLinkRouteHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+    routeOptions: { promptOutcome: { kind: "stay" } },
+  });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
+  assert.equal(lastNotice(), "Linked · stays Next");
+  const [promptCall] = routePromptCalls(routeCalls);
+  assert.equal(promptCall[1].path, "Tasks.md");
+  assert.equal(promptCall[1].line, 0);
+  assert.equal(promptCall[1].actionLabel, "link to today");
+  assert.deepEqual(promptCall[1].reservedBlockIds, []);
+  assert.deepEqual(routeCommitCalls(routeCalls), []);
+});
+
+test("inbox-route: move links, then moves, with one composed toast and a route continue", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+  const routeCalls = [];
+  const handledRefs = [{ path: "Tasks.md", line: 0, raw: "- [*] #task Ship it ^ship" }];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+    commitResult: {
+      ok: true,
+      name: "health",
+      count: 1,
+      notice: "",
+      handledRefs,
+      reason: null,
+    },
+  });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
+  const [commitCall] = routeCommitCalls(routeCalls);
+  assert.equal(commitCall[1].path, "Tasks.md");
+  assert.equal(commitCall[1].line, 0);
+  assert.equal(commitCall[1].destinationPath, "health.md");
+  assert.deepEqual(commitCall[1].expected, [
+    { line: 0, raw: "- [*] #task Ship it ^ship", blockId: "ship" },
+  ]);
+  assert.deepEqual(reviewContinueCalls(calls), [
+    [
+      "continue",
+      origin,
+      {
+        kind: "route",
+        notice: "Linked · stays Next · moved to health",
+        handledRefs,
+      },
+    ],
+  ]);
+  assert.deepEqual(noticeMessages, []);
+});
+
+test("inbox-route: a new block ID goes through the ID prompt first, then the route, with the reserved ID passed", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  installMockReviewWalk(h.plugin, calls);
+  const routeCalls = [];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+    commitResult: {
+      ok: true,
+      name: "health",
+      count: 1,
+      notice: "",
+      handledRefs: [],
+      reason: null,
+    },
+  });
+  let promptedWith = null;
+  h.plugin.openBlockIdPrompt = (source) => {
+    promptedWith = source;
+    h.plugin.promptOpen = true;
+  };
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.ok(promptedWith);
+  assert.deepEqual(routePromptCalls(routeCalls), []);
+
+  const origin = promptedWith.reviewOrigin;
+  h.plugin.promptOpen = false;
+  const result = await h.plugin.submitPomodoroTaskLinkBlockId(promptedWith, "fresh");
+
+  assert.equal(result, true);
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it ^fresh");
+  const [promptCall] = routePromptCalls(routeCalls);
+  assert.deepEqual(promptCall[1].reservedBlockIds, ["fresh"]);
+  const [commitCall] = routeCommitCalls(routeCalls);
+  assert.deepEqual(commitCall[1].expected, [
+    { line: 0, raw: "- [*] #task Ship it", blockId: "fresh" },
+  ]);
+  assert.deepEqual(reviewContinueCalls(calls), [
+    [
+      "continue",
+      origin,
+      { kind: "route", notice: "Linked · stays Next · moved to health", handledRefs: [] },
+    ],
+  ]);
+  assert.deepEqual(noticeMessages, []);
+});
+
+test("inbox-route: a move failure gives the partial notice plus a link-today continue", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const calls = [];
+  const { origin } = installMockReviewWalk(h.plugin, calls);
+  const routeCalls = [];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+    commitResult: {
+      ok: false,
+      name: "",
+      count: 0,
+      notice: "Not moved: health is closed · still in Tasks",
+      handledRefs: [],
+      reason: "health is closed",
+    },
+  });
+
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+
+  assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
+  assert.deepEqual(noticeMessages, [
+    "Not moved: health is closed · still in Tasks",
+  ]);
+  assert.deepEqual(reviewContinueCalls(calls), [
+    ["continue", origin, { kind: "link-today", notice: "Linked · stays Next" }],
+  ]);
 });
 
 test("review-walk: no nav or nav v2 keeps today's notices", async () => {

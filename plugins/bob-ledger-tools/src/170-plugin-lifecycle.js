@@ -64,6 +64,10 @@ class BobLedgerToolsPlugin extends Plugin {
     // a cached priority-ladder snapshot.
     this.priorityMarksEnabled = true;
     this.priorityLadderCache = null;
+    // Task date marks (bob-cli-53 date-marks): session toggle plus the
+    // local day last seen by the midnight rollover.
+    this.dateMarksEnabled = true;
+    this.dateMarksDay = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -300,6 +304,14 @@ class BobLedgerToolsPlugin extends Plugin {
       // never throws: guard calls with try/catch as well as
       // optional chaining.
       priorityMarks: this.priorityMarksApi(),
+      // Task date marks (bob-cli-53 date-marks, dateMarks namespace
+      // v1): display-only calendar-label glyphs for the canonical
+      // `created` / `scheduled` / `completion` / `cancelled` dates,
+      // per the `docs/date-marks.md` display contract in bob-cli.
+      // Additive: top-level api stays v3. Every member is
+      // synchronous and never throws: guard calls with try/catch as
+      // well as optional chaining.
+      dateMarks: this.dateMarksApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -434,6 +446,12 @@ class BobLedgerToolsPlugin extends Plugin {
           } catch (error) {
             // Best-effort refresh only.
           }
+          // Date-mark calendar labels roll over at local midnight.
+          try {
+            this.refreshDateMarksForRollover(new Date());
+          } catch (error) {
+            // Best-effort refresh only.
+          }
           try {
             this.refreshDashboardCollectionChips(new Date());
           } catch (error) {
@@ -498,6 +516,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
     this.setupPriorityMarks();
+    this.setupDateMarks();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
@@ -690,6 +709,20 @@ class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-priority-marks");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    this.dateMarksDay = null;
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-date-marks");
       }
     } catch (error) {
       // Body class cleanup is best-effort.

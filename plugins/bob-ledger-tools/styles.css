@@ -1072,3 +1072,152 @@ body.bob-priority-marks .markdown-source-view.is-live-preview .dataview.inline-f
     transition: none;
   }
 }
+
+/* Task date marks (bob-cli-53 date-marks): one compact monochrome mark
+   for each canonical `[created::]`, `[scheduled::]`, `[completion::]`,
+   and `[cancelled::]` task date — a glyph plus a calendar label
+   (`today`, `tomorrow`, `Fri`, `Oct 22`). Display-only; nothing ever
+   writes it. Final glyph geometry (viewBox `0 0 16 16`, black stroke,
+   `stroke-width 1.9` to match the freshness ring, `stroke-linecap`
+   and `stroke-linejoin round`, `fill none`; used as CSS masks):
+   plus `M8 3.25v9.5 M3.25 8h9.5`; hourglass `M4 1.9h8 M4 14.1h8`
+   then `M5.1 1.9v1.6c0 1.9 1.2 3.1 2.9 4.5c1.7-1.4 2.9-2.6 2.9-4.5V1.9`
+   and `M5.1 14.1v-1.6c0-1.9 1.2-3.1 2.9-4.5c1.7 1.4 2.9 2.6 2.9 4.5v1.6`;
+   check `M3.1 8.6l3.1 3.1l6.7-6.9`; circle-slash
+   `<circle cx 8 cy 8 r 5.9>` plus `M3.83 3.83l8.34 8.34`. One mask
+   definition per field below, shared by every surface. */
+
+body {
+  --bob-date-glyph-created: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3.25v9.5 M3.25 8h9.5' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round'/%3E%3C/svg%3E");
+  --bob-date-glyph-scheduled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 1.9h8 M4 14.1h8 M5.1 1.9v1.6c0 1.9 1.2 3.1 2.9 4.5c1.7-1.4 2.9-2.6 2.9-4.5V1.9 M5.1 14.1v-1.6c0-1.9 1.2-3.1 2.9-4.5c1.7 1.4 2.9 2.6 2.9 4.5v1.6' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --bob-date-glyph-completion: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.1 8.6l3.1 3.1l6.7-6.9' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --bob-date-glyph-cancelled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5.9' fill='none' stroke='black' stroke-width='1.9'/%3E%3Cpath d='M3.83 3.83l8.34 8.34' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+/* Plugin host: `span.bob-date-mark[data-field]` emitted by the
+   plugin's JS, with the glyph drawn by the shared mask layers. The
+   metrics match `.bob-fresh-mark` exactly, so fresh, priority, and
+   date marks line up as one family. */
+
+.bob-date-mark {
+  --bob-date-ink: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22em;
+  margin: 0 0.08em;
+  padding: 0.06em 0.14em;
+  border-radius: 999px;
+  color: var(--bob-date-ink);
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  line-height: 1.1;
+  white-space: nowrap;
+  vertical-align: 0.05em;
+  opacity: 0.85;
+  cursor: default;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease;
+}
+
+.bob-date-mark[data-fold-space="true"] {
+  margin-inline-start: 0.3em;
+}
+
+.bob-date-mark:hover {
+  opacity: 1;
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.bob-date-mark-glyph {
+  flex: none;
+  width: 1.08em;
+  height: 1.08em;
+  background-color: var(--bob-date-ink);
+  -webkit-mask-image: var(--bob-date-glyph);
+  mask-image: var(--bob-date-glyph);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+/* Per-field glyph and ink, plus the quiet, emphasis, and resting
+   tones. Theme hooks `--bob-date-color-{created,scheduled,
+   completion,cancelled,today}` are unset by default. Resting is
+   qualified with `[data-when]` so it wins over every other row,
+   including scheduled-today emphasis. */
+
+.bob-date-mark[data-field="created"] {
+  --bob-date-glyph: var(--bob-date-glyph-created);
+  --bob-date-ink: var(--bob-date-color-created, var(--text-muted));
+  opacity: 0.7;
+}
+
+.bob-date-mark[data-field="scheduled"] {
+  --bob-date-glyph: var(--bob-date-glyph-scheduled);
+  --bob-date-ink: var(--bob-date-color-scheduled, var(--text-muted));
+}
+
+.bob-date-mark[data-field="scheduled"][data-when="past"] {
+  opacity: 0.7;
+}
+
+.bob-date-mark[data-field="scheduled"][data-when="today"] {
+  --bob-date-ink: var(--bob-date-color-today, var(--text-normal));
+  opacity: 1;
+  font-weight: 650;
+}
+
+.bob-date-mark[data-field="completion"] {
+  --bob-date-glyph: var(--bob-date-glyph-completion);
+  --bob-date-ink: var(--bob-date-color-completion, var(--text-muted));
+}
+
+.bob-date-mark[data-field="cancelled"] {
+  --bob-date-glyph: var(--bob-date-glyph-cancelled);
+  --bob-date-ink: var(--bob-date-color-cancelled, var(--text-muted));
+}
+
+/* Decorative reuse: the ink follows the surrounding color. */
+
+.bob-date-mark[data-inherit-color="true"] {
+  --bob-date-ink: currentColor;
+}
+
+/* Resting: closed tasks render faint. Derived purely in CSS from the
+   nearest `li.task-list-item` / `.HyperMD-task-line` `[data-task]`
+   ancestor, so it works on every surface. Closed wins over any
+   per-field tone. */
+
+li.task-list-item[data-task="x"] .bob-date-mark[data-when],
+li.task-list-item[data-task="X"] .bob-date-mark[data-when],
+li.task-list-item[data-task="-"] .bob-date-mark[data-when],
+.HyperMD-task-line[data-task="x"] .bob-date-mark[data-when],
+.HyperMD-task-line[data-task="X"] .bob-date-mark[data-when],
+.HyperMD-task-line[data-task="-"] .bob-date-mark[data-when] {
+  --bob-date-ink: var(--text-faint, var(--text-muted));
+  opacity: 0.75;
+  font-weight: 550;
+}
+
+/* Repair flag: while marks are on, any leftover
+   `created`/`scheduled`/`completion`/`cancelled` Dataview pill in
+   Live Preview is a field Tasks cannot read correctly (bad dates,
+   words, datetimes, duplicates, mismatched brackets, uppercase keys,
+   or a space before `::`). Full opacity plus a dashed orange border,
+   matching the freshness and priority repair flags. */
+
+body.bob-date-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> :is(.inline-field-key, .inline-field-standalone-value):is([data-dv-norm-key="created"], [data-dv-norm-key="scheduled"], [data-dv-norm-key="completion"], [data-dv-norm-key="cancelled"])) {
+  opacity: 1;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-orange) 55%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-date-mark {
+    transition: none;
+  }
+}

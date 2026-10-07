@@ -121,6 +121,26 @@ function ensurePriorityMarksRefresh() {
   }
   return priorityMarksRefresh;
 }
+// Task date marks (bob-cli-53 date-marks): a StateEffect the
+// consolidated live-refresh fan-out dispatches so Live Preview date
+// widgets rebuild without a doc change. Defined lazily on first
+// dispatch so requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite
+// shares one stub effect type across every eager define).
+let dateMarksRefresh = null;
+function ensureDateMarksRefresh() {
+  if (dateMarksRefresh) {
+    return dateMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      dateMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    dateMarksRefresh = null;
+  }
+  return dateMarksRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;

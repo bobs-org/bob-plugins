@@ -8409,6 +8409,35 @@ class TaskStatusCyclerCommandsMixin {
         ? this.app.workspace.getActiveFile()
         : null);
     const activePath = activeFile && activeFile.path;
+    // Pomodoro Task Link lines delegate Alt+[/Alt+] to nav's lane toggle
+    // (both keys do the same two-state toggle; `direction` is ignored and the
+    // bullet is never reformatted). This runs before the Depends-On,
+    // transcluded, and formatting branches so embedded Pomodoro links route
+    // here too.
+    if (this.isTaskLinkLaneLine(editor, activePath)) {
+      if (checking) {
+        return true;
+      }
+
+      let lane = null;
+      try {
+        lane = this.getTaskLinkLaneApi();
+      } catch (error) {
+        lane = null;
+      }
+      if (lane) {
+        let result = null;
+        try {
+          result = lane.toggle({ editor, view });
+        } catch (error) {
+          result = null;
+        }
+        if (result && typeof result.catch === "function") {
+          result.catch(() => undefined);
+        }
+      }
+      return true;
+    }
     // Depends-On lines cycle the prerequisite under the cursor (the plain-link
     // analogue of the transcluded path below) and never reformat the bullet.
     if (this.isActiveTaskDependencyLine(editor)) {
@@ -8750,6 +8779,44 @@ class TaskStatusCyclerCommandsMixin {
         : null);
     const activePath = activeFile && activeFile.path;
     const taskStatus = this.getActiveTaskStatus(view.editor);
+    // A counted Alt+[/Alt+] starting on a Pomodoro Task Link line delegates
+    // the whole gesture to nav's lane toggle instead of range-cycling.
+    if (!taskStatus && this.isTaskLinkLaneLine(view.editor, activePath)) {
+      if (this.handledCountedTaskCycleEvents) {
+        this.handledCountedTaskCycleEvents.add(event);
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+
+      resetPendingVimInputState(cm, "counted-task-link-lane");
+      let lane = null;
+      try {
+        lane = this.getTaskLinkLaneApi();
+      } catch (error) {
+        lane = null;
+      }
+      if (lane) {
+        let result = null;
+        try {
+          result = lane.toggle({
+            editor: view.editor,
+            view,
+            countExplicit: true,
+            additionalTaskCount: pendingRepeat.repeat,
+          });
+        } catch (error) {
+          result = null;
+        }
+        if (result && typeof result.catch === "function") {
+          result.catch(() => undefined);
+        }
+      }
+      return true;
+    }
     if (taskStatus) {
       if (!isCyclableTaskStatus(taskStatus)) {
         return false;
@@ -8819,6 +8886,36 @@ class TaskStatusCyclerCommandsMixin {
     let changed = false;
     let startDepLineUntargeted = false;
 
+    // Pomodoro Task Link lines never range-cycle: a counted range starting on
+    // one delegates wholesale in the dispatch above, and ranges starting
+    // elsewhere skip them. The snapshot content is enough because `matches`
+    // only reads the queried line's position.
+    let laneForRangeSkip = null;
+    let rangeSkipContent = null;
+    try {
+      laneForRangeSkip = this.getTaskLinkLaneApi();
+      if (laneForRangeSkip && typeof editor.getValue === "function") {
+        rangeSkipContent = String(editor.getValue() || "");
+      }
+    } catch (error) {
+      laneForRangeSkip = null;
+      rangeSkipContent = null;
+    }
+    const isLaneSkippedRangeLine = (snapshotLine) => {
+      if (!laneForRangeSkip || rangeSkipContent === null) {
+        return false;
+      }
+      try {
+        return laneForRangeSkip.matches({
+          content: rangeSkipContent,
+          line: snapshotLine,
+          path: activePath,
+        }) === true;
+      } catch (error) {
+        return false;
+      }
+    };
+
     // Predict, from the pre-write snapshot, every line where cycling out of
     // Blocked will insert a Schedule Log entry. Recorded in snapshot
     // coordinates so editor writes for later lines in the range can be
@@ -8848,6 +8945,9 @@ class TaskStatusCyclerCommandsMixin {
     };
 
     for (let line = startLine; line <= endLine; line += 1) {
+      if (isLaneSkippedRangeLine(line)) {
+        continue;
+      }
       const lineText = String(lines[line] || "");
       const taskStatus = getTaskStatusForLine(lineText, line);
       if (taskStatus) {
@@ -9052,6 +9152,64 @@ class TaskStatusCyclerCommandsMixin {
 }
 // ---- src/160-plugin-completion.js ----
 class TaskStatusCyclerCompletionMixin {
+  // Nav `api.taskLinkLane` v1 for the Pomodoro Task Link lane toggle (plan
+  // 202610/in_progress_task_link_marks.md §7): the frozen
+  // `{ matches, toggle }` pair, or null when nav is missing, old, or
+  // malformed. Never throws.
+  getTaskLinkLaneApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      if (!api) {
+        return null;
+      }
+      const lane = api.taskLinkLane;
+      if (!lane || !(Number(lane.version) >= 1)) {
+        return null;
+      }
+      if (
+        typeof lane.matches !== "function" ||
+        typeof lane.toggle !== "function"
+      ) {
+        return null;
+      }
+      return lane;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // True when the cursor line is a Pomodoro Task Link line per nav's
+  // `api.taskLinkLane.matches`, the single definition both plugins share.
+  // Never throws; false when the api is missing or the editor has no cursor.
+  isTaskLinkLaneLine(editor, activePath) {
+    try {
+      const lane = this.getTaskLinkLaneApi();
+      if (!lane) {
+        return false;
+      }
+      if (
+        !editor ||
+        typeof editor.getValue !== "function" ||
+        typeof editor.getCursor !== "function"
+      ) {
+        return false;
+      }
+      const cursor = editor.getCursor();
+      if (!cursor || typeof cursor.line !== "number") {
+        return false;
+      }
+      return lane.matches({
+        content: String(editor.getValue() || ""),
+        line: cursor.line,
+        path: activePath,
+      }) === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   // Nav api v3 `reviewWalk` for the review-walk auto-advance: the frozen
   // `{ capture, continue }` pair, or null when nav is missing, old, or
   // malformed. Never throws.

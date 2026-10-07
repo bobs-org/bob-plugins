@@ -1,4 +1,62 @@
 class TaskStatusCyclerCompletionMixin {
+  // Nav `api.taskLinkLane` v1 for the Pomodoro Task Link lane toggle (plan
+  // 202610/in_progress_task_link_marks.md §7): the frozen
+  // `{ matches, toggle }` pair, or null when nav is missing, old, or
+  // malformed. Never throws.
+  getTaskLinkLaneApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      if (!api) {
+        return null;
+      }
+      const lane = api.taskLinkLane;
+      if (!lane || !(Number(lane.version) >= 1)) {
+        return null;
+      }
+      if (
+        typeof lane.matches !== "function" ||
+        typeof lane.toggle !== "function"
+      ) {
+        return null;
+      }
+      return lane;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // True when the cursor line is a Pomodoro Task Link line per nav's
+  // `api.taskLinkLane.matches`, the single definition both plugins share.
+  // Never throws; false when the api is missing or the editor has no cursor.
+  isTaskLinkLaneLine(editor, activePath) {
+    try {
+      const lane = this.getTaskLinkLaneApi();
+      if (!lane) {
+        return false;
+      }
+      if (
+        !editor ||
+        typeof editor.getValue !== "function" ||
+        typeof editor.getCursor !== "function"
+      ) {
+        return false;
+      }
+      const cursor = editor.getCursor();
+      if (!cursor || typeof cursor.line !== "number") {
+        return false;
+      }
+      return lane.matches({
+        content: String(editor.getValue() || ""),
+        line: cursor.line,
+        path: activePath,
+      }) === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   // Nav api v3 `reviewWalk` for the review-walk auto-advance: the frozen
   // `{ capture, continue }` pair, or null when nav is missing, old, or
   // malformed. Never throws.

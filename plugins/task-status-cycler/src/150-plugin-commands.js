@@ -29,6 +29,35 @@ class TaskStatusCyclerCommandsMixin {
         ? this.app.workspace.getActiveFile()
         : null);
     const activePath = activeFile && activeFile.path;
+    // Pomodoro Task Link lines delegate Alt+[/Alt+] to nav's lane toggle
+    // (both keys do the same two-state toggle; `direction` is ignored and the
+    // bullet is never reformatted). This runs before the Depends-On,
+    // transcluded, and formatting branches so embedded Pomodoro links route
+    // here too.
+    if (this.isTaskLinkLaneLine(editor, activePath)) {
+      if (checking) {
+        return true;
+      }
+
+      let lane = null;
+      try {
+        lane = this.getTaskLinkLaneApi();
+      } catch (error) {
+        lane = null;
+      }
+      if (lane) {
+        let result = null;
+        try {
+          result = lane.toggle({ editor, view });
+        } catch (error) {
+          result = null;
+        }
+        if (result && typeof result.catch === "function") {
+          result.catch(() => undefined);
+        }
+      }
+      return true;
+    }
     // Depends-On lines cycle the prerequisite under the cursor (the plain-link
     // analogue of the transcluded path below) and never reformat the bullet.
     if (this.isActiveTaskDependencyLine(editor)) {
@@ -370,6 +399,44 @@ class TaskStatusCyclerCommandsMixin {
         : null);
     const activePath = activeFile && activeFile.path;
     const taskStatus = this.getActiveTaskStatus(view.editor);
+    // A counted Alt+[/Alt+] starting on a Pomodoro Task Link line delegates
+    // the whole gesture to nav's lane toggle instead of range-cycling.
+    if (!taskStatus && this.isTaskLinkLaneLine(view.editor, activePath)) {
+      if (this.handledCountedTaskCycleEvents) {
+        this.handledCountedTaskCycleEvents.add(event);
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+
+      resetPendingVimInputState(cm, "counted-task-link-lane");
+      let lane = null;
+      try {
+        lane = this.getTaskLinkLaneApi();
+      } catch (error) {
+        lane = null;
+      }
+      if (lane) {
+        let result = null;
+        try {
+          result = lane.toggle({
+            editor: view.editor,
+            view,
+            countExplicit: true,
+            additionalTaskCount: pendingRepeat.repeat,
+          });
+        } catch (error) {
+          result = null;
+        }
+        if (result && typeof result.catch === "function") {
+          result.catch(() => undefined);
+        }
+      }
+      return true;
+    }
     if (taskStatus) {
       if (!isCyclableTaskStatus(taskStatus)) {
         return false;
@@ -439,6 +506,36 @@ class TaskStatusCyclerCommandsMixin {
     let changed = false;
     let startDepLineUntargeted = false;
 
+    // Pomodoro Task Link lines never range-cycle: a counted range starting on
+    // one delegates wholesale in the dispatch above, and ranges starting
+    // elsewhere skip them. The snapshot content is enough because `matches`
+    // only reads the queried line's position.
+    let laneForRangeSkip = null;
+    let rangeSkipContent = null;
+    try {
+      laneForRangeSkip = this.getTaskLinkLaneApi();
+      if (laneForRangeSkip && typeof editor.getValue === "function") {
+        rangeSkipContent = String(editor.getValue() || "");
+      }
+    } catch (error) {
+      laneForRangeSkip = null;
+      rangeSkipContent = null;
+    }
+    const isLaneSkippedRangeLine = (snapshotLine) => {
+      if (!laneForRangeSkip || rangeSkipContent === null) {
+        return false;
+      }
+      try {
+        return laneForRangeSkip.matches({
+          content: rangeSkipContent,
+          line: snapshotLine,
+          path: activePath,
+        }) === true;
+      } catch (error) {
+        return false;
+      }
+    };
+
     // Predict, from the pre-write snapshot, every line where cycling out of
     // Blocked will insert a Schedule Log entry. Recorded in snapshot
     // coordinates so editor writes for later lines in the range can be
@@ -468,6 +565,9 @@ class TaskStatusCyclerCommandsMixin {
     };
 
     for (let line = startLine; line <= endLine; line += 1) {
+      if (isLaneSkippedRangeLine(line)) {
+        continue;
+      }
       const lineText = String(lines[line] || "");
       const taskStatus = getTaskStatusForLine(lineText, line);
       if (taskStatus) {

@@ -68,6 +68,16 @@ class BobLedgerToolsPlugin extends Plugin {
     // local day last seen by the midnight rollover.
     this.dateMarksEnabled = true;
     this.dateMarksDay = null;
+    // Task Link In Progress marks (bob-cli-56 progress-marks):
+    // session toggle, optimistic hint map (`path\0blockId` →
+    // `{ status, expiresAt }`), the last build's target paths for
+    // the metadataCache `changed` handler, the debounced refresh
+    // timer, and the daily path last seen by the midnight rollover.
+    this.progressMarksEnabled = true;
+    this.progressMarkHints = new Map();
+    this.progressMarkLastTargets = new Set();
+    this.progressMarksTimer = null;
+    this.progressMarksDay = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -313,6 +323,15 @@ class BobLedgerToolsPlugin extends Plugin {
       // synchronous and never throws: guard calls with try/catch as
       // well as optional chaining.
       dateMarks: this.dateMarksApi(),
+      // Task Link In Progress marks (bob-cli-56 progress-marks,
+      // progressMarks namespace v1): display-only half-ring marks
+      // before In Progress Task Links under today's open Pomodoros,
+      // per the epic plan
+      // `plan:202610/in_progress_task_link_marks.md`. Additive:
+      // top-level api stays v3. Every member is synchronous and
+      // never throws: guard calls with try/catch as well as
+      // optional chaining.
+      progressMarks: this.progressMarksApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -352,6 +371,7 @@ class BobLedgerToolsPlugin extends Plugin {
           this.refreshTodayCacheForChangedFile(file, data);
           this.refreshFreshnessForChangedFile(file, data);
           this.refreshNoteReadyForChangedFile(file);
+          this.refreshProgressMarksForChangedFile(file);
           this.scheduleDashboardCollectionsRefresh();
           try {
             const path = file && typeof file.path === "string" ? file.path : "";
@@ -453,6 +473,13 @@ class BobLedgerToolsPlugin extends Plugin {
           } catch (error) {
             // Best-effort refresh only.
           }
+          // In Progress marks follow the daily note at local
+          // midnight.
+          try {
+            this.refreshProgressMarksForRollover(new Date());
+          } catch (error) {
+            // Best-effort refresh only.
+          }
           try {
             this.refreshDashboardCollectionChips(new Date());
           } catch (error) {
@@ -518,6 +545,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupFreshnessMarks();
     this.setupPriorityMarks();
     this.setupDateMarks();
+    this.setupProgressMarks();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();

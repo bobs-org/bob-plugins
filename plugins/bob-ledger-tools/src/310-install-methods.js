@@ -30,6 +30,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPriorityMarksMixin,
   BobLedgerToolsDateMarksMixin,
   BobLedgerToolsDateMarksTasksMixin,
+  BobLedgerToolsProgressMarksMixin,
+  BobLedgerToolsProgressMarksReadingMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsTodayLocationMixin,

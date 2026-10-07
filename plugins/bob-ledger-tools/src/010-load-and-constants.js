@@ -141,6 +141,27 @@ function ensureDateMarksRefresh() {
   }
   return dateMarksRefresh;
 }
+// Task Link In Progress marks (bob-cli-56 progress-marks): a
+// StateEffect the consolidated live-refresh fan-out dispatches so
+// Live Preview progress widgets rebuild without a doc change.
+// Defined lazily on first dispatch so requiring the module never
+// adds a second eager `StateEffect.define()` call (the
+// freshness-mark surfaces suite shares one stub effect type across
+// every eager define).
+let progressMarksRefresh = null;
+function ensureProgressMarksRefresh() {
+  if (progressMarksRefresh) {
+    return progressMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      progressMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    progressMarksRefresh = null;
+  }
+  return progressMarksRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;

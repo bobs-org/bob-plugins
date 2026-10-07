@@ -1313,3 +1313,84 @@ body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task
     transition: none;
   }
 }
+
+/* Task Link In Progress marks (bob-cli-56 progress-marks): one small
+   amber half-filled ring before each In Progress Task Link under
+   today's open Pomodoros. Display-only; nothing ever writes it. The
+   glyph is a ring with its right half filled (a Linear-style "in
+   progress" circle) in a 16-unit box: an unfilled ring (stroke) plus
+   a filled right-half disc (`path`), so the shape carries the
+   meaning and the mark never relies on color alone. Geometry
+   (tunable by ±0.3 units): ring `cx 8 cy 8 r 6.05`, `stroke-width
+   1.9`; half disc `M8 4.1A3.9 3.9 0 0 1 8 11.9Z`. One mask
+   definition below, shared by the Live Preview host and the
+   Reading-view host. */
+
+body {
+  --bob-progress-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.05' fill='none' stroke='black' stroke-width='1.9'/%3E%3Cpath d='M8 4.1A3.9 3.9 0 0 1 8 11.9Z'/%3E%3C/svg%3E");
+}
+
+/* Plugin hosts: `span.bob-progress-mark[data-block-id]` emitted by
+   the plugin's JS (Live Preview widget plus Reading-view
+   post-processor), with the glyph drawn by the shared mask layer. */
+
+.bob-progress-mark {
+  --bob-progress-ink: var(--bob-progress-mark-color, var(--task-status-in-progress, var(--color-yellow)));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15em;
+  height: 1.15em;
+  margin-inline-end: 0.3em;
+  border-radius: 999px;
+  color: var(--bob-progress-ink);
+  line-height: 1;
+  vertical-align: -0.18em;
+  opacity: 0.92;
+  user-select: none;
+  cursor: default;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease;
+  animation: bob-progress-mark-in 160ms ease;
+}
+
+.bob-progress-mark::before {
+  content: "";
+  width: 1em;
+  height: 1em;
+  background-color: var(--bob-progress-ink);
+  -webkit-mask-image: var(--bob-progress-glyph);
+  mask-image: var(--bob-progress-glyph);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+.bob-progress-mark:hover {
+  opacity: 1;
+  background-color: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+body:not(.bob-progress-marks) .bob-progress-mark {
+  display: none;
+}
+
+@keyframes bob-progress-mark-in {
+  from {
+    opacity: 0;
+    scale: 0.6;
+  }
+  to {
+    opacity: 0.92;
+    scale: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-progress-mark {
+    animation: none;
+    transition: none;
+  }
+}

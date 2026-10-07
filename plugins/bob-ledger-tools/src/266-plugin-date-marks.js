@@ -315,26 +315,15 @@ class BobLedgerToolsDateMarksMixin {
                   try {
                     const absFrom = line.from + source.fieldStart;
                     const absTo = line.from + source.fieldEnd;
-                    // Reveal per field: hide while any selection
-                    // overlaps this field span (fold excluded).
-                    let revealed = false;
-                    for (const selection of selectionRanges) {
-                      try {
-                        if (
-                          selection &&
-                          typeof selection.from === "number" &&
-                          typeof selection.to === "number" &&
-                          selection.from <= absTo &&
-                          selection.to >= absFrom
-                        ) {
-                          revealed = true;
-                          break;
-                        }
-                      } catch (error) {
-                        continue;
-                      }
-                    }
-                    if (revealed) {
+                    // Reveal per field, and never hide a caret in
+                    // the folded run (see `dateMarkSelectionFold`).
+                    const fold = dateMarkSelectionFold(
+                      absFrom,
+                      absTo,
+                      source.foldLength,
+                      selectionRanges,
+                    );
+                    if (fold === null) {
                       continue;
                     }
                     let inCode = false;
@@ -356,15 +345,12 @@ class BobLedgerToolsDateMarksMixin {
                     if (!model) {
                       continue;
                     }
-                    const from = absFrom - source.foldLength;
+                    const from = absFrom - fold;
                     builder.add(
                       from,
                       absTo,
                       Decoration.replace({
-                        widget: new DateMarkWidget(
-                          model,
-                          source.foldLength,
-                        ),
+                        widget: new DateMarkWidget(model, fold),
                       }),
                     );
                   } catch (error) {

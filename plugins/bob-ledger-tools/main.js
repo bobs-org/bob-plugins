@@ -8603,11 +8603,85 @@ function dateMarkFoldLength(lineText, fieldStart, contentStart) {
   }
 }
 
+// The fold a field keeps for `selectionRanges` (absolute document
+// offsets): null reveals the raw field, 0 keeps the mark but folds
+// no spaces. The interior of a `Decoration.replace` range cannot
+// hold a caret: an endpoint strictly inside the folded run sits at
+// a hidden offset, so the browser inserts after the widget while
+// the selection stays behind it and each keystroke lands in front
+// of the previous one. Unfolding while an endpoint rests in the
+// run keeps the cursor in real text; the fold returns once it
+// leaves. Never throws: bad input yields 0, because no fold may
+// ever hide a cursor.
+function dateMarkSelectionFold(
+  fieldStart,
+  fieldEnd,
+  foldLength,
+  selectionRanges,
+) {
+  try {
+    const start = Number(fieldStart);
+    const end = Number(fieldEnd);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return 0;
+    }
+    let folds = Number(foldLength) || 0;
+    if (!Number.isFinite(folds) || folds < 0) {
+      folds = 0;
+    }
+    folds = Math.floor(folds);
+    const ranges = Array.isArray(selectionRanges) ? selectionRanges : [];
+    for (const selection of ranges) {
+      try {
+        if (
+          !selection ||
+          typeof selection.from !== "number" ||
+          typeof selection.to !== "number"
+        ) {
+          continue;
+        }
+        if (selection.from <= end && selection.to >= start) {
+          return null;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    const runStart = start - folds;
+    for (const selection of ranges) {
+      try {
+        if (
+          !selection ||
+          typeof selection.from !== "number" ||
+          typeof selection.to !== "number"
+        ) {
+          continue;
+        }
+        if (
+          (selection.from > runStart && selection.from < start) ||
+          (selection.to > runStart && selection.to < start)
+        ) {
+          return 0;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    return folds;
+  } catch (error) {
+    return 0;
+  }
+}
+
 // A Live Preview line's date-mark sources, in line order: canonical
 // fields plus `foldLength` per the folding rule. The space in front of
 // a field stays outside any neighbouring mark's range, because only
-// the spaces strictly before the field fold. Returns a frozen array of
-// frozen `{ field, date, fieldStart, fieldEnd, foldLength }`. Never
+// the spaces strictly before the field fold. A replace range never
+// keeps a selection endpoint strictly inside it: while a cursor or
+// selection end rests in the folded run, that field's mark is
+// emitted with fold 0 (see `dateMarkSelectionFold`). Returns a
+// frozen array of frozen
+// `{ field, date, fieldStart, fieldEnd, foldLength }`. Never
 // throws.
 function dateMarkSources(lineText) {
   try {
@@ -8896,9 +8970,12 @@ function buildDateMarkElement(doc, model, options) {
 
 // Live Preview widget for one date mark. `eq` compares a model key
 // plus `foldLength`, so unchanged marks never flicker and a new day
-// always re-renders. `toDOM` builds the listener-free element and adds
-// the reveal-on-mousedown listener only. Defined only when `WidgetType`
-// exists; otherwise null and the extension is not registered.
+// always re-renders. `foldLength` is the fold actually emitted: 0
+// while a selection endpoint rests in the folded run, so the range
+// never hides a caret. `toDOM` builds the listener-free element and
+// adds the reveal-on-mousedown listener only. Defined only when
+// `WidgetType` exists; otherwise null and the extension is not
+// registered.
 let DateMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   DateMarkWidget = class extends WidgetType {
@@ -19120,26 +19197,15 @@ class BobLedgerToolsDateMarksMixin {
                   try {
                     const absFrom = line.from + source.fieldStart;
                     const absTo = line.from + source.fieldEnd;
-                    // Reveal per field: hide while any selection
-                    // overlaps this field span (fold excluded).
-                    let revealed = false;
-                    for (const selection of selectionRanges) {
-                      try {
-                        if (
-                          selection &&
-                          typeof selection.from === "number" &&
-                          typeof selection.to === "number" &&
-                          selection.from <= absTo &&
-                          selection.to >= absFrom
-                        ) {
-                          revealed = true;
-                          break;
-                        }
-                      } catch (error) {
-                        continue;
-                      }
-                    }
-                    if (revealed) {
+                    // Reveal per field, and never hide a caret in
+                    // the folded run (see `dateMarkSelectionFold`).
+                    const fold = dateMarkSelectionFold(
+                      absFrom,
+                      absTo,
+                      source.foldLength,
+                      selectionRanges,
+                    );
+                    if (fold === null) {
                       continue;
                     }
                     let inCode = false;
@@ -19161,15 +19227,12 @@ class BobLedgerToolsDateMarksMixin {
                     if (!model) {
                       continue;
                     }
-                    const from = absFrom - source.foldLength;
+                    const from = absFrom - fold;
                     builder.add(
                       from,
                       absTo,
                       Decoration.replace({
-                        widget: new DateMarkWidget(
-                          model,
-                          source.foldLength,
-                        ),
+                        widget: new DateMarkWidget(model, fold),
                       }),
                     );
                   } catch (error) {
@@ -25909,6 +25972,7 @@ module.exports.helpers = {
   dateMarkCanonicalFields,
   dateMarkContentStart,
   dateMarkSources,
+  dateMarkSelectionFold,
   dateMarkSourcesInText,
   dateMarkRelativePhrase,
   dateMarkLabel,

@@ -181,6 +181,7 @@ const {
   dateMarkCanonicalFields,
   dateMarkContentStart,
   dateMarkSources,
+  dateMarkSelectionFold,
   dateMarkSourcesInText,
   dateMarkRelativePhrase,
   dateMarkLabel,
@@ -862,6 +863,187 @@ test("widget mousedown anchors at the field start for folds 0, 1, and 2", () => 
     handlers.mousedown({ preventDefault: () => {} });
     const last = view.dispatched[view.dispatched.length - 1];
     assert.equal(last.selection.anchor, 42 + 2);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+});
+
+test("DM24 a cursor in the folded run unfolds the mark (vim cw)", () => {
+  const plugin = pluginWithToday();
+  const line = "- [ ] #task  [created:: 2026-10-07]";
+  // Between the two spaces: the mark keeps rendering, but folds
+  // nothing, so the cursor sits in real text.
+  const unfolded = plugin.buildDateMarkDecorations(
+    makeView({ lines: [line], selection: [{ from: 12, to: 12 }] }),
+  );
+  assert.equal(unfolded.adds.length, 1);
+  assert.equal(unfolded.adds[0].from, 13);
+  assert.equal(unfolded.adds[0].to, 35);
+  assert.equal(unfolded.adds[0].value.widget.foldLength, 0);
+  // At the run start (the range boundary) the fold stays.
+  const boundary = plugin.buildDateMarkDecorations(
+    makeView({ lines: [line], selection: [{ from: 11, to: 11 }] }),
+  );
+  assert.equal(boundary.adds.length, 1);
+  assert.equal(boundary.adds[0].from, 11);
+  assert.equal(boundary.adds[0].to, 35);
+  assert.equal(boundary.adds[0].value.widget.foldLength, 2);
+  // After typing `b` the run is one space and the cursor sits at
+  // its start, so the fold is back and typing stays in order.
+  const typed = "- [ ] #task b [created:: 2026-10-07]";
+  const after = plugin.buildDateMarkDecorations(
+    makeView({ lines: [typed], selection: [{ from: 13, to: 13 }] }),
+  );
+  assert.equal(after.adds.length, 1);
+  assert.equal(after.adds[0].from, 13);
+  assert.equal(after.adds[0].to, 36);
+  assert.equal(after.adds[0].value.widget.foldLength, 1);
+});
+
+test("DM25 a cursor in Tasks double space unfolds only that field", () => {
+  const plugin = pluginWithToday();
+  const line =
+    "- [x] #task Review skill [created:: 2026-08-29]  [completion:: 2026-09-03] ^review";
+  const unfolded = plugin.buildDateMarkDecorations(
+    makeView({ lines: [line], selection: [{ from: 48, to: 48 }] }),
+  );
+  assert.equal(unfolded.adds.length, 2);
+  assert.equal(unfolded.adds[0].from, 24);
+  assert.equal(unfolded.adds[0].to, 47);
+  assert.equal(unfolded.adds[0].value.widget.foldLength, 1);
+  assert.equal(unfolded.adds[1].from, 49);
+  assert.equal(unfolded.adds[1].to, 74);
+  assert.equal(unfolded.adds[1].value.widget.foldLength, 0);
+});
+
+test("a selection ending inside the run unfolds; ending at its start keeps the fold", () => {
+  const plugin = pluginWithToday();
+  const line = "- [ ] #task  [created:: 2026-10-07]";
+  const inside = plugin.buildDateMarkDecorations(
+    makeView({ lines: [line], selection: [{ from: 5, to: 12 }] }),
+  );
+  assert.equal(inside.adds.length, 1);
+  assert.equal(inside.adds[0].from, 13);
+  assert.equal(inside.adds[0].value.widget.foldLength, 0);
+  const atStart = plugin.buildDateMarkDecorations(
+    makeView({ lines: [line], selection: [{ from: 5, to: 11 }] }),
+  );
+  assert.equal(atStart.adds.length, 1);
+  assert.equal(atStart.adds[0].from, 11);
+  assert.equal(atStart.adds[0].value.widget.foldLength, 2);
+});
+
+test("no emitted decoration ever hides a cursor, and reveal still means field overlap", () => {
+  const plugin = pluginWithToday();
+  const lines = [
+    "- [ ] #task Buy milk [created:: 2026-10-07]",
+    "- [x] #task Review skill [created:: 2026-08-29]  [completion:: 2026-09-03] ^review",
+    "- [ ] #task A [fresh:: 2026-10-05] [created::2026-09-29] [scheduled:: 2026-10-09]",
+    "> - [ ] #task Quoted [created:: 2026-10-01]",
+    "- [ ] #task  [created:: 2026-10-07]",
+    "- [ ] #task foo   [scheduled:: 2026-10-09]",
+  ];
+  for (const line of lines) {
+    const sources = dateMarkSources(line);
+    assert.ok(sources.length >= 1, line);
+    for (let offset = 0; offset <= line.length; offset += 1) {
+      const decorations = plugin.buildDateMarkDecorations(
+        makeView({ lines: [line], selection: [{ from: offset, to: offset }] }),
+      );
+      for (const decoration of decorations.adds) {
+        assert.ok(
+          !(decoration.from < offset && offset < decoration.to),
+          line + " hides cursor " + offset,
+        );
+      }
+      for (const source of sources) {
+        const revealed = !decorations.adds.some(
+          (decoration) => decoration.to === source.fieldEnd,
+        );
+        assert.equal(
+          revealed,
+          offset >= source.fieldStart && offset <= source.fieldEnd,
+          line + " reveal at " + offset,
+        );
+      }
+    }
+  }
+});
+
+test("dateMarkSelectionFold: reveal, unfold, fold, and garbage input", () => {
+  // Reveal wins: any overlap with the field span, inclusive.
+  assert.equal(
+    dateMarkSelectionFold(13, 35, 2, [{ from: 13, to: 13 }]),
+    null,
+  );
+  assert.equal(
+    dateMarkSelectionFold(13, 35, 2, [{ from: 35, to: 35 }]),
+    null,
+  );
+  assert.equal(
+    dateMarkSelectionFold(13, 35, 2, [
+      { from: 0, to: 12 },
+      { from: 20, to: 20 },
+    ]),
+    null,
+  );
+  // Unfold: an endpoint strictly inside the run.
+  assert.equal(dateMarkSelectionFold(13, 35, 2, [{ from: 12, to: 12 }]), 0);
+  assert.equal(dateMarkSelectionFold(13, 35, 2, [{ from: 0, to: 12 }]), 0);
+  // Boundaries keep the fold.
+  assert.equal(dateMarkSelectionFold(13, 35, 2, [{ from: 11, to: 11 }]), 2);
+  assert.equal(dateMarkSelectionFold(13, 35, 2, [{ from: 5, to: 11 }]), 2);
+  assert.equal(dateMarkSelectionFold(13, 35, 2, []), 2);
+  // Fold 0 and 1 have no interior integer, so they never unfold.
+  assert.equal(dateMarkSelectionFold(14, 36, 1, [{ from: 13, to: 13 }]), 1);
+  assert.equal(dateMarkSelectionFold(25, 47, 0, [{ from: 25, to: 25 }]), null);
+  assert.equal(dateMarkSelectionFold(25, 47, 0, [{ from: 0, to: 0 }]), 0);
+  // The widget coercion applies: fractions floor, negatives clear.
+  assert.equal(dateMarkSelectionFold(13, 35, 2.9, []), 2);
+  assert.equal(dateMarkSelectionFold(13, 35, -2, [{ from: 12, to: 12 }]), 0);
+  // Garbage never throws and never hides a cursor.
+  assert.equal(dateMarkSelectionFold(13, 35, 2, null), 2);
+  assert.equal(dateMarkSelectionFold(13, 35, 2, "x"), 2);
+  assert.equal(dateMarkSelectionFold(13, 35, 2, [null, {}, { from: "a" }]), 2);
+  assert.equal(dateMarkSelectionFold({}, {}, 2, []), 0);
+});
+
+test("mousedown on an unfolded (fold-0) widget anchors at the field start", () => {
+  const plugin = pluginWithToday();
+  const line = "- [ ] #task  [created:: 2026-10-07]";
+  const view = makeView({ lines: [line], selection: [{ from: 12, to: 12 }] });
+  const decorations = plugin.buildDateMarkDecorations(view);
+  assert.equal(decorations.adds.length, 1);
+  assert.equal(decorations.adds[0].value.widget.foldLength, 0);
+  const savedDocument = global.document;
+  const handlers = {};
+  global.document = {
+    createElement: () => ({
+      _attrs: {},
+      children: [],
+      setAttribute(name, value) {
+        this._attrs[name] = value;
+      },
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      addEventListener(name, handler) {
+        handlers[name] = handler;
+      },
+    }),
+    createTextNode: (value) => ({ text: String(value) }),
+  };
+  try {
+    const dom = decorations.adds[0].value.widget.toDOM(view);
+    assert.ok(dom);
+    handlers.mousedown({ preventDefault: () => {} });
+    const last = view.dispatched[view.dispatched.length - 1];
+    assert.equal(last.selection.anchor, 42);
   } finally {
     if (savedDocument === undefined) {
       delete global.document;

@@ -193,6 +193,7 @@ module.exports.helpers = {
   dateMarkCanonicalFields,
   dateMarkContentStart,
   dateMarkSources,
+  dateMarkSelectionFold,
   dateMarkSourcesInText,
   dateMarkRelativePhrase,
   dateMarkLabel,

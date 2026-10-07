@@ -54,6 +54,7 @@ module.exports.helpers = {
   parseInlineIdField,
   parsePomodoroEntryParts,
   planExplicitPomodoroLinkInsertion,
+  PomodoroLinkPickerModal,
   pomodoroLinkSelectorSlug,
   pomodoroRunProgress,
   parseStrictCalendarDate,

@@ -8,6 +8,7 @@
   "070-daily-and-activation-plans.js",
   "075-pomodoro-link-targets.js",
   "080-picker-ui-and-task-link-modal.js",
+  "085-pomodoro-link-picker-modal.js",
   "090-prompt-modals.js",
   "100-plugin-lifecycle.js",
   "110-plugin-block-id-submit.js",

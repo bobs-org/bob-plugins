@@ -255,6 +255,10 @@ function rangeContainsMatchingLink(
 // must stop the command before any note is mutated: no Pomodoros section, no
 // eligible open entry, or more than one open timed entry.
 function planPomodoroLinkInsertion(content, options = {}) {
+  if (options && options.target) {
+    return planExplicitPomodoroLinkInsertion(content, options);
+  }
+
   const blockId = normalizeText(options.blockId);
   const targetPath = resolvedFilePath(options.targetPath);
   const sourcePath = options.sourcePath;

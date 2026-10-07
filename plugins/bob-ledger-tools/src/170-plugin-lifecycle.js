@@ -714,6 +714,10 @@ class BobLedgerToolsPlugin extends Plugin {
       // Body class cleanup is best-effort.
     }
     this.dateMarksDay = null;
+    this.dateMarksEnabled = false;
+    this.tasksDateMarksQueue = [];
+    this.tasksDateMarksPending = false;
+    this.tasksDateMarksDoneSet = null;
     try {
       if (
         typeof document !== "undefined" &&

@@ -227,10 +227,16 @@ class BobLedgerToolsDateMarksTasksMixin {
   // `decorateTasksResultDates` once each (a WeakSet dedup); exhausted
   // entries are dropped silently, leaving Tasks' native emoji dates.
   // In the common case this lands before the next paint, so the emoji
-  // dates never flash. Never throws.
+  // dates never flash. A frame that runs after marks are disabled
+  // drops its queue untouched (a scheduled callback safely no-ops).
+  // Never throws.
   runTasksResultDateMarkFrame() {
     try {
       this.tasksDateMarksPending = false;
+      if (!this.dateMarksEnabled) {
+        this.tasksDateMarksQueue = [];
+        return;
+      }
       const queued = Array.isArray(this.tasksDateMarksQueue)
         ? this.tasksDateMarksQueue
         : [];
@@ -383,7 +389,7 @@ class BobLedgerToolsDateMarksTasksMixin {
       }
       const hosts = [];
       try {
-        const stack = (li.childNodes || []).slice();
+        const stack = Array.from(li.childNodes || []);
         let guard = 0;
         while (stack.length > 0 && guard < 10000) {
           guard += 1;

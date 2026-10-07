@@ -211,14 +211,60 @@ function runFrames(frames) {
 // Minimal fake DOM: elements carry classes, attributes, children, and
 // an ownerDocument with createElement/createTextNode, plus an explicit
 // isConnected flag so tests can model attached vs detached rows.
+// childNodes is a faithful NodeList-like: indexed with length,
+// iterable, and item(), but with no array methods (no slice/map).
 function fakeTasksDom() {
+  function makeChildNodes() {
+    const list = {
+      length: 0,
+      item(index) {
+        const at = Number(index);
+        if (!Number.isInteger(at) || at < 0 || at >= list.length) {
+          return null;
+        }
+        return list[at] !== undefined ? list[at] : null;
+      },
+      [Symbol.iterator]: function* childNodesIterator() {
+        for (let at = 0; at < list.length; at += 1) {
+          yield list[at];
+        }
+      },
+    };
+    return list;
+  }
+  function childNodesAppend(list, child) {
+    list[list.length] = child;
+    list.length += 1;
+  }
+  function childNodesIndexOf(list, child) {
+    for (let at = 0; at < list.length; at += 1) {
+      if (list[at] === child) {
+        return at;
+      }
+    }
+    return -1;
+  }
+  function childNodesInsertAt(list, at, child) {
+    for (let index = list.length; index > at; index -= 1) {
+      list[index] = list[index - 1];
+    }
+    list[at] = child;
+    list.length += 1;
+  }
+  function childNodesRemoveAt(list, at) {
+    for (let index = at; index < list.length - 1; index += 1) {
+      list[index] = list[index + 1];
+    }
+    delete list[list.length - 1];
+    list.length -= 1;
+  }
   function el(tag, className = "") {
     const node = {
       nodeType: 1,
       tagName: String(tag).toUpperCase(),
       nodeName: String(tag).toUpperCase(),
       className,
-      childNodes: [],
+      childNodes: makeChildNodes(),
       get firstChild() {
         return this.childNodes.length > 0 ? this.childNodes[0] : null;
       },
@@ -257,7 +303,7 @@ function fakeTasksDom() {
         if (!wanted) {
           return null;
         }
-        const stack = node.childNodes.slice();
+        const stack = Array.from(node.childNodes || []);
         while (stack.length > 0) {
           const candidate = stack.pop();
           if (
@@ -277,23 +323,23 @@ function fakeTasksDom() {
       },
       appendChild(child) {
         child.parentNode = node;
-        node.childNodes.push(child);
+        childNodesAppend(node.childNodes, child);
         return child;
       },
       insertBefore(child, ref) {
         child.parentNode = node;
-        const at = ref ? node.childNodes.indexOf(ref) : -1;
+        const at = ref ? childNodesIndexOf(node.childNodes, ref) : -1;
         if (at === -1) {
-          node.childNodes.push(child);
+          childNodesAppend(node.childNodes, child);
         } else {
-          node.childNodes.splice(at, 0, child);
+          childNodesInsertAt(node.childNodes, at, child);
         }
         return child;
       },
       removeChild(child) {
-        const at = node.childNodes.indexOf(child);
+        const at = childNodesIndexOf(node.childNodes, child);
         if (at !== -1) {
-          node.childNodes.splice(at, 1);
+          childNodesRemoveAt(node.childNodes, at);
         }
         child.parentNode = null;
         return child;
@@ -350,12 +396,33 @@ function markRootsIn(root) {
 function markLabel(mark) {
   const labelEl = mark.querySelector(".bob-date-mark-label");
   assert.ok(labelEl, "mark has a label span");
-  const bits = (labelEl.childNodes || [])
+  const bits = Array.from(labelEl.childNodes || [])
     .map((child) =>
       typeof child.nodeValue === "string" ? child.nodeValue : "",
     )
     .join("");
   return bits;
+}
+
+function innerTextOf(host) {
+  const stack = Array.from(host.childNodes || []);
+  const bits = [];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.nodeType === 3) {
+      bits.push(
+        typeof node.nodeValue === "string" ? node.nodeValue : "",
+      );
+      continue;
+    }
+    for (const child of (node && node.childNodes) || []) {
+      stack.push(child);
+    }
+  }
+  return bits.reverse().join("");
 }
 
 // One complete Tasks result row:
@@ -571,6 +638,154 @@ test("the Tasks pass never throws on hostile input", () => {
   plugin.scheduleTasksResultDateMarks(42);
   plugin.dateMarksRequestFrame(null);
   plugin.runTasksResultDateMarkFrame();
+});
+
+test("T10 real-DOM NodeList children decorate via direct and queued passes", () => {
+  const plugin = pluginWithToday();
+  const fx = fakeTasksDom();
+  const row = tasksRow(fx, "task-scheduled", " ⏳ 2026-10-09", "");
+  for (const node of [row.li, row.body, row.host, row.inner]) {
+    assert.equal(
+      typeof node.childNodes.slice,
+      "undefined",
+      "childNodes has no array slice",
+    );
+    assert.equal(Array.isArray(node.childNodes), false);
+    assert.equal(
+      typeof node.childNodes[Symbol.iterator],
+      "function",
+      "childNodes stays iterable",
+    );
+  }
+  assert.equal(plugin.decorateTasksResultDates(row.li, TODAY), 1);
+  assert.equal(row.host.getAttribute("data-bob-date-mark"), "true");
+  const direct = markRootsIn(row.host);
+  assert.equal(direct.length, 1);
+  assert.equal(markLabel(direct[0]), "Fri");
+  assert.equal(direct[0].getAttribute("data-field"), "scheduled");
+  assert.ok(
+    innerTextOf(row.host).includes("2026-10-09"),
+    "native inner span text stays",
+  );
+  assert.equal(
+    plugin.decorateTasksResultDates(row.li, TODAY),
+    0,
+    "direct pass stays idempotent",
+  );
+  assert.equal(markRootsIn(row.host).length, 1);
+
+  const queued = pluginWithToday();
+  const queuedFrames = manualScheduler(queued);
+  const queuedFx = fakeTasksDom();
+  const queuedRow = tasksRow(
+    queuedFx,
+    "task-scheduled",
+    " ⏳ 2026-10-09",
+    "",
+  );
+  assert.equal(typeof queuedRow.li.childNodes.slice, "undefined");
+  queued.scheduleTasksResultDateMarks(queuedRow.body);
+  assert.equal(queuedFrames.length, 1);
+  runFrames(queuedFrames);
+  const marks = markRootsIn(queuedRow.host);
+  assert.equal(marks.length, 1);
+  assert.equal(markLabel(marks[0]), "Fri");
+  assert.ok(innerTextOf(queuedRow.host).includes("2026-10-09"));
+  assert.equal(
+    queued.decorateTasksResultDates(queuedRow.li, TODAY),
+    0,
+    "queued pass stays idempotent",
+  );
+});
+
+test("T11 toggling off before a queued frame runs writes nothing", () => {
+  const plugin = pluginWithToday();
+  const frames = manualScheduler(plugin);
+  const fx = fakeTasksDom();
+  const row = tasksRow(fx, "task-scheduled", " ⏳ 2026-10-09", "");
+  plugin.scheduleTasksResultDateMarks(row.body);
+  assert.equal(frames.length, 1);
+  assert.equal(plugin.toggleDateMarks(), false);
+  runFrames(frames);
+  assert.equal(markRootsIn(row.host).length, 0);
+  assert.equal(row.host.getAttribute("data-bob-date-mark"), null);
+  assert.deepEqual(plugin.tasksDateMarksQueue, []);
+  assert.equal(plugin.tasksDateMarksPending, false);
+  assert.equal(plugin.toggleDateMarks(), true);
+  const retryFx = fakeTasksDom();
+  const retry = tasksRow(
+    retryFx,
+    "task-scheduled",
+    " ⏳ 2026-10-09",
+    "",
+  );
+  plugin.scheduleTasksResultDateMarks(retry.body);
+  assert.equal(frames.length, 1, "scheduler accepts new rows after re-enable");
+  runFrames(frames);
+  assert.equal(markRootsIn(retry.host).length, 1);
+  assert.equal(markLabel(markRootsIn(retry.host)[0]), "Fri");
+});
+
+test("T12 a pending-row retry followed by disabling writes nothing", () => {
+  const plugin = pluginWithToday();
+  const frames = manualScheduler(plugin);
+  const fx = fakeTasksDom();
+  const row = tasksRow(fx, "task-scheduled", " ⏳ 2026-10-09", null);
+  plugin.scheduleTasksResultDateMarks(row.body);
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.equal(
+    markRootsIn(row.host).length,
+    0,
+    "no mark while data-task is missing",
+  );
+  assert.ok(frames.length > 0, "the pending row is retried");
+  assert.equal(plugin.toggleDateMarks(), false);
+  row.li.setAttribute("data-task", "");
+  runFrames(frames);
+  assert.equal(
+    markRootsIn(row.host).length,
+    0,
+    "no mark after disable even once complete",
+  );
+  assert.deepEqual(plugin.tasksDateMarksQueue, []);
+  assert.equal(plugin.toggleDateMarks(), true);
+  plugin.scheduleTasksResultDateMarks(row.body);
+  runFrames(frames);
+  assert.equal(markRootsIn(row.host).length, 1);
+  assert.equal(markLabel(markRootsIn(row.host)[0]), "Fri");
+});
+
+test("T13 unloading before a callback runs writes nothing", () => {
+  const plugin = pluginWithToday();
+  const frames = manualScheduler(plugin);
+  const fx = fakeTasksDom();
+  const row = tasksRow(fx, "task-scheduled", " ⏳ 2026-10-09", "");
+  plugin.scheduleTasksResultDateMarks(row.body);
+  assert.equal(frames.length, 1);
+  plugin.onunload();
+  assert.equal(plugin.dateMarksEnabled, false);
+  runFrames(frames);
+  assert.equal(
+    markRootsIn(row.host).length,
+    0,
+    "no DOM write after shutdown",
+  );
+  assert.equal(row.host.getAttribute("data-bob-date-mark"), null);
+  assert.deepEqual(plugin.tasksDateMarksQueue, []);
+  plugin.dateMarksEnabled = true;
+  const revivedFx = fakeTasksDom();
+  const revived = tasksRow(
+    revivedFx,
+    "task-scheduled",
+    " ⏳ 2026-10-09",
+    "",
+  );
+  plugin.scheduleTasksResultDateMarks(revived.body);
+  assert.equal(frames.length, 1, "scheduler works after re-enable");
+  runFrames(frames);
+  assert.equal(markRootsIn(revived.host).length, 1);
+  assert.equal(markLabel(markRootsIn(revived.host)[0]), "Fri");
 });
 
 test("styles.css covers the Tasks hosts: hide, toggle-off, and short-mode glyphs", () => {

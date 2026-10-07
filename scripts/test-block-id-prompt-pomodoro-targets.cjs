@@ -549,6 +549,56 @@ test("planExplicitPomodoroLinkInsertion preserves CRLF and a missing final newli
   );
 });
 
+test("buildPomodoroLinkPickerRows suppresses creates for mixed-case exact names", () => {
+  const content = ["## Pomodoros", "- [ ] () — Deep Work"].join("\n");
+  const model = helpers.buildPomodoroLinkPickerModel(content, {});
+  const { rows } = helpers.buildPomodoroLinkPickerRows(model, "deep work");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "existing");
+  assert.equal(rows[0].entry.title, "Deep Work");
+  const intent = helpers.resolvePomodoroLinkCreateIntent(model, "deep work");
+  assert.equal(intent.kind, "existing");
+  assert.equal(intent.entry.title, "Deep Work");
+});
+
+test("buildPomodoroLinkPickerRows keeps againOf for completed mixed-case names", () => {
+  const content = ["## Pomodoros", "- [x] () — Taxes", "- [ ] () — FOCUS"].join("\n");
+  const model = helpers.buildPomodoroLinkPickerModel(content, {});
+  const { rows } = helpers.buildPomodoroLinkPickerRows(model, "taxes");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "new");
+  assert.equal(rows[0].name, "TAXES");
+  assert.equal(rows[0].againOf, "Taxes");
+});
+
+test("planExplicitPomodoroLinkInsertion matches mixed-case raced open names", () => {
+  const daily = ["## Pomodoros", "- [ ] () — Deep Work", "- [ ] () — LATER"].join("\n");
+  const plan = helpers.planExplicitPomodoroLinkInsertion(daily, linkBase({
+    target: { kind: "new", name: "DEEP WORK" },
+  }));
+  assert.equal(plan.destination.matchedExisting, true);
+  assert.equal(plan.destination.kind, "existing");
+  assert.equal(plan.entryLine, 1);
+  assert.ok(!plan.content.includes("— DEEP WORK"));
+  assert.ok(plan.content.includes("- [ ] () — Deep Work\n\t- [[Tasks#^task1]]"));
+});
+
+test("buildPomodoroLinkPickerRows bounds #N position matches", () => {
+  const names = ["P01", "P02", "P03", "P04", "P05", "P06", "P07", "P08", "P09", "P10"];
+  const content = ["## Pomodoros", ...names.map((name) => `- [ ] () — ${name}`)].join("\n");
+  const model = helpers.buildPomodoroLinkPickerModel(content, {});
+
+  const ten = helpers.buildPomodoroLinkPickerRows(model, "#10");
+  assert.ok(ten.rows.some((row) => row.kind === "existing" && row.entry.position === 10));
+  assert.ok(!ten.rows.some((row) => row.kind === "existing" && row.entry.position === 1));
+
+  const one = helpers.buildPomodoroLinkPickerRows(model, "#1!");
+  assert.ok(one.rows.some((row) => row.kind === "existing" && row.entry.position === 1));
+
+  const two = helpers.buildPomodoroLinkPickerRows(model, "#2");
+  assert.ok(two.rows.some((row) => row.kind === "existing" && row.entry.position === 2));
+});
+
 test("planPomodoroLinkInsertion without a target keeps today's behavior and shape", () => {
   const daily = ["## Pomodoros", "- [ ] (10:00-10:25) — Current", "- [ ] () — Next"].join("\n");
   const plan = helpers.planPomodoroLinkInsertion(daily, linkBase());

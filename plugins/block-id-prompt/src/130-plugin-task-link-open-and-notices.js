@@ -463,11 +463,12 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       ) {
         return null;
       }
-      const over =
-        budget.status === "over" || themes.over === true || links.over === true;
+      const themesOver = themes.over === true;
+      const linksOver = links.over === true;
+      const over = budget.status === "over" || themesOver || linksOver;
       return {
-        themes: { count: themes.count, cap: themes.cap, over: themes.over === true || budget.status === "over" },
-        links: { count: links.count, cap: links.cap, over: links.over === true || budget.status === "over" },
+        themes: { count: themes.count, cap: themes.cap, over: themesOver },
+        links: { count: links.count, cap: links.cap, over: linksOver },
         over,
         status: budget.status,
       };

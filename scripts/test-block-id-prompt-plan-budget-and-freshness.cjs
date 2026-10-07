@@ -411,6 +411,36 @@ test("Ctrl+Shift+Enter on a malformed Depends-On line is refused without deletin
   assert.equal(lastNotice(), "⛓ Dependency link — edit it with Ctrl+Shift+P");
 });
 
+test("readPlanBudgetMeter keeps per-cap over flags independent", () => {
+  const plugin = new Plugin();
+  plugin.app = {};
+  stubPlanBudgetApi(plugin, {
+    status: "over",
+    themes: { count: 2, cap: 3, over: false },
+    links: { count: 11, cap: 10, over: true },
+  });
+  const meter = plugin.readPlanBudgetMeter("## Pomodoros\n- [ ] () — FOCUS");
+  assert.equal(meter.themes.over, false);
+  assert.equal(meter.links.over, true);
+  assert.equal(meter.over, true);
+  assert.deepEqual([meter.themes.count, meter.themes.cap], [2, 3]);
+  assert.deepEqual([meter.links.count, meter.links.cap], [11, 10]);
+});
+
+test("readPlanBudgetMeter keeps per-cap over flags independent (mirror)", () => {
+  const plugin = new Plugin();
+  plugin.app = {};
+  stubPlanBudgetApi(plugin, {
+    status: "over",
+    themes: { count: 4, cap: 3, over: true },
+    links: { count: 2, cap: 10, over: false },
+  });
+  const meter = plugin.readPlanBudgetMeter("## Pomodoros\n- [ ] () — FOCUS");
+  assert.equal(meter.themes.over, true);
+  assert.equal(meter.links.over, false);
+  assert.equal(meter.over, true);
+});
+
 test("block-id-prompt freshness accessors degrade without ledger-tools", () => {
   const plugin = new Plugin();
   plugin.app = {};

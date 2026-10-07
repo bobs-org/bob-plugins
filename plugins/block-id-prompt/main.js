@@ -3638,6 +3638,15 @@ function canonicalizePomodoroLinkName(raw) {
   return { valid: true, name, error: null };
 }
 
+// Canonical name for a stored entry `name`, or "" when missing/invalid.
+function canonicalPomodoroEntryName(name) {
+  if (typeof name !== "string" || !name.trim()) {
+    return "";
+  }
+  const canonical = canonicalizePomodoroLinkName(name);
+  return canonical.valid ? canonical.name : "";
+}
+
 // Capture parity (`is_pomodoro_name` over task-section titles plus `+` in
 // the non-leading position): first char A-Z/0-9, the rest A-Z 0-9 space tab
 // `& ' ( ) + , . / -`, and at least one ASCII letter present.
@@ -4077,8 +4086,18 @@ function rankPomodoroLinkEntry(entry, needle, query) {
       return { tier: 3, field: "time", text: entry.range.text };
     }
   }
-  if (query.includes(`#${entry.position}`)) {
-    return { tier: 3, field: "position", text: `#${entry.position}` };
+  const positionToken = `#${entry.position}`;
+  let positionFrom = 0;
+  while (true) {
+    const found = query.indexOf(positionToken, positionFrom);
+    if (found === -1) {
+      break;
+    }
+    const next = query[found + positionToken.length];
+    if (next === undefined || !/[0-9]/.test(next)) {
+      return { tier: 3, field: "position", text: `#${entry.position}` };
+    }
+    positionFrom = found + 1;
   }
   const blockHit = (entry.links || []).find((link) =>
     asciiLowercasePomodoroText(link.blockId || "").includes(query),
@@ -4143,11 +4162,13 @@ function buildPomodoroLinkPickerRows(model, rawQuery) {
 
   const canonical = canonicalizePomodoroLinkName(query);
   if (canonical.valid) {
-    const exactOpen = model.entries.some((entry) => entry.name === canonical.name);
+    const exactOpen = model.entries.some(
+      (entry) => canonicalPomodoroEntryName(entry.name) === canonical.name,
+    );
     if (!exactOpen) {
       if (model.creation && model.creation.allowed) {
         const againEntry = (model.allEntries || []).find(
-          (entry) => !entry.open && entry.name === canonical.name,
+          (entry) => !entry.open && canonicalPomodoroEntryName(entry.name) === canonical.name,
         );
         rows.push({
           kind: "new",
@@ -4200,7 +4221,9 @@ function resolvePomodoroLinkCreateIntent(model, rawQuery) {
     return { kind: "none", reason: "invalid-name" };
   }
 
-  const exact = (model.entries || []).find((entry) => entry.name === canonical.name);
+  const exact = (model.entries || []).find(
+    (entry) => canonicalPomodoroEntryName(entry.name) === canonical.name,
+  );
   if (exact) {
     return { kind: "existing", entry: exact };
   }
@@ -4348,7 +4371,9 @@ function planNewPomodoroLinkInsertion(
 ) {
   const { blockId, targetPath, sourcePath, resolveTarget, linkText } = linkOptions;
   const collected = collectPomodoroLinkEntries(snapshot);
-  const race = collected.entries.find((entry) => entry.open && entry.name === name);
+  const race = collected.entries.find(
+    (entry) => entry.open && canonicalPomodoroEntryName(entry.name) === name,
+  );
   if (race) {
     return planExistingPomodoroLinkInsertion(
       snapshot,
@@ -8366,11 +8391,12 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       ) {
         return null;
       }
-      const over =
-        budget.status === "over" || themes.over === true || links.over === true;
+      const themesOver = themes.over === true;
+      const linksOver = links.over === true;
+      const over = budget.status === "over" || themesOver || linksOver;
       return {
-        themes: { count: themes.count, cap: themes.cap, over: themes.over === true || budget.status === "over" },
-        links: { count: links.count, cap: links.cap, over: links.over === true || budget.status === "over" },
+        themes: { count: themes.count, cap: themes.cap, over: themesOver },
+        links: { count: links.count, cap: links.cap, over: linksOver },
         over,
         status: budget.status,
       };

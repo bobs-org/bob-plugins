@@ -264,7 +264,7 @@ function resolveReviewQueueLine(content, entry) {
 // Tier-aware jump notice. v4 entries (with per-tier ranks) read
 // `Review {rank}/{total} · {TIER} {tierRank}/{tierTotal} · {detail}`:
 // NEW has no detail; PROJECTS names the empty-project confirmation;
-// PENDING/NEXT name the confirmation age; RETURNED names the return
+// PENDING/NEXT name the confirmation age; TICKLER names the return
 // date; ROTTEN names the overdue age and interval (or `due today`).
 // Lane tiers add a second line with the keep/release/today actions.
 // Legacy v3 entries keep today's state text.
@@ -365,14 +365,14 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
       }
     } else if (tier === "pending" || tier === "next") {
       detail = reviewLaneConfirmedDetail(entry, todayText);
-    } else if (tier === "returned") {
+    } else if (tier === "tickler") {
       const since =
         entry && typeof entry.dueOn === "string" && entry.dueOn
           ? entry.dueOn
           : entry && typeof entry.fresh === "string"
             ? entry.fresh
             : "";
-      detail = since ? `back since ${reviewShortDate(since)}` : "returned";
+      detail = since ? `back since ${reviewShortDate(since)}` : "tickler";
     } else if (tier === "rotten") {
       const interval =
         entry && Number.isInteger(entry.interval) ? entry.interval : null;
@@ -779,7 +779,7 @@ function freshnessSupportsDecayDecisions(freshnessApi) {
 // authorizes counting only when the pre-write queue holds exactly one row
 // with `entry.path === path`, `entry.line === editorLine + 1`,
 // `entry.originalMarkdown === rawLine`, `lane === 'ready'`, and
-// `tier in {'rotten','returned'}`. Line-only or raw-only matches, age,
+// `tier in {'rotten','tickler'}`. Line-only or raw-only matches, age,
 // glyph, bucket alone, block ID alone, a changed line number, or a selected
 // DOM row never authorize. Anything else stamps uncounted through
 // `keepLine` and preserves the streak. Returns `{ ok, entry, reason }`
@@ -815,7 +815,7 @@ function matchFreshStampExactEntry(queueBefore, ref) {
     return Object.freeze({ ok: false, entry, reason: "lane" });
   }
   const tier = reviewEntryMachineTier(entry);
-  if (tier !== "rotten" && tier !== "returned") {
+  if (tier !== "rotten" && tier !== "tickler") {
     return Object.freeze({ ok: false, entry, reason: "tier" });
   }
   return Object.freeze({ ok: true, entry, reason: "ok" });

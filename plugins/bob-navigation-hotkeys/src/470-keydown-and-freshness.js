@@ -148,8 +148,9 @@ function reviewIsChecklistTier(tier) {
 
 // Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
 // and `references` tracker tiers and v7 `pre`/`post` checklist tiers),
-// else the legacy v3 `state` mapping (`resurfaced` reads as the RETURNED
-// tier). Returns "".
+// else the legacy v3 `state` mapping (`resurfaced` reads as the TICKLER
+// tier). A `returned` tier reads as `tickler` for a v7 ledger api.
+// Returns "".
 function reviewEntryMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
@@ -161,12 +162,15 @@ function reviewEntryMachineTier(entry) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
-    tier === "returned" ||
+    tier === "tickler" ||
     tier === "references" ||
     tier === "rotten" ||
     tier === "post"
   ) {
     return tier;
+  }
+  if (tier === "returned") {
+    return "tickler";
   }
   const state =
     entry && typeof entry.state === "string"
@@ -179,7 +183,7 @@ function reviewEntryMachineTier(entry) {
     return "rotten";
   }
   if (state === "resurfaced") {
-    return "returned";
+    return "tickler";
   }
   return "";
 }
@@ -209,7 +213,7 @@ function reviewIsCommitmentTier(tier) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
-    tier === "returned" ||
+    tier === "tickler" ||
     tier === "references"
   );
 }
@@ -747,7 +751,7 @@ function matchReviewChecklistCursor(queue, cursor) {
 
 // Remaining walk counts after excluding handled keys: `{ commitments,
 // rotten, post, pre }`. Commitments are the PRE/NEW/PROJECTS/PENDING/
-// NEXT/RETURNED/REFERENCES tiers. POST is the closing tier.
+// NEXT/TICKLER/REFERENCES tiers. POST is the closing tier.
 function reviewWalkRemaining(queue, excludedKeys) {
   const excluded =
     excludedKeys instanceof Set

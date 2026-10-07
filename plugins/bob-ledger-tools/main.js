@@ -3753,7 +3753,7 @@ function setReadyAnchorContent(anchor, model, options = {}) {
 // Shared NEW/ROTTEN chip content: separate label and value spans like
 // the READY badge, so dashboard and rotten-summary chips style like
 // neighboring chips. NEW shows 0 when empty and is red above 0;
-// ROTTEN is neutral at 0, orange above 0, red once any returned or
+// ROTTEN is neutral at 0, orange above 0, red once any tickler or
 // age-expired row is a full interval overdue.
 const REVIEW_LABEL_CLS = "bob-plan-review-label";
 const REVIEW_VALUE_CLS = "bob-plan-review-value";
@@ -4583,7 +4583,7 @@ function readFreshness(line, todayText) {
 // `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v7).
+// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v8).
 
 // Whether the compatible review-walk decision card is present: nav exposes
 // `api.freshnessDecayCard.version >= 2` (ungated handler contract). Version
@@ -4659,12 +4659,12 @@ function coerceFreshnessDecay(raw) {
 
 // Whether a choice is due for a Ready-lane row in `tier` with `keeps`
 // counted keeps under `config`: enabled decay, Ready lane,
-// rotten/returned tier, keeps at or over the limit. The annotation
+// rotten/tickler tier, keeps at or over the limit. The annotation
 // means a choice is due, not permission to execute an action. Mirrors
 // `decide_for` in `src/native/freshness/state.rs`.
 function freshnessDecideFor(lane, tier, keeps, config) {
   try {
-    const dueTier = tier === "rotten" || tier === "returned";
+    const dueTier = tier === "rotten" || tier === "tickler";
     if (!dueTier || lane !== "ready") {
       return false;
     }
@@ -5131,7 +5131,7 @@ function freshnessEvaluateValidScheduled(value) {
 //
 // Returns `{ state ("new"|"resurfaced"|"rotten"|"fresh"|null; null is
 // out of scope, see S13; lane rows keep a null state),
-// tier ("new"|"projects"|"pending"|"next"|"returned"|"references"|"rotten"|null),
+// tier ("new"|"projects"|"pending"|"next"|"tickler"|"references"|"rotten"|null),
 // lane ("ready"|"pending"|"next"|null), fresh, intervalDays,
 // intervalSource, dueOn, daysOverdue, keeps (the valid `[keeps:: N]`
 // semantic count, 0 when absent), decide (a choice is due — never
@@ -5342,7 +5342,7 @@ function freshnessEvaluate(row, todayText, config) {
   } else if (lane === "next" && walkScope && laneDue && !isTracker) {
     tier = "next";
   } else if (state === "resurfaced") {
-    tier = "returned";
+    tier = "tickler";
   } else if (state === "rotten") {
     tier = "rotten";
   }
@@ -5531,7 +5531,7 @@ function freshnessRowKey(row) {
   return path + ":" + row.line;
 }
 
-// Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED →
+// Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER →
 // REFERENCES → ROTTEN → POST. Mirrors the `Tier` ordering in
 // `src/native/freshness/state.rs`.
 const FRESHNESS_TIER_ORDER = {
@@ -5540,7 +5540,7 @@ const FRESHNESS_TIER_ORDER = {
   projects: 2,
   pending: 3,
   next: 4,
-  returned: 5,
+  tickler: 5,
   references: 6,
   rotten: 7,
   post: 8,
@@ -5576,8 +5576,8 @@ function freshnessTierLabel(tier) {
   if (tier === "next") {
     return "NEXT";
   }
-  if (tier === "returned") {
-    return "RETURNED";
+  if (tier === "tickler") {
+    return "TICKLER";
   }
   if (tier === "references") {
     return "REFERENCES";
@@ -5589,6 +5589,20 @@ function freshnessTierLabel(tier) {
     return "POST";
   }
   return "";
+}
+
+// Compact status-bar label for the review footer.
+function freshnessTierFooterLabel(tier) {
+  if (tier === "pending") {
+    return "WIP";
+  }
+  if (tier === "tickler") {
+    return "TICKS";
+  }
+  if (tier === "references") {
+    return "REFS";
+  }
+  return freshnessTierLabel(tier);
 }
 
 // Compare `created` with missing dates always last, in both ascending
@@ -5630,7 +5644,7 @@ function freshnessComparePathLine(a, b) {
 }
 // ---- src/110-freshness-queue.js ----
 // The tiered review queue PRE → NEW → PROJECTS → PENDING → NEXT →
-// RETURNED → REFERENCES → ROTTEN → POST, with each tier's comparator from
+// TICKLER → REFERENCES → ROTTEN → POST, with each tier's comparator from
 // `docs/freshness.md` §4.
 // Entries
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
@@ -5716,7 +5730,7 @@ function freshnessQueue(rows, todayText, config) {
         freshnessComparePathLine(left, right)
       );
     }
-    if (left.tier === "returned") {
+    if (left.tier === "tickler") {
       return (
         freshnessCompareDueOn(left.dueOn, right.dueOn) ||
         freshnessCompareCreated(left.created, right.created, true) ||
@@ -5779,7 +5793,7 @@ function freshnessCounts(rows, todayText, config) {
     projects: 0,
     pending: 0,
     next: 0,
-    returned: 0,
+    tickler: 0,
     references: 0,
     rotten: 0,
     post: 0,
@@ -5850,7 +5864,7 @@ function freshnessCounts(rows, todayText, config) {
     byTier.projects +
     byTier.pending +
     byTier.next +
-    byTier.returned +
+    byTier.tickler +
     byTier.references +
     byTier.rotten +
     byTier.post;
@@ -5916,7 +5930,7 @@ function freshnessCollectLints(rows, todayText, config) {
 // Pure view-model for the status bar counter. `counts` is a
 // `freshnessCounts` result; `mostOverdue` is the queue's largest
 // `daysOverdue` (or null when nothing is due). The meter shows
-// upkeep (`upkeepToday`); ROTTEN includes RETURNED, as on the chip.
+// upkeep (`upkeepToday`); ROTTEN includes TICKLER, as on the chip.
 // Hidden references still count here (they walk through the status
 // bar, `]s`, and the CLI). Mirrors `docs/freshness.md` §4 (freshness
 // namespace v5).
@@ -5932,7 +5946,7 @@ function freshnessStatusView(counts, options = {}) {
   const safe = counts || {};
   // Tier counts drive the surfaces so the shown numbers sum to
   // `walk`. Without a `byTier` histogram fall back to the legacy
-  // state counts. The rotten number keeps folding RETURNED in.
+  // state counts. The rotten number keeps folding TICKLER in.
   const tierCount = (key, legacy) => {
     if (safe.byTier && typeof safe.byTier === "object") {
       const value = safe.byTier[key];
@@ -5947,11 +5961,11 @@ function freshnessStatusView(counts, options = {}) {
   const tierProjects = tierCount("projects", safe.projectsDue);
   const tierPending = tierCount("pending", safe.pendingDue);
   const tierNext = tierCount("next", safe.nextDue);
-  const tierReturned = tierCount("returned", safe.resurfaced);
+  const tierTickler = tierCount("tickler", safe.resurfaced);
   const tierReferences = tierCount("references", safe.referencesDue);
   const tierRotten = tierCount("rotten", safe.rotten);
   const tierPost = tierCount("post", safe.postDue);
-  const rotten = tierReturned + tierRotten;
+  const rotten = tierTickler + tierRotten;
   const walk =
     Number.isInteger(safe.walk) && safe.walk >= 0
       ? safe.walk
@@ -5960,7 +5974,7 @@ function freshnessStatusView(counts, options = {}) {
         tierProjects +
         tierPending +
         tierNext +
-        tierReturned +
+        tierTickler +
         tierReferences +
         tierRotten +
         tierPost;
@@ -6010,8 +6024,8 @@ function freshnessStatusView(counts, options = {}) {
     tierPending +
     " · NEXT " +
     tierNext +
-    " · RETURNED " +
-    tierReturned +
+    " · TICKLER " +
+    tierTickler +
     " · REFERENCES " +
     tierReferences +
     " · ROTTEN " +
@@ -6025,7 +6039,7 @@ function freshnessStatusView(counts, options = {}) {
     meter +
     " today";
   // Mode precedence: `new` (NEW > 0), then `due` while any
-  // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, RETURNED,
+  // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, TICKLER,
   // REFERENCES) remains, then `budget` (met), then `clear` (walk
   // empty), else `due`. The raw `budgetMet` formula is unchanged;
   // outstanding commitment tiers (including PROJECTS and REFERENCES)
@@ -6038,7 +6052,7 @@ function freshnessStatusView(counts, options = {}) {
     tierProjects > 0 ||
     tierPending > 0 ||
     tierNext > 0 ||
-    tierReturned > 0 ||
+    tierTickler > 0 ||
     tierReferences > 0
   ) {
     mode = "due";
@@ -6058,7 +6072,7 @@ const FRESHNESS_FOOTER_TIERS = [
   "projects",
   "pending",
   "next",
-  "returned",
+  "tickler",
   "references",
   "rotten",
   "post",
@@ -6070,7 +6084,7 @@ const FRESHNESS_FOOTER_COMMITMENT_TIERS = [
   "projects",
   "pending",
   "next",
-  "returned",
+  "tickler",
   "references",
 ];
 
@@ -6086,7 +6100,7 @@ function freshnessReviewEntryViewEmpty() {
 }
 
 // Machine walk tier for an already-evaluated queue entry. v4 `tier`,
-// else the legacy v3 `state` mapping (`resurfaced` reads as RETURNED).
+// else the legacy v3 `state` mapping (`resurfaced` reads as TICKLER).
 function freshnessReviewMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
@@ -6098,7 +6112,7 @@ function freshnessReviewMachineTier(entry) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
-    tier === "returned" ||
+    tier === "tickler" ||
     tier === "references" ||
     tier === "rotten" ||
     tier === "post"
@@ -6116,7 +6130,7 @@ function freshnessReviewMachineTier(entry) {
     return "rotten";
   }
   if (state === "resurfaced") {
-    return "returned";
+    return "tickler";
   }
   return "";
 }
@@ -6275,14 +6289,14 @@ function freshnessReviewEntryView(entry, options = {}) {
         tier === "pending"
           ? "Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today"
           : "Still next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
-    } else if (tier === "returned") {
+    } else if (tier === "tickler") {
       const since =
         entry && typeof entry.dueOn === "string" && entry.dueOn
           ? entry.dueOn
           : entry && typeof entry.fresh === "string"
             ? entry.fresh
             : "";
-      detail = since ? "back since " + freshnessReviewShortDate(since) : "returned";
+      detail = since ? "back since " + freshnessReviewShortDate(since) : "tickler";
       compact = detail;
     } else if (tier === "rotten") {
       detail = freshnessReviewRottenDetail(entry);
@@ -6320,7 +6334,7 @@ function freshnessFooterReadTiers(counts) {
     projects: freshnessFooterTierCount(safe, "projects", safe.projectsDue),
     pending: freshnessFooterTierCount(safe, "pending", safe.pendingDue),
     next: freshnessFooterTierCount(safe, "next", safe.nextDue),
-    returned: freshnessFooterTierCount(safe, "returned", safe.resurfaced),
+    tickler: freshnessFooterTierCount(safe, "tickler", safe.resurfaced),
     references: freshnessFooterTierCount(safe, "references", safe.referencesDue),
     rotten: freshnessFooterTierCount(safe, "rotten", safe.rotten),
     post: freshnessFooterTierCount(safe, "post", safe.postDue),
@@ -6360,7 +6374,7 @@ function freshnessFooterGroups(counts) {
       if (Number.isInteger(count) && count > 0) {
         groups.push({
           key,
-          label: freshnessTierLabel(key),
+          label: freshnessTierFooterLabel(key),
           count,
         });
       }
@@ -6545,7 +6559,9 @@ function freshnessFooterView(memo, options = {}) {
             rank,
             total,
             tier: presentation.tier,
-            label: presentation.label,
+            label:
+              freshnessTierFooterLabel(presentation.tier) ||
+              presentation.label,
             tierRank: Number.isInteger(currentEntry.tierRank)
               ? currentEntry.tierRank
               : null,
@@ -6615,6 +6631,21 @@ function freshnessFooterView(memo, options = {}) {
       Number.isInteger(options.mostOverdue) && options.mostOverdue >= 0
         ? options.mostOverdue
         : null;
+    const shownTiers = new Set(groups.map((group) => group.key));
+    if (current && current.tier) {
+      shownTiers.add(current.tier);
+    }
+    const legendParts = [];
+    if (shownTiers.has("pending")) {
+      legendParts.push("WIP = PENDING");
+    }
+    if (shownTiers.has("tickler")) {
+      legendParts.push("TICKS = TICKLER");
+    }
+    if (shownTiers.has("references")) {
+      legendParts.push("REFS = REFERENCES");
+    }
+    const legendText = legendParts.join(" · ");
     const tooltipLines = [
       freshnessFooterJoin([
         dueText,
@@ -6627,7 +6658,8 @@ function freshnessFooterView(memo, options = {}) {
         meterText,
         mostOverdue === null ? "" : "oldest " + mostOverdue + "d overdue",
       ]),
-      "Footer splits RETURNED from ROTTEN; dashboard ROTTEN chips still fold both.",
+      legendText,
+      "Footer splits TICKS from ROTTEN; dashboard ROTTEN chips still fold both.",
     ];
     if (current && current.detail && current.detail !== current.compact) {
       tooltipLines.splice(1, 0, current.detail);
@@ -6964,7 +6996,7 @@ function freshnessReviewUnavailable() {
   return {
     available: false,
     new: null,
-    returned: null,
+    tickler: null,
     rotten: null,
     refreshedToday: null,
     upkeepToday: null,
@@ -6982,7 +7014,7 @@ function freshnessReviewUnavailable() {
 
 // Shared NEW/ROTTEN view-model from one freshness snapshot. `counts`
 // is a `freshnessCounts` result and `queue` a `freshnessQueue` result
-// over the same rows. The ROTTEN total includes RETURNED; escalation
+// over the same rows. The ROTTEN total includes TICKLER; escalation
 // is per-row (`daysOverdue >= interval` for that row), never the
 // confirmation age or the global default. The meter shows upkeep
 // (`upkeepToday`); `refreshedToday` stays exposed for the census.
@@ -7048,7 +7080,7 @@ function freshnessReviewModel(counts, queue, visible = null) {
     const meter =
       budget !== null ? upkeep + "/" + budget : String(upkeep);
     // NEW is red above 0; ROTTEN is neutral at 0, orange above 0, red
-    // once any returned or age-expired row is a full interval overdue.
+    // once any tickler or age-expired row is a full interval overdue.
     const severity =
       freshNew > 0 ? "new" : escalated ? "escalated" : rotten > 0 ? "rotten" : "none";
     const tooltip =
@@ -7056,7 +7088,7 @@ function freshnessReviewModel(counts, queue, visible = null) {
       rotten +
       " = " +
       resurfaced +
-      " returned + " +
+      " tickler + " +
       ageExpired +
       " rotten · oldest " +
       (oldest === null ? "–" : oldest + "d") +
@@ -7066,7 +7098,7 @@ function freshnessReviewModel(counts, queue, visible = null) {
     return {
       available: true,
       new: freshNew,
-      returned: resurfaced,
+      tickler: resurfaced,
       rotten,
       refreshedToday: refreshed,
       upkeepToday: upkeep,
@@ -10568,7 +10600,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3, freshness namespace v7): memoized
+    // Task freshness (api v3, freshness namespace v8): memoized
     // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
@@ -10774,12 +10806,13 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Task freshness (freshness namespace v7 adds checklist tiers to
-      // the same read-time queue without changing buckets or stamps;
-      // date-independent decide/config, counting, and `keepLine` remain
-      // available from v5. Tiered walk PRE → NEW → PROJECTS → PENDING
-      // → NEXT → RETURNED → REFERENCES
-      // → ROTTEN → POST with daily lane review;
+      // Task freshness (freshness namespace v8 renames the `returned`
+      // tier, `byTier.returned`, and `reviewModel().returned` to
+      // `tickler`; v7 added checklist tiers to the same read-time
+      // queue without changing buckets or stamps; date-independent
+      // decide/config, counting, and `keepLine` remain available from
+      // v5. Tiered walk PRE → NEW → PROJECTS → PENDING → NEXT →
+      // TICKLER → REFERENCES → ROTTEN → POST with daily lane review;
       // `state`/`bucket`/`counts`/`config` keep the rotten vocabulary;
       // the removed `stale_daily_budget` key still parses for one
       // release with a deprecation lint. Keep streaks (`keeps`,
@@ -10802,7 +10835,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 7,
+        version: 8,
         trackerReview: true,
         referenceReview: true,
         checklistTiers: true,
@@ -15007,7 +15040,7 @@ class BobLedgerToolsHeadingReviewMixin {
 }
 // ---- src/230-plugin-freshness-api.js ----
 class BobLedgerToolsFreshnessApiMixin {
-  // --- Task freshness (freshness namespace v7) --------------------------
+  // --- Task freshness (freshness namespace v8) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
   // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -15821,7 +15854,7 @@ class BobLedgerToolsFreshnessApiMixin {
           projects: 0,
           pending: 0,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 0,
           post: 0,
@@ -24223,6 +24256,7 @@ module.exports.helpers = {
   freshnessIntervalFor,
   freshnessIntervalForLine,
   freshnessTierLabel,
+  freshnessTierFooterLabel,
   freshnessTrackerFromBlockId,
   freshnessEvaluate,
   freshnessState,

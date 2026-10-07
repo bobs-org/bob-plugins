@@ -139,6 +139,7 @@ module.exports.helpers = {
   freshnessIntervalFor,
   freshnessIntervalForLine,
   freshnessTierLabel,
+  freshnessTierFooterLabel,
   freshnessTrackerFromBlockId,
   freshnessEvaluate,
   freshnessState,

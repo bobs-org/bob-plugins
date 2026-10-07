@@ -693,13 +693,13 @@ test("tier-aware jump notices name each tier", () => {
     helpers.buildReviewJumpNotice(
       v4({
         key: "r.md:1", path: "r.md",
-        tier: "returned", tierLabel: "RETURNED", lane: "ready",
+        tier: "tickler", tierLabel: "TICKLER", lane: "ready",
         fresh: "2026-10-05", dueOn: "2026-10-07", daysOverdue: 1,
         interval: 7, tierRank: 1, tierTotal: 1,
       }),
       4, 5, today,
     ),
-    "Review 4/5 · RETURNED 1/1 · back since Oct 7",
+    "Review 4/5 · TICKLER 1/1 · back since Oct 7",
   );
   assert.equal(
     helpers.buildReviewJumpNotice(
@@ -953,7 +953,7 @@ test("tier notices fall back without tier ranks and wrap on the last line", () =
 test("boundary notice names commitments done and rotten next", () => {
   assert.equal(
     helpers.buildReviewBoundaryNotice({
-      originTier: "returned", destTier: "rotten",
+      originTier: "tickler", destTier: "rotten",
       commitmentsLeft: 0, rottenLeft: 4,
     }),
     "Commitments done — 4 ROTTEN left",
@@ -1107,7 +1107,7 @@ test("anchor wraps at both ends", () => {
   assert.equal(emptied.kind, "empty");
 });
 
-test("advance across NEXT to RETURNED to ROTTEN lands the boundary", () => {
+test("advance across NEXT to TICKLER to ROTTEN lands the boundary", () => {
   const tiered = (stem, tier, index, total) => queueEntry({
     key: `${stem}.md:1`, path: `${stem}.md`, line: 1,
     originalMarkdown: `- [ ] #task ${stem}`,
@@ -1117,7 +1117,7 @@ test("advance across NEXT to RETURNED to ROTTEN lands the boundary", () => {
   });
   const queue = [
     tiered("n", "next", 1, 1),
-    tiered("r", "returned", 2, 1),
+    tiered("r", "tickler", 2, 1),
     tiered("o", "rotten", 3, 1),
   ];
   const afterNext = helpers.buildReviewAnchor(queue, ["n.md:1"], 1);
@@ -1126,7 +1126,7 @@ test("advance across NEXT to RETURNED to ROTTEN lands the boundary", () => {
   assert.equal(
     helpers.buildReviewBoundaryNotice({
       originTier: toReturned.originTier,
-      destTier: "returned",
+      destTier: "tickler",
       ...helpers.reviewWalkRemaining(queue, new Set(afterNext.keys)),
     }),
     null,
@@ -1248,8 +1248,8 @@ function mixedTierQueue() {
     }),
     v4({
       key: "r.md:4", path: "r.md", line: 4,
-      originalMarkdown: "- [ ] #task Returned",
-      tier: "returned", tierLabel: "RETURNED", lane: "ready",
+      originalMarkdown: "- [ ] #task Tickler",
+      tier: "tickler", tierLabel: "TICKLER", lane: "ready",
       fresh: "2026-10-05", dueOn: "2026-10-07", daysOverdue: 1,
       interval: 7, rank: 4, tierRank: 1, tierTotal: 1,
     }),
@@ -2160,7 +2160,7 @@ test("day-scoped anchors from another day are ignored", () => {
 test("boundary into ROTTEN appends ]S when POST remains; into POST names commitments done", () => {
   assert.equal(
     helpers.buildReviewBoundaryNotice({
-      originTier: "returned", destTier: "rotten",
+      originTier: "tickler", destTier: "rotten",
       commitmentsLeft: 0, rottenLeft: 4, postLeft: 1,
     }),
     "Commitments done — 4 ROTTEN left · ]S closes the review",
@@ -2174,7 +2174,7 @@ test("boundary into ROTTEN appends ]S when POST remains; into POST names commitm
   );
   assert.equal(
     helpers.buildReviewBoundaryNotice({
-      originTier: "returned", destTier: "post",
+      originTier: "tickler", destTier: "post",
       commitmentsLeft: 0, rottenLeft: 0, postLeft: 1,
     }),
     "Commitments done — 0 ROTTEN left",
@@ -2256,4 +2256,21 @@ test("]S reaches POST with 77 ROTTEN rows and a null budget", async () => {
   assert.match(notice, /^Review 78\/78 · POST 1\/1 · closeout/);
   assert.match(notice, /0 commitments due · 77 ROTTEN left/);
   assert.ok(!notice.includes("Commitments done"));
+});
+
+test("nav normalizes a legacy v7 returned tier to tickler", () => {
+  assert.equal(
+    helpers.reviewEntryMachineTier({ tier: "tickler" }),
+    "tickler",
+  );
+  assert.equal(
+    helpers.reviewEntryMachineTier({ tier: "returned" }),
+    "tickler",
+  );
+  assert.equal(
+    helpers.reviewEntryMachineTier({ state: "resurfaced" }),
+    "tickler",
+  );
+  assert.equal(helpers.reviewIsCommitmentTier("tickler"), true);
+  assert.equal(helpers.reviewIsCommitmentTier("returned"), false);
 });

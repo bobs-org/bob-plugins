@@ -125,7 +125,7 @@ test("reviewModel shares counts, meter, tooltip, and severity", () => {
   const model = freshnessReviewModel(counts, queue);
   assert.equal(model.available, true);
   assert.equal(model.new, 1);
-  assert.equal(model.returned, 1);
+  assert.equal(model.tickler, 1);
   assert.equal(model.rotten, 2);
   assert.equal(model.meter, "✓ 12");
   assert.equal(model.newText, "NEW 1");
@@ -133,7 +133,7 @@ test("reviewModel shares counts, meter, tooltip, and severity", () => {
   assert.equal(model.severity, "new");
   assert.equal(model.escalated, true);
   assert.equal(model.oldestDaysOverdue, 11);
-  assert.match(model.tooltip, /ROTTEN 2 = 1 returned \+ 1 rotten/);
+  assert.match(model.tooltip, /ROTTEN 2 = 1 tickler \+ 1 rotten/);
 
   const calm = freshnessReviewModel(
     {
@@ -321,7 +321,7 @@ test("review chips share the model with severity classes", () => {
   assert.match(rotten.attrs.class, /bob-plan-warn/);
   assert.ok(!/bob-plan-over/.test(rotten.attrs.class));
   assert.equal(rotten.href, "rotten");
-  assert.match(rotten.attrs.title, /1 returned \+ 0 rotten/);
+  assert.match(rotten.attrs.title, /1 tickler \+ 0 rotten/);
   // A full interval overdue escalates ROTTEN to red.
   const bad = freshnessReviewModel(
     {

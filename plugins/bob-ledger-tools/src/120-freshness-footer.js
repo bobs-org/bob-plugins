@@ -4,7 +4,7 @@ const FRESHNESS_FOOTER_TIERS = [
   "projects",
   "pending",
   "next",
-  "returned",
+  "tickler",
   "references",
   "rotten",
   "post",
@@ -16,7 +16,7 @@ const FRESHNESS_FOOTER_COMMITMENT_TIERS = [
   "projects",
   "pending",
   "next",
-  "returned",
+  "tickler",
   "references",
 ];
 
@@ -32,7 +32,7 @@ function freshnessReviewEntryViewEmpty() {
 }
 
 // Machine walk tier for an already-evaluated queue entry. v4 `tier`,
-// else the legacy v3 `state` mapping (`resurfaced` reads as RETURNED).
+// else the legacy v3 `state` mapping (`resurfaced` reads as TICKLER).
 function freshnessReviewMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
@@ -44,7 +44,7 @@ function freshnessReviewMachineTier(entry) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
-    tier === "returned" ||
+    tier === "tickler" ||
     tier === "references" ||
     tier === "rotten" ||
     tier === "post"
@@ -62,7 +62,7 @@ function freshnessReviewMachineTier(entry) {
     return "rotten";
   }
   if (state === "resurfaced") {
-    return "returned";
+    return "tickler";
   }
   return "";
 }
@@ -221,14 +221,14 @@ function freshnessReviewEntryView(entry, options = {}) {
         tier === "pending"
           ? "Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today"
           : "Still next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
-    } else if (tier === "returned") {
+    } else if (tier === "tickler") {
       const since =
         entry && typeof entry.dueOn === "string" && entry.dueOn
           ? entry.dueOn
           : entry && typeof entry.fresh === "string"
             ? entry.fresh
             : "";
-      detail = since ? "back since " + freshnessReviewShortDate(since) : "returned";
+      detail = since ? "back since " + freshnessReviewShortDate(since) : "tickler";
       compact = detail;
     } else if (tier === "rotten") {
       detail = freshnessReviewRottenDetail(entry);
@@ -266,7 +266,7 @@ function freshnessFooterReadTiers(counts) {
     projects: freshnessFooterTierCount(safe, "projects", safe.projectsDue),
     pending: freshnessFooterTierCount(safe, "pending", safe.pendingDue),
     next: freshnessFooterTierCount(safe, "next", safe.nextDue),
-    returned: freshnessFooterTierCount(safe, "returned", safe.resurfaced),
+    tickler: freshnessFooterTierCount(safe, "tickler", safe.resurfaced),
     references: freshnessFooterTierCount(safe, "references", safe.referencesDue),
     rotten: freshnessFooterTierCount(safe, "rotten", safe.rotten),
     post: freshnessFooterTierCount(safe, "post", safe.postDue),
@@ -306,7 +306,7 @@ function freshnessFooterGroups(counts) {
       if (Number.isInteger(count) && count > 0) {
         groups.push({
           key,
-          label: freshnessTierLabel(key),
+          label: freshnessTierFooterLabel(key),
           count,
         });
       }
@@ -491,7 +491,9 @@ function freshnessFooterView(memo, options = {}) {
             rank,
             total,
             tier: presentation.tier,
-            label: presentation.label,
+            label:
+              freshnessTierFooterLabel(presentation.tier) ||
+              presentation.label,
             tierRank: Number.isInteger(currentEntry.tierRank)
               ? currentEntry.tierRank
               : null,
@@ -561,6 +563,21 @@ function freshnessFooterView(memo, options = {}) {
       Number.isInteger(options.mostOverdue) && options.mostOverdue >= 0
         ? options.mostOverdue
         : null;
+    const shownTiers = new Set(groups.map((group) => group.key));
+    if (current && current.tier) {
+      shownTiers.add(current.tier);
+    }
+    const legendParts = [];
+    if (shownTiers.has("pending")) {
+      legendParts.push("WIP = PENDING");
+    }
+    if (shownTiers.has("tickler")) {
+      legendParts.push("TICKS = TICKLER");
+    }
+    if (shownTiers.has("references")) {
+      legendParts.push("REFS = REFERENCES");
+    }
+    const legendText = legendParts.join(" · ");
     const tooltipLines = [
       freshnessFooterJoin([
         dueText,
@@ -573,7 +590,8 @@ function freshnessFooterView(memo, options = {}) {
         meterText,
         mostOverdue === null ? "" : "oldest " + mostOverdue + "d overdue",
       ]),
-      "Footer splits RETURNED from ROTTEN; dashboard ROTTEN chips still fold both.",
+      legendText,
+      "Footer splits TICKS from ROTTEN; dashboard ROTTEN chips still fold both.",
     ];
     if (current && current.detail && current.detail !== current.compact) {
       tooltipLines.splice(1, 0, current.detail);

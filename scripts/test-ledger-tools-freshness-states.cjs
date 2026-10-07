@@ -157,7 +157,7 @@ test("S13 out-of-scope rows read null", () => {
   }
 });
 
-test("S14 queue order (rewritten): NEW then RETURNED beats ROTTEN", () => {
+test("S14 queue order (rewritten): NEW then TICKLER beats ROTTEN", () => {
   const rows = [
     sRow({ path: "b.md", line: 3 }),
     sRow({ path: "a.md", line: 9 }),
@@ -189,11 +189,11 @@ test("S14 queue order (rewritten): NEW then RETURNED beats ROTTEN", () => {
   );
   assert.deepEqual(
     queue.map((entry) => entry.tier),
-    ["new", "new", "returned", "rotten", "rotten"],
+    ["new", "new", "tickler", "rotten", "rotten"],
   );
   assert.deepEqual(
     queue.map((entry) => entry.tierLabel),
-    ["NEW", "NEW", "RETURNED", "ROTTEN", "ROTTEN"],
+    ["NEW", "NEW", "TICKLER", "ROTTEN", "ROTTEN"],
   );
   assert.deepEqual(
     queue.map((entry) => entry.lane),
@@ -522,7 +522,7 @@ test("intervalForLine covers every source with its Ready fallback", () => {
     null,
   );
   assert.equal(freshnessTierLabel("new"), "NEW");
-  assert.equal(freshnessTierLabel("returned"), "RETURNED");
+  assert.equal(freshnessTierLabel("tickler"), "TICKLER");
   assert.equal(freshnessTierLabel("bogus"), "");
 });
 

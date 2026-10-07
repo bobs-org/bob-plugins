@@ -4,7 +4,7 @@ function freshnessReviewUnavailable() {
   return {
     available: false,
     new: null,
-    returned: null,
+    tickler: null,
     rotten: null,
     refreshedToday: null,
     upkeepToday: null,
@@ -22,7 +22,7 @@ function freshnessReviewUnavailable() {
 
 // Shared NEW/ROTTEN view-model from one freshness snapshot. `counts`
 // is a `freshnessCounts` result and `queue` a `freshnessQueue` result
-// over the same rows. The ROTTEN total includes RETURNED; escalation
+// over the same rows. The ROTTEN total includes TICKLER; escalation
 // is per-row (`daysOverdue >= interval` for that row), never the
 // confirmation age or the global default. The meter shows upkeep
 // (`upkeepToday`); `refreshedToday` stays exposed for the census.
@@ -88,7 +88,7 @@ function freshnessReviewModel(counts, queue, visible = null) {
     const meter =
       budget !== null ? upkeep + "/" + budget : String(upkeep);
     // NEW is red above 0; ROTTEN is neutral at 0, orange above 0, red
-    // once any returned or age-expired row is a full interval overdue.
+    // once any tickler or age-expired row is a full interval overdue.
     const severity =
       freshNew > 0 ? "new" : escalated ? "escalated" : rotten > 0 ? "rotten" : "none";
     const tooltip =
@@ -96,7 +96,7 @@ function freshnessReviewModel(counts, queue, visible = null) {
       rotten +
       " = " +
       resurfaced +
-      " returned + " +
+      " tickler + " +
       ageExpired +
       " rotten · oldest " +
       (oldest === null ? "–" : oldest + "d") +
@@ -106,7 +106,7 @@ function freshnessReviewModel(counts, queue, visible = null) {
     return {
       available: true,
       new: freshNew,
-      returned: resurfaced,
+      tickler: resurfaced,
       rotten,
       refreshedToday: refreshed,
       upkeepToday: upkeep,

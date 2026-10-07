@@ -214,7 +214,7 @@ function freshnessEvaluateValidScheduled(value) {
 //
 // Returns `{ state ("new"|"resurfaced"|"rotten"|"fresh"|null; null is
 // out of scope, see S13; lane rows keep a null state),
-// tier ("new"|"projects"|"pending"|"next"|"returned"|"references"|"rotten"|null),
+// tier ("new"|"projects"|"pending"|"next"|"tickler"|"references"|"rotten"|null),
 // lane ("ready"|"pending"|"next"|null), fresh, intervalDays,
 // intervalSource, dueOn, daysOverdue, keeps (the valid `[keeps:: N]`
 // semantic count, 0 when absent), decide (a choice is due — never
@@ -425,7 +425,7 @@ function freshnessEvaluate(row, todayText, config) {
   } else if (lane === "next" && walkScope && laneDue && !isTracker) {
     tier = "next";
   } else if (state === "resurfaced") {
-    tier = "returned";
+    tier = "tickler";
   } else if (state === "rotten") {
     tier = "rotten";
   }
@@ -614,7 +614,7 @@ function freshnessRowKey(row) {
   return path + ":" + row.line;
 }
 
-// Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED →
+// Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER →
 // REFERENCES → ROTTEN → POST. Mirrors the `Tier` ordering in
 // `src/native/freshness/state.rs`.
 const FRESHNESS_TIER_ORDER = {
@@ -623,7 +623,7 @@ const FRESHNESS_TIER_ORDER = {
   projects: 2,
   pending: 3,
   next: 4,
-  returned: 5,
+  tickler: 5,
   references: 6,
   rotten: 7,
   post: 8,
@@ -659,8 +659,8 @@ function freshnessTierLabel(tier) {
   if (tier === "next") {
     return "NEXT";
   }
-  if (tier === "returned") {
-    return "RETURNED";
+  if (tier === "tickler") {
+    return "TICKLER";
   }
   if (tier === "references") {
     return "REFERENCES";
@@ -672,6 +672,20 @@ function freshnessTierLabel(tier) {
     return "POST";
   }
   return "";
+}
+
+// Compact status-bar label for the review footer.
+function freshnessTierFooterLabel(tier) {
+  if (tier === "pending") {
+    return "WIP";
+  }
+  if (tier === "tickler") {
+    return "TICKS";
+  }
+  if (tier === "references") {
+    return "REFS";
+  }
+  return freshnessTierLabel(tier);
 }
 
 // Compare `created` with missing dates always last, in both ascending

@@ -80,6 +80,7 @@ const {
   freshnessMatchQueueCursor,
   freshnessQueue,
   freshnessReviewEntryView,
+  freshnessTierFooterLabel,
 } = helpers;
 
 const D = "2026-10-08";
@@ -276,14 +277,14 @@ test("footer groups omit every zero tier and keep walk order", () => {
       projects: 0,
       pending: 2,
       next: 0,
-      returned: 1,
+      tickler: 1,
       references: 0,
       rotten: 3,
     },
   });
   assert.deepEqual(
     groups.map((group) => group.key + ":" + group.count),
-    ["new:1", "pending:2", "returned:1", "rotten:3"],
+    ["new:1", "pending:2", "tickler:1", "rotten:3"],
   );
   assert.equal(
     groups.some((group) => group.key === "projects"),
@@ -300,7 +301,7 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
       projects: 0,
       pending: 0,
       next: 0,
-      returned: 0,
+      tickler: 0,
       references: 0,
       rotten: 1,
       post: 1,
@@ -343,7 +344,7 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
           projects: 0,
           pending: 0,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 0,
           post: 1,
@@ -374,14 +375,14 @@ test("a NEW-state tracker appears only in its walk tier", () => {
       projects: 1,
       pending: 0,
       next: 0,
-      returned: 0,
+      tickler: 0,
       references: 1,
       rotten: 0,
     },
   });
   assert.deepEqual(
     groups.map((group) => group.label + " " + group.count),
-    ["PROJECTS 1", "REFERENCES 1"],
+    ["PROJECTS 1", "REFS 1"],
   );
 });
 
@@ -398,7 +399,7 @@ test("empty queue hides the footer even with upkeep or a met budget", () => {
           projects: 0,
           pending: 0,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 0,
         },
@@ -435,7 +436,7 @@ test("generic summary names due, commitments, and nonempty groups", () => {
           projects: 0,
           pending: 2,
           next: 0,
-          returned: 1,
+          tickler: 1,
           references: 0,
           rotten: 3,
         },
@@ -449,7 +450,7 @@ test("generic summary names due, commitments, and nonempty groups", () => {
   assert.equal(view.dueText, "Review 7 due");
   assert.equal(view.contextText, "4 commitments");
   assert.equal(view.hintText, "]s next");
-  assert.equal(view.groupsText, "NEW 1 · PENDING 2 · RETURNED 1 · ROTTEN 3");
+  assert.equal(view.groupsText, "NEW 1 · WIP 2 · TICKS 1 · ROTTEN 3");
   assert.equal(view.meterText, "✓ 0/15 today");
   assert.equal(view.mode, "new");
   const noNav = freshnessFooterView(
@@ -463,7 +464,7 @@ test("generic summary names due, commitments, and nonempty groups", () => {
           projects: 0,
           pending: 2,
           next: 0,
-          returned: 1,
+          tickler: 1,
           references: 0,
           rotten: 3,
         },
@@ -505,7 +506,7 @@ test("current-task context uses shared ranks and compact wording", () => {
           projects: 0,
           pending: 2,
           next: 0,
-          returned: 1,
+          tickler: 1,
           references: 0,
           rotten: 3,
         },
@@ -516,7 +517,7 @@ test("current-task context uses shared ranks and compact wording", () => {
     { current, navAvailable: true, todayText: D },
   );
   assert.equal(view.dueText, "Review 2/7");
-  assert.equal(view.contextText, "PENDING 1/2");
+  assert.equal(view.contextText, "WIP 1/2");
   assert.equal(view.detailText, "confirmed yesterday");
   assert.equal(view.hintText, "");
   assert.equal(view.current.actionHint.includes("Ctrl+Alt+F keep"), true);
@@ -536,7 +537,7 @@ test("only ROTTEN remaining names commitments done or a met budget", () => {
           projects: 0,
           pending: 0,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 3,
         },
@@ -561,7 +562,7 @@ test("only ROTTEN remaining names commitments done or a met budget", () => {
           projects: 0,
           pending: 0,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 3,
         },
@@ -589,7 +590,7 @@ test("NEW and commitments take precedence over a met budget", () => {
           projects: 0,
           pending: 1,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 0,
         },
@@ -667,8 +668,8 @@ test("reviewEntryView compact and detail cover the original freshness tiers", ()
   assert.equal(
     freshnessReviewEntryView(
       queueEntry({
-        tier: "returned",
-        tierLabel: "RETURNED",
+        tier: "tickler",
+        tierLabel: "TICKLER",
         fresh: "2026-10-05",
         dueOn: "2026-10-07",
       }),
@@ -826,7 +827,7 @@ test("footer paint hides the host and keeps a stable button", () => {
           projects: 0,
           pending: 0,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 0,
         },
@@ -950,7 +951,7 @@ test("queue-built ranks agree with the footer current entry", () => {
           projects: 0,
           pending: 1,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 1,
         },
@@ -961,7 +962,151 @@ test("queue-built ranks agree with the footer current entry", () => {
     { current, todayText: D, navAvailable: true },
   );
   assert.equal(view.dueText, "Review 2/3");
-  assert.equal(view.contextText, "PENDING 1/1");
+  assert.equal(view.contextText, "WIP 1/1");
   const presentation = freshnessReviewEntryView(current, { todayText: D });
   assert.equal(view.detailText, presentation.compact);
+});
+
+test("footer short labels map every tier", () => {
+  assert.deepEqual(
+    [
+      "pre", "new", "projects", "pending", "next",
+      "tickler", "references", "rotten", "post",
+    ].map((tier) => `${tier}:${freshnessTierFooterLabel(tier)}`),
+    [
+      "pre:PRE", "new:NEW", "projects:PROJECTS", "pending:WIP",
+      "next:NEXT", "tickler:TICKS", "references:REFS",
+      "rotten:ROTTEN", "post:POST",
+    ],
+  );
+});
+
+test("current-row footer context uses short labels while entry views keep full labels", () => {
+  const today = { todayText: D };
+  const ticklerEntry = queueEntry({
+    key: "t.md:1",
+    tier: "tickler",
+    tierLabel: "TICKLER",
+    lane: "ready",
+    state: "resurfaced",
+    fresh: "2026-10-05",
+    dueOn: "2026-10-07",
+    rank: 5,
+    tierRank: 2,
+    tierTotal: 14,
+  });
+  const presentation = freshnessReviewEntryView(ticklerEntry, today);
+  assert.equal(presentation.ok, true);
+  assert.equal(presentation.tier, "tickler");
+  assert.equal(presentation.label, "TICKLER");
+  const view = freshnessFooterView(
+    {
+      counts: {
+        walk: 76,
+        upkeepToday: 0,
+        byTier: {
+          pre: 0, new: 0, projects: 0, pending: 10, next: 0,
+          tickler: 14, references: 0, rotten: 0, post: 0,
+        },
+      },
+      queue: [ticklerEntry],
+      tasksAvailable: true,
+    },
+    { current: ticklerEntry, todayText: D, navAvailable: true },
+  );
+  assert.equal(view.dueText, "Review 5/76");
+  assert.equal(view.contextText, "TICKS 2/14");
+  const pendingEntry = queueEntry({
+    key: "p.md:1",
+    tier: "pending",
+    tierLabel: "PENDING",
+    lane: "pending",
+    fresh: "2026-10-07",
+    interval: 1,
+    daysOverdue: 0,
+    rank: 5,
+    tierRank: 3,
+    tierTotal: 10,
+  });
+  assert.equal(
+    freshnessReviewEntryView(pendingEntry, today).label,
+    "PENDING",
+  );
+  const pendingView = freshnessFooterView(
+    {
+      counts: {
+        walk: 76,
+        upkeepToday: 0,
+        byTier: {
+          pre: 0, new: 0, projects: 0, pending: 10, next: 0,
+          tickler: 0, references: 0, rotten: 0, post: 0,
+        },
+      },
+      queue: [pendingEntry],
+      tasksAvailable: true,
+    },
+    { current: pendingEntry, todayText: D, navAvailable: true },
+  );
+  assert.equal(pendingView.contextText, "WIP 3/10");
+});
+
+test("legend line lists only the abbreviations shown", () => {
+  const legendFor = (view) =>
+    view.tooltip.split("\n").find((line) => line.includes(" = "));
+  const abbreviated = freshnessFooterView(
+    {
+      counts: {
+        walk: 7,
+        upkeepToday: 0,
+        byTier: {
+          new: 1, projects: 0, pending: 2, next: 0,
+          tickler: 1, references: 0, rotten: 3,
+        },
+      },
+      queue: [queueEntry(), queueEntry({ key: "b" })],
+      tasksAvailable: true,
+    },
+    { navAvailable: true },
+  );
+  assert.equal(
+    legendFor(abbreviated),
+    "WIP = PENDING · TICKS = TICKLER",
+  );
+  const refsOnly = freshnessFooterView(
+    {
+      counts: {
+        walk: 2,
+        upkeepToday: 0,
+        byTier: {
+          new: 0, projects: 1, pending: 0, next: 0,
+          tickler: 0, references: 1, rotten: 0,
+        },
+      },
+      queue: [queueEntry(), queueEntry({ key: "b" })],
+      tasksAvailable: true,
+    },
+    { navAvailable: true },
+  );
+  assert.equal(refsOnly.groupsText, "PROJECTS 1 · REFS 1");
+  assert.equal(legendFor(refsOnly), "REFS = REFERENCES");
+  const plain = freshnessFooterView(
+    {
+      counts: {
+        walk: 2,
+        upkeepToday: 0,
+        byTier: {
+          new: 1, projects: 0, pending: 0, next: 1,
+          tickler: 0, references: 0, rotten: 0,
+        },
+      },
+      queue: [queueEntry(), queueEntry({ key: "b" })],
+      tasksAvailable: true,
+    },
+    { navAvailable: true },
+  );
+  assert.equal(legendFor(plain), undefined);
+  assert.match(
+    abbreviated.tooltip,
+    /Footer splits TICKS from ROTTEN; dashboard ROTTEN chips still fold both\./,
+  );
 });

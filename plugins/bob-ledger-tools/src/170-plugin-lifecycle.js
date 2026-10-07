@@ -11,7 +11,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.activeDailyScrollDOM = null;
     this.activeDailyScrollHandler = null;
     this.isRestoringDailyLocation = false;
-    // Task freshness (api v3, freshness namespace v7): memoized
+    // Task freshness (api v3, freshness namespace v8): memoized
     // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
@@ -217,12 +217,13 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Task freshness (freshness namespace v7 adds checklist tiers to
-      // the same read-time queue without changing buckets or stamps;
-      // date-independent decide/config, counting, and `keepLine` remain
-      // available from v5. Tiered walk PRE → NEW → PROJECTS → PENDING
-      // → NEXT → RETURNED → REFERENCES
-      // → ROTTEN → POST with daily lane review;
+      // Task freshness (freshness namespace v8 renames the `returned`
+      // tier, `byTier.returned`, and `reviewModel().returned` to
+      // `tickler`; v7 added checklist tiers to the same read-time
+      // queue without changing buckets or stamps; date-independent
+      // decide/config, counting, and `keepLine` remain available from
+      // v5. Tiered walk PRE → NEW → PROJECTS → PENDING → NEXT →
+      // TICKLER → REFERENCES → ROTTEN → POST with daily lane review;
       // `state`/`bucket`/`counts`/`config` keep the rotten vocabulary;
       // the removed `stale_daily_budget` key still parses for one
       // release with a deprecation lint. Keep streaks (`keeps`,
@@ -245,7 +246,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 7,
+        version: 8,
         trackerReview: true,
         referenceReview: true,
         checklistTiers: true,

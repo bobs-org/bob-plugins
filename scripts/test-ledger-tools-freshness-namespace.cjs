@@ -10,7 +10,7 @@ const {
   withMissingConfig,
   makeStatusEl,
 } = require("./ledger-tools-harness.cjs");
-test("freshness namespace v7 advertises checklist tiers without changing buckets", () => {
+test("freshness namespace v8 advertises checklist tiers without changing buckets", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -30,7 +30,7 @@ test("freshness namespace v7 advertises checklist tiers without changing buckets
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 7);
+      assert.equal(freshness.version, 8);
       assert.equal(freshness.checklistTiers, true);
       for (const key of [
         "config",
@@ -311,7 +311,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(status.mode, "new");
   assert.match(status.tooltip, /Walk 48 · PRE 0 · NEW 3 · PROJECTS 0 · PENDING 10 · NEXT 15/);
-  assert.match(status.tooltip, /RETURNED 2 · REFERENCES 0 · ROTTEN 18/);
+  assert.match(status.tooltip, /TICKLER 2 · REFERENCES 0 · ROTTEN 18/);
   assert.match(status.tooltip, /oldest 11d overdue/);
   assert.match(status.tooltip, /✓ 12 today/);
   const budgeted = freshnessStatusView(
@@ -335,7 +335,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
     "⟳ 0 pre · 0 new · 0 projects · 0 pending · 0 next · 0 references · 5 rotten · 0 post · ✓ 12/15 today",
   );
   assert.equal(budgeted.mode, "due");
-  assert.match(budgeted.tooltip, /RETURNED 1 · REFERENCES 0 · ROTTEN 4/);
+  assert.match(budgeted.tooltip, /TICKLER 1 · REFERENCES 0 · ROTTEN 4/);
   // A `byTier` histogram drives the surfaces so the numbers sum to
   // the walk; `references` counts on the commitment side.
   const tiered = freshnessStatusView(
@@ -352,7 +352,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
         projects: 1,
         pending: 0,
         next: 0,
-        returned: 0,
+        tickler: 0,
         references: 1,
         rotten: 1,
       },

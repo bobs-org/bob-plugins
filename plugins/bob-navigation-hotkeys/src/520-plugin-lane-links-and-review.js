@@ -452,7 +452,7 @@ class BobNavigationHotkeysLaneReviewMixin {
     const queueBefore = this.readFreshnessQueue(api);
     const countsBefore = this.readFreshnessCounts(api);
     // Resolve every target exactly against the pre-write queue: only an
-    // exact due-Ready ROTTEN/RETURNED row counts (`docs/freshness.md` §2a).
+    // exact due-Ready ROTTEN/TICKLER row counts (`docs/freshness.md` §2a).
     // Every other explicit keep still goes through `keepLine` uncounted so
     // the streak is preserved, never reset.
     const contentLines = splitMarkdownContent(content).lines;

@@ -1,5 +1,5 @@
 // The tiered review queue PRE → NEW → PROJECTS → PENDING → NEXT →
-// RETURNED → REFERENCES → ROTTEN → POST, with each tier's comparator from
+// TICKLER → REFERENCES → ROTTEN → POST, with each tier's comparator from
 // `docs/freshness.md` §4.
 // Entries
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
@@ -85,7 +85,7 @@ function freshnessQueue(rows, todayText, config) {
         freshnessComparePathLine(left, right)
       );
     }
-    if (left.tier === "returned") {
+    if (left.tier === "tickler") {
       return (
         freshnessCompareDueOn(left.dueOn, right.dueOn) ||
         freshnessCompareCreated(left.created, right.created, true) ||
@@ -148,7 +148,7 @@ function freshnessCounts(rows, todayText, config) {
     projects: 0,
     pending: 0,
     next: 0,
-    returned: 0,
+    tickler: 0,
     references: 0,
     rotten: 0,
     post: 0,
@@ -219,7 +219,7 @@ function freshnessCounts(rows, todayText, config) {
     byTier.projects +
     byTier.pending +
     byTier.next +
-    byTier.returned +
+    byTier.tickler +
     byTier.references +
     byTier.rotten +
     byTier.post;
@@ -285,7 +285,7 @@ function freshnessCollectLints(rows, todayText, config) {
 // Pure view-model for the status bar counter. `counts` is a
 // `freshnessCounts` result; `mostOverdue` is the queue's largest
 // `daysOverdue` (or null when nothing is due). The meter shows
-// upkeep (`upkeepToday`); ROTTEN includes RETURNED, as on the chip.
+// upkeep (`upkeepToday`); ROTTEN includes TICKLER, as on the chip.
 // Hidden references still count here (they walk through the status
 // bar, `]s`, and the CLI). Mirrors `docs/freshness.md` §4 (freshness
 // namespace v5).
@@ -301,7 +301,7 @@ function freshnessStatusView(counts, options = {}) {
   const safe = counts || {};
   // Tier counts drive the surfaces so the shown numbers sum to
   // `walk`. Without a `byTier` histogram fall back to the legacy
-  // state counts. The rotten number keeps folding RETURNED in.
+  // state counts. The rotten number keeps folding TICKLER in.
   const tierCount = (key, legacy) => {
     if (safe.byTier && typeof safe.byTier === "object") {
       const value = safe.byTier[key];
@@ -316,11 +316,11 @@ function freshnessStatusView(counts, options = {}) {
   const tierProjects = tierCount("projects", safe.projectsDue);
   const tierPending = tierCount("pending", safe.pendingDue);
   const tierNext = tierCount("next", safe.nextDue);
-  const tierReturned = tierCount("returned", safe.resurfaced);
+  const tierTickler = tierCount("tickler", safe.resurfaced);
   const tierReferences = tierCount("references", safe.referencesDue);
   const tierRotten = tierCount("rotten", safe.rotten);
   const tierPost = tierCount("post", safe.postDue);
-  const rotten = tierReturned + tierRotten;
+  const rotten = tierTickler + tierRotten;
   const walk =
     Number.isInteger(safe.walk) && safe.walk >= 0
       ? safe.walk
@@ -329,7 +329,7 @@ function freshnessStatusView(counts, options = {}) {
         tierProjects +
         tierPending +
         tierNext +
-        tierReturned +
+        tierTickler +
         tierReferences +
         tierRotten +
         tierPost;
@@ -379,8 +379,8 @@ function freshnessStatusView(counts, options = {}) {
     tierPending +
     " · NEXT " +
     tierNext +
-    " · RETURNED " +
-    tierReturned +
+    " · TICKLER " +
+    tierTickler +
     " · REFERENCES " +
     tierReferences +
     " · ROTTEN " +
@@ -394,7 +394,7 @@ function freshnessStatusView(counts, options = {}) {
     meter +
     " today";
   // Mode precedence: `new` (NEW > 0), then `due` while any
-  // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, RETURNED,
+  // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, TICKLER,
   // REFERENCES) remains, then `budget` (met), then `clear` (walk
   // empty), else `due`. The raw `budgetMet` formula is unchanged;
   // outstanding commitment tiers (including PROJECTS and REFERENCES)
@@ -407,7 +407,7 @@ function freshnessStatusView(counts, options = {}) {
     tierProjects > 0 ||
     tierPending > 0 ||
     tierNext > 0 ||
-    tierReturned > 0 ||
+    tierTickler > 0 ||
     tierReferences > 0
   ) {
     mode = "due";

@@ -1,5 +1,5 @@
 class BobLedgerToolsFreshnessApiMixin {
-  // --- Task freshness (freshness namespace v7) --------------------------
+  // --- Task freshness (freshness namespace v8) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
   // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -813,7 +813,7 @@ class BobLedgerToolsFreshnessApiMixin {
           projects: 0,
           pending: 0,
           next: 0,
-          returned: 0,
+          tickler: 0,
           references: 0,
           rotten: 0,
           post: 0,

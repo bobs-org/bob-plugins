@@ -33,23 +33,23 @@ test("Q2 tier order beats path order", () => {
   const fresh = readyRow("e.md", 1, null, null);
   const pending = laneRow("d.md", 1, "/", "2026-10-07", null);
   const next = laneRow("c.md", 1, "*", "2026-10-07", null);
-  const returned = readyRow("b.md", 1, "2026-10-05", null);
-  returned.scheduled = "2026-10-07";
-  returned.rawLine =
+  const tickler = readyRow("b.md", 1, "2026-10-05", null);
+  tickler.scheduled = "2026-10-07";
+  tickler.rawLine =
     "- [ ] #task R [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
   const rotten = readyRow("a.md", 1, "2026-09-20", null);
-  const ordered = freshnessQueue([rotten, returned, next, pending, fresh], D, CFG);
+  const ordered = freshnessQueue([rotten, tickler, next, pending, fresh], D, CFG);
   assert.deepEqual(
     ordered.map((entry) => `${entry.path}:${entry.line}`),
     ["e.md:1", "d.md:1", "c.md:1", "b.md:1", "a.md:1"],
   );
   assert.deepEqual(
     ordered.map((entry) => entry.tier),
-    ["new", "pending", "next", "returned", "rotten"],
+    ["new", "pending", "next", "tickler", "rotten"],
   );
   assert.deepEqual(
     ordered.map((entry) => entry.tierLabel),
-    ["NEW", "PENDING", "NEXT", "RETURNED", "ROTTEN"],
+    ["NEW", "PENDING", "NEXT", "TICKLER", "ROTTEN"],
   );
 });
 
@@ -130,24 +130,24 @@ test("L5 lane order never stamped first", () => {
   );
 });
 
-test("R1 RETURNED beats older ROTTEN", () => {
-  const returned = readyRow("b.md", 1, "2026-10-05", null);
-  returned.scheduled = "2026-10-07";
-  returned.rawLine =
+test("R1 TICKLER beats older ROTTEN", () => {
+  const tickler = readyRow("b.md", 1, "2026-10-05", null);
+  tickler.scheduled = "2026-10-07";
+  tickler.rawLine =
     "- [ ] #task R [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
   const rotten = readyRow("a.md", 1, "2026-09-20", null);
-  const ordered = freshnessQueue([rotten, returned], D, CFG);
+  const ordered = freshnessQueue([rotten, tickler], D, CFG);
   assert.deepEqual(
     ordered.map((entry) => `${entry.path}:${entry.line}`),
     ["b.md:1", "a.md:1"],
   );
   assert.deepEqual(
     ordered.map((entry) => entry.tier),
-    ["returned", "rotten"],
+    ["tickler", "rotten"],
   );
 });
 
-test("R2 returned orders by schedule then newest created", () => {
+test("R2 tickler orders by schedule then newest created", () => {
   const x = readyRow("x.md", 1, "2026-10-05", "2026-09-01");
   x.scheduled = "2026-10-06";
   x.rawLine = "- [ ] #task X [fresh:: 2026-10-05] [scheduled:: 2026-10-06]";

@@ -144,7 +144,7 @@ test("tracking counts decouple states from the nine-key tier histogram", () => {
       report.byTier.projects +
       report.byTier.pending +
       report.byTier.next +
-      report.byTier.returned +
+      report.byTier.tickler +
       report.byTier.references +
       report.byTier.rotten +
       report.byTier.post,
@@ -333,10 +333,10 @@ test("references walk with the reference cadence in every lane", () => {
   const queue = freshnessQueue(rows, D, cfg);
   assert.deepEqual(
     queue.map((entry) => entry.tier),
-    ["new", "projects", "pending", "next", "returned", "references", "rotten"],
+    ["new", "projects", "pending", "next", "tickler", "references", "rotten"],
   );
   const report = freshnessCounts(rows, D, cfg);
-  assert.equal(report.walk, report.byTier.pre + report.byTier.new + report.byTier.projects + report.byTier.pending + report.byTier.next + report.byTier.returned + report.byTier.references + report.byTier.rotten + report.byTier.post);
+  assert.equal(report.walk, report.byTier.pre + report.byTier.new + report.byTier.projects + report.byTier.pending + report.byTier.next + report.byTier.tickler + report.byTier.references + report.byTier.rotten + report.byTier.post);
   assert.equal(report.referencesDue, 1);
   assert.equal(report.byTier.references, 1);
 });
@@ -423,14 +423,14 @@ test("CL8-CL12: nine tier order, checklist-only due counts, and completion seman
     sRow({ path: "c.md", line: 1, blockId: "prj", rawLine: "- [ ] #task Project [fresh:: 2026-10-01] ^prj" }),
     laneRow("d.md", 1, "/", "2026-10-07", null),
     laneRow("e.md", 1, "*", "2026-10-07", null),
-    sRow({ path: "f.md", line: 1, rawLine: "- [ ] #task Returned [fresh:: 2026-10-05] [scheduled:: 2026-10-07]", scheduled: "2026-10-07" }),
+    sRow({ path: "f.md", line: 1, rawLine: "- [ ] #task Tickler [fresh:: 2026-10-05] [scheduled:: 2026-10-07]", scheduled: "2026-10-07" }),
     sRow({ path: "g.md", line: 1, blockId: "ref", rawLine: "- [ ] #task Reference [fresh:: 2026-10-01] ^ref" }),
     sRow({ path: "h.md", line: 1, rawLine: "- [ ] #task Rotten [fresh:: 2026-10-01]" }),
     sRow({ path: "i.md", line: 1, checklist: "post", rawLine: "- [ ] #task #gtd #post Post" }),
   ];
   const queue = freshnessQueue(rows, D, CFG);
   assert.deepEqual(queue.map((entry) => entry.tier), [
-    "pre", "new", "projects", "pending", "next", "returned", "references", "rotten", "post",
+    "pre", "new", "projects", "pending", "next", "tickler", "references", "rotten", "post",
   ]);
   assert.equal(queue[0].lane, "ready");
   assert.equal(queue.at(-1).lane, "ready");

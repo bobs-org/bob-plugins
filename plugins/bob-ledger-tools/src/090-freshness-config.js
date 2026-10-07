@@ -4,7 +4,7 @@
 // `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v7).
+// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v8).
 
 // Whether the compatible review-walk decision card is present: nav exposes
 // `api.freshnessDecayCard.version >= 2` (ungated handler contract). Version
@@ -80,12 +80,12 @@ function coerceFreshnessDecay(raw) {
 
 // Whether a choice is due for a Ready-lane row in `tier` with `keeps`
 // counted keeps under `config`: enabled decay, Ready lane,
-// rotten/returned tier, keeps at or over the limit. The annotation
+// rotten/tickler tier, keeps at or over the limit. The annotation
 // means a choice is due, not permission to execute an action. Mirrors
 // `decide_for` in `src/native/freshness/state.rs`.
 function freshnessDecideFor(lane, tier, keeps, config) {
   try {
-    const dueTier = tier === "rotten" || tier === "returned";
+    const dueTier = tier === "rotten" || tier === "tickler";
     if (!dueTier || lane !== "ready") {
       return false;
     }

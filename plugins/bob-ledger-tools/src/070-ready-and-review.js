@@ -630,7 +630,7 @@ function setReadyAnchorContent(anchor, model, options = {}) {
 // Shared NEW/ROTTEN chip content: separate label and value spans like
 // the READY badge, so dashboard and rotten-summary chips style like
 // neighboring chips. NEW shows 0 when empty and is red above 0;
-// ROTTEN is neutral at 0, orange above 0, red once any returned or
+// ROTTEN is neutral at 0, orange above 0, red once any tickler or
 // age-expired row is a full interval overdue.
 const REVIEW_LABEL_CLS = "bob-plan-review-label";
 const REVIEW_VALUE_CLS = "bob-plan-review-value";

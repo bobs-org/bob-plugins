@@ -135,7 +135,7 @@ test("exact eligibility authorizes one due-Ready ROTTEN row", () => {
   assert.equal(verdict.entry.keeps, 2);
 });
 
-test("exact eligibility authorizes a RETURNED row", () => {
+test("exact eligibility authorizes a TICKLER row", () => {
   const queue = [
     rottenEntry({
       key: "b.md:4",
@@ -143,7 +143,7 @@ test("exact eligibility authorizes a RETURNED row", () => {
       line: 4,
       originalMarkdown: "- [ ] #task Came back [fresh:: 2026-09-20]",
       state: "resurfaced",
-      tier: "returned",
+      tier: "tickler",
       lane: "ready",
     }),
   ];

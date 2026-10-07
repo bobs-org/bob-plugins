@@ -584,9 +584,9 @@ test("D2 at limit decides; D3 below limit stamps without a card", () => {
   }
 });
 
-test("D4 returned counts as due; D5 NEW never decides", () => {
+test("D4 tickler counts as due; D5 NEW never decides", () => {
   assert.equal(
-    freshnessDecideFor("ready", "returned", 5, {
+    freshnessDecideFor("ready", "tickler", 5, {
       decay: { ...DECAY_DEFAULT },
     }),
     true,

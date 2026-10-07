@@ -6872,6 +6872,15 @@ class BlockIdPromptPomodoroLinksMixin {
         }
       }
 
+      // The picker is the one constant first step of the link gesture:
+      // Pomodoro picker → (block-ID prompt) → (inbox route picker) →
+      // write. Cancelling it can never leave a half-assigned block ID.
+      const pomodoroTarget = await this.choosePomodoroLinkTarget(source);
+      if (!pomodoroTarget) {
+        return;
+      }
+      source.pomodoroTarget = pomodoroTarget;
+
       if (task.existingId) {
         this.promptOpen = true;
         try {
@@ -6888,6 +6897,7 @@ class BlockIdPromptPomodoroLinksMixin {
         ...source,
         previewText: task.displayText,
         prefillId: false,
+        pomodoroTarget,
       };
       attachLinkReviewOrigin(promptSource);
       this.openBlockIdPrompt(promptSource);
@@ -7309,9 +7319,16 @@ class BlockIdPromptPomodoroLinksMixin {
       resolveTarget: (reference, referrerPath) =>
         this.resolveReferenceDestination(reference, referrerPath),
       linkText,
+      target: source.pomodoroTarget || null,
     });
     if (pomodoroPlan.error) {
-      new Notice(this.pomodoroPlanErrorNotice(pomodoroPlan.error, dailyFile.path));
+      new Notice(
+        this.pomodoroPlanErrorNotice(
+          pomodoroPlan.error,
+          dailyFile.path,
+          source.pomodoroTarget || null,
+        ),
+      );
       return false;
     }
 
@@ -7548,6 +7565,149 @@ class BlockIdPromptPomodoroLinksMixin {
     );
   }
 
+}
+// ---- src/122-plugin-pomodoro-link-picker.js ----
+class BlockIdPromptPomodoroLinkPickerMixin {
+  // Test seam for the "Link to today" picker: opens the modal and resolves
+  // its choice. Never throws (logs and resolves null).
+  async promptPomodoroLinkTarget(request) {
+    try {
+      const modal = new PomodoroLinkPickerModal(this.app, request);
+      modal.open();
+      return await modal.waitForChoice();
+    } catch (error) {
+      try {
+        console.error("Block ID Prompt pomodoro picker failed", error);
+      } catch (ignoredError) {
+        // Logging is best effort; the null below carries the refusal.
+      }
+      return null;
+    }
+  }
+
+  // Preflight plus picker for the Ctrl+Shift+Enter link direction. Resolves
+  // today's daily note and reads its snapshot (the live editor value when
+  // the task note is the daily note), refuses with today's Notice texts and
+  // opens nothing when the note is missing, unreadable, or has no
+  // `## Pomodoros` section, otherwise opens the picker with `promptOpen`
+  // held true and resolves its choice (or null on cancel).
+  async choosePomodoroLinkTarget(source) {
+    let heldPromptOpen = false;
+    try {
+      const dailyFile = this.resolveTodayDailyFile();
+      if (!dailyFile) {
+        new Notice("Task link blocked: today's daily note could not be found");
+        return null;
+      }
+
+      const taskFile = this.resolveTaskFile(source.sourcePath);
+      const sameNote = Boolean(taskFile && dailyFile.path === taskFile.path);
+      const dailyContent = sameNote
+        ? source.editor.getValue()
+        : await this.readFileSnapshot(dailyFile, source);
+      if (dailyContent === null) {
+        new Notice(`Task link blocked: ${dailyFile.path} could not be read`);
+        return null;
+      }
+
+      const model = buildPomodoroLinkPickerModel(dailyContent, {
+        now: this.now(),
+      });
+      if (!model || model.ok !== true) {
+        new Notice(`Task link blocked: ${dailyFile.path} has no Pomodoros section`);
+        return null;
+      }
+
+      const task = (source && source.task) || {};
+      const needsBlockId = !task.existingId;
+      const displayText =
+        task.displayText ||
+        (typeof task.rawLine === "string" ? cleanTaskDisplayText(task.rawLine) : "(untitled task)");
+      const current = this.readPlanBudgetMeter(dailyContent);
+      const pickerSnapshot = dailyContent;
+      const pickerDailyPath = dailyFile.path;
+      const pickerTaskPath = taskFile ? taskFile.path : source.sourcePath;
+      const plugin = this;
+      const budget = {
+        current,
+        forNewName(name) {
+          try {
+            const canonical = canonicalizePomodoroLinkName(name);
+            if (!canonical.valid) {
+              return null;
+            }
+            const blockId = task.existingId || "pomodoro-picker-projection";
+            let linkTargetText = "";
+            try {
+              if (taskFile && pickerDailyPath !== taskFile.path) {
+                linkTargetText = plugin.buildPomodoroLinkTargetText(
+                  taskFile,
+                  pickerDailyPath,
+                );
+              }
+            } catch (error) {
+              linkTargetText = "";
+            }
+            let linkText = null;
+            try {
+              linkText = sourceReplacement(
+                { targetText: linkTargetText, aliasSuffix: "" },
+                blockId,
+                CANONICAL_BLOCK_LINK_PREFIX,
+              );
+            } catch (error) {
+              return null;
+            }
+            const planned = planExplicitPomodoroLinkInsertion(pickerSnapshot, {
+              blockId,
+              targetPath: pickerTaskPath,
+              sourcePath: pickerDailyPath,
+              resolveTarget: (reference, referrerPath) =>
+                plugin.resolveReferenceDestination(reference, referrerPath),
+              linkText,
+              target: { kind: "new", name: canonical.name },
+            });
+            if (!planned || planned.error || typeof planned.content !== "string") {
+              return null;
+            }
+            return plugin.readPlanBudgetMeter(planned.content);
+          } catch (error) {
+            return null;
+          }
+        },
+      };
+
+      const request = {
+        model,
+        task: { displayText, status: task.status },
+        needsBlockId,
+        now: this.now(),
+        budget,
+      };
+
+      this.promptOpen = true;
+      heldPromptOpen = true;
+      try {
+        return await this.promptPomodoroLinkTarget(request);
+      } finally {
+        this.promptOpen = false;
+        heldPromptOpen = false;
+      }
+    } catch (error) {
+      try {
+        console.error("Block ID Prompt pomodoro picker failed", error);
+      } catch (ignoredError) {
+        // Logging is best effort; the null below carries the refusal.
+      }
+      if (heldPromptOpen) {
+        this.promptOpen = false;
+      }
+      return null;
+    }
+  }
+}
+// ---- src/124-plugin-pomodoro-inbox-route.js ----
+class BlockIdPromptPomodoroInboxRouteMixin {
   // nav `inboxRoute` v1 gate for Ctrl+Shift+Enter (link-toggle-gate). Only
   // the cursor-task toggle (`link-task-pomodoro`) routes; task-link mode
   // keeps today's behavior. Resolves `{ kind: "stay" }` (today's behavior,
@@ -7739,7 +7899,6 @@ class BlockIdPromptPomodoroLinksMixin {
     new Notice(partial);
     return true;
   }
-
 }
 // ---- src/130-plugin-task-link-open-and-notices.js ----
 class BlockIdPromptTaskLinkOpenAndNoticesMixin {
@@ -7973,7 +8132,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     );
   }
 
-  pomodoroPlanErrorNotice(error, dailyPath) {
+  pomodoroPlanErrorNotice(error, dailyPath, target) {
     switch (error) {
       case "no-section":
         return `Task link blocked: ${dailyPath} has no Pomodoros section`;
@@ -7981,6 +8140,20 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         return `Task link blocked: ${dailyPath} has no eligible open Pomodoro`;
       case "multiple-open-timed":
         return `Task link blocked: ${dailyPath} has multiple open timed Pomodoros`;
+      case "target-missing": {
+        const title = target && target.title ? target.title : "Pomodoro";
+        return `Task link blocked: Pomodoro ${title} changed in ${dailyPath}`;
+      }
+      case "target-closed": {
+        const title = target && target.title ? target.title : "Pomodoro";
+        return `Task link blocked: Pomodoro ${title} is already closed`;
+      }
+      case "invalid-name":
+        return `Task link blocked: ${POMODORO_NAME_USAGE}`;
+      case "verify-failed": {
+        const name = target && target.name ? target.name : "Pomodoro";
+        return `Task link blocked: new Pomodoro ${name} could not be verified`;
+      }
       default:
         return `Task link blocked: ${dailyPath} could not be updated`;
     }
@@ -8080,9 +8253,18 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
   }
 
   formatPomodoroLinkOutcome(plan, pomodoroPlan) {
+    const destination = pomodoroPlan && pomodoroPlan.destination;
+    let prefix = "Linked";
+    if (destination) {
+      if (destination.kind === "created") {
+        prefix = `Linked to new ${destination.name || destination.title}`;
+      } else if (destination.title) {
+        prefix = `Linked to ${destination.title}`;
+      }
+    }
     const base = plan.statusChanged
-      ? "Linked · Next"
-      : `Linked · stays ${laneStatusName(plan.newStatus)}`;
+      ? `${prefix} · Next`
+      : `${prefix} · stays ${laneStatusName(plan.newStatus)}`;
     const chips = [];
     if (plan.removedFutureSchedule) {
       chips.push("removed future schedule");
@@ -8146,15 +8328,12 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     return options.includeNoop ? " · no current/future Pomodoro links removed" : "";
   }
 
-  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan T/Tc · L/Lc`,
-  // with a trailing ` 🔴` when over the cap. Computed synchronously from the
-  // post-write daily content through bob-ledger-tools' public API. Returns ""
-  // (no suffix) when the API is missing, the budget shape is unexpected, or
-  // the daily note wasn't part of the operation (non-string content). Warns
-  // only, never refuses: failures degrade to no suffix.
-  planBudgetNoticeSuffix(dailyContent) {
+  // Shared ledger-tools meter read for Notices and the picker projection:
+  // returns the meter shape or null. Never throws; a throw or misshapen
+  // meter hides the meter instead of breaking the caller.
+  readPlanBudgetMeter(dailyContent) {
     if (typeof dailyContent !== "string") {
-      return "";
+      return null;
     }
     try {
       const plugins = this.app && this.app.plugins;
@@ -8169,11 +8348,11 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
           : null);
       const api = holder && holder.api;
       if (!api || typeof api.planBudget !== "function") {
-        return "";
+        return null;
       }
       const budget = api.planBudget({ content: dailyContent });
       if (!budget || typeof budget !== "object" || typeof budget.then === "function") {
-        return "";
+        return null;
       }
       const themes = budget.themes;
       const links = budget.links;
@@ -8185,14 +8364,34 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         !Number.isInteger(links.count) ||
         !Number.isInteger(links.cap)
       ) {
-        return "";
+        return null;
       }
       const over =
         budget.status === "over" || themes.over === true || links.over === true;
-      return ` · plan ${themes.count}/${themes.cap} · ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
+      return {
+        themes: { count: themes.count, cap: themes.cap, over: themes.over === true || budget.status === "over" },
+        links: { count: links.count, cap: links.cap, over: links.over === true || budget.status === "over" },
+        over,
+        status: budget.status,
+      };
     } catch (error) {
+      return null;
+    }
+  }
+
+  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan T/Tc · L/Lc`,
+  // with a trailing ` 🔴` when over the cap. Computed synchronously from the
+  // post-write daily content through bob-ledger-tools' public API. Returns ""
+  // (no suffix) when the API is missing, the budget shape is unexpected, or
+  // the daily note wasn't part of the operation (non-string content). Warns
+  // only, never refuses: failures degrade to no suffix.
+  planBudgetNoticeSuffix(dailyContent) {
+    const meter = this.readPlanBudgetMeter(dailyContent);
+    if (!meter) {
       return "";
     }
+    const over = meter.over === true;
+    return ` · plan ${meter.themes.count}/${meter.themes.cap} · ${meter.links.count}/${meter.links.cap}${over ? " 🔴" : ""}`;
   }
 
 }
@@ -8935,6 +9134,8 @@ function installBlockIdPromptMixins(pluginClass, mixins) {
 installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptBlockIdSubmitMixin,
   BlockIdPromptPomodoroLinksMixin,
+  BlockIdPromptPomodoroLinkPickerMixin,
+  BlockIdPromptPomodoroInboxRouteMixin,
   BlockIdPromptTaskLinkOpenAndNoticesMixin,
   BlockIdPromptTargetPlansAndRewritesMixin,
   BlockIdPromptReferenceFilesMixin,

@@ -13,6 +13,8 @@
   "100-plugin-lifecycle.js",
   "110-plugin-block-id-submit.js",
   "120-plugin-pomodoro-links.js",
+  "122-plugin-pomodoro-link-picker.js",
+  "124-plugin-pomodoro-inbox-route.js",
   "130-plugin-task-link-open-and-notices.js",
   "140-plugin-target-plans-and-rewrites.js",
   "150-plugin-reference-files.js",

@@ -159,6 +159,11 @@ function createTaskModeHarness({ taskContent, dailyContent, taskPath = "Tasks.md
     reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
   plugin.suppressEditorScans = () => {};
   plugin.now = () => localDate(2026, 8, 15);
+  plugin.pickerRequests = [];
+  plugin.promptPomodoroLinkTarget = async (request) => {
+    plugin.pickerRequests.push(request);
+    return helpers.defaultPomodoroLinkChoice(request.model);
+  };
   return { plugin, editor, file, view, writes };
 }
 
@@ -232,6 +237,11 @@ function createTaskLinkHarness({
   };
   plugin.suppressEditorScans = () => {};
   plugin.now = () => localDate(2026, 8, 15);
+  plugin.pickerRequests = [];
+  plugin.promptPomodoroLinkTarget = async (request) => {
+    plugin.pickerRequests.push(request);
+    return helpers.defaultPomodoroLinkChoice(request.model);
+  };
   return { plugin, editor, file, view, store, writes, replaceCalls, state };
 }
 

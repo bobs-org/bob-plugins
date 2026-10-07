@@ -229,7 +229,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     );
   }
 
-  pomodoroPlanErrorNotice(error, dailyPath) {
+  pomodoroPlanErrorNotice(error, dailyPath, target) {
     switch (error) {
       case "no-section":
         return `Task link blocked: ${dailyPath} has no Pomodoros section`;
@@ -237,6 +237,20 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         return `Task link blocked: ${dailyPath} has no eligible open Pomodoro`;
       case "multiple-open-timed":
         return `Task link blocked: ${dailyPath} has multiple open timed Pomodoros`;
+      case "target-missing": {
+        const title = target && target.title ? target.title : "Pomodoro";
+        return `Task link blocked: Pomodoro ${title} changed in ${dailyPath}`;
+      }
+      case "target-closed": {
+        const title = target && target.title ? target.title : "Pomodoro";
+        return `Task link blocked: Pomodoro ${title} is already closed`;
+      }
+      case "invalid-name":
+        return `Task link blocked: ${POMODORO_NAME_USAGE}`;
+      case "verify-failed": {
+        const name = target && target.name ? target.name : "Pomodoro";
+        return `Task link blocked: new Pomodoro ${name} could not be verified`;
+      }
       default:
         return `Task link blocked: ${dailyPath} could not be updated`;
     }
@@ -336,9 +350,18 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
   }
 
   formatPomodoroLinkOutcome(plan, pomodoroPlan) {
+    const destination = pomodoroPlan && pomodoroPlan.destination;
+    let prefix = "Linked";
+    if (destination) {
+      if (destination.kind === "created") {
+        prefix = `Linked to new ${destination.name || destination.title}`;
+      } else if (destination.title) {
+        prefix = `Linked to ${destination.title}`;
+      }
+    }
     const base = plan.statusChanged
-      ? "Linked · Next"
-      : `Linked · stays ${laneStatusName(plan.newStatus)}`;
+      ? `${prefix} · Next`
+      : `${prefix} · stays ${laneStatusName(plan.newStatus)}`;
     const chips = [];
     if (plan.removedFutureSchedule) {
       chips.push("removed future schedule");
@@ -402,15 +425,12 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     return options.includeNoop ? " · no current/future Pomodoro links removed" : "";
   }
 
-  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan T/Tc · L/Lc`,
-  // with a trailing ` 🔴` when over the cap. Computed synchronously from the
-  // post-write daily content through bob-ledger-tools' public API. Returns ""
-  // (no suffix) when the API is missing, the budget shape is unexpected, or
-  // the daily note wasn't part of the operation (non-string content). Warns
-  // only, never refuses: failures degrade to no suffix.
-  planBudgetNoticeSuffix(dailyContent) {
+  // Shared ledger-tools meter read for Notices and the picker projection:
+  // returns the meter shape or null. Never throws; a throw or misshapen
+  // meter hides the meter instead of breaking the caller.
+  readPlanBudgetMeter(dailyContent) {
     if (typeof dailyContent !== "string") {
-      return "";
+      return null;
     }
     try {
       const plugins = this.app && this.app.plugins;
@@ -425,11 +445,11 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
           : null);
       const api = holder && holder.api;
       if (!api || typeof api.planBudget !== "function") {
-        return "";
+        return null;
       }
       const budget = api.planBudget({ content: dailyContent });
       if (!budget || typeof budget !== "object" || typeof budget.then === "function") {
-        return "";
+        return null;
       }
       const themes = budget.themes;
       const links = budget.links;
@@ -441,14 +461,34 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         !Number.isInteger(links.count) ||
         !Number.isInteger(links.cap)
       ) {
-        return "";
+        return null;
       }
       const over =
         budget.status === "over" || themes.over === true || links.over === true;
-      return ` · plan ${themes.count}/${themes.cap} · ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
+      return {
+        themes: { count: themes.count, cap: themes.cap, over: themes.over === true || budget.status === "over" },
+        links: { count: links.count, cap: links.cap, over: links.over === true || budget.status === "over" },
+        over,
+        status: budget.status,
+      };
     } catch (error) {
+      return null;
+    }
+  }
+
+  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan T/Tc · L/Lc`,
+  // with a trailing ` 🔴` when over the cap. Computed synchronously from the
+  // post-write daily content through bob-ledger-tools' public API. Returns ""
+  // (no suffix) when the API is missing, the budget shape is unexpected, or
+  // the daily note wasn't part of the operation (non-string content). Warns
+  // only, never refuses: failures degrade to no suffix.
+  planBudgetNoticeSuffix(dailyContent) {
+    const meter = this.readPlanBudgetMeter(dailyContent);
+    if (!meter) {
       return "";
     }
+    const over = meter.over === true;
+    return ` · plan ${meter.themes.count}/${meter.themes.cap} · ${meter.links.count}/${meter.links.cap}${over ? " 🔴" : ""}`;
   }
 
 }

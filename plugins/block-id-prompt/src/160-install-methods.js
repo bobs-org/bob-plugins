@@ -20,6 +20,8 @@ function installBlockIdPromptMixins(pluginClass, mixins) {
 installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptBlockIdSubmitMixin,
   BlockIdPromptPomodoroLinksMixin,
+  BlockIdPromptPomodoroLinkPickerMixin,
+  BlockIdPromptPomodoroInboxRouteMixin,
   BlockIdPromptTaskLinkOpenAndNoticesMixin,
   BlockIdPromptTargetPlansAndRewritesMixin,
   BlockIdPromptReferenceFilesMixin,

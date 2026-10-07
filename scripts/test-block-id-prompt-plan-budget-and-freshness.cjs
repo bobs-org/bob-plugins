@@ -57,10 +57,14 @@ test("plan budget suffix: link Notice appends the meter computed on post-write d
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Linked · Next · plan 1/3 · 2/10"]);
-  assert.equal(seen.length, 1);
+  assert.deepEqual(noticeMessages, ["Linked to Current · Next · plan 1/3 · 2/10"]);
+  assert.equal(seen.length, 2);
   assert.ok(
-    seen[0].includes("[[Tasks#^ship]]"),
+    !seen[0].includes("[[Tasks#^ship]]"),
+    "picker meter runs on the pre-write daily content",
+  );
+  assert.ok(
+    seen[1].includes("[[Tasks#^ship]]"),
     "budget runs on the post-write daily content",
   );
 });
@@ -78,7 +82,7 @@ test("plan budget suffix: link Notice omits the meter when the ledger-tools API 
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Linked · Next"]);
+  assert.deepEqual(noticeMessages, ["Linked to Current · Next"]);
 });
 
 test("plan budget suffix: unlink Notice marks an over-cap plan with 🔴", async () => {
@@ -102,7 +106,10 @@ test("plan budget suffix: unlink Notice marks an over-cap plan with 🔴", async
 
 test("plan budget suffix: Next task without a block ID prompts for one and omits the meter", async () => {
   const h = createTaskLinkHarness({
-    files: { "Tasks.md": "- [*] #task Ship it" },
+    files: {
+      "Daily.md": "## Pomodoros\n- [ ] Current ()",
+      "Tasks.md": "- [*] #task Ship it",
+    },
     activePath: "Tasks.md",
     cursor: { line: 0, ch: 4 },
   });
@@ -116,7 +123,11 @@ test("plan budget suffix: Next task without a block ID prompts for one and omits
 
   assert.equal(prompted, true);
   assert.deepEqual(noticeMessages, []);
-  assert.deepEqual(seen, []);
+  assert.equal(seen.length, 1);
+  assert.ok(
+    !seen[0].includes("[[Tasks#^"),
+    "picker meter runs before any link is written",
+  );
 });
 
 test("plan budget suffix: Task Link Notice appends the meter from post-write daily content", async () => {

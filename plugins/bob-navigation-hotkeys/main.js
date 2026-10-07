@@ -16141,6 +16141,220 @@ function formatSchedulingWorkLogDateSpan(dates) {
   return `scheduled → ${values[0]} → ${values[values.length - 1]}`;
 }
 
+// ---- src/196-task-link-lane-modal.js ----
+// Move to Next prompt for the Task Link lane toggle (plan
+// 202610/in_progress_task_link_marks.md D8). Styled like block-id-prompt's
+// polished `Unlink task` prompt (`bid-wlp`), so the two Work Log prompts
+// look like one family; the `bob-tll-*` styles live in this plugin's
+// `styles.css`. Calls back with null on cancel/Esc or `{ summary }` on
+// submit. A blank summary moves without logging.
+class TaskLinkLanePromptModal extends Modal {
+  constructor(app, options = {}) {
+    super(app);
+    this.options = options || {};
+    this.onDone = this.options.onDone;
+    this.completed = false;
+    this.inputEl = null;
+    this.previewEl = null;
+    this.warningEl = null;
+    this.primaryButton = null;
+  }
+
+  taskLinkLaneTasks() {
+    const tasks = this.options.tasks;
+    if (!Array.isArray(tasks)) {
+      return [];
+    }
+    return tasks
+      .filter((task) => task && typeof task === "object")
+      .map((task) =>
+        Object.freeze({
+          displayText: String(task.displayText || "(untitled task)"),
+          path: String(task.path || "Current note"),
+        }),
+      );
+  }
+
+  taskLinkLaneDateText() {
+    if (typeof this.options.dateText === "string" && this.options.dateText) {
+      return String(this.options.dateText);
+    }
+    return formatBulletPropertyDate(getLocalDateStart(new Date()));
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.addClass("bob-tll-modal");
+    contentEl.addClass("bob-tll");
+
+    const header = contentEl.createDiv({ cls: "bob-tll-header" });
+    const headerIcon = header.createDiv({ cls: "bob-tll-header-icon" });
+    applyIcon(headerIcon, "pause-circle");
+    const headerText = header.createDiv({ cls: "bob-tll-header-text" });
+    headerText.createDiv({ cls: "bob-tll-title", text: "Move to Next" });
+    headerText.createDiv({
+      cls: "bob-tll-subtitle",
+      text: "Optional: what did you get done? Saved to the Work Log.",
+    });
+
+    const tasks = this.taskLinkLaneTasks();
+    const contextEl = contentEl.createDiv({
+      cls: "bob-tll-context",
+      attr: { role: "note", "aria-label": "Selected tasks" },
+    });
+    if (tasks.length <= 1) {
+      const single = tasks.length === 1 ? tasks[0] : null;
+      contextEl.createDiv({
+        cls: "bob-tll-context-task",
+        text: single ? single.displayText : "(untitled task)",
+      });
+      contextEl.createDiv({
+        cls: "bob-tll-context-source",
+        text: single ? single.path : "Current note",
+      });
+    } else {
+      contextEl.createDiv({
+        cls: "bob-tll-context-task",
+        text: `${tasks.length} tasks`,
+      });
+      for (const task of tasks.slice(0, 3)) {
+        contextEl.createDiv({
+          cls: "bob-tll-context-source",
+          text: task.displayText,
+        });
+      }
+      if (tasks.length > 3) {
+        contextEl.createDiv({
+          cls: "bob-tll-context-source",
+          text: `+${tasks.length - 3} more`,
+        });
+      }
+      contextEl.createDiv({
+        cls: "bob-tll-context-source",
+        text: "The same entry is logged on each task.",
+      });
+    }
+
+    const fieldEl = contentEl.createDiv({ cls: "bob-tll-field" });
+    fieldEl.createEl("label", {
+      cls: "bob-tll-label",
+      attr: { for: "bob-tll-summary" },
+      text: "Work summary (optional)",
+    });
+    this.inputEl = fieldEl.createEl("input", {
+      cls: "bob-tll-input",
+      attr: {
+        id: "bob-tll-summary",
+        "aria-describedby": "bob-tll-preview bob-tll-warning",
+        placeholder: "What did you get done?",
+        type: "text",
+      },
+    });
+    this.inputEl.addEventListener("input", () => this.updatePreview());
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.submit();
+    });
+
+    this.previewEl = contentEl.createDiv({
+      cls: "bob-tll-preview",
+      attr: { id: "bob-tll-preview", role: "note", "aria-live": "polite" },
+    });
+    this.warningEl = contentEl.createDiv({
+      cls: "bob-tll-warning",
+      attr: { id: "bob-tll-warning", role: "status" },
+      text: "Contains ::, which Dataview may read as an inline field.",
+    });
+
+    const row = contentEl.createDiv({ cls: "bob-tll-actions" });
+    const cancelBtn = row.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => this.close());
+    this.primaryButton = row.createEl("button", { text: "Move to Next" });
+    this.primaryButton.addEventListener("click", () => this.submit());
+
+    this.updatePreview();
+    window.setTimeout(() => {
+      if (this.inputEl) {
+        this.inputEl.focus();
+      }
+    }, 0);
+  }
+
+  updatePreview() {
+    if (!this.previewEl) {
+      return;
+    }
+    const state = taskLinkLanePromptState(
+      this.inputEl ? this.inputEl.value : "",
+      { date: this.taskLinkLaneDateText() },
+    );
+    if (
+      this.primaryButton &&
+      typeof this.primaryButton.setText === "function"
+    ) {
+      this.primaryButton.setText(state.primaryButtonText);
+    }
+    this.previewEl.empty();
+    if (state.isBlank) {
+      this.previewEl.setAttribute(
+        "aria-label",
+        "No work-log entry will be added.",
+      );
+      this.previewEl.createDiv({
+        cls: "bob-tll-preview-muted",
+        text: "No work-log entry will be added.",
+      });
+    } else {
+      this.previewEl.setAttribute("aria-label", state.formattedEntry);
+      this.previewEl.createDiv({
+        cls: "bob-tll-preview-marker",
+        text: `${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`,
+      });
+      this.previewEl.createDiv({
+        cls: "bob-tll-preview-entry",
+        text: state.formattedEntry,
+      });
+    }
+    if (this.warningEl) {
+      const hidden = !state.hasDataviewWarning;
+      if (typeof this.warningEl.toggleClass === "function") {
+        this.warningEl.toggleClass("is-hidden", hidden);
+      } else if (this.warningEl.classList) {
+        this.warningEl.classList.toggle("is-hidden", hidden);
+      }
+    }
+  }
+
+  submit() {
+    const value = this.inputEl ? this.inputEl.value : "";
+    this.completed = true;
+    try {
+      if (typeof this.onDone === "function") {
+        this.onDone({ summary: String(value || "") });
+      }
+    } finally {
+      this.onDone = null;
+      this.close();
+    }
+  }
+
+  onClose() {
+    contentElCleanup(this.contentEl);
+    if (!this.completed && typeof this.onDone === "function") {
+      try {
+        this.onDone(null);
+      } catch (error) {
+        // Best effort.
+      }
+    }
+    this.onDone = null;
+  }
+}
 // ---- src/200-filtered-picker-modals.js ----
 class FilteredPickerModal extends Modal {
   constructor(app, options) {
@@ -18432,8 +18646,12 @@ function discoverLinkPickerTargets(content, startLine, additionalTaskCount) {
 
 // Resolve a block ID to its task line inside one note's content. The ID must
 // be unique and must sit on an open #task line; anything else reports an
-// error the caller surfaces as a Notice without changing anything.
-function findUniqueLinkPickerTargetLine(noteContent, blockId) {
+// error the caller surfaces as a Notice without changing anything. With
+// `{ allowClosed: true }` a uniquely resolved closed task line resolves with
+// its status instead of failing, so the Task Link lane toggle can skip it;
+// missing, duplicated, and non-task targets still fail either way.
+function findUniqueLinkPickerTargetLine(noteContent, blockId, options = {}) {
+  const allowClosed = Boolean(options && options.allowClosed === true);
   const id = normalizeBulletPropertyValue(blockId);
   const text = String(noteContent || "");
   if (!id) {
@@ -18461,6 +18679,9 @@ function findUniqueLinkPickerTargetLine(noteContent, blockId) {
     return Object.freeze({ valid: false, error: "not-task", line: null });
   }
   if (!isOpenObsidianTaskLine(rawLine)) {
+    if (allowClosed && isObsidianTaskLine(rawLine)) {
+      return Object.freeze({ valid: true, error: null, line, rawLine });
+    }
     return Object.freeze({ valid: false, error: "closed", line: null });
   }
   return Object.freeze({ valid: true, error: null, line, rawLine });
@@ -20527,6 +20748,393 @@ function taskMoveLinkNoteMatchesPath(note, filePath) {
   return target === path || target === basename;
 }
 
+// ---- src/245-task-link-lane.js ----
+// ---------------------------------------------------------------------------
+// task-link-lane: toggle a Pomodoro Task Link's target between Next (`*`) and
+// In Progress (`/`) (plan 202610/in_progress_task_link_marks.md §6).
+//
+// `isPomodoroTaskLinkLine` is the single definition of "Pomodoro Task Link
+// line" shared by nav's `api.taskLinkLane.matches` and task-status-cycler's
+// Alt+[ / Alt+] delegation, so the two plugins can never disagree. The mode
+// is decided once across all note groups (`decideTaskLinkLaneMode`: start
+// wins), each group is planned with `planTaskLinkLaneBatch` (shaped like
+// `planTaskLaneBatch`), and `buildTaskLinkLaneNotice` renders the D5/L1-L8
+// notices. `taskLinkLanePromptState` drives the Move to Next prompt.
+// ---------------------------------------------------------------------------
+
+// True when `line` (0-based) of `content` is a Pomodoro Task Link line: the
+// path has daily-note shape, the line is unfenced, it carries no checkbox, it
+// is accepted by `parseLinkPickerTaskLink` (a dedicated bullet: plain, 🍅,
+// `#` move-only, struck, or embedded), and it sits inside a Pomodoro entry's
+// sub-bullet block within `## Pomodoros`. The entry may be open or closed:
+// toggling from a 🍅 history line changes the task, never the line. Never
+// throws.
+function isPomodoroTaskLinkLine(content, line, path) {
+  try {
+    if (!canonicalRecoveryDailyDate(path)) {
+      return false;
+    }
+    const text = String(content || "");
+    const source = splitMarkdownContent(text);
+    const index = Math.floor(numericOrDefault(line, Number.NaN));
+    if (
+      !Number.isFinite(index) ||
+      index < 0 ||
+      index >= source.lines.length
+    ) {
+      return false;
+    }
+    const contexts = getMarkdownLineContexts(text);
+    const context = contexts[index] || {};
+    if (context.inFence || context.inFrontmatter) {
+      return false;
+    }
+    // Any checkbox line stays on its legacy behavior — including `[x] [[…]]`
+    // checklist rows without `#task`, which `parseLinkPickerTaskLink` would
+    // otherwise accept (D4). This is broader than `isObsidianTaskAtLine`.
+    if (OBSIDIAN_TASK_LINE_RE.test(String(source.lines[index] || ""))) {
+      return false;
+    }
+    if (!parseLinkPickerTaskLink(source.lines[index])) {
+      return false;
+    }
+    return Boolean(findPomodoroBulletContext(text, index));
+  } catch (error) {
+    return false;
+  }
+}
+
+// Decide the toggle mode once across every target status: start wins (any
+// Next target starts), otherwise pause (any In Progress target pauses),
+// otherwise null (the batch is refused with the first target's D5 message).
+// `statuses` are single checkbox characters (or null). Never throws.
+function decideTaskLinkLaneMode(statuses) {
+  try {
+    const list = Array.isArray(statuses) ? statuses : [];
+    if (list.some((status) => status === "*")) {
+      return "start";
+    }
+    if (list.some((status) => status === "/")) {
+      return "pause";
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The D5 refusal Notice text for one target status, or null when the status
+// toggles (`*` or `/`). Unknown statuses get a neutral refusal.
+function taskLinkLaneRefusalFor(status) {
+  switch (String(status ?? "")) {
+    case "*":
+    case "/":
+      return null;
+    case " ":
+      return "Task is Ready · Alt+N commits it to Next";
+    case "?":
+      return "Blocked is derived · clear its dependency or future schedule first";
+    case "x":
+    case "X":
+      return "Task is done · Ctrl+Enter reopens it";
+    case "-":
+      return "Task is cancelled";
+    default:
+      return "Task is not open · only Next and In Progress toggle";
+  }
+}
+
+// Truncate a task label to about 60 characters with `…`.
+function truncateTaskLinkLaneLabel(value) {
+  const text = String(value === null || value === undefined ? "" : value);
+  if (text.length <= 60) {
+    return text;
+  }
+  return `${text.slice(0, 59).trimEnd()}…`;
+}
+
+// Plan a two-state Next <-> In Progress toggle across the task lines of one
+// note's content. `mode` ("start" or "pause") is passed in, decided once
+// across groups by `decideTaskLinkLaneMode` — never per-group. Start moves
+// every Next (`*`) target to In Progress (`/`); pause moves every In Progress
+// (`/`) target to Next (`*`) and writes `insertLaneWorkLogEntry` for each
+// paused task when the summary is non-blank. Ready, Blocked, and closed
+// targets are skipped and counted, never written. Stale preimages (a line
+// changed or stopped being a task) refuse the whole batch. Writes apply
+// bottom-up and the freshness stamp is the last line transformation. Pure
+// and CRLF-preserving, shaped like `planTaskLaneBatch`.
+function planTaskLinkLaneBatch(content, session, options = {}) {
+  const text = String(content || "");
+  const source = splitMarkdownContent(text);
+  const contexts = getMarkdownLineContexts(text);
+  const mode = options && options.mode === "pause" ? "pause" : options && options.mode === "start" ? "start" : null;
+  const targets =
+    session && Array.isArray(session.targets) ? session.targets : [];
+  const invalid = (error, stale = false) =>
+    Object.freeze({
+      valid: false,
+      error,
+      stale,
+      mode: null,
+      changedTaskCount: 0,
+      blockedSkipped: 0,
+      skippedClosedCount: 0,
+      workLogWrittenCount: 0,
+      released: Object.freeze([]),
+      moved: Object.freeze([]),
+      started: Object.freeze([]),
+      paused: Object.freeze([]),
+      readySkipped: 0,
+      closedSkipped: 0,
+      content: text,
+    });
+  if (!mode) {
+    return invalid("No tasks to update");
+  }
+  if (targets.length === 0) {
+    return invalid("No tasks to update");
+  }
+  // Duplicate targets in one batch are written once (L14).
+  const seenLines = new Set();
+  const deduped = [];
+  for (const target of targets) {
+    if (!target || !Number.isInteger(target.line)) {
+      continue;
+    }
+    if (seenLines.has(target.line)) {
+      continue;
+    }
+    seenLines.add(target.line);
+    deduped.push(target);
+  }
+  for (const target of deduped) {
+    const live =
+      Number.isInteger(target.line) &&
+      target.line >= 0 &&
+      target.line < source.lines.length
+        ? source.lines[target.line]
+        : undefined;
+    if (
+      live !== target.rawLine ||
+      !isObsidianTaskAtLine(text, target.line, contexts, source.lines)
+    ) {
+      return invalid("A linked note changed; no tasks were updated", true);
+    }
+  }
+  const summary = normalizeLaneWorkSummary(options.summary);
+  const dateText = String(options.dateText || "");
+  const laneStamper = resolveFreshStamper(options);
+  const laneFreshDateText = resolveFreshDateText(options);
+  const workingLines = source.lines.slice();
+  let changedTaskCount = 0;
+  let blockedSkipped = 0;
+  let skippedClosedCount = 0;
+  let readySkipped = 0;
+  let closedSkipped = 0;
+  let workLogWrittenCount = 0;
+  const moved = [];
+  // Work Log insertions shift later lines, so apply bottom-up.
+  const ordered = deduped
+    .map((target) => ({
+      target,
+      status: getObsidianTaskCheckboxStatus(target.rawLine || ""),
+    }))
+    .sort((a, b) => b.target.line - a.target.line);
+  for (const { target, status } of ordered) {
+    const applicable =
+      (mode === "start" && status === "*") ||
+      (mode === "pause" && status === "/");
+    if (!applicable) {
+      // Already in the destination lane: left alone and uncounted (D6).
+      if (
+        (mode === "start" && status === "/") ||
+        (mode === "pause" && status === "*")
+      ) {
+        continue;
+      }
+      if (status === " ") {
+        readySkipped += 1;
+      } else if (status === "?") {
+        blockedSkipped += 1;
+      } else {
+        skippedClosedCount += 1;
+        closedSkipped += 1;
+      }
+      continue;
+    }
+    const toStatus = mode === "start" ? "/" : "*";
+    const oldLine = String(workingLines[target.line] || "");
+    let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, toStatus);
+    if (laneStamper) {
+      nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+    }
+    if (nextLine !== oldLine) {
+      changedTaskCount += 1;
+    }
+    workingLines[target.line] = nextLine;
+    // Read the block ID from the pre-edit line: the freshness stamp lands
+    // after it, so the postimage no longer ends with the ID.
+    const blockId = getTrailingBlockId(oldLine);
+    moved.push(
+      Object.freeze({
+        line: target.line,
+        blockId: blockId || null,
+        fromStatus: status,
+        toStatus,
+      }),
+    );
+    if (mode === "pause" && summary) {
+      if (insertLaneWorkLogEntry(workingLines, target.line, summary, dateText)) {
+        workLogWrittenCount += 1;
+      }
+    }
+  }
+  moved.sort((a, b) => a.line - b.line);
+  const frozenMoved = Object.freeze(moved);
+  return Object.freeze({
+    valid: true,
+    error: null,
+    stale: false,
+    mode,
+    changedTaskCount,
+    blockedSkipped,
+    skippedClosedCount,
+    workLogWrittenCount,
+    released: frozenMoved,
+    moved: frozenMoved,
+    started: mode === "start" ? frozenMoved : Object.freeze([]),
+    paused: mode === "pause" ? frozenMoved : Object.freeze([]),
+    readySkipped,
+    closedSkipped,
+    content: workingLines.join(source.lineEnding),
+  });
+}
+
+// Build the Task Link lane Notice. `details.tasks` holds cleaned display
+// strings for the moved tasks. Successes read `◐ In Progress · <task|N tasks>`
+// and `→ Next · <task|N tasks>` with `· logged` suffixes, skip counts, and
+// PENDING/NEXT budget suffixes from `readLaneBudgets` adjusted by the moved
+// count for both lanes (over-cap lanes gain Alt+N's 🔴 weekly-review hint).
+function buildTaskLinkLaneNotice(details = {}) {
+  const mode = details.mode === "pause" ? "pause" : "start";
+  const changed = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.changedTaskCount, 0)),
+  );
+  const tasks = Array.isArray(details.tasks) ? details.tasks : [];
+  const label =
+    tasks.length === 1
+      ? truncateTaskLinkLaneLabel(tasks[0])
+      : `${formatCountLabel(changed, "task")}`;
+  let text = mode === "start" ? `◐ In Progress · ${label}` : `→ Next · ${label}`;
+  const logged = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.workLogWrittenCount, 0)),
+  );
+  if (mode === "pause" && logged > 0) {
+    text += tasks.length === 1 ? " · logged" : ` · logged ${logged}`;
+  }
+  const ready = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.readySkipped, 0)),
+  );
+  if (ready > 0) {
+    text += ` · ${ready} Ready skipped`;
+  }
+  const blocked = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.blockedSkipped, 0)),
+  );
+  if (blocked > 0) {
+    text += ` · ${blocked} Blocked skipped — Blocked is derived`;
+  }
+  const closed = Math.max(
+    0,
+    Math.floor(
+      numericOrDefault(
+        details.closedSkipped,
+        numericOrDefault(details.skippedClosedCount, 0),
+      ),
+    ),
+  );
+  if (closed > 0) {
+    text += ` · ${closed} already closed`;
+  }
+  const budgets = details.laneBudgets || null;
+  const parts = [];
+  if (
+    budgets &&
+    budgets.pending &&
+    Number.isFinite(Math.floor(Number(budgets.pending.count))) &&
+    Number.isFinite(Math.floor(Number(budgets.pending.cap)))
+  ) {
+    const pendingAfter = Math.max(
+      0,
+      Math.floor(Number(budgets.pending.count)) +
+        (mode === "start" ? changed : -changed),
+    );
+    const pendingCap = Math.floor(Number(budgets.pending.cap));
+    parts.push(`PENDING ${pendingAfter}/${pendingCap}`);
+    if (pendingAfter > pendingCap) {
+      parts.push("🔴 · prune at the weekly review");
+    }
+  }
+  if (
+    budgets &&
+    budgets.next &&
+    Number.isFinite(Math.floor(Number(budgets.next.count))) &&
+    Number.isFinite(Math.floor(Number(budgets.next.cap)))
+  ) {
+    const nextAfter = Math.max(
+      0,
+      Math.floor(Number(budgets.next.count)) +
+        (mode === "start" ? -changed : changed),
+    );
+    const nextCap = Math.floor(Number(budgets.next.cap));
+    parts.push(`NEXT ${nextAfter}/${nextCap}`);
+    if (nextAfter > nextCap) {
+      parts.push("🔴 · prune at the weekly review");
+    }
+  }
+  // Deduplicate the prune hint when both lanes are over.
+  const deduped = [];
+  let hintSeen = false;
+  for (const part of parts) {
+    if (part.includes("prune at the weekly review")) {
+      if (hintSeen) {
+        continue;
+      }
+      hintSeen = true;
+    }
+    deduped.push(part);
+  }
+  if (deduped.length > 0) {
+    text += ` · ${deduped.join(" · ")}`;
+  }
+  return text;
+}
+
+// Pure state for the Move to Next prompt: normalized summary, today's date,
+// the formatted Work Log preview (blank when nothing would be logged), the
+// `::` Dataview warning flag, and the call-to-action button text.
+function taskLinkLanePromptState(summary, options = {}) {
+  const normalized = normalizeLaneWorkSummary(summary);
+  const date =
+    options && typeof options.date === "string" && options.date
+      ? String(options.date)
+      : formatBulletPropertyDate(getLocalDateStart(new Date()));
+  const formattedEntry = normalized
+    ? formatLaneWorkLogEntry(normalized, date)
+    : "";
+  return Object.freeze({
+    summary: normalized,
+    date,
+    formattedEntry,
+    isBlank: normalized.length === 0,
+    hasDataviewWarning: normalized.includes("::"),
+    primaryButtonText: normalized ? "Log & move to Next" : "Move to Next",
+  });
+}
 // ---- src/250-task-move.js ----
 function rewriteTaskMoveBlockLinks(content, options = {}) {
   const text = String(content || "");
@@ -37066,8 +37674,13 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `nav-stage` swaps in the vault-wide stage. `removeDependency` removes one
 // prerequisite through the single-transaction writer (`parentRef`:
 // `{path, line}`, `target`: `{path, blockId}`); it re-reads the dependent
-// and refuses with a notice when stale. Plugins never import each other's
-// `main.js`: bob-ledger-tools feature-detects `api?.version >= 1`.
+// and refuses with a notice when stale. `taskLinkLane` is the Pomodoro Task
+// Link lane toggle (plan 202610/in_progress_task_link_marks.md §3): `matches`
+// synchronously reports whether a line is a Pomodoro Task Link line and
+// `toggle` runs the Next <-> In Progress toggle, settling to a result
+// object and never rejecting. Plugins never import each other's
+// `main.js`: bob-ledger-tools feature-detects `api?.version >= 1` and
+// task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -37091,6 +37704,7 @@ function createDependencyNavApi(plugin) {
     ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
     reviewWalk: createReviewWalkApi(plugin),
     inboxRoute: createInboxRouteApi(plugin),
+    taskLinkLane: createTaskLinkLaneApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
@@ -37911,8 +38525,11 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Resolve every discovered Task Link to the open #task line behind it,
   // reading the target's live editor buffer when it is open. Either every
   // link resolves or the whole result is an error: a missing, duplicated,
-  // non-task, or closed target changes nothing.
-  async resolveLinkPickerTargets(sourcePath, discovery) {
+  // non-task, or closed target changes nothing. With `{ allowClosed: true }`
+  // closed targets resolve with their status instead of failing (the Task
+  // Link lane toggle skips them); the default keeps Alt+N byte-identical.
+  async resolveLinkPickerTargets(sourcePath, discovery, options = {}) {
+    const allowClosed = Boolean(options && options.allowClosed === true);
     const targets = [];
     const seen = new Set();
     for (const entry of discovery.targets || []) {
@@ -37937,6 +38554,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
       const found = findUniqueLinkPickerTargetLine(
         content,
         entry.link.blockId,
+        { allowClosed },
       );
       if (!found.valid) {
         if (found.error === "missing" || found.error === "duplicated") {
@@ -40063,6 +40681,346 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
     return true;
   }
+}
+// ---- src/525-plugin-task-link-lane.js ----
+// Orchestration for the Pomodoro Task Link lane toggle (plan
+// 202610/in_progress_task_link_marks.md §6.4): Next <-> In Progress on the
+// Alt+N link pipeline (discover, allowClosed resolve, start-wins batch plan,
+// Move to Next prompt, preimage-checked commit, notices, progressMarks
+// hint). Exposed as nav `api.taskLinkLane` v1 via `createTaskLinkLaneApi`.
+// The bullet is never reformatted.
+class BobNavigationHotkeysTaskLinkLaneMixin {
+
+  // Run the D5/D6 toggle for the cursor link (+ N siblings when counted).
+  // Uses only the passed count, never re-reads Vim state. Resolves
+  // `{ ok: true, mode, changed }` or `{ ok: false, reason }` and never
+  // rejects. A second call while one is in flight resolves busy with no
+  // write and no Notice. Cancel ends silently with no write and no Notice.
+  async toggleTaskLinkLane(request = {}) {
+    const editor = (request && request.editor) || null;
+    const view = (request && request.view) || null;
+    const countExplicit = Boolean(request && request.countExplicit === true);
+    const additionalTaskCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(request && request.additionalTaskCount, 0)),
+    );
+    const fail = (reason, noticeText) => {
+      if (noticeText) {
+        new Notice(noticeText);
+      }
+      return Object.freeze({ ok: false, reason });
+    };
+    if (this.taskLinkLaneBusy === true) {
+      return Object.freeze({ ok: false, reason: "busy" });
+    }
+    this.taskLinkLaneBusy = true;
+    try {
+      const cursor =
+        editor && typeof editor.getCursor === "function"
+          ? getEditorCursor(editor)
+          : null;
+      if (!cursor) {
+        return fail("error", "No active markdown editor");
+      }
+      const content =
+        editor && typeof editor.getValue === "function"
+          ? String(editor.getValue() || "")
+          : "";
+      const discovery = discoverLinkPickerTargets(
+        content,
+        cursor.line,
+        countExplicit ? additionalTaskCount : 0,
+      );
+      if (!discovery.valid) {
+        return fail(
+          "refused",
+          discovery.notLink ? "Cursor is not on a Task Link" : discovery.error,
+        );
+      }
+      const activeView = view || this.getActiveMarkdownView();
+      if (!activeView || !activeView.file) {
+        return fail("unavailable", "No active markdown note");
+      }
+      const sourcePath = activeView.file.path;
+      let resolution = null;
+      try {
+        resolution = await this.resolveLinkPickerTargets(
+          sourcePath,
+          discovery,
+          { allowClosed: true },
+        );
+      } catch (error) {
+        return fail("error", "Task Link targets could not be read");
+      }
+      if (!resolution || resolution.error) {
+        return fail(
+          "refused",
+          (resolution && resolution.error) ||
+            "Task Link targets could not be read",
+        );
+      }
+      if (
+        editor &&
+        typeof editor.getValue === "function" &&
+        String(editor.getValue() || "") !== content
+      ) {
+        return fail("stale", "A linked note changed; no tasks were updated");
+      }
+      const groups = groupLinkPickerTargetsByNote(resolution.targets);
+      if (groups.length === 0) {
+        return fail("refused", "Could not update task; no tasks were updated");
+      }
+      const statuses = resolution.targets.map((target) =>
+        getObsidianTaskCheckboxStatus(target.rawLine || ""),
+      );
+      const mode = decideTaskLinkLaneMode(statuses);
+      if (!mode) {
+        const firstStatus = statuses.length > 0 ? statuses[0] : null;
+        return fail(
+          "refused",
+          taskLinkLaneRefusalFor(firstStatus),
+        );
+      }
+      const laneBudgets = readLaneBudgets(this.app);
+      const dateText = this.laneReleaseDateText();
+      let summary = "";
+      if (mode === "pause") {
+        const pausable = resolution.targets.filter(
+          (target) =>
+            getObsidianTaskCheckboxStatus(target.rawLine || "") === "/",
+        );
+        if (pausable.length > 0) {
+          const answer = await this.requestTaskLinkLaneSummary({
+            targets: pausable,
+            dateText,
+          });
+          if (answer.cancelled) {
+            return Object.freeze({ ok: false, reason: "cancelled" });
+          }
+          summary = answer.summary;
+        }
+      }
+      const planned = [];
+      for (const group of groups) {
+        const plan = planTaskLinkLaneBatch(group.content, group.session, {
+          mode,
+          summary,
+          dateText,
+          stampLine: this.getFreshnessStampLine(),
+          freshDateText: this.getFreshnessDateText(),
+        });
+        if (!plan.valid) {
+          return fail(
+            "stale",
+            plan.stale
+              ? "A linked note changed; no tasks were updated"
+              : plan.error,
+          );
+        }
+        planned.push({ group, plan });
+      }
+      let commit = null;
+      try {
+        commit = await this.commitLinkPickerNoteWrites(planned, {});
+      } catch (error) {
+        return fail("error", "Could not update task; no tasks were updated");
+      }
+      if (!commit || !commit.ok) {
+        return fail("stale", "A linked note changed; no tasks were updated");
+      }
+      let changed = 0;
+      let workLogWrittenCount = 0;
+      let readySkipped = 0;
+      let blockedSkipped = 0;
+      let closedSkipped = 0;
+      const movedHints = [];
+      const labels = [];
+      const labelByKey = new Map();
+      for (const target of resolution.targets) {
+        labelByKey.set(
+          `${target.path}::${target.line}`,
+          target.displayText || cleanTaskDisplayText(target.rawLine || ""),
+        );
+      }
+      for (const { group, plan } of planned) {
+        changed += plan.moved.length;
+        workLogWrittenCount += plan.workLogWrittenCount;
+        readySkipped += plan.readySkipped;
+        blockedSkipped += plan.blockedSkipped;
+        closedSkipped += plan.closedSkipped;
+        for (const entry of plan.moved) {
+          if (entry.blockId) {
+            movedHints.push(
+              Object.freeze({
+                path: group.path,
+                blockId: entry.blockId,
+                status: entry.toStatus,
+              }),
+            );
+          }
+          const label = labelByKey.get(`${group.path}::${entry.line}`);
+          if (label) {
+            labels.push(label);
+          }
+        }
+      }
+      this.hintTaskLinkLaneProgressMarks(movedHints);
+      new Notice(
+        buildTaskLinkLaneNotice({
+          mode,
+          tasks: labels,
+          changedTaskCount: changed,
+          workLogWrittenCount,
+          readySkipped,
+          blockedSkipped,
+          closedSkipped,
+          laneBudgets,
+        }),
+      );
+      return Object.freeze({ ok: true, mode, changed });
+    } catch (error) {
+      return Object.freeze({ ok: false, reason: "error" });
+    } finally {
+      this.taskLinkLaneBusy = false;
+    }
+  }
+
+  // Ask once for the optional Move to Next Work Log summary. Resolves
+  // `{ cancelled, summary }`; cancel ends the gesture silently. Mirrors
+  // `requestLaneReleaseSummary`: a prompt that cannot open proceeds with a
+  // blank summary instead of refusing the toggle.
+  async requestTaskLinkLaneSummary(options = {}) {
+    if (typeof TaskLinkLanePromptModal !== "function") {
+      return { cancelled: false, summary: "" };
+    }
+    const targets = Array.isArray(options.targets) ? options.targets : [];
+    const tasks = targets.map((target) =>
+      Object.freeze({
+        displayText:
+          target.displayText || cleanTaskDisplayText(target.rawLine || ""),
+        path: target.path || "Current note",
+      }),
+    );
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.taskLinkLanePrompt) {
+          this.taskLinkLanePrompt = null;
+        }
+        resolve(result);
+      };
+      let modal = null;
+      try {
+        modal = new TaskLinkLanePromptModal(this.app, {
+          tasks,
+          dateText: options.dateText,
+          onDone: (result) => {
+            if (result === null) {
+              finish({ cancelled: true, summary: "" });
+            } else {
+              finish({
+                cancelled: false,
+                summary: String((result && result.summary) || ""),
+              });
+            }
+          },
+        });
+        this.taskLinkLanePrompt = modal;
+        modal.open();
+      } catch (error) {
+        this.taskLinkLanePrompt = null;
+        finish({ cancelled: false, summary: "" });
+      }
+    });
+  }
+
+  // Instant feedback (D9): tell ledger-tools `api.progressMarks` about every
+  // just-written status so the mark flips on the same frame instead of
+  // waiting up to ~2 s for autosave. Feature-detected (`version >= 1`) and
+  // never throwing: a missing or old api is a no-op and the marks fall back
+  // to cache-driven refresh.
+  hintTaskLinkLaneProgressMarks(entries) {
+    try {
+      const list = Array.isArray(entries) ? entries : [];
+      if (list.length === 0) {
+        return;
+      }
+      const plugins =
+        this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins ? plugins["bob-ledger-tools"] : null;
+      const api = holder ? holder.api : null;
+      const namespace = api ? api.progressMarks : null;
+      if (
+        !namespace ||
+        Number(namespace.version) < 1 ||
+        typeof namespace.expect !== "function"
+      ) {
+        return;
+      }
+      namespace.expect(
+        list
+          .filter(
+            (entry) =>
+              entry &&
+              typeof entry.path === "string" &&
+              typeof entry.blockId === "string",
+          )
+          .map((entry) =>
+            Object.freeze({
+              path: entry.path,
+              blockId: entry.blockId,
+              status: entry.status,
+            }),
+          ),
+      );
+    } catch (error) {
+      // A hint must never break the toggle.
+    }
+  }
+}
+
+// nav `api.taskLinkLane` v1 (plan 202610/in_progress_task_link_marks.md §3):
+// an additive namespace, frozen. `matches` is synchronous and never throws;
+// `toggle` settles to a result object and never rejects. Plugins never
+// import each other's `main.js`: task-status-cycler feature-detects
+// `api?.taskLinkLane?.version >= 1`.
+function createTaskLinkLaneApi(plugin) {
+  const matches = (args = {}) => {
+    try {
+      return isPomodoroTaskLinkLine(
+        args ? args.content : "",
+        args ? args.line : NaN,
+        args ? args.path : "",
+      );
+    } catch (error) {
+      return false;
+    }
+  };
+  const toggle = (args = {}) => {
+    try {
+      if (!plugin || typeof plugin.toggleTaskLinkLane !== "function") {
+        return Promise.resolve(
+          Object.freeze({ ok: false, reason: "unavailable" }),
+        );
+      }
+      return Promise.resolve()
+        .then(() => plugin.toggleTaskLinkLane(args || {}))
+        .then(
+          (result) =>
+            result && typeof result === "object" && "ok" in result
+              ? result
+              : Object.freeze({ ok: false, reason: "error" }),
+          () => Object.freeze({ ok: false, reason: "error" }),
+        );
+    } catch (error) {
+      return Promise.resolve(Object.freeze({ ok: false, reason: "error" }));
+    }
+  };
+  return Object.freeze({ version: 1, matches, toggle });
 }
 // ---- src/530-plugin-freshness-refresh-and-decay.js ----
 class BobNavigationHotkeysFreshnessDecayMixin {
@@ -56594,6 +57552,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysTransclusionLinkMixin,
   BobNavigationHotkeysLinkCommitLaneMixin,
   BobNavigationHotkeysLaneReviewMixin,
+  BobNavigationHotkeysTaskLinkLaneMixin,
   BobNavigationHotkeysFreshnessDecayMixin,
   BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysReviewAdvanceMixin,
@@ -56621,6 +57580,7 @@ module.exports = BobNavigationHotkeysPlugin;
 module.exports.helpers = {
   FilteredPickerModal,
   FreshnessRefreshSummaryModal,
+  TaskLinkLanePromptModal,
   ChildNotePickerModal,
   TaskMoveDestinationPickerModal,
   InboxRoutePickerModal,
@@ -56895,6 +57855,14 @@ module.exports.helpers = {
   planTaskLaneBatch,
   buildLaneToggleNotice,
   readLaneBudgets,
+  isPomodoroTaskLinkLine,
+  decideTaskLinkLaneMode,
+  taskLinkLaneRefusalFor,
+  truncateTaskLinkLaneLabel,
+  planTaskLinkLaneBatch,
+  buildTaskLinkLaneNotice,
+  taskLinkLanePromptState,
+  createTaskLinkLaneApi,
   getReviewFreshnessApi,
   getReviewCyclerApi,
   reviewFreshnessSupportsTiers,

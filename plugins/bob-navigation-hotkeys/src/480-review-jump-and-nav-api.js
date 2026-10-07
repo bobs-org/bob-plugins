@@ -875,8 +875,13 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `nav-stage` swaps in the vault-wide stage. `removeDependency` removes one
 // prerequisite through the single-transaction writer (`parentRef`:
 // `{path, line}`, `target`: `{path, blockId}`); it re-reads the dependent
-// and refuses with a notice when stale. Plugins never import each other's
-// `main.js`: bob-ledger-tools feature-detects `api?.version >= 1`.
+// and refuses with a notice when stale. `taskLinkLane` is the Pomodoro Task
+// Link lane toggle (plan 202610/in_progress_task_link_marks.md §3): `matches`
+// synchronously reports whether a line is a Pomodoro Task Link line and
+// `toggle` runs the Next <-> In Progress toggle, settling to a result
+// object and never rejecting. Plugins never import each other's
+// `main.js`: bob-ledger-tools feature-detects `api?.version >= 1` and
+// task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -900,6 +905,7 @@ function createDependencyNavApi(plugin) {
     ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
     reviewWalk: createReviewWalkApi(plugin),
     inboxRoute: createInboxRouteApi(plugin),
+    taskLinkLane: createTaskLinkLaneApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

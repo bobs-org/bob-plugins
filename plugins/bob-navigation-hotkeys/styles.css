@@ -2090,3 +2090,173 @@
 .bob-task-card-suspended {
   display: none !important;
 }
+
+/* Task Link lane toggle (task-link-lane): the Move to Next prompt. Ported
+   from block-id-prompt's Work Log pause prompt (`bid-wlp`), so the two Work
+   Log prompts look like one family; the header icon is tinted with the
+   In Progress amber instead of the accent. Namespaced under bob-tll-*. */
+
+.modal.bob-tll-modal {
+  width: min(92vw, 560px);
+  max-width: 560px;
+  min-width: 320px;
+  padding: 0;
+  border-radius: var(--radius-l);
+  overflow: hidden;
+}
+
+.bob-tll {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-3);
+  min-width: 0;
+  padding: var(--size-4-4);
+}
+
+.bob-tll-header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-3);
+}
+
+.bob-tll-header-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-m);
+  color: var(--task-status-in-progress, var(--color-yellow));
+  background-color: color-mix(in srgb, var(--task-status-in-progress, var(--color-yellow)) 14%, transparent);
+}
+
+.bob-tll-header-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.bob-tll-header-text,
+.bob-tll-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bob-tll-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-bold);
+  line-height: 1.2;
+}
+
+.bob-tll-subtitle,
+.bob-tll-context-source,
+.bob-tll-preview-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+.bob-tll-subtitle {
+  margin-top: 2px;
+}
+
+.bob-tll-context,
+.bob-tll-preview,
+.bob-tll-warning {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background-color: var(--background-secondary);
+}
+
+.bob-tll-context {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-1);
+  padding: var(--size-4-2) var(--size-4-3);
+}
+
+.bob-tll-context-task {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+}
+
+.bob-tll-label {
+  margin-bottom: var(--size-2-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+.bob-tll-input,
+.bob-tll-input:hover,
+.bob-tll-input:focus {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  box-shadow: none;
+}
+
+.bob-tll-input:focus {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
+}
+
+.bob-tll-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-1);
+  min-height: 58px;
+  padding: var(--size-4-2) var(--size-4-3);
+}
+
+.bob-tll-preview-marker {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+.bob-tll-preview-entry {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.bob-tll-warning {
+  padding: var(--size-2-3) var(--size-4-3);
+  color: var(--text-warning);
+  background-color: color-mix(in srgb, var(--text-warning) 9%, var(--background-secondary));
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+.bob-tll-warning.is-hidden {
+  display: none;
+}
+
+.bob-tll-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+}
+
+@media (max-width: 560px) {
+  .modal.bob-tll-modal {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+  }
+
+  .bob-tll {
+    padding: var(--size-4-3);
+  }
+}

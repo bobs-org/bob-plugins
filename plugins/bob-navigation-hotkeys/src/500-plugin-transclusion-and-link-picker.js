@@ -359,8 +359,11 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Resolve every discovered Task Link to the open #task line behind it,
   // reading the target's live editor buffer when it is open. Either every
   // link resolves or the whole result is an error: a missing, duplicated,
-  // non-task, or closed target changes nothing.
-  async resolveLinkPickerTargets(sourcePath, discovery) {
+  // non-task, or closed target changes nothing. With `{ allowClosed: true }`
+  // closed targets resolve with their status instead of failing (the Task
+  // Link lane toggle skips them); the default keeps Alt+N byte-identical.
+  async resolveLinkPickerTargets(sourcePath, discovery, options = {}) {
+    const allowClosed = Boolean(options && options.allowClosed === true);
     const targets = [];
     const seen = new Set();
     for (const entry of discovery.targets || []) {
@@ -385,6 +388,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
       const found = findUniqueLinkPickerTargetLine(
         content,
         entry.link.blockId,
+        { allowClosed },
       );
       if (!found.valid) {
         if (found.error === "missing" || found.error === "duplicated") {

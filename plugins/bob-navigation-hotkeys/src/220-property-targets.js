@@ -326,8 +326,12 @@ function discoverLinkPickerTargets(content, startLine, additionalTaskCount) {
 
 // Resolve a block ID to its task line inside one note's content. The ID must
 // be unique and must sit on an open #task line; anything else reports an
-// error the caller surfaces as a Notice without changing anything.
-function findUniqueLinkPickerTargetLine(noteContent, blockId) {
+// error the caller surfaces as a Notice without changing anything. With
+// `{ allowClosed: true }` a uniquely resolved closed task line resolves with
+// its status instead of failing, so the Task Link lane toggle can skip it;
+// missing, duplicated, and non-task targets still fail either way.
+function findUniqueLinkPickerTargetLine(noteContent, blockId, options = {}) {
+  const allowClosed = Boolean(options && options.allowClosed === true);
   const id = normalizeBulletPropertyValue(blockId);
   const text = String(noteContent || "");
   if (!id) {
@@ -355,6 +359,9 @@ function findUniqueLinkPickerTargetLine(noteContent, blockId) {
     return Object.freeze({ valid: false, error: "not-task", line: null });
   }
   if (!isOpenObsidianTaskLine(rawLine)) {
+    if (allowClosed && isObsidianTaskLine(rawLine)) {
+      return Object.freeze({ valid: true, error: null, line, rawLine });
+    }
     return Object.freeze({ valid: false, error: "closed", line: null });
   }
   return Object.freeze({ valid: true, error: null, line, rawLine });

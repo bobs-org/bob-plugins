@@ -29,6 +29,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessMarkRenderMixin,
   BobLedgerToolsPriorityMarksMixin,
   BobLedgerToolsDateMarksMixin,
+  BobLedgerToolsDateMarksTasksMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsTodayLocationMixin,

@@ -1,7 +1,5 @@
 // --- Task date marks: Live Preview, rendered views, toggle, api ----------
 // `BobLedgerToolsDateMarksMixin` (see `310-install-methods.js`).
-// Mirrors `265-plugin-priority-marks.js`, but the model is calendrical
-// and the midnight rollover relabels rendered marks in place.
 // Synchronous throughout; never throws.
 class BobLedgerToolsDateMarksMixin {
   setupDateMarks() {
@@ -105,11 +103,11 @@ class BobLedgerToolsDateMarksMixin {
           }
         }
 
+
         update(u) {
           try {
             if (plugin.dateMarkShouldRebuild(u)) {
-              this.decorations =
-                plugin.buildDateMarkDecorations(u.view);
+              this.decorations = plugin.buildDateMarkDecorations(u.view);
             }
           } catch (error) {
             // Keep previous decorations on failure.
@@ -317,9 +315,8 @@ class BobLedgerToolsDateMarksMixin {
                   try {
                     const absFrom = line.from + source.fieldStart;
                     const absTo = line.from + source.fieldEnd;
-                    // Reveal per field: a mark hides while any
-                    // selection range overlaps its own field span
-                    // (inclusive; folded spaces excluded).
+                    // Reveal per field: hide while any selection
+                    // overlaps this field span (fold excluded).
                     let revealed = false;
                     for (const selection of selectionRanges) {
                       try {
@@ -614,8 +611,7 @@ class BobLedgerToolsDateMarksMixin {
           if (!value || value.indexOf("::") === -1) {
             continue;
           }
-          // Unlike priority marks there is no line-type gate: any
-          // canonical field outside code gets a mark.
+          // No line-type gate: any canonical field outside code marks.
           const sources = dateMarkSourcesInText(value);
           if (!sources || sources.length === 0) {
             continue;
@@ -698,6 +694,16 @@ class BobLedgerToolsDateMarksMixin {
         } catch (error) {
           continue;
         }
+      }
+      // Tasks renders every description through `MarkdownRenderer`,
+      // so this fires once per result row; the 267 mixin schedules
+      // the narrow frame pass from here.
+      try {
+        if (typeof this.scheduleTasksResultDateMarks === "function") {
+          this.scheduleTasksResultDateMarks(el);
+        }
+      } catch (error) {
+        // Tasks-result scheduling is best-effort.
       }
     } catch (error) {
       // Rendered-view marks never throw.
@@ -789,8 +795,8 @@ class BobLedgerToolsDateMarksMixin {
     }
   }
 
-  // Midnight rollover: on a day change, refresh editors and relabel
-  // rendered marks in place (never Live Preview widget DOM). Never throws.
+  // Midnight rollover: refresh editors and relabel rendered marks
+  // in place on a day change. Never throws.
   refreshDateMarksForRollover(now) {
     try {
       let day = null;
@@ -802,10 +808,7 @@ class BobLedgerToolsDateMarksMixin {
       if (!day) {
         return false;
       }
-      if (
-        this.dateMarksDay === null ||
-        this.dateMarksDay === undefined
-      ) {
+      if (this.dateMarksDay === null || this.dateMarksDay === undefined) {
         this.dateMarksDay = day;
         return false;
       }
@@ -829,9 +832,8 @@ class BobLedgerToolsDateMarksMixin {
     }
   }
 
-  // Relabel every `.bob-date-mark[data-rendered="true"]` in place from
-  // its `data-field` and `data-date`: the label text, `aria-label`,
-  // and `data-when`. Returns the relabeled count. Never throws.
+  // Relabel every rendered mark in place. Returns the count.
+  // Never throws.
   relabelRenderedDateMarks(todayText) {
     try {
       let today = null;
@@ -916,11 +918,8 @@ class BobLedgerToolsDateMarksMixin {
     }
   }
 
-  // Additive `api.dateMarks` v1 namespace: `{ version: 1, fields,
-  // model(field, dateText), render(host, field, dateText, options) }`.
-  // Synchronous and never throwing; `render` appends to `host` and
-  // returns the element, or null for an unknown field or a
-  // non-canonical date. The top-level api stays v3.
+  // Additive `api.dateMarks` v1 namespace. Synchronous and never
+  // throwing; the top-level api stays v3.
   dateMarksApi() {
     try {
       const plugin = this;

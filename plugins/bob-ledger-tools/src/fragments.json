@@ -29,6 +29,7 @@
   "260-plugin-freshness-mark-render.js",
   "265-plugin-priority-marks.js",
   "266-plugin-date-marks.js",
+  "267-plugin-date-marks-tasks.js",
   "270-plugin-dependency-model.js",
   "280-plugin-dependency-render.js",
   "290-plugin-today-and-location.js",

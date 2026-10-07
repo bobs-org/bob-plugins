@@ -1216,6 +1216,98 @@ body.bob-date-marks .markdown-source-view.is-live-preview .dataview.inline-field
   border-color: color-mix(in srgb, var(--color-orange) 55%, transparent);
 }
 
+/* Task date marks in Tasks query results (bob-cli-53 tasks-results).
+   Full mode: the 267 frame pass appends one listener-free mark per
+   date component, and the inner Tasks span (emoji plus ISO date) is
+   visually hidden with the clip pattern, not `display: none`, so
+   screen readers keep it and Tasks' own click (date editor) and
+   contextmenu (postpone) listeners keep working through bubbling.
+   Short mode is CSS-only: each date span becomes a 1.08em glyph box
+   drawing the shared field mask. Unlike the priority mark (CSS-only
+   everywhere), full mode needs JS because CSS cannot split Tasks'
+   emoji from its date. */
+
+body.bob-date-marks .plugin-tasks-list-item [data-bob-date-mark="true"] > span:not(.bob-date-mark) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Toggle-off cover: before Tasks re-renders after a toggle, a stale
+   Tasks-host mark hides instead of lingering beside the emoji. */
+
+body:not(.bob-date-marks) .bob-date-mark[data-host="tasks"] {
+  display: none;
+}
+
+/* Short mode: glyph boxes with the shared masks at the default ink,
+   resting from the row's `data-task`. */
+
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled) {
+  position: relative;
+  display: inline-block;
+  width: 1.08em;
+  height: 1.08em;
+  margin-inline-start: 0.3em;
+  vertical-align: 0.05em;
+  opacity: 0.85;
+}
+
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled) > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: var(--text-muted);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item .task-created::before {
+  -webkit-mask-image: var(--bob-date-glyph-created);
+  mask-image: var(--bob-date-glyph-created);
+}
+
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item .task-scheduled::before {
+  -webkit-mask-image: var(--bob-date-glyph-scheduled);
+  mask-image: var(--bob-date-glyph-scheduled);
+}
+
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item .task-done::before {
+  -webkit-mask-image: var(--bob-date-glyph-completion);
+  mask-image: var(--bob-date-glyph-completion);
+}
+
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item .task-cancelled::before {
+  -webkit-mask-image: var(--bob-date-glyph-cancelled);
+  mask-image: var(--bob-date-glyph-cancelled);
+}
+
+body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="x"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before,
+body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="X"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before,
+body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="-"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before {
+  background-color: var(--text-faint, var(--text-muted));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-date-mark {
     transition: none;

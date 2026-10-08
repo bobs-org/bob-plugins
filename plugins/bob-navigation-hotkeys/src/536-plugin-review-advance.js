@@ -127,7 +127,8 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   }
 
   // One landing setter: every walk landing replaces the landing and bumps
-  // the epoch, so a stale `continue` can never move the cursor.
+  // the epoch, so a stale `continue` can never move the cursor. It also
+  // records the current review task, which outlives the landing.
   setReviewLanding(entry, path) {
     try {
       this.reviewLandingEpoch =
@@ -142,6 +143,15 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       tier: reviewEntryMachineTier(entry) || null,
       day: this.laneReleaseDateText({}),
     });
+    try {
+      this.reviewWalkCurrent = reviewWalkCurrentRef(
+        entry,
+        path,
+        this.reviewLanding ? this.reviewLanding.day : this.laneReleaseDateText({}),
+      );
+    } catch (error) {
+      this.reviewWalkCurrent = null;
+    }
   }
 
   // Accumulate today's answered keys (the accumulator resets on day
@@ -389,6 +399,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       // Consume synchronously: the landing is gone and the walk anchor
       // covers the answered row before any await can interleave.
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       const handledRefs =
         input && Array.isArray(input.handledRefs) ? input.handledRefs : [];
       const answerKeys = collectReviewAnswerKeys(
@@ -517,6 +528,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       const counts = this.readFreshnessCounts(api);
       if (queue.length === 0) {
         this.reviewLanding = null;
+        this.reviewWalkCurrent = null;
         new Notice(
           this.composeReviewAdvanceNotice(preamble, buildReviewEmptyNotice(counts)),
         );
@@ -532,6 +544,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       let plan = planOnce(queue);
       if (plan.kind === "empty") {
         this.reviewLanding = null;
+        this.reviewWalkCurrent = null;
         new Notice(
           this.composeReviewAdvanceNotice(preamble, buildReviewEmptyNotice(counts)),
         );
@@ -557,6 +570,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         plan = planOnce(queue);
         if (plan.kind === "empty") {
           this.reviewLanding = null;
+          this.reviewWalkCurrent = null;
           const emptyNotice = buildReviewEmptyNotice(counts);
           new Notice(this.composeReviewAdvanceNotice(preamble, emptyNotice));
           return { advanced: false, stopped: false };
@@ -795,7 +809,8 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   }
 
   // Vault-wide jump to the next (direction +1) or previous (direction -1)
-  // task due for freshness review. From a queued task go to the following
+  // task due for freshness review. A relative press first returns to a
+  // live, unselected current review task. From a queued task go to the following
   // (or preceding) entry; from a just-stamped task go to the entry after
   // its remembered rank tuple; otherwise go to the first (or last) entry.
   // Wraps with a Notice; an empty queue shows the refreshed-today count.
@@ -834,6 +849,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     let queue = this.readFreshnessQueue(api);
     if (queue.length === 0) {
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
       return false;
     }
@@ -846,6 +862,17 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
       anchor = null;
     }
+    if (!endpoint) {
+      const back = await this.returnToReviewWalkCurrent({
+        api,
+        queue,
+        cursor,
+        anchor,
+        todayText,
+        jumpOrigin,
+      });
+      if (back.handled) return back.result;
+    }
     let plan = planReviewJump(queue, {
       direction: step,
       cursor,
@@ -857,6 +884,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     });
     if (plan.kind === "empty") {
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
       return false;
     }
@@ -874,6 +902,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       });
       if (plan.kind === "empty") {
         this.reviewLanding = null;
+        this.reviewWalkCurrent = null;
         new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
         return false;
       }

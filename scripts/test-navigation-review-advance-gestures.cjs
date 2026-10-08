@@ -296,6 +296,7 @@ function makePlugin({ rows, activePath, cursorLine = 0, areaPaths = [] }) {
   };
   plugin.reviewAnchor = null;
   plugin.reviewLanding = null;
+  plugin.reviewWalkCurrent = null;
   plugin.reviewLandingEpoch = 0;
   plugin.reviewGestureSeq = 0;
   plugin.reviewWalkLock = null;
@@ -1120,4 +1121,20 @@ test("a re-indexed origin still advances from the landed row", async () => {
   });
   assert.deepEqual(result, { ok: true, advanced: true, stopped: false });
   assert.equal(plugin.reviewLanding.text, bRow.originalMarkdown, "advances to B, not past it");
+});
+test("a landed move park clears the current review task", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.ok(plugin.reviewWalkCurrent, "a current task is set");
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "an origin is captured");
+  assert.equal(plugin.parkReviewWalkAfterMove(origin, []), true, "the park lands");
+  assert.equal(plugin.reviewLanding, null, "the landing is consumed");
+  assert.equal(plugin.reviewWalkCurrent, null, "the current task is cleared");
+  plugin.advanceReviewClock(400);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.equal(plugin.reviewLanding.text, markFor("next", "Two"), "the next ]s resumes at the neighbour");
+  assert.ok(!notices[0].startsWith("Back to current review task"), "no return after a park");
 });

@@ -326,6 +326,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.reviewAnchor = null;
     this.reviewLanding = null;
+    this.reviewWalkCurrent = null;
     // Review-walk auto-advance (`docs/freshness.md` §6): the landing epoch
     // and gesture sequence make stale callbacks refuse, and the lock
     // swallows double presses while an answer is in flight or settling.

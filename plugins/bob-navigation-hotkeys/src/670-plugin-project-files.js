@@ -623,6 +623,7 @@ class BobNavigationHotkeysProjectFileMixin {
   trackOpenedFile(file) {
     // A landing ends when another note opens: the next gesture is no
     // longer "on the row `]s` just landed on".
+    // The current review task deliberately survives a note switch.
     try {
       const landing = this.reviewLanding;
       const openedPath =

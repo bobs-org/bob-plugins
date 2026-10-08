@@ -880,7 +880,9 @@ function applyReviewJumpRepeat(step, walkList, direction, repeatRaw) {
   });
 }
 
-// Pure jump position over a freshly read queue. Returns `{ kind: "empty" }`
+// Pure jump position over a freshly read queue. A relative press first
+// returns to a live, unselected current review task (handled by the
+// caller). Returns `{ kind: "empty" }`
 // or `{ kind: "jump", entry, rank, total, wrapped, originTier }`
 // (`rank` is 1-based). `endpoint` ("first"/"last") selects that queue
 // endpoint with full-queue rank/total, `wrapped: false`, and a null origin,

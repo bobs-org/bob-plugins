@@ -252,6 +252,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
     }
 
     this.reviewLanding = null;
+    this.reviewWalkCurrent = null;
     this.addReviewAnsweredKeys(
       [{ key: entryKey, text: entry.originalMarkdown }],
       todayText,

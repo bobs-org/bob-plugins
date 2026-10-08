@@ -226,6 +226,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
   // instead of showing it, so the shared advance tail can compose one
   // toast from the preamble and the landing.
   finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText, extra = {}) {
+    this.endReviewWalkCurrentForRefs(refs);
     const matched = matchFreshStampRefs(queueBefore, refs);
     this.reviewAnchor =
       matched.count > 0
@@ -678,6 +679,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
   // fresh but continues from the surviving successor or predecessor).
   rememberFreshnessDecayCardAnchor(cardCtx) {
     try {
+      this.endReviewWalkCurrentForRefs([{ path: cardCtx.filePath, raw: cardCtx.rawLine }]);
       const matched = matchFreshStampRefs(cardCtx.queueBefore, [
         { path: cardCtx.filePath, line: cardCtx.line, raw: cardCtx.rawLine },
       ]);

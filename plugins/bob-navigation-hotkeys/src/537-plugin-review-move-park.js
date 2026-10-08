@@ -225,6 +225,7 @@ class BobNavigationHotkeysReviewMoveMixin {
         return false;
       }
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       const refs = Array.isArray(handledRefs) ? handledRefs : [];
       const answerKeys = collectReviewAnswerKeys(
         origin,

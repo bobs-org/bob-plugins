@@ -206,6 +206,7 @@ function makePlugin({ rows, activePath, cursorLine = 0, freshnessOptions = {}, w
   plugin.app = { plugins: { plugins }, workspace, vault };
   plugin.reviewAnchor = null;
   plugin.reviewLanding = null;
+  plugin.reviewWalkCurrent = null;
   plugin.reviewLandingEpoch = 0;
   plugin.reviewGestureSeq = 0;
   plugin.reviewWalkLock = null;
@@ -1214,4 +1215,249 @@ test("walk identity: collectReviewAnswerKeys separates position from exclusion",
 
   const failed = collectReviewAnswerKeys(null, null, null, DATE);
   assert.deepEqual(failed.positionKeys, [], "garbage input never throws");
+});
+test("return: planReviewWalkReturn pure decisions", () => {
+  const { planReviewWalkReturn, reviewWalkCurrentRef } = helpers;
+  const rows = nextQueue(["One", "Two", "Three"]);
+  const current = reviewWalkCurrentRef(rows[1], "walk.md", DATE);
+  assert.ok(current && Object.isFrozen(current), "a current ref is frozen");
+  assert.deepEqual(
+    { path: current.path, line: current.line, text: current.text, key: current.key, tier: current.tier, day: current.day },
+    { path: "walk.md", line: 2, text: markFor("next", "Two"), key: "walk.md:2", tier: "next", day: DATE },
+  );
+  assert.equal(reviewWalkCurrentRef(rows[1], "", DATE), null, "empty path is null");
+  assert.equal(reviewWalkCurrentRef(null, "walk.md", DATE), null, "null entry is null");
+
+  assert.deepEqual(planReviewWalkReturn(rows, null, null, DATE), { kind: "none" }, "null current");
+  assert.deepEqual(planReviewWalkReturn(rows, "nope", null, DATE), { kind: "none" }, "non-object current");
+  assert.deepEqual(
+    planReviewWalkReturn(rows, { ...current, day: "2026-10-07" }, null, DATE).kind,
+    "gone",
+    "another day",
+  );
+  assert.deepEqual(
+    planReviewWalkReturn(rows, { path: "walk.md", line: 9, text: "- [ ] missing", key: "walk.md:9", tier: "next", day: DATE }, null, DATE).kind,
+    "gone",
+    "a row missing from the queue",
+  );
+  assert.deepEqual(
+    planReviewWalkReturn(rows, { ...current, text: "- [*] #task Two changed" }, null, DATE).kind,
+    "gone",
+    "changed text",
+  );
+  const selected = planReviewWalkReturn(rows, current, { path: "walk.md", line: 2, text: markFor("next", "Two") }, DATE);
+  assert.equal(selected.kind, "selected", "same path and text");
+  assert.equal(selected.index, 1, "selected index");
+  assert.ok(Object.isFrozen(selected), "frozen");
+
+  for (const cursor of [
+    { path: "walk.md", line: 4, text: "# filler" },
+    null,
+    { path: "b.md", line: 1, text: markFor("next", "Two") },
+  ]) {
+    const plan = planReviewWalkReturn(rows, current, cursor, DATE);
+    assert.equal(plan.kind, "return", `returns for ${JSON.stringify(cursor)}`);
+    assert.equal(plan.entry.originalMarkdown, markFor("next", "Two"), "the live entry");
+    assert.equal(plan.rank, 2, "rank");
+    assert.equal(plan.total, 3, "total");
+    assert.ok(Object.isFrozen(plan), "frozen");
+  }
+  assert.deepEqual(planReviewWalkReturn(null, null, null, DATE), { kind: "none" }, "garbage never throws");
+});
+
+test("return: same-note ]s returns then steps, both directions", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.equal(await plugin.jumpToDueTask(1), true, "steps to Two");
+  assert.equal(editor.getCursor().line, 1, "on Two");
+  clearNotices();
+  editor.state.lines.push("# filler 4");
+  editor.setCursor(3, 0);
+  assert.equal(await plugin.jumpToDueTask(1), true, "returns to Two");
+  assert.equal(editor.getCursor().line, 1, "cursor on the task");
+  assert.deepEqual(notices, ["Back to current review task\nReview 2/3 · NEXT 2/3 · confirmed 2d ago"]);
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "the return re-arms the landing");
+  plugin.settleReviewWalkLock(false);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "next press steps");
+  assert.equal(editor.getCursor().line, 2, "on Three");
+
+  const backward = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  await land(backward, "first");
+  assert.equal(await backward.plugin.jumpToDueTask(1), true, "steps to Two");
+  clearNotices();
+  backward.editor.state.lines.push("# filler 4");
+  backward.editor.setCursor(3, 0);
+  assert.equal(await backward.plugin.jumpToDueTask(-1), true, "[s returns too");
+  assert.equal(backward.editor.getCursor().line, 1, "back on Two, not One");
+  assert.deepEqual(notices, ["Back to current review task\nReview 2/3 · NEXT 2/3 · confirmed 2d ago"]);
+  backward.plugin.settleReviewWalkLock(false);
+  clearNotices();
+  assert.equal(await backward.plugin.jumpToDueTask(-1), true, "next [s steps back");
+  assert.equal(backward.editor.getCursor().line, 0, "on One");
+});
+
+test("return: a different due row returns instead of stepping from there", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three", "Four"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.match(editor.getLine(0), /One/);
+  editor.setCursor(2, 0);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "returns to One, not Four");
+  assert.equal(editor.getCursor().line, 0, "back on One");
+  assert.match(notices[0], /^Back to current review task\n/);
+  plugin.settleReviewWalkLock(false);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "next press steps");
+  assert.equal(editor.getCursor().line, 1, "on Two");
+});
+
+test("return: cross-note return re-arms and records <C-o>", async () => {
+  const fixture = makePlugin({
+    rows: [
+      laneEntry({ tier: "next", path: "a.md", line: 1, text: "Alpha", rank: 1, tierRank: 1, tierTotal: 2 }),
+      laneEntry({ tier: "next", path: "b.md", line: 1, text: "Beta", rank: 2, tierRank: 2, tierTotal: 2 }),
+    ],
+    activePath: "a.md",
+  });
+  const { plugin, editors } = fixture;
+  await land(fixture, "first");
+  assert.equal(fixture.activePath(), "a.md");
+  await plugin.app.workspace.getLeaf().openFile({ path: "b.md" });
+  plugin.trackOpenedFile({ path: "b.md", extension: "md" });
+  assert.equal(plugin.reviewLanding, null, "the landing ends on a note switch");
+  assert.ok(plugin.reviewWalkCurrent, "the current task survives");
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "returns across notes");
+  assert.equal(fixture.activePath(), "a.md", "back in the task note");
+  assert.equal(editors.get("a.md").getCursor().line, 0, "cursor on the row");
+  assert.ok(plugin.reviewLanding, "the landing is re-armed");
+  assert.match(notices[0], /^Back to current review task\n/);
+  const recapture = plugin.captureReviewGesture(editors.get("a.md"));
+  assert.ok(recapture && !recapture.busy, "answer gestures work again");
+  plugin.settleReviewWalkLock(false);
+  await flushed(plugin);
+  assert.deepEqual(plugin.vimJumpHistory.entries, [
+    { path: "b.md", line: 0, ch: 0 },
+    { path: "a.md", line: 0, ch: 0 },
+  ]);
+});
+
+test("return: a count is consumed and ignored", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three", "Four"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.equal(await plugin.jumpToDueTask(1), true, "steps to Two");
+  clearNotices();
+  editor.state.lines.push("# filler 5");
+  editor.setCursor(4, 0);
+  assert.equal(await plugin.jumpToDueTask(1, { repeat: 3 }), true, "3]s only returns");
+  assert.equal(editor.getCursor().line, 1, "still on Two");
+  assert.match(notices[0], /^Back to current review task\n/);
+});
+
+test("return: endpoints never return", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.equal(await plugin.jumpToDueTask(1), true, "steps to Two");
+  clearNotices();
+  editor.state.lines.push("# filler 4");
+  editor.setCursor(3, 0);
+  assert.equal(await plugin.jumpToDueTask(1, { endpoint: "last" }), true);
+  assert.equal(editor.getCursor().line, 2, "on the last row");
+  assert.ok(!notices[0].startsWith("Back to current review task"), "no return toast");
+  clearNotices();
+  editor.setCursor(3, 0);
+  assert.equal(await plugin.jumpToDueTask(-1, { endpoint: "first" }), true);
+  assert.equal(editor.getCursor().line, 0, "on the first row");
+  assert.ok(!notices[0].startsWith("Back to current review task"), "no return toast");
+});
+
+test("return: its own stamp ends it", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  clearNotices();
+  assert.equal(await plugin.refreshTaskFreshness(editor, { dateText: DATE }), true, "Alt+F stamps the landed row");
+  assert.equal(plugin.reviewWalkCurrent, null, "the current task ends");
+  editor.state.lines.push("# filler 4");
+  editor.setCursor(3, 0);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.ok(!notices[0].startsWith("Back to current review task"), "behaves as today");
+  assert.equal(editor.getCursor().line, 1, "anchor successor, not a return");
+});
+
+test("return: a stamp elsewhere does not end it", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  editor.setCursor(2, 0);
+  clearNotices();
+  assert.equal(await plugin.refreshTaskFreshness(editor, { dateText: DATE }), true, "Alt+F on Three");
+  assert.ok(plugin.reviewWalkCurrent, "the current task survives");
+  editor.state.lines.push("# filler 4");
+  editor.setCursor(3, 0);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "returns to One");
+  assert.equal(editor.getCursor().line, 0);
+  assert.match(notices[0], /^Back to current review task\n/);
+});
+
+test("return: answers move the current task, a stopped Ctrl+Enter clears it", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor, queueState } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  await plugin.continueReviewWalkAfter(origin, {
+    kind: "lane",
+    handledRefs: [{ path: "walk.md", line: 0, raw: queueState[0].originalMarkdown }],
+    notice: "Ready · 1 task",
+  });
+  assert.equal(plugin.reviewWalkCurrent.text, markFor("next", "Two"), "on the landed successor");
+  clearNotices();
+
+  const stopped = makePlugin({
+    rows: [laneEntry({ tier: "pre", line: 1, text: "Only chore", rank: 1, tierRank: 1, tierTotal: 1 })],
+    activePath: "walk.md",
+    freshnessOptions: { version: 7 },
+    withCycler: true,
+  });
+  await land(stopped, "first");
+  assert.ok(stopped.plugin.reviewWalkCurrent, "a current task is set");
+  clearNotices();
+  const claim = await stopped.plugin.claimReviewWalkCtrlEnter(stopped.editor);
+  assert.deepEqual(claim, { ok: true }, "the last chore completes");
+  assert.equal(stopped.plugin.reviewWalkCurrent, null, "a stopped Ctrl+Enter leaves it null");
+});
+
+test("return: a stale landing falls through in the same press", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["Only"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  editor.state.lines[0] = "- [*] #task Only edited";
+  editor.state.lines.push("# filler 2");
+  editor.setCursor(1, 0);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), false, "the empty queue plans as today");
+  assert.ok(!notices.join("\n").includes("Review queue changed"), "no queue-changed notice for the failed return");
+  assert.equal(plugin.reviewWalkCurrent, null);
+  assert.deepEqual(notices, ["Nothing due for review · ✓ 0 today"]);
+});
+
+test("return: a day change never returns", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.equal(await plugin.jumpToDueTask(1), true, "steps to Two");
+  editor.state.lines.push("# filler 4");
+  editor.setCursor(3, 0);
+  plugin.laneReleaseDateText = () => "2026-10-09";
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "plans as today");
+  assert.ok(!notices[0].startsWith("Back to current review task"), "no return across days");
 });

@@ -36780,7 +36780,9 @@ function applyReviewJumpRepeat(step, walkList, direction, repeatRaw) {
   });
 }
 
-// Pure jump position over a freshly read queue. Returns `{ kind: "empty" }`
+// Pure jump position over a freshly read queue. A relative press first
+// returns to a live, unselected current review task (handled by the
+// caller). Returns `{ kind: "empty" }`
 // or `{ kind: "jump", entry, rank, total, wrapped, originTier }`
 // (`rank` is 1-based). `endpoint` ("first"/"last") selects that queue
 // endpoint with full-queue rank/total, `wrapped: false`, and a null origin,
@@ -38069,6 +38071,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.reviewAnchor = null;
     this.reviewLanding = null;
+    this.reviewWalkCurrent = null;
     // Review-walk auto-advance (`docs/freshness.md` §6): the landing epoch
     // and gesture sequence make stale callbacks refuse, and the lock
     // swallows double presses while an answer is in flight or settling.
@@ -41254,6 +41257,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
   // instead of showing it, so the shared advance tail can compose one
   // toast from the preamble and the landing.
   finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText, extra = {}) {
+    this.endReviewWalkCurrentForRefs(refs);
     const matched = matchFreshStampRefs(queueBefore, refs);
     this.reviewAnchor =
       matched.count > 0
@@ -41706,6 +41710,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
   // fresh but continues from the surviving successor or predecessor).
   rememberFreshnessDecayCardAnchor(cardCtx) {
     try {
+      this.endReviewWalkCurrentForRefs([{ path: cardCtx.filePath, raw: cardCtx.rawLine }]);
       const matched = matchFreshStampRefs(cardCtx.queueBefore, [
         { path: cardCtx.filePath, line: cardCtx.line, raw: cardCtx.rawLine },
       ]);
@@ -42168,6 +42173,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
     }
 
     this.reviewLanding = null;
+    this.reviewWalkCurrent = null;
     this.addReviewAnsweredKeys(
       [{ key: entryKey, text: entry.originalMarkdown }],
       todayText,
@@ -42486,7 +42492,8 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   }
 
   // One landing setter: every walk landing replaces the landing and bumps
-  // the epoch, so a stale `continue` can never move the cursor.
+  // the epoch, so a stale `continue` can never move the cursor. It also
+  // records the current review task, which outlives the landing.
   setReviewLanding(entry, path) {
     try {
       this.reviewLandingEpoch =
@@ -42501,6 +42508,15 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       tier: reviewEntryMachineTier(entry) || null,
       day: this.laneReleaseDateText({}),
     });
+    try {
+      this.reviewWalkCurrent = reviewWalkCurrentRef(
+        entry,
+        path,
+        this.reviewLanding ? this.reviewLanding.day : this.laneReleaseDateText({}),
+      );
+    } catch (error) {
+      this.reviewWalkCurrent = null;
+    }
   }
 
   // Accumulate today's answered keys (the accumulator resets on day
@@ -42748,6 +42764,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       // Consume synchronously: the landing is gone and the walk anchor
       // covers the answered row before any await can interleave.
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       const handledRefs =
         input && Array.isArray(input.handledRefs) ? input.handledRefs : [];
       const answerKeys = collectReviewAnswerKeys(
@@ -42876,6 +42893,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       const counts = this.readFreshnessCounts(api);
       if (queue.length === 0) {
         this.reviewLanding = null;
+        this.reviewWalkCurrent = null;
         new Notice(
           this.composeReviewAdvanceNotice(preamble, buildReviewEmptyNotice(counts)),
         );
@@ -42891,6 +42909,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       let plan = planOnce(queue);
       if (plan.kind === "empty") {
         this.reviewLanding = null;
+        this.reviewWalkCurrent = null;
         new Notice(
           this.composeReviewAdvanceNotice(preamble, buildReviewEmptyNotice(counts)),
         );
@@ -42916,6 +42935,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         plan = planOnce(queue);
         if (plan.kind === "empty") {
           this.reviewLanding = null;
+          this.reviewWalkCurrent = null;
           const emptyNotice = buildReviewEmptyNotice(counts);
           new Notice(this.composeReviewAdvanceNotice(preamble, emptyNotice));
           return { advanced: false, stopped: false };
@@ -43154,7 +43174,8 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   }
 
   // Vault-wide jump to the next (direction +1) or previous (direction -1)
-  // task due for freshness review. From a queued task go to the following
+  // task due for freshness review. A relative press first returns to a
+  // live, unselected current review task. From a queued task go to the following
   // (or preceding) entry; from a just-stamped task go to the entry after
   // its remembered rank tuple; otherwise go to the first (or last) entry.
   // Wraps with a Notice; an empty queue shows the refreshed-today count.
@@ -43193,6 +43214,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     let queue = this.readFreshnessQueue(api);
     if (queue.length === 0) {
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
       return false;
     }
@@ -43205,6 +43227,17 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
       anchor = null;
     }
+    if (!endpoint) {
+      const back = await this.returnToReviewWalkCurrent({
+        api,
+        queue,
+        cursor,
+        anchor,
+        todayText,
+        jumpOrigin,
+      });
+      if (back.handled) return back.result;
+    }
     let plan = planReviewJump(queue, {
       direction: step,
       cursor,
@@ -43216,6 +43249,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     });
     if (plan.kind === "empty") {
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
       return false;
     }
@@ -43233,6 +43267,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       });
       if (plan.kind === "empty") {
         this.reviewLanding = null;
+        this.reviewWalkCurrent = null;
         new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
         return false;
       }
@@ -43517,6 +43552,7 @@ class BobNavigationHotkeysReviewMoveMixin {
         return false;
       }
       this.reviewLanding = null;
+      this.reviewWalkCurrent = null;
       const refs = Array.isArray(handledRefs) ? handledRefs : [];
       const answerKeys = collectReviewAnswerKeys(
         origin,
@@ -44271,6 +44307,293 @@ function collectReviewAnswerKeys(origin, handledRefs, stored, todayText) {
       handled: new Set(fallback),
       answeredRefs: Object.freeze([]),
     });
+  }
+}
+// ---- src/539-plugin-review-walk-return.js ----
+// Review-walk return to the current review task: `]s` / `[s` (and the
+// same commands via Ctrl+Alt+J/K or the footer click) away from the
+// current review task first land back on it.
+//
+// The current review task is the row the walk last landed on today. Any
+// landing sets it through `setReviewLanding`; unlike the landing
+// (`reviewLanding`) it survives cursor moves and opening other notes. It
+// ends when a new landing replaces it, an answer on its landing resolves
+// the row, a landed Ctrl+Shift+M parks the walk, a stamp or applied
+// decision-card choice targets the current row itself, a walk key finds
+// the queue empty, the day changes or the plugin reloads, or its row is
+// no longer a live queue entry with the same note path and exact line
+// text (checked lazily on the next `]s` / `[s`). A stamp or answer on
+// some other row does not end it.
+//
+// On a relative walk key, when a live current review task exists and is
+// not selected, the press lands on the current task exactly once: `[s`
+// returns too, a count is consumed and ignored, there is no boundary
+// preamble and no wrap, the toast is `Back to current review task` plus
+// the normal landing notice, a `<C-o>` jump is recorded, and the landing
+// is re-armed. The next press steps exactly as today. `[S` / `]S`
+// endpoint jumps never return. Nothing here throws.
+const REVIEW_RETURN_NOTICE_HEAD = "Back to current review task";
+
+// Frozen `{ path, line, text, key, tier, day }` for the row the walk last
+// landed on. `line` is the queue row's 1-based `line`, `text` is its
+// `originalMarkdown`, and `tier` is `reviewEntryMachineTier(entry)`.
+// Returns null when the path or text is empty. Never throws.
+function reviewWalkCurrentRef(entry, path, day) {
+  try {
+    const ref = reviewResumeRef(entry);
+    if (!ref) {
+      return null;
+    }
+    const refPath = typeof path === "string" ? path : "";
+    const text =
+      entry && typeof entry.originalMarkdown === "string"
+        ? entry.originalMarkdown
+        : "";
+    if (!refPath || !text) {
+      return null;
+    }
+    const line = entry && Number.isInteger(entry.line) ? entry.line : null;
+    let key = "";
+    try {
+      key = reviewQueueEntryKey(entry);
+    } catch (error) {
+      key = "";
+    }
+    let tier = null;
+    try {
+      tier = reviewEntryMachineTier(entry) || null;
+    } catch (error) {
+      tier = null;
+    }
+    return Object.freeze({
+      path: refPath,
+      line,
+      text,
+      key,
+      tier,
+      day: typeof day === "string" ? day : "",
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+// Frozen return decision over a freshly read queue. `current` is the
+// stored current review task, `cursor` is `{ path, line, text }`, and
+// `todayText` is `YYYY-MM-DD`. `none` means plan as today, `gone` means
+// the current task ended (clear it, then plan as today), `selected`
+// means the cursor is already on it (plan as today), and `return` means
+// land on the live entry exactly once. Never throws.
+function planReviewWalkReturn(queue, current, cursor, todayText) {
+  try {
+    if (!current || typeof current !== "object") {
+      return Object.freeze({ kind: "none" });
+    }
+    const day = typeof current.day === "string" ? current.day.trim() : "";
+    const today = typeof todayText === "string" ? todayText.trim() : "";
+    if (day && today && day !== today) {
+      return Object.freeze({ kind: "gone" });
+    }
+    const list = Array.isArray(queue) ? queue : [];
+    let index = -1;
+    try {
+      index = findReviewResumeIndex(list, current);
+    } catch (error) {
+      return Object.freeze({ kind: "none" });
+    }
+    if (index < 0) {
+      return Object.freeze({ kind: "gone" });
+    }
+    if (
+      cursor &&
+      typeof cursor === "object" &&
+      String(cursor.path || "") === String(current.path || "") &&
+      String(cursor.text || "") === String(current.text || "")
+    ) {
+      return Object.freeze({ kind: "selected", index });
+    }
+    return Object.freeze({
+      kind: "return",
+      entry: list[index],
+      rank: index + 1,
+      total: list.length,
+    });
+  } catch (error) {
+    return Object.freeze({ kind: "none" });
+  }
+}
+
+// True when any `{ path, raw }` ref names the current review task's row
+// (same note path and exact pre-write line text). Never throws.
+function reviewRefsTouchWalkCurrent(current, refs) {
+  try {
+    if (!current || typeof current !== "object") {
+      return false;
+    }
+    const path = String(current.path || "");
+    const text = String(current.text || "");
+    if (!path || !text) {
+      return false;
+    }
+    for (const ref of Array.isArray(refs) ? refs : []) {
+      if (!ref || typeof ref !== "object") {
+        continue;
+      }
+      if (
+        String(ref.path || "") === path &&
+        String(ref.raw || "") === text
+      ) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+class BobNavigationHotkeysReviewReturnMixin {
+  clearReviewWalkCurrent() {
+    try {
+      this.reviewWalkCurrent = null;
+    } catch (error) {
+      // Best effort: the walk plans as today without it.
+    }
+  }
+
+  endReviewWalkCurrentForRefs(refs) {
+    try {
+      if (reviewRefsTouchWalkCurrent(this.reviewWalkCurrent, refs)) {
+        this.reviewWalkCurrent = null;
+      }
+    } catch (error) {
+      // Best effort: a stale current is dropped lazily on the next key.
+    }
+  }
+
+  // Land back on the live, unselected current review task exactly once.
+  // Resolves `{ handled, result }`; `handled: false` means the caller
+  // plans as today. A stale landing clears the current task and falls
+  // through in the same press; any other landing failure keeps it.
+  // Never throws.
+  async returnToReviewWalkCurrent(options = {}) {
+    try {
+      const opts =
+        options && typeof options === "object" ? options : {};
+      const api = opts.api;
+      const queue = Array.isArray(opts.queue) ? opts.queue : [];
+      const cursor =
+        opts.cursor && typeof opts.cursor === "object" ? opts.cursor : null;
+      const anchor =
+        opts.anchor && typeof opts.anchor === "object" ? opts.anchor : null;
+      const todayText =
+        typeof opts.todayText === "string" ? opts.todayText : "";
+      const jumpOrigin =
+        opts.jumpOrigin && typeof opts.jumpOrigin === "object"
+          ? opts.jumpOrigin
+          : null;
+      let plan = null;
+      try {
+        plan = planReviewWalkReturn(
+          queue,
+          this.reviewWalkCurrent,
+          cursor,
+          todayText,
+        );
+      } catch (error) {
+        return Object.freeze({ handled: false });
+      }
+      if (!plan || typeof plan !== "object") {
+        return Object.freeze({ handled: false });
+      }
+      if (plan.kind === "gone") {
+        try {
+          this.reviewWalkCurrent = null;
+        } catch (error) {
+          // Best effort only.
+        }
+        return Object.freeze({ handled: false });
+      }
+      if (plan.kind !== "return") {
+        return Object.freeze({ handled: false });
+      }
+      let landed = null;
+      try {
+        landed = await this.landOnReviewQueueEntry(plan.entry, {
+          jumpOrigin,
+        });
+      } catch (error) {
+        return Object.freeze({ handled: false });
+      }
+      if (landed && landed.ok) {
+        try {
+          this.reviewAnchor = buildReviewAnchor(
+            queue,
+            [reviewQueueEntryKey(plan.entry)],
+            plan.rank,
+            todayText,
+          );
+        } catch (error) {
+          // The landing re-armed the walk; the anchor is best effort.
+        }
+        let landingNotice = "";
+        try {
+          landingNotice = buildReviewJumpNotice(
+            plan.entry,
+            plan.rank,
+            plan.total,
+            {
+              wrapped: false,
+              todayText,
+              trackers: reviewFreshnessSupportsTrackers(api),
+              reviewEntryView:
+                api && typeof api.reviewEntryView === "function"
+                  ? (noticeEntry, noticeOptions) =>
+                      api.reviewEntryView(noticeEntry, noticeOptions)
+                  : null,
+            },
+          );
+        } catch (error) {
+          landingNotice = "";
+        }
+        try {
+          if (reviewEntryMachineTier(plan.entry) === "post") {
+            const remaining = reviewWalkRemaining(
+              queue,
+              reviewVerifiedHandledKeys(queue, anchor),
+            );
+            landingNotice = appendReviewPostLandingTail(
+              landingNotice,
+              remaining,
+            );
+          }
+        } catch (error) {
+          // The return toast without the POST tail still lands.
+        }
+        try {
+          new Notice(`${REVIEW_RETURN_NOTICE_HEAD}\n${landingNotice}`);
+        } catch (error) {
+          // Best effort: Obsidian is tearing down.
+        }
+        return Object.freeze({ handled: true, result: true });
+      }
+      if (landed && landed.stale === true) {
+        try {
+          this.reviewWalkCurrent = null;
+        } catch (error) {
+          // Best effort only.
+        }
+        return Object.freeze({ handled: false });
+      }
+      try {
+        new Notice("Could not jump to task");
+      } catch (error) {
+        // Best effort: Obsidian is tearing down.
+      }
+      return Object.freeze({ handled: true, result: false });
+    } catch (error) {
+      return Object.freeze({ handled: false });
+    }
   }
 }
 // ---- src/540-plugin-decay-picker-and-cancel.js ----
@@ -56887,6 +57210,7 @@ class BobNavigationHotkeysProjectFileMixin {
   trackOpenedFile(file) {
     // A landing ends when another note opens: the next gesture is no
     // longer "on the row `]s` just landed on".
+    // The current review task deliberately survives a note switch.
     try {
       const landing = this.reviewLanding;
       const openedPath =
@@ -57574,6 +57898,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysReviewAdvanceMixin,
   BobNavigationHotkeysReviewMoveMixin,
+  BobNavigationHotkeysReviewReturnMixin,
   BobNavigationHotkeysDecayCancelMixin,
   BobNavigationHotkeysCancelPropertyMixin,
   BobNavigationHotkeysCountedRollMixin,
@@ -57902,6 +58227,10 @@ module.exports.helpers = {
   findReviewResumeIndex,
   buildReviewMoveAnchor,
   planReviewResume,
+  REVIEW_RETURN_NOTICE_HEAD,
+  reviewWalkCurrentRef,
+  planReviewWalkReturn,
+  reviewRefsTouchWalkCurrent,
   reviewWalkRemaining,
   buildReviewBoundaryNotice,
   planReviewJump,

@@ -265,7 +265,11 @@ if (WidgetType && typeof WidgetType === "function") {
 // Carries exact `checklist` tier tags and the status symbol as written
 // on the line (null when the line cannot provide one), plus `created`
 // (canonical `YYYY-MM-DD` from `createdDate`/`created`,
-// else the inline `created` field, else null) for the tiered walk.
+// else the inline `created` field, else null) for the tiered walk,
+// and `due`/`start` (canonical `YYYY-MM-DD` from the Tasks
+// `dueDate`/`startDate` fields with the same key variants as
+// `scheduled`, else the inline `[due::]`/`[start::]` field, else
+// null) for the RECURRING occurrence date.
 // Never throws: missing fields degrade to an out-of-scope row.
 function freshnessRowFromTask(task, index, context) {
   const safeContext = context || {};
@@ -290,6 +294,8 @@ function freshnessRowFromTask(task, index, context) {
         isDailyNote: false,
         isToday: false,
         scheduled: null,
+        due: null,
+        start: null,
         created: null,
         rawLine: "",
         noteRefreshRaw: undefined,
@@ -392,6 +398,64 @@ function freshnessRowFromTask(task, index, context) {
     } catch (error) {
       scheduled = null;
     }
+    let due = null;
+    try {
+      for (const key of ["dueDate", "due", "dueDay"]) {
+        if (task[key] === undefined || task[key] === null) {
+          continue;
+        }
+        const day = planDayNumber(task[key]);
+        if (day === null) {
+          continue;
+        }
+        const coerced = planCoerceDate(task[key]);
+        if (coerced) {
+          due = formatLocalDate(coerced);
+          break;
+        }
+      }
+      if (due === null) {
+        const fields = freshnessInlineFields(rawLine, "due");
+        for (const field of fields) {
+          const parsed = parseFreshDateStrict(field.value.trim());
+          if (parsed !== null) {
+            due = parsed;
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      due = null;
+    }
+    let start = null;
+    try {
+      for (const key of ["startDate", "start", "startDay"]) {
+        if (task[key] === undefined || task[key] === null) {
+          continue;
+        }
+        const day = planDayNumber(task[key]);
+        if (day === null) {
+          continue;
+        }
+        const coerced = planCoerceDate(task[key]);
+        if (coerced) {
+          start = formatLocalDate(coerced);
+          break;
+        }
+      }
+      if (start === null) {
+        const fields = freshnessInlineFields(rawLine, "start");
+        for (const field of fields) {
+          const parsed = parseFreshDateStrict(field.value.trim());
+          if (parsed !== null) {
+            start = parsed;
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      start = null;
+    }
     // Tasks normally supplies the scheduled date on the task object,
     // which `planLaneVisible` already checks. Preserve that exclusion
     // when adapting cached Markdown rows whose object omitted it.
@@ -472,6 +536,8 @@ function freshnessRowFromTask(task, index, context) {
       isDailyNote,
       isToday,
       scheduled,
+      due,
+      start,
       created,
       rawLine,
       noteRefreshRaw,
@@ -493,6 +559,8 @@ function freshnessRowFromTask(task, index, context) {
       isDailyNote: false,
       isToday: false,
       scheduled: null,
+      due: null,
+      start: null,
       created: null,
       rawLine: "",
       noteRefreshRaw: undefined,

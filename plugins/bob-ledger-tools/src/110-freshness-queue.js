@@ -1,6 +1,6 @@
 // The tiered review queue PRE → NEW → PROJECTS → PENDING → NEXT →
-// TICKLER → REFERENCES → ROTTEN → POST, with each tier's comparator from
-// `docs/freshness.md` §4.
+// RECURRING → TICKLER → REFERENCES → ROTTEN → POST, with each tier's
+// comparator from `docs/freshness.md` §4.
 // Entries
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
 // blockId, state (null for lane rows), bucket, tier (machine),
@@ -85,6 +85,12 @@ function freshnessQueue(rows, todayText, config) {
         freshnessComparePathLine(left, right)
       );
     }
+    if (left.tier === "recurring") {
+      return (
+        freshnessCompareDueOn(left.dueOn, right.dueOn) ||
+        freshnessComparePathLine(left, right)
+      );
+    }
     if (left.tier === "tickler") {
       return (
         freshnessCompareDueOn(left.dueOn, right.dueOn) ||
@@ -123,7 +129,7 @@ function freshnessIsExcludedCountPath(path) {
 
 // Whole-vault counts: `{ due, new, resurfaced, rotten, fresh,
 // preDue, postDue, pendingDue, nextDue, projectsDue, referencesDue,
-// byTier, walk, decide,
+// recurringDue, byTier, walk, decide,
 // refreshedToday, upkeepToday, budget, budgetMet }`. State totals
 // (`due = new + resurfaced + rotten`) count evaluated Ready states
 // over the full review universe, including eligible Ready trackers
@@ -148,6 +154,7 @@ function freshnessCounts(rows, todayText, config) {
     projects: 0,
     pending: 0,
     next: 0,
+    recurring: 0,
     tickler: 0,
     references: 0,
     rotten: 0,
@@ -219,6 +226,7 @@ function freshnessCounts(rows, todayText, config) {
     byTier.projects +
     byTier.pending +
     byTier.next +
+    byTier.recurring +
     byTier.tickler +
     byTier.references +
     byTier.rotten +
@@ -236,6 +244,7 @@ function freshnessCounts(rows, todayText, config) {
     nextDue: byTier.next,
     projectsDue: byTier.projects,
     referencesDue: byTier.references,
+    recurringDue: byTier.recurring,
     byTier: { ...byTier },
     walk,
     decide,
@@ -316,6 +325,7 @@ function freshnessStatusView(counts, options = {}) {
   const tierProjects = tierCount("projects", safe.projectsDue);
   const tierPending = tierCount("pending", safe.pendingDue);
   const tierNext = tierCount("next", safe.nextDue);
+  const tierRecurring = tierCount("recurring", safe.recurringDue);
   const tierTickler = tierCount("tickler", safe.resurfaced);
   const tierReferences = tierCount("references", safe.referencesDue);
   const tierRotten = tierCount("rotten", safe.rotten);
@@ -329,6 +339,7 @@ function freshnessStatusView(counts, options = {}) {
         tierProjects +
         tierPending +
         tierNext +
+        tierRecurring +
         tierTickler +
         tierReferences +
         tierRotten +
@@ -354,6 +365,8 @@ function freshnessStatusView(counts, options = {}) {
     " pending · " +
     tierNext +
     " next · " +
+    tierRecurring +
+    " recurring · " +
     tierReferences +
     " references · " +
     rotten +
@@ -379,6 +392,8 @@ function freshnessStatusView(counts, options = {}) {
     tierPending +
     " · NEXT " +
     tierNext +
+    " · RECURRING " +
+    tierRecurring +
     " · TICKLER " +
     tierTickler +
     " · REFERENCES " +
@@ -394,11 +409,11 @@ function freshnessStatusView(counts, options = {}) {
     meter +
     " today";
   // Mode precedence: `new` (NEW > 0), then `due` while any
-  // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, TICKLER,
-  // REFERENCES) remains, then `budget` (met), then `clear` (walk
-  // empty), else `due`. The raw `budgetMet` formula is unchanged;
-  // outstanding commitment tiers (including PROJECTS and REFERENCES)
-  // take precedence in this mode.
+  // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, RECURRING,
+  // TICKLER, REFERENCES) remains, then `budget` (met), then `clear`
+  // (walk empty), else `due`. The raw `budgetMet` formula is
+  // unchanged; outstanding commitment tiers (including PROJECTS and
+  // REFERENCES) take precedence in this mode.
   let mode = "due";
   if (tierNew > 0) {
     mode = "new";
@@ -407,6 +422,7 @@ function freshnessStatusView(counts, options = {}) {
     tierProjects > 0 ||
     tierPending > 0 ||
     tierNext > 0 ||
+    tierRecurring > 0 ||
     tierTickler > 0 ||
     tierReferences > 0
   ) {

@@ -644,7 +644,8 @@ function freshnessMarkModel(input) {
       state === "rotten" ||
       state === "resurfaced" ||
       tier === "pending" ||
-      tier === "next"
+      tier === "next" ||
+      tier === "recurring"
     ) {
       tone = "due";
     } else if (ageDays === 0) {
@@ -747,6 +748,8 @@ function freshnessMarkModel(input) {
         line3 = "POST closeout · complete to close review";
       } else if (tier === "pending" || tier === "next") {
         line3 = "Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
+      } else if (tier === "recurring") {
+        line3 = "complete or reschedule to resolve";
       } else if (showDecision) {
         line3 = "Alt+F to decide";
       } else {

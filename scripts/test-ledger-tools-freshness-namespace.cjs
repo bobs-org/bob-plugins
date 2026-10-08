@@ -10,7 +10,7 @@ const {
   withMissingConfig,
   makeStatusEl,
 } = require("./ledger-tools-harness.cjs");
-test("freshness namespace v8 advertises checklist tiers without changing buckets", () => {
+test("freshness namespace v9 advertises checklist and recurring tiers without changing buckets", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -30,8 +30,9 @@ test("freshness namespace v8 advertises checklist tiers without changing buckets
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 8);
+      assert.equal(freshness.version, 9);
       assert.equal(freshness.checklistTiers, true);
+      assert.equal(freshness.recurringTier, true);
       for (const key of [
         "config",
         "stampLine",
@@ -307,7 +308,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     status.text,
-    "⟳ 0 pre · 3 new · 0 projects · 10 pending · 15 next · 0 references · 20 rotten · 0 post · ✓ 12 today",
+    "⟳ 0 pre · 3 new · 0 projects · 10 pending · 15 next · 0 recurring · 0 references · 20 rotten · 0 post · ✓ 12 today",
   );
   assert.equal(status.mode, "new");
   assert.match(status.tooltip, /Walk 48 · PRE 0 · NEW 3 · PROJECTS 0 · PENDING 10 · NEXT 15/);
@@ -332,7 +333,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     budgeted.text,
-    "⟳ 0 pre · 0 new · 0 projects · 0 pending · 0 next · 0 references · 5 rotten · 0 post · ✓ 12/15 today",
+    "⟳ 0 pre · 0 new · 0 projects · 0 pending · 0 next · 0 recurring · 0 references · 5 rotten · 0 post · ✓ 12/15 today",
   );
   assert.equal(budgeted.mode, "due");
   assert.match(budgeted.tooltip, /TICKLER 1 · REFERENCES 0 · ROTTEN 4/);
@@ -361,7 +362,7 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     tiered.text,
-    "⟳ 0 pre · 0 new · 1 projects · 0 pending · 0 next · 1 references · 1 rotten · 0 post · ✓ 0 today",
+    "⟳ 0 pre · 0 new · 1 projects · 0 pending · 0 next · 0 recurring · 1 references · 1 rotten · 0 post · ✓ 0 today",
   );
   assert.match(tiered.tooltip, /REFERENCES 1/);
   assert.equal(tiered.mode, "due");

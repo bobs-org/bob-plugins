@@ -200,6 +200,66 @@ function freshnessEvaluateValidScheduled(value) {
   return parseFreshDateStrict(String(value).trim());
 }
 
+// The earliest of the row's valid `scheduled`, `due`, and `start`
+// dates (Tasks' "happens" date); null when it has none of them.
+// Mirrors `occurs_on` in `src/native/freshness/state.rs`.
+function freshnessOccursOn(row) {
+  const safe = row && typeof row === "object" ? row : {};
+  const dates = [
+    freshnessEvaluateValidScheduled(safe.scheduled),
+    freshnessEvaluateValidScheduled(safe.due),
+    freshnessEvaluateValidScheduled(safe.start),
+  ].filter((date) => date !== null && date !== undefined);
+  if (dates.length === 0) {
+    return null;
+  }
+  dates.sort();
+  return dates[0];
+}
+
+// Recurring overlay (`docs/freshness.md` §4): an open, visible,
+// non-checklist recurring row whose occurrence date has arrived
+// walks in RECURRING. Applied after the checklist logic at the
+// single `freshnessEvaluate` exit so no early return in the
+// evaluator can drop it. A checklist member never reaches a
+// recurring tier. Mirrors `overlay_recurring` in
+// `src/native/freshness/state.rs`: `tier`, `dueOn`, and
+// `daysOverdue` are set from the occurrence date, `decide` is
+// false, and `state`, `lane`, `fresh`, interval, keeps, and lints
+// are left alone.
+function freshnessApplyRecurringOverlay(row, today, evaluated) {
+  const safe = row && typeof row === "object" ? row : {};
+  if (safe.checklist === "pre" || safe.checklist === "post") {
+    return evaluated;
+  }
+  if (!safe.recurring) {
+    return evaluated;
+  }
+  if (evaluated.lane === null || evaluated.lane === undefined) {
+    return evaluated;
+  }
+  if (!safe.laneVisible) {
+    return evaluated;
+  }
+  if (safe.isDailyNote || safe.isToday) {
+    return evaluated;
+  }
+  const occurs = freshnessOccursOn(safe);
+  if (occurs === null || occurs === undefined) {
+    return evaluated;
+  }
+  if (occurs > today) {
+    return evaluated;
+  }
+  return {
+    ...evaluated,
+    tier: "recurring",
+    dueOn: occurs,
+    daysOverdue: freshDateDiffDays(occurs, today),
+    decide: false,
+  };
+}
+
 // Evaluate one row for `todayText` under `config`. A row carries the
 // caller-precomputed scope inputs:
 //
@@ -208,13 +268,14 @@ function freshnessEvaluateValidScheduled(value) {
 //     TODO), recurring, laneVisible (the NEXT/PENDING lane predicate),
 //     isDailyNote (canonical YYYY/YYYYMMDD.md), isToday (Task Link
 //     under today's open Pomodoros), scheduled (canonical date or
+//     null), due (canonical date or null), start (canonical date or
 //     null), created (canonical date or null, for queue order only),
 //     rawLine (the task's originalMarkdown), noteRefreshRaw (the note's
 //     raw `task_refresh`) }
 //
 // Returns `{ state ("new"|"resurfaced"|"rotten"|"fresh"|null; null is
 // out of scope, see S13; lane rows keep a null state),
-// tier ("new"|"projects"|"pending"|"next"|"tickler"|"references"|"rotten"|null),
+// tier ("new"|"projects"|"pending"|"next"|"recurring"|"tickler"|"references"|"rotten"|null),
 // lane ("ready"|"pending"|"next"|null), fresh, intervalDays,
 // intervalSource, dueOn, daysOverdue, keeps (the valid `[keeps:: N]`
 // semantic count, 0 when absent), decide (a choice is due — never
@@ -223,9 +284,11 @@ function freshnessEvaluateValidScheduled(value) {
 // predicate (sync owns `#hide`). Due `^prj` rows walk in PROJECTS and
 // due `^ref` rows in REFERENCES with the effective (tracker-override
 // or Ready-chain) interval even when their Ready state is NEW or
-// RESURFACED. Mirrors `evaluate` in `src/native/freshness/state.rs`;
-// `state` stays exactly as before so buckets never move.
-function freshnessEvaluate(row, todayText, config) {
+// RESURFACED. Mirrors `evaluate_without_checklist` plus the checklist
+// overlay in `src/native/freshness/state.rs`; `state` stays exactly
+// as before so buckets never move. The RECURRING overlay is applied
+// by `freshnessEvaluate` at its single exit, after this returns.
+function freshnessEvaluateWithoutRecurring(row, todayText, config) {
   const safe = row && typeof row === "object" ? row : {};
   const today = freshnessNormalizeDateText(todayText);
   const read = readFreshness(safe.rawLine || "", today);
@@ -567,6 +630,26 @@ function freshnessEvaluate(row, todayText, config) {
   };
 }
 
+// Evaluate one row for `todayText` under `config` (same shape as
+// `freshnessEvaluateWithoutRecurring`): the base evaluation plus the
+// RECURRING overlay at this single exit, so the lane-row and
+// null-state early returns inside cannot drop the tier. Mirrors
+// `evaluate` =
+// `overlay_recurring(overlay_checklist(evaluate_without_checklist(…)))`
+// in `src/native/freshness/state.rs`.
+function freshnessEvaluate(row, todayText, config) {
+  const evaluated = freshnessEvaluateWithoutRecurring(
+    row,
+    todayText,
+    config,
+  );
+  return freshnessApplyRecurringOverlay(
+    row,
+    freshnessNormalizeDateText(todayText),
+    evaluated,
+  );
+}
+
 // One row's state: `"new"` | `"resurfaced"` | `"rotten"` | `"fresh"` |
 // null (out of scope).
 function freshnessState(row, todayText, config) {
@@ -614,8 +697,8 @@ function freshnessRowKey(row) {
   return path + ":" + row.line;
 }
 
-// Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER →
-// REFERENCES → ROTTEN → POST. Mirrors the `Tier` ordering in
+// Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING →
+// TICKLER → REFERENCES → ROTTEN → POST. Mirrors the `Tier` ordering in
 // `src/native/freshness/state.rs`.
 const FRESHNESS_TIER_ORDER = {
   pre: 0,
@@ -623,10 +706,11 @@ const FRESHNESS_TIER_ORDER = {
   projects: 2,
   pending: 3,
   next: 4,
-  tickler: 5,
-  references: 6,
-  rotten: 7,
-  post: 8,
+  recurring: 5,
+  tickler: 6,
+  references: 7,
+  rotten: 8,
+  post: 9,
 };
 
 // Tracking-task identity: the parsed, exact trailing block ID `prj`
@@ -659,6 +743,9 @@ function freshnessTierLabel(tier) {
   if (tier === "next") {
     return "NEXT";
   }
+  if (tier === "recurring") {
+    return "RECURRING";
+  }
   if (tier === "tickler") {
     return "TICKLER";
   }
@@ -678,6 +765,9 @@ function freshnessTierLabel(tier) {
 function freshnessTierFooterLabel(tier) {
   if (tier === "pending") {
     return "WIP";
+  }
+  if (tier === "recurring") {
+    return "RECUR";
   }
   if (tier === "tickler") {
     return "TICKS";

@@ -6,8 +6,10 @@ class BobLedgerToolsFreshnessApiMixin {
   // Ready visibility is `planLaneVisible` plus status type TODO,
   // `!task.recurrence`, not a canonical daily-note path, and
   // `!isTodayTask`; lane rows (`/` pending, `*` next) walk the same
-  // predicate with their lane interval. The evaluated rows and tiered
-  // queue are memoized on the identity of the array `getTasks()`
+  // predicate with their lane interval. Due recurring occurrences walk
+  // in RECURRING with `due_on` (never stamped, never bucketed). The
+  // evaluated rows and tiered queue are memoized on the identity of
+  // the array `getTasks()`
   // returns, the local date, a frontmatter generation, and the config
   // (including lane intervals) — so `rank(task)` stays O(1) inside
   // Tasks' `sort by function`.
@@ -805,6 +807,7 @@ class BobLedgerToolsFreshnessApiMixin {
         nextDue: 0,
         projectsDue: 0,
         referencesDue: 0,
+        recurringDue: 0,
         preDue: 0,
         postDue: 0,
         byTier: {
@@ -813,6 +816,7 @@ class BobLedgerToolsFreshnessApiMixin {
           projects: 0,
           pending: 0,
           next: 0,
+          recurring: 0,
           tickler: 0,
           references: 0,
           rotten: 0,

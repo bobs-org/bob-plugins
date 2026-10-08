@@ -120,6 +120,8 @@ function sRow(overrides = {}) {
     isDailyNote: false,
     isToday: false,
     scheduled: null,
+    due: null,
+    start: null,
     created: null,
     rawLine: "- [ ] #task T",
     noteRefreshRaw: undefined,

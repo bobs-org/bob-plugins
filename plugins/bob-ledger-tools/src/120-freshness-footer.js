@@ -4,6 +4,7 @@ const FRESHNESS_FOOTER_TIERS = [
   "projects",
   "pending",
   "next",
+  "recurring",
   "tickler",
   "references",
   "rotten",
@@ -16,6 +17,7 @@ const FRESHNESS_FOOTER_COMMITMENT_TIERS = [
   "projects",
   "pending",
   "next",
+  "recurring",
   "tickler",
   "references",
 ];
@@ -44,6 +46,7 @@ function freshnessReviewMachineTier(entry) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
+    tier === "recurring" ||
     tier === "tickler" ||
     tier === "references" ||
     tier === "rotten" ||
@@ -221,6 +224,18 @@ function freshnessReviewEntryView(entry, options = {}) {
         tier === "pending"
           ? "Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today"
           : "Still next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today";
+    } else if (tier === "recurring") {
+      const overdue =
+        entry && Number.isFinite(entry.daysOverdue)
+          ? Math.max(0, Math.floor(entry.daysOverdue))
+          : null;
+      detail =
+        overdue === null || overdue < 1
+          ? "recurring · due today"
+          : "recurring · " + overdue + "d overdue";
+      compact = detail;
+      actionHint =
+        "Ctrl+Enter done · Ctrl+Shift+Enter today · Ctrl+Shift+P reschedule · ]s skip";
     } else if (tier === "tickler") {
       const since =
         entry && typeof entry.dueOn === "string" && entry.dueOn
@@ -266,6 +281,7 @@ function freshnessFooterReadTiers(counts) {
     projects: freshnessFooterTierCount(safe, "projects", safe.projectsDue),
     pending: freshnessFooterTierCount(safe, "pending", safe.pendingDue),
     next: freshnessFooterTierCount(safe, "next", safe.nextDue),
+    recurring: freshnessFooterTierCount(safe, "recurring", safe.recurringDue),
     tickler: freshnessFooterTierCount(safe, "tickler", safe.resurfaced),
     references: freshnessFooterTierCount(safe, "references", safe.referencesDue),
     rotten: freshnessFooterTierCount(safe, "rotten", safe.rotten),
@@ -570,6 +586,9 @@ function freshnessFooterView(memo, options = {}) {
     const legendParts = [];
     if (shownTiers.has("pending")) {
       legendParts.push("WIP = PENDING");
+    }
+    if (shownTiers.has("recurring")) {
+      legendParts.push("RECUR = RECURRING");
     }
     if (shownTiers.has("tickler")) {
       legendParts.push("TICKS = TICKLER");

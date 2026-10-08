@@ -1248,6 +1248,7 @@ function reviewRefreshKeyEvent(overrides = {}) {
     shiftKey: false,
     code: "KeyF",
     key: "f",
+    defaultPrevented: false,
     preventDefault: () => {},
     stopPropagation: () => {},
     stopImmediatePropagation: () => {},
@@ -1398,5 +1399,157 @@ test("obsolete and extra-modifier F chords stay unconsumed", async () => {
   );
   assert.equal(refreshCalls, 0);
   assert.deepEqual(cm.state.vim.inputState.prefixRepeat, ["2"]);
+  assert.equal(editor.state.lines[2], ROTTEN_LINE);
+});
+
+// --- live double-dispatch order ------------------------------------------------
+// Obsidian >= 1.14 runs a bound hotkey first (window capture, registered
+// before plugins), marks the keydown defaultPrevented, and only then does the
+// plugin's capture fallback see the same event. The fallback must stay quiet
+// so a Pending task asks for its Work Log summary exactly once.
+
+async function waitForPrompt(getCalls) {
+  for (let i = 0; i < 50 && getCalls() === 0; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(getCalls(), 1);
+}
+
+test("live Ctrl+Alt+F double dispatch asks once on a Pending task", async () => {
+  clearNotices();
+  const editor = makeEditor("- [/] #task Pending work", 0);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([], BASE_COUNTS),
+  });
+  attachReviewRefreshCapture(plugin);
+  let advances = 0;
+  plugin.jumpToDueTask = async () => {
+    advances += 1;
+    return true;
+  };
+  let promptCalls = 0;
+  let resolvePrompt = null;
+  plugin.requestFreshnessRefreshSummary = () => {
+    promptCalls += 1;
+    return new Promise((resolve) => {
+      resolvePrompt = resolve;
+    });
+  };
+  // Obsidian's hotkey dispatcher runs the command route first.
+  const pending = plugin.refreshTaskFreshness(editor, {
+    dateText: DATE,
+    advance: true,
+  });
+  await waitForPrompt(() => promptCalls);
+  // The same physical key then reaches the capture fallback, already
+  // defaultPrevented by the hotkey run.
+  let prevented = 0;
+  let stopped = 0;
+  const event = reviewRefreshKeyEvent({
+    ctrlKey: true,
+    defaultPrevented: true,
+    preventDefault: () => {
+      prevented += 1;
+    },
+    stopPropagation: () => {
+      stopped += 1;
+    },
+    stopImmediatePropagation: () => {
+      stopped += 1;
+    },
+  });
+  assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);
+  assert.equal(promptCalls, 1);
+  assert.equal(prevented, 0);
+  assert.equal(stopped, 0);
+  resolvePrompt({ cancelled: false, summary: "Did the review" });
+  assert.equal(await pending, true);
+  assert.equal(promptCalls, 1);
+  assert.equal(advances, 1);
+  const after = editor.state.lines.join("\n");
+  assert.match(after, /\[fresh:: 2026-10-08\]/);
+  assert.equal((after.match(/WORK LOG/g) || []).length, 1);
+  assert.equal((after.match(/Did the review/g) || []).length, 1);
+});
+
+test("live Alt+F double dispatch asks once on a Pending task", async () => {
+  clearNotices();
+  const editor = makeEditor("- [/] #task Pending work", 0);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([], BASE_COUNTS),
+  });
+  attachReviewRefreshCapture(plugin);
+  let advances = 0;
+  plugin.jumpToDueTask = async () => {
+    advances += 1;
+    return true;
+  };
+  let promptCalls = 0;
+  let resolvePrompt = null;
+  plugin.requestFreshnessRefreshSummary = () => {
+    promptCalls += 1;
+    return new Promise((resolve) => {
+      resolvePrompt = resolve;
+    });
+  };
+  const pending = plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  await waitForPrompt(() => promptCalls);
+  const event = reviewRefreshKeyEvent({ defaultPrevented: true });
+  assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);
+  assert.equal(promptCalls, 1);
+  resolvePrompt({ cancelled: false, summary: "Did the review" });
+  assert.equal(await pending, true);
+  assert.equal(promptCalls, 1);
+  assert.equal(advances, 0);
+  const after = editor.state.lines.join("\n");
+  assert.match(after, /\[fresh:: 2026-10-08\]/);
+  assert.equal((after.match(/WORK LOG/g) || []).length, 1);
+  assert.equal((after.match(/Did the review/g) || []).length, 1);
+});
+
+test("already-handled refresh keydown leaves Vim state alone", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_LINE].join("\n"), 2);
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
+  });
+  const cm = {
+    getCursor: () => ({ line: 2, ch: 0 }),
+    state: {
+      vim: {
+        inputState: {
+          prefixRepeat: ["3"],
+          motionRepeat: [],
+          keyBuffer: [],
+          reason: "",
+        },
+      },
+    },
+  };
+  attachReviewRefreshCapture(plugin, cm);
+  let refreshCalls = 0;
+  plugin.refreshTaskFreshness = async () => {
+    refreshCalls += 1;
+    return true;
+  };
+  let prevented = 0;
+  const event = reviewRefreshKeyEvent({
+    ctrlKey: true,
+    defaultPrevented: true,
+    preventDefault: () => {
+      prevented += 1;
+    },
+  });
+  assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);
+  assert.equal(refreshCalls, 0);
+  assert.equal(prevented, 0);
+  assert.deepEqual(cm.state.vim.inputState.prefixRepeat, ["3"]);
+  assert.equal(cm.state.vim.inputState.reason, "");
   assert.equal(editor.state.lines[2], ROTTEN_LINE);
 });

@@ -37620,11 +37620,14 @@ function matchFreshStampExactEntry(queueBefore, ref) {
   return Object.freeze({ ok: true, entry, reason: "ok" });
 }
 
-// Alt+F (wantAdvance false) / Ctrl+Alt+F (wantAdvance true). CodeMirror Vim
-// swallows Alt chords in normal mode, so these run on the capture-phase
-// fallback like the counted lane toggle; the hotkeys below cover insert
-// mode and non-Vim editing. Shift and Meta are never part of a supported
-// refresh chord: Alt+Shift+F is retired.
+// Alt+F (wantAdvance false) / Ctrl+Alt+F (wantAdvance true). Obsidian >=
+// 1.14 runs its keymap as a window capture listener registered before
+// plugins load, so a bound hotkey runs the command first whatever the Vim
+// mode and only calls stopPropagation; that command path consumes a pending
+// Vim count itself. The capture-phase fallback therefore skips keydowns
+// already defaultPrevented and acts only when no binding handled the chord,
+// for example after the hotkey is removed or on an older build. Shift and
+// Meta are never part of a supported refresh chord: Alt+Shift+F is retired.
 function isReviewRefreshKeydown(event, wantAdvance) {
   if (!event || event.metaKey || event.shiftKey || !event.altKey) {
     return false;
@@ -44511,11 +44514,15 @@ class BobNavigationHotkeysDecayCancelMixin {
   }
 
   // Capture-phase fallback so Alt+F / Ctrl+Alt+F reach the counted refresh
-  // route while Vim normal mode is active. CodeMirror Vim swallows Alt
-  // chords before Obsidian's hotkey dispatcher runs, so the hotkeys below
-  // only cover insert mode and non-Vim editing. A pending numeric Vim prefix
-  // is "N additional tasks", mirroring the counted Alt+N route, and
-  // Ctrl+Alt+F selects refresh-and-advance.
+  // route when no Obsidian binding handled the chord. Obsidian >= 1.14 runs
+  // its keymap as a window capture listener registered before plugins load,
+  // so a bound hotkey runs the command first whatever the Vim mode and only
+  // calls stopPropagation (not stopImmediatePropagation); that command path
+  // consumes a pending Vim count itself. The fallback therefore skips
+  // keydowns already defaultPrevented and acts only when no binding handled
+  // the chord, for example after the hotkey is removed or on an older build.
+  // A pending numeric Vim prefix is "N additional tasks", mirroring the
+  // counted Alt+N route, and Ctrl+Alt+F selects refresh-and-advance.
   registerReviewRefreshInputListeners() {
     this.handledReviewRefreshEvents = new WeakSet();
     const keydownHandler = (event) =>
@@ -44546,6 +44553,9 @@ class BobNavigationHotkeysDecayCancelMixin {
       !isReviewRefreshKeydown(event, false) &&
       !isReviewRefreshKeydown(event, true)
     ) {
+      return false;
+    }
+    if (event && event.defaultPrevented === true) {
       return false;
     }
     if (
@@ -50809,12 +50819,16 @@ class BobNavigationHotkeysJumpKeyMixin {
     );
   }
 
-  // Capture-phase fallback so counted N<Alt+N> reaches the lane toggle while
-  // Vim normal mode is active. CodeMirror Vim swallows Alt chords before
-  // Obsidian's hotkey dispatcher runs, so the hotkeys.json binding only
-  // covers insert mode and non-Vim editing. Follows the Ctrl+Shift+M pattern:
-  // a pending numeric prefix becomes N additional tasks, and the Vim input
-  // state is reset before toggling.
+  // Capture-phase fallback so counted N<Alt+N> reaches the lane toggle when
+  // no Obsidian binding handled the chord. Obsidian >= 1.14 runs its keymap
+  // as a window capture listener registered before plugins load, so a bound
+  // hotkey runs the command first whatever the Vim mode and only calls
+  // stopPropagation (not stopImmediatePropagation); that command path
+  // consumes a pending Vim count itself. The fallback therefore skips
+  // keydowns already defaultPrevented and acts only when no binding handled
+  // the chord, for example after the hotkey is removed or on an older build.
+  // Follows the Ctrl+Shift+M pattern: a pending numeric prefix becomes N
+  // additional tasks, and the Vim input state is reset before toggling.
   registerCountedLaneToggleInputListeners() {
     this.handledCountedLaneToggleEvents = new WeakSet();
     const keydownHandler = (event) =>
@@ -50842,6 +50856,9 @@ class BobNavigationHotkeysJumpKeyMixin {
       return false;
     }
     if (!this.isCountedLaneToggleKeydown(event)) {
+      return false;
+    }
+    if (event && event.defaultPrevented === true) {
       return false;
     }
     if (

@@ -531,3 +531,127 @@ test("link-mode priority notice keeps via Task Links visible", () => {
   assert.match(visible.text, /via Task Links/);
 });
 
+// --- live double-dispatch order ------------------------------------------------
+// Obsidian >= 1.14 runs a bound hotkey first (window capture, registered
+// before plugins), marks the keydown defaultPrevented, and only then does the
+// plugin's capture fallback see the same event. The fallback must stay quiet
+// so an off-landing Alt+N asks its release prompt exactly once.
+
+function laneToggleKeyEvent(overrides = {}) {
+  return {
+    repeat: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: true,
+    metaKey: false,
+    code: "KeyN",
+    key: "n",
+    defaultPrevented: false,
+    preventDefault: () => {},
+    stopPropagation: () => {},
+    stopImmediatePropagation: () => {},
+    ...overrides,
+  };
+}
+
+function attachLaneToggleCapture(plugin, editor, cm = {}) {
+  plugin.handledCountedLaneToggleEvents = new WeakSet();
+  const file = { path: "Plan.md", basename: "Plan.md", extension: "md" };
+  const view = { editor, file };
+  plugin.getFocusedMarkdownEditorView = () => view;
+  plugin.getActiveMarkdownView = () => view;
+  plugin.isVimNormalModeEditor = () => true;
+  plugin.resolveVimCodeMirror = () => cm;
+}
+
+function laneToggleTestPlugin() {
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    plugins: { plugins: {} },
+    vault: { getMarkdownFiles: () => [] },
+    workspace: { getLeavesOfType: () => [] },
+  };
+  return plugin;
+}
+
+test("already-handled Alt+N leaves Vim state alone", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor("- [/] #task Working ^a1", {
+    line: 0,
+    ch: 0,
+  });
+  const plugin = laneToggleTestPlugin();
+  const cm = {
+    state: {
+      vim: {
+        inputState: {
+          prefixRepeat: ["2"],
+          motionRepeat: [],
+          keyBuffer: [],
+        },
+      },
+    },
+  };
+  attachLaneToggleCapture(plugin, editor, cm);
+  let toggleCalls = 0;
+  plugin.toggleTaskLane = async () => {
+    toggleCalls += 1;
+    return true;
+  };
+  let prevented = 0;
+  const event = laneToggleKeyEvent({
+    defaultPrevented: true,
+    preventDefault: () => {
+      prevented += 1;
+    },
+  });
+  assert.equal(plugin.handleCountedLaneTogglePhysicalKeydown(event), false);
+  assert.equal(toggleCalls, 0);
+  assert.equal(prevented, 0);
+  assert.deepEqual(cm.state.vim.inputState.prefixRepeat, ["2"]);
+  assert.equal(editor.content, "- [/] #task Working ^a1");
+});
+
+test("Alt+N fallback still dispatches once with the Vim count", async () => {
+  notices.length = 0;
+  const editor = new TransactionEditor(
+    ["- [ ] #task One ^a1", "- [ ] #task Two ^b1"].join("\n"),
+    { line: 0, ch: 0 },
+  );
+  const plugin = laneToggleTestPlugin();
+  const cm = {
+    state: {
+      vim: {
+        inputState: {
+          prefixRepeat: ["2"],
+          motionRepeat: [],
+          keyBuffer: [],
+        },
+      },
+    },
+  };
+  attachLaneToggleCapture(plugin, editor, cm);
+  const seen = [];
+  let pending = null;
+  const inner = plugin.toggleTaskLane.bind(plugin);
+  plugin.toggleTaskLane = async (...args) => {
+    seen.push(args[1] || {});
+    pending = inner(...args);
+    return pending;
+  };
+  const event = laneToggleKeyEvent();
+  // The capture listener is registered on both window and document, so one
+  // physical key reaches the handler twice with the same event object.
+  assert.equal(plugin.handleCountedLaneTogglePhysicalKeydown(event), true);
+  assert.equal(plugin.handleCountedLaneTogglePhysicalKeydown(event), false);
+  await pending;
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].countExplicit, true);
+  assert.equal(seen[0].additionalTaskCount, 2);
+  assert.deepEqual(editor.content.split("\n"), [
+    "- [*] #task One ^a1",
+    "- [*] #task Two ^b1",
+  ]);
+  assert.match(notices.at(-1), /→ Next · 2 tasks/);
+});
+

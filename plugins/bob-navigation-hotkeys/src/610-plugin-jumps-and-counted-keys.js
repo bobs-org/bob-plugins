@@ -585,12 +585,16 @@ class BobNavigationHotkeysJumpKeyMixin {
     );
   }
 
-  // Capture-phase fallback so counted N<Alt+N> reaches the lane toggle while
-  // Vim normal mode is active. CodeMirror Vim swallows Alt chords before
-  // Obsidian's hotkey dispatcher runs, so the hotkeys.json binding only
-  // covers insert mode and non-Vim editing. Follows the Ctrl+Shift+M pattern:
-  // a pending numeric prefix becomes N additional tasks, and the Vim input
-  // state is reset before toggling.
+  // Capture-phase fallback so counted N<Alt+N> reaches the lane toggle when
+  // no Obsidian binding handled the chord. Obsidian >= 1.14 runs its keymap
+  // as a window capture listener registered before plugins load, so a bound
+  // hotkey runs the command first whatever the Vim mode and only calls
+  // stopPropagation (not stopImmediatePropagation); that command path
+  // consumes a pending Vim count itself. The fallback therefore skips
+  // keydowns already defaultPrevented and acts only when no binding handled
+  // the chord, for example after the hotkey is removed or on an older build.
+  // Follows the Ctrl+Shift+M pattern: a pending numeric prefix becomes N
+  // additional tasks, and the Vim input state is reset before toggling.
   registerCountedLaneToggleInputListeners() {
     this.handledCountedLaneToggleEvents = new WeakSet();
     const keydownHandler = (event) =>
@@ -618,6 +622,9 @@ class BobNavigationHotkeysJumpKeyMixin {
       return false;
     }
     if (!this.isCountedLaneToggleKeydown(event)) {
+      return false;
+    }
+    if (event && event.defaultPrevented === true) {
       return false;
     }
     if (

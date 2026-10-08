@@ -238,11 +238,15 @@ class BobNavigationHotkeysDecayCancelMixin {
   }
 
   // Capture-phase fallback so Alt+F / Ctrl+Alt+F reach the counted refresh
-  // route while Vim normal mode is active. CodeMirror Vim swallows Alt
-  // chords before Obsidian's hotkey dispatcher runs, so the hotkeys below
-  // only cover insert mode and non-Vim editing. A pending numeric Vim prefix
-  // is "N additional tasks", mirroring the counted Alt+N route, and
-  // Ctrl+Alt+F selects refresh-and-advance.
+  // route when no Obsidian binding handled the chord. Obsidian >= 1.14 runs
+  // its keymap as a window capture listener registered before plugins load,
+  // so a bound hotkey runs the command first whatever the Vim mode and only
+  // calls stopPropagation (not stopImmediatePropagation); that command path
+  // consumes a pending Vim count itself. The fallback therefore skips
+  // keydowns already defaultPrevented and acts only when no binding handled
+  // the chord, for example after the hotkey is removed or on an older build.
+  // A pending numeric Vim prefix is "N additional tasks", mirroring the
+  // counted Alt+N route, and Ctrl+Alt+F selects refresh-and-advance.
   registerReviewRefreshInputListeners() {
     this.handledReviewRefreshEvents = new WeakSet();
     const keydownHandler = (event) =>
@@ -273,6 +277,9 @@ class BobNavigationHotkeysDecayCancelMixin {
       !isReviewRefreshKeydown(event, false) &&
       !isReviewRefreshKeydown(event, true)
     ) {
+      return false;
+    }
+    if (event && event.defaultPrevented === true) {
       return false;
     }
     if (

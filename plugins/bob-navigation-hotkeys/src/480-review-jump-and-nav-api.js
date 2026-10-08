@@ -821,11 +821,14 @@ function matchFreshStampExactEntry(queueBefore, ref) {
   return Object.freeze({ ok: true, entry, reason: "ok" });
 }
 
-// Alt+F (wantAdvance false) / Ctrl+Alt+F (wantAdvance true). CodeMirror Vim
-// swallows Alt chords in normal mode, so these run on the capture-phase
-// fallback like the counted lane toggle; the hotkeys below cover insert
-// mode and non-Vim editing. Shift and Meta are never part of a supported
-// refresh chord: Alt+Shift+F is retired.
+// Alt+F (wantAdvance false) / Ctrl+Alt+F (wantAdvance true). Obsidian >=
+// 1.14 runs its keymap as a window capture listener registered before
+// plugins load, so a bound hotkey runs the command first whatever the Vim
+// mode and only calls stopPropagation; that command path consumes a pending
+// Vim count itself. The capture-phase fallback therefore skips keydowns
+// already defaultPrevented and acts only when no binding handled the chord,
+// for example after the hotkey is removed or on an older build. Shift and
+// Meta are never part of a supported refresh chord: Alt+Shift+F is retired.
 function isReviewRefreshKeydown(event, wantAdvance) {
   if (!event || event.metaKey || event.shiftKey || !event.altKey) {
     return false;

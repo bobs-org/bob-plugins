@@ -511,6 +511,16 @@ class BobNavigationHotkeysLaneReviewMixin {
         new Notice(REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE);
         return false;
       }
+      // RECURRING landing (ctrl_alt_f=refuse): a single uncounted target
+      // matching a live recurring queue row writes nothing, shows the
+      // recurring-tier notice, and stays. Counted/Task Link batches,
+      // non-landing recurring rows, and pre-v9 namespaces keep the
+      // existing refusal path below.
+      const recurring = matchReviewRecurringCursor(queueBefore, cursorRef);
+      if (recurring && reviewFreshnessSupportsRecurringTier(api)) {
+        new Notice(REVIEW_RECURRING_TIER_NOTICE);
+        return false;
+      }
     }
     // Single source-task trigger: one requested target outside a counted
     // session, exact eligible with a due choice, opens the card and writes

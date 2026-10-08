@@ -68,11 +68,15 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
     }
     const kind = String(outcome.kind || "");
     const checklist = tier === "pre" || tier === "post";
+    const recurring = tier === "recurring";
     if (kind === "complete") {
       return true;
     }
-    if (kind === "lane" || kind === "link-today" || kind === "route") {
-      return !checklist;
+    if (kind === "lane" || kind === "route") {
+      return recurring ? false : !checklist;
+    }
+    if (kind === "link-today") {
+      return recurring ? true : !checklist;
     }
     if (kind !== "card") {
       return false;
@@ -89,6 +93,39 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
       typeof todayText === "string" && /^\d{4}-\d{2}-\d{2}$/.test(todayText.trim())
         ? todayText.trim()
         : "";
+    if (recurring) {
+      // A card resolves a RECURRING landing when the row closed (above),
+      // its scheduled date moved past today, a new dependency id
+      // appeared, or the earliest valid inline scheduled/due/start moved
+      // past today. A freshness stamp never resolves it.
+      const scheduled = reviewAdvanceLineInlineDate(after, "scheduled");
+      if (scheduled && day && scheduled > day) {
+        return true;
+      }
+      const beforeIds = reviewAdvanceLineDependsOnIds(before);
+      for (const id of reviewAdvanceLineDependsOnIds(after)) {
+        if (!beforeIds.has(id)) {
+          return true;
+        }
+      }
+      const due = reviewAdvanceLineInlineDate(after, "due");
+      const start = reviewAdvanceLineInlineDate(after, "start");
+      const dates = [scheduled, due, start].filter(
+        (value) => typeof value === "string" && value,
+      );
+      if (dates.length > 0 && day) {
+        let earliest = dates[0];
+        for (const value of dates.slice(1)) {
+          if (value < earliest) {
+            earliest = value;
+          }
+        }
+        if (earliest > day) {
+          return true;
+        }
+      }
+      return false;
+    }
     const scheduled = reviewAdvanceLineInlineDate(after, "scheduled");
     if (scheduled && day && scheduled > day) {
       return true;

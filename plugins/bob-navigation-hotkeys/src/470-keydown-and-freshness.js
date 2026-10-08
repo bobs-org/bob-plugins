@@ -123,6 +123,22 @@ function reviewFreshnessSupportsChecklistTiers(freshnessApi) {
   }
 }
 
+// RECURRING walk tier (ledger-tools freshness namespace v9) requires
+// `api.freshness.version >= 9` and `recurringTier === true`. Without it
+// the rows still walk when a queue carries `recurring`, but Alt+F
+// refuses with the legacy notice instead of the recurring-tier notice.
+function reviewFreshnessSupportsRecurringTier(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) &&
+      Number(freshnessApi.version) >= 9 &&
+      freshnessApi.recurringTier === true
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
 // Cycler completion API (v2 `completeTaskAtCursor`), or null.
 function getReviewCyclerApi(app) {
   try {
@@ -147,10 +163,10 @@ function reviewIsChecklistTier(tier) {
 }
 
 // Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
-// and `references` tracker tiers and v7 `pre`/`post` checklist tiers),
-// else the legacy v3 `state` mapping (`resurfaced` reads as the TICKLER
-// tier). A `returned` tier reads as `tickler` for a v7 ledger api.
-// Returns "".
+// and `references` tracker tiers, v7 `pre`/`post` checklist tiers, and
+// the v9 `recurring` tier), else the legacy v3 `state` mapping
+// (`resurfaced` reads as the TICKLER tier). A `returned` tier reads as
+// `tickler` for a v7 ledger api. Returns "".
 function reviewEntryMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
@@ -162,6 +178,7 @@ function reviewEntryMachineTier(entry) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
+    tier === "recurring" ||
     tier === "tickler" ||
     tier === "references" ||
     tier === "rotten" ||
@@ -213,6 +230,7 @@ function reviewIsCommitmentTier(tier) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
+    tier === "recurring" ||
     tier === "tickler" ||
     tier === "references"
   );
@@ -749,9 +767,22 @@ function matchReviewChecklistCursor(queue, cursor) {
   return reviewIsChecklistTier(reviewEntryMachineTier(entry)) ? entry : null;
 }
 
+// Live RECURRING queue entry under the cursor (text-first, like the
+// checklist matcher): the Alt+F / Ctrl+Alt+F refusal target. Returns
+// the entry or null.
+function matchReviewRecurringCursor(queue, cursor) {
+  const list = Array.isArray(queue) ? queue : [];
+  const index = findReviewCursorIndex(list, cursor, new Set());
+  if (index < 0) {
+    return null;
+  }
+  const entry = list[index];
+  return reviewEntryMachineTier(entry) === "recurring" ? entry : null;
+}
+
 // Remaining walk counts after excluding handled keys: `{ commitments,
 // rotten, post, pre }`. Commitments are the PRE/NEW/PROJECTS/PENDING/
-// NEXT/TICKLER/REFERENCES tiers. POST is the closing tier.
+// NEXT/RECURRING/TICKLER/REFERENCES tiers. POST is the closing tier.
 function reviewWalkRemaining(queue, excludedKeys) {
   const excluded =
     excludedKeys instanceof Set

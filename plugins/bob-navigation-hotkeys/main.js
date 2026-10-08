@@ -36023,6 +36023,22 @@ function reviewFreshnessSupportsChecklistTiers(freshnessApi) {
   }
 }
 
+// RECURRING walk tier (ledger-tools freshness namespace v9) requires
+// `api.freshness.version >= 9` and `recurringTier === true`. Without it
+// the rows still walk when a queue carries `recurring`, but Alt+F
+// refuses with the legacy notice instead of the recurring-tier notice.
+function reviewFreshnessSupportsRecurringTier(freshnessApi) {
+  try {
+    return (
+      Boolean(freshnessApi) &&
+      Number(freshnessApi.version) >= 9 &&
+      freshnessApi.recurringTier === true
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
 // Cycler completion API (v2 `completeTaskAtCursor`), or null.
 function getReviewCyclerApi(app) {
   try {
@@ -36047,10 +36063,10 @@ function reviewIsChecklistTier(tier) {
 }
 
 // Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
-// and `references` tracker tiers and v7 `pre`/`post` checklist tiers),
-// else the legacy v3 `state` mapping (`resurfaced` reads as the TICKLER
-// tier). A `returned` tier reads as `tickler` for a v7 ledger api.
-// Returns "".
+// and `references` tracker tiers, v7 `pre`/`post` checklist tiers, and
+// the v9 `recurring` tier), else the legacy v3 `state` mapping
+// (`resurfaced` reads as the TICKLER tier). A `returned` tier reads as
+// `tickler` for a v7 ledger api. Returns "".
 function reviewEntryMachineTier(entry) {
   const tier =
     entry && typeof entry.tier === "string"
@@ -36062,6 +36078,7 @@ function reviewEntryMachineTier(entry) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
+    tier === "recurring" ||
     tier === "tickler" ||
     tier === "references" ||
     tier === "rotten" ||
@@ -36113,6 +36130,7 @@ function reviewIsCommitmentTier(tier) {
     tier === "projects" ||
     tier === "pending" ||
     tier === "next" ||
+    tier === "recurring" ||
     tier === "tickler" ||
     tier === "references"
   );
@@ -36649,9 +36667,22 @@ function matchReviewChecklistCursor(queue, cursor) {
   return reviewIsChecklistTier(reviewEntryMachineTier(entry)) ? entry : null;
 }
 
+// Live RECURRING queue entry under the cursor (text-first, like the
+// checklist matcher): the Alt+F / Ctrl+Alt+F refusal target. Returns
+// the entry or null.
+function matchReviewRecurringCursor(queue, cursor) {
+  const list = Array.isArray(queue) ? queue : [];
+  const index = findReviewCursorIndex(list, cursor, new Set());
+  if (index < 0) {
+    return null;
+  }
+  const entry = list[index];
+  return reviewEntryMachineTier(entry) === "recurring" ? entry : null;
+}
+
 // Remaining walk counts after excluding handled keys: `{ commitments,
 // rotten, post, pre }`. Commitments are the PRE/NEW/PROJECTS/PENDING/
-// NEXT/TICKLER/REFERENCES tiers. POST is the closing tier.
+// NEXT/RECURRING/TICKLER/REFERENCES tiers. POST is the closing tier.
 function reviewWalkRemaining(queue, excludedKeys) {
   const excluded =
     excludedKeys instanceof Set
@@ -36799,6 +36830,11 @@ function applyReviewJumpRepeat(step, walkList, direction, repeatRaw) {
 // mirrored backward. Extra counted steps continue from that one-step
 // landing on the same walk list; `originTier` stays the one-step origin.
 // ---- src/480-review-jump-and-nav-api.js ----
+// RECURRING landing refusal (Alt+F and Ctrl+Alt+F write nothing and stay).
+// Exact text from plan:202610/recurring_review_tier.md.
+const REVIEW_RECURRING_TIER_NOTICE =
+  "RECURRING \u00b7 never stamped \u2014 Ctrl+Enter done \u00b7 Ctrl+Shift+Enter today \u00b7 Ctrl+Shift+P reschedule \u00b7 ]s skip";
+
 function reviewLineChecklistKind(line) {
   const tokens = String(line || "").toLowerCase().match(/#[^\s#]+/g) || [];
   const tags = new Set(tokens);
@@ -37166,6 +37202,15 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
       }
     } else if (tier === "pending" || tier === "next") {
       detail = reviewLaneConfirmedDetail(entry, todayText);
+    } else if (tier === "recurring") {
+      const overdue =
+        entry && Number.isFinite(entry.daysOverdue)
+          ? Math.max(0, Math.floor(entry.daysOverdue))
+          : null;
+      detail =
+        overdue === null || overdue < 1
+          ? "due today"
+          : `${overdue}d overdue`;
     } else if (tier === "tickler") {
       const since =
         entry && typeof entry.dueOn === "string" && entry.dueOn
@@ -37196,6 +37241,8 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
       lines.push("Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (options.omitActionHint !== true && tier === "next") {
       lines.push("Still next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+    } else if (options.omitActionHint !== true && tier === "recurring") {
+      lines.push("Ctrl+Enter done · Ctrl+Shift+Enter today · Ctrl+Shift+P reschedule · ]s skip");
     } else if (options.omitActionHint !== true && tier === "pre") {
       lines.push("Ctrl+Enter done · ]s skip");
     } else if (options.omitActionHint !== true && tier === "post") {
@@ -40465,6 +40512,16 @@ class BobNavigationHotkeysLaneReviewMixin {
         new Notice(REVIEW_CHECKLIST_UPDATE_LEDGER_NOTICE);
         return false;
       }
+      // RECURRING landing (ctrl_alt_f=refuse): a single uncounted target
+      // matching a live recurring queue row writes nothing, shows the
+      // recurring-tier notice, and stays. Counted/Task Link batches,
+      // non-landing recurring rows, and pre-v9 namespaces keep the
+      // existing refusal path below.
+      const recurring = matchReviewRecurringCursor(queueBefore, cursorRef);
+      if (recurring && reviewFreshnessSupportsRecurringTier(api)) {
+        new Notice(REVIEW_RECURRING_TIER_NOTICE);
+        return false;
+      }
     }
     // Single source-task trigger: one requested target outside a counted
     // session, exact eligible with a due choice, opens the card and writes
@@ -43665,11 +43722,15 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
     }
     const kind = String(outcome.kind || "");
     const checklist = tier === "pre" || tier === "post";
+    const recurring = tier === "recurring";
     if (kind === "complete") {
       return true;
     }
-    if (kind === "lane" || kind === "link-today" || kind === "route") {
-      return !checklist;
+    if (kind === "lane" || kind === "route") {
+      return recurring ? false : !checklist;
+    }
+    if (kind === "link-today") {
+      return recurring ? true : !checklist;
     }
     if (kind !== "card") {
       return false;
@@ -43686,6 +43747,39 @@ function reviewOutcomeResolves(tier, outcome, todayText) {
       typeof todayText === "string" && /^\d{4}-\d{2}-\d{2}$/.test(todayText.trim())
         ? todayText.trim()
         : "";
+    if (recurring) {
+      // A card resolves a RECURRING landing when the row closed (above),
+      // its scheduled date moved past today, a new dependency id
+      // appeared, or the earliest valid inline scheduled/due/start moved
+      // past today. A freshness stamp never resolves it.
+      const scheduled = reviewAdvanceLineInlineDate(after, "scheduled");
+      if (scheduled && day && scheduled > day) {
+        return true;
+      }
+      const beforeIds = reviewAdvanceLineDependsOnIds(before);
+      for (const id of reviewAdvanceLineDependsOnIds(after)) {
+        if (!beforeIds.has(id)) {
+          return true;
+        }
+      }
+      const due = reviewAdvanceLineInlineDate(after, "due");
+      const start = reviewAdvanceLineInlineDate(after, "start");
+      const dates = [scheduled, due, start].filter(
+        (value) => typeof value === "string" && value,
+      );
+      if (dates.length > 0 && day) {
+        let earliest = dates[0];
+        for (const value of dates.slice(1)) {
+          if (value < earliest) {
+            earliest = value;
+          }
+        }
+        if (earliest > day) {
+          return true;
+        }
+      }
+      return false;
+    }
     const scheduled = reviewAdvanceLineInlineDate(after, "scheduled");
     if (scheduled && day && scheduled > day) {
       return true;
@@ -58210,6 +58304,8 @@ module.exports.helpers = {
   reviewFreshnessSupportsTiers,
   reviewFreshnessSupportsTrackers,
   reviewFreshnessSupportsChecklistTiers,
+  reviewFreshnessSupportsRecurringTier,
+  REVIEW_RECURRING_TIER_NOTICE,
   reviewEntryMachineTier,
   reviewEntryTierLabel,
   reviewQueueEntryKey,
@@ -58218,6 +58314,7 @@ module.exports.helpers = {
   reviewAnchorIsCurrentDay,
   findReviewCursorIndex,
   matchReviewChecklistCursor,
+  matchReviewRecurringCursor,
   reviewLineChecklistKind,
   buildReviewAnchor,
   reviewVerifiedHandledKeys,

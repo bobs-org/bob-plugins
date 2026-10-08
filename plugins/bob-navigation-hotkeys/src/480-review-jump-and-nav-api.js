@@ -1,3 +1,8 @@
+// RECURRING landing refusal (Alt+F and Ctrl+Alt+F write nothing and stay).
+// Exact text from plan:202610/recurring_review_tier.md.
+const REVIEW_RECURRING_TIER_NOTICE =
+  "RECURRING \u00b7 never stamped \u2014 Ctrl+Enter done \u00b7 Ctrl+Shift+Enter today \u00b7 Ctrl+Shift+P reschedule \u00b7 ]s skip";
+
 function reviewLineChecklistKind(line) {
   const tokens = String(line || "").toLowerCase().match(/#[^\s#]+/g) || [];
   const tags = new Set(tokens);
@@ -365,6 +370,15 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
       }
     } else if (tier === "pending" || tier === "next") {
       detail = reviewLaneConfirmedDetail(entry, todayText);
+    } else if (tier === "recurring") {
+      const overdue =
+        entry && Number.isFinite(entry.daysOverdue)
+          ? Math.max(0, Math.floor(entry.daysOverdue))
+          : null;
+      detail =
+        overdue === null || overdue < 1
+          ? "due today"
+          : `${overdue}d overdue`;
     } else if (tier === "tickler") {
       const since =
         entry && typeof entry.dueOn === "string" && entry.dueOn
@@ -395,6 +409,8 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
       lines.push("Still pending? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
     } else if (options.omitActionHint !== true && tier === "next") {
       lines.push("Still next? Ctrl+Alt+F keep · Alt+N release · Ctrl+Shift+Enter today");
+    } else if (options.omitActionHint !== true && tier === "recurring") {
+      lines.push("Ctrl+Enter done · Ctrl+Shift+Enter today · Ctrl+Shift+P reschedule · ]s skip");
     } else if (options.omitActionHint !== true && tier === "pre") {
       lines.push("Ctrl+Enter done · ]s skip");
     } else if (options.omitActionHint !== true && tier === "post") {

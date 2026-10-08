@@ -337,8 +337,10 @@ function freshnessRowFromTask(task, index, context) {
       // lane predicate on a shallow clone with hide-matching tags
       // removed (never mutating the cached Tasks object); every other
       // exclusion still applies, and ordinary hidden tasks — and
-      // hidden `^prj` rows — stay out.
-      if (!laneVisible && tracker === "ref") {
+      // hidden `^prj` rows — stay out. Recurring rows keep ordinary
+      // visibility (including `#hide` exclusion) even on trackers, so
+      // a hidden recurring `^ref` never walks in RECURRING.
+      if (!laneVisible && tracker === "ref" && !recurring) {
         try {
           const tags = Array.isArray(task.tags) ? task.tags : [];
           const stripped = tags.filter(

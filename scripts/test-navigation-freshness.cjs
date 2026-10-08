@@ -2274,3 +2274,179 @@ test("nav normalizes a legacy v7 returned tier to tickler", () => {
   assert.equal(helpers.reviewIsCommitmentTier("tickler"), true);
   assert.equal(helpers.reviewIsCommitmentTier("returned"), false);
 });
+
+test("RECURRING is a machine tier, a commitment, and a v9 capability", () => {
+  assert.equal(helpers.reviewEntryMachineTier({ tier: "recurring" }), "recurring");
+  assert.equal(helpers.reviewEntryMachineTier({ tier: "RECURRING" }), "recurring");
+  assert.equal(helpers.reviewIsCommitmentTier("recurring"), true);
+  assert.equal(helpers.reviewIsChecklistTier("recurring"), false);
+  assert.equal(
+    helpers.reviewFreshnessSupportsRecurringTier({
+      version: 9,
+      recurringTier: true,
+    }),
+    true,
+  );
+  assert.equal(
+    helpers.reviewFreshnessSupportsRecurringTier({ version: 9 }),
+    false,
+  );
+  assert.equal(
+    helpers.reviewFreshnessSupportsRecurringTier({
+      version: 8,
+      recurringTier: true,
+    }),
+    false,
+  );
+  assert.equal(helpers.reviewFreshnessSupportsRecurringTier(null), false);
+  assert.equal(
+    helpers.REVIEW_RECURRING_TIER_NOTICE,
+    "RECURRING \u00b7 never stamped \u2014 Ctrl+Enter done \u00b7 Ctrl+Shift+Enter today \u00b7 Ctrl+Shift+P reschedule \u00b7 ]s skip",
+  );
+});
+
+test("RECURRING counts in reviewWalkRemaining and gates the boundary", () => {
+  const queue = [
+    queueEntry({
+      key: "r.md:1",
+      path: "r.md",
+      line: 1,
+      originalMarkdown: "- [ ] #task Pay [repeat:: every week] [scheduled:: 2026-10-01]",
+      state: null,
+      tier: "recurring",
+      tierLabel: "RECURRING",
+      rank: 1,
+    }),
+    queueEntry({
+      key: "n.md:1",
+      path: "n.md",
+      line: 1,
+      originalMarkdown: "- [ ] #task New",
+      state: "new",
+      rank: 2,
+    }),
+  ];
+  assert.deepEqual(helpers.reviewWalkRemaining(queue, new Set()), {
+    commitments: 2,
+    rotten: 0,
+    post: 0,
+    pre: 0,
+  });
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "recurring",
+      destTier: "rotten",
+      commitmentsLeft: 0,
+      rottenLeft: 4,
+      postLeft: 1,
+    }),
+    "Commitments done \u2014 4 ROTTEN left \u00b7 ]S closes the review",
+  );
+  // The boundary still fires only into ROTTEN/POST.
+  assert.equal(
+    helpers.buildReviewBoundaryNotice({
+      originTier: "recurring",
+      destTier: "tickler",
+      commitmentsLeft: 0,
+      rottenLeft: 4,
+      postLeft: 1,
+    }),
+    null,
+  );
+});
+
+test("matchReviewRecurringCursor is text-first like the checklist matcher", () => {
+  const brush = "- [ ] #task Pay [repeat:: every week] [scheduled:: 2026-10-01]";
+  const pills = "- [ ] #task Owed [repeat:: every week] [scheduled:: 2026-10-01]";
+  const queue = [
+    queueEntry({
+      key: "a.md:1",
+      path: "a.md",
+      line: 1,
+      originalMarkdown: brush,
+      state: null,
+      tier: "recurring",
+      rank: 1,
+    }),
+    queueEntry({
+      key: "a.md:2",
+      path: "a.md",
+      line: 2,
+      originalMarkdown: pills,
+      state: null,
+      tier: "recurring",
+      rank: 2,
+    }),
+    queueEntry({
+      key: "a.md:3",
+      path: "a.md",
+      line: 3,
+      originalMarkdown: "- [ ] #task Plain",
+      state: "new",
+      rank: 3,
+    }),
+  ];
+  const hit = helpers.matchReviewRecurringCursor(queue, {
+    path: "a.md",
+    line: 2,
+    text: brush,
+  });
+  assert.equal(hit.key, "a.md:1");
+  assert.equal(
+    helpers.matchReviewRecurringCursor(queue, {
+      path: "a.md",
+      line: 3,
+      text: "- [ ] #task Plain",
+    }),
+    null,
+  );
+  assert.equal(
+    helpers.matchReviewRecurringCursor(queue, {
+      path: "elsewhere.md",
+      line: 1,
+      text: brush,
+    }),
+    null,
+  );
+});
+
+test("fallback notices name RECURRING due detail with the reschedule hint", () => {
+  const today = {
+    key: "a.md:2",
+    path: "a.md",
+    line: 2,
+    originalMarkdown: "- [ ] #task Pay [repeat:: every week] [scheduled:: 2026-10-08]",
+    text: "Pay",
+    state: null,
+    bucket: null,
+    tier: "recurring",
+    tierLabel: "RECURRING",
+    lane: "ready",
+    fresh: null,
+    dueOn: "2026-10-08",
+    daysOverdue: 0,
+    interval: 7,
+    rank: 1,
+    tierRank: 1,
+    tierTotal: 2,
+  };
+  assert.equal(
+    helpers.buildReviewJumpNotice(today, 1, 2, { todayText: "2026-10-08" }),
+    "Review 1/2 \u00b7 RECURRING 1/2 \u00b7 due today\nCtrl+Enter done \u00b7 Ctrl+Shift+Enter today \u00b7 Ctrl+Shift+P reschedule \u00b7 ]s skip",
+  );
+  const overdue = { ...today, dueOn: "2026-10-01", daysOverdue: 7 };
+  assert.equal(
+    helpers.buildReviewJumpNotice(overdue, 1, 2, { todayText: "2026-10-08" }),
+    "Review 1/2 \u00b7 RECURRING 1/2 \u00b7 7d overdue\nCtrl+Enter done \u00b7 Ctrl+Shift+Enter today \u00b7 Ctrl+Shift+P reschedule \u00b7 ]s skip",
+  );
+});
+
+test("Alt+F and Ctrl+Alt+F share the recurring refusal; Alt+Shift+F stays retired", () => {
+  const altF = { altKey: true, ctrlKey: false, metaKey: false, shiftKey: false, code: "KeyF", key: "f" };
+  const ctrlAltF = { altKey: true, ctrlKey: true, metaKey: false, shiftKey: false, code: "KeyF", key: "f" };
+  const altShiftF = { altKey: true, ctrlKey: false, metaKey: false, shiftKey: true, code: "KeyF", key: "F" };
+  assert.equal(helpers.isReviewRefreshKeydown(altF, false), true);
+  assert.equal(helpers.isReviewRefreshKeydown(ctrlAltF, true), true);
+  assert.equal(helpers.isReviewRefreshKeydown(altShiftF, false), false);
+  assert.equal(helpers.isReviewRefreshKeydown(altShiftF, true), false);
+});

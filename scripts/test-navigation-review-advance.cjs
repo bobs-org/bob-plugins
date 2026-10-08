@@ -1461,3 +1461,153 @@ test("return: a day change never returns", async () => {
   assert.equal(await plugin.jumpToDueTask(1), true, "plans as today");
   assert.ok(!notices[0].startsWith("Back to current review task"), "no return across days");
 });
+
+test("predicate: reviewOutcomeResolves for the RECURRING resolution table", () => {
+  const { reviewOutcomeResolves: resolves } = helpers;
+  const before = "- [ ] #task Pay [repeat:: every week on Sunday] [scheduled:: 2026-09-21]";
+  assert.equal(resolves("recurring", { kind: "complete" }, DATE), true);
+  assert.equal(resolves("recurring", { kind: "link-today" }, DATE), true);
+  assert.equal(resolves("recurring", { kind: "lane" }, DATE), false);
+  assert.equal(resolves("recurring", { kind: "route" }, DATE), false);
+  assert.equal(resolves("recurring", { kind: "move" }, DATE), false);
+  assert.equal(resolves("recurring", null, DATE), false);
+  assert.equal(
+    resolves("recurring", { kind: "card", beforeLine: before, afterLine: before }, DATE),
+    false,
+    "unchanged line never resolves",
+  );
+  assert.equal(
+    resolves(
+      "recurring",
+      { kind: "card", beforeLine: before, afterLine: "- [x] #task Pay [repeat:: every week on Sunday] [scheduled:: 2026-09-21]" },
+      DATE,
+    ),
+    true,
+    "closed advances on a recurring row",
+  );
+  assert.equal(
+    resolves(
+      "recurring",
+      { kind: "card", beforeLine: before, afterLine: "- [ ] #task Pay [repeat:: every week on Sunday] [scheduled:: 2026-10-20]" },
+      DATE,
+    ),
+    true,
+    "future scheduled advances on a recurring row",
+  );
+  assert.equal(
+    resolves(
+      "recurring",
+      { kind: "card", beforeLine: before, afterLine: "- [ ] #task Pay [repeat:: every week on Sunday] [scheduled:: 2026-10-08]" },
+      DATE,
+    ),
+    false,
+    "today scheduled stays on a recurring row",
+  );
+  assert.equal(
+    resolves(
+      "recurring",
+      { kind: "card", beforeLine: before, afterLine: `${before} [dependsOn:: #a1b2c3]` },
+      DATE,
+    ),
+    true,
+    "a gained prerequisite advances on a recurring row",
+  );
+  assert.equal(
+    resolves(
+      "recurring",
+      {
+        kind: "card",
+        beforeLine: "- [ ] #task Pay [repeat:: every week] [scheduled:: 2026-09-21]",
+        afterLine: "- [ ] #task Pay [repeat:: every week] [due:: 2026-10-20]",
+      },
+      DATE,
+    ),
+    true,
+    "future due advances on a recurring row",
+  );
+  assert.equal(
+    resolves(
+      "recurring",
+      {
+        kind: "card",
+        beforeLine: "- [ ] #task Pay [repeat:: every week] [scheduled:: 2026-09-21]",
+        afterLine: "- [ ] #task Pay [repeat:: every week] [start:: 2026-10-20]",
+      },
+      DATE,
+    ),
+    true,
+    "future start advances on a recurring row",
+  );
+  assert.equal(
+    resolves(
+      "recurring",
+      { kind: "card", beforeLine: before, afterLine: `${before} [fresh:: ${DATE}]` },
+      DATE,
+    ),
+    false,
+    "a freshness stamp never resolves a recurring row",
+  );
+});
+
+test("recurring Ctrl+Enter: a fixed-cadence insert above never skips the next due row", () => {
+  const { buildReviewAnchor, planReviewJump } = helpers;
+  const sunday = "- [ ] #task Apply [repeat:: every week on Sunday] [scheduled:: 2026-09-21]";
+  const owed = "- [ ] #task Owed [repeat:: every week] [scheduled:: 2026-10-01]";
+  const before = [
+    laneEntry({ tier: "recurring", path: "walk.md", line: 1, text: "Apply", rank: 1, tierRank: 1, tierTotal: 2, extra: { originalMarkdown: sunday } }),
+    laneEntry({ tier: "recurring", path: "walk.md", line: 2, text: "Owed", rank: 2, tierRank: 2, tierTotal: 2, extra: { originalMarkdown: owed } }),
+  ];
+  // Completing the landed Sunday row resolves and advances exactly once.
+  assert.equal(
+    helpers.reviewOutcomeResolves("recurring", { kind: "complete" }, DATE),
+    true,
+  );
+  const anchor = buildReviewAnchor(before, ["walk.md:1"], 1, DATE);
+  // Tasks inserts the still-due next Sunday occurrence above; the queue
+  // still holds it in RECURRING alongside the remaining due row.
+  const after = [
+    laneEntry({ tier: "recurring", path: "walk.md", line: 1, text: "Apply", rank: 1, tierRank: 1, tierTotal: 2, extra: { originalMarkdown: sunday } }),
+    laneEntry({ tier: "recurring", path: "walk.md", line: 3, text: "Owed", rank: 2, tierRank: 2, tierTotal: 2, extra: { originalMarkdown: owed } }),
+  ];
+  const plan = planReviewJump(after, {
+    direction: 1,
+    anchor,
+    todayText: DATE,
+    cursor: { path: "walk.md", line: 1, text: sunday },
+  });
+  assert.equal(plan.kind, "jump");
+  assert.equal(plan.entry.originalMarkdown, owed, "advances to the next due row, not the insert");
+  assert.equal(
+    helpers.reviewEntryMachineTier(after[0]),
+    "recurring",
+    "the inserted occurrence stays in RECURRING",
+  );
+  assert.equal(
+    helpers.reviewEntryMachineTier(plan.entry),
+    "recurring",
+    "the walk lands on a RECURRING row",
+  );
+});
+
+test("return: a RECURRING landing rearms the current-task return", async () => {
+  const rows = ["Apply", "Owed"].map((text, index) =>
+    laneEntry({
+      tier: "recurring",
+      line: index + 1,
+      text,
+      rank: index + 1,
+      tierRank: index + 1,
+      tierTotal: 2,
+    }),
+  );
+  const fixture = makePlugin({ rows, activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.equal(plugin.reviewWalkCurrent.text, rows[0].originalMarkdown);
+  editor.state.lines.push("# filler 3");
+  editor.setCursor(2, 0);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "returns first");
+  assert.equal(editor.getCursor().line, 0, "back on the RECURRING row");
+  assert.match(notices[0], /^Back to current review task\n/);
+});

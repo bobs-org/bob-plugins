@@ -405,3 +405,88 @@ test("freshness namespace v9 advertises the recurringTier capability", () => {
     }
   });
 });
+
+test("hidden recurring ^ref keeps ordinary visibility (Rust parity)", () => {
+  const hiddenLine =
+    "- [ ] #task Hidden [repeat:: every week] [scheduled:: 2026-10-01] ^ref";
+  const hiddenTask = {
+    status: { type: "TODO", name: "Todo", symbol: " " },
+    tags: ["#task", "#hide"],
+    path: "a.md",
+    lineNumber: 0,
+    description: hiddenLine,
+    originalMarkdown: hiddenLine,
+    blockLink: " ^ref",
+  };
+  const hiddenRow = freshnessRowFromTask(hiddenTask, 0, {
+    list: [hiddenTask],
+    todayDay: 20261008,
+    isToday: () => false,
+  });
+  assert.equal(hiddenRow.recurring, true);
+  assert.equal(hiddenRow.tracker, "ref");
+  assert.equal(
+    hiddenRow.laneVisible,
+    false,
+    "hidden recurring ^ref stays lane-hidden",
+  );
+  const hiddenEvaluated = freshnessEvaluate(hiddenRow, D, CFG);
+  assert.equal(hiddenEvaluated.tier, null);
+
+  const visibleLine =
+    "- [ ] #task Visible [repeat:: every week] [scheduled:: 2026-10-01] ^ref";
+  const visibleTask = {
+    status: { type: "TODO", name: "Todo", symbol: " " },
+    tags: ["#task"],
+    path: "a.md",
+    lineNumber: 1,
+    description: visibleLine,
+    originalMarkdown: visibleLine,
+    blockLink: " ^ref",
+  };
+  const visibleRow = freshnessRowFromTask(visibleTask, 1, {
+    list: [visibleTask],
+    todayDay: 20261008,
+    isToday: () => false,
+  });
+  assert.equal(visibleRow.recurring, true);
+  assert.equal(visibleRow.laneVisible, true);
+  const visibleEvaluated = freshnessEvaluate(visibleRow, D, CFG);
+  assert.equal(
+    visibleEvaluated.tier,
+    "recurring",
+    "visible recurring ^ref walks RECURRING, not REFERENCES",
+  );
+  const queued = freshnessQueue([visibleRow, hiddenRow], D, CFG);
+  assert.ok(
+    queued.some((entry) => entry.originalMarkdown === visibleLine),
+    "visible recurring ^ref is queued",
+  );
+  assert.ok(
+    !queued.some((entry) => entry.originalMarkdown === hiddenLine),
+    "hidden recurring ^ref is not queued",
+  );
+
+  const ordinaryLine = "- [ ] #task Read #hide ^ref";
+  const ordinaryTask = {
+    status: { type: "TODO", name: "Todo", symbol: " " },
+    tags: ["#task", "#hide"],
+    path: "a.md",
+    lineNumber: 2,
+    description: ordinaryLine,
+    originalMarkdown: ordinaryLine,
+    blockLink: " ^ref",
+  };
+  const ordinaryRow = freshnessRowFromTask(ordinaryTask, 2, {
+    list: [ordinaryTask],
+    todayDay: 20261008,
+    isToday: () => false,
+  });
+  assert.equal(ordinaryRow.recurring, false);
+  assert.equal(
+    ordinaryRow.laneVisible,
+    true,
+    "ordinary hidden ^ref keeps the tracker bypass",
+  );
+  assert.equal(freshnessEvaluate(ordinaryRow, D, CFG).tier, "references");
+});

@@ -1,9 +1,9 @@
 {
   "id": "bob-ledger-tools",
   "name": "Bob Ledger Tools",
-  "version": "1.35.0",
+  "version": "1.35.1",
   "minAppVersion": "1.8.7",
-  "description": "Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, render task freshness stamps as compact marks, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates as compact date marks (including in Tasks query results), render `#task` tags as a quiet hash task-tag mark (hidden in Tasks query results), and render Depends-On lines as live dependency chips. Render Task Links under today's open Pomodoros with In Progress half-ring marks.",
+  "description": "Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, render task freshness stamps as compact marks, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates as compact date marks (including in Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results), and render Depends-On lines as live dependency chips. Render Task Links under today's open Pomodoros with In Progress half-ring marks.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

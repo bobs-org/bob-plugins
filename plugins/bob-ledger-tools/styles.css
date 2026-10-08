@@ -1314,18 +1314,22 @@ body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task
   }
 }
 
-/* Task tag marks (task-tag-marks): one small, faint, monochrome hash
+/* Task tag marks (task-tag-marks): one small teal identity hash
    for each exact `#task` tag on a task line. Display-only; nothing
    ever writes it. Contract: bob-cli `docs/task-tag-marks.md`.
-   Geometry (viewBox `0 0 16 16`, stroked, used as a CSS mask,
-   tunable ±0.3 units): `stroke-width 1.6`, `stroke-linecap round`,
+   The ink is one constant identity hue (`--bob-task-tag-hue`, a deep
+   teal blending theme cyan toward the text color), never a status,
+   lane, warning, or tag color. Geometry (viewBox `0 0 16 16`,
+   stroked, used as a CSS mask, tunable ±0.3 units):
+   `stroke-width 1.8`, `stroke-linecap round`,
    path `M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9`, centered
    at (8, 8) with roughly square cells, about the height of a text
    `#`. One mask definition below, shared by the Live Preview widget
    and the rendered-view `a.tag` host. */
 
 body {
-  --bob-task-tag-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9'/%3E%3C/svg%3E");
+  --bob-task-tag-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9'/%3E%3C/svg%3E");
+  --bob-task-tag-hue: color-mix(in srgb, var(--color-cyan, #00bfbc) 72%, var(--text-normal));
 }
 
 /* Shared host rules, gated by `body.bob-task-tag-marks`: the Live
@@ -1334,7 +1338,7 @@ body {
    copy and screen readers). */
 
 body.bob-task-tag-marks .bob-task-tag-mark {
-  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-faint));
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-task-tag-hue));
   display: inline-block;
   position: relative;
   width: 1.08em;
@@ -1364,11 +1368,10 @@ body.bob-task-tag-marks .bob-task-tag-mark {
    no community theme pill survives under the glyph. */
 
 body.bob-task-tag-marks a.tag.bob-task-tag-mark {
-  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-faint));
   --tag-padding-x: 0.14em;
   --tag-padding-y: 0.06em;
   --tag-background: none;
-  --tag-background-hover: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  --tag-background-hover: color-mix(in srgb, var(--bob-task-tag-ink) 14%, transparent);
   --tag-border-color: transparent;
   --tag-border-width: 0;
   --tag-color: transparent;
@@ -1385,10 +1388,11 @@ body.bob-task-tag-marks a.tag.bob-task-tag-mark {
   cursor: pointer;
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark:hover {
-  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-muted));
+body.bob-task-tag-marks .bob-task-tag-mark:hover,
+body.bob-task-tag-marks a.tag.bob-task-tag-mark:hover {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-task-tag-hue));
   opacity: 1;
-  background-color: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  background-color: color-mix(in srgb, var(--bob-task-tag-ink) 14%, transparent);
 }
 
 body.bob-task-tag-marks .bob-task-tag-mark::before {
@@ -1418,8 +1422,8 @@ li.task-list-item[data-task="-"] .bob-task-tag-mark,
 .HyperMD-task-line[data-task="x"] .bob-task-tag-mark,
 .HyperMD-task-line[data-task="X"] .bob-task-tag-mark,
 .HyperMD-task-line[data-task="-"] .bob-task-tag-mark {
-  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-faint));
-  opacity: 0.55;
+  --bob-task-tag-ink: color-mix(in srgb, var(--bob-task-tag-color, var(--bob-task-tag-hue)) 40%, var(--text-faint));
+  opacity: 0.75;
 }
 
 /* Tasks query results (tasks_results = hide): every row is a `#task`

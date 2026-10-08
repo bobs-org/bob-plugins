@@ -827,7 +827,10 @@ test("ledger-tools CSS is theme-safe for the new views", () => {
   }
   assert.ok(css.includes("tabular-nums"));
   assert.ok(css.includes("prefers-reduced-motion"));
-  const added = css.slice(css.indexOf("Per-note Ready cap views"));
+  const added = css.slice(
+    css.indexOf("Per-note Ready cap views"),
+    css.indexOf("Task tag marks (task-tag-marks)"),
+  );
   assert.doesNotMatch(added, /#[0-9a-fA-F]{3,8}/);
 });
 

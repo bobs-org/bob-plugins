@@ -904,13 +904,53 @@ test("session toggle and onload wiring", () => {
   }
 });
 
-test("styles.css contract: glyph, both hosts, hide in Tasks, resting, print, motion", () => {
+test("styles.css contract: teal identity ink, glyph, both hosts, hover, hide in Tasks, resting, print, motion", () => {
   const css = fs.readFileSync(
     path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
     "utf8",
   );
   const count = (needle) => css.split(needle).length - 1;
   assert.equal(count("--bob-task-tag-glyph:"), 1);
+  assert.equal(count("--bob-task-tag-hue:"), 1);
+  const hueAt = css.indexOf("--bob-task-tag-hue:");
+  const hueLine = css.slice(hueAt, css.indexOf(";", hueAt) + 1);
+  assert.ok(hueLine.indexOf("var(--color-cyan, #00bfbc)") !== -1);
+  assert.ok(hueLine.indexOf("var(--text-normal)") !== -1);
+  assert.ok(css.indexOf("stroke-width='1.8'") !== -1);
+  assert.ok(css.indexOf("stroke-width='1.6'") === -1);
+  assert.ok(
+    css.indexOf("--bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-task-tag-hue))") !== -1,
+  );
+  assert.ok(
+    css.indexOf("body.bob-task-tag-marks a.tag.bob-task-tag-mark:hover") !== -1,
+  );
+  assert.ok(
+    css.indexOf("color-mix(in srgb, var(--bob-task-tag-ink) 14%, transparent)") !== -1,
+  );
+  assert.ok(
+    css.indexOf(
+      "color-mix(in srgb, var(--bob-task-tag-color, var(--bob-task-tag-hue)) 40%, var(--text-faint))",
+    ) !== -1,
+  );
+  assert.ok(css.indexOf("opacity: 0.75") !== -1);
+  const hostAt = css.indexOf("body.bob-task-tag-marks a.tag.bob-task-tag-mark {");
+  assert.ok(hostAt !== -1);
+  const hostBlock = css.slice(hostAt, css.indexOf("}", hostAt) + 1);
+  assert.ok(hostBlock.indexOf("--bob-task-tag-ink:") === -1);
+  const blockStart = css.indexOf("Task tag marks (task-tag-marks)");
+  const blockEnd = css.indexOf("Task Link In Progress marks");
+  assert.ok(blockStart !== -1 && blockEnd !== -1 && blockEnd > blockStart);
+  const block = css.slice(blockStart, blockEnd);
+  for (const banned of [
+    "--color-red",
+    "--color-orange",
+    "--color-yellow",
+    "--color-green",
+    "--color-blue",
+    "--task-status-",
+  ]) {
+    assert.ok(block.indexOf(banned) === -1, banned);
+  }
   assert.ok(css.indexOf("M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9") !== -1);
   assert.ok(
     css.indexOf("body.bob-task-tag-marks .bob-task-tag-mark") !== -1,

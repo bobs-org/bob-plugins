@@ -60,6 +60,9 @@ class BobLedgerToolsPlugin extends Plugin {
     // Tasks-memo index lives on the freshness memo itself.
     this.dependencyChipsEnabled = true;
     this.dependencyChipsTimer = null;
+    // Task tag marks (task-tag-marks): session toggle; Tasks query
+    // results are CSS-only, so there is no snapshot cache.
+    this.taskTagMarksEnabled = true;
     // Priority marks (bob-cli-4p ledger-marks): session toggle plus
     // a cached priority-ladder snapshot.
     this.priorityMarksEnabled = true;
@@ -543,6 +546,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupFreshnessStatusBar();
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
+    this.setupTaskTagMarks();
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
@@ -724,6 +728,27 @@ class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-dep-chips");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    this.taskTagMarksEnabled = false;
+    try {
+      if (typeof this.stripTaskTagMarksInDocument === "function") {
+        this.stripTaskTagMarksInDocument();
+      }
+    } catch (error) {
+      // Annotation cleanup is best-effort.
+    }
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-task-tag-marks");
       }
     } catch (error) {
       // Body class cleanup is best-effort.

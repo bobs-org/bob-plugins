@@ -164,6 +164,26 @@ function ensureProgressMarksRefresh() {
   }
   return progressMarksRefresh;
 }
+// Task tag marks (task-tag-marks): a StateEffect the consolidated
+// live-refresh fan-out dispatches so Live Preview task-tag widgets
+// rebuild without a doc change. Defined lazily on first dispatch so
+// requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite
+// shares one stub effect type across every eager define).
+let taskTagMarksRefresh = null;
+function ensureTaskTagMarksRefresh() {
+  if (taskTagMarksRefresh) {
+    return taskTagMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      taskTagMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    taskTagMarksRefresh = null;
+  }
+  return taskTagMarksRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;
@@ -9374,6 +9394,441 @@ if (WidgetType && typeof WidgetType === "function") {
     }
   };
 }
+// ---- src/138-task-tag-marks.js ----
+// --- Task tag marks: pure mark-core -------------------------------------
+// Owned by the `docs/task-tag-marks.md` display contract in bob-cli.
+// Pure helpers only: `#task` token detection, the Live Preview range
+// model, rendered-view eligibility, in-place annotation, a
+// listener-free DOM builder, and the Live Preview widget. Every
+// helper is synchronous and never throws; bad input yields null or an
+// empty list. Mirrors the priority-mark code paths in
+// `135-priority-marks.js` and reuses `freshnessTaskStatus` and
+// `freshnessMarkPosInCode` (code exclusion) from the sibling
+// fragments. The mark is truthful, never guessing: only exact, whole
+// `#task` tags on task lines get a mark.
+
+// The exact, case-sensitive tracked-task tag.
+const TASK_TAG_MARK_TEXT = "#task";
+
+// Tooltip lines joined with `\n`. Never contains `::`, because
+// Dataview re-scans `innerHTML` for inline fields.
+const TASK_TAG_MARK_TOOLTIP =
+  "#task \u00b7 tracked task\nCtrl+Shift+] to demote to a bullet";
+
+// A character that continues a tag: letters, numbers, `_`, `/`, `-`.
+// Anything else (or the end of the text) ends the tag.
+const TASK_TAG_MARK_TAG_CHAR_RE = /[\p{L}\p{N}_/-]/u;
+
+// Boundary-only token ranges for `#task` in `text`: the exact,
+// case-sensitive text `#task`, preceded by the start of the text or
+// whitespace, and followed by the end of the text or a non-tag
+// character. So `#tasks`, `#task/sub`, `#Task`, `foo#task`, and
+// `(#task)` never match, while `#task!` does. Returns a frozen array
+// of frozen `{ from, to }` in UTF-16 offsets. Never throws.
+function taskTagMarkTokenRanges(text) {
+  try {
+    if (typeof text !== "string" || text === "") {
+      return Object.freeze([]);
+    }
+    const found = [];
+    let index = text.indexOf(TASK_TAG_MARK_TEXT);
+    while (index !== -1) {
+      try {
+        let ok = true;
+        if (index > 0) {
+          try {
+            if (!/\s/.test(text[index - 1])) {
+              ok = false;
+            }
+          } catch (error) {
+            ok = false;
+          }
+        }
+        if (ok) {
+          const after = index + TASK_TAG_MARK_TEXT.length;
+          if (after < text.length) {
+            try {
+              if (TASK_TAG_MARK_TAG_CHAR_RE.test(text[after])) {
+                ok = false;
+              }
+            } catch (error) {
+              ok = false;
+            }
+          }
+        }
+        if (ok) {
+          found.push(
+            Object.freeze({ from: index, to: index + TASK_TAG_MARK_TEXT.length }),
+          );
+        }
+      } catch (error) {
+        // One bad token never breaks the scan.
+      }
+      index = text.indexOf(TASK_TAG_MARK_TEXT, index + 1);
+    }
+    return Object.freeze(found);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// A Live Preview line's task-tag-mark ranges, in line order: the
+// boundary tokens gated by the task-line check
+// (`freshnessTaskStatus(lineText) !== null`, quote-aware, so
+// callouts and numbered lists count). Every eligible token on the
+// line gets its own mark. Code exclusion is NOT applied here: the
+// decoration builder drops tokens inside code via
+// `freshnessMarkPosInCode`, so ``- [ ] Note `the #task tag` here``
+// still reports `[16,21)` from the core (TT10). Plain bullets,
+// paragraphs, and headings yield no ranges. Returns a frozen array
+// of frozen `{ from, to }` in UTF-16 line offsets. Never throws.
+function taskTagMarkRanges(lineText) {
+  try {
+    if (typeof lineText !== "string" || lineText === "") {
+      return Object.freeze([]);
+    }
+    if (lineText.indexOf(TASK_TAG_MARK_TEXT) === -1) {
+      return Object.freeze([]);
+    }
+    try {
+      if (freshnessTaskStatus(lineText) === null) {
+        return Object.freeze([]);
+      }
+    } catch (error) {
+      return Object.freeze([]);
+    }
+    return taskTagMarkTokenRanges(lineText);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// Whether `node` is an eligible rendered-view task-tag host: an
+// `a.tag` whose `textContent` is exactly `#task` (and whose `href`,
+// if present, is `#task`), whose nearest `li` ancestor within `root`
+// carries `task-list-item`, and which sits under no `code`/`pre`
+// ancestor and no Tasks result row (`.plugin-tasks-list-item`,
+// `.tasks-list-text`, or `.task-description`). A nested plain child
+// bullet under a task gets no mark, while a task nested under a
+// plain bullet does. With no `li` ancestor (a detached element),
+// there is no mark. Never throws.
+function taskTagMarkElementEligible(node, root) {
+  try {
+    if (!node || typeof node !== "object") {
+      return false;
+    }
+    let tag = "";
+    try {
+      tag = String(node.tagName || node.nodeName || "").toUpperCase();
+    } catch (error) {
+      return false;
+    }
+    if (tag !== "A") {
+      return false;
+    }
+    let text = null;
+    try {
+      text =
+        typeof node.textContent === "string"
+          ? node.textContent
+          : typeof node.nodeValue === "string"
+            ? node.nodeValue
+            : null;
+    } catch (error) {
+      text = null;
+    }
+    if (text !== TASK_TAG_MARK_TEXT) {
+      return false;
+    }
+    try {
+      if (node && typeof node.getAttribute === "function") {
+        const href = node.getAttribute("href");
+        if (href !== null && href !== undefined && href !== "") {
+          if (String(href) !== TASK_TAG_MARK_TEXT) {
+            return false;
+          }
+        }
+      } else if (node.href !== undefined && node.href !== null && node.href !== "") {
+        if (String(node.href) !== TASK_TAG_MARK_TEXT) {
+          return false;
+        }
+      }
+    } catch (error) {
+      return false;
+    }
+    let nearestLi = null;
+    try {
+      let current = node.parentNode || null;
+      let guard = 0;
+      while (current && current !== root && guard < 100) {
+        guard += 1;
+        try {
+          const ancestorTag = String(
+            current.tagName || current.nodeName || "",
+          ).toUpperCase();
+          if (ancestorTag === "CODE" || ancestorTag === "PRE") {
+            return false;
+          }
+          let classText = "";
+          try {
+            if (
+              current.classList &&
+              typeof current.classList.contains === "function"
+            ) {
+              if (
+                current.classList.contains("plugin-tasks-list-item") ||
+                current.classList.contains("tasks-list-text") ||
+                current.classList.contains("task-description")
+              ) {
+                return false;
+              }
+            }
+            if (typeof current.className === "string") {
+              classText = current.className;
+            } else if (typeof current.getAttribute === "function") {
+              classText = current.getAttribute("class") || "";
+            }
+          } catch (error) {
+            classText = "";
+          }
+          if (typeof classText === "string" && classText !== "") {
+            const parts = classText.split(/\s+/);
+            if (
+              parts.indexOf("plugin-tasks-list-item") !== -1 ||
+              parts.indexOf("tasks-list-text") !== -1 ||
+              parts.indexOf("task-description") !== -1
+            ) {
+              return false;
+            }
+          }
+          if (ancestorTag === "LI" && nearestLi === null) {
+            nearestLi = current;
+          }
+        } catch (error) {
+          // Keep walking on per-ancestor failure.
+        }
+        current = current.parentNode || null;
+      }
+    } catch (error) {
+      return false;
+    }
+    if (!nearestLi) {
+      return false;
+    }
+    try {
+      if (
+        nearestLi.classList &&
+        typeof nearestLi.classList.contains === "function" &&
+        nearestLi.classList.contains("task-list-item")
+      ) {
+        return true;
+      }
+      const classText =
+        typeof nearestLi.className === "string"
+          ? nearestLi.className
+          : typeof nearestLi.getAttribute === "function"
+            ? nearestLi.getAttribute("class") || ""
+            : "";
+      return (
+        typeof classText === "string" &&
+        classText.split(/\s+/).indexOf("task-list-item") !== -1
+      );
+    } catch (error) {
+      return false;
+    }
+  } catch (error) {
+    return false;
+  }
+}
+
+// Annotate an eligible `a.tag` in place: add the
+// `bob-task-tag-mark` class plus `aria-label` and
+// `data-tooltip-position`. Never creates or removes nodes, so it is
+// idempotent and survives Dataview's `innerHTML` round trip. Returns
+// true on success, false otherwise. Never throws.
+function annotateTaskTagMark(el) {
+  try {
+    if (!el || typeof el !== "object") {
+      return false;
+    }
+    try {
+      if (el.classList && typeof el.classList.add === "function") {
+        el.classList.add("bob-task-tag-mark");
+      } else if (typeof el.className === "string") {
+        const parts = el.className.split(/\s+/).filter((part) => part !== "");
+        if (parts.indexOf("bob-task-tag-mark") === -1) {
+          parts.push("bob-task-tag-mark");
+        }
+        el.className = parts.join(" ");
+      } else if (typeof el.setAttribute === "function") {
+        el.setAttribute("class", "bob-task-tag-mark");
+      } else {
+        return false;
+      }
+    } catch (error) {
+      return false;
+    }
+    try {
+      if (typeof el.setAttribute === "function") {
+        el.setAttribute("aria-label", TASK_TAG_MARK_TOOLTIP);
+        el.setAttribute("data-tooltip-position", "top");
+      } else {
+        el["aria-label"] = TASK_TAG_MARK_TOOLTIP;
+        el["data-tooltip-position"] = "top";
+      }
+    } catch (error) {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Strip an annotation added by `annotateTaskTagMark`: remove the
+// class, `aria-label`, and `data-tooltip-position`, so pills look
+// and behave natively at once. Returns true on success, false
+// otherwise. Never throws.
+function stripTaskTagMark(el) {
+  try {
+    if (!el || typeof el !== "object") {
+      return false;
+    }
+    try {
+      if (el.classList && typeof el.classList.remove === "function") {
+        el.classList.remove("bob-task-tag-mark");
+      } else if (typeof el.className === "string") {
+        el.className = el.className
+          .split(/\s+/)
+          .filter((part) => part !== "" && part !== "bob-task-tag-mark")
+          .join(" ");
+      }
+    } catch (error) {
+      // Class removal is best-effort.
+    }
+    try {
+      if (typeof el.removeAttribute === "function") {
+        el.removeAttribute("aria-label");
+        el.removeAttribute("data-tooltip-position");
+      } else {
+        try {
+          delete el["aria-label"];
+        } catch (error) {
+          // Best-effort.
+        }
+        try {
+          delete el["data-tooltip-position"];
+        } catch (error) {
+          // Best-effort.
+        }
+      }
+    } catch (error) {
+      // Attribute removal is best-effort.
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Listener-free mark element, so it survives Dataview's innerHTML
+// round-trip. Produces an empty
+// `span.bob-task-tag-mark[role="img"]` with the tooltip `aria-label`
+// and `data-tooltip-position="top"` (the glyph itself is drawn by
+// the single CSS-mask definition). `doc` provides `createElement` so
+// tests can pass a fake document. Never throws: bad input yields
+// null.
+function buildTaskTagMarkElement(doc) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    const span = doc.createElement("span");
+    if (!span) {
+      return null;
+    }
+    try {
+      span.setAttribute("class", "bob-task-tag-mark");
+      span.setAttribute("role", "img");
+      span.setAttribute("aria-label", TASK_TAG_MARK_TOOLTIP);
+      span.setAttribute("data-tooltip-position", "top");
+    } catch (error) {
+      return null;
+    }
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Live Preview widget for one task tag mark. `eq` compares a
+// constant key, so unchanged marks never flicker. `toDOM` builds the
+// listener-free element and adds the reveal-on-click listener only.
+// Defined only when `WidgetType` exists; otherwise null and the
+// extension is not registered.
+let TaskTagMarkWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  TaskTagMarkWidget = class extends WidgetType {
+    constructor() {
+      super();
+      this.key = "task-tag-mark";
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof TaskTagMarkWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildTaskTagMarkElement(
+        typeof document !== "undefined" ? document : null,
+      );
+      // In tests `document` is undefined and the caller passes a fake
+      // doc via `buildTaskTagMarkElement` directly; never throw here.
+      if (!dom) {
+        const fallback =
+          typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        return fallback;
+      }
+      try {
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let anchor = null;
+            try {
+              anchor =
+                view && typeof view.posAtDOM === "function"
+                  ? view.posAtDOM(dom)
+                  : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (typeof anchor === "number") {
+              view.dispatch({
+                selection: { anchor },
+              });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+          } catch (error) {
+            // Reveal is best-effort; the mark itself still renders.
+          }
+        });
+      } catch (error) {
+        // A listener-free mark still renders.
+      }
+      return dom;
+    }
+  };
+}
 // ---- src/140-dependency-model.js ----
 // Dependency chips (bob-cli-3n chips): pure Depends-On grammar.
 // `docs/task-dependencies.md` §§2, 7, 11.1 (DP vectors) is authoritative.
@@ -11051,6 +11506,9 @@ class BobLedgerToolsPlugin extends Plugin {
     // Tasks-memo index lives on the freshness memo itself.
     this.dependencyChipsEnabled = true;
     this.dependencyChipsTimer = null;
+    // Task tag marks (task-tag-marks): session toggle; Tasks query
+    // results are CSS-only, so there is no snapshot cache.
+    this.taskTagMarksEnabled = true;
     // Priority marks (bob-cli-4p ledger-marks): session toggle plus
     // a cached priority-ladder snapshot.
     this.priorityMarksEnabled = true;
@@ -11534,6 +11992,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupFreshnessStatusBar();
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
+    this.setupTaskTagMarks();
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
@@ -11715,6 +12174,27 @@ class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-dep-chips");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    this.taskTagMarksEnabled = false;
+    try {
+      if (typeof this.stripTaskTagMarksInDocument === "function") {
+        this.stripTaskTagMarksInDocument();
+      }
+    } catch (error) {
+      // Annotation cleanup is best-effort.
+    }
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-task-tag-marks");
       }
     } catch (error) {
       // Body class cleanup is best-effort.
@@ -17883,6 +18363,682 @@ class BobLedgerToolsFreshnessMarkRenderMixin {
   // __FRESHNESS_E1_END__
 
 }
+// ---- src/264-plugin-task-tag-marks.js ----
+// --- Task tag marks: Live Preview, rendered views, toggle -----------------
+// `BobLedgerToolsTaskTagMarksMixin`, installed in
+// `310-install-methods.js` before the priority-mark mixin. Mirrors
+// `265-plugin-priority-marks.js` (setup, extension, toggle) but the
+// model is trivial: every exact `#task` tag on a task line gets the
+// same quiet hash glyph. Every method is synchronous and never
+// throws.
+class BobLedgerToolsTaskTagMarksMixin {
+  setupTaskTagMarks() {
+    try {
+      if (typeof this.taskTagMarksEnabled !== "boolean") {
+        this.taskTagMarksEnabled = true;
+      }
+      try {
+        if (
+          typeof document !== "undefined" &&
+          document &&
+          document.body &&
+          document.body.classList &&
+          typeof document.body.classList.add === "function"
+        ) {
+          if (this.taskTagMarksEnabled) {
+            document.body.classList.add("bob-task-tag-marks");
+          } else {
+            document.body.classList.remove("bob-task-tag-marks");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-task-tag-marks",
+            name: "Toggle task tag marks",
+            callback: () => this.toggleTaskTagMarks(),
+          });
+        }
+      } catch (error) {
+        // The toggle is best-effort.
+      }
+      try {
+        const extension = this.createTaskTagMarkExtension();
+        if (
+          extension &&
+          typeof this.registerEditorExtension === "function"
+        ) {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview marks are best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderTaskTagMarksIn(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Rendered-view marks are best-effort.
+      }
+    } catch (error) {
+      // Marks setup never throws.
+    }
+  }
+
+  taskTagMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          TaskTagMarkWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createTaskTagMarkExtension() {
+    try {
+      if (!this.taskTagMarksAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const MarkPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildTaskTagMarkDecorations(view);
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+        }
+
+        update(u) {
+          try {
+            if (plugin.taskTagMarkShouldRebuild(u)) {
+              this.decorations =
+                plugin.buildTaskTagMarkDecorations(u.view);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(MarkPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTagMarkShouldRebuild(u) {
+    try {
+      if (!u || typeof u !== "object") {
+        return false;
+      }
+      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        return true;
+      }
+      try {
+        const refresh = ensureTaskTagMarksRefresh();
+        const transactions = u.transactions || [];
+        for (const transaction of transactions) {
+          try {
+            const effects =
+              transaction && transaction.effects !== undefined
+                ? transaction.effects
+                : null;
+            if (!effects) {
+              continue;
+            }
+            const list = Array.isArray(effects) ? effects : [effects];
+            for (const effect of list) {
+              try {
+                if (!effect) {
+                  continue;
+                }
+                if (effect === refresh) {
+                  return true;
+                }
+                if (
+                  refresh &&
+                  typeof effect.is === "function" &&
+                  effect.is(refresh)
+                ) {
+                  return true;
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        // Effect scan is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && u.startState && u.state) {
+          let before = null;
+          let after = null;
+          try {
+            before = u.startState.field(editorLivePreviewField);
+          } catch (error) {
+            before = null;
+          }
+          try {
+            after = u.state.field(editorLivePreviewField);
+          } catch (error) {
+            after = null;
+          }
+          if (before !== after) {
+            return true;
+          }
+        }
+        if (editorInfoField && u.startState && u.state) {
+          let beforePath = null;
+          let afterPath = null;
+          try {
+            const beforeInfo = u.startState.field(editorInfoField);
+            beforePath =
+              beforeInfo && beforeInfo.file ? beforeInfo.file.path : null;
+          } catch (error) {
+            beforePath = null;
+          }
+          try {
+            const afterInfo = u.state.field(editorInfoField);
+            afterPath =
+              afterInfo && afterInfo.file ? afterInfo.file.path : null;
+          } catch (error) {
+            afterPath = null;
+          }
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildTaskTagMarkDecorations(view) {
+    try {
+      if (!this.taskTagMarksEnabled) {
+        return Decoration.none;
+      }
+      if (!Decoration || !RangeSetBuilder || !TaskTagMarkWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) {
+        return Decoration.none;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!filePath) {
+        return Decoration.none;
+      }
+      const ranges = (view && view.visibleRanges) || [];
+      let selectionRanges = [];
+      try {
+        selectionRanges =
+          (view.state.selection && view.state.selection.ranges) || [];
+      } catch (error) {
+        selectionRanges = [];
+      }
+      let tree = null;
+      try {
+        if (syntaxTree && typeof syntaxTree === "function" && view.state) {
+          tree = syntaxTree(view.state);
+        } else if (
+          syntaxTree &&
+          typeof syntaxTree.resolveInner === "function"
+        ) {
+          tree = syntaxTree;
+        }
+      } catch (error) {
+        tree = null;
+      }
+      const builder = new RangeSetBuilder();
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") {
+        return builder.finish();
+      }
+      const docLength =
+        typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      for (const range of ranges) {
+        try {
+          if (!range || typeof range.from !== "number") {
+            continue;
+          }
+          let pos = Math.max(0, range.from);
+          const end = Math.min(
+            typeof range.to === "number" ? range.to : docLength,
+            docLength,
+          );
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try {
+              line = doc.lineAt(pos);
+            } catch (error) {
+              break;
+            }
+            if (!line || typeof line.text !== "string") {
+              break;
+            }
+            try {
+              if (line.text.indexOf("#task") !== -1) {
+                const sources = taskTagMarkRanges(line.text);
+                for (const source of sources) {
+                  try {
+                    if (
+                      !source ||
+                      typeof source.from !== "number" ||
+                      typeof source.to !== "number"
+                    ) {
+                      continue;
+                    }
+                    const absFrom = line.from + source.from;
+                    const absTo = line.from + source.to;
+                    let revealed = false;
+                    for (const selection of selectionRanges) {
+                      try {
+                        if (
+                          selection &&
+                          typeof selection.from === "number" &&
+                          typeof selection.to === "number" &&
+                          selection.from <= absTo &&
+                          selection.to >= absFrom
+                        ) {
+                          revealed = true;
+                          break;
+                        }
+                      } catch (error) {
+                        continue;
+                      }
+                    }
+                    if (revealed) {
+                      continue;
+                    }
+                    let inCode = false;
+                    try {
+                      if (tree) {
+                        inCode = freshnessMarkPosInCode(tree, absFrom + 1);
+                      }
+                    } catch (error) {
+                      inCode = false;
+                    }
+                    if (inCode) {
+                      continue;
+                    }
+                    builder.add(
+                      absFrom,
+                      absTo,
+                      Decoration.replace({
+                        widget: new TaskTagMarkWidget(),
+                      }),
+                    );
+                  } catch (error) {
+                    continue;
+                  }
+                }
+              }
+            } catch (error) {
+              // One bad line never breaks the build.
+            }
+            if (typeof line.to !== "number" || line.to >= end) {
+              break;
+            }
+            if (line.to < pos) {
+              break;
+            }
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  taskTagMarkCandidateAnchors(el) {
+    try {
+      if (!el || typeof el !== "object") {
+        return [];
+      }
+      try {
+        if (typeof el.querySelectorAll === "function") {
+          return Array.prototype.slice.call(
+            el.querySelectorAll("a.tag"),
+          );
+        }
+      } catch (error) {
+        // Fall through to the manual walk.
+      }
+      const found = [];
+      try {
+        const stack = [el];
+        let guard = 0;
+        while (stack.length > 0 && guard < 10000) {
+          guard += 1;
+          const top = stack.pop();
+          try {
+            const children = (top && top.childNodes) || [];
+            for (let index = children.length - 1; index >= 0; index -= 1) {
+              const child = children[index];
+              if (!child) {
+                continue;
+              }
+              if (child.nodeType === 1) {
+                try {
+                  const tag = String(
+                    child.tagName || child.nodeName || "",
+                  ).toUpperCase();
+                  if (tag === "CODE" || tag === "PRE") {
+                    continue;
+                  }
+                  if (tag === "A") {
+                    found.push(child);
+                  }
+                } catch (error) {
+                  // Keep walking on per-node failure.
+                }
+                stack.push(child);
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        return [];
+      }
+      return found;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  renderTaskTagMarksIn(el, ctx) {
+    try {
+      if (!this.taskTagMarksEnabled) {
+        return;
+      }
+      if (!el || !ctx) {
+        return;
+      }
+      const anchors = this.taskTagMarkCandidateAnchors(el);
+      for (const anchor of anchors) {
+        try {
+          if (!anchor) {
+            continue;
+          }
+          if (!taskTagMarkElementEligible(anchor, el)) {
+            continue;
+          }
+          annotateTaskTagMark(anchor);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Rendered-view marks never throw.
+    }
+  }
+
+  annotateTaskTagMarksInDocument() {
+    try {
+      if (typeof document === "undefined" || !document) {
+        return 0;
+      }
+      const root = document.body || document;
+      if (!root) {
+        return 0;
+      }
+      let count = 0;
+      const anchors = this.taskTagMarkCandidateAnchors(root);
+      for (const anchor of anchors) {
+        try {
+          if (taskTagMarkElementEligible(anchor, root)) {
+            if (annotateTaskTagMark(anchor)) {
+              count += 1;
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return count;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  stripTaskTagMarksInDocument() {
+    try {
+      if (typeof document === "undefined" || !document) {
+        return 0;
+      }
+      const root = document.body || document;
+      if (!root) {
+        return 0;
+      }
+      let candidates = [];
+      try {
+        if (root.querySelectorAll && typeof root.querySelectorAll === "function") {
+          candidates = Array.prototype.slice.call(
+            root.querySelectorAll("a.tag.bob-task-tag-mark"),
+          );
+        } else if (
+          typeof document.querySelectorAll === "function" &&
+          root === document.body
+        ) {
+          candidates = Array.prototype.slice.call(
+            document.querySelectorAll("a.tag.bob-task-tag-mark"),
+          );
+        }
+      } catch (error) {
+        candidates = [];
+      }
+      if (candidates.length === 0) {
+        try {
+          const stack = [root];
+          let guard = 0;
+          while (stack.length > 0 && guard < 10000) {
+            guard += 1;
+            const top = stack.pop();
+            try {
+              const children = (top && top.childNodes) || [];
+              for (let index = children.length - 1; index >= 0; index -= 1) {
+                const child = children[index];
+                if (!child || child.nodeType !== 1) {
+                  continue;
+                }
+                try {
+                  const classText =
+                    typeof child.className === "string"
+                      ? child.className
+                      : typeof child.getAttribute === "function"
+                        ? child.getAttribute("class") || ""
+                        : "";
+                  if (
+                    typeof classText === "string" &&
+                    classText.split(/\s+/).indexOf("bob-task-tag-mark") !== -1
+                  ) {
+                    candidates.push(child);
+                  }
+                } catch (error) {
+                  // Keep walking on per-node failure.
+                }
+                stack.push(child);
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        } catch (error) {
+          // Best-effort walk only.
+        }
+      }
+      let count = 0;
+      for (const candidate of candidates) {
+        try {
+          if (stripTaskTagMark(candidate)) {
+            count += 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return count;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  toggleTaskTagMarks() {
+    try {
+      this.taskTagMarksEnabled = !this.taskTagMarksEnabled;
+      const enabled = this.taskTagMarksEnabled;
+      try {
+        if (
+          typeof document !== "undefined" &&
+          document &&
+          document.body &&
+          document.body.classList
+        ) {
+          if (enabled) {
+            if (typeof document.body.classList.add === "function") {
+              document.body.classList.add("bob-task-tag-marks");
+            }
+          } else if (typeof document.body.classList.remove === "function") {
+            document.body.classList.remove("bob-task-tag-marks");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        if (enabled) {
+          this.annotateTaskTagMarksInDocument();
+        } else {
+          this.stripTaskTagMarksInDocument();
+        }
+      } catch (error) {
+        // Document re-annotation is best-effort.
+      }
+      try {
+        this.refreshTaskTagMarkEditors();
+      } catch (error) {
+        // Editor refresh is best-effort.
+      }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // Tasks re-render is best-effort.
+      }
+      try {
+        new Notice(
+          enabled ? "Task tag marks on" : "Task tag marks off",
+        );
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.taskTagMarksEnabled;
+    }
+  }
+
+  refreshTaskTagMarkEditors() {
+    try {
+      const refresh = ensureTaskTagMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      for (const leaf of leaves) {
+        try {
+          const cm =
+            leaf && leaf.view && leaf.view.editor
+              ? leaf.view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function" && refresh) {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+}
 // ---- src/265-plugin-priority-marks.js ----
 // --- Task priority marks: Live Preview, rendered views, toggle, api --------
 // `BobLedgerToolsPriorityMarksMixin`, installed in
@@ -23944,6 +25100,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
+  BobLedgerToolsTaskTagMarksMixin,
   BobLedgerToolsPriorityMarksMixin,
   BobLedgerToolsDateMarksMixin,
   BobLedgerToolsDateMarksTasksMixin,
@@ -25961,6 +27118,15 @@ module.exports.helpers = {
   freshnessShortDate,
   buildFreshnessMarkElement,
   freshnessMarkPosInCode,
+  TASK_TAG_MARK_TEXT,
+  TASK_TAG_MARK_TOOLTIP,
+  taskTagMarkTokenRanges,
+  taskTagMarkRanges,
+  taskTagMarkElementEligible,
+  annotateTaskTagMark,
+  stripTaskTagMark,
+  buildTaskTagMarkElement,
+  ensureTaskTagMarksRefresh,
   PRIORITY_MARK_VALUES,
   priorityMarkSource,
   priorityMarkSourceInText,

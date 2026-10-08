@@ -1314,6 +1314,131 @@ body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task
   }
 }
 
+/* Task tag marks (task-tag-marks): one small, faint, monochrome hash
+   for each exact `#task` tag on a task line. Display-only; nothing
+   ever writes it. Contract: bob-cli `docs/task-tag-marks.md`.
+   Geometry (viewBox `0 0 16 16`, stroked, used as a CSS mask,
+   tunable ±0.3 units): `stroke-width 1.6`, `stroke-linecap round`,
+   path `M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9`, centered
+   at (8, 8) with roughly square cells, about the height of a text
+   `#`. One mask definition below, shared by the Live Preview widget
+   and the rendered-view `a.tag` host. */
+
+body {
+  --bob-task-tag-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9'/%3E%3C/svg%3E");
+}
+
+/* Shared host rules, gated by `body.bob-task-tag-marks`: the Live
+   Preview `span.bob-task-tag-mark` widget and the rendered-view
+   `a.tag.bob-task-tag-mark` host (whose text stays in the DOM for
+   copy and screen readers). */
+
+body.bob-task-tag-marks .bob-task-tag-mark {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-faint));
+  display: inline-block;
+  position: relative;
+  width: 1.08em;
+  height: 1.08em;
+  padding: 0.06em 0.14em;
+  margin: 0 0.08em;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: transparent;
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: -0.1em;
+  opacity: 0.9;
+  cursor: default;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* Override every theme tag-pill property with enough specificity so
+   no community theme pill survives under the glyph. */
+
+body.bob-task-tag-marks a.tag.bob-task-tag-mark {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-faint));
+  --tag-padding-x: 0.14em;
+  --tag-padding-y: 0.06em;
+  --tag-background: none;
+  --tag-background-hover: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  --tag-border-color: transparent;
+  --tag-border-width: 0;
+  --tag-color: transparent;
+  --tag-color-hover: transparent;
+  --tag-font-weight: 400;
+  --tag-font-size: 0.8em;
+  padding: 0.06em 0.14em;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: transparent;
+  font-weight: 400;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark:hover {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-muted));
+  opacity: 1;
+  background-color: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark::before {
+  content: "";
+  position: absolute;
+  inset: 0.06em 0.14em;
+  background-color: var(--bob-task-tag-ink);
+  -webkit-mask-image: var(--bob-task-tag-glyph);
+  mask-image: var(--bob-task-tag-glyph);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* Resting: closed tasks render fainter. Derived purely in CSS from
+   the nearest `li.task-list-item` / `.HyperMD-task-line`
+   `[data-task]` ancestor, so it works on every surface. */
+
+li.task-list-item[data-task="x"] .bob-task-tag-mark,
+li.task-list-item[data-task="X"] .bob-task-tag-mark,
+li.task-list-item[data-task="-"] .bob-task-tag-mark,
+.HyperMD-task-line[data-task="x"] .bob-task-tag-mark,
+.HyperMD-task-line[data-task="X"] .bob-task-tag-mark,
+.HyperMD-task-line[data-task="-"] .bob-task-tag-mark {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--text-faint));
+  opacity: 0.55;
+}
+
+/* Tasks query results (tasks_results = hide): every row is a `#task`
+   task by the global filter, so the tag carries no information and is
+   hidden with `display: none`. CSS only; no JS touches Tasks' DOM, so
+   `hide tags` and re-renders keep working. The description's leading
+   space remains, giving a uniform gap on every row. Placed after, and
+   with higher specificity than, the shared host rules. */
+
+body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data-tag-name="#task"], [href="#task"]) {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.bob-task-tag-marks .bob-task-tag-mark {
+    transition: none;
+  }
+}
+
 /* Task Link In Progress marks (bob-cli-56 progress-marks): one small
    amber half-filled ring before each In Progress Task Link under
    today's open Pomodoros. Display-only; nothing ever writes it. The

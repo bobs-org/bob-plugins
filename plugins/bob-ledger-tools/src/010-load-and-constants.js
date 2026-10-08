@@ -162,6 +162,26 @@ function ensureProgressMarksRefresh() {
   }
   return progressMarksRefresh;
 }
+// Task tag marks (task-tag-marks): a StateEffect the consolidated
+// live-refresh fan-out dispatches so Live Preview task-tag widgets
+// rebuild without a doc change. Defined lazily on first dispatch so
+// requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite
+// shares one stub effect type across every eager define).
+let taskTagMarksRefresh = null;
+function ensureTaskTagMarksRefresh() {
+  if (taskTagMarksRefresh) {
+    return taskTagMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      taskTagMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    taskTagMarksRefresh = null;
+  }
+  return taskTagMarksRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;

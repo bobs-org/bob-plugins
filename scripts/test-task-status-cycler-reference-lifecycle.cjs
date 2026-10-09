@@ -461,6 +461,8 @@ test("post-close finalizer serializes dependent recovery before reference retire
     retired: 2,
     recoveryFailures: [],
     retirementFailures: [],
+    successors: null,
+    successorNotice: null,
   });
 });
 

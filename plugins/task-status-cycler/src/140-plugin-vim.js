@@ -234,16 +234,27 @@ class TaskStatusCyclerVimMixin {
         // `closing` is read before the write; the chained toggle already
         // awaits transclusion propagation and finalizeClosedTasks, so the
         // walk continues only after both ran. A rejected toggle settles
-        // with null so the gesture lock is always released.
+        // with null so the gesture lock is always released. The successor
+        // text composes into `outcome.notice` after the Done line and no
+        // card is shown, keeping the gesture's single walk toast.
         const closing = isTranscludedCompletionClosableStatus(taskStatus);
+        const successorNoticeBox = {};
         void this.toggleActiveCheckboxOpenDoneAndPropagate(
           view.editor,
           activeFile,
           taskStatus,
+          { successorNoticeTarget: "return", successorNoticeBox },
         ).then(
           (wrote) =>
             settleReviewOrigin(
-              wrote === true && closing ? { kind: "complete" } : null,
+              wrote === true && closing
+                ? {
+                  kind: "complete",
+                  ...(successorNoticeBox.text
+                    ? { notice: successorNoticeBox.text }
+                    : {}),
+                }
+                : null,
             ),
           () => settleReviewOrigin(null),
         );

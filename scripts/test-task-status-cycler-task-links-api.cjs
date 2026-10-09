@@ -280,7 +280,7 @@ test("completeTaskAtCursor closes each open symbol through the Tasks command", a
     };
 
     const result = await plugin.completeTaskAtCursor(editor);
-    assert.deepEqual(result, { ok: true, lineDelta: 0 }, symbol);
+    assert.deepEqual(result, { ok: true, lineDelta: 0, successorNotice: null }, symbol);
     assert.deepEqual(executed, [doneCommand], symbol);
     assert.equal(editor.getLine(0), "- [x] #task Brush teeth ^chore", symbol);
     assert.ok(!editor.getValue().includes("[fresh::"), symbol);
@@ -313,7 +313,7 @@ test("completeTaskAtCursor insert-above reports lineDelta 1 and never stamps", a
   };
 
   const result = await plugin.completeTaskAtCursor(editor);
-  assert.deepEqual(result, { ok: true, lineDelta: 1 });
+  assert.deepEqual(result, { ok: true, lineDelta: 1, successorNotice: null });
   assert.deepEqual(executed, [doneCommand]);
   assert.equal(stampCalls, 0);
   assert.equal(editor.lineCount(), 2);
@@ -381,7 +381,7 @@ test("Ctrl+Enter still refuses [?] while completeTaskAtCursor closes it", async 
 
   installTasksCloseCommand(plugin, editor);
   const result = await plugin.completeTaskAtCursor(editor);
-  assert.deepEqual(result, { ok: true, lineDelta: 0 });
+  assert.deepEqual(result, { ok: true, lineDelta: 0, successorNotice: null });
   assert.equal(editor.getLine(0), "- [x] #task Brush teeth ^chore");
 });
 
@@ -524,7 +524,14 @@ test("future-scheduled dependents stay Blocked on the planner, api, and close pa
     [{ path: "Tasks.md", blockId: "root" }],
     {},
   );
-  assert.equal(finalized.reopened, 1);
+  // The successor pass recovers Plain to its derived rank before legacy
+  // recovery runs, so the legacy counter stays 0 for the same end state.
+  assert.equal(finalized.reopened, 0);
+  assert.equal(finalized.successors.unblocked.length, 1);
+  assert.equal(
+    finalized.successors.unblocked[0].not_linked,
+    "not_planned_today",
+  );
   assert.match(closeHarness.getSource("Tasks.md"), /^- \[\?\] #task Future/m);
   assert.match(closeHarness.getSource("Tasks.md"), /^- \[ \] #task Plain .* \^plain/m);
 });

@@ -20,6 +20,7 @@ function installTaskStatusCyclerMixins(pluginClass, mixins) {
 installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerDependencyIdsMixin,
   TaskStatusCyclerReferencesMixin,
+  TaskStatusCyclerSuccessorsMixin,
   TaskStatusCyclerVimMixin,
   TaskStatusCyclerCommandsMixin,
   TaskStatusCyclerCompletionMixin,

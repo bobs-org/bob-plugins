@@ -42924,6 +42924,15 @@ class BobNavigationHotkeysChecklistWalkMixin {
       new Notice(`Not completed — ${result && result.reason ? result.reason : "not-closed"}`);
       return false;
     }
+    // Successor-link line from the cycler's additive `successorNotice`:
+    // appended to whichever walk toast reports this close, keeping the
+    // gesture's single toast (no second notification).
+    const successorToastLine = result &&
+        typeof result.successorNotice === "string"
+      ? result.successorNotice.trim()
+      : "";
+    const withSuccessorToast = (toast) =>
+      [toast, successorToastLine].filter(Boolean).join("\n");
 
     this.reviewLanding = null;
     this.reviewWalkCurrent = null;
@@ -43019,11 +43028,17 @@ class BobNavigationHotkeysChecklistWalkMixin {
           const doneLine = withinGroup
             ? formatReviewCtrlEnterDoneLine(taskText, tier)
             : `✓ Done · ${taskText}`;
-          new Notice([doneLine, landingNotice].filter(Boolean).join("\n"));
+          new Notice(
+            withSuccessorToast(
+              [doneLine, landingNotice].filter(Boolean).join("\n"),
+            ),
+          );
           return true;
         }
         if (landed && landed.stale !== true) {
-          new Notice(`✓ Done · ${taskText}\nCould not jump to task`);
+          new Notice(
+            withSuccessorToast(`✓ Done · ${taskText}\nCould not jump to task`),
+          );
           return true;
         }
       }
@@ -43045,13 +43060,15 @@ class BobNavigationHotkeysChecklistWalkMixin {
       const nextLabel =
         next && next.kind === "jump" ? reviewEntryTierLabel(next.entry) : "";
       new Notice(
-        formatReviewChecklistGroupEndNotice({
-          taskText,
-          tier,
-          skipped: liveGroup.before.length,
-          nextLabel,
-          commitments: remaining.commitments,
-        }),
+        withSuccessorToast(
+          formatReviewChecklistGroupEndNotice({
+            taskText,
+            tier,
+            skipped: liveGroup.before.length,
+            nextLabel,
+            commitments: remaining.commitments,
+          }),
+        ),
       );
       return true;
     }
@@ -43059,33 +43076,35 @@ class BobNavigationHotkeysChecklistWalkMixin {
     if (tier === "post") {
       if (!advance && liveGroup.after.length + liveGroup.before.length > 0) {
         const postLeft = liveGroup.after.length + liveGroup.before.length;
-        new Notice(`✓ Done · ${postLeft} POST left`);
+        new Notice(withSuccessorToast(`✓ Done · ${postLeft} POST left`));
       } else {
         new Notice(
-          formatReviewClosedNotice({
-            commitments: remaining.commitments,
-            postSkipped: liveGroup.before.length,
-            rotten: remaining.rotten,
-          }),
+          withSuccessorToast(
+            formatReviewClosedNotice({
+              commitments: remaining.commitments,
+              postSkipped: liveGroup.before.length,
+              rotten: remaining.rotten,
+            }),
+          ),
         );
       }
       return true;
     }
 
     if (!advance) {
-      new Notice(`✓ Done · ${remaining.pre} PRE left`);
+      new Notice(withSuccessorToast(`✓ Done · ${remaining.pre} PRE left`));
       return true;
     }
     const doneLine = `✓ Done · ${taskText}`;
     if (!nextPlan || nextPlan.kind !== "jump") {
-      new Notice(doneLine);
+      new Notice(withSuccessorToast(doneLine));
       return true;
     }
     const landed = await this.landOnReviewQueueEntry(nextPlan.entry, {
       jumpOrigin,
     });
     if (!landed.ok) {
-      new Notice(doneLine);
+      new Notice(withSuccessorToast(doneLine));
       return true;
     }
     this.reviewAnchor = buildReviewAnchor(
@@ -43111,7 +43130,11 @@ class BobNavigationHotkeysChecklistWalkMixin {
     if (destTier === "post") {
       landingNotice = appendReviewPostLandingTail(landingNotice, remaining);
     }
-    new Notice([doneLine, boundary, landingNotice].filter(Boolean).join("\n"));
+    new Notice(
+      withSuccessorToast(
+        [doneLine, boundary, landingNotice].filter(Boolean).join("\n"),
+      ),
+    );
     return true;
   }
 }

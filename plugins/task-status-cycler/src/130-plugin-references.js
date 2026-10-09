@@ -57,9 +57,24 @@ class TaskStatusCyclerReferencesMixin {
         retired: 0,
         recoveryFailures: [],
         retirementFailures: [],
+        successors: null,
+        successorNotice: null,
       });
     }
     return this.enqueueTaskReferenceMutation(async () => {
+      // Successor pass first: anchors are read while the cursor link is
+      // still unstruck (the strike lands after this job) and before embed
+      // retirement. Best-effort: a failure here never blocks the close.
+      let successors = null;
+      try {
+        successors = await this.planAndApplySuccessorsNow(
+          closed,
+          context || {},
+        );
+      } catch (error) {
+        console.error("Could not plan successor links", error);
+        successors = null;
+      }
       let recovery;
       try {
         recovery = await this.recoverBlockedDependentsNow(
@@ -76,11 +91,19 @@ class TaskStatusCyclerReferencesMixin {
         normalizeTaskReferenceIdentities(closed),
         context || {},
       );
+      let successorNotice = null;
+      try {
+        successorNotice = this.presentSuccessorModel(successors, context || {});
+      } catch (error) {
+        successorNotice = null;
+      }
       return {
         reopened: recovery.reopened,
         retired: retirement.retired,
         recoveryFailures: recovery.failures,
         retirementFailures: retirement.failures,
+        successors,
+        successorNotice,
       };
     });
   }
@@ -124,6 +147,23 @@ class TaskStatusCyclerReferencesMixin {
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.getMarkdownFiles !== "function") {
       return { reopened: 0, failures: [] };
+    }
+    // Gate: with no `[id::]` in the closed set nothing can be blocked on
+    // it, so skip the vault-wide scan entirely. Identical output (the plan
+    // builder would resolve zero closed ids), pure speed-up.
+    try {
+      if (typeof this.resolveSuccessorClosedIdentities === "function") {
+        const gate = await this.resolveSuccessorClosedIdentities(
+          closedIdentities,
+          context || {},
+          new Map(),
+        );
+        if (gate && gate.gated) {
+          return { reopened: 0, failures: [] };
+        }
+      }
+    } catch (error) {
+      // Best effort: fall through to the full recovery below.
     }
     const openEditors = this.getOpenMarkdownEditors(context || {});
     const files = vault.getMarkdownFiles().filter(

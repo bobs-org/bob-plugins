@@ -333,6 +333,44 @@ class TaskStatusCyclerPomodoroMixin {
     if (!plan) {
       return false;
     }
+    // Successor-link closing hint: captured before the completion plan
+    // edits, so anchors read the pre-gesture day text. Only when the closed
+    // Pomodoro lives in today's daily note; otherwise the pass anchors
+    // from the daily text itself. The pass re-locates the entry and its
+    // created continuation from current editor text by headline.
+    let successorDailyBefore = null;
+    let successorClosingEntry = null;
+    try {
+      const dailyPath = todayDailyPath(this.app);
+      if (
+        dailyPath && sourcePath === dailyPath &&
+        Number.isInteger(context.pomodoroLine) &&
+        context.pomodoroLine >= 0 &&
+        context.pomodoroLine < lines.length
+      ) {
+        const headline = String(lines[context.pomodoroLine] || "");
+        let name = "";
+        try {
+          const parts = parsePomodoroEntryLineParts(headline);
+          name = parts && typeof parts.name === "string" ? parts.name : "";
+        } catch (error) {
+          name = "";
+        }
+        successorDailyBefore = lines.slice();
+        successorClosingEntry = {
+          line: context.pomodoroLine,
+          lineText: headline,
+          name,
+          createdPomodoro: plan.createdPomodoro === true,
+          createdName: typeof plan.createdPomodoroName === "string"
+            ? plan.createdPomodoroName
+            : "",
+        };
+      }
+    } catch (error) {
+      successorDailyBefore = null;
+      successorClosingEntry = null;
+    }
 
     const pomodoroIdentity = closedTaskIdentity(
       sourcePath,
@@ -363,6 +401,8 @@ class TaskStatusCyclerPomodoroMixin {
       editor,
       activePath: sourcePath,
       originPath: sourcePath,
+      ...(successorDailyBefore ? { dailyBefore: successorDailyBefore } : {}),
+      ...(successorClosingEntry ? { closingEntry: successorClosingEntry } : {}),
     });
     return true;
   }

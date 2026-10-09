@@ -244,10 +244,23 @@ class TaskStatusCyclerCompletionMixin {
       return { ok: false, reason: "not-closed" };
     }
 
+    // Successor notice is returned, never shown here: nav's walk caller
+    // appends it to the walk toast it already shows.
     if (identity) {
-      await this.finalizeClosedTasks([identity], { editor, activePath });
+      const finalized = await this.finalizeClosedTasks([identity], {
+        editor,
+        activePath,
+        successorNoticeTarget: "return",
+      });
+      return {
+        ok: true,
+        lineDelta,
+        successorNotice: finalized && finalized.successorNotice
+          ? String(finalized.successorNotice)
+          : null,
+      };
     }
-    return { ok: true, lineDelta };
+    return { ok: true, lineDelta, successorNotice: null };
   }
 
   async toggleActiveTranscludedTaskOpenDone(editor, activeFile) {
@@ -303,7 +316,12 @@ class TaskStatusCyclerCompletionMixin {
   // and finalize both identities together in one batch. The candidate embed
   // is captured before the local write so a Tasks-plugin recurrence insertion
   // above the active line cannot shift which line's transclusion is selected.
-  async toggleActiveCheckboxOpenDoneAndPropagate(editor, activeFile, taskStatus) {
+  async toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    activeFile,
+    taskStatus,
+    options = {},
+  ) {
     const activePath = activeFile && activeFile.path;
     const cursor =
       typeof editor.getCursor === "function" ? editor.getCursor() : null;
@@ -330,9 +348,24 @@ class TaskStatusCyclerCompletionMixin {
     );
     const identities = [localIdentity, targetIdentity].filter(Boolean);
     if (identities.length) {
+      // Walk landings pass `successorNoticeTarget: "return"` with a
+      // `successorNoticeBox`: the text is composed into `outcome.notice`
+      // and no card is shown, keeping the gesture's single walk toast.
       const context = { editor, activePath };
+      if (
+        options && options.successorNoticeTarget === "return"
+      ) {
+        context.successorNoticeTarget = "return";
+      }
       if (closing) {
-        await this.finalizeClosedTasks(identities, context);
+        const finalized = await this.finalizeClosedTasks(identities, context);
+        if (
+          options && options.successorNoticeBox &&
+          typeof options.successorNoticeBox === "object" &&
+          finalized && finalized.successorNotice
+        ) {
+          options.successorNoticeBox.text = String(finalized.successorNotice);
+        }
       } else {
         await this.restoreReopenedTaskReferences(identities, context);
       }

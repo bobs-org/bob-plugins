@@ -164,6 +164,26 @@ function ensureProgressMarksRefresh() {
   }
   return progressMarksRefresh;
 }
+// Unblocked hand-off glyph (bob-cli-5w ledger_glyph): a StateEffect
+// the consolidated live-refresh fan-out dispatches so Live Preview
+// glyph widgets rebuild without a doc change. Defined lazily on first
+// dispatch so requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite
+// shares one stub effect type across every eager define).
+let unblockedGlyphRefresh = null;
+function ensureUnblockedGlyphRefresh() {
+  if (unblockedGlyphRefresh) {
+    return unblockedGlyphRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      unblockedGlyphRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    unblockedGlyphRefresh = null;
+  }
+  return unblockedGlyphRefresh;
+}
 // Task tag marks (task-tag-marks): a StateEffect the consolidated
 // live-refresh fan-out dispatches so Live Preview task-tag widgets
 // rebuild without a doc change. Defined lazily on first dispatch so
@@ -9957,6 +9977,546 @@ if (WidgetType && typeof WidgetType === "function") {
     }
   };
 }
+// ---- src/139-unblocked-glyph.js ----
+// --- Unblocked hand-off glyph: pure mark-core ---------------------------
+// Owned by the epic plan `plan:202610/successor_links.md`
+// (bob-cli-5w phase `ledger_glyph`). Pure helpers only: the read-time
+// model that finds live Task Links under today's open Pomodoros whose
+// task had a prerequisite completed today, the tooltip, a
+// listener-free DOM builder, and the Live Preview widget. Every helper
+// is synchronous and never throws; bad input yields null (or an empty
+// list). The model is derived from the Tasks cache and never stored.
+// It reuses `progressMarkLinks` for the live-link definition (open
+// entry, dedicated plain link at the entry's first child indent),
+// `planTaskBlockId` / `planTaskPath` / `planTaskDescription` for the
+// Tasks-cache identity, `planDayNumber` for the done-date comparison,
+// and `dependencyCleanTaskText` for the tooltip text.
+
+// The glyph drawn after the link. It is text (not a mask) so the
+// read-time decoration stays legible without new assets.
+const UNBLOCKED_GLYPH_TEXT = "🔓";
+
+// The hover tooltip for `names` prerequisite texts. One name is named
+// in full; several name the first and carry `+N more`. Never throws.
+function unblockedGlyphTooltip(names) {
+  try {
+    const list = Array.isArray(names)
+      ? names.filter(
+          (name) => typeof name === "string" && name.trim() !== "",
+        )
+      : [];
+    if (list.length === 0) {
+      return "Unblocked today";
+    }
+    const first = list[0].trim();
+    if (list.length === 1) {
+      return "Unblocked today by ✓ " + first;
+    }
+    return (
+      "Unblocked today by ✓ " + first + " +" + (list.length - 1) + " more"
+    );
+  } catch (error) {
+    return "Unblocked today";
+  }
+}
+
+// The Tasks-cache identity of `task` (the `[id::]` value Tasks exposes
+// as `id`), or null. Never throws.
+function unblockedGlyphTaskId(task) {
+  try {
+    if (!task || typeof task !== "object") {
+      return null;
+    }
+    for (const key of ["id", "taskId"]) {
+      try {
+        const value = task[key];
+        if (typeof value === "string" && value.trim() !== "") {
+          return value.trim();
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The `dependsOn` ids of `task` (the prerequisite `[id::]` values), or
+// `[]`. Never throws.
+function unblockedGlyphTaskDependsOn(task) {
+  try {
+    if (!task || typeof task !== "object") {
+      return [];
+    }
+    const raw =
+      task.dependsOn !== undefined && task.dependsOn !== null
+        ? task.dependsOn
+        : task.depends_on;
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const out = [];
+    for (const entry of raw) {
+      try {
+        if (typeof entry === "string" && entry.trim() !== "") {
+          out.push(entry.trim());
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    return out;
+  } catch (error) {
+    return [];
+  }
+}
+
+// Whether Tasks-cache `task` is Done with a done date of `todayDay` (a
+// `planDayNumber` day number). Cancelled tasks never qualify: only the
+// DONE status (or an explicit done flag) with a done date of today
+// counts as "completed today". Never throws.
+function unblockedGlyphDoneToday(task, todayDay) {
+  try {
+    if (!task || typeof task !== "object") {
+      return false;
+    }
+    if (!Number.isInteger(todayDay)) {
+      return false;
+    }
+    let doneStatus = false;
+    try {
+      const status =
+        task.status && typeof task.status === "object" ? task.status : null;
+      if (status && status.type === "DONE") {
+        doneStatus = true;
+      } else if (task.done === true) {
+        doneStatus = true;
+      } else if (
+        status &&
+        typeof status.name === "string" &&
+        /^\s*done\s*$/i.test(status.name)
+      ) {
+        doneStatus = true;
+      }
+    } catch (error) {
+      doneStatus = false;
+    }
+    if (!doneStatus) {
+      return false;
+    }
+    let raw = null;
+    try {
+      if (task.doneDate !== undefined && task.doneDate !== null) {
+        raw = task.doneDate;
+      } else if (task.done_date !== undefined && task.done_date !== null) {
+        raw = task.done_date;
+      }
+    } catch (error) {
+      raw = null;
+    }
+    if (raw === null || raw === undefined) {
+      return false;
+    }
+    let day = null;
+    try {
+      day = planDayNumber(raw);
+    } catch (error) {
+      day = null;
+    }
+    return day !== null && day === todayDay;
+  } catch (error) {
+    return false;
+  }
+}
+
+// An index over Tasks-cache tasks: `byBlock` (blockId → tasks in vault
+// order) and `byId` (`[id::]` → task). Never throws.
+function unblockedGlyphIndex(tasks) {
+  const empty = { byBlock: new Map(), byId: new Map() };
+  try {
+    const list = Array.isArray(tasks) ? tasks : [];
+    for (const task of list) {
+      try {
+        if (!task || typeof task !== "object") {
+          continue;
+        }
+        let blockId = null;
+        try {
+          blockId = planTaskBlockId(task);
+        } catch (error) {
+          blockId = null;
+        }
+        if (typeof blockId === "string" && blockId !== "") {
+          try {
+            const bucket = empty.byBlock.get(blockId);
+            if (Array.isArray(bucket)) {
+              bucket.push(task);
+            } else {
+              empty.byBlock.set(blockId, [task]);
+            }
+          } catch (error) {
+            // One bad identity never breaks the index.
+          }
+        }
+        let id = null;
+        try {
+          id = unblockedGlyphTaskId(task);
+        } catch (error) {
+          id = null;
+        }
+        if (id && !empty.byId.has(id)) {
+          try {
+            empty.byId.set(id, task);
+          } catch (error) {
+            // One bad identity never breaks the index.
+          }
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    return empty;
+  } catch (error) {
+    return empty;
+  }
+}
+
+// Whether vault `path` matches link `target` (a linkpath without `.md`
+// and without alias). An empty target is the daily note itself, which
+// only matches when `dailyPath` names it. Never throws.
+function unblockedGlyphTargetMatches(path, target, dailyPath) {
+  try {
+    const name = String(target || "");
+    const candidate = String(path || "");
+    if (candidate === "") {
+      return false;
+    }
+    if (name === "") {
+      if (typeof dailyPath !== "string" || dailyPath === "") {
+        return true;
+      }
+      try {
+        return sameVaultPath(candidate, dailyPath);
+      } catch (error) {
+        return candidate === dailyPath;
+      }
+    }
+    const withMd = /\.md$/i.test(name) ? name : name + ".md";
+    if (candidate === name || candidate === withMd) {
+      return true;
+    }
+    if (
+      candidate.endsWith("/" + name) ||
+      candidate.endsWith("/" + withMd)
+    ) {
+      return true;
+    }
+    let base = candidate;
+    try {
+      const parts = candidate.split("/");
+      base = parts.length > 0 ? parts[parts.length - 1] : candidate;
+    } catch (error) {
+      base = candidate;
+    }
+    return base === name || base === withMd;
+  } catch (error) {
+    return false;
+  }
+}
+
+// The Tasks-cache task a live link points at, or null: the first
+// block-id match whose path matches the link target (exact paths win
+// over suffix matches). Never throws.
+function unblockedGlyphLinkedTask(index, target, blockId, dailyPath) {
+  try {
+    const id = String(blockId || "");
+    if (id === "") {
+      return null;
+    }
+    const bucket =
+      index && index.byBlock instanceof Map ? index.byBlock.get(id) : null;
+    if (!Array.isArray(bucket) || bucket.length === 0) {
+      return null;
+    }
+    let fallback = null;
+    for (const task of bucket) {
+      try {
+        if (!task || typeof task !== "object") {
+          continue;
+        }
+        let path = "";
+        try {
+          path = planTaskPath(task) || "";
+        } catch (error) {
+          path = "";
+        }
+        if (!unblockedGlyphTargetMatches(path, target, dailyPath)) {
+          continue;
+        }
+        const name = String(target || "");
+        const withMd = /\.md$/i.test(name) ? name : name + ".md";
+        if (name !== "" && (path === name || path === withMd)) {
+          return task;
+        }
+        if (fallback === null) {
+          fallback = task;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    return fallback;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The display texts of the linked task's prerequisites completed today,
+// in `dependsOn` order. Never throws.
+function unblockedGlyphDoneTodayNames(linked, index, todayDay) {
+  try {
+    if (!linked || typeof linked !== "object") {
+      return [];
+    }
+    const ids = unblockedGlyphTaskDependsOn(linked);
+    if (ids.length === 0) {
+      return [];
+    }
+    const names = [];
+    for (const id of ids) {
+      try {
+        const prereq =
+          index && index.byId instanceof Map ? index.byId.get(id) : null;
+        if (!prereq) {
+          continue;
+        }
+        if (!unblockedGlyphDoneToday(prereq, todayDay)) {
+          continue;
+        }
+        let text = "";
+        try {
+          text = planTaskDescription(prereq) || "";
+        } catch (error) {
+          text = "";
+        }
+        try {
+          text = dependencyCleanTaskText(text) || "";
+        } catch (error) {
+          text = String(text || "");
+        }
+        names.push(String(text || "").trim() === "" ? id : text.trim());
+      } catch (error) {
+        continue;
+      }
+    }
+    return names;
+  } catch (error) {
+    return [];
+  }
+}
+
+// Every live Task Link under today's open Pomodoro entries whose task
+// is open and had a prerequisite completed today, in ledger order:
+// `[{ line, ch, target, blockId, unblockedBy }]`, with 0-based `line`,
+// `ch` the line-relative offset of `[[`, and `unblockedBy` the
+// done-today prerequisite texts. `lines` is the day-file text split on
+// newline (a single string is split); `tasks` is the Tasks cache (a
+// cold cache draws nothing); `today` defaults to now;
+// `options.dailyPath` resolves empty (same-note) targets. Never throws.
+function unblockedTodayLinks(lines, tasks, today, options) {
+  try {
+    let list = [];
+    if (typeof lines === "string") {
+      list = String(lines).replace(/\r\n/g, "\n").split("\n");
+    } else if (Array.isArray(lines)) {
+      list = lines;
+    } else {
+      return [];
+    }
+    const todayDay = planDayNumber(today === undefined ? new Date() : today);
+    if (!Number.isInteger(todayDay)) {
+      return [];
+    }
+    const taskList = Array.isArray(tasks) ? tasks : [];
+    if (taskList.length === 0) {
+      return [];
+    }
+    let dailyPath = null;
+    try {
+      if (options && typeof options.dailyPath === "string") {
+        dailyPath = options.dailyPath;
+      }
+    } catch (error) {
+      dailyPath = null;
+    }
+    let content = "";
+    try {
+      content = list.map((line) => String(line || "")).join("\n");
+    } catch (error) {
+      return [];
+    }
+    let links = [];
+    try {
+      links = progressMarkLinks(content);
+    } catch (error) {
+      links = [];
+    }
+    if (!Array.isArray(links) || links.length === 0) {
+      return [];
+    }
+    let index = null;
+    try {
+      index = unblockedGlyphIndex(taskList);
+    } catch (error) {
+      return [];
+    }
+    const out = [];
+    for (const link of links) {
+      try {
+        if (!link || typeof link.blockId !== "string") {
+          continue;
+        }
+        const linked = unblockedGlyphLinkedTask(
+          index,
+          link.target,
+          link.blockId,
+          dailyPath,
+        );
+        if (!linked) {
+          continue;
+        }
+        let open = false;
+        try {
+          open = !planTaskIsDone(linked);
+        } catch (error) {
+          open = false;
+        }
+        if (!open) {
+          continue;
+        }
+        const names = unblockedGlyphDoneTodayNames(linked, index, todayDay);
+        if (names.length === 0) {
+          continue;
+        }
+        out.push({
+          line: link.line,
+          ch: link.ch,
+          target: link.target,
+          blockId: link.blockId,
+          unblockedBy: names,
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+    return out;
+  } catch (error) {
+    return [];
+  }
+}
+
+// Listener-free glyph element, so it survives Dataview's innerHTML
+// round-trip. Produces
+// `span.bob-unblocked-glyph[role=img][aria-label][title][data-tooltip-position=top]`.
+// `doc` provides `createElement` so tests can pass a fake document.
+// Never throws: bad input yields null.
+function buildUnblockedGlyphElement(doc, tooltip) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    const raw = String(tooltip || "").trim();
+    const text = raw === "" ? "Unblocked today" : raw;
+    const span = doc.createElement("span");
+    span.setAttribute("class", "bob-unblocked-glyph");
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", text);
+    span.setAttribute("title", text);
+    span.setAttribute("data-tooltip-position", "top");
+    try {
+      span.textContent = UNBLOCKED_GLYPH_TEXT;
+    } catch (error) {
+      return null;
+    }
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Live Preview widget for one hand-off glyph. `eq` compares the
+// tooltip, so unchanged glyphs never flicker. `toDOM` builds the
+// listener-free element and adds the place-cursor-on-mousedown
+// listener only: the glyph never writes. Defined only when
+// `WidgetType` exists; otherwise null and the extension is not
+// registered.
+let UnblockedGlyphWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  UnblockedGlyphWidget = class extends WidgetType {
+    constructor(tooltip) {
+      super();
+      this.tooltip = String(tooltip || "Unblocked today");
+      this.key = this.tooltip;
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof UnblockedGlyphWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildUnblockedGlyphElement(
+        typeof document !== "undefined" ? document : null,
+        this.tooltip,
+      );
+      // In tests `document` is undefined and the caller passes a fake
+      // doc via `buildUnblockedGlyphElement` directly; never throw here.
+      if (!dom) {
+        const fallback =
+          typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        return fallback;
+      }
+      try {
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let anchor = null;
+            try {
+              anchor =
+                view && typeof view.posAtDOM === "function"
+                  ? view.posAtDOM(dom)
+                  : null;
+            } catch (error) {
+              anchor = null;
+            }
+            // The widget sits at `side: 1` on the link end, so the
+            // widget position is just past the link.
+            if (typeof anchor === "number") {
+              view.dispatch({ selection: { anchor } });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+          } catch (error) {
+            // Placing the cursor is best-effort; the glyph renders.
+          }
+        });
+      } catch (error) {
+        // A listener-free glyph still renders.
+      }
+      return dom;
+    }
+  };
+}
 // ---- src/140-dependency-model.js ----
 // Dependency chips (bob-cli-3n chips): pure Depends-On grammar.
 // `docs/task-dependencies.md` §§2, 7, 11.1 (DP vectors) is authoritative.
@@ -11725,6 +12285,12 @@ class BobLedgerToolsPlugin extends Plugin {
     this.progressMarkLastTargets = new Set();
     this.progressMarksTimer = null;
     this.progressMarksDay = null;
+    // Unblocked hand-off glyph (bob-cli-5w ledger_glyph): session
+    // toggle, the debounced refresh timer, and the daily path last
+    // seen by the midnight rollover.
+    this.unblockedGlyphEnabled = true;
+    this.unblockedGlyphTimer = null;
+    this.unblockedGlyphDay = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -11983,6 +12549,14 @@ class BobLedgerToolsPlugin extends Plugin {
       // never throws: guard calls with try/catch as well as
       // optional chaining.
       progressMarks: this.progressMarksApi(),
+      // Unblocked hand-off glyph (bob-cli-5w ledger_glyph,
+      // unblockedGlyph namespace v1): a display-only read-time `🔓`
+      // after live Task Links under today's open Pomodoros whose
+      // task had a prerequisite completed today. Additive:
+      // top-level api stays v3. Every member is synchronous and
+      // never throws: guard calls with try/catch as well as
+      // optional chaining.
+      unblockedGlyph: this.unblockedGlyphApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -12023,6 +12597,7 @@ class BobLedgerToolsPlugin extends Plugin {
           this.refreshFreshnessForChangedFile(file, data);
           this.refreshNoteReadyForChangedFile(file);
           this.refreshProgressMarksForChangedFile(file);
+          this.refreshUnblockedGlyphForChangedFile(file);
           this.scheduleDashboardCollectionsRefresh();
           try {
             const path = file && typeof file.path === "string" ? file.path : "";
@@ -12131,6 +12706,13 @@ class BobLedgerToolsPlugin extends Plugin {
           } catch (error) {
             // Best-effort refresh only.
           }
+          // Unblocked hand-off glyphs follow the daily note at local
+          // midnight.
+          try {
+            this.refreshUnblockedGlyphForRollover(new Date());
+          } catch (error) {
+            // Best-effort refresh only.
+          }
           try {
             this.refreshDashboardCollectionChips(new Date());
           } catch (error) {
@@ -12198,6 +12780,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
+    this.setupUnblockedGlyph();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
@@ -16020,6 +16603,11 @@ class BobLedgerToolsHeadingReviewMixin {
     }
     try {
       this.scheduleProgressMarksRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleUnblockedGlyphRefresh();
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
@@ -23415,6 +24003,763 @@ class BobLedgerToolsDependencyModelMixin {
   }
 
 }
+// ---- src/271-plugin-unblocked-glyph.js ----
+// --- Unblocked hand-off glyph: Live Preview, Reading view, api ---------
+// `BobLedgerToolsUnblockedGlyphMixin`, installed in
+// `310-install-methods.js` after the dependency render mixin. Owned by
+// the epic plan `plan:202610/successor_links.md` (bob-cli-5w phase
+// `ledger_glyph`). Mirrors `268-plugin-progress-marks.js` (setup,
+// extension, toggle) and `269-plugin-progress-marks-reading.js`
+// (post-processor shape, refresh), but the model is link-oriented:
+// `unblockedTodayLinks` finds live Task Links under today's open
+// Pomodoros whose Tasks-cache task had a prerequisite completed today,
+// and the glyph is a faint read-time `🔓` after the link with a
+// tooltip naming the prerequisite. Derived from the Tasks cache on
+// every build; never written. Every method is synchronous and never
+// throws.
+class BobLedgerToolsUnblockedGlyphMixin {
+  setupUnblockedGlyph() {
+    try {
+      if (typeof this.unblockedGlyphEnabled !== "boolean") {
+        this.unblockedGlyphEnabled = true;
+      }
+      try {
+        if (
+          typeof document !== "undefined" &&
+          document &&
+          document.body &&
+          document.body.classList &&
+          typeof document.body.classList.add === "function"
+        ) {
+          if (this.unblockedGlyphEnabled) {
+            document.body.classList.add("bob-unblocked-glyphs");
+          } else {
+            document.body.classList.remove("bob-unblocked-glyphs");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-unblocked-glyph",
+            name: "Toggle unblocked hand-off glyph",
+            callback: () => this.toggleUnblockedGlyph(),
+          });
+        }
+      } catch (error) {
+        // The toggle is best-effort.
+      }
+      try {
+        const extension = this.createUnblockedGlyphExtension();
+        if (
+          extension &&
+          typeof this.registerEditorExtension === "function"
+        ) {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview glyphs are best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderUnblockedGlyphIn(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Reading-view glyphs are best-effort.
+      }
+    } catch (error) {
+      // Glyph setup never throws.
+    }
+  }
+
+  unblockedGlyphAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          UnblockedGlyphWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createUnblockedGlyphExtension() {
+    try {
+      if (!this.unblockedGlyphAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const GlyphPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildUnblockedGlyphDecorations(view);
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+        }
+
+        update(u) {
+          try {
+            if (plugin.unblockedGlyphShouldRebuild(u)) {
+              this.decorations =
+                plugin.buildUnblockedGlyphDecorations(u.view);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(GlyphPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Rebuild on a doc change, a viewport change, a live-preview
+  // toggle, or the lazily defined refresh effect. Never on
+  // `selectionSet`: the glyph covers no source text, so it stays
+  // visible while the cursor is on the line. Never throws.
+  unblockedGlyphShouldRebuild(u) {
+    try {
+      if (!u || typeof u !== "object") {
+        return false;
+      }
+      if (u.docChanged || u.viewportChanged) {
+        return true;
+      }
+      try {
+        const refresh = ensureUnblockedGlyphRefresh();
+        const transactions = u.transactions || [];
+        for (const transaction of transactions) {
+          try {
+            const effects =
+              transaction && transaction.effects !== undefined
+                ? transaction.effects
+                : null;
+            if (!effects) {
+              continue;
+            }
+            const list = Array.isArray(effects) ? effects : [effects];
+            for (const effect of list) {
+              try {
+                if (!effect) {
+                  continue;
+                }
+                if (effect === refresh) {
+                  return true;
+                }
+                if (
+                  refresh &&
+                  typeof effect.is === "function" &&
+                  effect.is(refresh)
+                ) {
+                  return true;
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        // Effect scan is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && u.startState && u.state) {
+          let before = null;
+          let after = null;
+          try {
+            before = u.startState.field(editorLivePreviewField);
+          } catch (error) {
+            before = null;
+          }
+          try {
+            after = u.state.field(editorLivePreviewField);
+          } catch (error) {
+            after = null;
+          }
+          if (before !== after) {
+            return true;
+          }
+        }
+        if (editorInfoField && u.startState && u.state) {
+          let beforePath = null;
+          let afterPath = null;
+          try {
+            const beforeInfo = u.startState.field(editorInfoField);
+            beforePath =
+              beforeInfo && beforeInfo.file ? beforeInfo.file.path : null;
+          } catch (error) {
+            beforePath = null;
+          }
+          try {
+            const afterInfo = u.state.field(editorInfoField);
+            afterPath =
+              afterInfo && afterInfo.file ? afterInfo.file.path : null;
+          } catch (error) {
+            afterPath = null;
+          }
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The line-relative offset just past the dedicated Task Link on
+  // `lineText`, or null when the line carries no such link. The model
+  // already validated the line; this re-derivation only maps it back
+  // to a CodeMirror position. Never throws.
+  unblockedGlyphLinkEndCh(lineText) {
+    try {
+      const bullet = todayBulletBody(String(lineText || ""));
+      if (!bullet) {
+        return null;
+      }
+      const match = progressMarkMatchFromBody(bullet.body);
+      if (!match || !match.token) {
+        return null;
+      }
+      return bullet.bodyStart + match.prefix + match.token.end;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  buildUnblockedGlyphDecorations(view) {
+    try {
+      if (!this.unblockedGlyphEnabled) {
+        return Decoration.none;
+      }
+      if (!Decoration || !RangeSetBuilder || !UnblockedGlyphWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) {
+        return Decoration.none;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!filePath) {
+        return Decoration.none;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (!dailyPath || !sameVaultPath(filePath, dailyPath)) {
+        return Decoration.none;
+      }
+      const builder = new RangeSetBuilder();
+      const doc = view.state.doc;
+      if (
+        !doc ||
+        typeof doc.toString !== "function" ||
+        typeof doc.line !== "function"
+      ) {
+        return builder.finish();
+      }
+      let content = "";
+      try {
+        content = doc.toString();
+      } catch (error) {
+        return builder.finish();
+      }
+      // A cold Tasks cache draws nothing: the glyph is derived, never
+      // stored, and recomputed on every `cache-update` fan-out.
+      let tasks = null;
+      try {
+        tasks = planBlockTasks(this.app);
+      } catch (error) {
+        tasks = null;
+      }
+      if (!Array.isArray(tasks)) {
+        return builder.finish();
+      }
+      let entries = [];
+      try {
+        entries = unblockedTodayLinks(content, tasks, new Date(), {
+          dailyPath,
+        });
+      } catch (error) {
+        entries = [];
+      }
+      const ranges = (view && view.visibleRanges) || [];
+      for (const entry of entries) {
+        try {
+          if (!entry || typeof entry.blockId !== "string") {
+            continue;
+          }
+          const tooltip = unblockedGlyphTooltip(entry.unblockedBy);
+          let line = null;
+          try {
+            line = doc.line(entry.line + 1);
+          } catch (error) {
+            continue;
+          }
+          if (!line || typeof line.from !== "number") {
+            continue;
+          }
+          const endCh = this.unblockedGlyphLinkEndCh(line.text);
+          if (typeof endCh !== "number") {
+            continue;
+          }
+          const pos = line.from + endCh;
+          let visible = false;
+          for (const range of ranges) {
+            try {
+              if (
+                range &&
+                typeof range.from === "number" &&
+                typeof range.to === "number" &&
+                pos >= range.from &&
+                pos <= range.to
+              ) {
+                visible = true;
+                break;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+          if (!visible) {
+            continue;
+          }
+          builder.add(
+            pos,
+            pos,
+            Decoration.widget({
+              widget: new UnblockedGlyphWidget(tooltip),
+              side: 1,
+            }),
+          );
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  toggleUnblockedGlyph() {
+    try {
+      this.unblockedGlyphEnabled = !this.unblockedGlyphEnabled;
+      const enabled = this.unblockedGlyphEnabled;
+      try {
+        const body =
+          typeof document !== "undefined" && document
+            ? document.body
+            : null;
+        if (body && body.classList) {
+          if (enabled) {
+            body.classList.add("bob-unblocked-glyphs");
+          } else {
+            body.classList.remove("bob-unblocked-glyphs");
+          }
+        }
+      } catch (error) {
+        // Body class is best-effort.
+      }
+      try {
+        this.refreshUnblockedGlyphEditors();
+      } catch (error) {
+        // Editor refresh is best-effort.
+      }
+      try {
+        new Notice(
+          enabled ? "Unblocked glyph on" : "Unblocked glyph off",
+        );
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.unblockedGlyphEnabled;
+    }
+  }
+
+  refreshUnblockedGlyphEditors() {
+    try {
+      const refresh = ensureUnblockedGlyphRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const filePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : null;
+          // Only today's daily-note editors carry the glyph.
+          if (
+            filePath &&
+            dailyPath &&
+            !sameVaultPath(filePath, dailyPath)
+          ) {
+            continue;
+          }
+          const cm =
+            view && view.editor && view.editor.cm
+              ? view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function" && refresh) {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  scheduleUnblockedGlyphRefresh() {
+    try {
+      if (
+        this.unblockedGlyphTimer !== null &&
+        this.unblockedGlyphTimer !== undefined
+      ) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" &&
+        typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      const self = this;
+      this.unblockedGlyphTimer = schedule(() => {
+        self.unblockedGlyphTimer = null;
+        try {
+          self.refreshUnblockedGlyphEditors();
+        } catch (error) {
+          // Refresh is best-effort.
+        }
+      }, 150);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
+
+  // The metadataCache `changed` handler calls this: schedule a glyph
+  // refresh when the changed path is today's daily note. Prerequisite
+  // completions arrive through the Tasks `cache-update` fan-out, so
+  // only the link lines themselves need the file hook. Never throws.
+  refreshUnblockedGlyphForChangedFile(file) {
+    try {
+      const changedPath =
+        file && typeof file.path === "string" ? file.path : null;
+      if (!changedPath) {
+        return false;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (dailyPath && sameVaultPath(changedPath, dailyPath)) {
+        try {
+          this.scheduleUnblockedGlyphRefresh();
+        } catch (error) {
+          // Scheduling is best-effort.
+        }
+        return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Midnight rollover: refresh the glyph once the daily path rolls
+  // over. Never throws.
+  refreshUnblockedGlyphForRollover(now) {
+    try {
+      let dailyPath = null;
+      try {
+        dailyPath =
+          this.currentTodayDailyPath(now instanceof Date ? now : new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (!dailyPath) {
+        return false;
+      }
+      if (
+        this.unblockedGlyphDay === null ||
+        this.unblockedGlyphDay === undefined
+      ) {
+        this.unblockedGlyphDay = dailyPath;
+        return false;
+      }
+      if (sameVaultPath(this.unblockedGlyphDay, dailyPath)) {
+        return false;
+      }
+      this.unblockedGlyphDay = dailyPath;
+      try {
+        this.refreshUnblockedGlyphEditors();
+      } catch (error) {
+        // Editor refresh is best-effort.
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The Reading-view half: today's daily note only, one glyph after
+  // each live Task Link row whose Tasks-cache task had a prerequisite
+  // completed today. Row eligibility reuses the progress-marks
+  // dedicated-link context (the same D3 live-link rules); the model is
+  // the same Tasks-cache derivation as Live Preview. Synchronous
+  // throughout; never throws.
+  renderUnblockedGlyphIn(el, ctx) {
+    try {
+      if (!this.unblockedGlyphEnabled) {
+        return;
+      }
+      if (!el || !ctx) {
+        return;
+      }
+      const sourcePath =
+        typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!sourcePath) {
+        return;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (!dailyPath || !sameVaultPath(sourcePath, dailyPath)) {
+        return;
+      }
+      // A cold Tasks cache draws nothing.
+      let tasks = null;
+      try {
+        tasks = planBlockTasks(this.app);
+      } catch (error) {
+        tasks = null;
+      }
+      if (!Array.isArray(tasks)) {
+        return;
+      }
+      let items = [];
+      try {
+        if (typeof el.querySelectorAll === "function") {
+          const found = el.querySelectorAll("li");
+          items = typeof found.length === "number" ? found : [];
+        } else if (Array.isArray(el.children)) {
+          items = el.children;
+        }
+      } catch (error) {
+        return;
+      }
+      const docNode =
+        (el.ownerDocument && el.ownerDocument) ||
+        (typeof document !== "undefined" ? document : null);
+      if (!docNode) {
+        return;
+      }
+      let index = null;
+      try {
+        index = unblockedGlyphIndex(tasks);
+      } catch (error) {
+        return;
+      }
+      let todayDay = null;
+      try {
+        todayDay = planDayNumber(new Date());
+      } catch (error) {
+        todayDay = null;
+      }
+      if (!Number.isInteger(todayDay)) {
+        return;
+      }
+      for (const li of items) {
+        try {
+          if (!li || li.nodeType !== 1) {
+            continue;
+          }
+          if (li.dataset && li.dataset.bobUnblockedProcessed === "1") {
+            continue;
+          }
+          let context = null;
+          try {
+            if (typeof this.progressMarkReadingContext === "function") {
+              context = this.progressMarkReadingContext(li, el);
+            }
+          } catch (error) {
+            context = null;
+          }
+          if (!context) {
+            continue;
+          }
+          const linked = unblockedGlyphLinkedTask(
+            index,
+            context.target,
+            context.blockId,
+            sourcePath,
+          );
+          if (!linked) {
+            continue;
+          }
+          let open = false;
+          try {
+            open = !planTaskIsDone(linked);
+          } catch (error) {
+            open = false;
+          }
+          if (!open) {
+            continue;
+          }
+          const names = unblockedGlyphDoneTodayNames(
+            linked,
+            index,
+            todayDay,
+          );
+          if (names.length === 0) {
+            continue;
+          }
+          const glyph = buildUnblockedGlyphElement(
+            docNode,
+            unblockedGlyphTooltip(names),
+          );
+          if (!glyph) {
+            continue;
+          }
+          try {
+            li.insertBefore(glyph, context.anchor.nextSibling || null);
+          } catch (error) {
+            continue;
+          }
+          try {
+            if (li.dataset) {
+              li.dataset.bobUnblockedProcessed = "1";
+            } else if (typeof li.setAttribute === "function") {
+              li.setAttribute("data-bob-unblocked-processed", "1");
+            }
+          } catch (error) {
+            // Dedup flag is best-effort.
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Reading-view glyphs never throw.
+    }
+  }
+
+  // Additive `api.unblockedGlyph` v1 namespace (`refresh`,
+  // `isEnabled`). Synchronous and never throwing; the top-level api
+  // stays v3.
+  unblockedGlyphApi() {
+    try {
+      const plugin = this;
+      return Object.freeze({
+        version: 1,
+        refresh() {
+          try {
+            plugin.scheduleUnblockedGlyphRefresh();
+          } catch (error) {
+            // Scheduling is best-effort.
+          }
+        },
+        isEnabled() {
+          try {
+            return Boolean(plugin.unblockedGlyphEnabled);
+          } catch (error) {
+            return false;
+          }
+        },
+      });
+    } catch (error) {
+      return Object.freeze({
+        version: 1,
+        refresh() {},
+        isEnabled() {
+          return false;
+        },
+      });
+    }
+  }
+}
 // ---- src/280-plugin-dependency-render.js ----
 class BobLedgerToolsDependencyRenderMixin {
   renderDependencyChipsIn(el, ctx) {
@@ -25313,6 +26658,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsProgressMarksMixin,
   BobLedgerToolsProgressMarksReadingMixin,
   BobLedgerToolsDependencyModelMixin,
+  BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsVimSnippetsMixin,
@@ -27360,6 +28706,18 @@ module.exports.helpers = {
   progressMarkLiveStatus,
   buildProgressMarkElement,
   ensureProgressMarksRefresh,
+  UNBLOCKED_GLYPH_TEXT,
+  unblockedGlyphTooltip,
+  unblockedGlyphTaskId,
+  unblockedGlyphTaskDependsOn,
+  unblockedGlyphDoneToday,
+  unblockedGlyphIndex,
+  unblockedGlyphTargetMatches,
+  unblockedGlyphLinkedTask,
+  unblockedGlyphDoneTodayNames,
+  unblockedTodayLinks,
+  buildUnblockedGlyphElement,
+  ensureUnblockedGlyphRefresh,
   parseDependencyLine,
   dependencyChipLineOwnedByTask,
   dependencyReadingOwnText,

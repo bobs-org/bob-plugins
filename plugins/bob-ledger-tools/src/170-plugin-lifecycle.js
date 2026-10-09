@@ -81,6 +81,12 @@ class BobLedgerToolsPlugin extends Plugin {
     this.progressMarkLastTargets = new Set();
     this.progressMarksTimer = null;
     this.progressMarksDay = null;
+    // Unblocked hand-off glyph (bob-cli-5w ledger_glyph): session
+    // toggle, the debounced refresh timer, and the daily path last
+    // seen by the midnight rollover.
+    this.unblockedGlyphEnabled = true;
+    this.unblockedGlyphTimer = null;
+    this.unblockedGlyphDay = null;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -339,6 +345,14 @@ class BobLedgerToolsPlugin extends Plugin {
       // never throws: guard calls with try/catch as well as
       // optional chaining.
       progressMarks: this.progressMarksApi(),
+      // Unblocked hand-off glyph (bob-cli-5w ledger_glyph,
+      // unblockedGlyph namespace v1): a display-only read-time `🔓`
+      // after live Task Links under today's open Pomodoros whose
+      // task had a prerequisite completed today. Additive:
+      // top-level api stays v3. Every member is synchronous and
+      // never throws: guard calls with try/catch as well as
+      // optional chaining.
+      unblockedGlyph: this.unblockedGlyphApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -379,6 +393,7 @@ class BobLedgerToolsPlugin extends Plugin {
           this.refreshFreshnessForChangedFile(file, data);
           this.refreshNoteReadyForChangedFile(file);
           this.refreshProgressMarksForChangedFile(file);
+          this.refreshUnblockedGlyphForChangedFile(file);
           this.scheduleDashboardCollectionsRefresh();
           try {
             const path = file && typeof file.path === "string" ? file.path : "";
@@ -487,6 +502,13 @@ class BobLedgerToolsPlugin extends Plugin {
           } catch (error) {
             // Best-effort refresh only.
           }
+          // Unblocked hand-off glyphs follow the daily note at local
+          // midnight.
+          try {
+            this.refreshUnblockedGlyphForRollover(new Date());
+          } catch (error) {
+            // Best-effort refresh only.
+          }
           try {
             this.refreshDashboardCollectionChips(new Date());
           } catch (error) {
@@ -554,6 +576,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
+    this.setupUnblockedGlyph();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();

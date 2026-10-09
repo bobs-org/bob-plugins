@@ -1517,6 +1517,31 @@ body:not(.bob-progress-marks) .bob-progress-mark {
   }
 }
 
+/* Unblocked hand-off glyph (bob-cli-5w ledger_glyph):
+   `span.bob-unblocked-glyph` emitted by the plugin's JS (Live Preview
+   widget plus Reading-view post-processor), a faint read-time 🔓 after
+   a live Task Link whose task had a prerequisite completed today. */
+
+.bob-unblocked-glyph {
+  display: inline-block;
+  margin-inline-start: 0.3em;
+  color: var(--bob-unblocked-glyph-color, var(--task-status-done, var(--text-muted)));
+  font-size: 0.85em;
+  line-height: 1;
+  vertical-align: baseline;
+  opacity: 0.55;
+  user-select: none;
+  cursor: default;
+}
+
+.bob-unblocked-glyph:hover {
+  opacity: 0.9;
+}
+
+body:not(.bob-unblocked-glyphs) .bob-unblocked-glyph {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-progress-mark {
     animation: none;

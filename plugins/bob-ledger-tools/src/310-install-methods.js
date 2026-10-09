@@ -34,6 +34,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsProgressMarksMixin,
   BobLedgerToolsProgressMarksReadingMixin,
   BobLedgerToolsDependencyModelMixin,
+  BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsVimSnippetsMixin,

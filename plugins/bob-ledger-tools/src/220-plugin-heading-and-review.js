@@ -699,6 +699,11 @@ class BobLedgerToolsHeadingReviewMixin {
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
+    try {
+      this.scheduleUnblockedGlyphRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
   }
 
   // --- NEW/ROTTEN review chips (freshness namespace v5) ----------------  // Lifecycle-owned live chips for DataviewJS surfaces (dash NEW, the

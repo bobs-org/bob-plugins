@@ -4868,6 +4868,1836 @@ function restoreReopenedTaskReferencesInText(
   const text = sourceLines.map((line) => `${line.text}${line.ending}`).join("");
   return { text, changed: text !== String(sourceText || ""), restored };
 }
+// ---- src/085-successor-plan.js ----
+// Pure successor-link planner (docs/task-dependencies.md §12).
+// Mirrors the Rust capture planner's rule: dependents index, eligibility,
+// anchors, ordering, the breaker, placement edits, notice text, and the
+// config and today-path loaders. Pure code only: no vault reads, no editor
+// writes, no behavior change. The wiring phase consumes these helpers.
+
+const SUCCESSOR_BREAKER_LIMIT = 5;
+const SUCCESSOR_NOTICE_TEXT_LIMIT = 48;
+
+// Status-type names, matching bob-cli's capture output (`/` is In Progress,
+// `*` is Next, `?` is Blocked, anything else reads Ready).
+function successorStatusName(symbol) {
+  if (symbol === "?") {
+    return "Blocked";
+  }
+  if (symbol === "*") {
+    return "Next";
+  }
+  if (symbol === "/") {
+    return "In Progress";
+  }
+  return "Ready";
+}
+
+// Normalize one Tasks cache task to successor pool shape, or null when it
+// carries no usable location. Field names differ across Tasks versions, so
+// every known alias is tried (ported from nav's `normalizeStageCacheTask`,
+// `300-dependency-stage.js:360`, and its `readStageTasksCache` shape
+// handling, `590-plugin-dependency-stage.js:226`).
+function normalizeTasksCacheTask(entry) {
+  const task = entry && typeof entry === "object" ? entry : null;
+  if (!task) {
+    return null;
+  }
+  const location =
+    task.taskLocation && typeof task.taskLocation === "object"
+      ? task.taskLocation
+      : {};
+  const file = task.file && typeof task.file === "object" ? task.file : {};
+  const path = normalizeDependencyMarkdownPath(
+    task.path || location.path || file.path || "",
+  );
+  if (!path) {
+    return null;
+  }
+  const status =
+    (task.status && task.status.symbol) ||
+    task.statusSymbol ||
+    (typeof task.status === "string" ? task.status : null) ||
+    " ";
+  let line = -1;
+  for (const candidate of [
+    task.lineNumber,
+    task.line,
+    location.lineNumber,
+    location.line,
+  ]) {
+    const numeric = Math.floor(
+      typeof candidate === "number" ? candidate : Number.NaN,
+    );
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      line = numeric;
+      break;
+    }
+  }
+  const rawLine =
+    typeof task.originalMarkdown === "string" ? task.originalMarkdown : null;
+  const text =
+    (typeof task.description === "string" && task.description) ||
+    (typeof task.text === "string" && task.text) ||
+    (rawLine ? successorBodyAfterStatusBox(rawLine) : "(untitled task)");
+  const trailingId =
+    (typeof task.blockId === "string" && task.blockId) ||
+    (rawLine ? getTrailingBlockId(rawLine) : null) ||
+    null;
+  const idField =
+    (typeof task.id === "string" && task.id) ||
+    (task.taskId != null ? String(task.taskId) : null) ||
+    null;
+  const dependsOn = Array.isArray(task.dependsOn)
+    ? task.dependsOn
+      .map((value) => String(value || "").trim())
+      .filter((value) => value.length > 0)
+    : [];
+  const scheduledMatches = rawLine ? findScheduledFieldMatches(rawLine) : [];
+  return {
+    path,
+    line,
+    status: String(status || " "),
+    hidden: task.hidden === true,
+    blockId: trailingId
+      ? String(trailingId).replace(/^\^/, "").trim() || null
+      : null,
+    taskId: idField ? String(idField).trim() || null : null,
+    dependsOn,
+    text: String(text || ""),
+    rawLine,
+    scheduled: scheduledMatches.length > 0 ? scheduledMatches[0].value : null,
+  };
+}
+
+// Normalize parsed vault documents to successor pool shape, built on the
+// existing `parseTaskDependencyDocument`. `documents` is
+// `[{ path, text }]`.
+function tasksFromDocuments(documents) {
+  const tasks = [];
+  for (const document of Array.isArray(documents) ? documents : []) {
+    const path = normalizeDependencyMarkdownPath(
+      (document && document.path) || "",
+    );
+    if (!path) {
+      continue;
+    }
+    const text = String((document && document.text) || "");
+    for (const parsed of parseTaskDependencyDocument(text, path)) {
+      const scheduledMatches = findScheduledFieldMatches(parsed.lineText);
+      tasks.push({
+        path: parsed.path,
+        line: parsed.line,
+        status: parsed.status,
+        blockId: parsed.blockId,
+        taskId: parsed.taskId,
+        dependsOn: parsed.dependsOn.slice(),
+        text: parsed.lineText,
+        rawLine: parsed.lineText,
+        scheduled: scheduledMatches.length > 0 ? scheduledMatches[0].value : null,
+      });
+    }
+  }
+  return tasks;
+}
+
+// Reverse index over normalized successor tasks
+// (`{ path, line, status, blockId, taskId, dependsOn[], text, rawLine,
+// scheduled }`). `byTaskId` covers only tasks with an explicit `[id::]`
+// (the one identity blocking resolves under); `tasks` keeps every task in
+// input order so dependents without an `[id::]` of their own still qualify.
+function buildDependentsIndex(tasks) {
+  const byDependsOn = new Map();
+  const byTaskId = new Map();
+  const all = [];
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!task || typeof task !== "object") {
+      continue;
+    }
+    all.push(task);
+    if (task.taskId) {
+      if (!byTaskId.has(task.taskId)) {
+        byTaskId.set(task.taskId, task);
+      }
+    }
+    for (const id of Array.isArray(task.dependsOn) ? task.dependsOn : []) {
+      if (!id) {
+        continue;
+      }
+      if (!byDependsOn.has(id)) {
+        byDependsOn.set(id, []);
+      }
+      byDependsOn.get(id).push(task);
+    }
+  }
+  return { byDependsOn, byTaskId, tasks: all };
+}
+
+function successorNormalizeLines(dailyLines) {
+  if (Array.isArray(dailyLines)) {
+    return dailyLines.map((line) => String(line ?? ""));
+  }
+  return String(dailyLines ?? "").split(/\r?\n/);
+}
+
+// Whether a link token spans a list item's whole body, ignoring surrounding
+// whitespace and one trailing `#` deferral marker.
+function successorTokenSpansListBody(lineText, startIndex, endIndex) {
+  const line = String(lineText || "");
+  const listMatch = line.match(LIST_ITEM_MARKER_RE);
+  if (!listMatch) {
+    return false;
+  }
+  const bodyStart = listMatch[1].length;
+  let end = line.length;
+  while (end > bodyStart && (line[end - 1] === " " || line[end - 1] === "\t")) {
+    end -= 1;
+  }
+  if (end - 1 > bodyStart && line[end - 1] === "#") {
+    end -= 1;
+  }
+  while (end > bodyStart && (line[end - 1] === " " || line[end - 1] === "\t")) {
+    end -= 1;
+  }
+  let start = bodyStart;
+  while (start < end && (line[start] === " " || line[start] === "\t")) {
+    start += 1;
+  }
+  return startIndex === start && endIndex === end;
+}
+
+// Whether a single sub-bullet line is a live Task Link: after stripping 🍅
+// markers, its body is exactly one block link (plain, embed, or
+// `#`-deferred) and the link is unstruck. Struck links and Depends-On lines
+// are history, not plans. Returns `{ pathPart, blockId, embedded }` or null.
+function parseSuccessorLiveLink(lineText) {
+  const stripped = stripPomodoroMarkersFromLine(lineText);
+  if (isTaskDependencyLine(stripped)) {
+    return null;
+  }
+  const spans = getStrikethroughSpans(stripped);
+  const embedded = parseEmbeddedBlockTransclusions(stripped);
+  if (embedded.length === 1) {
+    const candidate = embedded[0];
+    if (
+      successorTokenSpansListBody(stripped, candidate.startIndex, candidate.endIndex) &&
+      !rangeIsStruck(candidate.startIndex, candidate.endIndex, spans)
+    ) {
+      return {
+        pathPart: candidate.pathPart,
+        blockId: candidate.blockId,
+        embedded: true,
+      };
+    }
+    return null;
+  }
+  if (embedded.length > 1) {
+    return null;
+  }
+  const bare = getBareNonEmbeddedBlockLinkTargetFromListItem(stripped);
+  if (bare && !rangeIsStruck(bare.startIndex, bare.endIndex, spans)) {
+    return { pathPart: bare.pathPart, blockId: bare.blockId, embedded: false };
+  }
+  return null;
+}
+
+// One Pomodoro entry with its live links. `name` is null for unnamed
+// entries; `links` is in ledger order.
+function parseSuccessorLedgerEntries(lines) {
+  const section = findPomodorosSectionInLines(lines);
+  if (!section) {
+    return [];
+  }
+  const entries = [];
+  for (let line = section.startLine; line <= section.endLine; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!isTopLevelTaskLine(lineText)) {
+      continue;
+    }
+    const parts = parsePomodoroEntryLineParts(lineText);
+    if (!parts) {
+      continue;
+    }
+    const status = getTaskStatusForLine(lineText, line);
+    const open = !!status && status.symbol === " ";
+    const range = getSubBulletBlockRange(lines, line, section);
+    // Live links live only under open entries: struck links and links under
+    // closed entries are history, not plans (§12).
+    const links = [];
+    if (open) {
+      for (let linkLine = range.startLine; linkLine < range.endLine; linkLine += 1) {
+        const live = parseSuccessorLiveLink(lines[linkLine]);
+        if (live) {
+          links.push({ line: linkLine, ...live });
+        }
+      }
+    }
+    entries.push({
+      entryLine: line,
+      name: parts.name,
+      placeholder: parts.placeholder,
+      open,
+      links,
+    });
+  }
+  return entries;
+}
+
+// Per-entry live links in ledger order, built on
+// `findPomodorosSectionInLines` / `getSubBulletBlockRange` / the
+// `classifyPomodoroSubBullets` conventions (struck links never count; open
+// means a `[ ]` entry).
+function findLiveLinks(dailyLines) {
+  return parseSuccessorLedgerEntries(successorNormalizeLines(dailyLines));
+}
+
+function successorLinkMatchesIdentity(link, identity, dailyPath) {
+  if (!link || !identity || !link.blockId || !identity.blockId) {
+    return false;
+  }
+  if (String(link.blockId) !== String(identity.blockId)) {
+    return false;
+  }
+  const target = successorPathWithoutExtension(identity.path || "");
+  if (!target) {
+    return false;
+  }
+  if (!link.pathPart) {
+    return (
+      !!dailyPath &&
+      normalizeDependencyMarkdownPath(identity.path || "") ===
+        normalizeDependencyMarkdownPath(dailyPath)
+    );
+  }
+  return (
+    link.pathPart === target ||
+    link.pathPart === successorPathBasename(identity.path || "")
+  );
+}
+
+// Anchor each closed identity (`{ path, blockId, taskId, rootKey? }`) on the
+// day text before the gesture: `closing` when its link sits under the
+// Pomodoro this gesture closes, `slot` at its first live link in ledger
+// order, `inherit` at its root's anchor for a closed subtask with no live
+// link of its own, else `none`. Returns one anchor per closed entry:
+// `{ kind, entryLine, bulletLine }` (`bulletLine` is null for closing and
+// none anchors). `options.closingEntry` is the 0-based closed-entry line.
+function computeSuccessorAnchors(closedIdentities, dailyLines, options = {}) {
+  const lines = successorNormalizeLines(dailyLines);
+  const closingEntry =
+    options && Number.isInteger(options.closingEntry)
+      ? options.closingEntry
+      : null;
+  const dailyPath =
+    options && typeof options.dailyPath === "string" ? options.dailyPath : null;
+  const entries = parseSuccessorLedgerEntries(lines);
+  const anchorFor = (identity) => {
+    if (closingEntry != null) {
+      const closed = entries.find((entry) => entry.entryLine === closingEntry);
+      if (
+        closed &&
+        closed.links.some((link) =>
+          successorLinkMatchesIdentity(link, identity, dailyPath),
+        )
+      ) {
+        return { kind: "closing", entryLine: closingEntry, bulletLine: null };
+      }
+    }
+    for (const entry of entries) {
+      const link = entry.links.find((candidate) =>
+        successorLinkMatchesIdentity(candidate, identity, dailyPath),
+      );
+      if (link) {
+        return { kind: "slot", entryLine: entry.entryLine, bulletLine: link.line };
+      }
+    }
+    return { kind: "none", entryLine: null, bulletLine: null };
+  };
+  return (Array.isArray(closedIdentities) ? closedIdentities : []).map(
+    (identity) => {
+      const direct = anchorFor(identity || {});
+      if (direct.kind === "none" && identity && identity.rootKey) {
+        const root = anchorFor(identity.rootKey);
+        if (root.kind !== "none") {
+          return {
+            kind: "inherit",
+            entryLine: root.entryLine,
+            bulletLine: root.bulletLine,
+          };
+        }
+      }
+      return direct;
+    },
+  );
+}
+
+function successorHasHideTag(rawLine) {
+  return String(rawLine || "")
+    .split(/\s+/)
+    .some((token) => token === "#hide");
+}
+
+function successorIsProjectTask(blockId) {
+  return typeof blockId === "string" && blockId.toLowerCase() === "prj";
+}
+
+function successorIsDonePath(path) {
+  return String(path || "")
+    .split("/")
+    .some((segment) => segment === "done");
+}
+
+// Row display text: the mint-pipeline cleaning of the body after the status
+// box (mirroring Rust's `clean_description` row text).
+function successorDisplayText(task, globalFilter = "#task") {
+  if (!task) {
+    return "";
+  }
+  if (task.rawLine) {
+    return cleanDescription(
+      successorBodyAfterStatusBox(task.rawLine),
+      globalFilter,
+      task.blockId || null,
+    );
+  }
+  return String(task.text || "");
+}
+
+function collectSuccessorUsedIds(noteText) {
+  const used = new Set();
+  for (const line of successorNormalizeLines(noteText)) {
+    const id = getTrailingBlockId(line);
+    if (id) {
+      used.add(String(id));
+    }
+  }
+  return used;
+}
+
+// Default inbox check: `inbox.md` at the vault root (the root case of nav's
+// `isInboxNotePath`). Pass a richer `isInbox` when vault frontmatter is
+// available.
+function successorDefaultIsInbox(path) {
+  return normalizeDependencyMarkdownPath(path) === "inbox.md";
+}
+
+function successorAnchorPosition(anchor) {
+  return anchor && anchor.entryLine != null
+    ? anchor.entryLine
+    : Number.MAX_SAFE_INTEGER;
+}
+
+function successorOrderCompare(left, right) {
+  return (
+    successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor) ||
+    (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1) ||
+    String(left.notePath || "").localeCompare(String(right.notePath || "")) ||
+    (Number(left.line) || 0) - (Number(right.line) || 0)
+  );
+}
+
+// Plan the successor-link write set for one close gesture (§12.2 steps 1–8,
+// the breaker, and ordering). Options:
+//
+// - `closed`: identities this gesture moved open → Done
+//   (`[{ path, blockId, taskId, text, rootKey? }]`); matching uses only the
+//   `[id::]` (`taskId`) values.
+// - `index`: a `buildDependentsIndex` result over the staged post-close
+//   snapshot.
+// - `dailyBefore`: day text (or lines) before the gesture — the
+//   already-planned baseline and anchor source.
+// - `dailyAfter`: day text (or lines) after the gesture for the derived
+//   recover rank (defaults to `dailyBefore`; the strike never moves a
+//   dependent's own links, but pass the post text when the same close can
+//   drop them, e.g. `=x~K`).
+// - `dailyPath`: vault-relative day path (day-file link exception, row
+//   `day_file`).
+// - `today`: `"YYYY-MM-DD"` (defaults to today).
+// - `linkUnblocked`: the `plan.link_unblocked` kill switch (default true).
+// - `isInbox`: `(path) => boolean` (default: root `inbox.md` check).
+// - `basenameCounts`: lowercase-basename → vault-wide note count for the
+//   §12.4 link form.
+// - `closingEntry`: 0-based line of the Pomodoro this gesture closes.
+// - `noteTexts`: `{ path: text }` staged note bodies for mint used-IDs.
+//
+// Note `line` in rows is 0-based (mirroring Rust's `line_index`); day-file
+// `entry_line`/`line` in placements are 1-based (per §12.5). Returns
+// `{ unblocked, still_blocked, edits, placements, unblocked_check }` with
+// §12.5 snake_case rows; `edits` are `{ path, line, before, after }`
+// (`before`/`after` are null when the source line is unknown, e.g. a cache
+// task without `originalMarkdown` — the wiring re-reads the vault).
+// `placements` carry `rowIndex` into `unblocked` and are already in ORDER
+// (anchor ledger position, then note path, then line).
+function planSuccessors(options = {}) {
+  const closed = Array.isArray(options.closed) ? options.closed : [];
+  const index =
+    options.index && typeof options.index === "object"
+      ? options.index
+      : { byDependsOn: new Map(), byTaskId: new Map(), tasks: [] };
+  const dailyBefore = successorNormalizeLines(options.dailyBefore ?? []);
+  const dailyAfter = options.dailyAfter === undefined
+    ? dailyBefore
+    : successorNormalizeLines(options.dailyAfter);
+  const dailyPath = typeof options.dailyPath === "string" ? options.dailyPath : "";
+  const today =
+    typeof options.today === "string" && options.today
+      ? options.today
+      : formatLocalDate();
+  const linkUnblocked = options.linkUnblocked !== false;
+  const isInbox =
+    typeof options.isInbox === "function" ? options.isInbox : successorDefaultIsInbox;
+  const basenameCounts =
+    options.basenameCounts instanceof Map ||
+    (options.basenameCounts && typeof options.basenameCounts === "object")
+      ? options.basenameCounts
+      : {};
+  const closingEntry = Number.isInteger(options.closingEntry)
+    ? options.closingEntry
+    : null;
+  const noteTexts =
+    options.noteTexts && typeof options.noteTexts === "object" ? options.noteTexts : {};
+
+  const empty = {
+    unblocked: [],
+    still_blocked: [],
+    edits: [],
+    placements: [],
+    unblocked_check: "checked",
+  };
+
+  const closedTaskIds = new Set();
+  for (const identity of closed) {
+    if (identity && identity.taskId) {
+      closedTaskIds.add(String(identity.taskId));
+    }
+  }
+  // GATE: no `[id::]` in C → no lookup, no reads, empty arrays.
+  if (closedTaskIds.size === 0) {
+    return empty;
+  }
+
+  const byTaskId = index.byTaskId instanceof Map ? index.byTaskId : new Map();
+  const openIdsAfter = new Set();
+  for (const [id, task] of byTaskId) {
+    if (
+      task &&
+      DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+      !closedTaskIds.has(String(id))
+    ) {
+      openIdsAfter.add(String(id));
+    }
+  }
+
+  const allTasks = Array.isArray(index.tasks) ? index.tasks : [...byTaskId.values()];
+  const candidates = allTasks
+    .filter(
+      (task) =>
+        task &&
+        typeof task === "object" &&
+        DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+        !(task.taskId && closedTaskIds.has(String(task.taskId))) &&
+        !successorIsDonePath(task.path) &&
+        Array.isArray(task.dependsOn) &&
+        task.dependsOn.some((id) => closedTaskIds.has(String(id))),
+    )
+    .sort(
+      (left, right) =>
+        String(left.path || "").localeCompare(String(right.path || "")) ||
+        (Number(left.line) || 0) - (Number(right.line) || 0),
+    );
+
+  const liveBefore = parseSuccessorLedgerEntries(dailyBefore);
+  const liveAfter = dailyAfter === dailyBefore
+    ? liveBefore
+    : parseSuccessorLedgerEntries(dailyAfter);
+  const hasLiveLink = (entries, task) =>
+    entries.some((entry) =>
+      entry.links.some((link) =>
+        successorLinkMatchesIdentity(
+          link,
+          { path: task.path, blockId: task.blockId },
+          dailyPath,
+        ),
+      ),
+    );
+
+  const anchors = computeSuccessorAnchors(closed, dailyBefore, {
+    closingEntry,
+    dailyPath,
+  });
+  const anchorOf = (identity) => {
+    const position = closed.findIndex(
+      (candidate) => candidate === identity,
+    );
+    return position === -1
+      ? { kind: "none", entryLine: null, bulletLine: null }
+      : anchors[position];
+  };
+
+  // Candidate verdicts in candidate order: still-blocked rows, recoveries
+  // (`{ task, reason, always }`), and successor marked with their anchor.
+  const stillBlocked = [];
+  const recovers = [];
+  const successorMarks = [];
+
+  for (const task of candidates) {
+    const postOpen = (task.dependsOn || []).filter((id) =>
+      openIdsAfter.has(String(id)),
+    );
+    // 1. Still waiting on another open prerequisite.
+    if (postOpen.length > 0) {
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: successorDisplayText(task),
+        status_symbol: task.status,
+        reason: "waits_on",
+        waits_on: postOpen.length,
+        scheduled: null,
+      });
+      continue;
+    }
+    // 2. Future-scheduled dependents stay Blocked.
+    const futureScheduled = task.rawLine
+      ? findSingleFutureScheduledField(task.rawLine, today)
+      : null;
+    if (futureScheduled) {
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: successorDisplayText(task),
+        status_symbol: task.status,
+        reason: "scheduled",
+        waits_on: 0,
+        scheduled: futureScheduled.value,
+      });
+      continue;
+    }
+    const predecessors = closed.filter(
+      (identity) =>
+        identity &&
+        identity.taskId &&
+        (task.dependsOn || []).some((id) => String(id) === String(identity.taskId)),
+    );
+    const predecessorRows = predecessors.map((identity) => ({
+      note_path: String(identity.path || ""),
+      block_id: String(identity.blockId || ""),
+      text: String(identity.text || ""),
+    }));
+    const anchored = predecessors.map((identity) => ({
+      identity,
+      anchor: anchorOf(identity),
+    }));
+    // 3. Project tasks recover but never link.
+    if (successorIsProjectTask(task.blockId)) {
+      recovers.push({ task, reason: "project_task", predecessorRows });
+      continue;
+    }
+    // 4. Hidden tasks recover but never link.
+    if (
+      task.hidden === true ||
+      (task.rawLine && successorHasHideTag(task.rawLine))
+    ) {
+      recovers.push({ task, reason: "hidden", predecessorRows });
+      continue;
+    }
+    // 5. Already planned today: recover to the derived rank, never duplicate.
+    if (hasLiveLink(liveBefore, task)) {
+      recovers.push({ task, reason: "already_planned", predecessorRows });
+      continue;
+    }
+    // 6. No predecessor planned today → the ledger is left alone.
+    if (!anchored.some((pred) => pred.anchor.kind !== "none")) {
+      recovers.push({ task, reason: "not_planned_today", predecessorRows });
+      continue;
+    }
+    // 7. Kill switch: linking and minting off, recovery still runs.
+    if (!linkUnblocked) {
+      recovers.push({ task, reason: "disabled", predecessorRows });
+      continue;
+    }
+    // 8. SUCCESSOR, anchored at the earliest anchor among its predecessors.
+    anchored.sort(
+      (left, right) =>
+        successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor) ||
+        (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1),
+    );
+    successorMarks.push({
+      task,
+      anchor: anchored[0].anchor,
+      predecessorRows,
+      notePath: task.path,
+      line: task.line,
+    });
+  }
+
+  const unblocked = [];
+  const edits = [];
+  let placements = [];
+
+  const pushRecover = (task, reason, predecessorRows, always) => {
+    const rank = task.status === "?"
+      ? (hasLiveLink(liveAfter, task) ? "*" : " ")
+      : task.status;
+    if (rank === task.status && !always) {
+      return;
+    }
+    const before = task.rawLine != null ? String(task.rawLine) : null;
+    const after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
+    if (before !== after) {
+      edits.push({ path: task.path, line: task.line, before, after });
+    }
+    unblocked.push({
+      note_path: task.path,
+      block_id: task.blockId || "",
+      line: task.line,
+      text: successorDisplayText(task),
+      previous_status_symbol: task.status,
+      previous_status_name: successorStatusName(task.status),
+      status_symbol: rank,
+      status_name: successorStatusName(rank),
+      inbox: isInbox(task.path) === true,
+      unblocked_by: predecessorRows,
+      link: null,
+      not_linked: reason,
+    });
+  };
+
+  // BREAKER: more than 5 successors in one gesture → link none; each
+  // recovers to its derived rank with `not_linked: "breaker"`. Breaker rows
+  // always report (even with an unchanged rank): the gesture refused their
+  // links, and the notice counts them.
+  if (successorMarks.length > SUCCESSOR_BREAKER_LIMIT) {
+    for (const recover of recovers) {
+      pushRecover(recover.task, recover.reason, recover.predecessorRows, false);
+    }
+    for (const mark of successorMarks) {
+      pushRecover(mark.task, "breaker", mark.predecessorRows, true);
+    }
+    placements = [];
+  } else {
+    for (const recover of recovers) {
+      pushRecover(recover.task, recover.reason, recover.predecessorRows, false);
+    }
+    successorMarks.sort(successorOrderCompare);
+    const mintedByNote = new Map();
+    for (const mark of successorMarks) {
+      const task = mark.task;
+      const rank = task.status === "?" || task.status === " " ? "*" : task.status;
+      let blockId = task.blockId || "";
+      let blockIdCreated = false;
+      if (!blockId) {
+        if (!mintedByNote.has(task.path)) {
+          mintedByNote.set(
+            task.path,
+            collectSuccessorUsedIds(noteTexts[task.path] ?? ""),
+          );
+        }
+        const used = mintedByNote.get(task.path);
+        blockId = mintBlockId(
+          cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"),
+          used,
+        );
+        used.add(blockId);
+        blockIdCreated = true;
+      }
+      const before = task.rawLine != null ? String(task.rawLine) : null;
+      let after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
+      if (after != null && blockIdCreated) {
+        after = `${after.replace(/\s+$/, "")} ^${blockId}`;
+      }
+      if (before !== after) {
+        edits.push({ path: task.path, line: task.line, before, after });
+      }
+      const rowIndex = unblocked.length;
+      unblocked.push({
+        note_path: task.path,
+        block_id: blockId,
+        line: task.line,
+        text: successorDisplayText(task),
+        previous_status_symbol: task.status,
+        previous_status_name: successorStatusName(task.status),
+        status_symbol: rank,
+        status_name: successorStatusName(rank),
+        inbox: isInbox(task.path) === true,
+        unblocked_by: mark.predecessorRows,
+        link: {
+          day_file: dailyPath,
+          entry_name: "",
+          entry_line: null,
+          entry_created: false,
+          next_up: false,
+          line: null,
+          block_link: successorLinkText(task.path, blockId, dailyPath, basenameCounts),
+          block_id_created: blockIdCreated,
+        },
+        not_linked: null,
+      });
+      placements.push({
+        key: `${task.path}|${blockId}`,
+        rowIndex,
+        anchor: mark.anchor,
+        blockLink: unblocked[rowIndex].link.block_link,
+      });
+    }
+  }
+
+  return {
+    unblocked,
+    still_blocked: stillBlocked,
+    edits,
+    placements,
+    unblocked_check: "checked",
+  };
+}
+// ---- src/086-successor-ids.js ----
+// Successor block-ID minting (docs/task-dependencies.md §12.4, §11.7 SB
+// vectors). Pure code only: no vault reads, no editor writes.
+//
+// This fragment is a faithful JS port of bob-cli's
+// `src/native/capture_block_ids.rs` (`suggest_ids_with_used` and its
+// STOPWORDS, LEADING_VERBS, `words_in`, `phrase_spans`, `wikilink_phrase`,
+// and `join_truncated` plus the `-2`…`-9` suffix rules) and of
+// `note_tasks::clean_description`. Capture and Ctrl+Enter mint
+// byte-identical IDs; the SB vectors pin both.
+
+const SUCCESSOR_ID_STOPWORDS = [
+  "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "into",
+  "is", "it", "its", "my", "of", "on", "or", "our", "so", "that", "the",
+  "their", "this", "to", "via", "with", "your",
+];
+
+const SUCCESSOR_ID_LEADING_VERBS = [
+  "add",
+  "build",
+  "check",
+  "clean",
+  "create",
+  "delete",
+  "document",
+  "enable",
+  "ensure",
+  "finish",
+  "fix",
+  "implement",
+  "improve",
+  "investigate",
+  "make",
+  "migrate",
+  "move",
+  "plan",
+  "read",
+  "refactor",
+  "remove",
+  "rename",
+  "research",
+  "review",
+  "run",
+  "start",
+  "stop",
+  "support",
+  "test",
+  "try",
+  "update",
+  "use",
+  "write",
+];
+
+const SUCCESSOR_ID_STOPWORD_SET = new Set(SUCCESSOR_ID_STOPWORDS);
+const SUCCESSOR_ID_LEADING_VERB_SET = new Set(SUCCESSOR_ID_LEADING_VERBS);
+
+// Mirrors `capture_block_ids::is_valid_block_id`: ASCII letters, digits,
+// and `-`, non-empty.
+function isValidSuccessorBlockId(id) {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    /^[A-Za-z0-9-]+$/.test(id)
+  );
+}
+
+// ASCII alphanumeric runs, lowercased. Anything else is a separator, exactly
+// like the Rust byte walk (`words_in`).
+function successorWordsIn(text) {
+  const words = [];
+  let current = "";
+  const flush = () => {
+    if (current && !SUCCESSOR_ID_STOPWORD_SET.has(current)) {
+      words.push(current);
+    }
+    current = "";
+  };
+  for (const ch of String(text || "")) {
+    if (
+      (ch >= "a" && ch <= "z") ||
+      (ch >= "A" && ch <= "Z") ||
+      (ch >= "0" && ch <= "9")
+    ) {
+      current += ch.toLowerCase();
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return words;
+}
+
+function successorWikilinkPhrase(inner) {
+  const text = String(inner || "");
+  const aliasIndex = text.indexOf("|");
+  if (aliasIndex !== -1) {
+    return text.slice(aliasIndex + 1);
+  }
+  const hashIndex = text.indexOf("#");
+  const target = hashIndex === -1 ? text : text.slice(0, hashIndex);
+  const slashIndex = target.lastIndexOf("/");
+  return slashIndex === -1 ? target : target.slice(slashIndex + 1);
+}
+
+// Char index of a UTF-16 offset inside a char array, for spans the Rust code
+// finds as byte offsets (`indexOf(")")` / `indexOf("]]")` only ever match
+// ASCII, so the offset is always a char boundary).
+function successorCharIndexOfOffsets(chars, offset) {
+  let cursor = 0;
+  for (let index = 0; index < chars.length; index += 1) {
+    if (cursor === offset) {
+      return index;
+    }
+    cursor += chars[index].length;
+  }
+  return chars.length;
+}
+
+// Ordered phrase spans: backticked, double-quoted (`"…"` or `"…"`),
+// parenthesised, then `[[…]]` (alias form via `successorWikilinkPhrase`).
+// Mirrors `phrase_spans`, including its first-match-wins scan order.
+function successorPhraseSpans(body) {
+  const text = String(body || "");
+  const chars = Array.from(text);
+  const phrases = [];
+  let index = 0;
+  while (index < chars.length) {
+    const ch = chars[index];
+    if (ch === "`") {
+      const close = chars.indexOf("`", index + 1);
+      if (close === -1) {
+        index += 1;
+        continue;
+      }
+      phrases.push(chars.slice(index + 1, close).join(""));
+      index = close + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "“") {
+      let close = -1;
+      for (let scan = index + 1; scan < chars.length; scan += 1) {
+        if (chars[scan] === '"' || chars[scan] === "”") {
+          close = scan;
+          break;
+        }
+      }
+      if (close === -1) {
+        index += 1;
+        continue;
+      }
+      phrases.push(chars.slice(index + 1, close).join(""));
+      index = close + 1;
+      continue;
+    }
+    if (ch === "(") {
+      const offsets = [];
+      let cursor = 0;
+      for (const c of chars) {
+        offsets.push(cursor);
+        cursor += c.length;
+      }
+      const byteClose = text.indexOf(")", offsets[index] + 1);
+      if (byteClose === -1) {
+        index += 1;
+        continue;
+      }
+      const close = successorCharIndexOfOffsets(chars, byteClose);
+      phrases.push(chars.slice(index + 1, close).join(""));
+      index = close + 1;
+      continue;
+    }
+    if (ch === "[" && chars[index + 1] === "[") {
+      const offsets = [];
+      let cursor = 0;
+      for (const c of chars) {
+        offsets.push(cursor);
+        cursor += c.length;
+      }
+      const byteClose = text.indexOf("]]", offsets[index] + 2);
+      if (byteClose === -1) {
+        index += 2;
+        continue;
+      }
+      const close = successorCharIndexOfOffsets(chars, byteClose);
+      phrases.push(successorWikilinkPhrase(chars.slice(index + 2, close).join("")));
+      index = close + 2;
+      continue;
+    }
+    index += 1;
+  }
+  return phrases;
+}
+
+// Join words with `-`, cutting at 32 characters on a `-` boundary (never
+// mid-word, never empty). Mirrors `join_truncated`; all words are ASCII so
+// character and byte lengths agree.
+function successorJoinTruncated(words, marker) {
+  const list = Array.isArray(words) ? words : [];
+  if (list.length === 0) {
+    return null;
+  }
+  const joined = list.join("-");
+  let truncated = joined;
+  if (joined.length > 32) {
+    const cut = joined.slice(0, 32).lastIndexOf("-");
+    if (cut <= 0) {
+      return null;
+    }
+    truncated = joined.slice(0, cut);
+  }
+  if (!truncated || !isValidSuccessorBlockId(truncated)) {
+    return null;
+  }
+  return truncated;
+}
+
+// Deterministic suggestions for a description: at most 3. Pure function.
+// Mirrors `suggest_ids_with_used` exactly: candidate 1 is the first phrase
+// with at least one word (first 4), candidate 2 the first 3 prose words,
+// candidate 3 (leading verb only) the next 3 words. A taken candidate takes
+// the first free `-2`…`-9` suffix (staying within 64 characters) or is
+// dropped. `usedIds` is any iterable of taken IDs.
+function suggestSuccessorIds(description, usedIds) {
+  const used = new Set(
+    Array.from(usedIds || []).map((id) => String(id || "")),
+  );
+  const body = String(description || "");
+  const candidates = [];
+
+  const prose = successorWordsIn(body);
+  for (const phrase of successorPhraseSpans(body)) {
+    const words = successorWordsIn(phrase);
+    if (words.length === 0) {
+      continue;
+    }
+    const joined = successorJoinTruncated(words.slice(0, Math.min(4, words.length)), "^");
+    if (joined) {
+      candidates.push(joined);
+    }
+    break;
+  }
+  if (prose.length > 0) {
+    const joined = successorJoinTruncated(prose.slice(0, Math.min(3, prose.length)), "^");
+    if (joined) {
+      candidates.push(joined);
+    }
+    if (SUCCESSOR_ID_LEADING_VERB_SET.has(prose[0]) && prose.length > 1) {
+      const end = Math.min(1 + 3, prose.length);
+      const verbJoined = successorJoinTruncated(prose.slice(1, end), "^");
+      if (verbJoined) {
+        candidates.push(verbJoined);
+      }
+    }
+  }
+
+  const seen = new Set();
+  const deduped = [];
+  for (const candidate of candidates) {
+    if (!seen.has(candidate)) {
+      seen.add(candidate);
+      deduped.push(candidate);
+    }
+  }
+
+  const out = [];
+  for (const candidate of deduped) {
+    if (!used.has(candidate)) {
+      out.push(candidate);
+    } else {
+      let placed = null;
+      for (let suffix = 2; suffix <= 9; suffix += 1) {
+        const suffixed = `${candidate}-${suffix}`;
+        if (suffixed.length > 64) {
+          continue;
+        }
+        if (
+          !isValidSuccessorBlockId(suffixed) ||
+          used.has(suffixed) ||
+          seen.has(suffixed)
+        ) {
+          continue;
+        }
+        placed = suffixed;
+        break;
+      }
+      if (placed) {
+        seen.add(placed);
+        out.push(placed);
+      }
+    }
+    if (out.length >= 3) {
+      break;
+    }
+  }
+  return out.slice(0, 3);
+}
+
+// Mint a block ID for a successor-link dependent (§12.4): the first
+// suggestion, else the first free `task`, `task-2`, `task-3`, … ID.
+// Mirrors `capture_block_ids::mint_block_id`. Pure function.
+function mintBlockId(description, usedIds) {
+  const used = new Set(
+    Array.from(usedIds || []).map((id) => String(id || "")),
+  );
+  const first = suggestSuccessorIds(description, used)[0];
+  if (first) {
+    return first;
+  }
+  if (!used.has("task")) {
+    return "task";
+  }
+  let suffix = 2;
+  for (;;) {
+    const candidate = `task-${suffix}`;
+    if (!used.has(candidate)) {
+      return candidate;
+    }
+    suffix += 1;
+  }
+}
+
+const SUCCESSOR_INLINE_FIELD_RE = /\[[A-Za-z][A-Za-z0-9_-]*::\s*[^\]]*\]/g;
+
+// Clean a task body for the mint pipeline: drop the trailing `^block-id`
+// (when given), replace inline `[key:: value]` fields with a space, drop the
+// Tasks global-filter tag, collapse whitespace. Mirrors
+// `note_tasks::clean_description`. `rawLine` is the body after the status
+// box; `globalFilter` defaults to the Tasks default (`#task`).
+function cleanDescription(rawLine, globalFilter = "#task", blockId = null) {
+  const filter = globalFilter === undefined ? "#task" : globalFilter;
+  let text = String(rawLine || "");
+  if (blockId) {
+    const suffix = `^${String(blockId)}`;
+    const trimmed = text.replace(/\s+$/, "");
+    text = trimmed.endsWith(suffix)
+      ? trimmed.slice(0, trimmed.length - suffix.length)
+      : text;
+  }
+  SUCCESSOR_INLINE_FIELD_RE.lastIndex = 0;
+  const withoutFields = text.replace(SUCCESSOR_INLINE_FIELD_RE, " ");
+  return withoutFields
+    .split(/\s+/)
+    .filter(
+      (token) =>
+        token && (filter === "" || filter == null || token !== filter),
+    )
+    .join(" ");
+}
+
+// Body after the status box (`- [?] body`), mirroring the Rust SB test's
+// `find("] ")` split but anchored on a real checkbox.
+function successorBodyAfterStatusBox(rawLine) {
+  const line = String(rawLine || "");
+  const match = line.match(
+    /^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+\[[^\]\n]\][ \t]*/,
+  );
+  if (match) {
+    return line.slice(match[0].length);
+  }
+  const index = line.indexOf("] ");
+  return index === -1 ? line : line.slice(index + 2);
+}
+
+function successorPathWithoutExtension(path) {
+  const normalized = normalizeDependencyMarkdownPath(path);
+  return normalized.replace(/\.md$/i, "");
+}
+
+function successorPathBasename(path) {
+  const withoutExtension = successorPathWithoutExtension(path);
+  const slash = withoutExtension.lastIndexOf("/");
+  return slash === -1 ? withoutExtension : withoutExtension.slice(slash + 1);
+}
+
+function successorCountFromBasenameCounts(basenameCounts, stem) {
+  const key = String(stem || "").toLowerCase();
+  if (basenameCounts instanceof Map) {
+    const value = basenameCounts.get(key);
+    return typeof value === "number" ? value : null;
+  }
+  if (basenameCounts && typeof basenameCounts === "object") {
+    const value = basenameCounts[key];
+    return typeof value === "number" ? value : null;
+  }
+  return null;
+}
+
+// Shortest unambiguous link form for a successor target (§12.4):
+// `[[basename#^id]]` when the basename is unique in the vault
+// (case-insensitive, counted over the same task-bearing-note set capture
+// uses for `&` dependency links), else `[[dir/note#^id]]`. The one
+// exception: a successor that lives in the day file itself still names the
+// note (`[[20261009#^id]]`), never the bare `[[#^id]]`. `basenameCounts`
+// maps the lowercase basename to its vault-wide note count; an unknown
+// count links long. Pure function.
+function successorLinkText(targetPath, blockId, dailyPath, basenameCounts) {
+  const id = String(blockId || "").replace(/^\^/, "");
+  const stem = successorPathBasename(targetPath);
+  const target = successorPathWithoutExtension(targetPath);
+  const daily = dailyPath ? successorPathWithoutExtension(dailyPath) : "";
+  const sameAsDaily = !!daily && target.toLowerCase() === daily.toLowerCase();
+  const count = successorCountFromBasenameCounts(basenameCounts, stem);
+  if (sameAsDaily || count === 1) {
+    return `[[${stem}#^${id}]]`;
+  }
+  return `[[${target}#^${id}]]`;
+}
+// ---- src/087-successor-place.js ----
+// Successor placement edits and notice text (docs/task-dependencies.md §12.3,
+// §12.5–§12.6) plus the config and today-path loaders. Pure code only: no
+// vault reads, no editor writes. Consumed with 085-successor-plan.js by the
+// wiring phase.
+function successorIndentOf(lineText) {
+  const match = String(lineText || "").match(/^[ \t]*/);
+  return match ? match[0] : "";
+}
+
+function successorEntryNameAt(lines, entryLine) {
+  const parts = parsePomodoroEntryLineParts(String(lines[entryLine] || ""));
+  return parts && parts.name ? parts.name : "";
+}
+
+// Apply ordered successor placements to the day text. Slot anchors insert
+// immediately after the anchor bullet's subtree (the bullet plus its
+// deeper-indented children), in successor order; the indent is the anchor
+// bullet's own. Closing anchors append after the target entry's existing
+// children (one tab in): the created continuation
+// (`options.createdEntry = { line }`), else the first open same-name entry
+// after the closed one, else a new `- [ ] () — NAME` placeholder right
+// after the closed entry's sub-bullet range (successors count as carried).
+// A lone stub child is replaced. `dailyLines` is text or an array;
+// `options.closingEntry` is the 0-based closed-entry line. Returns
+// `{ text, splices, links, skipped }`: `splices` apply in array order
+// (`{ at, deleteCount, lines }`, 0-based); `links` aligns with `placements`
+// (`entry_line`/`line` 1-based, `entry_name` `""` when unnamed); `skipped`
+// lists placements with no valid target (the wiring reports them as
+// `failed` rows).
+function planSuccessorInsertions(dailyLines, placements, options = {}) {
+  const sourceText = Array.isArray(dailyLines)
+    ? dailyLines.map((line) => String(line ?? "")).join("\n")
+    : String(dailyLines ?? "");
+  const ending = sourceText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = sourceText.split(/\r?\n/);
+  const list = Array.isArray(placements) ? placements : [];
+  const closingEntry = Number.isInteger(options.closingEntry)
+    ? options.closingEntry
+    : null;
+  const createdEntry =
+    options.createdEntry && typeof options.createdEntry === "object"
+      ? options.createdEntry
+      : null;
+  const section = findPomodorosSectionInLines(lines);
+  const entries = parseSuccessorLedgerEntries(lines);
+  const entryOfLine = (line) => {
+    let owner = null;
+    for (const entry of entries) {
+      if (entry.entryLine <= line) {
+        owner = entry;
+      } else {
+        break;
+      }
+    }
+    return owner;
+  };
+
+  const ops = [];
+  const skipped = [];
+  let seq = 0;
+
+  const slotGroups = new Map();
+  const closingItems = [];
+  list.forEach((placement, order) => {
+    const anchor = placement && placement.anchor;
+    if (anchor && anchor.bulletLine != null) {
+      if (!slotGroups.has(anchor.bulletLine)) {
+        slotGroups.set(anchor.bulletLine, []);
+      }
+      slotGroups.get(anchor.bulletLine).push({ placement, order });
+    } else {
+      closingItems.push({ placement, order });
+    }
+  });
+
+  for (const [bulletLine, items] of slotGroups) {
+    if (
+      !Number.isInteger(bulletLine) ||
+      bulletLine < 0 ||
+      bulletLine >= lines.length
+    ) {
+      for (const item of items) {
+        skipped.push({
+          key: (item.placement && item.placement.key) || null,
+          order: item.order,
+          reason: "no-anchor-bullet",
+        });
+      }
+      continue;
+    }
+    const owner = entryOfLine(bulletLine);
+    const indent = successorIndentOf(lines[bulletLine]);
+    let end = bulletLine + 1;
+    while (end < lines.length) {
+      const text = lines[end];
+      if (!text.trim()) {
+        break;
+      }
+      if (!INDENTED_LIST_LINE_RE.test(text)) {
+        break;
+      }
+      if (successorIndentOf(text).length <= indent.length) {
+        break;
+      }
+      end += 1;
+    }
+    ops.push({
+      at: end,
+      deleteCount: 0,
+      lines: items.map(
+        (item) => `${indent}- ${item.placement.blockLink}`,
+      ),
+      seq: seq++,
+      marks: items.map((item, index) => ({
+        order: item.order,
+        index,
+        entryOriginal: owner ? owner.entryLine : null,
+        entryCreated: false,
+      })),
+    });
+  }
+
+  if (closingItems.length > 0) {
+    let targetLine = null;
+    let entryCreated = false;
+    let placeholderOp = false;
+    if (
+      createdEntry &&
+      Number.isInteger(createdEntry.line) &&
+      createdEntry.line >= 0 &&
+      createdEntry.line < lines.length
+    ) {
+      targetLine = createdEntry.line;
+      entryCreated = true;
+    } else if (
+      closingEntry != null &&
+      closingEntry >= 0 &&
+      closingEntry < lines.length
+    ) {
+      const closedName = successorEntryNameAt(lines, closingEntry);
+      if (closedName) {
+        const next = entries.find(
+          (entry) =>
+            entry.open &&
+            entry.entryLine > closingEntry &&
+            entry.name === closedName,
+        );
+        if (next) {
+          targetLine = next.entryLine;
+        }
+      }
+      if (targetLine == null) {
+        const range = section
+          ? getSubBulletBlockRange(lines, closingEntry, section)
+          : { startLine: closingEntry + 1, endLine: closingEntry + 1 };
+        const placeholder = formatPomodoroPlaceholderLine(
+          successorEntryNameAt(lines, closingEntry) || "",
+        );
+        ops.push({
+          at: range.endLine,
+          deleteCount: 0,
+          lines: [
+            placeholder,
+            ...closingItems.map((item) => `\t- ${item.placement.blockLink}`),
+          ],
+          seq: seq++,
+          marks: closingItems.map((item, index) => ({
+            order: item.order,
+            index: 1 + index,
+            entryOriginal: null,
+            entryCreated: true,
+          })),
+        });
+        placeholderOp = true;
+      }
+    } else {
+      for (const item of closingItems) {
+        skipped.push({
+          key: (item.placement && item.placement.key) || null,
+          order: item.order,
+          reason: "no-closing-entry",
+        });
+      }
+    }
+    if (targetLine != null && !placeholderOp) {
+      const range = section
+        ? getSubBulletBlockRange(lines, targetLine, section)
+        : { startLine: targetLine + 1, endLine: targetLine + 1 };
+      const children = lines.slice(range.startLine, range.endLine);
+      if (children.length === 1 && children[0].trim() === "-") {
+        ops.push({
+          at: range.startLine,
+          deleteCount: 1,
+          lines: closingItems.map((item) => `\t- ${item.placement.blockLink}`),
+          seq: seq++,
+          marks: closingItems.map((item, index) => ({
+            order: item.order,
+            index,
+            entryOriginal: targetLine,
+            entryCreated,
+          })),
+        });
+      } else {
+        ops.push({
+          at: range.endLine,
+          deleteCount: 0,
+          lines: closingItems.map((item) => `\t- ${item.placement.blockLink}`),
+          seq: seq++,
+          marks: closingItems.map((item, index) => ({
+            order: item.order,
+            index,
+            entryOriginal: targetLine,
+            entryCreated,
+          })),
+        });
+      }
+    }
+  }
+
+  ops.sort((left, right) => left.at - right.at || left.seq - right.seq);
+  const out = lines.slice();
+  let shift = 0;
+  const linkLineByOrder = new Map();
+  const entryLineByOrder = new Map();
+  const createdByOrder = new Map();
+  for (const op of ops) {
+    const actual = op.at + shift;
+    out.splice(actual, op.deleteCount, ...op.lines);
+    for (const mark of op.marks) {
+      linkLineByOrder.set(mark.order, actual + mark.index);
+      if (mark.entryOriginal == null) {
+        entryLineByOrder.set(mark.order, actual);
+      } else {
+        let entryLine = mark.entryOriginal;
+        for (const earlier of ops) {
+          if (earlier === op) {
+            break;
+          }
+          if (earlier.at <= mark.entryOriginal) {
+            entryLine += earlier.lines.length - earlier.deleteCount;
+          }
+        }
+        entryLineByOrder.set(mark.order, entryLine);
+      }
+      createdByOrder.set(mark.order, mark.entryCreated === true);
+    }
+    shift += op.lines.length - op.deleteCount;
+  }
+
+  const finalEntries = parseSuccessorLedgerEntries(out);
+  const firstPlaceholder = finalEntries.find(
+    (entry) => entry.open && entry.placeholder,
+  );
+  const firstPlaceholderLine = firstPlaceholder
+    ? firstPlaceholder.entryLine
+    : null;
+  const links = [];
+  list.forEach((placement, order) => {
+    if (!linkLineByOrder.has(order)) {
+      return;
+    }
+    const entryLine = entryLineByOrder.get(order);
+    const entry = finalEntries.find((item) => item.entryLine === entryLine);
+    links.push({
+      key: (placement && placement.key) || null,
+      rowIndex: placement && placement.rowIndex != null ? placement.rowIndex : null,
+      entry_name: entry && entry.name ? entry.name : "",
+      entry_line: entryLine + 1,
+      entry_created: createdByOrder.get(order) === true,
+      next_up: firstPlaceholderLine != null && entryLine === firstPlaceholderLine,
+      line: linkLineByOrder.get(order) + 1,
+      block_link: placement ? placement.blockLink : null,
+    });
+  });
+
+  return {
+    text: out.join(ending),
+    splices: ops.map((op) => ({
+      at: op.at,
+      deleteCount: op.deleteCount,
+      lines: op.lines.slice(),
+    })),
+    links,
+    skipped,
+  };
+}
+
+function truncateSuccessorNoticeText(text, limit = SUCCESSOR_NOTICE_TEXT_LIMIT) {
+  const value = String(text || "");
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
+}
+
+// Plain notice fallback and walk-toast form for the shared §12.5 notice
+// model (`{ predecessors, unblocked, still_blocked, failure }`). One notice
+// per gesture; silence (`""`) when nothing was unblocked. Never leads with
+// a block ID; task text truncates at 48 characters with `…`.
+function successorNoticeText(model = {}) {
+  const source = model && typeof model === "object" ? model : {};
+  const predecessors = Array.isArray(source.predecessors) ? source.predecessors : [];
+  const unblocked = Array.isArray(source.unblocked) ? source.unblocked : [];
+  const linked = unblocked.filter((row) => row && row.link);
+  const notLinked = unblocked.filter((row) => row && !row.link);
+  const failure = source.failure && typeof source.failure === "object" ? source.failure : null;
+
+  if (failure && Number(failure.count) > 0) {
+    const pred = predecessors[0] && predecessors[0].text
+      ? truncateSuccessorNoticeText(predecessors[0].text)
+      : "tasks";
+    const count = Number(failure.count);
+    return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})`;
+  }
+  if (linked.length === 1) {
+    const row = linked[0];
+    const text = truncateSuccessorNoticeText(row.text);
+    const name = (row.link && row.link.entry_name) || "";
+    if (row.link && row.link.entry_created) {
+      return name
+        ? `🔓 Next in new ${name} session (next up): ${text}`
+        : `🔓 Next in new session (next up): ${text}`;
+    }
+    return name
+      ? `🔓 Next in ${name}: ${text}`
+      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}`;
+  }
+  if (linked.length > 1) {
+    const names = [];
+    for (const row of linked) {
+      const label = (row.link && row.link.entry_name) ||
+        `line ${(row.link && row.link.line) || "?"}`;
+      if (!names.includes(label)) {
+        names.push(label);
+      }
+    }
+    if (names.length === 1) {
+      const shown = linked
+        .slice(0, 2)
+        .map((row) => truncateSuccessorNoticeText(row.text));
+      const more = linked.length > 2 ? `, +${linked.length - 2}` : "";
+      return `🔓 ${linked.length} linked → ${names[0]}: ${shown.join(", ")}${more}`;
+    }
+    return `🔓 ${linked.length} linked · ${names.join(", ")}`;
+  }
+  const breaker = notLinked.filter((row) => row.not_linked === "breaker");
+  if (breaker.length > 0 && breaker.length === notLinked.length) {
+    return `🔓 ${breaker.length} unblocked · not linked (more than 5)`;
+  }
+  if (notLinked.length === 1) {
+    const row = notLinked[0];
+    const lane = row.status_name || successorStatusName(row.status_symbol);
+    return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})`;
+  }
+  if (notLinked.length > 1) {
+    const shown = notLinked.slice(0, 3).map(
+      (row) => `${truncateSuccessorNoticeText(row.text)} (${row.status_name || successorStatusName(row.status_symbol)})`,
+    );
+    const more = notLinked.length > 3 ? `, +${notLinked.length - 3} more` : "";
+    return `🔓 Unblocked: ${shown.join(", ")}${more}`;
+  }
+  return "";
+}
+
+// --- Loaders ---
+// Duplicated from bob-ledger-tools intentionally: deployed plugins must not
+// import one another (see `010-core.js:70`).
+const SUCCESSOR_DAILY_NOTES_COMMAND_ID = "daily-notes";
+const SUCCESSOR_DEFAULT_DAILY_FORMAT = "YYYY/YYYYMMDD";
+const SUCCESSOR_DAILY_FORMAT_TOKENS = ["YYYY", "YY", "MM", "DD", "M", "D"];
+
+function successorDailyDateTokens(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  const yearText = String(date.getFullYear());
+  const monthNumber = date.getMonth() + 1;
+  const monthText = String(monthNumber).padStart(2, "0");
+  const dayNumber = date.getDate();
+  const dayText = String(dayNumber).padStart(2, "0");
+  return {
+    YYYY: yearText,
+    YY: yearText.slice(-2),
+    MM: monthText,
+    DD: dayText,
+    M: String(monthNumber),
+    D: String(dayNumber),
+  };
+}
+
+function successorFormatDailyDate(value, format = SUCCESSOR_DEFAULT_DAILY_FORMAT) {
+  const source = String(format || SUCCESSOR_DEFAULT_DAILY_FORMAT);
+  const tokens = successorDailyDateTokens(value);
+  let result = "";
+  for (let index = 0; index < source.length;) {
+    if (source[index] === "[") {
+      const endIndex = source.indexOf("]", index + 1);
+      if (endIndex !== -1) {
+        result += source.slice(index + 1, endIndex);
+        index = endIndex + 1;
+        continue;
+      }
+    }
+    const token = SUCCESSOR_DAILY_FORMAT_TOKENS.find((candidate) =>
+      source.startsWith(candidate, index),
+    );
+    if (token) {
+      result += tokens[token];
+      index += token.length;
+      continue;
+    }
+    result += source[index];
+    index += 1;
+  }
+  return result;
+}
+
+function successorNormalizeVaultPath(value) {
+  const text = String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "");
+  if (!text) {
+    return "";
+  }
+  const compactPath = text.replace(/\/+/g, "/").replace(/\/$/, "");
+  if (typeof normalizePath === "function") {
+    return normalizePath(compactPath).replace(/^\/+/, "");
+  }
+  return compactPath;
+}
+
+function successorEnsureMarkdownExtension(path) {
+  const normalized = successorNormalizeVaultPath(path);
+  return /\.md$/i.test(normalized) ? normalized : `${normalized}.md`;
+}
+
+function successorJoinVaultPath(folder, path) {
+  const normalizedPath = successorNormalizeVaultPath(path);
+  const normalizedFolder = successorNormalizeVaultPath(folder);
+  return normalizedFolder
+    ? successorNormalizeVaultPath(`${normalizedFolder}/${normalizedPath}`)
+    : normalizedPath;
+}
+
+function successorDailyNotesOptions(app) {
+  const internalPlugins = app && app.internalPlugins;
+  const plugin =
+    (internalPlugins &&
+      internalPlugins.plugins &&
+      internalPlugins.plugins[SUCCESSOR_DAILY_NOTES_COMMAND_ID]) ||
+    (internalPlugins && typeof internalPlugins.getPluginById === "function"
+      ? internalPlugins.getPluginById(SUCCESSOR_DAILY_NOTES_COMMAND_ID)
+      : null);
+  const instance = plugin && plugin.instance;
+  return (instance && instance.options) || {};
+}
+
+// Vault-relative path of today's daily note, mirroring ledger's
+// `todayDailyPath` (`020-time-and-pomodoro.js:278`).
+function todayDailyPath(app, now = new Date()) {
+  const options = successorDailyNotesOptions(app) || {};
+  const path = successorEnsureMarkdownExtension(
+    successorFormatDailyDate(now, options.format || SUCCESSOR_DEFAULT_DAILY_FORMAT),
+  );
+  return successorJoinVaultPath(options.folder || "", path);
+}
+
+function successorRequireOptionalNodeModule(name) {
+  try {
+    if (typeof require !== "function") {
+      return null;
+    }
+    return require(name);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function successorJoinPathSegments(firstSegment, ...restSegments) {
+  const trim = (text, side) => {
+    const value = String(text || "");
+    if (side === "left") {
+      return value.replace(/^\/+/, "");
+    }
+    if (side === "right") {
+      return value.replace(/\/+$/, "");
+    }
+    return value.replace(/^\/+|\/+$/g, "");
+  };
+  const first = trim(firstSegment, "right");
+  const rest = restSegments
+    .map((segment) => trim(segment, "both"))
+    .filter((segment) => segment.length > 0);
+  return [first, ...rest].filter((segment) => segment.length > 0).join("/");
+}
+
+function successorConfigHomeDir(osModule, env) {
+  if (osModule && typeof osModule.homedir === "function") {
+    try {
+      const home = osModule.homedir();
+      if (typeof home === "string" && home.trim()) {
+        return home;
+      }
+    } catch (_error) {
+      // Fall through to $HOME below.
+    }
+  }
+  if (env && typeof env.HOME === "string" && env.HOME.trim()) {
+    return env.HOME;
+  }
+  return "~";
+}
+
+// Config path for `plan.link_unblocked`, honoring `$XDG_CONFIG_HOME` like
+// ledger's `planConfigPath`.
+function successorPlanConfigPath(options = {}) {
+  const env = options.env ||
+    (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined
+    ? successorRequireOptionalNodeModule("os")
+    : options.osModule;
+  const xdgConfigHome =
+    typeof env.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME.trim()
+      ? env.XDG_CONFIG_HOME
+      : null;
+  const configHome = xdgConfigHome ||
+    successorJoinPathSegments(successorConfigHomeDir(osModule, env), ".config");
+  return successorJoinPathSegments(configHome, "bob/config.yml");
+}
+
+let successorLinkUnblockedCache = { key: null, result: true };
+
+function resetSuccessorLinkUnblockedCache() {
+  successorLinkUnblockedCache = { key: null, result: true };
+}
+
+function successorConfigStatKey(fsModule, configPath) {
+  try {
+    if (!fsModule || typeof fsModule.statSync !== "function") {
+      return null;
+    }
+    const stat = fsModule.statSync(configPath);
+    const mtime =
+      stat && stat.mtimeMs !== undefined && stat.mtimeMs !== null
+        ? stat.mtimeMs
+        : stat && stat.mtime
+          ? Number(stat.mtime)
+          : "?";
+    const size =
+      stat && stat.size !== undefined && stat.size !== null ? stat.size : "?";
+    return `${mtime}:${size}`;
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return "missing";
+    }
+    return null;
+  }
+}
+
+function parseSuccessorLinkUnblockedScalar(raw) {
+  const value = String(raw || "")
+    .replace(/["']/g, "")
+    .split("#")[0]
+    .trim()
+    .toLowerCase();
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return true;
+}
+
+// Minimal `plan:` → `link_unblocked:` reader (block style plus single-line
+// flow style). Anything missing or invalid reads `true` (§12.8).
+function parseSuccessorLinkUnblocked(text) {
+  let inPlan = false;
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (/^\s*(#|$)/.test(line)) {
+      continue;
+    }
+    const top = line.match(/^([A-Za-z0-9_-]+)\s*:(.*)$/);
+    if (top) {
+      inPlan = top[1] === "plan";
+      if (inPlan) {
+        const rest = top[2].trim();
+        if (rest) {
+          const flow = rest.match(/link_unblocked\s*:\s*([^,\s}]+)/i);
+          if (flow) {
+            return parseSuccessorLinkUnblockedScalar(flow[1]);
+          }
+          if (/^\{.*\}$/.test(rest)) {
+            return true;
+          }
+        }
+      }
+      continue;
+    }
+    if (inPlan) {
+      const nested = line.match(/^\s+link_unblocked\s*:\s*(\S+)/i);
+      if (nested) {
+        return parseSuccessorLinkUnblockedScalar(nested[1]);
+      }
+    }
+  }
+  return true;
+}
+
+// Read the `plan.link_unblocked` kill switch from
+// `$XDG_CONFIG_HOME/bob/config.yml` (else `~/.config/bob/config.yml`),
+// stat-cached on mtime and size like ledger's `loadPlanCaps`. A missing or
+// invalid value reads `true`. Pure apart from the config read.
+function loadLinkUnblocked(options = {}) {
+  const env = options.env ||
+    (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined
+    ? successorRequireOptionalNodeModule("os")
+    : options.osModule;
+  const fsModule = options.fsModule === undefined
+    ? successorRequireOptionalNodeModule("fs")
+    : options.fsModule;
+  const configPath = options.configPath || successorPlanConfigPath({ env, osModule });
+  if (!fsModule || typeof fsModule.readFileSync !== "function") {
+    return true;
+  }
+  const statKey = successorConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && successorLinkUnblockedCache.key === key) {
+    return successorLinkUnblockedCache.result;
+  }
+  let result = true;
+  try {
+    result = parseSuccessorLinkUnblocked(fsModule.readFileSync(configPath, "utf8"));
+  } catch (_error) {
+    result = true;
+  }
+  if (key != null) {
+    successorLinkUnblockedCache = { key, result };
+  }
+  return result;
+}
 // ---- src/090-source-and-formatting.js ----
 function getLineTextFromSourceText(sourceText, lineNumber) {
   const lineIndex = Math.floor(Number(lineNumber));
@@ -12410,6 +14240,33 @@ module.exports.helpers = {
   normalizeHeadingTitle,
   normalizeTaskDependencyBlockIds,
   normalizeClosedTaskIdentities,
+  buildDependentsIndex,
+  tasksFromDocuments,
+  normalizeTasksCacheTask,
+  findLiveLinks,
+  computeSuccessorAnchors,
+  planSuccessors,
+  planSuccessorInsertions,
+  successorNoticeText,
+  successorStatusName,
+  successorBodyAfterStatusBox,
+  successorLinkText,
+  successorWikilinkPhrase,
+  successorPhraseSpans,
+  successorWordsIn,
+  successorJoinTruncated,
+  isValidSuccessorBlockId,
+  suggestSuccessorIds,
+  mintBlockId,
+  cleanDescription,
+  collectSuccessorUsedIds,
+  successorPathBasename,
+  loadLinkUnblocked,
+  resetSuccessorLinkUnblockedCache,
+  parseSuccessorLinkUnblocked,
+  successorPlanConfigPath,
+  todayDailyPath,
+  parseSuccessorLiveLink,
   rewriteDependsOnBlockIdsInText,
   rewriteDependsOnIdsInLine,
   rewriteGeneratedIdToBlockId,

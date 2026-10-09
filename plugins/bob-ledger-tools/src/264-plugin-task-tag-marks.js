@@ -76,7 +76,8 @@ class BobLedgerToolsTaskTagMarksMixin {
           RangeSetBuilder &&
           editorInfoField &&
           editorLivePreviewField &&
-          TaskTagMarkWidget,
+          TaskTagMarkWidget &&
+          RefTaskMarkWidget,
       );
     } catch (error) {
       return false;
@@ -230,7 +231,7 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (!this.taskTagMarksEnabled) {
         return Decoration.none;
       }
-      if (!Decoration || !RangeSetBuilder || !TaskTagMarkWidget) {
+      if (!Decoration || !RangeSetBuilder || !TaskTagMarkWidget || !RefTaskMarkWidget) {
         return Decoration.none;
       }
       if (!editorInfoField || !editorLivePreviewField) {
@@ -353,11 +354,18 @@ class BobLedgerToolsTaskTagMarksMixin {
                     if (inCode) {
                       continue;
                     }
+                    // A `ref` range spans the whole `#task #ref` pair,
+                    // so one open-book decoration replaces both tags
+                    // and one cursor touch reveals both.
+                    const widget =
+                      source && source.kind === "ref"
+                        ? new RefTaskMarkWidget()
+                        : new TaskTagMarkWidget();
                     builder.add(
                       absFrom,
                       absTo,
                       Decoration.replace({
-                        widget: new TaskTagMarkWidget(),
+                        widget,
                       }),
                     );
                   } catch (error) {
@@ -448,6 +456,30 @@ class BobLedgerToolsTaskTagMarksMixin {
     }
   }
 
+  // Annotate one eligible `#task` anchor: a `#task #ref` pair
+  // becomes the open-book mark (and hides the `#ref` partner), any
+  // other eligible anchor becomes the hash. Returns true on success,
+  // false otherwise. Never throws.
+  annotateTaskTagAnchor(anchor) {
+    try {
+      if (!anchor || typeof anchor !== "object") {
+        return false;
+      }
+      let partner = null;
+      try {
+        partner = refTaskPairAnchor(anchor);
+      } catch (error) {
+        partner = null;
+      }
+      if (partner) {
+        return annotateRefTaskMark(anchor, partner);
+      }
+      return annotateTaskTagMark(anchor);
+    } catch (error) {
+      return false;
+    }
+  }
+
   renderTaskTagMarksIn(el, ctx) {
     try {
       if (!this.taskTagMarksEnabled) {
@@ -465,7 +497,7 @@ class BobLedgerToolsTaskTagMarksMixin {
           if (!taskTagMarkElementEligible(anchor, el)) {
             continue;
           }
-          annotateTaskTagMark(anchor);
+          this.annotateTaskTagAnchor(anchor);
         } catch (error) {
           continue;
         }
@@ -489,7 +521,7 @@ class BobLedgerToolsTaskTagMarksMixin {
       for (const anchor of anchors) {
         try {
           if (taskTagMarkElementEligible(anchor, root)) {
-            if (annotateTaskTagMark(anchor)) {
+            if (this.annotateTaskTagAnchor(anchor)) {
               count += 1;
             }
           }
@@ -513,10 +545,14 @@ class BobLedgerToolsTaskTagMarksMixin {
         return 0;
       }
       let candidates = [];
+      let hidden = [];
       try {
         if (root.querySelectorAll && typeof root.querySelectorAll === "function") {
           candidates = Array.prototype.slice.call(
             root.querySelectorAll("a.tag.bob-task-tag-mark"),
+          );
+          hidden = Array.prototype.slice.call(
+            root.querySelectorAll("a.tag." + REF_TASK_HIDDEN_CLASS),
           );
         } else if (
           typeof document.querySelectorAll === "function" &&
@@ -525,11 +561,15 @@ class BobLedgerToolsTaskTagMarksMixin {
           candidates = Array.prototype.slice.call(
             document.querySelectorAll("a.tag.bob-task-tag-mark"),
           );
+          hidden = Array.prototype.slice.call(
+            document.querySelectorAll("a.tag." + REF_TASK_HIDDEN_CLASS),
+          );
         }
       } catch (error) {
         candidates = [];
+        hidden = [];
       }
-      if (candidates.length === 0) {
+      if (candidates.length === 0 && hidden.length === 0) {
         try {
           const stack = [root];
           let guard = 0;
@@ -550,11 +590,13 @@ class BobLedgerToolsTaskTagMarksMixin {
                       : typeof child.getAttribute === "function"
                         ? child.getAttribute("class") || ""
                         : "";
-                  if (
-                    typeof classText === "string" &&
-                    classText.split(/\s+/).indexOf("bob-task-tag-mark") !== -1
-                  ) {
-                    candidates.push(child);
+                  if (typeof classText === "string" && classText !== "") {
+                    const parts = classText.split(/\s+/);
+                    if (parts.indexOf("bob-task-tag-mark") !== -1) {
+                      candidates.push(child);
+                    } else if (parts.indexOf(REF_TASK_HIDDEN_CLASS) !== -1) {
+                      hidden.push(child);
+                    }
                   }
                 } catch (error) {
                   // Keep walking on per-node failure.
@@ -573,6 +615,18 @@ class BobLedgerToolsTaskTagMarksMixin {
       for (const candidate of candidates) {
         try {
           if (stripTaskTagMark(candidate)) {
+            count += 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      // A book-annotated `#task` anchor is restored by the loop above
+      // (it carries `bob-task-tag-mark` too); its hidden `#ref`
+      // partner needs its own reveal.
+      for (const partner of hidden) {
+        try {
+          if (stripRefTaskHidden(partner)) {
             count += 1;
           }
         } catch (error) {

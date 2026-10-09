@@ -30,6 +30,15 @@ const TASK_CHECKBOX_STATUS_RE =
   /^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[)[^\]\n](\])/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
+// A `#ref` tag (any case) directly after an exact `#task` tag with one
+// whitespace run between: the reading-task pair (`docs/task-tag-marks.md`
+// "Reference reading tasks" in bob-cli). `#task #references` never
+// matches (the lookahead rejects the longer tag).
+const REF_AFTER_TASK_RE = /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/;
+const REF_AFTER_TASK_GLOBAL_RE =
+  /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/g;
+// Picker display prefix for reading tasks (mirrors the CLI `📖`).
+const REF_TASK_DISPLAY_PREFIX = "📖 ";
 const HIDE_TASK_TAG_RE = /(^|[\s([{])#hide(?=$|[\s)\]},.;:!?])/;
 const HIDE_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#hide(?=$|[\s)\]},.;:!?])/g;
 const TRAILING_BLOCK_ID_RE = /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;

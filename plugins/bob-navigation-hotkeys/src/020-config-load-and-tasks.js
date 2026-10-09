@@ -258,16 +258,21 @@ function insertMissingBulletProperty(line, name, value) {
 }
 
 function stripTaskTag(text) {
-  return String(text || "").replace(
-    PROJECT_TASK_TAG_GLOBAL_RE,
-    (match, prefix) => {
+  return String(text || "")
+    .replace(REF_AFTER_TASK_GLOBAL_RE, (match, prefix) => {
       if (!prefix) {
         return "";
       }
 
       return /\s/.test(prefix) ? " " : prefix;
-    },
-  );
+    })
+    .replace(PROJECT_TASK_TAG_GLOBAL_RE, (match, prefix) => {
+      if (!prefix) {
+        return "";
+      }
+
+      return /\s/.test(prefix) ? " " : prefix;
+    });
 }
 
 function cleanTaskDisplayText(line) {
@@ -279,12 +284,16 @@ function cleanTaskDisplayText(line) {
     .replace(BULLET_PROPERTY_TRAILING_BLOCK_ID_RE, "")
     .replace(BULLET_PROPERTY_TASKS_INLINE_FIELD_RE, "")
     .replace(BULLET_PROPERTY_TASKS_EMOJI_DATE_RE, "");
+  const isRefTask = REF_AFTER_TASK_RE.test(body);
   body = stripTaskTag(body)
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 
-  return body || "(untitled task)";
+  if (body === "") {
+    return "(untitled task)";
+  }
+  return isRefTask ? REF_TASK_DISPLAY_PREFIX + body : body;
 }
 
 function getTrailingBlockId(line) {

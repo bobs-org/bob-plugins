@@ -88,6 +88,15 @@ const PROJECT_SOURCE_TASK_LINE_RE =
   /^(\s*)(?:[-*+]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
+// A `#ref` tag (any case) directly after an exact `#task` tag with one
+// whitespace run between: the reading-task pair (`docs/task-tag-marks.md`
+// "Reference reading tasks" in bob-cli). `#task #references` never
+// matches (the lookahead rejects the longer tag).
+const REF_AFTER_TASK_RE = /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/;
+const REF_AFTER_TASK_GLOBAL_RE =
+  /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/g;
+// Picker display prefix for reading tasks (mirrors the CLI `📖`).
+const REF_TASK_DISPLAY_PREFIX = "📖 ";
 const PROJECT_LIFECYCLE_TAG_GLOBAL_RE =
   /(^|[\s([{])#(?:prj|hide)(?=$|[\s)\]},.;:!?])/g;
 const PROJECT_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;

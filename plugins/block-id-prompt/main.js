@@ -32,6 +32,15 @@ const TASK_CHECKBOX_STATUS_RE =
   /^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[)[^\]\n](\])/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
+// A `#ref` tag (any case) directly after an exact `#task` tag with one
+// whitespace run between: the reading-task pair (`docs/task-tag-marks.md`
+// "Reference reading tasks" in bob-cli). `#task #references` never
+// matches (the lookahead rejects the longer tag).
+const REF_AFTER_TASK_RE = /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/;
+const REF_AFTER_TASK_GLOBAL_RE =
+  /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/g;
+// Picker display prefix for reading tasks (mirrors the CLI `📖`).
+const REF_TASK_DISPLAY_PREFIX = "📖 ";
 const HIDE_TASK_TAG_RE = /(^|[\s([{])#hide(?=$|[\s)\]},.;:!?])/;
 const HIDE_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#hide(?=$|[\s)\]},.;:!?])/g;
 const TRAILING_BLOCK_ID_RE = /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
@@ -866,6 +875,7 @@ function collapseStrippedTagPrefix(match, prefix) {
 
 function stripInternalTaskTags(text) {
   return String(text || "")
+    .replace(REF_AFTER_TASK_GLOBAL_RE, collapseStrippedTagPrefix)
     .replace(PROJECT_TASK_TAG_GLOBAL_RE, collapseStrippedTagPrefix)
     .replace(HIDE_TASK_TAG_GLOBAL_RE, collapseStrippedTagPrefix);
 }
@@ -878,12 +888,16 @@ function cleanTaskDisplayText(lineText) {
     .replace(TRAILING_BLOCK_ID_RE, "")
     .replace(TASKS_INLINE_FIELD_RE, "")
     .replace(TASKS_EMOJI_DATE_RE, "");
+  const isRefTask = REF_AFTER_TASK_RE.test(text);
   text = stripInternalTaskTags(text)
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 
-  return text || "(untitled task)";
+  if (text === "") {
+    return "(untitled task)";
+  }
+  return isRefTask ? REF_TASK_DISPLAY_PREFIX + text : text;
 }
 
 function taskItemFromLine(lineText, lineNumber, options = {}) {

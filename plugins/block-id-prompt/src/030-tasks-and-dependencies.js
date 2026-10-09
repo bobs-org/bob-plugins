@@ -157,6 +157,7 @@ function collapseStrippedTagPrefix(match, prefix) {
 
 function stripInternalTaskTags(text) {
   return String(text || "")
+    .replace(REF_AFTER_TASK_GLOBAL_RE, collapseStrippedTagPrefix)
     .replace(PROJECT_TASK_TAG_GLOBAL_RE, collapseStrippedTagPrefix)
     .replace(HIDE_TASK_TAG_GLOBAL_RE, collapseStrippedTagPrefix);
 }
@@ -169,12 +170,16 @@ function cleanTaskDisplayText(lineText) {
     .replace(TRAILING_BLOCK_ID_RE, "")
     .replace(TASKS_INLINE_FIELD_RE, "")
     .replace(TASKS_EMOJI_DATE_RE, "");
+  const isRefTask = REF_AFTER_TASK_RE.test(text);
   text = stripInternalTaskTags(text)
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 
-  return text || "(untitled task)";
+  if (text === "") {
+    return "(untitled task)";
+  }
+  return isRefTask ? REF_TASK_DISPLAY_PREFIX + text : text;
 }
 
 function taskItemFromLine(lineText, lineNumber, options = {}) {

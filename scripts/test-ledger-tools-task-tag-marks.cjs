@@ -178,11 +178,21 @@ const { helpers } = LedgerToolsPlugin;
 const {
   TASK_TAG_MARK_TEXT,
   TASK_TAG_MARK_TOOLTIP,
+  REF_TASK_TAG_TEXT,
+  REF_TASK_MARK_TOOLTIP,
+  REF_TASK_MARK_LABEL,
+  REF_TASK_MARK_CLASS,
+  REF_TASK_HIDDEN_CLASS,
+  refTaskPairEnd,
   taskTagMarkTokenRanges,
   taskTagMarkRanges,
   taskTagMarkElementEligible,
+  isRefTaskTagAnchor,
+  refTaskPairAnchor,
   annotateTaskTagMark,
+  annotateRefTaskMark,
   stripTaskTagMark,
+  stripRefTaskHidden,
   buildTaskTagMarkElement,
   ensureTaskTagMarksRefresh,
   priorityMarkSource,
@@ -190,6 +200,8 @@ const {
 } = helpers;
 
 const TOOLTIP = "#task \u00b7 tracked task\nCtrl+Shift+] to demote to a bullet";
+const REF_TOOLTIP = "#task #ref \u00b7 reference reading task";
+const REF_LABEL = "Reference reading task";
 
 function rangeList(ranges) {
   return ranges.map((range) => [range.from, range.to]);
@@ -978,4 +990,370 @@ test("styles.css contract: teal identity ink, glyph, both hosts, hover, hide in 
   assert.ok(css.indexOf("-webkit-print-color-adjust: exact") !== -1);
   assert.ok(css.indexOf("prefers-reduced-motion") !== -1);
   assert.ok(css.indexOf("color: transparent") !== -1);
+});
+
+test("TT20-TT28 verbatim: the #task #ref pair yields one ref range spanning both tokens", () => {
+  assert.equal(REF_TASK_TAG_TEXT, "#ref");
+  assert.equal(REF_TASK_MARK_TOOLTIP, REF_TOOLTIP);
+  assert.equal(REF_TASK_MARK_LABEL, REF_LABEL);
+  assert.ok(REF_TOOLTIP.indexOf("::") === -1);
+  const kinds = (line) => taskTagMarkRanges(line).map((range) => range.kind);
+  const spans = (line) =>
+    taskTagMarkRanges(line).map((range) => [range.from, range.to]);
+
+  // TT20: the pair on an open line is one range covering both tokens.
+  assert.deepEqual(spans("- [ ] #task #ref Harness Engineering"), [[6, 16]]);
+  assert.deepEqual(kinds("- [ ] #task #ref Harness Engineering"), ["ref"]);
+  // TT21: the pair on a closed line (resting tone is CSS).
+  assert.deepEqual(
+    spans("- [x] #task #ref Done book [completion:: 2026-10-05]"),
+    [[6, 16]],
+  );
+  assert.deepEqual(
+    kinds("- [x] #task #ref Done book [completion:: 2026-10-05]"),
+    ["ref"],
+  );
+  // TT22: `#REF` pairs (case-insensitive partner).
+  assert.deepEqual(spans("- [ ] #task #REF Loud"), [[6, 16]]);
+  assert.deepEqual(kinds("- [ ] #task #REF Loud"), ["ref"]);
+  // TT23: extra whitespace between the tokens still pairs.
+  assert.deepEqual(spans("- [ ] #task   #ref Extra spaces"), [[6, 18]]);
+  assert.deepEqual(kinds("- [ ] #task   #ref Extra spaces"), ["ref"]);
+  // TT24: `#task #references` is the hash only.
+  assert.deepEqual(spans("- [ ] #task #references Not a ref"), [[6, 11]]);
+  assert.deepEqual(kinds("- [ ] #task #references Not a ref"), ["task"]);
+  // TT25: `#ref #task` order is the hash only, on `#task`.
+  assert.deepEqual(spans("- [ ] #ref #task Reversed"), [[11, 16]]);
+  assert.deepEqual(kinds("- [ ] #ref #task Reversed"), ["task"]);
+  // TT26: `#ref` alone gets no mark.
+  assert.deepEqual(spans("- [ ] #ref Alone"), []);
+  // TT27: the pair on a non-task line gets no mark.
+  assert.deepEqual(spans("- #task #ref Not a task"), []);
+  assert.deepEqual(spans("Paragraph #task #ref text"), []);
+  // TT28: inline code still reports from the core (like TT10); the
+  // decoration builder drops it.
+  assert.deepEqual(spans("- [ ] Note `the #task #ref pair` here"), [[16, 26]]);
+  assert.deepEqual(kinds("- [ ] Note `the #task #ref pair` here"), ["ref"]);
+  // Mixed lines keep each token's own kind.
+  assert.deepEqual(spans("- [ ] #task A #task #ref B"), [
+    [6, 11],
+    [14, 24],
+  ]);
+  assert.deepEqual(kinds("- [ ] #task A #task #ref B"), ["task", "ref"]);
+  // The token scanner itself is unchanged (no kind, hash only).
+  assert.deepEqual(
+    taskTagMarkTokenRanges("- [ ] #task #ref Harness").map((range) => [
+      range.from,
+      range.to,
+    ]),
+    [[6, 11]],
+  );
+  // Pair-end helper boundaries.
+  assert.equal(refTaskPairEnd("- [ ] #task #ref Harness", 11), 16);
+  assert.equal(refTaskPairEnd("- [ ] #task #references No", 11), -1);
+  assert.equal(refTaskPairEnd("- [ ] #task#ref No", 11), -1);
+  assert.equal(refTaskPairEnd("- [ ] #task", 11), -1);
+  assert.equal(refTaskPairEnd(null, 11), -1);
+});
+
+test("Live Preview ref decorations replace the whole pair and reveal both tags at once", () => {
+  const plugin = pluginWithTaskTag();
+  const line = "- [ ] #task #ref Harness Engineering";
+  const built = plugin.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(built.adds.length, 1);
+  assert.equal(built.adds[0].from, 6);
+  assert.equal(built.adds[0].to, 16);
+  const widget = built.adds[0].value.widget;
+  assert.equal(widget.key, "ref-task-mark");
+  const rebuilt = plugin.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(widget.eq(rebuilt.adds[0].value.widget), true);
+  // A hash widget and a book widget never compare equal.
+  const hash = plugin.buildTaskTagMarkDecorations(
+    makeView({ lines: ["- [ ] #task Plain"] }),
+  ).adds[0].value.widget;
+  assert.equal(hash.key, "task-tag-mark");
+  assert.equal(widget.eq(hash), false);
+  assert.equal(hash.eq(widget), false);
+  // Reveal is inclusive over the whole span: a cursor touching either
+  // tag (or a selection covering both) exposes both raw tags.
+  for (const sel of [
+    { from: 6, to: 6 },
+    { from: 11, to: 11 },
+    { from: 12, to: 12 },
+    { from: 16, to: 16 },
+    { from: 0, to: 20 },
+  ]) {
+    assert.equal(
+      plugin.buildTaskTagMarkDecorations(makeView({ lines: [line], selection: [sel] }))
+        .adds.length,
+      0,
+      JSON.stringify(sel),
+    );
+  }
+  assert.equal(
+    plugin.buildTaskTagMarkDecorations(makeView({ lines: [line], selection: [{ from: 5, to: 5 }] }))
+      .adds.length,
+    1,
+  );
+  // Code exclusion still drops the pair (TT28).
+  assert.equal(
+    plugin.buildTaskTagMarkDecorations(
+      makeView({ lines: ["- [ ] Note `the #task #ref pair` here"], treeTag: "inline" }),
+    ).adds.length,
+    0,
+  );
+});
+
+test("ref element structure: book classes, reference label, and tooltip", () => {
+  const doc = fakeElementDoc();
+  const span = buildTaskTagMarkElement(doc, "ref");
+  assert.ok(span);
+  assert.equal(span.attrs.class, "bob-task-tag-mark " + REF_TASK_MARK_CLASS);
+  assert.equal(span.attrs.role, "img");
+  assert.equal(span.attrs["aria-label"], REF_LABEL);
+  assert.equal(span.attrs.title, REF_TOOLTIP);
+  assert.equal(span.attrs["data-tooltip-position"], "top");
+  assert.equal(span.children.length, 0);
+  // The hash path is unchanged.
+  const hash = buildTaskTagMarkElement(doc);
+  assert.equal(hash.attrs.class, "bob-task-tag-mark");
+  assert.equal(hash.attrs["aria-label"], TOOLTIP);
+});
+
+function makePairTree({ refText = "#ref", gap = " ", taskText = "#task" } = {}) {
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.className = "task-list-item";
+  fx.root.appendChild(li);
+  const task = makeAnchor(fx, { text: taskText, href: taskText });
+  li.appendChild(task);
+  const space = fx.doc.createTextNode(gap);
+  li.appendChild(space);
+  const ref = makeAnchor(fx, { text: refText, href: refText });
+  li.appendChild(ref);
+  return { fx, li, task, ref };
+}
+
+test("TR10 verbatim: the #task anchor becomes the book and the adjacent #ref anchor hides", () => {
+  const plugin = pluginWithTaskTag();
+  const ctx = { sourcePath: "a.md" };
+  const { fx, task, ref } = makePairTree();
+  assert.equal(taskTagMarkElementEligible(task, fx.root), true);
+  assert.equal(isRefTaskTagAnchor(ref), true);
+  assert.equal(refTaskPairAnchor(task), ref);
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  const classes = String(task.className || "").split(/\s+/);
+  assert.ok(classes.includes("bob-task-tag-mark"));
+  assert.ok(classes.includes(REF_TASK_MARK_CLASS));
+  assert.equal(task.getAttribute("aria-label"), REF_LABEL);
+  assert.equal(task.getAttribute("title"), REF_TOOLTIP);
+  assert.ok(task.textContent === "#task");
+  assert.ok(
+    String(ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+  );
+  // Idempotent: a second pass changes nothing.
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  assert.ok(
+    String(ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+  );
+  // Case-insensitive partner.
+  const loud = makePairTree({ refText: "#REF", gap: "  " });
+  assert.equal(refTaskPairAnchor(loud.task), loud.ref);
+  plugin.renderTaskTagMarksIn(loud.fx.root, ctx);
+  assert.ok(
+    String(loud.task.className || "").split(/\s+/).includes(REF_TASK_MARK_CLASS),
+  );
+  // A non-whitespace gap breaks the pair: the hash stays a hash and
+  // the `#ref` pill is untouched.
+  const broken = makePairTree({ gap: " and " });
+  assert.equal(refTaskPairAnchor(broken.task), null);
+  plugin.renderTaskTagMarksIn(broken.fx.root, ctx);
+  const brokenClasses = String(broken.task.className || "").split(/\s+/);
+  assert.ok(brokenClasses.includes("bob-task-tag-mark"));
+  assert.ok(!brokenClasses.includes(REF_TASK_MARK_CLASS));
+  assert.ok(
+    !String(broken.ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+  );
+});
+
+test("TR11 verbatim: #task #references and reversed order keep the hash only", () => {
+  const plugin = pluginWithTaskTag();
+  const ctx = { sourcePath: "a.md" };
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.className = "task-list-item";
+  fx.root.appendChild(li);
+  const task = makeAnchor(fx);
+  li.appendChild(task);
+  li.appendChild(fx.doc.createTextNode(" "));
+  const longer = makeAnchor(fx, { text: "#references", href: "#references" });
+  li.appendChild(longer);
+  assert.equal(isRefTaskTagAnchor(longer), false);
+  assert.equal(refTaskPairAnchor(task), null);
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  assert.ok(String(task.className || "").split(/\s+/).includes("bob-task-tag-mark"));
+  assert.ok(
+    !String(task.className || "").split(/\s+/).includes(REF_TASK_MARK_CLASS),
+  );
+
+  const rev = fakeRenderTree();
+  const revLi = rev.makeEl("li");
+  revLi.className = "task-list-item";
+  rev.root.appendChild(revLi);
+  const first = makeAnchor(rev, { text: "#ref", href: "#ref" });
+  revLi.appendChild(first);
+  revLi.appendChild(rev.doc.createTextNode(" "));
+  const second = makeAnchor(rev);
+  revLi.appendChild(second);
+  assert.equal(taskTagMarkElementEligible(second, rev.root), true);
+  assert.equal(refTaskPairAnchor(second), null);
+  plugin.renderTaskTagMarksIn(rev.root, ctx);
+  assert.ok(
+    String(second.className || "").split(/\s+/).includes("bob-task-tag-mark"),
+  );
+  assert.ok(
+    !String(second.className || "").split(/\s+/).includes(REF_TASK_MARK_CLASS),
+  );
+});
+
+test("TR12 verbatim: Tasks rows never annotate (the #ref book is CSS-only)", () => {
+  const plugin = pluginWithTaskTag();
+  const ctx = { sourcePath: "a.md" };
+  const fx = fakeRenderTree();
+  const tasksRow = fx.makeEl("li");
+  tasksRow.className = "plugin-tasks-list-item";
+  fx.root.appendChild(tasksRow);
+  const desc = fx.makeEl("span");
+  desc.className = "task-description";
+  tasksRow.appendChild(desc);
+  const ref = makeAnchor(fx, { text: "#ref", href: "#ref" });
+  desc.appendChild(ref);
+  assert.equal(taskTagMarkElementEligible(ref, fx.root), false);
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  assert.equal(String(ref.className || "").split(/\s+/).includes("bob-task-tag-mark"), false);
+  assert.equal(
+    String(ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+    false,
+  );
+});
+
+test("TR13 toggle covers the new classes: off strips the book and reveals #ref, on restores both", () => {
+  const savedDocument = global.document;
+  const { fx, task, ref } = makePairTree();
+  const body = fx.root;
+  body.querySelectorAll = (selector) => {
+    const wants = String(selector || "")
+      .split(".")
+      .filter((part) => part !== "" && part !== "a" && part !== "tag");
+    const found = [];
+    const stack = [body];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node.nodeType === 1) {
+        const classes = String(node.className || "").split(/\s+/);
+        if (
+          String(node.tagName).toUpperCase() === "A" &&
+          wants.every((want) => classes.includes(want))
+        ) {
+          found.push(node);
+        }
+      }
+      for (const child of node.childNodes || []) {
+        stack.push(child);
+      }
+    }
+    return found;
+  };
+  global.document = { body, createElement: fx.doc.createElement.bind(fx.doc) };
+  try {
+    const plugin = pluginWithTaskTag();
+    plugin.renderTaskTagMarksIn(fx.root, { sourcePath: "a.md" });
+    assert.ok(String(task.className || "").split(/\s+/).includes(REF_TASK_MARK_CLASS));
+    assert.ok(
+      String(ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+    );
+    assert.equal(plugin.toggleTaskTagMarks(), false);
+    assert.ok(
+      !String(task.className || "").split(/\s+/).includes(REF_TASK_MARK_CLASS),
+    );
+    assert.ok(
+      !String(task.className || "").split(/\s+/).includes("bob-task-tag-mark"),
+    );
+    assert.ok(
+      !String(ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+    );
+    assert.equal(ref.getAttribute("aria-label"), null);
+    assert.equal(plugin.toggleTaskTagMarks(), true);
+    assert.ok(String(task.className || "").split(/\s+/).includes(REF_TASK_MARK_CLASS));
+    assert.ok(
+      String(ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+    );
+    assert.equal(task.getAttribute("aria-label"), REF_LABEL);
+    // Direct helper round-trip.
+    assert.equal(annotateRefTaskMark(task, ref), true);
+    assert.equal(stripRefTaskHidden(ref), true);
+    assert.ok(
+      !String(ref.className || "").split(/\s+/).includes(REF_TASK_HIDDEN_CLASS),
+    );
+    assert.equal(annotateRefTaskMark(null, ref), false);
+    assert.equal(stripRefTaskHidden(null), false);
+    assert.equal(refTaskPairAnchor(null), null);
+    assert.equal(isRefTaskTagAnchor(null), false);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+});
+
+test("styles.css contract for reference reading tasks: glyph, variant, resting, hidden partner, Tasks book", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  const count = (needle) => css.split(needle).length - 1;
+  assert.equal(count("--bob-ref-task-glyph:"), 1);
+  const glyphAt = css.indexOf("--bob-ref-task-glyph:");
+  const glyphLine = css.slice(glyphAt, css.indexOf(";", glyphAt) + 1);
+  assert.ok(glyphLine.indexOf("viewBox='0 0 16 16'") !== -1);
+  assert.ok(glyphLine.indexOf("stroke-width='1.8'") !== -1);
+  assert.ok(glyphLine.indexOf("stroke-linecap='round'") !== -1);
+  assert.ok(glyphLine.indexOf("stroke-linejoin='round'") !== -1);
+  assert.ok(glyphLine.indexOf("M8 4.5") !== -1);
+  assert.ok(
+    css.indexOf("body.bob-task-tag-marks .bob-task-tag-mark.bob-ref-task-mark::before") !== -1,
+  );
+  assert.ok(css.indexOf("mask-image: var(--bob-ref-task-glyph)") !== -1);
+  assert.ok(css.indexOf("-webkit-mask-image: var(--bob-ref-task-glyph)") !== -1);
+  for (const status of ["x", "X", "-"]) {
+    assert.ok(
+      css.indexOf(
+        `li.task-list-item[data-task="${status}"] .bob-task-tag-mark.bob-ref-task-mark`,
+      ) !== -1,
+      status,
+    );
+    assert.ok(
+      css.indexOf(
+        `.HyperMD-task-line[data-task="${status}"] .bob-task-tag-mark.bob-ref-task-mark`,
+      ) !== -1,
+      status,
+    );
+  }
+  const hiddenSelector = "body.bob-task-tag-marks a.tag.bob-ref-task-hidden";
+  assert.ok(css.indexOf(hiddenSelector) !== -1);
+  const hiddenAt = css.indexOf(hiddenSelector);
+  assert.ok(css.slice(hiddenAt, hiddenAt + 300).indexOf("display: none") !== -1);
+  const tasksSelector =
+    "body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is(";
+  const tasksRefAt = css.indexOf(tasksSelector, css.indexOf("--bob-ref-task-glyph:"));
+  assert.ok(tasksRefAt !== -1);
+  const tasksRefBlock = css.slice(tasksRefAt, tasksRefAt + 500);
+  assert.ok(tasksRefBlock.indexOf('[data-tag-name="#ref" i]') !== -1);
+  assert.ok(tasksRefBlock.indexOf('[href="#ref" i]') !== -1);
+  assert.ok(tasksRefBlock.indexOf("display: inline-block") !== -1);
+  assert.ok(tasksRefBlock.indexOf("color: transparent") !== -1);
+  const tasksRefBefore = css.slice(tasksRefAt, tasksRefAt + 2500);
+  assert.ok(tasksRefBefore.indexOf("mask-image: var(--bob-ref-task-glyph)") !== -1);
 });

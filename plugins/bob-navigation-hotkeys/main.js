@@ -90,6 +90,15 @@ const PROJECT_SOURCE_TASK_LINE_RE =
   /^(\s*)(?:[-*+]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
 const PROJECT_TASK_TAG_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/;
 const PROJECT_TASK_TAG_GLOBAL_RE = /(^|[\s([{])#task(?=$|[\s)\]},.;:!?])/g;
+// A `#ref` tag (any case) directly after an exact `#task` tag with one
+// whitespace run between: the reading-task pair (`docs/task-tag-marks.md`
+// "Reference reading tasks" in bob-cli). `#task #references` never
+// matches (the lookahead rejects the longer tag).
+const REF_AFTER_TASK_RE = /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/;
+const REF_AFTER_TASK_GLOBAL_RE =
+  /(^|[\s([{])#task(\s+)#[Rr][Ee][Ff](?=$|[\s)\]},.;:!?])/g;
+// Picker display prefix for reading tasks (mirrors the CLI `📖`).
+const REF_TASK_DISPLAY_PREFIX = "📖 ";
 const PROJECT_LIFECYCLE_TAG_GLOBAL_RE =
   /(^|[\s([{])#(?:prj|hide)(?=$|[\s)\]},.;:!?])/g;
 const PROJECT_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
@@ -1157,16 +1166,21 @@ function insertMissingBulletProperty(line, name, value) {
 }
 
 function stripTaskTag(text) {
-  return String(text || "").replace(
-    PROJECT_TASK_TAG_GLOBAL_RE,
-    (match, prefix) => {
+  return String(text || "")
+    .replace(REF_AFTER_TASK_GLOBAL_RE, (match, prefix) => {
       if (!prefix) {
         return "";
       }
 
       return /\s/.test(prefix) ? " " : prefix;
-    },
-  );
+    })
+    .replace(PROJECT_TASK_TAG_GLOBAL_RE, (match, prefix) => {
+      if (!prefix) {
+        return "";
+      }
+
+      return /\s/.test(prefix) ? " " : prefix;
+    });
 }
 
 function cleanTaskDisplayText(line) {
@@ -1178,12 +1192,16 @@ function cleanTaskDisplayText(line) {
     .replace(BULLET_PROPERTY_TRAILING_BLOCK_ID_RE, "")
     .replace(BULLET_PROPERTY_TASKS_INLINE_FIELD_RE, "")
     .replace(BULLET_PROPERTY_TASKS_EMOJI_DATE_RE, "");
+  const isRefTask = REF_AFTER_TASK_RE.test(body);
   body = stripTaskTag(body)
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 
-  return body || "(untitled task)";
+  if (body === "") {
+    return "(untitled task)";
+  }
+  return isRefTask ? REF_TASK_DISPLAY_PREFIX + body : body;
 }
 
 function getTrailingBlockId(line) {

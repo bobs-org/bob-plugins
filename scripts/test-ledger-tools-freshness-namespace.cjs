@@ -10,7 +10,7 @@ const {
   withMissingConfig,
   makeStatusEl,
 } = require("./ledger-tools-harness.cjs");
-test("freshness namespace v9 advertises checklist and recurring tiers without changing buckets", () => {
+test("freshness namespace v10 advertises checklist and recurring tiers without changing buckets", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -30,9 +30,10 @@ test("freshness namespace v9 advertises checklist and recurring tiers without ch
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 9);
+      assert.equal(freshness.version, 10);
       assert.equal(freshness.checklistTiers, true);
       assert.equal(freshness.recurringTier, true);
+      assert.equal(freshness.refTagIdentity, true);
       for (const key of [
         "config",
         "stampLine",

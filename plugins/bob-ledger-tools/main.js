@@ -5120,10 +5120,11 @@ function freshnessIntervalFor(taskDays, noteDays, config, lane, tracker) {
 // `{ days, source, ready: { days, source } }`. Reads the status from
 // the line (quote-aware) and the lane/tracker intervals from
 // `config`. `ready` is the interval the task returns to after
-// release, including a configured tracker override. A tracker
-// (`^prj`/`^ref`) in any lane shows the Ready-chain interval when no
-// tracker interval is set (the weekly reminder never becomes a daily
-// lane review). Mirrors `docs/freshness.md` §4.
+// release, including a configured tracker override. A `^prj` in any
+// lane shows the Ready-chain interval when no tracker interval is
+// set (the weekly reminder never becomes a daily lane review); a
+// lane `#ref`/`^ref` row is an ordinary lane row and shows the lane
+// interval. Mirrors `docs/freshness.md` §4.
 function freshnessIntervalForLine(line, noteRefreshRaw, config) {
   try {
     const text = typeof line === "string" ? line : "";
@@ -5132,16 +5133,23 @@ function freshnessIntervalForLine(line, noteRefreshRaw, config) {
     const blockMatch = / \^([A-Za-z0-9-]+)\s*$/.exec(
       String(text || "").split("\n")[0] || "",
     );
-    const tracker =
-      blockMatch !== null && (blockMatch[1] === "prj" || blockMatch[1] === "ref")
-        ? blockMatch[1]
-        : null;
-    const ready =
-      freshnessTrackerIntervalFor(config, tracker) ||
-      freshnessIntervalFor(read.refresh, note.days, config, null, null);
+    const blockId = blockMatch !== null ? blockMatch[1] : null;
     const symbol = freshnessTaskStatus(text);
     const lane =
       symbol === "/" ? "pending" : symbol === "*" ? "next" : null;
+    // Ref identity counts only in the Ready lane (lane is null
+    // here); lane refs take the ordinary lane interval.
+    let tracker = null;
+    if (blockId === "prj") {
+      tracker = "prj";
+    } else if (lane === null) {
+      if (blockId === "ref" || freshnessLineHasRefTag(text)) {
+        tracker = "ref";
+      }
+    }
+    const ready =
+      freshnessTrackerIntervalFor(config, tracker) ||
+      freshnessIntervalFor(read.refresh, note.days, config, null, null);
     if (tracker !== null) {
       const trackerInterval = freshnessTrackerIntervalFor(config, tracker);
       if (trackerInterval !== null) {
@@ -5316,22 +5324,26 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       ? freshnessLaneIntervalDays(config, lane)
       : null;
 
-  // Exact tracking identity (`^prj`/`^ref` block IDs only). A
-  // configured tracker interval wins for that type; otherwise
-  // trackers in any lane keep the Ready-chain cadence, never the
-  // lane interval.
-  const tracker =
-    freshnessTrackerFromBlockId(
-      typeof safe.tracker === "string"
-        ? safe.tracker
-        : typeof safe.blockId === "string"
-          ? safe.blockId
-          : null,
-    );
+  // Tracking identity from the row's block ID, tags, and line
+  // (`^prj`, or `^ref` / whole-token `#ref` for references). A
+  // configured tracker interval wins for that type; otherwise a
+  // tracker keeps the Ready-chain cadence, never the lane interval.
+  // Only Ready refs keep the tracker cadence and REFERENCES tier;
+  // lane refs (`/`/`*`) are ordinary lane rows (the J4 split, mirroring
+  // `evaluate_without_checklist` in `src/native/freshness/state.rs`).
+  // `^prj` behavior is unchanged.
+  const tracker = freshnessTrackerFromRow(safe);
   const isPrj = tracker === "prj";
-  const isRef = tracker === "ref";
+  const isRef = tracker === "ref" && lane === "ready";
   const isTracker = isPrj || isRef;
-  const trackerInterval = freshnessTrackerIntervalFor(config, tracker);
+  // Lane refs are ordinary lane rows, so the reference cadence never
+  // applies to them — only the effective (Ready-gated) identity feeds
+  // the interval.
+  const effectiveTracker = isPrj ? "prj" : isRef ? "ref" : null;
+  const trackerInterval = freshnessTrackerIntervalFor(
+    config,
+    effectiveTracker,
+  );
   const readyInterval = freshnessIntervalFor(
     read.refresh,
     note.days,
@@ -5443,10 +5455,11 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     }
   }
 
-  // PROJECTS is every due `^prj` and REFERENCES every due `^ref`
-  // (Ready NEW/RESURFACED/ROTTEN plus every due lane tracker with its
-  // actual lane retained); both precede NEW and the lane tiers, so a
-  // never-confirmed Ready reference walks in REFERENCES, never NEW.
+  // PROJECTS is every due `^prj` (Ready NEW/RESURFACED/ROTTEN plus
+  // every due lane tracker with its actual lane retained) and
+  // REFERENCES every due Ready `#ref`/`^ref` row; both precede NEW
+  // and the lane tiers, so a never-confirmed Ready reference walks
+  // in REFERENCES, never NEW. Lane refs are ordinary lane rows.
   const trackerReadyDue =
     isTracker &&
     lane === "ready" &&
@@ -5691,15 +5704,58 @@ const FRESHNESS_TIER_ORDER = {
   post: 9,
 };
 
-// Tracking-task identity: the parsed, exact trailing block ID `prj`
-// or `ref`. Tags alone, `^prj-extra`, description text, and
-// `[[x#^prj]]` links/embeds are never identities. Mirrors
-// `TrackerKind::from_block_id` in `src/native/freshness/state.rs`.
-function freshnessTrackerFromBlockId(blockId) {
+// Whole-token `#ref` tag in a task line, case-insensitive.
+// `#references` and `#ref/x` never qualify. Mirrors the tag half of
+// `TrackerKind::from_tags_and_block_id` in
+// `src/native/freshness/state.rs`.
+function freshnessLineHasRefTag(line) {
+  const text = typeof line === "string" ? line : "";
+  const tokens = text.split(/[\s\ufeff]+/);
+  for (const token of tokens) {
+    const cleaned = token.replace(/^[>"'([{*\-+]+/, "").replace(/[.,;:!?)\]}'"]+$/, "");
+    if (cleaned.toLowerCase() === "#ref") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Tracking-task identity from the row's block ID, tag list, and
+// line: the exact trailing block ID `prj`, or — for references —
+// the exact trailing block ID `ref` or a whole-token `#ref` tag
+// (case-insensitive). `^prj-extra`, `#references`, description text,
+// and `[[x#^prj]]` links/embeds are never identities. Mirrors
+// `TrackerKind::from_tags_and_block_id` in
+// `src/native/freshness/state.rs`.
+function freshnessTrackerFromRow(row) {
+  const safe = row && typeof row === "object" ? row : {};
+  const blockId =
+    typeof safe.tracker === "string"
+      ? safe.tracker
+      : typeof safe.blockId === "string"
+        ? safe.blockId
+        : null;
   if (blockId === "prj") {
     return "prj";
   }
   if (blockId === "ref") {
+    return "ref";
+  }
+  if (
+    Array.isArray(safe.tags) &&
+    safe.tags.some(
+      (tag) => typeof tag === "string" && tag.trim().toLowerCase() === "#ref",
+    )
+  ) {
+    return "ref";
+  }
+  const line =
+    typeof safe.rawLine === "string"
+      ? safe.rawLine
+      : typeof safe.originalMarkdown === "string"
+        ? safe.originalMarkdown
+        : "";
+  if (freshnessLineHasRefTag(line)) {
     return "ref";
   }
   return null;
@@ -11909,21 +11965,27 @@ function freshnessRowFromTask(task, index, context) {
       task.recurring === true ||
       freshnessHasRepeatField(rawLine);
     const blockId = planTaskBlockId(task);
-    const tracker = freshnessTrackerFromBlockId(blockId);
+    const tracker = freshnessTrackerFromRow({
+      blockId,
+      tags: Array.isArray(task.tags) ? task.tags : [],
+      rawLine,
+    });
     let laneVisible = false;
     try {
       laneVisible = Boolean(
         planLaneVisible(task, list, safeContext.todayDay ?? null),
       );
-      // Freshness-specific review eligibility: exact `^ref` trackers
-      // bypass only the conventional `#hide` tag. Re-run the same
+      // Freshness-specific review eligibility: only exact `^ref`
+      // trackers bypass the conventional `#hide` tag (the
+      // transitional v1 bypass). A hand-written `#hide` on a
+      // tag-only `#ref` line hides it like any task. Re-run the same
       // lane predicate on a shallow clone with hide-matching tags
       // removed (never mutating the cached Tasks object); every other
       // exclusion still applies, and ordinary hidden tasks — and
       // hidden `^prj` rows — stay out. Recurring rows keep ordinary
       // visibility (including `#hide` exclusion) even on trackers, so
       // a hidden recurring `^ref` never walks in RECURRING.
-      if (!laneVisible && tracker === "ref" && !recurring) {
+      if (!laneVisible && blockId === "ref" && !recurring) {
         try {
           const tags = Array.isArray(task.tags) ? task.tags : [];
           const stripped = tags.filter(
@@ -12455,14 +12517,17 @@ class BobLedgerToolsPlugin extends Plugin {
       // (`keeps`, `decay`, `decide`) mirror `docs/freshness.md`
       // §§2a/4/7/11-12; `keepLine` is the sole increment helper and
       // every generic stamper clears. Tracker review rides the same
-      // namespace with the explicit `trackerReview` capability: exact
-      // `^ref` trackers bypass `#hide`, visible `^prj` rows use the
-      // ordinary predicate, and the PROJECTS/REFERENCES tiers walk
-      // with `projectsDue`/`referencesDue` and `checklistTiers`
-      // advertises PRE/POST using `preDue`/`postDue` and the nine-key
-      // `byTier` histogram (ten keys with `recurring`). The explicit
+      // namespace with the explicit `trackerReview` capability: only
+      // exact `^ref` trackers bypass `#hide` (tag-only `#ref` rows use
+      // the ordinary predicate), visible `^prj` rows use the ordinary
+      // predicate, and the PROJECTS/REFERENCES tiers walk with
+      // `projectsDue`/`referencesDue` and `checklistTiers` advertises
+      // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
+      // histogram (ten keys with `recurring`). The explicit
       // `referenceReview` capability tells consumers the queue may
-      // carry `references` entries.
+      // carry `references` entries. Namespace v10 re-keys ref identity
+      // to the `#ref` tag (the explicit `refTagIdentity` capability):
+      // Ready `#ref` rows keep REFERENCES, lane refs walk PENDING/NEXT.
       // Top-level api stays v3).
       // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
       // member is synchronous, never awaits and never throws. Missing
@@ -12472,11 +12537,12 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 9,
+        version: 10,
         trackerReview: true,
         referenceReview: true,
         checklistTiers: true,
         recurringTier: true,
+        refTagIdentity: true,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),
@@ -28628,7 +28694,8 @@ module.exports.helpers = {
   freshnessIntervalForLine,
   freshnessTierLabel,
   freshnessTierFooterLabel,
-  freshnessTrackerFromBlockId,
+  freshnessLineHasRefTag,
+  freshnessTrackerFromRow,
   freshnessOccursOn,
   freshnessEvaluateWithoutRecurring,
   freshnessApplyRecurringOverlay,

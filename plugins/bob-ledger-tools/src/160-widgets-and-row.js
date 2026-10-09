@@ -326,21 +326,27 @@ function freshnessRowFromTask(task, index, context) {
       task.recurring === true ||
       freshnessHasRepeatField(rawLine);
     const blockId = planTaskBlockId(task);
-    const tracker = freshnessTrackerFromBlockId(blockId);
+    const tracker = freshnessTrackerFromRow({
+      blockId,
+      tags: Array.isArray(task.tags) ? task.tags : [],
+      rawLine,
+    });
     let laneVisible = false;
     try {
       laneVisible = Boolean(
         planLaneVisible(task, list, safeContext.todayDay ?? null),
       );
-      // Freshness-specific review eligibility: exact `^ref` trackers
-      // bypass only the conventional `#hide` tag. Re-run the same
+      // Freshness-specific review eligibility: only exact `^ref`
+      // trackers bypass the conventional `#hide` tag (the
+      // transitional v1 bypass). A hand-written `#hide` on a
+      // tag-only `#ref` line hides it like any task. Re-run the same
       // lane predicate on a shallow clone with hide-matching tags
       // removed (never mutating the cached Tasks object); every other
       // exclusion still applies, and ordinary hidden tasks — and
       // hidden `^prj` rows — stay out. Recurring rows keep ordinary
       // visibility (including `#hide` exclusion) even on trackers, so
       // a hidden recurring `^ref` never walks in RECURRING.
-      if (!laneVisible && tracker === "ref" && !recurring) {
+      if (!laneVisible && blockId === "ref" && !recurring) {
         try {
           const tags = Array.isArray(task.tags) ? task.tags : [];
           const stripped = tags.filter(

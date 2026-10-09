@@ -390,16 +390,17 @@ test("a stale-stamped recurring row marks due with the resolve hint", () => {
   assert.match(model.tooltip, /complete or reschedule to resolve/);
 });
 
-test("freshness namespace v9 advertises the recurringTier capability", () => {
+test("freshness namespace v10 advertises the recurringTier capability", () => {
   withMissingConfig(() => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({}), {});
     plugin.onload();
     try {
-      assert.equal(plugin.api.freshness.version, 9);
+      assert.equal(plugin.api.freshness.version, 10);
       assert.equal(plugin.api.freshness.trackerReview, true);
       assert.equal(plugin.api.freshness.referenceReview, true);
       assert.equal(plugin.api.freshness.checklistTiers, true);
       assert.equal(plugin.api.freshness.recurringTier, true);
+      assert.equal(plugin.api.freshness.refTagIdentity, true);
     } finally {
       plugin.onunload();
     }

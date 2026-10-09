@@ -251,14 +251,17 @@ class BobLedgerToolsPlugin extends Plugin {
       // (`keeps`, `decay`, `decide`) mirror `docs/freshness.md`
       // §§2a/4/7/11-12; `keepLine` is the sole increment helper and
       // every generic stamper clears. Tracker review rides the same
-      // namespace with the explicit `trackerReview` capability: exact
-      // `^ref` trackers bypass `#hide`, visible `^prj` rows use the
-      // ordinary predicate, and the PROJECTS/REFERENCES tiers walk
-      // with `projectsDue`/`referencesDue` and `checklistTiers`
-      // advertises PRE/POST using `preDue`/`postDue` and the nine-key
-      // `byTier` histogram (ten keys with `recurring`). The explicit
+      // namespace with the explicit `trackerReview` capability: only
+      // exact `^ref` trackers bypass `#hide` (tag-only `#ref` rows use
+      // the ordinary predicate), visible `^prj` rows use the ordinary
+      // predicate, and the PROJECTS/REFERENCES tiers walk with
+      // `projectsDue`/`referencesDue` and `checklistTiers` advertises
+      // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
+      // histogram (ten keys with `recurring`). The explicit
       // `referenceReview` capability tells consumers the queue may
-      // carry `references` entries.
+      // carry `references` entries. Namespace v10 re-keys ref identity
+      // to the `#ref` tag (the explicit `refTagIdentity` capability):
+      // Ready `#ref` rows keep REFERENCES, lane refs walk PENDING/NEXT.
       // Top-level api stays v3).
       // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
       // member is synchronous, never awaits and never throws. Missing
@@ -268,11 +271,12 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 9,
+        version: 10,
         trackerReview: true,
         referenceReview: true,
         checklistTiers: true,
         recurringTier: true,
+        refTagIdentity: true,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),

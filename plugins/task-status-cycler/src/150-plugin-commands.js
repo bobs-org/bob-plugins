@@ -19,6 +19,30 @@ class TaskStatusCyclerCommandsMixin {
       if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
         this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
       }
+      // `cycler_polish` (bead bob-cli-3k): a cycle into Done joins the same
+      // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
+      // only (`closeKind: "cancelled"`, never links).
+      if (wrote && (nextSymbol === "x" || nextSymbol === "-")) {
+        const cycleFile = view.file ||
+          (this.app.workspace &&
+          typeof this.app.workspace.getActiveFile === "function"
+            ? this.app.workspace.getActiveFile()
+            : null);
+        const cyclePath = cycleFile && cycleFile.path;
+        if (cyclePath) {
+          const identity = closedTaskIdentity(cyclePath, taskStatus.lineText);
+          if (identity) {
+            const cycleContext = { activePath: cyclePath };
+            if (editor && typeof editor.getValue === "function") {
+              cycleContext.editor = editor;
+            }
+            void this.finalizeCycledClosedTasks(
+              [{ identity, symbol: nextSymbol }],
+              cycleContext,
+            );
+          }
+        }
+      }
       return true;
     }
 
@@ -505,6 +529,9 @@ class TaskStatusCyclerCommandsMixin {
     const seenResolvedTargets = new Set();
     let changed = false;
     let startDepLineUntargeted = false;
+    // `cycler_polish`: identities cycled into Done/Cancelled, finalized as
+    // one batch after the loop (Done links, Cancelled recovers only).
+    const cycleClosed = [];
 
     // Pomodoro Task Link lines never range-cycle: a counted range starting on
     // one delegates wholesale in the dispatch above, and ranges starting
@@ -601,6 +628,12 @@ class TaskStatusCyclerCommandsMixin {
           if (taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
             this.applyBlockedStatusRetirementInEditor(editor, editorLineFor(line));
           }
+          if (activePath && (nextSymbol === "x" || nextSymbol === "-")) {
+            const identity = closedTaskIdentity(activePath, lineText);
+            if (identity) {
+              cycleClosed.push({ identity, symbol: nextSymbol });
+            }
+          }
         }
         continue;
       }
@@ -660,9 +693,25 @@ class TaskStatusCyclerCommandsMixin {
         resolvedTarget,
         context,
         direction,
+        { deferFinalize: true },
       );
       if (wrote) {
         changed = true;
+        const targetNext = this.getAdjacentSymbol(
+          resolvedTarget.taskStatus.symbol,
+          direction,
+        );
+        if (activePath && (targetNext === "x" || targetNext === "-")) {
+          const identity = closedTaskIdentity(
+            resolvedTarget.file.path,
+            resolvedTarget.taskStatus.lineText,
+          ) || (resolvedTarget.blockId
+            ? { path: resolvedTarget.file.path, blockId: resolvedTarget.blockId }
+            : null);
+          if (identity) {
+            cycleClosed.push({ identity, symbol: targetNext });
+          }
+        }
       }
     }
 
@@ -678,6 +727,15 @@ class TaskStatusCyclerCommandsMixin {
 
     if (!changed && startDepLineUntargeted) {
       new Notice("⛓ Put the cursor on a dependency link to cycle it");
+    }
+
+    // One batched pass for the whole counted range (partitioned Done vs
+    // Cancelled inside); the cycle writes already landed.
+    if (cycleClosed.length > 0 && activePath) {
+      void this.finalizeCycledClosedTasks(cycleClosed, {
+        editor,
+        activePath,
+      });
     }
 
     return changed;

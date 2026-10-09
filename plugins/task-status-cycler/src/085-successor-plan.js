@@ -443,6 +443,7 @@ function successorOrderCompare(left, right) {
 //   `day_file`).
 // - `today`: `"YYYY-MM-DD"` (defaults to today).
 // - `linkUnblocked`: the `plan.link_unblocked` kill switch (default true).
+// - `cancelled`: a cancel close recovers only; rows report `cancelled`.
 // - `isInbox`: `(path) => boolean` (default: root `inbox.md` check).
 // - `basenameCounts`: lowercase-basename → vault-wide note count for the
 //   §12.4 link form.
@@ -473,6 +474,9 @@ function planSuccessors(options = {}) {
       ? options.today
       : formatLocalDate();
   const linkUnblocked = options.linkUnblocked !== false;
+  // `cycler_polish`: an Alt+]/Alt+[ move into Cancelled recovers only —
+  // rows report `cancelled`, never `disabled`, and nothing links or mints.
+  const cancelledClose = options.cancelled === true;
   const isInbox =
     typeof options.isInbox === "function" ? options.isInbox : successorDefaultIsInbox;
   const basenameCounts =
@@ -643,8 +647,12 @@ function planSuccessors(options = {}) {
       continue;
     }
     // 7. Kill switch: linking and minting off, recovery still runs.
-    if (!linkUnblocked) {
-      recovers.push({ task, reason: "disabled", predecessorRows });
+    if (cancelledClose || !linkUnblocked) {
+      recovers.push({
+        task,
+        reason: cancelledClose ? "cancelled" : "disabled",
+        predecessorRows,
+      });
       continue;
     }
     // 8. SUCCESSOR, anchored at the earliest anchor among its predecessors.

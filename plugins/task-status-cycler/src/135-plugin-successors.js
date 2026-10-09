@@ -291,12 +291,9 @@ class TaskStatusCyclerSuccessorsMixin {
     return { documents };
   }
 
-  // Re-locate a Pomodoro-line close's closed entry in the current daily text
-  // by its pre-edit headline. The completion plan only flips the entry's
-  // status to `[x]`, so the exact post-edit line is known; Work Log writes
-  // to the same note can shift it, hence the search. Returns the 0-based
-  // line or null when re-location fails (callers report `failed` rather
-  // than guess). Never throws.
+  // Re-locate a Pomodoro-line close's entry by pre-edit headline (Work Log
+  // writes can shift it). Returns the 0-based line or null (callers report
+  // `failed` rather than guess). Never throws.
   relocateSuccessorClosingEntry(currentLines, hint) {
     try {
       const lines = Array.isArray(currentLines) ? currentLines : [];
@@ -354,11 +351,8 @@ class TaskStatusCyclerSuccessorsMixin {
     }
   }
 
-  // Apply successor note edits (`{ path, line, before, after }` full-line
-  // replacements): through the open editor with a line-text re-check, else
-  // through `vault.process` with a preimage check. A mismatch marks that
-  // dependent's row `failed` instead of writing. Returns
-  // `{ failed, failureReason }`. Never throws.
+  // Apply successor note edits through the open editor (line re-check) or
+  // `vault.process` (preimage check); mismatches mark rows `failed`. Never throws.
   async applySuccessorNoteEdits(plan, context) {
     let failed = 0;
     let failureReason = null;
@@ -497,11 +491,8 @@ class TaskStatusCyclerSuccessorsMixin {
     return { failed, failureReason };
   }
 
-  // Apply daily insertions from `planSuccessorInsertions` as one editor
-  // transaction, or through `vault.process` with an anchor-line preimage
-  // check. Fills each linked row's `link` fields from the insertion result;
-  // placements the insertion skipped (or a vault preimage mismatch) mark
-  // their rows `failed`. Returns `{ failed, failureReason }`. Never throws.
+  // Apply daily insertions as one editor transaction or through
+  // `vault.process`; skipped placements mark their rows `failed`. Never throws.
   async applySuccessorDailyInsertions(plan, insertion, context, dailyPath) {
     let failed = 0;
     let failureReason = null;
@@ -651,12 +642,9 @@ class TaskStatusCyclerSuccessorsMixin {
     return { failed, failureReason };
   }
 
-  // The gated recover-and-link pass. Runs inside `finalizeClosedTasks`'s
-  // queued job: gate on `[id::]`, build the dependents index (Tasks Warm
-  // cache with open-buffer overrides, else the cold full scan), plan with
-  // `planSuccessors`, apply note edits and daily insertions, and return the
-  // shared §12.5 notice model (or null when the gate stops the pass). The
-  // close itself never depends on this result. Never throws.
+  // The gated recover-and-link pass inside `finalizeClosedTasks`: gate on
+  // `[id::]`, plan with `planSuccessors`, apply, and return the §12.5 model
+  // (or null). The close never depends on this result. Never throws.
   async planAndApplySuccessorsNow(closed, context) {
     try {
       const active = context && typeof context === "object" ? context : {};
@@ -684,6 +672,12 @@ class TaskStatusCyclerSuccessorsMixin {
         linkUnblocked = loadLinkUnblocked() !== false;
       } catch (error) {
         linkUnblocked = true;
+      }
+      // `cycler_polish`: a cancel close (`closeKind: "cancelled"`) recovers
+      // only — no links, no mints, rows report `cancelled`.
+      const cancelledClose = active.closeKind === "cancelled";
+      if (cancelledClose) {
+        linkUnblocked = false;
       }
       let today = null;
       try {
@@ -789,6 +783,7 @@ class TaskStatusCyclerSuccessorsMixin {
           dailyPath: dailyPath || "",
           today,
           linkUnblocked,
+          cancelled: cancelledClose,
           basenameCounts,
           closingEntry: planClosingEntry,
           noteTexts: noteTextsObject,
@@ -892,6 +887,19 @@ class TaskStatusCyclerSuccessorsMixin {
             }
           }
         }
+      }
+      // `cycler_polish`: remember linked rows for the same-day reopen
+      // take-back. Capture closes never reach this pass, so they gain no
+      // receipt (Alt+N is their per-link undo).
+      try {
+        if (typeof this.rememberSuccessorPass === "function") {
+          this.rememberSuccessorPass(identities, plan, insertion, {
+            dailyPath,
+            today,
+          });
+        }
+      } catch (error) {
+        // Best effort: a missed receipt only loses the take-back shortcut.
       }
       const predecessors = identities.map((identity) => ({
         note_path: String(identity.path || ""),

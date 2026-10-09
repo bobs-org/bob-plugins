@@ -290,6 +290,21 @@ class TaskStatusCyclerCompletionMixin {
         resolvedTarget,
         context,
       );
+      if (result.changed) {
+        // `cycler_polish`: a Ctrl+Enter reopen takes back this pass's
+        // untouched successor links.
+        try {
+          await this.consumeSuccessorReopenReceipt(
+            [{
+              path: resolvedTarget.file.path,
+              blockId: resolvedTarget.blockId,
+            }],
+            context,
+          );
+        } catch (error) {
+          // Best effort: the reopen already landed.
+        }
+      }
       return result.changed;
     }
 
@@ -368,6 +383,15 @@ class TaskStatusCyclerCompletionMixin {
         }
       } else {
         await this.restoreReopenedTaskReferences(identities, context);
+        // `cycler_polish`: `[x]` → open on the task line takes back this
+        // pass's untouched successor links the same day.
+        if (identities.length > 0) {
+          try {
+            await this.consumeSuccessorReopenReceipt(identities, context);
+          } catch (error) {
+            // Best effort: the reopen already landed.
+          }
+        }
       }
     }
     return true;
@@ -489,6 +513,21 @@ class TaskStatusCyclerCompletionMixin {
           );
         } catch (error) {
           // Best effort: the reopen already landed; a missed unstrike is cosmetic.
+        }
+      }
+      if (reopenResult.changed) {
+        // `cycler_polish`: the struck-link reopen takes back this pass's
+        // untouched successor links the same day.
+        try {
+          await this.consumeSuccessorReopenReceipt(
+            [{
+              path: resolvedTarget.file.path,
+              blockId: resolvedTarget.blockId,
+            }],
+            context,
+          );
+        } catch (error) {
+          // Best effort: the reopen already landed.
         }
       }
       return { resolved: true, changed: reopenResult.changed };
@@ -627,7 +666,12 @@ class TaskStatusCyclerCompletionMixin {
     );
   }
 
-  async cycleResolvedTranscludedTaskTarget(resolvedTarget, context, direction) {
+  async cycleResolvedTranscludedTaskTarget(
+    resolvedTarget,
+    context,
+    direction,
+    options = {},
+  ) {
     if (!resolvedTarget || !isCyclableTaskStatus(resolvedTarget.taskStatus)) {
       return false;
     }
@@ -647,6 +691,31 @@ class TaskStatusCyclerCompletionMixin {
 
     if (wrote && sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL) {
       await this.applyBlockedStatusRetirementToTranscludedTarget(resolvedTarget, context);
+    }
+
+    // `cycler_polish` (bead bob-cli-3k): a transcluded-target cycle into
+    // Done or Cancelled joins the same pass as Ctrl+Enter, unless the caller
+    // batches the finalize itself (the counted range passes
+    // `deferFinalize`).
+    if (
+      wrote && !(options && options.deferFinalize) &&
+      (nextSymbol === "x" || nextSymbol === "-")
+    ) {
+      const targetPath = resolvedTarget.file && resolvedTarget.file.path;
+      if (targetPath) {
+        const identity = closedTaskIdentity(
+          targetPath,
+          resolvedTarget.taskStatus.lineText,
+        ) || (resolvedTarget.blockId
+          ? { path: targetPath, blockId: resolvedTarget.blockId }
+          : null);
+        if (identity) {
+          void this.finalizeCycledClosedTasks(
+            [{ identity, symbol: nextSymbol }],
+            context,
+          );
+        }
+      }
     }
 
     return wrote;

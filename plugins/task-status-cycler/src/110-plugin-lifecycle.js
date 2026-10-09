@@ -150,6 +150,11 @@ class TaskStatusCyclerPlugin extends Plugin {
       this.demotionSectionPicker.close();
       this.demotionSectionPicker = null;
     }
+    // `cycler_polish`: reopen receipts are in-memory only and die with the
+    // plugin (they also expire at local midnight on next use).
+    if (this.successorReopenReceiptStore) {
+      this.successorReopenReceiptStore.clear();
+    }
   }
 
 }

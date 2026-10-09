@@ -16,6 +16,7 @@
   "120-plugin-dependency-ids.js",
   "130-plugin-references.js",
   "135-plugin-successors.js",
+  "136-plugin-successor-receipt.js",
   "140-plugin-vim.js",
   "150-plugin-commands.js",
   "160-plugin-completion.js",

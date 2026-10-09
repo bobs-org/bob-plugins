@@ -901,6 +901,8 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // object and never rejecting. Plugins never import each other's
 // `main.js`: bob-ledger-tools feature-detects `api?.version >= 1` and
 // task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
+// `notice` is the additive Unblocked card (`api.notice` v1, §12.6);
+// callers feature-detect `api.notice?.version >= 1`.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -925,6 +927,7 @@ function createDependencyNavApi(plugin) {
     reviewWalk: createReviewWalkApi(plugin),
     inboxRoute: createInboxRouteApi(plugin),
     taskLinkLane: createTaskLinkLaneApi(plugin),
+    notice: createNoticeApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

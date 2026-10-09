@@ -31,6 +31,7 @@
   "260-project-schedules.js",
   "270-counted-batches.js",
   "280-notices-and-dates.js",
+  "285-unblocked-notice.js",
   "290-local-task-items.js",
   "300-dependency-stage.js",
   "310-task-card-previews.js",

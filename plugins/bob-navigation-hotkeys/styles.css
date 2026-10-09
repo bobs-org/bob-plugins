@@ -1367,6 +1367,68 @@
   --bob-nh-tone: var(--text-muted);
 }
 
+/* Unblocked successor notice card: the level color is the Next tone, and
+   rows lay out on a glyph / text / pill grid over the existing
+   `--task-status-*` tokens and the cancel card's chip tones. Muted rows
+   (not-linked and still-blocked) read as secondary. */
+.bob-nh-notice.is-unblock {
+  --bob-nh-level-color: var(--task-status-next, var(--color-green));
+}
+
+.bob-nh-unblock-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bob-nh-unblock-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 2px 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.bob-nh-unblock-row.is-clickable {
+  cursor: pointer;
+}
+
+.bob-nh-unblock-row.is-muted {
+  color: var(--text-muted);
+}
+
+.bob-nh-unblock-row.is-muted .bob-nh-unblock-text {
+  color: var(--text-muted);
+}
+
+.bob-nh-unblock-row.is-linked .bob-nh-unblock-glyph {
+  color: var(--task-status-next, var(--color-green));
+  font-weight: var(--font-semibold);
+}
+
+.bob-nh-unblock-row .bob-nh-unblock-glyph {
+  color: var(--text-muted);
+}
+
+.bob-nh-unblock-row .bob-nh-unblock-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bob-nh-unblock-row .bob-nh-unblock-suffix {
+  grid-column: 2;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.bob-nh-unblock-more {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-style: italic;
+}
+
 /* Vault-wide Depends on stage (nav-stage): CURRENT / RESULTS / BLOCKED
    section dividers, guarded (disabled) rows, and cross-note guard reasons.
    Section headers sit inside the first row of their section and read as a

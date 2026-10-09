@@ -417,12 +417,24 @@ function clampNumber(value, min, max) {
 
 function showBulletPropertyNotice(message, options) {
   const showNotice = options && options.showNotice;
+  const duration =
+    options && Number.isFinite(Number(options.duration))
+      ? Number(options.duration)
+      : null;
   if (typeof showNotice === "function") {
-    showNotice(message);
+    if (duration === null) {
+      showNotice(message);
+    } else {
+      showNotice(message, duration);
+    }
     return;
   }
 
-  new Notice(message);
+  if (duration === null) {
+    new Notice(message);
+  } else {
+    new Notice(message, duration);
+  }
 }
 
 function requireOptionalNodeModule(name) {

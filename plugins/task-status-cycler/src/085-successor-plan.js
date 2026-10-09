@@ -410,6 +410,130 @@ function successorDefaultIsInbox(path) {
   return normalizeDependencyMarkdownPath(path) === "inbox.md";
 }
 
+// Vault directories capture never walks (`vault_note_paths`): hidden
+// dot-directories and the always-excluded names. Only directory segments
+// count — a dotted file name is still eligible.
+const SUCCESSOR_EXCLUDED_DIR_NAMES = new Set([
+  ".git",
+  ".obsidian",
+  "_conflicts",
+  "_generated",
+  "_templates",
+]);
+
+function isExcludedSuccessorVaultPath(path) {
+  const segments = String(path || "").split("/");
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (
+      segment.startsWith(".") || SUCCESSOR_EXCLUDED_DIR_NAMES.has(segment)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Inbox predicate for the successor pass: nav's versioned `inboxRoute`
+// API (`api.inboxRoute.version >= 1`, root `inbox.md` plus direct area
+// children), else the host plugin's `isInboxNotePath`, else the safe
+// root-`inbox.md` default. Never throws; per-path failures fall back.
+function getSuccessorIsInbox(app) {
+  try {
+    const plugins = (app && app.plugins && app.plugins.plugins) || {};
+    const nav = plugins["bob-navigation-hotkeys"];
+    const api = nav && nav.api;
+    const route = api && api.inboxRoute;
+    if (
+      route && Number(route.version) >= 1 &&
+      typeof route.isInboxNote === "function"
+    ) {
+      return (path) => {
+        try {
+          return route.isInboxNote(path) === true;
+        } catch (error) {
+          return successorDefaultIsInbox(path);
+        }
+      };
+    }
+    if (nav && typeof nav.isInboxNotePath === "function") {
+      return (path) => {
+        try {
+          return nav.isInboxNotePath(path) === true;
+        } catch (error) {
+          return successorDefaultIsInbox(path);
+        }
+      };
+    }
+  } catch (error) {
+    // Fall through to the default.
+  }
+  return successorDefaultIsInbox;
+}
+
+// Basename counts over the same eligible Markdown path set capture
+// walks: every vault `.md` file minus dot-directories and the
+// always-excluded names (`.git`, `.obsidian`, `_conflicts`, `_generated`,
+// `_templates`), unioned with staged/open-editor paths. Bodies are never
+// read. Never throws.
+function countSuccessorBasenames(app, tasks, identities, dailyPath, noteTexts) {
+  const counts = {};
+  try {
+    const knownPaths = new Set();
+    const vault = app && app.vault;
+    const files = vault && typeof vault.getMarkdownFiles === "function"
+      ? vault.getMarkdownFiles()
+      : [];
+    for (const file of files) {
+      const path = file && file.path;
+      if (!path || !MARKDOWN_EXTENSION_RE.test(path)) {
+        continue;
+      }
+      if (isExcludedSuccessorVaultPath(path)) {
+        continue;
+      }
+      knownPaths.add(String(path));
+    }
+    for (const task of Array.isArray(tasks) ? tasks : []) {
+      if (task && task.path) {
+        knownPaths.add(String(task.path));
+      }
+    }
+    for (const identity of Array.isArray(identities) ? identities : []) {
+      if (identity && identity.path) {
+        knownPaths.add(String(identity.path));
+      }
+    }
+    if (dailyPath) {
+      knownPaths.add(String(dailyPath));
+    }
+    if (noteTexts && typeof noteTexts.keys === "function") {
+      for (const path of noteTexts.keys()) {
+        if (path) {
+          knownPaths.add(String(path));
+        }
+      }
+    } else if (noteTexts && typeof noteTexts === "object") {
+      for (const path of Object.keys(noteTexts)) {
+        if (path) {
+          knownPaths.add(String(path));
+        }
+      }
+    }
+    for (const path of knownPaths) {
+      const base = path.split("/").pop() || "";
+      const stem = (base.replace(/\.md$/i, "") || base).toLowerCase();
+      if (!stem) {
+        continue;
+      }
+      counts[stem] = (counts[stem] || 0) + 1;
+    }
+  } catch (error) {
+    // Best effort: an empty count links long, never wrong-short.
+  }
+  return counts;
+}
+
 function successorAnchorPosition(anchor) {
   return anchor && anchor.entryLine != null
     ? anchor.entryLine

@@ -169,12 +169,34 @@ function normalizeClosedTaskIdentities(identities) {
     if (!blockId && !taskId) {
       continue;
     }
+    // The recursive close's anchor root survives normalization: matching
+    // still uses only nonempty `taskId` values, while the successor pass
+    // inherits the planned slot from `rootKey`. A root never names itself.
+    let root = identity && identity.rootKey && identity.rootKey.path
+      ? {
+        path: String(identity.rootKey.path),
+        ...(BLOCK_ID_RE.test(String(identity.rootKey.blockId || ""))
+          ? { blockId: String(identity.rootKey.blockId) }
+          : {}),
+      }
+      : null;
+    // A root never names itself: drop a self-referencing rootKey so the
+    // anchor pass cannot inherit a task from itself.
+    if (
+      root && root.path === String(identity.path) &&
+      (root.blockId || "") === (blockId || "")
+    ) {
+      root = null;
+    }
     const next = {
       path: String(identity.path),
       ...(blockId ? { blockId } : {}),
       ...(taskId ? { taskId } : {}),
+      ...(root ? { rootKey: root } : {}),
     };
-    const key = `${next.path}\0${blockId || ""}\0${taskId || ""}`;
+    const key = `${next.path}\0${blockId || ""}\0${taskId || ""}\0${
+      root ? `${root.path}\0${root.blockId || ""}` : ""
+    }`;
     if (seen.has(key)) {
       continue;
     }
@@ -206,19 +228,28 @@ function buildBlockedDependentRecoveryPlan(
       document && document.path,
     ),
   }));
-  const openIds = new Set();
-  for (const document of parsedDocuments) {
-    for (const task of document.tasks) {
-      if (
-        task.taskId &&
-        DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)
-      ) {
-        openIds.add(task.taskId);
+  // A Warm caller may supply the complete open/closed sets (built over the
+  // full Tasks index) so only candidate bodies need reading; otherwise
+  // both sets derive from the parsed documents exactly as before.
+  const openIds = new Set(
+    options && options.openIds ? Array.from(options.openIds, String) : [],
+  );
+  if (!options || !options.openIds) {
+    for (const document of parsedDocuments) {
+      for (const task of document.tasks) {
+        if (
+          task.taskId &&
+          DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)
+        ) {
+          openIds.add(task.taskId);
+        }
       }
     }
   }
 
-  const closedIds = new Set();
+  const closedIds = new Set(
+    options && options.closedIds ? Array.from(options.closedIds, String) : [],
+  );
   const closed = normalizeClosedTaskIdentities(closedIdentities);
   for (const identity of closed) {
     if (identity.taskId) {

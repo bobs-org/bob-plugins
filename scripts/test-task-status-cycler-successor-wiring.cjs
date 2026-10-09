@@ -181,67 +181,83 @@ test("close with no [id::] performs zero vault reads and shows nothing", async (
   assert.equal(notices.length, 0);
 });
 
-test("Warm successor pass reads only the candidate notes and the daily note", async () => {
+test("Warm finalize reads no unrelated note bodies on the real close path", async () => {
   notices.length = 0;
-  const day = fixDay();
+  const day = ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — FIX", "\t- [[p#^p]]"].join("\n");
   const harness = createInMemoryObsidianApp({
-    "sase.md": [FIX_DONE_LINE, DEPENDENT_LINE].join("\n"),
-    "decoy.md": "- [?] #task Decoy [dependsOn:: other__thing] ^decoy",
+    "p.md": "- [x] #task Pred [id:: p] ^p",
+    "a/d.md": "- [?] #task Dep [dependsOn:: p] [id:: d] ^d",
+    "b/d.md": "# Notes\n\nProse about d things, no tasks here.\n",
     [DAILY_PATH]: day,
   });
+  // Complete link metadata: the daily note links the predecessor; the
+  // prose-only decoy links nothing, so retirement skips its body too.
+  harness.app.metadataCache.resolvedLinks = {
+    [DAILY_PATH]: { "p.md": 1 },
+  };
   const editor = createTextEditor(day, { line: 4, ch: 5 });
   const plugin = makePlugin(harness, editor, DAILY_PATH);
   const seen = [];
   installNavStub(plugin, seen);
   installTasksStub(plugin, [
     {
-      path: "sase.md",
+      path: "p.md",
       lineNumber: 0,
       status: "x",
-      originalMarkdown: FIX_DONE_LINE,
-      description: "Fix apollo machine!",
-      blockId: "fix-apollo",
-      id: "sase__fix-apollo",
+      originalMarkdown: "- [x] #task Pred [id:: p] ^p",
+      description: "Pred",
+      blockId: "p",
+      id: "p",
       dependsOn: [],
     },
     {
-      path: "sase.md",
-      lineNumber: 1,
+      path: "a/d.md",
+      lineNumber: 0,
       status: "?",
-      originalMarkdown: DEPENDENT_LINE,
-      description: "Re-launch all failed agents on apollo!",
-      blockId: "relaunch-failed",
-      id: null,
-      dependsOn: ["sase__fix-apollo"],
+      originalMarkdown: "- [?] #task Dep [dependsOn:: p] [id:: d] ^d",
+      description: "Dep",
+      blockId: "d",
+      id: "d",
+      dependsOn: ["p"],
     },
   ]);
   const counts = countVaultReads(harness);
 
-  // Drive the pass directly: `finalizeClosedTasks` also runs the legacy
-  // full-scan recovery as a backstop, which is out of scope for this
-  // read budget (see the bead's follow-up note).
-  const model = await plugin.planAndApplySuccessorsNow(
-    [{ path: "sase.md", blockId: "fix-apollo" }],
+  // The entire gesture through the real `finalizeClosedTasks`: one gated
+  // recover-and-link plan (no legacy full-scan recovery), linker-scoped
+  // retirement, and exactly one notice.
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "p.md", blockId: "p" }],
     { editor, activePath: DAILY_PATH },
   );
 
+  const model = result.successors;
   assert.ok(model);
   assert.equal(model.unblocked.length, 1);
   assert.equal(model.unblocked[0].status_symbol, "*");
   assert.ok(model.unblocked[0].link);
   assert.equal(model.unblocked[0].link.entry_name, "FIX");
+  // The prose-only `b/d.md` sibling forces the long form, exactly like
+  // Rust's walk-only catalog.
+  assert.equal(model.unblocked[0].link.block_link, "[[a/d#^d]]");
+  assert.equal(model.failure, null);
+  // Recovery counts propagate from the same plan: one `?` changed.
+  assert.equal(result.reopened, 1);
+  assert.deepEqual(result.recoveryFailures, []);
+  assert.deepEqual(result.retirementFailures, []);
   assert.equal(
-    harness.getSource("sase.md"),
-    [FIX_DONE_LINE, DEPENDENT_NEXT_LINE].join("\n"),
+    harness.getSource("a/d.md"),
+    "- [*] #task Dep [dependsOn:: p] [id:: d] ^d",
   );
-  assert.equal(editor.getLine(5), "\t- [[sase#^relaunch-failed]]");
-  // Only the closed note (gate lookup) was read; the decoy never was, and
-  // the open daily buffer needed no read at all.
+  assert.equal(editor.getLine(5), "\t- [[a/d#^d]]");
+  // Related notes were read; the prose-only decoy and the open daily
+  // buffer needed no body read at all.
   const allReads = [...counts.cachedRead, ...counts.read];
-  assert.ok(!allReads.includes("decoy.md"));
+  assert.ok(!allReads.includes("b/d.md"));
   assert.ok(!allReads.includes(DAILY_PATH));
-  assert.ok(allReads.includes("sase.md"));
-  assert.equal(plugin.presentSuccessorModel(model, { editor }), "🔓 Next in FIX: Re-launch all failed agents on apollo!");
+  assert.ok(allReads.includes("p.md"));
+  assert.ok(allReads.includes("a/d.md"));
+  // Exactly one notice for the whole gesture.
   assert.equal(seen.length, 1);
   assert.equal(notices.length, 0);
 });
@@ -438,12 +454,13 @@ test("stale cache line yields a failed row and a warning notice", async () => {
   assert.equal(row.link, null);
   assert.equal(row.not_linked, "failed");
   assert.equal(result.successors.failure.count, 1);
-  // No link was written for the failed row, but the legacy recovery
-  // backstop still recovered the status from its fresh read: recovered
-  // but unlinked, exactly as the contract promises.
+  // No link was written for the failed row, and with the single gated
+  // plan there is no legacy backstop rewrite either: the stale line is
+  // left untouched and the failure is reported, exactly as the contract
+  // promises.
   assert.equal(
     harness.getSource("sase.md").split("\n")[1],
-    "- [ ] #task Re-launch all failed agents TODAY! [dependsOn:: sase__fix-apollo] ^relaunch-failed",
+    "- [?] #task Re-launch all failed agents TODAY! [dependsOn:: sase__fix-apollo] ^relaunch-failed",
   );
   assert.equal(seen.length, 1);
   assert.match(

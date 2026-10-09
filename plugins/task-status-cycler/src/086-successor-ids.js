@@ -386,8 +386,9 @@ function successorCountFromBasenameCounts(basenameCounts, stem) {
 
 // Shortest unambiguous link form for a successor target (§12.4):
 // `[[basename#^id]]` when the basename is unique in the vault
-// (case-insensitive, counted over the same task-bearing-note set capture
-// uses for `&` dependency links), else `[[dir/note#^id]]`. The one
+// (case-insensitive, counted over the same eligible Markdown path set
+// capture walks for `&` dependency links — prose-only notes included),
+// else `[[dir/note#^id]]`. The one
 // exception: a successor that lives in the day file itself still names the
 // note (`[[20261009#^id]]`), never the bare `[[#^id]]`. `basenameCounts`
 // maps the lowercase basename to its vault-wide note count; an unknown

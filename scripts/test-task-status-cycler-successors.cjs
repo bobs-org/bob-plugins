@@ -1138,3 +1138,263 @@ test("todayDailyPath mirrors the ledger daily path", () => {
     "daily/2026-10-09.md",
   );
 });
+
+test("normalizeClosedTaskIdentities keeps the anchor root off the match gate", () => {
+  const normalized = helpers.normalizeClosedTaskIdentities([
+    { path: "sase.md", blockId: "p", rootKey: { path: "sase.md", blockId: "p" } },
+    {
+      path: "sub.md",
+      blockId: "s",
+      taskId: "s",
+      rootKey: { path: "sase.md", blockId: "p" },
+    },
+    { path: "nowhere.md" },
+  ]);
+  // The ID-less root survives for its anchor (matching still skips it),
+  // the child's rootKey survives, and the empty identity drops.
+  assert.equal(normalized.length, 2);
+  assert.equal(normalized[0].rootKey, undefined);
+  assert.deepEqual(normalized[1].rootKey, { path: "sase.md", blockId: "p" });
+});
+
+test("ID-less planned roots anchor ID-bearing children without minting IDs", () => {
+  const day = [
+    "# 2026-10-09",
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[sase#^p]]",
+  ].join("\n");
+  const { plan } = planFixture({
+    day,
+    notes: {
+      "sase.md": "- [ ] #task Root ^p",
+      "sub.md": "- [x] #task Subtask [id:: s] ^s",
+      "d.md": "- [?] #task Dependent [dependsOn:: s] [id:: d] ^d",
+    },
+    // As the recursive close reports it: the root carries no `taskId`,
+    // the child names its tree root.
+    closed: [
+      { path: "sase.md", blockId: "p", text: "Root" },
+      {
+        path: "sub.md",
+        blockId: "s",
+        taskId: "s",
+        text: "Subtask",
+        rootKey: { path: "sase.md", blockId: "p" },
+      },
+    ],
+  });
+  assert.equal(plan.unblocked.length, 1);
+  assert.equal(plan.unblocked[0].block_id, "d");
+  assert.ok(plan.unblocked[0].link);
+  // Inherited from the ID-less root's FIX slot.
+  assert.deepEqual(plan.placements[0].anchor, {
+    kind: "inherit",
+    entryLine: 3,
+    bulletLine: 4,
+  });
+});
+
+test("successor anchors never guess across roots", () => {
+  const day = [
+    "# 2026-10-09",
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[a#^ra]]",
+  ].join("\n");
+  const { plan } = planFixture({
+    day,
+    notes: {
+      "a.md": "- [x] #task Root A ^ra",
+      "b.md": "- [x] #task Root B ^rb",
+      "sub.md": "- [x] #task Sub of B [id:: s] ^s",
+      "d.md": "- [?] #task Dependent [dependsOn:: s] [id:: d] ^d",
+    },
+    closed: [
+      { path: "a.md", blockId: "ra", text: "Root A" },
+      { path: "b.md", blockId: "rb", text: "Root B" },
+      {
+        path: "sub.md",
+        blockId: "s",
+        taskId: "s",
+        text: "Sub of B",
+        rootKey: { path: "b.md", blockId: "rb" },
+      },
+    ],
+  });
+  // The child's own root was never planned: it recovers instead of
+  // borrowing the first root's anchor.
+  assert.equal(plan.unblocked.length, 1);
+  assert.equal(plan.unblocked[0].block_id, "d");
+  assert.equal(plan.unblocked[0].link, null);
+  assert.equal(plan.unblocked[0].not_linked, "not_planned_today");
+});
+
+test("a child with its own live link keeps its own slot", () => {
+  const day = [
+    "# 2026-10-09",
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[sase#^p]]",
+    "- [ ] () — SASE",
+    "\t- [[sub#^s]]",
+  ].join("\n");
+  const { plan } = planFixture({
+    day,
+    notes: {
+      "sase.md": "- [ ] #task Root ^p",
+      "sub.md": "- [x] #task Subtask [id:: s] ^s",
+      "d.md": "- [?] #task Dependent [dependsOn:: s] [id:: d] ^d",
+    },
+    closed: [
+      { path: "sase.md", blockId: "p", text: "Root" },
+      {
+        path: "sub.md",
+        blockId: "s",
+        taskId: "s",
+        text: "Subtask",
+        rootKey: { path: "sase.md", blockId: "p" },
+      },
+    ],
+  });
+  assert.equal(plan.unblocked.length, 1);
+  assert.ok(plan.unblocked[0].link);
+  // The direct slot wins over the inherited root anchor.
+  assert.deepEqual(plan.placements[0].anchor, {
+    kind: "slot",
+    entryLine: 5,
+    bulletLine: 6,
+  });
+});
+
+test("getSuccessorIsInbox prefers the versioned nav API with safe fallbacks", () => {
+  const viaRoute = helpers.getSuccessorIsInbox({
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            inboxRoute: {
+              version: 1,
+              isInboxNote: (path) => path === "areas/triage.md",
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(viaRoute("areas/triage.md"), true);
+  assert.equal(viaRoute("inbox.md"), false);
+  // A throwing route falls back per path, never throws the gesture.
+  const throwing = helpers.getSuccessorIsInbox({
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            inboxRoute: {
+              version: 1,
+              isInboxNote: () => {
+                throw new Error("nav down");
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(throwing("inbox.md"), true);
+  assert.equal(throwing("sase.md"), false);
+  // Without the versioned API the host predicate is used.
+  const viaHost = helpers.getSuccessorIsInbox({
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          isInboxNotePath: (path) => path === "mac_inbox.md",
+        },
+      },
+    },
+  });
+  assert.equal(viaHost("mac_inbox.md"), true);
+  assert.equal(viaHost("inbox.md"), false);
+  // Without nav only the root default remains.
+  const fallback = helpers.getSuccessorIsInbox({ plugins: { plugins: {} } });
+  assert.equal(fallback("inbox.md"), true);
+  assert.equal(fallback("mac_inbox.md"), false);
+});
+
+test("countSuccessorBasenames walks the vault set, not the task set", () => {
+  const app = {
+    vault: {
+      getMarkdownFiles: () => [
+        { path: "a/d.md" },
+        { path: "b/d.md" },
+        { path: "inbox.md" },
+        { path: ".obsidian/hidden.md" },
+        { path: "_templates/tpl.md" },
+        { path: ".drafts/wip.md" },
+        { path: "notes.txt" },
+      ],
+    },
+  };
+  const counts = helpers.countSuccessorBasenames(
+    app,
+    [{ path: "a/d.md" }],
+    [],
+    "2026/20261009.md",
+    {},
+  );
+  // The prose-only `b/d.md` still forces the long form; excluded
+  // directories and non-Markdown files never count.
+  assert.equal(counts.d, 2);
+  assert.equal(counts.inbox, 1);
+  assert.equal(counts.hidden, undefined);
+  assert.equal(counts.tpl, undefined);
+  assert.equal(counts.wip, undefined);
+  assert.equal(counts.notes, undefined);
+  // Staged paths join the set without reading bodies.
+  const staged = helpers.countSuccessorBasenames(
+    { vault: { getMarkdownFiles: () => [{ path: "Notes.md" }] } },
+    [],
+    [],
+    "",
+    { "extra.md": "- [ ] #task New\n" },
+  );
+  assert.equal(staged.notes, 1);
+  assert.equal(staged.extra, 1);
+  // Stems compare case-insensitively: differently-cased twins collide.
+  const cased = helpers.countSuccessorBasenames(
+    {
+      vault: {
+        getMarkdownFiles: () => [{ path: "a/d.md" }, { path: "A/D.md" }],
+      },
+    },
+    [],
+    [],
+    "",
+    {},
+  );
+  assert.equal(cased.d, 2);
+});
+
+test("the pass threads a richer isInbox into unblocked rows", () => {
+  const { plan } = planFixture({
+    day: FIX_DAY,
+    notes: {
+      "sase.md": [
+        "- [?] #task Fix apollo machine! [id:: sase__fix-apollo] ^fix-apollo",
+      ].join("\n"),
+      "mac_inbox.md": [
+        "- [?] #task Triage this [dependsOn:: sase__fix-apollo] ^triage",
+      ].join("\n"),
+    },
+    closed: FIX_CLOSED,
+    options: {
+      basenameCounts: { sase: 1, mac_inbox: 1 },
+      isInbox: (path) => path === "mac_inbox.md",
+    },
+  });
+  assert.equal(plan.unblocked.length, 1);
+  assert.equal(plan.unblocked[0].inbox, true);
+});

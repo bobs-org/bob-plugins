@@ -580,7 +580,13 @@ class TaskStatusCyclerPomodoroMixin {
   // visited
   // is true once the candidate resolved to a fresh in-bounds target, changed is
   // true when this node or any descendant was forced to done.
-  async completeTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
+  async completeTranscludedTaskTargetTree(
+    candidate,
+    context,
+    seen,
+    depth = 0,
+    rootKey = null,
+  ) {
     if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
       return { visited: false, changed: false, closed: [] };
     }
@@ -602,6 +608,7 @@ class TaskStatusCyclerPomodoroMixin {
       context,
       seen,
       depth,
+      rootKey,
     );
   }
 
@@ -615,6 +622,7 @@ class TaskStatusCyclerPomodoroMixin {
     context,
     seen,
     depth = 0,
+    rootKey = null,
   ) {
     if (!resolvedTarget || !resolvedTarget.file) {
       return { visited: false, changed: false, closed: [] };
@@ -625,6 +633,17 @@ class TaskStatusCyclerPomodoroMixin {
       return { visited: false, changed: false, closed: [] };
     }
     seen.add(seenKey);
+
+    // The tree's anchor root: the topmost resolved target of this close.
+    // Descendant closes carry it as `rootKey` so the successor pass can
+    // inherit the planned anchor for an ID-less root; each tree keeps its
+    // own root, never the first closed identity of a multi-root gesture.
+    const treeRoot = rootKey && rootKey.path
+      ? { path: String(rootKey.path), blockId: String(rootKey.blockId || "") }
+      : {
+        path: resolvedTarget.file.path,
+        blockId: resolvedTarget.blockId,
+      };
 
     const childContext = {
       editor: context.editor,
@@ -644,6 +663,7 @@ class TaskStatusCyclerPomodoroMixin {
           childContext,
           seen,
           depth + 1,
+          treeRoot,
         );
         if (childResult && childResult.changed) {
           changed = true;
@@ -667,15 +687,22 @@ class TaskStatusCyclerPomodoroMixin {
       );
       if (wrote) {
         changed = true;
-        closed.push(
-          closedTaskIdentity(
-            resolvedTarget.file.path,
-            resolvedTarget.taskStatus.lineText,
-          ) || {
-            path: resolvedTarget.file.path,
-            blockId: resolvedTarget.blockId,
-          },
-        );
+        const identity = closedTaskIdentity(
+          resolvedTarget.file.path,
+          resolvedTarget.taskStatus.lineText,
+        ) || {
+          path: resolvedTarget.file.path,
+          blockId: resolvedTarget.blockId,
+        };
+        // Non-root closes name their tree root; the root itself anchors
+        // directly and carries no `rootKey`.
+        if (rootKey && rootKey.path) {
+          identity.rootKey = {
+            path: String(treeRoot.path),
+            blockId: String(treeRoot.blockId || ""),
+          };
+        }
+        closed.push(identity);
       }
     }
 

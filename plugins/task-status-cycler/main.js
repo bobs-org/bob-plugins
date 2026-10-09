@@ -4530,12 +4530,34 @@ function normalizeClosedTaskIdentities(identities) {
     if (!blockId && !taskId) {
       continue;
     }
+    // The recursive close's anchor root survives normalization: matching
+    // still uses only nonempty `taskId` values, while the successor pass
+    // inherits the planned slot from `rootKey`. A root never names itself.
+    let root = identity && identity.rootKey && identity.rootKey.path
+      ? {
+        path: String(identity.rootKey.path),
+        ...(BLOCK_ID_RE.test(String(identity.rootKey.blockId || ""))
+          ? { blockId: String(identity.rootKey.blockId) }
+          : {}),
+      }
+      : null;
+    // A root never names itself: drop a self-referencing rootKey so the
+    // anchor pass cannot inherit a task from itself.
+    if (
+      root && root.path === String(identity.path) &&
+      (root.blockId || "") === (blockId || "")
+    ) {
+      root = null;
+    }
     const next = {
       path: String(identity.path),
       ...(blockId ? { blockId } : {}),
       ...(taskId ? { taskId } : {}),
+      ...(root ? { rootKey: root } : {}),
     };
-    const key = `${next.path}\0${blockId || ""}\0${taskId || ""}`;
+    const key = `${next.path}\0${blockId || ""}\0${taskId || ""}\0${
+      root ? `${root.path}\0${root.blockId || ""}` : ""
+    }`;
     if (seen.has(key)) {
       continue;
     }
@@ -4567,19 +4589,28 @@ function buildBlockedDependentRecoveryPlan(
       document && document.path,
     ),
   }));
-  const openIds = new Set();
-  for (const document of parsedDocuments) {
-    for (const task of document.tasks) {
-      if (
-        task.taskId &&
-        DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)
-      ) {
-        openIds.add(task.taskId);
+  // A Warm caller may supply the complete open/closed sets (built over the
+  // full Tasks index) so only candidate bodies need reading; otherwise
+  // both sets derive from the parsed documents exactly as before.
+  const openIds = new Set(
+    options && options.openIds ? Array.from(options.openIds, String) : [],
+  );
+  if (!options || !options.openIds) {
+    for (const document of parsedDocuments) {
+      for (const task of document.tasks) {
+        if (
+          task.taskId &&
+          DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)
+        ) {
+          openIds.add(task.taskId);
+        }
       }
     }
   }
 
-  const closedIds = new Set();
+  const closedIds = new Set(
+    options && options.closedIds ? Array.from(options.closedIds, String) : [],
+  );
   const closed = normalizeClosedTaskIdentities(closedIdentities);
   for (const identity of closed) {
     if (identity.taskId) {
@@ -5279,6 +5310,130 @@ function collectSuccessorUsedIds(noteText) {
 // available.
 function successorDefaultIsInbox(path) {
   return normalizeDependencyMarkdownPath(path) === "inbox.md";
+}
+
+// Vault directories capture never walks (`vault_note_paths`): hidden
+// dot-directories and the always-excluded names. Only directory segments
+// count — a dotted file name is still eligible.
+const SUCCESSOR_EXCLUDED_DIR_NAMES = new Set([
+  ".git",
+  ".obsidian",
+  "_conflicts",
+  "_generated",
+  "_templates",
+]);
+
+function isExcludedSuccessorVaultPath(path) {
+  const segments = String(path || "").split("/");
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (
+      segment.startsWith(".") || SUCCESSOR_EXCLUDED_DIR_NAMES.has(segment)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Inbox predicate for the successor pass: nav's versioned `inboxRoute`
+// API (`api.inboxRoute.version >= 1`, root `inbox.md` plus direct area
+// children), else the host plugin's `isInboxNotePath`, else the safe
+// root-`inbox.md` default. Never throws; per-path failures fall back.
+function getSuccessorIsInbox(app) {
+  try {
+    const plugins = (app && app.plugins && app.plugins.plugins) || {};
+    const nav = plugins["bob-navigation-hotkeys"];
+    const api = nav && nav.api;
+    const route = api && api.inboxRoute;
+    if (
+      route && Number(route.version) >= 1 &&
+      typeof route.isInboxNote === "function"
+    ) {
+      return (path) => {
+        try {
+          return route.isInboxNote(path) === true;
+        } catch (error) {
+          return successorDefaultIsInbox(path);
+        }
+      };
+    }
+    if (nav && typeof nav.isInboxNotePath === "function") {
+      return (path) => {
+        try {
+          return nav.isInboxNotePath(path) === true;
+        } catch (error) {
+          return successorDefaultIsInbox(path);
+        }
+      };
+    }
+  } catch (error) {
+    // Fall through to the default.
+  }
+  return successorDefaultIsInbox;
+}
+
+// Basename counts over the same eligible Markdown path set capture
+// walks: every vault `.md` file minus dot-directories and the
+// always-excluded names (`.git`, `.obsidian`, `_conflicts`, `_generated`,
+// `_templates`), unioned with staged/open-editor paths. Bodies are never
+// read. Never throws.
+function countSuccessorBasenames(app, tasks, identities, dailyPath, noteTexts) {
+  const counts = {};
+  try {
+    const knownPaths = new Set();
+    const vault = app && app.vault;
+    const files = vault && typeof vault.getMarkdownFiles === "function"
+      ? vault.getMarkdownFiles()
+      : [];
+    for (const file of files) {
+      const path = file && file.path;
+      if (!path || !MARKDOWN_EXTENSION_RE.test(path)) {
+        continue;
+      }
+      if (isExcludedSuccessorVaultPath(path)) {
+        continue;
+      }
+      knownPaths.add(String(path));
+    }
+    for (const task of Array.isArray(tasks) ? tasks : []) {
+      if (task && task.path) {
+        knownPaths.add(String(task.path));
+      }
+    }
+    for (const identity of Array.isArray(identities) ? identities : []) {
+      if (identity && identity.path) {
+        knownPaths.add(String(identity.path));
+      }
+    }
+    if (dailyPath) {
+      knownPaths.add(String(dailyPath));
+    }
+    if (noteTexts && typeof noteTexts.keys === "function") {
+      for (const path of noteTexts.keys()) {
+        if (path) {
+          knownPaths.add(String(path));
+        }
+      }
+    } else if (noteTexts && typeof noteTexts === "object") {
+      for (const path of Object.keys(noteTexts)) {
+        if (path) {
+          knownPaths.add(String(path));
+        }
+      }
+    }
+    for (const path of knownPaths) {
+      const base = path.split("/").pop() || "";
+      const stem = (base.replace(/\.md$/i, "") || base).toLowerCase();
+      if (!stem) {
+        continue;
+      }
+      counts[stem] = (counts[stem] || 0) + 1;
+    }
+  } catch (error) {
+    // Best effort: an empty count links long, never wrong-short.
+  }
+  return counts;
 }
 
 function successorAnchorPosition(anchor) {
@@ -6049,8 +6204,9 @@ function successorCountFromBasenameCounts(basenameCounts, stem) {
 
 // Shortest unambiguous link form for a successor target (§12.4):
 // `[[basename#^id]]` when the basename is unique in the vault
-// (case-insensitive, counted over the same task-bearing-note set capture
-// uses for `&` dependency links), else `[[dir/note#^id]]`. The one
+// (case-insensitive, counted over the same eligible Markdown path set
+// capture walks for `&` dependency links — prose-only notes included),
+// else `[[dir/note#^id]]`. The one
 // exception: a successor that lives in the day file itself still names the
 // note (`[[20261009#^id]]`), never the bare `[[#^id]]`. `basenameCounts`
 // maps the lowercase basename to its vault-wide note count; an unknown
@@ -8796,9 +8952,11 @@ class TaskStatusCyclerReferencesMixin {
       });
     }
     return this.enqueueTaskReferenceMutation(async () => {
-      // Successor pass first: anchors are read while the cursor link is
-      // still unstruck (the strike lands after this job) and before embed
-      // retirement. Best-effort: a failure here never blocks the close.
+      // One gated dependency plan: the successor pass recovers and links
+      // in a single Warm pass (anchors are read while the cursor link is
+      // still unstruck and before embed retirement). No legacy full-scan
+      // recovery follows it. Best-effort: a failure here never blocks the
+      // close.
       let successors = null;
       try {
         successors = await this.planAndApplySuccessorsNow(
@@ -8809,17 +8967,32 @@ class TaskStatusCyclerReferencesMixin {
         console.error("Could not plan successor links", error);
         successors = null;
       }
-      let recovery;
-      try {
-        recovery = await this.recoverBlockedDependentsNow(
-          closed,
-          context || {},
-        );
-      } catch (error) {
-        const message = error && error.message ? error.message : String(error);
-        console.error("Could not recover blocked dependents", error);
+      // Recovery counts and failures propagate from that same plan: every
+      // applied `?`-changing row counts as reopened, and a failed plan
+      // reports the lookup as failed instead of scanning the vault again.
+      // A gated plan (no `[id::]`) stays quiet: nothing was checkable.
+      let reopened = 0;
+      let recoveryFailures = [];
+      if (successors && successors.gated === true) {
+        successors = null;
+      } else if (successors && Array.isArray(successors.unblocked)) {
+        for (const row of successors.unblocked) {
+          if (
+            row && row.previous_status_symbol === "?" &&
+            row.status_symbol !== "?" && row.not_linked !== "failed"
+          ) {
+            reopened += 1;
+          }
+        }
+        if (successors.failure) {
+          recoveryFailures = [
+            successors.failure.reason || "blocked dependents could not be checked",
+          ];
+          new Notice("Closed tasks, but blocked dependents could not be checked.");
+        }
+      } else {
+        recoveryFailures = ["blocked dependents could not be checked"];
         new Notice("Closed tasks, but blocked dependents could not be checked.");
-        recovery = { reopened: 0, failures: [message] };
       }
       const retirement = await this.retireClosedTaskReferencesNow(
         normalizeTaskReferenceIdentities(closed),
@@ -8832,9 +9005,9 @@ class TaskStatusCyclerReferencesMixin {
         successorNotice = null;
       }
       return {
-        reopened: recovery.reopened,
+        reopened,
         retired: retirement.retired,
-        recoveryFailures: recovery.failures,
+        recoveryFailures,
         retirementFailures: retirement.failures,
         successors,
         successorNotice,
@@ -8884,7 +9057,9 @@ class TaskStatusCyclerReferencesMixin {
     }
     // Gate: with no `[id::]` in the closed set nothing can be blocked on
     // it, so skip the vault-wide scan entirely. Identical output (the plan
-    // builder would resolve zero closed ids), pure speed-up.
+    // builder would resolve zero closed ids), pure speed-up. The resolved
+    // identities are kept for the Warm path's complete closed set below.
+    let resolvedClosed = null;
     try {
       if (typeof this.resolveSuccessorClosedIdentities === "function") {
         const gate = await this.resolveSuccessorClosedIdentities(
@@ -8895,9 +9070,13 @@ class TaskStatusCyclerReferencesMixin {
         if (gate && gate.gated) {
           return { reopened: 0, failures: [] };
         }
+        if (gate && Array.isArray(gate.identities)) {
+          resolvedClosed = gate.identities;
+        }
       }
     } catch (error) {
       // Best effort: fall through to the full recovery below.
+      resolvedClosed = null;
     }
     const openEditors = this.getOpenMarkdownEditors(context || {});
     const files = vault.getMarkdownFiles().filter(
@@ -8912,36 +9091,113 @@ class TaskStatusCyclerReferencesMixin {
       failures.push(`${filePath}: ${message}`);
       failedPaths.add(filePath);
     };
-
-    for (const file of files) {
-      try {
-        const editor = openEditors.get(file.path);
-        const text = editor
-          ? editor.getValue()
-          : typeof vault.cachedRead === "function"
-            ? await vault.cachedRead(file)
-            : typeof vault.read === "function"
-              ? await vault.read(file)
-              : null;
-        if (typeof text !== "string") {
-          recordFailure(file.path, "note could not be read");
-          continue;
-        }
-        documents.push({ path: file.path, text, file, editor: editor || null });
-      } catch (error) {
-        recordFailure(file.path, error.message || String(error));
-      }
-    }
-
     const recoveryToday =
       context && typeof context.today === "string" && context.today
         ? context.today
         : typeof this.getScheduleLogDateString === "function"
           ? this.getScheduleLogDateString()
           : formatLocalDate();
-    const plan = buildBlockedDependentRecoveryPlan(documents, closedIdentities, {
-      today: recoveryToday,
-    });
+
+    // Warm fast path: the Tasks cache already indexes every task, so the
+    // open set is complete without reading bodies, and only notes holding
+    // a dependent of the closed set are read (open editor buffers first,
+    // exactly like the cold scan). Recovery semantics are unchanged —
+    // Ready recovery with no links — and an unready cache falls back to
+    // the full scan below.
+    let plan = null;
+    let warm = false;
+    try {
+      if (
+        typeof this.buildSuccessorPool === "function" && resolvedClosed
+      ) {
+        const closedIds = new Set();
+        for (const identity of resolvedClosed) {
+          if (identity && identity.taskId) {
+            closedIds.add(String(identity.taskId));
+          }
+        }
+        if (closedIds.size === 0) {
+          return { reopened: 0, failures: [] };
+        }
+        const pool = await this.buildSuccessorPool(
+          closedIds,
+          context || {},
+          new Map(),
+        );
+        if (pool && pool.warm && Array.isArray(pool.tasks)) {
+          const openIds = new Set();
+          const candidatePaths = new Set();
+          for (const task of pool.tasks) {
+            if (!task || typeof task !== "object") {
+              continue;
+            }
+            if (
+              task.taskId &&
+              DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+              !closedIds.has(String(task.taskId))
+            ) {
+              openIds.add(String(task.taskId));
+            }
+            if (
+              task.path && Array.isArray(task.dependsOn) &&
+              task.dependsOn.some((id) => closedIds.has(String(id)))
+            ) {
+              candidatePaths.add(String(task.path));
+            }
+          }
+          for (const path of candidatePaths) {
+            const text = pool.noteTexts.get(path);
+            if (typeof text !== "string") {
+              recordFailure(path, "note could not be read");
+              continue;
+            }
+            documents.push({
+              path,
+              text,
+              file: fileByPath.get(path) || null,
+              editor: openEditors.get(path) || null,
+            });
+          }
+          plan = buildBlockedDependentRecoveryPlan(
+            documents,
+            resolvedClosed,
+            {
+              today: recoveryToday,
+              openIds: [...openIds],
+              closedIds: [...closedIds],
+            },
+          );
+          warm = true;
+        }
+      }
+    } catch (error) {
+      warm = false;
+      plan = null;
+    }
+    if (!warm) {
+      for (const file of files) {
+        try {
+          const editor = openEditors.get(file.path);
+          const text = editor
+            ? editor.getValue()
+            : typeof vault.cachedRead === "function"
+              ? await vault.cachedRead(file)
+              : typeof vault.read === "function"
+                ? await vault.read(file)
+                : null;
+          if (typeof text !== "string") {
+            recordFailure(file.path, "note could not be read");
+            continue;
+          }
+          documents.push({ path: file.path, text, file, editor: editor || null });
+        } catch (error) {
+          recordFailure(file.path, error.message || String(error));
+        }
+      }
+      plan = buildBlockedDependentRecoveryPlan(documents, closedIdentities, {
+        today: recoveryToday,
+      });
+    }
     const editsByPath = new Map();
     for (const edit of plan.edits) {
       if (!editsByPath.has(edit.path)) {
@@ -9032,6 +9288,71 @@ class TaskStatusCyclerReferencesMixin {
     return { reopened, failures };
   }
 
+  // Sources that link any closed note, from the vault link index
+  // (`metadataCache.resolvedLinks`/`unresolvedLinks`, inverted): the only
+  // notes that can embed a closed task, plus the closed notes themselves
+  // (mutual embeds), the active note, and every open editor buffer (newer
+  // than the index). Null when the index is unavailable — callers keep the
+  // conservative full scan so no retirement write is ever dropped to pass
+  // a counter.
+  retirementLinkerPaths(closedIdentities, context) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      const resolved = metadataCache && metadataCache.resolvedLinks;
+      const unresolved = metadataCache && metadataCache.unresolvedLinks;
+      if (
+        (!resolved || typeof resolved !== "object") &&
+        (!unresolved || typeof unresolved !== "object")
+      ) {
+        return null;
+      }
+      const wanted = new Set();
+      for (const identity of normalizeTaskReferenceIdentities(closedIdentities)) {
+        if (identity && identity.path) {
+          wanted.add(String(identity.path));
+        }
+      }
+      if (wanted.size === 0) {
+        return new Set();
+      }
+      const linkers = new Set(wanted);
+      for (const index of [resolved, unresolved]) {
+        if (!index || typeof index !== "object") {
+          continue;
+        }
+        for (const source of Object.keys(index)) {
+          let dests = null;
+          try {
+            dests = index[source];
+          } catch (error) {
+            dests = null;
+          }
+          if (!dests || typeof dests !== "object") {
+            continue;
+          }
+          for (const dest of Object.keys(dests)) {
+            if (wanted.has(String(dest))) {
+              linkers.add(String(source));
+              break;
+            }
+          }
+        }
+      }
+      const active = context && context.activePath;
+      if (active) {
+        linkers.add(String(active));
+      }
+      if (typeof this.getOpenMarkdownEditors === "function") {
+        for (const path of this.getOpenMarkdownEditors(context || {}).keys()) {
+          linkers.add(String(path));
+        }
+      }
+      return linkers;
+    } catch (error) {
+      return null;
+    }
+  }
+
   async retireClosedTaskReferencesNow(closedIdentities, context) {
     const result = await this.mutateTaskReferencesNow(
       closedIdentities,
@@ -9044,6 +9365,7 @@ class TaskStatusCyclerReferencesMixin {
         failureLog: "Could not retire all closed task references",
         failureNotice: (count) =>
           `Closed tasks, but ${count} note${count === 1 ? "" : "s"} could not be checked for references.`,
+        linkerPaths: this.retirementLinkerPaths(closedIdentities, context || {}),
       },
     );
     return { retired: result.count, failures: result.failures };
@@ -9302,45 +9624,70 @@ class TaskStatusCyclerReferencesMixin {
     };
     let count = 0;
     const failures = [];
+    // Open buffers are read in memory: the active editor plus every other
+    // open Markdown editor, which may be newer than the vault on disk.
+    let openEditors = null;
+    try {
+      openEditors = typeof this.getOpenMarkdownEditors === "function"
+        ? this.getOpenMarkdownEditors(context || {})
+        : new Map();
+    } catch (error) {
+      openEditors = new Map();
+    }
+    if (editor && typeof editor.getValue === "function" && activePath) {
+      openEditors.set(activePath, editor);
+    }
+    // A caller-supplied linker set restricts the scan to notes that can
+    // hold a matching reference (plus open buffers, always eligible);
+    // without one every note is visited, exactly as before.
+    const linkerPaths = mutation && mutation.linkerPaths instanceof Set
+      ? mutation.linkerPaths
+      : null;
+
+    const applyEditorBuffer = (buffer, bufferPath) => {
+      const before = buffer.getValue();
+      const result = mutation.transform(
+        before,
+        bufferPath,
+        identities,
+        resolveLinkPath,
+      );
+      if (result.changed) {
+        const oldLines = splitTextByLineEndings(before).map((line) => line.text);
+        const newLines = splitTextByLineEndings(result.text).map(
+          (line) => line.text,
+        );
+        const cursor =
+          typeof buffer.getCursor === "function" ? buffer.getCursor() : null;
+        for (let line = oldLines.length - 1; line >= 0; line -= 1) {
+          if (oldLines[line] !== newLines[line]) {
+            this.replaceEditorLine(line, newLines[line], buffer);
+          }
+        }
+        if (cursor && typeof buffer.setCursor === "function") {
+          const lineText = buffer.getLine(cursor.line) || "";
+          buffer.setCursor({
+            line: cursor.line,
+            ch: Math.min(cursor.ch, lineText.length),
+          });
+        }
+      }
+      count += result[mutation.countField];
+    };
 
     for (const file of vault.getMarkdownFiles()) {
       if (!file || !file.path) {
         continue;
       }
+      const openEditor = openEditors.get(file.path) || null;
+      if (
+        linkerPaths && !linkerPaths.has(file.path) && !openEditor
+      ) {
+        continue;
+      }
       try {
-        if (
-          file.path === activePath &&
-          editor &&
-          typeof editor.getValue === "function"
-        ) {
-          const before = editor.getValue();
-          const result = mutation.transform(
-            before,
-            file.path,
-            identities,
-            resolveLinkPath,
-          );
-          if (result.changed) {
-            const oldLines = splitTextByLineEndings(before).map((line) => line.text);
-            const newLines = splitTextByLineEndings(result.text).map(
-              (line) => line.text,
-            );
-            const cursor =
-              typeof editor.getCursor === "function" ? editor.getCursor() : null;
-            for (let line = oldLines.length - 1; line >= 0; line -= 1) {
-              if (oldLines[line] !== newLines[line]) {
-                this.replaceEditorLine(line, newLines[line], editor);
-              }
-            }
-            if (cursor && typeof editor.setCursor === "function") {
-              const lineText = editor.getLine(cursor.line) || "";
-              editor.setCursor({
-                line: cursor.line,
-                ch: Math.min(cursor.ch, lineText.length),
-              });
-            }
-          }
-          count += result[mutation.countField];
+        if (openEditor && typeof openEditor.getValue === "function") {
+          applyEditorBuffer(openEditor, file.path);
           continue;
         }
 
@@ -10064,8 +10411,21 @@ class TaskStatusCyclerSuccessorsMixin {
         active,
         cache,
       );
+      // Gated (no `[id::]` in C): nothing can be blocked on this close.
+      // Return a quiet marker, not a failure: callers stay silent and the
+      // read budget proves no vault-wide scan ran.
+      const quietGate = {
+        version: 1,
+        gated: true,
+        predecessors: [],
+        unblocked: [],
+        still_blocked: [],
+        daily_path: "",
+        daily_content: null,
+        failure: null,
+      };
       if (gate.gated) {
-        return null;
+        return quietGate;
       }
       const identities = gate.identities;
       const closedTaskIds = new Set(
@@ -10074,7 +10434,7 @@ class TaskStatusCyclerSuccessorsMixin {
         ),
       );
       if (closedTaskIds.size === 0) {
-        return null;
+        return quietGate;
       }
       let linkUnblocked = true;
       try {
@@ -10153,31 +10513,18 @@ class TaskStatusCyclerSuccessorsMixin {
           }
         }
       }
-      // Basename uniqueness over distinct task-bearing notes (lowercase
-      // stems), matching the file set `successorLinkText` documents.
-      const basenameCounts = {};
-      const knownPaths = new Set();
-      for (const task of tasks) {
-        if (task && task.path) {
-          knownPaths.add(String(task.path));
-        }
-      }
-      for (const identity of identities) {
-        if (identity.path) {
-          knownPaths.add(String(identity.path));
-        }
-      }
-      if (dailyPath) {
-        knownPaths.add(String(dailyPath));
-      }
-      for (const path of knownPaths) {
-        const base = path.split("/").pop() || "";
-        const stem = (base.replace(/\.md$/i, "") || base).toLowerCase();
-        if (!stem) {
-          continue;
-        }
-        basenameCounts[stem] = (basenameCounts[stem] || 0) + 1;
-      }
+      // Basename uniqueness over the same eligible Markdown path set
+      // capture walks (`vault_note_paths`): every vault `.md` file minus
+      // dot-directories and always-excluded names, unioned with staged
+      // and open-editor paths — without reading note bodies. A prose-only
+      // same-named sibling must still force the long link form.
+      const basenameCounts = countSuccessorBasenames(
+        this.app,
+        tasks,
+        identities,
+        dailyPath,
+        noteTexts,
+      );
       const noteTextsObject = {};
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
@@ -10193,6 +10540,7 @@ class TaskStatusCyclerSuccessorsMixin {
           today,
           linkUnblocked,
           cancelled: cancelledClose,
+          isInbox: getSuccessorIsInbox(this.app),
           basenameCounts,
           closingEntry: planClosingEntry,
           noteTexts: noteTextsObject,
@@ -14034,7 +14382,13 @@ class TaskStatusCyclerPomodoroMixin {
   // visited
   // is true once the candidate resolved to a fresh in-bounds target, changed is
   // true when this node or any descendant was forced to done.
-  async completeTranscludedTaskTargetTree(candidate, context, seen, depth = 0) {
+  async completeTranscludedTaskTargetTree(
+    candidate,
+    context,
+    seen,
+    depth = 0,
+    rootKey = null,
+  ) {
     if (depth > MAX_TRANSCLUDED_RECURSION_DEPTH) {
       return { visited: false, changed: false, closed: [] };
     }
@@ -14056,6 +14410,7 @@ class TaskStatusCyclerPomodoroMixin {
       context,
       seen,
       depth,
+      rootKey,
     );
   }
 
@@ -14069,6 +14424,7 @@ class TaskStatusCyclerPomodoroMixin {
     context,
     seen,
     depth = 0,
+    rootKey = null,
   ) {
     if (!resolvedTarget || !resolvedTarget.file) {
       return { visited: false, changed: false, closed: [] };
@@ -14079,6 +14435,17 @@ class TaskStatusCyclerPomodoroMixin {
       return { visited: false, changed: false, closed: [] };
     }
     seen.add(seenKey);
+
+    // The tree's anchor root: the topmost resolved target of this close.
+    // Descendant closes carry it as `rootKey` so the successor pass can
+    // inherit the planned anchor for an ID-less root; each tree keeps its
+    // own root, never the first closed identity of a multi-root gesture.
+    const treeRoot = rootKey && rootKey.path
+      ? { path: String(rootKey.path), blockId: String(rootKey.blockId || "") }
+      : {
+        path: resolvedTarget.file.path,
+        blockId: resolvedTarget.blockId,
+      };
 
     const childContext = {
       editor: context.editor,
@@ -14098,6 +14465,7 @@ class TaskStatusCyclerPomodoroMixin {
           childContext,
           seen,
           depth + 1,
+          treeRoot,
         );
         if (childResult && childResult.changed) {
           changed = true;
@@ -14121,15 +14489,22 @@ class TaskStatusCyclerPomodoroMixin {
       );
       if (wrote) {
         changed = true;
-        closed.push(
-          closedTaskIdentity(
-            resolvedTarget.file.path,
-            resolvedTarget.taskStatus.lineText,
-          ) || {
-            path: resolvedTarget.file.path,
-            blockId: resolvedTarget.blockId,
-          },
-        );
+        const identity = closedTaskIdentity(
+          resolvedTarget.file.path,
+          resolvedTarget.taskStatus.lineText,
+        ) || {
+          path: resolvedTarget.file.path,
+          blockId: resolvedTarget.blockId,
+        };
+        // Non-root closes name their tree root; the root itself anchors
+        // directly and carries no `rootKey`.
+        if (rootKey && rootKey.path) {
+          identity.rootKey = {
+            path: String(treeRoot.path),
+            blockId: String(treeRoot.blockId || ""),
+          };
+        }
+        closed.push(identity);
       }
     }
 
@@ -16065,6 +16440,10 @@ module.exports.helpers = {
   normalizeTasksCacheTask,
   findLiveLinks,
   computeSuccessorAnchors,
+  getSuccessorIsInbox,
+  countSuccessorBasenames,
+  isExcludedSuccessorVaultPath,
+  successorDefaultIsInbox,
   planSuccessors,
   planSuccessorInsertions,
   successorNoticeText,

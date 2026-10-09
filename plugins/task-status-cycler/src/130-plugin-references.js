@@ -62,9 +62,11 @@ class TaskStatusCyclerReferencesMixin {
       });
     }
     return this.enqueueTaskReferenceMutation(async () => {
-      // Successor pass first: anchors are read while the cursor link is
-      // still unstruck (the strike lands after this job) and before embed
-      // retirement. Best-effort: a failure here never blocks the close.
+      // One gated dependency plan: the successor pass recovers and links
+      // in a single Warm pass (anchors are read while the cursor link is
+      // still unstruck and before embed retirement). No legacy full-scan
+      // recovery follows it. Best-effort: a failure here never blocks the
+      // close.
       let successors = null;
       try {
         successors = await this.planAndApplySuccessorsNow(
@@ -75,17 +77,32 @@ class TaskStatusCyclerReferencesMixin {
         console.error("Could not plan successor links", error);
         successors = null;
       }
-      let recovery;
-      try {
-        recovery = await this.recoverBlockedDependentsNow(
-          closed,
-          context || {},
-        );
-      } catch (error) {
-        const message = error && error.message ? error.message : String(error);
-        console.error("Could not recover blocked dependents", error);
+      // Recovery counts and failures propagate from that same plan: every
+      // applied `?`-changing row counts as reopened, and a failed plan
+      // reports the lookup as failed instead of scanning the vault again.
+      // A gated plan (no `[id::]`) stays quiet: nothing was checkable.
+      let reopened = 0;
+      let recoveryFailures = [];
+      if (successors && successors.gated === true) {
+        successors = null;
+      } else if (successors && Array.isArray(successors.unblocked)) {
+        for (const row of successors.unblocked) {
+          if (
+            row && row.previous_status_symbol === "?" &&
+            row.status_symbol !== "?" && row.not_linked !== "failed"
+          ) {
+            reopened += 1;
+          }
+        }
+        if (successors.failure) {
+          recoveryFailures = [
+            successors.failure.reason || "blocked dependents could not be checked",
+          ];
+          new Notice("Closed tasks, but blocked dependents could not be checked.");
+        }
+      } else {
+        recoveryFailures = ["blocked dependents could not be checked"];
         new Notice("Closed tasks, but blocked dependents could not be checked.");
-        recovery = { reopened: 0, failures: [message] };
       }
       const retirement = await this.retireClosedTaskReferencesNow(
         normalizeTaskReferenceIdentities(closed),
@@ -98,9 +115,9 @@ class TaskStatusCyclerReferencesMixin {
         successorNotice = null;
       }
       return {
-        reopened: recovery.reopened,
+        reopened,
         retired: retirement.retired,
-        recoveryFailures: recovery.failures,
+        recoveryFailures,
         retirementFailures: retirement.failures,
         successors,
         successorNotice,
@@ -150,7 +167,9 @@ class TaskStatusCyclerReferencesMixin {
     }
     // Gate: with no `[id::]` in the closed set nothing can be blocked on
     // it, so skip the vault-wide scan entirely. Identical output (the plan
-    // builder would resolve zero closed ids), pure speed-up.
+    // builder would resolve zero closed ids), pure speed-up. The resolved
+    // identities are kept for the Warm path's complete closed set below.
+    let resolvedClosed = null;
     try {
       if (typeof this.resolveSuccessorClosedIdentities === "function") {
         const gate = await this.resolveSuccessorClosedIdentities(
@@ -161,9 +180,13 @@ class TaskStatusCyclerReferencesMixin {
         if (gate && gate.gated) {
           return { reopened: 0, failures: [] };
         }
+        if (gate && Array.isArray(gate.identities)) {
+          resolvedClosed = gate.identities;
+        }
       }
     } catch (error) {
       // Best effort: fall through to the full recovery below.
+      resolvedClosed = null;
     }
     const openEditors = this.getOpenMarkdownEditors(context || {});
     const files = vault.getMarkdownFiles().filter(
@@ -178,36 +201,113 @@ class TaskStatusCyclerReferencesMixin {
       failures.push(`${filePath}: ${message}`);
       failedPaths.add(filePath);
     };
-
-    for (const file of files) {
-      try {
-        const editor = openEditors.get(file.path);
-        const text = editor
-          ? editor.getValue()
-          : typeof vault.cachedRead === "function"
-            ? await vault.cachedRead(file)
-            : typeof vault.read === "function"
-              ? await vault.read(file)
-              : null;
-        if (typeof text !== "string") {
-          recordFailure(file.path, "note could not be read");
-          continue;
-        }
-        documents.push({ path: file.path, text, file, editor: editor || null });
-      } catch (error) {
-        recordFailure(file.path, error.message || String(error));
-      }
-    }
-
     const recoveryToday =
       context && typeof context.today === "string" && context.today
         ? context.today
         : typeof this.getScheduleLogDateString === "function"
           ? this.getScheduleLogDateString()
           : formatLocalDate();
-    const plan = buildBlockedDependentRecoveryPlan(documents, closedIdentities, {
-      today: recoveryToday,
-    });
+
+    // Warm fast path: the Tasks cache already indexes every task, so the
+    // open set is complete without reading bodies, and only notes holding
+    // a dependent of the closed set are read (open editor buffers first,
+    // exactly like the cold scan). Recovery semantics are unchanged —
+    // Ready recovery with no links — and an unready cache falls back to
+    // the full scan below.
+    let plan = null;
+    let warm = false;
+    try {
+      if (
+        typeof this.buildSuccessorPool === "function" && resolvedClosed
+      ) {
+        const closedIds = new Set();
+        for (const identity of resolvedClosed) {
+          if (identity && identity.taskId) {
+            closedIds.add(String(identity.taskId));
+          }
+        }
+        if (closedIds.size === 0) {
+          return { reopened: 0, failures: [] };
+        }
+        const pool = await this.buildSuccessorPool(
+          closedIds,
+          context || {},
+          new Map(),
+        );
+        if (pool && pool.warm && Array.isArray(pool.tasks)) {
+          const openIds = new Set();
+          const candidatePaths = new Set();
+          for (const task of pool.tasks) {
+            if (!task || typeof task !== "object") {
+              continue;
+            }
+            if (
+              task.taskId &&
+              DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+              !closedIds.has(String(task.taskId))
+            ) {
+              openIds.add(String(task.taskId));
+            }
+            if (
+              task.path && Array.isArray(task.dependsOn) &&
+              task.dependsOn.some((id) => closedIds.has(String(id)))
+            ) {
+              candidatePaths.add(String(task.path));
+            }
+          }
+          for (const path of candidatePaths) {
+            const text = pool.noteTexts.get(path);
+            if (typeof text !== "string") {
+              recordFailure(path, "note could not be read");
+              continue;
+            }
+            documents.push({
+              path,
+              text,
+              file: fileByPath.get(path) || null,
+              editor: openEditors.get(path) || null,
+            });
+          }
+          plan = buildBlockedDependentRecoveryPlan(
+            documents,
+            resolvedClosed,
+            {
+              today: recoveryToday,
+              openIds: [...openIds],
+              closedIds: [...closedIds],
+            },
+          );
+          warm = true;
+        }
+      }
+    } catch (error) {
+      warm = false;
+      plan = null;
+    }
+    if (!warm) {
+      for (const file of files) {
+        try {
+          const editor = openEditors.get(file.path);
+          const text = editor
+            ? editor.getValue()
+            : typeof vault.cachedRead === "function"
+              ? await vault.cachedRead(file)
+              : typeof vault.read === "function"
+                ? await vault.read(file)
+                : null;
+          if (typeof text !== "string") {
+            recordFailure(file.path, "note could not be read");
+            continue;
+          }
+          documents.push({ path: file.path, text, file, editor: editor || null });
+        } catch (error) {
+          recordFailure(file.path, error.message || String(error));
+        }
+      }
+      plan = buildBlockedDependentRecoveryPlan(documents, closedIdentities, {
+        today: recoveryToday,
+      });
+    }
     const editsByPath = new Map();
     for (const edit of plan.edits) {
       if (!editsByPath.has(edit.path)) {
@@ -298,6 +398,71 @@ class TaskStatusCyclerReferencesMixin {
     return { reopened, failures };
   }
 
+  // Sources that link any closed note, from the vault link index
+  // (`metadataCache.resolvedLinks`/`unresolvedLinks`, inverted): the only
+  // notes that can embed a closed task, plus the closed notes themselves
+  // (mutual embeds), the active note, and every open editor buffer (newer
+  // than the index). Null when the index is unavailable — callers keep the
+  // conservative full scan so no retirement write is ever dropped to pass
+  // a counter.
+  retirementLinkerPaths(closedIdentities, context) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      const resolved = metadataCache && metadataCache.resolvedLinks;
+      const unresolved = metadataCache && metadataCache.unresolvedLinks;
+      if (
+        (!resolved || typeof resolved !== "object") &&
+        (!unresolved || typeof unresolved !== "object")
+      ) {
+        return null;
+      }
+      const wanted = new Set();
+      for (const identity of normalizeTaskReferenceIdentities(closedIdentities)) {
+        if (identity && identity.path) {
+          wanted.add(String(identity.path));
+        }
+      }
+      if (wanted.size === 0) {
+        return new Set();
+      }
+      const linkers = new Set(wanted);
+      for (const index of [resolved, unresolved]) {
+        if (!index || typeof index !== "object") {
+          continue;
+        }
+        for (const source of Object.keys(index)) {
+          let dests = null;
+          try {
+            dests = index[source];
+          } catch (error) {
+            dests = null;
+          }
+          if (!dests || typeof dests !== "object") {
+            continue;
+          }
+          for (const dest of Object.keys(dests)) {
+            if (wanted.has(String(dest))) {
+              linkers.add(String(source));
+              break;
+            }
+          }
+        }
+      }
+      const active = context && context.activePath;
+      if (active) {
+        linkers.add(String(active));
+      }
+      if (typeof this.getOpenMarkdownEditors === "function") {
+        for (const path of this.getOpenMarkdownEditors(context || {}).keys()) {
+          linkers.add(String(path));
+        }
+      }
+      return linkers;
+    } catch (error) {
+      return null;
+    }
+  }
+
   async retireClosedTaskReferencesNow(closedIdentities, context) {
     const result = await this.mutateTaskReferencesNow(
       closedIdentities,
@@ -310,6 +475,7 @@ class TaskStatusCyclerReferencesMixin {
         failureLog: "Could not retire all closed task references",
         failureNotice: (count) =>
           `Closed tasks, but ${count} note${count === 1 ? "" : "s"} could not be checked for references.`,
+        linkerPaths: this.retirementLinkerPaths(closedIdentities, context || {}),
       },
     );
     return { retired: result.count, failures: result.failures };
@@ -568,45 +734,70 @@ class TaskStatusCyclerReferencesMixin {
     };
     let count = 0;
     const failures = [];
+    // Open buffers are read in memory: the active editor plus every other
+    // open Markdown editor, which may be newer than the vault on disk.
+    let openEditors = null;
+    try {
+      openEditors = typeof this.getOpenMarkdownEditors === "function"
+        ? this.getOpenMarkdownEditors(context || {})
+        : new Map();
+    } catch (error) {
+      openEditors = new Map();
+    }
+    if (editor && typeof editor.getValue === "function" && activePath) {
+      openEditors.set(activePath, editor);
+    }
+    // A caller-supplied linker set restricts the scan to notes that can
+    // hold a matching reference (plus open buffers, always eligible);
+    // without one every note is visited, exactly as before.
+    const linkerPaths = mutation && mutation.linkerPaths instanceof Set
+      ? mutation.linkerPaths
+      : null;
+
+    const applyEditorBuffer = (buffer, bufferPath) => {
+      const before = buffer.getValue();
+      const result = mutation.transform(
+        before,
+        bufferPath,
+        identities,
+        resolveLinkPath,
+      );
+      if (result.changed) {
+        const oldLines = splitTextByLineEndings(before).map((line) => line.text);
+        const newLines = splitTextByLineEndings(result.text).map(
+          (line) => line.text,
+        );
+        const cursor =
+          typeof buffer.getCursor === "function" ? buffer.getCursor() : null;
+        for (let line = oldLines.length - 1; line >= 0; line -= 1) {
+          if (oldLines[line] !== newLines[line]) {
+            this.replaceEditorLine(line, newLines[line], buffer);
+          }
+        }
+        if (cursor && typeof buffer.setCursor === "function") {
+          const lineText = buffer.getLine(cursor.line) || "";
+          buffer.setCursor({
+            line: cursor.line,
+            ch: Math.min(cursor.ch, lineText.length),
+          });
+        }
+      }
+      count += result[mutation.countField];
+    };
 
     for (const file of vault.getMarkdownFiles()) {
       if (!file || !file.path) {
         continue;
       }
+      const openEditor = openEditors.get(file.path) || null;
+      if (
+        linkerPaths && !linkerPaths.has(file.path) && !openEditor
+      ) {
+        continue;
+      }
       try {
-        if (
-          file.path === activePath &&
-          editor &&
-          typeof editor.getValue === "function"
-        ) {
-          const before = editor.getValue();
-          const result = mutation.transform(
-            before,
-            file.path,
-            identities,
-            resolveLinkPath,
-          );
-          if (result.changed) {
-            const oldLines = splitTextByLineEndings(before).map((line) => line.text);
-            const newLines = splitTextByLineEndings(result.text).map(
-              (line) => line.text,
-            );
-            const cursor =
-              typeof editor.getCursor === "function" ? editor.getCursor() : null;
-            for (let line = oldLines.length - 1; line >= 0; line -= 1) {
-              if (oldLines[line] !== newLines[line]) {
-                this.replaceEditorLine(line, newLines[line], editor);
-              }
-            }
-            if (cursor && typeof editor.setCursor === "function") {
-              const lineText = editor.getLine(cursor.line) || "";
-              editor.setCursor({
-                line: cursor.line,
-                ch: Math.min(cursor.ch, lineText.length),
-              });
-            }
-          }
-          count += result[mutation.countField];
+        if (openEditor && typeof openEditor.getValue === "function") {
+          applyEditorBuffer(openEditor, file.path);
           continue;
         }
 

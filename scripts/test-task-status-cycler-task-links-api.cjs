@@ -524,9 +524,9 @@ test("future-scheduled dependents stay Blocked on the planner, api, and close pa
     [{ path: "Tasks.md", blockId: "root" }],
     {},
   );
-  // The successor pass recovers Plain to its derived rank before legacy
-  // recovery runs, so the legacy counter stays 0 for the same end state.
-  assert.equal(finalized.reopened, 0);
+  // One gated plan recovers Plain to its derived rank, so the reopened
+  // count propagates from that same plan instead of a legacy second scan.
+  assert.equal(finalized.reopened, 1);
   assert.equal(finalized.successors.unblocked.length, 1);
   assert.equal(
     finalized.successors.unblocked[0].not_linked,

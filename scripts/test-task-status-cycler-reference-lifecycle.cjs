@@ -75,7 +75,11 @@ test("recursive completion closes a Next root and its nested Next descendant", a
     visited: true,
     changed: true,
     closed: [
-      { path: "Root.md", blockId: "child" },
+      {
+        path: "Root.md",
+        blockId: "child",
+        rootKey: { path: "Root.md", blockId: "root" },
+      },
       { path: "Root.md", blockId: "root" },
     ],
   });
@@ -115,7 +119,13 @@ test("recursive completion traverses Done parents and skips excluded siblings", 
   assert.deepEqual(result, {
     visited: true,
     changed: true,
-    closed: [{ path: "Tree.md", blockId: "next" }],
+    closed: [
+      {
+        path: "Tree.md",
+        blockId: "next",
+        rootKey: { path: "Tree.md", blockId: "parent" },
+      },
+    ],
   });
   assert.equal(
     harness.getSource("Tree.md"),
@@ -440,28 +450,47 @@ test("close and reopen reference mutations share one serialized queue", async ()
   assert.deepEqual(order, ["retire:1", "restore:1"]);
 });
 
-test("post-close finalizer serializes dependent recovery before reference retirement", async () => {
+test("post-close finalizer runs one gated plan before reference retirement", async () => {
   const plugin = new TaskStatusCyclerPlugin();
   const order = [];
-  plugin.recoverBlockedDependentsNow = async (identities) => {
-    order.push(`recover:${identities.length}`);
-    return { reopened: 1, failures: [] };
+  const model = {
+    version: 1,
+    predecessors: [],
+    unblocked: [
+      {
+        previous_status_symbol: "?",
+        status_symbol: " ",
+        not_linked: "ready",
+        link: null,
+      },
+    ],
+    still_blocked: [],
+    daily_path: "",
+    daily_content: null,
+    failure: null,
+  };
+  plugin.planAndApplySuccessorsNow = async (identities) => {
+    order.push(`successors:${identities.length}`);
+    return model;
   };
   plugin.retireClosedTaskReferencesNow = async (identities) => {
     order.push(`retire:${identities.length}`);
     return { retired: 2, failures: [] };
   };
+  plugin.presentSuccessorModel = () => null;
   const result = await plugin.finalizeClosedTasks(
     [{ path: "Tasks.md", blockId: "root", taskId: "root-id" }],
     {},
   );
-  assert.deepEqual(order, ["recover:1", "retire:1"]);
+  // One gated recover-and-link plan, then retirement: no legacy second
+  // recovery scan, with counts propagated from the same plan.
+  assert.deepEqual(order, ["successors:1", "retire:1"]);
   assert.deepEqual(result, {
     reopened: 1,
     retired: 2,
     recoveryFailures: [],
     retirementFailures: [],
-    successors: null,
+    successors: model,
     successorNotice: null,
   });
 });

@@ -655,8 +655,21 @@ class TaskStatusCyclerSuccessorsMixin {
         active,
         cache,
       );
+      // Gated (no `[id::]` in C): nothing can be blocked on this close.
+      // Return a quiet marker, not a failure: callers stay silent and the
+      // read budget proves no vault-wide scan ran.
+      const quietGate = {
+        version: 1,
+        gated: true,
+        predecessors: [],
+        unblocked: [],
+        still_blocked: [],
+        daily_path: "",
+        daily_content: null,
+        failure: null,
+      };
       if (gate.gated) {
-        return null;
+        return quietGate;
       }
       const identities = gate.identities;
       const closedTaskIds = new Set(
@@ -665,7 +678,7 @@ class TaskStatusCyclerSuccessorsMixin {
         ),
       );
       if (closedTaskIds.size === 0) {
-        return null;
+        return quietGate;
       }
       let linkUnblocked = true;
       try {
@@ -744,31 +757,18 @@ class TaskStatusCyclerSuccessorsMixin {
           }
         }
       }
-      // Basename uniqueness over distinct task-bearing notes (lowercase
-      // stems), matching the file set `successorLinkText` documents.
-      const basenameCounts = {};
-      const knownPaths = new Set();
-      for (const task of tasks) {
-        if (task && task.path) {
-          knownPaths.add(String(task.path));
-        }
-      }
-      for (const identity of identities) {
-        if (identity.path) {
-          knownPaths.add(String(identity.path));
-        }
-      }
-      if (dailyPath) {
-        knownPaths.add(String(dailyPath));
-      }
-      for (const path of knownPaths) {
-        const base = path.split("/").pop() || "";
-        const stem = (base.replace(/\.md$/i, "") || base).toLowerCase();
-        if (!stem) {
-          continue;
-        }
-        basenameCounts[stem] = (basenameCounts[stem] || 0) + 1;
-      }
+      // Basename uniqueness over the same eligible Markdown path set
+      // capture walks (`vault_note_paths`): every vault `.md` file minus
+      // dot-directories and always-excluded names, unioned with staged
+      // and open-editor paths — without reading note bodies. A prose-only
+      // same-named sibling must still force the long link form.
+      const basenameCounts = countSuccessorBasenames(
+        this.app,
+        tasks,
+        identities,
+        dailyPath,
+        noteTexts,
+      );
       const noteTextsObject = {};
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
@@ -784,6 +784,7 @@ class TaskStatusCyclerSuccessorsMixin {
           today,
           linkUnblocked,
           cancelled: cancelledClose,
+          isInbox: getSuccessorIsInbox(this.app),
           basenameCounts,
           closingEntry: planClosingEntry,
           noteTexts: noteTextsObject,

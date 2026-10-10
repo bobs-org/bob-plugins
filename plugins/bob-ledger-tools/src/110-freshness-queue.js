@@ -1,5 +1,5 @@
 // The tiered review queue PRE → NEW → PROJECTS → PENDING → NEXT →
-// RECURRING → TICKLER → REFERENCES → ROTTEN → POST, with each tier's
+// RECURRING → TICKLER → ROTTEN → POST, with each tier's
 // comparator from `docs/freshness.md` §4.
 // Entries
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
@@ -76,8 +76,7 @@ function freshnessQueue(rows, todayText, config) {
     if (
       left.tier === "projects" ||
       left.tier === "pending" ||
-      left.tier === "next" ||
-      left.tier === "references"
+      left.tier === "next"
     ) {
       return (
         freshnessCompareDueOn(left.dueOn, right.dueOn) ||
@@ -128,7 +127,7 @@ function freshnessIsExcludedCountPath(path) {
 }
 
 // Whole-vault counts: `{ due, new, resurfaced, rotten, fresh,
-// preDue, postDue, pendingDue, nextDue, projectsDue, referencesDue,
+// preDue, postDue, pendingDue, nextDue, projectsDue,
 // recurringDue, byTier, walk, decide,
 // refreshedToday, upkeepToday, budget, budgetMet }`. State totals
 // (`due = new + resurfaced + rotten`) count evaluated Ready states
@@ -156,7 +155,6 @@ function freshnessCounts(rows, todayText, config) {
     next: 0,
     recurring: 0,
     tickler: 0,
-    references: 0,
     rotten: 0,
     post: 0,
   };
@@ -228,7 +226,6 @@ function freshnessCounts(rows, todayText, config) {
     byTier.next +
     byTier.recurring +
     byTier.tickler +
-    byTier.references +
     byTier.rotten +
     byTier.post;
 
@@ -243,7 +240,6 @@ function freshnessCounts(rows, todayText, config) {
     pendingDue: byTier.pending,
     nextDue: byTier.next,
     projectsDue: byTier.projects,
-    referencesDue: byTier.references,
     recurringDue: byTier.recurring,
     byTier: { ...byTier },
     walk,
@@ -325,7 +321,6 @@ function freshnessStatusView(counts, options = {}) {
   const tierNext = tierCount("next", safe.nextDue);
   const tierRecurring = tierCount("recurring", safe.recurringDue);
   const tierTickler = tierCount("tickler", safe.resurfaced);
-  const tierReferences = tierCount("references", safe.referencesDue);
   const tierRotten = tierCount("rotten", safe.rotten);
   const tierPost = tierCount("post", safe.postDue);
   const rotten = tierTickler + tierRotten;
@@ -339,7 +334,6 @@ function freshnessStatusView(counts, options = {}) {
         tierNext +
         tierRecurring +
         tierTickler +
-        tierReferences +
         tierRotten +
         tierPost;
   const upkeep =
@@ -365,8 +359,6 @@ function freshnessStatusView(counts, options = {}) {
     " next · " +
     tierRecurring +
     " recurring · " +
-    tierReferences +
-    " references · " +
     rotten +
     " rotten · " +
     tierPost +
@@ -394,8 +386,6 @@ function freshnessStatusView(counts, options = {}) {
     tierRecurring +
     " · TICKLER " +
     tierTickler +
-    " · REFERENCES " +
-    tierReferences +
     " · ROTTEN " +
     tierRotten +
     " · POST " +
@@ -408,10 +398,10 @@ function freshnessStatusView(counts, options = {}) {
     " today";
   // Mode precedence: `new` (NEW > 0), then `due` while any
   // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, RECURRING,
-  // TICKLER, REFERENCES) remains, then `budget` (met), then `clear`
+  // TICKLER) remains, then `budget` (met), then `clear`
   // (walk empty), else `due`. The raw `budgetMet` formula is
-  // unchanged; outstanding commitment tiers (including PROJECTS and
-  // REFERENCES) take precedence in this mode.
+  // unchanged; outstanding PROJECTS commitments take precedence in
+  // this mode.
   let mode = "due";
   if (tierNew > 0) {
     mode = "new";
@@ -421,8 +411,7 @@ function freshnessStatusView(counts, options = {}) {
     tierPending > 0 ||
     tierNext > 0 ||
     tierRecurring > 0 ||
-    tierTickler > 0 ||
-    tierReferences > 0
+    tierTickler > 0
   ) {
     mode = "due";
   } else if (safe.budgetMet) {

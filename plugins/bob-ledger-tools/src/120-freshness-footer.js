@@ -6,7 +6,6 @@ const FRESHNESS_FOOTER_TIERS = [
   "next",
   "recurring",
   "tickler",
-  "references",
   "rotten",
   "post",
 ];
@@ -19,7 +18,6 @@ const FRESHNESS_FOOTER_COMMITMENT_TIERS = [
   "next",
   "recurring",
   "tickler",
-  "references",
 ];
 
 function freshnessReviewEntryViewEmpty() {
@@ -48,9 +46,17 @@ function freshnessReviewMachineTier(entry) {
     tier === "next" ||
     tier === "recurring" ||
     tier === "tickler" ||
-    tier === "references" ||
     tier === "rotten" ||
     tier === "post"
+  ) {
+    return tier;
+  }
+  // Legacy queue entries are tagged only by navigation when they came
+  // from a freshness namespace <=10. New producers never emit this tier.
+  if (
+    tier === "references" &&
+    entry &&
+    entry.legacyReferenceTier === true
   ) {
     return tier;
   }
@@ -283,7 +289,6 @@ function freshnessFooterReadTiers(counts) {
     next: freshnessFooterTierCount(safe, "next", safe.nextDue),
     recurring: freshnessFooterTierCount(safe, "recurring", safe.recurringDue),
     tickler: freshnessFooterTierCount(safe, "tickler", safe.resurfaced),
-    references: freshnessFooterTierCount(safe, "references", safe.referencesDue),
     rotten: freshnessFooterTierCount(safe, "rotten", safe.rotten),
     post: freshnessFooterTierCount(safe, "post", safe.postDue),
   };
@@ -592,9 +597,6 @@ function freshnessFooterView(memo, options = {}) {
     }
     if (shownTiers.has("tickler")) {
       legendParts.push("TICKS = TICKLER");
-    }
-    if (shownTiers.has("references")) {
-      legendParts.push("REFS = REFERENCES");
     }
     const legendText = legendParts.join(" · ");
     const tooltipLines = [

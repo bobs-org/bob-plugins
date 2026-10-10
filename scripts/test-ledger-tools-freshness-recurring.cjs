@@ -318,7 +318,6 @@ test("status view counts RECURRING as a due commitment tier", () => {
         next: 0,
         recurring: 2,
         tickler: 0,
-        references: 0,
         rotten: 0,
         post: 0,
       },
@@ -390,17 +389,17 @@ test("a stale-stamped recurring row marks due with the resolve hint", () => {
   assert.match(model.tooltip, /complete or reschedule to resolve/);
 });
 
-test("freshness namespace v10 advertises the recurringTier capability", () => {
+test("freshness namespace v11 keeps recurring and removes reference capabilities", () => {
   withMissingConfig(() => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({}), {});
     plugin.onload();
     try {
-      assert.equal(plugin.api.freshness.version, 10);
+      assert.equal(plugin.api.freshness.version, 11);
       assert.equal(plugin.api.freshness.trackerReview, true);
-      assert.equal(plugin.api.freshness.referenceReview, true);
+      assert.equal(plugin.api.freshness.referenceReview, undefined);
       assert.equal(plugin.api.freshness.checklistTiers, true);
       assert.equal(plugin.api.freshness.recurringTier, true);
-      assert.equal(plugin.api.freshness.refTagIdentity, true);
+      assert.equal(plugin.api.freshness.refTagIdentity, undefined);
     } finally {
       plugin.onunload();
     }
@@ -425,7 +424,7 @@ test("hidden recurring ^ref keeps ordinary visibility (Rust parity)", () => {
     isToday: () => false,
   });
   assert.equal(hiddenRow.recurring, true);
-  assert.equal(hiddenRow.tracker, "ref");
+  assert.equal(hiddenRow.tracker, null, "reference anchors do not create a freshness tracker");
   assert.equal(
     hiddenRow.laneVisible,
     false,

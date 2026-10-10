@@ -16,413 +16,186 @@ const {
   withMissingConfig,
   checklistTaskRow,
 } = require("./ledger-tools-harness.cjs");
-test("tracking review: visible ^prj walks PROJECTS, hidden ^prj is out, visible ^ref walks REFERENCES and hidden ^ref is out", () => {
+test("project tracking stays special while reference tasks use ordinary Ready freshness", () => {
   const { freshnessEvaluate } = helpers;
-  const empty = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Project ^prj", blockId: "prj", projectReadyCount: 0 }),
+  const project = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Project ^prj", blockId: "prj" }),
     D,
     CFG,
   );
-  assert.equal(empty.state, "new");
-  assert.equal(empty.tier, "projects");
+  assert.equal(project.state, "new");
+  assert.equal(project.tier, "projects");
 
-  const stamped = freshnessEvaluate(
-    sRow({
-      rawLine: "- [ ] #task Project [fresh:: 2026-10-08] ^prj",
-      blockId: "prj",
-      projectReadyCount: 0,
-    }),
-    D,
-    CFG,
-  );
-  assert.equal(stamped.state, "fresh");
-  assert.equal(stamped.tier, null);
-
-  // Open tasks in the same note no longer suppress: sync owns `#hide`.
-  const populated = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Project ^prj", blockId: "prj", projectReadyCount: 1 }),
-    D,
-    CFG,
-  );
-  assert.equal(populated.state, "new");
-  assert.equal(populated.tier, "projects");
-
-  const hiddenPrj = freshnessEvaluate(
+  const hiddenProject = freshnessEvaluate(
     sRow({ rawLine: "- [ ] #task Project #hide ^prj", blockId: "prj", laneVisible: false }),
     D,
     CFG,
   );
-  assert.equal(hiddenPrj.state, null);
-  assert.equal(hiddenPrj.tier, null);
+  assert.equal(hiddenProject.tier, null);
 
-  const visibleRef = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Read ^ref", blockId: "ref" }),
-    D,
-    CFG,
-  );
-  assert.equal(visibleRef.state, "new");
-  assert.equal(visibleRef.tier, "references");
-
-  const hiddenRef = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Read #hide ^ref", blockId: "ref", laneVisible: false }),
-    D,
-    CFG,
-  );
-  assert.equal(hiddenRef.state, null);
-  assert.equal(hiddenRef.tier, null);
-
-  const hidden = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Read #hide", laneVisible: false }),
-    D,
-    CFG,
-  );
-  assert.equal(hidden.state, null);
-  assert.equal(hidden.tier, null);
-
-  const nearMatch = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Read ^prj-extra", blockId: "prj-extra" }),
-    D,
-    CFG,
-  );
-  assert.equal(nearMatch.tier, "new");
-});
-
-test("tracking review: lane ^prj keeps its lane with the Ready cadence", () => {
-  const { freshnessEvaluate } = helpers;
-  const row = {
-    path: "p.md",
-    line: 2,
-    statusSymbol: "/",
-    isTodo: false,
-    recurring: false,
-    laneVisible: true,
-    isDailyNote: false,
-    isToday: false,
-    scheduled: null,
-    created: null,
-    rawLine: "- [/] #task Project ^prj",
-    noteRefreshRaw: undefined,
-    blockId: "prj",
-  };
-  const evaluated = freshnessEvaluate(row, D, CFG);
-  assert.equal(evaluated.lane, "pending");
-  assert.equal(evaluated.state, null);
-  assert.equal(evaluated.tier, "projects");
-  assert.equal(evaluated.intervalDays, 7);
-  assert.equal(evaluated.intervalSource, "default");
-});
-
-test("tracking counts decouple states from the nine-key tier histogram", () => {
-  const emptyPrj = sRow({
-    rawLine: "- [ ] #task Project ^prj",
-    blockId: "prj",
-    projectReadyCount: 0,
+  const reference = sRow({
+    path: "same.md",
+    line: 1,
+    rawLine: "- [ ] #task #REF Read [fresh:: 2026-10-06] [keeps:: 3] ^ref-essay",
+    blockId: "ref-essay",
+    tags: ["#task", "#REF"],
   });
-  const visibleRef = sRow({
-    rawLine: "- [ ] #task Read ^ref",
-    blockId: "ref",
+  const ordinary = sRow({
+    path: "same.md",
+    line: 1,
+    rawLine: "- [ ] #task Read [fresh:: 2026-10-06] [keeps:: 3] ^ordinary",
   });
-  const lanePrj = {
-    path: "p.md",
-    line: 2,
-    statusSymbol: "/",
-    isTodo: false,
-    recurring: false,
-    laneVisible: true,
-    isDailyNote: false,
-    isToday: false,
-    scheduled: null,
-    created: null,
-    rawLine: "- [/] #task Project ^prj",
-    noteRefreshRaw: undefined,
-    blockId: "prj",
-  };
-  const report = freshnessCounts([emptyPrj, visibleRef, lanePrj], D, CFG);
-  assert.equal(report.new, 2);
-  assert.equal(report.due, 2);
-  assert.equal(report.projectsDue, 2);
-  assert.equal(report.referencesDue, 1);
-  assert.equal(report.byTier.new, 0);
-  assert.equal(report.byTier.projects, 2);
-  assert.equal(report.byTier.references, 1);
-  assert.equal(
-    report.walk,
-    report.byTier.pre +
-      report.byTier.new +
-      report.byTier.projects +
-      report.byTier.pending +
-      report.byTier.next +
-      report.byTier.tickler +
-      report.byTier.references +
-      report.byTier.rotten +
-      report.byTier.post,
-  );
-});
+  const config = { ...CFG, interval: 2, intervalFromConfig: true };
+  const referenceEval = freshnessEvaluate(reference, D, config);
+  const ordinaryEval = freshnessEvaluate(ordinary, D, config);
+  assert.deepEqual(referenceEval, ordinaryEval);
+  assert.equal(referenceEval.state, "rotten");
+  assert.equal(referenceEval.tier, "rotten");
+  assert.equal(referenceEval.intervalSource, "config");
+  assert.equal(referenceEval.dueOn, "2026-10-08");
 
-test("tracking queue orders NEW before PROJECTS before lanes", () => {
-  const rows = [
-    sRow({
-      path: "b.md",
-      line: 1,
-      rawLine: "- [ ] #task Ordinary",
-    }),
-    sRow({
-      path: "a.md",
-      line: 1,
-      rawLine: "- [ ] #task Project ^prj",
-      blockId: "prj",
-      projectReadyCount: 0,
-    }),
-  ];
-  const queue = freshnessQueue(rows, D, CFG);
-  assert.deepEqual(
-    queue.map((entry) => entry.tier),
-    ["new", "projects"],
-  );
-});
-
-test("tracker intervals override every level with project/reference sources", () => {
-  const cfg = { ...CFG, projectInterval: 1, referenceInterval: 3 };
-  const prj = helpers.freshnessEvaluate(
-    sRow({
-      rawLine: "- [ ] #task P [fresh:: 2026-10-07] [refresh:: 30] ^prj",
-      blockId: "prj",
-      tracker: "prj",
-      noteRefreshRaw: "14",
-      projectOpenCount: 0,
-      projectReadyCount: 0,
-    }),
+  const unstampedRef = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task #ref Read ^ref" }),
     D,
-    cfg,
-  );
-  assert.equal(prj.intervalDays, 1);
-  assert.equal(prj.intervalSource, "project");
-  assert.equal(prj.dueOn, "2026-10-08");
-  assert.equal(prj.tier, "projects");
-  const freshRef = helpers.freshnessEvaluate(
-    sRow({
-      rawLine: "- [ ] #task R [fresh:: 2026-10-06] ^ref",
-      blockId: "ref",
-      tracker: "ref",
-    }),
-    D,
-    cfg,
-  );
-  assert.equal(freshRef.intervalDays, 3);
-  assert.equal(freshRef.intervalSource, "reference");
-  assert.equal(freshRef.state, "fresh");
-  const rottenRef = helpers.freshnessEvaluate(
-    sRow({
-      rawLine: "- [ ] #task R [fresh:: 2026-10-05] ^ref",
-      blockId: "ref",
-      tracker: "ref",
-    }),
-    D,
-    cfg,
-  );
-  assert.equal(rottenRef.intervalDays, 3);
-  assert.equal(rottenRef.intervalSource, "reference");
-  assert.equal(rottenRef.state, "rotten");
-  assert.equal(rottenRef.dueOn, "2026-10-08");
-  const ordinary = helpers.freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task T [fresh:: 2026-10-01]" }),
-    D,
-    cfg,
-  );
-  assert.equal(ordinary.intervalDays, 7);
-  assert.equal(ordinary.intervalSource, "default");
-  const pendingRef = helpers.freshnessEvaluate(
-    laneRow("r.md", 1, "/", "2026-10-05", null),
-    D,
-    cfg,
-  );
-  // laneRow has no tracker; attach the reference identity explicitly.
-  pendingRef.rawLine = "- [/] #task Walk [fresh:: 2026-10-05] ^ref";
-  // A lane ref is an ordinary lane row: the lane interval wins over
-  // the reference cadence and it walks PENDING, never REFERENCES.
-  const pendingEvaluated = helpers.freshnessEvaluate(
-    { ...laneRow("r.md", 1, "/", "2026-10-05", null), blockId: "ref", tracker: "ref" },
-    D,
-    cfg,
-  );
-  assert.equal(pendingEvaluated.intervalDays, 1);
-  assert.equal(pendingEvaluated.intervalSource, "pending");
-  assert.equal(pendingEvaluated.tier, "pending");
-  assert.equal(pendingEvaluated.state, null);
-  // A lane `#ref`/`^ref` shows the lane interval, so the nav refresh
-  // row agrees with the queue.
-  const unconfigured = helpers.freshnessIntervalForLine(
-    "- [/] #task R ^ref",
-    null,
     CFG,
   );
-  assert.equal(unconfigured.days, 1);
-  assert.equal(unconfigured.source, "pending");
-  assert.equal(
-    helpers.freshnessIntervalForLine(
-      "- [ ] #task P [fresh:: 2026-10-07] ^prj",
-      null,
-      cfg,
-    ).source,
-    "project",
+  assert.equal(unstampedRef.state, "new");
+  assert.equal(unstampedRef.tier, "new");
+  assert.equal(helpers.freshnessBucketForState(unstampedRef.state), "new");
+
+  const hiddenReference = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task #ref Read #hide ^ref", laneVisible: false }),
+    D,
+    CFG,
   );
-  assert.equal(
-    helpers.freshnessIntervalForLine(
-      "- [ ] #task R [fresh:: 2026-10-05] ^ref",
-      null,
-      cfg,
-    ).source,
-    "reference",
-  );
+  assert.equal(hiddenReference.state, null);
+  assert.equal(hiddenReference.tier, null);
 });
 
-test("tracker config rejects booleans and out-of-range values", () => {
-  for (const block of [
-    { project_interval: false },
-    { reference_interval: false },
-    { project_interval: true },
-    { reference_interval: 0 },
-    { project_interval: 366 },
-    { reference_interval: "soon" },
-    { reference_interval: 7.5 },
+test("reference tasks match ordinary interval precedence and lane behavior", () => {
+  const intervalConfig = { ...CFG, interval: 9, intervalFromConfig: true };
+  for (const [line, noteRefreshRaw, expected] of [
+    ["- [ ] #task #ref A [fresh:: 2026-10-03] [refresh:: 2] ^ref", "4", { days: 2, source: "task" }],
+    ["- [ ] #task #ref A [fresh:: 2026-10-03] ^ref", "4", { days: 4, source: "note" }],
+    ["- [ ] #task #ref A [fresh:: 2026-10-03] ^ref", null, { days: 9, source: "config" }],
   ]) {
-    assert.equal(coerceFreshnessConfig(block).invalid, true, JSON.stringify(block));
+    const ordinaryLine = line.replace(" #ref", "");
+    const ref = helpers.freshnessEvaluate(
+      sRow({ rawLine: line, noteRefreshRaw }),
+      D,
+      intervalConfig,
+    );
+    const ordinary = helpers.freshnessEvaluate(
+      sRow({ rawLine: ordinaryLine, noteRefreshRaw }),
+      D,
+      intervalConfig,
+    );
+    assert.deepEqual(ref, ordinary);
+    assert.equal(ref.intervalDays, expected.days);
+    assert.equal(ref.intervalSource, expected.source);
+  }
+
+  for (const [symbol, lane, intervalSource] of [
+    ["/", "pending", "pending"],
+    ["*", "next", "next"],
+  ]) {
+    const refLine = "- [" + symbol + "] #task #ref A [fresh:: 2026-10-07] ^ref";
+    const ordinaryLine = refLine.replace(" #ref", "");
+    const ref = helpers.freshnessEvaluate(
+      { ...laneRow("same.md", 1, symbol, "2026-10-07", null), rawLine: refLine },
+      D,
+      CFG,
+    );
+    const ordinary = helpers.freshnessEvaluate(
+      { ...laneRow("same.md", 1, symbol, "2026-10-07", null), rawLine: ordinaryLine },
+      D,
+      CFG,
+    );
+    assert.deepEqual(ref, ordinary);
+    assert.equal(ref.lane, lane);
+    assert.equal(ref.state, null);
+    assert.equal(ref.tier, lane);
+    assert.equal(ref.intervalDays, 1);
+    assert.equal(ref.intervalSource, intervalSource);
+  }
+
+  for (const [symbol, laneKey] of [["/", "pendingInterval"], ["*", "nextInterval"]]) {
+    const disabled = { ...CFG, [laneKey]: null };
+    const ref = helpers.freshnessEvaluate(
+      { ...laneRow("same.md", 1, symbol, "2026-10-01", null), rawLine: "- [" + symbol + "] #task #ref A ^ref" },
+      D,
+      disabled,
+    );
+    const ordinary = helpers.freshnessEvaluate(
+      { ...laneRow("same.md", 1, symbol, "2026-10-01", null), rawLine: "- [" + symbol + "] #task A ^plain" },
+      D,
+      disabled,
+    );
+    assert.deepEqual(ref, ordinary);
+    assert.equal(ref.tier, null);
+    assert.equal(ref.dueOn, null);
+  }
+
+  assert.deepEqual(
+    freshnessIntervalForLine("- [/] #task #ref A ^ref", null, CFG),
+    { days: 1, source: "pending", ready: { days: 7, source: "default" } },
+  );
+  assert.deepEqual(
+    freshnessIntervalForLine("- [ ] #task #ref A", null, intervalConfig),
+    { days: 9, source: "config", ready: { days: 9, source: "config" } },
+  );
+});
+
+test("obsolete reference interval keys are ignored and project config still validates", () => {
+  for (const oldValue of [3, null, false, "soon", { days: 3 }]) {
+    for (const key of ["reference_interval", "referenceInterval"]) {
+      const result = coerceFreshnessConfig({ interval: 5, [key]: oldValue });
+      assert.equal(result.invalid, false, key + ":" + JSON.stringify(oldValue));
+      assert.equal(result.config.interval, 5);
+      assert.equal(result.config.projectInterval, null);
+    }
   }
   assert.equal(coerceFreshnessConfig({ project_interval: 1 }).config.projectInterval, 1);
-  assert.equal(coerceFreshnessConfig({ reference_interval: 3 }).config.referenceInterval, 3);
-  assert.equal(coerceFreshnessConfig({}).config.projectInterval, null);
-  assert.equal(coerceFreshnessConfig({}).config.referenceInterval, null);
+  assert.equal(coerceFreshnessConfig({ project_interval: false }).invalid, true);
+  assert.equal(coerceFreshnessConfig({ project_interval: 366 }).invalid, true);
 });
 
-test("references walk with the reference cadence in the Ready lane; lane refs walk their lanes", () => {
-  const { freshnessEvaluate, freshnessQueue, freshnessCounts } = helpers;
-  const cfg = { ...CFG, referenceInterval: 7 };
-  // Stamped 6 days ago: fresh, no tier. Stamped 7 days ago: due.
-  const freshRef = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task R [fresh:: 2026-10-02] ^ref", blockId: "ref" }),
-    D,
-    cfg,
-  );
-  assert.equal(freshRef.state, "fresh");
-  assert.equal(freshRef.tier, null);
-  const dueRef = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task R [fresh:: 2026-10-01] ^ref", blockId: "ref" }),
-    D,
-    cfg,
-  );
-  assert.equal(dueRef.state, "rotten");
-  assert.equal(dueRef.tier, "references");
-  assert.equal(dueRef.intervalDays, 7);
-  assert.equal(dueRef.intervalSource, "reference");
-  // A lane ref is an ordinary lane row: with the lane walked it
-  // walks PENDING on the lane interval, and with the lane off it
-  // falls back like an ordinary task.
-  const laneRef = freshnessEvaluate(
-    { ...laneRow("r.md", 1, "/", "2026-10-01", null), blockId: "ref", tracker: "ref" },
-    D,
-    cfg,
-  );
-  assert.equal(laneRef.lane, "pending");
-  assert.equal(laneRef.state, null);
-  assert.equal(laneRef.tier, "pending");
-  assert.equal(laneRef.intervalDays, 1);
-  assert.equal(laneRef.intervalSource, "pending");
-  const off = { ...cfg, pendingInterval: null };
-  const laneRefOff = freshnessEvaluate(
-    { ...laneRow("r.md", 1, "/", "2026-10-01", null), blockId: "ref", tracker: "ref" },
-    D,
-    off,
-  );
-  assert.equal(laneRefOff.lane, "pending");
-  assert.equal(laneRefOff.state, null);
-  assert.equal(laneRefOff.tier, null);
-  // Nine-tier order with stable ties, and the walk sums the histogram.
+test("references use ordinary keep decisions and the nine-tier queue shape", () => {
+  const config = {
+    ...CFG,
+    decay: { enabled: true, keeps: 3, enter: null },
+  };
+  const ref = sRow({
+    path: "r.md",
+    line: 1,
+    rawLine: "- [ ] #task #ref Read [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 3] ^ref",
+    scheduled: "2026-10-07",
+  });
+  const plain = sRow({
+    path: "r.md",
+    line: 1,
+    rawLine: "- [ ] #task Read [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 3] ^plain",
+    scheduled: "2026-10-07",
+  });
+  const refEval = helpers.freshnessEvaluate(ref, D, config);
+  assert.deepEqual(refEval, helpers.freshnessEvaluate(plain, D, config));
+  assert.equal(refEval.tier, "tickler");
+  assert.equal(refEval.state, "resurfaced");
+  assert.equal(refEval.decide, true);
+
   const rows = [
-    sRow({ path: "g.md", line: 1, rawLine: "- [ ] #task Ordinary" }),
-    sRow({ path: "f.md", line: 1, rawLine: "- [ ] #task P ^prj", blockId: "prj" }),
-    laneRow("e.md", 1, "/", "2026-10-07", null),
-    laneRow("d.md", 1, "*", "2026-10-07", null),
-    sRow({
-      path: "c.md",
-      line: 1,
-      rawLine: "- [ ] #task Back [fresh:: 2026-10-05]",
-      scheduled: "2026-10-07",
-    }),
-    sRow({ path: "b.md", line: 1, rawLine: "- [ ] #task R [fresh:: 2026-10-01] ^ref", blockId: "ref" }),
-    sRow({ path: "a.md", line: 1, rawLine: "- [ ] #task Old [fresh:: 2026-09-20]" }),
+    sRow({ path: "new.md", line: 1, rawLine: "- [ ] #task #ref Unread ^ref" }),
+    sRow({ path: "plain.md", line: 1, rawLine: "- [ ] #task Plain" }),
+    sRow({ path: "old.md", line: 1, rawLine: "- [ ] #task #REF Old [fresh:: 2026-09-20] ^ref" }),
   ];
-  const queue = freshnessQueue(rows, D, cfg);
-  assert.deepEqual(
-    queue.map((entry) => entry.tier),
-    ["new", "projects", "pending", "next", "tickler", "references", "rotten"],
-  );
-  const report = freshnessCounts(rows, D, cfg);
-  assert.equal(report.walk, report.byTier.pre + report.byTier.new + report.byTier.projects + report.byTier.pending + report.byTier.next + report.byTier.tickler + report.byTier.references + report.byTier.rotten + report.byTier.post);
-  assert.equal(report.referencesDue, 1);
-  assert.equal(report.byTier.references, 1);
-});
-
-test("ref identity is the #ref tag or the exact ^ref block id; lane refs walk their lanes", () => {
-  const { freshnessEvaluate, freshnessTrackerFromRow } = helpers;
-  // Tag-only rows qualify: whole-token, case-insensitive.
-  assert.equal(
-    freshnessTrackerFromRow({ blockId: "ref-essay", rawLine: "- [ ] #task #ref Read ^ref-essay" }),
-    "ref",
-  );
-  assert.equal(
-    freshnessTrackerFromRow({ blockId: null, tags: ["#task", "#REF"], rawLine: "- [ ] #task #REF Read" }),
-    "ref",
-  );
-  // Near matches never qualify.
-  assert.equal(
-    freshnessTrackerFromRow({ blockId: null, rawLine: "- [ ] #task Read #references" }),
-    null,
-  );
-  assert.equal(
-    freshnessTrackerFromRow({ blockId: "ref-2", rawLine: "- [ ] #task Read ^ref-2" }),
-    null,
-  );
-  assert.equal(
-    freshnessTrackerFromRow({ blockId: "prj-extra", rawLine: "- [ ] #task Read ^prj-extra" }),
-    null,
-  );
-  assert.equal(freshnessTrackerFromRow({ blockId: "prj", rawLine: "- [ ] #task P ^prj" }), "prj");
-  // A v2 Ready ref walks REFERENCES (never NEW) with its Ready state.
-  const readyRef = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task #ref Read ^ref-essay", blockId: "ref-essay" }),
-    D,
-    CFG,
-  );
-  assert.equal(readyRef.state, "new");
-  assert.equal(readyRef.tier, "references");
-  // A v2 `[*]` ref walks NEXT on the next interval.
-  const nextRef = freshnessEvaluate(
-    { ...laneRow("r.md", 1, "*", "2026-10-07", null), blockId: "ref-essay", rawLine: "- [*] #task #ref Read [fresh:: 2026-10-07] ^ref-essay" },
-    D,
-    CFG,
-  );
-  assert.equal(nextRef.lane, "next");
-  assert.equal(nextRef.state, null);
-  assert.equal(nextRef.tier, "next");
-  assert.equal(nextRef.intervalDays, 1);
-  assert.equal(nextRef.intervalSource, "next");
-  // A `#ref` line with `#hide` is hidden like any task.
-  const hiddenTag = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task #ref Read #hide ^ref-essay", blockId: "ref-essay", laneVisible: false }),
-    D,
-    CFG,
-  );
-  assert.equal(hiddenTag.state, null);
-  assert.equal(hiddenTag.tier, null);
-  // A hidden exact-`^ref` row stays out like any hidden task now that the
-  // transitional bypass is gone.
-  const hiddenV1 = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Read #hide ^ref", blockId: "ref", laneVisible: false }),
-    D,
-    CFG,
-  );
-  assert.equal(hiddenV1.state, null);
-  assert.equal(hiddenV1.tier, null);
+  const queue = freshnessQueue(rows, D, CFG);
+  assert.deepEqual(queue.map((entry) => entry.tier), ["new", "new", "rotten"]);
+  const counts = freshnessCounts(rows, D, CFG);
+  assert.deepEqual(Object.keys(counts.byTier), [
+    "pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post",
+  ]);
+  assert.equal(counts.walk, 3);
+  assert.equal(counts.referencesDue, undefined);
 });
 
 test("CL1-CL7: exact checklist scope, precedence, and unchanged state buckets", () => {
@@ -514,7 +287,7 @@ test("CL8-CL12: nine tier order, checklist-only due counts, and completion seman
   ];
   const queue = freshnessQueue(rows, D, CFG);
   assert.deepEqual(queue.map((entry) => entry.tier), [
-    "pre", "new", "projects", "pending", "next", "tickler", "references", "rotten", "post",
+    "pre", "new", "projects", "pending", "next", "tickler", "rotten", "rotten", "post",
   ]);
   assert.equal(queue[0].lane, "ready");
   assert.equal(queue.at(-1).lane, "ready");
@@ -569,14 +342,15 @@ test("CL8-CL12: nine tier order, checklist-only due counts, and completion seman
   assert.equal(helpers.freshnessEvaluate(missingWhenDone, D, CFG).tier, "pre");
 });
 
-test("referenceReview capability advertises the references tier", () => {
+test("freshness namespace v11 retires reference-only capability flags", () => {
   withMissingConfig(() => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({}), {});
     plugin.onload();
     try {
-      assert.equal(plugin.api.freshness.trackerReview, true);
-      assert.equal(plugin.api.freshness.referenceReview, true);
-      assert.equal(plugin.api.freshness.refTagIdentity, true);
+      assert.equal(plugin.api.freshness.version, 11);
+      assert.equal(plugin.api.freshness.referenceReview, undefined);
+      assert.equal(plugin.api.freshness.refTagIdentity, undefined);
+      assert.equal(plugin.api.version, 3);
     } finally {
       plugin.onunload();
     }

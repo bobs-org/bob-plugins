@@ -31,7 +31,6 @@ function defaultFreshnessConfig() {
     pendingInterval: 1,
     nextInterval: 1,
     projectInterval: null,
-    referenceInterval: null,
     rottenDailyBudget: null,
     decay: { enabled: true, keeps: 3, enter: null },
   };
@@ -228,11 +227,8 @@ function coerceFreshnessConfig(block) {
   if (nextCoerced.invalid) {
     invalid = true;
   }
-  // Tracker intervals: absent or null inherits (`null`); an integer
-  // 1-365 sets the explicit type cadence. Booleans (including
-  // `false`), zero, negatives, >365, fractional numbers, strings,
-  // and containers are config errors. Mirrors
-  // `parse_tracker_interval` in `src/native/config/freshness.rs`.
+  // Project interval: absent or null inherits; an integer 1-365 sets
+  // the explicit cadence. Mirrors `parse_tracker_interval` in Rust.
   const coerceTrackerInterval = (raw) => {
     if (raw === undefined || raw === null) {
       return { days: null, invalid: false };
@@ -253,11 +249,6 @@ function coerceFreshnessConfig(block) {
   const rawProject = pick("project_interval", "projectInterval");
   const projectCoerced = coerceTrackerInterval(rawProject);
   if (projectCoerced.invalid) {
-    invalid = true;
-  }
-  const rawReference = pick("reference_interval", "referenceInterval");
-  const referenceCoerced = coerceTrackerInterval(rawReference);
-  if (referenceCoerced.invalid) {
     invalid = true;
   }
   // Keep-streak policy: absent, null, `true`, or `{}` means enabled
@@ -281,7 +272,6 @@ function coerceFreshnessConfig(block) {
       pendingInterval: pendingCoerced.days,
       nextInterval: nextCoerced.days,
       projectInterval: projectCoerced.days,
-      referenceInterval: referenceCoerced.days,
       rottenDailyBudget: budget,
       intervalFromConfig,
       deprecatedStaleBudget,

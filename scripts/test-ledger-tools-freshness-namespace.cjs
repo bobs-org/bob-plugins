@@ -10,7 +10,7 @@ const {
   withMissingConfig,
   makeStatusEl,
 } = require("./ledger-tools-harness.cjs");
-test("freshness namespace v10 advertises checklist and recurring tiers without changing buckets", () => {
+test("freshness namespace v11 exposes the current nine-tier contract", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -30,10 +30,11 @@ test("freshness namespace v10 advertises checklist and recurring tiers without c
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 10);
+      assert.equal(freshness.version, 11);
       assert.equal(freshness.checklistTiers, true);
       assert.equal(freshness.recurringTier, true);
-      assert.equal(freshness.refTagIdentity, true);
+      assert.equal(freshness.referenceReview, undefined);
+      assert.equal(freshness.refTagIdentity, undefined);
       for (const key of [
         "config",
         "stampLine",
@@ -60,7 +61,6 @@ test("freshness namespace v10 advertises checklist and recurring tiers without c
         pendingInterval: 1,
         nextInterval: 1,
         projectInterval: null,
-        referenceInterval: null,
         rottenDailyBudget: null,
         intervalFromConfig: false,
         invalid: false,
@@ -309,11 +309,11 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     status.text,
-    "⟳ 0 pre · 3 new · 0 projects · 10 pending · 15 next · 0 recurring · 0 references · 20 rotten · 0 post · ✓ 12 today",
+    "⟳ 0 pre · 3 new · 0 projects · 10 pending · 15 next · 0 recurring · 20 rotten · 0 post · ✓ 12 today",
   );
   assert.equal(status.mode, "new");
   assert.match(status.tooltip, /Walk 48 · PRE 0 · NEW 3 · PROJECTS 0 · PENDING 10 · NEXT 15/);
-  assert.match(status.tooltip, /TICKLER 2 · REFERENCES 0 · ROTTEN 18/);
+  assert.match(status.tooltip, /TICKLER 2 · ROTTEN 18/);
   assert.match(status.tooltip, /oldest 11d overdue/);
   assert.match(status.tooltip, /✓ 12 today/);
   const budgeted = freshnessStatusView(
@@ -334,12 +334,12 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     budgeted.text,
-    "⟳ 0 pre · 0 new · 0 projects · 0 pending · 0 next · 0 recurring · 0 references · 5 rotten · 0 post · ✓ 12/15 today",
+    "⟳ 0 pre · 0 new · 0 projects · 0 pending · 0 next · 0 recurring · 5 rotten · 0 post · ✓ 12/15 today",
   );
   assert.equal(budgeted.mode, "due");
-  assert.match(budgeted.tooltip, /TICKLER 1 · REFERENCES 0 · ROTTEN 4/);
+  assert.match(budgeted.tooltip, /TICKLER 1 · ROTTEN 4/);
   // A `byTier` histogram drives the surfaces so the numbers sum to
-  // the walk; `references` counts on the commitment side.
+  // the walk.
   const tiered = freshnessStatusView(
     {
       due: 2,
@@ -355,7 +355,6 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
         pending: 0,
         next: 0,
         tickler: 0,
-        references: 1,
         rotten: 1,
       },
     },
@@ -363,12 +362,11 @@ test("status bar text covers every state, and a missing host stays quiet", () =>
   );
   assert.equal(
     tiered.text,
-    "⟳ 0 pre · 0 new · 1 projects · 0 pending · 0 next · 0 recurring · 1 references · 1 rotten · 0 post · ✓ 0 today",
+    "⟳ 0 pre · 0 new · 1 projects · 0 pending · 0 next · 0 recurring · 1 rotten · 0 post · ✓ 0 today",
   );
-  assert.match(tiered.tooltip, /REFERENCES 1/);
   assert.equal(tiered.mode, "due");
   assert.equal(
-    freshnessStatusView({ due: 0, walk: 1, byTier: { references: 1 } }, {}).mode,
+    freshnessStatusView({ due: 0, walk: 1, byTier: { rotten: 1 } }, {}).mode,
     "due",
   );
   // Mode table: new, then due while commitments remain, then

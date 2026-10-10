@@ -784,12 +784,12 @@ test("projects tier walks with commitment rank and empty-project notice", () => 
 
 test("references tier walks with commitment rank and reference notice", () => {
   assert.equal(
-    helpers.reviewEntryMachineTier({ tier: "references" }),
+    helpers.reviewEntryMachineTier({ tier: "references", legacyReferenceTier: true }),
     "references",
   );
   // The walk counts references as commitments, not upkeep.
   const queue = [
-    { key: "r.md:1", tier: "references" },
+    { key: "r.md:1", tier: "references", legacyReferenceTier: true },
     { key: "o.md:1", tier: "rotten" },
   ];
   assert.deepEqual(helpers.reviewWalkRemaining(queue, new Set()), {
@@ -819,6 +819,7 @@ test("references tier walks with commitment rank and reference notice", () => {
     bucket: "new",
     tier: "references",
     tierLabel: "REFERENCES",
+    legacyReferenceTier: true,
     lane: "ready",
     created: null,
     fresh: null,

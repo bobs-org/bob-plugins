@@ -271,8 +271,7 @@ test("footer groups omit every zero tier and keep walk order", () => {
     pendingDue: 0,
     nextDue: 0,
     resurfaced: 0,
-    referencesDue: 0,
-    rotten: 0,
+        rotten: 0,
     walk: 7,
     byTier: {
       new: 1,
@@ -280,7 +279,6 @@ test("footer groups omit every zero tier and keep walk order", () => {
       pending: 2,
       next: 0,
       tickler: 1,
-      references: 0,
       rotten: 3,
     },
   });
@@ -304,7 +302,6 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
       pending: 0,
       next: 0,
       tickler: 0,
-      references: 0,
       rotten: 1,
       post: 1,
     },
@@ -347,8 +344,7 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
           pending: 0,
           next: 0,
           tickler: 0,
-          references: 0,
-          rotten: 0,
+              rotten: 0,
           post: 1,
         },
       },
@@ -362,15 +358,14 @@ test("PRE and POST groups bracket the nine-tier queue and expose completion hint
   assert.equal(view.current.actionHint, pre.actionHint);
 });
 
-test("a NEW-state tracker appears only in its walk tier", () => {
+test("a NEW-state project appears only in its walk tier", () => {
   const groups = freshnessFooterGroups({
     new: 1,
     projectsDue: 1,
     pendingDue: 0,
     nextDue: 0,
     resurfaced: 0,
-    referencesDue: 1,
-    rotten: 0,
+        rotten: 0,
     walk: 2,
     byTier: {
       new: 0,
@@ -378,13 +373,12 @@ test("a NEW-state tracker appears only in its walk tier", () => {
       pending: 0,
       next: 0,
       tickler: 0,
-      references: 1,
-      rotten: 0,
+        rotten: 0,
     },
   });
   assert.deepEqual(
     groups.map((group) => group.label + " " + group.count),
-    ["PROJECTS 1", "REFS 1"],
+    ["PROJECTS 1"],
   );
 });
 
@@ -402,8 +396,7 @@ test("empty queue hides the footer even with upkeep or a met budget", () => {
           pending: 0,
           next: 0,
           tickler: 0,
-          references: 0,
-          rotten: 0,
+              rotten: 0,
         },
       },
       queue: [],
@@ -439,8 +432,7 @@ test("generic summary names due, commitments, and nonempty groups", () => {
           pending: 2,
           next: 0,
           tickler: 1,
-          references: 0,
-          rotten: 3,
+              rotten: 3,
         },
       },
       queue: [queueEntry(), queueEntry({ key: "b" })],
@@ -467,8 +459,7 @@ test("generic summary names due, commitments, and nonempty groups", () => {
           pending: 2,
           next: 0,
           tickler: 1,
-          references: 0,
-          rotten: 3,
+              rotten: 3,
         },
       },
       queue: [queueEntry()],
@@ -509,8 +500,7 @@ test("current-task context uses shared ranks and compact wording", () => {
           pending: 2,
           next: 0,
           tickler: 1,
-          references: 0,
-          rotten: 3,
+              rotten: 3,
         },
       },
       queue: [queueEntry(), current],
@@ -540,8 +530,7 @@ test("only ROTTEN remaining names commitments done or a met budget", () => {
           pending: 0,
           next: 0,
           tickler: 0,
-          references: 0,
-          rotten: 3,
+              rotten: 3,
         },
       },
       queue: rottenQueue,
@@ -565,8 +554,7 @@ test("only ROTTEN remaining names commitments done or a met budget", () => {
           pending: 0,
           next: 0,
           tickler: 0,
-          references: 0,
-          rotten: 3,
+              rotten: 3,
         },
       },
       queue: rottenQueue,
@@ -593,8 +581,7 @@ test("NEW and commitments take precedence over a met budget", () => {
           pending: 1,
           next: 0,
           tickler: 0,
-          references: 0,
-          rotten: 0,
+              rotten: 0,
         },
       },
       queue: [queueEntry(), queueEntry({ key: "p", tier: "pending" })],
@@ -684,6 +671,7 @@ test("reviewEntryView compact and detail cover the original freshness tiers", ()
       queueEntry({
         tier: "references",
         tierLabel: "REFERENCES",
+        legacyReferenceTier: true,
         fresh: "2026-10-01",
         dueOn: "2026-10-08",
         daysOverdue: 0,
@@ -698,11 +686,18 @@ test("reviewEntryView compact and detail cover the original freshness tiers", ()
       queueEntry({
         tier: "references",
         tierLabel: "REFERENCES",
+        legacyReferenceTier: true,
       }),
       today,
     ).compact,
     "Reference",
   );
+  const unmarkedLegacyShape = freshnessReviewEntryView(
+    queueEntry({ tier: "references", tierLabel: "REFERENCES" }),
+    today,
+  );
+  assert.equal(unmarkedLegacyShape.ok, true);
+  assert.equal(unmarkedLegacyShape.tier, "new", "unmarked rows fall back to ordinary state");
   const rotten = freshnessReviewEntryView(
     queueEntry({
       tier: "rotten",
@@ -830,8 +825,7 @@ test("footer paint hides the host and keeps a stable button", () => {
           pending: 0,
           next: 0,
           tickler: 0,
-          references: 0,
-          rotten: 0,
+              rotten: 0,
         },
       },
       queue: [queueEntry()],
@@ -954,8 +948,7 @@ test("queue-built ranks agree with the footer current entry", () => {
           pending: 1,
           next: 0,
           tickler: 0,
-          references: 0,
-          rotten: 1,
+              rotten: 1,
         },
       },
       queue,
@@ -973,11 +966,11 @@ test("footer short labels map every tier", () => {
   assert.deepEqual(
     [
       "pre", "new", "projects", "pending", "next",
-      "tickler", "references", "rotten", "post",
+      "tickler", "rotten", "post",
     ].map((tier) => `${tier}:${freshnessTierFooterLabel(tier)}`),
     [
       "pre:PRE", "new:NEW", "projects:PROJECTS", "pending:WIP",
-      "next:NEXT", "tickler:TICKS", "references:REFS",
+      "next:NEXT", "tickler:TICKS",
       "rotten:ROTTEN", "post:POST",
     ],
   );
@@ -1008,7 +1001,7 @@ test("current-row footer context uses short labels while entry views keep full l
         upkeepToday: 0,
         byTier: {
           pre: 0, new: 0, projects: 0, pending: 10, next: 0,
-          tickler: 14, references: 0, rotten: 0, post: 0,
+          tickler: 14, rotten: 0, post: 0,
         },
       },
       queue: [ticklerEntry],
@@ -1041,7 +1034,7 @@ test("current-row footer context uses short labels while entry views keep full l
         upkeepToday: 0,
         byTier: {
           pre: 0, new: 0, projects: 0, pending: 10, next: 0,
-          tickler: 0, references: 0, rotten: 0, post: 0,
+          tickler: 0, rotten: 0, post: 0,
         },
       },
       queue: [pendingEntry],
@@ -1052,7 +1045,7 @@ test("current-row footer context uses short labels while entry views keep full l
   assert.equal(pendingView.contextText, "WIP 3/10");
 });
 
-test("legend line lists only the abbreviations shown", () => {
+test("legend line lists only current abbreviated tiers", () => {
   const legendFor = (view) =>
     view.tooltip.split("\n").find((line) => line.includes(" = "));
   const abbreviated = freshnessFooterView(
@@ -1062,7 +1055,7 @@ test("legend line lists only the abbreviations shown", () => {
         upkeepToday: 0,
         byTier: {
           new: 1, projects: 0, pending: 2, next: 0,
-          tickler: 1, references: 0, rotten: 3,
+          tickler: 1, rotten: 3,
         },
       },
       queue: [queueEntry(), queueEntry({ key: "b" })],
@@ -1074,23 +1067,6 @@ test("legend line lists only the abbreviations shown", () => {
     legendFor(abbreviated),
     "WIP = PENDING · TICKS = TICKLER",
   );
-  const refsOnly = freshnessFooterView(
-    {
-      counts: {
-        walk: 2,
-        upkeepToday: 0,
-        byTier: {
-          new: 0, projects: 1, pending: 0, next: 0,
-          tickler: 0, references: 1, rotten: 0,
-        },
-      },
-      queue: [queueEntry(), queueEntry({ key: "b" })],
-      tasksAvailable: true,
-    },
-    { navAvailable: true },
-  );
-  assert.equal(refsOnly.groupsText, "PROJECTS 1 · REFS 1");
-  assert.equal(legendFor(refsOnly), "REFS = REFERENCES");
   const plain = freshnessFooterView(
     {
       counts: {
@@ -1098,7 +1074,7 @@ test("legend line lists only the abbreviations shown", () => {
         upkeepToday: 0,
         byTier: {
           new: 1, projects: 0, pending: 0, next: 1,
-          tickler: 0, references: 0, rotten: 0,
+          tickler: 0, rotten: 0,
         },
       },
       queue: [queueEntry(), queueEntry({ key: "b" })],

@@ -4671,7 +4671,6 @@ function defaultFreshnessConfig() {
     pendingInterval: 1,
     nextInterval: 1,
     projectInterval: null,
-    referenceInterval: null,
     rottenDailyBudget: null,
     decay: { enabled: true, keeps: 3, enter: null },
   };
@@ -4868,11 +4867,8 @@ function coerceFreshnessConfig(block) {
   if (nextCoerced.invalid) {
     invalid = true;
   }
-  // Tracker intervals: absent or null inherits (`null`); an integer
-  // 1-365 sets the explicit type cadence. Booleans (including
-  // `false`), zero, negatives, >365, fractional numbers, strings,
-  // and containers are config errors. Mirrors
-  // `parse_tracker_interval` in `src/native/config/freshness.rs`.
+  // Project interval: absent or null inherits; an integer 1-365 sets
+  // the explicit cadence. Mirrors `parse_tracker_interval` in Rust.
   const coerceTrackerInterval = (raw) => {
     if (raw === undefined || raw === null) {
       return { days: null, invalid: false };
@@ -4893,11 +4889,6 @@ function coerceFreshnessConfig(block) {
   const rawProject = pick("project_interval", "projectInterval");
   const projectCoerced = coerceTrackerInterval(rawProject);
   if (projectCoerced.invalid) {
-    invalid = true;
-  }
-  const rawReference = pick("reference_interval", "referenceInterval");
-  const referenceCoerced = coerceTrackerInterval(rawReference);
-  if (referenceCoerced.invalid) {
     invalid = true;
   }
   // Keep-streak policy: absent, null, `true`, or `{}` means enabled
@@ -4921,7 +4912,6 @@ function coerceFreshnessConfig(block) {
       pendingInterval: pendingCoerced.days,
       nextInterval: nextCoerced.days,
       projectInterval: projectCoerced.days,
-      referenceInterval: referenceCoerced.days,
       rottenDailyBudget: budget,
       intervalFromConfig,
       deprecatedStaleBudget,
@@ -5057,9 +5047,9 @@ function freshnessLaneIntervalDays(config, lane) {
   return null;
 }
 
-// Effective interval and where it came from. A configured tracker
-// interval wins for that tracker type (source `project` |
-// `reference`). Otherwise a lane task in a walked lane uses that
+// Effective interval and where it came from. A configured project
+// interval wins for `^prj` (source `project`). Otherwise a lane task
+// in a walked lane uses that
 // lane's interval (source `pending` | `next`), overriding the whole
 // Ready chain below. Otherwise the task's `[refresh:: N]`, then the
 // note's `task_refresh`, then `freshness.interval`, then 7. Mirrors
@@ -5072,14 +5062,6 @@ function freshnessTrackerIntervalFor(config, tracker) {
         : null;
     if (days !== null) {
       return { days, source: "project" };
-    }
-  } else if (tracker === "ref") {
-    const days =
-      config && Number.isInteger(config.referenceInterval)
-        ? config.referenceInterval
-        : null;
-    if (days !== null) {
-      return { days, source: "reference" };
     }
   }
   return null;
@@ -5118,13 +5100,12 @@ function freshnessIntervalFor(taskDays, noteDays, config, lane, tracker) {
 
 // Pure, never-throwing line interval for nav's refresh row:
 // `{ days, source, ready: { days, source } }`. Reads the status from
-// the line (quote-aware) and the lane/tracker intervals from
+// the line (quote-aware) and the lane/project intervals from
 // `config`. `ready` is the interval the task returns to after
-// release, including a configured tracker override. A `^prj` in any
+// release, including a configured project override. A `^prj` in any
 // lane shows the Ready-chain interval when no tracker interval is
-// set (the weekly reminder never becomes a daily lane review); a
-// lane `#ref`/`^ref` row is an ordinary lane row and shows the lane
-// interval. Mirrors `docs/freshness.md` §4.
+// set (the weekly reminder never becomes a daily lane review).
+// References use ordinary Ready/lane intervals. Mirrors `docs/freshness.md` §4.
 function freshnessIntervalForLine(line, noteRefreshRaw, config) {
   try {
     const text = typeof line === "string" ? line : "";
@@ -5137,16 +5118,7 @@ function freshnessIntervalForLine(line, noteRefreshRaw, config) {
     const symbol = freshnessTaskStatus(text);
     const lane =
       symbol === "/" ? "pending" : symbol === "*" ? "next" : null;
-    // Ref identity counts only in the Ready lane (lane is null
-    // here); lane refs take the ordinary lane interval.
-    let tracker = null;
-    if (blockId === "prj") {
-      tracker = "prj";
-    } else if (lane === null) {
-      if (blockId === "ref" || freshnessLineHasRefTag(text)) {
-        tracker = "ref";
-      }
-    }
+    const tracker = blockId === "prj" ? "prj" : null;
     const ready =
       freshnessTrackerIntervalFor(config, tracker) ||
       freshnessIntervalFor(read.refresh, note.days, config, null, null);
@@ -5261,15 +5233,14 @@ function freshnessApplyRecurringOverlay(row, today, evaluated) {
 //
 // Returns `{ state ("new"|"resurfaced"|"rotten"|"fresh"|null; null is
 // out of scope, see S13; lane rows keep a null state),
-// tier ("new"|"projects"|"pending"|"next"|"recurring"|"tickler"|"references"|"rotten"|null),
+// tier ("new"|"projects"|"pending"|"next"|"recurring"|"tickler"|"rotten"|null),
 // lane ("ready"|"pending"|"next"|null), fresh, intervalDays,
 // intervalSource, dueOn, daysOverdue, keeps (the valid `[keeps:: N]`
 // semantic count, 0 when absent), decide (a choice is due — never
 // permission to act), lints }`. Tracker rows use the ordinary lane-visible
-// predicate (sync owns `#hide`). Due `^prj` rows walk in PROJECTS and
-// due `^ref` rows in REFERENCES with the effective (tracker-override
-// or Ready-chain) interval even when their Ready state is NEW or
-// RESURFACED. Mirrors `evaluate_without_checklist` plus the checklist
+// predicate (sync owns `#hide`). Due `^prj` rows walk in PROJECTS.
+// Reference tasks use ordinary freshness and review groups. Mirrors
+// `evaluate_without_checklist` plus the checklist
 // overlay in `src/native/freshness/state.rs`; `state` stays exactly
 // as before so buckets never move. The RECURRING overlay is applied
 // by `freshnessEvaluate` at its single exit, after this returns.
@@ -5323,25 +5294,13 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       ? freshnessLaneIntervalDays(config, lane)
       : null;
 
-  // Tracking identity from the row's block ID, tags, and line
-  // (`^prj`, or `^ref` / whole-token `#ref` for references). A
-  // configured tracker interval wins for that type; otherwise a
-  // tracker keeps the Ready-chain cadence, never the lane interval.
-  // Only Ready refs keep the tracker cadence and REFERENCES tier;
-  // lane refs (`/`/`*`) are ordinary lane rows (the J4 split, mirroring
-  // `evaluate_without_checklist` in `src/native/freshness/state.rs`).
-  // `^prj` behavior is unchanged.
+  // Project identity is the only tracker exception. References use
+  // ordinary Ready and lane intervals.
   const tracker = freshnessTrackerFromRow(safe);
   const isPrj = tracker === "prj";
-  const isRef = tracker === "ref" && lane === "ready";
-  const isTracker = isPrj || isRef;
-  // Lane refs are ordinary lane rows, so the reference cadence never
-  // applies to them — only the effective (Ready-gated) identity feeds
-  // the interval.
-  const effectiveTracker = isPrj ? "prj" : isRef ? "ref" : null;
   const trackerInterval = freshnessTrackerIntervalFor(
     config,
-    effectiveTracker,
+    isPrj ? "prj" : null,
   );
   const readyInterval = freshnessIntervalFor(
     read.refresh,
@@ -5350,12 +5309,12 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     null,
     null,
   );
-  const interval =
-    trackerInterval !== null
-      ? trackerInterval
-      : isTracker
-        ? readyInterval
-        : freshnessIntervalFor(read.refresh, note.days, config, lane, null);
+  const interval = trackerInterval !== null
+    ? trackerInterval
+    : isPrj
+      ? readyInterval
+      : freshnessIntervalFor(read.refresh, note.days, config, lane, null);
+  const isTracker = isPrj;
   const fresh = read.fresh;
 
   const walkScope =
@@ -5454,11 +5413,9 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     }
   }
 
-  // PROJECTS is every due `^prj` (Ready NEW/RESURFACED/ROTTEN plus
-  // every due lane tracker with its actual lane retained) and
-  // REFERENCES every due Ready `#ref`/`^ref` row; both precede NEW
-  // and the lane tiers, so a never-confirmed Ready reference walks
-  // in REFERENCES, never NEW. Lane refs are ordinary lane rows.
+  // PROJECTS is every due `^prj` row (Ready states and lane rows with
+  // their actual lane retained). All other rows, including references,
+  // use the ordinary NEW/lane/TICKLER/ROTTEN groups.
   const trackerReadyDue =
     isTracker &&
     lane === "ready" &&
@@ -5469,8 +5426,6 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     tier = checklist;
   } else if (isPrj && (trackerReadyDue || trackerLaneDueRow)) {
     tier = "projects";
-  } else if (isRef && (trackerReadyDue || trackerLaneDueRow)) {
-    tier = "references";
   } else if (lane === "ready" && state === "new" && !isTracker) {
     tier = "new";
   } else if (lane === "pending" && walkScope && laneDue && !isTracker) {
@@ -5688,7 +5643,7 @@ function freshnessRowKey(row) {
 }
 
 // Walk tier order: PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING →
-// TICKLER → REFERENCES → ROTTEN → POST. Mirrors the `Tier` ordering in
+// TICKLER → ROTTEN → POST. Mirrors the `Tier` ordering in
 // `src/native/freshness/state.rs`.
 const FRESHNESS_TIER_ORDER = {
   pre: 0,
@@ -5698,34 +5653,11 @@ const FRESHNESS_TIER_ORDER = {
   next: 4,
   recurring: 5,
   tickler: 6,
-  references: 7,
-  rotten: 8,
-  post: 9,
+  rotten: 7,
+  post: 8,
 };
 
-// Whole-token `#ref` tag in a task line, case-insensitive.
-// `#references` and `#ref/x` never qualify. Mirrors the tag half of
-// `TrackerKind::from_tags_and_block_id` in
-// `src/native/freshness/state.rs`.
-function freshnessLineHasRefTag(line) {
-  const text = typeof line === "string" ? line : "";
-  const tokens = text.split(/[\s\ufeff]+/);
-  for (const token of tokens) {
-    const cleaned = token.replace(/^[>"'([{*\-+]+/, "").replace(/[.,;:!?)\]}'"]+$/, "");
-    if (cleaned.toLowerCase() === "#ref") {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Tracking-task identity from the row's block ID, tag list, and
-// line: the exact trailing block ID `prj`, or — for references —
-// the exact trailing block ID `ref` or a whole-token `#ref` tag
-// (case-insensitive). `^prj-extra`, `#references`, description text,
-// and `[[x#^prj]]` links/embeds are never identities. Mirrors
-// `TrackerKind::from_tags_and_block_id` in
-// `src/native/freshness/state.rs`.
+// Project tracking-task identity is the exact `^prj` block ID.
 function freshnessTrackerFromRow(row) {
   const safe = row && typeof row === "object" ? row : {};
   const blockId =
@@ -5736,26 +5668,6 @@ function freshnessTrackerFromRow(row) {
         : null;
   if (blockId === "prj") {
     return "prj";
-  }
-  if (blockId === "ref") {
-    return "ref";
-  }
-  if (
-    Array.isArray(safe.tags) &&
-    safe.tags.some(
-      (tag) => typeof tag === "string" && tag.trim().toLowerCase() === "#ref",
-    )
-  ) {
-    return "ref";
-  }
-  const line =
-    typeof safe.rawLine === "string"
-      ? safe.rawLine
-      : typeof safe.originalMarkdown === "string"
-        ? safe.originalMarkdown
-        : "";
-  if (freshnessLineHasRefTag(line)) {
-    return "ref";
   }
   return null;
 }
@@ -5782,9 +5694,6 @@ function freshnessTierLabel(tier) {
   if (tier === "tickler") {
     return "TICKLER";
   }
-  if (tier === "references") {
-    return "REFERENCES";
-  }
   if (tier === "rotten") {
     return "ROTTEN";
   }
@@ -5804,9 +5713,6 @@ function freshnessTierFooterLabel(tier) {
   }
   if (tier === "tickler") {
     return "TICKS";
-  }
-  if (tier === "references") {
-    return "REFS";
   }
   return freshnessTierLabel(tier);
 }
@@ -5850,7 +5756,7 @@ function freshnessComparePathLine(a, b) {
 }
 // ---- src/110-freshness-queue.js ----
 // The tiered review queue PRE → NEW → PROJECTS → PENDING → NEXT →
-// RECURRING → TICKLER → REFERENCES → ROTTEN → POST, with each tier's
+// RECURRING → TICKLER → ROTTEN → POST, with each tier's
 // comparator from `docs/freshness.md` §4.
 // Entries
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
@@ -5927,8 +5833,7 @@ function freshnessQueue(rows, todayText, config) {
     if (
       left.tier === "projects" ||
       left.tier === "pending" ||
-      left.tier === "next" ||
-      left.tier === "references"
+      left.tier === "next"
     ) {
       return (
         freshnessCompareDueOn(left.dueOn, right.dueOn) ||
@@ -5979,7 +5884,7 @@ function freshnessIsExcludedCountPath(path) {
 }
 
 // Whole-vault counts: `{ due, new, resurfaced, rotten, fresh,
-// preDue, postDue, pendingDue, nextDue, projectsDue, referencesDue,
+// preDue, postDue, pendingDue, nextDue, projectsDue,
 // recurringDue, byTier, walk, decide,
 // refreshedToday, upkeepToday, budget, budgetMet }`. State totals
 // (`due = new + resurfaced + rotten`) count evaluated Ready states
@@ -6007,7 +5912,6 @@ function freshnessCounts(rows, todayText, config) {
     next: 0,
     recurring: 0,
     tickler: 0,
-    references: 0,
     rotten: 0,
     post: 0,
   };
@@ -6079,7 +5983,6 @@ function freshnessCounts(rows, todayText, config) {
     byTier.next +
     byTier.recurring +
     byTier.tickler +
-    byTier.references +
     byTier.rotten +
     byTier.post;
 
@@ -6094,7 +5997,6 @@ function freshnessCounts(rows, todayText, config) {
     pendingDue: byTier.pending,
     nextDue: byTier.next,
     projectsDue: byTier.projects,
-    referencesDue: byTier.references,
     recurringDue: byTier.recurring,
     byTier: { ...byTier },
     walk,
@@ -6176,7 +6078,6 @@ function freshnessStatusView(counts, options = {}) {
   const tierNext = tierCount("next", safe.nextDue);
   const tierRecurring = tierCount("recurring", safe.recurringDue);
   const tierTickler = tierCount("tickler", safe.resurfaced);
-  const tierReferences = tierCount("references", safe.referencesDue);
   const tierRotten = tierCount("rotten", safe.rotten);
   const tierPost = tierCount("post", safe.postDue);
   const rotten = tierTickler + tierRotten;
@@ -6190,7 +6091,6 @@ function freshnessStatusView(counts, options = {}) {
         tierNext +
         tierRecurring +
         tierTickler +
-        tierReferences +
         tierRotten +
         tierPost;
   const upkeep =
@@ -6216,8 +6116,6 @@ function freshnessStatusView(counts, options = {}) {
     " next · " +
     tierRecurring +
     " recurring · " +
-    tierReferences +
-    " references · " +
     rotten +
     " rotten · " +
     tierPost +
@@ -6245,8 +6143,6 @@ function freshnessStatusView(counts, options = {}) {
     tierRecurring +
     " · TICKLER " +
     tierTickler +
-    " · REFERENCES " +
-    tierReferences +
     " · ROTTEN " +
     tierRotten +
     " · POST " +
@@ -6259,10 +6155,10 @@ function freshnessStatusView(counts, options = {}) {
     " today";
   // Mode precedence: `new` (NEW > 0), then `due` while any
   // commitment tier (PRE, NEW, PROJECTS, PENDING, NEXT, RECURRING,
-  // TICKLER, REFERENCES) remains, then `budget` (met), then `clear`
+  // TICKLER) remains, then `budget` (met), then `clear`
   // (walk empty), else `due`. The raw `budgetMet` formula is
-  // unchanged; outstanding commitment tiers (including PROJECTS and
-  // REFERENCES) take precedence in this mode.
+  // unchanged; outstanding PROJECTS commitments take precedence in
+  // this mode.
   let mode = "due";
   if (tierNew > 0) {
     mode = "new";
@@ -6272,8 +6168,7 @@ function freshnessStatusView(counts, options = {}) {
     tierPending > 0 ||
     tierNext > 0 ||
     tierRecurring > 0 ||
-    tierTickler > 0 ||
-    tierReferences > 0
+    tierTickler > 0
   ) {
     mode = "due";
   } else if (safe.budgetMet) {
@@ -6294,7 +6189,6 @@ const FRESHNESS_FOOTER_TIERS = [
   "next",
   "recurring",
   "tickler",
-  "references",
   "rotten",
   "post",
 ];
@@ -6307,7 +6201,6 @@ const FRESHNESS_FOOTER_COMMITMENT_TIERS = [
   "next",
   "recurring",
   "tickler",
-  "references",
 ];
 
 function freshnessReviewEntryViewEmpty() {
@@ -6336,9 +6229,17 @@ function freshnessReviewMachineTier(entry) {
     tier === "next" ||
     tier === "recurring" ||
     tier === "tickler" ||
-    tier === "references" ||
     tier === "rotten" ||
     tier === "post"
+  ) {
+    return tier;
+  }
+  // Legacy queue entries are tagged only by navigation when they came
+  // from a freshness namespace <=10. New producers never emit this tier.
+  if (
+    tier === "references" &&
+    entry &&
+    entry.legacyReferenceTier === true
   ) {
     return tier;
   }
@@ -6571,7 +6472,6 @@ function freshnessFooterReadTiers(counts) {
     next: freshnessFooterTierCount(safe, "next", safe.nextDue),
     recurring: freshnessFooterTierCount(safe, "recurring", safe.recurringDue),
     tickler: freshnessFooterTierCount(safe, "tickler", safe.resurfaced),
-    references: freshnessFooterTierCount(safe, "references", safe.referencesDue),
     rotten: freshnessFooterTierCount(safe, "rotten", safe.rotten),
     post: freshnessFooterTierCount(safe, "post", safe.postDue),
   };
@@ -6880,9 +6780,6 @@ function freshnessFooterView(memo, options = {}) {
     }
     if (shownTiers.has("tickler")) {
       legendParts.push("TICKS = TICKLER");
-    }
-    if (shownTiers.has("references")) {
-      legendParts.push("REFS = REFERENCES");
     }
     const legendText = legendParts.join(" · ");
     const tooltipLines = [
@@ -7668,12 +7565,11 @@ function freshnessMarkResolution(row, todayText, config, options) {
     const today = freshnessNormalizeDateText(todayText);
     const evaluated = freshnessEvaluate(row, today, config);
     // An evaluator `"new"` is unresolved (null) — except a due
-    // tracker in PROJECTS or REFERENCES, which reads as its tier with
+    // tracker in PROJECTS, which reads as its tier with
     // the effective interval so marks agree with the queue.
     if (
       evaluated.state === "new" &&
-      evaluated.tier !== "projects" &&
-      evaluated.tier !== "references"
+      evaluated.tier !== "projects"
     ) {
       return null;
     }
@@ -12858,7 +12754,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // queue without changing buckets or stamps; date-independent
       // decide/config, counting, and `keepLine` remain available from
       // v5. Tiered walk PRE → NEW → PROJECTS → PENDING → NEXT →
-      // RECURRING → TICKLER → REFERENCES → ROTTEN → POST with daily
+      // RECURRING → TICKLER → ROTTEN → POST with daily
       // lane review; `state`/`bucket`/`counts`/`config` keep the rotten
       // vocabulary; the removed `stale_daily_budget` key still parses
       // for one release with a deprecation lint. Keep streaks
@@ -12868,15 +12764,12 @@ class BobLedgerToolsPlugin extends Plugin {
       // namespace with the explicit `trackerReview` capability: tracker
       // rows use the ordinary predicate, and a `#hide` tag hides them
       // like any task. Visible `^prj` rows use the ordinary
-      // predicate, and the PROJECTS/REFERENCES tiers walk with
-      // `projectsDue`/`referencesDue` and `checklistTiers` advertises
+      // predicate, and the PROJECTS tier walks with `projectsDue`;
+      // references use ordinary freshness and review groups.
+      // `checklistTiers` advertises
       // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
-      // histogram (ten keys with `recurring`). The explicit
-      // `referenceReview` capability tells consumers the queue may
-      // carry `references` entries. Namespace v10 re-keys ref identity
-      // to the `#ref` tag (the explicit `refTagIdentity` capability):
-      // Ready `#ref` rows keep REFERENCES, lane refs walk PENDING/NEXT.
-      // Top-level api stays v3).
+      // histogram including recurring. Namespace v11 removes
+      // the reference review tier and cadence. Top-level api stays v3).
       // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
       // member is synchronous, never awaits and never throws. Missing
       // or old freshness namespaces degrade vault queries to the
@@ -12885,12 +12778,10 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 10,
+        version: 11,
         trackerReview: true,
-        referenceReview: true,
         checklistTiers: true,
         recurringTier: true,
-        refTagIdentity: true,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),
@@ -17567,10 +17458,6 @@ class BobLedgerToolsFreshnessApiMixin {
         snapshot.config.projectInterval !== undefined
           ? snapshot.config.projectInterval
           : null;
-      const referenceInterval =
-        snapshot.config.referenceInterval !== undefined
-          ? snapshot.config.referenceInterval
-          : null;
       const rawDecay =
         snapshot.config.decay && typeof snapshot.config.decay === "object"
           ? snapshot.config.decay
@@ -17580,7 +17467,6 @@ class BobLedgerToolsFreshnessApiMixin {
         pendingInterval,
         nextInterval,
         projectInterval,
-        referenceInterval,
         rottenDailyBudget: snapshot.config.rottenDailyBudget,
         intervalFromConfig: Boolean(snapshot.config.intervalFromConfig),
         invalid: snapshot.invalid,
@@ -17605,7 +17491,6 @@ class BobLedgerToolsFreshnessApiMixin {
         pendingInterval: 1,
         nextInterval: 1,
         projectInterval: null,
-        referenceInterval: null,
         rottenDailyBudget: null,
         intervalFromConfig: false,
         invalid: false,
@@ -17964,7 +17849,6 @@ class BobLedgerToolsFreshnessApiMixin {
         pendingDue: 0,
         nextDue: 0,
         projectsDue: 0,
-        referencesDue: 0,
         recurringDue: 0,
         preDue: 0,
         postDue: 0,
@@ -17976,7 +17860,6 @@ class BobLedgerToolsFreshnessApiMixin {
           next: 0,
           recurring: 0,
           tickler: 0,
-          references: 0,
           rotten: 0,
           post: 0,
         },
@@ -29094,7 +28977,6 @@ module.exports.helpers = {
   freshnessIntervalForLine,
   freshnessTierLabel,
   freshnessTierFooterLabel,
-  freshnessLineHasRefTag,
   freshnessTrackerFromRow,
   freshnessOccursOn,
   freshnessEvaluateWithoutRecurring,

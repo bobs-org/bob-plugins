@@ -282,7 +282,6 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     pendingInterval: 1,
     nextInterval: 1,
     projectInterval: null,
-    referenceInterval: null,
     rottenDailyBudget: null,
     decay: { enabled: true, keeps: 3, enter: null },
   });
@@ -352,7 +351,6 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
         pendingInterval: coerced.config.pendingInterval,
         nextInterval: coerced.config.nextInterval,
         projectInterval: coerced.config.projectInterval,
-        referenceInterval: coerced.config.referenceInterval,
         rottenDailyBudget: coerced.config.rottenDailyBudget,
         decay: coerced.config.decay,
       },
@@ -361,11 +359,20 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
         pendingInterval: 1,
         nextInterval: 1,
         projectInterval: null,
-        referenceInterval: null,
         rottenDailyBudget: null,
         decay: { enabled: true, keeps: 3, enter: null },
       },
     );
+  }
+  for (const oldValue of [3, null, false, "soon", { days: 3 }]) {
+    for (const key of ["reference_interval", "referenceInterval"]) {
+      const coerced = coerceFreshnessConfig({
+        interval: 5,
+        [key]: oldValue,
+      });
+      assert.equal(coerced.invalid, false, key + ":" + JSON.stringify(oldValue));
+      assert.equal(coerced.config.interval, 5);
+    }
   }
   // Lane intervals: absent or null mean the default 1, false turns
   // the lane off, integers set it, camelCase is tolerated.

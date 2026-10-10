@@ -437,12 +437,11 @@ function freshnessMarkResolution(row, todayText, config, options) {
     const today = freshnessNormalizeDateText(todayText);
     const evaluated = freshnessEvaluate(row, today, config);
     // An evaluator `"new"` is unresolved (null) — except a due
-    // tracker in PROJECTS or REFERENCES, which reads as its tier with
+    // tracker in PROJECTS, which reads as its tier with
     // the effective interval so marks agree with the queue.
     if (
       evaluated.state === "new" &&
-      evaluated.tier !== "projects" &&
-      evaluated.tier !== "references"
+      evaluated.tier !== "projects"
     ) {
       return null;
     }

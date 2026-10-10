@@ -92,11 +92,10 @@ function reviewFreshnessSupportsTiers(freshnessApi) {
   }
 }
 
-// Project/reference tracking review (ledger-tools freshness capability
-// `trackerReview`). Legacy v3/v4 queues keep working when the
-// capability is absent: they never carry `projects` or `references`
-// entries, and every branch below treats a missing capability as "no
-// tracker detail".
+// Project tracking review (ledger-tools freshness capability
+// `trackerReview`). The legacy references tier is recognized only on
+// queue entries tagged by readFreshnessQueue from freshness namespaces
+// <=10; the v11 producer no longer emits it.
 function reviewFreshnessSupportsTrackers(freshnessApi) {
   try {
     return (
@@ -162,8 +161,8 @@ function reviewIsChecklistTier(tier) {
   return tier === "pre" || tier === "post";
 }
 
-// Machine walk tier for a queue entry: v4 `tier` (plus the `projects`
-// and `references` tracker tiers, v7 `pre`/`post` checklist tiers, and
+// Machine walk tier for a queue entry: v4 `tier` (plus `projects`,
+// legacy references from namespaces <=10, v7 `pre`/`post` checklist tiers, and
 // the v9 `recurring` tier), else the legacy v3 `state` mapping
 // (`resurfaced` reads as the TICKLER tier). A `returned` tier reads as
 // `tickler` for a v7 ledger api. Returns "".
@@ -180,10 +179,12 @@ function reviewEntryMachineTier(entry) {
     tier === "next" ||
     tier === "recurring" ||
     tier === "tickler" ||
-    tier === "references" ||
     tier === "rotten" ||
     tier === "post"
   ) {
+    return tier;
+  }
+  if (tier === "references" && entry && entry.legacyReferenceTier === true) {
     return tier;
   }
   if (tier === "returned") {
@@ -232,6 +233,8 @@ function reviewIsCommitmentTier(tier) {
     tier === "next" ||
     tier === "recurring" ||
     tier === "tickler" ||
+    // Only normalized legacy entries from namespaces <=10 reach this
+    // branch. Current producers have no references tier.
     tier === "references"
   );
 }
@@ -782,7 +785,8 @@ function matchReviewRecurringCursor(queue, cursor) {
 
 // Remaining walk counts after excluding handled keys: `{ commitments,
 // rotten, post, pre }`. Commitments are the PRE/NEW/PROJECTS/PENDING/
-// NEXT/RECURRING/TICKLER/REFERENCES tiers. POST is the closing tier.
+// NEXT/RECURRING/TICKLER tiers. Legacy REFERENCES rows are recognized
+// only when marked from a freshness namespace <=10. POST is the closing tier.
 function reviewWalkRemaining(queue, excludedKeys) {
   const excluded =
     excludedKeys instanceof Set

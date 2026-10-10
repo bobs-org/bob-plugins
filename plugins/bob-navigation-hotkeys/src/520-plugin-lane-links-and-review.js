@@ -212,7 +212,18 @@ class BobNavigationHotkeysLaneReviewMixin {
     try {
       const queue =
         api && typeof api.queue === "function" ? api.queue() : [];
-      return Array.isArray(queue) ? queue : [];
+      if (!Array.isArray(queue)) {
+        return [];
+      }
+      const legacyReferenceProvider =
+        Number(api && api.version) <= 10;
+      return queue.map((entry) =>
+        legacyReferenceProvider &&
+        entry &&
+        String(entry.tier || "").toLowerCase() === "references"
+          ? { ...entry, legacyReferenceTier: true }
+          : entry,
+      );
     } catch (error) {
       return [];
     }

@@ -244,7 +244,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // queue without changing buckets or stamps; date-independent
       // decide/config, counting, and `keepLine` remain available from
       // v5. Tiered walk PRE → NEW → PROJECTS → PENDING → NEXT →
-      // RECURRING → TICKLER → REFERENCES → ROTTEN → POST with daily
+      // RECURRING → TICKLER → ROTTEN → POST with daily
       // lane review; `state`/`bucket`/`counts`/`config` keep the rotten
       // vocabulary; the removed `stale_daily_budget` key still parses
       // for one release with a deprecation lint. Keep streaks
@@ -254,15 +254,12 @@ class BobLedgerToolsPlugin extends Plugin {
       // namespace with the explicit `trackerReview` capability: tracker
       // rows use the ordinary predicate, and a `#hide` tag hides them
       // like any task. Visible `^prj` rows use the ordinary
-      // predicate, and the PROJECTS/REFERENCES tiers walk with
-      // `projectsDue`/`referencesDue` and `checklistTiers` advertises
+      // predicate, and the PROJECTS tier walks with `projectsDue`;
+      // references use ordinary freshness and review groups.
+      // `checklistTiers` advertises
       // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
-      // histogram (ten keys with `recurring`). The explicit
-      // `referenceReview` capability tells consumers the queue may
-      // carry `references` entries. Namespace v10 re-keys ref identity
-      // to the `#ref` tag (the explicit `refTagIdentity` capability):
-      // Ready `#ref` rows keep REFERENCES, lane refs walk PENDING/NEXT.
-      // Top-level api stays v3).
+      // histogram including recurring. Namespace v11 removes
+      // the reference review tier and cadence. Top-level api stays v3).
       // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
       // member is synchronous, never awaits and never throws. Missing
       // or old freshness namespaces degrade vault queries to the
@@ -271,12 +268,10 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 10,
+        version: 11,
         trackerReview: true,
-        referenceReview: true,
         checklistTiers: true,
         recurringTier: true,
-        refTagIdentity: true,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),

@@ -235,10 +235,10 @@ test("exact eligibility refuses non-Ready and non-due rows", () => {
   );
   assert.equal(
     helpers.matchFreshStampExactEntry(
-      [rottenEntry({ lane: "ready", tier: "references", state: "rotten" })],
+      [rottenEntry({ lane: "ready", tier: "rotten", state: "rotten" })],
       ref,
-    ).reason,
-    "tier",
+    ).ok,
+    true,
   );
   // Legacy v3 rows without a lane never authorize.
   assert.equal(

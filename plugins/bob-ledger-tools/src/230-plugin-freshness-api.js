@@ -407,10 +407,6 @@ class BobLedgerToolsFreshnessApiMixin {
         snapshot.config.projectInterval !== undefined
           ? snapshot.config.projectInterval
           : null;
-      const referenceInterval =
-        snapshot.config.referenceInterval !== undefined
-          ? snapshot.config.referenceInterval
-          : null;
       const rawDecay =
         snapshot.config.decay && typeof snapshot.config.decay === "object"
           ? snapshot.config.decay
@@ -420,7 +416,6 @@ class BobLedgerToolsFreshnessApiMixin {
         pendingInterval,
         nextInterval,
         projectInterval,
-        referenceInterval,
         rottenDailyBudget: snapshot.config.rottenDailyBudget,
         intervalFromConfig: Boolean(snapshot.config.intervalFromConfig),
         invalid: snapshot.invalid,
@@ -445,7 +440,6 @@ class BobLedgerToolsFreshnessApiMixin {
         pendingInterval: 1,
         nextInterval: 1,
         projectInterval: null,
-        referenceInterval: null,
         rottenDailyBudget: null,
         intervalFromConfig: false,
         invalid: false,
@@ -804,7 +798,6 @@ class BobLedgerToolsFreshnessApiMixin {
         pendingDue: 0,
         nextDue: 0,
         projectsDue: 0,
-        referencesDue: 0,
         recurringDue: 0,
         preDue: 0,
         postDue: 0,
@@ -816,7 +809,6 @@ class BobLedgerToolsFreshnessApiMixin {
           next: 0,
           recurring: 0,
           tickler: 0,
-          references: 0,
           rotten: 0,
           post: 0,
         },

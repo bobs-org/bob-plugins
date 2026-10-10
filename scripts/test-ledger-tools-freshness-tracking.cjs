@@ -16,7 +16,7 @@ const {
   withMissingConfig,
   checklistTaskRow,
 } = require("./ledger-tools-harness.cjs");
-test("tracking review: visible ^prj walks PROJECTS, hidden ^prj is out, hidden ^ref is REFERENCES", () => {
+test("tracking review: visible ^prj walks PROJECTS, hidden ^prj is out, visible ^ref walks REFERENCES and hidden ^ref is out", () => {
   const { freshnessEvaluate } = helpers;
   const empty = freshnessEvaluate(
     sRow({ rawLine: "- [ ] #task Project ^prj", blockId: "prj", projectReadyCount: 0 }),
@@ -55,13 +55,21 @@ test("tracking review: visible ^prj walks PROJECTS, hidden ^prj is out, hidden ^
   assert.equal(hiddenPrj.state, null);
   assert.equal(hiddenPrj.tier, null);
 
-  const hiddenRef = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Read #hide ^ref", blockId: "ref" }),
+  const visibleRef = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Read ^ref", blockId: "ref" }),
     D,
     CFG,
   );
-  assert.equal(hiddenRef.state, "new");
-  assert.equal(hiddenRef.tier, "references");
+  assert.equal(visibleRef.state, "new");
+  assert.equal(visibleRef.tier, "references");
+
+  const hiddenRef = freshnessEvaluate(
+    sRow({ rawLine: "- [ ] #task Read #hide ^ref", blockId: "ref", laneVisible: false }),
+    D,
+    CFG,
+  );
+  assert.equal(hiddenRef.state, null);
+  assert.equal(hiddenRef.tier, null);
 
   const hidden = freshnessEvaluate(
     sRow({ rawLine: "- [ ] #task Read #hide", laneVisible: false }),
@@ -110,8 +118,8 @@ test("tracking counts decouple states from the nine-key tier histogram", () => {
     blockId: "prj",
     projectReadyCount: 0,
   });
-  const hiddenRef = sRow({
-    rawLine: "- [ ] #task Read #hide ^ref",
+  const visibleRef = sRow({
+    rawLine: "- [ ] #task Read ^ref",
     blockId: "ref",
   });
   const lanePrj = {
@@ -129,7 +137,7 @@ test("tracking counts decouple states from the nine-key tier histogram", () => {
     noteRefreshRaw: undefined,
     blockId: "prj",
   };
-  const report = freshnessCounts([emptyPrj, hiddenRef, lanePrj], D, CFG);
+  const report = freshnessCounts([emptyPrj, visibleRef, lanePrj], D, CFG);
   assert.equal(report.new, 2);
   assert.equal(report.due, 2);
   assert.equal(report.projectsDue, 2);
@@ -406,14 +414,15 @@ test("ref identity is the #ref tag or the exact ^ref block id; lane refs walk th
   );
   assert.equal(hiddenTag.state, null);
   assert.equal(hiddenTag.tier, null);
-  // An exact-`^ref` hidden v1 tracker still reviews (transitional bypass).
+  // A hidden exact-`^ref` row stays out like any hidden task now that the
+  // transitional bypass is gone.
   const hiddenV1 = freshnessEvaluate(
-    sRow({ rawLine: "- [ ] #task Read #hide ^ref", blockId: "ref" }),
+    sRow({ rawLine: "- [ ] #task Read #hide ^ref", blockId: "ref", laneVisible: false }),
     D,
     CFG,
   );
-  assert.equal(hiddenV1.state, "new");
-  assert.equal(hiddenV1.tier, "references");
+  assert.equal(hiddenV1.state, null);
+  assert.equal(hiddenV1.tier, null);
 });
 
 test("CL1-CL7: exact checklist scope, precedence, and unchanged state buckets", () => {

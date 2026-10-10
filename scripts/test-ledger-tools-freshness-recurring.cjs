@@ -486,8 +486,8 @@ test("hidden recurring ^ref keeps ordinary visibility (Rust parity)", () => {
   assert.equal(ordinaryRow.recurring, false);
   assert.equal(
     ordinaryRow.laneVisible,
-    true,
-    "ordinary hidden ^ref keeps the tracker bypass",
+    false,
+    "a hidden ^ref stays out like any hidden task",
   );
-  assert.equal(freshnessEvaluate(ordinaryRow, D, CFG).tier, "references");
+  assert.equal(freshnessEvaluate(ordinaryRow, D, CFG).tier, null);
 });

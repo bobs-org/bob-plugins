@@ -615,9 +615,7 @@ class BobLedgerToolsFreshnessApiMixin {
       // the same memoized evaluated states projected onto the existing
       // visible Ready pool (strict lane visibility, hide excluded), so
       // hidden review-only rows never feed a badge for a section that
-      // excludes them. The full `freshness.counts()`/CLI review counts
-      // intentionally differ; hidden references still walk through
-      // `]s`, the status bar, and the CLI.
+      // excludes them.
       return freshnessReviewModel(
         memo.counts,
         memo.queue,

@@ -295,9 +295,7 @@ function freshnessCollectLints(rows, todayText, config) {
 // `freshnessCounts` result; `mostOverdue` is the queue's largest
 // `daysOverdue` (or null when nothing is due). The meter shows
 // upkeep (`upkeepToday`); ROTTEN includes TICKLER, as on the chip.
-// Hidden references still count here (they walk through the status
-// bar, `]s`, and the CLI). Mirrors `docs/freshness.md` §4 (freshness
-// namespace v5).
+// Mirrors `docs/freshness.md` §4 (freshness namespace v5).
 function freshnessStatusView(counts, options = {}) {
   const tasksAvailable = options.tasksAvailable !== false;
   if (!tasksAvailable) {

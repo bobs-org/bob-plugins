@@ -5265,8 +5265,7 @@ function freshnessApplyRecurringOverlay(row, today, evaluated) {
 // lane ("ready"|"pending"|"next"|null), fresh, intervalDays,
 // intervalSource, dueOn, daysOverdue, keeps (the valid `[keeps:: N]`
 // semantic count, 0 when absent), decide (a choice is due — never
-// permission to act), lints }`. Exact `^ref` trackers bypass only the
-// `#hide` exclusion; exact `^prj` rows use the ordinary lane-visible
+// permission to act), lints }`. Tracker rows use the ordinary lane-visible
 // predicate (sync owns `#hide`). Due `^prj` rows walk in PROJECTS and
 // due `^ref` rows in REFERENCES with the effective (tracker-override
 // or Ready-chain) interval even when their Ready state is NEW or
@@ -6147,9 +6146,7 @@ function freshnessCollectLints(rows, todayText, config) {
 // `freshnessCounts` result; `mostOverdue` is the queue's largest
 // `daysOverdue` (or null when nothing is due). The meter shows
 // upkeep (`upkeepToday`); ROTTEN includes TICKLER, as on the chip.
-// Hidden references still count here (they walk through the status
-// bar, `]s`, and the CLI). Mirrors `docs/freshness.md` §4 (freshness
-// namespace v5).
+// Mirrors `docs/freshness.md` §4 (freshness namespace v5).
 function freshnessStatusView(counts, options = {}) {
   const tasksAvailable = options.tasksAvailable !== false;
   if (!tasksAvailable) {
@@ -12352,34 +12349,8 @@ function freshnessRowFromTask(task, index, context) {
       laneVisible = Boolean(
         planLaneVisible(task, list, safeContext.todayDay ?? null),
       );
-      // Freshness-specific review eligibility: only exact `^ref`
-      // trackers bypass the conventional `#hide` tag (the
-      // transitional v1 bypass). A hand-written `#hide` on a
-      // tag-only `#ref` line hides it like any task. Re-run the same
-      // lane predicate on a shallow clone with hide-matching tags
-      // removed (never mutating the cached Tasks object); every other
-      // exclusion still applies, and ordinary hidden tasks — and
-      // hidden `^prj` rows — stay out. Recurring rows keep ordinary
-      // visibility (including `#hide` exclusion) even on trackers, so
-      // a hidden recurring `^ref` never walks in RECURRING.
-      if (!laneVisible && blockId === "ref" && !recurring) {
-        try {
-          const tags = Array.isArray(task.tags) ? task.tags : [];
-          const stripped = tags.filter(
-            (tag) =>
-              typeof tag !== "string" ||
-              !tag.toLowerCase().includes("#hide"),
-          );
-          if (stripped.length !== tags.length) {
-            const clone = { ...task, tags: stripped };
-            laneVisible = Boolean(
-              planLaneVisible(clone, list, safeContext.todayDay ?? null),
-            );
-          }
-        } catch (error) {
-          // Keep the unmodified predicate result.
-        }
-      }
+      // A `#hide` tag hides a `#ref` row like any task, exact `^ref`
+      // rows included (the transitional bypass was removed at closeout).
     } catch (error) {
       laneVisible = false;
     }
@@ -12894,9 +12865,9 @@ class BobLedgerToolsPlugin extends Plugin {
       // (`keeps`, `decay`, `decide`) mirror `docs/freshness.md`
       // §§2a/4/7/11-12; `keepLine` is the sole increment helper and
       // every generic stamper clears. Tracker review rides the same
-      // namespace with the explicit `trackerReview` capability: only
-      // exact `^ref` trackers bypass `#hide` (tag-only `#ref` rows use
-      // the ordinary predicate), visible `^prj` rows use the ordinary
+      // namespace with the explicit `trackerReview` capability: tracker
+      // rows use the ordinary predicate, and a `#hide` tag hides them
+      // like any task. Visible `^prj` rows use the ordinary
       // predicate, and the PROJECTS/REFERENCES tiers walk with
       // `projectsDue`/`referencesDue` and `checklistTiers` advertises
       // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
@@ -17804,9 +17775,7 @@ class BobLedgerToolsFreshnessApiMixin {
       // the same memoized evaluated states projected onto the existing
       // visible Ready pool (strict lane visibility, hide excluded), so
       // hidden review-only rows never feed a badge for a section that
-      // excludes them. The full `freshness.counts()`/CLI review counts
-      // intentionally differ; hidden references still walk through
-      // `]s`, the status bar, and the CLI.
+      // excludes them.
       return freshnessReviewModel(
         memo.counts,
         memo.queue,

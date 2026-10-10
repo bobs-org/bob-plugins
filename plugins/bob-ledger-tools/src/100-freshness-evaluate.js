@@ -287,8 +287,7 @@ function freshnessApplyRecurringOverlay(row, today, evaluated) {
 // lane ("ready"|"pending"|"next"|null), fresh, intervalDays,
 // intervalSource, dueOn, daysOverdue, keeps (the valid `[keeps:: N]`
 // semantic count, 0 when absent), decide (a choice is due — never
-// permission to act), lints }`. Exact `^ref` trackers bypass only the
-// `#hide` exclusion; exact `^prj` rows use the ordinary lane-visible
+// permission to act), lints }`. Tracker rows use the ordinary lane-visible
 // predicate (sync owns `#hide`). Due `^prj` rows walk in PROJECTS and
 // due `^ref` rows in REFERENCES with the effective (tracker-override
 // or Ready-chain) interval even when their Ready state is NEW or

@@ -251,9 +251,9 @@ class BobLedgerToolsPlugin extends Plugin {
       // (`keeps`, `decay`, `decide`) mirror `docs/freshness.md`
       // §§2a/4/7/11-12; `keepLine` is the sole increment helper and
       // every generic stamper clears. Tracker review rides the same
-      // namespace with the explicit `trackerReview` capability: only
-      // exact `^ref` trackers bypass `#hide` (tag-only `#ref` rows use
-      // the ordinary predicate), visible `^prj` rows use the ordinary
+      // namespace with the explicit `trackerReview` capability: tracker
+      // rows use the ordinary predicate, and a `#hide` tag hides them
+      // like any task. Visible `^prj` rows use the ordinary
       // predicate, and the PROJECTS/REFERENCES tiers walk with
       // `projectsDue`/`referencesDue` and `checklistTiers` advertises
       // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`

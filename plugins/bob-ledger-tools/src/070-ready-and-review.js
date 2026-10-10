@@ -161,9 +161,8 @@ function dashboardLaneBudgetFromTasks(tasks, today, caps, lane, isToday) {
 
 // Shared dashboard lane badge view-model. `budget` is
 // `{ section, lane, cap, over, today }` with nulls for unavailable.
-// The badge shows the section count over the whole-lane cap
-// (`section/cap`); the whole-lane pressure stays in the tooltip and
-// accessible label. Red uses the whole lane (`lane > cap`).
+// The badge shows and colors the section count against its cap; whole-lane
+// pressure remains separately labeled in the tooltip and accessible label.
 function dashboardLaneBadgeModel(budget, lane) {
   const label = lane === "next" ? "NEXT" : "PENDING";
   const cap =
@@ -200,9 +199,11 @@ function dashboardLaneBadgeModel(budget, lane) {
   ) {
     return {
       text: `${label} –`,
-      tooltip: `${label} section unavailable; limit ${cap}. Live section excluding Today. Open ${label} Tasks in dash.`,
-      aria: `${label}: unavailable (limit ${cap}). Open ${label} Tasks in dash.`,
+      tooltip: `${label} section unavailable; section cap ${cap} cannot be assessed. Live section excluding Today. Open ${label} Tasks in dash.`,
+      aria: `${label}: section unavailable; section cap ${cap} cannot be assessed. Open ${label} Tasks in dash.`,
       over: false,
+      sectionOver: false,
+      laneOver: false,
       placeholder: true,
       section: null,
       lane: null,
@@ -210,19 +211,26 @@ function dashboardLaneBadgeModel(budget, lane) {
       cap,
     };
   }
-  const over = laneCount > cap;
+  const sectionOver = section > cap;
+  const laneOver = laneCount > cap;
   const todayText = Number.isInteger(today) ? today : Math.max(0, laneCount - section);
-  const tooltip = over
-    ? `${section} in this section; whole lane ${laneCount}/${cap}; ${todayText} in TODAY · ${laneCount - cap} over the limit. Live section excluding Today. Open ${label} Tasks in dash.`
-    : `${section} in this section; whole lane ${laneCount}/${cap}; ${todayText} in TODAY. Live section excluding Today. Open ${label} Tasks in dash.`;
-  const aria = over
-    ? `${label}: ${section} of ${cap} in this section, whole lane ${laneCount} of ${cap}, ${laneCount - cap} over the limit, ${todayText} in TODAY. Open ${label} Tasks in dash.`
-    : `${label}: ${section} of ${cap} in this section, whole lane ${laneCount} of ${cap}, ${todayText} in TODAY. Open ${label} Tasks in dash.`;
+  const pressure = [];
+  if (sectionOver) {
+    pressure.push(`${section - cap} over the section cap`);
+  }
+  if (laneOver) {
+    pressure.push(`${laneCount - cap} over the whole-lane cap`);
+  }
+  const pressureText = pressure.length > 0 ? ` · ${pressure.join("; ")}` : "";
+  const tooltip = `${section} in this section; whole lane ${laneCount}/${cap}; ${todayText} in TODAY${pressureText}. Live section excluding Today. Open ${label} Tasks in dash.`;
+  const aria = `${label}: ${section} of ${cap} in this section${sectionOver ? `, ${section - cap} over the section cap` : ""}, whole lane ${laneCount} of ${cap}${laneOver ? `, ${laneCount - cap} over the whole-lane cap` : ""}, ${todayText} in TODAY. Open ${label} Tasks in dash.`;
   return {
     text: `${label} ${section}/${cap}`,
     tooltip,
     aria,
-    over,
+    over: sectionOver,
+    sectionOver,
+    laneOver,
     placeholder: false,
     section,
     lane: laneCount,

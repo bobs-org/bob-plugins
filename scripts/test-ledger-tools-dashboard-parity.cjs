@@ -393,7 +393,7 @@ test("throwing Today degrades to unavailable, never zero", () => {
   }
 });
 
-test("dashboard tooltips distinguish section pressure from whole-lane caps", () => {
+test("dashboard badges color the displayed section count and label whole-lane pressure", () => {
   const model = dashboardLaneBadgeModel(
     { section: 1, lane: 2, count: 1, laneCount: 2, today: 1, cap: 10, over: false },
     "pending",
@@ -404,17 +404,19 @@ test("dashboard tooltips distinguish section pressure from whole-lane caps", () 
   assert.match(model.tooltip, /1 in TODAY/);
   assert.match(model.aria, /1 of 10 in this section/);
   assert.equal(model.over, false);
-  const over = dashboardLaneBadgeModel(
+  const sectionOver = dashboardLaneBadgeModel(
     { section: 11, lane: 12, count: 11, laneCount: 12, today: 1, cap: 10, over: true },
-    "next",
+    "pending",
   );
-  assert.equal(over.text, "NEXT 11/10");
-  assert.equal(over.over, true);
-  assert.match(over.tooltip, /11 in this section/);
-  assert.match(over.tooltip, /whole lane 12\/10/);
-  assert.match(over.tooltip, /over the limit/);
-  assert.match(over.aria, /whole lane 12 of 10/);
-  assert.match(over.aria, /11 of 10 in this section/);
+  assert.equal(sectionOver.text, "PENDING 11/10");
+  assert.equal(sectionOver.over, true);
+  assert.match(sectionOver.tooltip, /11 in this section/);
+  assert.match(sectionOver.tooltip, /whole lane 12\/10/);
+  assert.match(sectionOver.tooltip, /1 over the section cap/);
+  assert.match(sectionOver.tooltip, /2 over the whole-lane cap/);
+  assert.doesNotMatch(sectionOver.tooltip, /over the limit/);
+  assert.match(sectionOver.aria, /whole lane 12 of 10, 2 over the whole-lane cap/);
+  assert.match(sectionOver.aria, /11 of 10 in this section, 1 over the section cap/);
   // READY keeps its n/cap fraction and unavailable behavior.
   const ready = readyBadgeModel({ count: 3, cap: 100, over: false });
   assert.equal(ready.text, "READY 3/100");
@@ -422,29 +424,72 @@ test("dashboard tooltips distinguish section pressure from whole-lane caps", () 
   assert.equal(missing.placeholder, true);
 });
 
-test("dashboard lane badge shows section/cap and stays red on whole-lane excess", () => {
+test("dashboard section warning boundaries ignore TODAY-only whole-lane excess", () => {
+  const cases = [
+    ["next", 10, 17, 7, 15, false],
+    ["next", 15, 16, 1, 15, false],
+    ["next", 16, 16, 0, 15, true],
+    ["next", 15, 15, 0, 15, false],
+    ["next", 0, 0, 0, 20, false],
+    ["next", 21, 25, 4, 20, true],
+    ["pending", 4, 11, 7, 10, false],
+    ["pending", 10, 11, 1, 10, false],
+    ["pending", 11, 11, 0, 10, true],
+    ["pending", 10, 10, 0, 10, false],
+  ];
+  for (const [lane, section, whole, today, cap, over] of cases) {
+    const model = dashboardLaneBadgeModel(
+      { section, lane: whole, today, cap, over: whole > cap },
+      lane,
+    );
+    assert.equal(model.text, `${lane.toUpperCase()} ${section}/${cap}`);
+    assert.equal(model.over, over, `${lane} ${section}/${whole} (${today} today)`);
+    assert.equal(model.laneOver, whole > cap);
+    assert.equal(model.sectionOver, section > cap);
+  }
+
+  // Non-dashboard callers retain the independent whole-lane budget policy.
+  const nextWhole = laneBudgetFromTasks(
+    Array.from({ length: 17 }, (_, index) => nextTask({ path: `notes/n${index}.md` })),
+    DAY,
+    defaultPlanCaps(),
+    "next",
+  );
+  const pendingWhole = laneBudgetFromTasks(
+    Array.from({ length: 11 }, (_, index) => pendingTask({ path: `notes/p${index}.md` })),
+    DAY,
+    defaultPlanCaps(),
+    "pending",
+  );
+  assert.deepEqual([nextWhole.count, nextWhole.over], [17, true]);
+  assert.deepEqual([pendingWhole.count, pendingWhole.over], [11, true]);
+});
+
+test("dashboard lane badge keeps unavailable data neutral", () => {
   // Unavailable never renders as 0/cap.
   const missing = dashboardLaneBadgeModel(
-    { section: null, lane: null, count: null, laneCount: null, today: null, cap: 10 },
+    { section: null, lane: 17, count: null, laneCount: 17, today: 7, cap: 15, over: true },
     "pending",
   );
   assert.equal(missing.text, "PENDING –");
   assert.equal(missing.placeholder, true);
+  assert.equal(missing.over, false);
   assert.ok(!missing.text.includes("/"));
-  // Rare edge: section <= cap < lane reads e.g. NEXT 15/15 in red with the
-  // whole-lane excess named in the tooltip.
+  // Whole-lane excess remains visible in details without turning an at-cap
+  // displayed section red.
   const edge = dashboardLaneBadgeModel(
     { section: 15, lane: 16, count: 15, laneCount: 16, today: 1, cap: 15, over: true },
     "next",
   );
   assert.equal(edge.text, "NEXT 15/15");
-  assert.equal(edge.over, true);
+  assert.equal(edge.over, false);
   assert.match(edge.tooltip, /15 in this section/);
   assert.match(edge.tooltip, /whole lane 16\/15/);
-  assert.match(edge.tooltip, /1 over the limit/);
+  assert.match(edge.tooltip, /1 over the whole-lane cap/);
+  assert.match(edge.aria, /whole lane 16 of 15, 1 over the whole-lane cap/);
 });
 
-test("dashboard lane paint keeps section/cap across refresh without extra spans", () => {
+test("dashboard lane paint and refresh keep color aligned with the visible section", () => {
   const savedXdg = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = "/definitely/missing/dashboard-parity-test";
   const app = makeApp({
@@ -510,8 +555,8 @@ test("dashboard lane paint keeps section/cap across refresh without extra spans"
     };
     const el = plugin.paintDashboardLaneElement(
       host,
-      "pending",
-      { section: 1, lane: 1, count: 1, laneCount: 1, today: 0, cap: 10, over: false },
+      "next",
+      { section: 10, lane: 17, count: 10, laneCount: 17, today: 7, cap: 15, over: true },
       {},
     );
     assert.ok(el);
@@ -519,16 +564,36 @@ test("dashboard lane paint keeps section/cap across refresh without extra spans"
       const span = el.querySelector(".bob-plan-ready-value");
       return span ? span.text : null;
     };
-    assert.equal(valueText(), "1/10");
+    assert.equal(valueText(), "10/15");
+    assert.doesNotMatch(el.cls, /bob-plan-over/);
+    assert.match(el.title, /2 over the whole-lane cap/);
+    assert.match(el.attrs["aria-label"], /NEXT: 10 of 15 in this section/);
     assert.equal(el.querySelectorAll(".bob-plan-ready-value").length, 1);
     assert.equal(el.querySelectorAll(".bob-plan-ready-label").length, 1);
-    plugin.dashboardLaneWidgets.add({ el, lane: "pending", sourcePath: "dash.md", component: null });
+    plugin.dashboardLaneWidgets.add({ el, lane: "next", sourcePath: "dash.md", component: null });
+    let currentBudget = { section: 16, lane: 16, count: 16, laneCount: 16, today: 0, cap: 15, over: true };
+    plugin.dashboardLaneBudget = () => currentBudget;
     // Detach the parent createEl so refresh takes the live-widget path.
     const parent = { createEl: host.createEl.bind(host) };
     Object.defineProperty(el, "parentNode", { value: parent, configurable: true });
     assert.equal(plugin.refreshDashboardLaneBadges(DAY), true);
-    assert.equal(valueText(), "1/10");
+    assert.equal(valueText(), "16/15");
+    assert.match(el.cls, /bob-plan-over/);
+    assert.equal(el.attrs.class, el.cls);
+    assert.match(el.attrs.title, /1 over the section cap/);
+    assert.match(el.attrs["aria-label"], /1 over the section cap/);
+    assert.match(el.attrs["aria-label"], /1 over the whole-lane cap/);
     assert.equal(el.querySelectorAll(".bob-plan-ready-value").length, 1);
+    // A reused anchor crosses back to the at-cap section state. Whole-lane
+    // pressure remains in text, but the warning class clears immediately.
+    currentBudget = { section: 15, lane: 16, count: 15, laneCount: 16, today: 1, cap: 15, over: true };
+    assert.equal(plugin.refreshDashboardLaneBadges(DAY), true);
+    assert.equal(valueText(), "15/15");
+    assert.doesNotMatch(el.cls, /bob-plan-over/);
+    assert.equal(el.attrs.class, el.cls);
+    assert.match(el.attrs.title, /1 over the whole-lane cap/);
+    assert.doesNotMatch(el.attrs["aria-label"], /over the section cap/);
+    assert.match(el.attrs["aria-label"], /1 over the whole-lane cap/);
   } finally {
     plugin.onunload();
     if (savedXdg === undefined) {

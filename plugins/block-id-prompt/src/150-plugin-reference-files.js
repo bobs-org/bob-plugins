@@ -12,6 +12,22 @@ class BlockIdPromptReferenceFilesMixin {
       };
     }
 
+    // Prefer a live target buffer over stale disk so suggestions,
+    // validation, and writes stay coherent; disagreeing buffers refuse.
+    if (typeof readAuthoritativePromptTargetContent === "function") {
+      try {
+        const snapshot = await readAuthoritativePromptTargetContent(this, source, file);
+        if (snapshot.ambiguous) {
+          return { file, content: null };
+        }
+        if (snapshot.content !== null) {
+          return { file, content: snapshot.content };
+        }
+      } catch (error) {
+        // Fall through to the vault read below.
+      }
+    }
+
     try {
       return {
         file,

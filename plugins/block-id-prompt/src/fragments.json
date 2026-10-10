@@ -1,5 +1,6 @@
 [
   "010-core.js",
+  "015-prompt-block-id-naming.js",
   "020-markers-and-references.js",
   "030-tasks-and-dependencies.js",
   "040-editor-pomodoro-and-logs.js",
@@ -10,6 +11,7 @@
   "080-picker-ui-and-task-link-modal.js",
   "085-pomodoro-link-picker-modal.js",
   "090-prompt-modals.js",
+  "095-prompt-suggestion-resolver.js",
   "100-plugin-lifecycle.js",
   "110-plugin-block-id-submit.js",
   "120-plugin-pomodoro-links.js",

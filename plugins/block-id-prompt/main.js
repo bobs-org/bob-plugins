@@ -233,6 +233,459 @@ function splitWikiLinkBody(body) {
   };
 }
 
+// ---- src/015-prompt-block-id-naming.js ----
+// Prompt block-ID naming contract (plan 202610/task_block_id_prefill.md).
+// Pure functions only: no vault reads, no editor writes. Copy-small-helpers:
+// an equivalent fragment lives in bob-navigation-hotkeys; both are exercised
+// by scripts/prompt-block-id-fixtures.cjs. Do not change the automatic
+// successor minting contract (task-status-cycler 086-successor-ids.js).
+
+const PROMPT_BLOCK_ID_STOPWORDS = [
+  "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "into",
+  "is", "it", "its", "my", "of", "on", "or", "our", "so", "that", "the",
+  "their", "this", "to", "via", "with", "your",
+];
+
+const PROMPT_BLOCK_ID_STOPWORD_SET = new Set(PROMPT_BLOCK_ID_STOPWORDS);
+const PROMPT_BLOCK_ID_MAX_LENGTH = 32;
+
+function promptBlockIdEscapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function promptBlockIdStripCombining(text) {
+  return String(text || "").replace(/[\u0300-\u036f]/g, "");
+}
+
+function promptBlockIdNormalizeLatin(text) {
+  try {
+    return promptBlockIdStripCombining(String(text || "").normalize("NFKD"));
+  } catch (error) {
+    return String(text || "");
+  }
+}
+
+// ASCII alphanumeric runs, lowercased, stopwords dropped. Underscores and
+// punctuation separate words, never glue them. Latin accents are normalized
+// first so `café` contributes `cafe`.
+function promptBlockIdWordsIn(text) {
+  const normalized = promptBlockIdNormalizeLatin(text);
+  const words = [];
+  let current = "";
+  const flush = () => {
+    if (current && !PROMPT_BLOCK_ID_STOPWORD_SET.has(current)) {
+      words.push(current);
+    }
+    current = "";
+  };
+  for (const ch of normalized) {
+    if (
+      (ch >= "a" && ch <= "z") ||
+      (ch >= "A" && ch <= "Z") ||
+      (ch >= "0" && ch <= "9")
+    ) {
+      current += ch.toLowerCase();
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return words;
+}
+
+function promptBlockIdWikilinkPhrase(inner) {
+  const text = String(inner || "");
+  const aliasIndex = text.indexOf("|");
+  if (aliasIndex !== -1) {
+    return text.slice(aliasIndex + 1);
+  }
+  const hashIndex = text.indexOf("#");
+  const target = hashIndex === -1 ? text : text.slice(0, hashIndex);
+  const slashIndex = target.lastIndexOf("/");
+  return slashIndex === -1 ? target : target.slice(slashIndex + 1);
+}
+
+function promptBlockIdExtractTaskBody(rawLine) {
+  const line = String(rawLine || "");
+  const match = line.match(
+    /^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+\[[^\]\n]\](?:[ \t]+(.*))?$/,
+  );
+  if (!match) {
+    return null;
+  }
+  return match[1] || "";
+}
+
+function promptBlockIdFindProtectedSpans(text) {
+  const spans = [];
+  const body = String(text || "");
+  let match;
+
+  const codeRe = /`([^`\n]*?)`/g;
+  while ((match = codeRe.exec(body)) !== null) {
+    spans.push({ start: match.index, end: match.index + match[0].length });
+  }
+
+  const wikiRe = /\[\[([^\]\n]+?)\]\]/g;
+  while ((match = wikiRe.exec(body)) !== null) {
+    spans.push({ start: match.index, end: match.index + match[0].length });
+  }
+
+  const mdRe = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
+  while ((match = mdRe.exec(body)) !== null) {
+    spans.push({ start: match.index, end: match.index + match[0].length });
+  }
+
+  const urlRe = /(?:https?:\/\/|www\.)[^\s)\]]+/g;
+  while ((match = urlRe.exec(body)) !== null) {
+    spans.push({ start: match.index, end: match.index + match[0].length });
+  }
+
+  spans.sort((left, right) => left.start - right.start);
+  return spans;
+}
+
+function promptBlockIdIndexInSpans(spans, index) {
+  for (const span of spans) {
+    if (index >= span.start && index < span.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Clean a task headline for suggestion only; source text is never rewritten
+// by this step. Strips the checkbox/list/blockquote prefix (via extract),
+// trailing block ID, Dataview inline fields, Tasks emoji date/priority
+// metadata, and standalone letter-tags outside code/link labels. Preserves
+// semantic numbers such as `#123` and technical text inside code spans.
+function promptBlockIdCleanHeadline(rawLine) {
+  const body = promptBlockIdExtractTaskBody(rawLine);
+  if (body === null) {
+    return null;
+  }
+  let text = body.replace(/[ \t]+\^[A-Za-z0-9-]+[ \t]*$/, "");
+  text = text.replace(/[ \t]*\[[^\[\]\n]+::[^\]\n]*\]/g, " ");
+  text = text.replace(
+    /[ \t]*(?:[\u2600-\u27BF]|\uD83C[\uD000-\uDFFF]|\uD83D[\uD000-\uDFFF]|\uD83E[\uD000-\uDFFF])\s*\d{4}-\d{2}-\d{2}/g,
+    " ",
+  );
+  text = text.replace(/[ \t]+(?:🔁|⏫|🔼|🔽|⏬|📅|🛫|⏳)/g, " ");
+
+  const spans = promptBlockIdFindProtectedSpans(text);
+  const tagRe = /(^|[\s([{])#([A-Za-z][A-Za-z0-9/_-]*)/g;
+  let result = "";
+  let lastIndex = 0;
+  let tagMatch;
+  while ((tagMatch = tagRe.exec(text)) !== null) {
+    const tagStart = tagMatch.index + tagMatch[1].length;
+    if (promptBlockIdIndexInSpans(spans, tagStart)) {
+      continue;
+    }
+    result += text.slice(lastIndex, tagStart);
+    // Keep the prefix (usually whitespace) so surviving tokens stay
+    // separated; collapse later.
+    result += tagMatch[1];
+    lastIndex = tagStart + 1 + tagMatch[2].length;
+  }
+  result += text.slice(lastIndex);
+  text = result;
+
+  text = text
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return text;
+}
+
+function promptBlockIdIsBareUrlLike(phrase) {
+  const text = String(phrase || "").trim();
+  if (!text) {
+    return true;
+  }
+  return /[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) || /^www\./i.test(text);
+}
+
+// Ordered visible phrases: inline code, straight/curly double-quoted text,
+// parenthetical text, wikilinks (alias/basename), Markdown links (label).
+// Each Markdown link is one construct so its URL parentheses never become a
+// named phrase. Returns visible strings in text order.
+function promptBlockIdPhraseSpans(cleaned) {
+  const text = String(cleaned || "");
+  const chars = Array.from(text);
+  const phrases = [];
+  let index = 0;
+
+  const offsetsOf = () => {
+    const offsets = [];
+    let cursor = 0;
+    for (const c of chars) {
+      offsets.push(cursor);
+      cursor += c.length;
+    }
+    return offsets;
+  };
+
+  while (index < chars.length) {
+    const ch = chars[index];
+    if (ch === "`") {
+      const close = chars.indexOf("`", index + 1);
+      if (close === -1) {
+        index += 1;
+        continue;
+      }
+      phrases.push(chars.slice(index + 1, close).join(""));
+      index = close + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "“") {
+      let close = -1;
+      for (let scan = index + 1; scan < chars.length; scan += 1) {
+        if (chars[scan] === '"' || chars[scan] === "”") {
+          close = scan;
+          break;
+        }
+      }
+      if (close === -1) {
+        index += 1;
+        continue;
+      }
+      phrases.push(chars.slice(index + 1, close).join(""));
+      index = close + 1;
+      continue;
+    }
+    if (ch === "[" && chars[index + 1] === "[") {
+      const offsets = offsetsOf();
+      const byteClose = text.indexOf("]]", offsets[index] + 2);
+      if (byteClose === -1) {
+        index += 2;
+        continue;
+      }
+      let close = chars.length;
+      for (let scan = 0; scan < chars.length; scan += 1) {
+        if (offsets[scan] === byteClose) {
+          close = scan;
+          break;
+        }
+      }
+      const inner = chars.slice(index + 2, close).join("");
+      phrases.push(promptBlockIdWikilinkPhrase(inner));
+      index = close + 2;
+      continue;
+    }
+    if (ch === "[") {
+      const offsets = offsetsOf();
+      const byteBracket = text.indexOf("]", offsets[index] + 1);
+      if (
+        byteBracket !== -1 &&
+        text[byteBracket + 1] === "("
+      ) {
+        const byteParen = text.indexOf(")", byteBracket + 2);
+        if (byteParen !== -1) {
+          let labelEnd = chars.length;
+          for (let scan = 0; scan < chars.length; scan += 1) {
+            if (offsets[scan] === byteBracket) {
+              labelEnd = scan;
+              break;
+            }
+          }
+          let parenEnd = chars.length;
+          for (let scan = 0; scan < chars.length; scan += 1) {
+            if (offsets[scan] === byteParen) {
+              parenEnd = scan;
+              break;
+            }
+          }
+          // Label excludes a leading `!` image marker (handled by slicing
+          // from after `[`, which is exact for `![alt](url)` too).
+          phrases.push(chars.slice(index + 1, labelEnd).join(""));
+          index = parenEnd + 1;
+          continue;
+        }
+      }
+      index += 1;
+      continue;
+    }
+    if (ch === "(") {
+      const offsets = offsetsOf();
+      const byteClose = text.indexOf(")", offsets[index] + 1);
+      if (byteClose === -1) {
+        index += 1;
+        continue;
+      }
+      let close = chars.length;
+      for (let scan = 0; scan < chars.length; scan += 1) {
+        if (offsets[scan] === byteClose) {
+          close = scan;
+          break;
+        }
+      }
+      phrases.push(chars.slice(index + 1, close).join(""));
+      index = close + 1;
+      continue;
+    }
+    index += 1;
+  }
+  return phrases;
+}
+
+// Visible prose projection for the fallback: wikilinks and Markdown links
+// become their visible text, code spans lose their backticks, bare URLs are
+// removed entirely.
+function promptBlockIdProseText(cleaned) {
+  let text = String(cleaned || "");
+  text = text.replace(
+    /!\[([^\]\n]*)\]\(([^)\n]+)\)/g,
+    (whole, label) => ` ${label || ""} `,
+  );
+  text = text.replace(
+    /\[([^\]\n]*)\]\(([^)\n]+)\)/g,
+    (whole, label) => ` ${label || ""} `,
+  );
+  text = text.replace(
+    /\[\[([^\]\n]+?)\]\]/g,
+    (whole, inner) => ` ${promptBlockIdWikilinkPhrase(inner)} `,
+  );
+  text = text.replace(/`([^`\n]*?)`/g, (whole, inner) => ` ${inner} `);
+  text = text.replace(/(?:https?:\/\/|www\.)[^\s)\]]+/g, " ");
+  return text;
+}
+
+function promptBlockIdTruncateSlug(slug, maxLength) {
+  return String(slug || "")
+    .slice(0, maxLength)
+    .replace(/-+$/g, "");
+}
+
+// Join words with `-`, cutting at 32 characters on a `-` boundary where
+// possible; a single over-long token is truncated to the limit.
+function promptBlockIdJoinTruncated(words, maxLength) {
+  const list = Array.isArray(words) ? words : [];
+  if (list.length === 0) {
+    return null;
+  }
+  const limit =
+    Number.isInteger(maxLength) && maxLength > 0
+      ? maxLength
+      : PROMPT_BLOCK_ID_MAX_LENGTH;
+  const joined = list.join("-");
+  if (joined.length <= limit) {
+    return joined && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(joined)
+      ? joined
+      : null;
+  }
+  const cut = joined.slice(0, limit).lastIndexOf("-");
+  if (cut > 0) {
+    return joined.slice(0, cut);
+  }
+  const truncated = joined.slice(0, limit);
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(truncated) && truncated
+    ? truncated
+    : joined.slice(0, limit).replace(/[^a-z0-9]+$/g, "") || null;
+}
+
+function promptBlockIdCountOccurrences(content, id) {
+  const needle = String(id || "");
+  if (!needle) {
+    return 0;
+  }
+  const re = new RegExp(
+    `(^|[ \\t])\\^${promptBlockIdEscapeRegExp(needle)}(?=$|[ \\t\\r\\n])`,
+    "gm",
+  );
+  let count = 0;
+  let match;
+  while ((match = re.exec(String(content || ""))) !== null) {
+    count += 1;
+    // Avoid zero-length infinite loops (pattern always consumes, but guard).
+    if (match[0].length === 0) {
+      re.lastIndex += 1;
+    }
+  }
+  return count;
+}
+
+function promptBlockIdReservedSet(reservedIds) {
+  if (reservedIds instanceof Set) {
+    return reservedIds;
+  }
+  return new Set(reservedIds || []);
+}
+
+// Pure suggestion over task text, occupied note content, and pending
+// reservations. Returns a slug or null for non-task input. Collisions walk
+// `stem-2`, `stem-3`, … without a `-9` cutoff, reserving suffix room within
+// 32 characters. `excludeId` ignores one occurrence (marker-triggered
+// rename); never globally remove duplicates.
+function suggestPromptBlockId(rawLine, content, options = {}) {
+  const cleaned = promptBlockIdCleanHeadline(rawLine);
+  if (cleaned === null) {
+    return null;
+  }
+  const reserved = promptBlockIdReservedSet(options.reservedIds);
+  const excludeId =
+    typeof options.excludeId === "string" && options.excludeId
+      ? options.excludeId
+      : null;
+  const text = String(content || "");
+  const isTaken = (candidate) => {
+    if (reserved.has(candidate)) {
+      return true;
+    }
+    let count = promptBlockIdCountOccurrences(text, candidate);
+    if (excludeId !== null && candidate === excludeId) {
+      count -= 1;
+    }
+    return count > 0;
+  };
+
+  let stem = null;
+  const phrases = promptBlockIdPhraseSpans(cleaned);
+  for (const phrase of phrases) {
+    if (promptBlockIdIsBareUrlLike(phrase)) {
+      continue;
+    }
+    const words = promptBlockIdWordsIn(phrase).slice(0, 4);
+    if (words.length === 0) {
+      continue;
+    }
+    const joined = promptBlockIdJoinTruncated(
+      words,
+      PROMPT_BLOCK_ID_MAX_LENGTH,
+    );
+    if (joined) {
+      stem = joined;
+      break;
+    }
+  }
+
+  if (!stem) {
+    const proseWords = promptBlockIdWordsIn(
+      promptBlockIdProseText(cleaned),
+    ).slice(0, 3);
+    if (proseWords.length > 0) {
+      stem =
+        promptBlockIdJoinTruncated(proseWords, PROMPT_BLOCK_ID_MAX_LENGTH) ||
+        "task";
+    } else {
+      stem = "task";
+    }
+  }
+
+  let candidate = stem;
+  let suffix = 2;
+  while (isTaken(candidate)) {
+    const suffixText = `-${suffix}`;
+    const base =
+      promptBlockIdTruncateSlug(
+        stem,
+        Math.max(1, PROMPT_BLOCK_ID_MAX_LENGTH - suffixText.length),
+      ) || "task";
+    candidate = `${base}${suffixText}`;
+    suffix += 1;
+  }
+  return candidate;
+}
 // ---- src/020-markers-and-references.js ----
 function parseTaskPickerPosition(destination) {
   let blockPrefix;
@@ -5810,20 +6263,37 @@ class BlockIdPromptModal extends Modal {
     this.submitting = false;
     this.input = null;
     this.previewEl = null;
+    this.saveButton = null;
+    this.awaitingSuggestion = false;
+    this.suggestionResolved = false;
+    this.userEdited = false;
+    this.userMovedFocus = false;
+    this.closed = false;
   }
 
   onOpen() {
+    this.closed = false;
     this.contentEl.empty();
     this.contentEl.createEl("h2", { text: "Block ID" });
     this.createPreviewEl();
     this.loadPreview();
 
+    const isExplicit =
+      Boolean(this.source.prefillId) && Boolean(this.source.oldId);
+
     new Setting(this.contentEl).setName("ID").addText((text) => {
       this.input = text;
-      text.setPlaceholder("my-id");
-      if (this.source.prefillId && this.source.oldId) {
+      text.setPlaceholder(isExplicit ? "my-id" : "Loading suggestion…");
+      if (isExplicit) {
         text.setValue(this.source.oldId);
+        this.suggestionResolved = true;
       }
+      text.inputEl.addEventListener("input", () => {
+        this.userEdited = true;
+      });
+      text.inputEl.addEventListener("blur", () => {
+        this.userMovedFocus = true;
+      });
       text.inputEl.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") {
           return;
@@ -5840,19 +6310,161 @@ class BlockIdPromptModal extends Modal {
           .setButtonText("Cancel")
           .onClick(() => this.close()),
       )
-      .addButton((button) =>
+      .addButton((button) => {
+        this.saveButton = button;
         button
           .setButtonText("Save")
           .setCta()
-          .onClick(() => this.submit()),
-      );
+          .onClick(() => this.submit());
+        if (!isExplicit) {
+          this.setSaveDisabled(true);
+        }
+      });
 
-    window.setTimeout(() => {
-      if (this.input && this.input.inputEl) {
+    if (isExplicit) {
+      window.setTimeout(() => {
+        if (this.closed || !this.input || !this.input.inputEl) {
+          return;
+        }
+        if (!this.input.inputEl.isConnected) {
+          return;
+        }
         this.input.inputEl.focus();
-        if (this.source.prefillId && this.input.getValue()) {
+        if (this.input.getValue()) {
           this.input.inputEl.select();
         }
+      }, 0);
+      return;
+    }
+
+    this.awaitingSuggestion = true;
+    void this.resolveSuggestion();
+  }
+
+  setSaveDisabled(disabled) {
+    const button = this.saveButton;
+    if (!button) {
+      return;
+    }
+    try {
+      if (typeof button.setDisabled === "function") {
+        button.setDisabled(Boolean(disabled));
+        return;
+      }
+    } catch (error) {
+      // Fall through to the DOM toggle below.
+    }
+    try {
+      if (button.buttonEl) {
+        button.buttonEl.disabled = Boolean(disabled);
+      } else if (button.el) {
+        button.el.disabled = Boolean(disabled);
+      }
+    } catch (error) {
+      // Disabling Save is best effort; submit() still guards.
+    }
+  }
+
+  async resolveSuggestion() {
+    let result = null;
+    try {
+      result = await resolvePromptBlockIdSuggestion(this.plugin, this.source);
+    } catch (error) {
+      result = null;
+    }
+
+    if (this.closed) {
+      return;
+    }
+    const input = this.input;
+    if (!input || !input.inputEl || !input.inputEl.isConnected) {
+      this.awaitingSuggestion = false;
+      return;
+    }
+
+    this.awaitingSuggestion = false;
+    this.suggestionResolved = true;
+    this.setSaveDisabled(false);
+    try {
+      input.setPlaceholder("my-id");
+    } catch (error) {
+      // Placeholder is cosmetic; a missing setter never blocks seeding.
+    }
+
+    if (!result || result.explicit) {
+      window.setTimeout(() => {
+        if (this.closed || !this.input || !this.input.inputEl) {
+          return;
+        }
+        if (!this.input.inputEl.isConnected) {
+          return;
+        }
+        if (!this.userEdited && !this.userMovedFocus) {
+          this.input.inputEl.focus();
+        }
+      }, 0);
+      return;
+    }
+
+    if (result.notice) {
+      try {
+        new Notice(result.notice);
+      } catch (error) {
+        // Notices are best effort in headless test harnesses.
+      }
+    }
+
+    const suggestion =
+      typeof result.suggestion === "string" && result.suggestion
+        ? result.suggestion
+        : null;
+    if (!suggestion) {
+      window.setTimeout(() => {
+        if (this.closed || !this.input || !this.input.inputEl) {
+          return;
+        }
+        if (!this.input.inputEl.isConnected) {
+          return;
+        }
+        if (!this.userEdited && !this.userMovedFocus) {
+          this.input.inputEl.focus();
+        }
+      }, 0);
+      return;
+    }
+
+    // A late result never overwrites typing (including clearing the field).
+    if (this.userEdited) {
+      return;
+    }
+
+    try {
+      input.setValue(suggestion);
+    } catch (error) {
+      return;
+    }
+
+    // Select the untouched generated value once; never steal focus back
+    // after the user has moved it elsewhere.
+    if (this.userMovedFocus) {
+      return;
+    }
+    const inputEl = input.inputEl;
+    window.setTimeout(() => {
+      if (this.closed || !this.input || this.input.inputEl !== inputEl) {
+        return;
+      }
+      if (!inputEl.isConnected) {
+        return;
+      }
+      if (this.userEdited || this.userMovedFocus) {
+        return;
+      }
+      try {
+        inputEl.focus();
+        inputEl.select();
+      } catch (error) {
+        // Focus is best effort; the seeded value already stands.
       }
     }, 0);
   }
@@ -5910,6 +6522,10 @@ class BlockIdPromptModal extends Modal {
       return;
     }
 
+    if (this.awaitingSuggestion) {
+      return;
+    }
+
     const id = this.input ? this.input.getValue().trim() : "";
     if (!id) {
       new Notice("Block ID cannot be blank");
@@ -5934,6 +6550,8 @@ class BlockIdPromptModal extends Modal {
   }
 
   onClose() {
+    this.closed = true;
+    this.awaitingSuggestion = false;
     this.contentEl.empty();
 
     if (!this.completed && !this.submitting) {
@@ -6129,6 +6747,296 @@ class WorkSummaryPromptModal extends Modal {
   }
 }
 
+// ---- src/095-prompt-suggestion-resolver.js ----
+// Source-to-suggestion resolver for prompt block IDs
+// (plan 202610/task_block_id_prefill.md). All entry points converge on
+// `openBlockIdPrompt`; the modal calls `resolvePromptBlockIdSuggestion`
+// so gestures share one naming path. Pure naming lives in
+// 015-prompt-block-id-naming.js; this fragment only resolves *which* task
+// text and *which* note content seed it, preferring live editor buffers.
+
+function findOpenPromptTargetEditors(plugin, targetPath) {
+  const editors = [];
+  try {
+    const workspace = plugin && plugin.app && plugin.app.workspace;
+    if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+      return editors;
+    }
+    const leaves = workspace.getLeavesOfType("markdown") || [];
+    for (const leaf of leaves) {
+      const view = leaf && leaf.view;
+      if (
+        !view ||
+        !view.file ||
+        view.file.path !== targetPath ||
+        !view.editor ||
+        typeof view.editor.getValue !== "function"
+      ) {
+        continue;
+      }
+      try {
+        editors.push({
+          editor: view.editor,
+          content: String(view.editor.getValue() || ""),
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+  } catch (error) {
+    return editors;
+  }
+  return editors;
+}
+
+// Authoritative target snapshot: same-note reads use the source editor;
+// cross-note reads prefer an open target editor (unsaved wins over disk),
+// otherwise the vault. Multiple disagreeing live buffers refuse instead of
+// guessing. Returns `{ content, editor }` or `{ content: null, ambiguous }`.
+async function readAuthoritativePromptTargetContent(plugin, source, targetFile) {
+  if (
+    targetFile &&
+    targetFile.path === source.sourcePath &&
+    source.editor &&
+    typeof source.editor.getValue === "function"
+  ) {
+    try {
+      return { content: String(source.editor.getValue() || ""), editor: source.editor };
+    } catch (error) {
+      return { content: null, editor: null, error: true };
+    }
+  }
+
+  if (!targetFile) {
+    return { content: null, editor: null, error: true };
+  }
+
+  const openEditors = findOpenPromptTargetEditors(plugin, targetFile.path);
+  if (openEditors.length === 1) {
+    return { content: openEditors[0].content, editor: openEditors[0].editor };
+  }
+  if (openEditors.length > 1) {
+    const first = openEditors[0].content;
+    const agrees = openEditors.every((entry) => entry.content === first);
+    if (!agrees) {
+      return { content: null, editor: null, ambiguous: true };
+    }
+    return { content: first, editor: openEditors[0].editor };
+  }
+
+  try {
+    const content = await plugin.app.vault.read(targetFile);
+    if (typeof content !== "string") {
+      return { content: null, editor: null, error: true };
+    }
+    return { content, editor: null };
+  } catch (error) {
+    return { content: null, editor: null, error: true };
+  }
+}
+
+function getDirectAddPromptRootLine(source) {
+  try {
+    if (!source || !source.editor || typeof source.editor.getValue !== "function") {
+      return null;
+    }
+    const lines = String(source.editor.getValue() || "").split("\n");
+    const start = source.rangeStartLine;
+    const end = source.rangeEndLine;
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < 0 ||
+      end >= lines.length ||
+      start > end
+    ) {
+      return null;
+    }
+    if (typeof source.expectedBlockText === "string") {
+      const current = lineRangeText(lines, start, end);
+      if (current !== source.expectedBlockText) {
+        return null;
+      }
+    }
+    const rootLine = lines[start];
+    if (promptBlockIdExtractTaskBody(rootLine) === null) {
+      return null;
+    }
+    return rootLine;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Resolve which suggestion (if any) seeds the modal. Returns
+// `{ suggestion, notice }`; `suggestion` is null for blank (non-task,
+// explicit rename handled by the caller, or unresolvable). `notice` uses the
+// existing submit-path wording so failures look identical before/after Save.
+async function resolvePromptBlockIdSuggestion(plugin, source) {
+  try {
+    if (!source) {
+      return { suggestion: null, notice: null };
+    }
+
+    // Explicit renames win unchanged; the modal prefills oldId synchronously.
+    if (source.prefillId && source.oldId) {
+      return { suggestion: null, notice: null, explicit: true };
+    }
+
+    if (source.kind === "direct-add") {
+      const rootLine = getDirectAddPromptRootLine(source);
+      if (rootLine === null) {
+        return { suggestion: null, notice: null };
+      }
+      let content = "";
+      try {
+        content = String(source.editor.getValue() || "");
+      } catch (error) {
+        return { suggestion: null, notice: "Block ID add blocked: active note could not be read" };
+      }
+      return {
+        suggestion: suggestPromptBlockId(rootLine, content, { reservedIds: new Set() }),
+        notice: null,
+      };
+    }
+
+    if (source.kind === "link-task-complete") {
+      const task = source.task;
+      if (!task || typeof task.rawLine !== "string") {
+        return { suggestion: null, notice: null };
+      }
+      const targetFile = plugin.resolveDestinationFile
+        ? plugin.resolveDestinationFile(source)
+        : null;
+      if (!targetFile) {
+        return {
+          suggestion: null,
+          notice: "Task link blocked: target note could not be resolved",
+        };
+      }
+      const snapshot = await readAuthoritativePromptTargetContent(plugin, source, targetFile);
+      if (snapshot.content === null) {
+        if (snapshot.ambiguous) {
+          return {
+            suggestion: null,
+            notice: `Task link blocked: ${targetFile.path} changed before update`,
+          };
+        }
+        return {
+          suggestion: null,
+          notice: "Task link blocked: target note could not be resolved",
+        };
+      }
+      const currentLine = contentLineAt(snapshot.content, task.line);
+      if (currentLine === null || currentLine !== task.rawLine) {
+        return {
+          suggestion: null,
+          notice: `Task link blocked: selected task changed in ${targetFile.path}`,
+        };
+      }
+      return {
+        suggestion: suggestPromptBlockId(task.rawLine, snapshot.content, {
+          reservedIds: new Set(),
+        }),
+        notice: null,
+      };
+    }
+
+    if (source.kind === "link-task-pomodoro") {
+      const task = source.task;
+      if (!task || typeof task.rawLine !== "string") {
+        return { suggestion: null, notice: null };
+      }
+      if (!source.editor || typeof source.editor.getValue !== "function") {
+        return { suggestion: null, notice: "Task link blocked: active note could not be read" };
+      }
+      const currentLine = source.editor.getLine(source.line);
+      if (currentLine !== task.rawLine) {
+        return {
+          suggestion: null,
+          notice: `Task link blocked: selected task changed in ${source.sourcePath}`,
+        };
+      }
+      let content = "";
+      try {
+        content = String(source.editor.getValue() || "");
+      } catch (error) {
+        return { suggestion: null, notice: "Task link blocked: active note could not be read" };
+      }
+      return {
+        suggestion: suggestPromptBlockId(task.rawLine, content, { reservedIds: new Set() }),
+        notice: null,
+      };
+    }
+
+    // Marker-triggered rename: oldId present without an explicit prefill flag.
+    // Suggest only for uniquely resolved task blocks; never hide ambiguity by
+    // globally removing duplicates (exclude exactly one occurrence).
+    if (source.oldId && !source.prefillId) {
+      const targetFile = plugin.resolveDestinationFile
+        ? plugin.resolveDestinationFile(source)
+        : null;
+      if (!targetFile) {
+        return {
+          suggestion: null,
+          notice: "Block ID rename blocked: target note could not be resolved",
+        };
+      }
+      const snapshot = await readAuthoritativePromptTargetContent(plugin, source, targetFile);
+      if (snapshot.content === null) {
+        if (snapshot.ambiguous) {
+          return {
+            suggestion: null,
+            notice: `Block ID rename blocked: ${targetFile.path} changed before rename`,
+          };
+        }
+        return {
+          suggestion: null,
+          notice: "Block ID rename blocked: target note could not be resolved",
+        };
+      }
+      const occurrences = promptBlockIdCountOccurrences(snapshot.content, source.oldId);
+      if (occurrences !== 1) {
+        return {
+          suggestion: null,
+          notice: `Block ID rename blocked: old ID was not found exactly once in ${targetFile.path}`,
+        };
+      }
+      const lines = snapshot.content.split("\n");
+      let targetLine = null;
+      for (const line of lines) {
+        if (promptBlockIdCountOccurrences(line, source.oldId) === 1) {
+          // The line holds the unique token; confirm it is the token form
+          // (not a coincidental substring) via the shared token matcher.
+          if (blockTokenMatches(line, source.oldId).length === 1) {
+            targetLine = line;
+            break;
+          }
+        }
+      }
+      if (targetLine === null) {
+        return {
+          suggestion: null,
+          notice: `Block ID rename blocked: old ID was not found exactly once in ${targetFile.path}`,
+        };
+      }
+      if (promptBlockIdExtractTaskBody(targetLine) === null) {
+        return { suggestion: null, notice: null };
+      }
+      return {
+        suggestion: suggestPromptBlockId(targetLine, snapshot.content, {
+          reservedIds: new Set(),
+          excludeId: source.oldId,
+        }),
+        notice: null,
+      };
+    }
+
+    return { suggestion: null, notice: null };
+  } catch (error) {
+    return { suggestion: null, notice: null };
+  }
+}
 // ---- src/100-plugin-lifecycle.js ----
 class BlockIdPromptPlugin extends Plugin {
   onload() {
@@ -8463,14 +9371,32 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
 
   // Apply a planTargetTaskUpdate() plan as one guarded target-note write: for
   // the active source note, every discrete edit is applied to the live editor
-  // (so unrelated document state is left untouched); for any other note, the
+  // (so unrelated document state is left untouched); for any other note, an
+  // open target editor wins over stale disk (preimage-checked), otherwise the
   // complete postimage is written in a single vault.modify call. Re-reads and
   // matches `expectedContent` first so a target that changed since the plan
-  // was built is never silently overwritten.
+  // was built is never silently overwritten. Disagreeing live buffers refuse
+  // instead of guessing.
   async applyTargetTaskPlan(file, source, plan, expectedContent, options = {}) {
     const noticePrefix = options.noticePrefix || "Task link stopped";
     const quiet = options.quiet === true;
-    const content = await this.readFileSnapshot(file, source);
+    let content = null;
+    let targetEditor = null;
+    if (file.path === source.sourcePath) {
+      content = await this.readFileSnapshot(file, source);
+    } else if (typeof readAuthoritativePromptTargetContent === "function") {
+      const snapshot = await readAuthoritativePromptTargetContent(this, source, file);
+      if (snapshot.ambiguous) {
+        if (!quiet) {
+          new Notice(`${noticePrefix}: ${file.path} changed before update`);
+        }
+        return false;
+      }
+      content = snapshot.content;
+      targetEditor = snapshot.editor || null;
+    } else {
+      content = await this.readFileSnapshot(file, source);
+    }
     if (content === null) {
       if (!quiet) {
         new Notice(`${noticePrefix}: ${file.path} could not be read`);
@@ -8497,6 +9423,19 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       const sortedEdits = [...plan.edits].sort((left, right) => right.start - left.start);
       for (const edit of sortedEdits) {
         source.editor.replaceRange(
+          edit.replacement,
+          indexToEditorPosition(content, edit.start),
+          indexToEditorPosition(content, edit.end),
+        );
+      }
+      return true;
+    }
+
+    if (targetEditor && typeof targetEditor.replaceRange === "function") {
+      this.suppressEditorScans();
+      const sortedEdits = [...plan.edits].sort((left, right) => right.start - left.start);
+      for (const edit of sortedEdits) {
+        targetEditor.replaceRange(
           edit.replacement,
           indexToEditorPosition(content, edit.start),
           indexToEditorPosition(content, edit.end),
@@ -8822,6 +9761,22 @@ class BlockIdPromptReferenceFilesMixin {
         file,
         content: source.editor.getValue(),
       };
+    }
+
+    // Prefer a live target buffer over stale disk so suggestions,
+    // validation, and writes stay coherent; disagreeing buffers refuse.
+    if (typeof readAuthoritativePromptTargetContent === "function") {
+      try {
+        const snapshot = await readAuthoritativePromptTargetContent(this, source, file);
+        if (snapshot.ambiguous) {
+          return { file, content: null };
+        }
+        if (snapshot.content !== null) {
+          return { file, content: snapshot.content };
+        }
+      } catch (error) {
+        // Fall through to the vault read below.
+      }
     }
 
     try {
@@ -9261,4 +10216,16 @@ module.exports.helpers = {
   todayDailyPath,
   workSummaryContainsDataviewInlineField,
   workSummaryPromptState,
+  PROMPT_BLOCK_ID_STOPWORDS,
+  suggestPromptBlockId,
+  promptBlockIdCleanHeadline,
+  promptBlockIdPhraseSpans,
+  promptBlockIdProseText,
+  promptBlockIdWordsIn,
+  resolvePromptBlockIdSuggestion,
+  readAuthoritativePromptTargetContent,
+  findOpenPromptTargetEditors,
+  getDirectAddPromptRootLine,
+  BlockIdPromptModal,
+  TaskLinkPickerModal,
 };

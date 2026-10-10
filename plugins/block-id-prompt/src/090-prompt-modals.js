@@ -7,20 +7,37 @@ class BlockIdPromptModal extends Modal {
     this.submitting = false;
     this.input = null;
     this.previewEl = null;
+    this.saveButton = null;
+    this.awaitingSuggestion = false;
+    this.suggestionResolved = false;
+    this.userEdited = false;
+    this.userMovedFocus = false;
+    this.closed = false;
   }
 
   onOpen() {
+    this.closed = false;
     this.contentEl.empty();
     this.contentEl.createEl("h2", { text: "Block ID" });
     this.createPreviewEl();
     this.loadPreview();
 
+    const isExplicit =
+      Boolean(this.source.prefillId) && Boolean(this.source.oldId);
+
     new Setting(this.contentEl).setName("ID").addText((text) => {
       this.input = text;
-      text.setPlaceholder("my-id");
-      if (this.source.prefillId && this.source.oldId) {
+      text.setPlaceholder(isExplicit ? "my-id" : "Loading suggestion…");
+      if (isExplicit) {
         text.setValue(this.source.oldId);
+        this.suggestionResolved = true;
       }
+      text.inputEl.addEventListener("input", () => {
+        this.userEdited = true;
+      });
+      text.inputEl.addEventListener("blur", () => {
+        this.userMovedFocus = true;
+      });
       text.inputEl.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") {
           return;
@@ -37,19 +54,161 @@ class BlockIdPromptModal extends Modal {
           .setButtonText("Cancel")
           .onClick(() => this.close()),
       )
-      .addButton((button) =>
+      .addButton((button) => {
+        this.saveButton = button;
         button
           .setButtonText("Save")
           .setCta()
-          .onClick(() => this.submit()),
-      );
+          .onClick(() => this.submit());
+        if (!isExplicit) {
+          this.setSaveDisabled(true);
+        }
+      });
 
-    window.setTimeout(() => {
-      if (this.input && this.input.inputEl) {
+    if (isExplicit) {
+      window.setTimeout(() => {
+        if (this.closed || !this.input || !this.input.inputEl) {
+          return;
+        }
+        if (!this.input.inputEl.isConnected) {
+          return;
+        }
         this.input.inputEl.focus();
-        if (this.source.prefillId && this.input.getValue()) {
+        if (this.input.getValue()) {
           this.input.inputEl.select();
         }
+      }, 0);
+      return;
+    }
+
+    this.awaitingSuggestion = true;
+    void this.resolveSuggestion();
+  }
+
+  setSaveDisabled(disabled) {
+    const button = this.saveButton;
+    if (!button) {
+      return;
+    }
+    try {
+      if (typeof button.setDisabled === "function") {
+        button.setDisabled(Boolean(disabled));
+        return;
+      }
+    } catch (error) {
+      // Fall through to the DOM toggle below.
+    }
+    try {
+      if (button.buttonEl) {
+        button.buttonEl.disabled = Boolean(disabled);
+      } else if (button.el) {
+        button.el.disabled = Boolean(disabled);
+      }
+    } catch (error) {
+      // Disabling Save is best effort; submit() still guards.
+    }
+  }
+
+  async resolveSuggestion() {
+    let result = null;
+    try {
+      result = await resolvePromptBlockIdSuggestion(this.plugin, this.source);
+    } catch (error) {
+      result = null;
+    }
+
+    if (this.closed) {
+      return;
+    }
+    const input = this.input;
+    if (!input || !input.inputEl || !input.inputEl.isConnected) {
+      this.awaitingSuggestion = false;
+      return;
+    }
+
+    this.awaitingSuggestion = false;
+    this.suggestionResolved = true;
+    this.setSaveDisabled(false);
+    try {
+      input.setPlaceholder("my-id");
+    } catch (error) {
+      // Placeholder is cosmetic; a missing setter never blocks seeding.
+    }
+
+    if (!result || result.explicit) {
+      window.setTimeout(() => {
+        if (this.closed || !this.input || !this.input.inputEl) {
+          return;
+        }
+        if (!this.input.inputEl.isConnected) {
+          return;
+        }
+        if (!this.userEdited && !this.userMovedFocus) {
+          this.input.inputEl.focus();
+        }
+      }, 0);
+      return;
+    }
+
+    if (result.notice) {
+      try {
+        new Notice(result.notice);
+      } catch (error) {
+        // Notices are best effort in headless test harnesses.
+      }
+    }
+
+    const suggestion =
+      typeof result.suggestion === "string" && result.suggestion
+        ? result.suggestion
+        : null;
+    if (!suggestion) {
+      window.setTimeout(() => {
+        if (this.closed || !this.input || !this.input.inputEl) {
+          return;
+        }
+        if (!this.input.inputEl.isConnected) {
+          return;
+        }
+        if (!this.userEdited && !this.userMovedFocus) {
+          this.input.inputEl.focus();
+        }
+      }, 0);
+      return;
+    }
+
+    // A late result never overwrites typing (including clearing the field).
+    if (this.userEdited) {
+      return;
+    }
+
+    try {
+      input.setValue(suggestion);
+    } catch (error) {
+      return;
+    }
+
+    // Select the untouched generated value once; never steal focus back
+    // after the user has moved it elsewhere.
+    if (this.userMovedFocus) {
+      return;
+    }
+    const inputEl = input.inputEl;
+    window.setTimeout(() => {
+      if (this.closed || !this.input || this.input.inputEl !== inputEl) {
+        return;
+      }
+      if (!inputEl.isConnected) {
+        return;
+      }
+      if (this.userEdited || this.userMovedFocus) {
+        return;
+      }
+      try {
+        inputEl.focus();
+        inputEl.select();
+      } catch (error) {
+        // Focus is best effort; the seeded value already stands.
       }
     }, 0);
   }
@@ -107,6 +266,10 @@ class BlockIdPromptModal extends Modal {
       return;
     }
 
+    if (this.awaitingSuggestion) {
+      return;
+    }
+
     const id = this.input ? this.input.getValue().trim() : "";
     if (!id) {
       new Notice("Block ID cannot be blank");
@@ -131,6 +294,8 @@ class BlockIdPromptModal extends Modal {
   }
 
   onClose() {
+    this.closed = true;
+    this.awaitingSuggestion = false;
     this.contentEl.empty();
 
     if (!this.completed && !this.submitting) {

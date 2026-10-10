@@ -393,22 +393,69 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
 
   // The note whose content seeds `+ id` suggestions and uniqueness checks:
   // the target's own note for vault-wide rows, else the dependent's note.
+  // Cross-note rows never silently fall back to the dependent note: a missing
+  // snapshot returns null so the stage opens blank instead of a colliding
+  // ready value (confirm-time reads still revalidate fresh).
   getBlockIdStageContent() {
     const task = this.pendingTask;
     const ownerPath = normalizeVaultRelativePath(this.filePath || "");
     const targetPath = normalizeVaultRelativePath(
       (task && task.path) || ownerPath,
     );
-    if (
-      targetPath &&
-      targetPath !== ownerPath &&
-      this.vaultStage &&
-      this.vaultStage.files instanceof Map &&
-      this.vaultStage.files.has(targetPath)
-    ) {
-      return String(this.vaultStage.files.get(targetPath) || "");
+    if (targetPath && targetPath !== ownerPath) {
+      if (
+        this.vaultStage &&
+        this.vaultStage.files instanceof Map &&
+        this.vaultStage.files.has(targetPath)
+      ) {
+        return String(this.vaultStage.files.get(targetPath) || "");
+      }
+      const openContent = this.getOpenTargetNoteContent(targetPath);
+      if (typeof openContent === "string") {
+        return openContent;
+      }
+      return null;
     }
     return this.getEditorContent();
+  }
+
+  getOpenTargetNoteContent(targetPath) {
+    try {
+      const normalized = normalizeVaultRelativePath(targetPath || "");
+      if (!normalized) {
+        return null;
+      }
+      const workspace =
+        (this.plugin && this.plugin.app && this.plugin.app.workspace) ||
+        (this.app && this.app.workspace);
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return null;
+      }
+      const seen = new Set();
+      for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+        const view = leaf && leaf.view;
+        if (
+          !view ||
+          !view.file ||
+          normalizeVaultRelativePath(view.file.path || "") !== normalized ||
+          !view.editor ||
+          typeof view.editor.getValue !== "function"
+        ) {
+          continue;
+        }
+        try {
+          seen.add(String(view.editor.getValue() || ""));
+        } catch (error) {
+          continue;
+        }
+      }
+      if (seen.size === 1) {
+        return Array.from(seen)[0];
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
   }
 
   // Reserved block IDs chosen earlier in the current batch prompt sequence, so
@@ -450,14 +497,46 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
     const reservedIds = this.getBlockIdReservedIds();
-    // Prefill with the existing `[id::]` value when present (confirmation
-    // replaces it with the canonical path-qualified ID); otherwise suggest a slug that avoids existing and
-    // reserved block IDs in the target's own note.
-    const suggestedId = task.existingIdField
-      ? normalizeBulletPropertyValue(task.existingIdField)
-      : suggestBlockIdFromTask(task.displayText, this.getBlockIdStageContent(), {
-          reservedIds,
-        });
+    const targetContent = this.getBlockIdStageContent();
+    // Prompt policy (plan 202610/task_block_id_prefill.md): reuse a legacy
+    // `[id::]` only when it is valid and free in the target note; otherwise
+    // generate from the raw task text with the shared prompt helper. A
+    // path-qualified value such as `Tasks__target` fails the block-ID grammar
+    // and falls through to generation. Missing cross-note snapshots stay blank.
+    const legacyRaw =
+      (task && (task.existingIdField || task.idField)) || null;
+    const legacyNormalized = legacyRaw
+      ? normalizeBulletPropertyValue(legacyRaw)
+      : "";
+    let suggestedId = "";
+    if (targetContent !== null) {
+      if (legacyNormalized) {
+        const legacyCheck = validateBlockIdCandidate(
+          legacyNormalized,
+          targetContent,
+          { reservedIds },
+        );
+        if (legacyCheck.valid) {
+          suggestedId = legacyCheck.id;
+        }
+      }
+      if (!suggestedId) {
+        const rawLine =
+          (task && typeof task.rawLine === "string" && task.rawLine) ||
+          (task && typeof task.displayText === "string" && task.displayText) ||
+          "";
+        if (typeof suggestPromptBlockId === "function") {
+          suggestedId =
+            suggestPromptBlockId(rawLine, targetContent, { reservedIds }) || "";
+        } else {
+          suggestedId = suggestBlockIdFromTask(
+            (task && task.displayText) || "",
+            targetContent,
+            { reservedIds },
+          );
+        }
+      }
+    }
     const isLast =
       this.blockIdMode !== "batch" ||
       this.blockIdContext.position >= this.blockIdContext.total;

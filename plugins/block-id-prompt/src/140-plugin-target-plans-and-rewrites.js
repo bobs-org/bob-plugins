@@ -25,14 +25,32 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
 
   // Apply a planTargetTaskUpdate() plan as one guarded target-note write: for
   // the active source note, every discrete edit is applied to the live editor
-  // (so unrelated document state is left untouched); for any other note, the
+  // (so unrelated document state is left untouched); for any other note, an
+  // open target editor wins over stale disk (preimage-checked), otherwise the
   // complete postimage is written in a single vault.modify call. Re-reads and
   // matches `expectedContent` first so a target that changed since the plan
-  // was built is never silently overwritten.
+  // was built is never silently overwritten. Disagreeing live buffers refuse
+  // instead of guessing.
   async applyTargetTaskPlan(file, source, plan, expectedContent, options = {}) {
     const noticePrefix = options.noticePrefix || "Task link stopped";
     const quiet = options.quiet === true;
-    const content = await this.readFileSnapshot(file, source);
+    let content = null;
+    let targetEditor = null;
+    if (file.path === source.sourcePath) {
+      content = await this.readFileSnapshot(file, source);
+    } else if (typeof readAuthoritativePromptTargetContent === "function") {
+      const snapshot = await readAuthoritativePromptTargetContent(this, source, file);
+      if (snapshot.ambiguous) {
+        if (!quiet) {
+          new Notice(`${noticePrefix}: ${file.path} changed before update`);
+        }
+        return false;
+      }
+      content = snapshot.content;
+      targetEditor = snapshot.editor || null;
+    } else {
+      content = await this.readFileSnapshot(file, source);
+    }
     if (content === null) {
       if (!quiet) {
         new Notice(`${noticePrefix}: ${file.path} could not be read`);
@@ -59,6 +77,19 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       const sortedEdits = [...plan.edits].sort((left, right) => right.start - left.start);
       for (const edit of sortedEdits) {
         source.editor.replaceRange(
+          edit.replacement,
+          indexToEditorPosition(content, edit.start),
+          indexToEditorPosition(content, edit.end),
+        );
+      }
+      return true;
+    }
+
+    if (targetEditor && typeof targetEditor.replaceRange === "function") {
+      this.suppressEditorScans();
+      const sortedEdits = [...plan.edits].sort((left, right) => right.start - left.start);
+      for (const edit of sortedEdits) {
+        targetEditor.replaceRange(
           edit.replacement,
           indexToEditorPosition(content, edit.start),
           indexToEditorPosition(content, edit.end),

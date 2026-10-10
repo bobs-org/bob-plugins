@@ -17,7 +17,9 @@ class BobLedgerToolsTodayLocationMixin {
   // Rebuild the cache from daily-note text. When the key set changes,
   // every open Tasks query re-reads via TODAY_RELOAD_EVENT and the
   // bob-plan blocks re-render (debounced, like the existing re-render).
-  // Returns true when the keys changed.
+  // Becoming ready for the current day (including an empty TODAY set)
+  // also schedules that refresh so daily section badges can leave `–`.
+  // Returns true when the membership keys changed.
   rebuildTodayCache(content, dailyPath, now = new Date()) {
     if (!this.todayCache || !(this.todayCache.rank instanceof Map)) {
       this.todayCache = {
@@ -27,6 +29,7 @@ class BobLedgerToolsTodayLocationMixin {
         rank: new Map(),
       };
     }
+    const wasReady = this.isTodayCacheReady(now);
     const links = computeTodayLinks(content, dailyPath);
     const keys = resolveTodayKeys(links, dailyPath, (target, daily) =>
       this.resolveTodayLink(target, daily),
@@ -41,7 +44,8 @@ class BobLedgerToolsTodayLocationMixin {
       keys,
       rank: new Map(keys.map((key, index) => [key, index])),
     };
-    if (changed) {
+    const becameReady = !wasReady && this.isTodayCacheReady(now);
+    if (changed || becameReady) {
       try {
         const workspace = this.app && this.app.workspace;
         if (workspace && typeof workspace.trigger === "function") {
@@ -261,8 +265,6 @@ class BobLedgerToolsTodayLocationMixin {
 
   paintPlanBlock(el, sourcePath) {
     const targetPath = planBlockTargetPath(this.app, sourcePath);
-    const { caps, invalid } = loadPlanCaps();
-    const tasks = planBlockTasks(this.app);
     if (!this.planPaintGens) {
       this.planPaintGens = new Map();
     }
@@ -276,8 +278,18 @@ class BobLedgerToolsTodayLocationMixin {
         if (!el || typeof el.empty !== "function") {
           return;
         }
-        el.empty();
         const paintDay = new Date();
+        const { caps, invalid } = loadPlanCaps();
+        const tasks = planBlockTasks(this.app);
+        const nextDashboard = this.dashboardLaneBudget("next", paintDay);
+        const pendingDashboard = this.dashboardLaneBudget(
+          "pending",
+          paintDay,
+        );
+        if (this.planPaintGens.get(el) !== paintGen) {
+          return;
+        }
+        el.empty();
         // Gate READY from one validated snapshot; a missing snapshot
         // keeps the legacy ungated count and tooltip.
         let planGate = null;
@@ -306,12 +318,16 @@ class BobLedgerToolsTodayLocationMixin {
           isToday: (task) => this.isTodayTask(task),
           isReviewBucket: planGate,
           review: planReview,
+          nextDashboard,
+          pendingDashboard,
         });
         const container = el.createDiv({ cls: "bob-plan" });
         container.setAttribute("role", "status");
         container.setAttribute(
           "aria-label",
-          `${model.planText}, ${model.pendingText}, ${model.nextText}, ${model.readyText}${model.over ? ", over plan" : ""}`,
+          `${model.planText}, ${model.pendingText}, ${model.nextText}, ${model.readyText}${
+            model.budget.status === "over" ? ", over plan" : ""
+          }`,
         );
         const planChip = container.createEl("span", {
           cls: `bob-plan-chip bob-plan-plan${
@@ -321,45 +337,31 @@ class BobLedgerToolsTodayLocationMixin {
           title: model.planTitle,
         });
         planChip.setAttribute("aria-label", `TODAY: ${model.planTitle}`);
-        const laneChips = [
-          {
-            cls: "bob-plan-pending",
-            text: model.pendingText,
-            title: "Open PENDING tasks in dash",
-            href: "dash#PENDING Tasks",
-            over: model.hasTasks && model.pending.over,
-          },
-          {
-            cls: "bob-plan-next",
-            text: model.nextText,
-            title: "Open NEXT tasks in dash",
-            href: "dash#NEXT Tasks",
-            over: model.hasTasks && model.next.over,
-          },
-        ];
-        for (const chip of laneChips) {
-          const laneChip = container.createEl("a", {
-            cls: `bob-plan-chip ${chip.cls}${chip.over ? " bob-plan-over" : ""}`,
-            text: chip.text,
-            title: chip.title,
-            href: chip.href,
-          });
-          laneChip.setAttribute("aria-label", chip.title);
-          laneChip.addEventListener("click", (event) => {
-            event.preventDefault();
-            try {
-              const workspace = this.app && this.app.workspace;
-              if (workspace && typeof workspace.openLinkText === "function") {
-                workspace.openLinkText(chip.href, "", false);
-              }
-            } catch (error) {
-              // The chip still shows the count without the navigation.
-            }
-          });
+        const paintSource =
+          typeof sourcePath === "string" ? sourcePath : "";
+        try {
+          this.paintDashboardLaneElement(
+            container,
+            "pending",
+            pendingDashboard,
+            { sourcePath: paintSource, invalid },
+          );
+        } catch (error) {
+          // The PENDING badge degrades; other chips stay.
+        }
+        try {
+          this.paintDashboardLaneElement(
+            container,
+            "next",
+            nextDashboard,
+            { sourcePath: paintSource, invalid },
+          );
+        } catch (error) {
+          // The NEXT badge degrades; other chips stay.
         }
         try {
           this.paintReadyElement(container, model.ready ? { count: model.ready.count, cap: model.ready.cap, over: model.ready.over, lane: model.lane || null } : { count: null, cap: effectivePlanCaps(caps).maxReady }, {
-            sourcePath: typeof sourcePath === "string" ? sourcePath : "",
+            sourcePath: paintSource,
             invalid,
           });
         } catch (error) {

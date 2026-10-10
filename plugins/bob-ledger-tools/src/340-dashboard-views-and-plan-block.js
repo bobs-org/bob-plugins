@@ -731,12 +731,63 @@ function planBlockTasks(app) {
   return null;
 }
 
+// Daily NEXT/PENDING presentation uses the dashboard section budget.
+// A supplied budget (including unavailable nulls) is used as-is and
+// never replaced with an ungated whole-lane fallback. Standalone
+// callers without a prepared budget compute the same section through
+// dashboardLaneBudgetFromTasks when Tasks data is present.
+function unavailablePlanDashboardBudget(effective, lane) {
+  return {
+    section: null,
+    lane: null,
+    count: null,
+    laneCount: null,
+    cap: lane === "next" ? effective.maxNext : effective.maxPending,
+    over: false,
+    today: null,
+  };
+}
+
+function resolvePlanDashboardBudget(
+  supplied,
+  taskList,
+  day,
+  effective,
+  lane,
+  isTodayPredicate,
+  hasTasks,
+) {
+  if (supplied !== undefined) {
+    if (!supplied || typeof supplied !== "object") {
+      return unavailablePlanDashboardBudget(effective, lane);
+    }
+    return supplied;
+  }
+  if (!hasTasks) {
+    return unavailablePlanDashboardBudget(effective, lane);
+  }
+  try {
+    return dashboardLaneBudgetFromTasks(
+      taskList,
+      day,
+      effective,
+      lane,
+      isTodayPredicate,
+    );
+  } catch (error) {
+    return unavailablePlanDashboardBudget(effective, lane);
+  }
+}
+
 // Synchronous view-model for the ```bob-plan block. Never throws: missing
 // content, caps, or Tasks all degrade to `–` placeholders, never an error.
 // `isToday` is the caller's Today predicate over cached Tasks tasks
 // (the plugin passes its synchronous cache); it still feeds READY.
 // READY is the shared live current backlog (Today excluded); it never
 // changes what the ledger's PLAN status means.
+// Daily NEXT/PENDING badges follow dashboard section counts. Whole-lane
+// `next`/`pending` remain for cap lints. Optional `nextDashboard` /
+// `pendingDashboard` are prepared guarded budgets from the paint path.
 function planBlockModel({
   content,
   tasks,
@@ -747,6 +798,8 @@ function planBlockModel({
   isToday,
   isReviewBucket,
   review,
+  nextDashboard,
+  pendingDashboard,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -776,6 +829,26 @@ function planBlockModel({
   } catch (error) {
     pending = { count: 0, cap: effective.maxPending, over: false };
   }
+  const nextDash = resolvePlanDashboardBudget(
+    nextDashboard,
+    taskList,
+    day,
+    effective,
+    "next",
+    isTodayPredicate,
+    hasTasks,
+  );
+  const pendingDash = resolvePlanDashboardBudget(
+    pendingDashboard,
+    taskList,
+    day,
+    effective,
+    "pending",
+    isTodayPredicate,
+    hasTasks,
+  );
+  const nextModel = dashboardLaneBadgeModel(nextDash, "next");
+  const pendingModel = dashboardLaneBadgeModel(pendingDash, "pending");
   let ready = null;
   if (hasTasks) {
     try {
@@ -790,21 +863,22 @@ function planBlockModel({
       ready = null;
     }
   }
+  // Ledger PLAN status stays independent of lane pressure. READY over
+  // still flags the aggregate `over` for existing READY tests; the
+  // accessible summary uses the ledger status for "over plan".
   const over =
-    budget.status === "over" ||
-    (hasTasks && (next.over || pending.over)) ||
-    (hasTasks && ready && ready.over);
+    budget.status === "over" || (hasTasks && ready && ready.over);
   const lintWarnings = budget.warnings.slice();
   if (hasTasks && next.over) {
     lintWarnings.push({
       code: PLAN_LINT_NEXT_CAP,
-      message: `NEXT has ${next.count}/${next.cap} tasks; release some with Alt+N`,
+      message: `NEXT whole lane has ${next.count}/${next.cap} tasks (including TODAY); release some with Alt+N`,
     });
   }
   if (hasTasks && pending.over) {
     lintWarnings.push({
       code: PLAN_LINT_PENDING_CAP,
-      message: `PENDING has ${pending.count}/${pending.cap} tasks; release some with Alt+N`,
+      message: `PENDING whole lane has ${pending.count}/${pending.cap} tasks (including TODAY); release some with Alt+N`,
     });
   }
   if (
@@ -856,12 +930,12 @@ function planBlockModel({
     planTitle: budget.hasSection
       ? themeCounts.join(" · ") || "no themes"
       : "no Pomodoros section",
-    nextText: hasTasks ? `NEXT ${next.count}/${next.cap}` : "NEXT –",
-    pendingText: hasTasks
-      ? `PENDING ${pending.count}/${pending.cap}`
-      : "PENDING –",
+    nextText: nextModel.text,
+    pendingText: pendingModel.text,
     readyText: hasTasks ? readyModel.text : "READY –",
     readyModel,
+    nextModel,
+    pendingModel,
     themesText:
       budget.themeNames.length > 0
         ? `★ ${budget.themeNames.join(" · ")}`
@@ -875,6 +949,8 @@ function planBlockModel({
     budget,
     next,
     pending,
+    nextDashboard: nextDash,
+    pendingDashboard: pendingDash,
     ready,
     lane: reviewLane,
   };

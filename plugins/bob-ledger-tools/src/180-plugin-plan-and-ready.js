@@ -225,10 +225,11 @@ class BobLedgerToolsPlanAndReadyMixin {
   }
 
   // Dashboard PENDING/NEXT section budget (api v3, additive). The
-  // section count excludes TODAY (and dash.md itself); the whole-lane
-  // count and cap keep their existing semantics for tooltips, cap
-  // warnings, and non-dashboard callers. `count`/`section` is null when
-  // unavailable (no Tasks data, a non-Warm cache, no initial Today
+  // section count excludes TODAY (and dash.md itself) and is shared by
+  // dashboard badges and daily `bob-plan` PENDING/NEXT chips; the
+  // whole-lane count and cap keep their existing semantics for tooltips,
+  // cap warnings, and non-dashboard callers. `count`/`section` is null
+  // when unavailable (no Tasks data, a non-Warm cache, no initial Today
   // build, or a failed evaluation); unavailable never becomes zero.
   dashboardLaneBudget(lane, now = new Date()) {
     try {

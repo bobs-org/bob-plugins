@@ -462,6 +462,39 @@ test("refresh fires only when the key set changes", () => {
   });
 });
 
+test("unready to ready with empty TODAY still refreshes open badges", () => {
+  withMissingConfig(() => {
+    const now = new Date(2026, 8, 30);
+    const triggers = [];
+    const app = makeTodayApp({ files: {}, targets: {}, triggers });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      const dailyPath =
+        plugin.currentTodayDailyPath(now) || "2026/20260930.md";
+      const scheduled = [];
+      plugin.schedulePlanBlockRerender = () => scheduled.push("plan");
+      assert.equal(plugin.isTodayCacheReady(now), false);
+      assert.equal(
+        plugin.rebuildTodayCache("## Pomodoros\n", dailyPath, now),
+        false,
+      );
+      assert.equal(plugin.isTodayCacheReady(now), true);
+      assert.deepEqual(plugin.api.todayKeys(), []);
+      assert.deepEqual(triggers, [TODAY_RELOAD_EVENT]);
+      assert.deepEqual(scheduled, ["plan"]);
+      assert.equal(
+        plugin.rebuildTodayCache("## Pomodoros\n", dailyPath, now),
+        false,
+      );
+      assert.deepEqual(triggers, [TODAY_RELOAD_EVENT]);
+      assert.deepEqual(scheduled, ["plan"]);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
 test("cache rebuilds on the daily changed event with the event content", () => {
   withMissingConfig(() => {
     const day = new Date(2026, 8, 30);

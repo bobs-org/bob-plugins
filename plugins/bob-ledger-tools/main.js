@@ -13569,10 +13569,11 @@ class BobLedgerToolsPlanAndReadyMixin {
   }
 
   // Dashboard PENDING/NEXT section budget (api v3, additive). The
-  // section count excludes TODAY (and dash.md itself); the whole-lane
-  // count and cap keep their existing semantics for tooltips, cap
-  // warnings, and non-dashboard callers. `count`/`section` is null when
-  // unavailable (no Tasks data, a non-Warm cache, no initial Today
+  // section count excludes TODAY (and dash.md itself) and is shared by
+  // dashboard badges and daily `bob-plan` PENDING/NEXT chips; the
+  // whole-lane count and cap keep their existing semantics for tooltips,
+  // cap warnings, and non-dashboard callers. `count`/`section` is null
+  // when unavailable (no Tasks data, a non-Warm cache, no initial Today
   // build, or a failed evaluation); unavailable never becomes zero.
   dashboardLaneBudget(lane, now = new Date()) {
     try {
@@ -25968,7 +25969,9 @@ class BobLedgerToolsTodayLocationMixin {
   // Rebuild the cache from daily-note text. When the key set changes,
   // every open Tasks query re-reads via TODAY_RELOAD_EVENT and the
   // bob-plan blocks re-render (debounced, like the existing re-render).
-  // Returns true when the keys changed.
+  // Becoming ready for the current day (including an empty TODAY set)
+  // also schedules that refresh so daily section badges can leave `–`.
+  // Returns true when the membership keys changed.
   rebuildTodayCache(content, dailyPath, now = new Date()) {
     if (!this.todayCache || !(this.todayCache.rank instanceof Map)) {
       this.todayCache = {
@@ -25978,6 +25981,7 @@ class BobLedgerToolsTodayLocationMixin {
         rank: new Map(),
       };
     }
+    const wasReady = this.isTodayCacheReady(now);
     const links = computeTodayLinks(content, dailyPath);
     const keys = resolveTodayKeys(links, dailyPath, (target, daily) =>
       this.resolveTodayLink(target, daily),
@@ -25992,7 +25996,8 @@ class BobLedgerToolsTodayLocationMixin {
       keys,
       rank: new Map(keys.map((key, index) => [key, index])),
     };
-    if (changed) {
+    const becameReady = !wasReady && this.isTodayCacheReady(now);
+    if (changed || becameReady) {
       try {
         const workspace = this.app && this.app.workspace;
         if (workspace && typeof workspace.trigger === "function") {
@@ -26212,8 +26217,6 @@ class BobLedgerToolsTodayLocationMixin {
 
   paintPlanBlock(el, sourcePath) {
     const targetPath = planBlockTargetPath(this.app, sourcePath);
-    const { caps, invalid } = loadPlanCaps();
-    const tasks = planBlockTasks(this.app);
     if (!this.planPaintGens) {
       this.planPaintGens = new Map();
     }
@@ -26227,8 +26230,18 @@ class BobLedgerToolsTodayLocationMixin {
         if (!el || typeof el.empty !== "function") {
           return;
         }
-        el.empty();
         const paintDay = new Date();
+        const { caps, invalid } = loadPlanCaps();
+        const tasks = planBlockTasks(this.app);
+        const nextDashboard = this.dashboardLaneBudget("next", paintDay);
+        const pendingDashboard = this.dashboardLaneBudget(
+          "pending",
+          paintDay,
+        );
+        if (this.planPaintGens.get(el) !== paintGen) {
+          return;
+        }
+        el.empty();
         // Gate READY from one validated snapshot; a missing snapshot
         // keeps the legacy ungated count and tooltip.
         let planGate = null;
@@ -26257,12 +26270,16 @@ class BobLedgerToolsTodayLocationMixin {
           isToday: (task) => this.isTodayTask(task),
           isReviewBucket: planGate,
           review: planReview,
+          nextDashboard,
+          pendingDashboard,
         });
         const container = el.createDiv({ cls: "bob-plan" });
         container.setAttribute("role", "status");
         container.setAttribute(
           "aria-label",
-          `${model.planText}, ${model.pendingText}, ${model.nextText}, ${model.readyText}${model.over ? ", over plan" : ""}`,
+          `${model.planText}, ${model.pendingText}, ${model.nextText}, ${model.readyText}${
+            model.budget.status === "over" ? ", over plan" : ""
+          }`,
         );
         const planChip = container.createEl("span", {
           cls: `bob-plan-chip bob-plan-plan${
@@ -26272,45 +26289,31 @@ class BobLedgerToolsTodayLocationMixin {
           title: model.planTitle,
         });
         planChip.setAttribute("aria-label", `TODAY: ${model.planTitle}`);
-        const laneChips = [
-          {
-            cls: "bob-plan-pending",
-            text: model.pendingText,
-            title: "Open PENDING tasks in dash",
-            href: "dash#PENDING Tasks",
-            over: model.hasTasks && model.pending.over,
-          },
-          {
-            cls: "bob-plan-next",
-            text: model.nextText,
-            title: "Open NEXT tasks in dash",
-            href: "dash#NEXT Tasks",
-            over: model.hasTasks && model.next.over,
-          },
-        ];
-        for (const chip of laneChips) {
-          const laneChip = container.createEl("a", {
-            cls: `bob-plan-chip ${chip.cls}${chip.over ? " bob-plan-over" : ""}`,
-            text: chip.text,
-            title: chip.title,
-            href: chip.href,
-          });
-          laneChip.setAttribute("aria-label", chip.title);
-          laneChip.addEventListener("click", (event) => {
-            event.preventDefault();
-            try {
-              const workspace = this.app && this.app.workspace;
-              if (workspace && typeof workspace.openLinkText === "function") {
-                workspace.openLinkText(chip.href, "", false);
-              }
-            } catch (error) {
-              // The chip still shows the count without the navigation.
-            }
-          });
+        const paintSource =
+          typeof sourcePath === "string" ? sourcePath : "";
+        try {
+          this.paintDashboardLaneElement(
+            container,
+            "pending",
+            pendingDashboard,
+            { sourcePath: paintSource, invalid },
+          );
+        } catch (error) {
+          // The PENDING badge degrades; other chips stay.
+        }
+        try {
+          this.paintDashboardLaneElement(
+            container,
+            "next",
+            nextDashboard,
+            { sourcePath: paintSource, invalid },
+          );
+        } catch (error) {
+          // The NEXT badge degrades; other chips stay.
         }
         try {
           this.paintReadyElement(container, model.ready ? { count: model.ready.count, cap: model.ready.cap, over: model.ready.over, lane: model.lane || null } : { count: null, cap: effectivePlanCaps(caps).maxReady }, {
-            sourcePath: typeof sourcePath === "string" ? sourcePath : "",
+            sourcePath: paintSource,
             invalid,
           });
         } catch (error) {
@@ -28693,12 +28696,63 @@ function planBlockTasks(app) {
   return null;
 }
 
+// Daily NEXT/PENDING presentation uses the dashboard section budget.
+// A supplied budget (including unavailable nulls) is used as-is and
+// never replaced with an ungated whole-lane fallback. Standalone
+// callers without a prepared budget compute the same section through
+// dashboardLaneBudgetFromTasks when Tasks data is present.
+function unavailablePlanDashboardBudget(effective, lane) {
+  return {
+    section: null,
+    lane: null,
+    count: null,
+    laneCount: null,
+    cap: lane === "next" ? effective.maxNext : effective.maxPending,
+    over: false,
+    today: null,
+  };
+}
+
+function resolvePlanDashboardBudget(
+  supplied,
+  taskList,
+  day,
+  effective,
+  lane,
+  isTodayPredicate,
+  hasTasks,
+) {
+  if (supplied !== undefined) {
+    if (!supplied || typeof supplied !== "object") {
+      return unavailablePlanDashboardBudget(effective, lane);
+    }
+    return supplied;
+  }
+  if (!hasTasks) {
+    return unavailablePlanDashboardBudget(effective, lane);
+  }
+  try {
+    return dashboardLaneBudgetFromTasks(
+      taskList,
+      day,
+      effective,
+      lane,
+      isTodayPredicate,
+    );
+  } catch (error) {
+    return unavailablePlanDashboardBudget(effective, lane);
+  }
+}
+
 // Synchronous view-model for the ```bob-plan block. Never throws: missing
 // content, caps, or Tasks all degrade to `–` placeholders, never an error.
 // `isToday` is the caller's Today predicate over cached Tasks tasks
 // (the plugin passes its synchronous cache); it still feeds READY.
 // READY is the shared live current backlog (Today excluded); it never
 // changes what the ledger's PLAN status means.
+// Daily NEXT/PENDING badges follow dashboard section counts. Whole-lane
+// `next`/`pending` remain for cap lints. Optional `nextDashboard` /
+// `pendingDashboard` are prepared guarded budgets from the paint path.
 function planBlockModel({
   content,
   tasks,
@@ -28709,6 +28763,8 @@ function planBlockModel({
   isToday,
   isReviewBucket,
   review,
+  nextDashboard,
+  pendingDashboard,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -28738,6 +28794,26 @@ function planBlockModel({
   } catch (error) {
     pending = { count: 0, cap: effective.maxPending, over: false };
   }
+  const nextDash = resolvePlanDashboardBudget(
+    nextDashboard,
+    taskList,
+    day,
+    effective,
+    "next",
+    isTodayPredicate,
+    hasTasks,
+  );
+  const pendingDash = resolvePlanDashboardBudget(
+    pendingDashboard,
+    taskList,
+    day,
+    effective,
+    "pending",
+    isTodayPredicate,
+    hasTasks,
+  );
+  const nextModel = dashboardLaneBadgeModel(nextDash, "next");
+  const pendingModel = dashboardLaneBadgeModel(pendingDash, "pending");
   let ready = null;
   if (hasTasks) {
     try {
@@ -28752,21 +28828,22 @@ function planBlockModel({
       ready = null;
     }
   }
+  // Ledger PLAN status stays independent of lane pressure. READY over
+  // still flags the aggregate `over` for existing READY tests; the
+  // accessible summary uses the ledger status for "over plan".
   const over =
-    budget.status === "over" ||
-    (hasTasks && (next.over || pending.over)) ||
-    (hasTasks && ready && ready.over);
+    budget.status === "over" || (hasTasks && ready && ready.over);
   const lintWarnings = budget.warnings.slice();
   if (hasTasks && next.over) {
     lintWarnings.push({
       code: PLAN_LINT_NEXT_CAP,
-      message: `NEXT has ${next.count}/${next.cap} tasks; release some with Alt+N`,
+      message: `NEXT whole lane has ${next.count}/${next.cap} tasks (including TODAY); release some with Alt+N`,
     });
   }
   if (hasTasks && pending.over) {
     lintWarnings.push({
       code: PLAN_LINT_PENDING_CAP,
-      message: `PENDING has ${pending.count}/${pending.cap} tasks; release some with Alt+N`,
+      message: `PENDING whole lane has ${pending.count}/${pending.cap} tasks (including TODAY); release some with Alt+N`,
     });
   }
   if (
@@ -28818,12 +28895,12 @@ function planBlockModel({
     planTitle: budget.hasSection
       ? themeCounts.join(" · ") || "no themes"
       : "no Pomodoros section",
-    nextText: hasTasks ? `NEXT ${next.count}/${next.cap}` : "NEXT –",
-    pendingText: hasTasks
-      ? `PENDING ${pending.count}/${pending.cap}`
-      : "PENDING –",
+    nextText: nextModel.text,
+    pendingText: pendingModel.text,
     readyText: hasTasks ? readyModel.text : "READY –",
     readyModel,
+    nextModel,
+    pendingModel,
     themesText:
       budget.themeNames.length > 0
         ? `★ ${budget.themeNames.join(" · ")}`
@@ -28837,6 +28914,8 @@ function planBlockModel({
     budget,
     next,
     pending,
+    nextDashboard: nextDash,
+    pendingDashboard: pendingDash,
     ready,
     lane: reviewLane,
   };

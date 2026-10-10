@@ -439,7 +439,10 @@ test("planBlockModel renders chips, themes, and lints", () => {
     isToday: (task) => task.blockLink === " ^aaa",
   });
   assert.equal(model.planText, "TODAY 1/3 · 1/10");
-  assert.equal(model.nextText, "NEXT 1/15");
+  // Linked Next is TODAY: the daily badge follows the dashboard section.
+  assert.equal(model.nextText, "NEXT 0/15");
+  assert.equal(model.next.count, 1);
+  assert.equal(model.nextModel.section, 0);
   assert.equal(model.pendingText, "PENDING 1/10");
   assert.equal(model.themesText, "★ GOALS");
   assert.equal(model.over, false);
@@ -458,10 +461,18 @@ test("planBlockModel adds lane cap lints when a lane is over", () => {
     today: new Date(2026, 8, 30),
     caps: defaultPlanCaps(),
   });
-  assert.equal(model.over, true);
+  // Whole-lane excess keeps its lint; it does not mark the ledger over.
+  assert.equal(model.over, false);
+  assert.equal(model.budget.status, "ok");
+  assert.equal(model.nextText, "NEXT 16/15");
+  assert.equal(model.nextModel.over, true);
   assert.ok(
     model.lints.some((lint) => lint.endsWith("next_cap_exceeded")),
     `expected a next_cap_exceeded lint, got ${JSON.stringify(model.lints)}`,
+  );
+  assert.match(
+    model.lints[0],
+    /NEXT whole lane has 16\/15 tasks \(including TODAY\)/,
   );
 });
 
@@ -583,4 +594,106 @@ test("lane predicate matches hide subtags, case, and non-task", () => {
   ];
   const budget = laneBudgetFromTasks(tasks, today, undefined, "next");
   assert.equal(budget.count, 1);
+});
+
+test("planBlockModel daily badges follow dashboard section counts", () => {
+  const day = new Date(2026, 8, 30);
+  const nextTasks = (section, todayCount) =>
+    Array.from({ length: section + todayCount }, (_, index) =>
+      laneTask({
+        path: `notes/n${index}.md`,
+        blockLink: ` ^n${index}`,
+        status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+      }),
+    );
+  const pendingTasks = (section, todayCount) =>
+    Array.from({ length: section + todayCount }, (_, index) =>
+      laneTask({
+        path: `notes/p${index}.md`,
+        blockLink: ` ^p${index}`,
+        status: { type: "IN_PROGRESS", name: "In Progress", symbol: "/" },
+      }),
+    );
+  const modelOf = (tasks, isToday, caps) =>
+    planBlockModel({
+      content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+      tasks,
+      today: day,
+      caps: caps || defaultPlanCaps(),
+      sourcePath: "2026/20260930.md",
+      app: {},
+      isToday,
+    });
+  const screenshotNext = modelOf(nextTasks(10, 7), (task) => {
+    const n = Number(String(task.blockLink).replace(" ^n", ""));
+    return n >= 10;
+  });
+  assert.equal(screenshotNext.nextText, "NEXT 10/15");
+  assert.equal(screenshotNext.next.count, 17);
+  assert.equal(screenshotNext.nextModel.over, false);
+  assert.equal(screenshotNext.over, false);
+  assert.match(
+    screenshotNext.lints[0],
+    /NEXT whole lane has 17\/15 tasks \(including TODAY\)/,
+  );
+  const screenshotPending = modelOf(pendingTasks(4, 4), (task) => {
+    const n = Number(String(task.blockLink).replace(" ^p", ""));
+    return n >= 4;
+  });
+  assert.equal(screenshotPending.pendingText, "PENDING 4/10");
+  assert.equal(screenshotPending.pending.count, 8);
+  assert.equal(screenshotPending.pendingModel.over, false);
+  assert.deepEqual(screenshotPending.lints, []);
+  const pendingLaneOver = modelOf(pendingTasks(4, 7), (task) => {
+    const n = Number(String(task.blockLink).replace(" ^p", ""));
+    return n >= 4;
+  });
+  assert.equal(pendingLaneOver.pendingText, "PENDING 4/10");
+  assert.equal(pendingLaneOver.pendingModel.over, false);
+  assert.match(
+    pendingLaneOver.lints[0],
+    /PENDING whole lane has 11\/10 tasks \(including TODAY\)/,
+  );
+  const atCap = modelOf(nextTasks(15, 1), (task) => {
+    const n = Number(String(task.blockLink).replace(" ^n", ""));
+    return n >= 15;
+  });
+  assert.equal(atCap.nextText, "NEXT 15/15");
+  assert.equal(atCap.nextModel.over, false);
+  const sectionOver = modelOf(nextTasks(16, 0), () => false);
+  assert.equal(sectionOver.nextText, "NEXT 16/15");
+  assert.equal(sectionOver.nextModel.over, true);
+  const empty = modelOf([], () => false, { maxNext: 20, maxPending: 8 });
+  assert.equal(empty.nextText, "NEXT 0/20");
+  assert.equal(empty.pendingText, "PENDING 0/8");
+});
+
+test("planBlockModel keeps a supplied unavailable dashboard budget", () => {
+  const tasks = [
+    laneTask({
+      status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+    }),
+  ];
+  const unavailable = {
+    section: null,
+    lane: null,
+    count: null,
+    cap: 15,
+    over: false,
+    today: null,
+  };
+  const model = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] () — GOALS\n",
+    tasks,
+    today: new Date(2026, 8, 30),
+    caps: defaultPlanCaps(),
+    isToday: () => false,
+    nextDashboard: unavailable,
+    pendingDashboard: unavailable,
+  });
+  assert.equal(model.nextText, "NEXT –");
+  assert.equal(model.pendingText, "PENDING –");
+  assert.equal(model.nextModel.placeholder, true);
+  assert.equal(model.nextModel.over, false);
+  assert.equal(model.next.count, 1);
 });

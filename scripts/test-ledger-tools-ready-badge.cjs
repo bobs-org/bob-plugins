@@ -1288,8 +1288,8 @@ test("lane lints appear in NEXT, PENDING, READY order", () => {
     isToday: () => false,
   });
   assert.deepEqual(model.lints, [
-    "NEXT has 16/15 tasks; release some with Alt+N  next_cap_exceeded",
-    "PENDING has 11/10 tasks; release some with Alt+N  pending_cap_exceeded",
+    "NEXT whole lane has 16/15 tasks (including TODAY); release some with Alt+N  next_cap_exceeded",
+    "PENDING whole lane has 11/10 tasks (including TODAY); release some with Alt+N  pending_cap_exceeded",
     "READY has 101/100 tasks; prune at the weekly review  ready_cap_exceeded",
   ]);
 });
@@ -1402,7 +1402,7 @@ test("READY speaks each host's chip language (daily single-tone, dash two-tone)"
   }
   assert.match(
     flat,
-    /\.bob-plan \.bob-plan-ready[^{,]*,\s*\.bob-plan \.bob-plan-review \{[^}]*gap: 0/,
+    /\.bob-plan \.bob-plan-ready[^{]*\.bob-plan \.bob-plan-pending[^{]*\.bob-plan \.bob-plan-next[^{]*\.bob-plan \.bob-plan-review \{[^}]*gap: 0/,
   );
   assert.match(
     flat,
@@ -1411,6 +1411,14 @@ test("READY speaks each host's chip language (daily single-tone, dash two-tone)"
   assert.match(
     flat,
     /\.bob-plan \.bob-plan-ready \.bob-plan-ready-value::before[^{]*\{[^}]*content: "\\00a0"/,
+  );
+  assert.match(
+    flat,
+    /\.bob-plan \.bob-plan-pending \.bob-plan-ready-value::before[^{]*\{[^}]*content: "\\00a0"/,
+  );
+  assert.match(
+    flat,
+    /\.bob-plan \.bob-plan-next \.bob-plan-ready-value::before[^{]*\{[^}]*content: "\\00a0"/,
   );
 });
 

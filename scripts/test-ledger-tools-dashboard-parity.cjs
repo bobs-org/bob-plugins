@@ -695,3 +695,428 @@ test("dashboard lane widgets refresh together and prune on unload", () => {
     }
   }
 });
+
+function paintNode(tag, options = {}) {
+  const node = {
+    tag,
+    cls: options.cls,
+    text: options.text,
+    title: options.title,
+    href: options.href,
+    attrs: {},
+    children: [],
+    parentNode: null,
+    listeners: {},
+    setAttribute(name, value) {
+      node.attrs[name] = String(value);
+    },
+    hasAttribute(name) {
+      return name in node.attrs;
+    },
+    setText(value) {
+      node.text = String(value);
+    },
+    addEventListener(name, handler) {
+      node.listeners[name] = node.listeners[name] || [];
+      node.listeners[name].push(handler);
+    },
+    empty() {
+      node.children = [];
+    },
+    createDiv(childOptions = {}) {
+      return node.createEl("div", childOptions);
+    },
+    createEl(childTag, childOptions = {}) {
+      const child = paintNode(childTag, childOptions);
+      child.parentNode = node;
+      node.children.push(child);
+      return child;
+    },
+    querySelector(selector) {
+      const cls = String(selector).replace(/^\./, "");
+      const found = node.children.find((child) =>
+        String(child.cls || "")
+          .split(/\s+/)
+          .includes(cls),
+      );
+      if (found) {
+        return found;
+      }
+      for (const child of node.children) {
+        const nested = child.querySelector(selector);
+        if (nested) {
+          return nested;
+        }
+      }
+      return null;
+    },
+    querySelectorAll(selector) {
+      const cls = String(selector).replace(/^\./, "");
+      const out = [];
+      const walk = (current) => {
+        if (
+          String(current.cls || "")
+            .split(/\s+/)
+            .includes(cls)
+        ) {
+          out.push(current);
+        }
+        for (const child of current.children || []) {
+          walk(child);
+        }
+      };
+      for (const child of node.children) {
+        walk(child);
+      }
+      return out;
+    },
+  };
+  return node;
+}
+
+function laneValue(anchor) {
+  const span = anchor && anchor.querySelector(".bob-plan-ready-value");
+  return span ? span.text : null;
+}
+
+function findLaneAnchor(el, lane) {
+  const container = el.children[0];
+  assert.ok(container, "expected the bob-plan container");
+  const cls = lane === "next" ? "bob-plan-next" : "bob-plan-pending";
+  const anchor = container.children.find((child) =>
+    String(child.cls || "")
+      .split(/\s+/)
+      .includes(cls),
+  );
+  assert.ok(anchor, `expected the ${lane} anchor in the daily block`);
+  return anchor;
+}
+
+function withParityPlugin(tasks, run, { todayIds = new Set(), opens = [] } = {}) {
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = "/definitely/missing/dashboard-parity-test";
+  const now = new Date();
+  const app = makeApp({
+    vault: {
+      getAbstractFileByPath: () => ({ path: "2026/20260930.md" }),
+      cachedRead: () =>
+        Promise.resolve("## Pomodoros\n\n- [ ] () — GOALS\n"),
+    },
+    workspace: {
+      on: () => ({}),
+      offref: () => {},
+      onLayoutReady: () => {},
+      getActiveFile: () => null,
+      openLinkText: (linktext, sourcePath, newLeaf) => {
+        opens.push({ linktext, sourcePath, newLeaf });
+        return Promise.resolve();
+      },
+      trigger: () => {},
+    },
+    plugins: {
+      plugins: {
+        "obsidian-tasks-plugin": {
+          getTasks: () => tasks,
+          getState: () => "Warm",
+        },
+      },
+    },
+  });
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  plugin.rebuildTodayCache(
+    "## Pomodoros\n",
+    plugin.currentTodayDailyPath(now) || "2026/20260930.md",
+    now,
+  );
+  plugin.isTodayTask = (task) => todayIds.has(task.blockLink);
+  return Promise.resolve(run(plugin, now))
+    .finally(() => {
+      plugin.onunload();
+      if (savedXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = savedXdg;
+      }
+    });
+}
+
+test("daily paint matches dashboard section badges on screenshot fixtures", async () => {
+  const nextTasks = Array.from({ length: 17 }, (_, index) =>
+    nextTask({
+      path: `notes/n${index}.md`,
+      blockLink: ` ^n${index}`,
+      description: `next ${index}`,
+    }),
+  );
+  const todayIds = new Set(
+    nextTasks.slice(10).map((task) => task.blockLink),
+  );
+  await withParityPlugin(nextTasks, async (plugin) => {
+    const dailyEl = paintNode("div");
+    plugin.paintPlanBlock(dailyEl, "2026/20260930.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    const dashHost = paintNode("div");
+    const dash = plugin.paintDashboardLaneElement(
+      dashHost,
+      "next",
+      plugin.dashboardLaneBudget("next"),
+      { sourcePath: "dash.md" },
+    );
+    const daily = findLaneAnchor(dailyEl, "next");
+    assert.equal(laneValue(daily), "10/15");
+    assert.equal(laneValue(dash), "10/15");
+    assert.doesNotMatch(daily.cls, /bob-plan-over/);
+    assert.doesNotMatch(dash.cls, /bob-plan-over/);
+    assert.equal(daily.title, dash.title);
+    assert.equal(daily.attrs["aria-label"], dash.attrs["aria-label"]);
+    assert.match(daily.title, /whole lane 17\/15/);
+    const container = dailyEl.children[0];
+    assert.match(container.attrs["aria-label"], /NEXT 10\/15/);
+    assert.doesNotMatch(container.attrs["aria-label"], /over plan/);
+    const lint = container.children.find((child) =>
+      String(child.cls || "").includes("bob-plan-lint"),
+    );
+    assert.match(
+      lint.text,
+      /NEXT whole lane has 17\/15 tasks \(including TODAY\)/,
+    );
+    assert.equal(plugin.dashboardLaneWidgets.size, 0);
+  }, { todayIds });
+});
+
+test("daily and dashboard membership agree for exclusions and custom IN_PROGRESS", async () => {
+  const keepPending = pendingTask({
+    path: "notes/keep.md",
+    blockLink: " ^keep",
+    description: "keep",
+  });
+  const customPending = pendingTask({
+    path: "notes/custom.md",
+    blockLink: " ^custom",
+    description: "custom",
+    status: { type: "IN_PROGRESS", name: "Doing", symbol: ">" },
+  });
+  const keepNext = nextTask({
+    path: "notes/next.md",
+    blockLink: " ^next",
+    description: "next",
+  });
+  const tasks = [
+    keepPending,
+    customPending,
+    keepNext,
+    pendingTask({ path: "dash.md", blockLink: " ^dash", description: "dash" }),
+    pendingTask({
+      path: "_templates/t.md",
+      blockLink: " ^tpl",
+      description: "tpl",
+    }),
+    pendingTask({
+      path: "notes/_conflicts/a.md",
+      blockLink: " ^conf",
+      description: "conf",
+    }),
+    pendingTask({
+      path: "notes/h.md",
+      blockLink: " ^hide",
+      tags: ["#task", "#hide"],
+      description: "hide",
+    }),
+    pendingTask({
+      path: "notes/f.md",
+      blockLink: " ^fut",
+      scheduledDate: new Date(2099, 0, 1),
+      description: "future",
+    }),
+    pendingTask({
+      path: "notes/d.md",
+      blockLink: " ^done",
+      status: { type: "DONE", name: "Done", symbol: "x" },
+      description: "done",
+    }),
+    pendingTask({
+      path: "notes/b.md",
+      blockLink: " ^blk",
+      description: "blocked",
+      isBlocked: () => true,
+    }),
+    nextTask({
+      path: "notes/today-next.md",
+      blockLink: " ^today",
+      description: "today-next",
+    }),
+  ];
+  const todayIds = new Set([" ^today"]);
+  const pendingQuery = querySection(tasks, "pending", {
+    isToday: (t) => todayIds.has(t.blockLink),
+  });
+  const nextQuery = querySection(tasks, "next", {
+    isToday: (t) => todayIds.has(t.blockLink),
+  });
+  assert.deepEqual(
+    identities(pendingQuery),
+    identities([keepPending, customPending]),
+  );
+  assert.deepEqual(identities(nextQuery), identities([keepNext]));
+  await withParityPlugin(tasks, async (plugin) => {
+    const dailyEl = paintNode("div");
+    plugin.paintPlanBlock(dailyEl, "2026/20260930.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "pending")), "2/10");
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "1/15");
+    assert.equal(plugin.dashboardLaneBudget("pending").section, pendingQuery.length);
+    assert.equal(plugin.dashboardLaneBudget("next").section, nextQuery.length);
+  }, { todayIds });
+});
+
+test("daily paint refreshes with dashboard when Today, lane, and cap change", async () => {
+  const tasks = [
+    nextTask({ path: "notes/a.md", blockLink: " ^a", description: "a" }),
+    nextTask({ path: "notes/b.md", blockLink: " ^b", description: "b" }),
+  ];
+  const todayIds = new Set();
+  await withParityPlugin(tasks, async (plugin) => {
+    const dailyEl = paintNode("div");
+    const dashHost = paintNode("div");
+    plugin.renderPlanBlock(dailyEl, { sourcePath: "2026/20260930.md" });
+    await new Promise((resolve) => setImmediate(resolve));
+    const dash = plugin.renderDashboardLaneBadge(dashHost, {
+      lane: "next",
+      sourcePath: "dash.md",
+    });
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "2/15");
+    assert.equal(laneValue(dash), "2/15");
+    todayIds.add(" ^a");
+    plugin.rerenderPlanBlocks();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "1/15");
+    assert.equal(laneValue(dash), "1/15");
+    tasks[1].status = { type: "TODO", name: "Todo", symbol: " " };
+    plugin.rerenderPlanBlocks();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "0/15");
+    assert.equal(laneValue(dash), "0/15");
+    const extra = Array.from({ length: 16 }, (_, index) =>
+      nextTask({
+        path: `notes/x${index}.md`,
+        blockLink: ` ^x${index}`,
+        description: `x${index}`,
+      }),
+    );
+    tasks.push(...extra);
+    plugin.rerenderPlanBlocks();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "16/15");
+    assert.match(findLaneAnchor(dailyEl, "next").cls, /bob-plan-over/);
+    assert.match(dash.cls, /bob-plan-over/);
+    tasks.pop();
+    plugin.rerenderPlanBlocks();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "15/15");
+    assert.doesNotMatch(findLaneAnchor(dailyEl, "next").cls, /bob-plan-over/);
+    assert.doesNotMatch(dash.cls, /bob-plan-over/);
+  }, { todayIds });
+});
+
+test("older daily notes follow today's dashboard lanes", async () => {
+  const tasks = [
+    nextTask({ path: "notes/a.md", blockLink: " ^a", description: "a" }),
+    nextTask({ path: "notes/b.md", blockLink: " ^b", description: "b" }),
+  ];
+  await withParityPlugin(tasks, async (plugin) => {
+    const oldReads = [];
+    const originalRead = plugin.readPlanBlockContent.bind(plugin);
+    plugin.readPlanBlockContent = (path) => {
+      oldReads.push(path);
+      if (path === "2026/20250101.md") {
+        return Promise.resolve("## Pomodoros\n\n- [ ] () — OLD\n    - [[gone#^z]]\n");
+      }
+      return originalRead(path);
+    };
+    const dailyEl = paintNode("div");
+    plugin.paintPlanBlock(dailyEl, "2026/20250101.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(oldReads.includes("2026/20250101.md"));
+    const container = dailyEl.children[0];
+    assert.match(container.attrs["aria-label"], /TODAY 1\/3 · 1\/10/);
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "2/15");
+    const dashHost = paintNode("div");
+    const dash = plugin.paintDashboardLaneElement(
+      dashHost,
+      "next",
+      plugin.dashboardLaneBudget("next"),
+      { sourcePath: "dash.md" },
+    );
+    assert.equal(laneValue(dash), "2/15");
+  });
+});
+
+test("daily lane anchors keep shared navigation and reject stale paints", async () => {
+  const tasks = [
+    nextTask({ path: "notes/a.md", blockLink: " ^a", description: "a" }),
+  ];
+  const opens = [];
+  await withParityPlugin(tasks, async (plugin) => {
+    const dailyEl = paintNode("div");
+    plugin.paintPlanBlock(dailyEl, "notes/old-daily.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    const next = findLaneAnchor(dailyEl, "next");
+    assert.equal(next.attrs.role, "link");
+    assert.equal(next.attrs.tabindex, "0");
+    next.listeners.click[0]({
+      preventDefault() {},
+      ctrlKey: true,
+    });
+    assert.deepEqual(opens[0], {
+      linktext: "dash#NEXT Tasks",
+      sourcePath: "notes/old-daily.md",
+      newLeaf: true,
+    });
+    next.listeners.keydown[0]({
+      preventDefault() {},
+      key: "Enter",
+    });
+    assert.equal(opens[1].linktext, "dash#NEXT Tasks");
+    let releaseFirst;
+    plugin.readPlanBlockContent = () =>
+      new Promise((resolve) => {
+        releaseFirst = resolve;
+      });
+    plugin.paintPlanBlock(dailyEl, "notes/old-daily.md");
+    plugin.readPlanBlockContent = () =>
+      Promise.resolve("## Pomodoros\n\n- [ ] () — GOALS\n");
+    plugin.paintPlanBlock(dailyEl, "notes/old-daily.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseFirst("## Pomodoros\n\n- [ ] () — STALE\n");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(
+      dailyEl.children[0].attrs["aria-label"],
+      /STALE/,
+    );
+    assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "1/15");
+  }, { opens });
+});
+
+test("daily paint stays unavailable until Tasks and Today are ready", async () => {
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = "/definitely/missing/dashboard-parity-test";
+  try {
+    const plugin = new LedgerToolsPlugin(makeApp({}), {});
+    plugin.onload();
+    plugin.readPlanBlockContent = () =>
+      Promise.resolve("## Pomodoros\n\n- [ ] () — GOALS\n");
+    const el = paintNode("div");
+    plugin.paintPlanBlock(el, "2026/20260930.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(laneValue(findLaneAnchor(el, "next")), "–");
+    assert.doesNotMatch(findLaneAnchor(el, "next").cls, /bob-plan-over/);
+    plugin.onunload();
+  } finally {
+    if (savedXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = savedXdg;
+    }
+  }
+});

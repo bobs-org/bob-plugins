@@ -329,10 +329,12 @@ class BobLedgerToolsTodayLocationMixin {
             model.budget.status === "over" ? ", over plan" : ""
           }`,
         );
+        const todayToneCls = workToneClass(model.todayTone !== undefined ? model.todayTone : todayBadgeTone(model.budget));
+        const planBaseCls = `bob-plan-chip bob-plan-plan${
+          model.budget.status === "over" ? " bob-plan-over" : ""
+        }${!model.budget.hasSection ? " bob-plan-unavailable" : ""}`;
         const planChip = container.createEl("span", {
-          cls: `bob-plan-chip bob-plan-plan${
-            model.budget.status === "over" ? " bob-plan-over" : ""
-          }`,
+          cls: todayToneCls ? `${planBaseCls} ${todayToneCls}` : planBaseCls,
           text: model.planText,
           title: model.planTitle,
         });

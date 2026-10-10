@@ -236,6 +236,27 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
+      // Work badge tones (workBadges namespace v1): shared
+      // count-to-limit colors for TODAY, PENDING, NEXT, and READY.
+      // Additive: top-level api stays v3. Every member is synchronous
+      // and never throws.
+      workBadges: Object.freeze({
+        version: 1,
+        tone: (count, cap) => {
+          try {
+            return workBadgeTone(count, cap);
+          } catch (error) {
+            return null;
+          }
+        },
+        todayTone: (budget) => {
+          try {
+            return todayBadgeTone(budget);
+          } catch (error) {
+            return null;
+          }
+        },
+      }),
       // Task freshness (freshness namespace v9 adds the RECURRING
       // tier with the explicit `recurringTier` capability,
       // `byTier.recurring`, and `recurringDue`; v8 renamed the `returned`

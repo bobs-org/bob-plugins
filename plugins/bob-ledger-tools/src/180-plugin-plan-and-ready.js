@@ -301,8 +301,10 @@ class BobLedgerToolsPlanAndReadyMixin {
       const invalid = Boolean(options.invalid);
       const model = dashboardLaneBadgeModel(budget, normalized);
       const tooltip = model.tooltip + (invalid ? " Plan config invalid, using defaults." : "");
+      const toneCls = workToneClass(model.tone);
+      const baseCls = `bob-plan-chip bob-plan-${normalized}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
       const anchor = host.createEl("a", {
-        cls: `bob-plan-chip bob-plan-${normalized}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        cls: toneCls ? `${baseCls} ${toneCls}` : baseCls,
         title: tooltip,
         href: `dash#${label} Tasks`,
       });
@@ -463,22 +465,21 @@ class BobLedgerToolsPlanAndReadyMixin {
         const budget = this.dashboardLaneBudget(lane, now);
         const model = dashboardLaneBadgeModel(budget, lane);
         const tooltip = model.tooltip + (loaded.invalid ? " Plan config invalid, using defaults." : "");
+        const toneCls = workToneClass(model.tone);
+        const baseCls = `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+        const cls = toneCls ? `${baseCls} ${toneCls}` : baseCls;
         if (el && typeof el.setAttribute === "function") {
           try {
             el.setAttribute("title", tooltip);
             el.setAttribute("aria-label", model.aria);
-            el.setAttribute(
-              "class",
-              `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
-            );
+            el.setAttribute("class", cls);
           } catch (error) {
             // Best-effort label refresh only.
           }
         }
         try {
           if (el && typeof el.cls === "string") {
-            el.cls =
-              `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+            el.cls = cls;
           }
         } catch (error) {
           // Best-effort class refresh only.
@@ -546,8 +547,10 @@ class BobLedgerToolsPlanAndReadyMixin {
         invalid,
         lane: budget && budget.lane ? budget.lane : null,
       });
+      const toneCls = workToneClass(model.tone);
+      const baseCls = `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
       const anchor = host.createEl("a", {
-        cls: `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        cls: toneCls ? `${baseCls} ${toneCls}` : baseCls,
         title: model.tooltip,
         href: "dash#READY Tasks",
       });

@@ -101,6 +101,36 @@ a.bob-plan-ready:hover {
   --bob-plan-accent: var(--task-status-blocked, var(--color-red, #c65367));
 }
 
+/* Work badge tones: shared count-to-limit colors for TODAY, PENDING,
+   NEXT, and READY. These override the old per-lane accents and any Work
+   excess marker at equal specificity by source order. Never derived
+   from --task-status-*, which gives different meanings to the same hue.
+   Scoped to .bob-plan-chip so shared over/warn rules elsewhere keep
+   their behavior. */
+.bob-plan-chip.bob-work-tone-grey {
+  --bob-plan-accent: var(--text-muted, #8b8b8b);
+}
+
+.bob-plan-chip.bob-work-tone-blue {
+  --bob-plan-accent: var(--color-blue, #4f8ef7);
+}
+
+.bob-plan-chip.bob-work-tone-green {
+  --bob-plan-accent: var(--color-green, #3f8f5f);
+}
+
+.bob-plan-chip.bob-work-tone-yellow {
+  --bob-plan-accent: var(--color-yellow, #c69026);
+}
+
+.bob-plan-chip.bob-work-tone-orange {
+  --bob-plan-accent: var(--color-orange, #d9822b);
+}
+
+.bob-plan-chip.bob-work-tone-red {
+  --bob-plan-accent: var(--color-red, #c65367);
+}
+
 /* ROTTEN above zero but below escalation: orange, never the red that
    means over-cap or needs-confirmation. */
 .bob-plan-chip.bob-plan-warn {

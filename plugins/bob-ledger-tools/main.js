@@ -3393,6 +3393,7 @@ function dashboardLaneBadgeModel(budget, lane) {
       lane: null,
       today: null,
       cap,
+      tone: null,
     };
   }
   const sectionOver = section > cap;
@@ -3420,6 +3421,7 @@ function dashboardLaneBadgeModel(budget, lane) {
     lane: laneCount,
     today: todayText,
     cap,
+    tone: workBadgeTone(section, cap),
   };
 }
 
@@ -3531,6 +3533,7 @@ function readyBadgeModel(budget, options = {}) {
       placeholder: true,
       count: null,
       cap,
+      tone: null,
     };
   }
   const over = count > cap;
@@ -3569,6 +3572,7 @@ function readyBadgeModel(budget, options = {}) {
     placeholder: false,
     count,
     cap,
+    tone: workBadgeTone(count, cap),
   };
 }
 
@@ -3800,19 +3804,41 @@ function setReadyAnchorContent(anchor, model, options = {}) {
   } catch (error) {
     // Best-effort cleanup only.
   }
+  const resolvedTone = (() => {
+    try {
+      if (model && typeof model.tone === "string" && WORK_BADGE_TONES.indexOf(model.tone) !== -1) {
+        return model.tone;
+      }
+      if (!model || model.placeholder) {
+        return null;
+      }
+      const rawCount =
+        Number.isInteger(model.count) ? model.count
+        : Number.isInteger(model.section) ? model.section
+        : null;
+      const rawCap = Number.isInteger(model.cap) ? model.cap : null;
+      if (rawCount === null || rawCap === null) {
+        return null;
+      }
+      return workBadgeTone(rawCount, rawCap);
+    } catch (error) {
+      return null;
+    }
+  })();
+  const toneCls = workToneClass(resolvedTone);
+  const baseCls =
+    `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+  const cls = toneCls ? `${baseCls} ${toneCls}` : baseCls;
   if (typeof anchor.setAttribute === "function") {
     anchor.setAttribute("title", model.tooltip);
     anchor.setAttribute("aria-label", model.aria);
-    const cls =
-      `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
     anchor.setAttribute("class", cls);
     if (anchor.attrs && typeof anchor.attrs === "object") {
       anchor.attrs.class = cls;
     }
   }
   if (anchor && typeof anchor.cls === "string") {
-    anchor.cls =
-      `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+    anchor.cls = cls;
   }
   if (anchor && typeof anchor.title === "string") {
     anchor.title = model.tooltip;
@@ -3951,6 +3977,115 @@ function paintReviewElement(host, kind, review) {
   }
 }
 
+// ---- src/075-work-badge-tone.js ----
+// --- Work badge tones -------------------------------------------------------
+// Shared count-to-limit presentation for TODAY, PENDING, NEXT, and READY.
+// Precedence (exact comparisons, never rounded percentages):
+// n === 0 -> grey, 0 < n < L/2 -> blue, L/2 <= n < 3L/4 -> green,
+// 3L/4 <= n < L -> yellow, n === L -> orange, n > L -> red.
+// Invalid or missing input is unavailable (null), never numeric zero.
+const WORK_BADGE_TONES = ["grey", "blue", "green", "yellow", "orange", "red"];
+
+function workBadgeTone(count, cap) {
+  if (!Number.isInteger(count) || count < 0) {
+    return null;
+  }
+  if (!Number.isInteger(cap) || cap < 1) {
+    return null;
+  }
+  if (count === 0) {
+    return "grey";
+  }
+  if (count > cap) {
+    return "red";
+  }
+  if (count === cap) {
+    return "orange";
+  }
+  if (count >= (3 * cap) / 4) {
+    return "yellow";
+  }
+  if (count >= cap / 2) {
+    return "green";
+  }
+  return "blue";
+}
+
+// TODAY tone: ledger-availability check plus the theme-overflow override.
+// `budget` is a plan budget (`computePlanBudget` / `emptyPlanBudget`
+// shape). Missing section, missing/invalid theme or link meters, or a
+// missing budget is unavailable (null). Themes over cap force red,
+// including when links are zero; themes exactly at cap keep the
+// link-based tone. Both fractions remain displayed by callers.
+function todayBadgeTone(budget) {
+  try {
+    if (!budget || typeof budget !== "object" || Array.isArray(budget)) {
+      return null;
+    }
+    if (budget.hasSection !== true) {
+      return null;
+    }
+    const themes = budget.themes;
+    const links = budget.links;
+    if (!themes || typeof themes !== "object" || Array.isArray(themes)) {
+      return null;
+    }
+    if (!links || typeof links !== "object" || Array.isArray(links)) {
+      return null;
+    }
+    if (
+      !Number.isInteger(themes.count) ||
+      themes.count < 0 ||
+      !Number.isInteger(themes.cap) ||
+      themes.cap < 1
+    ) {
+      return null;
+    }
+    if (
+      !Number.isInteger(links.count) ||
+      links.count < 0 ||
+      !Number.isInteger(links.cap) ||
+      links.cap < 1
+    ) {
+      return null;
+    }
+    if (themes.count > themes.cap) {
+      return "red";
+    }
+    return workBadgeTone(links.count, links.cap);
+  } catch (error) {
+    return null;
+  }
+}
+
+function workToneClass(tone) {
+  if (typeof tone !== "string" || !tone) {
+    return "";
+  }
+  if (WORK_BADGE_TONES.indexOf(tone) === -1) {
+    return "";
+  }
+  return `bob-work-tone-${tone}`;
+}
+
+function workBadgeToneClass(count, cap) {
+  return workToneClass(workBadgeTone(count, cap));
+}
+
+// Append (or replace) the Work tone class on a chip class string without
+// accumulating stale tones. Keeps over/unavailable markers intact.
+function withWorkToneClass(baseCls, tone) {
+  const base = String(baseCls || "");
+  const cleaned = base
+    .replace(/\s*bob-work-tone-(grey|blue|green|yellow|orange|red)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const toneCls = workToneClass(tone);
+  if (!toneCls) {
+    return cleaned;
+  }
+  return cleaned ? `${cleaned} ${toneCls}` : toneCls;
+}
 // ---- src/080-freshness-placement.js ----
 // --- Task freshness: placement ----------------------------------------------
 // Owned by `docs/freshness.md` in bob-cli; the Rust half is
@@ -12754,6 +12889,27 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
+      // Work badge tones (workBadges namespace v1): shared
+      // count-to-limit colors for TODAY, PENDING, NEXT, and READY.
+      // Additive: top-level api stays v3. Every member is synchronous
+      // and never throws.
+      workBadges: Object.freeze({
+        version: 1,
+        tone: (count, cap) => {
+          try {
+            return workBadgeTone(count, cap);
+          } catch (error) {
+            return null;
+          }
+        },
+        todayTone: (budget) => {
+          try {
+            return todayBadgeTone(budget);
+          } catch (error) {
+            return null;
+          }
+        },
+      }),
       // Task freshness (freshness namespace v9 adds the RECURRING
       // tier with the explicit `recurringTier` capability,
       // `byTier.recurring`, and `recurringDue`; v8 renamed the `returned`
@@ -13645,8 +13801,10 @@ class BobLedgerToolsPlanAndReadyMixin {
       const invalid = Boolean(options.invalid);
       const model = dashboardLaneBadgeModel(budget, normalized);
       const tooltip = model.tooltip + (invalid ? " Plan config invalid, using defaults." : "");
+      const toneCls = workToneClass(model.tone);
+      const baseCls = `bob-plan-chip bob-plan-${normalized}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
       const anchor = host.createEl("a", {
-        cls: `bob-plan-chip bob-plan-${normalized}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        cls: toneCls ? `${baseCls} ${toneCls}` : baseCls,
         title: tooltip,
         href: `dash#${label} Tasks`,
       });
@@ -13807,22 +13965,21 @@ class BobLedgerToolsPlanAndReadyMixin {
         const budget = this.dashboardLaneBudget(lane, now);
         const model = dashboardLaneBadgeModel(budget, lane);
         const tooltip = model.tooltip + (loaded.invalid ? " Plan config invalid, using defaults." : "");
+        const toneCls = workToneClass(model.tone);
+        const baseCls = `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+        const cls = toneCls ? `${baseCls} ${toneCls}` : baseCls;
         if (el && typeof el.setAttribute === "function") {
           try {
             el.setAttribute("title", tooltip);
             el.setAttribute("aria-label", model.aria);
-            el.setAttribute(
-              "class",
-              `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
-            );
+            el.setAttribute("class", cls);
           } catch (error) {
             // Best-effort label refresh only.
           }
         }
         try {
           if (el && typeof el.cls === "string") {
-            el.cls =
-              `bob-plan-chip bob-plan-${lane}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+            el.cls = cls;
           }
         } catch (error) {
           // Best-effort class refresh only.
@@ -13890,8 +14047,10 @@ class BobLedgerToolsPlanAndReadyMixin {
         invalid,
         lane: budget && budget.lane ? budget.lane : null,
       });
+      const toneCls = workToneClass(model.tone);
+      const baseCls = `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
       const anchor = host.createEl("a", {
-        cls: `bob-plan-chip bob-plan-ready${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        cls: toneCls ? `${baseCls} ${toneCls}` : baseCls,
         title: model.tooltip,
         href: "dash#READY Tasks",
       });
@@ -26281,10 +26440,12 @@ class BobLedgerToolsTodayLocationMixin {
             model.budget.status === "over" ? ", over plan" : ""
           }`,
         );
+        const todayToneCls = workToneClass(model.todayTone !== undefined ? model.todayTone : todayBadgeTone(model.budget));
+        const planBaseCls = `bob-plan-chip bob-plan-plan${
+          model.budget.status === "over" ? " bob-plan-over" : ""
+        }${!model.budget.hasSection ? " bob-plan-unavailable" : ""}`;
         const planChip = container.createEl("span", {
-          cls: `bob-plan-chip bob-plan-plan${
-            model.budget.status === "over" ? " bob-plan-over" : ""
-          }`,
+          cls: todayToneCls ? `${planBaseCls} ${todayToneCls}` : planBaseCls,
           text: model.planText,
           title: model.planTitle,
         });
@@ -28885,6 +29046,12 @@ function planBlockModel({
       : { count: null, cap: effective.maxReady },
     reviewLane ? { lane: reviewLane } : {},
   );
+  let todayTone = null;
+  try {
+    todayTone = todayBadgeTone(budget);
+  } catch (error) {
+    todayTone = null;
+  }
   return {
     targetPath,
     hasContent: typeof content === "string",
@@ -28892,6 +29059,7 @@ function planBlockModel({
     planText: budget.hasSection
       ? `TODAY ${budget.themes.count}/${budget.themes.cap} · ${budget.links.count}/${budget.links.cap}`
       : "TODAY –",
+    todayTone,
     planTitle: budget.hasSection
       ? themeCounts.join(" · ") || "no themes"
       : "no Pomodoros section",
@@ -29002,6 +29170,12 @@ module.exports.helpers = {
   laneBudgetFromTasks,
   dashboardLaneBudgetFromTasks,
   dashboardLaneBadgeModel,
+  workBadgeTone,
+  todayBadgeTone,
+  workToneClass,
+  workBadgeToneClass,
+  withWorkToneClass,
+  WORK_BADGE_TONES,
   dashboardLaneSectionVisible,
   dashboardLaneStatusMatches,
   dashboardSectionBaseVisible,

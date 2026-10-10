@@ -920,6 +920,12 @@ function planBlockModel({
       : { count: null, cap: effective.maxReady },
     reviewLane ? { lane: reviewLane } : {},
   );
+  let todayTone = null;
+  try {
+    todayTone = todayBadgeTone(budget);
+  } catch (error) {
+    todayTone = null;
+  }
   return {
     targetPath,
     hasContent: typeof content === "string",
@@ -927,6 +933,7 @@ function planBlockModel({
     planText: budget.hasSection
       ? `TODAY ${budget.themes.count}/${budget.themes.cap} · ${budget.links.count}/${budget.links.cap}`
       : "TODAY –",
+    todayTone,
     planTitle: budget.hasSection
       ? themeCounts.join(" · ") || "no themes"
       : "no Pomodoros section",

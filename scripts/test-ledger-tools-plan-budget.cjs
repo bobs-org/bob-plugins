@@ -697,3 +697,20 @@ test("planBlockModel keeps a supplied unavailable dashboard budget", () => {
   assert.equal(model.nextModel.over, false);
   assert.equal(model.next.count, 1);
 });
+
+test("work tones: TODAY override and unavailable stay neutral in planBlockModel", () => {
+  const { todayBadgeTone, workBadgeTone } = helpers;
+  assert.equal(todayBadgeTone({ hasSection: false }), null);
+  const model = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] () — A\n    - [[x#^one]]\n",
+    tasks: [],
+    today: new Date(2026, 9, 10),
+    caps: defaultPlanCaps(),
+    sourcePath: "2026/20261010.md",
+    app: null,
+    isToday: () => false,
+  });
+  assert.equal(model.todayTone, "blue");
+  assert.equal(model.nextModel.tone, workBadgeTone(model.nextModel.section, model.nextModel.cap));
+  assert.equal(model.pendingModel.tone, workBadgeTone(model.pendingModel.section, model.pendingModel.cap));
+});

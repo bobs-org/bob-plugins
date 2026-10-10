@@ -1643,3 +1643,12 @@ test("daily paint degrades to the legacy tooltip without freshness", async () =>
     }
   }
 });
+
+test("work tones: READY model carries the displayed-count tone", () => {
+  const { readyBadgeModel, workBadgeTone } = helpers;
+  assert.equal(readyBadgeModel({ count: 0, cap: 100, over: false }).tone, "grey");
+  assert.equal(readyBadgeModel({ count: 50, cap: 100, over: false }).tone, workBadgeTone(50, 100));
+  assert.equal(readyBadgeModel({ count: 100, cap: 100, over: false }).tone, "orange");
+  assert.equal(readyBadgeModel({ count: 101, cap: 100, over: true }).tone, "red");
+  assert.equal(readyBadgeModel({ count: null, cap: 100, over: false }).tone, null);
+});

@@ -1120,3 +1120,14 @@ test("daily paint stays unavailable until Tasks and Today are ready", async () =
     }
   }
 });
+
+test("work tones: dashboard lane models carry section tones", () => {
+  const { dashboardLaneBadgeModel, workBadgeTone } = helpers;
+  const green = dashboardLaneBadgeModel({ section: 10, lane: 17, count: 10, laneCount: 17, today: 7, cap: 15, over: false }, "next");
+  assert.equal(green.tone, "green");
+  assert.equal(green.tone, workBadgeTone(10, 15));
+  const orange = dashboardLaneBadgeModel({ section: 15, lane: 16, count: 15, laneCount: 16, today: 1, cap: 15, over: false }, "next");
+  assert.equal(orange.tone, "orange");
+  const missing = dashboardLaneBadgeModel({ section: null, lane: null, count: null, laneCount: null, today: null, cap: 15, over: false }, "next");
+  assert.equal(missing.tone, null);
+});

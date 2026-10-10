@@ -209,6 +209,7 @@ function dashboardLaneBadgeModel(budget, lane) {
       lane: null,
       today: null,
       cap,
+      tone: null,
     };
   }
   const sectionOver = section > cap;
@@ -236,6 +237,7 @@ function dashboardLaneBadgeModel(budget, lane) {
     lane: laneCount,
     today: todayText,
     cap,
+    tone: workBadgeTone(section, cap),
   };
 }
 
@@ -347,6 +349,7 @@ function readyBadgeModel(budget, options = {}) {
       placeholder: true,
       count: null,
       cap,
+      tone: null,
     };
   }
   const over = count > cap;
@@ -385,6 +388,7 @@ function readyBadgeModel(budget, options = {}) {
     placeholder: false,
     count,
     cap,
+    tone: workBadgeTone(count, cap),
   };
 }
 
@@ -616,19 +620,41 @@ function setReadyAnchorContent(anchor, model, options = {}) {
   } catch (error) {
     // Best-effort cleanup only.
   }
+  const resolvedTone = (() => {
+    try {
+      if (model && typeof model.tone === "string" && WORK_BADGE_TONES.indexOf(model.tone) !== -1) {
+        return model.tone;
+      }
+      if (!model || model.placeholder) {
+        return null;
+      }
+      const rawCount =
+        Number.isInteger(model.count) ? model.count
+        : Number.isInteger(model.section) ? model.section
+        : null;
+      const rawCap = Number.isInteger(model.cap) ? model.cap : null;
+      if (rawCount === null || rawCap === null) {
+        return null;
+      }
+      return workBadgeTone(rawCount, rawCap);
+    } catch (error) {
+      return null;
+    }
+  })();
+  const toneCls = workToneClass(resolvedTone);
+  const baseCls =
+    `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+  const cls = toneCls ? `${baseCls} ${toneCls}` : baseCls;
   if (typeof anchor.setAttribute === "function") {
     anchor.setAttribute("title", model.tooltip);
     anchor.setAttribute("aria-label", model.aria);
-    const cls =
-      `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
     anchor.setAttribute("class", cls);
     if (anchor.attrs && typeof anchor.attrs === "object") {
       anchor.attrs.class = cls;
     }
   }
   if (anchor && typeof anchor.cls === "string") {
-    anchor.cls =
-      `bob-plan-chip bob-plan-${kind}${model.over ? " bob-plan-over" : ""}${model.placeholder ? " bob-plan-unavailable" : ""}`;
+    anchor.cls = cls;
   }
   if (anchor && typeof anchor.title === "string") {
     anchor.title = model.tooltip;

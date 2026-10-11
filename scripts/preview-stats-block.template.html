@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob Stats production renderer preview</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { font: 14px/1.45 system-ui, sans-serif; padding: 0 0 24px; }
+    body.theme-light {
+      color-scheme: light; --background-primary: #fff; --background-secondary: #f6f5f2;
+      --background-modifier-border: #d8d5cf; --background-modifier-hover: #eeece8;
+      --text-normal: #262521; --text-muted: #6f6c65; --interactive-accent: #6556c8;
+      --interactive-accent-hover: #5143ad; --shadow-s: 0 3px 12px #18161124;
+      background: #eeece8; color: var(--text-normal);
+    }
+    body.theme-dark {
+      color-scheme: dark; --background-primary: #202124; --background-secondary: #292a2e;
+      --background-modifier-border: #45464c; --background-modifier-hover: #34363b;
+      --text-normal: #e7e6e2; --text-muted: #a4a3a0; --interactive-accent: #9a8cf0;
+      --interactive-accent-hover: #b2a9ff; --shadow-s: 0 3px 14px #0008;
+      background: #17181a; color: var(--text-normal);
+    }
+    .preview-shell { margin: 0 auto; padding: 12px; background: var(--background-primary); }
+    .preview-heading { margin: 0 0 10px; font-size: 20px; }
+    .preview-case { min-width: 0; margin: 0 0 20px; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); }
+    .preview-case-title { margin: 0 0 8px; color: var(--text-muted); font-size: 12px; font-weight: 650; letter-spacing: .02em; }
+    .preview-block { min-width: 0; width: 100%; }
+    .preview-empty { color: var(--text-muted); padding: 8px; }
+    .bob-stats { min-width: 0; max-width: 100%; }
+  </style>
+  <style id="production-stats-css">__PRODUCTION_STATS_CSS__</style>
+</head>
+<body class="theme-light">
+  <main id="preview-root"></main>
+  <script>
+  (() => {
+    "use strict";
+    const pluginSource = __PLUGIN_SOURCE_JSON__;
+    const fixtureReports = __FIXTURE_REPORTS_JSON__;
+    const noOp = () => {};
+    class PreviewPluginBase {
+      constructor(app) { this.app = app; }
+      addCommand() {}
+      registerEvent() {}
+      registerInterval() {}
+      registerMarkdownCodeBlockProcessor() {}
+      registerEditorExtension() {}
+    }
+    const obsidian = {
+      Plugin: PreviewPluginBase,
+      MarkdownRenderChild: class MarkdownRenderChild { constructor(containerEl) { this.containerEl = containerEl; } },
+      MarkdownView: class MarkdownView {},
+      Notice: class Notice { constructor(message) { this.message = message; } },
+      Platform: { isDesktopApp: false },
+      normalizePath: (value) => value,
+      parseYaml: () => ({}),
+    };
+    const codemirrorState = { Prec: { highest: (value) => value }, StateEffect: { define: () => ({}) }, RangeSetBuilder: class {} };
+    const codemirrorView = { EditorView: { updateListener: { of: (fn) => ({ fn }) } }, keymap: { of: (value) => value } };
+    const modules = {
+      obsidian,
+      "@codemirror/state": codemirrorState,
+      "@codemirror/view": codemirrorView,
+      "@codemirror/language": { syntaxTree: null },
+    };
+    const browserRequire = (name) => modules[name] || {};
+    const moduleObject = { exports: {} };
+    new Function("require", "module", "exports", "process", pluginSource)(
+      browserRequire,
+      moduleObject,
+      moduleObject.exports,
+      { env: { HOME: "/" } },
+    );
+    const StatsPlugin = moduleObject.exports;
+    const openedLinks = [];
+    let plugin = null;
+    let views = [];
+    let fetchCount = 0;
+
+    function createPlugin() {
+      openedLinks.length = 0;
+      fetchCount = 0;
+      const app = { workspace: { openLinkText: (...args) => openedLinks.push(args) } };
+      const instance = new StatsPlugin(app);
+      instance.statsBlockViews = new Set();
+      instance.statsViewStates = new Map();
+      instance.statsPaintGens = new Map();
+      instance.statsCache = new Map();
+      instance.apiStatsFetch = async () => { fetchCount += 1; return { report: null }; };
+      return instance;
+    }
+
+    function releaseViews() {
+      for (const view of views) {
+        if (plugin && typeof plugin.statsReleaseChartView === "function") plugin.statsReleaseChartView(view);
+      }
+      views = [];
+    }
+
+    function makeView(report, focus, name, settings = {}) {
+      const card = document.createElement("article");
+      card.className = "preview-case";
+      const title = document.createElement("h2");
+      title.className = "preview-case-title";
+      title.textContent = settings.title || `${report.presentation_fixture ? "Synthetic" : "Golden vault"} · ${focus || "empty"}`;
+      card.appendChild(title);
+      const container = document.createElement("div");
+      container.className = "preview-block";
+      card.appendChild(container);
+      document.querySelector("#preview-root").appendChild(card);
+      const view = { el: container, sourcePath: `preview/${name}.md`, fence: {} };
+      const state = plugin.statsViewStateFor(view.sourcePath);
+      state.focus = focus;
+      state.table = settings.table === true;
+      state.definitionOpen = settings.definitionOpen === true;
+      state.compare = settings.compare === true;
+      plugin.statsBlockViews.add(view);
+      views.push(view);
+      plugin.renderStatsResult(view, { report, stale: false });
+      return view;
+    }
+
+    function renderMatrix(width, theme) {
+      releaseViews();
+      if (plugin) plugin.teardownStatsBlock();
+      plugin = createPlugin();
+      document.body.className = `theme-${theme}`;
+      document.documentElement.className = `theme-${theme}`;
+      const shell = document.querySelector("#preview-root");
+      shell.replaceChildren();
+      shell.className = "preview-shell";
+      shell.style.width = `${width}px`;
+      const heading = document.createElement("h1");
+      heading.className = "preview-heading";
+      heading.textContent = `Daily Stats · ${width}px · ${theme}`;
+      shell.appendChild(heading);
+      const canonical = fixtureReports.canonical;
+      const cases = [
+        ["worked", canonical, "worked", { title: "Pomodoro themes · chart, definition, tooltip, and table", table: true, definitionOpen: true }],
+        ["tasks", canonical, "done", { title: "Task breakdown" }],
+        ["flow", canonical, "net", { title: "Signed task flow" }],
+        ["answers", canonical, "reviewed", { title: "Review answers" }],
+        ["keep", canonical, "keep_rate", { title: "Keep rate and review-time context" }],
+        ["checklist", canonical, "habits", { title: "Checklist calendar and chore grid" }],
+        ["month", fixtureReports.month, "net", { title: "Synthetic month buckets · signed values, medians, prior ticks, and long labels" }],
+        ["week", fixtureReports.week, "worked", { title: "Synthetic week buckets · daily-point drill-down" }],
+        ["all-null", fixtureReports.allNull, "worked", { title: "Synthetic all-null report" }],
+        ["empty", fixtureReports.empty, null, { title: "Synthetic empty report" }],
+      ];
+      for (const [name, report, focus, settings] of cases) makeView(report, focus, `${name}-${width}-${theme}`, settings);
+      return {
+        width,
+        theme,
+        containerWidth: shell.getBoundingClientRect().width,
+        chartCount: shell.querySelectorAll(".bob-stats-chart-section").length,
+        panelCount: shell.querySelectorAll(".bob-stats-panel").length,
+        tableVisible: Boolean(shell.querySelector(".bob-stats-table")),
+        definitionVisible: Boolean(shell.querySelector(".bob-stats-definition-panel")),
+        tooltipVisible: Boolean(views[0] && views[0].chartTooltip && !views[0].chartTooltip.hasAttribute("hidden")),
+        pageScrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    }
+
+    function renderSingle(fixtureName = "canonical", focus = "worked", width = 1000, theme = "light") {
+      releaseViews();
+      if (plugin) plugin.teardownStatsBlock();
+      plugin = createPlugin();
+      document.body.className = `theme-${theme}`;
+      document.documentElement.className = `theme-${theme}`;
+      const shell = document.querySelector("#preview-root");
+      shell.replaceChildren();
+      shell.className = "preview-shell";
+      shell.style.width = `${width}px`;
+      const report = fixtureReports[fixtureName];
+      const view = makeView(report, focus, `single-${fixtureName}-${focus}`, { title: `${fixtureName} / ${focus}` });
+      return view;
+    }
+
+    window.statsPreview = {
+      renderMatrix,
+      renderSingle,
+      fixtures: fixtureReports,
+      get plugin() { return plugin; },
+      get views() { return views; },
+      get openedLinks() { return openedLinks; },
+      get fetchCount() { return fetchCount; },
+      get shell() { return document.querySelector("#preview-root"); },
+      stateFor(view) { return plugin.statsViewStateFor(view && view.sourcePath); },
+    };
+    window.__statsPreviewReady = true;
+  })();
+  </script>
+</body>
+</html>

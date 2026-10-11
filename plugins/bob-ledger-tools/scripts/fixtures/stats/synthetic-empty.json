@@ -1,0 +1,60 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "today": "2026-10-11",
+  "range": {
+    "offset": 0,
+    "start": "2026-10-08",
+    "end": "2026-10-10",
+    "days": 3,
+    "includes_today": true,
+    "group": "day",
+    "label": "No observations",
+    "prior": {
+      "start": "2026-10-05",
+      "end": "2026-10-07",
+      "label": "Oct 5 – Oct 7"
+    }
+  },
+  "metrics": [],
+  "health": {
+    "journal": {
+      "since": "2026-10-08",
+      "malformed_lines": 1,
+      "hosts": [
+        {
+          "host": "apollo",
+          "events": 5,
+          "last_ts": "2026-10-11T09:00:00-04:00",
+          "last_day": "2026-10-11"
+        },
+        {
+          "host": "hermes",
+          "events": 1,
+          "last_ts": "2026-10-10T08:00:00-04:00",
+          "last_day": "2026-10-10"
+        }
+      ]
+    },
+    "tasks": {
+      "invalid_dates": 1,
+      "closed_without_date": 0,
+      "missing_created": 1
+    }
+  },
+  "warnings": [
+    {
+      "code": "journal_gap",
+      "metric": "reviewed",
+      "date": "2026-10-09",
+      "message": "Review closed on Fri, Oct 9 but no answers were recorded: the review plugin may be outdated or a write failed"
+    },
+    {
+      "code": "journal_gap",
+      "metric": "keep_rate",
+      "date": "2026-10-09",
+      "message": "Review closed on Fri, Oct 9 but no answers were recorded: the review plugin may be outdated or a write failed"
+    }
+  ],
+  "presentation_fixture": "Synthetic empty report: no metrics are available."
+}

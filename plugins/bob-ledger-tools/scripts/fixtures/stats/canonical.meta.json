@@ -1,0 +1,9 @@
+{
+  "fixture_version": "stats-browser-preview-canonical-1",
+  "schema_version": 1,
+  "source": "bob-cli tests/fixtures/stats/vault",
+  "bob_cli_version": "0.1.0",
+  "bob_cli_revision": "ab314c061da8",
+  "bob_now": "2026-10-11 12:00:00",
+  "requested_range": "2026-10-08..2026-10-11"
+}

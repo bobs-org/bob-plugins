@@ -1,6 +1,7 @@
 const STATS_REVIEW_DIRECTORY = ".bob/stats/review";
 const STATS_REVIEW_KIND = "review.answer";
 const STATS_REVIEW_PLUGIN = "bob-navigation-hotkeys@2.x";
+const STATS_REVIEW_PLUGIN_PATTERN = /^[a-z0-9-]+@\d+\.\d+\.\d+$/;
 const STATS_REVIEW_OUTCOMES = new Set([
   "keep",
   "done",
@@ -14,10 +15,29 @@ const STATS_REVIEW_OUTCOMES = new Set([
   "checklist",
 ]);
 
+function statsInvalidReviewEvent(message) {
+  const error = new TypeError(message);
+  error.code = "invalid_review_event";
+  return error;
+}
+
+function statsReviewHost(raw) {
+  const cut = String(raw || "")
+    .toLowerCase()
+    .split(".")[0];
+  const sanitized = cut.replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized || "host";
+}
+
+function statsReviewPlugin(value) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return STATS_REVIEW_PLUGIN_PATTERN.test(raw) ? raw : STATS_REVIEW_PLUGIN;
+}
+
 function statsReviewDay(value) {
   const day = typeof value === "string" ? value.trim() : "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
-    throw new TypeError("Review journal day must be YYYY-MM-DD");
+    throw statsInvalidReviewEvent("Review journal day must be YYYY-MM-DD");
   }
   const [year, month, date] = day.split("-").map(Number);
   const parsed = new Date(year, month - 1, date);
@@ -26,7 +46,7 @@ function statsReviewDay(value) {
     parsed.getMonth() !== month - 1 ||
     parsed.getDate() !== date
   ) {
-    throw new TypeError("Review journal day must be a real calendar date");
+    throw statsInvalidReviewEvent("Review journal day must be a real calendar date");
   }
   return day;
 }
@@ -55,10 +75,23 @@ async function statsReviewEnsureDirectory(adapter, path) {
 }
 
 class BobLedgerToolsStatsJournalMixin {
+  apiStatsHost() {
+    try {
+      const osModule = planRequireOptionalNodeModule("os");
+      const raw =
+        osModule && typeof osModule.hostname === "function"
+          ? String(osModule.hostname() || "")
+          : "";
+      return statsReviewHost(raw);
+    } catch (error) {
+      return "host";
+    }
+  }
+
   apiStatsAppend(event) {
     const run = async () => {
       if (!event || typeof event !== "object" || Array.isArray(event)) {
-        throw new TypeError("Review journal event must be an object");
+        throw statsInvalidReviewEvent("Review journal event must be an object");
       }
       const day = statsReviewDay(event.day);
       const tier = typeof event.tier === "string" ? event.tier.trim() : "";
@@ -68,17 +101,16 @@ class BobLedgerToolsStatsJournalMixin {
         STATS_REVIEW_OUTCOMES.has(outcome) ||
         /^decay:(?:notNow|level:\d+|lessOften|reword|drop|keep)$/.test(outcome);
       if (!tier || !key || !validOutcome) {
-        throw new TypeError("Review journal event has an invalid tier, key, or outcome");
+        throw statsInvalidReviewEvent(
+          "Review journal event has an invalid tier, key, or outcome",
+        );
       }
       const osModule = planRequireOptionalNodeModule("os");
       const rawHost =
         osModule && typeof osModule.hostname === "function"
           ? String(osModule.hostname() || "")
           : "";
-      const host = rawHost.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^\.+|\.+$/g, "");
-      if (!host) {
-        throw new Error("Could not determine the review journal host name");
-      }
+      const host = statsReviewHost(rawHost);
       const adapter = this.app && this.app.vault && this.app.vault.adapter;
       if (
         !adapter ||
@@ -105,7 +137,7 @@ class BobLedgerToolsStatsJournalMixin {
         tier,
         outcome,
         key,
-        plugin: STATS_REVIEW_PLUGIN,
+        plugin: statsReviewPlugin(event.plugin),
       };
       await adapter.append(path, `${JSON.stringify(record)}\n`);
       try {

@@ -4,6 +4,10 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.reviewJournalPending = [];
     this.reviewJournalDraining = false;
     this.reviewJournalRetryTimer = null;
+    this.reviewJournalBurst = false;
+    this.reviewJournalMissingApiNoticed = false;
+    this.reviewJournalDropped = 0;
+    this.reviewJournalDropWarned = false;
     this.currentFilePath = null;
     this.alternateFilePath = null;
     this.filePositions = new Map();
@@ -378,6 +382,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
       clearTimeout(this.reviewJournalRetryTimer);
       this.reviewJournalRetryTimer = null;
     }
+    this.reviewJournalDraining = false;
+    this.reviewJournalBurst = false;
+    this.reviewJournalDropWarned = false;
     this.linkPickerRequestToken = (this.linkPickerRequestToken || 0) + 1;
     if (this.activeBulletPropertyPicker) {
       try {

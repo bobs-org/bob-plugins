@@ -308,6 +308,7 @@ test("stats api v2 keeps append and adds fetch plus bobPath", async () => {
       assert.equal(plugin.api.version, 3);
       assert.equal(plugin.api.stats.version, 2);
       assert.equal(typeof plugin.api.stats.append, "function");
+      assert.equal(typeof plugin.api.stats.host, "function");
       assert.equal(typeof plugin.api.stats.fetch, "function");
       assert.equal(typeof plugin.api.stats.bobPath, "function");
       const resolved = plugin.api.stats.bobPath();

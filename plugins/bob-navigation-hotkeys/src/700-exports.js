@@ -332,6 +332,7 @@ module.exports.helpers = {
   REVIEW_ADVANCE_SETTLE_MS,
   REVIEW_WALK_BUSY,
   reviewOutcomeResolves,
+  reviewCardJournalOutcome,
   reviewJournalOutcome,
   buildReviewAnswerEvents,
   createReviewWalkApi,

@@ -238,11 +238,13 @@ class BobLedgerToolsPlugin extends Plugin {
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
       // Review journal writer (stats namespace v1) plus the Stats page
-      // data path (v2 adds `fetch` and `bobPath`). Appends one validated
-      // answer event to this host's monthly JSONL file. Additive: api stays v3.
+      // data path (v2 adds `fetch` and `bobPath`). `host()` is the v1
+      // sanitizer; appends one validated answer event to this host's
+      // monthly JSONL file. Additive: api stays v3.
       stats: Object.freeze({
         version: 2,
         append: (event) => this.apiStatsAppend(event),
+        host: () => this.apiStatsHost(),
         fetch: (options) => this.apiStatsFetch(options),
         bobPath: () => this.apiStatsBobPath(),
       }),

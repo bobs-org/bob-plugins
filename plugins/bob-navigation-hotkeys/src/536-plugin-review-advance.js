@@ -424,7 +424,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       );
       this.recordReviewAnswer(
         origin,
-        input && (input.journalOutcome || input.outcome || input.kind),
+        input,
         Array.isArray(answerKeys.answeredRefs) ? answerKeys.answeredRefs : [],
       );
       const before = Array.isArray(origin.queueBefore) ? origin.queueBefore : [];

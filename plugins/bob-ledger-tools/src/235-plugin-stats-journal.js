@@ -108,6 +108,13 @@ class BobLedgerToolsStatsJournalMixin {
         plugin: STATS_REVIEW_PLUGIN,
       };
       await adapter.append(path, `${JSON.stringify(record)}\n`);
+      try {
+        if (typeof this.statsAfterJournalAppend === "function") {
+          this.statsAfterJournalAppend();
+        }
+      } catch (error) {
+        // Journal revalidation is best-effort.
+      }
       return record;
     };
     const previous = this.statsAppendQueue || Promise.resolve();

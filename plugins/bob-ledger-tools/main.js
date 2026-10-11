@@ -12890,11 +12890,14 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Review journal writer (stats namespace v1). Appends one validated
+      // Review journal writer (stats namespace v1) plus the Stats page
+      // data path (v2 adds `fetch` and `bobPath`). Appends one validated
       // answer event to this host's monthly JSONL file. Additive: api stays v3.
       stats: Object.freeze({
-        version: 1,
+        version: 2,
         append: (event) => this.apiStatsAppend(event),
+        fetch: (options) => this.apiStatsFetch(options),
+        bobPath: () => this.apiStatsBobPath(),
       }),
       // Work badge tones (workBadges namespace v1): shared
       // count-to-limit colors for TODAY, PENDING, NEXT, and READY.
@@ -13260,6 +13263,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
+    this.setupStatsBlock();
   }
 
   onunload() {
@@ -13337,6 +13341,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.readyLastDay = null;
     if (this.planPaintGens) {
       this.planPaintGens.clear();
+    }
+    try {
+      this.teardownStatsBlock();
+    } catch (error) {
+      // Stats teardown is best-effort.
     }
     this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
     if (
@@ -18249,12 +18258,1761 @@ class BobLedgerToolsStatsJournalMixin {
         plugin: STATS_REVIEW_PLUGIN,
       };
       await adapter.append(path, `${JSON.stringify(record)}\n`);
+      try {
+        if (typeof this.statsAfterJournalAppend === "function") {
+          this.statsAfterJournalAppend();
+        }
+      } catch (error) {
+        // Journal revalidation is best-effort.
+      }
       return record;
     };
     const previous = this.statsAppendQueue || Promise.resolve();
     const pending = Promise.resolve(previous).catch(() => {}).then(run);
     this.statsAppendQueue = pending.catch(() => {});
     return pending;
+  }
+}
+// ---- src/236-plugin-stats-data.js ----
+// --- Daily Stats data path (api.stats v2, bob-cli-6l page) -------------------
+// Spawns `bob stats show -a -f json` with stale-while-revalidate caching so
+// one call serves tiles, focus, and panels. bob-cli owns every value,
+// summary, and display string; this file only moves JSON. Readers decode
+// defensively and reject only a different `schema_version`.
+
+const STATS_FETCH_TIMEOUT_MS = 20000;
+const STATS_FETCH_MAX_BUFFER = 32 * 1024 * 1024;
+const STATS_CACHE_SIZE = 8;
+const STATS_REVALIDATE_DEBOUNCE_MS = 3000;
+const STATS_SCHEMA_VERSION = 1;
+const STATS_RANGE_PRESETS = ["7d", "4w", "3m", "1y", "all"];
+const STATS_DEFAULT_RANGE = "4w";
+// GUI Obsidian on macOS lacks the shell PATH, so desktop `bob` resolution
+// tries these before falling back to `bob` on PATH.
+const STATS_BOB_CANDIDATES = [
+  ".cargo/bin/bob",
+  ".local/bin/bob",
+  "/opt/homebrew/bin/bob",
+  "/usr/local/bin/bob",
+];
+
+function statsExpandHome(rawPath, home) {
+  const text = typeof rawPath === "string" ? rawPath : "";
+  if (text === "~") {
+    return typeof home === "string" && home ? home : text;
+  }
+  if (text.startsWith("~/")) {
+    return typeof home === "string" && home ? home + text.slice(1) : text;
+  }
+  return text;
+}
+
+function statsHomeDir(options = {}) {
+  try {
+    const osModule = options.osModule;
+    if (osModule && typeof osModule.homedir === "function") {
+      const home = osModule.homedir();
+      if (typeof home === "string" && home.trim()) {
+        return home;
+      }
+    }
+  } catch (error) {
+    // Fall through to $HOME below.
+  }
+  try {
+    const env = options.env;
+    if (env && typeof env.HOME === "string" && env.HOME.trim()) {
+      return env.HOME;
+    }
+  } catch (error) {
+    // Fall through to "" below.
+  }
+  return "";
+}
+
+// Resolve the `bob` binary: `stats.bob_path` (tilde-expanded) first, then
+// the well-known install locations, else `bob` on PATH. Never throws.
+// Returns `{ path, source }` with source `config | candidate | path`.
+function statsResolveBobPath(options = {}) {
+  const home = options.home !== undefined ? options.home : statsHomeDir(options);
+  const configured =
+    typeof options.configured === "string" && options.configured.trim()
+      ? statsExpandHome(options.configured.trim(), home)
+      : "";
+  if (configured) {
+    return { path: configured, source: "config" };
+  }
+  const existsSync =
+    options.existsSync ||
+    (() => {
+      try {
+        const fsModule = planRequireOptionalNodeModule("fs");
+        return fsModule && typeof fsModule.existsSync === "function"
+          ? (candidate) => {
+              try {
+                return fsModule.existsSync(candidate);
+              } catch (error) {
+                return false;
+              }
+            }
+          : () => false;
+      } catch (error) {
+        return () => false;
+      }
+    })();
+  for (const relative of STATS_BOB_CANDIDATES) {
+    try {
+      const candidate = home ? `${home}/${relative}` : relative;
+      if (existsSync(candidate)) {
+        return { path: candidate, source: "candidate" };
+      }
+    } catch (error) {
+      // Try the next candidate.
+    }
+  }
+  return { path: "bob", source: "path" };
+}
+
+// Read one `stats.<key>` value from the bob config file, guarded for
+// mobile and missing files. Returns undefined when unreadable.
+function statsReadConfigValue(key, options = {}) {
+  try {
+    const fsModule =
+      options.fsModule === undefined
+        ? planRequireOptionalNodeModule("fs")
+        : options.fsModule;
+    if (!fsModule || typeof fsModule.readFileSync !== "function") {
+      return undefined;
+    }
+    const yamlParser =
+      options.parseYaml === undefined ? parseYaml : options.parseYaml;
+    if (typeof yamlParser !== "function") {
+      return undefined;
+    }
+    const configPath =
+      options.configPath || planConfigPath({ env: options.env });
+    let text = null;
+    try {
+      text = fsModule.readFileSync(configPath, "utf8");
+    } catch (error) {
+      return undefined;
+    }
+    if (typeof text !== "string" || !text.trim()) {
+      return undefined;
+    }
+    const parsed = yamlParser(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const block = parsed.stats;
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      return undefined;
+    }
+    return block[key];
+  } catch (error) {
+    return undefined;
+  }
+}
+
+function statsNormalizeRange(value, fallback) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) {
+    return fallback;
+  }
+  if (STATS_RANGE_PRESETS.includes(text)) {
+    return text;
+  }
+  if (/^\d+[dwmy]$/.test(text)) {
+    return text;
+  }
+  const rangeMatch = text.match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
+  if (rangeMatch) {
+    return `${rangeMatch[1]}..${rangeMatch[2]}`;
+  }
+  return fallback;
+}
+
+function statsNormalizeOffset(value) {
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < 0) {
+    return 0;
+  }
+  return offset;
+}
+
+// Build the argv for one fetch: always `stats show -a -f json` plus the
+// chosen flags, so one call serves tiles, focus, and panels.
+function statsBuildArgs(options = {}) {
+  const fallback =
+    typeof options.fallbackRange === "string" && options.fallbackRange
+      ? options.fallbackRange
+      : STATS_DEFAULT_RANGE;
+  const args = ["stats", "show", "-a", "-f", "json"];
+  const range = statsNormalizeRange(options.range, fallback);
+  if (range) {
+    args.push("-r", range);
+  }
+  const offset = statsNormalizeOffset(options.offset);
+  if (offset > 0) {
+    args.push("-o", String(offset));
+  }
+  if (options.compare === true) {
+    args.push("-c");
+  }
+  if (Array.isArray(options.metrics) && options.metrics.length > 0) {
+    for (const id of options.metrics) {
+      if (typeof id === "string" && id.trim()) {
+        args.push(id.trim());
+      }
+    }
+  }
+  return args;
+}
+
+function statsCacheKey(args) {
+  try {
+    return JSON.stringify(Array.isArray(args) ? args : []);
+  } catch (error) {
+    return String(args);
+  }
+}
+
+// Defensive decode: accept schema 1 reports, reject everything else with
+// a named error. Returns `{ ok: true, report }` or
+// `{ ok: false, code, message, detail }`.
+function statsDecodeReport(stdout, stderr) {
+  let body = null;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob stats returned output that is not JSON.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob stats returned an unexpected JSON shape.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.schema_version !== STATS_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      code: "schema-mismatch",
+      message: `bob stats returned schema ${String(body.schema_version)}, this block reads schema ${STATS_SCHEMA_VERSION}.`,
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.ok === false) {
+    const inner = body.error && typeof body.error === "object" ? body.error : {};
+    return {
+      ok: false,
+      code:
+        typeof inner.code === "string" && inner.code ? inner.code : "bob-error",
+      message:
+        typeof inner.message === "string" && inner.message
+          ? inner.message
+          : "bob stats reported an error.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!Array.isArray(body.metrics)) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob stats returned a report without metrics.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  return { ok: true, report: body };
+}
+
+function statsFirstLine(stderr) {
+  try {
+    const text = String(stderr === undefined ? "" : stderr);
+    const line = text.split("\n").map((part) => part.trim()).find(Boolean);
+    return line || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+// Actionable error card model: what happened, what to try, and whether a
+// Retry button applies. Never throws.
+function statsErrorModel(result, options = {}) {
+  const resolved =
+    result && typeof result === "object" ? result : { code: "unknown" };
+  if (resolved.code === "bob-not-found") {
+    const tried = Array.isArray(options.tried) ? options.tried : [];
+    return {
+      code: "bob-not-found",
+      title: "bob was not found",
+      hint:
+        tried.length > 0
+          ? `Tried ${tried.join(", ")}. Set stats.bob_path in ~/.config/bob/config.yml.`
+          : "Set stats.bob_path in ~/.config/bob/config.yml.",
+      retry: true,
+    };
+  }
+  if (resolved.code === "timeout") {
+    return {
+      code: "timeout",
+      title: "bob stats timed out",
+      hint: "The vault may be large; retry once before investigating.",
+      retry: true,
+    };
+  }
+  if (resolved.code === "schema-mismatch") {
+    return {
+      code: "schema-mismatch",
+      title: "bob stats is newer or older than this block",
+      hint: "Update bob-cli and Bob Ledger Tools together, then retry.",
+      retry: true,
+    };
+  }
+  return {
+    code: typeof resolved.code === "string" ? resolved.code : "failed",
+    title: "bob stats failed",
+    hint: resolved.detail || resolved.message || "Retry once, then run bob stats in a terminal.",
+    retry: true,
+  };
+}
+
+class BobLedgerToolsStatsDataMixin {
+  statsVaultBasePath() {
+    try {
+      const adapter = this.app && this.app.vault && this.app.vault.adapter;
+      if (adapter && typeof adapter.basePath === "string" && adapter.basePath) {
+        return adapter.basePath;
+      }
+      if (adapter && typeof adapter.getBasePath === "function") {
+        const basePath = adapter.getBasePath();
+        if (typeof basePath === "string" && basePath) {
+          return basePath;
+        }
+      }
+    } catch (error) {
+      // Fall through to null below.
+    }
+    return null;
+  }
+
+  statsConfiguredBobPath() {
+    const value = statsReadConfigValue("bob_path");
+    return typeof value === "string" && value.trim() ? value.trim() : "";
+  }
+
+  // Public: where the Stats block finds `bob`. Synchronous, never throws.
+  apiStatsBobPath() {
+    try {
+      return statsResolveBobPath({
+        configured: this.statsConfiguredBobPath(),
+      });
+    } catch (error) {
+      return { path: "bob", source: "path" };
+    }
+  }
+
+  statsCacheStore() {
+    if (!(this.statsCache instanceof Map)) {
+      this.statsCache = new Map();
+    }
+    return this.statsCache;
+  }
+
+  statsCacheGet(key) {
+    const store = this.statsCacheStore();
+    const entry = store.get(key);
+    if (!entry) {
+      return null;
+    }
+    // LRU touch: reinsert so the oldest entry evicts first.
+    store.delete(key);
+    store.set(key, entry);
+    return entry;
+  }
+
+  statsCacheSet(key, report) {
+    const store = this.statsCacheStore();
+    if (store.has(key)) {
+      store.delete(key);
+    }
+    store.set(key, { report, fetchedAt: Date.now() });
+    while (store.size > STATS_CACHE_SIZE) {
+      const oldest = store.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      store.delete(oldest.value);
+    }
+  }
+
+  statsSpawnFetch(args, options = {}) {
+    const execFile =
+      options.execFile ||
+      (() => {
+        try {
+          const childProcess = planRequireOptionalNodeModule("child_process");
+          return (
+            childProcess && typeof childProcess.execFile === "function"
+              ? childProcess.execFile
+              : null
+          );
+        } catch (error) {
+          return null;
+        }
+      })();
+    const resolved =
+      options.resolved || (typeof this.apiStatsBobPath === "function"
+        ? this.apiStatsBobPath()
+        : { path: "bob", source: "path" });
+    const tried =
+      options.tried ||
+      (() => {
+        try {
+          const home = statsHomeDir({});
+          return [
+            ...STATS_BOB_CANDIDATES.map((relative) => `${home}/${relative}`),
+            "bob (PATH)",
+          ];
+        } catch (error) {
+          return ["bob (PATH)"];
+        }
+      })();
+    return new Promise((resolve) => {
+      if (typeof execFile !== "function") {
+        // Desktop-only spawn: no child_process off desktop.
+        resolve({
+          ok: false,
+          code: "bob-not-found",
+          message: "Spawning bob needs the desktop app.",
+          detail: "",
+          tried,
+        });
+        return;
+      }
+      let env = null;
+      try {
+        const base = (typeof process !== "undefined" && process.env) || {};
+        env = { ...base };
+      } catch (error) {
+        env = {};
+      }
+      try {
+        const vaultPath =
+          options.vaultPath !== undefined
+            ? options.vaultPath
+            : this.statsVaultBasePath();
+        if (vaultPath) {
+          env.BOB_DIR = vaultPath;
+        }
+        env.NO_COLOR = "1";
+      } catch (error) {
+        // Env augmentation is best-effort.
+      }
+      let settled = false;
+      const finish = (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(result);
+      };
+      let child = null;
+      try {
+        child = execFile(
+          resolved.path,
+          args,
+          { env, timeout: STATS_FETCH_TIMEOUT_MS, maxBuffer: STATS_FETCH_MAX_BUFFER },
+          (error, stdout, stderr) => {
+            if (error) {
+              if (error.code === "ENOENT") {
+                finish({
+                  ok: false,
+                  code: "bob-not-found",
+                  message: `bob was not found at ${resolved.path}.`,
+                  detail: "",
+                  tried,
+                });
+                return;
+              }
+              if (error.killed) {
+                finish({
+                  ok: false,
+                  code: "timeout",
+                  message: "bob stats timed out after 20 s.",
+                  detail: statsFirstLine(stderr),
+                  tried,
+                });
+                return;
+              }
+              const decoded = statsDecodeReport(stdout, stderr);
+              if (decoded.ok) {
+                finish({ ok: true, report: decoded.report });
+                return;
+              }
+              finish({
+                ok: false,
+                code: decoded.code,
+                message: decoded.message,
+                detail: decoded.detail || statsFirstLine(stderr),
+                tried,
+              });
+              return;
+            }
+            finish(statsDecodeReport(stdout, stderr));
+          },
+        );
+      } catch (error) {
+        if (error && error.code === "ENOENT") {
+          finish({
+            ok: false,
+            code: "bob-not-found",
+            message: `bob was not found at ${resolved.path}.`,
+            detail: "",
+            tried,
+          });
+          return;
+        }
+        finish({
+          ok: false,
+          code: "failed",
+          message:
+            error && error.message ? String(error.message) : "bob stats failed to run.",
+          detail: "",
+          tried,
+        });
+      }
+      void child;
+    });
+  }
+
+  // Public: fetch a stats report. Resolves `{ report, stale, error }`:
+  // a cached report returns immediately as stale while one background
+  // revalidation refreshes it; a miss spawns `bob`. At most one spawn
+  // is in flight with one coalesced follow-up; concurrent callers for
+  // the same arguments share the flight. Never rejects.
+  apiStatsFetch(options = {}) {
+    const opts = options && typeof options === "object" ? options : {};
+    let fallbackRange = STATS_DEFAULT_RANGE;
+    try {
+      const configuredRange = statsReadConfigValue("range");
+      if (typeof configuredRange === "string" && configuredRange.trim()) {
+        fallbackRange = configuredRange.trim();
+      }
+    } catch (error) {
+      // Config default is best-effort.
+    }
+    const args = statsBuildArgs({ ...opts, fallbackRange });
+    const key = statsCacheKey(args);
+    const cached = this.statsCacheGet(key);
+    // Same arguments already in flight: share the flight.
+    if (this.statsFlight && this.statsFlight.key === key) {
+      return this.statsFlight.promise;
+    }
+    if (this.statsFlight) {
+      // A different key is in flight: coalesce to the single pending
+      // follow-up (latest options win); waiters share its promise.
+      if (
+        !this.statsPendingFetch ||
+        statsCacheKey(
+          statsBuildArgs({ ...this.statsPendingFetch.opts, fallbackRange }),
+        ) !== key
+      ) {
+        this.statsPendingFetch = { opts: { ...opts }, waiters: [] };
+        this.statsPendingFetch.promise = new Promise((resolve) => {
+          this.statsPendingFetch.waiters.push(resolve);
+        });
+      }
+      const pending = this.statsPendingFetch;
+      if (cached) {
+        return Promise.resolve({ report: cached.report, stale: true, error: null });
+      }
+      return pending.promise;
+    }
+    const run = async (runArgs, runKey, runOpts, hadCached) => {
+      try {
+        const result = await this.statsSpawnFetch(runArgs, runOpts);
+        if (result && result.ok) {
+          this.statsCacheSet(runKey, result.report);
+          if (hadCached) {
+            // The caller already holds the stale frame; repaint views
+            // with the fresh one.
+            try {
+              this.repaintStatsBlocks();
+            } catch (error) {
+              // Repaint is best-effort.
+            }
+          }
+          return { report: result.report, stale: false, error: null };
+        }
+        if (hadCached) {
+          const staleEntry = this.statsCacheGet(runKey);
+          return {
+            report: staleEntry ? staleEntry.report : null,
+            stale: true,
+            error: result,
+          };
+        }
+        return { report: null, stale: false, error: result };
+      } catch (error) {
+        const failure = {
+          ok: false,
+          code: "failed",
+          message:
+            error && error.message ? String(error.message) : "bob stats failed.",
+          detail: "",
+        };
+        if (hadCached) {
+          const staleEntry = this.statsCacheGet(runKey);
+          return {
+            report: staleEntry ? staleEntry.report : null,
+            stale: true,
+            error: failure,
+          };
+        }
+        return { report: null, stale: false, error: failure };
+      }
+    };
+    const launch = (launchArgs, launchKey, launchOpts, hadCached) => {
+      const promise = run(launchArgs, launchKey, launchOpts, hadCached).finally(
+        () => {
+          if (this.statsFlight && this.statsFlight.promise === promise) {
+            this.statsFlight = null;
+          }
+          // One coalesced follow-up: the latest request that arrived
+          // mid-flight runs next.
+          if (this.statsPendingFetch) {
+            const pending = this.statsPendingFetch;
+            this.statsPendingFetch = null;
+            const pendingArgs = statsBuildArgs({
+              ...pending.opts,
+              fallbackRange,
+            });
+            const pendingKey = statsCacheKey(pendingArgs);
+            const pendingCached = this.statsCacheGet(pendingKey);
+            const next = launch(pendingArgs, pendingKey, pending.opts, Boolean(pendingCached));
+            for (const waiter of pending.waiters) {
+              try {
+                next.then(waiter);
+              } catch (error) {
+                // Waiter delivery is best-effort.
+              }
+            }
+          }
+        },
+      );
+      this.statsFlight = { key: launchKey, promise };
+      return promise;
+    };
+    const flight = launch(args, key, opts, Boolean(cached));
+    if (cached) {
+      // Stale-while-revalidate: hand back the stale frame now; the
+      // flight refreshes the cache and repaints.
+      return Promise.resolve({ report: cached.report, stale: true, error: null });
+    }
+    return flight;
+  }
+
+  // Debounced revalidation: only while a Stats view is mounted, at most
+  // one timer, ~3 s after the last trigger.
+  scheduleStatsRevalidate(reason) {
+    void reason;
+    try {
+      if (!this.statsBlockViews || this.statsBlockViews.size === 0) {
+        return;
+      }
+    } catch (error) {
+      return;
+    }
+    if (this.statsRevalidateTimer !== null && this.statsRevalidateTimer !== undefined) {
+      return;
+    }
+    const schedule =
+      typeof window !== "undefined" && typeof window.setTimeout === "function"
+        ? window.setTimeout
+        : setTimeout;
+    this.statsRevalidateTimer = schedule(() => {
+      this.statsRevalidateTimer = null;
+      try {
+        this.revalidateStatsBlocks();
+      } catch (error) {
+        // Revalidation is best-effort.
+      }
+    }, STATS_REVALIDATE_DEBOUNCE_MS);
+  }
+
+  scheduleStatsRevalidateForFile(file) {
+    try {
+      if (!file) {
+        return;
+      }
+      // Ledger rows are not Tasks lines, so Tasks `cache-update` alone
+      // is not enough: any vault write may move a stat.
+      this.scheduleStatsRevalidate("vault");
+    } catch (error) {
+      // Best-effort only.
+    }
+  }
+
+  statsAfterJournalAppend() {
+    try {
+      this.scheduleStatsRevalidate("journal");
+    } catch (error) {
+      // Best-effort only.
+    }
+  }
+}
+// ---- src/237-plugin-stats-models.js ----
+// --- Daily Stats page models (bob-cli-6l page) ------------------------------
+// Pure helpers for the `bob-stats` code block: the injected-document
+// element helper, fence parsing, tile models, spark geometry, table rows,
+// CSV, overview ids, and labels. Layout math stays here so fake-DOM tests
+// and the browser preview share it with Obsidian.
+
+const STATS_RANGE_CHIPS = [
+  { id: "7d", label: "7D" },
+  { id: "4w", label: "4W" },
+  { id: "3m", label: "3M" },
+  { id: "1y", label: "1Y" },
+  { id: "all", label: "All" },
+];
+const STATS_FENCE_KEYS = ["range", "metrics", "focus"];
+const STATS_DEFAULT_TILE_COUNT = 6;
+
+// Tiny element helper over an injected document.
+function statsEl(doc, tag, attrs, text) {
+  const scope =
+    doc && typeof doc.createElement === "function"
+      ? doc
+      : typeof document !== "undefined"
+        ? document
+        : null;
+  if (!scope) {
+    return null;
+  }
+  const node = scope.createElement(tag);
+  if (!node) {
+    return null;
+  }
+  if (attrs && typeof attrs === "object") {
+    for (const [name, value] of Object.entries(attrs)) {
+      if (value === null || value === undefined || value === false) {
+        continue;
+      }
+      try {
+        if (name === "class") {
+          node.setAttribute("class", String(value));
+        } else if (name.startsWith("aria-") || name === "role") {
+          node.setAttribute(name, String(value));
+        } else if (name === "tabindex" || name === "title" || name === "type") {
+          node.setAttribute(name, String(value));
+        } else {
+          node.setAttribute(name, String(value));
+        }
+      } catch (error) {
+        // Attribute setting is best-effort.
+      }
+    }
+  }
+  if (text !== undefined && text !== null) {
+    try {
+      node.textContent = String(text);
+    } catch (error) {
+      // Text setting is best-effort.
+    }
+  }
+  return node;
+}
+
+function statsDocFor(el) {
+  try {
+    if (el && el.ownerDocument && typeof el.ownerDocument.createElement === "function") {
+      return el.ownerDocument;
+    }
+  } catch (error) {
+    // Fall through to the global document.
+  }
+  try {
+    if (typeof document !== "undefined" && typeof document.createElement === "function") {
+      return document;
+    }
+  } catch (error) {
+    // No document available (pure-model callers pass their own).
+  }
+  return null;
+}
+
+// Parse the optional fence-body YAML (`range`, `metrics`, `focus`). The
+// fence sets defaults only; anything absent follows `stats.range` and
+// `stats.overview`. Guarded: never throws, unknown keys ignored.
+function statsParseFenceOptions(source) {
+  const options = {};
+  try {
+    const text = typeof source === "string" ? source.trim() : "";
+    if (!text) {
+      return options;
+    }
+    if (typeof parseYaml !== "function") {
+      return options;
+    }
+    let parsed = null;
+    try {
+      parsed = parseYaml(text);
+    } catch (error) {
+      return options;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return options;
+    }
+    for (const key of Object.keys(parsed)) {
+      if (!STATS_FENCE_KEYS.includes(key)) {
+        continue;
+      }
+      options[key] = parsed[key];
+    }
+    if (options.range !== undefined) {
+      const range = statsNormalizeRange(options.range, "");
+      if (range) {
+        options.range = range;
+      } else {
+        delete options.range;
+      }
+    }
+    if (options.metrics !== undefined) {
+      if (Array.isArray(options.metrics)) {
+        const ids = options.metrics
+          .filter((id) => typeof id === "string" && id.trim())
+          .map((id) => id.trim());
+        if (ids.length > 0) {
+          options.metrics = ids;
+        } else {
+          delete options.metrics;
+        }
+      } else {
+        delete options.metrics;
+      }
+    }
+    if (options.focus !== undefined) {
+      if (typeof options.focus !== "string" || !options.focus.trim()) {
+        delete options.focus;
+      } else {
+        options.focus = options.focus.trim();
+      }
+    }
+  } catch (error) {
+    // Fence parsing never breaks the block.
+  }
+  return options;
+}
+
+function statsDefaultViewState() {
+  return {
+    range: null,
+    offset: 0,
+    focus: null,
+    compare: false,
+    table: false,
+    pinnedDay: null,
+  };
+}
+
+// One tile's pure model from a report metric. Covers every unit
+// (minutes, count, signed, bool, ratio) and every quality (ok, partial,
+// missing, not_tracked). Never throws.
+function statsTileModel(metric) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const id = typeof safe.id === "string" ? safe.id : "unknown";
+  const label = typeof safe.label === "string" && safe.label ? safe.label : id;
+  const color = typeof safe.color === "string" && safe.color ? safe.color : "gray";
+  const unit = typeof safe.unit === "string" ? safe.unit : "count";
+  const summary = safe.summary && typeof safe.summary === "object" ? safe.summary : {};
+  const headline = summary.headline && typeof summary.headline === "object" ? summary.headline : {};
+  const delta = summary.delta && typeof summary.delta === "object" ? summary.delta : {};
+  const points = Array.isArray(safe.points) ? safe.points : [];
+  const headlineDisplay =
+    typeof headline.display === "string" && headline.display ? headline.display : "–";
+  let suffix = typeof headline.suffix === "string" ? headline.suffix : "";
+  if (!suffix) {
+    if (unit === "minutes" || unit === "count" || unit === "signed") {
+      suffix = "/day";
+    } else if (unit === "bool") {
+      suffix = "days";
+    }
+  }
+  const spark = points.map((point) => {
+    if (!point || typeof point !== "object") {
+      return { value: null, provisional: false };
+    }
+    return {
+      value: typeof point.value === "number" ? point.value : null,
+      provisional: point.provisional === true,
+    };
+  });
+  const qualities = points.map((point) =>
+    point && typeof point.quality === "string" ? point.quality : "ok",
+  );
+  const quality = qualities.includes("ok") || qualities.includes("partial")
+    ? "ok"
+    : qualities.includes("missing")
+      ? "missing"
+      : "not_tracked";
+  return {
+    id,
+    label,
+    color,
+    unit,
+    headline: headlineDisplay,
+    suffix,
+    delta: typeof delta.display === "string" ? delta.display : "",
+    deltaWords: typeof delta.words === "string" ? delta.words : "",
+    spark,
+    quality,
+    daysWithData:
+      typeof summary.days_with_data === "number" ? summary.days_with_data : null,
+  };
+}
+
+// Normalize one tile sparkline to 0..1 bar heights for div bars. A real
+// zero renders as a 2 px baseline tick (height 0 + `stats-zero` class);
+// null renders as a faint gap; today renders hollow. Never throws.
+function statsSparkBars(spark) {
+  const values = (Array.isArray(spark) ? spark : [])
+    .map((bar) => (bar && typeof bar.value === "number" ? bar.value : null))
+    .filter((value) => value !== null);
+  const max = values.length > 0 ? Math.max(...values, 0) : 0;
+  return (Array.isArray(spark) ? spark : []).map((bar) => {
+    const value = bar && typeof bar.value === "number" ? bar.value : null;
+    if (value === null) {
+      return { height: 0, empty: true, provisional: false, zero: false };
+    }
+    if (max <= 0) {
+      return { height: 0, empty: false, provisional: bar.provisional === true, zero: true };
+    }
+    return {
+      height: Math.max(value <= 0 ? 0 : Math.round((value / max) * 100) / 100, value > 0 ? 0.08 : 0),
+      empty: false,
+      provisional: bar.provisional === true,
+      zero: value === 0,
+    };
+  });
+}
+
+// Table rows for the focus metric: date, value, quality/reason, top
+// parts. The accessible route and the source of exact numbers.
+function statsTableRows(metric, limit) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const points = Array.isArray(safe.points) ? safe.points : [];
+  const max = typeof limit === "number" && limit > 0 ? limit : points.length;
+  return points.slice(0, max).map((point) => {
+    const row = point && typeof point === "object" ? point : {};
+    const parts = row.parts && typeof row.parts === "object" ? row.parts : {};
+    const topParts = [];
+    for (const [dimension, entries] of Object.entries(parts)) {
+      if (!entries || typeof entries !== "object") {
+        continue;
+      }
+      const ranked = Object.entries(entries)
+        .filter(([, value]) => typeof value === "number")
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([key, value]) => ({ dimension, key, value }));
+      topParts.push(...ranked);
+    }
+    return {
+      date: typeof row.date === "string" ? row.date : "",
+      display: typeof row.display === "string" ? row.display : "–",
+      quality: typeof row.quality === "string" ? row.quality : "ok",
+      reason: typeof row.reason === "string" ? row.reason : "",
+      provisional: row.provisional === true,
+      num: typeof row.num === "number" ? row.num : null,
+      den: typeof row.den === "number" ? row.den : null,
+      topParts: topParts.slice(0, 3),
+    };
+  });
+}
+
+// Tidy CSV from the report points (`date,end,metric,value,display,
+// quality,provisional` plus `num,den` for ratios). The Copy CSV button
+// builds from the same points as the table.
+function statsCsv(report) {
+  const lines = ["date,end,metric,value,display,quality,provisional,num,den"];
+  const metrics =
+    report && Array.isArray(report.metrics) ? report.metrics : [];
+  const cell = (value) => {
+    const text = value === null || value === undefined ? "" : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  for (const metric of metrics) {
+    if (!metric || typeof metric !== "object") {
+      continue;
+    }
+    const id = typeof metric.id === "string" ? metric.id : "";
+    for (const point of Array.isArray(metric.points) ? metric.points : []) {
+      const row = point && typeof point === "object" ? point : {};
+      lines.push(
+        [
+          cell(row.date || ""),
+          cell(row.end || row.date || ""),
+          cell(id),
+          cell(typeof row.value === "number" ? row.value : ""),
+          cell(row.display || ""),
+          cell(row.quality || ""),
+          cell(row.provisional === true ? "true" : "false"),
+          cell(typeof row.num === "number" ? row.num : ""),
+          cell(typeof row.den === "number" ? row.den : ""),
+        ].join(","),
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+// Which metric ids fill the tile row: the fence `metrics`, else
+// `stats.overview` filtered to ids in the report, else the first tiles.
+function statsOverviewIds(report, fenceMetrics) {
+  const metrics = report && Array.isArray(report.metrics) ? report.metrics : [];
+  const present = new Set(
+    metrics.filter((metric) => metric && typeof metric.id === "string").map((metric) => metric.id),
+  );
+  if (Array.isArray(fenceMetrics) && fenceMetrics.length > 0) {
+    const ids = fenceMetrics.filter((id) => present.has(id));
+    if (ids.length > 0) {
+      return ids;
+    }
+  }
+  try {
+    const overview = statsReadConfigValue("overview");
+    if (Array.isArray(overview)) {
+      const ids = overview
+        .filter((id) => typeof id === "string" && present.has(id));
+      if (ids.length > 0) {
+        return ids;
+      }
+    }
+  } catch (error) {
+    // Config overview is best-effort.
+  }
+  return metrics
+    .filter((metric) => metric && typeof metric.id === "string")
+    .slice(0, STATS_DEFAULT_TILE_COUNT)
+    .map((metric) => metric.id);
+}
+
+function statsWindowLabel(report) {
+  try {
+    const range = report && report.range;
+    const label = range && typeof range.label === "string" ? range.label : "";
+    const includesToday = range && range.includes_today === true;
+    if (!label) {
+      return includesToday ? "today in progress" : "";
+    }
+    return includesToday ? `${label} · today in progress` : label;
+  } catch (error) {
+    return "";
+  }
+}
+
+function statsTrackingSince(report) {
+  try {
+    const metrics = report && Array.isArray(report.metrics) ? report.metrics : [];
+    const sinces = metrics
+      .filter((metric) => metric && typeof metric.since === "string" && metric.since)
+      .map((metric) => metric.since)
+      .sort();
+    return sinces.length > 0 ? sinces[0] : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+// ---- src/238-plugin-stats-block.js ----
+// --- Daily Stats page block (bob-cli-6l page) --------------------------------
+// The `bob-stats` code block: header controls, tile row, table view, and
+// footer with every honest state. The focus chart, context panels, and
+// day interaction below the tile row belong to the charts phase; tiles
+// already record the selected focus id in session state for it.
+class BobLedgerToolsStatsBlockMixin {
+  statsViewStateFor(sourcePath) {
+    try {
+      if (!(this.statsViewStates instanceof Map)) {
+        this.statsViewStates = new Map();
+      }
+      const key = typeof sourcePath === "string" ? sourcePath : "";
+      let state = this.statsViewStates.get(key);
+      if (!state) {
+        state = statsDefaultViewState();
+        this.statsViewStates.set(key, state);
+      }
+      return state;
+    } catch (error) {
+      return statsDefaultViewState();
+    }
+  }
+
+  setupStatsBlock() {
+    try {
+      if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
+        this.registerMarkdownCodeBlockProcessor("bob-stats", (source, el, ctx) =>
+          this.renderStatsBlock(el, ctx, source),
+        );
+      }
+    } catch (error) {
+      // Block registration is best-effort.
+    }
+    try {
+      if (typeof this.addCommand === "function") {
+        this.addCommand({
+          id: "open-stats",
+          name: "Open Stats",
+          callback: () => {
+            try {
+              const workspace = this.app && this.app.workspace;
+              if (workspace && typeof workspace.openLinkText === "function") {
+                void workspace.openLinkText("dash_stats", "", false);
+                return;
+              }
+            } catch (error) {
+              // Fall through to the Notice below.
+            }
+            try {
+              new Notice("Could not open Stats");
+            } catch (error) {
+              // Notice is best-effort.
+            }
+          },
+        });
+      }
+    } catch (error) {
+      // Command registration is best-effort.
+    }
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        // Ledger rows are not Tasks lines, so Tasks `cache-update`
+        // alone is not enough: any metadata change may move a stat.
+        this.registerEvent(
+          metadataCache.on("changed", () => this.scheduleStatsRevalidateForFile({})),
+        );
+      }
+    } catch (error) {
+      // Revalidation wiring is best-effort.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        for (const event of ["create", "delete", "rename"]) {
+          this.registerEvent(
+            vault.on(event, (file) => this.scheduleStatsRevalidateForFile(file)),
+          );
+        }
+      }
+    } catch (error) {
+      // Revalidation wiring is best-effort.
+    }
+    try {
+      if (
+        typeof this.registerInterval === "function" &&
+        typeof window !== "undefined" &&
+        typeof window.setInterval === "function"
+      ) {
+        // Local-date rollover: revalidate mounted Stats views once the
+        // day changes.
+        this.registerInterval(
+          window.setInterval(() => {
+            try {
+              this.refreshStatsBlocksForRollover(new Date());
+            } catch (error) {
+              // Rollover is best-effort.
+            }
+          }, 60 * 1000),
+        );
+      }
+    } catch (error) {
+      // Rollover wiring is best-effort.
+    }
+  }
+
+  teardownStatsBlock() {
+    try {
+      if (this.statsRevalidateTimer !== null && this.statsRevalidateTimer !== undefined) {
+        const clear =
+          typeof window !== "undefined" && typeof window.clearTimeout === "function"
+            ? window.clearTimeout
+            : clearTimeout;
+        clear(this.statsRevalidateTimer);
+      }
+    } catch (error) {
+      // Timer cleanup is best-effort.
+    }
+    this.statsRevalidateTimer = null;
+    if (this.statsBlockViews instanceof Set) {
+      this.statsBlockViews.clear();
+    }
+    if (this.statsPaintGens instanceof Map) {
+      this.statsPaintGens.clear();
+    }
+    if (this.statsViewStates instanceof Map) {
+      this.statsViewStates.clear();
+    }
+    if (this.statsCache instanceof Map) {
+      this.statsCache.clear();
+    }
+    this.statsFlight = null;
+    this.statsPendingFetch = null;
+    this.statsBlockDay = null;
+  }
+
+  refreshStatsBlocksForRollover(now) {
+    try {
+      const day =
+        now instanceof Date
+          ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+          : "";
+      if (!day) {
+        return;
+      }
+      if (this.statsBlockDay === null || this.statsBlockDay === undefined) {
+        this.statsBlockDay = day;
+        return;
+      }
+      if (this.statsBlockDay !== day) {
+        this.statsBlockDay = day;
+        this.revalidateStatsBlocks();
+      }
+    } catch (error) {
+      // Rollover is best-effort.
+    }
+  }
+
+  renderStatsBlock(el, ctx, source) {
+    if (!el) {
+      return;
+    }
+    const sourcePath = ctx && ctx.sourcePath;
+    if (!(this.statsBlockViews instanceof Set)) {
+      this.statsBlockViews = new Set();
+    }
+    const fence = statsParseFenceOptions(source);
+    const view = { el, sourcePath, fence };
+    this.statsBlockViews.add(view);
+    if (ctx && typeof ctx.addChild === "function") {
+      let child = null;
+      try {
+        if (typeof MarkdownRenderChild === "function") {
+          child = new MarkdownRenderChild(el);
+          child.onunload = () => {
+            if (this.statsBlockViews) {
+              this.statsBlockViews.delete(view);
+            }
+            if (this.statsPaintGens) {
+              this.statsPaintGens.delete(el);
+            }
+          };
+        }
+      } catch (error) {
+        child = null;
+      }
+      if (!child) {
+        child = {
+          unload: () => {
+            if (this.statsBlockViews) {
+              this.statsBlockViews.delete(view);
+            }
+            if (this.statsPaintGens) {
+              this.statsPaintGens.delete(el);
+            }
+          },
+        };
+      }
+      try {
+        ctx.addChild(child);
+      } catch (error) {
+        // Older hosts may reject the child; the Set is cleared on unload.
+      }
+    }
+    this.paintStatsBlock(view);
+  }
+
+  statsFetchArgsFor(view) {
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    const fence = (view && view.fence) || {};
+    return {
+      range: fence.range || state.range || undefined,
+      offset: state.offset || 0,
+      compare: state.compare === true,
+    };
+  }
+
+  paintStatsBlock(view) {
+    if (!view || !view.el) {
+      return;
+    }
+    if (!(this.statsPaintGens instanceof Map)) {
+      this.statsPaintGens = new Map();
+    }
+    const paintGen = (this.statsPaintGens.get(view.el) || 0) + 1;
+    this.statsPaintGens.set(view.el, paintGen);
+    this.paintStatsSkeleton(view);
+    // A rejecting fetch still renders an error card, never an empty block.
+    Promise.resolve()
+      .then(() =>
+        typeof this.apiStatsFetch === "function"
+          ? this.apiStatsFetch(this.statsFetchArgsFor(view))
+          : { report: null, stale: false, error: { code: "unavailable" } },
+      )
+      .then(
+        (result) => {
+          if (this.statsPaintGens.get(view.el) !== paintGen) {
+            return;
+          }
+          this.renderStatsResult(view, result || { report: null });
+        },
+        (error) => {
+          if (this.statsPaintGens.get(view.el) !== paintGen) {
+            return;
+          }
+          this.renderStatsResult(view, {
+            report: null,
+            stale: false,
+            error: {
+              code: "failed",
+              message: String((error && error.message) || error),
+              detail: "",
+            },
+          });
+        },
+      );
+  }
+
+  repaintStatsBlocks() {
+    try {
+      if (!(this.statsBlockViews instanceof Set)) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          this.paintStatsBlock(view);
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Repaint is best-effort.
+    }
+  }
+
+  revalidateStatsBlocks() {
+    // Revalidating keeps the previous frame at reduced opacity until
+    // the new one swaps in (see `renderStatsResult`).
+    try {
+      if (!(this.statsBlockViews instanceof Set) || this.statsBlockViews.size === 0) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          if (view.el && typeof view.el.addClass === "function") {
+            view.el.addClass("bob-stats-revalidating");
+          } else if (view.el && view.el.classList) {
+            view.el.classList.add("bob-stats-revalidating");
+          }
+        } catch (error) {
+          // Opacity marking is best-effort.
+        }
+      }
+      this.repaintStatsBlocks();
+    } catch (error) {
+      // Revalidation is best-effort.
+    }
+  }
+
+  paintStatsSkeleton(view) {
+    try {
+      const doc = statsDocFor(view.el);
+      if (!doc) {
+        return;
+      }
+      if (this.statsPaintGens.get(view.el) === undefined) {
+        return;
+      }
+      // Keep an existing frame (revalidation); skeleton only on first paint.
+      if (view.el.querySelector && view.el.querySelector(".bob-stats")) {
+        return;
+      }
+      if (typeof view.el.empty === "function") {
+        view.el.empty();
+      } else {
+        view.el.textContent = "";
+      }
+      const root = statsEl(doc, "div", { class: "bob-stats bob-stats-loading" });
+      const tiles = statsEl(doc, "div", { class: "bob-stats-tiles", role: "status", "aria-label": "Stats loading" });
+      for (let index = 0; index < STATS_DEFAULT_TILE_COUNT; index += 1) {
+        const tile = statsEl(doc, "div", { class: "bob-stats-tile bob-stats-skeleton" });
+        tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-label" }, " "));
+        tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-value" }, " "));
+        tiles.appendChild(tile);
+      }
+      root.appendChild(tiles);
+      view.el.appendChild(root);
+    } catch (error) {
+      // Skeleton is best-effort.
+    }
+  }
+
+  renderStatsResult(view, result) {
+    try {
+      const doc = statsDocFor(view.el);
+      if (!doc) {
+        return;
+      }
+      const clearRevalidating = () => {
+        try {
+          if (view.el && typeof view.el.removeClass === "function") {
+            view.el.removeClass("bob-stats-revalidating");
+          } else if (view.el && view.el.classList) {
+            view.el.classList.remove("bob-stats-revalidating");
+          }
+        } catch (error) {
+          // Class cleanup is best-effort.
+        }
+      };
+      clearRevalidating();
+      if (typeof view.el.empty === "function") {
+        view.el.empty();
+      } else {
+        view.el.textContent = "";
+      }
+      const root = statsEl(doc, "div", { class: "bob-stats" });
+      view.el.appendChild(root);
+      const report = result && result.report;
+      if (!report) {
+        root.appendChild(this.statsErrorCard(doc, result && result.error, view));
+        return;
+      }
+      root.appendChild(this.statsHeader(doc, view, report));
+      root.appendChild(this.statsTiles(doc, view, report));
+      // The focus chart and context panels render here in the charts
+      // phase, keyed by the session focus id below.
+      const state = this.statsViewStateFor(view.sourcePath);
+      const fence = view.fence || {};
+      const ids = statsOverviewIds(report, fence.metrics);
+      if (!state.focus || !ids.includes(state.focus)) {
+        state.focus = fence.focus && ids.includes(fence.focus) ? fence.focus : ids[0] || null;
+      }
+      if (state.table) {
+        root.appendChild(this.statsTable(doc, view, report));
+      }
+      root.appendChild(this.statsFooter(doc, report));
+    } catch (error) {
+      // A failed render never leaves an empty block: fall back to text.
+      try {
+        view.el.textContent = "Stats unavailable.";
+      } catch (inner) {
+        // Last-resort text is best-effort.
+      }
+    }
+  }
+
+  statsHeader(doc, view, report) {
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    const fence = (view && view.fence) || {};
+    const header = statsEl(doc, "div", { class: "bob-stats-header" });
+    const title = statsEl(doc, "div", { class: "bob-stats-title" }, "Stats");
+    header.appendChild(title);
+    const controls = statsEl(doc, "div", { class: "bob-stats-controls", role: "group", "aria-label": "Stats range controls" });
+    const activeRange = state.range || fence.range || (report.range && report.range.preset) || STATS_DEFAULT_RANGE;
+    for (const chip of STATS_RANGE_CHIPS) {
+      const button = statsEl(
+        doc,
+        "button",
+        {
+          class: `bob-stats-chip${activeRange === chip.id ? " bob-stats-chip-active" : ""}`,
+          type: "button",
+          "aria-pressed": activeRange === chip.id ? "true" : "false",
+        },
+        chip.label,
+      );
+      button.addEventListener("click", () => {
+        state.range = chip.id;
+        state.offset = 0;
+        this.paintStatsBlock(view);
+      });
+      controls.appendChild(button);
+    }
+    const custom = statsEl(doc, "button", { class: "bob-stats-chip", type: "button" }, "Custom…");
+    custom.addEventListener("click", () => {
+      this.statsCustomRange(doc, view, controls);
+    });
+    controls.appendChild(custom);
+    const prev = statsEl(doc, "button", { class: "bob-stats-nav", type: "button", "aria-label": "Previous window" }, "‹");
+    prev.addEventListener("click", () => {
+      state.offset = (state.offset || 0) + 1;
+      this.paintStatsBlock(view);
+    });
+    controls.appendChild(prev);
+    const next = statsEl(doc, "button", { class: "bob-stats-nav", type: "button", "aria-label": "Next window" }, "›");
+    next.addEventListener("click", () => {
+      state.offset = Math.max(0, (state.offset || 0) - 1);
+      this.paintStatsBlock(view);
+    });
+    controls.appendChild(next);
+    const compare = statsEl(
+      doc,
+      "button",
+      {
+        class: `bob-stats-toggle${state.compare ? " bob-stats-toggle-on" : ""}`,
+        type: "button",
+        "aria-pressed": state.compare ? "true" : "false",
+      },
+      "☐ vs prior",
+    );
+    compare.addEventListener("click", () => {
+      state.compare = !state.compare;
+      this.paintStatsBlock(view);
+    });
+    controls.appendChild(compare);
+    const table = statsEl(
+      doc,
+      "button",
+      {
+        class: `bob-stats-toggle${state.table ? " bob-stats-toggle-on" : ""}`,
+        type: "button",
+        "aria-pressed": state.table ? "true" : "false",
+      },
+      "▦ Table",
+    );
+    table.addEventListener("click", () => {
+      state.table = !state.table;
+      this.paintStatsBlock(view);
+    });
+    controls.appendChild(table);
+    header.appendChild(controls);
+    const windowLabel = statsEl(doc, "div", { class: "bob-stats-window" }, statsWindowLabel(report));
+    header.appendChild(windowLabel);
+    return header;
+  }
+
+  statsCustomRange(doc, view, anchor) {
+    try {
+      const state = this.statsViewStateFor(view && view.sourcePath);
+      if (anchor && anchor.querySelector && anchor.querySelector(".bob-stats-custom")) {
+        return;
+      }
+      const popover = statsEl(doc, "div", { class: "bob-stats-custom", role: "dialog", "aria-label": "Custom range" });
+      const start = statsEl(doc, "input", { class: "bob-stats-date", type: "date" });
+      const end = statsEl(doc, "input", { class: "bob-stats-date", type: "date" });
+      const apply = statsEl(doc, "button", { class: "bob-stats-chip", type: "button" }, "Apply");
+      apply.addEventListener("click", () => {
+        const from = start.value || (start.getAttribute && start.getAttribute("value")) || "";
+        const to = end.value || (end.getAttribute && end.getAttribute("value")) || "";
+        const normalized = statsNormalizeRange(`${from}..${to}`, "");
+        if (normalized) {
+          state.range = normalized;
+          state.offset = 0;
+          this.paintStatsBlock(view);
+        }
+        try {
+          popover.remove();
+        } catch (error) {
+          // Popover cleanup is best-effort.
+        }
+      });
+      popover.appendChild(start);
+      popover.appendChild(end);
+      popover.appendChild(apply);
+      anchor.appendChild(popover);
+    } catch (error) {
+      // Custom range is best-effort.
+    }
+  }
+
+  statsTiles(doc, view, report) {
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    const fence = (view && view.fence) || {};
+    const ids = statsOverviewIds(report, fence.metrics);
+    const byId = new Map(
+      (report.metrics || [])
+        .filter((metric) => metric && typeof metric.id === "string")
+        .map((metric) => [metric.id, metric]),
+    );
+    const row = statsEl(doc, "div", { class: "bob-stats-tiles" });
+    for (const id of ids) {
+      const model = statsTileModel(byId.get(id));
+      const selected = state.focus === id;
+      const tile = statsEl(doc, "div", {
+        class: `bob-stats-tile bob-stats-hue-${model.color}${selected ? " bob-stats-tile-selected" : ""}`,
+        role: "button",
+        tabindex: "0",
+        "aria-label": `${model.label}: ${model.headline}${model.deltaWords ? `, ${model.deltaWords}` : ""}`,
+      });
+      tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-label" }, model.label.toUpperCase()));
+      tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-value" }, model.headline));
+      if (model.suffix) {
+        tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-suffix" }, model.suffix));
+      }
+      if (model.delta) {
+        tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-delta" }, model.delta));
+      } else if (model.quality === "not_tracked") {
+        const since = statsTrackingSince(report);
+        tile.appendChild(
+          statsEl(doc, "div", { class: "bob-stats-tile-delta" }, since ? `Tracking since ${since}` : "Not tracked yet"),
+        );
+      }
+      const spark = statsEl(doc, "div", { class: "bob-stats-spark", "aria-hidden": "true" });
+      for (const bar of statsSparkBars(model.spark)) {
+        const classes = ["bob-stats-bar"];
+        if (bar.empty) {
+          classes.push("bob-stats-bar-null");
+        }
+        if (bar.zero) {
+          classes.push("bob-stats-bar-zero");
+        }
+        if (bar.provisional) {
+          classes.push("bob-stats-bar-today");
+        }
+        const node = statsEl(doc, "div", { class: classes.join(" ") });
+        if (!bar.empty && !bar.zero) {
+          try {
+            node.setAttribute("style", `height: ${Math.round(bar.height * 100)}%`);
+          } catch (error) {
+            // Bar height is best-effort.
+          }
+        }
+        spark.appendChild(node);
+      }
+      tile.appendChild(spark);
+      const select = () => {
+        state.focus = id;
+        this.paintStatsBlock(view);
+      };
+      tile.addEventListener("click", select);
+      tile.addEventListener("keydown", (event) => {
+        if ((event && event.key === "Enter") || (event && event.key === " ")) {
+          if (event.preventDefault) {
+            event.preventDefault();
+          }
+          select();
+        }
+      });
+      row.appendChild(tile);
+    }
+    return row;
+  }
+
+  statsTable(doc, view, report) {
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    const metric = (report.metrics || []).find((entry) => entry && entry.id === state.focus) || null;
+    const wrap = statsEl(doc, "div", { class: "bob-stats-table-wrap" });
+    if (!metric) {
+      wrap.appendChild(statsEl(doc, "div", { class: "bob-stats-table-empty" }, "No data."));
+      return wrap;
+    }
+    const table = statsEl(doc, "table", { class: "bob-stats-table" });
+    const head = statsEl(doc, "thead", {});
+    const headRow = statsEl(doc, "tr", {});
+    for (const label of ["Date", "Value", "Quality", "Top parts"]) {
+      headRow.appendChild(statsEl(doc, "th", {}, label));
+    }
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = statsEl(doc, "tbody", {});
+    for (const row of statsTableRows(metric)) {
+      const line = statsEl(doc, "tr", {});
+      line.appendChild(statsEl(doc, "td", {}, row.date + (row.provisional ? " (today)" : "")));
+      line.appendChild(statsEl(doc, "td", {}, row.display));
+      const qualityText = row.quality === "ok" ? "ok" : `${row.quality}${row.reason ? ` — ${row.reason}` : ""}`;
+      line.appendChild(statsEl(doc, "td", {}, qualityText));
+      const partsText = row.topParts
+        .map((part) => `${part.dimension}:${part.key} ${part.value}`)
+        .join(" · ");
+      line.appendChild(statsEl(doc, "td", {}, partsText));
+      body.appendChild(line);
+    }
+    table.appendChild(body);
+    wrap.appendChild(table);
+    const copy = statsEl(doc, "button", { class: "bob-stats-chip", type: "button" }, "Copy CSV");
+    copy.addEventListener("click", async () => {
+      try {
+        const csv = statsCsv(report);
+        const clipboard =
+          (typeof navigator !== "undefined" && navigator.clipboard) || null;
+        if (clipboard && typeof clipboard.writeText === "function") {
+          await clipboard.writeText(csv);
+          new Notice("Stats CSV copied");
+        }
+      } catch (error) {
+        try {
+          new Notice("Could not copy Stats CSV");
+        } catch (inner) {
+          // Notice is best-effort.
+        }
+      }
+    });
+    wrap.appendChild(copy);
+    return wrap;
+  }
+
+  statsFooter(doc, report) {
+    const footer = statsEl(doc, "div", { class: "bob-stats-footer" });
+    const hosts =
+      report && report.health && report.health.journal && Array.isArray(report.health.journal.hosts)
+        ? report.health.journal.hosts
+        : [];
+    const hostText = hosts
+      .map((host) => {
+        const name = host && typeof host.host === "string" ? host.host : "?";
+        const last = host && typeof host.last_ts === "string" ? host.last_ts : "";
+        return last ? `${name} ${last}` : `${name}`;
+      })
+      .join(" · ");
+    footer.appendChild(
+      statsEl(doc, "div", { class: "bob-stats-provenance" }, `Derived by bob stats${hostText ? ` · journal: ${hostText}` : ""}`),
+    );
+    const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+    if (warnings.length > 0) {
+      const list = statsEl(doc, "ul", { class: "bob-stats-warnings" });
+      for (const warning of warnings) {
+        if (!warning || typeof warning !== "object") {
+          continue;
+        }
+        const code = typeof warning.code === "string" ? warning.code : "warning";
+        const message = typeof warning.message === "string" ? warning.message : "";
+        list.appendChild(statsEl(doc, "li", {}, message ? `${message} (${code})` : code));
+      }
+      footer.appendChild(list);
+    }
+    return footer;
+  }
+
+  statsErrorCard(doc, error, view) {
+    const tried =
+      error && Array.isArray(error.tried)
+        ? error.tried
+        : (() => {
+            try {
+              const home = statsHomeDir({});
+              return [...STATS_BOB_CANDIDATES.map((relative) => `${home}/${relative}`), "bob (PATH)"];
+            } catch (inner) {
+              return ["bob (PATH)"];
+            }
+          })();
+    const model = statsErrorModel(error || { code: "failed" }, { tried });
+    const card = statsEl(doc, "div", { class: "bob-stats-error", role: "alert" });
+    card.appendChild(statsEl(doc, "div", { class: "bob-stats-error-title" }, model.title));
+    card.appendChild(statsEl(doc, "div", { class: "bob-stats-error-hint" }, model.hint));
+    if (model.retry) {
+      const retry = statsEl(doc, "button", { class: "bob-stats-chip", type: "button" }, "Retry");
+      retry.addEventListener("click", () => {
+        this.paintStatsBlock(view);
+      });
+      card.appendChild(retry);
+    }
+    return card;
   }
 }
 // ---- src/240-plugin-freshness-status.js ----
@@ -27296,6 +29054,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsHeadingReviewMixin,
   BobLedgerToolsFreshnessApiMixin,
   BobLedgerToolsStatsJournalMixin,
+  BobLedgerToolsStatsDataMixin,
+  BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
@@ -29498,4 +31258,30 @@ module.exports.helpers = {
   dashboardCollectionValidateRefsBase,
   dashboardCollectionEntryFor,
   dashboardCollectionChipModel,
+  STATS_FETCH_TIMEOUT_MS,
+  STATS_CACHE_SIZE,
+  STATS_SCHEMA_VERSION,
+  STATS_RANGE_PRESETS,
+  statsExpandHome,
+  statsHomeDir,
+  statsResolveBobPath,
+  statsReadConfigValue,
+  statsNormalizeRange,
+  statsNormalizeOffset,
+  statsBuildArgs,
+  statsCacheKey,
+  statsDecodeReport,
+  statsFirstLine,
+  statsErrorModel,
+  statsEl,
+  statsDocFor,
+  statsParseFenceOptions,
+  statsDefaultViewState,
+  statsTileModel,
+  statsSparkBars,
+  statsTableRows,
+  statsCsv,
+  statsOverviewIds,
+  statsWindowLabel,
+  statsTrackingSince,
 };

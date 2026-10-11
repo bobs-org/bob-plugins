@@ -41,7 +41,7 @@ test("stats namespace v1 serializes versioned review answer JSONL", async () => 
     plugin.onload();
     try {
       assert.equal(plugin.api.version, 3);
-      assert.equal(plugin.api.stats.version, 1);
+      assert.equal(plugin.api.stats.version, 2);
       const events = [
         { day: "2026-10-11", tier: "next", outcome: "keep", key: "a.md#^a" },
         { day: "2026-10-11", tier: "pre", outcome: "checklist", key: "b.md#^b" },

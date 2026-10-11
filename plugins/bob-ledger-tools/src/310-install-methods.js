@@ -25,6 +25,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsHeadingReviewMixin,
   BobLedgerToolsFreshnessApiMixin,
   BobLedgerToolsStatsJournalMixin,
+  BobLedgerToolsStatsDataMixin,
+  BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,

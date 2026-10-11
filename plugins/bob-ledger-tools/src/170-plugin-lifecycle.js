@@ -237,11 +237,14 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
-      // Review journal writer (stats namespace v1). Appends one validated
+      // Review journal writer (stats namespace v1) plus the Stats page
+      // data path (v2 adds `fetch` and `bobPath`). Appends one validated
       // answer event to this host's monthly JSONL file. Additive: api stays v3.
       stats: Object.freeze({
-        version: 1,
+        version: 2,
         append: (event) => this.apiStatsAppend(event),
+        fetch: (options) => this.apiStatsFetch(options),
+        bobPath: () => this.apiStatsBobPath(),
       }),
       // Work badge tones (workBadges namespace v1): shared
       // count-to-limit colors for TODAY, PENDING, NEXT, and READY.
@@ -607,6 +610,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
+    this.setupStatsBlock();
   }
 
   onunload() {
@@ -684,6 +688,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.readyLastDay = null;
     if (this.planPaintGens) {
       this.planPaintGens.clear();
+    }
+    try {
+      this.teardownStatsBlock();
+    } catch (error) {
+      // Stats teardown is best-effort.
     }
     this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
     if (

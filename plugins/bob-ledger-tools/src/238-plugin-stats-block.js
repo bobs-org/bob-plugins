@@ -118,6 +118,9 @@ class BobLedgerToolsStatsBlockMixin {
     }
     this.statsRevalidateTimer = null;
     if (this.statsBlockViews instanceof Set) {
+      for (const view of this.statsBlockViews) {
+        this.statsReleaseChartView(view);
+      }
       this.statsBlockViews.clear();
     }
     if (this.statsPaintGens instanceof Map) {
@@ -173,6 +176,7 @@ class BobLedgerToolsStatsBlockMixin {
         if (typeof MarkdownRenderChild === "function") {
           child = new MarkdownRenderChild(el);
           child.onunload = () => {
+            this.statsReleaseChartView(view);
             if (this.statsBlockViews) {
               this.statsBlockViews.delete(view);
             }
@@ -187,6 +191,7 @@ class BobLedgerToolsStatsBlockMixin {
       if (!child) {
         child = {
           unload: () => {
+            this.statsReleaseChartView(view);
             if (this.statsBlockViews) {
               this.statsBlockViews.delete(view);
             }
@@ -208,9 +213,10 @@ class BobLedgerToolsStatsBlockMixin {
   statsFetchArgsFor(view) {
     const state = this.statsViewStateFor(view && view.sourcePath);
     const fence = (view && view.fence) || {};
+    const range = state.range || fence.range || undefined;
     return {
-      range: fence.range || state.range || undefined,
-      offset: state.offset || 0,
+      range,
+      offset: range === "all" ? 0 : state.offset || 0,
       compare: state.compare === true,
     };
   }
@@ -222,6 +228,7 @@ class BobLedgerToolsStatsBlockMixin {
     if (!(this.statsPaintGens instanceof Map)) {
       this.statsPaintGens = new Map();
     }
+    view.pendingStatsFocusKey = view.pendingStatsFocusKey || statsChartActiveFocusKey(view.el);
     const paintGen = (this.statsPaintGens.get(view.el) || 0) + 1;
     this.statsPaintGens.set(view.el, paintGen);
     this.paintStatsSkeleton(view);
@@ -238,6 +245,8 @@ class BobLedgerToolsStatsBlockMixin {
             return;
           }
           this.renderStatsResult(view, result || { report: null });
+          statsChartRestoreFocus(view.el, view.pendingStatsFocusKey);
+          view.pendingStatsFocusKey = null;
         },
         (error) => {
           if (this.statsPaintGens.get(view.el) !== paintGen) {
@@ -252,6 +261,8 @@ class BobLedgerToolsStatsBlockMixin {
               detail: "",
             },
           });
+          statsChartRestoreFocus(view.el, view.pendingStatsFocusKey);
+          view.pendingStatsFocusKey = null;
         },
       );
   }
@@ -348,31 +359,49 @@ class BobLedgerToolsStatsBlockMixin {
         }
       };
       clearRevalidating();
+      this.statsReleaseChartView(view);
       if (typeof view.el.empty === "function") {
         view.el.empty();
       } else {
         view.el.textContent = "";
       }
-      const root = statsEl(doc, "div", { class: "bob-stats" });
+      const root = statsEl(doc, "div", {
+        class: "bob-stats",
+        role: "region",
+        tabindex: "0",
+        "aria-label": "Daily Stats",
+        "data-stats-focus-key": "stats-root",
+      });
       view.el.appendChild(root);
       const report = result && result.report;
       if (!report) {
+        view.report = null;
         root.appendChild(this.statsErrorCard(doc, result && result.error, view));
         return;
       }
-      root.appendChild(this.statsHeader(doc, view, report));
-      root.appendChild(this.statsTiles(doc, view, report));
-      // The focus chart and context panels render here in the charts
-      // phase, keyed by the session focus id below.
+      view.report = report;
+      if (!view.chartId) {
+        statsChartSerial += 1;
+        view.chartId = "bob-stats-chart-" + statsChartSerial;
+      }
       const state = this.statsViewStateFor(view.sourcePath);
       const fence = view.fence || {};
       const ids = statsOverviewIds(report, fence.metrics);
-      if (!state.focus || !ids.includes(state.focus)) {
-        state.focus = fence.focus && ids.includes(fence.focus) ? fence.focus : ids[0] || null;
+      const metrics = Array.isArray(report.metrics) ? report.metrics.filter((metric) => metric && typeof metric.id === "string") : [];
+      const allIds = metrics.map((metric) => metric.id);
+      if (!allIds.includes(state.focus)) {
+        state.focus = fence.focus && allIds.includes(fence.focus) ? fence.focus : ids[0] || allIds[0] || null;
+      }
+      root.appendChild(this.statsHeader(doc, view, report));
+      root.appendChild(this.statsTiles(doc, view, report));
+      const focusMetric = metrics.find((metric) => metric.id === state.focus) || null;
+      if (focusMetric) {
+        root.appendChild(this.statsChartDrawMetric(doc, view, report, focusMetric));
       }
       if (state.table) {
         root.appendChild(this.statsTable(doc, view, report));
       }
+      this.statsInstallChartKeyboard(root, view, report);
       root.appendChild(this.statsFooter(doc, report));
     } catch (error) {
       // A failed render never leaves an empty block: fall back to text.
@@ -400,6 +429,7 @@ class BobLedgerToolsStatsBlockMixin {
           class: `bob-stats-chip${activeRange === chip.id ? " bob-stats-chip-active" : ""}`,
           type: "button",
           "aria-pressed": activeRange === chip.id ? "true" : "false",
+          "data-stats-focus-key": "range-" + chip.id,
         },
         chip.label,
       );
@@ -410,18 +440,19 @@ class BobLedgerToolsStatsBlockMixin {
       });
       controls.appendChild(button);
     }
-    const custom = statsEl(doc, "button", { class: "bob-stats-chip", type: "button" }, "Custom…");
+    const custom = statsEl(doc, "button", { class: "bob-stats-chip", type: "button", "data-stats-focus-key": "range-custom" }, "Custom…");
     custom.addEventListener("click", () => {
       this.statsCustomRange(doc, view, controls);
     });
     controls.appendChild(custom);
-    const prev = statsEl(doc, "button", { class: "bob-stats-nav", type: "button", "aria-label": "Previous window" }, "‹");
+    const canShift = activeRange !== "all";
+    const prev = statsEl(doc, "button", { class: "bob-stats-nav", type: "button", "aria-label": "Previous window", disabled: !canShift, "data-stats-focus-key": "range-previous" }, "‹");
     prev.addEventListener("click", () => {
       state.offset = (state.offset || 0) + 1;
       this.paintStatsBlock(view);
     });
     controls.appendChild(prev);
-    const next = statsEl(doc, "button", { class: "bob-stats-nav", type: "button", "aria-label": "Next window" }, "›");
+    const next = statsEl(doc, "button", { class: "bob-stats-nav", type: "button", "aria-label": "Next window", disabled: !canShift || (state.offset || 0) <= 0, "data-stats-focus-key": "range-next" }, "›");
     next.addEventListener("click", () => {
       state.offset = Math.max(0, (state.offset || 0) - 1);
       this.paintStatsBlock(view);
@@ -434,6 +465,7 @@ class BobLedgerToolsStatsBlockMixin {
         class: `bob-stats-toggle${state.compare ? " bob-stats-toggle-on" : ""}`,
         type: "button",
         "aria-pressed": state.compare ? "true" : "false",
+        "data-stats-focus-key": "compare-toggle",
       },
       "☐ vs prior",
     );
@@ -449,12 +481,13 @@ class BobLedgerToolsStatsBlockMixin {
         class: `bob-stats-toggle${state.table ? " bob-stats-toggle-on" : ""}`,
         type: "button",
         "aria-pressed": state.table ? "true" : "false",
+        "data-stats-focus-key": "table-toggle",
       },
       "▦ Table",
     );
     table.addEventListener("click", () => {
       state.table = !state.table;
-      this.paintStatsBlock(view);
+      this.statsRenderLocally(view, "table-toggle");
     });
     controls.appendChild(table);
     header.appendChild(controls);
@@ -470,9 +503,9 @@ class BobLedgerToolsStatsBlockMixin {
         return;
       }
       const popover = statsEl(doc, "div", { class: "bob-stats-custom", role: "dialog", "aria-label": "Custom range" });
-      const start = statsEl(doc, "input", { class: "bob-stats-date", type: "date" });
-      const end = statsEl(doc, "input", { class: "bob-stats-date", type: "date" });
-      const apply = statsEl(doc, "button", { class: "bob-stats-chip", type: "button" }, "Apply");
+      const start = statsEl(doc, "input", { class: "bob-stats-date", type: "date", "data-stats-focus-key": "range-custom-start" });
+      const end = statsEl(doc, "input", { class: "bob-stats-date", type: "date", "data-stats-focus-key": "range-custom-end" });
+      const apply = statsEl(doc, "button", { class: "bob-stats-chip", type: "button", "data-stats-focus-key": "range-custom-apply" }, "Apply");
       apply.addEventListener("click", () => {
         const from = start.value || (start.getAttribute && start.getAttribute("value")) || "";
         const to = end.value || (end.getAttribute && end.getAttribute("value")) || "";
@@ -480,6 +513,7 @@ class BobLedgerToolsStatsBlockMixin {
         if (normalized) {
           state.range = normalized;
           state.offset = 0;
+          view.pendingStatsFocusKey = "range-custom";
           this.paintStatsBlock(view);
         }
         try {
@@ -514,6 +548,7 @@ class BobLedgerToolsStatsBlockMixin {
         class: `bob-stats-tile bob-stats-hue-${model.color}${selected ? " bob-stats-tile-selected" : ""}`,
         role: "button",
         tabindex: "0",
+        "data-stats-focus-key": "tile:" + id,
         "aria-label": `${model.label}: ${model.headline}${model.deltaWords ? `, ${model.deltaWords}` : ""}`,
       });
       tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-label" }, model.label.toUpperCase()));
@@ -554,7 +589,7 @@ class BobLedgerToolsStatsBlockMixin {
       tile.appendChild(spark);
       const select = () => {
         state.focus = id;
-        this.paintStatsBlock(view);
+        this.statsRenderLocally(view, "tile:" + id);
       };
       tile.addEventListener("click", select);
       tile.addEventListener("keydown", (event) => {
@@ -601,7 +636,7 @@ class BobLedgerToolsStatsBlockMixin {
     }
     table.appendChild(body);
     wrap.appendChild(table);
-    const copy = statsEl(doc, "button", { class: "bob-stats-chip", type: "button" }, "Copy CSV");
+    const copy = statsEl(doc, "button", { class: "bob-stats-chip", type: "button", "data-stats-focus-key": "copy-csv" }, "Copy CSV");
     copy.addEventListener("click", async () => {
       try {
         const csv = statsCsv(report);

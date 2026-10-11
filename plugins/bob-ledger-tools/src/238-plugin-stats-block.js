@@ -397,6 +397,10 @@ class BobLedgerToolsStatsBlockMixin {
       const focusMetric = metrics.find((metric) => metric.id === state.focus) || null;
       if (focusMetric) {
         root.appendChild(this.statsChartDrawMetric(doc, view, report, focusMetric));
+        const panels = this.statsRenderContextPanels(doc, view, report, focusMetric);
+        if (panels) {
+          root.appendChild(panels);
+        }
       }
       if (state.table) {
         root.appendChild(this.statsTable(doc, view, report));

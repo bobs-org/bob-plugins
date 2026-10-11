@@ -1,0 +1,334 @@
+// Pure context-panel models for the Stats metric families.
+// The focus chart owns the selected metric; these helpers shape the
+// per-family context underneath it (theme breakdowns, task flow,
+// review counterweights, checklist calendars, and chore grids).
+const STATS_PANEL_KEEP_REFERENCE = 9000;
+const STATS_PANEL_CHECKLIST_STATES = ["met", "missed", "not_due", "missing", "not_tracked"];
+const STATS_PANEL_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const STATS_PANEL_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Dispatch on metric.kind, with the built-in `net` id as the explicit
+// formula exception. Every other field/formula metric has only the
+// focus chart and table, so this returns null for those.
+function statsPanelFamily(metric) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  if (safe.id === "net") {
+    return "flow";
+  }
+  const kind = typeof safe.kind === "string" ? safe.kind : "";
+  if (kind === "pomodoro") {
+    return "pomodoro";
+  }
+  if (kind === "tasks") {
+    return "tasks";
+  }
+  if (kind === "journal") {
+    return safe.id === "keep_rate" ? "keep" : "answers";
+  }
+  if (kind === "checklist") {
+    return "checklist";
+  }
+  return null;
+}
+
+function statsPanelMetricById(report, id) {
+  const metrics = report && Array.isArray(report.metrics) ? report.metrics : [];
+  return metrics.find((metric) => metric && metric.id === id) || null;
+}
+
+function statsPanelGroup(report, metric) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  return (safe.chart && safe.chart.group) || (report && report.range && report.range.group) || "day";
+}
+
+function statsPanelSummaryEntry(entry) {
+  const safe = entry && typeof entry === "object" ? entry : {};
+  if (typeof safe.key !== "string" || !safe.key) {
+    return null;
+  }
+  return {
+    key: safe.key,
+    value: statsFinite(safe.value) ? safe.value : null,
+    display: typeof safe.display === "string" && safe.display ? safe.display : "–",
+    share: typeof safe.share === "string" ? safe.share : "",
+  };
+}
+
+// Ranked theme rows for pomodoro metrics plus the supplied period total.
+// Rust already keeps top-five-plus-other; this preserves that order for
+// ties and sorts strictly by value otherwise.
+function statsPanelThemeRows(metric) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
+  const raw = Array.isArray(summary.theme) ? summary.theme : [];
+  const rows = raw.map(statsPanelSummaryEntry).filter(Boolean);
+  rows.sort((a, b) => (b.value === null ? -1 : a.value === null ? 1 : 0) || ((b.value || 0) - (a.value || 0)));
+  const total = safe.summary && typeof safe.summary === "object" ? safe.summary.total : null;
+  return {
+    total: total && typeof total.display === "string" && total.display ? total.display : "",
+    rows,
+  };
+}
+
+function statsPanelPointByKey(points, key) {
+  return (Array.isArray(points) ? points : []).find((point) => point && statsChartPointKey(point) === key) || null;
+}
+
+// Align the four task-flow series by bucket so the panel consumes the
+// existing report series and never recomputes Net. Missing constituents
+// stay null (rendered as missing, never zero); today stays provisional.
+function statsPanelFlowRows(report) {
+  const created = statsPanelMetricById(report, "created");
+  const done = statsPanelMetricById(report, "done");
+  const dropped = statsPanelMetricById(report, "dropped");
+  const net = statsPanelMetricById(report, "net");
+  const series = [created, done, dropped, net].filter(Boolean);
+  if (!series.length) {
+    return { rows: [], present: { created: false, done: false, dropped: false, net: false } };
+  }
+  const order = [];
+  const seen = new Set();
+  for (const metric of series) {
+    for (const point of Array.isArray(metric.points) ? metric.points : []) {
+      if (!point || typeof point !== "object") {
+        continue;
+      }
+      const key = statsChartPointKey(point);
+      if (!seen.has(key)) {
+        seen.add(key);
+        order.push({ date: point.date || "", end: point.end || point.date || "", key });
+      }
+    }
+  }
+  const rows = order.map((slot) => {
+    const pick = (metric) => {
+      if (!metric) {
+        return null;
+      }
+      const point = statsPanelPointByKey(metric.points, slot.key);
+      return point || null;
+    };
+    const picked = { created: pick(created), done: pick(done), dropped: pick(dropped), net: pick(net) };
+    const values = [picked.created, picked.done, picked.dropped, picked.net].filter(
+      (point) => point && statsFinite(point.value),
+    );
+    return {
+      date: slot.date,
+      end: slot.end,
+      created: picked.created,
+      done: picked.done,
+      dropped: picked.dropped,
+      net: picked.net,
+      empty: values.length === 0,
+      provisional: [picked.created, picked.done, picked.dropped, picked.net].some(
+        (point) => point && point.provisional === true,
+      ),
+      partial: [picked.created, picked.done, picked.dropped, picked.net].some(
+        (point) => point && point.partial === true,
+      ),
+    };
+  });
+  return {
+    rows,
+    present: { created: Boolean(created), done: Boolean(done), dropped: Boolean(dropped), net: Boolean(net) },
+  };
+}
+
+function statsPanelFlowValues(rows) {
+  const values = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row.created && statsFinite(row.created.value)) {
+      values.push(row.created.value);
+    }
+    if (row.done && statsFinite(row.done.value)) {
+      values.push(-row.done.value);
+    }
+    if (row.dropped && statsFinite(row.dropped.value)) {
+      values.push(-row.dropped.value);
+    }
+    if (row.done && row.dropped && statsFinite(row.done.value) && statsFinite(row.dropped.value)) {
+      values.push(-(row.done.value + row.dropped.value));
+    }
+    if (row.net && statsFinite(row.net.value)) {
+      values.push(row.net.value);
+    }
+  }
+  return values;
+}
+
+// Null-separated polyline over point.value (the focus-chart helper only
+// reads rolling_median). Gaps stay visible on missing constituents.
+function statsPanelValuePath(points, xPositions, yFor) {
+  const values = Array.isArray(points) ? points : [];
+  const xs = Array.isArray(xPositions) ? xPositions : [];
+  if (typeof yFor !== "function") {
+    return "";
+  }
+  let path = "";
+  let drawing = false;
+  for (let index = 0; index < values.length; index += 1) {
+    const point = values[index] && typeof values[index] === "object" ? values[index] : {};
+    const x = xs[index];
+    if (!statsFinite(x) || !statsFinite(point.value)) {
+      drawing = false;
+      continue;
+    }
+    const y = yFor(point.value);
+    if (!statsFinite(y)) {
+      drawing = false;
+      continue;
+    }
+    path += (drawing ? " L " : " M ") + x + " " + y;
+    drawing = true;
+  }
+  return path.trim();
+}
+
+// Ranked dimension rows (By kind / Top notes / Answers) from the
+// supplied parts_summary. Reviewed is never plotted in task flow, but
+// its journal parts are welcome here.
+function statsPanelRankedDimension(metric, dimension) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
+  const raw = Array.isArray(summary[dimension]) ? summary[dimension] : [];
+  const rows = raw.map(statsPanelSummaryEntry).filter(Boolean);
+  rows.sort((a, b) => (b.value === null ? -1 : a.value === null ? 1 : 0) || ((b.value || 0) - (a.value || 0)) || a.key.localeCompare(b.key));
+  return rows;
+}
+
+function statsPanelTotalDisplay(metric) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const total = safe.summary && typeof safe.summary === "object" ? safe.summary.total : null;
+  if (total && typeof total.display === "string" && total.display) {
+    return total.display;
+  }
+  const headline = safe.summary && typeof safe.summary === "object" ? safe.summary.headline : null;
+  if (headline && typeof headline.display === "string" && headline.display) {
+    return headline.display;
+  }
+  return "";
+}
+
+// One checklist day cell from actual daily data. `state` is empty when
+// the schema predates checklist_state; callers omit the calendar then
+// with a short explanatory label instead of inventing history.
+function statsPanelCalendarCell(point) {
+  const safe = point && typeof point === "object" ? point : {};
+  const date = typeof safe.date === "string" ? safe.date : "";
+  const raw = typeof safe.checklist_state === "string" ? safe.checklist_state : "";
+  return {
+    date,
+    display: typeof safe.display === "string" && safe.display ? safe.display : "–",
+    reason: typeof safe.reason === "string" ? safe.reason : "",
+    quality: typeof safe.quality === "string" ? safe.quality : "",
+    provisional: safe.provisional === true,
+    state: STATS_PANEL_CHECKLIST_STATES.includes(raw) ? raw : "",
+  };
+}
+
+function statsPanelMondayLabel(mondayOrdinal) {
+  const date = new Date(mondayOrdinal * 86400000);
+  const label = STATS_PANEL_MONTHS[date.getUTCMonth()] + " " + date.getUTCDate();
+  return { label, year: date.getUTCFullYear() };
+}
+
+// Monday-aligned week columns of weekday rows from the selected daily
+// data, even when the main chart is grouped. Returns null when no daily
+// cell carries checklist_state (old schema-1 reports).
+function statsPanelCalendar(metric, report) {
+  const daily = statsChartDailyPoints(metric, report);
+  const cells = daily
+    .map(statsPanelCalendarCell)
+    .filter((cell) => cell.date && statsIsoOrdinal(cell.date) !== null);
+  if (!cells.length || !cells.some((cell) => cell.state)) {
+    return null;
+  }
+  const weeks = new Map();
+  for (const cell of cells) {
+    const ordinal = statsIsoOrdinal(cell.date);
+    const weekday = new Date(ordinal * 86400000).getUTCDay();
+    const monday = ordinal - ((weekday + 6) % 7);
+    if (!weeks.has(monday)) {
+      weeks.set(monday, { monday, slots: [null, null, null, null, null, null, null] });
+    }
+    weeks.get(monday).slots[(weekday + 6) % 7] = cell;
+  }
+  const ordered = Array.from(weeks.values()).sort((a, b) => a.monday - b.monday);
+  const years = new Set();
+  for (const week of ordered) {
+    for (const cell of week.slots) {
+      if (cell) {
+        years.add(Number(cell.date.slice(0, 4)));
+      }
+    }
+    const monday = statsPanelMondayLabel(week.monday);
+    week.label = monday.label;
+    week.year = monday.year;
+  }
+  const showYear = years.size > 1;
+  for (const week of ordered) {
+    if (showYear) {
+      week.label += " ’" + String(week.year).slice(2);
+    }
+  }
+  return { weeks: ordered };
+}
+
+// Chore-by-day states from each daily point's existing met/missed
+// parts. A chore absent on a known day is not due, while globally
+// missing/untracked days stay unknown. Returns null without chores.
+function statsPanelChoreGrid(metric, report) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const chores = (Array.isArray(safe.chores) ? safe.chores : [])
+    .filter((chore) => chore && typeof chore.key === "string" && chore.key)
+    .map((chore) => ({
+      key: chore.key,
+      met: typeof chore.met === "number" ? chore.met : null,
+      due: typeof chore.due === "number" ? chore.due : null,
+      display: typeof chore.display === "string" && chore.display ? chore.display : "",
+    }));
+  if (!chores.length) {
+    return null;
+  }
+  const days = statsChartDailyPoints(metric, report)
+    .filter((point) => point && typeof point.date === "string" && statsIsoOrdinal(point.date) !== null)
+    .map((point) => {
+      const parts = point.parts && typeof point.parts === "object" ? point.parts : {};
+      const met = parts.met && typeof parts.met === "object" ? parts.met : {};
+      const missed = parts.missed && typeof parts.missed === "object" ? parts.missed : {};
+      const unknown = point.checklist_state === "missing" || point.checklist_state === "not_tracked" ||
+        point.quality === "missing" || point.quality === "not_tracked";
+      const states = {};
+      for (const chore of chores) {
+        if (unknown) {
+          states[chore.key] = "unknown";
+        } else if (Object.prototype.hasOwnProperty.call(met, chore.key)) {
+          states[chore.key] = "met";
+        } else if (Object.prototype.hasOwnProperty.call(missed, chore.key)) {
+          states[chore.key] = "missed";
+        } else {
+          states[chore.key] = "not_due";
+        }
+      }
+      return {
+        date: point.date,
+        display: typeof point.display === "string" && point.display ? point.display : "–",
+        reason: typeof point.reason === "string" ? point.reason : "",
+        provisional: point.provisional === true,
+        states,
+      };
+    });
+  return { chores, days };
+}
+
+function statsPanelCalendarAriaLabel(cell) {
+  const parts = [cell.date || "Date unavailable", cell.display];
+  if (cell.provisional) {
+    parts.push("provisional today");
+  }
+  if (cell.reason) {
+    parts.push(cell.reason);
+  }
+  parts.push("state: " + (cell.state ? cell.state.replace(/_/g, " ") : "unknown"));
+  return parts.filter(Boolean).join(" · ");
+}

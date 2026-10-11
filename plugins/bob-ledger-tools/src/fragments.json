@@ -34,6 +34,8 @@
   "238-plugin-stats-block.js",
   "239-plugin-stats-chart-models.js",
   "239-plugin-stats-chart-render.js",
+  "239-plugin-stats-panel-models.js",
+  "239-plugin-stats-panel-render.js",
   "240-plugin-freshness-status.js",
   "250-plugin-freshness-mark-model.js",
   "260-plugin-freshness-mark-render.js",

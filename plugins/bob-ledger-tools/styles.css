@@ -2183,6 +2183,333 @@ body:not(.bob-unblocked-glyphs) .bob-unblocked-glyph {
   margin: 0.3rem 0 0.6rem;
 }
 
+/* Family context panels (bob-cli-6l.5.1.3): theme breakdowns, task
+   flow, review counterweights, checklist calendars, and chore grids.
+   Panels reuse the focus chart tokens, hue slots, and legend row. */
+.bob-stats-panel {
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--background-modifier-border);
+  border-inline-start: 2px solid var(--bob-stats-tile-hue, var(--interactive-accent));
+  padding-inline-start: 0.6rem;
+}
+
+.bob-stats-panel-title {
+  font-size: 0.95em;
+  font-weight: 650;
+  color: var(--text-normal);
+}
+
+.bob-stats-panel-heading {
+  margin-top: 0.5rem;
+  font-size: 0.78em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.bob-stats-panel-total {
+  margin-top: 0.2rem;
+  font-size: 0.88em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
+}
+
+.bob-stats-panel-note {
+  margin-top: 0.3rem;
+  font-size: 0.82em;
+  color: var(--text-muted);
+}
+
+.bob-stats-panel-bars {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.bob-stats-panel-bar-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 12rem) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.bob-stats-panel-bar-track {
+  display: block;
+  height: 10px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  overflow: hidden;
+}
+
+.bob-stats-panel-bar-thin {
+  height: 6px;
+}
+
+.bob-stats-panel-bar-fill {
+  display: block;
+  height: 100%;
+  background-color: var(--bob-stats-tile-hue, var(--text-muted));
+}
+
+.bob-stats-panel-bar-text {
+  font-size: 0.84em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
+}
+
+.bob-stats-panel-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.bob-stats-flow-net {
+  stroke: var(--text-normal);
+  stroke-width: 2;
+}
+
+.bob-stats-flow-today {
+  fill: transparent;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.bob-stats-legend-created::before,
+.bob-stats-legend-done::before,
+.bob-stats-legend-dropped::before,
+.bob-stats-legend-net::before,
+.bob-stats-legend-keep::before,
+.bob-stats-legend-reference::before {
+  content: "";
+  display: inline-block;
+  width: 0.7rem;
+  margin-inline-end: 0.3rem;
+  vertical-align: baseline;
+}
+
+.bob-stats-legend-created::before {
+  height: 0.55rem;
+  border-radius: 2px 2px 0 0;
+  background: var(--bob-stats-blue);
+}
+
+.bob-stats-legend-done::before {
+  height: 0.55rem;
+  border-radius: 0 0 2px 2px;
+  background: var(--bob-stats-green);
+}
+
+.bob-stats-legend-dropped::before {
+  height: 0.55rem;
+  border-radius: 0 0 2px 2px;
+  background: var(--bob-stats-gray);
+}
+
+.bob-stats-legend-net::before {
+  width: 0.7rem;
+  border-top: 2px solid var(--text-normal);
+}
+
+.bob-stats-legend-keep::before {
+  width: 0.7rem;
+  border-top: 2px solid var(--bob-stats-violet);
+}
+
+.bob-stats-legend-reference::before {
+  width: 0.7rem;
+  border-top: 1.5px dashed var(--text-muted);
+}
+
+.bob-stats-keep-line {
+  stroke: var(--bob-stats-tile-hue, var(--text-muted));
+  stroke-width: 2;
+}
+
+.bob-stats-keep-point {
+  fill: var(--bob-stats-tile-hue, var(--text-muted));
+}
+
+.bob-stats-keep-today {
+  fill: transparent;
+  stroke: var(--bob-stats-tile-hue, var(--text-muted));
+  stroke-width: 1.5;
+}
+
+.bob-stats-keep-reference {
+  stroke: var(--text-muted);
+}
+
+.bob-stats-keep-reference-label {
+  fill: var(--text-muted);
+  font-size: 11px;
+}
+
+.bob-stats-panel-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin-top: 0.4rem;
+  padding-bottom: 0.3rem;
+}
+
+.bob-stats-cal,
+.bob-stats-chores {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
+}
+
+.bob-stats-cal th,
+.bob-stats-cal td,
+.bob-stats-chores th,
+.bob-stats-chores td {
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 0.2em 0.45em;
+  text-align: center;
+  font-size: 0.82em;
+}
+
+.bob-stats-cal th[scope="row"],
+.bob-stats-chores th[scope="row"] {
+  text-align: start;
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bob-stats-cal th[scope="col"],
+.bob-stats-chores th[scope="col"] {
+  color: var(--text-muted);
+  font-size: 0.75em;
+  white-space: nowrap;
+}
+
+.bob-stats-cal-cell,
+.bob-stats-dot-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.9rem;
+  min-height: 1.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.bob-stats-cal-cell:focus-visible,
+.bob-stats-dot-cell:focus-visible,
+.bob-stats-panel-scroll:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+.bob-stats-cal-day {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
+}
+
+.bob-stats-cal-met {
+  background-color: color-mix(in srgb, var(--bob-stats-tile-hue, var(--interactive-accent)) 32%, transparent);
+  border: 1px solid var(--bob-stats-tile-hue, var(--interactive-accent));
+}
+
+.bob-stats-cal-missed {
+  border: 1.5px solid var(--bob-stats-tile-hue, var(--interactive-accent));
+}
+
+.bob-stats-cal-not_due {
+  border: 1px solid transparent;
+}
+
+.bob-stats-cal-missing {
+  border: 1px dashed var(--text-faint);
+  background: repeating-linear-gradient(45deg, transparent 0 3px, color-mix(in srgb, var(--text-faint) 30%, transparent) 3px 4px);
+}
+
+.bob-stats-cal-not_tracked {
+  border: 1px solid transparent;
+  opacity: 0.45;
+}
+
+.bob-stats-cal-today {
+  outline: 1.5px solid var(--bob-stats-tile-hue, var(--interactive-accent));
+  outline-offset: 1px;
+}
+
+.bob-stats-cal-pad {
+  display: inline-block;
+  min-width: 1.9rem;
+}
+
+.bob-stats-dot {
+  font-size: 0.9em;
+  line-height: 1;
+}
+
+.bob-stats-dot-cell {
+  border-radius: 50%;
+  min-width: 1.7rem;
+  min-height: 1.7rem;
+}
+
+.bob-stats-dot-met .bob-stats-dot {
+  color: var(--bob-stats-tile-hue, var(--text-muted));
+}
+
+.bob-stats-dot-missed {
+  border: 1.5px solid var(--bob-stats-tile-hue, var(--interactive-accent));
+}
+
+.bob-stats-dot-missed .bob-stats-dot {
+  color: transparent;
+}
+
+.bob-stats-dot-not_due .bob-stats-dot {
+  color: transparent;
+}
+
+.bob-stats-dot-unknown {
+  border: 1px dashed var(--text-faint);
+}
+
+.bob-stats-dot-unknown .bob-stats-dot {
+  color: var(--text-faint);
+}
+
+.bob-stats-cal-swatch {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 3px;
+  margin-inline-end: 0.3rem;
+  vertical-align: -1px;
+  border: 1px solid var(--bob-stats-tile-hue, var(--interactive-accent));
+}
+
+.bob-stats-cal-swatch.bob-stats-cal-met {
+  background-color: var(--bob-stats-tile-hue, var(--interactive-accent));
+}
+
+.bob-stats-cal-swatch.bob-stats-cal-not_due,
+.bob-stats-cal-swatch.bob-stats-cal-not_tracked {
+  border-color: var(--text-faint);
+}
+
+.bob-stats-cal-swatch.bob-stats-cal-missing {
+  border-style: dashed;
+  border-color: var(--text-faint);
+}
+
+.bob-stats-panel-chores {
+  margin: 0.35rem 0 0;
+  padding-inline-start: 1.2rem;
+  color: var(--text-normal);
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-stats-revalidating .bob-stats {
     opacity: 1;
@@ -2216,6 +2543,36 @@ body:not(.bob-unblocked-glyphs) .bob-unblocked-glyph {
   .bob-stats-chart-prior {
     fill: CanvasText;
     stroke: CanvasText;
+  }
+  .bob-stats-panel-bar-fill {
+    background-color: CanvasText;
+  }
+  .bob-stats-flow-net,
+  .bob-stats-keep-line {
+    stroke: CanvasText;
+  }
+  .bob-stats-keep-point,
+  .bob-stats-dot-met .bob-stats-dot {
+    fill: CanvasText;
+    color: CanvasText;
+  }
+  .bob-stats-keep-today,
+  .bob-stats-dot-missed,
+  .bob-stats-cal-missed,
+  .bob-stats-cal-today {
+    stroke: Highlight;
+    border-color: Highlight;
+    outline-color: Highlight;
+  }
+  .bob-stats-cal-met {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+  .bob-stats-keep-reference,
+  .bob-stats-dot-unknown,
+  .bob-stats-cal-missing {
+    stroke: CanvasText;
+    border-color: CanvasText;
   }
   .bob-stats-chart-band,
   .bob-stats-chart-missing {

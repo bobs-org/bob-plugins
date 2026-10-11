@@ -27,6 +27,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysReviewAdvanceMixin,
   BobNavigationHotkeysReviewMoveMixin,
   BobNavigationHotkeysReviewReturnMixin,
+  BobNavigationHotkeysReviewJournalMixin,
   BobNavigationHotkeysDecayCancelMixin,
   BobNavigationHotkeysCancelPropertyMixin,
   BobNavigationHotkeysCountedRollMixin,

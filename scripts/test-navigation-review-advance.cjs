@@ -195,7 +195,9 @@ function makePlugin({ rows, activePath, cursorLine = 0, freshnessOptions = {}, w
   };
   const freshness = freshnessApi(queueState, freshnessOptions);
   const plugins = {
-    "bob-ledger-tools": { api: { version: 3, freshness } },
+    "bob-ledger-tools": {
+      api: { version: 3, freshness, stats: { version: 1, append: async () => {} } },
+    },
   };
   if (withCycler) {
     plugins["task-status-cycler"] = {

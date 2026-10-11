@@ -422,6 +422,11 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         Array.isArray(answerKeys.answeredRefs) ? answerKeys.answeredRefs : [],
         todayText,
       );
+      this.recordReviewAnswer(
+        origin,
+        input && (input.journalOutcome || input.outcome || input.kind),
+        Array.isArray(answerKeys.answeredRefs) ? answerKeys.answeredRefs : [],
+      );
       const before = Array.isArray(origin.queueBefore) ? origin.queueBefore : [];
       const originRowKey =
         typeof origin.rowKey === "string" && origin.rowKey

@@ -241,7 +241,9 @@ function makePlugin({ filePath, editor, freshness, cycler }) {
   const view = { file, editor };
   const plugin = Object.create(NavigationHotkeysPlugin.prototype);
   const plugins = {
-    "bob-ledger-tools": { api: { version: 3, freshness } },
+    "bob-ledger-tools": {
+      api: { version: 3, freshness, stats: { version: 1, append: async () => {} } },
+    },
   };
   if (cycler) {
     plugins["task-status-cycler"] = { api: cycler };

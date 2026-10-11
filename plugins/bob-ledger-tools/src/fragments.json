@@ -28,6 +28,7 @@
   "210-plugin-ready-notes.js",
   "220-plugin-heading-and-review.js",
   "230-plugin-freshness-api.js",
+  "235-plugin-stats-journal.js",
   "240-plugin-freshness-status.js",
   "250-plugin-freshness-mark-model.js",
   "260-plugin-freshness-mark-render.js",

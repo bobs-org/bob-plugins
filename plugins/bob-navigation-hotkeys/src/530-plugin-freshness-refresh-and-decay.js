@@ -228,6 +228,26 @@ class BobNavigationHotkeysFreshnessDecayMixin {
   finishFreshStamp(queueBefore, countsBefore, refs, stamped, dateText, extra = {}) {
     this.endReviewWalkCurrentForRefs(refs);
     const matched = matchFreshStampRefs(queueBefore, refs);
+    const changedRefs = (Array.isArray(refs) ? refs : []).filter(
+      (_ref, index) =>
+        Array.isArray(stamped) &&
+        stamped[index] &&
+        stamped[index].after !== stamped[index].before,
+    );
+    const changedMatch = matchFreshStampRefs(queueBefore, changedRefs);
+    const landing = this.reviewLanding;
+    if (
+      landing &&
+      landing.day === dateText &&
+      Array.isArray(changedMatch.keys) &&
+      changedMatch.keys.includes(landing.key)
+    ) {
+      this.recordReviewAnswer(
+        { ...landing, rowKey: landing.key, queueBefore },
+        (extra && extra.journalOutcome) || "keep",
+        changedMatch.keys.map((key) => ({ key })),
+      );
+    }
     this.reviewAnchor =
       matched.count > 0
         ? buildReviewAnchor(queueBefore, matched.keys, matched.rank, dateText)
@@ -640,34 +660,35 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         return false;
       }
       const key = String(action || "");
+      let applied = false;
       if (key === "notNow") {
-        return await this.applyFreshnessDecayCardDeferral(
+        applied = await this.applyFreshnessDecayCardDeferral(
           cardCtx,
           check.live,
           cardCtx.plan.notNow,
         );
-      }
-      if (key.startsWith("level:")) {
+      } else if (key.startsWith("level:")) {
         const index = Number(key.slice("level:".length));
         const pick =
           cardCtx.plan.levels && Number.isInteger(index)
             ? cardCtx.plan.levels[index]
             : null;
-        return await this.applyFreshnessDecayCardDeferral(cardCtx, check.live, pick);
-      }
-      if (key === "lessOften") {
+        applied = await this.applyFreshnessDecayCardDeferral(cardCtx, check.live, pick);
+      } else if (key === "lessOften") {
+        // The picker form has not committed yet. The eventual writer records
+        // lessOften only after its editor transaction succeeds.
         return await this.applyFreshnessDecayCardLessOften(cardCtx, check.live);
+      } else if (key === "reword") {
+        applied = await this.applyFreshnessDecayCardReword(cardCtx, check.live);
+      } else if (key === "drop") {
+        applied = await this.applyFreshnessDecayCardDrop(cardCtx, check.live);
+      } else if (key === "keep") {
+        applied = await this.applyFreshnessDecayCardKeep(cardCtx, check.live);
       }
-      if (key === "reword") {
-        return await this.applyFreshnessDecayCardReword(cardCtx, check.live);
+      if (applied) {
+        this.recordFreshnessDecayReviewAnswer(cardCtx, key);
       }
-      if (key === "drop") {
-        return await this.applyFreshnessDecayCardDrop(cardCtx, check.live);
-      }
-      if (key === "keep") {
-        return await this.applyFreshnessDecayCardKeep(cardCtx, check.live);
-      }
-      return false;
+      return applied === true;
     } catch (error) {
       new Notice("Could not update task; no tasks were updated");
       return false;
@@ -877,6 +898,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
+      this.recordFreshnessDecayReviewAnswer(cardCtx, "lessOften");
       this.rememberFreshnessDecayCardAnchor(cardCtx);
       new Notice(`Less often · every ${beforeDays} → ${days} days · kept ${cardCtx.keeps}×`);
       await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "lessOften");

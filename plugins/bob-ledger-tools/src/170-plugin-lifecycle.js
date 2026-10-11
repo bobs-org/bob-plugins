@@ -203,6 +203,7 @@ class BobLedgerToolsPlugin extends Plugin {
     // from the daily note's text (never awaited inside the api); before
     // the first build `isToday` returns false for every task.
     this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
+    this.statsAppendQueue = Promise.resolve();
     this.api = Object.freeze({
       version: 3,
       caps: () => loadPlanCaps().caps,
@@ -236,6 +237,12 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReadyBadge(parent, options),
       renderReviewChip: (parent, options = {}) =>
         this.renderReviewChip(parent, options),
+      // Review journal writer (stats namespace v1). Appends one validated
+      // answer event to this host's monthly JSONL file. Additive: api stays v3.
+      stats: Object.freeze({
+        version: 1,
+        append: (event) => this.apiStatsAppend(event),
+      }),
       // Work badge tones (workBadges namespace v1): shared
       // count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous

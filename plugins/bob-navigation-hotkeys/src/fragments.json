@@ -66,6 +66,7 @@
   "538-review-walk-identity.js",
   "539-plugin-review-walk-return.js",
   "540-plugin-decay-picker-and-cancel.js",
+  "545-plugin-review-journal.js",
   "550-plugin-cancel-and-counted-property.js",
   "560-plugin-counted-priority-and-roll.js",
   "570-plugin-link-roll-and-schedule.js",

@@ -266,6 +266,17 @@ class BobNavigationHotkeysChecklistWalkMixin {
       [{ key: entryKey, text: entry.originalMarkdown }],
       todayText,
     );
+    this.recordReviewAnswer(
+      {
+        day: todayText,
+        key: entryKey,
+        rowKey: entryKey,
+        tier,
+        queueBefore,
+      },
+      "checklist",
+      [{ key: entryKey, text: entry.originalMarkdown, tier }],
+    );
     // The pre-landing cursor for the `<C-o>` jump record: the completed row.
     const jumpOrigin = {
       path: filePath,

@@ -1,6 +1,9 @@
 class BobNavigationHotkeysPlugin extends Plugin {
   onload() {
     this.taskCardPluginUnloading = false;
+    this.reviewJournalPending = [];
+    this.reviewJournalDraining = false;
+    this.reviewJournalRetryTimer = null;
     this.currentFilePath = null;
     this.alternateFilePath = null;
     this.filePositions = new Map();
@@ -371,6 +374,10 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
+    if (this.reviewJournalRetryTimer !== null) {
+      clearTimeout(this.reviewJournalRetryTimer);
+      this.reviewJournalRetryTimer = null;
+    }
     this.linkPickerRequestToken = (this.linkPickerRequestToken || 0) + 1;
     if (this.activeBulletPropertyPicker) {
       try {

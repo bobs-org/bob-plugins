@@ -289,7 +289,13 @@ function makePlugin({ rows, activePath, cursorLine = 0, areaPaths = [] }) {
   const freshness = freshnessApi(queueState);
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
-    plugins: { plugins: { "bob-ledger-tools": { api: { version: 3, freshness } } } },
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: { version: 3, freshness, stats: { version: 1, append: async () => {} } },
+        },
+      },
+    },
     workspace,
     vault,
     metadataCache,

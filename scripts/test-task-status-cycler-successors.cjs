@@ -663,6 +663,10 @@ test("PDC3 keeps a project resident Blocked when its own prerequisite remains op
   const resident = plan.still_blocked.find((row) => row.block_id === "release-notes");
   assert.equal(resident.reason, "waits_on");
   assert.equal(resident.waits_on, 1);
+  const tagStrip = plan.edits.find((edit) => edit.before.includes("^release-notes"));
+  assert.ok(tagStrip);
+  assert.match(tagStrip.after, /^- \[\?\]/);
+  assert.doesNotMatch(tagStrip.after, /#prj_is_blocked/);
   const recovered = plan.unblocked.find((row) => row.block_id === "publish");
   assert.equal(recovered.not_linked, "project_member");
   assert.equal(recovered.status_symbol, " ");

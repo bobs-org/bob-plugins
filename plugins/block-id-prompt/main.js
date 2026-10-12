@@ -1749,12 +1749,15 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     : null;
   const projectScheduleIsFuture = !!projectSchedule &&
     compareCalendarDates(projectSchedule, todayParts) > 0;
-  const projectDateRefusal = target.blockId === "prj" && !!ownSchedule;
   const projectDependencyBlocked =
     (resident && (projectOpen.length > 0 || !projectScheduleIsFuture)) ||
     (target.blockId === "prj" && ownOpen.length > 0);
   const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
     projectOpen.length > 0;
+  // A project's own date is a special refusal only when it is the sole
+  // remaining reason. Dependency reasons take precedence and can be raised.
+  const projectDateRefusal = target.blockId === "prj" && !!ownSchedule &&
+    !dependencyBlocked;
   if (!dependencyBlocked && !projectScheduleIsFuture && !projectDateRefusal) {
     return { blocked: false, target, ownSchedule };
   }
@@ -4138,9 +4141,14 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   }
 
   let newStatus = currentStatus;
-  if (forceNext && !isProjectTask) {
-    // Linking never lowers a lane: only Ready and Blocked rise to Next.
-    if (currentStatus === " " || currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS) {
+  if (forceNext) {
+    // A direct Task Link raises any task, including ^prj, without lowering
+    // an existing lane. A future-dated ^prj remains Blocked; dependency
+    // promotion excludes ^prj elsewhere.
+    if (
+      (currentStatus === " " || currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS) &&
+      (!isProjectTask || !findSingleFutureScheduledField(lineText, today))
+    ) {
       newStatus = "*";
     }
   } else if (activationEligible) {
@@ -8298,21 +8306,21 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    if (plan.projectDateRefusal) {
-      new Notice(
-        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
-      );
-    } else if (plan.projectScheduleIsFuture) {
-      new Notice(
-        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
-      );
-    } else if (plan.dependencyBlocked) {
+    if (plan.dependencyBlocked) {
       const promotionText = applied > 0
         ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
         : "prerequisites already raised";
       const suffix = failed ? " · some updates failed" : "";
       new Notice(
         `${plan.projectDependencyBlocked ? "Project blocked by dependency" : "Task blocked"} · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
+      );
+    } else if (plan.projectDateRefusal) {
+      new Notice(
+        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
+      );
+    } else if (plan.projectScheduleIsFuture) {
+      new Notice(
+        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
       );
     } else {
       new Notice(`Task blocked · project reason in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`);

@@ -651,6 +651,12 @@ function planSuccessors(options = {}) {
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [...byTaskId.values()];
   const { projectInfoByPath, projectRecoveryPaths } =
     projectSuccessorRecoveryState(noteTexts, closedTaskIds, openIdsAfter, today);
+  const projectTagStripEdits = projectSuccessorTagStripEdits(
+    projectInfoByPath,
+    projectRecoveryPaths,
+    openIdsAfter,
+    today,
+  );
   const candidateByLocation = new Map();
   for (const task of allTasks) {
     if (
@@ -858,7 +864,7 @@ function planSuccessors(options = {}) {
   }
 
   const unblocked = [];
-  const edits = [];
+  const edits = [...projectTagStripEdits];
   let placements = [];
 
   const pushRecover = (task, reason, predecessorRows, always) => {
@@ -873,6 +879,8 @@ function planSuccessors(options = {}) {
       ? rewriteRecoveredTaskLine(before, rank, {
         markUnblockedLine,
         today,
+        isDailyNote: isDailyNotePath(task.path),
+        isToday: hasLiveLink(liveAfter, task),
       })
       : null;
     if (before !== after) {

@@ -67,7 +67,7 @@ test("project-blocked member consumption promotes the project's open prerequisit
       { path: "jobs.md", text: prerequisite },
     ],
     "projects/release.md",
-    5,
+    4,
     new Date(2026, 7, 15),
   );
   assert.equal(plan.blocked, true);
@@ -123,6 +123,29 @@ test("project schedule blocks residents without promotion, while a task's own sc
   );
   assert.equal(ownSchedule.blocked, false);
   assert.equal(ownSchedule.ownSchedule.value, "2026-08-20");
+});
+
+test("project date refusal applies only when the date is the sole project reason", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch [scheduled:: 2026-08-20] [dependsOn:: jobs__review] ^prj",
+    "- [?] #task Resident #prj_is_blocked ^resident",
+  ].join("\n");
+  const plan = helpers.planTaskLinkBlockConsumption(
+    [
+      { path: "projects/launch.md", text: project },
+      { path: "jobs.md", text: "- [ ] #task Review [id:: jobs__review] ^review" },
+    ],
+    "projects/launch.md",
+    4,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(plan.projectDateRefusal, false);
+  assert.equal(plan.dependencyBlocked, true);
+  assert.deepEqual(plan.promoted, ["jobs__review"]);
 });
 
 test("a project-blocked tag is token-bounded and ignored on lookalike tags", () => {

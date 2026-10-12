@@ -403,9 +403,14 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   }
 
   let newStatus = currentStatus;
-  if (forceNext && !isProjectTask) {
-    // Linking never lowers a lane: only Ready and Blocked rise to Next.
-    if (currentStatus === " " || currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS) {
+  if (forceNext) {
+    // A direct Task Link raises any task, including ^prj, without lowering
+    // an existing lane. A future-dated ^prj remains Blocked; dependency
+    // promotion excludes ^prj elsewhere.
+    if (
+      (currentStatus === " " || currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS) &&
+      (!isProjectTask || !findSingleFutureScheduledField(lineText, today))
+    ) {
       newStatus = "*";
     }
   } else if (activationEligible) {

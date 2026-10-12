@@ -16,6 +16,17 @@ function stripProjectBlockedResidentTag(lineText) {
     );
 }
 
+function projectRecoveryTaskIsToday(plugin, task) {
+  try {
+    const plugins = plugin && plugin.app && plugin.app.plugins;
+    const ledger = plugins && plugins.plugins && plugins.plugins["bob-ledger-tools"];
+    const isToday = ledger && ledger.api && ledger.api.isToday;
+    return typeof isToday === "function" ? Boolean(isToday(task)) : false;
+  } catch (error) {
+    return false;
+  }
+}
+
 function rewriteRecoveredTaskLine(lineText, statusSymbol, options = {}) {
   const source = String(lineText || "");
   const current = getTaskStatusForLine(source);
@@ -27,6 +38,10 @@ function rewriteRecoveredTaskLine(lineText, statusSymbol, options = {}) {
       typeof options.markUnblockedLine === "function") {
     const marked = options.markUnblockedLine(next, {
       today: options.today || formatLocalDate(),
+      isDailyNote: Boolean(options.isDailyNote),
+      isToday: typeof options.isToday === "function"
+        ? Boolean(options.isToday(options.task || current))
+        : Boolean(options.isToday),
     });
     if (typeof marked !== "string") {
       return null;

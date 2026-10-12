@@ -578,12 +578,15 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     : null;
   const projectScheduleIsFuture = !!projectSchedule &&
     compareCalendarDates(projectSchedule, todayParts) > 0;
-  const projectDateRefusal = target.blockId === "prj" && !!ownSchedule;
   const projectDependencyBlocked =
     (resident && (projectOpen.length > 0 || !projectScheduleIsFuture)) ||
     (target.blockId === "prj" && ownOpen.length > 0);
   const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
     projectOpen.length > 0;
+  // A project's own date is a special refusal only when it is the sole
+  // remaining reason. Dependency reasons take precedence and can be raised.
+  const projectDateRefusal = target.blockId === "prj" && !!ownSchedule &&
+    !dependencyBlocked;
   if (!dependencyBlocked && !projectScheduleIsFuture && !projectDateRefusal) {
     return { blocked: false, target, ownSchedule };
   }

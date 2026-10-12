@@ -820,7 +820,7 @@ test("planTargetTaskUpdate forceNext never creates a Schedule Log for a task tha
   assert.equal(plan.content, "- [*] #task Ship it");
 });
 
-test("planTargetTaskUpdate never pulls a ^prj date forward or raises the project task", () => {
+test("direct Task Links raise ^prj while never pulling its date forward", () => {
   const now = localDate(2026, 8, 15);
   const source = "- [?] #task #prj Launch the project [scheduled:: 2026-08-20] ^prj";
   const plan = helpers.planTargetTaskUpdate(source, 0, {
@@ -832,4 +832,12 @@ test("planTargetTaskUpdate never pulls a ^prj date forward or raises the project
   assert.equal(plan.statusChanged, false);
   assert.equal(plan.newStatus, "?");
   assert.equal(plan.content, source);
+
+  const unscheduled = helpers.planTargetTaskUpdate(
+    "- [ ] #task #prj Launch the project ^prj",
+    0,
+    { forceNext: true, now },
+  );
+  assert.equal(unscheduled.newStatus, "*");
+  assert.equal(unscheduled.content, "- [*] #task #prj Launch the project ^prj");
 });

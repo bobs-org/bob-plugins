@@ -310,14 +310,9 @@ class TaskStatusCyclerReferencesMixin {
     }
     const markUnblockedLine = this.getFreshnessMarkUnblockedLine();
     if (plan.edits.length > 0 && typeof markUnblockedLine !== "function") {
-      for (const edit of plan.edits) {
-        recordFailure(
-          edit.path,
-          "bob-ledger-tools freshness namespace v12 is required for recovery",
-        );
-      }
-      new Notice("Blocked tasks stayed blocked: update bob-ledger-tools to freshness v12 first.");
-      return { reopened: 0, failures };
+      console.warn(
+        "Task Status Cycler: recovering blocked tasks without [unblocked::]; update bob-ledger-tools to freshness v12 to record review ticklers.",
+      );
     }
     const editsByPath = new Map();
     for (const edit of plan.edits) {
@@ -341,16 +336,18 @@ class TaskStatusCyclerReferencesMixin {
             : null;
           if (
             !task ||
-            task.status !== "?" ||
-            task.statusStart !== edit.statusStart ||
+            (edit.recover && (task.status !== "?" || task.statusStart !== edit.statusStart)) ||
             typeof editor.replaceRange !== "function"
           ) {
             recordFailure(path, `line ${edit.line + 1} changed before recovery`);
             continue;
           }
-          const rewritten = rewriteRecoveredTaskLine(currentLine, " ", {
+          const rewritten = rewriteRecoveredTaskLine(currentLine, edit.recover ? " " : task.status, {
             markUnblockedLine,
             today: recoveryToday,
+            task,
+            isDailyNote: isDailyNotePath(path),
+            isToday: (task) => projectRecoveryTaskIsToday(this, task),
           });
           if (typeof rewritten !== "string") {
             recordFailure(path, `line ${edit.line + 1} could not be marked unblocked`);
@@ -361,7 +358,7 @@ class TaskStatusCyclerReferencesMixin {
             { line: edit.line, ch: 0 },
             { line: edit.line, ch: currentLine.length },
           );
-          reopened += 1;
+          if (edit.recover !== false) reopened += 1;
         }
         if (cursor && typeof editor.setCursor === "function") {
           const cursorLine = editor.getLine(cursor.line) || "";
@@ -384,6 +381,8 @@ class TaskStatusCyclerReferencesMixin {
           result = applyBlockedDependentRecoveryEdits(text, edits, {
             markUnblockedLine,
             today: recoveryToday,
+            isDailyNote: isDailyNotePath(path),
+            isToday: (task) => projectRecoveryTaskIsToday(this, task),
           });
           return result.text;
         };

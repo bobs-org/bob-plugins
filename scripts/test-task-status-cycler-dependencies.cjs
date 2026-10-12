@@ -199,6 +199,63 @@ test("blocked-dependent edits preserve EOLs and skip stale lines idempotently", 
   assert.equal(second.text, applied.text);
 });
 
+test("project recovery strips resident tags and works without freshness v12", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Release [dependsOn:: closed__root] ^prj",
+    "- [?] #task Own blocker [dependsOn:: open__root] #prj_is_blocked ^own-blocked",
+    "- [*] #task Already Next #prj_is_blocked ^already-next",
+    "- [?] #task Ready to recover #prj_is_blocked ^recover",
+  ].join("\n");
+  const docs = [
+    { path: "projects/release.md", text: project },
+    { path: "closed.md", text: "- [x] #task Closed [id:: closed__root] ^root" },
+    { path: "open.md", text: "- [ ] #task Still open [id:: open__root] ^root" },
+  ];
+  const plan = helpers.buildBlockedDependentRecoveryPlan(
+    docs,
+    [{ path: "closed.md", taskId: "closed__root" }],
+    { today: "2026-10-12" },
+  );
+  const residentEdits = plan.edits.filter((edit) => edit.path === "projects/release.md");
+  assert.deepEqual(
+    residentEdits.map((edit) => [edit.line, edit.recover]),
+    [[4, true], [5, false], [6, false], [7, true]],
+  );
+  const applied = helpers.applyBlockedDependentRecoveryEdits(
+    project,
+    residentEdits,
+    { today: "2026-10-12" },
+  );
+  assert.match(applied.text, /^- \[\?\] #task Own blocker \[dependsOn:: open__root\] \^own-blocked$/m);
+  assert.match(applied.text, /^- \[\*\] #task Already Next \^already-next$/m);
+  assert.match(applied.text, /^- \[ \] #task Ready to recover \^recover$/m);
+  assert.doesNotMatch(applied.text, /#prj_is_blocked/);
+});
+
+test("recovery passes daily-note and Today skip flags to ledger freshness", () => {
+  const source = "- [?] #task Recover this [dependsOn:: closed__root] ^recover";
+  const plan = helpers.buildBlockedDependentRecoveryPlan(
+    [{ path: "2026/20261012.md", text: source }],
+    [{ path: "closed.md", taskId: "closed__root" }],
+    { today: "2026-10-12" },
+  );
+  let observed = null;
+  helpers.applyBlockedDependentRecoveryEdits(source, plan.edits, {
+    today: "2026-10-12",
+    isToday: () => true,
+    markUnblockedLine: (line, options) => {
+      observed = options;
+      return line;
+    },
+  });
+  assert.equal(observed.isDailyNote, true);
+  assert.equal(observed.isToday, true);
+});
+
 test("normalization mappings propagate to every dependent file", async () => {
   const harness = createInMemoryObsidianApp({
     "Target.md": "- [ ] #task Target [id:: old] ^review",

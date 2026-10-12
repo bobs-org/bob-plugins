@@ -299,21 +299,21 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    if (plan.projectDateRefusal) {
-      new Notice(
-        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
-      );
-    } else if (plan.projectScheduleIsFuture) {
-      new Notice(
-        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
-      );
-    } else if (plan.dependencyBlocked) {
+    if (plan.dependencyBlocked) {
       const promotionText = applied > 0
         ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
         : "prerequisites already raised";
       const suffix = failed ? " · some updates failed" : "";
       new Notice(
         `${plan.projectDependencyBlocked ? "Project blocked by dependency" : "Task blocked"} · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
+      );
+    } else if (plan.projectDateRefusal) {
+      new Notice(
+        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
+      );
+    } else if (plan.projectScheduleIsFuture) {
+      new Notice(
+        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
       );
     } else {
       new Notice(`Task blocked · project reason in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`);

@@ -244,7 +244,6 @@ function projectSuccessorRecoveryState(noteTexts, closedIds, openIdsAfter, today
     if (
       projectTask.status === "?" &&
       project.dependencyIds.some((id) => closedIds.has(String(id))) &&
-      !findSingleFutureScheduledField(projectTask.lineText, today) &&
       !projectIsBlockedAfter(project, openIdsAfter, today, closedIds)
     ) {
       projectRecoveryPaths.add(path);
@@ -278,6 +277,24 @@ function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
     }
   }
   return members;
+}
+
+function projectSuccessorTagStripEdits(projectInfoByPath, recoveryPaths, openIds, today) {
+  const edits = [];
+  for (const path of recoveryPaths || []) {
+    const project = projectInfoByPath.get(path);
+    for (const task of project ? project.tasks : []) {
+      if (task.blockId === "prj" || !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
+          !hasProjectBlockedResidentTag(task.lineText)) continue;
+      const willRecover = task.status === "?" &&
+        !task.dependsOn.some((id) => openIds.has(String(id))) &&
+        !findSingleFutureScheduledField(task.lineText, today);
+      if (willRecover) continue;
+      const after = rewriteRecoveredTaskLine(task.lineText, task.status);
+      if (after !== task.lineText) edits.push({ path, line: task.line, before: task.lineText, after });
+    }
+  }
+  return edits;
 }
 
 function isProjectBlockedResidentTaskInDocument(sourceText, path, line) {
@@ -464,7 +481,6 @@ function buildBlockedDependentRecoveryPlan(
     const isUnblockedProjectTask =
       projectTask.status === "?" &&
       project.dependencyIds.some((id) => closedIds.has(String(id))) &&
-      !findSingleFutureScheduledField(projectTask.lineText, today) &&
       !projectIsBlockedAfter(project, openIds, today);
     if (isUnblockedProjectTask) {
       recoveringProjects.set(document.path, project);
@@ -499,6 +515,7 @@ function buildBlockedDependentRecoveryPlan(
         statusStart: task.statusStart,
         taskId: task.taskId,
         dependsOn: task.dependsOn.slice(),
+        recover: true,
       });
     }
   }
@@ -508,16 +525,14 @@ function buildBlockedDependentRecoveryPlan(
   // have also cleared, and never become successor candidates here.
   for (const [path, project] of recoveringProjects) {
     for (const task of project.tasks) {
-      if (
-        task.blockId === "prj" ||
-        task.status !== "?" ||
-        task.dependsOn.some((id) =>
-          openIds.has(String(id))
-        ) ||
-        findSingleFutureScheduledField(task.lineText, today)
-      ) {
+      if (task.blockId === "prj") {
         continue;
       }
+      const hasOwnReason = task.dependsOn.some((id) => openIds.has(String(id))) ||
+        !!findSingleFutureScheduledField(task.lineText, today);
+      const recover = task.status === "?" && !hasOwnReason;
+      const stripTag = hasProjectBlockedResidentTag(task.lineText);
+      if (!recover && !stripTag) continue;
       const key = `${path}\0${task.line}`;
       if (seenEdits.has(key)) {
         continue;
@@ -530,6 +545,7 @@ function buildBlockedDependentRecoveryPlan(
         statusStart: task.statusStart,
         taskId: task.taskId,
         dependsOn: task.dependsOn.slice(),
+        recover,
       });
     }
   }
@@ -563,17 +579,24 @@ function applyBlockedDependentRecoveryEdits(sourceText, edits, options = {}) {
       edit.path,
       edit.line,
     );
-    if (!task || task.status !== "?" || task.statusStart !== edit.statusStart) {
+    if (
+      !task ||
+      (edit.recover && (task.status !== "?" || task.statusStart !== edit.statusStart))
+    ) {
       stale.push(edit);
       continue;
     }
-    const rewritten = rewriteRecoveredTaskLine(sourceLine.text, " ", options);
+    const rewritten = rewriteRecoveredTaskLine(
+      sourceLine.text,
+      edit.recover ? " " : task.status,
+      { ...options, task, isDailyNote: isDailyNotePath(edit.path) },
+    );
     if (typeof rewritten !== "string") {
       stale.push(edit);
       continue;
     }
     sourceLine.text = rewritten;
-    reopened += 1;
+    if (edit.recover !== false) reopened += 1;
   }
   return {
     text: sourceLines.map((line) => `${line.text}${line.ending}`).join(""),

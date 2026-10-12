@@ -173,11 +173,23 @@ function planDependencyStageView(args = {}) {
   ) {
     labelByKey.set(dependentKey, dependent.displayText || dependent.text);
   }
+  const isProjectPrjDependent = dependent && dependent.isProjectPrj === true;
   const guard = (candidate) => {
     const key =
       candidate.path && candidate.blockId
         ? dependencyStageRowKey(candidate.path, candidate.blockId)
         : null;
+    // §13.6: a `^prj` link to its own note is a guaranteed deadlock, so
+    // every same-note row is disabled. Removing an existing link stays
+    // allowed: CURRENT rows never pass through this guard.
+    if (isProjectPrjDependent && candidate.path === dependentPath) {
+      return {
+        disabled: true,
+        reason: "inside this project",
+        cycle: null,
+        cycleLabels: null,
+      };
+    }
     if (key && dependentKey) {
       if (key === dependentKey) {
         const selfCycle = Object.freeze([dependentKey]);

@@ -437,6 +437,11 @@ class BobNavigationHotkeysDependencyStageMixin {
         key: dependentKey,
         displayText: cleanTaskDisplayText(parentText) || null,
         text: cleanTaskDisplayText(parentText) || null,
+        // §13.6: the stage disables every same-note row for a `^prj`
+        // dependent (a link to its own note is a guaranteed deadlock).
+        isProjectPrj:
+          primary >= 0 &&
+          Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)
@@ -597,6 +602,11 @@ class BobNavigationHotkeysDependencyStageMixin {
         key: dependentKey,
         displayText: cleanTaskDisplayText(parentText) || null,
         text: cleanTaskDisplayText(parentText) || null,
+        // §13.6: the stage disables every same-note row for a `^prj`
+        // dependent (a link to its own note is a guaranteed deadlock).
+        isProjectPrj:
+          primary >= 0 &&
+          Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)

@@ -828,6 +828,15 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       const vaultContents = needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch, add)
         ? await this.readDependencyRecoveryVaultContents(parentPath, content)
         : null;
+      const markUnblockedLine = (line, markOptions) => {
+        const freshness =
+          typeof this.getFreshnessApi === "function"
+            ? this.getFreshnessApi()
+            : null;
+        return freshness && typeof freshness.markUnblockedLine === "function"
+          ? freshness.markUnblockedLine(line, markOptions)
+          : line;
+      };
       const plan = planDependencyEdit({
         content,
         parentLine,
@@ -842,6 +851,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           registry,
           today: args.today || new Date(),
           vaultContents,
+          markUnblockedLine,
         },
       });
       if (!plan.ok) {
@@ -850,7 +860,25 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!plan.changed) {
         return Object.freeze({ ok: true, reason: "unchanged", notice: plan.notice });
       }
-      const outcome = await applyDependencyEditTransaction(plan, {
+      // §13.10: consume the live Pomodoro links of `^prj` and its newly
+      // Blocked residents. A cleanup failure is reported, never rolled
+      // back; reconcile repairs it within one interval.
+      let commitPlan = plan;
+      let pomodoroPrep = null;
+      if (!mirrorTouch) {
+        pomodoroPrep = await prepareProjectPomodoroCleanup(
+          (snapshotOptions) =>
+            this.readDeferredPomodoroSnapshot(this.app, snapshotOptions),
+          plan,
+          parentPath,
+          content,
+          args.today || new Date(),
+        );
+        if (pomodoroPrep.commitContent !== plan.nextContent) {
+          commitPlan = { ...plan, nextContent: pomodoroPrep.commitContent };
+        }
+      }
+      const outcome = await applyDependencyEditTransaction(commitPlan, {
         // The hand-edit mirror never writes cross-note targets' `[id::]`;
         // the hooks reconcile them (contract §4).
         prepareTargetFile: mirrorTouch
@@ -888,6 +916,27 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       });
       if (!outcome.ok && outcome.reason === "stale-editor") {
         new Notice("changed — reopen");
+      }
+      if (!outcome.ok) {
+        return outcome;
+      }
+      // Cross-note daily cleanup lands after the dependent's own write and
+      // is never rolled back (§13.10).
+      const pomodoroDone = pomodoroPrep
+        ? await finishProjectPomodoroCleanup(
+            (snapshot, cleanup) =>
+              this.writeDeferredPomodoroCleanup(snapshot, cleanup),
+            pomodoroPrep.snapshot,
+            pomodoroPrep.cleanup,
+          )
+        : { removed: 0, failed: false };
+      const projectNotice = projectPomodoroNotice(
+        plan,
+        pomodoroDone.removed,
+        pomodoroDone.failed,
+      );
+      if (projectNotice) {
+        return Object.freeze({ ok: true, reason: null, notice: projectNotice });
       }
       return outcome;
     } catch (_error) {

@@ -604,6 +604,10 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
             workingContent,
           )
         : null;
+    const freshnessApi =
+      this.plugin && typeof this.plugin.getFreshnessApi === "function"
+        ? this.plugin.getFreshnessApi()
+        : null;
     const plan = planDependencyEdit({
       content: workingContent,
       parentLine: this.cursor.line,
@@ -617,27 +621,72 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       resolveLinkpath: this.plugin
         ? this.plugin.dependencyLinkpathResolver()
         : null,
-      recovery: { registry, today: new Date(), vaultContents },
+      recovery: {
+        registry,
+        today: new Date(),
+        vaultContents,
+        markUnblockedLine:
+          freshnessApi && typeof freshnessApi.markUnblockedLine === "function"
+            ? (line, markOptions) =>
+                freshnessApi.markUnblockedLine(line, markOptions)
+            : null,
+      },
     });
     if (!plan.ok) {
       new Notice(dependencyPlanFailureNotice(plan.reason, "update"));
       return false;
+    }
+    // §13.10: consume the live Pomodoro links of `^prj` and its newly
+    // Blocked residents. A cleanup failure is reported, never rolled back.
+    let batchCommitContent = plan.nextContent;
+    let batchPomodoroPrep = null;
+    if (plan.changed && this.plugin) {
+      batchPomodoroPrep = await prepareProjectPomodoroCleanup(
+        typeof this.plugin.readDeferredPomodoroSnapshot === "function"
+          ? (snapshotOptions) =>
+              this.plugin.readDeferredPomodoroSnapshot(
+                this.plugin.app,
+                snapshotOptions,
+              )
+          : null,
+        plan,
+        filePath,
+        workingContent,
+        new Date(),
+      );
+      if (batchPomodoroPrep.commitContent !== plan.nextContent) {
+        batchCommitContent = batchPomodoroPrep.commitContent;
+      }
     }
     if (plan.changed) {
       const nextContent =
         this.plugin &&
         typeof this.plugin.stampDependencyParentLine === "function"
           ? this.plugin.stampDependencyParentLine(
-              plan.nextContent,
+              batchCommitContent,
               this.cursor.line,
               undefined,
               undefined,
             )
-          : plan.nextContent;
+          : batchCommitContent;
       if (!applyEditorContentTransaction(this.editor, originalContent, nextContent)) {
         new Notice("Could not update bullet property");
         return false;
       }
+    }
+    let batchPomodoroRemoved = 0;
+    let batchPomodoroPruneFailed = false;
+    if (batchPomodoroPrep && this.plugin) {
+      const batchDone = await finishProjectPomodoroCleanup(
+        typeof this.plugin.writeDeferredPomodoroCleanup === "function"
+          ? (snapshot, cleanup) =>
+              this.plugin.writeDeferredPomodoroCleanup(snapshot, cleanup)
+          : null,
+        batchPomodoroPrep.snapshot,
+        batchPomodoroPrep.cleanup,
+      );
+      batchPomodoroRemoved = batchDone.removed;
+      batchPomodoroPruneFailed = batchDone.failed;
     }
 
     const finalCursorLine =
@@ -652,8 +701,14 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
     );
 
     const skipped = skippedStale + skippedOther;
+    const batchProjectNotice = projectPomodoroNotice(
+      plan,
+      batchPomodoroRemoved,
+      batchPomodoroPruneFailed,
+    );
+    const batchNotice = batchProjectNotice || plan.notice;
     new Notice(
-      plan.notice + (skipped > 0 ? ` (${skipped} skipped)` : ""),
+      batchNotice + (skipped > 0 ? ` (${skipped} skipped)` : ""),
     );
     return true;
   }

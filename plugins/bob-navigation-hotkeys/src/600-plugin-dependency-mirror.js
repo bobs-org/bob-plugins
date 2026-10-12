@@ -335,6 +335,10 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       }
       const files = new Map();
       files.set(parentPath, working);
+      const freshnessApi =
+        typeof this.getFreshnessApi === "function"
+          ? this.getFreshnessApi()
+          : null;
       const plan = planDependencyEdit({
         content: working,
         parentLine: owning,
@@ -344,7 +348,16 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         files,
         vaultFiles,
         resolveLinkpath,
-        recovery: { registry, today, vaultContents: baseVaultContents },
+        recovery: {
+          registry,
+          today,
+          vaultContents: baseVaultContents,
+          markUnblockedLine:
+            freshnessApi && typeof freshnessApi.markUnblockedLine === "function"
+              ? (line, markOptions) =>
+                  freshnessApi.markUnblockedLine(line, markOptions)
+              : null,
+        },
       });
       if (!plan.ok) {
         new Notice(

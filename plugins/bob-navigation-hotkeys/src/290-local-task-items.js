@@ -521,6 +521,7 @@ function resolveDependencyStageCurrent(content, parentLine, parentPath, index, s
 // Unresolvable links are skipped: they never block and never guard.
 function collectDependencyStageEdgesFromSnapshots(snapshots, index) {
   const edges = new Map();
+  const projectPrjFromByPath = new Map();
   const add = (from, to) => {
     if (!from || !to || from === to) {
       return;
@@ -549,6 +550,19 @@ function collectDependencyStageEdgesFromSnapshots(snapshots, index) {
         (selfBlockId && dependencyStageRowKey(path, selfBlockId)) ||
         (selfIdField && `id:${selfIdField}`) ||
         `${path}#line:${line}`;
+      if (isProjectLifecycleTaskLine(rawLine)) {
+        if (!projectPrjFromByPath.has(path)) {
+          projectPrjFromByPath.set(path, { prjFrom: null, residentFroms: [] });
+        }
+        if (selfBlockId) {
+          projectPrjFromByPath.get(path).prjFrom = from;
+        }
+      } else {
+        if (!projectPrjFromByPath.has(path)) {
+          projectPrjFromByPath.set(path, { prjFrom: null, residentFroms: [] });
+        }
+        projectPrjFromByPath.get(path).residentFroms.push({ line, from });
+      }
       const collection = getCachedDependencyCollection(snapshot, text, line);
       if (!collection.reason) {
         for (const target of collection.targets) {
@@ -571,6 +585,32 @@ function collectDependencyStageEdgesFromSnapshots(snapshots, index) {
             add(from, dependencyStageRowKey(record.path, record.blockId));
           }
         }
+      }
+    }
+  }
+  // §13.6: residents inherit `^prj`'s outgoing edges, so cycle detection
+  // sees the implicit resident → `^prj`-link edges. Only recognized
+  // projects participate, matching the writer's recognition exactly.
+  for (const [path, snapshot] of snapshots) {
+    const tracked = projectPrjFromByPath.get(path);
+    if (!tracked || !tracked.prjFrom) {
+      continue;
+    }
+    const info = getProjectPrjDependencyResidents(snapshot.text, path);
+    if (!info) {
+      continue;
+    }
+    const inherited = edges.get(tracked.prjFrom) || [];
+    if (inherited.length === 0) {
+      continue;
+    }
+    const residentLines = new Set(info.residents.map((row) => row.line));
+    for (const resident of tracked.residentFroms) {
+      if (!residentLines.has(resident.line)) {
+        continue;
+      }
+      for (const target of inherited) {
+        add(resident.from, target);
       }
     }
   }

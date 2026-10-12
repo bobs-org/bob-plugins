@@ -127,6 +127,24 @@ function planDependencyEdit(args = {}) {
     .filter((ref) => ref.path && ref.blockId);
 
   const parentStatusBefore = getObsidianTaskCheckboxStatus(lines[parentIndex]);
+  // `^prj` in a recognized project note (§13.10): the ordinary line writer
+  // also blocks, tags, and unlinks residents. A same-note target is a
+  // guaranteed deadlock (§13.6) and refuses the whole gesture; removals of
+  // hand-authored internal targets still flow below.
+  const projectPrj = detectProjectPrjDependencyParent(
+    args,
+    content,
+    parentPath,
+    parentIndex,
+  );
+  const internalAddReason = failProjectPrjInternalAdd(
+    projectPrj,
+    add,
+    parentPath,
+  );
+  if (internalAddReason) {
+    return fail(internalAddReason);
+  }
   // Legacy children join the order while the field (or this batch) still
   // manages them, so a touch folds them into the line in the same write.
   const collection = collectDependencyNavigationBullets(content, parentIndex, [
@@ -203,10 +221,15 @@ function planDependencyEdit(args = {}) {
       if (addedKeys.has(dependencyTargetRefKey(ref))) {
         return fail("target-not-found");
       }
-      if (parentFieldValues.length !== existing.length) {
+      const comparableExisting = filterProjectedExisting(
+        projectPrj,
+        existing,
+        parentPath,
+      );
+      if (parentFieldValues.length !== comparableExisting.length) {
         return fail("target-not-found");
       }
-      const slot = existing.findIndex(
+      const slot = comparableExisting.findIndex(
         (entry) => dependencyTargetRefKey(entry) === dependencyTargetRefKey(ref),
       );
       const keptValue =
@@ -214,7 +237,7 @@ function planDependencyEdit(args = {}) {
       if (!keptValue) {
         return fail("target-not-found");
       }
-      const keptNote = slot !== -1 ? existing[slot].note : "";
+      const keptNote = slot !== -1 ? comparableExisting[slot].note : "";
       const row = Object.freeze({
         ref,
         depValue: keptValue,
@@ -266,6 +289,8 @@ function planDependencyEdit(args = {}) {
     targetRows.set(dependencyTargetRefKey(ref), row);
   }
 
+  const projected = projectResolvedTargets(projectPrj, resolved, parentPath);
+
   const existingKeys = new Set(existing.map(dependencyTargetRefKey));
   const seenAddKeys = new Set();
   const addedRows = [];
@@ -292,7 +317,7 @@ function planDependencyEdit(args = {}) {
   // no placeholder).
   const seenValues = new Set();
   const fieldValues = [];
-  for (const row of resolved) {
+  for (const row of projected) {
     if (seenValues.has(row.depValue)) {
       continue;
     }
@@ -324,7 +349,7 @@ function planDependencyEdit(args = {}) {
   const mirrorTouch = args.mirrorTouch === true;
   const addedOpen = addedRows.filter((row) => row.open);
   let blockParent = false;
-  const mirrorOpenRemaining = resolved.filter((row) => row.open).length;
+  const mirrorOpenRemaining = projected.filter((row) => row.open).length;
   if (mirrorTouch ? mirrorOpenRemaining > 0 : addedOpen.length > 0) {
     const blocked = blockObsidianTaskCheckboxStatus(parentText);
     blockParent = blocked !== parentText;
@@ -344,8 +369,20 @@ function planDependencyEdit(args = {}) {
       }),
     );
   };
+  const residentBlockPlan = planProjectResidentBlockEdits(
+    projectPrj,
+    lines,
+    addedOpen,
+  );
+  const residentBlockEdits = residentBlockPlan.edits;
+  const projectNewlyBlockedLines = residentBlockPlan.newlyBlocked;
+
+  const projectLaneStatuses = projectPromotionLaneStatuses(projectPrj, lines);
   for (const row of (mirrorTouch ? [] : addedOpen)) {
-    const desired = getDependencyPromotionStatus(parentStatusBefore);
+    const desired = getDependencyPromotionStatus(
+      parentStatusBefore,
+      projectLaneStatuses,
+    );
     if (!desired) {
       continue;
     }
@@ -434,6 +471,12 @@ function planDependencyEdit(args = {}) {
     }
   }
 
+  const mergedSameNoteEdits = mergeProjectResidentBlockEdits(
+    targetEdits,
+    residentBlockEdits,
+    parentPath,
+  );
+
   // The line: create, append, remove, or delete (empty list deletes it).
   const linkTargets = resolved.map((row) => ({
     blockId: row.ref.blockId,
@@ -475,7 +518,7 @@ function planDependencyEdit(args = {}) {
   // A cleared field counts as a removal even when no link row was removed
   // (field-only Ctrl+D), and the hand-edit mirror recovers whenever no open
   // prerequisite remains, since the hand edit itself is the removal.
-  const openRemaining = resolved.filter((row) => row.open).length;
+  const openRemaining = projected.filter((row) => row.open).length;
   const recoveryToday =
     args.recovery && args.recovery.today
       ? args.recovery.today
@@ -487,13 +530,29 @@ function planDependencyEdit(args = {}) {
     openRemaining === 0 &&
     getObsidianTaskCheckboxStatus(parentText) === "?" &&
     !dependencyParentHasFutureSchedule(parentText, recoveryToday);
+  const projectWantsResidentRecovery = shouldRecoverProjectResidents(
+    projectPrj,
+    args.recovery,
+    removedCount,
+    fieldCleared,
+    openRemaining,
+    parentText,
+    recoveryToday,
+  );
   let recoveredOutcome = null;
-  if (recoverParent && args.recovery && args.recovery.registry) {
+  let projectRecoveredLines = [];
+  let projectReadyLines = [];
+  let residentRecoveryEdits = [];
+  if (
+    (recoverParent || projectWantsResidentRecovery) &&
+    args.recovery &&
+    args.recovery.registry
+  ) {
     const preview = applyDependencyPlanLines(
       lines,
       parentIndex,
       parentText,
-      targetEdits.filter((edit) => edit.path === parentPath),
+      mergedSameNoteEdits,
       structural,
       lineText,
       lineEnding,
@@ -533,22 +592,43 @@ function planDependencyEdit(args = {}) {
       args.recovery.registry,
       args.recovery.today,
     );
-    const metadata = getScheduledRecoveryMetadata(
-      recoveryIndex,
-      parentPath,
-      parentIndex,
-    );
-    const reconciled = reconcileBlockedScheduledTaskLine(parentText, metadata);
-    parentText = reconciled.line;
-    recoveredOutcome = reconciled.outcome;
-    recoverParent = reconciled.outcome === "still-blocked";
+    if (recoverParent) {
+      const metadata = getScheduledRecoveryMetadata(
+        recoveryIndex,
+        parentPath,
+        parentIndex,
+      );
+      const reconciled = reconcileBlockedScheduledTaskLine(parentText, metadata);
+      parentText = reconciled.line;
+      recoveredOutcome = reconciled.outcome;
+      recoverParent = reconciled.outcome === "still-blocked";
+    }
+    if (projectWantsResidentRecovery) {
+      const markUnblockedLine =
+        args.recovery && typeof args.recovery.markUnblockedLine === "function"
+          ? args.recovery.markUnblockedLine
+          : null;
+      const recovery = recoverProjectResidents(
+        projectPrj,
+        lines,
+        preview.lines,
+        recoveryIndex,
+        parentPath,
+        structural,
+        recoveryToday,
+        markUnblockedLine,
+      );
+      residentRecoveryEdits = recovery.edits;
+      projectRecoveredLines = recovery.recovered;
+      projectReadyLines = recovery.ready;
+    }
   }
 
   const next = applyDependencyPlanLines(
     lines,
     parentIndex,
     parentText,
-    targetEdits.filter((edit) => edit.path === parentPath),
+    [...mergedSameNoteEdits, ...residentRecoveryEdits],
     structural,
     lineText,
     lineEnding,
@@ -560,6 +640,15 @@ function planDependencyEdit(args = {}) {
     openRemaining,
     blockedAfter: getObsidianTaskCheckboxStatus(parentText) === "?",
     recoveredOutcome,
+    project: summarizeProjectDependencyEdit(projectPrj, {
+      lines,
+      parentIndex,
+      parentText,
+      addedOpen,
+      newlyBlocked: projectNewlyBlockedLines,
+      recovered: projectRecoveredLines,
+      ready: projectReadyLines,
+    }),
   });
   return Object.freeze({
     ok: true,
@@ -587,7 +676,7 @@ function planDependencyEdit(args = {}) {
         .map((ref) => describeRemovedDependencyTarget(ref, filesMap)),
     ),
     summary,
-    notice: buildDependencyEditNotice(summary, {
+    notice: buildDependencyEditNoticeWithProject(summary, {
       added: addedRows.map((row) => row.description),
       removed: existing
         .filter((ref) => !targetRows.has(dependencyTargetRefKey(ref)))
@@ -676,36 +765,6 @@ function describeRemovedDependencyTarget(ref, filesMap) {
   }
 }
 
-// Contract §6.7 notices for one dependency gesture.
-function buildDependencyEditNotice(summary, names = {}) {
-  const added = Math.max(0, summary.added || 0);
-  const removed = Math.max(0, summary.removed || 0);
-  const firstAdded = (names.added || [])[0];
-  const firstRemoved = (names.removed || [])[0];
-  const state = summary.blockedAfter
-    ? `Blocked${summary.openRemaining > 0 ? ` (${summary.openRemaining} open)` : ""}`
-    : summary.recoveredOutcome && summary.recoveredOutcome !== "still-blocked"
-      ? "Ready again"
-      : "Ready";
-  if (added === 1 && removed === 0 && firstAdded) {
-    return `⛓ Now waits on "${firstAdded}" · ${summary.blockedAfter ? "Blocked" : "Ready"}`;
-  }
-  if (added === 0 && removed === 1 && firstRemoved) {
-    return `⛓ No longer waits on "${firstRemoved}" · ${summary.blockedAfter ? "Still blocked" : "Ready again"}`;
-  }
-  const parts = [];
-  if (added > 0) {
-    parts.push(`${added} added`);
-  }
-  if (removed > 0) {
-    parts.push(`${removed} removed`);
-  }
-  if (parts.length === 0) {
-    return `⛓ Dependencies updated · ${state}`;
-  }
-  return `⛓ ${parts.join(" · ")} · ${state}`;
-}
-
 // Sequencing core for the writer: preparations first (an unused target id is
 // acceptable, a link to an unprepared target is not), then the dependent's
 // one-transaction commit. Both effects are injected so tests can stub them;
@@ -754,43 +813,6 @@ async function applyDependencyEditTransaction(plan, io = {}) {
     });
   }
   return Object.freeze({ ok: true, reason: null, notice: plan.notice });
-}
-
-// Build the notice for a local-task dependency write, distinguishing whether the
-// `[dependsOn:: ...]` field was newly added vs already present and summarizing
-// how the single managed navigation bullet changed.
-function buildLocalTaskDependencyNotice(details = {}) {
-  const id = normalizeBulletPropertyValue(details.id);
-  const name = String(details.name || "");
-  const dependencyText = details.dependencyAlreadyPresent
-    ? `Already depends on ${id}`
-    : `${name} → ${id}`;
-  const navigationParts = [];
-
-  switch (details.navigationResult) {
-    case "added":
-      navigationParts.push("added navigation link");
-      break;
-    case "updated":
-      navigationParts.push("updated navigation bullet");
-      break;
-    case "already-present":
-      navigationParts.push("navigation link already present");
-      break;
-    case "failed":
-    case "guard-failed":
-      return `${dependencyText} (could not add navigation link)`;
-    default:
-      break;
-  }
-
-  if (details.navigationConsolidated) {
-    navigationParts.push("consolidated navigation bullet");
-  }
-
-  return navigationParts.length > 0
-    ? `${dependencyText}; ${navigationParts.join("; ")}`
-    : dependencyText;
 }
 
 function formatCountLabel(count, singular, plural = `${singular}s`) {

@@ -112,7 +112,16 @@ function getObsidianTaskStatusRank(status) {
 // Blocked is open for dependency semantics but intentionally has no active
 // promotion rank. A blocked parent therefore contributes the minimum Ready
 // request while Next and In Progress retain their existing ordering.
-function getDependencyPromotionStatus(status) {
+function getDependencyPromotionStatus(status, extraStatuses) {
+  // On `^prj` the strongest lane among `^prj` and its residents transfers
+  // (Design §5 Lanes); otherwise the dependent's own status decides, and a
+  // Blocked parent contributes no lane.
+  if (Array.isArray(extraStatuses) && extraStatuses.length > 0) {
+    const lane = strongestDependencyPromotionLane([status, ...extraStatuses]);
+    if (lane) {
+      return lane;
+    }
+  }
   return status === "?" ? " " : status;
 }
 

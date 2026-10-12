@@ -874,7 +874,7 @@ test("setProjectNoteScheduledValue writes a schedule log entry under the ^prj ta
     "type: [[project]]",
     "scheduled: 2026-08-13",
     "---",
-    "- [ ] #task Ship ^prj",
+    "- [ ] #task Ship [scheduled:: 2026-08-13] ^prj",
   ].join("\n");
   const cursor = { line: 4, ch: 12 };
   const editor = new TransactionEditor(input, cursor, 700);
@@ -899,10 +899,11 @@ test("setProjectNoteScheduledValue writes a schedule log entry under the ^prj ta
     },
   );
   assert.equal(wrote, true);
-  assert.match(editor.content, /^scheduled: 2026-08-20$/m);
+  assert.match(editor.content, /^scheduled: 2026-08-13$/m);
+  assert.match(editor.content, /#task Ship \[scheduled:: 2026-08-20\] #hide \^prj/);
   assert.match(
     editor.content,
-    /- \[ \] #task Ship #hide \^prj\n\t- 🗓️ \*\*SCHEDULE LOG\*\*\n\t\t- \*2026-08-13 → 2026-08-20\* — waiting on the API review to land/,
+    /- \[\?\] #task Ship .*\[scheduled:: 2026-08-20\].*\^prj\n\t- 🗓️ \*\*SCHEDULE LOG\*\*\n\t\t- \*2026-08-13 → 2026-08-20\* — waiting on the API review to land/,
   );
   assert.match(notices.at(-1), /logged reason/);
 });

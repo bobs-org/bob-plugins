@@ -279,18 +279,18 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
     const propertyName = item.property.name;
     if (!item.defined) {
       new Notice(
-        item.target.kind === "project-frontmatter"
+        item.target.kind === "project-inline"
           ? `${propertyName} is not set on this project`
           : `${propertyName} is not set on this bullet`,
       );
       return false;
     }
-    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    // Project scheduling keeps the inline field plus resident side effects.
     if (
       !this.isLinkSession() &&
       !this.isCountedSession() &&
       item.target &&
-      item.target.kind === "project-frontmatter"
+      item.target.kind === "project-inline"
     ) {
       const direct = await this.plugin.deleteProjectNoteScheduledValue(
         this.editor,
@@ -322,7 +322,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
               this.taskSession,
               propertyName,
             )
-          : item.target.kind === "project-frontmatter"
+          : item.target.kind === "project-inline"
             ? await this.plugin.deleteProjectNoteScheduledValue(
                 this.editor,
                 this.cursor,
@@ -394,14 +394,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       return false;
     }
 
-    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    // Project scheduling keeps the inline field plus resident side effects.
     const selectedTarget =
       this.selectedPropertyItem && this.selectedPropertyItem.target;
     if (
       !this.isLinkSession() &&
       !this.isCountedSession() &&
       selectedTarget &&
-      selectedTarget.kind === "project-frontmatter"
+      selectedTarget.kind === "project-inline"
     ) {
       if (this.selectedPropertyItem.kind === "refresh-interval") {
         return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
@@ -512,7 +512,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         );
       }
 
-      if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
+      if (this.selectedPropertyItem.target.kind === "project-inline") {
         return await this.plugin.setProjectNoteScheduledValue(
           this.editor,
           this.cursor,

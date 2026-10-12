@@ -651,6 +651,9 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openTaskMoveDestinationPicker(editor, view, options = {}) {
+    if (this.taskMoveDestinationPickerOpening) {
+      return true;
+    }
     let activePicker = this.activeTaskMoveDestinationPicker;
     if (
       activePicker &&
@@ -709,65 +712,108 @@ class BobNavigationHotkeysNotesMoveMixin {
       vault && typeof vault.getMarkdownFiles === "function"
         ? vault.getMarkdownFiles()
         : [];
-    const destinations = collectTaskMoveDestinations(
+    const destinationCandidates = collectTaskMoveDestinations(
       markdownFiles,
       sourceFile.path,
       (file) => getFileChildNoteInfo(this.app, file, new Date()),
     );
-    const scroll =
-      typeof editor.getScrollInfo === "function"
-        ? editor.getScrollInfo()
-        : null;
-    // Review-walk (nav-gestures): a landed move captures so the commit can
-    // consume the landing and park the walk; a move never advances. While
-    // the gesture lock is held the key is swallowed with no write. The
-    // Pomodoro bullet and entry contexts use different pickers and never
-    // match a landing, so only this task path captures.
-    let reviewOrigin = null;
-    try {
-      if (typeof this.captureReviewGesture === "function") {
-        const captured = this.captureReviewGesture(editor);
-        if (captured && captured.busy === true) {
-          return true;
-        }
-        reviewOrigin = captured || null;
-      }
-    } catch (error) {
-      reviewOrigin = null;
-    }
-    this.taskMoveReviewCommitStarted = false;
-    const session = Object.freeze({
-      sourceFile,
-      sourcePath: sourceFile.path,
-      sourceView,
-      editor,
-      sourceContent,
-      cursor: Object.freeze({ ...cursor }),
-      scroll:
-        scroll && typeof scroll === "object"
-          ? Object.freeze({ left: scroll.left, top: scroll.top })
-          : null,
-      countExplicit: options.countExplicit === true,
-      discovery,
-      ranges: ranges.ranges,
-      reviewOrigin,
-    });
-    const picker = new TaskMoveDestinationPickerModal(
+    const hydratedDestinations = hydrateTaskMoveDestinationSchedules(
       this.app,
-      this,
-      destinations,
-      session,
+      destinationCandidates,
     );
-    this.activeTaskMoveDestinationPicker = picker;
-    try {
-      picker.open();
-    } catch (error) {
-      if (this.activeTaskMoveDestinationPicker === picker) {
-        this.activeTaskMoveDestinationPicker = null;
+    const openPicker = (destinations) => {
+      const scroll =
+        typeof editor.getScrollInfo === "function"
+          ? editor.getScrollInfo()
+          : null;
+      // Review-walk (nav-gestures): a landed move captures so the commit can
+      // consume the landing and park the walk; a move never advances. While
+      // the gesture lock is held the key is swallowed with no write. The
+      // Pomodoro bullet and entry contexts use different pickers and never
+      // match a landing, so only this task path captures.
+      let reviewOrigin = null;
+      try {
+        if (typeof this.captureReviewGesture === "function") {
+          const captured = this.captureReviewGesture(editor);
+          if (captured && captured.busy === true) {
+            return true;
+          }
+          reviewOrigin = captured || null;
+        }
+      } catch (error) {
+        reviewOrigin = null;
       }
-      throw error;
+      this.taskMoveReviewCommitStarted = false;
+      const session = Object.freeze({
+        sourceFile,
+        sourcePath: sourceFile.path,
+        sourceView,
+        editor,
+        sourceContent,
+        cursor: Object.freeze({ ...cursor }),
+        scroll:
+          scroll && typeof scroll === "object"
+            ? Object.freeze({ left: scroll.left, top: scroll.top })
+            : null,
+        countExplicit: options.countExplicit === true,
+        discovery,
+        ranges: ranges.ranges,
+        reviewOrigin,
+      });
+      const picker = new TaskMoveDestinationPickerModal(
+        this.app,
+        this,
+        destinations,
+        session,
+      );
+      this.activeTaskMoveDestinationPicker = picker;
+      try {
+        picker.open();
+      } catch (error) {
+        if (this.activeTaskMoveDestinationPicker === picker) {
+          this.activeTaskMoveDestinationPicker = null;
+        }
+        throw error;
+      }
+      return true;
+    };
+    if (
+      hydratedDestinations &&
+      typeof hydratedDestinations.then === "function"
+    ) {
+      this.taskMoveDestinationPickerOpening = true;
+      Promise.resolve(hydratedDestinations)
+        .then((destinations) => {
+          this.taskMoveDestinationPickerOpening = false;
+          if (String(editor.getValue() || "") !== sourceContent) {
+            return false;
+          }
+          const liveView = this.getActiveMarkdownView();
+          if (
+            liveView &&
+            (liveView.editor !== editor ||
+              !liveView.file ||
+              liveView.file.path !== sourceFile.path)
+          ) {
+            return false;
+          }
+          const active = this.activeTaskMoveDestinationPicker;
+          if (
+            active &&
+            typeof isStaleRegisteredPicker === "function" &&
+            !isStaleRegisteredPicker(active)
+          ) {
+            return false;
+          }
+          return openPicker(destinations);
+        })
+        .catch(() => {
+          this.taskMoveDestinationPickerOpening = false;
+          new Notice("Could not load task destinations");
+        });
+      return true;
     }
-    return true;
+    return openPicker(hydratedDestinations);
   }
 
   async getTaskMoveFileSnapshot(file) {

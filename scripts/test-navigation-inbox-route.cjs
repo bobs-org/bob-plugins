@@ -430,6 +430,18 @@ test("route picker honors the shared move-picker guard", async () => {
   assert.ok(picker instanceof helpers.InboxRoutePickerModal);
   picker.handleKeydown(keyEvent("Enter", { shiftKey: true }));
   assert.deepEqual(await pending, { kind: "stay" });
+
+  plugin.activeTaskMoveDestinationPicker = null;
+  plugin.taskMoveDestinationPickerOpening = true;
+  assert.deepEqual(
+    await plugin.promptInboxRoute({
+      editor,
+      sourcePath: "mac_inbox.md",
+      startLine: 0,
+      actionLabel: "set P2",
+    }),
+    { kind: "cancel" },
+  );
 });
 
 function promptedRoute(overrides = {}) {

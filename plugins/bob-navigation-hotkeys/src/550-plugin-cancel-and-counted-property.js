@@ -637,6 +637,12 @@ class BobNavigationHotkeysCancelPropertyMixin {
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
+        markUnblockedLine: (line, markOptions) => {
+          const freshness = this.getFreshnessApi();
+          return freshness && typeof freshness.markUnblockedLine === "function"
+            ? freshness.markUnblockedLine(line, markOptions)
+            : line;
+        },
       },
     );
     if (!plan.valid) {
@@ -679,6 +685,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -700,6 +707,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
           }

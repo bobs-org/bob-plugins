@@ -2120,7 +2120,7 @@ test("picker-single opens on scheduled so Ctrl+Enter rolls with no navigation", 
   );
 });
 
-test("picker-single opens a ^prj task on scheduled for an immediate roll", async () => {
+test("picker-single opens a ^prj task on inline scheduled for an immediate roll", async () => {
   notices.length = 0;
   const harness = createRollPickerHarness({
     content: [
@@ -2143,7 +2143,8 @@ test("picker-single opens a ^prj task on scheduled for an immediate roll", async
   await flushRollWrites(harness.plugin, before);
   assert.equal(harness.plugin.activeBulletPropertyPicker, null);
   assert.equal(harness.editor.undoGroups, 1);
-  assert.match(harness.editor.content, /scheduled: 2026-10-08/);
+  assert.match(harness.editor.content, /scheduled: 2026-10-01/);
+  assert.match(harness.editor.content, /\[scheduled:: 2026-10-08\]/);
   assert.match(harness.editor.content, /🎲 P2 roll · in \*\*8\*\* \(8–30\) days/);
 });
 
@@ -2450,7 +2451,7 @@ test("picker-single Ctrl+R in stage two keeps the pinned row and recommendation 
   );
 });
 
-test("picker-single Ctrl+Enter rolls a ^prj task through frontmatter in one undo group", async () => {
+test("picker-single Ctrl+Enter rolls a ^prj task through its inline date in one undo group", async () => {
   notices.length = 0;
   const harness = createRollPickerHarness({
     content: [
@@ -2471,11 +2472,12 @@ test("picker-single Ctrl+Enter rolls a ^prj task through frontmatter in one undo
   await flushRollWrites(harness.plugin, before);
   assert.equal(harness.plugin.activeBulletPropertyPicker, null);
   assert.equal(harness.editor.undoGroups, 1);
-  assert.match(harness.editor.content, /scheduled: 2026-10-08/);
+  assert.match(harness.editor.content, /scheduled: 2026-10-01/);
+  assert.match(harness.editor.content, /\[scheduled:: 2026-10-08\]/);
   assert.match(harness.editor.content, /🎲 P2 roll · in \*\*8\*\* \(8–30\) days/);
 });
 
-test("picker-single Ctrl+Enter decays a ^prj task through frontmatter in one undo group", async () => {
+test("picker-single Ctrl+Enter decays a ^prj task through its inline date in one undo group", async () => {
   notices.length = 0;
   const harness = createRollPickerHarness({
     content: [
@@ -2498,7 +2500,8 @@ test("picker-single Ctrl+Enter decays a ^prj task through frontmatter in one und
   await flushRollWrites(harness.plugin, before);
   assert.equal(harness.plugin.activeBulletPropertyPicker, null);
   assert.equal(harness.editor.undoGroups, 1);
-  assert.match(harness.editor.content, /scheduled: 2026-10-31/);
+  assert.match(harness.editor.content, /scheduled: 2026-10-01/);
+  assert.match(harness.editor.content, /\[scheduled:: 2026-10-31\]/);
   assert.match(harness.editor.content, /\[priority:: low\]/);
   assert.match(harness.editor.content, /🎲 P2 → P3 decay · in \*\*31\*\* \(31–90\) days/);
 });

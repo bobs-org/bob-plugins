@@ -132,7 +132,7 @@ test("counted property planning rejects any stale source with no partial result"
   assert.doesNotMatch(plan.content, /\[\?\]/);
 });
 
-test("counted scheduled planning composes project YAML with ordinary inline tasks", () => {
+test("counted project scheduling writes the ^prj inline date and blocks tagged residents", () => {
   const input = [
     "---",
     "type: [[project]]",
@@ -151,75 +151,45 @@ test("counted scheduled planning composes project YAML with ordinary inline task
     { operation: "set", today: new Date(2026, 6, 16, 12) },
   );
   assert.equal(plan.valid, true);
-  assert.equal(plan.cursorLine, 5);
-  assert.equal((plan.content.match(/^scheduled:/gm) || []).length, 1);
-  assert.match(plan.content, /^scheduled: 2026-07-23$/m);
-  assert.doesNotMatch(plan.content, /Ship[^\r\n]*\[scheduled::/);
+  assert.equal(plan.cursorLine, 4);
+  assert.doesNotMatch(plan.content, /^scheduled:/m);
+  assert.match(plan.content, /\[\?\] #task Ship[^\r\n]*\[scheduled:: 2026-07-23\]/);
   assert.match(
     plan.content,
-    /\[\?\] #task Follow up \[created:: 2026-07-02\] \[scheduled:: 2026-07-23\] \^follow-up/,
+    /\[\?\] #task Follow up[^\r\n]*\[scheduled:: 2026-07-23\][^\r\n]*#prj_is_blocked/,
   );
-  assert.match(plan.content, /Ship \[created:: 2026-07-01\] #hide \^prj/);
-  assert.equal(plan.blockedTaskCount, 1);
-  assert.equal(plan.propagatedScheduleTaskCount, 1);
-  assert.equal(plan.removedHideTaskCount, 0);
-  assert.equal(
-    helpers.parseProjectTaskScheduledFields(
-      plan.content.split(/\r?\n/).at(-1),
-    ).length,
-    1,
-  );
+  assert.equal(plan.blockedTaskCount, 2);
+  assert.equal(plan.propagatedScheduleTaskCount, 2);
 });
 
-test("project schedule update coordinates YAML, propagation, and Blocked status", () => {
+test("moving a project schedule earlier replaces only exact old-date copies", () => {
   const input = [
     "---",
-    "type: \"[[project]]\"",
-    "status: wip",
+    "type: [[project]]",
     "---",
-    "- [ ] #task Ship [scheduled:: 2026-07-12] [p:: 1] ^prj",
-    "- [/] #task Work #hide #hide ^work",
+    "- [?] #task Ship [scheduled:: 2026-07-30] ^prj",
+    "- [?] #task Exact copy [scheduled:: 2026-07-30] #prj_is_blocked ^exact",
+    "- [?] #task Later date [scheduled:: 2026-08-01] #prj_is_blocked ^later",
   ].join("\n");
-  const result = helpers.planProjectScheduledUpdate(
+  const plan = helpers.planProjectScheduledUpdate(
     input,
-    4,
-    "2026-07-16",
-    new Date(2026, 6, 11, 23, 59),
+    3,
+    "2026-07-25",
+    new Date(2026, 6, 16),
   );
-  assert.equal(result.valid, true);
-  assert.equal(result.cursorLine, 5);
-  assert.equal(
-    result.content,
-    [
-      "---",
-      "type: \"[[project]]\"",
-      "status: wip",
-      "scheduled: 2026-07-16",
-      "---",
-      "- [ ] #task Ship [p:: 1] #hide ^prj",
-      "- [?] #task Work [scheduled:: 2026-07-16] ^work",
-    ].join("\n"),
+  assert.equal(plan.valid, true);
+  assert.match(plan.content, /Ship \[scheduled:: 2026-07-25\] #hide \^prj/);
+  assert.match(
+    plan.content,
+    /Exact copy \[scheduled:: 2026-07-25\] #prj_is_blocked \^exact/,
   );
-  assert.equal(result.scheduledTaskCount, 1);
-  assert.equal(result.removedHideTaskCount, 1);
-  assert.equal(result.blockedTaskCount, 1);
-
-  const deleted = helpers.planProjectScheduledDelete(result.content, 5, {
-    today: new Date(2026, 6, 11),
-    recoveryByLine: new Map([
-      [6, { state: "in-progress", rank: "/", reason: null }],
-    ]),
-  });
-  assert.equal(deleted.valid, true);
-  assert.equal(deleted.cursorLine, 4);
-  assert.doesNotMatch(deleted.content, /^scheduled:/m);
-  assert.match(deleted.content, /Ship \[p:: 1\] #hide \^prj/);
-  assert.match(deleted.content, /\[\/\] #task Work \^work/);
-  assert.equal(deleted.removedScheduledTaskCount, 1);
-  assert.equal(deleted.recoveredInProgressTaskCount, 1);
+  assert.match(
+    plan.content,
+    /Later date \[scheduled:: 2026-08-01\] #prj_is_blocked \^later/,
+  );
 });
 
-test("future project schedules propagate across real Markdown tasks", () => {
+test("future project schedules block every open resident and consume review status", () => {
   const input = [
     "---",
     "type: [[project]]",
@@ -242,123 +212,94 @@ test("future project schedules propagate across real Markdown tasks", () => {
     new Date(2026, 6, 11, 23, 59),
   );
   assert.equal(result.valid, true);
-  assert.equal(result.taskCount, 7);
+  assert.equal(result.taskCount, 5);
   assert.equal(result.content.includes("\r\n"), true);
-  assert.match(result.content, /\[p:: 1\] #hide \^prj/);
+  assert.match(result.content, /\[\?\] #task Ship[^\r\n]*\[scheduled:: 2026-07-12\] \^prj/);
   assert.match(
     result.content,
-    /\[\?\] #task Nested \[scheduled:: 2026-07-12\] \^nested/,
+    /\[\?\] #task Nested \[scheduled:: 2026-07-12\] #prj_is_blocked \^nested/,
   );
-  assert.match(result.content, /Completed\r\n/);
+  assert.match(result.content, /Completed #hide\r\n/);
   assert.match(result.content, /Canceled #hidden\r\n/);
   assert.match(
     result.content,
-    /\[\?\] #task Next \(scheduled:: 2026-07-13\)\s+\r\n/,
+    /\[\?\] #task Next \(scheduled:: 2026-07-13\) #prj_is_blocked/,
   );
   assert.match(
     result.content,
-    /Duplicate \[scheduled:: 2026-07-09\] \(scheduled:: 2026-07-14\) #hide/,
+    /Duplicate \[scheduled:: 2026-07-09\] \(scheduled:: 2026-07-14\) #hide #prj_is_blocked/,
   );
-  assert.match(result.content, /\[!\] #task Custom\r\n/);
+  assert.match(result.content, /\[!\] #task Custom #hide\r\n/);
   assert.match(result.content, /```md\r\n- \[ \] fenced example\r\n```/);
   assert.match(result.content, /This mentions - \[ \] checkbox prose/);
-  assert.equal(result.scheduledTaskCount, 1);
-  assert.equal(result.blockedTaskCount, 2);
-  assert.equal(result.removedHideTaskCount, 3);
+  assert.equal(result.blockedTaskCount, 3);
   assert.deepEqual(result.ambiguousTaskLines, [8]);
-  assert.equal(
-    helpers.planProjectTaskSchedules(
-      result.content,
-      "2026-07-12",
-      new Date(2026, 6, 11),
-    ).changed,
-    false,
-  );
 });
 
-test("today and past project schedules recover ordinary tasks and honor ^prj", () => {
-  const multiple = [
-    "---",
-    "type: [[project]]",
-    "---",
-    "- [ ] #task Ship #hide #hide ^prj",
-    "- [x] Done #hidden #hide",
-    "- [-] Canceled #hide",
-    "- [?] #task Ready #hide [scheduled:: 2026-07-10] ^ready",
-    "- [?] #task Later #hide (scheduled:: 2026-07-12) ^later",
-  ].join("\n");
-  for (const date of ["2026-07-11", "2026-07-10"]) {
-    const shown = helpers.planProjectTaskSchedules(
-      multiple,
-      date,
-      new Date(2026, 6, 11, 0, 1),
-      {
-        recoveryByLine: new Map([
-          [6, { state: "ready", rank: " ", reason: null }],
-        ]),
-      },
-    );
-    assert.match(shown.content, /Ship #hide #hide \^prj/);
-    assert.match(shown.content, /Done #hidden$/m);
-    assert.match(shown.content, /Canceled$/m);
-    assert.equal(
-      shown.content.includes(
-        `[ ] #task Ready [scheduled:: ${date}] ^ready`,
-      ),
-      true,
-    );
-    assert.match(
-      shown.content,
-      /\[\?\] #task Later \(scheduled:: 2026-07-12\) \^later/,
-    );
-  }
-
-  const sole = [
-    "---",
-    "type: [[project]]",
-    "---",
-    "- [ ] #task Ship #hide #hide ^prj",
-  ].join("\n");
-  const shownSole = helpers.planProjectTaskSchedules(
-    sole,
-    "2026-07-11",
-    new Date(2026, 6, 11, 23, 59),
-  );
-  assert.match(shownSole.content, /Ship \^prj$/);
-  assert.doesNotMatch(shownSole.content, /#hide/);
-});
-
-test("schedule deletion removes only exactly matching propagated fields", () => {
+test("due project dates recover residents through the gate and write unblocked markers", () => {
   const input = [
     "---",
     "type: [[project]]",
-    "scheduled: '2026-07-16'",
     "---",
-    "- [ ] #task Ship #hide [scheduled:: 2026-07-15] [p:: 2] [scheduled:: old] ^prj",
-    "- [?] #task Work #hide [scheduled:: 2026-07-16] ^work",
-    "- [?] #task Own later (scheduled:: 2026-07-17) ^later",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-30] ^prj",
+    "- [?] #task Work [scheduled:: 2026-07-30] #prj_is_blocked [fresh:: 2026-07-01] ^work",
+  ].join("\n");
+  const plan = helpers.planProjectScheduledUpdate(
+    input,
+    3,
+    "2026-07-11",
+    new Date(2026, 6, 11),
+    {
+      recoveryByLine: new Map([
+        [3, { state: "ready", rank: " ", reason: null }],
+        [4, { state: "ready", rank: " ", reason: null }],
+      ]),
+      markUnblockedLine: (line, options) => {
+        const date = options.today instanceof Date
+          ? `${options.today.getFullYear()}-${String(options.today.getMonth() + 1).padStart(2, "0")}-${String(options.today.getDate()).padStart(2, "0")}`
+          : String(options.today);
+        return line.replace(/(?= \^[A-Za-z0-9-]+\s*$)/, ` [unblocked:: ${date}]`);
+      },
+    },
+  );
+  assert.equal(plan.valid, true);
+  assert.match(plan.content, /- \[ \] #task Ship #hide \[scheduled:: 2026-07-11\] \^prj/);
+  assert.match(
+    plan.content,
+    /- \[ \] #task Work \[scheduled:: 2026-07-11\] \[fresh:: 2026-07-01\] \[unblocked:: 2026-07-11\] \^work/,
+  );
+  assert.doesNotMatch(plan.content, /#prj_is_blocked/);
+  assert.equal(plan.recoveredReadyTaskCount, 2);
+});
+
+test("schedule deletion removes only exact project-date copies and recovers residents", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-16] [p:: 2] ^prj",
+    "- [?] #task Work #prj_is_blocked [scheduled:: 2026-07-16] ^work",
+    "- [?] #task Own later #prj_is_blocked (scheduled:: 2026-07-17) ^later",
     "- [x] #task Done [scheduled:: 2026-07-16] ^done",
   ].join("\r\n");
-  const deleted = helpers.planProjectScheduledDelete(input, 4, {
+  const deleted = helpers.planProjectScheduledDelete(input, 3, {
     today: new Date(2026, 6, 15),
     recoveryByLine: new Map([
-      [5, { state: "next", rank: "*", reason: null }],
-      [6, { state: "ready", rank: " ", reason: null }],
+      [3, { state: "ready", rank: " ", reason: null }],
+      [4, { state: "next", rank: "*", reason: null }],
+      [5, { state: "blocked", rank: null, reason: "future own date" }],
     ]),
   });
   assert.equal(deleted.valid, true);
-  assert.equal(
+  assert.doesNotMatch(deleted.content, /^scheduled:/m);
+  assert.doesNotMatch(deleted.content.split(/\r?\n/)[3], /\[scheduled::/);
+  assert.match(deleted.content, /- \[ \] #task Ship #hide \[p:: 2\] \^prj/);
+  assert.match(deleted.content, /- \[\*\] #task Work \^work/);
+  assert.match(
     deleted.content,
-    [
-      "---",
-      "type: [[project]]",
-      "---",
-      "- [ ] #task Ship #hide [p:: 2] ^prj",
-      "- [*] #task Work #hide ^work",
-      "- [?] #task Own later (scheduled:: 2026-07-17) ^later",
-      "- [x] #task Done [scheduled:: 2026-07-16] ^done",
-    ].join("\r\n"),
+    /- \[\?\] #task Own later \(scheduled:: 2026-07-17\) \^later/,
   );
+  assert.match(deleted.content, /- \[x\] #task Done \[scheduled:: 2026-07-16\] \^done/);
   assert.equal(deleted.removedScheduledTaskCount, 1);
   assert.equal(deleted.recoveredNextTaskCount, 1);
 });

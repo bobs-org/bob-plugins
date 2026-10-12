@@ -31,6 +31,7 @@
   "250-task-move.js",
   "255-inbox-route.js",
   "260-project-schedules.js",
+  "265-project-schedule-inline.js",
   "270-counted-batches.js",
   "280-notices-and-dates.js",
   "285-unblocked-notice.js",

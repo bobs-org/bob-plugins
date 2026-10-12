@@ -867,10 +867,12 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
 }
 
 function getProjectNotePropertyContext(content, lineIndex, options = {}) {
+  const lineText = splitMarkdownContent(content).lines[lineIndex] || "";
   if (!isProjectLifecycleTaskAtLine(content, lineIndex)) {
     return Object.freeze({
       valid: true,
       isProjectTask: false,
+      lineText,
       frontmatter: null,
     });
   }
@@ -880,6 +882,7 @@ function getProjectNotePropertyContext(content, lineIndex, options = {}) {
     return Object.freeze({
       valid: false,
       isProjectTask: true,
+      lineText,
       error: frontmatter.error,
       frontmatter,
     });
@@ -888,6 +891,7 @@ function getProjectNotePropertyContext(content, lineIndex, options = {}) {
   return Object.freeze({
     valid: true,
     isProjectTask: true,
+    lineText,
     error: null,
     frontmatter,
   });

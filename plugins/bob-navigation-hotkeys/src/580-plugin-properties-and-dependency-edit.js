@@ -48,23 +48,43 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     const plan = planProjectScheduledDelete(
       writeContext.content,
       cursor.line,
-      { today, recoveryByLine },
+      {
+        today,
+        recoveryByLine,
+        markUnblockedLine: (line, markOptions) => {
+          const freshness = this.getFreshnessApi();
+          return freshness && typeof freshness.markUnblockedLine === "function"
+            ? freshness.markUnblockedLine(line, markOptions)
+            : line;
+        },
+      },
     );
     if (!plan.valid) {
       new Notice(plan.error);
       return null;
     }
 
-    let finalLine = "";
+    const plannedSource = splitMarkdownContent(plan.content);
+    let finalLine = plannedSource.lines[plan.cursorLine] || "";
+    if (finalLine !== String(expectedLine || "")) {
+      const stamper = this.getFreshnessStampLine();
+      if (typeof stamper === "function") {
+        finalLine = applyFreshStampLine(
+          finalLine,
+          stamper,
+          this.getFreshnessDateText(),
+        );
+        plannedSource.lines[plan.cursorLine] = finalLine;
+      }
+    }
+    const finalContent = plannedSource.lines.join(plannedSource.lineEnding);
     try {
-      finalLine =
-        splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
       if (
         plan.changed &&
         !applyEditorContentTransaction(
           cm,
           writeContext.content,
-          plan.content,
+          finalContent,
           {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
@@ -123,12 +143,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       : "";
     const shouldRecover =
       hasScheduledValue &&
-      isDueInlineScheduledValue(normalizedScheduledValue, today) &&
-      !isProjectLifecycleTaskLine(lineText);
+      isDueInlineScheduledValue(normalizedScheduledValue, today);
     const shouldPrune =
       hasScheduledValue &&
-      isFutureInlineScheduledValue(normalizedScheduledValue, today) &&
-      !isProjectLifecycleTaskLine(lineText);
+      isFutureInlineScheduledValue(normalizedScheduledValue, today);
     let recovery = null;
     let pomodoroSnapshot = null;
     if (shouldRecover || shouldPrune) {
@@ -595,12 +613,14 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     );
     const schedulingWorkLogForPriority =
       context.schedulingWorkLog || context.workLog || null;
-    if (scheduledTarget.kind === "project-frontmatter") {
-      const expectedScheduledValue =
-        propertyContext.frontmatter &&
-        propertyContext.frontmatter.scheduledDefined
-          ? propertyContext.frontmatter.scheduledValue
-          : "";
+    if (scheduledTarget.kind === "project-inline") {
+      const expectedScheduledField = findBulletPropertyField(
+        currentLine,
+        property.schedules,
+      );
+      const expectedScheduledValue = expectedScheduledField
+        ? expectedScheduledField.value
+        : "";
       return await this.setProjectNoteScheduledValue(
         cm,
         cursor,

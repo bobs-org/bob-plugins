@@ -506,12 +506,19 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
 }
 
 class ChildNotePickerModal extends FilteredPickerModal {
-  constructor(app, plugin, childFiles, parentFile) {
+  constructor(app, plugin, childFiles, parentFile, noteContentByPath = new Map()) {
     const now = new Date();
     const noteInfoByPath = new Map(
       childFiles.map((file) => [
         file.path,
-        getFileChildNoteInfo(app, file, now),
+        getFileChildNoteInfo(
+          app,
+          file,
+          now,
+          noteContentByPath instanceof Map && noteContentByPath.has(file.path)
+            ? noteContentByPath.get(file.path)
+            : undefined,
+        ),
       ]),
     );
     const summaryParts = getChildNoteSummary(childFiles, noteInfoByPath);

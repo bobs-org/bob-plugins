@@ -300,6 +300,9 @@ class BobNavigationHotkeysInboxRouteMixin {
         }
       }
       const active = this.activeTaskMoveDestinationPicker;
+      if (this.taskMoveDestinationPickerOpening) {
+        return { kind: "cancel" };
+      }
       if (active) {
         if (!isStaleRegisteredPicker(active)) {
           return { kind: "cancel" };
@@ -333,12 +336,13 @@ class BobNavigationHotkeysInboxRouteMixin {
         vault && typeof vault.getMarkdownFiles === "function"
           ? vault.getMarkdownFiles()
           : [];
+      const destinationCandidates = collectTaskMoveDestinations(
+        markdownFiles,
+        sourcePath,
+        (file) => getFileChildNoteInfo(this.app, file, new Date()),
+      );
       const destinations = filterInboxRouteDestinations(
-        collectTaskMoveDestinations(
-          markdownFiles,
-          sourcePath,
-          (file) => getFileChildNoteInfo(this.app, file, new Date()),
-        ),
+        destinationCandidates,
         (path) => this.isInboxNotePath(path),
         sourcePath,
       );

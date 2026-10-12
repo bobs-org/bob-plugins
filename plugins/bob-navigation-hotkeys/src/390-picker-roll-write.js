@@ -36,11 +36,9 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         liveContext,
       );
       let currentScheduled = "";
-      if (scheduledTarget.kind === "project-frontmatter") {
-        currentScheduled =
-          liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-            ? liveContext.frontmatter.scheduledValue
-            : "";
+      if (scheduledTarget.kind === "project-inline") {
+        const scheduledField = findBulletPropertyField(lineText, schedulesName);
+        currentScheduled = scheduledField ? scheduledField.value : "";
       } else {
         const scheduledField = findBulletPropertyField(lineText, schedulesName);
         currentScheduled = scheduledField ? scheduledField.value : "";
@@ -441,12 +439,15 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       recommendation.schedulesName,
       liveContext,
     );
-    // Project-frontmatter writers stay unwrapped (task-card-gate).
-    if (scheduledTarget.kind === "project-frontmatter") {
-      const liveScheduledDirect =
-        liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-          ? liveContext.frontmatter.scheduledValue
-          : "";
+    // Project scheduling uses the same inline field and adds resident effects.
+    if (scheduledTarget.kind === "project-inline") {
+      const liveScheduledField = findBulletPropertyField(
+        liveLine,
+        recommendation.schedulesName,
+      );
+      const liveScheduledDirect = liveScheduledField
+        ? liveScheduledField.value
+        : "";
       const nextHintDirect = planNextPriorityRollHint(property, recommendation);
       const rollOptionDirect = {
         kind: "roll",
@@ -468,6 +469,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         liveScheduledDirect,
         recommendation.date,
         {
+          today: this.valueBaseDate,
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
             level: recommendation.level,
@@ -529,6 +531,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         {
           filePath: this.filePath,
           expectedLine: this.lineText,
+          today: this.valueBaseDate,
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
             level: recommendation.level,

@@ -21,7 +21,7 @@ test("bare future scheduled writes block only real supported open inline tasks",
     ["- [!] #task Unknown ^unknown", "!"],
     ["- [ ] Plain checkbox", null],
     ["- ordinary bullet", null],
-    ["- [ ] #task Project lifecycle ^prj", " "],
+    ["- [ ] #task Project lifecycle ^prj", "?"],
   ];
   for (const [line, expectedStatus] of cases) {
     notices.length = 0;
@@ -422,7 +422,7 @@ test("counted property runtime aborts a stale batch without a transaction", asyn
   assert.match(notices.at(-1), /no tasks were updated/);
 });
 
-test("counted project scheduling is one structural transaction", async () => {
+test("counted project scheduling writes an inline date and blocks tagged residents", async () => {
   const input = [
     "---",
     "type: [[project]]",
@@ -444,38 +444,45 @@ test("counted project scheduling is one structural transaction", async () => {
       file.path,
       session,
       "scheduled",
-      "2026-07-23",
+      "2099-07-23",
     ),
     true,
   );
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.undoGroups, 1);
   assert.deepEqual(editor.transactionScrollTops, [934]);
-  assert.equal(editor.transactions[0].changes.length, 1);
-  assert.deepEqual(editor.transactions[0].changes[0].from, { line: 0, ch: 0 });
+  assert.equal(editor.transactions[0].changes.length, 2);
+  assert.deepEqual(
+    editor.transactions[0].changes.map((change) => change.from.line),
+    [3, 4],
+  );
   assert.deepEqual(editor.transactions[0].selection, {
-    from: { line: 4, ch: 12 },
-    to: { line: 4, ch: 12 },
+    from: { line: 3, ch: 12 },
+    to: { line: 3, ch: 12 },
   });
   assert.equal(editor.content.includes("\r\n"), true);
-  assert.match(editor.content, /^scheduled: 2026-07-23$/m);
-  assert.doesNotMatch(editor.getLine(4), /\[scheduled::/);
-  assert.match(editor.getLine(5), /\[scheduled:: 2026-07-23\]/);
+  assert.doesNotMatch(editor.content, /^scheduled:/m);
+  assert.match(editor.getLine(3), /\[\?\] #task Ship[^\r\n]*\[scheduled:: 2099-07-23\]/);
+  assert.match(editor.getLine(4), /\[\?\] #task Follow up[^\r\n]*#prj_is_blocked/);
 });
 
-test("single project scheduling recovers due tasks in one guarded transaction", async () => {
-  notices.length = 0;
+test("future project scheduling prunes resident links and an emptied Pomodoro", async () => {
+  const now = new Date();
+  const todayPath = `${now.getFullYear()}/${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}.md`;
   const input = [
     "---",
     "type: [[project]]",
-    "scheduled: 2099-01-01",
     "---",
-    "- [ ] #task Ship #hide ^prj",
-    "- [?] #task Ready [scheduled:: 2000-01-01] ^ready",
-  ].join("\r\n");
-  const cursor = { line: 4, ch: 12 };
-  const editor = new TransactionEditor(input, cursor, 733);
-  const file = { path: "projects/Ship.md", extension: "md" };
+    "- [ ] #task Ship ^prj",
+    "- [/] #task Follow up ^follow",
+    "## Pomodoros",
+    "- [ ] Current (0900-0930)",
+    `  - [[${todayPath.slice(5, -3)}#^prj]]`,
+    `  - [[${todayPath.slice(5, -3)}#^follow]]`,
+  ].join("\n");
+  const cursor = { line: 3, ch: 12 };
+  const editor = new TransactionEditor(input, cursor);
+  const file = { path: todayPath, extension: "md" };
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
     workspace: { getLeavesOfType: () => [] },
@@ -494,7 +501,62 @@ test("single project scheduling recovers due tasks in one guarded transaction", 
       editor,
       cursor,
       file.path,
-      input.split(/\r?\n/)[4],
+      input.split("\n")[3],
+      "",
+      "2099-07-23",
+      { today: now },
+    ),
+    true,
+  );
+  assert.equal(editor.transactions.length, 1);
+  assert.match(editor.content, /\[\?\] #task Ship[^\n]*\[scheduled:: 2099-07-23\]/);
+  assert.match(editor.content, /\[\?\] #task Follow up[^\n]*#prj_is_blocked/);
+  assert.doesNotMatch(editor.content, /- \[ \] Current \(0900-0930\)/);
+  assert.doesNotMatch(editor.content, /\[\[.*#\^(?:prj|follow)\]\]/);
+});
+
+test("single project scheduling recovers due residents through the gate", async () => {
+  notices.length = 0;
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2099-01-01] ^prj",
+    "- [?] #task Ready [scheduled:: 2099-01-01] #prj_is_blocked [fresh:: 2000-01-01] ^ready",
+  ].join("\r\n");
+  const cursor = { line: 3, ch: 12 };
+  const editor = new TransactionEditor(input, cursor, 733);
+  const file = { path: "projects/Ship.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: {
+      getMarkdownFiles: () => [file],
+      cachedRead: async () => input,
+      adapter: {
+        read: async () => JSON.stringify(compatibleTasksSettings()),
+      },
+    },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  plugin.getFreshnessApi = () => ({
+    stampLine(line, dateText) {
+      return line.replace(/(?= \^[A-Za-z0-9-]+\s*$)/, ` [fresh:: ${dateText}]`);
+    },
+    markUnblockedLine(line, options) {
+      const today = options.today instanceof Date
+        ? `${options.today.getFullYear()}-${String(options.today.getMonth() + 1).padStart(2, "0")}-${String(options.today.getDate()).padStart(2, "0")}`
+        : String(options.today || "2026-10-12");
+      return line.replace(/(?= \^[A-Za-z0-9-]+\s*$)/, ` [unblocked:: ${today}]`);
+    },
+  });
+
+  assert.equal(
+    await plugin.setProjectNoteScheduledValue(
+      editor,
+      cursor,
+      file.path,
+      input.split(/\r?\n/)[3],
       "2099-01-01",
       "2000-01-01",
     ),
@@ -504,26 +566,30 @@ test("single project scheduling recovers due tasks in one guarded transaction", 
   assert.equal(editor.undoGroups, 1);
   assert.deepEqual(editor.transactionScrollTops, [733]);
   assert.equal(editor.getScrollInfo().top, 733);
-  assert.match(editor.content, /^scheduled: 2000-01-01$/m);
+  assert.doesNotMatch(editor.content, /^scheduled:/m);
   assert.match(
     editor.content,
-    /- \[ \] #task Ready \[scheduled:: 2000-01-01\] \^ready/,
+    /- \[ \] #task Ship #hide \[scheduled:: 2000-01-01\] \[fresh:: \d{4}-\d{2}-\d{2}\] \^prj/,
   );
-  assert.match(notices.at(-1), /recovered 1 task Ready/);
+  assert.match(
+    editor.content,
+    /- \[ \] #task Ready \[scheduled:: 2000-01-01\] \[fresh:: 2000-01-01\] \[unblocked:: \d{4}-\d{2}-\d{2}\] \^ready/,
+  );
+  assert.doesNotMatch(editor.content, /#prj_is_blocked/);
+  assert.match(notices.at(-1), /recovered 2 tasks Ready/);
 });
 
-test("single project schedule deletion removes propagated fields and recovers", async () => {
+test("single project schedule deletion removes propagated copies and recovers", async () => {
   notices.length = 0;
   const input = [
     "---",
     "type: [[project]]",
-    "scheduled: 2099-01-01",
     "---",
-    "- [ ] #task Ship #hide ^prj",
-    "- [?] #task Ready [scheduled:: 2099-01-01] ^ready",
-    "- [?] #task Own later [scheduled:: 2099-01-02] ^later",
+    "- [?] #task Ship #hide [scheduled:: 2099-01-01] ^prj",
+    "- [?] #task Ready #prj_is_blocked [scheduled:: 2099-01-01] [fresh:: 2000-01-01] ^ready",
+    "- [?] #task Own later #prj_is_blocked [scheduled:: 2099-01-02] ^later",
   ].join("\n");
-  const cursor = { line: 4, ch: 12 };
+  const cursor = { line: 3, ch: 12 };
   const editor = new TransactionEditor(input, cursor, 744);
   const file = { path: "projects/Ship.md", extension: "md" };
   const plugin = new NavigationHotkeysPlugin();
@@ -538,12 +604,23 @@ test("single project schedule deletion removes propagated fields and recovers", 
     },
   };
   plugin.getActiveMarkdownView = () => ({ editor, file });
+  plugin.getFreshnessApi = () => ({
+    stampLine(line, dateText) {
+      return line.replace(/(?= \^[A-Za-z0-9-]+\s*$)/, ` [fresh:: ${dateText}]`);
+    },
+    markUnblockedLine(line, options) {
+      const today = options.today instanceof Date
+        ? `${options.today.getFullYear()}-${String(options.today.getMonth() + 1).padStart(2, "0")}-${String(options.today.getDate()).padStart(2, "0")}`
+        : String(options.today || "2026-10-12");
+      return line.replace(/(?= \^[A-Za-z0-9-]+\s*$)/, ` [unblocked:: ${today}]`);
+    },
+  });
 
   const result = await plugin.deleteProjectNoteScheduledValue(
     editor,
     cursor,
     file.path,
-    input.split("\n")[4],
+    input.split("\n")[3],
     "2099-01-01",
   );
   assert.equal(result.deleted, true);
@@ -551,13 +628,15 @@ test("single project schedule deletion removes propagated fields and recovers", 
   assert.equal(editor.undoGroups, 1);
   assert.deepEqual(editor.transactionScrollTops, [744]);
   assert.doesNotMatch(editor.content, /^scheduled:/m);
-  assert.match(editor.content, /- \[ \] #task Ready \^ready/);
+  assert.match(editor.content, /- \[ \] #task Ship #hide \[fresh:: \d{4}-\d{2}-\d{2}\] \^prj/);
+  assert.match(editor.content, /- \[ \] #task Ready \[fresh:: 2000-01-01\] \[unblocked:: /);
   assert.match(
     editor.content,
     /- \[\?\] #task Own later \[scheduled:: 2099-01-02\] \^later/,
   );
+  assert.doesNotMatch(editor.content, /#prj_is_blocked/);
   assert.match(
     notices.at(-1),
-    /removed propagated schedule from 1 task.*recovered 1 task Ready/,
+    /removed propagated schedule from 1 task.*recovered 2 tasks Ready/,
   );
 });

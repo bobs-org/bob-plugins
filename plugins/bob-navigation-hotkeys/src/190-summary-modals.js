@@ -376,7 +376,7 @@ function getProjectNoteInfo(frontmatter, now = new Date()) {
     };
   }
 
-  const schedule = getFutureProjectSchedule(frontmatter.scheduled, now);
+  const schedule = Object.freeze({ scheduled: false, date: "", label: "" });
   const normalizedStatus = normalizeStatus(frontmatter.status);
   const statusKey = PROJECT_STATUS_CANCELED_ALIASES.has(normalizedStatus)
     ? "canceled"
@@ -409,7 +409,16 @@ function getProjectNoteInfo(frontmatter, now = new Date()) {
   };
 }
 
-function getChildNoteInfo(frontmatter, now = new Date()) {
+function getProjectTaskInlineScheduledValue(content) {
+  const task = getRealMarkdownTaskLines(String(content || "")).find(
+    (entry) => entry.isProjectTask,
+  );
+  if (!task) return "";
+  const field = findBulletPropertyField(task.text, "scheduled");
+  return field ? String(field.value || "").trim() : "";
+}
+
+function getChildNoteInfo(frontmatter, now = new Date(), inlineSchedule) {
   const projectInfo = getProjectNoteInfo(frontmatter, now);
   if (projectInfo.isProject) {
     return {
@@ -420,9 +429,18 @@ function getChildNoteInfo(frontmatter, now = new Date()) {
       emoji: projectInfo.emoji,
       icon: projectInfo.icon,
       variant: projectInfo.variant,
-      scheduled: projectInfo.scheduled,
-      scheduledDate: projectInfo.scheduledDate,
-      scheduledLabel: projectInfo.scheduledLabel,
+      scheduled:
+        inlineSchedule === undefined
+          ? projectInfo.scheduled
+          : inlineSchedule.scheduled,
+      scheduledDate:
+        inlineSchedule === undefined
+          ? projectInfo.scheduledDate
+          : inlineSchedule.date,
+      scheduledLabel:
+        inlineSchedule === undefined
+          ? projectInfo.scheduledLabel
+          : inlineSchedule.label,
     };
   }
 
@@ -455,14 +473,21 @@ function getChildNoteInfo(frontmatter, now = new Date()) {
   };
 }
 
-function getFileChildNoteInfo(app, file, now = new Date()) {
+function getFileChildNoteInfo(app, file, now = new Date(), contentOverride) {
   const frontmatter =
     app &&
     app.metadataCache &&
     typeof app.metadataCache.getFileCache === "function"
       ? app.metadataCache.getFileCache(file)?.frontmatter
       : null;
-  return getChildNoteInfo(frontmatter, now);
+  const inlineSchedule =
+    contentOverride === undefined
+      ? undefined
+      : getFutureProjectSchedule(
+          getProjectTaskInlineScheduledValue(contentOverride),
+          now,
+        );
+  return getChildNoteInfo(frontmatter, now, inlineSchedule);
 }
 
 function getChildNoteSummary(childFiles, noteInfoByPath) {

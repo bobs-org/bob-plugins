@@ -1,85 +1,3 @@
-function planProjectScheduledDelete(content, cursorLine, options = {}) {
-  const context = getProjectNotePropertyContext(content, cursorLine, options);
-  if (!context.valid || !context.isProjectTask) {
-    return Object.freeze({
-      valid: false,
-      error: context.error || "Cursor is not on a valid ^prj task",
-    });
-  }
-  if (!context.frontmatter.scheduledDefined) {
-    return Object.freeze({
-      valid: false,
-      error: "scheduled is not set on this project",
-    });
-  }
-
-  const scheduled = context.frontmatter.scheduledValue;
-  const source = splitMarkdownContent(content);
-  const tasks = getRealMarkdownTaskLines(content);
-  let changedTaskCount = 0;
-  let removedScheduledTaskCount = 0;
-  const recoveryCounts = emptyScheduledRecoveryCounts();
-  tasks.forEach((task) => {
-    let nextLine = task.text;
-    if (task.isProjectTask) {
-      nextLine = removeProjectTaskScheduledFields(nextLine).line;
-    } else {
-      const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
-      const status = match ? match[1] : null;
-      if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
-        return;
-      }
-      const removed = removeProjectTaskScheduledFields(
-        nextLine,
-        (field) => field.value === scheduled,
-      );
-      nextLine = removed.line;
-      if (removed.removedCount > 0) {
-        removedScheduledTaskCount += 1;
-      }
-      const remaining = parseProjectTaskScheduledFields(nextLine);
-      if (
-        remaining.length === 1 &&
-        isFutureInlineScheduledValue(remaining[0].value, options.today || new Date())
-      ) {
-        nextLine = blockObsidianTaskCheckboxStatus(nextLine);
-      } else if (remaining.length < 2) {
-        const recovery = reconcileBlockedScheduledTaskLine(
-          nextLine,
-          getTargetScheduledRecovery(options, task.line),
-        );
-        nextLine = recovery.line;
-        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
-      }
-    }
-    if (nextLine !== task.text) {
-      source.lines[task.line] = nextLine;
-      changedTaskCount += 1;
-    }
-  });
-  const cleanedContent = source.lines.join(source.lineEnding);
-  const frontmatterUpdate = updateProjectScheduledFrontmatter(
-    cleanedContent,
-    context.frontmatter,
-    null,
-  );
-  return Object.freeze({
-    valid: true,
-    error: null,
-    content: frontmatterUpdate.content,
-    changed: frontmatterUpdate.content !== String(content || ""),
-    cursorLine: cursorLine + frontmatterUpdate.cursorLineDelta,
-    scheduled,
-    changedTaskCount,
-    removedScheduledTaskCount,
-    recoveredReadyTaskCount: recoveryCounts.ready,
-    recoveredNextTaskCount: recoveryCounts.next,
-    recoveredInProgressTaskCount: recoveryCounts.inProgress,
-    stillBlockedTaskCount: recoveryCounts.stillBlocked,
-    deferredRecoveryTaskCount: recoveryCounts.deferred,
-  });
-}
-
 function isDueInlineScheduledValue(value, today = new Date()) {
   const validation = validateProjectScheduledDate(value);
   return (
@@ -398,7 +316,7 @@ function planCountedBulletPropertyBatch(
       ? targetStates.filter(
           (entry) =>
             (isPriorityOperation ? entry.scheduledState : entry.state).target
-              .kind === "project-frontmatter",
+              .kind === "project-inline",
         )
       : [];
   let nextContent = text;
@@ -420,7 +338,6 @@ function planCountedBulletPropertyBatch(
     const projectState = isPriorityOperation
       ? firstProject.scheduledState
       : firstProject.state;
-    const frontmatter = projectState.context.frontmatter;
     projectScheduledValue = isPriorityOperation
       ? normalizeBulletPropertyValue(
           scheduledValueByLine.get(firstProject.target.line),
@@ -456,10 +373,9 @@ function planCountedBulletPropertyBatch(
       recoveryCounts.stillBlocked += projectPlan.stillBlockedTaskCount;
       recoveryCounts.deferred += projectPlan.deferredRecoveryTaskCount;
       projectPropertyChanged =
-        !frontmatter.scheduledDefined ||
-        frontmatter.scheduledValue !== projectScheduledValue;
+        !projectState.defined || projectState.value !== projectScheduledValue;
       futureScheduledTaskLines.push(...projectPlan.futureScheduledTaskLines);
-    } else if (frontmatter.scheduledDefined) {
+    } else if (projectState.defined) {
       const projectPlan = planProjectScheduledDelete(
         text,
         firstProject.target.line,
@@ -530,17 +446,34 @@ function planCountedBulletPropertyBatch(
       const scheduledValue = normalizeBulletPropertyValue(
         scheduledValueByLine.get(target.line),
       );
-      if (scheduledState.target.kind === "project-frontmatter") {
-        nextLine = removeAllBulletProperties(
+      if (scheduledState.target.kind === "project-inline") {
+        const scheduledResult = upsertBulletProperty(
           nextLine,
           scheduledPropertyName,
+          scheduledValue,
         );
+        nextLine = scheduledResult.line;
         targetChanged ||=
           projectPropertyChanged ||
-          Boolean(
-            findBulletPropertyField(target.rawLine, scheduledPropertyName),
-          ) ||
-          nextLine !== priorityResult.line;
+          scheduledResult.changed ||
+          liveLine !== target.rawLine;
+        if (shouldBlockInlineTasks) {
+          const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+          if (blockedLine !== nextLine) {
+            nextLine = blockedLine;
+            targetChanged = true;
+            blockedTaskCount += 1;
+          }
+        } else if (shouldRecoverInlineTasks) {
+          const recovery = reconcileBlockedScheduledTaskLine(
+            nextLine,
+            getTargetScheduledRecovery(options, target.line),
+            { today: options.today, ownLine: true },
+          );
+          nextLine = recovery.line;
+          targetChanged ||= recovery.changed;
+          recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+        }
       } else {
         const scheduledResult = upsertBulletProperty(
           nextLine,
@@ -577,30 +510,18 @@ function planCountedBulletPropertyBatch(
           recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
         }
       }
-    } else if (
-      propertyName === "scheduled" &&
-      state.target.kind === "project-frontmatter"
-    ) {
-      // Keep the existing ^prj rule strict even if several lifecycle task
-      // sources were counted: scheduled is represented only in frontmatter.
-      if (operation === "set" || state.defined) {
-        nextLine = removeAllBulletProperties(liveLine, propertyName);
-      }
-      targetChanged =
-        projectPropertyChanged ||
-        Boolean(findBulletPropertyField(target.rawLine, propertyName)) ||
-        nextLine !== liveLine;
     } else {
       const result =
-        operation === "set" &&
-        propertyName === "scheduled" &&
-        projectTargets.length > 0
-          ? upsertProjectTaskScheduledField(liveLine, normalizedValue)
-          : operation === "delete"
-            ? deleteBulletProperty(liveLine, propertyName)
-            : upsertBulletProperty(liveLine, propertyName, normalizedValue);
+        operation === "delete"
+          ? deleteBulletProperty(liveLine, propertyName)
+          : upsertBulletProperty(liveLine, propertyName, normalizedValue);
       nextLine = result.line;
-      targetChanged = result.changed;
+      targetChanged =
+        result.changed ||
+        (propertyName === "scheduled" &&
+          state.target.kind === "project-inline" &&
+          projectPropertyChanged) ||
+        liveLine !== target.rawLine;
       if (shouldBlockInlineTasks) {
         futureScheduledTaskLines.push(target.line);
         const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
@@ -624,14 +545,10 @@ function planCountedBulletPropertyBatch(
     }
 
     if (countedStamper && targetChanged) {
-      const isFrontmatterTarget =
-        !isPriorityOperation && state && state.target && state.target.kind === "project-frontmatter";
-      if (!isFrontmatterTarget) {
-        const stamped = applyFreshStampLine(nextLine, countedStamper, countedFreshDateText);
-        if (stamped !== nextLine) {
-          nextLine = stamped;
-          targetChanged = true;
-        }
+      const stamped = applyFreshStampLine(nextLine, countedStamper, countedFreshDateText);
+      if (stamped !== nextLine) {
+        nextLine = stamped;
+        targetChanged = true;
       }
     }
 
@@ -665,11 +582,10 @@ function planCountedBulletPropertyBatch(
       .map((detail) => {
         const entry = entryByOriginalLine.get(detail.originalLine);
         const scheduledState = isPriorityOperation ? entry && entry.scheduledState : entry && entry.state;
-        // Only the first ^prj target's roll reaches frontmatter, so every
-        // project-frontmatter target logs the value that was actually written.
+        // Project schedule writes and priority rolls update the ^prj inline field.
         const to = !isPriorityOperation
           ? normalizedValue
-          : scheduledState && scheduledState.target.kind === "project-frontmatter"
+          : scheduledState && scheduledState.target.kind === "project-inline"
             ? projectScheduledValue
             : normalizeBulletPropertyValue(scheduledValueByLine.get(detail.originalLine));
         const from = scheduledState ? scheduledState.value : "";

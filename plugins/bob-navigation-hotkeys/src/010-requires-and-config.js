@@ -250,8 +250,8 @@ const BULLET_PROPERTY_LIST_ITEM_RE =
   /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s/;
 const PROJECT_NOTE_PROPERTY_TARGETS = Object.freeze({
   scheduled: Object.freeze({
-    kind: "project-frontmatter",
-    frontmatterKey: "scheduled",
+    kind: "project-inline",
+    fieldName: "scheduled",
   }),
 });
 const PROJECT_HIDE_TAG = "#hide";

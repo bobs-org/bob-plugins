@@ -654,6 +654,38 @@ function collectTaskMoveDestinations(files, sourcePath, getNoteInfo) {
     .map((entry) => Object.freeze(entry));
 }
 
+function hydrateTaskMoveDestinationSchedules(app, destinations, now = new Date()) {
+  const entries = Array.isArray(destinations) ? destinations : [];
+  const vault = app && app.vault;
+  const cachedRead = vault && typeof vault.cachedRead === "function"
+    ? vault.cachedRead.bind(vault)
+    : null;
+  if (
+    !cachedRead ||
+    !entries.some((entry) => entry && entry.noteInfo && entry.noteInfo.kind === "project")
+  ) {
+    return Object.freeze(entries.slice());
+  }
+  return Promise.all(
+    entries.map(async (entry) => {
+      if (!entry || !entry.noteInfo || entry.noteInfo.kind !== "project") {
+        return entry;
+      }
+      let content = "";
+      if (cachedRead) {
+        try {
+          content = String((await cachedRead(entry.file)) || "");
+        } catch (_error) {
+          // An unreadable note has no trusted inline schedule; never fall back
+          // to the legacy YAML field for the picker chip.
+        }
+      }
+      const noteInfo = getFileChildNoteInfo(app, entry.file, now, content);
+      return Object.freeze({ ...entry, noteInfo });
+    }),
+  );
+}
+
 function getTaskMoveSectionEnd(lines, headerIndex) {
   let inFence = null;
   for (let index = headerIndex + 1; index < lines.length; index += 1) {

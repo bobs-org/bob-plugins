@@ -501,14 +501,14 @@ test("runtime: a ^prj project schedule prunes the propagated tasks and the ^prj 
       cursor,
       sourceFile.path,
       input.split(/\r?\n/)[4],
-      "2000-01-01",
+      "",
       `${year}-01-01`,
     ),
     true,
   );
   assert.equal(
     contents.get(dailyFile.path),
-    ["## Pomodoros", "", "- [ ] Current (0900-0930)"].join("\n"),
+    "## Pomodoros\n",
   );
   assert.match(notices.at(-1), /removed 2 Pomodoro links/);
 });

@@ -38,22 +38,16 @@ function createBulletPropertyItems(config, line, context = {}) {
     .map((property, order) => {
       const target = resolveBulletPropertyTarget(property.name, context);
       const field =
-        target.kind === "inline" ? fields.get(property.name) || null : null;
-      const frontmatterDefined =
-        target.kind === "project-frontmatter" &&
-        context.frontmatter &&
-        context.frontmatter.scheduledDefined;
-      const currentValue = frontmatterDefined
-        ? context.frontmatter.scheduledValue
-        : field
-          ? field.value
-          : "";
+        target.kind === "inline" || target.kind === "project-inline"
+          ? fields.get(property.name) || null
+          : null;
+      const currentValue = field ? field.value : "";
       return {
         kind: "property",
         property,
         target,
         order,
-        defined: frontmatterDefined || !!field,
+        defined: !!field,
         currentValue,
         currentLabel: getBulletPropertyCurrentLabel(property, currentValue),
         dependencyEligible,

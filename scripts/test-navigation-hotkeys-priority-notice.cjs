@@ -638,7 +638,7 @@ test("counted priority writes keep the rolled date right of the priority", async
   );
 });
 
-test("priority picker writes project priority inline and schedule to frontmatter atomically", async () => {
+test("priority picker writes project priority and schedule inline atomically", async () => {
   notices.length = 0;
   const content = [
     "---",
@@ -662,9 +662,8 @@ test("priority picker writes project priority inline and schedule to frontmatter
   await choosePriorityLevel(harness, "P1");
 
   assert.equal(harness.editor.transactions.length, 1);
-  assert.match(harness.editor.content, /^scheduled: 2026-08-05$/m);
-  assert.match(harness.editor.content, /#task Ship.*\[priority:: high\] \^prj/);
-  assert.doesNotMatch(harness.editor.content, /#task Ship.*\[scheduled::/);
+  assert.doesNotMatch(harness.editor.content, /^scheduled:/m);
+  assert.match(harness.editor.content, /#task Ship #hide \[scheduled:: 2026-08-05\] \[priority:: high\] \^prj/);
   assert.equal(notices.length, 1);
   assert.match(
     notices[0],
@@ -714,7 +713,7 @@ test("counted priority picker rolls an independent schedule for every task", asy
   ]);
 });
 
-test("counted priority planning keeps project schedules in frontmatter", () => {
+test("counted priority planning keeps project schedules inline", () => {
   const input = [
     "---",
     "type: [[project]]",
@@ -741,9 +740,8 @@ test("counted priority planning keeps project schedules in frontmatter", () => {
   );
 
   assert.equal(plan.valid, true);
-  assert.match(plan.content, /^scheduled: 2026-08-05$/m);
-  assert.match(plan.content, /#task Ship.*\[priority:: high\].*\^prj/);
-  assert.doesNotMatch(plan.content, /#task Ship.*\[scheduled::/);
+  assert.doesNotMatch(plan.content, /^scheduled:/m);
+  assert.match(plan.content, /#task Ship #hide \[priority:: high\] \[scheduled:: 2026-08-05\] \^prj/);
   assert.match(
     plan.content,
     /#task Follow up.*\[priority:: high\] \[scheduled:: 2026-08-08\].*\^follow/,

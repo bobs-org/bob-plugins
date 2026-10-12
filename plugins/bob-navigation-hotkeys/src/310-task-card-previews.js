@@ -246,14 +246,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
   const scheduledName = normalizeBulletPropertyName(priorityProperty.schedules);
   const scheduledTarget = resolveBulletPropertyTarget(scheduledName, liveContext);
   const scheduledField = findBulletPropertyField(line, scheduledName);
-  const currentScheduled =
-    scheduledTarget.kind === "project-frontmatter"
-      ? liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-        ? liveContext.frontmatter.scheduledValue
-        : ""
-      : scheduledField
-        ? scheduledField.value
-        : "";
+  const currentScheduled = scheduledField ? scheduledField.value : "";
   const recommendation = planPriorityRollRecommendation({
     property: priorityProperty,
     content: session.content,

@@ -945,6 +945,30 @@ class BobNavigationHotkeysLeafMixin {
       return;
     }
 
-    new ChildNotePickerModal(this.app, this, children, file).open();
+    const noteContentByPath = new Map(
+      children.map((child) => [child.path, ""]),
+    );
+    const vault = this.app && this.app.vault;
+    if (vault && typeof vault.cachedRead === "function") {
+      await Promise.all(
+        children.map(async (child) => {
+          try {
+            noteContentByPath.set(
+              child.path,
+              String((await vault.cachedRead(child)) || ""),
+            );
+          } catch (_error) {
+            noteContentByPath.set(child.path, "");
+          }
+        }),
+      );
+    }
+    new ChildNotePickerModal(
+      this.app,
+      this,
+      children,
+      file,
+      noteContentByPath,
+    ).open();
   }
 }

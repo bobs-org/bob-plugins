@@ -412,7 +412,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         !applyEditorContentTransaction(
           cm,
           writeContext.content,
-          plan.content,
+          finalPlannedContent,
           {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
@@ -615,9 +615,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           "Cursor is no longer on a valid ^prj task",
       });
     }
-    const currentValue = propertyContext.frontmatter.scheduledDefined
-      ? propertyContext.frontmatter.scheduledValue
-      : "";
+    const scheduledField = findBulletPropertyField(lineText, "scheduled");
+    const currentValue = scheduledField ? scheduledField.value : "";
     if (currentValue !== normalizeBulletPropertyValue(expectedValue)) {
       return Object.freeze({
         valid: false,
@@ -656,7 +655,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const today =
       options.today instanceof Date ? getLocalDateStart(options.today) : new Date();
     let recoveryByLine = null;
-    if (isDueInlineScheduledValue(value, today)) {
+    if (!isFutureInlineScheduledValue(value, today)) {
       recoveryByLine = await buildTargetScheduledRecoveryByLine(
         this.app,
         filePath,
@@ -686,7 +685,17 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       cursor.line,
       value,
       today,
-      { recoveryByLine },
+      {
+        recoveryByLine,
+        previousScheduled: expectedValue,
+        today,
+        markUnblockedLine: (line, markOptions) => {
+          const freshness = this.getFreshnessApi();
+          return freshness && typeof freshness.markUnblockedLine === "function"
+            ? freshness.markUnblockedLine(line, markOptions)
+            : line;
+        },
+      },
     );
     if (!plan.valid) {
       new Notice(plan.error);
@@ -704,6 +713,16 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       return false;
     }
     finalLine = inlineResult.line;
+    if (finalLine !== String(expectedLine || "")) {
+      const stamper = this.getFreshnessStampLine();
+      if (typeof stamper === "function") {
+        finalLine = applyFreshStampLine(
+          finalLine,
+          stamper,
+          this.getFreshnessDateText(),
+        );
+      }
+    }
     plannedSource.lines[plan.cursorLine] = finalLine;
 
     let scheduleLogOutcome = null;
@@ -727,7 +746,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           : null;
     let projectWorkLogWritten = false;
     if (hasSchedulingWorkLogInput(projectSchedulingWorkLogInput)) {
-      const eligibilityLine = String(expectedLine ?? lineText ?? "");
+      const eligibilityLine = String(expectedLine || "");
       if (isSchedulingWorkLogRawLine(eligibilityLine)) {
         const summary = normalizeSchedulingWorkSummary(
           projectSchedulingWorkLogInput.summary,
@@ -791,6 +810,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -812,6 +832,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
           }

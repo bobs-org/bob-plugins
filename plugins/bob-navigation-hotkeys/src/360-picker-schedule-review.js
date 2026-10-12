@@ -455,9 +455,9 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
     return this.applyInboxRoutedRefreshCustom(query);
   }
 
-  // The scheduled value a picked date replaces: frontmatter for a ^prj task,
-  // the inline field otherwise. Empty in a counted session, where each target's
-  // own previous value is resolved by the counted planner instead.
+  // The scheduled value a picked date replaces: the inline ^prj field for a
+  // project lifecycle task, the inline field otherwise. Empty in a counted
+  // session, where each target's own previous value is resolved by the planner.
   getPendingScheduleFrom() {
     const propertyItem = this.selectedPropertyItem;
     if (
@@ -469,7 +469,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
     }
 
     return normalizeBulletPropertyValue(
-      propertyItem.target && propertyItem.target.kind === "project-frontmatter"
+      propertyItem.target && propertyItem.target.kind === "project-inline"
         ? propertyItem.currentValue
         : this.getCurrentPropertyValue(propertyItem.property.name),
     );
@@ -583,7 +583,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
       isProject: Boolean(
         this.selectedPropertyItem &&
           this.selectedPropertyItem.target &&
-          this.selectedPropertyItem.target.kind === "project-frontmatter",
+          this.selectedPropertyItem.target.kind === "project-inline",
       ),
       baseDate: this.valueBaseDate,
     });

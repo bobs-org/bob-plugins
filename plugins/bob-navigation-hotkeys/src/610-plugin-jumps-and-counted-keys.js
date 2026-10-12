@@ -16,9 +16,24 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (propertyName === "dependsOn") {
       return this.deleteDependencyLineAndField(cm, cursor, options, writeContext);
     }
-    const shouldRecover =
+    if (
       propertyName === "scheduled" &&
-      !isProjectLifecycleTaskLine(lineText);
+      isProjectLifecycleTaskAtLine(writeContext.content, cursor.line)
+    ) {
+      const scheduledField = findBulletPropertyField(lineText, propertyName);
+      if (!scheduledField) {
+        new Notice("scheduled is not set on this project");
+        return { deleted: false, line: lineText };
+      }
+      return await this.deleteProjectNoteScheduledValue(
+        cm,
+        cursor,
+        writeContext.filePath,
+        lineText,
+        scheduledField.value,
+      );
+    }
+    const shouldRecover = propertyName === "scheduled";
     let recovery = null;
     if (shouldRecover) {
       const recoveryByLine = await buildTargetScheduledRecoveryByLine(

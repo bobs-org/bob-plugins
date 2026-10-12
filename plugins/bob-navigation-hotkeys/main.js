@@ -252,8 +252,8 @@ const BULLET_PROPERTY_LIST_ITEM_RE =
   /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s/;
 const PROJECT_NOTE_PROPERTY_TARGETS = Object.freeze({
   scheduled: Object.freeze({
-    kind: "project-frontmatter",
-    frontmatterKey: "scheduled",
+    kind: "project-inline",
+    fieldName: "scheduled",
   }),
 });
 const PROJECT_HIDE_TAG = "#hide";
@@ -3488,11 +3488,9 @@ function planPriorityRollRecommendationsForTargets(
         schedulesName,
         liveContext,
       );
-      if (scheduledTarget.kind === "project-frontmatter") {
-        currentScheduled =
-          liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-            ? liveContext.frontmatter.scheduledValue
-            : "";
+      if (scheduledTarget.kind === "project-inline") {
+        const scheduledField = findBulletPropertyField(rawLine, schedulesName);
+        currentScheduled = scheduledField ? scheduledField.value : "";
       } else {
         const scheduledField = findBulletPropertyField(rawLine, schedulesName);
         currentScheduled = scheduledField ? scheduledField.value : "";
@@ -16298,7 +16296,7 @@ function getProjectNoteInfo(frontmatter, now = new Date()) {
     };
   }
 
-  const schedule = getFutureProjectSchedule(frontmatter.scheduled, now);
+  const schedule = Object.freeze({ scheduled: false, date: "", label: "" });
   const normalizedStatus = normalizeStatus(frontmatter.status);
   const statusKey = PROJECT_STATUS_CANCELED_ALIASES.has(normalizedStatus)
     ? "canceled"
@@ -16331,7 +16329,16 @@ function getProjectNoteInfo(frontmatter, now = new Date()) {
   };
 }
 
-function getChildNoteInfo(frontmatter, now = new Date()) {
+function getProjectTaskInlineScheduledValue(content) {
+  const task = getRealMarkdownTaskLines(String(content || "")).find(
+    (entry) => entry.isProjectTask,
+  );
+  if (!task) return "";
+  const field = findBulletPropertyField(task.text, "scheduled");
+  return field ? String(field.value || "").trim() : "";
+}
+
+function getChildNoteInfo(frontmatter, now = new Date(), inlineSchedule) {
   const projectInfo = getProjectNoteInfo(frontmatter, now);
   if (projectInfo.isProject) {
     return {
@@ -16342,9 +16349,18 @@ function getChildNoteInfo(frontmatter, now = new Date()) {
       emoji: projectInfo.emoji,
       icon: projectInfo.icon,
       variant: projectInfo.variant,
-      scheduled: projectInfo.scheduled,
-      scheduledDate: projectInfo.scheduledDate,
-      scheduledLabel: projectInfo.scheduledLabel,
+      scheduled:
+        inlineSchedule === undefined
+          ? projectInfo.scheduled
+          : inlineSchedule.scheduled,
+      scheduledDate:
+        inlineSchedule === undefined
+          ? projectInfo.scheduledDate
+          : inlineSchedule.date,
+      scheduledLabel:
+        inlineSchedule === undefined
+          ? projectInfo.scheduledLabel
+          : inlineSchedule.label,
     };
   }
 
@@ -16377,14 +16393,21 @@ function getChildNoteInfo(frontmatter, now = new Date()) {
   };
 }
 
-function getFileChildNoteInfo(app, file, now = new Date()) {
+function getFileChildNoteInfo(app, file, now = new Date(), contentOverride) {
   const frontmatter =
     app &&
     app.metadataCache &&
     typeof app.metadataCache.getFileCache === "function"
       ? app.metadataCache.getFileCache(file)?.frontmatter
       : null;
-  return getChildNoteInfo(frontmatter, now);
+  const inlineSchedule =
+    contentOverride === undefined
+      ? undefined
+      : getFutureProjectSchedule(
+          getProjectTaskInlineScheduledValue(contentOverride),
+          now,
+        );
+  return getChildNoteInfo(frontmatter, now, inlineSchedule);
 }
 
 function getChildNoteSummary(childFiles, noteInfoByPath) {
@@ -17488,12 +17511,19 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
 }
 
 class ChildNotePickerModal extends FilteredPickerModal {
-  constructor(app, plugin, childFiles, parentFile) {
+  constructor(app, plugin, childFiles, parentFile, noteContentByPath = new Map()) {
     const now = new Date();
     const noteInfoByPath = new Map(
       childFiles.map((file) => [
         file.path,
-        getFileChildNoteInfo(app, file, now),
+        getFileChildNoteInfo(
+          app,
+          file,
+          now,
+          noteContentByPath instanceof Map && noteContentByPath.has(file.path)
+            ? noteContentByPath.get(file.path)
+            : undefined,
+        ),
       ]),
     );
     const summaryParts = getChildNoteSummary(childFiles, noteInfoByPath);
@@ -18915,10 +18945,12 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
 }
 
 function getProjectNotePropertyContext(content, lineIndex, options = {}) {
+  const lineText = splitMarkdownContent(content).lines[lineIndex] || "";
   if (!isProjectLifecycleTaskAtLine(content, lineIndex)) {
     return Object.freeze({
       valid: true,
       isProjectTask: false,
+      lineText,
       frontmatter: null,
     });
   }
@@ -18928,6 +18960,7 @@ function getProjectNotePropertyContext(content, lineIndex, options = {}) {
     return Object.freeze({
       valid: false,
       isProjectTask: true,
+      lineText,
       error: frontmatter.error,
       frontmatter,
     });
@@ -18936,6 +18969,7 @@ function getProjectNotePropertyContext(content, lineIndex, options = {}) {
   return Object.freeze({
     valid: true,
     isProjectTask: true,
+    lineText,
     error: null,
     frontmatter,
   });
@@ -19403,22 +19437,16 @@ function createBulletPropertyItems(config, line, context = {}) {
     .map((property, order) => {
       const target = resolveBulletPropertyTarget(property.name, context);
       const field =
-        target.kind === "inline" ? fields.get(property.name) || null : null;
-      const frontmatterDefined =
-        target.kind === "project-frontmatter" &&
-        context.frontmatter &&
-        context.frontmatter.scheduledDefined;
-      const currentValue = frontmatterDefined
-        ? context.frontmatter.scheduledValue
-        : field
-          ? field.value
-          : "";
+        target.kind === "inline" || target.kind === "project-inline"
+          ? fields.get(property.name) || null
+          : null;
+      const currentValue = field ? field.value : "";
       return {
         kind: "property",
         property,
         target,
         order,
-        defined: frontmatterDefined || !!field,
+        defined: !!field,
         currentValue,
         currentLabel: getBulletPropertyCurrentLabel(property, currentValue),
         dependencyEligible,
@@ -21569,6 +21597,38 @@ function collectTaskMoveDestinations(files, sourcePath, getNoteInfo) {
     .map((entry) => Object.freeze(entry));
 }
 
+function hydrateTaskMoveDestinationSchedules(app, destinations, now = new Date()) {
+  const entries = Array.isArray(destinations) ? destinations : [];
+  const vault = app && app.vault;
+  const cachedRead = vault && typeof vault.cachedRead === "function"
+    ? vault.cachedRead.bind(vault)
+    : null;
+  if (
+    !cachedRead ||
+    !entries.some((entry) => entry && entry.noteInfo && entry.noteInfo.kind === "project")
+  ) {
+    return Object.freeze(entries.slice());
+  }
+  return Promise.all(
+    entries.map(async (entry) => {
+      if (!entry || !entry.noteInfo || entry.noteInfo.kind !== "project") {
+        return entry;
+      }
+      let content = "";
+      if (cachedRead) {
+        try {
+          content = String((await cachedRead(entry.file)) || "");
+        } catch (_error) {
+          // An unreadable note has no trusted inline schedule; never fall back
+          // to the legacy YAML field for the picker chip.
+        }
+      }
+      const noteInfo = getFileChildNoteInfo(app, entry.file, now, content);
+      return Object.freeze({ ...entry, noteInfo });
+    }),
+  );
+}
+
 function getTaskMoveSectionEnd(lines, headerIndex) {
   let inFence = null;
   for (let index = headerIndex + 1; index < lines.length; index += 1) {
@@ -22453,20 +22513,6 @@ function getCountedPropertyTargetState(
   }
 
   const descriptor = resolveBulletPropertyTarget(property.name, context);
-  if (descriptor.kind === "project-frontmatter") {
-    const defined = Boolean(
-      context.frontmatter && context.frontmatter.scheduledDefined,
-    );
-    return Object.freeze({
-      valid: true,
-      error: null,
-      target: descriptor,
-      context,
-      defined,
-      value: defined ? context.frontmatter.scheduledValue : "",
-    });
-  }
-
   const field = findBulletPropertyField(target.rawLine, property.name);
   return Object.freeze({
     valid: true,
@@ -22694,39 +22740,6 @@ function parseProjectTaskScheduledFields(lineText) {
   return fields;
 }
 
-function upsertProjectTaskScheduledField(lineText, scheduled) {
-  const text = String(lineText || "");
-  const fields = parseProjectTaskScheduledFields(text);
-  if (fields.length > 1) {
-    return Object.freeze({ line: text, changed: false, ambiguous: true });
-  }
-  if (fields.length === 1) {
-    const validation = validateProjectScheduledDate(fields[0].value);
-    if (validation.valid && validation.value >= scheduled) {
-      return Object.freeze({
-        line: text,
-        changed: false,
-        ambiguous: false,
-      });
-    }
-    const nextLine =
-      text.slice(0, fields[0].span.start) +
-      formatBulletPropertyField("scheduled", scheduled) +
-      text.slice(fields[0].span.end);
-    return Object.freeze({
-      line: nextLine,
-      changed: nextLine !== text,
-      ambiguous: false,
-    });
-  }
-  const inserted = upsertBulletProperty(text, "scheduled", scheduled);
-  return Object.freeze({
-    line: inserted.line,
-    changed: inserted.changed,
-    ambiguous: false,
-  });
-}
-
 function removeProjectTaskScheduledFields(lineText, predicate = () => true) {
   const text = String(lineText || "");
   const spans = parseProjectTaskScheduledFields(text)
@@ -22779,162 +22792,6 @@ function getRealMarkdownTaskLines(content) {
   return tasks;
 }
 
-function getProjectScheduleRecoveryTargetLines(content) {
-  return getRealMarkdownTaskLines(content)
-    .filter((task) => {
-      if (task.isProjectTask) {
-        return false;
-      }
-      const match = OBSIDIAN_TASK_LINE_RE.exec(task.text);
-      return Boolean(match && OPEN_OBSIDIAN_TASK_STATUSES.has(match[1]));
-    })
-    .map((task) => task.line);
-}
-
-function planProjectTaskSchedules(
-  content,
-  scheduled,
-  today = new Date(),
-  options = {},
-) {
-  const validation = validateProjectScheduledDate(scheduled);
-  if (!validation.valid) {
-    return Object.freeze({
-      valid: false,
-      error: validation.message,
-      content: String(content || ""),
-      changed: false,
-      changedTaskCount: 0,
-      scheduledTaskCount: 0,
-      removedHideTaskCount: 0,
-      blockedTaskCount: 0,
-      recoveredReadyTaskCount: 0,
-      recoveredNextTaskCount: 0,
-      recoveredInProgressTaskCount: 0,
-      stillBlockedTaskCount: 0,
-      deferredRecoveryTaskCount: 0,
-      ambiguousTaskLines: Object.freeze([]),
-      taskCount: 0,
-      futureScheduledTaskLines: Object.freeze([]),
-    });
-  }
-
-  const scheduledDate = new Date(
-    validation.year,
-    validation.month - 1,
-    validation.day,
-  );
-  const localToday = getLocalDateStart(today);
-  const future = compareLocalDates(scheduledDate, localToday) > 0;
-  const source = splitMarkdownContent(content);
-  const tasks = getRealMarkdownTaskLines(content);
-  let changedTaskCount = 0;
-  let scheduledTaskCount = 0;
-  let removedHideTaskCount = 0;
-  let blockedTaskCount = 0;
-  let projectHideChanged = false;
-  const ambiguousTaskLines = [];
-  const futureScheduledTaskLines = [];
-  const recoveryCounts = emptyScheduledRecoveryCounts();
-  tasks.forEach((task) => {
-    if (task.isProjectTask) {
-      let nextLine = normalizeProjectLifecycleHideTag(
-        task.text,
-        future,
-        future || tasks.length === 1,
-      );
-      nextLine = removeProjectTaskScheduledFields(nextLine).line;
-      if (nextLine !== task.text) {
-        source.lines[task.line] = nextLine;
-        changedTaskCount += 1;
-        projectHideChanged =
-          getWholeTaskTagSpans(nextLine, PROJECT_HIDE_TAG).length !==
-          getWholeTaskTagSpans(task.text, PROJECT_HIDE_TAG).length;
-      }
-      // `^prj` never receives an inline `scheduled` field — its schedule lives
-      // in frontmatter only — so it is never blocked by the branch below. It
-      // still needs pruning from today's open Pomodoros when the project
-      // itself moves to a future date.
-      if (future) {
-        futureScheduledTaskLines.push(task.line);
-      }
-      return;
-    }
-
-    const scheduledFields = parseProjectTaskScheduledFields(task.text);
-    if (scheduledFields.length > 1) {
-      ambiguousTaskLines.push(task.line);
-      return;
-    }
-
-    let nextLine = removeTextSpans(
-      task.text,
-      getWholeTaskTagSpans(task.text, PROJECT_HIDE_TAG),
-    );
-    if (nextLine !== task.text) {
-      removedHideTaskCount += 1;
-    }
-    const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
-    const status = match ? match[1] : null;
-    if (OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
-      const scheduleResult = upsertProjectTaskScheduledField(
-        nextLine,
-        validation.value,
-      );
-      nextLine = scheduleResult.line;
-      if (scheduleResult.changed) {
-        scheduledTaskCount += 1;
-      }
-
-      const finalFields = parseProjectTaskScheduledFields(nextLine);
-      const futureTaskSchedule =
-        finalFields.length === 1 &&
-        isFutureInlineScheduledValue(finalFields[0].value, today);
-      if (futureTaskSchedule) {
-        futureScheduledTaskLines.push(task.line);
-        const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
-        if (blockedLine !== nextLine) {
-          nextLine = blockedLine;
-          blockedTaskCount += 1;
-        }
-      } else if (finalFields.length === 1) {
-        const recovery = reconcileBlockedScheduledTaskLine(
-          nextLine,
-          getTargetScheduledRecovery(options, task.line),
-        );
-        nextLine = recovery.line;
-        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
-      }
-    }
-    if (nextLine !== task.text) {
-      source.lines[task.line] = nextLine;
-      changedTaskCount += 1;
-    }
-  });
-
-  const nextContent = source.lines.join(source.lineEnding);
-  return Object.freeze({
-    valid: true,
-    error: null,
-    content: nextContent,
-    changed: nextContent !== String(content || ""),
-    changedTaskCount,
-    scheduledTaskCount,
-    removedHideTaskCount,
-    blockedTaskCount,
-    recoveredReadyTaskCount: recoveryCounts.ready,
-    recoveredNextTaskCount: recoveryCounts.next,
-    recoveredInProgressTaskCount: recoveryCounts.inProgress,
-    stillBlockedTaskCount: recoveryCounts.stillBlocked,
-    deferredRecoveryTaskCount: recoveryCounts.deferred,
-    ambiguousTaskLines: Object.freeze(ambiguousTaskLines),
-    taskCount: tasks.length,
-    future,
-    projectHideChanged,
-    futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
-  });
-}
-
 function removeAllBulletProperties(line, name) {
   let text = String(line || "");
   let field = findBulletPropertyField(text, name);
@@ -22952,84 +22809,6 @@ function replaceMarkdownLine(content, lineIndex, nextLine) {
   }
   source.lines[lineIndex] = nextLine;
   return source.lines.join(source.lineEnding);
-}
-
-function updateProjectScheduledFrontmatter(content, frontmatter, value) {
-  const source = splitMarkdownContent(content);
-  let cursorLineDelta = 0;
-  if (value === null) {
-    if (frontmatter.scheduledDefined) {
-      source.lines.splice(frontmatter.scheduledLine, 1);
-      cursorLineDelta = -1;
-    }
-  } else if (frontmatter.scheduledDefined) {
-    source.lines[frontmatter.scheduledLine] = `scheduled: ${value}`;
-  } else {
-    source.lines.splice(frontmatter.closingLine, 0, `scheduled: ${value}`);
-    cursorLineDelta = 1;
-  }
-
-  return Object.freeze({
-    content: source.lines.join(source.lineEnding),
-    cursorLineDelta,
-  });
-}
-
-function planProjectScheduledUpdate(
-  content,
-  cursorLine,
-  scheduled,
-  today = new Date(),
-  options = {},
-) {
-  const validation = validateProjectScheduledDate(scheduled);
-  if (!validation.valid) {
-    return Object.freeze({ valid: false, error: validation.message });
-  }
-  const context = getProjectNotePropertyContext(content, cursorLine, options);
-  if (!context.valid || !context.isProjectTask) {
-    return Object.freeze({
-      valid: false,
-      error: context.error || "Cursor is not on a valid ^prj task",
-    });
-  }
-
-  const propagation = planProjectTaskSchedules(
-    content,
-    validation.value,
-    today,
-    options,
-  );
-  if (!propagation.valid) {
-    return Object.freeze({ valid: false, error: propagation.error });
-  }
-  const frontmatterUpdate = updateProjectScheduledFrontmatter(
-    propagation.content,
-    context.frontmatter,
-    validation.value,
-  );
-
-  return Object.freeze({
-    valid: true,
-    error: null,
-    content: frontmatterUpdate.content,
-    changed: frontmatterUpdate.content !== String(content || ""),
-    cursorLine: cursorLine + frontmatterUpdate.cursorLineDelta,
-    scheduled: validation.value,
-    future: propagation.future,
-    changedTaskCount: propagation.changedTaskCount,
-    scheduledTaskCount: propagation.scheduledTaskCount,
-    removedHideTaskCount: propagation.removedHideTaskCount,
-    futureScheduledTaskLines: propagation.futureScheduledTaskLines,
-    blockedTaskCount: propagation.blockedTaskCount,
-    recoveredReadyTaskCount: propagation.recoveredReadyTaskCount,
-    recoveredNextTaskCount: propagation.recoveredNextTaskCount,
-    recoveredInProgressTaskCount:
-      propagation.recoveredInProgressTaskCount,
-    stillBlockedTaskCount: propagation.stillBlockedTaskCount,
-    deferredRecoveryTaskCount: propagation.deferredRecoveryTaskCount,
-    ambiguousTaskLines: propagation.ambiguousTaskLines,
-  });
 }
 
 // ---- src/255-inbox-route.js ----
@@ -23381,88 +23160,6 @@ function createInboxRouteApi(plugin) {
   });
 }
 // ---- src/260-project-schedules.js ----
-function planProjectScheduledDelete(content, cursorLine, options = {}) {
-  const context = getProjectNotePropertyContext(content, cursorLine, options);
-  if (!context.valid || !context.isProjectTask) {
-    return Object.freeze({
-      valid: false,
-      error: context.error || "Cursor is not on a valid ^prj task",
-    });
-  }
-  if (!context.frontmatter.scheduledDefined) {
-    return Object.freeze({
-      valid: false,
-      error: "scheduled is not set on this project",
-    });
-  }
-
-  const scheduled = context.frontmatter.scheduledValue;
-  const source = splitMarkdownContent(content);
-  const tasks = getRealMarkdownTaskLines(content);
-  let changedTaskCount = 0;
-  let removedScheduledTaskCount = 0;
-  const recoveryCounts = emptyScheduledRecoveryCounts();
-  tasks.forEach((task) => {
-    let nextLine = task.text;
-    if (task.isProjectTask) {
-      nextLine = removeProjectTaskScheduledFields(nextLine).line;
-    } else {
-      const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
-      const status = match ? match[1] : null;
-      if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
-        return;
-      }
-      const removed = removeProjectTaskScheduledFields(
-        nextLine,
-        (field) => field.value === scheduled,
-      );
-      nextLine = removed.line;
-      if (removed.removedCount > 0) {
-        removedScheduledTaskCount += 1;
-      }
-      const remaining = parseProjectTaskScheduledFields(nextLine);
-      if (
-        remaining.length === 1 &&
-        isFutureInlineScheduledValue(remaining[0].value, options.today || new Date())
-      ) {
-        nextLine = blockObsidianTaskCheckboxStatus(nextLine);
-      } else if (remaining.length < 2) {
-        const recovery = reconcileBlockedScheduledTaskLine(
-          nextLine,
-          getTargetScheduledRecovery(options, task.line),
-        );
-        nextLine = recovery.line;
-        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
-      }
-    }
-    if (nextLine !== task.text) {
-      source.lines[task.line] = nextLine;
-      changedTaskCount += 1;
-    }
-  });
-  const cleanedContent = source.lines.join(source.lineEnding);
-  const frontmatterUpdate = updateProjectScheduledFrontmatter(
-    cleanedContent,
-    context.frontmatter,
-    null,
-  );
-  return Object.freeze({
-    valid: true,
-    error: null,
-    content: frontmatterUpdate.content,
-    changed: frontmatterUpdate.content !== String(content || ""),
-    cursorLine: cursorLine + frontmatterUpdate.cursorLineDelta,
-    scheduled,
-    changedTaskCount,
-    removedScheduledTaskCount,
-    recoveredReadyTaskCount: recoveryCounts.ready,
-    recoveredNextTaskCount: recoveryCounts.next,
-    recoveredInProgressTaskCount: recoveryCounts.inProgress,
-    stillBlockedTaskCount: recoveryCounts.stillBlocked,
-    deferredRecoveryTaskCount: recoveryCounts.deferred,
-  });
-}
-
 function isDueInlineScheduledValue(value, today = new Date()) {
   const validation = validateProjectScheduledDate(value);
   return (
@@ -23781,7 +23478,7 @@ function planCountedBulletPropertyBatch(
       ? targetStates.filter(
           (entry) =>
             (isPriorityOperation ? entry.scheduledState : entry.state).target
-              .kind === "project-frontmatter",
+              .kind === "project-inline",
         )
       : [];
   let nextContent = text;
@@ -23803,7 +23500,6 @@ function planCountedBulletPropertyBatch(
     const projectState = isPriorityOperation
       ? firstProject.scheduledState
       : firstProject.state;
-    const frontmatter = projectState.context.frontmatter;
     projectScheduledValue = isPriorityOperation
       ? normalizeBulletPropertyValue(
           scheduledValueByLine.get(firstProject.target.line),
@@ -23839,10 +23535,9 @@ function planCountedBulletPropertyBatch(
       recoveryCounts.stillBlocked += projectPlan.stillBlockedTaskCount;
       recoveryCounts.deferred += projectPlan.deferredRecoveryTaskCount;
       projectPropertyChanged =
-        !frontmatter.scheduledDefined ||
-        frontmatter.scheduledValue !== projectScheduledValue;
+        !projectState.defined || projectState.value !== projectScheduledValue;
       futureScheduledTaskLines.push(...projectPlan.futureScheduledTaskLines);
-    } else if (frontmatter.scheduledDefined) {
+    } else if (projectState.defined) {
       const projectPlan = planProjectScheduledDelete(
         text,
         firstProject.target.line,
@@ -23913,17 +23608,34 @@ function planCountedBulletPropertyBatch(
       const scheduledValue = normalizeBulletPropertyValue(
         scheduledValueByLine.get(target.line),
       );
-      if (scheduledState.target.kind === "project-frontmatter") {
-        nextLine = removeAllBulletProperties(
+      if (scheduledState.target.kind === "project-inline") {
+        const scheduledResult = upsertBulletProperty(
           nextLine,
           scheduledPropertyName,
+          scheduledValue,
         );
+        nextLine = scheduledResult.line;
         targetChanged ||=
           projectPropertyChanged ||
-          Boolean(
-            findBulletPropertyField(target.rawLine, scheduledPropertyName),
-          ) ||
-          nextLine !== priorityResult.line;
+          scheduledResult.changed ||
+          liveLine !== target.rawLine;
+        if (shouldBlockInlineTasks) {
+          const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+          if (blockedLine !== nextLine) {
+            nextLine = blockedLine;
+            targetChanged = true;
+            blockedTaskCount += 1;
+          }
+        } else if (shouldRecoverInlineTasks) {
+          const recovery = reconcileBlockedScheduledTaskLine(
+            nextLine,
+            getTargetScheduledRecovery(options, target.line),
+            { today: options.today, ownLine: true },
+          );
+          nextLine = recovery.line;
+          targetChanged ||= recovery.changed;
+          recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+        }
       } else {
         const scheduledResult = upsertBulletProperty(
           nextLine,
@@ -23960,30 +23672,18 @@ function planCountedBulletPropertyBatch(
           recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
         }
       }
-    } else if (
-      propertyName === "scheduled" &&
-      state.target.kind === "project-frontmatter"
-    ) {
-      // Keep the existing ^prj rule strict even if several lifecycle task
-      // sources were counted: scheduled is represented only in frontmatter.
-      if (operation === "set" || state.defined) {
-        nextLine = removeAllBulletProperties(liveLine, propertyName);
-      }
-      targetChanged =
-        projectPropertyChanged ||
-        Boolean(findBulletPropertyField(target.rawLine, propertyName)) ||
-        nextLine !== liveLine;
     } else {
       const result =
-        operation === "set" &&
-        propertyName === "scheduled" &&
-        projectTargets.length > 0
-          ? upsertProjectTaskScheduledField(liveLine, normalizedValue)
-          : operation === "delete"
-            ? deleteBulletProperty(liveLine, propertyName)
-            : upsertBulletProperty(liveLine, propertyName, normalizedValue);
+        operation === "delete"
+          ? deleteBulletProperty(liveLine, propertyName)
+          : upsertBulletProperty(liveLine, propertyName, normalizedValue);
       nextLine = result.line;
-      targetChanged = result.changed;
+      targetChanged =
+        result.changed ||
+        (propertyName === "scheduled" &&
+          state.target.kind === "project-inline" &&
+          projectPropertyChanged) ||
+        liveLine !== target.rawLine;
       if (shouldBlockInlineTasks) {
         futureScheduledTaskLines.push(target.line);
         const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
@@ -24007,14 +23707,10 @@ function planCountedBulletPropertyBatch(
     }
 
     if (countedStamper && targetChanged) {
-      const isFrontmatterTarget =
-        !isPriorityOperation && state && state.target && state.target.kind === "project-frontmatter";
-      if (!isFrontmatterTarget) {
-        const stamped = applyFreshStampLine(nextLine, countedStamper, countedFreshDateText);
-        if (stamped !== nextLine) {
-          nextLine = stamped;
-          targetChanged = true;
-        }
+      const stamped = applyFreshStampLine(nextLine, countedStamper, countedFreshDateText);
+      if (stamped !== nextLine) {
+        nextLine = stamped;
+        targetChanged = true;
       }
     }
 
@@ -24048,11 +23744,10 @@ function planCountedBulletPropertyBatch(
       .map((detail) => {
         const entry = entryByOriginalLine.get(detail.originalLine);
         const scheduledState = isPriorityOperation ? entry && entry.scheduledState : entry && entry.state;
-        // Only the first ^prj target's roll reaches frontmatter, so every
-        // project-frontmatter target logs the value that was actually written.
+        // Project schedule writes and priority rolls update the ^prj inline field.
         const to = !isPriorityOperation
           ? normalizedValue
-          : scheduledState && scheduledState.target.kind === "project-frontmatter"
+          : scheduledState && scheduledState.target.kind === "project-inline"
             ? projectScheduledValue
             : normalizeBulletPropertyValue(scheduledValueByLine.get(detail.originalLine));
         const from = scheduledState ? scheduledState.value : "";
@@ -24189,6 +23884,398 @@ function planCountedBulletPropertyBatch(
 // Converge one selected dependency across every counted source task. All
 // source fields, target identity normalization, and per-parent navigation
 // bullets are built in memory so the runtime path can apply exactly one write.
+// ---- src/265-project-schedule-inline.js ----
+// Project scheduling is stored on the ordinary ^prj task line. The project
+// schedule still propagates to residents and owns the same block/recovery
+// effects, but no navigation writer reads or writes YAML `scheduled`.
+function getProjectScheduleRecoveryTargetLines(content) {
+  return getRealMarkdownTaskLines(content)
+    .filter((task) => {
+      if (!PROJECT_TASK_TAG_RE.test(task.text)) return false;
+      const match = OBSIDIAN_TASK_LINE_RE.exec(task.text);
+      return Boolean(match && OPEN_OBSIDIAN_TASK_STATUSES.has(match[1]));
+    })
+    .map((task) => task.line);
+}
+
+function upsertProjectTaskScheduledField(
+  lineText,
+  scheduled,
+  previousProjectScheduled = "",
+) {
+  const text = String(lineText || "");
+  const fields = parseProjectTaskScheduledFields(text);
+  if (fields.length > 1) {
+    return Object.freeze({ line: text, changed: false, ambiguous: true });
+  }
+  if (fields.length === 1) {
+    const current = validateProjectScheduledDate(fields[0].value);
+    const previous = normalizeBulletPropertyValue(previousProjectScheduled);
+    const movingPriorCopyEarlier =
+      previous && current.valid && current.value === previous;
+    if (
+      current.valid &&
+      current.value >= scheduled &&
+      !movingPriorCopyEarlier
+    ) {
+      return Object.freeze({ line: text, changed: false, ambiguous: false });
+    }
+    const nextLine =
+      text.slice(0, fields[0].span.start) +
+      formatBulletPropertyField("scheduled", scheduled) +
+      text.slice(fields[0].span.end);
+    return Object.freeze({
+      line: nextLine,
+      changed: nextLine !== text,
+      ambiguous: false,
+    });
+  }
+  const inserted = upsertBulletProperty(text, "scheduled", scheduled);
+  return Object.freeze({
+    line: inserted.line,
+    changed: inserted.changed,
+    ambiguous: false,
+  });
+}
+
+function planProjectTaskSchedules(
+  content,
+  scheduled,
+  today = new Date(),
+  options = {},
+) {
+  const validation = validateProjectScheduledDate(scheduled);
+  const original = String(content || "");
+  if (!validation.valid) {
+    return Object.freeze({
+      valid: false,
+      error: validation.message,
+      content: original,
+      changed: false,
+      changedTaskCount: 0,
+      scheduledTaskCount: 0,
+      removedHideTaskCount: 0,
+      blockedTaskCount: 0,
+      recoveredReadyTaskCount: 0,
+      recoveredNextTaskCount: 0,
+      recoveredInProgressTaskCount: 0,
+      stillBlockedTaskCount: 0,
+      deferredRecoveryTaskCount: 0,
+      ambiguousTaskLines: Object.freeze([]),
+      taskCount: 0,
+      futureScheduledTaskLines: Object.freeze([]),
+    });
+  }
+
+  const date = new Date(
+    validation.year,
+    validation.month - 1,
+    validation.day,
+  );
+  const future = compareLocalDates(date, getLocalDateStart(today)) > 0;
+  const source = splitMarkdownContent(original);
+  const tasks = getRealMarkdownTaskLines(original).filter((task) =>
+    PROJECT_TASK_TAG_RE.test(task.text),
+  );
+  const projectTask = tasks.find((task) => task.isProjectTask);
+  const previousProjectScheduled = normalizeBulletPropertyValue(
+    options.previousScheduled !== undefined
+      ? options.previousScheduled
+      : projectTask
+        ? readProjectTaskScheduledValue(projectTask.text)
+        : "",
+  );
+  let changedTaskCount = 0;
+  let scheduledTaskCount = 0;
+  let removedHideTaskCount = 0;
+  let blockedTaskCount = 0;
+  let projectHideChanged = false;
+  const ambiguousTaskLines = [];
+  const futureScheduledTaskLines = [];
+  const recoveryCounts = emptyScheduledRecoveryCounts();
+
+  for (const task of tasks) {
+    let nextLine = task.text;
+    const statusMatch = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
+    const status = statusMatch ? statusMatch[1] : null;
+    if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+      continue;
+    }
+
+    if (task.isProjectTask) {
+      const beforeHide = getWholeTaskTagSpans(nextLine, PROJECT_HIDE_TAG).length;
+      nextLine = normalizeProjectLifecycleHideTag(
+        nextLine,
+        future,
+        future || tasks.length === 1,
+      );
+      projectHideChanged =
+        projectHideChanged ||
+        beforeHide !== getWholeTaskTagSpans(nextLine, PROJECT_HIDE_TAG).length;
+      const priorField = findBulletPropertyField(nextLine, "scheduled");
+      const scheduleResult = upsertBulletProperty(
+        nextLine,
+        "scheduled",
+        validation.value,
+      );
+      nextLine = scheduleResult.line;
+      if (scheduleResult.changed) scheduledTaskCount += 1;
+      if (future) {
+        const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+        if (blockedLine !== nextLine) blockedTaskCount += 1;
+        nextLine = blockedLine;
+        futureScheduledTaskLines.push(task.line);
+      } else {
+        nextLine = setProjectBlockedTag(nextLine, false);
+        const recovery = reconcileBlockedScheduledTaskLine(
+          nextLine,
+          getTargetScheduledRecovery(options, task.line),
+          {
+            today,
+            ownLine: true,
+            markUnblockedLine: options.markUnblockedLine,
+          },
+        );
+        nextLine = recovery.line;
+        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      }
+      if (!priorField && scheduleResult.changed && !future) {
+        // A due date is still an explicit project schedule; only the blocked
+        // state changes when its reason clears.
+      }
+    } else {
+      const scheduledFields = parseProjectTaskScheduledFields(nextLine);
+      if (scheduledFields.length > 1) {
+        ambiguousTaskLines.push(task.line);
+        if (future) {
+          nextLine = setProjectBlockedTag(nextLine, true);
+          const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+          if (blockedLine !== nextLine) blockedTaskCount += 1;
+          nextLine = blockedLine;
+          futureScheduledTaskLines.push(task.line);
+        } else {
+          nextLine = setProjectBlockedTag(nextLine, false);
+        }
+      } else {
+        const withoutHide = removeTextSpans(
+          nextLine,
+          getWholeTaskTagSpans(nextLine, PROJECT_HIDE_TAG),
+        );
+        if (withoutHide !== nextLine) removedHideTaskCount += 1;
+        nextLine = withoutHide;
+        const scheduleResult = upsertProjectTaskScheduledField(
+          nextLine,
+          validation.value,
+          previousProjectScheduled,
+        );
+        nextLine = scheduleResult.line;
+        if (scheduleResult.changed) scheduledTaskCount += 1;
+        const ownFields = parseProjectTaskScheduledFields(nextLine);
+        const ownFuture =
+          ownFields.length === 1 &&
+          isFutureInlineScheduledValue(ownFields[0].value, today);
+
+        if (future) {
+          nextLine = setProjectBlockedTag(nextLine, true);
+          const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+          if (blockedLine !== nextLine) blockedTaskCount += 1;
+          nextLine = blockedLine;
+          futureScheduledTaskLines.push(task.line);
+        } else {
+          nextLine = setProjectBlockedTag(nextLine, false);
+          if (ownFuture) {
+            const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+            if (blockedLine !== nextLine) blockedTaskCount += 1;
+            nextLine = blockedLine;
+            futureScheduledTaskLines.push(task.line);
+          } else {
+            const recovery = reconcileBlockedScheduledTaskLine(
+              nextLine,
+              getTargetScheduledRecovery(options, task.line),
+              {
+                today,
+                ownLine: false,
+                markUnblockedLine: options.markUnblockedLine,
+              },
+            );
+            nextLine = recovery.line;
+            recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+          }
+        }
+      }
+    }
+
+    if (nextLine !== task.text) {
+      source.lines[task.line] = nextLine;
+      changedTaskCount += 1;
+    }
+  }
+
+  const nextContent = source.lines.join(source.lineEnding);
+  return Object.freeze({
+    valid: true,
+    error: null,
+    content: nextContent,
+    changed: nextContent !== original,
+    changedTaskCount,
+    scheduledTaskCount,
+    removedHideTaskCount,
+    blockedTaskCount,
+    recoveredReadyTaskCount: recoveryCounts.ready,
+    recoveredNextTaskCount: recoveryCounts.next,
+    recoveredInProgressTaskCount: recoveryCounts.inProgress,
+    stillBlockedTaskCount: recoveryCounts.stillBlocked,
+    deferredRecoveryTaskCount: recoveryCounts.deferred,
+    ambiguousTaskLines: Object.freeze(ambiguousTaskLines),
+    taskCount: tasks.length,
+    future,
+    projectHideChanged,
+    futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
+  });
+}
+
+function planProjectScheduledUpdate(
+  content,
+  cursorLine,
+  scheduled,
+  today = new Date(),
+  options = {},
+) {
+  const validation = validateProjectScheduledDate(scheduled);
+  if (!validation.valid) {
+    return Object.freeze({ valid: false, error: validation.message });
+  }
+  const context = getProjectNotePropertyContext(content, cursorLine, options);
+  if (!context.valid || !context.isProjectTask) {
+    return Object.freeze({
+      valid: false,
+      error: context.error || "Cursor is not on a valid ^prj task",
+    });
+  }
+  const previousScheduled = readProjectTaskScheduledValue(context.lineText);
+  const propagation = planProjectTaskSchedules(
+    content,
+    validation.value,
+    today,
+    { ...options, previousScheduled },
+  );
+  if (!propagation.valid) {
+    return Object.freeze({ valid: false, error: propagation.error });
+  }
+  return Object.freeze({
+    ...propagation,
+    valid: true,
+    error: null,
+    cursorLine,
+    scheduled: validation.value,
+  });
+}
+
+function planProjectScheduledDelete(content, cursorLine, options = {}) {
+  const original = String(content || "");
+  const context = getProjectNotePropertyContext(original, cursorLine, options);
+  if (!context.valid || !context.isProjectTask) {
+    return Object.freeze({
+      valid: false,
+      error: context.error || "Cursor is not on a valid ^prj task",
+    });
+  }
+  const scheduled = readProjectTaskScheduledValue(context.lineText);
+  if (!scheduled) {
+    return Object.freeze({
+      valid: false,
+      error: "scheduled is not set on this project",
+    });
+  }
+
+  const source = splitMarkdownContent(original);
+  const tasks = getRealMarkdownTaskLines(original).filter((task) =>
+    PROJECT_TASK_TAG_RE.test(task.text),
+  );
+  const recoveryCounts = emptyScheduledRecoveryCounts();
+  let changedTaskCount = 0;
+  let removedScheduledTaskCount = 0;
+  const futureScheduledTaskLines = [];
+  for (const task of tasks) {
+    let nextLine = task.text;
+    const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
+    if (!match || !OPEN_OBSIDIAN_TASK_STATUSES.has(match[1])) continue;
+    if (task.isProjectTask) {
+      nextLine = removeProjectTaskScheduledFields(nextLine).line;
+      nextLine = normalizeProjectLifecycleHideTag(
+        nextLine,
+        false,
+        tasks.length === 1,
+      );
+      nextLine = setProjectBlockedTag(nextLine, false);
+      const recovery = reconcileBlockedScheduledTaskLine(
+        nextLine,
+        getTargetScheduledRecovery(options, task.line),
+        {
+          today: options.today,
+          ownLine: true,
+          markUnblockedLine: options.markUnblockedLine,
+        },
+      );
+      nextLine = recovery.line;
+      recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+    } else {
+      const removed = removeProjectTaskScheduledFields(
+        nextLine,
+        (field) => field.value === scheduled,
+      );
+      nextLine = removed.line;
+      if (removed.removedCount > 0) removedScheduledTaskCount += 1;
+      nextLine = setProjectBlockedTag(nextLine, false);
+      const ownFields = parseProjectTaskScheduledFields(nextLine);
+      const ownFuture =
+        ownFields.length === 1 &&
+        isFutureInlineScheduledValue(
+          ownFields[0].value,
+          options.today || new Date(),
+        );
+      if (ownFuture) {
+        const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
+        if (blockedLine !== nextLine) nextLine = blockedLine;
+        futureScheduledTaskLines.push(task.line);
+      } else {
+        const recovery = reconcileBlockedScheduledTaskLine(
+          nextLine,
+          getTargetScheduledRecovery(options, task.line),
+          {
+            today: options.today,
+            ownLine: false,
+            markUnblockedLine: options.markUnblockedLine,
+          },
+        );
+        nextLine = recovery.line;
+        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      }
+    }
+    if (nextLine !== task.text) {
+      source.lines[task.line] = nextLine;
+      changedTaskCount += 1;
+    }
+  }
+
+  const nextContent = source.lines.join(source.lineEnding);
+  return Object.freeze({
+    valid: true,
+    error: null,
+    content: nextContent,
+    changed: nextContent !== original,
+    cursorLine,
+    scheduled,
+    changedTaskCount,
+    removedScheduledTaskCount,
+    futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
+    recoveredReadyTaskCount: recoveryCounts.ready,
+    recoveredNextTaskCount: recoveryCounts.next,
+    recoveredInProgressTaskCount: recoveryCounts.inProgress,
+    stillBlockedTaskCount: recoveryCounts.stillBlocked,
+    deferredRecoveryTaskCount: recoveryCounts.deferred,
+  });
+}
 // ---- src/270-counted-batches.js ----
 function planCountedLocalTaskDependency(
   content,
@@ -28419,14 +28506,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
   const scheduledName = normalizeBulletPropertyName(priorityProperty.schedules);
   const scheduledTarget = resolveBulletPropertyTarget(scheduledName, liveContext);
   const scheduledField = findBulletPropertyField(line, scheduledName);
-  const currentScheduled =
-    scheduledTarget.kind === "project-frontmatter"
-      ? liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-        ? liveContext.frontmatter.scheduledValue
-        : ""
-      : scheduledField
-        ? scheduledField.value
-        : "";
+  const currentScheduled = scheduledField ? scheduledField.value : "";
   const recommendation = planPriorityRollRecommendation({
     property: priorityProperty,
     content: session.content,
@@ -30672,7 +30752,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       const item = this.getTaskCardPropertyItem(propertyName);
       if (!item || item.kind !== "property" || !item.defined) {
         new Notice(
-          item && item.target && item.target.kind === "project-frontmatter"
+          item && item.target && item.target.kind === "project-inline"
             ? `${propertyName} is not set on this project`
             : `${propertyName} is not set on this bullet`,
         );
@@ -31412,9 +31492,9 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
     return this.applyInboxRoutedRefreshCustom(query);
   }
 
-  // The scheduled value a picked date replaces: frontmatter for a ^prj task,
-  // the inline field otherwise. Empty in a counted session, where each target's
-  // own previous value is resolved by the counted planner instead.
+  // The scheduled value a picked date replaces: the inline ^prj field for a
+  // project lifecycle task, the inline field otherwise. Empty in a counted
+  // session, where each target's own previous value is resolved by the planner.
   getPendingScheduleFrom() {
     const propertyItem = this.selectedPropertyItem;
     if (
@@ -31426,7 +31506,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
     }
 
     return normalizeBulletPropertyValue(
-      propertyItem.target && propertyItem.target.kind === "project-frontmatter"
+      propertyItem.target && propertyItem.target.kind === "project-inline"
         ? propertyItem.currentValue
         : this.getCurrentPropertyValue(propertyItem.property.name),
     );
@@ -31540,7 +31620,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
       isProject: Boolean(
         this.selectedPropertyItem &&
           this.selectedPropertyItem.target &&
-          this.selectedPropertyItem.target.kind === "project-frontmatter",
+          this.selectedPropertyItem.target.kind === "project-inline",
       ),
       baseDate: this.valueBaseDate,
     });
@@ -32694,11 +32774,9 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         liveContext,
       );
       let currentScheduled = "";
-      if (scheduledTarget.kind === "project-frontmatter") {
-        currentScheduled =
-          liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-            ? liveContext.frontmatter.scheduledValue
-            : "";
+      if (scheduledTarget.kind === "project-inline") {
+        const scheduledField = findBulletPropertyField(lineText, schedulesName);
+        currentScheduled = scheduledField ? scheduledField.value : "";
       } else {
         const scheduledField = findBulletPropertyField(lineText, schedulesName);
         currentScheduled = scheduledField ? scheduledField.value : "";
@@ -33099,12 +33177,15 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       recommendation.schedulesName,
       liveContext,
     );
-    // Project-frontmatter writers stay unwrapped (task-card-gate).
-    if (scheduledTarget.kind === "project-frontmatter") {
-      const liveScheduledDirect =
-        liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-          ? liveContext.frontmatter.scheduledValue
-          : "";
+    // Project scheduling uses the same inline field and adds resident effects.
+    if (scheduledTarget.kind === "project-inline") {
+      const liveScheduledField = findBulletPropertyField(
+        liveLine,
+        recommendation.schedulesName,
+      );
+      const liveScheduledDirect = liveScheduledField
+        ? liveScheduledField.value
+        : "";
       const nextHintDirect = planNextPriorityRollHint(property, recommendation);
       const rollOptionDirect = {
         kind: "roll",
@@ -33126,6 +33207,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         liveScheduledDirect,
         recommendation.date,
         {
+          today: this.valueBaseDate,
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
             level: recommendation.level,
@@ -33187,6 +33269,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         {
           filePath: this.filePath,
           expectedLine: this.lineText,
+          today: this.valueBaseDate,
           scheduleLog: buildPriorityRollScheduleLog({
             source: "scheduled",
             level: recommendation.level,
@@ -36780,18 +36863,18 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
     const propertyName = item.property.name;
     if (!item.defined) {
       new Notice(
-        item.target.kind === "project-frontmatter"
+        item.target.kind === "project-inline"
           ? `${propertyName} is not set on this project`
           : `${propertyName} is not set on this bullet`,
       );
       return false;
     }
-    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    // Project scheduling keeps the inline field plus resident side effects.
     if (
       !this.isLinkSession() &&
       !this.isCountedSession() &&
       item.target &&
-      item.target.kind === "project-frontmatter"
+      item.target.kind === "project-inline"
     ) {
       const direct = await this.plugin.deleteProjectNoteScheduledValue(
         this.editor,
@@ -36823,7 +36906,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
               this.taskSession,
               propertyName,
             )
-          : item.target.kind === "project-frontmatter"
+          : item.target.kind === "project-inline"
             ? await this.plugin.deleteProjectNoteScheduledValue(
                 this.editor,
                 this.cursor,
@@ -36895,14 +36978,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       return false;
     }
 
-    // Project-frontmatter writers stay unwrapped (task-card-gate).
+    // Project scheduling keeps the inline field plus resident side effects.
     const selectedTarget =
       this.selectedPropertyItem && this.selectedPropertyItem.target;
     if (
       !this.isLinkSession() &&
       !this.isCountedSession() &&
       selectedTarget &&
-      selectedTarget.kind === "project-frontmatter"
+      selectedTarget.kind === "project-inline"
     ) {
       if (this.selectedPropertyItem.kind === "refresh-interval") {
         return await this.plugin.applyRefreshIntervalFromPicker(this, item, options);
@@ -37013,7 +37096,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         );
       }
 
-      if (this.selectedPropertyItem.target.kind === "project-frontmatter") {
+      if (this.selectedPropertyItem.target.kind === "project-inline") {
         return await this.plugin.setProjectNoteScheduledValue(
           this.editor,
           this.cursor,
@@ -48488,6 +48571,12 @@ class BobNavigationHotkeysCancelPropertyMixin {
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
+        markUnblockedLine: (line, markOptions) => {
+          const freshness = this.getFreshnessApi();
+          return freshness && typeof freshness.markUnblockedLine === "function"
+            ? freshness.markUnblockedLine(line, markOptions)
+            : line;
+        },
       },
     );
     if (!plan.valid) {
@@ -48530,6 +48619,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -48551,6 +48641,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
           }
@@ -49728,7 +49819,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         !applyEditorContentTransaction(
           cm,
           writeContext.content,
-          plan.content,
+          finalPlannedContent,
           {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
@@ -49931,9 +50022,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           "Cursor is no longer on a valid ^prj task",
       });
     }
-    const currentValue = propertyContext.frontmatter.scheduledDefined
-      ? propertyContext.frontmatter.scheduledValue
-      : "";
+    const scheduledField = findBulletPropertyField(lineText, "scheduled");
+    const currentValue = scheduledField ? scheduledField.value : "";
     if (currentValue !== normalizeBulletPropertyValue(expectedValue)) {
       return Object.freeze({
         valid: false,
@@ -49972,7 +50062,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const today =
       options.today instanceof Date ? getLocalDateStart(options.today) : new Date();
     let recoveryByLine = null;
-    if (isDueInlineScheduledValue(value, today)) {
+    if (!isFutureInlineScheduledValue(value, today)) {
       recoveryByLine = await buildTargetScheduledRecoveryByLine(
         this.app,
         filePath,
@@ -50002,7 +50092,17 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       cursor.line,
       value,
       today,
-      { recoveryByLine },
+      {
+        recoveryByLine,
+        previousScheduled: expectedValue,
+        today,
+        markUnblockedLine: (line, markOptions) => {
+          const freshness = this.getFreshnessApi();
+          return freshness && typeof freshness.markUnblockedLine === "function"
+            ? freshness.markUnblockedLine(line, markOptions)
+            : line;
+        },
+      },
     );
     if (!plan.valid) {
       new Notice(plan.error);
@@ -50020,6 +50120,16 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       return false;
     }
     finalLine = inlineResult.line;
+    if (finalLine !== String(expectedLine || "")) {
+      const stamper = this.getFreshnessStampLine();
+      if (typeof stamper === "function") {
+        finalLine = applyFreshStampLine(
+          finalLine,
+          stamper,
+          this.getFreshnessDateText(),
+        );
+      }
+    }
     plannedSource.lines[plan.cursorLine] = finalLine;
 
     let scheduleLogOutcome = null;
@@ -50043,7 +50153,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           : null;
     let projectWorkLogWritten = false;
     if (hasSchedulingWorkLogInput(projectSchedulingWorkLogInput)) {
-      const eligibilityLine = String(expectedLine ?? lineText ?? "");
+      const eligibilityLine = String(expectedLine || "");
       if (isSchedulingWorkLogRawLine(eligibilityLine)) {
         const summary = normalizeSchedulingWorkSummary(
           projectSchedulingWorkLogInput.summary,
@@ -50107,6 +50217,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -50128,6 +50239,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
           }
@@ -50306,23 +50418,43 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     const plan = planProjectScheduledDelete(
       writeContext.content,
       cursor.line,
-      { today, recoveryByLine },
+      {
+        today,
+        recoveryByLine,
+        markUnblockedLine: (line, markOptions) => {
+          const freshness = this.getFreshnessApi();
+          return freshness && typeof freshness.markUnblockedLine === "function"
+            ? freshness.markUnblockedLine(line, markOptions)
+            : line;
+        },
+      },
     );
     if (!plan.valid) {
       new Notice(plan.error);
       return null;
     }
 
-    let finalLine = "";
+    const plannedSource = splitMarkdownContent(plan.content);
+    let finalLine = plannedSource.lines[plan.cursorLine] || "";
+    if (finalLine !== String(expectedLine || "")) {
+      const stamper = this.getFreshnessStampLine();
+      if (typeof stamper === "function") {
+        finalLine = applyFreshStampLine(
+          finalLine,
+          stamper,
+          this.getFreshnessDateText(),
+        );
+        plannedSource.lines[plan.cursorLine] = finalLine;
+      }
+    }
+    const finalContent = plannedSource.lines.join(plannedSource.lineEnding);
     try {
-      finalLine =
-        splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
       if (
         plan.changed &&
         !applyEditorContentTransaction(
           cm,
           writeContext.content,
-          plan.content,
+          finalContent,
           {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
@@ -50381,12 +50513,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       : "";
     const shouldRecover =
       hasScheduledValue &&
-      isDueInlineScheduledValue(normalizedScheduledValue, today) &&
-      !isProjectLifecycleTaskLine(lineText);
+      isDueInlineScheduledValue(normalizedScheduledValue, today);
     const shouldPrune =
       hasScheduledValue &&
-      isFutureInlineScheduledValue(normalizedScheduledValue, today) &&
-      !isProjectLifecycleTaskLine(lineText);
+      isFutureInlineScheduledValue(normalizedScheduledValue, today);
     let recovery = null;
     let pomodoroSnapshot = null;
     if (shouldRecover || shouldPrune) {
@@ -50853,12 +50983,14 @@ class BobNavigationHotkeysPropertyDependencyMixin {
     );
     const schedulingWorkLogForPriority =
       context.schedulingWorkLog || context.workLog || null;
-    if (scheduledTarget.kind === "project-frontmatter") {
-      const expectedScheduledValue =
-        propertyContext.frontmatter &&
-        propertyContext.frontmatter.scheduledDefined
-          ? propertyContext.frontmatter.scheduledValue
-          : "";
+    if (scheduledTarget.kind === "project-inline") {
+      const expectedScheduledField = findBulletPropertyField(
+        currentLine,
+        property.schedules,
+      );
+      const expectedScheduledValue = expectedScheduledField
+        ? expectedScheduledField.value
+        : "";
       return await this.setProjectNoteScheduledValue(
         cm,
         cursor,
@@ -53001,9 +53133,24 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (propertyName === "dependsOn") {
       return this.deleteDependencyLineAndField(cm, cursor, options, writeContext);
     }
-    const shouldRecover =
+    if (
       propertyName === "scheduled" &&
-      !isProjectLifecycleTaskLine(lineText);
+      isProjectLifecycleTaskAtLine(writeContext.content, cursor.line)
+    ) {
+      const scheduledField = findBulletPropertyField(lineText, propertyName);
+      if (!scheduledField) {
+        new Notice("scheduled is not set on this project");
+        return { deleted: false, line: lineText };
+      }
+      return await this.deleteProjectNoteScheduledValue(
+        cm,
+        cursor,
+        writeContext.filePath,
+        lineText,
+        scheduledField.value,
+      );
+    }
+    const shouldRecover = propertyName === "scheduled";
     let recovery = null;
     if (shouldRecover) {
       const recoveryByLine = await buildTargetScheduledRecoveryByLine(
@@ -55833,7 +55980,31 @@ class BobNavigationHotkeysLeafMixin {
       return;
     }
 
-    new ChildNotePickerModal(this.app, this, children, file).open();
+    const noteContentByPath = new Map(
+      children.map((child) => [child.path, ""]),
+    );
+    const vault = this.app && this.app.vault;
+    if (vault && typeof vault.cachedRead === "function") {
+      await Promise.all(
+        children.map(async (child) => {
+          try {
+            noteContentByPath.set(
+              child.path,
+              String((await vault.cachedRead(child)) || ""),
+            );
+          } catch (_error) {
+            noteContentByPath.set(child.path, "");
+          }
+        }),
+      );
+    }
+    new ChildNotePickerModal(
+      this.app,
+      this,
+      children,
+      file,
+      noteContentByPath,
+    ).open();
   }
 }
 // ---- src/640-plugin-notes-and-task-move.js ----
@@ -56490,6 +56661,9 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openTaskMoveDestinationPicker(editor, view, options = {}) {
+    if (this.taskMoveDestinationPickerOpening) {
+      return true;
+    }
     let activePicker = this.activeTaskMoveDestinationPicker;
     if (
       activePicker &&
@@ -56548,65 +56722,108 @@ class BobNavigationHotkeysNotesMoveMixin {
       vault && typeof vault.getMarkdownFiles === "function"
         ? vault.getMarkdownFiles()
         : [];
-    const destinations = collectTaskMoveDestinations(
+    const destinationCandidates = collectTaskMoveDestinations(
       markdownFiles,
       sourceFile.path,
       (file) => getFileChildNoteInfo(this.app, file, new Date()),
     );
-    const scroll =
-      typeof editor.getScrollInfo === "function"
-        ? editor.getScrollInfo()
-        : null;
-    // Review-walk (nav-gestures): a landed move captures so the commit can
-    // consume the landing and park the walk; a move never advances. While
-    // the gesture lock is held the key is swallowed with no write. The
-    // Pomodoro bullet and entry contexts use different pickers and never
-    // match a landing, so only this task path captures.
-    let reviewOrigin = null;
-    try {
-      if (typeof this.captureReviewGesture === "function") {
-        const captured = this.captureReviewGesture(editor);
-        if (captured && captured.busy === true) {
-          return true;
-        }
-        reviewOrigin = captured || null;
-      }
-    } catch (error) {
-      reviewOrigin = null;
-    }
-    this.taskMoveReviewCommitStarted = false;
-    const session = Object.freeze({
-      sourceFile,
-      sourcePath: sourceFile.path,
-      sourceView,
-      editor,
-      sourceContent,
-      cursor: Object.freeze({ ...cursor }),
-      scroll:
-        scroll && typeof scroll === "object"
-          ? Object.freeze({ left: scroll.left, top: scroll.top })
-          : null,
-      countExplicit: options.countExplicit === true,
-      discovery,
-      ranges: ranges.ranges,
-      reviewOrigin,
-    });
-    const picker = new TaskMoveDestinationPickerModal(
+    const hydratedDestinations = hydrateTaskMoveDestinationSchedules(
       this.app,
-      this,
-      destinations,
-      session,
+      destinationCandidates,
     );
-    this.activeTaskMoveDestinationPicker = picker;
-    try {
-      picker.open();
-    } catch (error) {
-      if (this.activeTaskMoveDestinationPicker === picker) {
-        this.activeTaskMoveDestinationPicker = null;
+    const openPicker = (destinations) => {
+      const scroll =
+        typeof editor.getScrollInfo === "function"
+          ? editor.getScrollInfo()
+          : null;
+      // Review-walk (nav-gestures): a landed move captures so the commit can
+      // consume the landing and park the walk; a move never advances. While
+      // the gesture lock is held the key is swallowed with no write. The
+      // Pomodoro bullet and entry contexts use different pickers and never
+      // match a landing, so only this task path captures.
+      let reviewOrigin = null;
+      try {
+        if (typeof this.captureReviewGesture === "function") {
+          const captured = this.captureReviewGesture(editor);
+          if (captured && captured.busy === true) {
+            return true;
+          }
+          reviewOrigin = captured || null;
+        }
+      } catch (error) {
+        reviewOrigin = null;
       }
-      throw error;
+      this.taskMoveReviewCommitStarted = false;
+      const session = Object.freeze({
+        sourceFile,
+        sourcePath: sourceFile.path,
+        sourceView,
+        editor,
+        sourceContent,
+        cursor: Object.freeze({ ...cursor }),
+        scroll:
+          scroll && typeof scroll === "object"
+            ? Object.freeze({ left: scroll.left, top: scroll.top })
+            : null,
+        countExplicit: options.countExplicit === true,
+        discovery,
+        ranges: ranges.ranges,
+        reviewOrigin,
+      });
+      const picker = new TaskMoveDestinationPickerModal(
+        this.app,
+        this,
+        destinations,
+        session,
+      );
+      this.activeTaskMoveDestinationPicker = picker;
+      try {
+        picker.open();
+      } catch (error) {
+        if (this.activeTaskMoveDestinationPicker === picker) {
+          this.activeTaskMoveDestinationPicker = null;
+        }
+        throw error;
+      }
+      return true;
+    };
+    if (
+      hydratedDestinations &&
+      typeof hydratedDestinations.then === "function"
+    ) {
+      this.taskMoveDestinationPickerOpening = true;
+      Promise.resolve(hydratedDestinations)
+        .then((destinations) => {
+          this.taskMoveDestinationPickerOpening = false;
+          if (String(editor.getValue() || "") !== sourceContent) {
+            return false;
+          }
+          const liveView = this.getActiveMarkdownView();
+          if (
+            liveView &&
+            (liveView.editor !== editor ||
+              !liveView.file ||
+              liveView.file.path !== sourceFile.path)
+          ) {
+            return false;
+          }
+          const active = this.activeTaskMoveDestinationPicker;
+          if (
+            active &&
+            typeof isStaleRegisteredPicker === "function" &&
+            !isStaleRegisteredPicker(active)
+          ) {
+            return false;
+          }
+          return openPicker(destinations);
+        })
+        .catch(() => {
+          this.taskMoveDestinationPickerOpening = false;
+          new Notice("Could not load task destinations");
+        });
+      return true;
     }
-    return true;
+    return openPicker(hydratedDestinations);
   }
 
   async getTaskMoveFileSnapshot(file) {
@@ -57912,6 +58129,9 @@ class BobNavigationHotkeysInboxRouteMixin {
         }
       }
       const active = this.activeTaskMoveDestinationPicker;
+      if (this.taskMoveDestinationPickerOpening) {
+        return { kind: "cancel" };
+      }
       if (active) {
         if (!isStaleRegisteredPicker(active)) {
           return { kind: "cancel" };
@@ -57945,12 +58165,13 @@ class BobNavigationHotkeysInboxRouteMixin {
         vault && typeof vault.getMarkdownFiles === "function"
           ? vault.getMarkdownFiles()
           : [];
+      const destinationCandidates = collectTaskMoveDestinations(
+        markdownFiles,
+        sourcePath,
+        (file) => getFileChildNoteInfo(this.app, file, new Date()),
+      );
       const destinations = filterInboxRouteDestinations(
-        collectTaskMoveDestinations(
-          markdownFiles,
-          sourcePath,
-          (file) => getFileChildNoteInfo(this.app, file, new Date()),
-        ),
+        destinationCandidates,
         (path) => this.isInboxNotePath(path),
         sourcePath,
       );
@@ -60476,7 +60697,9 @@ module.exports.helpers = {
   getFutureProjectSchedule,
   isFutureInlineScheduledValue,
   getProjectNoteInfo,
+  getProjectTaskInlineScheduledValue,
   getChildNoteInfo,
+  getFileChildNoteInfo,
   getChildNoteSummary,
   getChildNoteSearchText,
   getNoteTemplateForCreationPath,
@@ -60734,6 +60957,7 @@ module.exports.helpers = {
   flattenTaskMoveBlocks,
   parseTaskMoveDestinationFrontmatter,
   collectTaskMoveDestinations,
+  hydrateTaskMoveDestinationSchedules,
   insertTaskMoveBlocks,
   collectTaskMoveBlockIds,
   prepareTaskMoveBlockIdentities,

@@ -358,33 +358,97 @@ test("scheduled recovery honors the configured Tasks global filter", () => {
   );
 });
 
-test("picker metadata exposes future schedules to badges, search, and summary", () => {
+test("child picker schedule metadata reads the inline ^prj date", () => {
   const now = new Date(2026, 6, 10, 12);
-  const future = helpers.getChildNoteInfo(
-    { type: "[[project]]", status: "wip", scheduled: "2026-07-11" },
-    now,
-  );
-  const due = helpers.getChildNoteInfo(
-    { type: "[[project]]", status: "done", scheduled: "2026-07-10" },
-    now,
-  );
-  assert.equal(future.scheduled, true);
-  assert.equal(due.scheduled, false);
-
   const file = { path: "Projects/Future.md", basename: "Future" };
+  const app = {
+    metadataCache: {
+      getFileCache: () => ({
+        frontmatter: {
+          type: "[[project]]",
+          status: "wip",
+          scheduled: "2026-07-30",
+        },
+      }),
+    },
+  };
+  assert.equal(helpers.getFileChildNoteInfo(app, file, now).scheduled, false);
+  const content = [
+    "---",
+    "type: [[project]]",
+    "scheduled: 2026-07-30",
+    "---",
+    "- [ ] #task Ship [scheduled:: 2026-07-11] #hide ^prj",
+  ].join("\n");
+  const future = helpers.getFileChildNoteInfo(app, file, now, content);
+  assert.equal(future.scheduled, true);
+  assert.equal(future.scheduledDate, "2026-07-11");
+  assert.equal(future.scheduledLabel, "Tomorrow");
+
+  const noInlineDate = helpers.getFileChildNoteInfo(
+    app,
+    { path: "Projects/NoDate.md", basename: "NoDate" },
+    now,
+    content.replace(" [scheduled:: 2026-07-11]", ""),
+  );
+  assert.equal(noInlineDate.scheduled, false);
+
   const search = helpers.getChildNoteSearchText(file, future);
   assert.match(search, /scheduled/);
   assert.match(search, /2026-07-11/);
   assert.match(search, /tomorrow/);
-
   const summary = helpers.getChildNoteSummary(
-    [file, { path: "Projects/Due.md", basename: "Due" }],
+    [file, { path: "Projects/NoDate.md", basename: "NoDate" }],
     new Map([
       [file.path, future],
-      ["Projects/Due.md", due],
+      ["Projects/NoDate.md", noInlineDate],
     ]),
   );
   assert.ok(summary.includes("1 future-scheduled"));
+});
+
+test("task move destination schedule hydration reads cached ^prj content", async () => {
+  const now = new Date(2026, 6, 10, 12);
+  const file = { path: "Projects/Future.md", basename: "Future" };
+  const app = {
+    metadataCache: {
+      getFileCache: () => ({
+        frontmatter: {
+          type: "[[project]]",
+          status: "wip",
+          scheduled: "2026-07-30",
+        },
+      }),
+    },
+    vault: {
+      cachedRead: async () => [
+        "---",
+        "type: [[project]]",
+        "scheduled: 2026-07-30",
+        "---",
+        "- [ ] #task Ship [scheduled:: 2026-07-11] ^prj",
+      ].join("\n"),
+    },
+  };
+  const initial = helpers.getFileChildNoteInfo(app, file, now);
+  const hydrated = await helpers.hydrateTaskMoveDestinationSchedules(
+    app,
+    [{ file, noteInfo: initial }],
+    now,
+  );
+  assert.equal(hydrated[0].noteInfo.scheduled, true);
+  assert.equal(hydrated[0].noteInfo.scheduledDate, "2026-07-11");
+  assert.equal(hydrated[0].noteInfo.scheduledLabel, "Tomorrow");
+
+  const unreadable = await helpers.hydrateTaskMoveDestinationSchedules(
+    {
+      ...app,
+      vault: { cachedRead: async () => { throw new Error("unavailable"); } },
+    },
+    [{ file, noteInfo: initial }],
+    now,
+  );
+  assert.equal(unreadable[0].noteInfo.scheduled, false);
 });
 
 test("project lifecycle task classification requires unfenced #task with trailing ^prj", () => {

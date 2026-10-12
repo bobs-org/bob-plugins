@@ -382,11 +382,9 @@ function planPriorityRollRecommendationsForTargets(
         schedulesName,
         liveContext,
       );
-      if (scheduledTarget.kind === "project-frontmatter") {
-        currentScheduled =
-          liveContext.frontmatter && liveContext.frontmatter.scheduledDefined
-            ? liveContext.frontmatter.scheduledValue
-            : "";
+      if (scheduledTarget.kind === "project-inline") {
+        const scheduledField = findBulletPropertyField(rawLine, schedulesName);
+        currentScheduled = scheduledField ? scheduledField.value : "";
       } else {
         const scheduledField = findBulletPropertyField(rawLine, schedulesName);
         currentScheduled = scheduledField ? scheduledField.value : "";

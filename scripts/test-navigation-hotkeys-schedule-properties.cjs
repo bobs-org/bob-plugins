@@ -201,7 +201,7 @@ test("priority bullet property config rejects each invalid schema category once"
   }
 });
 
-test("property targets use project YAML only for scheduled on ^prj", () => {
+test("project scheduling targets the inline ^prj field", () => {
   const config = {
     properties: [
       { name: "scheduled", values: "date" },
@@ -225,7 +225,7 @@ test("property targets use project YAML only for scheduled on ^prj", () => {
   assert.deepEqual(
     items.map((item) => [item.property.name, item.target.kind, item.currentValue]),
     [
-      ["scheduled", "project-frontmatter", "2026-07-16"],
+      ["scheduled", "project-inline", "2026-07-15"],
       ["dependsOn", "inline", "prep"],
     ],
   );
@@ -235,28 +235,26 @@ test("property targets use project YAML only for scheduled on ^prj", () => {
   assert.equal(ordinary[0].target.kind, "inline");
   assert.equal(ordinary[0].currentValue, "2026-07-15");
 
-  const unscheduledProject = project.replace("scheduled: 2026-07-16\n", "");
+  const unscheduledProject = project.replace(" [scheduled:: 2026-07-15]", "");
   const unscheduledContext = helpers.getProjectNotePropertyContext(
     unscheduledProject,
-    3,
+    4,
   );
-  assert.equal(unscheduledContext.valid, true);
   const unscheduledItems = helpers.createBulletPropertyItems(
     config,
-    unscheduledProject.split("\n")[3],
+    unscheduledProject.split("\n")[4],
     unscheduledContext,
   );
   const unscheduledItem = unscheduledItems.find(
     (item) => item.property.name === "scheduled",
   );
-  assert.equal(unscheduledItem.target.kind, "project-frontmatter");
+  assert.equal(unscheduledItem.target.kind, "project-inline");
   assert.equal(unscheduledItem.defined, false);
   assert.equal(unscheduledItem.currentValue, "");
-
-  const malformed = project.replace("2026-07-16", "2026-02-30");
-  const malformedContext = helpers.getProjectNotePropertyContext(malformed, 4);
-  assert.equal(malformedContext.valid, false);
-  assert.match(malformedContext.error, /valid calendar date/);
+  assert.equal(
+    helpers.getProjectTaskInlineScheduledValue(unscheduledProject),
+    "",
+  );
 });
 
 test("local task properties are addable only on valid tasks but invalid metadata stays removable", () => {

@@ -490,7 +490,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       const item = this.getTaskCardPropertyItem(propertyName);
       if (!item || item.kind !== "property" || !item.defined) {
         new Notice(
-          item && item.target && item.target.kind === "project-frontmatter"
+          item && item.target && item.target.kind === "project-inline"
             ? `${propertyName} is not set on this project`
             : `${propertyName} is not set on this bullet`,
         );

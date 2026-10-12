@@ -308,6 +308,17 @@ class TaskStatusCyclerReferencesMixin {
         today: recoveryToday,
       });
     }
+    const markUnblockedLine = this.getFreshnessMarkUnblockedLine();
+    if (plan.edits.length > 0 && typeof markUnblockedLine !== "function") {
+      for (const edit of plan.edits) {
+        recordFailure(
+          edit.path,
+          "bob-ledger-tools freshness namespace v12 is required for recovery",
+        );
+      }
+      new Notice("Blocked tasks stayed blocked: update bob-ledger-tools to freshness v12 first.");
+      return { reopened: 0, failures };
+    }
     const editsByPath = new Map();
     for (const edit of plan.edits) {
       if (!editsByPath.has(edit.path)) {
@@ -337,10 +348,18 @@ class TaskStatusCyclerReferencesMixin {
             recordFailure(path, `line ${edit.line + 1} changed before recovery`);
             continue;
           }
+          const rewritten = rewriteRecoveredTaskLine(currentLine, " ", {
+            markUnblockedLine,
+            today: recoveryToday,
+          });
+          if (typeof rewritten !== "string") {
+            recordFailure(path, `line ${edit.line + 1} could not be marked unblocked`);
+            continue;
+          }
           editor.replaceRange(
-            " ",
-            { line: edit.line, ch: task.statusStart },
-            { line: edit.line, ch: task.statusStart + 1 },
+            rewritten,
+            { line: edit.line, ch: 0 },
+            { line: edit.line, ch: currentLine.length },
           );
           reopened += 1;
         }
@@ -362,7 +381,10 @@ class TaskStatusCyclerReferencesMixin {
       try {
         let result = { reopened: 0, stale: [], text: null };
         const transform = (text) => {
-          result = applyBlockedDependentRecoveryEdits(text, edits);
+          result = applyBlockedDependentRecoveryEdits(text, edits, {
+            markUnblockedLine,
+            today: recoveryToday,
+          });
           return result.text;
         };
         if (typeof vault.process === "function") {

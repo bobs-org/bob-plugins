@@ -577,7 +577,7 @@ test("PDC1 leaves a dependency-ready resident Blocked while its project still wa
     "status: wip",
     "---",
     "- [?] #task #prj Release the project [id:: project__prj] [dependsOn:: sase__fix-apollo, sase__still-open] ^prj",
-    "- [?] #task Prepare the release [dependsOn:: sase__fix-apollo] ^release-notes",
+    "- [?] #task Prepare the release [dependsOn:: sase__fix-apollo] #prj_is_blocked ^release-notes",
   ].join("\n");
   const { plan } = planFixture({
     day: FIX_DAY,
@@ -591,7 +591,7 @@ test("PDC1 leaves a dependency-ready resident Blocked while its project still wa
     closed: FIX_CLOSED,
   });
   const resident = plan.still_blocked.find((row) => row.block_id === "release-notes");
-  assert.equal(resident.reason, "project");
+  assert.equal(resident.reason, "project_dependency");
   assert.equal(resident.status_symbol, "?");
   assert.equal(
     plan.unblocked.some((row) => row.block_id === "release-notes" && row.link),
@@ -606,8 +606,8 @@ test("PDC2 recovers the project and all eligible residents without successor lin
     "status: wip",
     "---",
     "- [?] #task #prj Release the project [id:: project__prj] [dependsOn:: sase__fix-apollo] ^prj",
-    "- [?] #task Prepare the release ^release-notes",
-    "- [?] #task Publish the release [dependsOn:: sase__fix-apollo] ^publish",
+    "- [?] #task Prepare the release #prj_is_blocked ^release-notes",
+    "- [?] #task Publish the release [dependsOn:: sase__fix-apollo] #prj_is_blocked ^publish",
   ].join("\n");
   const { plan } = planFixture({
     day: FIX_DAY,
@@ -616,6 +616,10 @@ test("PDC2 recovers the project and all eligible residents without successor lin
       "projects/release.md": project,
     },
     closed: FIX_CLOSED,
+    options: {
+      markUnblockedLine: (line, { today }) =>
+        line.replace(/(\s+\^[A-Za-z0-9_-]+$)/, ` [unblocked:: ${today}]$1`),
+    },
   });
   assert.equal(plan.placements.length, 0);
   assert.deepEqual(
@@ -626,6 +630,13 @@ test("PDC2 recovers the project and all eligible residents without successor lin
       ["publish", "project_member", " "],
     ],
   );
+  for (const edit of plan.edits.filter((candidate) =>
+    candidate.path === "projects/release.md" &&
+    candidate.before.includes("#prj_is_blocked")
+  )) {
+    assert.match(edit.after, /\[unblocked:: 2026-10-09\]/);
+    assert.doesNotMatch(edit.after, /#prj_is_blocked/);
+  }
 });
 
 test("PDC3 keeps a project resident Blocked when its own prerequisite remains open", () => {
@@ -635,8 +646,8 @@ test("PDC3 keeps a project resident Blocked when its own prerequisite remains op
     "status: wip",
     "---",
     "- [?] #task #prj Release the project [id:: project__prj] [dependsOn:: sase__fix-apollo] ^prj",
-    "- [?] #task Prepare the release [dependsOn:: other__open] ^release-notes",
-    "- [?] #task Publish the release ^publish",
+    "- [?] #task Prepare the release [dependsOn:: other__open] #prj_is_blocked ^release-notes",
+    "- [?] #task Publish the release #prj_is_blocked ^publish",
   ].join("\n");
   const { plan } = planFixture({
     day: FIX_DAY,

@@ -21,7 +21,13 @@ class TaskStatusCyclerCommandsMixin {
         )
       ) {
         if (!checking) {
-          new Notice(`Project blocked · resolve the dependency in ${activePath}`);
+          new Notice(
+            projectBlockedResidentNotice(
+              editor.getValue(),
+              activePath,
+              taskStatus.line,
+            ) || `Project blocked · resolve the ^prj reason in ${activePath}`,
+          );
         }
         return true;
       }
@@ -548,6 +554,7 @@ class TaskStatusCyclerCommandsMixin {
     const seenResolvedTargets = new Set();
     let changed = false;
     let projectBlockedSkipped = false;
+    let projectBlockedNotice = null;
     let startDepLineUntargeted = false;
     // `cycler_polish`: identities cycled into Done/Cancelled, finalized as
     // one batch after the loop (Done links, Cancelled recovers only).
@@ -631,6 +638,12 @@ class TaskStatusCyclerCommandsMixin {
           )
         ) {
           projectBlockedSkipped = true;
+          projectBlockedNotice = projectBlockedNotice ||
+            projectBlockedResidentNotice(
+              lines.join("\n"),
+              activePath,
+              line,
+            );
           continue;
         }
 
@@ -761,7 +774,10 @@ class TaskStatusCyclerCommandsMixin {
       new Notice("⛓ Put the cursor on a dependency link to cycle it");
     }
     if (projectBlockedSkipped) {
-      new Notice(`Project blocked · resolve the dependency in ${activePath}`);
+      new Notice(
+        projectBlockedNotice ||
+          `Project blocked · resolve the ^prj reason in ${activePath}`,
+      );
     }
 
     // One batched pass for the whole counted range (partitioned Done vs

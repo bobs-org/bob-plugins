@@ -387,8 +387,9 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   }
 
   const currentStatus = taskMatch[1];
+  const isProjectTask = getTrailingBlockId(lineText) === "prj";
   const today = localTodayParts(options.now);
-  const futureField = scheduleActivationEligible
+  const futureField = scheduleActivationEligible && !isProjectTask
     ? findSingleFutureScheduledField(lineText, today)
     : null;
 
@@ -402,7 +403,7 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   }
 
   let newStatus = currentStatus;
-  if (forceNext) {
+  if (forceNext && !isProjectTask) {
     // Linking never lowers a lane: only Ready and Blocked rise to Next.
     if (currentStatus === " " || currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS) {
       newStatus = "*";

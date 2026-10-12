@@ -17,8 +17,8 @@ const {
 // Alt+]/Alt+[ closes routed through `finalizeClosedTasks` (bead bob-cli-3k:
 // Done closes link, Cancelled closes recover only).
 
-const TODAY = "2026-10-09";
-const DAILY_NOW = new Date("2026-10-09T12:00:00");
+const TODAY = helpers.formatLocalDate();
+const DAILY_NOW = new Date(`${TODAY}T12:00:00`);
 // Today's daily path under the default daily-notes settings (no
 // daily-notes plugin configured in the harness app).
 const DAILY_PATH = helpers.todayDailyPath({}, DAILY_NOW);
@@ -68,7 +68,7 @@ const DEPENDENT_NEXT_LINE =
   "- [*] #task Re-launch all failed agents on apollo! [dependsOn:: sase__fix-apollo] ^relaunch-failed";
 
 function fixDay(linkLine = "\t- [[sase#^fix-apollo]]") {
-  return ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — FIX", linkLine].join(
+  return [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX", linkLine].join(
     "\n",
   );
 }
@@ -313,7 +313,7 @@ test("Alt+[ into Cancelled recovers its dependents without linking", async () =>
   // recovery edit lands in the open editor buffer, as above).
   assert.equal(
     editor.getValue().split("\n")[1],
-    "- [ ] #task Re-launch all failed agents on apollo! [dependsOn:: sase__fix-apollo] ^relaunch-failed",
+    `- [ ] #task Re-launch all failed agents on apollo! [unblocked:: ${TODAY}] [dependsOn:: sase__fix-apollo] ^relaunch-failed`,
   );
   assert.equal(harness.getSource(DAILY_PATH), day);
   assert.equal(seen.length, 1);

@@ -1552,7 +1552,14 @@ function resolveTaskDependencyState(rawLine, index) {
   };
 }
 
-function parseProjectFrontmatter(sourceText, path = "") {
+const PROJECT_BLOCKED_RESIDENT_TAG_RE =
+  /(^|[\s([{])#prj_is_blocked(?=$|[\s)\]},.;:!?])/;
+
+function hasProjectBlockedResidentTag(lineText) {
+  return PROJECT_BLOCKED_RESIDENT_TAG_RE.test(String(lineText || ""));
+}
+
+function parseProjectFrontmatter(sourceText, path = "", records = null) {
   const lines = String(sourceText || "").split(/\r?\n/);
   if (
     /(?:^|\/)\d{4}\/\d{8}\.md$/i.test(String(path || "")) ||
@@ -1588,8 +1595,25 @@ function parseProjectFrontmatter(sourceText, path = "") {
   ) {
     return null;
   }
-  const scheduled = readScalar("scheduled");
-  const parsedSchedule = scheduled && parseStrictCalendarDate(scheduled);
+  const documentRecords = Array.isArray(records)
+    ? records
+    : taskDependencyRecordsFromDocuments([{
+      path: String(path || ""),
+      text: String(sourceText || ""),
+    }]);
+  const projectTasks = documentRecords.filter((task) =>
+    task.path === String(path || "") && task.blockId === "prj" &&
+    OPEN_OBSIDIAN_TASK_STATUSES.has(task.status)
+  );
+  if (projectTasks.length !== 1) {
+    return null;
+  }
+  const scheduledFields = findScheduledFieldMatches(projectTasks[0].lineText);
+  const scheduledField = scheduledFields.find((field) =>
+    parseStrictCalendarDate(field.value)
+  );
+  const parsedSchedule = scheduledField &&
+    parseStrictCalendarDate(scheduledField.value);
   return {
     path: String(path || ""),
     scheduled: parsedSchedule ? formatCalendarDate(parsedSchedule) : null,
@@ -1630,7 +1654,11 @@ function canonicalDependencyId(path, blockId) {
 }
 
 function projectDependencyInfoForRecords(document, records) {
-  const metadata = parseProjectFrontmatter(document.text, document.path);
+  const metadata = parseProjectFrontmatter(
+    document.text,
+    document.path,
+    records,
+  );
   if (!metadata) {
     return null;
   }
@@ -1680,8 +1708,8 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     }
   }
   const project = projects.get(target.path);
-  const resident = project && target.blockId !== "prj" &&
-    project.tasks.some((task) => task.line === target.line);
+  const resident = target.blockId !== "prj" &&
+    hasProjectBlockedResidentTag(target.lineText);
   const resolveOpenIds = (ids, internalOnly = false) => ids.filter((id) => {
     const dependency = byId.get(String(id));
     if (!isDependencyTargetOpen(dependency)) {
@@ -1716,13 +1744,18 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     target.lineText,
     todayParts,
   );
-  const projectSchedule = project && (resident || target.blockId === "prj")
+  const projectSchedule = project && resident
     ? project.scheduled && parseStrictCalendarDate(project.scheduled)
     : null;
   const projectScheduleIsFuture = !!projectSchedule &&
     compareCalendarDates(projectSchedule, todayParts) > 0;
-  const dependencyBlocked = ownOpen.length > 0 || projectOpen.length > 0;
-  if (!dependencyBlocked && !projectScheduleIsFuture) {
+  const projectDateRefusal = target.blockId === "prj" && !!ownSchedule;
+  const projectDependencyBlocked =
+    (resident && (projectOpen.length > 0 || !projectScheduleIsFuture)) ||
+    (target.blockId === "prj" && ownOpen.length > 0);
+  const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
+    projectOpen.length > 0;
+  if (!dependencyBlocked && !projectScheduleIsFuture && !projectDateRefusal) {
     return { blocked: false, target, ownSchedule };
   }
 
@@ -1786,7 +1819,10 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
   return {
     blocked: true,
     dependencyBlocked,
+    projectDependencyBlocked,
     projectScheduleIsFuture,
+    projectDateRefusal,
+    ownSchedule,
     projectSchedule: projectScheduleIsFuture ? formatCalendarDate(projectSchedule) : null,
     projectPath: project ? project.path : null,
     unresolvedIds,
@@ -4086,8 +4122,9 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   }
 
   const currentStatus = taskMatch[1];
+  const isProjectTask = getTrailingBlockId(lineText) === "prj";
   const today = localTodayParts(options.now);
-  const futureField = scheduleActivationEligible
+  const futureField = scheduleActivationEligible && !isProjectTask
     ? findSingleFutureScheduledField(lineText, today)
     : null;
 
@@ -4101,7 +4138,7 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   }
 
   let newStatus = currentStatus;
-  if (forceNext) {
+  if (forceNext && !isProjectTask) {
     // Linking never lowers a lane: only Ready and Blocked rise to Next.
     if (currentStatus === " " || currentStatus === BLOCKED_OBSIDIAN_TASK_STATUS) {
       newStatus = "*";
@@ -8185,6 +8222,20 @@ class BlockIdPromptPomodoroLinksMixin {
   }
 
   async consumeBlockedTaskPomodoroLink(source, targetFile) {
+    const editor = source && source.editor;
+    const targetLine = editor && typeof editor.getLine === "function"
+      ? editor.getLine(source.line)
+      : null;
+    const targetMatch = typeof targetLine === "string"
+      ? getObsidianTaskLineMatch(targetLine)
+      : null;
+    if (
+      !targetMatch ||
+      (targetMatch[1] !== BLOCKED_OBSIDIAN_TASK_STATUS &&
+        !hasProjectBlockedResidentTag(targetLine))
+    ) {
+      return false;
+    }
     const { documents, fileByPath, failures } =
       await this.readTaskDependencyDocuments(source, targetFile);
     const plan = planTaskLinkBlockConsumption(
@@ -8247,18 +8298,24 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    if (plan.dependencyBlocked) {
+    if (plan.projectDateRefusal) {
+      new Notice(
+        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
+      );
+    } else if (plan.projectScheduleIsFuture) {
+      new Notice(
+        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
+      );
+    } else if (plan.dependencyBlocked) {
       const promotionText = applied > 0
         ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
         : "prerequisites already raised";
       const suffix = failed ? " · some updates failed" : "";
       new Notice(
-        `Task blocked · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
+        `${plan.projectDependencyBlocked ? "Project blocked by dependency" : "Task blocked"} · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
       );
     } else {
-      new Notice(
-        `Project blocked until ${plan.projectSchedule} · move its Schedule in ${plan.projectPath} · no Pomodoro link created`,
-      );
+      new Notice(`Task blocked · project reason in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`);
     }
     return true;
   }
@@ -8600,7 +8657,6 @@ class BlockIdPromptPomodoroLinksMixin {
       ? this.resolveTaskFile(source.sourcePath)
       : null;
     if (taskFile) {
-      const taskContent = source.editor.getValue();
       if (await this.consumeBlockedTaskPomodoroLink(source, taskFile)) {
         return false;
       }
@@ -10547,6 +10603,7 @@ module.exports.helpers = {
   findSelectedTaskLinkOnLine,
   findSingleFutureScheduledField,
   findTaskPickerMarkerNearCursor,
+  hasProjectBlockedResidentTag,
   findWorkLogEntryPrefix,
   findWorkLogMarker,
   formatCalendarDate,

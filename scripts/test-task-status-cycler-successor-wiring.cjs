@@ -17,8 +17,8 @@ const {
 // closing-entry hint, editor/vault write-through with preimage checks, and
 // the single-notice reporting (nav card, walk toast, plain fallback).
 
-const TODAY = "2026-10-09";
-const DAILY_NOW = new Date("2026-10-09T12:00:00");
+const TODAY = helpers.formatLocalDate();
+const DAILY_NOW = new Date(`${TODAY}T12:00:00`);
 // Today's daily path under the default daily-notes settings (no
 // daily-notes plugin configured in the harness app).
 const DAILY_PATH = helpers.todayDailyPath({}, DAILY_NOW);
@@ -94,14 +94,14 @@ const FIX_LINE =
 const FIX_DONE_LINE =
   "- [x] #task Fix apollo machine! [id:: sase__fix-apollo] ^fix-apollo";
 const FIX_CLOSED_STAMPED_LINE =
-  "- [x] #task Fix apollo machine! [id:: sase__fix-apollo]  [completion:: 2026-10-09] ^fix-apollo";
+  `- [x] #task Fix apollo machine! [id:: sase__fix-apollo]  [completion:: ${TODAY}] ^fix-apollo`;
 const DEPENDENT_LINE =
   "- [?] #task Re-launch all failed agents on apollo! [dependsOn:: sase__fix-apollo] ^relaunch-failed";
 const DEPENDENT_NEXT_LINE =
   "- [*] #task Re-launch all failed agents on apollo! [dependsOn:: sase__fix-apollo] ^relaunch-failed";
 
 function fixDay(linkLine = "\t- [[sase#^fix-apollo]]") {
-  return ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — FIX", linkLine].join(
+  return [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX", linkLine].join(
     "\n",
   );
 }
@@ -171,7 +171,7 @@ test("close with no [id::] performs zero vault reads and shows nothing", async (
   assert.equal(wrote, true);
   assert.equal(
     editor.getLine(0),
-    "- [x] #task Plain chore  [completion:: 2026-10-09] ^plain",
+    `- [x] #task Plain chore  [completion:: ${TODAY}] ^plain`,
   );
   assert.deepEqual(counts.cachedRead, []);
   assert.deepEqual(counts.read, []);
@@ -183,7 +183,7 @@ test("close with no [id::] performs zero vault reads and shows nothing", async (
 
 test("Warm finalize reads no unrelated note bodies on the real close path", async () => {
   notices.length = 0;
-  const day = ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — FIX", "\t- [[p#^p]]"].join("\n");
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX", "\t- [[p#^p]]"].join("\n");
   const harness = createInMemoryObsidianApp({
     "p.md": "- [x] #task Pred [id:: p] ^p",
     "a/d.md": "- [?] #task Dep [dependsOn:: p] [id:: d] ^d",
@@ -291,7 +291,7 @@ test("recovered-only close reports unblocked without linking", async () => {
   notices.length = 0;
   // The predecessor was never planned today, so the dependent recovers to
   // Ready with `not_planned_today` and no link is written.
-  const day = ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — FIX"].join("\n");
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX"].join("\n");
   const harness = createInMemoryObsidianApp({
     "sase.md": [FIX_LINE, DEPENDENT_LINE].join("\n"),
     [DAILY_PATH]: day,
@@ -321,7 +321,7 @@ test("recovered-only close reports unblocked without linking", async () => {
   assert.equal(row.not_linked, "not_planned_today");
   assert.equal(
     harness.getSource("sase.md").split("\n")[1],
-    "- [ ] #task Re-launch all failed agents on apollo! [dependsOn:: sase__fix-apollo] ^relaunch-failed",
+    `- [ ] #task Re-launch all failed agents on apollo! [unblocked:: ${TODAY}] [dependsOn:: sase__fix-apollo] ^relaunch-failed`,
   );
   assert.equal(editor.getValue(), day);
   assert.equal(seen.length, 1);
@@ -472,7 +472,7 @@ test("stale cache line yields a failed row and a warning notice", async () => {
 test("Pomodoro-line close appends the successor to the created continuation", async () => {
   notices.length = 0;
   const day = [
-    "# 2026-10-09",
+    `# ${TODAY}`,
     "",
     "## Pomodoros",
     "- [ ] () — FIX",
@@ -497,7 +497,7 @@ test("Pomodoro-line close appends the successor to the created continuation", as
   assert.equal(
     harness.getSource("sase.md"),
     [
-      "- [x] #task Fix apollo machine! [id:: sase__fix-apollo]  [completion:: 2026-10-09] ^fix-apollo",
+      FIX_CLOSED_STAMPED_LINE,
       DEPENDENT_NEXT_LINE,
     ].join("\n"),
   );

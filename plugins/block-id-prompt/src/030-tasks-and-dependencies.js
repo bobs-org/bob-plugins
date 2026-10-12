@@ -381,7 +381,14 @@ function resolveTaskDependencyState(rawLine, index) {
   };
 }
 
-function parseProjectFrontmatter(sourceText, path = "") {
+const PROJECT_BLOCKED_RESIDENT_TAG_RE =
+  /(^|[\s([{])#prj_is_blocked(?=$|[\s)\]},.;:!?])/;
+
+function hasProjectBlockedResidentTag(lineText) {
+  return PROJECT_BLOCKED_RESIDENT_TAG_RE.test(String(lineText || ""));
+}
+
+function parseProjectFrontmatter(sourceText, path = "", records = null) {
   const lines = String(sourceText || "").split(/\r?\n/);
   if (
     /(?:^|\/)\d{4}\/\d{8}\.md$/i.test(String(path || "")) ||
@@ -417,8 +424,25 @@ function parseProjectFrontmatter(sourceText, path = "") {
   ) {
     return null;
   }
-  const scheduled = readScalar("scheduled");
-  const parsedSchedule = scheduled && parseStrictCalendarDate(scheduled);
+  const documentRecords = Array.isArray(records)
+    ? records
+    : taskDependencyRecordsFromDocuments([{
+      path: String(path || ""),
+      text: String(sourceText || ""),
+    }]);
+  const projectTasks = documentRecords.filter((task) =>
+    task.path === String(path || "") && task.blockId === "prj" &&
+    OPEN_OBSIDIAN_TASK_STATUSES.has(task.status)
+  );
+  if (projectTasks.length !== 1) {
+    return null;
+  }
+  const scheduledFields = findScheduledFieldMatches(projectTasks[0].lineText);
+  const scheduledField = scheduledFields.find((field) =>
+    parseStrictCalendarDate(field.value)
+  );
+  const parsedSchedule = scheduledField &&
+    parseStrictCalendarDate(scheduledField.value);
   return {
     path: String(path || ""),
     scheduled: parsedSchedule ? formatCalendarDate(parsedSchedule) : null,
@@ -459,7 +483,11 @@ function canonicalDependencyId(path, blockId) {
 }
 
 function projectDependencyInfoForRecords(document, records) {
-  const metadata = parseProjectFrontmatter(document.text, document.path);
+  const metadata = parseProjectFrontmatter(
+    document.text,
+    document.path,
+    records,
+  );
   if (!metadata) {
     return null;
   }
@@ -509,8 +537,8 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     }
   }
   const project = projects.get(target.path);
-  const resident = project && target.blockId !== "prj" &&
-    project.tasks.some((task) => task.line === target.line);
+  const resident = target.blockId !== "prj" &&
+    hasProjectBlockedResidentTag(target.lineText);
   const resolveOpenIds = (ids, internalOnly = false) => ids.filter((id) => {
     const dependency = byId.get(String(id));
     if (!isDependencyTargetOpen(dependency)) {
@@ -545,13 +573,18 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     target.lineText,
     todayParts,
   );
-  const projectSchedule = project && (resident || target.blockId === "prj")
+  const projectSchedule = project && resident
     ? project.scheduled && parseStrictCalendarDate(project.scheduled)
     : null;
   const projectScheduleIsFuture = !!projectSchedule &&
     compareCalendarDates(projectSchedule, todayParts) > 0;
-  const dependencyBlocked = ownOpen.length > 0 || projectOpen.length > 0;
-  if (!dependencyBlocked && !projectScheduleIsFuture) {
+  const projectDateRefusal = target.blockId === "prj" && !!ownSchedule;
+  const projectDependencyBlocked =
+    (resident && (projectOpen.length > 0 || !projectScheduleIsFuture)) ||
+    (target.blockId === "prj" && ownOpen.length > 0);
+  const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
+    projectOpen.length > 0;
+  if (!dependencyBlocked && !projectScheduleIsFuture && !projectDateRefusal) {
     return { blocked: false, target, ownSchedule };
   }
 
@@ -615,7 +648,10 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
   return {
     blocked: true,
     dependencyBlocked,
+    projectDependencyBlocked,
     projectScheduleIsFuture,
+    projectDateRefusal,
+    ownSchedule,
     projectSchedule: projectScheduleIsFuture ? formatCalendarDate(projectSchedule) : null,
     projectPath: project ? project.path : null,
     unresolvedIds,

@@ -597,6 +597,9 @@ function planSuccessors(options = {}) {
     typeof options.today === "string" && options.today
       ? options.today
       : formatLocalDate();
+  const markUnblockedLine = typeof options.markUnblockedLine === "function"
+    ? options.markUnblockedLine
+    : null;
   const linkUnblocked = options.linkUnblocked !== false;
   // `cycler_polish`: an Alt+]/Alt+[ move into Cancelled recovers only —
   // rows report `cancelled`, never `disabled`, and nothing links or mints.
@@ -754,6 +757,7 @@ function planSuccessors(options = {}) {
       project && (projectResident || projectTask) &&
       projectIsBlockedAfter(project, openIdsAfter, today, closedTaskIds)
     ) {
+      const projectDateBlocked = projectHasFutureSchedule(project, today);
       const projectOpenCount = project.dependencyIds.filter((id) => {
         const localIds = new Set(
           project.tasks.map((candidate) => candidate.taskId).filter(Boolean),
@@ -767,11 +771,9 @@ function planSuccessors(options = {}) {
         line: task.line,
         text: successorDisplayText(task),
         status_symbol: task.status,
-        reason: "project",
+        reason: projectDateBlocked ? "project_schedule" : "project_dependency",
         waits_on: projectOpenCount,
-        scheduled: projectHasFutureSchedule(project, today)
-          ? project.scheduled
-          : null,
+        scheduled: projectDateBlocked ? project.scheduled : null,
       });
       continue;
     }
@@ -867,7 +869,12 @@ function planSuccessors(options = {}) {
       return;
     }
     const before = task.rawLine != null ? String(task.rawLine) : null;
-    const after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
+    const after = before != null
+      ? rewriteRecoveredTaskLine(before, rank, {
+        markUnblockedLine,
+        today,
+      })
+      : null;
     if (before !== after) {
       edits.push({ path: task.path, line: task.line, before, after });
     }

@@ -53,7 +53,7 @@ test("option-bracket refuses to change a member while its project is Blocked", (
     "status: wip",
     "---",
     "- [?] #task #prj Release the project [dependsOn:: jobs__approval] ^prj",
-    "- [?] #task Prepare the release ^notes",
+    "- [?] #task Prepare the release #prj_is_blocked ^notes",
   ].join("\n");
   assert.equal(
     helpers.isProjectBlockedResidentTaskInDocument(
@@ -62,6 +62,14 @@ test("option-bracket refuses to change a member while its project is Blocked", (
       5,
     ),
     true,
+  );
+  assert.equal(
+    helpers.isProjectBlockedResidentTaskInDocument(
+      source.replace("#prj_is_blocked", "#prj_is_blockedish"),
+      "projects/release.md",
+      5,
+    ),
+    false,
   );
   for (const direction of [-1, 1]) {
     notices.length = 0;
@@ -75,9 +83,32 @@ test("option-bracket refuses to change a member while its project is Blocked", (
     assert.equal(plugin.handleCycleCommand(false, editor, view, direction), true);
     assert.equal(editor.getValue(), source);
     assert.ok(
-      notices.some((notice) => notice.includes("resolve the dependency in projects/release.md")),
+      notices.some((notice) => notice.includes("Project blocked by dependency")),
     );
   }
+});
+
+test("project resident notice reads the inline ^prj date and ignores frontmatter scheduled", () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "scheduled: 2027-01-01",
+    "---",
+    "- [?] #task #prj Launch the project [scheduled:: 2026-08-20] ^prj",
+    "- [?] #task Prepare the launch #prj_is_blocked ^notes",
+  ].join("\n");
+  const project = helpers.projectDependencyInfo(source, "projects/launch.md");
+  assert.equal(project.scheduled, "2026-08-20");
+  assert.equal(
+    helpers.projectBlockedResidentNotice(
+      source,
+      "projects/launch.md",
+      6,
+      "2026-08-15",
+    ),
+    "Project blocked by date · move the ^prj Schedule in projects/launch.md (2026-08-20)",
+  );
 });
 
 test("findSingleFutureScheduledField validates form, field order, and the strictly-future boundary", () => {

@@ -686,7 +686,11 @@ class TaskStatusCyclerCompletionMixin {
       )
     ) {
       new Notice(
-        `Project blocked · resolve the dependency in ${resolvedTarget.file.path}`,
+        projectBlockedResidentNotice(
+          resolvedTarget.sourceText,
+          resolvedTarget.file.path,
+          resolvedTarget.line,
+        ) || `Project blocked · resolve the ^prj reason in ${resolvedTarget.file.path}`,
       );
       return false;
     }

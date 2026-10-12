@@ -10,6 +10,7 @@
   "085-successor-plan.js",
   "086-successor-ids.js",
   "087-successor-place.js",
+  "088-project-blocking.js",
   "090-source-and-formatting.js",
   "100-editor-and-modal.js",
   "110-plugin-lifecycle.js",

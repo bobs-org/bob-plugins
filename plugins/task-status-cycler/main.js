@@ -4549,8 +4549,12 @@ function projectDependencyInfo(sourceText, path = "") {
   if (projectTasks.length !== 1) {
     return null;
   }
-  const scheduled = parseFrontmatterScalar(sourceText, "scheduled");
-  const scheduledDate = scheduled && parseStrictCalendarDate(scheduled);
+  const scheduledFields = findScheduledFieldMatches(projectTasks[0].lineText);
+  const scheduledField = scheduledFields.find((field) =>
+    parseStrictCalendarDate(field.value)
+  );
+  const scheduledDate = scheduledField &&
+    parseStrictCalendarDate(scheduledField.value);
   return {
     path: String(path || ""),
     tasks,
@@ -4615,7 +4619,10 @@ function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
   for (const path of recoveryPaths || []) {
     const project = projectInfoByPath.get(path);
     for (const task of project ? project.tasks : []) {
-      if (task.blockId === "prj" || task.status !== "?") {
+      if (
+        task.blockId === "prj" || task.status !== "?" ||
+        !hasProjectBlockedResidentTag(task.lineText)
+      ) {
         continue;
       }
       members.push({
@@ -4635,18 +4642,44 @@ function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
 }
 
 function isProjectBlockedResidentTaskInDocument(sourceText, path, line) {
-  const project = projectDependencyInfo(sourceText, path);
-  if (!project || project.projectTask.status !== "?") {
+  if (isCanonicalDailyNotePath(path)) {
     return false;
   }
-  const task = project.tasks.find((candidate) => candidate.line === line);
-  if (!task || task.blockId === "prj" || task.status !== "?") {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const sourceLine = sourceLines[line];
+  const task = sourceLine && parseTaskDependencyLine(
+    sourceLine.text,
+    path,
+    line,
+  );
+  if (
+    !task || task.blockId === "prj" || task.status !== "?" ||
+    !hasProjectBlockedResidentTag(task.lineText)
+  ) {
     return false;
   }
-  // The editor shortcut is allowed to use the project's current `[?]` as its
-  // immediate blocked-state signal. Reconcile remains authoritative for the
-  // underlying reasons.
   return true;
+}
+
+function projectBlockedResidentNotice(sourceText, path, line, today = formatLocalDate()) {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const sourceLine = sourceLines[line];
+  const resident = sourceLine && parseTaskDependencyLine(
+    sourceLine.text,
+    path,
+    line,
+  );
+  if (!resident || !hasProjectBlockedResidentTag(resident.lineText)) {
+    return null;
+  }
+  const project = projectDependencyInfo(sourceText, path);
+  if (!project) {
+    return `Project blocked · resolve the project's ^prj reason in ${path}`;
+  }
+  if (projectHasFutureSchedule(project, today)) {
+    return `Project blocked by date · move the ^prj Schedule in ${path} (${project.scheduled})`;
+  }
+  return `Project blocked by dependency · resolve the ^prj prerequisite in ${path}`;
 }
 
 function closedTaskIdentity(path, lineText) {
@@ -4870,7 +4903,7 @@ function buildBlockedDependentRecoveryPlan(
   };
 }
 
-function applyBlockedDependentRecoveryEdits(sourceText, edits) {
+function applyBlockedDependentRecoveryEdits(sourceText, edits, options = {}) {
   const sourceLines = splitTextByLineEndings(sourceText);
   let reopened = 0;
   const stale = [];
@@ -4895,7 +4928,12 @@ function applyBlockedDependentRecoveryEdits(sourceText, edits) {
       stale.push(edit);
       continue;
     }
-    sourceLine.text = `${sourceLine.text.slice(0, task.statusStart)} ${sourceLine.text.slice(task.statusStart + 1)}`;
+    const rewritten = rewriteRecoveredTaskLine(sourceLine.text, " ", options);
+    if (typeof rewritten !== "string") {
+      stale.push(edit);
+      continue;
+    }
+    sourceLine.text = rewritten;
     reopened += 1;
   }
   return {
@@ -5703,6 +5741,9 @@ function planSuccessors(options = {}) {
     typeof options.today === "string" && options.today
       ? options.today
       : formatLocalDate();
+  const markUnblockedLine = typeof options.markUnblockedLine === "function"
+    ? options.markUnblockedLine
+    : null;
   const linkUnblocked = options.linkUnblocked !== false;
   // `cycler_polish`: an Alt+]/Alt+[ move into Cancelled recovers only —
   // rows report `cancelled`, never `disabled`, and nothing links or mints.
@@ -5860,6 +5901,7 @@ function planSuccessors(options = {}) {
       project && (projectResident || projectTask) &&
       projectIsBlockedAfter(project, openIdsAfter, today, closedTaskIds)
     ) {
+      const projectDateBlocked = projectHasFutureSchedule(project, today);
       const projectOpenCount = project.dependencyIds.filter((id) => {
         const localIds = new Set(
           project.tasks.map((candidate) => candidate.taskId).filter(Boolean),
@@ -5873,11 +5915,9 @@ function planSuccessors(options = {}) {
         line: task.line,
         text: successorDisplayText(task),
         status_symbol: task.status,
-        reason: "project",
+        reason: projectDateBlocked ? "project_schedule" : "project_dependency",
         waits_on: projectOpenCount,
-        scheduled: projectHasFutureSchedule(project, today)
-          ? project.scheduled
-          : null,
+        scheduled: projectDateBlocked ? project.scheduled : null,
       });
       continue;
     }
@@ -5973,7 +6013,12 @@ function planSuccessors(options = {}) {
       return;
     }
     const before = task.rawLine != null ? String(task.rawLine) : null;
-    const after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
+    const after = before != null
+      ? rewriteRecoveredTaskLine(before, rank, {
+        markUnblockedLine,
+        today,
+      })
+      : null;
     if (before !== after) {
       edits.push({ path: task.path, line: task.line, before, after });
     }
@@ -7126,6 +7171,92 @@ function loadLinkUnblocked(options = {}) {
     successorLinkUnblockedCache = { key, result };
   }
   return result;
+}
+// ---- src/088-project-blocking.js ----
+// Helpers for the project-blocked resident tag and its recovery write.
+// The tag is the immediate project-blocked signal; reconcile remains the
+// authority that adds or removes it from resident tasks.
+const PROJECT_BLOCKED_RESIDENT_TAG_RE =
+  /(^|[\s([{])#prj_is_blocked(?=$|[\s)\]},.;:!?])/;
+
+function hasProjectBlockedResidentTag(lineText) {
+  return PROJECT_BLOCKED_RESIDENT_TAG_RE.test(String(lineText || ""));
+}
+
+function stripProjectBlockedResidentTag(lineText) {
+  return String(lineText || "")
+    .replace(
+      /(^|[ \t]+)#prj_is_blocked(?=$|[\s)\]},.;:!?])/g,
+      "",
+    );
+}
+
+function rewriteRecoveredTaskLine(lineText, statusSymbol, options = {}) {
+  const source = String(lineText || "");
+  const current = getTaskStatusForLine(source);
+  if (!current) {
+    return null;
+  }
+  let next = `${source.slice(0, current.statusStart)}${statusSymbol}${source.slice(current.statusStart + 1)}`;
+  if (current.symbol === "?" && statusSymbol === " " &&
+      typeof options.markUnblockedLine === "function") {
+    const marked = options.markUnblockedLine(next, {
+      today: options.today || formatLocalDate(),
+    });
+    if (typeof marked !== "string") {
+      return null;
+    }
+    next = marked;
+  }
+  return stripProjectBlockedResidentTag(next);
+}
+
+function successorReadyRecoveryEdits(plan) {
+  return (Array.isArray(plan && plan.edits) ? plan.edits : []).filter((edit) => {
+    if (typeof edit.before !== "string" || typeof edit.after !== "string") {
+      return false;
+    }
+    const before = getTaskStatusForLine(edit.before);
+    const after = getTaskStatusForLine(edit.after);
+    return before && after && before.symbol === "?" && after.symbol === " ";
+  });
+}
+
+async function applySuccessorNoteEditsWithUnblockedGuard(plugin, plan, context) {
+  const required = successorReadyRecoveryEdits(plan);
+  const markUnblockedLine = plugin &&
+    typeof plugin.getFreshnessMarkUnblockedLine === "function"
+    ? plugin.getFreshnessMarkUnblockedLine()
+    : null;
+  if (required.length === 0 || typeof markUnblockedLine === "function") {
+    return plugin.applySuccessorNoteEdits(plan, context);
+  }
+
+  const failedLocations = new Set(required.map((edit) =>
+    `${edit.path}\0${edit.line}`
+  ));
+  const failedRows = new Set();
+  for (let index = 0; index < plan.unblocked.length; index += 1) {
+    const row = plan.unblocked[index];
+    if (
+      row && failedLocations.has(`${row.note_path}\0${row.line}`)
+    ) {
+      row.link = null;
+      row.not_linked = "failed";
+      failedRows.add(index);
+    }
+  }
+  plan.edits = plan.edits.filter((edit) =>
+    !failedLocations.has(`${edit.path}\0${edit.line}`)
+  );
+  plan.placements = plan.placements.filter((placement) =>
+    !failedRows.has(placement && placement.rowIndex)
+  );
+  const outcome = await plugin.applySuccessorNoteEdits(plan, context);
+  outcome.failed += Math.max(required.length, failedRows.size);
+  outcome.failureReason = outcome.failureReason ||
+    "bob-ledger-tools freshness namespace v12 is required for recovery";
+  return outcome;
 }
 // ---- src/090-source-and-formatting.js ----
 function getLineTextFromSourceText(sourceText, lineNumber) {
@@ -9463,6 +9594,17 @@ class TaskStatusCyclerReferencesMixin {
         today: recoveryToday,
       });
     }
+    const markUnblockedLine = this.getFreshnessMarkUnblockedLine();
+    if (plan.edits.length > 0 && typeof markUnblockedLine !== "function") {
+      for (const edit of plan.edits) {
+        recordFailure(
+          edit.path,
+          "bob-ledger-tools freshness namespace v12 is required for recovery",
+        );
+      }
+      new Notice("Blocked tasks stayed blocked: update bob-ledger-tools to freshness v12 first.");
+      return { reopened: 0, failures };
+    }
     const editsByPath = new Map();
     for (const edit of plan.edits) {
       if (!editsByPath.has(edit.path)) {
@@ -9492,10 +9634,18 @@ class TaskStatusCyclerReferencesMixin {
             recordFailure(path, `line ${edit.line + 1} changed before recovery`);
             continue;
           }
+          const rewritten = rewriteRecoveredTaskLine(currentLine, " ", {
+            markUnblockedLine,
+            today: recoveryToday,
+          });
+          if (typeof rewritten !== "string") {
+            recordFailure(path, `line ${edit.line + 1} could not be marked unblocked`);
+            continue;
+          }
           editor.replaceRange(
-            " ",
-            { line: edit.line, ch: task.statusStart },
-            { line: edit.line, ch: task.statusStart + 1 },
+            rewritten,
+            { line: edit.line, ch: 0 },
+            { line: edit.line, ch: currentLine.length },
           );
           reopened += 1;
         }
@@ -9517,7 +9667,10 @@ class TaskStatusCyclerReferencesMixin {
       try {
         let result = { reopened: 0, stale: [], text: null };
         const transform = (text) => {
-          result = applyBlockedDependentRecoveryEdits(text, edits);
+          result = applyBlockedDependentRecoveryEdits(text, edits, {
+            markUnblockedLine,
+            today: recoveryToday,
+          });
           return result.text;
         };
         if (typeof vault.process === "function") {
@@ -10803,6 +10956,7 @@ class TaskStatusCyclerSuccessorsMixin {
           dailyAfter,
           dailyPath: dailyPath || "",
           today,
+          markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
           linkUnblocked,
           cancelled: cancelledClose,
           isInbox: getSuccessorIsInbox(this.app),
@@ -10816,7 +10970,7 @@ class TaskStatusCyclerSuccessorsMixin {
       if (!plan) {
         return null;
       }
-      const noteOutcome = await this.applySuccessorNoteEdits(plan, active);
+      const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
       // A dependent whose status edit failed is recovered-but-unlinked:
       // drop its placement so no link is inserted for it.
       if (noteOutcome.failed > 0) {
@@ -12462,7 +12616,13 @@ class TaskStatusCyclerCommandsMixin {
         )
       ) {
         if (!checking) {
-          new Notice(`Project blocked · resolve the dependency in ${activePath}`);
+          new Notice(
+            projectBlockedResidentNotice(
+              editor.getValue(),
+              activePath,
+              taskStatus.line,
+            ) || `Project blocked · resolve the ^prj reason in ${activePath}`,
+          );
         }
         return true;
       }
@@ -12989,6 +13149,7 @@ class TaskStatusCyclerCommandsMixin {
     const seenResolvedTargets = new Set();
     let changed = false;
     let projectBlockedSkipped = false;
+    let projectBlockedNotice = null;
     let startDepLineUntargeted = false;
     // `cycler_polish`: identities cycled into Done/Cancelled, finalized as
     // one batch after the loop (Done links, Cancelled recovers only).
@@ -13072,6 +13233,12 @@ class TaskStatusCyclerCommandsMixin {
           )
         ) {
           projectBlockedSkipped = true;
+          projectBlockedNotice = projectBlockedNotice ||
+            projectBlockedResidentNotice(
+              lines.join("\n"),
+              activePath,
+              line,
+            );
           continue;
         }
 
@@ -13202,7 +13369,10 @@ class TaskStatusCyclerCommandsMixin {
       new Notice("⛓ Put the cursor on a dependency link to cycle it");
     }
     if (projectBlockedSkipped) {
-      new Notice(`Project blocked · resolve the dependency in ${activePath}`);
+      new Notice(
+        projectBlockedNotice ||
+          `Project blocked · resolve the ^prj reason in ${activePath}`,
+      );
     }
 
     // One batched pass for the whole counted range (partitioned Done vs
@@ -13993,7 +14163,11 @@ class TaskStatusCyclerCompletionMixin {
       )
     ) {
       new Notice(
-        `Project blocked · resolve the dependency in ${resolvedTarget.file.path}`,
+        projectBlockedResidentNotice(
+          resolvedTarget.sourceText,
+          resolvedTarget.file.path,
+          resolvedTarget.line,
+        ) || `Project blocked · resolve the ^prj reason in ${resolvedTarget.file.path}`,
       );
       return false;
     }
@@ -16237,6 +16411,31 @@ class TaskStatusCyclerTargetsMixin {
     }
   }
 
+  // Automatic Blocked → Ready recovery must enter the TICKLER review tier.
+  // Require the v12 namespace so older ledger-tools builds cannot silently
+  // recover a task without recording that transition.
+  getFreshnessMarkUnblockedLine() {
+    try {
+      const plugins = this.app && this.app.plugins;
+      const byId = plugins && plugins.plugins
+        ? plugins.plugins["bob-ledger-tools"]
+        : null;
+      const holder = byId || (plugins && typeof plugins.getPlugin === "function"
+        ? plugins.getPlugin("bob-ledger-tools")
+        : null);
+      const freshness = holder && holder.api && holder.api.freshness;
+      if (
+        !freshness || freshness.version < 12 ||
+        typeof freshness.markUnblockedLine !== "function"
+      ) {
+        return null;
+      }
+      return freshness.markUnblockedLine.bind(freshness);
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Stamp one editor line with today's freshness date when a stamper is
   // available. Best effort: returns false when nothing was written.
   stampFreshnessOnEditorLine(editor, line) {
@@ -16814,6 +17013,7 @@ module.exports.helpers = {
   getLineIndentation,
   getOpenLineBelowPrefix,
   getChildBulletOpenLinePrefix,
+  hasProjectBlockedResidentTag,
   mapOriginalLineToRemaining,
   moveDemotionPickerSelection,
   lineContainsStandaloneBlockId,
@@ -16824,12 +17024,15 @@ module.exports.helpers = {
   isTaskDependencyLine,
   isCanonicalDailyNotePath,
   isProjectBlockedResidentTaskInDocument,
+  projectBlockedResidentNotice,
   projectDependencyInfo,
   projectHasFutureSchedule,
   projectHasOpenDependency,
   projectIsBlockedAfter,
   projectSuccessorRecoveryMembers,
   projectSuccessorRecoveryState,
+  rewriteRecoveredTaskLine,
+  successorReadyRecoveryEdits,
   parseTaskDependencyDocument,
   parseTaskDependencyLine,
   parseTaskDependencyMetadata,

@@ -56,10 +56,9 @@ test("project-blocked member consumption promotes the project's open prerequisit
     "---",
     'type: "[[project]]"',
     "status: wip",
-    'depends_on: ["[[jobs#^release]]"]',
     "---",
     "- [?] #task #prj Ship the project [dependsOn:: jobs__release] ^prj",
-    "- [?] #task Prepare launch notes ^notes",
+    "- [?] #task Prepare launch notes #prj_is_blocked ^notes",
   ].join("\n");
   const prerequisite = "- [ ] #task Release approval [id:: jobs__release] ^release";
   const plan = helpers.planTaskLinkBlockConsumption(
@@ -68,7 +67,7 @@ test("project-blocked member consumption promotes the project's open prerequisit
       { path: "jobs.md", text: prerequisite },
     ],
     "projects/release.md",
-    6,
+    5,
     new Date(2026, 7, 15),
   );
   assert.equal(plan.blocked, true);
@@ -86,10 +85,10 @@ test("project schedule blocks residents without promotion, while a task's own sc
     "---",
     'type: "[[project]]"',
     "status: wip",
-    "scheduled: 2026-08-20",
+    "scheduled: 2027-01-01",
     "---",
-    "- [?] #task #prj Launch the project ^prj",
-    "- [?] #task Prepare launch notes ^notes",
+    "- [?] #task #prj Launch the project [scheduled:: 2026-08-20] ^prj",
+    "- [?] #task Prepare launch notes #prj_is_blocked ^notes",
   ].join("\n");
   const projectPlan = helpers.planTaskLinkBlockConsumption(
     [{ path: "projects/launch.md", text: project }],
@@ -102,6 +101,17 @@ test("project schedule blocks residents without promotion, while a task's own sc
   assert.equal(projectPlan.projectSchedule, "2026-08-20");
   assert.deepEqual(projectPlan.promoted, []);
 
+  const projectTaskPlan = helpers.planTaskLinkBlockConsumption(
+    [{ path: "projects/launch.md", text: project }],
+    "projects/launch.md",
+    5,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(projectTaskPlan.blocked, true);
+  assert.equal(projectTaskPlan.projectScheduleIsFuture, false);
+  assert.equal(projectTaskPlan.projectDateRefusal, true);
+  assert.equal(projectTaskPlan.ownSchedule.value, "2026-08-20");
+
   const ownSchedule = helpers.planTaskLinkBlockConsumption(
     [{
       path: "jobs.md",
@@ -113,6 +123,25 @@ test("project schedule blocks residents without promotion, while a task's own sc
   );
   assert.equal(ownSchedule.blocked, false);
   assert.equal(ownSchedule.ownSchedule.value, "2026-08-20");
+});
+
+test("a project-blocked tag is token-bounded and ignored on lookalike tags", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "scheduled: 2026-08-20",
+    "---",
+    "- [ ] #task #prj Launch the project ^prj",
+    "- [?] #task Prepare launch notes #prj_is_blockedish ^notes",
+  ].join("\n");
+  const plan = helpers.planTaskLinkBlockConsumption(
+    [{ path: "projects/launch.md", text: project }],
+    "projects/launch.md",
+    6,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(plan.blocked, false);
 });
 
 test("task picker includes Blocked tasks and excludes closed, hidden, and untagged lines", () => {

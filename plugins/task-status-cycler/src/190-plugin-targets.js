@@ -451,6 +451,31 @@ class TaskStatusCyclerTargetsMixin {
     }
   }
 
+  // Automatic Blocked → Ready recovery must enter the TICKLER review tier.
+  // Require the v12 namespace so older ledger-tools builds cannot silently
+  // recover a task without recording that transition.
+  getFreshnessMarkUnblockedLine() {
+    try {
+      const plugins = this.app && this.app.plugins;
+      const byId = plugins && plugins.plugins
+        ? plugins.plugins["bob-ledger-tools"]
+        : null;
+      const holder = byId || (plugins && typeof plugins.getPlugin === "function"
+        ? plugins.getPlugin("bob-ledger-tools")
+        : null);
+      const freshness = holder && holder.api && holder.api.freshness;
+      if (
+        !freshness || freshness.version < 12 ||
+        typeof freshness.markUnblockedLine !== "function"
+      ) {
+        return null;
+      }
+      return freshness.markUnblockedLine.bind(freshness);
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Stamp one editor line with today's freshness date when a stamper is
   // available. Best effort: returns false when nothing was written.
   stampFreshnessOnEditorLine(editor, line) {

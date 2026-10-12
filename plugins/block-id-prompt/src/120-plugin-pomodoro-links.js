@@ -223,6 +223,20 @@ class BlockIdPromptPomodoroLinksMixin {
   }
 
   async consumeBlockedTaskPomodoroLink(source, targetFile) {
+    const editor = source && source.editor;
+    const targetLine = editor && typeof editor.getLine === "function"
+      ? editor.getLine(source.line)
+      : null;
+    const targetMatch = typeof targetLine === "string"
+      ? getObsidianTaskLineMatch(targetLine)
+      : null;
+    if (
+      !targetMatch ||
+      (targetMatch[1] !== BLOCKED_OBSIDIAN_TASK_STATUS &&
+        !hasProjectBlockedResidentTag(targetLine))
+    ) {
+      return false;
+    }
     const { documents, fileByPath, failures } =
       await this.readTaskDependencyDocuments(source, targetFile);
     const plan = planTaskLinkBlockConsumption(
@@ -285,18 +299,24 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    if (plan.dependencyBlocked) {
+    if (plan.projectDateRefusal) {
+      new Notice(
+        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
+      );
+    } else if (plan.projectScheduleIsFuture) {
+      new Notice(
+        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
+      );
+    } else if (plan.dependencyBlocked) {
       const promotionText = applied > 0
         ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
         : "prerequisites already raised";
       const suffix = failed ? " · some updates failed" : "";
       new Notice(
-        `Task blocked · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
+        `${plan.projectDependencyBlocked ? "Project blocked by dependency" : "Task blocked"} · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
       );
     } else {
-      new Notice(
-        `Project blocked until ${plan.projectSchedule} · move its Schedule in ${plan.projectPath} · no Pomodoro link created`,
-      );
+      new Notice(`Task blocked · project reason in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`);
     }
     return true;
   }
@@ -638,7 +658,6 @@ class BlockIdPromptPomodoroLinksMixin {
       ? this.resolveTaskFile(source.sourcePath)
       : null;
     if (taskFile) {
-      const taskContent = source.editor.getValue();
       if (await this.consumeBlockedTaskPomodoroLink(source, taskFile)) {
         return false;
       }

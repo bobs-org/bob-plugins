@@ -94,6 +94,30 @@ test("resolvePomodoroLinkTaskFromEditor accepts a #hide project task directly un
   assert.equal(result.task.displayText, "Secret errand");
 });
 
+test("Pomodoro link checks do not read other notes for a non-Blocked task", async () => {
+  const plugin = new Plugin();
+  const editor = createEditor("- [ ] #task Ready task ^ready");
+  let scans = 0;
+  plugin.readTaskDependencyDocuments = async () => {
+    scans += 1;
+    return { documents: [], fileByPath: new Map(), failures: [] };
+  };
+  const source = { editor, line: 0, sourcePath: "Tasks.md" };
+  assert.equal(
+    await plugin.consumeBlockedTaskPomodoroLink(source, createTFile("Tasks.md")),
+    false,
+  );
+  assert.equal(scans, 0);
+
+  const blockedEditor = createEditor("- [?] #task Blocked task ^blocked");
+  const blockedSource = { editor: blockedEditor, line: 0, sourcePath: "Tasks.md" };
+  await plugin.consumeBlockedTaskPomodoroLink(
+    blockedSource,
+    createTFile("Tasks.md"),
+  );
+  assert.equal(scans, 1);
+});
+
 test("resolvePomodoroLinkTaskFromEditor rejects a block ID duplicated elsewhere in the same note", () => {
   const plugin = new Plugin();
   const editor = createEditor(

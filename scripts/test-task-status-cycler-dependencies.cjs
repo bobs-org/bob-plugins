@@ -164,7 +164,7 @@ test("blocked-dependent planner matches the CLI dependency truth table", () => {
 
 test("blocked-dependent edits preserve EOLs and skip stale lines idempotently", () => {
   const source = [
-    "- [?] #task First [dependsOn:: root] ^first",
+    "- [?] #task First [dependsOn:: root] #prj_is_blocked ^first",
     "- [?] #task Second (dependsOn:: root) ^second",
   ].join("\r\n");
   const plan = helpers.buildBlockedDependentRecoveryPlan(
@@ -175,15 +175,25 @@ test("blocked-dependent edits preserve EOLs and skip stale lines idempotently", 
   const applied = helpers.applyBlockedDependentRecoveryEdits(
     staleSource,
     plan.edits,
+    {
+      today: "2026-10-09",
+      markUnblockedLine: (line, { today }) =>
+        line.replace(/\s+(\^[A-Za-z0-9_-]+$)/, ` [unblocked:: ${today}] $1`),
+    },
   );
   assert.equal(applied.reopened, 1);
   assert.equal(applied.stale.length, 1);
-  assert.match(applied.text, /^- \[ \] #task First/m);
+  assert.match(applied.text, /^- \[ \] #task First \[dependsOn:: root\] \[unblocked:: 2026-10-09\] \^first/m);
+  assert.doesNotMatch(applied.text, /#prj_is_blocked/);
   assert.match(applied.text, /^- \[\?\] #task Second changed/m);
   assert.equal(applied.text.includes("\r\n"), true);
   const second = helpers.applyBlockedDependentRecoveryEdits(
     applied.text,
     plan.edits,
+    {
+      today: "2026-10-09",
+      markUnblockedLine: (line, { today }) => line,
+    },
   );
   assert.equal(second.reopened, 0);
   assert.equal(second.text, applied.text);

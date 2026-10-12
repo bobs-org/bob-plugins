@@ -188,8 +188,12 @@ function projectDependencyInfo(sourceText, path = "") {
   if (projectTasks.length !== 1) {
     return null;
   }
-  const scheduled = parseFrontmatterScalar(sourceText, "scheduled");
-  const scheduledDate = scheduled && parseStrictCalendarDate(scheduled);
+  const scheduledFields = findScheduledFieldMatches(projectTasks[0].lineText);
+  const scheduledField = scheduledFields.find((field) =>
+    parseStrictCalendarDate(field.value)
+  );
+  const scheduledDate = scheduledField &&
+    parseStrictCalendarDate(scheduledField.value);
   return {
     path: String(path || ""),
     tasks,
@@ -254,7 +258,10 @@ function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
   for (const path of recoveryPaths || []) {
     const project = projectInfoByPath.get(path);
     for (const task of project ? project.tasks : []) {
-      if (task.blockId === "prj" || task.status !== "?") {
+      if (
+        task.blockId === "prj" || task.status !== "?" ||
+        !hasProjectBlockedResidentTag(task.lineText)
+      ) {
         continue;
       }
       members.push({
@@ -274,18 +281,44 @@ function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
 }
 
 function isProjectBlockedResidentTaskInDocument(sourceText, path, line) {
-  const project = projectDependencyInfo(sourceText, path);
-  if (!project || project.projectTask.status !== "?") {
+  if (isCanonicalDailyNotePath(path)) {
     return false;
   }
-  const task = project.tasks.find((candidate) => candidate.line === line);
-  if (!task || task.blockId === "prj" || task.status !== "?") {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const sourceLine = sourceLines[line];
+  const task = sourceLine && parseTaskDependencyLine(
+    sourceLine.text,
+    path,
+    line,
+  );
+  if (
+    !task || task.blockId === "prj" || task.status !== "?" ||
+    !hasProjectBlockedResidentTag(task.lineText)
+  ) {
     return false;
   }
-  // The editor shortcut is allowed to use the project's current `[?]` as its
-  // immediate blocked-state signal. Reconcile remains authoritative for the
-  // underlying reasons.
   return true;
+}
+
+function projectBlockedResidentNotice(sourceText, path, line, today = formatLocalDate()) {
+  const sourceLines = splitTextByLineEndings(sourceText);
+  const sourceLine = sourceLines[line];
+  const resident = sourceLine && parseTaskDependencyLine(
+    sourceLine.text,
+    path,
+    line,
+  );
+  if (!resident || !hasProjectBlockedResidentTag(resident.lineText)) {
+    return null;
+  }
+  const project = projectDependencyInfo(sourceText, path);
+  if (!project) {
+    return `Project blocked · resolve the project's ^prj reason in ${path}`;
+  }
+  if (projectHasFutureSchedule(project, today)) {
+    return `Project blocked by date · move the ^prj Schedule in ${path} (${project.scheduled})`;
+  }
+  return `Project blocked by dependency · resolve the ^prj prerequisite in ${path}`;
 }
 
 function closedTaskIdentity(path, lineText) {
@@ -509,7 +542,7 @@ function buildBlockedDependentRecoveryPlan(
   };
 }
 
-function applyBlockedDependentRecoveryEdits(sourceText, edits) {
+function applyBlockedDependentRecoveryEdits(sourceText, edits, options = {}) {
   const sourceLines = splitTextByLineEndings(sourceText);
   let reopened = 0;
   const stale = [];
@@ -534,7 +567,12 @@ function applyBlockedDependentRecoveryEdits(sourceText, edits) {
       stale.push(edit);
       continue;
     }
-    sourceLine.text = `${sourceLine.text.slice(0, task.statusStart)} ${sourceLine.text.slice(task.statusStart + 1)}`;
+    const rewritten = rewriteRecoveredTaskLine(sourceLine.text, " ", options);
+    if (typeof rewritten !== "string") {
+      stale.push(edit);
+      continue;
+    }
+    sourceLine.text = rewritten;
     reopened += 1;
   }
   return {

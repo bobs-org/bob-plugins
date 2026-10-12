@@ -177,6 +177,22 @@ const { helpers } = TaskStatusCyclerPlugin;
 function createInMemoryObsidianApp(initialSources) {
   const files = new Map();
   const sources = new Map();
+  const markUnblockedLine = (lineText, options = {}) => {
+    const today = options.today || "2026-10-12";
+    let line = String(lineText || "").replace(
+      /\s+\[unblocked::\s*\d{4}-\d{2}-\d{2}\]/g,
+      "",
+    );
+    const suffix = line.match(
+      /\s+(?=(?:\[(?:created|priority|scheduled|dependsOn|id)::|#(?:hide|prj_is_blocked)(?=$|[\s)\]},.;:!?])|\^[A-Za-z0-9_-]+(?:\s|$)))/i,
+    );
+    if (!suffix) {
+      return `${line} [unblocked:: ${today}]`;
+    }
+    const before = line.slice(0, suffix.index).replace(/[ \t]+$/, "");
+    const after = line.slice(suffix.index).replace(/^[ \t]+/, "");
+    return `${before} [unblocked:: ${today}]${after ? ` ${after}` : ""}`;
+  };
 
   for (const [path, sourceText] of Object.entries(initialSources)) {
     const file = { path };
@@ -201,6 +217,19 @@ function createInMemoryObsidianApp(initialSources) {
 
   return {
     app: {
+      plugins: {
+        plugins: {
+          "bob-ledger-tools": {
+            api: {
+              version: 3,
+              freshness: {
+                version: 12,
+                markUnblockedLine,
+              },
+            },
+          },
+        },
+      },
       vault: {
         getAbstractFileByPath: (path) => files.get(path) || null,
         getMarkdownFiles: () => [...files.values()],

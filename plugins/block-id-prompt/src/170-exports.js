@@ -30,6 +30,7 @@ module.exports.helpers = {
   findSelectedTaskLinkOnLine,
   findSingleFutureScheduledField,
   findTaskPickerMarkerNearCursor,
+  hasProjectBlockedResidentTag,
   findWorkLogEntryPrefix,
   findWorkLogMarker,
   formatCalendarDate,

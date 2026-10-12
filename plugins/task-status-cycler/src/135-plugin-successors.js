@@ -782,6 +782,7 @@ class TaskStatusCyclerSuccessorsMixin {
           dailyAfter,
           dailyPath: dailyPath || "",
           today,
+          markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
           linkUnblocked,
           cancelled: cancelledClose,
           isInbox: getSuccessorIsInbox(this.app),
@@ -795,7 +796,7 @@ class TaskStatusCyclerSuccessorsMixin {
       if (!plan) {
         return null;
       }
-      const noteOutcome = await this.applySuccessorNoteEdits(plan, active);
+      const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
       // A dependent whose status edit failed is recovered-but-unlinked:
       // drop its placement so no link is inserted for it.
       if (noteOutcome.failed > 0) {

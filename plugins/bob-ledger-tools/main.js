@@ -3708,9 +3708,10 @@ function setReadyAnchorContent(anchor, model, options = {}) {
   }
   // bob-cli-3d fix: keep the caller's chip-kind class instead of
   // hard-coding `bob-plan-ready`. Callers pass `{ kind: "pending" }`,
-  // `{ kind: "next" }`, or `{ kind: "crowded" }`; the default stays
-  // "ready" so existing callers are unchanged. `model.kind` is honored
-  // as a fallback for models that carry it.
+  // `{ kind: "next" }`, `{ kind: "crowded" }`, `{ kind: "projects" }`,
+  // or `{ kind: "references" }`; the default stays "ready" so existing
+  // callers are unchanged. `model.kind` is honored as a fallback for
+  // models that carry it.
   const rawKind =
     options && typeof options.kind === "string" && options.kind
       ? options.kind
@@ -3721,6 +3722,8 @@ function setReadyAnchorContent(anchor, model, options = {}) {
     rawKind === "pending" ||
     rawKind === "next" ||
     rawKind === "crowded" ||
+    rawKind === "projects" ||
+    rawKind === "references" ||
     rawKind === "ready"
       ? rawKind
       : "ready";
@@ -15367,9 +15370,7 @@ class BobLedgerToolsDashboardMixin {
       const sourcePath =
         typeof options.sourcePath === "string" ? options.sourcePath : "";
       const anchor = host.createEl("a", {
-        cls:
-          `bob-plan-chip bob-plan-${normalized}` +
-          `${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        cls: dashboardCollectionChipClass(normalized, model),
         title: model.tooltip,
         href: model.destination,
       });
@@ -15383,7 +15384,7 @@ class BobLedgerToolsDashboardMixin {
           tooltip: model.tooltip,
           aria: model.aria,
         },
-        { kind: "ready", label: model.label },
+        { kind: normalized, label: model.label },
       );
       try {
         const valueSpan = findReadySpan(anchor, READY_VALUE_CLS);
@@ -15580,7 +15581,7 @@ class BobLedgerToolsDashboardMixin {
             el.setAttribute("aria-label", model.aria);
             el.setAttribute(
               "class",
-              `bob-plan-chip bob-plan-${widget.kind}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+              dashboardCollectionChipClass(widget.kind, model),
             );
           }
         } catch (error) {
@@ -32812,6 +32813,12 @@ function dashboardCollectionChipModel(kind, entry) {
   }
 }
 
+function dashboardCollectionChipClass(kind, model) {
+  const normalized = kind === "references" ? "references" : "projects";
+  const unavailable = model && model.placeholder ? " bob-plan-unavailable" : "";
+  return `bob-plan-chip bob-plan-${normalized}${unavailable}`;
+}
+
 // --- Per-note Ready cap views (ledger-views) ---------------------------
 // Pure view models for the dash CROWDED chip, the `bob-ready-notes`
 // ranked-bar block, and the `## Tasks` heading chip. All take plain
@@ -33634,6 +33641,7 @@ module.exports.helpers = {
   dashboardCollectionValidateRefsBase,
   dashboardCollectionEntryFor,
   dashboardCollectionChipModel,
+  dashboardCollectionChipClass,
   statsReviewHost,
   STATS_FETCH_TIMEOUT_MS,
   STATS_CACHE_SIZE,

@@ -524,9 +524,10 @@ function setReadyAnchorContent(anchor, model, options = {}) {
   }
   // bob-cli-3d fix: keep the caller's chip-kind class instead of
   // hard-coding `bob-plan-ready`. Callers pass `{ kind: "pending" }`,
-  // `{ kind: "next" }`, or `{ kind: "crowded" }`; the default stays
-  // "ready" so existing callers are unchanged. `model.kind` is honored
-  // as a fallback for models that carry it.
+  // `{ kind: "next" }`, `{ kind: "crowded" }`, `{ kind: "projects" }`,
+  // or `{ kind: "references" }`; the default stays "ready" so existing
+  // callers are unchanged. `model.kind` is honored as a fallback for
+  // models that carry it.
   const rawKind =
     options && typeof options.kind === "string" && options.kind
       ? options.kind
@@ -537,6 +538,8 @@ function setReadyAnchorContent(anchor, model, options = {}) {
     rawKind === "pending" ||
     rawKind === "next" ||
     rawKind === "crowded" ||
+    rawKind === "projects" ||
+    rawKind === "references" ||
     rawKind === "ready"
       ? rawKind
       : "ready";

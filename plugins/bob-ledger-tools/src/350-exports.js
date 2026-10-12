@@ -279,6 +279,7 @@ module.exports.helpers = {
   dashboardCollectionValidateRefsBase,
   dashboardCollectionEntryFor,
   dashboardCollectionChipModel,
+  dashboardCollectionChipClass,
   statsReviewHost,
   STATS_FETCH_TIMEOUT_MS,
   STATS_CACHE_SIZE,

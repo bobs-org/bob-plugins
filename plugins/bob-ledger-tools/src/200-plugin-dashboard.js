@@ -306,9 +306,7 @@ class BobLedgerToolsDashboardMixin {
       const sourcePath =
         typeof options.sourcePath === "string" ? options.sourcePath : "";
       const anchor = host.createEl("a", {
-        cls:
-          `bob-plan-chip bob-plan-${normalized}` +
-          `${model.placeholder ? " bob-plan-unavailable" : ""}`,
+        cls: dashboardCollectionChipClass(normalized, model),
         title: model.tooltip,
         href: model.destination,
       });
@@ -322,7 +320,7 @@ class BobLedgerToolsDashboardMixin {
           tooltip: model.tooltip,
           aria: model.aria,
         },
-        { kind: "ready", label: model.label },
+        { kind: normalized, label: model.label },
       );
       try {
         const valueSpan = findReadySpan(anchor, READY_VALUE_CLS);
@@ -519,7 +517,7 @@ class BobLedgerToolsDashboardMixin {
             el.setAttribute("aria-label", model.aria);
             el.setAttribute(
               "class",
-              `bob-plan-chip bob-plan-${widget.kind}${model.placeholder ? " bob-plan-unavailable" : ""}`,
+              dashboardCollectionChipClass(widget.kind, model),
             );
           }
         } catch (error) {

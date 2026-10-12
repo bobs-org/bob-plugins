@@ -61,6 +61,8 @@ const {
   dashboardCollectionValidateRefsBase,
   dashboardCollectionEntryFor,
   dashboardCollectionChipModel,
+  dashboardCollectionChipClass,
+  setReadyAnchorContent,
 } = helpers;
 
 function resolverTo(destPath) {
@@ -84,6 +86,63 @@ test("collections namespace version is additive v1", () => {
   assert.equal(DASHBOARD_COLLECTIONS_VERSION, 1);
   assert.equal(DASHBOARD_COLLECTION_PROJECTS_VIEW, "🚀 Active & Waiting");
   assert.equal(DASHBOARD_COLLECTION_REFERENCES_VIEW, "🔖 Reading Queue");
+});
+
+test("collection chip classes stay collection-specific through paint and refresh", () => {
+  for (const kind of ["projects", "references"]) {
+    const plainModel = { placeholder: false };
+    const placeholderModel = { placeholder: true };
+    const expectedClass = `bob-plan-chip bob-plan-${kind}`;
+    assert.equal(dashboardCollectionChipClass(kind, plainModel), expectedClass);
+    assert.equal(
+      dashboardCollectionChipClass(kind, placeholderModel),
+      `${expectedClass} bob-plan-unavailable`,
+    );
+
+    const direct = {
+      attrs: {},
+      cls: "",
+      children: [],
+      setAttribute(name, value) {
+        this.attrs[name] = value;
+      },
+    };
+    setReadyAnchorContent(
+      direct,
+      { count: null, cap: null, over: false, tooltip: "", aria: "" },
+      { kind, label: kind.toUpperCase() },
+    );
+    assert.equal(direct.attrs.class, expectedClass);
+    assert.equal(direct.cls, expectedClass);
+
+    const plugin = pluginWith(stubApp({ "a.md": { type: "[[project]]", status: "wip" } }));
+    const host = stubHost();
+    const chip = plugin.dashboardCollectionsRenderChip(host, {
+      kind,
+      sourcePath: "dash.md",
+      component: { register() {} },
+    });
+    assert.ok(chip);
+    assert.equal(chip.attrs.class, expectedClass);
+    assert.equal(chip.cls, expectedClass);
+    assert.equal(chip.attrs.class.includes("bob-plan-ready"), false);
+    const firstPaintClass = chip.attrs.class;
+    assert.equal(plugin.refreshDashboardCollectionChips(new Date()), true);
+    assert.equal(chip.attrs.class, firstPaintClass);
+
+    const placeholderPlugin = pluginWith(stubApp({}));
+    placeholderPlugin.dashboardCollectionsBase = null;
+    const placeholder = placeholderPlugin.dashboardCollectionsRenderChip(stubHost(), {
+      kind,
+      sourcePath: "dash.md",
+      component: { register() {} },
+    });
+    assert.ok(placeholder);
+    assert.equal(
+      placeholder.attrs.class,
+      `${expectedClass} bob-plan-unavailable`,
+    );
+  }
 });
 
 test("projects: scalar resolved links count, lists never widen", () => {
@@ -357,7 +416,7 @@ test("changed definitions fail closed per collection, never stale", () => {
 
 function stubHost() {
   const children = [];
-  return {
+  const host = {
     children,
     createEl: (tag, opts = {}) => {
       const el = {
@@ -388,11 +447,12 @@ function stubHost() {
         },
         querySelector: () => null,
       };
-      el.parentNode = null;
+      el.parentNode = host;
       children.push(el);
       return el;
     },
   };
+  return host;
 }
 
 test("renderChip links, labels, and cleans up per component", () => {

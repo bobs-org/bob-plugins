@@ -423,6 +423,12 @@ function dashboardCollectionChipModel(kind, entry) {
   }
 }
 
+function dashboardCollectionChipClass(kind, model) {
+  const normalized = kind === "references" ? "references" : "projects";
+  const unavailable = model && model.placeholder ? " bob-plan-unavailable" : "";
+  return `bob-plan-chip bob-plan-${normalized}${unavailable}`;
+}
+
 // --- Per-note Ready cap views (ledger-views) ---------------------------
 // Pure view models for the dash CROWDED chip, the `bob-ready-notes`
 // ranked-bar block, and the `## Tasks` heading chip. All take plain

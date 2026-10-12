@@ -133,7 +133,7 @@ function planTaskMoveAcrossFiles(options = {}) {
   // closed and recurring lines.
   const moveStamper = resolveFreshStamper(options);
   const moveFreshDateText = resolveFreshDateText(options);
-  const movedBlocks = identities.blocks.map((block) => {
+  const rewrittenMovedBlocks = identities.blocks.map((block) => {
     const rewritten = rewriteTaskMoveReferences(block.join("\n"), {
       ...referenceOptions,
       currentPath: sourcePath,
@@ -143,6 +143,61 @@ function planTaskMoveAcrossFiles(options = {}) {
     if (moveStamper) {
       lines = lines.map((line) => applyFreshStampLine(line, moveStamper, moveFreshDateText));
     }
+    return Object.freeze(lines);
+  });
+  const today = options.today instanceof Date ? options.today : new Date();
+  const recovery = options.recoveryIndex || null;
+  const projectBlocked = new Map(
+    recovery && recovery.projectBlocked instanceof Map
+      ? recovery.projectBlocked
+      : [],
+  );
+  for (const range of rangeResult.ranges) {
+    range.lines.forEach((_line, offset) => {
+      projectBlocked.delete(
+        recoveryIdentity(sourcePath, String(range.startLine + offset)),
+      );
+    });
+  }
+  const recoveryIndex = recovery ? { ...recovery, projectBlocked } : null;
+  const destinationIsBlockedProject =
+    destination.kind === "project" &&
+    projectLooksBlockedByPrjShortcut(destinationContent);
+  const markUnblockedLine =
+    typeof options.markUnblockedLine === "function"
+      ? options.markUnblockedLine
+      : null;
+  let blockedOnDestinationCount = 0;
+  let recoveredOnMoveCount = 0;
+  const movedBlocks = rewrittenMovedBlocks.map((block, blockIndex) => {
+    const range = rangeResult.ranges[blockIndex];
+    const lines = block.map((line, offset) => {
+      let nextLine = String(line || "");
+      if (taskHasProjectBlockedTag(nextLine)) {
+        if (destinationIsBlockedProject) {
+          nextLine = setProjectBlockedTag(nextLine, false);
+        } else {
+          const sourceLine = range.startLine + offset;
+          const metadata = recoveryIndex
+            ? getScheduledRecoveryMetadata(recoveryIndex, sourcePath, sourceLine)
+            : deferredScheduledRecovery("project task recovery is unavailable");
+          const result = recoverProjectResidentLine(nextLine, metadata, {
+            today,
+            markUnblockedLine,
+          });
+          nextLine = result.line;
+          if (result.recovered) recoveredOnMoveCount += 1;
+        }
+      }
+      if (
+        destinationIsBlockedProject &&
+        isOpenObsidianTaskLine(nextLine)
+      ) {
+        nextLine = blockProjectResidentLine(nextLine);
+        blockedOnDestinationCount += 1;
+      }
+      return nextLine;
+    });
     return Object.freeze(lines);
   });
   const rewrittenSource = rewriteTaskMoveReferences(removal.content, {
@@ -191,6 +246,45 @@ function planTaskMoveAcrossFiles(options = {}) {
     }
   }
 
+  let pomodoroCleanup = null;
+  let pomodoroCleanupPath = null;
+  if (blockedOnDestinationCount > 0) {
+    const targets = movedBlocks
+      .flat()
+      .filter((line) => isOpenObsidianTaskLine(line) && taskHasProjectBlockedTag(line))
+      .map((line) => getTrailingBlockId(line))
+      .filter(Boolean)
+      .map((blockId) => ({ path: destinationPath, blockId }));
+    const files = [
+      { path: sourcePath, content: changes.get(sourcePath).after },
+      { path: destinationPath, content: changes.get(destinationPath).after },
+      ...Array.from(otherContents, ([path, content]) => ({ path, content })),
+    ];
+    const dailyPath =
+      normalizeVaultRelativePath(options.dailyPath) ||
+      scheduledRecoveryDailyPaths(files, today).current;
+    const dailyChange = dailyPath ? changes.get(dailyPath) : null;
+    const dailyBefore = dailyChange ? dailyChange.after : null;
+    const noteIndex = options.noteIndex || createScheduledRecoveryNoteIndex(files);
+    if (dailyBefore !== null && targets.length > 0) {
+      pomodoroCleanup = planDeferredPomodoroLinkCleanup(dailyBefore, targets, {
+        dailyPath,
+        noteIndex,
+        removeEmptiedEntries: true,
+      });
+      if (pomodoroCleanup.changed) {
+        pomodoroCleanupPath = dailyPath;
+        changes.set(
+          dailyPath,
+          Object.freeze({
+            before: dailyChange.before,
+            after: pomodoroCleanup.content,
+          }),
+        );
+      }
+    }
+  }
+
   return Object.freeze({
     valid: true,
     error: null,
@@ -204,6 +298,10 @@ function planTaskMoveAcrossFiles(options = {}) {
     destinationLine: insertion.insertedLine,
     destinationAnchorText: movedBlocks[0][0],
     destinationBlockId: getTrailingBlockId(movedBlocks[0][0]) || null,
+    blockedOnDestinationCount,
+    recoveredOnMoveCount,
+    pomodoroCleanup,
+    pomodoroCleanupPath,
   });
 }
 

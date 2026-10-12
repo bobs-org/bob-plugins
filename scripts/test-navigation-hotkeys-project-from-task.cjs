@@ -698,6 +698,54 @@ test("buildProjectContentFromTask appends a TASKS section bullet's notes after t
   );
 });
 
+test("project conversion accepts blocked sources and extracts their managed dependency child", () => {
+  const source = [
+    "- [?] #task Ship it [scheduled::2026-07-11] [id::Source__ship] [dependsOn::Source__prereq] ^ship",
+    "  - ⛓️ **DEPENDS ON:** [[#^prereq]]",
+    "  - [ ] #task Follow up ^follow-up",
+  ].join("\n");
+  const parsed = helpers.parseProjectSourceTaskLine(source.split("\n")[0]);
+  assert.equal(parsed.status, "?");
+  assert.equal(parsed.scheduled, "2026-07-11");
+  assert.doesNotMatch(parsed.description, /\[(?:id|dependsOn)::/);
+
+  const dependency = helpers.collectProjectSourceDependencyBlock(source, 0);
+  assert.equal(dependency.valid, true, dependency.error);
+  assert.deepEqual(dependency.lineIndices, [1]);
+  assert.deepEqual(
+    dependency.targets.map(({ note, blockId }) => ({ note, blockId })),
+    [{ note: "", blockId: "prereq" }],
+  );
+});
+
+test("project seeding keeps the inline date and identity on ^prj and tags open residents when blocked", () => {
+  const content = [
+    "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+  ].join("\n");
+  const parsed = helpers.parseProjectSourceTaskLine(
+    "- [?] #task Ship it [scheduled::2026-07-11] ^ship",
+  );
+  const result = helpers.buildProjectContentFromTask(content, parsed, {
+    projectPath: "Projects/Ship.md",
+    today: new Date(2026, 6, 10),
+    childTaskLines: ["- [ ] #task Follow up ^follow-up"],
+  });
+  assert.equal(result.seeded, true);
+  assert.equal(result.projectBlocked, true);
+  const lines = result.content.split("\n");
+  const root = lines.find((line) => /\^prj$/.test(line));
+  const resident = lines.find((line) => /Follow up/.test(line));
+  assert.match(root, /^- \[\?\] #task #prj Ship it .*\^prj$/);
+  assert.match(root, /\[scheduled::\s*2026-07-11\]/);
+  assert.match(root, /\[id::\s*Projects__Ship__prj\]/);
+  assert.doesNotMatch(root, /#prj_is_blocked/);
+  assert.match(resident, /^- \[\?\] #task Follow up #prj_is_blocked \^follow-up$/);
+});
+
 test("buildProjectContentFromTask inserts schedule-log lines directly under the project lifecycle task", () => {
   const content = [
     "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",

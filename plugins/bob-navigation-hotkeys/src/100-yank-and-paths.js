@@ -323,6 +323,18 @@ function extractProjectSourceSchedule(description) {
   });
 }
 
+function removeProjectDerivedTaskFields(lineText) {
+  let line = String(lineText || "");
+  for (const name of ["dependsOn", "id"]) {
+    let field = findBulletPropertyField(line, name);
+    while (field) {
+      line = removeBulletPropertyFieldSpan(line, field.span);
+      field = findBulletPropertyField(line, name);
+    }
+  }
+  return line;
+}
+
 function parseProjectSourceTaskLine(lineText) {
   const text = String(lineText || "");
   const match = PROJECT_SOURCE_TASK_LINE_RE.exec(text);
@@ -360,6 +372,11 @@ function parseProjectSourceTaskLine(lineText) {
 
   const schedule = extractProjectSourceSchedule(description);
   description = schedule.description;
+
+  // The Depends-On line is the source of truth. Its derived fields describe
+  // the old task identity and are rewritten for the new ^prj task below.
+  description = removeProjectDerivedTaskFields(description);
+  description = setProjectBlockedTag(description, false);
 
   description = collapseProjectTaskDescription(
     description.replace(PROJECT_TASK_TAG_GLOBAL_RE, "$1"),
@@ -706,6 +723,7 @@ function parseProjectLifecycleTaskBody(lineText) {
       .replace(PROJECT_TASK_TAG_GLOBAL_RE, "$1")
       .replace(PROJECT_LIFECYCLE_TAG_GLOBAL_RE, "$1"),
   );
+  description = removeProjectDerivedTaskFields(description);
 
   return Object.freeze({ status, description });
 }
@@ -762,14 +780,30 @@ function buildTaskLineFromProjectNote(fields) {
     taskBody = appendProjectReversalTaskField(taskBody, `[created::${created}]`);
   }
 
-  const blockId = String(input.blockId || "").trim();
-  if (blockId) {
-    const appendIndex = getBulletPropertyAppendIndex(taskBody);
-    const before = taskBody.slice(0, appendIndex).replace(/[ \t]+$/, "");
-    taskBody = `${before} ^${blockId}`;
+  let taskLine = `- [${status}] ${taskBody}`;
+  const id = String(input.id || "").trim();
+  if (id) {
+    taskLine = upsertBulletProperty(taskLine, "id", id).line;
+  }
+  const dependsOnIds = Array.isArray(input.dependsOnIds)
+    ? [...new Set(input.dependsOnIds.map((value) => String(value || "").trim()).filter(Boolean))]
+    : [];
+  if (dependsOnIds.length > 0) {
+    taskLine = upsertBulletProperty(
+      taskLine,
+      "dependsOn",
+      dependsOnIds.join(", "),
+    ).line;
   }
 
-  return `- [${status}] ${taskBody}`;
+  const blockId = String(input.blockId || "").trim();
+  if (blockId) {
+    const appendIndex = getBulletPropertyAppendIndex(taskLine);
+    const before = taskLine.slice(0, appendIndex).replace(/[ \t]+$/, "");
+    taskLine = `${before} ^${blockId}`;
+  }
+
+  return taskLine;
 }
 
 function getProjectParentBasenameFromLink(value) {

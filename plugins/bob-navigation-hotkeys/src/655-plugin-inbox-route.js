@@ -76,6 +76,29 @@ class BobNavigationHotkeysInboxRouteMixin {
     const otherContents = new Map(snapshots);
     otherContents.delete(sourcePath);
     otherContents.delete(destinationPath);
+    const today = new Date();
+    let recoveryIndex = null;
+    const selectedRanges = buildTaskMoveRanges(sourceContent, targets);
+    const movingTaggedResidents =
+      selectedRanges.valid &&
+      selectedRanges.ranges.some((range) =>
+        range.lines.some((line) => taskHasProjectBlockedTag(line)),
+      );
+    if (movingTaggedResidents) {
+      const files = Array.from(snapshots, ([path, content]) => ({
+        path,
+        content: path === sourcePath ? sourceContent : content,
+      }));
+      recoveryIndex = buildScheduledRecoveryIndex(
+        files,
+        await readTasksStatusRegistry(this.app),
+        today,
+      );
+    }
+    const freshness =
+      typeof this.getFreshnessApi === "function"
+        ? this.getFreshnessApi()
+        : null;
     const plan = planTaskMoveAcrossFiles({
       sourcePath,
       destinationPath,
@@ -85,6 +108,19 @@ class BobNavigationHotkeysInboxRouteMixin {
       targets,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
+      today,
+      recoveryIndex,
+      markUnblockedLine:
+        freshness && typeof freshness.markUnblockedLine === "function"
+          ? freshness.markUnblockedLine
+          : null,
+      noteIndex: createScheduledRecoveryNoteIndex(
+        Array.from(snapshots, ([path, content]) => ({ path, content })),
+      ),
+      dailyPath: scheduledRecoveryDailyPaths(
+        Array.from(snapshots, ([path, content]) => ({ path, content })),
+        today,
+      ).current,
     });
     if (!plan.valid) {
       return { ok: false, reason: `${plan.error}; nothing was moved` };

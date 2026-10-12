@@ -330,6 +330,124 @@ test("task move planning exposes a destination anchor for area destinations and 
   assert.equal(plan.destinationBlockId, null);
 });
 
+test("task move into a blocked project tags the moved task and consumes today's live Pomodoro link", () => {
+  const today = new Date(2026, 9, 12);
+  const dailyPath = "2026/20261012.md";
+  const sourcePath = "Source.md";
+  const destinationPath = "Projects/Blocked.md";
+  const sourceContent = [
+    "- [ ] #task Move this ^move",
+    "  - [ ] #task Move child ^child",
+  ].join("\n");
+  const destinationContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] ^prj",
+    "## Tasks",
+  ].join("\n");
+  const dailyContent = [
+    "## Pomodoros",
+    "",
+    "- [ ] Current (0900-0930)",
+    "  - [[Source#^move]]",
+    "  - [[Source#^child]]",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 0);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath,
+    destinationPath,
+    sourceContent,
+    destinationContent,
+    otherContents: new Map([[dailyPath, dailyContent]]),
+    targets: discovery.targets,
+    today,
+    dailyPath,
+    noteIndex: helpers.createScheduledRecoveryNoteIndex([
+      { path: sourcePath },
+      { path: destinationPath },
+      { path: dailyPath },
+    ]),
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const movedLine = plan.changes.get(destinationPath).after
+    .split("\n")
+    .find((line) => /Move this/.test(line));
+  assert.match(movedLine, /^- \[\?\] #task Move this/);
+  assert.match(movedLine, /#prj_is_blocked/);
+  assert.equal(plan.blockedOnDestinationCount, 2);
+  assert.equal(plan.pomodoroCleanup.removedLinkCount, 2);
+  assert.doesNotMatch(plan.changes.get(dailyPath).after, /\^move/);
+});
+
+test("task move out of a blocked project recovers through the shared gate and writes the unblocked mark", () => {
+  const today = new Date(2026, 9, 12);
+  const sourcePath = "Projects/Blocked.md";
+  const destinationPath = "Areas/Work.md";
+  const sourceContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] ^prj",
+    "",
+    "- [?] #task Move this #prj_is_blocked ^move",
+    "  - [?] #task Move child #prj_is_blocked ^child",
+  ].join("\n");
+  const destinationContent = [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "## Tasks",
+  ].join("\n");
+  const files = [
+    { path: sourcePath, content: sourceContent },
+    { path: destinationPath, content: destinationContent },
+  ];
+  const recoveryIndex = helpers.buildScheduledRecoveryIndex(
+    files,
+    helpers.parseTasksStatusRegistry({
+      globalFilter: "#task",
+      statusSettings: {
+        coreStatuses: [],
+        customStatuses: [
+          { symbol: "?", name: "Blocked", nextStatusSymbol: " ", type: "ON_HOLD", availableAsCommand: true },
+        ],
+      },
+    }),
+    today,
+  );
+  const sourceLine = sourceContent.split("\n").findIndex((line) => /Move this/.test(line));
+  const discovery = helpers.discoverMovableObsidianTaskTargets(
+    sourceContent,
+    sourceLine,
+    0,
+  );
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath,
+    destinationPath,
+    sourceContent,
+    destinationContent,
+    targets: discovery.targets,
+    today,
+    recoveryIndex,
+    markUnblockedLine: (line) => `${line} [unblocked::2026-10-12]`,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const movedLine = plan.changes.get(destinationPath)
+    .after.split("\n").find((line) => /Move this/.test(line));
+  const movedChild = plan.changes.get(destinationPath)
+    .after.split("\n").find((line) => /Move child/.test(line));
+  assert.match(movedLine, /^- \[ \] #task Move this/);
+  assert.match(movedChild, /^  - \[ \] #task Move child/);
+  assert.doesNotMatch(movedLine, /#prj_is_blocked/);
+  assert.doesNotMatch(movedChild, /#prj_is_blocked/);
+  assert.match(movedLine, /\[unblocked::2026-10-12\]/);
+  assert.match(movedChild, /\[unblocked::2026-10-12\]/);
+  assert.equal(plan.recoveredOnMoveCount, 2);
+});
+
 test("task move planning rejects destination collisions and malformed identities", () => {
   const destination = [
     "---",

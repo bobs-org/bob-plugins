@@ -1,0 +1,124 @@
+// Conversion helpers for moving the ordinary Depends-On line with a task or
+// the project's ^prj line. The field is a mirror; this line remains the
+// source of truth during either conversion.
+
+function collectProjectSourceDependencyBlock(content, parentLine) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const parent = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  const collection = collectDependencyNavigationBullets(text, parent);
+  if (collection.reason) {
+    return Object.freeze({
+      valid: false,
+      error: "Could not read the task's Depends-On line",
+      lineIndices: Object.freeze([]),
+      targets: Object.freeze([]),
+    });
+  }
+
+  const lineIndices = new Set(collection.lineIndices);
+  const block = findCurrentBulletChildBlock(lines, parent);
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(lines, index) !== parent) {
+      continue;
+    }
+    const parsed = parseDependencyLine(lines[index], {
+      isDirectChildOfTask: true,
+    });
+    if (parsed.verdict === "malformed") {
+      return Object.freeze({
+        valid: false,
+        error: "The task's Depends-On line is malformed; repair it before conversion",
+        lineIndices: Object.freeze([]),
+        targets: Object.freeze([]),
+      });
+    }
+    if (parsed.verdict === "accept" || parsed.verdict === "empty") {
+      lineIndices.add(index);
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    lineIndices: Object.freeze([...lineIndices].sort((a, b) => a - b)),
+    targets: Object.freeze(collection.targets.slice()),
+  });
+}
+
+// On reversal, the managed dependency child moves first. The machine-owned
+// Sub-projects child and its nested links describe note hierarchy, not task
+// content, so it is dropped with its whole subtree.
+function splitProjectLifecycleChildren(parentLine, childLines) {
+  const children = Array.isArray(childLines) ? childLines.map(String) : [];
+  const synthetic = [String(parentLine || ""), ...children];
+  const direct = [];
+  for (let index = 1; index < synthetic.length; index += 1) {
+    if (findNearestParentListItem(synthetic, index) === 0) {
+      direct.push(index);
+    }
+  }
+
+  const skipped = new Set();
+  const dependencyLines = [];
+  for (let at = 0; at < direct.length; at += 1) {
+    const start = direct[at];
+    const end = at + 1 < direct.length ? direct[at + 1] : synthetic.length;
+    const line = synthetic[start];
+    const dependency = parseDependencyLine(line, {
+      isDirectChildOfTask: true,
+    });
+    if (dependency.verdict === "malformed") {
+      return Object.freeze({
+        valid: false,
+        error: "Project Depends-On line is malformed; repair it before conversion",
+        dependencyLine: null,
+        otherLines: Object.freeze([]),
+      });
+    }
+    if (dependency.verdict === "accept" || dependency.verdict === "empty") {
+      dependencyLines.push(line);
+      for (let index = start; index < end; index += 1) skipped.add(index);
+      continue;
+    }
+    if (/\*\*\s*Sub-projects?\s*:?\s*\*\*/i.test(line)) {
+      for (let index = start; index < end; index += 1) skipped.add(index);
+    }
+  }
+
+  if (dependencyLines.length > 1) {
+    return Object.freeze({
+      valid: false,
+      error: "Project has multiple Depends-On lines; repair it before conversion",
+      dependencyLine: null,
+      otherLines: Object.freeze([]),
+    });
+  }
+
+  const otherLines = [];
+  for (let index = 1; index < synthetic.length; index += 1) {
+    if (!skipped.has(index)) otherLines.push(synthetic[index]);
+  }
+  return Object.freeze({
+    valid: true,
+    error: null,
+    dependencyLine: dependencyLines[0] || null,
+    otherLines: Object.freeze(otherLines),
+  });
+}
+
+function rewriteProjectDependencyLineForDestination(line, options = {}) {
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+  const destinationPath = normalizeVaultRelativePath(options.destinationPath);
+  if (!sourcePath || !destinationPath) return String(line || "");
+  const movedBlockIds = new Set(options.movedBlockIds || []);
+  const sourceBlockIds = new Set(options.sourceBlockIds || []);
+  return rewriteTaskMoveBlockLinks(String(line || ""), {
+    sourcePath,
+    destinationPath,
+    currentPath: sourcePath,
+    role: "moved",
+    movedBlockIds,
+    sourceBlockIds,
+  }).content;
+}

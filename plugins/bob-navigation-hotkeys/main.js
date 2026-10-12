@@ -84,7 +84,7 @@ const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
 const PROJECT_PARENT_TYPE_BASENAMES = new Set(["area", "project"]);
-const PROJECT_OPEN_TASK_STATUSES = new Set([" ", "/", "*"]);
+const PROJECT_OPEN_TASK_STATUSES = new Set([" ", "/", "*", "?"]);
 const PROJECT_LIST_ITEM_RE = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
 const PROJECT_SOURCE_TASK_LINE_RE =
   /^(\s*)(?:[-*+]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;
@@ -8195,6 +8195,18 @@ function extractProjectSourceSchedule(description) {
   });
 }
 
+function removeProjectDerivedTaskFields(lineText) {
+  let line = String(lineText || "");
+  for (const name of ["dependsOn", "id"]) {
+    let field = findBulletPropertyField(line, name);
+    while (field) {
+      line = removeBulletPropertyFieldSpan(line, field.span);
+      field = findBulletPropertyField(line, name);
+    }
+  }
+  return line;
+}
+
 function parseProjectSourceTaskLine(lineText) {
   const text = String(lineText || "");
   const match = PROJECT_SOURCE_TASK_LINE_RE.exec(text);
@@ -8232,6 +8244,11 @@ function parseProjectSourceTaskLine(lineText) {
 
   const schedule = extractProjectSourceSchedule(description);
   description = schedule.description;
+
+  // The Depends-On line is the source of truth. Its derived fields describe
+  // the old task identity and are rewritten for the new ^prj task below.
+  description = removeProjectDerivedTaskFields(description);
+  description = setProjectBlockedTag(description, false);
 
   description = collapseProjectTaskDescription(
     description.replace(PROJECT_TASK_TAG_GLOBAL_RE, "$1"),
@@ -8578,6 +8595,7 @@ function parseProjectLifecycleTaskBody(lineText) {
       .replace(PROJECT_TASK_TAG_GLOBAL_RE, "$1")
       .replace(PROJECT_LIFECYCLE_TAG_GLOBAL_RE, "$1"),
   );
+  description = removeProjectDerivedTaskFields(description);
 
   return Object.freeze({ status, description });
 }
@@ -8634,14 +8652,30 @@ function buildTaskLineFromProjectNote(fields) {
     taskBody = appendProjectReversalTaskField(taskBody, `[created::${created}]`);
   }
 
-  const blockId = String(input.blockId || "").trim();
-  if (blockId) {
-    const appendIndex = getBulletPropertyAppendIndex(taskBody);
-    const before = taskBody.slice(0, appendIndex).replace(/[ \t]+$/, "");
-    taskBody = `${before} ^${blockId}`;
+  let taskLine = `- [${status}] ${taskBody}`;
+  const id = String(input.id || "").trim();
+  if (id) {
+    taskLine = upsertBulletProperty(taskLine, "id", id).line;
+  }
+  const dependsOnIds = Array.isArray(input.dependsOnIds)
+    ? [...new Set(input.dependsOnIds.map((value) => String(value || "").trim()).filter(Boolean))]
+    : [];
+  if (dependsOnIds.length > 0) {
+    taskLine = upsertBulletProperty(
+      taskLine,
+      "dependsOn",
+      dependsOnIds.join(", "),
+    ).line;
   }
 
-  return `- [${status}] ${taskBody}`;
+  const blockId = String(input.blockId || "").trim();
+  if (blockId) {
+    const appendIndex = getBulletPropertyAppendIndex(taskLine);
+    const before = taskLine.slice(0, appendIndex).replace(/[ \t]+$/, "");
+    taskLine = `${before} ^${blockId}`;
+  }
+
+  return taskLine;
 }
 
 function getProjectParentBasenameFromLink(value) {
@@ -9433,6 +9467,50 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
     sectionsCreated = sectionsResult.createdCount;
   }
 
+  // Project identity and schedule belong to the ordinary ^prj task line.
+  // The caller supplies the new note path after Templater creates the file.
+  const lifecycleIndex = findProjectLifecycleTaskIndex(nextContent);
+  if (lifecycleIndex !== -1) {
+    const source = splitMarkdownContent(nextContent);
+    let lifecycleLine = source.lines[lifecycleIndex];
+    const projectPath = normalizeVaultRelativePath(options.projectPath);
+    const projectId = projectPath ? tryDependencyId(projectPath, "prj") : null;
+    if (projectId) {
+      lifecycleLine = upsertBulletProperty(lifecycleLine, "id", projectId).line;
+    }
+    const scheduled = String(parsedTask.scheduled || "").trim();
+    if (scheduled) {
+      lifecycleLine = upsertBulletProperty(
+        lifecycleLine,
+        "scheduled",
+        scheduled,
+      ).line;
+    }
+    const today = options.today instanceof Date ? options.today : new Date();
+    const projectBlocked =
+      options.projectBlocked === true ||
+      String(parsedTask.status || "") === "?" ||
+      (scheduled && isFutureInlineScheduledValue(scheduled, today));
+    if (projectBlocked) {
+      lifecycleLine = replaceObsidianTaskCheckboxStatus(lifecycleLine, "?");
+    }
+    source.lines[lifecycleIndex] = lifecycleLine;
+    nextContent = source.lines.join(source.lineEnding);
+
+    if (projectBlocked) {
+      const rows = collectProjectNoteTaskRows(nextContent);
+      if (rows.residents.length > 0) {
+        const nextLines = splitMarkdownContent(nextContent);
+        for (const resident of rows.residents) {
+          nextLines.lines[resident.line] = blockProjectResidentLine(
+            nextLines.lines[resident.line],
+          );
+        }
+        nextContent = nextLines.lines.join(nextLines.lineEnding);
+      }
+    }
+  }
+
   return Object.freeze({
     content: nextContent,
     seeded: true,
@@ -9441,20 +9519,16 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
     tasksSectionMissing,
     sectionsInserted,
     sectionsCreated,
+    projectBlocked:
+      lifecycleIndex !== -1 &&
+      projectLooksBlockedByPrjShortcut(nextContent),
   });
 }
 
-function applyProjectCreationFrontmatter(
-  frontmatter,
-  parentLink,
-  scheduled = null,
-) {
+function applyProjectCreationFrontmatter(frontmatter, parentLink) {
   frontmatter.parent = parentLink;
   frontmatter.type = "[[project]]";
   frontmatter.status = "wip";
-  if (scheduled !== null && scheduled !== undefined && scheduled !== "") {
-    frontmatter.scheduled = scheduled;
-  }
   return frontmatter;
 }
 
@@ -18673,6 +18747,8 @@ function emptyProjectNoteReversalSplit(error, extra = {}) {
         ? extra.lifecycleChildLines.slice()
         : [],
     ),
+    dependencyLine: extra.dependencyLine || null,
+    scheduled: extra.scheduled || "",
     taskLines: Object.freeze([]),
     sections: Object.freeze([]),
   });
@@ -18749,9 +18825,51 @@ function splitProjectNoteForReversal(content) {
   const parsed = parseProjectLifecycleTaskBody(lines[prjIndex]);
   const status = parsed ? parsed.status : null;
   const description = parsed ? parsed.description : "";
-  const lifecycleChildLines = getProjectReversalChildLines(lines, prjIndex);
-  const prjBlockEnd = prjIndex + lifecycleChildLines.length;
-  const splitExtra = { status, description, lifecycleChildLines };
+  const originalLifecycleChildLines = getProjectReversalChildLines(
+    lines,
+    prjIndex,
+  );
+  const lifecycleChildren = splitProjectLifecycleChildren(
+    lines[prjIndex],
+    originalLifecycleChildLines,
+  );
+  if (!lifecycleChildren.valid) {
+    return emptyProjectNoteReversalSplit(lifecycleChildren.error, {
+      status,
+      description,
+    });
+  }
+  const lifecycleChildLines = lifecycleChildren.otherLines;
+  const scheduledFields = parseBulletPropertyFields(lines[prjIndex]).filter(
+    (field) => field.key === "scheduled",
+  );
+  if (scheduledFields.length > 1) {
+    return emptyProjectNoteReversalSplit(
+      "Project ^prj task has multiple scheduled fields",
+      { status, description },
+    );
+  }
+  const scheduledRaw = scheduledFields[0]
+    ? String(scheduledFields[0].value || "").trim()
+    : "";
+  const scheduleValidation = scheduledRaw
+    ? validateProjectScheduledDate(scheduledRaw)
+    : { valid: true, value: "" };
+  if (!scheduleValidation.valid) {
+    return emptyProjectNoteReversalSplit(scheduleValidation.message, {
+      status,
+      description,
+    });
+  }
+  const scheduled = scheduleValidation.value;
+  const prjBlockEnd = prjIndex + originalLifecycleChildLines.length;
+  const splitExtra = {
+    status,
+    description,
+    lifecycleChildLines,
+    dependencyLine: lifecycleChildren.dependencyLine,
+    scheduled,
+  };
 
   const taskLines = [];
   const sections = [];
@@ -18853,6 +18971,8 @@ function splitProjectNoteForReversal(content) {
     status,
     description,
     lifecycleChildLines: Object.freeze(lifecycleChildLines.slice()),
+    dependencyLine: lifecycleChildren.dependencyLine,
+    scheduled,
     taskLines: Object.freeze(taskLines),
     sections: Object.freeze(sections),
   });
@@ -18929,7 +19049,7 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
         )
       : String(options.parentBasename || "").trim();
   const blockId = getProjectReversalBlockId(noteBasename, parentBasename);
-  const scheduled = frontmatter.scheduledValue || "";
+  const scheduled = split.scheduled || "";
   const createdRaw = getProjectFrontmatterCreatedDate(
     frontmatter.lines,
     frontmatter.closingLine,
@@ -18942,10 +19062,28 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
     scheduled,
     created,
     blockId,
+    id: options.destinationPath
+      ? tryDependencyId(options.destinationPath, blockId)
+      : null,
+    dependsOnIds: options.dependsOnIds,
   });
 
   const indentedTasks = indentProjectReversalLines(split.taskLines, 1);
-  const lines = [taskLine, ...indentedTasks];
+  const movedBlockIds = new Set(
+    split.taskLines.map((line) => getTrailingBlockId(line)).filter(Boolean),
+  );
+  const dependencyLine = split.dependencyLine
+    ? rewriteProjectDependencyLineForDestination(split.dependencyLine, {
+        sourcePath: options.sourcePath || options.notePath,
+        destinationPath: options.destinationPath,
+        movedBlockIds,
+        sourceBlockIds: collectTaskMoveBlockIds(content),
+      })
+    : null;
+  const indentedDependency = dependencyLine
+    ? indentProjectReversalLines([dependencyLine], 1)
+    : [];
+  const lines = [taskLine, ...indentedDependency, ...indentedTasks];
   let sectionCount = 0;
   for (const section of split.sections) {
     lines.push(`\t- ${section.title}`);
@@ -19006,6 +19144,131 @@ function getProjectNotePropertyContext(content, lineIndex, options = {}) {
   });
 }
 
+// ---- src/212-project-conversion.js ----
+// Conversion helpers for moving the ordinary Depends-On line with a task or
+// the project's ^prj line. The field is a mirror; this line remains the
+// source of truth during either conversion.
+
+function collectProjectSourceDependencyBlock(content, parentLine) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const parent = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  const collection = collectDependencyNavigationBullets(text, parent);
+  if (collection.reason) {
+    return Object.freeze({
+      valid: false,
+      error: "Could not read the task's Depends-On line",
+      lineIndices: Object.freeze([]),
+      targets: Object.freeze([]),
+    });
+  }
+
+  const lineIndices = new Set(collection.lineIndices);
+  const block = findCurrentBulletChildBlock(lines, parent);
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(lines, index) !== parent) {
+      continue;
+    }
+    const parsed = parseDependencyLine(lines[index], {
+      isDirectChildOfTask: true,
+    });
+    if (parsed.verdict === "malformed") {
+      return Object.freeze({
+        valid: false,
+        error: "The task's Depends-On line is malformed; repair it before conversion",
+        lineIndices: Object.freeze([]),
+        targets: Object.freeze([]),
+      });
+    }
+    if (parsed.verdict === "accept" || parsed.verdict === "empty") {
+      lineIndices.add(index);
+    }
+  }
+
+  return Object.freeze({
+    valid: true,
+    error: null,
+    lineIndices: Object.freeze([...lineIndices].sort((a, b) => a - b)),
+    targets: Object.freeze(collection.targets.slice()),
+  });
+}
+
+// On reversal, the managed dependency child moves first. The machine-owned
+// Sub-projects child and its nested links describe note hierarchy, not task
+// content, so it is dropped with its whole subtree.
+function splitProjectLifecycleChildren(parentLine, childLines) {
+  const children = Array.isArray(childLines) ? childLines.map(String) : [];
+  const synthetic = [String(parentLine || ""), ...children];
+  const direct = [];
+  for (let index = 1; index < synthetic.length; index += 1) {
+    if (findNearestParentListItem(synthetic, index) === 0) {
+      direct.push(index);
+    }
+  }
+
+  const skipped = new Set();
+  const dependencyLines = [];
+  for (let at = 0; at < direct.length; at += 1) {
+    const start = direct[at];
+    const end = at + 1 < direct.length ? direct[at + 1] : synthetic.length;
+    const line = synthetic[start];
+    const dependency = parseDependencyLine(line, {
+      isDirectChildOfTask: true,
+    });
+    if (dependency.verdict === "malformed") {
+      return Object.freeze({
+        valid: false,
+        error: "Project Depends-On line is malformed; repair it before conversion",
+        dependencyLine: null,
+        otherLines: Object.freeze([]),
+      });
+    }
+    if (dependency.verdict === "accept" || dependency.verdict === "empty") {
+      dependencyLines.push(line);
+      for (let index = start; index < end; index += 1) skipped.add(index);
+      continue;
+    }
+    if (/\*\*\s*Sub-projects?\s*:?\s*\*\*/i.test(line)) {
+      for (let index = start; index < end; index += 1) skipped.add(index);
+    }
+  }
+
+  if (dependencyLines.length > 1) {
+    return Object.freeze({
+      valid: false,
+      error: "Project has multiple Depends-On lines; repair it before conversion",
+      dependencyLine: null,
+      otherLines: Object.freeze([]),
+    });
+  }
+
+  const otherLines = [];
+  for (let index = 1; index < synthetic.length; index += 1) {
+    if (!skipped.has(index)) otherLines.push(synthetic[index]);
+  }
+  return Object.freeze({
+    valid: true,
+    error: null,
+    dependencyLine: dependencyLines[0] || null,
+    otherLines: Object.freeze(otherLines),
+  });
+}
+
+function rewriteProjectDependencyLineForDestination(line, options = {}) {
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+  const destinationPath = normalizeVaultRelativePath(options.destinationPath);
+  if (!sourcePath || !destinationPath) return String(line || "");
+  const movedBlockIds = new Set(options.movedBlockIds || []);
+  const sourceBlockIds = new Set(options.sourceBlockIds || []);
+  return rewriteTaskMoveBlockLinks(String(line || ""), {
+    sourcePath,
+    destinationPath,
+    currentPath: sourcePath,
+    role: "moved",
+    movedBlockIds,
+    sourceBlockIds,
+  }).content;
+}
 // ---- src/215-project-blocking.js ----
 // Project blocking from the `^prj` line: recognition, block state, ADJ-11
 // walk-through, recovery edges, and the resident-tag signal.
@@ -23034,7 +23297,7 @@ function planTaskMoveAcrossFiles(options = {}) {
   // closed and recurring lines.
   const moveStamper = resolveFreshStamper(options);
   const moveFreshDateText = resolveFreshDateText(options);
-  const movedBlocks = identities.blocks.map((block) => {
+  const rewrittenMovedBlocks = identities.blocks.map((block) => {
     const rewritten = rewriteTaskMoveReferences(block.join("\n"), {
       ...referenceOptions,
       currentPath: sourcePath,
@@ -23044,6 +23307,61 @@ function planTaskMoveAcrossFiles(options = {}) {
     if (moveStamper) {
       lines = lines.map((line) => applyFreshStampLine(line, moveStamper, moveFreshDateText));
     }
+    return Object.freeze(lines);
+  });
+  const today = options.today instanceof Date ? options.today : new Date();
+  const recovery = options.recoveryIndex || null;
+  const projectBlocked = new Map(
+    recovery && recovery.projectBlocked instanceof Map
+      ? recovery.projectBlocked
+      : [],
+  );
+  for (const range of rangeResult.ranges) {
+    range.lines.forEach((_line, offset) => {
+      projectBlocked.delete(
+        recoveryIdentity(sourcePath, String(range.startLine + offset)),
+      );
+    });
+  }
+  const recoveryIndex = recovery ? { ...recovery, projectBlocked } : null;
+  const destinationIsBlockedProject =
+    destination.kind === "project" &&
+    projectLooksBlockedByPrjShortcut(destinationContent);
+  const markUnblockedLine =
+    typeof options.markUnblockedLine === "function"
+      ? options.markUnblockedLine
+      : null;
+  let blockedOnDestinationCount = 0;
+  let recoveredOnMoveCount = 0;
+  const movedBlocks = rewrittenMovedBlocks.map((block, blockIndex) => {
+    const range = rangeResult.ranges[blockIndex];
+    const lines = block.map((line, offset) => {
+      let nextLine = String(line || "");
+      if (taskHasProjectBlockedTag(nextLine)) {
+        if (destinationIsBlockedProject) {
+          nextLine = setProjectBlockedTag(nextLine, false);
+        } else {
+          const sourceLine = range.startLine + offset;
+          const metadata = recoveryIndex
+            ? getScheduledRecoveryMetadata(recoveryIndex, sourcePath, sourceLine)
+            : deferredScheduledRecovery("project task recovery is unavailable");
+          const result = recoverProjectResidentLine(nextLine, metadata, {
+            today,
+            markUnblockedLine,
+          });
+          nextLine = result.line;
+          if (result.recovered) recoveredOnMoveCount += 1;
+        }
+      }
+      if (
+        destinationIsBlockedProject &&
+        isOpenObsidianTaskLine(nextLine)
+      ) {
+        nextLine = blockProjectResidentLine(nextLine);
+        blockedOnDestinationCount += 1;
+      }
+      return nextLine;
+    });
     return Object.freeze(lines);
   });
   const rewrittenSource = rewriteTaskMoveReferences(removal.content, {
@@ -23092,6 +23410,45 @@ function planTaskMoveAcrossFiles(options = {}) {
     }
   }
 
+  let pomodoroCleanup = null;
+  let pomodoroCleanupPath = null;
+  if (blockedOnDestinationCount > 0) {
+    const targets = movedBlocks
+      .flat()
+      .filter((line) => isOpenObsidianTaskLine(line) && taskHasProjectBlockedTag(line))
+      .map((line) => getTrailingBlockId(line))
+      .filter(Boolean)
+      .map((blockId) => ({ path: destinationPath, blockId }));
+    const files = [
+      { path: sourcePath, content: changes.get(sourcePath).after },
+      { path: destinationPath, content: changes.get(destinationPath).after },
+      ...Array.from(otherContents, ([path, content]) => ({ path, content })),
+    ];
+    const dailyPath =
+      normalizeVaultRelativePath(options.dailyPath) ||
+      scheduledRecoveryDailyPaths(files, today).current;
+    const dailyChange = dailyPath ? changes.get(dailyPath) : null;
+    const dailyBefore = dailyChange ? dailyChange.after : null;
+    const noteIndex = options.noteIndex || createScheduledRecoveryNoteIndex(files);
+    if (dailyBefore !== null && targets.length > 0) {
+      pomodoroCleanup = planDeferredPomodoroLinkCleanup(dailyBefore, targets, {
+        dailyPath,
+        noteIndex,
+        removeEmptiedEntries: true,
+      });
+      if (pomodoroCleanup.changed) {
+        pomodoroCleanupPath = dailyPath;
+        changes.set(
+          dailyPath,
+          Object.freeze({
+            before: dailyChange.before,
+            after: pomodoroCleanup.content,
+          }),
+        );
+      }
+    }
+  }
+
   return Object.freeze({
     valid: true,
     error: null,
@@ -23105,6 +23462,10 @@ function planTaskMoveAcrossFiles(options = {}) {
     destinationLine: insertion.insertedLine,
     destinationAnchorText: movedBlocks[0][0],
     destinationBlockId: getTrailingBlockId(movedBlocks[0][0]) || null,
+    blockedOnDestinationCount,
+    recoveredOnMoveCount,
+    pomodoroCleanup,
+    pomodoroCleanupPath,
   });
 }
 
@@ -58742,6 +59103,29 @@ class BobNavigationHotkeysInboxRouteMixin {
     const otherContents = new Map(snapshots);
     otherContents.delete(sourcePath);
     otherContents.delete(destinationPath);
+    const today = new Date();
+    let recoveryIndex = null;
+    const selectedRanges = buildTaskMoveRanges(sourceContent, targets);
+    const movingTaggedResidents =
+      selectedRanges.valid &&
+      selectedRanges.ranges.some((range) =>
+        range.lines.some((line) => taskHasProjectBlockedTag(line)),
+      );
+    if (movingTaggedResidents) {
+      const files = Array.from(snapshots, ([path, content]) => ({
+        path,
+        content: path === sourcePath ? sourceContent : content,
+      }));
+      recoveryIndex = buildScheduledRecoveryIndex(
+        files,
+        await readTasksStatusRegistry(this.app),
+        today,
+      );
+    }
+    const freshness =
+      typeof this.getFreshnessApi === "function"
+        ? this.getFreshnessApi()
+        : null;
     const plan = planTaskMoveAcrossFiles({
       sourcePath,
       destinationPath,
@@ -58751,6 +59135,19 @@ class BobNavigationHotkeysInboxRouteMixin {
       targets,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
+      today,
+      recoveryIndex,
+      markUnblockedLine:
+        freshness && typeof freshness.markUnblockedLine === "function"
+          ? freshness.markUnblockedLine
+          : null,
+      noteIndex: createScheduledRecoveryNoteIndex(
+        Array.from(snapshots, ([path, content]) => ({ path, content })),
+      ),
+      dailyPath: scheduledRecoveryDailyPaths(
+        Array.from(snapshots, ([path, content]) => ({ path, content })),
+        today,
+      ).current,
     });
     if (!plan.valid) {
       return { ok: false, reason: `${plan.error}; nothing was moved` };
@@ -59244,498 +59641,7 @@ class BobNavigationHotkeysInboxRouteMixin {
 // ---- src/660-plugin-project-notes.js ----
 class BobNavigationHotkeysProjectNoteMixin {
 
-  async createProjectNoteFromTask(editor, view) {
-    const sourceFile = view && view.file;
-    if (!editor || !this.isMarkdownFile(sourceFile)) {
-      new Notice(
-        "Open an area or project note before creating a project from a task",
-      );
-      return false;
-    }
-
-    if (!this.isAreaOrProjectNote(sourceFile)) {
-      new Notice(
-        "Project notes can only be created from an area or project note",
-      );
-      return false;
-    }
-
-    const cursor = getEditorCursor(editor);
-    if (!cursor) {
-      new Notice("Place the cursor on an open #task checkbox");
-      return false;
-    }
-
-    const lineText = getEditorLineText(editor, cursor.line);
-    if (lineText === null) {
-      new Notice("Place the cursor on an open #task checkbox");
-      return false;
-    }
-
-    if (
-      isProjectLifecycleTaskLine(lineText) &&
-      isProjectLifecycleTaskAtLine(editor.getValue(), cursor.line)
-    ) {
-      return this.convertProjectNoteToTask(editor, view, cursor, lineText);
-    }
-
-    const parsedTask = parseProjectSourceTaskLine(lineText);
-    if (!parsedTask) {
-      new Notice(getProjectSourceTaskLineNoticeText(lineText));
-      return false;
-    }
-    if (parsedTask.scheduleError) {
-      new Notice(parsedTask.scheduleError);
-      return false;
-    }
-
-    if (!this.app.vault || typeof this.app.vault.process !== "function") {
-      new Notice("Vault content updates are unavailable");
-      return false;
-    }
-
-    const sourceBlock = getProjectSourceTaskBlock(
-      editor,
-      cursor.line,
-      lineText,
-    ) || {
-      startLine: cursor.line,
-      endLineExclusive: cursor.line + 1,
-      lines: [lineText],
-      childLines: [],
-    };
-
-    const createdDate = formatProjectTaskCreatedDate(new Date());
-    let convertedChildTaskLines = [];
-    let convertedChildSections = [];
-    let convertedManagedLogLines = [];
-    let childConversionLossy = false;
-    const hasChildContent = sourceBlock.childLines.some(
-      (line) => String(line || "").trim() !== "",
-    );
-    if (hasChildContent) {
-      const conversion = buildProjectSeedFromChildBullets(
-        sourceBlock.childLines,
-        createdDate,
-      );
-      if (
-        conversion.lossless &&
-        (conversion.taskLines.length > 0 ||
-          conversion.sections.length > 0 ||
-          conversion.managedLogLines.length > 0)
-      ) {
-        convertedChildTaskLines = conversion.taskLines;
-        convertedChildSections = conversion.sections;
-        convertedManagedLogLines = conversion.managedLogLines;
-      } else {
-        childConversionLossy = true;
-      }
-    }
-
-    const sourceBasename =
-      sourceFile.basename ||
-      getVaultPathBasenameWithoutExtension(sourceFile.path);
-    let projectBasename = null;
-    let blockIdBacklinkRewrites = [];
-    if (parsedTask.blockId) {
-      projectBasename = getProjectBasenameFromTaskBlockId(
-        sourceBasename,
-        parsedTask.blockId,
-      );
-      if (!projectBasename) {
-        new Notice("Could not derive project note name from task block ID");
-        return false;
-      }
-
-      if (this.projectNoteBasenameExists(projectBasename, sourceFile)) {
-        new Notice(`Note "${projectBasename}" already exists; rename it first`);
-        return false;
-      }
-
-      blockIdBacklinkRewrites = this.getProjectTaskBlockIdBacklinkRewrites(
-        sourceFile,
-        parsedTask.blockId,
-      );
-    }
-
-    if (!view || typeof view.save !== "function") {
-      new Notice("Could not save source note");
-      return false;
-    }
-
-    try {
-      await view.save();
-    } catch (error) {
-      new Notice("Could not save source note");
-      return false;
-    }
-
-    const createdFile = await this.createProjectNoteFile(
-      sourceFile,
-      projectBasename || undefined,
-      parsedTask.scheduled,
-    );
-    if (!createdFile) {
-      return false;
-    }
-
-    let seedResult = null;
-    try {
-      await this.app.vault.process(createdFile, (content) => {
-        seedResult = buildProjectContentFromTask(content, parsedTask, {
-          childTaskLines: convertedChildTaskLines,
-          sections: convertedChildSections,
-          managedLogLines: convertedManagedLogLines,
-        });
-        return seedResult.content;
-      });
-    } catch (error) {
-      new Notice("Could not seed project task");
-      return false;
-    }
-
-    if (!seedResult || !seedResult.seeded) {
-      new Notice("Project task placeholder not found; source task was kept");
-      return true;
-    }
-
-    if (convertedChildTaskLines.length > 0 && !seedResult.tasksInserted) {
-      new Notice(
-        "Created project, but the Tasks section was missing; source task was kept",
-      );
-      return true;
-    }
-
-    if (
-      convertedManagedLogLines.length > 0 &&
-      !seedResult.managedLogsInserted
-    ) {
-      new Notice(
-        "Created project, but the task logs could not be added; source task was kept",
-      );
-      return true;
-    }
-
-    const sectionsHandled =
-      (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0);
-    if (
-      convertedChildSections.length > 0 &&
-      sectionsHandled < convertedChildSections.length
-    ) {
-      new Notice(
-        "Created project, but a section could not be added; source task was kept",
-      );
-      return true;
-    }
-
-    if (childConversionLossy) {
-      new Notice(
-        "Created project, but child bullets could not be converted; source task was kept",
-      );
-      return true;
-    }
-
-    let updatedLinkCount = 0;
-    if (parsedTask.blockId) {
-      const promotionPlan = planProjectPromotionTargets(
-        seedResult.content,
-      );
-      if (promotionPlan.error) {
-        new Notice(
-          `Created project, but ${promotionPlan.error}; source task was kept`,
-        );
-        return true;
-      }
-      const promotionToday =
-        this.promotionTodayForTests instanceof Date
-          ? this.promotionTodayForTests
-          : new Date();
-      const expansionResult = await this.applyProjectPromotionBacklinkExpansion(
-        {
-          sourceFile,
-          createdFile,
-          sourceBlockId: parsedTask.blockId,
-          seedContent: seedResult.content,
-          promotionPlan,
-          blockIdBacklinkRewrites,
-          today: promotionToday,
-        },
-      );
-      if (expansionResult.expanded) {
-        updatedLinkCount = expansionResult.updatedLinkCount;
-        if (expansionResult.failed) {
-          if (expansionResult.error) {
-            new Notice(
-              `Created project, but ${expansionResult.error}; source task was kept`,
-            );
-          } else {
-            const linkText =
-              expansionResult.failedLinkCount === 1 ? "link" : "links";
-            new Notice(
-              `Created project, but ${expansionResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
-            );
-          }
-          return true;
-        }
-      } else if (blockIdBacklinkRewrites.length > 0) {
-        const rewriteResult = await this.applyBlockIdLinkRewrites(
-          blockIdBacklinkRewrites,
-          createdFile.basename,
-        );
-        updatedLinkCount = rewriteResult.updatedLinkCount;
-        if (rewriteResult.failed) {
-          const linkText =
-            rewriteResult.failedLinkCount === 1 ? "link" : "links";
-          new Notice(
-            `Created project, but ${rewriteResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
-          );
-          return true;
-        }
-      }
-    }
-
-    let removedSourceTask = false;
-    try {
-      await this.app.vault.process(sourceFile, (content) => {
-        const result = removeTaskBlockFromContent(content, sourceBlock);
-        removedSourceTask = result.removed;
-        return result.content;
-      });
-    } catch (error) {
-      new Notice("Created project, but could not remove the source task");
-      return true;
-    }
-
-    if (!removedSourceTask) {
-      new Notice(
-        "Created project, but the source task changed and was not removed",
-      );
-      return true;
-    }
-
-    new Notice(
-      getProjectFromTaskNoticeText(
-        parsedTask.description,
-        sourceBasename,
-        projectBasename ? createdFile.basename : undefined,
-        updatedLinkCount,
-        sectionsHandled,
-        convertedManagedLogLines
-          .map((line) => {
-            const parsed = parseManagedTaskLogParentBullet(line);
-            return parsed ? parsed.kind : null;
-          })
-          .filter(Boolean),
-      ),
-    );
-    return true;
-  }
-
-  async convertProjectNoteToTask(editor, view, cursor, lineText) {
-    const vault = this.app && this.app.vault;
-    if (
-      !vault ||
-      typeof vault.process !== "function" ||
-      typeof vault.read !== "function"
-    ) {
-      new Notice("Vault content updates are unavailable");
-      return false;
-    }
-
-    if (!view || typeof view.save !== "function") {
-      new Notice("Could not save project note");
-      return false;
-    }
-
-    try {
-      await view.save();
-    } catch (error) {
-      new Notice("Could not save project note");
-      return false;
-    }
-
-    const sourceFile = view.file;
-    const content = editor.getValue();
-    const noteBasename =
-      (sourceFile && sourceFile.basename) ||
-      getVaultPathBasenameWithoutExtension(sourceFile && sourceFile.path);
-    const built = buildTaskBlockFromProjectNote(content, { noteBasename });
-    if (!built.valid) {
-      new Notice(built.error);
-      return false;
-    }
-
-    if (!isProjectFrontmatterParentLink(built.parentLink)) {
-      new Notice("Project note has no parent link");
-      return false;
-    }
-
-    const parentTarget = this.extractLinkTarget(built.parentLink);
-    if (!parentTarget) {
-      new Notice("Project note has no parent link");
-      return false;
-    }
-
-    const parentFile = this.resolveLinkTargetFile(
-      parentTarget,
-      sourceFile && sourceFile.path,
-    );
-    const parentDisplay = this.basenameForRenderedWikiLink(parentTarget);
-    if (!this.isMarkdownFile(parentFile)) {
-      new Notice(`Parent note "${parentDisplay}" not found`);
-      return false;
-    }
-
-    if (parentFile.path === sourceFile.path) {
-      new Notice("Project note parent points at itself");
-      return false;
-    }
-
-    const children = this.collectChildNotes(sourceFile);
-    if (children.length > 0) {
-      new Notice(
-        `Project has ${children.length} child notes; move them before converting`,
-      );
-      return false;
-    }
-
-    const parentBasename =
-      parentFile.basename ||
-      getVaultPathBasenameWithoutExtension(parentFile.path);
-    const restored = buildTaskBlockFromProjectNote(content, {
-      noteBasename,
-      parentBasename,
-    });
-    if (!restored.valid) {
-      new Notice(restored.error);
-      return false;
-    }
-
-    let parentContent;
-    try {
-      parentContent = await vault.read(parentFile);
-    } catch (error) {
-      new Notice(`Parent note "${parentBasename}" not found`);
-      return false;
-    }
-
-    const destination = parseTaskMoveDestinationFrontmatter(parentContent);
-    if (!destination.valid) {
-      new Notice(
-        `Parent note "${parentBasename}" must be an area or open project`,
-      );
-      return false;
-    }
-
-    if (restored.blockId) {
-      const existingIds = collectTaskMoveBlockIds(parentContent);
-      if (existingIds.has(restored.blockId)) {
-        new Notice(
-          `Parent note already contains block ID: ${restored.blockId}`,
-        );
-        return false;
-      }
-    }
-
-    const insertion = insertTaskMoveBlocks(
-      parentContent,
-      [restored.lines],
-      destination.kind,
-    );
-    if (!insertion.valid) {
-      new Notice(
-        `Parent note "${parentBasename}" has no ## Tasks section`,
-      );
-      return false;
-    }
-
-    const classification = this.getProjectNoteBacklinkClassification(
-      sourceFile,
-      parentFile.path,
-    );
-    if (classification.otherPaths.length > 0) {
-      new Notice(
-        `${classification.otherPaths.length} notes link to "${noteBasename}"; update them before converting (first: ${classification.otherPaths[0]})`,
-      );
-      return false;
-    }
-    if (classification.blockRewrites.length > 0 && !restored.blockId) {
-      new Notice(
-        "Could not derive a task block ID for the links that point at ^prj",
-      );
-      return false;
-    }
-
-    let wroteParent = false;
-    try {
-      await vault.process(parentFile, (current) => {
-        if (current !== parentContent) {
-          return current;
-        }
-        wroteParent = true;
-        return insertion.content;
-      });
-    } catch (error) {
-      new Notice("Could not update the parent note");
-      return false;
-    }
-
-    if (!wroteParent) {
-      new Notice("Parent note changed; nothing was converted");
-      return false;
-    }
-
-    let updatedLinkCount = 0;
-    if (classification.blockRewrites.length > 0) {
-      const rewriteResult = await this.applyBlockIdLinkRewrites(
-        classification.blockRewrites,
-        parentBasename,
-        restored.blockId,
-      );
-      updatedLinkCount = rewriteResult.updatedLinkCount;
-      if (rewriteResult.failed) {
-        const failed = rewriteResult.failedLinkCount;
-        new Notice(
-          `Restored the task in ${parentBasename}, but ${failed} links could not be updated; "${noteBasename}" was kept`,
-        );
-        return true;
-      }
-    }
-
-    await this.focusTaskMoveDestination(parentFile, {
-      line: insertion.insertedLine,
-      text: restored.lines[0],
-      blockId: restored.blockId,
-    });
-
-    try {
-      if (
-        !this.app.fileManager ||
-        typeof this.app.fileManager.trashFile !== "function"
-      ) {
-        throw new Error("trash unavailable");
-      }
-      await this.app.fileManager.trashFile(sourceFile);
-    } catch (error) {
-      new Notice(
-        `Restored the task in ${parentBasename}, but could not delete "${noteBasename}"`,
-      );
-      return true;
-    }
-
-    new Notice(
-      getProjectNoteToTaskNoticeText(
-        noteBasename,
-        parentBasename,
-        restored.taskCount,
-        restored.sectionCount,
-        updatedLinkCount,
-      ),
-    );
-    return true;
-  }
-
-  async createProjectNoteFile(creatingFile, basename, scheduled = null) {
+  async createProjectNoteFile(creatingFile, basename) {
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
       new Notice("Templater is not available");
@@ -59788,11 +59694,7 @@ class BobNavigationHotkeysProjectNoteMixin {
       await this.app.fileManager.processFrontMatter(
         createdFile,
         (frontmatter) => {
-          applyProjectCreationFrontmatter(
-            frontmatter,
-            parentLink,
-            scheduled,
-          );
+          applyProjectCreationFrontmatter(frontmatter, parentLink);
         },
       );
     } catch (error) {
@@ -60068,6 +59970,848 @@ class BobNavigationHotkeysProjectNoteMixin {
     if (!transformed) {
       throw new Error(`Promotion file write failed: ${normalized}`);
     }
+  }
+}
+// ---- src/665-plugin-project-conversion.js ----
+class BobNavigationHotkeysProjectConversionMixin {
+
+  async createProjectNoteFromTask(editor, view) {
+    const sourceFile = view && view.file;
+    if (!editor || !this.isMarkdownFile(sourceFile)) {
+      new Notice(
+        "Open an area or project note before creating a project from a task",
+      );
+      return false;
+    }
+
+    if (!this.isAreaOrProjectNote(sourceFile)) {
+      new Notice(
+        "Project notes can only be created from an area or project note",
+      );
+      return false;
+    }
+
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("Place the cursor on an open #task checkbox");
+      return false;
+    }
+
+    const lineText = getEditorLineText(editor, cursor.line);
+    if (lineText === null) {
+      new Notice("Place the cursor on an open #task checkbox");
+      return false;
+    }
+
+    if (
+      isProjectLifecycleTaskLine(lineText) &&
+      isProjectLifecycleTaskAtLine(editor.getValue(), cursor.line)
+    ) {
+      return this.convertProjectNoteToTask(editor, view, cursor, lineText);
+    }
+
+    const parsedTask = parseProjectSourceTaskLine(lineText);
+    if (!parsedTask) {
+      new Notice(getProjectSourceTaskLineNoticeText(lineText));
+      return false;
+    }
+    if (parsedTask.scheduleError) {
+      new Notice(parsedTask.scheduleError);
+      return false;
+    }
+
+    if (!this.app.vault || typeof this.app.vault.process !== "function") {
+      new Notice("Vault content updates are unavailable");
+      return false;
+    }
+
+    const sourceBlock = getProjectSourceTaskBlock(
+      editor,
+      cursor.line,
+      lineText,
+    ) || {
+      startLine: cursor.line,
+      endLineExclusive: cursor.line + 1,
+      lines: [lineText],
+      childLines: [],
+    };
+
+    const sourceDependencyBlock = collectProjectSourceDependencyBlock(
+      sourceBlock.lines.join("\n"),
+      0,
+    );
+    if (!sourceDependencyBlock.valid) {
+      new Notice(sourceDependencyBlock.error);
+      return false;
+    }
+    const sourceChildLines = sourceBlock.childLines.filter(
+      (_line, index) => !sourceDependencyBlock.lineIndices.includes(index + 1),
+    );
+
+    const createdDate = formatProjectTaskCreatedDate(new Date());
+    let convertedChildTaskLines = [];
+    let convertedChildSections = [];
+    let convertedManagedLogLines = [];
+    let childConversionLossy = false;
+    const hasChildContent = sourceChildLines.some(
+      (line) => String(line || "").trim() !== "",
+    );
+    if (hasChildContent) {
+      const conversion = buildProjectSeedFromChildBullets(
+        sourceChildLines,
+        createdDate,
+      );
+      if (
+        conversion.lossless &&
+        (conversion.taskLines.length > 0 ||
+          conversion.sections.length > 0 ||
+          conversion.managedLogLines.length > 0)
+      ) {
+        convertedChildTaskLines = conversion.taskLines;
+        convertedChildSections = conversion.sections;
+        convertedManagedLogLines = conversion.managedLogLines;
+      } else {
+        childConversionLossy = true;
+      }
+    }
+
+    const sourceBasename =
+      sourceFile.basename ||
+      getVaultPathBasenameWithoutExtension(sourceFile.path);
+    let projectBasename = null;
+    let blockIdBacklinkRewrites = [];
+    if (parsedTask.blockId) {
+      projectBasename = getProjectBasenameFromTaskBlockId(
+        sourceBasename,
+        parsedTask.blockId,
+      );
+      if (!projectBasename) {
+        new Notice("Could not derive project note name from task block ID");
+        return false;
+      }
+
+      if (this.projectNoteBasenameExists(projectBasename, sourceFile)) {
+        new Notice(`Note "${projectBasename}" already exists; rename it first`);
+        return false;
+      }
+
+      blockIdBacklinkRewrites = this.getProjectTaskBlockIdBacklinkRewrites(
+        sourceFile,
+        parsedTask.blockId,
+      );
+    }
+
+    if (!view || typeof view.save !== "function") {
+      new Notice("Could not save source note");
+      return false;
+    }
+
+    try {
+      await view.save();
+    } catch (error) {
+      new Notice("Could not save source note");
+      return false;
+    }
+
+    const createdFile = await this.createProjectNoteFile(
+      sourceFile,
+      projectBasename || undefined,
+    );
+    if (!createdFile) {
+      return false;
+    }
+
+    let seedResult = null;
+    try {
+      await this.app.vault.process(createdFile, (content) => {
+        seedResult = buildProjectContentFromTask(content, parsedTask, {
+          projectPath: createdFile.path,
+          today: new Date(),
+          childTaskLines: convertedChildTaskLines,
+          sections: convertedChildSections,
+          managedLogLines: convertedManagedLogLines,
+        });
+        return seedResult.content;
+      });
+    } catch (error) {
+      new Notice("Could not seed project task");
+      return false;
+    }
+
+    if (!seedResult || !seedResult.seeded) {
+      new Notice("Project task placeholder not found; source task was kept");
+      return true;
+    }
+
+    if (convertedChildTaskLines.length > 0 && !seedResult.tasksInserted) {
+      new Notice(
+        "Created project, but the Tasks section was missing; source task was kept",
+      );
+      return true;
+    }
+
+    if (
+      convertedManagedLogLines.length > 0 &&
+      !seedResult.managedLogsInserted
+    ) {
+      new Notice(
+        "Created project, but the task logs could not be added; source task was kept",
+      );
+      return true;
+    }
+
+    const sectionsHandled =
+      (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0);
+    if (
+      convertedChildSections.length > 0 &&
+      sectionsHandled < convertedChildSections.length
+    ) {
+      new Notice(
+        "Created project, but a section could not be added; source task was kept",
+      );
+      return true;
+    }
+
+    if (childConversionLossy) {
+      new Notice(
+        "Created project, but child bullets could not be converted; source task was kept",
+      );
+      return true;
+    }
+
+    const sourcePath = normalizeVaultRelativePath(sourceFile.path);
+    const childBlockIds = new Set(
+      convertedChildTaskLines
+        .map((line) => getTrailingBlockId(line))
+        .filter(Boolean),
+    );
+    const dependencyRefs = [];
+    let droppedResidentDependencyCount = 0;
+    for (const target of sourceDependencyBlock.targets) {
+      const targetFile = target.note
+        ? this.resolveLinkTargetFile(target.note, sourceFile.path)
+        : sourceFile;
+      if (!this.isMarkdownFile(targetFile)) {
+        new Notice("A Depends-On target could not be resolved; the source task was kept");
+        return true;
+      }
+      const targetPath = normalizeVaultRelativePath(targetFile.path);
+      if (
+        targetPath === sourcePath &&
+        (childBlockIds.has(target.blockId) || target.blockId === parsedTask.blockId)
+      ) {
+        droppedResidentDependencyCount += 1;
+        continue;
+      }
+      dependencyRefs.push({ path: targetPath, blockId: target.blockId });
+    }
+
+    let projectContent = seedResult.content;
+    if (dependencyRefs.length > 0) {
+      const files = new Map([[createdFile.path, projectContent]]);
+      for (const target of dependencyRefs) {
+        if (files.has(target.path)) continue;
+        if (target.path === sourcePath) {
+          files.set(target.path, String(editor.getValue() || ""));
+          continue;
+        }
+        const targetContent = await this.readDependencyNoteContent(
+          target.path,
+          null,
+          createdFile.path,
+        );
+        if (targetContent === null) {
+          new Notice("A Depends-On target could not be read; the source task was kept");
+          return true;
+        }
+        files.set(target.path, targetContent);
+      }
+      const projectLine = findProjectLifecycleTaskIndex(projectContent);
+      const dependencyPlan = planDependencyEdit({
+        content: projectContent,
+        parentLine: projectLine,
+        parentPath: createdFile.path,
+        add: dependencyRefs,
+        remove: [],
+        files,
+        vaultFiles: [
+          ...(this.readDependencyVaultFileList() || []),
+          normalizeVaultRelativePath(createdFile.path),
+        ],
+        resolveLinkpath: this.dependencyLinkpathResolver(),
+      });
+      if (!dependencyPlan.ok) {
+        new Notice(`Could not preserve the Depends-On line (${dependencyPlan.reason}); the source task was kept`);
+        return true;
+      }
+      if (dependencyPlan.changed) {
+        let committed = false;
+        for (const preparation of dependencyPlan.preparations || []) {
+          const prepared = await this.prepareDependencyTargetNote(
+            preparation.path,
+            preparation,
+          );
+          if (!prepared || prepared.ok !== true) {
+            new Notice(`Could not prepare a Depends-On target (${prepared && prepared.reason || "target-preparation-failed"}); the source task was kept`);
+            return true;
+          }
+        }
+        try {
+          await this.app.vault.process(createdFile, (current) => {
+            if (String(current || "") !== projectContent) return current;
+            committed = true;
+            return dependencyPlan.nextContent;
+          });
+        } catch (_error) {
+          committed = false;
+        }
+        if (!committed) {
+          new Notice("Could not finish the Depends-On write; the source task was kept");
+          return true;
+        }
+        projectContent = dependencyPlan.nextContent;
+      }
+    }
+
+    const projectIsBlocked = projectLooksBlockedByPrjShortcut(projectContent);
+    let dailyCleanupFailed = false;
+    let sameFileCleanup = null;
+    if (projectIsBlocked && (parsedTask.blockId || childBlockIds.size > 0)) {
+      const snapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath,
+        sourceContent: String(editor.getValue() || ""),
+        today: new Date(),
+      });
+      const targets = [parsedTask.blockId, ...childBlockIds]
+        .filter(Boolean)
+        .map((blockId) => ({
+        path: sourcePath,
+        blockId,
+        }));
+      if (snapshot) {
+        const dailyContent = snapshot.sameFile
+          ? String(editor.getValue() || "")
+          : snapshot.content;
+        const cleanup = planDeferredPomodoroLinkCleanup(
+          dailyContent,
+          targets,
+          {
+            dailyPath: snapshot.dailyPath,
+            noteIndex: snapshot.noteIndex,
+            removeEmptiedEntries: true,
+          },
+        );
+        if (cleanup.changed) {
+          if (snapshot.sameFile) {
+            sameFileCleanup = {
+              targets,
+              dailyPath: snapshot.dailyPath,
+              noteIndex: snapshot.noteIndex,
+            };
+          } else {
+            dailyCleanupFailed = !(await this.writeDeferredPomodoroCleanup(
+              snapshot,
+              cleanup,
+            ));
+          }
+        }
+      }
+    }
+
+    let updatedLinkCount = 0;
+    if (parsedTask.blockId) {
+      let expanded = false;
+      if (!projectIsBlocked) {
+        const promotionPlan = planProjectPromotionTargets(projectContent);
+        if (promotionPlan.error) {
+          new Notice(
+            `Created project, but ${promotionPlan.error}; source task was kept`,
+          );
+          return true;
+        }
+        const promotionToday =
+          this.promotionTodayForTests instanceof Date
+            ? this.promotionTodayForTests
+            : new Date();
+        const expansionResult = await this.applyProjectPromotionBacklinkExpansion(
+          {
+            sourceFile,
+            createdFile,
+            sourceBlockId: parsedTask.blockId,
+            seedContent: projectContent,
+            promotionPlan,
+            blockIdBacklinkRewrites,
+            today: promotionToday,
+          },
+        );
+        if (expansionResult.expanded) {
+          expanded = true;
+          updatedLinkCount = expansionResult.updatedLinkCount;
+          if (expansionResult.failed) {
+            if (expansionResult.error) {
+              new Notice(
+                `Created project, but ${expansionResult.error}; source task was kept`,
+              );
+            } else {
+              const linkText =
+                expansionResult.failedLinkCount === 1 ? "link" : "links";
+              new Notice(
+                `Created project, but ${expansionResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
+              );
+            }
+            return true;
+          }
+        }
+      }
+      if (!expanded && blockIdBacklinkRewrites.length > 0) {
+        const rewriteResult = await this.applyBlockIdLinkRewrites(
+          blockIdBacklinkRewrites,
+          createdFile.basename,
+        );
+        updatedLinkCount = rewriteResult.updatedLinkCount;
+        if (rewriteResult.failed) {
+          const linkText =
+            rewriteResult.failedLinkCount === 1 ? "link" : "links";
+          new Notice(
+            `Created project, but ${rewriteResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
+          );
+          return true;
+        }
+      }
+    }
+
+    let removedSourceTask = false;
+    try {
+      await this.app.vault.process(sourceFile, (content) => {
+        const base = sameFileCleanup
+          ? planDeferredPomodoroLinkCleanup(
+              content,
+              sameFileCleanup.targets,
+              {
+                dailyPath: sameFileCleanup.dailyPath,
+                noteIndex: sameFileCleanup.noteIndex,
+                removeEmptiedEntries: true,
+              },
+            ).content
+          : content;
+        const result = removeTaskBlockFromContent(base, sourceBlock);
+        removedSourceTask = result.removed;
+        return result.content;
+      });
+    } catch (error) {
+      new Notice("Created project, but could not remove the source task");
+      return true;
+    }
+
+    if (!removedSourceTask) {
+      new Notice(
+        "Created project, but the source task changed and was not removed",
+      );
+      return true;
+    }
+
+    let notice = getProjectFromTaskNoticeText(
+        parsedTask.description,
+        sourceBasename,
+        projectBasename ? createdFile.basename : undefined,
+        updatedLinkCount,
+        sectionsHandled,
+        convertedManagedLogLines
+          .map((line) => {
+            const parsed = parseManagedTaskLogParentBullet(line);
+            return parsed ? parsed.kind : null;
+          })
+          .filter(Boolean),
+      );
+    if (droppedResidentDependencyCount > 0) {
+      notice += ` · dropped ${formatCountLabel(droppedResidentDependencyCount, "prerequisite")} that became project residents`;
+    }
+    if (dailyCleanupFailed) notice += " · Pomodoro links not removed";
+    new Notice(notice);
+    return true;
+  }
+
+  async convertProjectNoteToTask(editor, view, cursor, lineText) {
+    const vault = this.app && this.app.vault;
+    if (
+      !vault ||
+      typeof vault.process !== "function" ||
+      typeof vault.read !== "function"
+    ) {
+      new Notice("Vault content updates are unavailable");
+      return false;
+    }
+
+    if (!view || typeof view.save !== "function") {
+      new Notice("Could not save project note");
+      return false;
+    }
+
+    try {
+      await view.save();
+    } catch (error) {
+      new Notice("Could not save project note");
+      return false;
+    }
+
+    const sourceFile = view.file;
+    const content = editor.getValue();
+    const noteBasename =
+      (sourceFile && sourceFile.basename) ||
+      getVaultPathBasenameWithoutExtension(sourceFile && sourceFile.path);
+    const projectHeader = buildTaskBlockFromProjectNote(content, { noteBasename });
+    if (!projectHeader.valid) {
+      new Notice(projectHeader.error);
+      return false;
+    }
+
+    if (!isProjectFrontmatterParentLink(projectHeader.parentLink)) {
+      new Notice("Project note has no parent link");
+      return false;
+    }
+
+    const parentTarget = this.extractLinkTarget(projectHeader.parentLink);
+    if (!parentTarget) {
+      new Notice("Project note has no parent link");
+      return false;
+    }
+
+    const parentFile = this.resolveLinkTargetFile(
+      parentTarget,
+      sourceFile && sourceFile.path,
+    );
+    const parentDisplay = this.basenameForRenderedWikiLink(parentTarget);
+    if (!this.isMarkdownFile(parentFile)) {
+      new Notice(`Parent note "${parentDisplay}" not found`);
+      return false;
+    }
+
+    if (parentFile.path === sourceFile.path) {
+      new Notice("Project note parent points at itself");
+      return false;
+    }
+
+    const children = this.collectChildNotes(sourceFile);
+    if (children.length > 0) {
+      new Notice(
+        `Project has ${children.length} child notes; move them before converting`,
+      );
+      return false;
+    }
+
+    const parentBasename =
+      parentFile.basename ||
+      getVaultPathBasenameWithoutExtension(parentFile.path);
+    const today = new Date();
+    const restored = buildTaskBlockFromProjectNote(content, {
+      noteBasename,
+      parentBasename,
+      sourcePath: sourceFile.path,
+      destinationPath: parentFile.path,
+    });
+    if (!restored.valid) {
+      new Notice(restored.error);
+      return false;
+    }
+
+    let parentContent;
+    try {
+      parentContent = await vault.read(parentFile);
+    } catch (error) {
+      new Notice(`Parent note "${parentBasename}" not found`);
+      return false;
+    }
+
+    const destination = parseTaskMoveDestinationFrontmatter(parentContent);
+    if (!destination.valid) {
+      new Notice(
+        `Parent note "${parentBasename}" must be an area or open project`,
+      );
+      return false;
+    }
+
+    if (restored.blockId) {
+      const existingIds = collectTaskMoveBlockIds(parentContent);
+      if (existingIds.has(restored.blockId)) {
+        new Notice(
+          `Parent note already contains block ID: ${restored.blockId}`,
+        );
+        return false;
+      }
+    }
+
+    const parentProjectBlocked =
+      destination.kind === "project" &&
+      projectLooksBlockedByPrjShortcut(parentContent);
+    let restoredLines = [...restored.lines];
+    const sourceRows = collectProjectNoteTaskRows(content).residents;
+    const sourceRowsById = new Map(
+      sourceRows.filter((row) => row.blockId).map((row) => [row.blockId, row]),
+    );
+    const hasBlockedResidents = restoredLines
+      .slice(1)
+      .some((line) => taskHasProjectBlockedTag(line));
+    if (hasBlockedResidents && !parentProjectBlocked) {
+      const recovery = await buildInteractiveScheduledRecoverySnapshot(
+        this.app,
+        { sourcePath: sourceFile.path, sourceContent: content, today },
+      );
+      const projectBlocked = new Map(
+        recovery && recovery.projectBlocked instanceof Map
+          ? recovery.projectBlocked
+          : [],
+      );
+      for (const line of restoredLines.slice(1)) {
+        const blockId = getTrailingBlockId(line);
+        const row = blockId ? sourceRowsById.get(blockId) : null;
+        if (row) {
+          projectBlocked.delete(recoveryIdentity(sourceFile.path, String(row.line)));
+        }
+      }
+      const recoveryIndex = recovery
+        ? { ...recovery, projectBlocked }
+        : null;
+      const markUnblockedLine = (line, markOptions) => {
+        const freshness = this.getFreshnessApi();
+        return freshness && typeof freshness.markUnblockedLine === "function"
+          ? freshness.markUnblockedLine(line, markOptions)
+          : line;
+      };
+      restoredLines = restoredLines.map((line, index) => {
+        if (index === 0 || !taskHasProjectBlockedTag(line)) return line;
+        const blockId = getTrailingBlockId(line);
+        const row = blockId ? sourceRowsById.get(blockId) : null;
+        const metadata = row && recoveryIndex
+          ? getScheduledRecoveryMetadata(
+              recoveryIndex,
+              sourceFile.path,
+              row.line,
+            )
+          : deferredScheduledRecovery("project task recovery is unavailable");
+        return recoverProjectResidentLine(line, metadata, {
+          today,
+          markUnblockedLine,
+        }).line;
+      });
+    }
+
+    if (parentProjectBlocked) {
+      restoredLines = restoredLines.map((line) =>
+        isOpenObsidianTaskLine(line) ? blockProjectResidentLine(line) : line,
+      );
+    }
+
+    const finalInsertion = insertTaskMoveBlocks(
+      parentContent,
+      [restoredLines],
+      destination.kind,
+    );
+    if (!finalInsertion.valid) {
+      new Notice(
+        `Parent note "${parentBasename}" has no ## Tasks section`,
+      );
+      return false;
+    }
+
+    const finalBlockIds = new Set(
+      restoredLines.map((line) => getTrailingBlockId(line)).filter(Boolean),
+    );
+    const projectDependencyBlock = collectProjectSourceDependencyBlock(
+      content,
+      findProjectLifecycleTaskIndex(content),
+    );
+    if (!projectDependencyBlock.valid) {
+      new Notice(projectDependencyBlock.error);
+      return false;
+    }
+    const dependencyRefs = [];
+    for (const target of projectDependencyBlock.targets) {
+      const targetFile = target.note
+        ? this.resolveLinkTargetFile(target.note, sourceFile.path)
+        : sourceFile;
+      if (!this.isMarkdownFile(targetFile)) {
+        new Notice("A Depends-On target could not be resolved; nothing was converted");
+        return false;
+      }
+      const targetPath = normalizeVaultRelativePath(targetFile.path);
+      dependencyRefs.push({
+        path:
+          targetPath === normalizeVaultRelativePath(sourceFile.path) &&
+          finalBlockIds.has(target.blockId)
+            ? normalizeVaultRelativePath(parentFile.path)
+            : targetPath,
+        blockId: target.blockId,
+      });
+    }
+
+    let parentContentToWrite = finalInsertion.content;
+    if (dependencyRefs.length > 0) {
+      const files = new Map([[normalizeVaultRelativePath(parentFile.path), finalInsertion.content]]);
+      for (const target of dependencyRefs) {
+        if (files.has(target.path)) continue;
+        const targetContent = await this.readDependencyNoteContent(
+          target.path,
+          null,
+          parentFile.path,
+        );
+        if (targetContent === null) {
+          new Notice("A Depends-On target could not be read; nothing was converted");
+          return false;
+        }
+        files.set(target.path, targetContent);
+      }
+      const plan = planDependencyEdit({
+        content: finalInsertion.content,
+        parentLine: finalInsertion.insertedLine,
+        parentPath: parentFile.path,
+        add: dependencyRefs,
+        remove: [],
+        files,
+        vaultFiles: this.readDependencyVaultFileList(),
+        resolveLinkpath: this.dependencyLinkpathResolver(),
+      });
+      if (!plan.ok) {
+        new Notice(`Could not preserve the Depends-On line (${plan.reason}); nothing was converted`);
+        return false;
+      }
+      for (const preparation of plan.preparations || []) {
+        const prepared = await this.prepareDependencyTargetNote(
+          preparation.path,
+          preparation,
+        );
+        if (!prepared || prepared.ok !== true) {
+          new Notice(`Could not prepare a Depends-On target (${prepared && prepared.reason || "target-preparation-failed"}); nothing was converted`);
+          return false;
+        }
+      }
+      parentContentToWrite = plan.nextContent;
+    }
+
+    let dailyCleanup = null;
+    let dailyCleanupSnapshot = null;
+    if (parentProjectBlocked) {
+      dailyCleanupSnapshot = await this.readDeferredPomodoroSnapshot(this.app, {
+        sourcePath: parentFile.path,
+        sourceContent: parentContent,
+        today,
+      });
+      const targets = [...restoredLines]
+        .filter((line) => isOpenObsidianTaskLine(line) && taskHasProjectBlockedTag(line))
+        .map((line) => getTrailingBlockId(line))
+        .filter(Boolean)
+        .map((blockId) => ({ path: parentFile.path, blockId }));
+      if (dailyCleanupSnapshot && targets.length > 0) {
+        const dailyContent = dailyCleanupSnapshot.sameFile
+          ? parentContentToWrite
+          : dailyCleanupSnapshot.content;
+        dailyCleanup = planDeferredPomodoroLinkCleanup(
+          dailyContent,
+          targets,
+          {
+            dailyPath: dailyCleanupSnapshot.dailyPath,
+            noteIndex: dailyCleanupSnapshot.noteIndex,
+            removeEmptiedEntries: true,
+          },
+        );
+        if (dailyCleanupSnapshot.sameFile && dailyCleanup.changed) {
+          parentContentToWrite = dailyCleanup.content;
+        }
+      }
+    }
+
+    const classification = this.getProjectNoteBacklinkClassification(
+      sourceFile,
+      parentFile.path,
+    );
+    if (classification.otherPaths.length > 0) {
+      new Notice(
+        `${classification.otherPaths.length} notes link to "${noteBasename}"; update them before converting (first: ${classification.otherPaths[0]})`,
+      );
+      return false;
+    }
+    if (classification.blockRewrites.length > 0 && !restored.blockId) {
+      new Notice(
+        "Could not derive a task block ID for the links that point at ^prj",
+      );
+      return false;
+    }
+
+    let wroteParent = false;
+    try {
+      await vault.process(parentFile, (current) => {
+        if (current !== parentContent) {
+          return current;
+        }
+        wroteParent = true;
+        return parentContentToWrite;
+      });
+    } catch (error) {
+      new Notice("Could not update the parent note");
+      return false;
+    }
+
+    if (!wroteParent) {
+      new Notice("Parent note changed; nothing was converted");
+      return false;
+    }
+
+    const dailyCleanupFailed =
+      dailyCleanup && dailyCleanup.changed && dailyCleanupSnapshot &&
+      !dailyCleanupSnapshot.sameFile
+        ? !(await this.writeDeferredPomodoroCleanup(
+            dailyCleanupSnapshot,
+            dailyCleanup,
+          ))
+        : false;
+
+    let updatedLinkCount = 0;
+    if (classification.blockRewrites.length > 0) {
+      const rewriteResult = await this.applyBlockIdLinkRewrites(
+        classification.blockRewrites,
+        parentBasename,
+        restored.blockId,
+      );
+      updatedLinkCount = rewriteResult.updatedLinkCount;
+      if (rewriteResult.failed) {
+        const failed = rewriteResult.failedLinkCount;
+        new Notice(
+          `Restored the task in ${parentBasename}, but ${failed} links could not be updated; "${noteBasename}" was kept`,
+        );
+        return true;
+      }
+    }
+
+    await this.focusTaskMoveDestination(parentFile, {
+      line: finalInsertion.insertedLine,
+      text: restoredLines[0],
+      blockId: restored.blockId,
+    });
+
+    try {
+      if (
+        !this.app.fileManager ||
+        typeof this.app.fileManager.trashFile !== "function"
+      ) {
+        throw new Error("trash unavailable");
+      }
+      await this.app.fileManager.trashFile(sourceFile);
+    } catch (error) {
+      new Notice(
+        `Restored the task in ${parentBasename}, but could not delete "${noteBasename}"`,
+      );
+      return true;
+    }
+
+    let notice = getProjectNoteToTaskNoticeText(
+      noteBasename,
+      parentBasename,
+      restored.taskCount,
+      restored.sectionCount,
+      updatedLinkCount,
+    );
+    if (dailyCleanupFailed) notice += " · Pomodoro links not removed";
+    new Notice(notice);
+    return true;
   }
 }
 // ---- src/670-plugin-project-files.js ----
@@ -61400,6 +62144,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysMoveCommitMixin,
   BobNavigationHotkeysInboxRouteMixin,
   BobNavigationHotkeysProjectNoteMixin,
+  BobNavigationHotkeysProjectConversionMixin,
   BobNavigationHotkeysProjectFileMixin,
   BobNavigationHotkeysLinkParseMixin,
 ]);
@@ -61502,6 +62247,9 @@ module.exports.helpers = {
   buildTaskLineFromProjectNote,
   splitProjectNoteForReversal,
   buildTaskBlockFromProjectNote,
+  collectProjectSourceDependencyBlock,
+  splitProjectLifecycleChildren,
+  rewriteProjectDependencyLineForDestination,
   getProjectNoteToTaskNoticeText,
   formatProjectSectionTitle,
   parseProjectSectionBulletTitle,

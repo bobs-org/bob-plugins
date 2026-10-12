@@ -16,12 +16,11 @@ function workedExampleProjectNote(overrides = {}) {
     type: 'type: "[[project]]"',
     status: "status: wip",
     created: "created: 2026-08-01T09:12:00-04:00",
-    scheduled: "scheduled: 2026-09-01",
     ...overrides.frontmatter,
   };
   const lifecycle =
     overrides.lifecycle ||
-    "- [ ] #task #prj Build a gym habit [p::1] #hide ^prj";
+    "- [ ] #task #prj Build a gym habit [p::1] [scheduled::2026-09-01] #hide ^prj";
   const lifecycleChildren = Object.prototype.hasOwnProperty.call(
     overrides,
     "lifecycleChildren",
@@ -143,6 +142,15 @@ function createProjectReversalHarness(options) {
     };
     contents[extra.path] = extra.content;
   }
+  if (options.tasksSettings) {
+    const settingsPath = ".obsidian/plugins/obsidian-tasks-plugin/data.json";
+    fileByPath[settingsPath] = {
+      path: settingsPath,
+      basename: "data",
+      extension: "json",
+    };
+    contents[settingsPath] = JSON.stringify(options.tasksSettings);
+  }
 
   const trashCalls = [];
   const focused = [];
@@ -187,6 +195,7 @@ function createProjectReversalHarness(options) {
           return contents[file.path];
         }),
       getMarkdownFiles: () => Object.values(fileByPath),
+      cachedRead: async (file) => contents[file.path],
       getAbstractFileByPath: (path) => fileByPath[path] || null,
     },
     fileManager: {
@@ -280,6 +289,34 @@ test("buildTaskBlockFromProjectNote restores the worked example and round-trips"
   ]);
 });
 
+test("project reversal puts Depends-On first, keeps the inline date, and drops Sub-projects", () => {
+  const content = workedExampleProjectNote({
+    lifecycle: "- [?] #task #prj Build a gym habit [scheduled::2026-09-01] [id::Health_gym_habit__prj] #hide ^prj",
+    lifecycleChildren: [
+      "\t- ⛓️ **DEPENDS ON:** [[#^shoes]]",
+      "\t- 🧩 **Sub-projects:** [[Health_child#^prj]]",
+      "\t\t- generated child detail",
+      "\t- 🗓️ **SCHEDULE LOG**",
+      "\t\t- _2026-08-05 — waiting_",
+    ],
+    tasks: [
+      "- [ ] #task Buy shoes [created::2026-08-01] ^shoes",
+    ],
+  });
+  const result = helpers.buildTaskBlockFromProjectNote(content, {
+    noteBasename: "Health_gym_habit",
+    parentBasename: "Health",
+    sourcePath: "Health_gym_habit.md",
+    destinationPath: "Health.md",
+  });
+  assert.equal(result.valid, true, result.error);
+  assert.match(result.lines[0], /^- \[\?\] #task Build a gym habit \[scheduled::2026-09-01\]/);
+  assert.equal(result.lines[1], "\t- ⛓️ **DEPENDS ON:** [[#^shoes]]");
+  assert.equal(result.lines[2], "\t- [ ] #task Buy shoes [created::2026-08-01] ^shoes");
+  assert.ok(result.lines.some((line) => /SCHEDULE LOG/.test(line)));
+  assert.equal(result.lines.some((line) => /Sub-projects|generated child detail/.test(line)), false);
+});
+
 test("buildTaskLineFromProjectNote preserves status, tags, and fields", () => {
   const now = new Date(2026, 7, 17);
   for (const status of [" ", "/", "*"]) {
@@ -302,7 +339,7 @@ test("buildTaskLineFromProjectNote preserves status, tags, and fields", () => {
   );
   assert.equal(
     hidden.description,
-    "Stay #hidden [p::1] [id::Health_gym_habit__prj]",
+    "Stay #hidden [p::1]",
   );
   assert.equal(
     helpers.buildTaskLineFromProjectNote({
@@ -311,8 +348,9 @@ test("buildTaskLineFromProjectNote preserves status, tags, and fields", () => {
       scheduled: "2026-09-01",
       created: "2026-08-01",
       blockId: "gym-habit",
+      id: "Health__gym-habit",
     }),
-    "- [ ] #task Stay #hidden [p::1] [id::Health_gym_habit__prj] [scheduled::2026-09-01] [created::2026-08-01] ^gym-habit",
+    "- [ ] #task Stay #hidden [p::1] [scheduled::2026-09-01] [created::2026-08-01] [id:: Health__gym-habit] ^gym-habit",
   );
 
   const alreadyScheduled = helpers.parseProjectLifecycleTaskBody(
@@ -716,7 +754,9 @@ test("convertProjectNoteToTask restores the parent task, rewrites links, and tra
     true,
   );
   assert.equal(
-    harness.contents["Health.md"].includes(expectedRestoredGymHabitBlock()[0]),
+    /^- \[ \] #task Build a gym habit .*\[id:: Health__gym-habit\] \^gym-habit$/m.test(
+      harness.contents["Health.md"],
+    ),
     true,
   );
   assert.equal(
@@ -731,6 +771,47 @@ test("convertProjectNoteToTask restores the parent task, rewrites links, and tra
   );
   assert.deepEqual(harness.trashCalls, ["Health_gym_habit.md"]);
   assert.match(notices.at(-1), /Converted .* into a task in Health/);
+});
+
+test("project reversal recovers tagged residents when they leave a blocked project", async () => {
+  const projectContent = workedExampleProjectNote({
+    lifecycle: "- [?] #task #prj Build a gym habit [scheduled::2099-12-31] #hide ^prj",
+    lifecycleChildren: [],
+    tasks: ["- [?] #task Resident #prj_is_blocked ^resident"],
+    extraSections: [],
+  });
+  const harness = createProjectReversalHarness({
+    projectContent,
+    parentContent: workedExampleParentNote(),
+    tasksSettings: {
+      globalFilter: "#task",
+      statusSettings: {
+        coreStatuses: [],
+        customStatuses: [
+          {
+            symbol: "?",
+            name: "Blocked",
+            nextStatusSymbol: " ",
+            availableAsCommand: true,
+            type: "ON_HOLD",
+          },
+        ],
+      },
+    },
+  });
+  harness.plugin.getFreshnessApi = () => ({
+    markUnblockedLine: (line) => `${line} [unblocked::2026-10-12]`,
+  });
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(
+      harness.editor,
+      harness.view,
+    ),
+    true,
+  );
+  const restored = harness.contents["Health.md"];
+  assert.match(restored, /\t- \[ \] #task Resident .*\[unblocked::2026-10-12\]/);
+  assert.doesNotMatch(restored, /Resident.*#prj_is_blocked/);
 });
 
 test("convertProjectNoteToTask separates the restored task from a count-only parent section", async () => {
@@ -948,8 +1029,8 @@ test("convertProjectNoteToTask reports post-write failures without rolling back"
   );
   assert.match(notices.at(-1), /could not delete/);
   assert.equal(
-    trashFailure.contents["Health.md"].includes(
-      expectedRestoredGymHabitBlock()[0],
+    /^- \[ \] #task Build a gym habit .*\[id:: Health__gym-habit\] \^gym-habit$/m.test(
+      trashFailure.contents["Health.md"],
     ),
     true,
   );

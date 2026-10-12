@@ -82,7 +82,7 @@ const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
 const PROJECT_PARENT_TYPE_BASENAMES = new Set(["area", "project"]);
-const PROJECT_OPEN_TASK_STATUSES = new Set([" ", "/", "*"]);
+const PROJECT_OPEN_TASK_STATUSES = new Set([" ", "/", "*", "?"]);
 const PROJECT_LIST_ITEM_RE = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
 const PROJECT_SOURCE_TASK_LINE_RE =
   /^(\s*)(?:[-*+]|\d+[.)])\s+\[([^\]\n])\](?:\s+(.*))?$/;

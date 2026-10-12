@@ -564,6 +564,8 @@ function emptyProjectNoteReversalSplit(error, extra = {}) {
         ? extra.lifecycleChildLines.slice()
         : [],
     ),
+    dependencyLine: extra.dependencyLine || null,
+    scheduled: extra.scheduled || "",
     taskLines: Object.freeze([]),
     sections: Object.freeze([]),
   });
@@ -640,9 +642,51 @@ function splitProjectNoteForReversal(content) {
   const parsed = parseProjectLifecycleTaskBody(lines[prjIndex]);
   const status = parsed ? parsed.status : null;
   const description = parsed ? parsed.description : "";
-  const lifecycleChildLines = getProjectReversalChildLines(lines, prjIndex);
-  const prjBlockEnd = prjIndex + lifecycleChildLines.length;
-  const splitExtra = { status, description, lifecycleChildLines };
+  const originalLifecycleChildLines = getProjectReversalChildLines(
+    lines,
+    prjIndex,
+  );
+  const lifecycleChildren = splitProjectLifecycleChildren(
+    lines[prjIndex],
+    originalLifecycleChildLines,
+  );
+  if (!lifecycleChildren.valid) {
+    return emptyProjectNoteReversalSplit(lifecycleChildren.error, {
+      status,
+      description,
+    });
+  }
+  const lifecycleChildLines = lifecycleChildren.otherLines;
+  const scheduledFields = parseBulletPropertyFields(lines[prjIndex]).filter(
+    (field) => field.key === "scheduled",
+  );
+  if (scheduledFields.length > 1) {
+    return emptyProjectNoteReversalSplit(
+      "Project ^prj task has multiple scheduled fields",
+      { status, description },
+    );
+  }
+  const scheduledRaw = scheduledFields[0]
+    ? String(scheduledFields[0].value || "").trim()
+    : "";
+  const scheduleValidation = scheduledRaw
+    ? validateProjectScheduledDate(scheduledRaw)
+    : { valid: true, value: "" };
+  if (!scheduleValidation.valid) {
+    return emptyProjectNoteReversalSplit(scheduleValidation.message, {
+      status,
+      description,
+    });
+  }
+  const scheduled = scheduleValidation.value;
+  const prjBlockEnd = prjIndex + originalLifecycleChildLines.length;
+  const splitExtra = {
+    status,
+    description,
+    lifecycleChildLines,
+    dependencyLine: lifecycleChildren.dependencyLine,
+    scheduled,
+  };
 
   const taskLines = [];
   const sections = [];
@@ -744,6 +788,8 @@ function splitProjectNoteForReversal(content) {
     status,
     description,
     lifecycleChildLines: Object.freeze(lifecycleChildLines.slice()),
+    dependencyLine: lifecycleChildren.dependencyLine,
+    scheduled,
     taskLines: Object.freeze(taskLines),
     sections: Object.freeze(sections),
   });
@@ -820,7 +866,7 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
         )
       : String(options.parentBasename || "").trim();
   const blockId = getProjectReversalBlockId(noteBasename, parentBasename);
-  const scheduled = frontmatter.scheduledValue || "";
+  const scheduled = split.scheduled || "";
   const createdRaw = getProjectFrontmatterCreatedDate(
     frontmatter.lines,
     frontmatter.closingLine,
@@ -833,10 +879,28 @@ function buildTaskBlockFromProjectNote(content, options = {}) {
     scheduled,
     created,
     blockId,
+    id: options.destinationPath
+      ? tryDependencyId(options.destinationPath, blockId)
+      : null,
+    dependsOnIds: options.dependsOnIds,
   });
 
   const indentedTasks = indentProjectReversalLines(split.taskLines, 1);
-  const lines = [taskLine, ...indentedTasks];
+  const movedBlockIds = new Set(
+    split.taskLines.map((line) => getTrailingBlockId(line)).filter(Boolean),
+  );
+  const dependencyLine = split.dependencyLine
+    ? rewriteProjectDependencyLineForDestination(split.dependencyLine, {
+        sourcePath: options.sourcePath || options.notePath,
+        destinationPath: options.destinationPath,
+        movedBlockIds,
+        sourceBlockIds: collectTaskMoveBlockIds(content),
+      })
+    : null;
+  const indentedDependency = dependencyLine
+    ? indentProjectReversalLines([dependencyLine], 1)
+    : [];
+  const lines = [taskLine, ...indentedDependency, ...indentedTasks];
   let sectionCount = 0;
   for (const section of split.sections) {
     lines.push(`\t- ${section.title}`);

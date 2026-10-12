@@ -695,6 +695,50 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
     sectionsCreated = sectionsResult.createdCount;
   }
 
+  // Project identity and schedule belong to the ordinary ^prj task line.
+  // The caller supplies the new note path after Templater creates the file.
+  const lifecycleIndex = findProjectLifecycleTaskIndex(nextContent);
+  if (lifecycleIndex !== -1) {
+    const source = splitMarkdownContent(nextContent);
+    let lifecycleLine = source.lines[lifecycleIndex];
+    const projectPath = normalizeVaultRelativePath(options.projectPath);
+    const projectId = projectPath ? tryDependencyId(projectPath, "prj") : null;
+    if (projectId) {
+      lifecycleLine = upsertBulletProperty(lifecycleLine, "id", projectId).line;
+    }
+    const scheduled = String(parsedTask.scheduled || "").trim();
+    if (scheduled) {
+      lifecycleLine = upsertBulletProperty(
+        lifecycleLine,
+        "scheduled",
+        scheduled,
+      ).line;
+    }
+    const today = options.today instanceof Date ? options.today : new Date();
+    const projectBlocked =
+      options.projectBlocked === true ||
+      String(parsedTask.status || "") === "?" ||
+      (scheduled && isFutureInlineScheduledValue(scheduled, today));
+    if (projectBlocked) {
+      lifecycleLine = replaceObsidianTaskCheckboxStatus(lifecycleLine, "?");
+    }
+    source.lines[lifecycleIndex] = lifecycleLine;
+    nextContent = source.lines.join(source.lineEnding);
+
+    if (projectBlocked) {
+      const rows = collectProjectNoteTaskRows(nextContent);
+      if (rows.residents.length > 0) {
+        const nextLines = splitMarkdownContent(nextContent);
+        for (const resident of rows.residents) {
+          nextLines.lines[resident.line] = blockProjectResidentLine(
+            nextLines.lines[resident.line],
+          );
+        }
+        nextContent = nextLines.lines.join(nextLines.lineEnding);
+      }
+    }
+  }
+
   return Object.freeze({
     content: nextContent,
     seeded: true,
@@ -703,20 +747,16 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
     tasksSectionMissing,
     sectionsInserted,
     sectionsCreated,
+    projectBlocked:
+      lifecycleIndex !== -1 &&
+      projectLooksBlockedByPrjShortcut(nextContent),
   });
 }
 
-function applyProjectCreationFrontmatter(
-  frontmatter,
-  parentLink,
-  scheduled = null,
-) {
+function applyProjectCreationFrontmatter(frontmatter, parentLink) {
   frontmatter.parent = parentLink;
   frontmatter.type = "[[project]]";
   frontmatter.status = "wip";
-  if (scheduled !== null && scheduled !== undefined && scheduled !== "") {
-    frontmatter.scheduled = scheduled;
-  }
   return frontmatter;
 }
 

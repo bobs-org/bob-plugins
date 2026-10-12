@@ -42,6 +42,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysMoveCommitMixin,
   BobNavigationHotkeysInboxRouteMixin,
   BobNavigationHotkeysProjectNoteMixin,
+  BobNavigationHotkeysProjectConversionMixin,
   BobNavigationHotkeysProjectFileMixin,
   BobNavigationHotkeysLinkParseMixin,
 ]);

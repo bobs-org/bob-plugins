@@ -55,7 +55,7 @@ test("source task schedule errors are focused and ambiguous fields fail", () => 
   assert.match(ambiguous.scheduleError, /multiple/);
 });
 
-test("project creation frontmatter receives source scheduling atomically", () => {
+test("project creation frontmatter never stores the task schedule", () => {
   assert.deepEqual(
     helpers.applyProjectCreationFrontmatter(
       {},
@@ -66,7 +66,6 @@ test("project creation frontmatter receives source scheduling atomically", () =>
       parent: "[[Parent]]",
       type: "[[project]]",
       status: "wip",
-      scheduled: "2026-07-16",
     },
   );
   assert.deepEqual(

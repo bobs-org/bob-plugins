@@ -389,12 +389,12 @@ test("a stale-stamped recurring row marks due with the resolve hint", () => {
   assert.match(model.tooltip, /complete or reschedule to resolve/);
 });
 
-test("freshness namespace v11 keeps recurring and removes reference capabilities", () => {
+test("freshness namespace v12 keeps recurring and removes reference capabilities", () => {
   withMissingConfig(() => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({}), {});
     plugin.onload();
     try {
-      assert.equal(plugin.api.freshness.version, 11);
+      assert.equal(plugin.api.freshness.version, 12);
       assert.equal(plugin.api.freshness.trackerReview, true);
       assert.equal(plugin.api.freshness.referenceReview, undefined);
       assert.equal(plugin.api.freshness.checklistTiers, true);

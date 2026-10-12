@@ -10,7 +10,7 @@ const {
   withMissingConfig,
   makeStatusEl,
 } = require("./ledger-tools-harness.cjs");
-test("freshness namespace v11 exposes the current nine-tier contract", () => {
+test("freshness namespace v12 exposes unblock TICKLER metadata and writers", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -30,7 +30,7 @@ test("freshness namespace v11 exposes the current nine-tier contract", () => {
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 11);
+      assert.equal(freshness.version, 12);
       assert.equal(freshness.checklistTiers, true);
       assert.equal(freshness.recurringTier, true);
       assert.equal(freshness.referenceReview, undefined);
@@ -40,7 +40,9 @@ test("freshness namespace v11 exposes the current nine-tier contract", () => {
         "stampLine",
         "setRefreshLine",
         "keepLine",
+        "markUnblockedLine",
         "state",
+        "returnedBy",
         "bucket",
         "reviewModel",
         "isDue",
@@ -98,6 +100,42 @@ test("freshness namespace v11 exposes the current nine-tier contract", () => {
         freshness.stampLine("- [ ] #task Buy milk", "2026-10-08"),
         "- [ ] #task Buy milk [fresh:: 2026-10-08]",
       );
+      assert.equal(
+        freshness.markUnblockedLine(
+          "- [ ] #task Recovered [fresh:: 2026-10-01]",
+          { today: "2026-10-08", status: " " },
+        ),
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08]",
+      );
+      assert.deepEqual(freshness.counts().returnedBy, {
+        scheduled: 0,
+        unblocked: 0,
+      });
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("freshness state and count API expose an unblock return source", () => {
+  withMissingConfig(() => {
+    const task = makeFreshnessTask({
+      description: "Recovered",
+      originalMarkdown:
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08]",
+    });
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [task] }), {});
+    plugin.onload();
+    try {
+      const freshness = plugin.api.freshness;
+      assert.equal(freshness.state(task), "resurfaced");
+      assert.equal(freshness.returnedBy(task), "unblocked");
+      assert.equal(freshness.queue()[0].returnedBy, "unblocked");
+      assert.equal(freshness.queue()[0].unblockedOn, "2026-10-08");
+      assert.deepEqual(freshness.counts().returnedBy, {
+        scheduled: 0,
+        unblocked: 1,
+      });
     } finally {
       plugin.onunload();
     }

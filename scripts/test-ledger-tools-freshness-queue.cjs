@@ -147,14 +147,14 @@ test("R1 TICKLER beats older ROTTEN", () => {
   );
 });
 
-test("R2 tickler orders by schedule then newest created", () => {
+test("R2 tickler orders by due date then path and line", () => {
   const x = readyRow("x.md", 1, "2026-10-05", "2026-09-01");
   x.scheduled = "2026-10-06";
   x.rawLine = "- [ ] #task X [fresh:: 2026-10-05] [scheduled:: 2026-10-06]";
-  const w = readyRow("w.md", 1, "2026-10-05", "2026-09-05");
+  const w = readyRow("w.md", 1, "2026-10-05", "2026-09-01");
   w.scheduled = "2026-10-07";
   w.rawLine = "- [ ] #task W [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
-  const y = readyRow("y.md", 1, "2026-10-05", "2026-09-01");
+  const y = readyRow("y.md", 1, "2026-10-05", "2026-09-05");
   y.scheduled = "2026-10-07";
   y.rawLine = "- [ ] #task Y [fresh:: 2026-10-05] [scheduled:: 2026-10-07]";
   const ordered = freshnessQueue([y, w, x], D, CFG);

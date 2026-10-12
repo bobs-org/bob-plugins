@@ -128,6 +128,8 @@ module.exports.helpers = {
   freshnessStampLine,
   freshnessSetRefreshLine,
   freshnessKeepLine,
+  freshnessMarkUnblockedLine,
+  freshnessReturnedByFromLine,
   freshnessParseKeepsValue,
   freshnessFirstValidKeeps,
   readFreshness,

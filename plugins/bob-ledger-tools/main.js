@@ -4460,10 +4460,10 @@ function freshnessTrailingFieldKey(trimmed) {
 // Byte offset where the trailing Tasks suffix starts. The suffix starts
 // at the leftmost Tasks element (a Tasks-key field, a trailing tag, or
 // `^id`) of the run scanned from the end of the line. `fresh` /
-// `refresh` / `keeps` fields extend the run but are not part of the
-// suffix. `keeps` is a run-extending non-Tasks key: it is never added
-// to the Tasks key registry. Returns the trimmed length when there is
-// no suffix.
+// `refresh` / `keeps` / `unblocked` fields extend the run but are not
+// part of the suffix. They are run-extending non-Tasks keys: never add
+// them to the Tasks key registry. Returns the trimmed length when
+// there is no suffix.
 function freshnessTasksSuffixStart(line) {
   const text = String(line || "");
   const floor = freshnessScanFloor(text);
@@ -4496,6 +4496,12 @@ function freshnessTasksSuffixStart(line) {
       cursor = freshnessTrimEndTo(text.slice(0, tagStart), tagStart);
       continue;
     }
+    const trailingBlock = freshnessTrailingBlockStart(trimmed);
+    if (trailingBlock !== null && trailingBlock >= floor) {
+      leftmost = trailingBlock;
+      cursor = freshnessTrimEndTo(text.slice(0, trailingBlock), trailingBlock);
+      continue;
+    }
     const field = freshnessTrailingFieldKey(trimmed);
     if (!field) {
       break;
@@ -4511,7 +4517,8 @@ function freshnessTasksSuffixStart(line) {
     if (
       field.key === "fresh" ||
       field.key === "refresh" ||
-      field.key === "keeps"
+      field.key === "keeps" ||
+      field.key === "unblocked"
     ) {
       cursor = freshnessTrimEndTo(text.slice(0, field.start), field.start);
       continue;
@@ -4522,18 +4529,14 @@ function freshnessTasksSuffixStart(line) {
   return leftmost === null ? trimmedLen : leftmost;
 }
 
-// Remove every `fresh`, `refresh`, and `keeps` field from `text`,
-// collapsing the whitespace each removal leaves to a single space.
-function freshnessRemoveFields(text) {
+// Remove selected freshness fields from `text`, collapsing the
+// whitespace each removal leaves to a single space.
+function freshnessRemoveNamedFields(text, names) {
   const ranges = [];
-  for (const field of freshnessInlineFields(text, "fresh")) {
-    ranges.push([field.start, field.end]);
-  }
-  for (const field of freshnessInlineFields(text, "refresh")) {
-    ranges.push([field.start, field.end]);
-  }
-  for (const field of freshnessInlineFields(text, "keeps")) {
-    ranges.push([field.start, field.end]);
+  for (const name of names) {
+    for (const field of freshnessInlineFields(text, name)) {
+      ranges.push([field.start, field.end]);
+    }
   }
   if (ranges.length === 0) {
     return text;
@@ -4556,6 +4559,15 @@ function freshnessRemoveFields(text) {
   }
   output += text.slice(cursor);
   return output;
+}
+
+function freshnessRemoveFields(text) {
+  return freshnessRemoveNamedFields(text, [
+    "fresh",
+    "refresh",
+    "keeps",
+    "unblocked",
+  ]);
 }
 
 // Rebuild `line` with `[fresh:: dateText]` (plus `[refresh:: N]` and
@@ -4627,6 +4639,133 @@ function freshnessStampLine(line, dateText) {
   return { line: output, changed: output !== text, refused: null };
 }
 
+function freshnessHasHiddenTag(line) {
+  return /(?:^|[ \t])#hide(?=$|[ \t])/i.test(String(line || ""));
+}
+
+function freshnessFirstValidDate(line, name) {
+  for (const field of freshnessInlineFields(line, name)) {
+    const date = parseFreshDateStrict(field.value);
+    if (date !== null) {
+      return date;
+    }
+  }
+  return null;
+}
+
+// Return the source of a due Ready resurfacing, if this line is in the
+// freshness scope. Scheduled wins a tie with an unblock date. keepLine uses
+// this so an unblock review does not alter the keep streak.
+function freshnessReturnedByFromLine(line, todayText, options = {}) {
+  try {
+    const text = String(line || "");
+    const today = freshnessNormalizeDateText(todayText);
+    const settings = options && typeof options === "object" ? options : {};
+    if (freshnessTaskStatus(text) !== " ") {
+      return null;
+    }
+    if (
+      freshnessHasRepeatField(text) ||
+      freshnessHasHiddenTag(text) ||
+      Boolean(settings.recurring) ||
+      Boolean(settings.hidden) ||
+      Boolean(settings.isDailyNote) ||
+      Boolean(settings.isToday)
+    ) {
+      return null;
+    }
+    const read = readFreshness(text, today);
+    if (read.fresh === null) {
+      return null;
+    }
+    const scheduled = freshnessFirstValidDate(text, "scheduled");
+    const scheduledReturn =
+      scheduled !== null && read.fresh < scheduled && scheduled <= today
+        ? scheduled
+        : null;
+    const unblockedReturn =
+      read.unblocked !== null &&
+      read.fresh <= read.unblocked &&
+      read.unblocked <= today
+        ? read.unblocked
+        : null;
+    if (
+      scheduledReturn !== null &&
+      (unblockedReturn === null || scheduledReturn >= unblockedReturn)
+    ) {
+      return "scheduled";
+    }
+    return unblockedReturn === null ? null : "unblocked";
+  } catch (error) {
+    return null;
+  }
+}
+
+// Record an automatic Blocked → Ready recovery when it needs to re-enter
+// review. The existing freshness group is kept exactly as written and this
+// never creates a fresh stamp. Extra scope flags let callers exclude daily
+// notes and Today-linked tasks, which cannot be inferred from a line alone.
+function freshnessMarkUnblockedLine(line, options = {}) {
+  try {
+    const text = String(line || "");
+    const settings = options && typeof options === "object" ? options : {};
+    const today = freshnessNormalizeDateText(settings.today);
+    const status =
+      settings.status === undefined || settings.status === null
+        ? freshnessTaskStatus(text)
+        : String(settings.status)[0];
+    if (
+      status !== " " ||
+      freshnessTaskStatus(text) === null ||
+      freshnessIsClosedStatus(status) ||
+      freshnessHasRepeatField(text) ||
+      freshnessHasHiddenTag(text) ||
+      Boolean(settings.recurring) ||
+      Boolean(settings.hidden) ||
+      Boolean(settings.isDailyNote) ||
+      Boolean(settings.isToday)
+    ) {
+      return text;
+    }
+
+    const read = readFreshness(text, today);
+    if (read.fresh === null) {
+      return text;
+    }
+    const scheduled = freshnessFirstValidDate(text, "scheduled");
+    if (
+      scheduled !== null &&
+      read.fresh < scheduled &&
+      scheduled <= today
+    ) {
+      return text;
+    }
+
+    const withoutUnblocked = freshnessRemoveNamedFields(text, ["unblocked"]);
+    const trimmedLen = withoutUnblocked.replace(/[ \t\n\r]+$/, "").length;
+    const suffixStart = Math.min(
+      freshnessTasksSuffixStart(withoutUnblocked),
+      trimmedLen,
+    );
+    const head = withoutUnblocked
+      .slice(0, suffixStart)
+      .replace(/[ \t\n\r]+$/, "");
+    const suffix = withoutUnblocked
+      .slice(suffixStart, trimmedLen)
+      .trim()
+      .replace(/^[ \t]+/, "");
+    return (
+      head +
+      " [unblocked:: " +
+      today +
+      "]" +
+      (suffix === "" ? "" : " " + suffix)
+    );
+  } catch (error) {
+    return String(line || "");
+  }
+}
+
 // The sole increment helper (`docs/freshness.md` §2a): stamp `line`
 // with `dateText` while counting one due-Ready bare keep. `options`
 // carries `{ counted }`: a counted keep increments the valid semantic
@@ -4659,8 +4798,9 @@ function freshnessKeepLine(line, dateText, options) {
     Boolean(options.counted);
   const read = readFreshness(text, day);
   const priorValid = read.fresh !== null && read.fresh < day;
+  const returnedBy = freshnessReturnedByFromLine(text, day, options);
   let keptKeeps = null;
-  if (counted && priorValid) {
+  if (counted && priorValid && returnedBy !== "unblocked") {
     keptKeeps = Math.min(read.keeps + 1, 999);
   } else if (read.keeps > 0) {
     keptKeeps = read.keeps;
@@ -4708,11 +4848,12 @@ function freshnessPushLint(lints, code) {
   }
 }
 
-// Read the `fresh` / `refresh` / `keeps` fields on `line`: the latest
+// Read the `fresh` / `refresh` / `keeps` / `unblocked` fields on `line`: the latest
 // valid `fresh` date not after `todayText` (a future date is treated
 // as none), the first valid `[refresh:: N]`, the first valid
 // `[keeps:: N]` semantic count (0 when absent or when no value is
-// valid), and lint codes in first-seen order. Mirrors `read_freshness`
+// valid), the latest valid `[unblocked:: YYYY-MM-DD]`, and lint codes
+// in first-seen order. Mirrors `read_freshness`
 // in `src/native/freshness/placement.rs`.
 function readFreshness(line, todayText) {
   const text = String(line || "");
@@ -4720,6 +4861,7 @@ function readFreshness(line, todayText) {
   const freshFields = freshnessInlineFields(text, "fresh");
   const refreshFields = freshnessInlineFields(text, "refresh");
   const keepsFields = freshnessInlineFields(text, "keeps");
+  const unblockedFields = freshnessInlineFields(text, "unblocked");
   const lints = [];
 
   let best = null;
@@ -4768,6 +4910,23 @@ function readFreshness(line, todayText) {
     freshnessPushLint(lints, "keeps_duplicate");
   }
 
+  let unblocked = null;
+  let unblockedInvalidSeen = false;
+  for (const field of unblockedFields) {
+    const date = parseFreshDateStrict(field.value);
+    if (date === null) {
+      unblockedInvalidSeen = true;
+    } else if (unblocked === null || date > unblocked) {
+      unblocked = date;
+    }
+  }
+  if (unblockedInvalidSeen) {
+    freshnessPushLint(lints, "unblocked_malformed");
+  }
+  if (unblockedFields.length > 1) {
+    freshnessPushLint(lints, "unblocked_duplicate");
+  }
+
   const suffixStart = freshnessTasksSuffixStart(text);
   const trimmedLen = text.replace(/[ \t\n\r]+$/, "").length;
   if (suffixStart < trimmedLen) {
@@ -4775,12 +4934,23 @@ function readFreshness(line, todayText) {
       freshnessInlineFields(text, name).some(
         (field) => field.start >= suffixStart,
       );
-    if (misplaced("fresh") || misplaced("refresh") || misplaced("keeps")) {
+    if (
+      misplaced("fresh") ||
+      misplaced("refresh") ||
+      misplaced("keeps") ||
+      misplaced("unblocked")
+    ) {
       freshnessPushLint(lints, "fresh_misplaced");
     }
   }
 
-  return { fresh: best, refresh, keeps: keeps === null ? 0 : keeps, lints };
+  return {
+    fresh: best,
+    refresh,
+    keeps: keeps === null ? 0 : keeps,
+    unblocked,
+    lints,
+  };
 }
 
 // ---- src/090-freshness-config.js ----
@@ -4868,9 +5038,11 @@ function coerceFreshnessDecay(raw) {
 // rotten/tickler tier, keeps at or over the limit. The annotation
 // means a choice is due, not permission to execute an action. Mirrors
 // `decide_for` in `src/native/freshness/state.rs`.
-function freshnessDecideFor(lane, tier, keeps, config) {
+function freshnessDecideFor(lane, tier, keeps, config, returnedBy) {
   try {
-    const dueTier = tier === "rotten" || tier === "tickler";
+    const dueTier =
+      (tier === "rotten" || tier === "tickler") &&
+      returnedBy !== "unblocked";
     if (!dueTier || lane !== "ready") {
       return false;
     }
@@ -5507,11 +5679,14 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     !safe.isDailyNote &&
     !safe.isToday;
 
-  // Effective resurfacing schedule: the inline schedule, once due.
-  // Tracker rows use the same ordinary inline handling as every
-  // other row.
+  // Effective resurfacing date: whichever came last from the inline
+  // schedule and the recorded automatic unblock. A scheduled date wins
+  // a tie; unblock dates allow `fresh == unblocked` so same-day recovery
+  // after a stamp still returns to review.
   const inlineScheduled = freshnessEvaluateValidScheduled(safe.scheduled);
-  let resurfacedOn = null;
+  const unblockedOn = read.unblocked;
+  let scheduledReturn = null;
+  let unblockedReturn = null;
   if (inScope) {
     if (
       inlineScheduled !== null &&
@@ -5519,8 +5694,33 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       fresh < inlineScheduled &&
       inlineScheduled <= today
     ) {
-      resurfacedOn = inlineScheduled;
+      scheduledReturn = inlineScheduled;
     }
+    if (
+      unblockedOn !== null &&
+      fresh !== null &&
+      fresh <= unblockedOn &&
+      unblockedOn <= today
+    ) {
+      unblockedReturn = unblockedOn;
+    }
+  }
+  let returnedOn = null;
+  let returnedBy = null;
+  if (scheduledReturn !== null && unblockedReturn !== null) {
+    if (scheduledReturn >= unblockedReturn) {
+      returnedOn = scheduledReturn;
+      returnedBy = "scheduled";
+    } else {
+      returnedOn = unblockedReturn;
+      returnedBy = "unblocked";
+    }
+  } else if (scheduledReturn !== null) {
+    returnedOn = scheduledReturn;
+    returnedBy = "scheduled";
+  } else if (unblockedReturn !== null) {
+    returnedOn = unblockedReturn;
+    returnedBy = "unblocked";
   }
 
   // Ready state: lane rows keep a null state; Ready rows evaluate
@@ -5532,7 +5732,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       state = null;
     } else if (fresh === null) {
       state = "new";
-    } else if (resurfacedOn !== null) {
+    } else if (returnedOn !== null) {
       state = "resurfaced";
     } else {
       const due = freshDateAddDays(fresh, interval.days);
@@ -5548,12 +5748,12 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
   const trackerLaneDue =
     trackerLaneEligible &&
     (fresh === null ||
-      resurfacedOn !== null ||
+      returnedOn !== null ||
       (fresh !== null && today >= freshDateAddDays(fresh, interval.days)));
   let trackerLaneDueOn = null;
   if (trackerLaneDue) {
-    if (resurfacedOn !== null) {
-      trackerLaneDueOn = resurfacedOn;
+    if (returnedOn !== null) {
+      trackerLaneDueOn = returnedOn;
     } else if (fresh !== null) {
       trackerLaneDueOn = freshDateAddDays(fresh, interval.days);
     }
@@ -5588,7 +5788,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
   // or over the keep limit. Mirrors the `decide` computation in
   // `evaluate` in `src/native/freshness/state.rs`.
   const keeps = read.keeps;
-  const decide = freshnessDecideFor(lane, tier, keeps, config);
+  const decide = freshnessDecideFor(lane, tier, keeps, config, returnedBy);
 
   // Lane rows use the lane due date; an unwalked lane falls back to
   // the Ready-chain interval with no due date (L4). Lane tracker rows
@@ -5611,6 +5811,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
         daysOverdue: checklistScope ? null : daysOverdue,
         keeps,
         decide,
+        returnedBy,
+        unblockedOn,
         lints,
       };
     }
@@ -5632,6 +5834,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue,
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -5648,6 +5852,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue: null,
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -5664,15 +5870,13 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue: null,
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
 
   if (state === "resurfaced") {
-    const scheduled =
-      resurfacedOn !== null
-        ? resurfacedOn
-        : freshnessEvaluateValidScheduled(safe.scheduled);
     return {
       state,
       tier,
@@ -5680,10 +5884,14 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
-      dueOn: checklistScope ? null : scheduled,
-      daysOverdue: checklistScope ? null : freshDateDiffDays(scheduled, today),
+      dueOn: checklistScope ? null : returnedOn,
+      daysOverdue: checklistScope
+        ? null
+        : freshDateDiffDays(returnedOn, today),
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -5701,6 +5909,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue: checklistScope ? null : freshDateDiffDays(dueOn, today),
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -5717,6 +5927,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     daysOverdue: null,
     keeps,
     decide,
+    returnedBy,
+    unblockedOn,
     lints,
   };
 }
@@ -5908,7 +6120,8 @@ function freshnessComparePathLine(a, b) {
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
 // blockId, state (null for lane rows), bucket, tier (machine),
 // tierLabel, lane, created, fresh, dueOn, daysOverdue, interval,
-// intervalSource, keeps, decide, rank, tierRank, tierTotal }` with
+// intervalSource, keeps, decide, returnedBy, unblockedOn, rank,
+// tierRank, tierTotal }` with
 // 1-based `line` (Tasks' `lineNumber` is 0-based). `decide` means a
 // choice is due, not permission to execute an action.
 function freshnessQueue(rows, todayText, config) {
@@ -5956,6 +6169,8 @@ function freshnessQueue(rows, todayText, config) {
       intervalSource: evaluated.intervalSource,
       keeps: evaluated.keeps,
       decide: evaluated.decide,
+      returnedBy: evaluated.returnedBy,
+      unblockedOn: evaluated.unblockedOn,
       rank: 0,
       tierRank: 0,
       tierTotal: 0,
@@ -5996,7 +6211,6 @@ function freshnessQueue(rows, todayText, config) {
     if (left.tier === "tickler") {
       return (
         freshnessCompareDueOn(left.dueOn, right.dueOn) ||
-        freshnessCompareCreated(left.created, right.created, true) ||
         freshnessComparePathLine(left, right)
       );
     }
@@ -6050,6 +6264,7 @@ function freshnessCounts(rows, todayText, config) {
   let resurfaced = 0;
   let rotten = 0;
   let fresh = 0;
+  const returnedBy = { scheduled: 0, unblocked: 0 };
   const byTier = {
     pre: 0,
     new: 0,
@@ -6070,6 +6285,13 @@ function freshnessCounts(rows, todayText, config) {
       continue;
     }
     const evaluated = freshnessEvaluate(row, today, config);
+    if (
+      evaluated.state === "resurfaced" &&
+      (evaluated.returnedBy === "scheduled" ||
+        evaluated.returnedBy === "unblocked")
+    ) {
+      returnedBy[evaluated.returnedBy] += 1;
+    }
     if (evaluated.decide) {
       decide += 1;
     }
@@ -6138,6 +6360,7 @@ function freshnessCounts(rows, todayText, config) {
     resurfaced,
     rotten,
     fresh,
+    returnedBy,
     preDue: byTier.pre,
     postDue: byTier.post,
     pendingDue: byTier.pending,
@@ -6159,10 +6382,12 @@ const FRESHNESS_LINT_MESSAGES = {
   fresh_future: "fresh date is in the future",
   fresh_duplicate: "more than one fresh field; the latest valid date wins",
   fresh_misplaced:
-    "fresh/refresh/keeps sits inside the Tasks suffix; the next stamp repairs it",
+    "fresh/refresh/keeps/unblocked sits inside the Tasks suffix; the next stamp repairs it",
   refresh_invalid: "refresh is not an integer 1-365",
   keeps_invalid: "keeps is not an integer 1-999",
   keeps_duplicate: "more than one keeps field; the first valid count wins",
+  unblocked_malformed: "unblocked date is not a YYYY-MM-DD calendar date",
+  unblocked_duplicate: "more than one unblocked field; the latest valid date wins",
   task_refresh_invalid: "task_refresh is not an integer 1-365",
   freshness_stale_daily_budget_deprecated:
     "freshness.stale_daily_budget is deprecated; use freshness.rotten_daily_budget",
@@ -6578,7 +6803,9 @@ function freshnessReviewEntryView(entry, options = {}) {
           : entry && typeof entry.fresh === "string"
             ? entry.fresh
             : "";
-      detail = since ? "back since " + freshnessReviewShortDate(since) : "tickler";
+      const source = entry && entry.returnedBy;
+      const prefix = source === "unblocked" ? "unblocked " : "scheduled ";
+      detail = since ? prefix + freshnessReviewShortDate(since) : "tickler";
       compact = detail;
     } else if (tier === "rotten") {
       detail = freshnessReviewRottenDetail(entry);
@@ -12949,15 +13176,16 @@ class BobLedgerToolsPlugin extends Plugin {
       // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
       // histogram including recurring. Namespace v11 removes
       // the reference review tier and cadence. Top-level api stays v3).
-      // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
-      // member is synchronous, never awaits and never throws. Missing
+      // `freshness` namespace v12 adds recorded unblock TICKLERs and
+      // their source metadata. It mirrors `docs/freshness.md` §4 in
+      // bob-cli. Every member is synchronous, never awaits and never throws. Missing
       // or old freshness namespaces degrade vault queries to the
       // legacy READY visibility: guard calls with try/catch as well as
       // optional chaining, since optional chaining alone does not
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 11,
+        version: 12,
         trackerReview: true,
         checklistTiers: true,
         recurringTier: true,
@@ -12968,7 +13196,10 @@ class BobLedgerToolsPlugin extends Plugin {
           this.apiFreshnessSetRefreshLine(line, days, dateText),
         keepLine: (line, dateText, options) =>
           this.apiFreshnessKeepLine(line, dateText, options),
+        markUnblockedLine: (line, options) =>
+          this.apiFreshnessMarkUnblockedLine(line, options),
         state: (task) => this.apiFreshnessState(task),
+        returnedBy: (task) => this.apiFreshnessReturnedBy(task),
         bucket: (task) => this.apiFreshnessBucket(task),
         reviewModel: () => this.freshnessReviewModel(),
         isDue: (task) => this.apiFreshnessIsDue(task),
@@ -17486,6 +17717,8 @@ class BobLedgerToolsFreshnessApiMixin {
           daysOverdue: evaluated.daysOverdue,
           intervalDays: evaluated.intervalDays,
           intervalSource: evaluated.intervalSource,
+          returnedBy: evaluated.returnedBy || null,
+          unblockedOn: evaluated.unblockedOn || null,
         };
         evaluatedByIndex[rowIndex] = entry;
         if (keyCounts.get(freshnessRowKey(row)) === 1) {
@@ -17697,6 +17930,17 @@ class BobLedgerToolsFreshnessApiMixin {
     }
   }
 
+  apiFreshnessMarkUnblockedLine(line, options) {
+    try {
+      const settings = options && typeof options === "object" ? options : {};
+      const day =
+        parseFreshDateStrict(settings.today) || this.freshnessTodayText();
+      return freshnessMarkUnblockedLine(line, { ...settings, today: day });
+    } catch (error) {
+      return String(line || "");
+    }
+  }
+
   apiFreshnessSetRefreshLine(line, days, dateText) {
     try {
       const day =
@@ -17799,12 +18043,22 @@ class BobLedgerToolsFreshnessApiMixin {
       daysOverdue: evaluated.daysOverdue,
       intervalDays: evaluated.intervalDays,
       intervalSource: evaluated.intervalSource,
+      returnedBy: evaluated.returnedBy || null,
+      unblockedOn: evaluated.unblockedOn || null,
     };
   }
 
   apiFreshnessState(task) {
     try {
       return this.freshnessEvaluatedFor(task).state;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  apiFreshnessReturnedBy(task) {
+    try {
+      return this.freshnessEvaluatedFor(task).returnedBy || null;
     } catch (error) {
       return null;
     }
@@ -18025,6 +18279,9 @@ class BobLedgerToolsFreshnessApiMixin {
       if (counts.byTier && typeof counts.byTier === "object") {
         counts.byTier = { ...counts.byTier };
       }
+      if (counts.returnedBy && typeof counts.returnedBy === "object") {
+        counts.returnedBy = { ...counts.returnedBy };
+      }
       return counts;
     } catch (error) {
       return {
@@ -18033,6 +18290,7 @@ class BobLedgerToolsFreshnessApiMixin {
         resurfaced: 0,
         rotten: 0,
         fresh: 0,
+        returnedBy: { scheduled: 0, unblocked: 0 },
         pendingDue: 0,
         nextDue: 0,
         projectsDue: 0,
@@ -33490,6 +33748,8 @@ module.exports.helpers = {
   freshnessStampLine,
   freshnessSetRefreshLine,
   freshnessKeepLine,
+  freshnessMarkUnblockedLine,
+  freshnessReturnedByFromLine,
   freshnessParseKeepsValue,
   freshnessFirstValidKeeps,
   readFreshness,

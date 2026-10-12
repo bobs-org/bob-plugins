@@ -3,6 +3,7 @@ const test = require("node:test");
 const {
   freshnessSetRefreshLine,
   freshnessStampLine,
+  freshnessKeepLine,
   readFreshness,
   D,
 } = require("./ledger-tools-harness.cjs");
@@ -144,6 +145,29 @@ test("P13 recurring and P17 done tasks are refused unchanged", () => {
   assert.equal(freshnessStampLine(plain, D).refused, "not_task");
 });
 
+test("U1-U2 stamp vectors clear unblocked while preserving keeps in seed mode", () => {
+  const u1 = freshnessStampLine(
+    "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-07] [created:: 2026-09-01]",
+    D,
+  );
+  assert.equal(
+    u1.line,
+    "- [ ] #task Recovered [fresh:: 2026-10-08] [created:: 2026-09-01]",
+  );
+  assert.equal(u1.changed, true);
+
+  const u2 = freshnessKeepLine(
+    "- [ ] #task Recovered [fresh:: 2026-10-01] [keeps:: 2] [unblocked:: 2026-10-07] [created:: 2026-09-01]",
+    D,
+    { counted: false },
+  );
+  assert.equal(
+    u2.line,
+    "- [ ] #task Recovered [fresh:: 2026-10-08] [keeps:: 2] [created:: 2026-09-01]",
+  );
+  assert.equal(u2.changed, true);
+});
+
 test("reader reports misplaced and duplicate fields", () => {
   const misplaced = readFreshness(
     "- [ ] #task Buy milk [created::2026-09-29] [fresh:: 2026-10-01]",
@@ -158,5 +182,12 @@ test("reader reports misplaced and duplicate fields", () => {
   );
   assert.ok(duplicates.lints.includes("fresh_duplicate"), "P10 lint");
   assert.equal(duplicates.fresh, "2026-09-20");
+
+  const misplacedUnblocked = readFreshness(
+    "- [ ] #task Recovered [fresh:: 2026-10-01] [created:: 2026-09-01] ^recovered [unblocked:: 2026-10-07]",
+    D,
+  );
+  assert.ok(misplacedUnblocked.lints.includes("fresh_misplaced"));
+  assert.equal(misplacedUnblocked.unblocked, "2026-10-07");
 });
 

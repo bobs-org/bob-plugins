@@ -664,7 +664,7 @@ test("reviewEntryView compact and detail cover the original freshness tiers", ()
       }),
       today,
     ).detail,
-    "back since Oct 7",
+    "scheduled Oct 7",
   );
   assert.equal(
     freshnessReviewEntryView(

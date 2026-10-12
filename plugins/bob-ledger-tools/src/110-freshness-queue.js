@@ -5,7 +5,8 @@
 // carry `{ key, path, line, lineNumber, text, originalMarkdown,
 // blockId, state (null for lane rows), bucket, tier (machine),
 // tierLabel, lane, created, fresh, dueOn, daysOverdue, interval,
-// intervalSource, keeps, decide, rank, tierRank, tierTotal }` with
+// intervalSource, keeps, decide, returnedBy, unblockedOn, rank,
+// tierRank, tierTotal }` with
 // 1-based `line` (Tasks' `lineNumber` is 0-based). `decide` means a
 // choice is due, not permission to execute an action.
 function freshnessQueue(rows, todayText, config) {
@@ -53,6 +54,8 @@ function freshnessQueue(rows, todayText, config) {
       intervalSource: evaluated.intervalSource,
       keeps: evaluated.keeps,
       decide: evaluated.decide,
+      returnedBy: evaluated.returnedBy,
+      unblockedOn: evaluated.unblockedOn,
       rank: 0,
       tierRank: 0,
       tierTotal: 0,
@@ -93,7 +96,6 @@ function freshnessQueue(rows, todayText, config) {
     if (left.tier === "tickler") {
       return (
         freshnessCompareDueOn(left.dueOn, right.dueOn) ||
-        freshnessCompareCreated(left.created, right.created, true) ||
         freshnessComparePathLine(left, right)
       );
     }
@@ -147,6 +149,7 @@ function freshnessCounts(rows, todayText, config) {
   let resurfaced = 0;
   let rotten = 0;
   let fresh = 0;
+  const returnedBy = { scheduled: 0, unblocked: 0 };
   const byTier = {
     pre: 0,
     new: 0,
@@ -167,6 +170,13 @@ function freshnessCounts(rows, todayText, config) {
       continue;
     }
     const evaluated = freshnessEvaluate(row, today, config);
+    if (
+      evaluated.state === "resurfaced" &&
+      (evaluated.returnedBy === "scheduled" ||
+        evaluated.returnedBy === "unblocked")
+    ) {
+      returnedBy[evaluated.returnedBy] += 1;
+    }
     if (evaluated.decide) {
       decide += 1;
     }
@@ -235,6 +245,7 @@ function freshnessCounts(rows, todayText, config) {
     resurfaced,
     rotten,
     fresh,
+    returnedBy,
     preDue: byTier.pre,
     postDue: byTier.post,
     pendingDue: byTier.pending,
@@ -256,10 +267,12 @@ const FRESHNESS_LINT_MESSAGES = {
   fresh_future: "fresh date is in the future",
   fresh_duplicate: "more than one fresh field; the latest valid date wins",
   fresh_misplaced:
-    "fresh/refresh/keeps sits inside the Tasks suffix; the next stamp repairs it",
+    "fresh/refresh/keeps/unblocked sits inside the Tasks suffix; the next stamp repairs it",
   refresh_invalid: "refresh is not an integer 1-365",
   keeps_invalid: "keeps is not an integer 1-999",
   keeps_duplicate: "more than one keeps field; the first valid count wins",
+  unblocked_malformed: "unblocked date is not a YYYY-MM-DD calendar date",
+  unblocked_duplicate: "more than one unblocked field; the latest valid date wins",
   task_refresh_invalid: "task_refresh is not an integer 1-365",
   freshness_stale_daily_budget_deprecated:
     "freshness.stale_daily_budget is deprecated; use freshness.rotten_daily_budget",

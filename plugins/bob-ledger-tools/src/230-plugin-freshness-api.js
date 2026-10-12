@@ -248,6 +248,8 @@ class BobLedgerToolsFreshnessApiMixin {
           daysOverdue: evaluated.daysOverdue,
           intervalDays: evaluated.intervalDays,
           intervalSource: evaluated.intervalSource,
+          returnedBy: evaluated.returnedBy || null,
+          unblockedOn: evaluated.unblockedOn || null,
         };
         evaluatedByIndex[rowIndex] = entry;
         if (keyCounts.get(freshnessRowKey(row)) === 1) {
@@ -459,6 +461,17 @@ class BobLedgerToolsFreshnessApiMixin {
     }
   }
 
+  apiFreshnessMarkUnblockedLine(line, options) {
+    try {
+      const settings = options && typeof options === "object" ? options : {};
+      const day =
+        parseFreshDateStrict(settings.today) || this.freshnessTodayText();
+      return freshnessMarkUnblockedLine(line, { ...settings, today: day });
+    } catch (error) {
+      return String(line || "");
+    }
+  }
+
   apiFreshnessSetRefreshLine(line, days, dateText) {
     try {
       const day =
@@ -561,12 +574,22 @@ class BobLedgerToolsFreshnessApiMixin {
       daysOverdue: evaluated.daysOverdue,
       intervalDays: evaluated.intervalDays,
       intervalSource: evaluated.intervalSource,
+      returnedBy: evaluated.returnedBy || null,
+      unblockedOn: evaluated.unblockedOn || null,
     };
   }
 
   apiFreshnessState(task) {
     try {
       return this.freshnessEvaluatedFor(task).state;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  apiFreshnessReturnedBy(task) {
+    try {
+      return this.freshnessEvaluatedFor(task).returnedBy || null;
     } catch (error) {
       return null;
     }
@@ -787,6 +810,9 @@ class BobLedgerToolsFreshnessApiMixin {
       if (counts.byTier && typeof counts.byTier === "object") {
         counts.byTier = { ...counts.byTier };
       }
+      if (counts.returnedBy && typeof counts.returnedBy === "object") {
+        counts.returnedBy = { ...counts.returnedBy };
+      }
       return counts;
     } catch (error) {
       return {
@@ -795,6 +821,7 @@ class BobLedgerToolsFreshnessApiMixin {
         resurfaced: 0,
         rotten: 0,
         fresh: 0,
+        returnedBy: { scheduled: 0, unblocked: 0 },
         pendingDue: 0,
         nextDue: 0,
         projectsDue: 0,

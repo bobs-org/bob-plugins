@@ -464,6 +464,42 @@ test("uncounted keep preserves the valid value while canonicalizing", () => {
   assert.equal(missing.line, "- [ ] #task A [fresh:: 2026-10-08]");
 });
 
+test("UB13 keep on an unblock TICKLER preserves the streak and skips the card", () => {
+  const line =
+    "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08] [keeps:: 5]";
+  const row = sRow({ rawLine: line });
+  const evaluated = freshnessEvaluate(row, D, CFG);
+  assert.equal(evaluated.state, "resurfaced");
+  assert.equal(evaluated.tier, "tickler");
+  assert.equal(evaluated.returnedBy, "unblocked");
+  assert.equal(evaluated.decide, false);
+  assert.equal(
+    freshnessDecideFor("ready", "tickler", 5, CFG, "unblocked"),
+    false,
+  );
+
+  const kept = freshnessKeepLine(line, D, { counted: true });
+  assert.equal(
+    kept.line,
+    "- [ ] #task Recovered [fresh:: 2026-10-08] [keeps:: 5]",
+  );
+  assert.equal(kept.changed, true);
+});
+
+test("a scheduled tickler still counts when schedule wins an unblock tie", () => {
+  const line =
+    "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-07] [scheduled:: 2026-10-07] [keeps:: 2]";
+  const row = sRow({ rawLine: line, scheduled: "2026-10-07" });
+  const evaluated = freshnessEvaluate(row, D, CFG);
+  assert.equal(evaluated.returnedBy, "scheduled");
+  assert.equal(evaluated.decide, false);
+  const kept = freshnessKeepLine(line, D, { counted: true });
+  assert.equal(
+    kept.line,
+    "- [ ] #task Recovered [fresh:: 2026-10-08] [keeps:: 3] [scheduled:: 2026-10-07]",
+  );
+});
+
 // --- C config vectors (mirror the fixture's decay cases) ---
 
 test("decay normalization: absent, null, true, and {} enable with 3", () => {

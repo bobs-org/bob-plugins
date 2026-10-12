@@ -393,11 +393,14 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     !safe.isDailyNote &&
     !safe.isToday;
 
-  // Effective resurfacing schedule: the inline schedule, once due.
-  // Tracker rows use the same ordinary inline handling as every
-  // other row.
+  // Effective resurfacing date: whichever came last from the inline
+  // schedule and the recorded automatic unblock. A scheduled date wins
+  // a tie; unblock dates allow `fresh == unblocked` so same-day recovery
+  // after a stamp still returns to review.
   const inlineScheduled = freshnessEvaluateValidScheduled(safe.scheduled);
-  let resurfacedOn = null;
+  const unblockedOn = read.unblocked;
+  let scheduledReturn = null;
+  let unblockedReturn = null;
   if (inScope) {
     if (
       inlineScheduled !== null &&
@@ -405,8 +408,33 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       fresh < inlineScheduled &&
       inlineScheduled <= today
     ) {
-      resurfacedOn = inlineScheduled;
+      scheduledReturn = inlineScheduled;
     }
+    if (
+      unblockedOn !== null &&
+      fresh !== null &&
+      fresh <= unblockedOn &&
+      unblockedOn <= today
+    ) {
+      unblockedReturn = unblockedOn;
+    }
+  }
+  let returnedOn = null;
+  let returnedBy = null;
+  if (scheduledReturn !== null && unblockedReturn !== null) {
+    if (scheduledReturn >= unblockedReturn) {
+      returnedOn = scheduledReturn;
+      returnedBy = "scheduled";
+    } else {
+      returnedOn = unblockedReturn;
+      returnedBy = "unblocked";
+    }
+  } else if (scheduledReturn !== null) {
+    returnedOn = scheduledReturn;
+    returnedBy = "scheduled";
+  } else if (unblockedReturn !== null) {
+    returnedOn = unblockedReturn;
+    returnedBy = "unblocked";
   }
 
   // Ready state: lane rows keep a null state; Ready rows evaluate
@@ -418,7 +446,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       state = null;
     } else if (fresh === null) {
       state = "new";
-    } else if (resurfacedOn !== null) {
+    } else if (returnedOn !== null) {
       state = "resurfaced";
     } else {
       const due = freshDateAddDays(fresh, interval.days);
@@ -434,12 +462,12 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
   const trackerLaneDue =
     trackerLaneEligible &&
     (fresh === null ||
-      resurfacedOn !== null ||
+      returnedOn !== null ||
       (fresh !== null && today >= freshDateAddDays(fresh, interval.days)));
   let trackerLaneDueOn = null;
   if (trackerLaneDue) {
-    if (resurfacedOn !== null) {
-      trackerLaneDueOn = resurfacedOn;
+    if (returnedOn !== null) {
+      trackerLaneDueOn = returnedOn;
     } else if (fresh !== null) {
       trackerLaneDueOn = freshDateAddDays(fresh, interval.days);
     }
@@ -474,7 +502,7 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
   // or over the keep limit. Mirrors the `decide` computation in
   // `evaluate` in `src/native/freshness/state.rs`.
   const keeps = read.keeps;
-  const decide = freshnessDecideFor(lane, tier, keeps, config);
+  const decide = freshnessDecideFor(lane, tier, keeps, config, returnedBy);
 
   // Lane rows use the lane due date; an unwalked lane falls back to
   // the Ready-chain interval with no due date (L4). Lane tracker rows
@@ -497,6 +525,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
         daysOverdue: checklistScope ? null : daysOverdue,
         keeps,
         decide,
+        returnedBy,
+        unblockedOn,
         lints,
       };
     }
@@ -518,6 +548,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue,
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -534,6 +566,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue: null,
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -550,15 +584,13 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue: null,
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
 
   if (state === "resurfaced") {
-    const scheduled =
-      resurfacedOn !== null
-        ? resurfacedOn
-        : freshnessEvaluateValidScheduled(safe.scheduled);
     return {
       state,
       tier,
@@ -566,10 +598,14 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       fresh,
       intervalDays: interval.days,
       intervalSource: interval.source,
-      dueOn: checklistScope ? null : scheduled,
-      daysOverdue: checklistScope ? null : freshDateDiffDays(scheduled, today),
+      dueOn: checklistScope ? null : returnedOn,
+      daysOverdue: checklistScope
+        ? null
+        : freshDateDiffDays(returnedOn, today),
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -587,6 +623,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
       daysOverdue: checklistScope ? null : freshDateDiffDays(dueOn, today),
       keeps,
       decide,
+      returnedBy,
+      unblockedOn,
       lints,
     };
   }
@@ -603,6 +641,8 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     daysOverdue: null,
     keeps,
     decide,
+    returnedBy,
+    unblockedOn,
     lints,
   };
 }

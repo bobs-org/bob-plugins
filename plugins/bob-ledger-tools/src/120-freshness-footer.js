@@ -249,7 +249,9 @@ function freshnessReviewEntryView(entry, options = {}) {
           : entry && typeof entry.fresh === "string"
             ? entry.fresh
             : "";
-      detail = since ? "back since " + freshnessReviewShortDate(since) : "tickler";
+      const source = entry && entry.returnedBy;
+      const prefix = source === "unblocked" ? "unblocked " : "scheduled ";
+      detail = since ? prefix + freshnessReviewShortDate(since) : "tickler";
       compact = detail;
     } else if (tier === "rotten") {
       detail = freshnessReviewRottenDetail(entry);

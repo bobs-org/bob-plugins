@@ -82,9 +82,11 @@ function coerceFreshnessDecay(raw) {
 // rotten/tickler tier, keeps at or over the limit. The annotation
 // means a choice is due, not permission to execute an action. Mirrors
 // `decide_for` in `src/native/freshness/state.rs`.
-function freshnessDecideFor(lane, tier, keeps, config) {
+function freshnessDecideFor(lane, tier, keeps, config, returnedBy) {
   try {
-    const dueTier = tier === "rotten" || tier === "tickler";
+    const dueTier =
+      (tier === "rotten" || tier === "tickler") &&
+      returnedBy !== "unblocked";
     if (!dueTier || lane !== "ready") {
       return false;
     }

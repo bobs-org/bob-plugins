@@ -293,15 +293,16 @@ class BobLedgerToolsPlugin extends Plugin {
       // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
       // histogram including recurring. Namespace v11 removes
       // the reference review tier and cadence. Top-level api stays v3).
-      // `freshness` mirrors `docs/freshness.md` §4 in bob-cli. Every
-      // member is synchronous, never awaits and never throws. Missing
+      // `freshness` namespace v12 adds recorded unblock TICKLERs and
+      // their source metadata. It mirrors `docs/freshness.md` §4 in
+      // bob-cli. Every member is synchronous, never awaits and never throws. Missing
       // or old freshness namespaces degrade vault queries to the
       // legacy READY visibility: guard calls with try/catch as well as
       // optional chaining, since optional chaining alone does not
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 11,
+        version: 12,
         trackerReview: true,
         checklistTiers: true,
         recurringTier: true,
@@ -312,7 +313,10 @@ class BobLedgerToolsPlugin extends Plugin {
           this.apiFreshnessSetRefreshLine(line, days, dateText),
         keepLine: (line, dateText, options) =>
           this.apiFreshnessKeepLine(line, dateText, options),
+        markUnblockedLine: (line, options) =>
+          this.apiFreshnessMarkUnblockedLine(line, options),
         state: (task) => this.apiFreshnessState(task),
+        returnedBy: (task) => this.apiFreshnessReturnedBy(task),
         bucket: (task) => this.apiFreshnessBucket(task),
         reviewModel: () => this.freshnessReviewModel(),
         isDue: (task) => this.apiFreshnessIsDue(task),

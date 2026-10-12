@@ -6363,22 +6363,46 @@ function planDependencyEdit(args = {}) {
     parentText = blocked;
   }
   const promotions = [];
+  const recordPromotion = (path, line, from, to) => {
+    if (from === to) {
+      return;
+    }
+    promotions.push(
+      Object.freeze({
+        path,
+        line,
+        from,
+        to,
+      }),
+    );
+  };
   for (const row of (mirrorTouch ? [] : addedOpen)) {
     const desired = getDependencyPromotionStatus(parentStatusBefore);
     if (!desired) {
       continue;
     }
-    const promoted = promoteObsidianTaskCheckboxStatus(row.text, desired);
-    if (promoted !== row.text) {
-      promotions.push(
-        Object.freeze({
-          path: row.ref.path,
-          line: row.line,
-          from: row.text,
-          to: promoted,
-        }),
-      );
+    // ADJ-11 (`docs/task-dependencies.md` §13.4 PDB9): never raise a `^prj`
+    // target; walk through it to that project's own Depends-On links.
+    if (isProjectLifecycleTaskLine(row.text) && row.ref.blockId === "prj") {
+      for (const walked of collectProjectDependencyPromotionRows(
+        filesMap,
+        row.ref.path,
+      )) {
+        recordPromotion(
+          walked.path,
+          walked.line,
+          walked.text,
+          promoteObsidianTaskCheckboxStatus(walked.text, desired),
+        );
+      }
+      continue;
     }
+    recordPromotion(
+      row.ref.path,
+      row.line,
+      row.text,
+      promoteObsidianTaskCheckboxStatus(row.text, desired),
+    );
   }
 
   // Same-note target writes join the dependent's one transaction;
@@ -6421,6 +6445,25 @@ function planDependencyEdit(args = {}) {
       nextText = upserted.line;
     }
     recordTargetWrite(row, nextText);
+  }
+  for (const promotion of promotions) {
+    const alreadyWritten = [...targetEdits, ...preparations].some(
+      (edit) => edit.path === promotion.path && edit.line === promotion.line,
+    );
+    if (alreadyWritten) {
+      continue;
+    }
+    const edit = Object.freeze({
+      path: promotion.path,
+      line: promotion.line,
+      from: promotion.from,
+      text: promotion.to,
+    });
+    if (promotion.path === parentPath) {
+      targetEdits.push(edit);
+    } else {
+      preparations.push(Object.freeze({ ...edit, kind: "target-identity" }));
+    }
   }
 
   // The line: create, append, remove, or delete (empty list deletes it).
@@ -10818,6 +10861,8 @@ function parseTrailingRecoveryTaskMetadata(body) {
       recognized = /^[A-Za-z0-9, !]*$/.test(value);
     } else if (key === "onCompletion") {
       recognized = /^[A-Za-z]+$/.test(value);
+    } else if (key === "unblocked") {
+      recognized = validRecoveryTaskDateShape(value);
     }
     if (!recognized) {
       break;
@@ -11195,7 +11240,12 @@ function deferredScheduledRecovery(reason) {
   });
 }
 
-function buildScheduledRecoveryIndex(files, registry, today = new Date()) {
+function buildScheduledRecoveryIndex(
+  files,
+  registry,
+  today = new Date(),
+  options = {},
+) {
   const markdownFiles = (Array.isArray(files) ? files : [])
     .filter((file) => isScheduledRecoveryMarkdownPath(file.path))
     .map((file) => ({
@@ -11320,6 +11370,14 @@ function buildScheduledRecoveryIndex(files, registry, today = new Date()) {
       roots.add(target);
     }
   }
+  const projectBlocked = applyProjectRecoveryEdges({
+    markdownFiles,
+    noteIndex,
+    blocks,
+    edges,
+    today,
+    scheduledOverrideByPath: options.scheduledOverrideByPath,
+  });
   const ranks = computeScheduledRecoveryRanks(roots, edges, blocks);
 
   return Object.freeze({
@@ -11337,6 +11395,7 @@ function buildScheduledRecoveryIndex(files, registry, today = new Date()) {
     dependencyIds,
     ranks,
     dailyPaths,
+    projectBlocked,
   });
 }
 
@@ -11389,6 +11448,16 @@ function getScheduledRecoveryMetadata(index, filePath, line) {
       });
     }
     dependencyAmbiguous ||= unknown;
+  }
+  const projectReason =
+    index.projectBlocked &&
+    index.projectBlocked.get(recoveryIdentity(path, String(line)));
+  if (projectReason) {
+    return Object.freeze({
+      state: "blocked",
+      rank: null,
+      reason: projectReason,
+    });
   }
   if (dependencyAmbiguous) {
     return deferredScheduledRecovery(
@@ -11537,6 +11606,9 @@ async function buildInteractiveScheduledRecoverySnapshot(
     files,
     await registryPromise,
     options.today || new Date(),
+    {
+      scheduledOverrideByPath: options.scheduledOverrideByPath,
+    },
   );
 }
 
@@ -11546,12 +11618,25 @@ async function buildTargetScheduledRecoveryByLine(
   sourceContent,
   targetLines,
   today = new Date(),
+  extra = {},
 ) {
-  const snapshot = await buildInteractiveScheduledRecoverySnapshot(app, {
+  const snapshotOptions = {
     sourcePath,
     sourceContent,
     today,
-  });
+  };
+  if (Object.prototype.hasOwnProperty.call(extra, "projectScheduled")) {
+    snapshotOptions.scheduledOverrideByPath = new Map([
+      [
+        normalizeVaultRelativePath(sourcePath),
+        extra.projectScheduled == null ? "" : String(extra.projectScheduled),
+      ],
+    ]);
+  }
+  const snapshot = await buildInteractiveScheduledRecoverySnapshot(
+    app,
+    snapshotOptions,
+  );
   return new Map(
     (Array.isArray(targetLines) ? targetLines : [targetLines]).map((line) => [
       line,
@@ -13652,6 +13737,7 @@ function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
     removedLinkCount: 0,
     removedTargets: Object.freeze([]),
     removedLineRanges: Object.freeze([]),
+    removedEntryCount: 0,
     unresolvedCount,
   });
 }
@@ -13773,6 +13859,60 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       endLineExclusive: block.endLineExclusive,
     });
   }
+  let removedEntryCount = 0;
+  if (options.removeEmptiedEntries === true) {
+    // Same open-ledger definition this cleanup already uses
+    // (`collectOpenPomodoroRanges` / `isOpenPomodoroLedgerEntryLine`), not
+    // `collectPomodoroEntries`' picker grammar, so a childless
+    // `- [ ] Current (0900-0930)` entry is eligible.
+    for (const range of openRanges) {
+      const entryBlock = findCurrentBulletChildBlock(lines, range.entryLine);
+      const childEndExclusive = Math.min(
+        entryBlock.endLineExclusive,
+        section.endLine + 1,
+      );
+      const entryStart = lineStarts[range.entryLine];
+      const entryEnd =
+        childEndExclusive < lines.length
+          ? lineStarts[childEndExclusive]
+          : snapshot.length;
+      const removedChild = subtreeCandidates.some(
+        (candidate) => candidate.start >= entryStart && candidate.start < entryEnd,
+      );
+      const tokenChild = matches.some(
+        (match) =>
+          match.line > range.entryLine && match.line < childEndExclusive,
+      );
+      if (!removedChild && !tokenChild) {
+        continue;
+      }
+      let remaining = 0;
+      for (let line = entryBlock.startLine; line < childEndExclusive; line += 1) {
+        if (!PROJECT_LIST_ITEM_RE.test(String(lines[line] || ""))) {
+          continue;
+        }
+        const lineStart = lineStarts[line];
+        const lineEnd = lineStart + String(lines[line] || "").length;
+        const gone = subtreeCandidates.some(
+          (candidate) => candidate.start <= lineStart && candidate.end >= lineEnd,
+        );
+        if (!gone) {
+          remaining += 1;
+        }
+      }
+      if (remaining === 0) {
+        subtreeCandidates.push({
+          start: entryStart,
+          end: entryEnd,
+          replacement: "",
+          startLine: range.entryLine,
+          endLineExclusive: childEndExclusive,
+        });
+        removedEntryCount += 1;
+      }
+    }
+  }
+
   subtreeCandidates.sort(
     (left, right) => left.start - right.start || right.end - left.end,
   );
@@ -13880,6 +14020,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
         }),
       ),
     ),
+    removedEntryCount,
     unresolvedCount,
   });
 }
@@ -18800,6 +18941,427 @@ function getProjectNotePropertyContext(content, lineIndex, options = {}) {
   });
 }
 
+// ---- src/215-project-blocking.js ----
+// Project blocking from the `^prj` line: recognition, block state, ADJ-11
+// walk-through, recovery edges, and the resident-tag signal.
+// Contract: `docs/task-dependencies.md` §13 (PDB/PDT) and Design §2–3.
+
+const PROJECT_BLOCKED_TAG = "#prj_is_blocked";
+const PROJECT_BLOCKED_TAG_RE =
+  /(^|[\s([{])#prj_is_blocked(?=$|[\s)\]},.;:!?])/;
+const PROJECT_TERMINAL_STATUSES = new Set(["done", "canceled", "cancelled"]);
+
+function taskHasProjectBlockedTag(lineText) {
+  return PROJECT_BLOCKED_TAG_RE.test(String(lineText || ""));
+}
+
+function collectProjectNoteTaskRows(content) {
+  const { lines } = splitMarkdownContent(content);
+  const contexts = getMarkdownLineContexts(content);
+  const prj = [];
+  const residents = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    const context = contexts[line];
+    if (!context || context.inFrontmatter || context.inFence) {
+      continue;
+    }
+    const lineText = String(lines[line] || "");
+    if (isBlockquotedMarkdownLine(lineText)) {
+      continue;
+    }
+    if (!isObsidianTaskLine(lineText)) {
+      continue;
+    }
+    const status = getObsidianTaskCheckboxStatus(lineText);
+    if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+      continue;
+    }
+    const row = Object.freeze({
+      line,
+      text: lineText,
+      status,
+      blockId: getTrailingBlockId(lineText),
+    });
+    if (isProjectLifecycleTaskLine(lineText)) {
+      prj.push(row);
+    } else {
+      residents.push(row);
+    }
+  }
+  return Object.freeze({
+    prj: Object.freeze(prj),
+    residents: Object.freeze(residents),
+  });
+}
+
+function readProjectFrontmatterRecognition(content) {
+  const { lines } = splitMarkdownContent(content);
+  if (!startsWithFrontmatter(lines)) {
+    return Object.freeze({
+      isProjectType: false,
+      status: "",
+    });
+  }
+  let closingLine = -1;
+  for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
+    if (FRONTMATTER_DELIMITER_RE.test(lines[lineIndex])) {
+      closingLine = lineIndex;
+      break;
+    }
+  }
+  if (closingLine === -1) {
+    return Object.freeze({
+      isProjectType: false,
+      status: "",
+    });
+  }
+  let typeValue = "";
+  let statusValue = "";
+  for (let lineIndex = 1; lineIndex < closingLine; lineIndex += 1) {
+    const typeMatch = /^type[ \t]*:(.*)$/.exec(lines[lineIndex]);
+    if (typeMatch && !typeValue) {
+      typeValue = getYamlScalarText(typeMatch[1]);
+    }
+    const statusMatch = /^status[ \t]*:(.*)$/.exec(lines[lineIndex]);
+    if (statusMatch && !statusValue) {
+      statusValue = getYamlScalarText(statusMatch[1]);
+    }
+  }
+  return Object.freeze({
+    isProjectType: typeValue === PROJECT_TYPE_WIKILINK,
+    status: normalizeStatus(statusValue),
+  });
+}
+
+function projectLooksBlockedByPrjShortcut(content) {
+  const rows = collectProjectNoteTaskRows(content);
+  return rows.prj.length === 1 && rows.prj[0].status === "?";
+}
+
+function canonicalProjectDependencyPath(note, sourcePath) {
+  const trimmed = String(note || "").trim();
+  if (!trimmed) {
+    return normalizeVaultRelativePath(sourcePath);
+  }
+  return canonicalRecoveryMarkdownPath(trimmed) || `${trimmed}.md`;
+}
+
+function collectProjectTaskDependencyItems(content, sourcePath) {
+  const rows = collectProjectNoteTaskRows(content);
+  if (rows.prj.length !== 1) {
+    return Object.freeze([]);
+  }
+  const { lines } = splitMarkdownContent(content);
+  const prjLine = rows.prj[0].line;
+  const source = normalizeVaultRelativePath(sourcePath);
+  const items = [];
+  const sourceIndent = getBulletIndentWidth(lines[prjLine]);
+  for (let line = prjLine + 1; line < lines.length; line += 1) {
+    const lineText = String(lines[line] || "");
+    if (!lineText.trim()) {
+      continue;
+    }
+    if (getBulletIndentWidth(lineText) <= sourceIndent) {
+      break;
+    }
+    if (findNearestParentListItem(lines, line) !== prjLine) {
+      continue;
+    }
+    const details = parseDependencyNavigationBulletDetails(lineText);
+    if (!details) {
+      continue;
+    }
+    for (const link of details.links) {
+      const path = canonicalProjectDependencyPath(link.note, source);
+      const internal = !link.note || (source && path === source);
+      const archive =
+        isArchivedRecoveryTarget(link.note) || isArchivedRecoveryTarget(path);
+      items.push(
+        Object.freeze({
+          note: String(link.note || ""),
+          path,
+          blockId: link.blockId,
+          line,
+          internal,
+          archive,
+        }),
+      );
+    }
+  }
+  return Object.freeze(items);
+}
+
+function readProjectTaskScheduledValue(lineText) {
+  const field = findBulletPropertyField(lineText, "scheduled");
+  return field ? String(field.value || "").trim() : "";
+}
+
+function getProjectBlockState(content, path, today, lookupOpen, options = {}) {
+  const notePath = normalizeVaultRelativePath(path);
+  const recognition = readProjectFrontmatterRecognition(content);
+  const rows = collectProjectNoteTaskRows(content);
+  const daily = Boolean(canonicalRecoveryDailyDate(notePath));
+  const terminal = PROJECT_TERMINAL_STATUSES.has(recognition.status);
+  const isProject =
+    recognition.isProjectType &&
+    !daily &&
+    !terminal &&
+    rows.prj.length === 1;
+  const empty = (extra = {}) =>
+    Object.freeze({
+      isProject: false,
+      reasons: Object.freeze([]),
+      prjLine: rows.prj.length === 1 ? rows.prj[0].line : -1,
+      prjStatus: rows.prj.length === 1 ? rows.prj[0].status : null,
+      residents: rows.residents,
+      openItems: Object.freeze([]),
+      ...extra,
+    });
+  if (!isProject) {
+    return empty();
+  }
+
+  const items = collectProjectTaskDependencyItems(content, notePath);
+  const openLookup = typeof lookupOpen === "function" ? lookupOpen : () => false;
+  const openItems = [];
+  for (const item of items) {
+    if (item.internal || item.archive) {
+      continue;
+    }
+    if (openLookup(item.path, item.blockId, item)) {
+      openItems.push(item);
+    }
+  }
+  const reasons = [];
+  if (openItems.length > 0) {
+    reasons.push(
+      Object.freeze({
+        kind: "project_dependency",
+        projectPath: notePath,
+        targetIds: Object.freeze(
+          openItems.map((item) => `${item.path}#^${item.blockId}`),
+        ),
+      }),
+    );
+  }
+  const scheduledValue = Object.prototype.hasOwnProperty.call(
+    options,
+    "scheduledValue",
+  )
+    ? options.scheduledValue == null
+      ? ""
+      : String(options.scheduledValue)
+    : readProjectTaskScheduledValue(rows.prj[0].text);
+  if (isFutureInlineScheduledValue(scheduledValue, today)) {
+    reasons.push(
+      Object.freeze({
+        kind: "project_schedule",
+        projectPath: notePath,
+        scheduled: scheduledValue,
+      }),
+    );
+  }
+
+  return Object.freeze({
+    isProject: true,
+    reasons: Object.freeze(reasons),
+    prjLine: rows.prj[0].line,
+    prjStatus: rows.prj[0].status,
+    residents: rows.residents,
+    openItems: Object.freeze(openItems),
+  });
+}
+
+function resolveProjectDependencyFilePath(filesMap, sourcePath, item) {
+  const raw = String(item && item.path ? item.path : "").trim();
+  if (!raw) {
+    return normalizeVaultRelativePath(sourcePath);
+  }
+  const exact = canonicalRecoveryMarkdownPath(
+    String(raw).replace(/\.md$/i, ""),
+  );
+  if (exact && filesMap.has(exact)) {
+    return exact;
+  }
+  const withMd = /\.md$/i.test(raw) ? raw : `${raw}.md`;
+  const normalized = normalizeVaultRelativePath(withMd);
+  if (filesMap.has(normalized)) {
+    return normalized;
+  }
+  const base = recoveryMarkdownBasename(normalized).toLowerCase();
+  let found = null;
+  for (const filePath of filesMap.keys()) {
+    if (recoveryMarkdownBasename(filePath).toLowerCase() === base) {
+      if (found && found !== filePath) {
+        return null;
+      }
+      found = filePath;
+    }
+  }
+  return found;
+}
+
+function collectProjectDependencyPromotionRows(
+  filesMap,
+  projectPath,
+  visited = new Set(),
+) {
+  const path = normalizeVaultRelativePath(projectPath);
+  const visitKey = `prj:${path}`;
+  if (!path || visited.has(visitKey)) {
+    return [];
+  }
+  visited.add(visitKey);
+  if (!filesMap.has(path)) {
+    return [];
+  }
+  const items = collectProjectTaskDependencyItems(filesMap.get(path), path);
+  const rows = [];
+  for (const item of items) {
+    if (item.internal || item.archive) {
+      continue;
+    }
+    const targetPath = resolveProjectDependencyFilePath(filesMap, path, item);
+    if (!targetPath || !filesMap.has(targetPath)) {
+      continue;
+    }
+    const targetLines = String(filesMap.get(targetPath) || "").split(/\r?\n/);
+    const line = findTaskLineByTrailingBlockId(targetLines, item.blockId);
+    if (line === null) {
+      continue;
+    }
+    const text = String(targetLines[line] || "");
+    const status = getObsidianTaskCheckboxStatus(text);
+    if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+      continue;
+    }
+    if (isProjectLifecycleTaskLine(text) && item.blockId === "prj") {
+      rows.push(
+        ...collectProjectDependencyPromotionRows(filesMap, targetPath, visited),
+      );
+      continue;
+    }
+    rows.push(
+      Object.freeze({
+        path: targetPath,
+        line,
+        text,
+        blockId: item.blockId,
+      }),
+    );
+  }
+  return rows;
+}
+
+function formatProjectRecoveryReason(reasons) {
+  const dependency = (Array.isArray(reasons) ? reasons : []).find(
+    (reason) => reason.kind === "project_dependency",
+  );
+  if (dependency && dependency.targetIds && dependency.targetIds.length > 0) {
+    return `project_dependency: ${dependency.targetIds[0]}`;
+  }
+  const scheduled = (Array.isArray(reasons) ? reasons : []).find(
+    (reason) => reason.kind === "project_schedule",
+  );
+  if (scheduled && scheduled.scheduled) {
+    return `project_schedule: ${scheduled.scheduled}`;
+  }
+  return "project_dependency";
+}
+
+function applyProjectRecoveryEdges(args = {}) {
+  const markdownFiles = Array.isArray(args.markdownFiles) ? args.markdownFiles : [];
+  const noteIndex = args.noteIndex;
+  const blocks = args.blocks instanceof Map ? args.blocks : new Map();
+  const edges = args.edges instanceof Map ? args.edges : new Map();
+  const today = args.today || new Date();
+  const projectBlocked = new Map();
+  const lookupOpen = (sourcePath, item) => {
+    if (!item || item.internal || item.archive) {
+      return false;
+    }
+    if (isArchivedRecoveryTarget(item.path)) {
+      return false;
+    }
+    const targetPath = resolveScheduledRecoveryNote(
+      noteIndex,
+      sourcePath,
+      String(item.path || "").replace(/\.md$/i, ""),
+    );
+    if (!targetPath) {
+      return false;
+    }
+    const matches = blocks.get(recoveryIdentity(targetPath, item.blockId)) || [];
+    return matches.some(
+      (task) =>
+        task.statusRecognized && TASK_STATUS_OPEN_TYPES.has(task.statusType),
+    );
+  };
+
+  const scheduledOverrideByPath =
+    args.scheduledOverrideByPath instanceof Map
+      ? args.scheduledOverrideByPath
+      : null;
+  for (const file of markdownFiles) {
+    const path = normalizeVaultRelativePath(file.path);
+    const extra = {};
+    if (scheduledOverrideByPath && scheduledOverrideByPath.has(path)) {
+      extra.scheduledValue = scheduledOverrideByPath.get(path);
+    }
+    const state = getProjectBlockState(
+      file.content,
+      path,
+      today,
+      (_targetPath, _blockId, item) => lookupOpen(path, item),
+      extra,
+    );
+    if (!state.isProject || state.reasons.length === 0) {
+      continue;
+    }
+    const reason = formatProjectRecoveryReason(state.reasons);
+    const mark = (line) => {
+      if (line >= 0) {
+        projectBlocked.set(recoveryIdentity(path, String(line)), reason);
+      }
+    };
+    mark(state.prjLine);
+    const prjEdges = edges.get(recoveryIdentity(path, "prj"));
+    for (const resident of state.residents) {
+      mark(resident.line);
+      if (!resident.blockId) {
+        continue;
+      }
+      const source = recoveryIdentity(path, resident.blockId);
+      if (prjEdges && prjEdges.size > 0) {
+        if (!edges.has(source)) {
+          edges.set(source, new Set());
+        }
+        for (const target of prjEdges) {
+          edges.get(source).add(target);
+        }
+        continue;
+      }
+      for (const item of state.openItems) {
+        const targetPath = resolveScheduledRecoveryNote(
+          noteIndex,
+          path,
+          String(item.path || "").replace(/\.md$/i, ""),
+        );
+        const target = targetPath
+          ? recoveryIdentity(targetPath, item.blockId)
+          : null;
+        if (!target || !blocks.has(target)) {
+          continue;
+        }
+        if (!edges.has(source)) {
+          edges.set(source, new Set());
+        }
+        edges.get(source).add(target);
+      }
+    }
+  }
+  return projectBlocked;
+}
 // ---- src/220-property-targets.js ----
 function resolveBulletPropertyTarget(name, context = {}) {
   const descriptor = Object.prototype.hasOwnProperty.call(
@@ -22920,7 +23482,26 @@ function getTargetScheduledRecovery(options, line) {
   return null;
 }
 
-function reconcileBlockedScheduledTaskLine(lineText, recovery) {
+function setProjectBlockedTag(line, on) {
+  const text = String(line || "");
+  const spans = getWholeTaskTagSpans(text, PROJECT_BLOCKED_TAG);
+  if (!on) {
+    return removeTextSpans(text, spans);
+  }
+  if (spans.length === 1) {
+    return text;
+  }
+  const stripped = spans.length > 0 ? removeTextSpans(text, spans) : text;
+  const trailingBlockId = getTrailingBlockIdSpan(stripped);
+  const insertionIndex = trailingBlockId
+    ? trailingBlockId.start
+    : stripped.trimEnd().length;
+  const before = stripped.slice(0, insertionIndex).replace(/[ \t]+$/, "");
+  const after = stripped.slice(insertionIndex);
+  return `${before} ${PROJECT_BLOCKED_TAG}${after}`;
+}
+
+function reconcileBlockedScheduledTaskLine(lineText, recovery, options = {}) {
   const line = String(lineText || "");
   const taskMatch = OBSIDIAN_TASK_LINE_RE.exec(line);
   if (!taskMatch || taskMatch[1] !== "?") {
@@ -22944,10 +23525,29 @@ function reconcileBlockedScheduledTaskLine(lineText, recovery) {
     });
   }
   const checkboxOffset = taskMatch[0].indexOf("[?]") + 1;
-  const nextLine =
+  let nextLine =
     line.slice(0, checkboxOffset) +
     decision.rank +
     line.slice(checkboxOffset + 1);
+  nextLine = setProjectBlockedTag(nextLine, false);
+  if (decision.rank === " " && options.ownLine === false) {
+    const mark =
+      options && typeof options.markUnblockedLine === "function"
+        ? options.markUnblockedLine
+        : null;
+    if (mark) {
+      nextLine = String(
+        mark(nextLine, {
+          today: options.today,
+          status: " ",
+        }) || nextLine,
+      );
+    } else {
+      console.warn(
+        "api.freshness.markUnblockedLine is unavailable; recovered without [unblocked::]",
+      );
+    }
+  }
   return Object.freeze({
     line: nextLine,
     changed: nextLine !== line,
@@ -38465,7 +39065,11 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
           : entry && typeof entry.fresh === "string"
             ? entry.fresh
             : "";
-      detail = since ? `back since ${reviewShortDate(since)}` : "tickler";
+      if (since && entry && entry.returnedBy === "unblocked") {
+        detail = `unblocked ${reviewShortDate(since)}`;
+      } else {
+        detail = since ? `back since ${reviewShortDate(since)}` : "tickler";
+      }
     } else if (tier === "rotten") {
       const interval =
         entry && Number.isInteger(entry.interval) ? entry.interval : null;
@@ -47855,6 +48459,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         writeContext.content,
         recoveryLines,
         today,
+        includesProjectSchedule ? { projectScheduled: value } : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         cm,
@@ -48129,12 +48734,20 @@ class BobNavigationHotkeysCountedRollMixin {
       const recoveryLines = includesProjectSchedule
         ? getProjectScheduleRecoveryTargetLines(writeContext.content)
         : session.targets.map((target) => target.line);
+      const projectTarget = includesProjectSchedule
+        ? session.targets.find((target) =>
+            isProjectLifecycleTaskAtLine(writeContext.content, target.line),
+          )
+        : null;
       recoveryByLine = await buildTargetScheduledRecoveryByLine(
         this.app,
         filePath,
         writeContext.content,
         recoveryLines,
         baseDate,
+        projectTarget
+          ? { projectScheduled: scheduledValueByLine.get(projectTarget.line) }
+          : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         cm,
@@ -48429,6 +49042,7 @@ class BobNavigationHotkeysCountedRollMixin {
         writeContext.content,
         recoveryLines,
         baseDate,
+        includesProjectSchedule ? { projectScheduled: dateText } : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         editor,
@@ -49073,6 +49687,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         writeContext.content,
         recoveryLines,
         new Date(),
+        includesProjectSchedule ? { projectScheduled: null } : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         cm,
@@ -49364,6 +49979,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         writeContext.content,
         getProjectScheduleRecoveryTargetLines(writeContext.content),
         today,
+        { projectScheduled: value },
       );
       const guarded = this.getProjectScheduledWriteContext(
         cm,
@@ -49669,6 +50285,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       writeContext.content,
       getProjectScheduleRecoveryTargetLines(writeContext.content),
       today,
+      { projectScheduled: null },
     );
     const guarded = this.getProjectScheduledWriteContext(
       cm,
@@ -59971,6 +60588,13 @@ module.exports.helpers = {
   isProjectLifecycleTaskLine,
   isProjectLifecycleTaskAtLine,
   parseProjectNoteFrontmatter,
+  getProjectBlockState,
+  projectLooksBlockedByPrjShortcut,
+  taskHasProjectBlockedTag,
+  collectProjectNoteTaskRows,
+  collectProjectDependencyPromotionRows,
+  applyProjectRecoveryEdges,
+  setProjectBlockedTag,
   getProjectNotePropertyContext,
   resolveBulletPropertyTarget,
   getBulletPropertyCurrentLabel,

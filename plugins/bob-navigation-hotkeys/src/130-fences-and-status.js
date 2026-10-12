@@ -354,6 +354,8 @@ function parseTrailingRecoveryTaskMetadata(body) {
       recognized = /^[A-Za-z0-9, !]*$/.test(value);
     } else if (key === "onCompletion") {
       recognized = /^[A-Za-z]+$/.test(value);
+    } else if (key === "unblocked") {
+      recognized = validRecoveryTaskDateShape(value);
     }
     if (!recognized) {
       break;
@@ -731,7 +733,12 @@ function deferredScheduledRecovery(reason) {
   });
 }
 
-function buildScheduledRecoveryIndex(files, registry, today = new Date()) {
+function buildScheduledRecoveryIndex(
+  files,
+  registry,
+  today = new Date(),
+  options = {},
+) {
   const markdownFiles = (Array.isArray(files) ? files : [])
     .filter((file) => isScheduledRecoveryMarkdownPath(file.path))
     .map((file) => ({
@@ -856,6 +863,14 @@ function buildScheduledRecoveryIndex(files, registry, today = new Date()) {
       roots.add(target);
     }
   }
+  const projectBlocked = applyProjectRecoveryEdges({
+    markdownFiles,
+    noteIndex,
+    blocks,
+    edges,
+    today,
+    scheduledOverrideByPath: options.scheduledOverrideByPath,
+  });
   const ranks = computeScheduledRecoveryRanks(roots, edges, blocks);
 
   return Object.freeze({
@@ -873,6 +888,7 @@ function buildScheduledRecoveryIndex(files, registry, today = new Date()) {
     dependencyIds,
     ranks,
     dailyPaths,
+    projectBlocked,
   });
 }
 

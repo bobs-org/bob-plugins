@@ -69,12 +69,20 @@ class BobNavigationHotkeysCountedRollMixin {
       const recoveryLines = includesProjectSchedule
         ? getProjectScheduleRecoveryTargetLines(writeContext.content)
         : session.targets.map((target) => target.line);
+      const projectTarget = includesProjectSchedule
+        ? session.targets.find((target) =>
+            isProjectLifecycleTaskAtLine(writeContext.content, target.line),
+          )
+        : null;
       recoveryByLine = await buildTargetScheduledRecoveryByLine(
         this.app,
         filePath,
         writeContext.content,
         recoveryLines,
         baseDate,
+        projectTarget
+          ? { projectScheduled: scheduledValueByLine.get(projectTarget.line) }
+          : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         cm,
@@ -369,6 +377,7 @@ class BobNavigationHotkeysCountedRollMixin {
         writeContext.content,
         recoveryLines,
         baseDate,
+        includesProjectSchedule ? { projectScheduled: dateText } : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         editor,

@@ -527,6 +527,7 @@ function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
     removedLinkCount: 0,
     removedTargets: Object.freeze([]),
     removedLineRanges: Object.freeze([]),
+    removedEntryCount: 0,
     unresolvedCount,
   });
 }
@@ -648,6 +649,60 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       endLineExclusive: block.endLineExclusive,
     });
   }
+  let removedEntryCount = 0;
+  if (options.removeEmptiedEntries === true) {
+    // Same open-ledger definition this cleanup already uses
+    // (`collectOpenPomodoroRanges` / `isOpenPomodoroLedgerEntryLine`), not
+    // `collectPomodoroEntries`' picker grammar, so a childless
+    // `- [ ] Current (0900-0930)` entry is eligible.
+    for (const range of openRanges) {
+      const entryBlock = findCurrentBulletChildBlock(lines, range.entryLine);
+      const childEndExclusive = Math.min(
+        entryBlock.endLineExclusive,
+        section.endLine + 1,
+      );
+      const entryStart = lineStarts[range.entryLine];
+      const entryEnd =
+        childEndExclusive < lines.length
+          ? lineStarts[childEndExclusive]
+          : snapshot.length;
+      const removedChild = subtreeCandidates.some(
+        (candidate) => candidate.start >= entryStart && candidate.start < entryEnd,
+      );
+      const tokenChild = matches.some(
+        (match) =>
+          match.line > range.entryLine && match.line < childEndExclusive,
+      );
+      if (!removedChild && !tokenChild) {
+        continue;
+      }
+      let remaining = 0;
+      for (let line = entryBlock.startLine; line < childEndExclusive; line += 1) {
+        if (!PROJECT_LIST_ITEM_RE.test(String(lines[line] || ""))) {
+          continue;
+        }
+        const lineStart = lineStarts[line];
+        const lineEnd = lineStart + String(lines[line] || "").length;
+        const gone = subtreeCandidates.some(
+          (candidate) => candidate.start <= lineStart && candidate.end >= lineEnd,
+        );
+        if (!gone) {
+          remaining += 1;
+        }
+      }
+      if (remaining === 0) {
+        subtreeCandidates.push({
+          start: entryStart,
+          end: entryEnd,
+          replacement: "",
+          startLine: range.entryLine,
+          endLineExclusive: childEndExclusive,
+        });
+        removedEntryCount += 1;
+      }
+    }
+  }
+
   subtreeCandidates.sort(
     (left, right) => left.start - right.start || right.end - left.end,
   );
@@ -755,6 +810,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
         }),
       ),
     ),
+    removedEntryCount,
     unresolvedCount,
   });
 }

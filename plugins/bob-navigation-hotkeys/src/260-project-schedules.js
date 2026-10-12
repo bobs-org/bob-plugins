@@ -99,7 +99,26 @@ function getTargetScheduledRecovery(options, line) {
   return null;
 }
 
-function reconcileBlockedScheduledTaskLine(lineText, recovery) {
+function setProjectBlockedTag(line, on) {
+  const text = String(line || "");
+  const spans = getWholeTaskTagSpans(text, PROJECT_BLOCKED_TAG);
+  if (!on) {
+    return removeTextSpans(text, spans);
+  }
+  if (spans.length === 1) {
+    return text;
+  }
+  const stripped = spans.length > 0 ? removeTextSpans(text, spans) : text;
+  const trailingBlockId = getTrailingBlockIdSpan(stripped);
+  const insertionIndex = trailingBlockId
+    ? trailingBlockId.start
+    : stripped.trimEnd().length;
+  const before = stripped.slice(0, insertionIndex).replace(/[ \t]+$/, "");
+  const after = stripped.slice(insertionIndex);
+  return `${before} ${PROJECT_BLOCKED_TAG}${after}`;
+}
+
+function reconcileBlockedScheduledTaskLine(lineText, recovery, options = {}) {
   const line = String(lineText || "");
   const taskMatch = OBSIDIAN_TASK_LINE_RE.exec(line);
   if (!taskMatch || taskMatch[1] !== "?") {
@@ -123,10 +142,29 @@ function reconcileBlockedScheduledTaskLine(lineText, recovery) {
     });
   }
   const checkboxOffset = taskMatch[0].indexOf("[?]") + 1;
-  const nextLine =
+  let nextLine =
     line.slice(0, checkboxOffset) +
     decision.rank +
     line.slice(checkboxOffset + 1);
+  nextLine = setProjectBlockedTag(nextLine, false);
+  if (decision.rank === " " && options.ownLine === false) {
+    const mark =
+      options && typeof options.markUnblockedLine === "function"
+        ? options.markUnblockedLine
+        : null;
+    if (mark) {
+      nextLine = String(
+        mark(nextLine, {
+          today: options.today,
+          status: " ",
+        }) || nextLine,
+      );
+    } else {
+      console.warn(
+        "api.freshness.markUnblockedLine is unavailable; recovered without [unblocked::]",
+      );
+    }
+  }
   return Object.freeze({
     line: nextLine,
     changed: nextLine !== line,

@@ -386,7 +386,11 @@ function buildReviewJumpNotice(entry, rank, total, options = {}) {
           : entry && typeof entry.fresh === "string"
             ? entry.fresh
             : "";
-      detail = since ? `back since ${reviewShortDate(since)}` : "tickler";
+      if (since && entry && entry.returnedBy === "unblocked") {
+        detail = `unblocked ${reviewShortDate(since)}`;
+      } else {
+        detail = since ? `back since ${reviewShortDate(since)}` : "tickler";
+      }
     } else if (tier === "rotten") {
       const interval =
         entry && Number.isInteger(entry.interval) ? entry.interval : null;

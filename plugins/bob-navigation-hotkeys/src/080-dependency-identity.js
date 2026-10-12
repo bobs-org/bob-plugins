@@ -331,22 +331,46 @@ function planDependencyEdit(args = {}) {
     parentText = blocked;
   }
   const promotions = [];
+  const recordPromotion = (path, line, from, to) => {
+    if (from === to) {
+      return;
+    }
+    promotions.push(
+      Object.freeze({
+        path,
+        line,
+        from,
+        to,
+      }),
+    );
+  };
   for (const row of (mirrorTouch ? [] : addedOpen)) {
     const desired = getDependencyPromotionStatus(parentStatusBefore);
     if (!desired) {
       continue;
     }
-    const promoted = promoteObsidianTaskCheckboxStatus(row.text, desired);
-    if (promoted !== row.text) {
-      promotions.push(
-        Object.freeze({
-          path: row.ref.path,
-          line: row.line,
-          from: row.text,
-          to: promoted,
-        }),
-      );
+    // ADJ-11 (`docs/task-dependencies.md` §13.4 PDB9): never raise a `^prj`
+    // target; walk through it to that project's own Depends-On links.
+    if (isProjectLifecycleTaskLine(row.text) && row.ref.blockId === "prj") {
+      for (const walked of collectProjectDependencyPromotionRows(
+        filesMap,
+        row.ref.path,
+      )) {
+        recordPromotion(
+          walked.path,
+          walked.line,
+          walked.text,
+          promoteObsidianTaskCheckboxStatus(walked.text, desired),
+        );
+      }
+      continue;
     }
+    recordPromotion(
+      row.ref.path,
+      row.line,
+      row.text,
+      promoteObsidianTaskCheckboxStatus(row.text, desired),
+    );
   }
 
   // Same-note target writes join the dependent's one transaction;
@@ -389,6 +413,25 @@ function planDependencyEdit(args = {}) {
       nextText = upserted.line;
     }
     recordTargetWrite(row, nextText);
+  }
+  for (const promotion of promotions) {
+    const alreadyWritten = [...targetEdits, ...preparations].some(
+      (edit) => edit.path === promotion.path && edit.line === promotion.line,
+    );
+    if (alreadyWritten) {
+      continue;
+    }
+    const edit = Object.freeze({
+      path: promotion.path,
+      line: promotion.line,
+      from: promotion.from,
+      text: promotion.to,
+    });
+    if (promotion.path === parentPath) {
+      targetEdits.push(edit);
+    } else {
+      preparations.push(Object.freeze({ ...edit, kind: "target-identity" }));
+    }
   }
 
   // The line: create, append, remove, or delete (empty list deletes it).

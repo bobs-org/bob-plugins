@@ -27,6 +27,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       writeContext.content,
       getProjectScheduleRecoveryTargetLines(writeContext.content),
       today,
+      { projectScheduled: null },
     );
     const guarded = this.getProjectScheduledWriteContext(
       cm,

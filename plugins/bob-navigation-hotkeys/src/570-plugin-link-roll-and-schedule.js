@@ -371,6 +371,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         writeContext.content,
         recoveryLines,
         new Date(),
+        includesProjectSchedule ? { projectScheduled: null } : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         cm,
@@ -662,6 +663,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         writeContext.content,
         getProjectScheduleRecoveryTargetLines(writeContext.content),
         today,
+        { projectScheduled: value },
       );
       const guarded = this.getProjectScheduledWriteContext(
         cm,

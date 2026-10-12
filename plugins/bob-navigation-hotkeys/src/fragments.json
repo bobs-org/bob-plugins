@@ -23,6 +23,7 @@
   "200-filtered-picker-modals.js",
   "205-inbox-route-picker-modal.js",
   "210-rename-and-line-context.js",
+  "215-project-blocking.js",
   "220-property-targets.js",
   "230-schedule-review.js",
   "240-cancel-and-lanes.js",

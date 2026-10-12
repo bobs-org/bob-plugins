@@ -47,6 +47,16 @@ function getScheduledRecoveryMetadata(index, filePath, line) {
     }
     dependencyAmbiguous ||= unknown;
   }
+  const projectReason =
+    index.projectBlocked &&
+    index.projectBlocked.get(recoveryIdentity(path, String(line)));
+  if (projectReason) {
+    return Object.freeze({
+      state: "blocked",
+      rank: null,
+      reason: projectReason,
+    });
+  }
   if (dependencyAmbiguous) {
     return deferredScheduledRecovery(
       "dependency status could not be resolved safely",
@@ -194,6 +204,9 @@ async function buildInteractiveScheduledRecoverySnapshot(
     files,
     await registryPromise,
     options.today || new Date(),
+    {
+      scheduledOverrideByPath: options.scheduledOverrideByPath,
+    },
   );
 }
 
@@ -203,12 +216,25 @@ async function buildTargetScheduledRecoveryByLine(
   sourceContent,
   targetLines,
   today = new Date(),
+  extra = {},
 ) {
-  const snapshot = await buildInteractiveScheduledRecoverySnapshot(app, {
+  const snapshotOptions = {
     sourcePath,
     sourceContent,
     today,
-  });
+  };
+  if (Object.prototype.hasOwnProperty.call(extra, "projectScheduled")) {
+    snapshotOptions.scheduledOverrideByPath = new Map([
+      [
+        normalizeVaultRelativePath(sourcePath),
+        extra.projectScheduled == null ? "" : String(extra.projectScheduled),
+      ],
+    ]);
+  }
+  const snapshot = await buildInteractiveScheduledRecoverySnapshot(
+    app,
+    snapshotOptions,
+  );
   return new Map(
     (Array.isArray(targetLines) ? targetLines : [targetLines]).map((line) => [
       line,

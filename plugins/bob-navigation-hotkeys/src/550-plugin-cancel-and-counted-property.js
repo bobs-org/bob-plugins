@@ -608,6 +608,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         writeContext.content,
         recoveryLines,
         today,
+        includesProjectSchedule ? { projectScheduled: value } : {},
       );
       const guarded = this.getCountedTaskWriteContext(
         cm,

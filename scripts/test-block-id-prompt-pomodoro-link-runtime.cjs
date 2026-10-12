@@ -258,6 +258,42 @@ test("existing-ID Pomodoro link runtime: cross-note guarded write, canonical lin
   assert.equal(lastNotice(), "Linked · Next · removed future schedule");
 });
 
+test("forceNext consumes a dependency-blocked target, promotes its prerequisite, and creates no link", async () => {
+  resetNotices();
+  const taskContent = [
+    "- [?] #task Apply for the role [dependsOn:: jobs__review] ^apply",
+    "- [ ] #task Review the application [id:: jobs__review] ^review",
+  ].join("\n");
+  const h = createTaskModeHarness({
+    taskContent,
+    dailyContent: UNLINKED_DAILY,
+  });
+  const taskFile = { path: "Tasks.md" };
+  h.plugin.resolveTaskFile = () => taskFile;
+  h.plugin.app.vault.getMarkdownFiles = () => [taskFile];
+  let dailyResolved = false;
+  h.plugin.resolveTodayDailyFile = () => {
+    dailyResolved = true;
+    return { path: "Daily.md" };
+  };
+  const source = sourceForPomodoroLink(h.editor, "Tasks.md", 0);
+
+  const result = await h.plugin.applyPomodoroTaskLink(source, "apply", false);
+
+  assert.equal(result, false);
+  assert.equal(dailyResolved, false);
+  assert.equal(
+    h.editor.getValue(),
+    [
+      "- [?] #task Apply for the role [dependsOn:: jobs__review] ^apply",
+      "- [*] #task Review the application [id:: jobs__review] ^review",
+    ].join("\n"),
+  );
+  assert.deepEqual(h.writes, []);
+  assert.match(lastNotice(), /raised 1 prerequisite to Next/);
+  assert.match(lastNotice(), /no Pomodoro link created/);
+});
+
 test("new-ID Pomodoro link runtime: cross-note guarded write, appended ID stays final, forced Next for a Ready task", async () => {
   resetNotices();
   const editor = createEditor("- [ ] #task Ship it [priority:: high]");

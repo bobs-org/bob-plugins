@@ -28,6 +28,93 @@ test("legacy tasks without an id field still fall back to their block ID", () =>
   assert.equal(helpers.collectTaskPickerItems(content)[0].dependency.isBlocked, true);
 });
 
+test("blocked-link consumption raises open prerequisites and leaves the dependent blocked", () => {
+  const content = [
+    "- [?] #task Apply for the role [dependsOn:: jobs__review] ^apply",
+    "- [ ] #task Review the application [id:: jobs__review] ^review",
+  ].join("\n");
+  const plan = helpers.planTaskLinkBlockConsumption(
+    [{ path: "jobs.md", text: content }],
+    "jobs.md",
+    0,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(plan.blocked, true);
+  assert.equal(plan.dependencyBlocked, true);
+  assert.deepEqual(plan.promoted, ["jobs__review"]);
+  assert.equal(
+    plan.updatesByPath.get("jobs.md").text,
+    [
+      "- [?] #task Apply for the role [dependsOn:: jobs__review] ^apply",
+      "- [*] #task Review the application [id:: jobs__review] ^review",
+    ].join("\n"),
+  );
+});
+
+test("project-blocked member consumption promotes the project's open prerequisite", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    'depends_on: ["[[jobs#^release]]"]',
+    "---",
+    "- [?] #task #prj Ship the project [dependsOn:: jobs__release] ^prj",
+    "- [?] #task Prepare launch notes ^notes",
+  ].join("\n");
+  const prerequisite = "- [ ] #task Release approval [id:: jobs__release] ^release";
+  const plan = helpers.planTaskLinkBlockConsumption(
+    [
+      { path: "projects/release.md", text: project },
+      { path: "jobs.md", text: prerequisite },
+    ],
+    "projects/release.md",
+    6,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(plan.blocked, true);
+  assert.equal(plan.dependencyBlocked, true);
+  assert.equal(plan.projectPath, "projects/release.md");
+  assert.deepEqual(plan.promoted, ["jobs__release"]);
+  assert.equal(
+    plan.updatesByPath.get("jobs.md").text,
+    "- [*] #task Release approval [id:: jobs__release] ^release",
+  );
+});
+
+test("project schedule blocks residents without promotion, while a task's own schedule stays pull-forward eligible", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "scheduled: 2026-08-20",
+    "---",
+    "- [?] #task #prj Launch the project ^prj",
+    "- [?] #task Prepare launch notes ^notes",
+  ].join("\n");
+  const projectPlan = helpers.planTaskLinkBlockConsumption(
+    [{ path: "projects/launch.md", text: project }],
+    "projects/launch.md",
+    6,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(projectPlan.blocked, true);
+  assert.equal(projectPlan.dependencyBlocked, false);
+  assert.equal(projectPlan.projectSchedule, "2026-08-20");
+  assert.deepEqual(projectPlan.promoted, []);
+
+  const ownSchedule = helpers.planTaskLinkBlockConsumption(
+    [{
+      path: "jobs.md",
+      text: "- [?] #task Ship it [scheduled:: 2026-08-20] ^ship",
+    }],
+    "jobs.md",
+    0,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(ownSchedule.blocked, false);
+  assert.equal(ownSchedule.ownSchedule.value, "2026-08-20");
+});
+
 test("task picker includes Blocked tasks and excludes closed, hidden, and untagged lines", () => {
   const content = [
     "- [ ] #task Ready",

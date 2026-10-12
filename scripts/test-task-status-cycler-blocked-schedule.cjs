@@ -7,6 +7,7 @@ const {
   createInMemoryObsidianApp,
   getEmbeddedTarget,
   createTextEditor,
+  notices,
 } = require("./task-status-cycler-harness.cjs");
 
 test("option-bracket ring reads Blocked as a source-only slot ahead of Ready", () => {
@@ -43,6 +44,40 @@ test("isCyclableTaskStatus accepts Blocked while Ctrl+Enter predicates still rej
   assert.equal(helpers.isTranscludedCompletionClosableStatus(blocked), false);
   assert.equal(helpers.isTranscludedReopenableStatus(blocked), false);
   assert.equal(helpers.isOpenDoneTaskStatus(blocked), false);
+});
+
+test("option-bracket refuses to change a member while its project is Blocked", () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Release the project [dependsOn:: jobs__approval] ^prj",
+    "- [?] #task Prepare the release ^notes",
+  ].join("\n");
+  assert.equal(
+    helpers.isProjectBlockedResidentTaskInDocument(
+      source,
+      "projects/release.md",
+      5,
+    ),
+    true,
+  );
+  for (const direction of [-1, 1]) {
+    notices.length = 0;
+    const editor = createTextEditor(source, { line: 5, ch: 4 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.app = { commands: { commands: {}, executeCommandById: () => false } };
+    const view = Object.assign(new MarkdownView(), {
+      editor,
+      file: { path: "projects/release.md" },
+    });
+    assert.equal(plugin.handleCycleCommand(false, editor, view, direction), true);
+    assert.equal(editor.getValue(), source);
+    assert.ok(
+      notices.some((notice) => notice.includes("resolve the dependency in projects/release.md")),
+    );
+  }
 });
 
 test("findSingleFutureScheduledField validates form, field order, and the strictly-future boundary", () => {

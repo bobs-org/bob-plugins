@@ -677,6 +677,19 @@ class TaskStatusCyclerCompletionMixin {
     }
 
     const sourceSymbol = resolvedTarget.taskStatus.symbol;
+    if (
+      sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL &&
+      isProjectBlockedResidentTaskInDocument(
+        resolvedTarget.sourceText,
+        resolvedTarget.file && resolvedTarget.file.path,
+        resolvedTarget.line,
+      )
+    ) {
+      new Notice(
+        `Project blocked · resolve the dependency in ${resolvedTarget.file.path}`,
+      );
+      return false;
+    }
     const nextSymbol = this.getAdjacentSymbol(sourceSymbol, direction);
     if (!nextSymbol) {
       return false;

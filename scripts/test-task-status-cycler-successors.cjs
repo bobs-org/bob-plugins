@@ -570,6 +570,93 @@ test("SL11 project and hidden tasks recover but never link", () => {
   }
 });
 
+test("PDC1 leaves a dependency-ready resident Blocked while its project still waits", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Release the project [id:: project__prj] [dependsOn:: sase__fix-apollo, sase__still-open] ^prj",
+    "- [?] #task Prepare the release [dependsOn:: sase__fix-apollo] ^release-notes",
+  ].join("\n");
+  const { plan } = planFixture({
+    day: FIX_DAY,
+    notes: {
+      "sase.md": [
+        "- [?] #task Fix apollo machine! [id:: sase__fix-apollo] ^fix-apollo",
+        "- [ ] #task Another open prerequisite [id:: sase__still-open] ^still-open",
+      ].join("\n"),
+      "projects/release.md": project,
+    },
+    closed: FIX_CLOSED,
+  });
+  const resident = plan.still_blocked.find((row) => row.block_id === "release-notes");
+  assert.equal(resident.reason, "project");
+  assert.equal(resident.status_symbol, "?");
+  assert.equal(
+    plan.unblocked.some((row) => row.block_id === "release-notes" && row.link),
+    false,
+  );
+});
+
+test("PDC2 recovers the project and all eligible residents without successor links", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Release the project [id:: project__prj] [dependsOn:: sase__fix-apollo] ^prj",
+    "- [?] #task Prepare the release ^release-notes",
+    "- [?] #task Publish the release [dependsOn:: sase__fix-apollo] ^publish",
+  ].join("\n");
+  const { plan } = planFixture({
+    day: FIX_DAY,
+    notes: {
+      "sase.md": "- [?] #task Fix apollo machine! [id:: sase__fix-apollo] ^fix-apollo",
+      "projects/release.md": project,
+    },
+    closed: FIX_CLOSED,
+  });
+  assert.equal(plan.placements.length, 0);
+  assert.deepEqual(
+    plan.unblocked.map((row) => [row.block_id, row.not_linked, row.status_symbol]),
+    [
+      ["prj", "project_task", " "],
+      ["release-notes", "project_member", " "],
+      ["publish", "project_member", " "],
+    ],
+  );
+});
+
+test("PDC3 keeps a project resident Blocked when its own prerequisite remains open", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Release the project [id:: project__prj] [dependsOn:: sase__fix-apollo] ^prj",
+    "- [?] #task Prepare the release [dependsOn:: other__open] ^release-notes",
+    "- [?] #task Publish the release ^publish",
+  ].join("\n");
+  const { plan } = planFixture({
+    day: FIX_DAY,
+    notes: {
+      "sase.md": [
+        "- [?] #task Fix apollo machine! [id:: sase__fix-apollo] ^fix-apollo",
+        "- [ ] #task Another open prerequisite [id:: other__open] ^still-open",
+      ].join("\n"),
+      "projects/release.md": project,
+    },
+    closed: FIX_CLOSED,
+  });
+  const resident = plan.still_blocked.find((row) => row.block_id === "release-notes");
+  assert.equal(resident.reason, "waits_on");
+  assert.equal(resident.waits_on, 1);
+  const recovered = plan.unblocked.find((row) => row.block_id === "publish");
+  assert.equal(recovered.not_linked, "project_member");
+  assert.equal(recovered.status_symbol, " ");
+});
+
 test("SL12 one gesture closing two prerequisites links once with both causes", () => {
   const day = [
     "# 2026-10-09",

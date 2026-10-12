@@ -6,6 +6,25 @@ class TaskStatusCyclerCommandsMixin {
 
     const taskStatus = this.getActiveTaskStatus(editor);
     if (taskStatus) {
+      const activePath = view.file && view.file.path
+        ? view.file.path
+        : this.app.workspace &&
+            typeof this.app.workspace.getActiveFile === "function"
+          ? (this.app.workspace.getActiveFile() || {}).path
+          : "";
+      if (
+        taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL &&
+        isProjectBlockedResidentTaskInDocument(
+          editor.getValue(),
+          activePath,
+          taskStatus.line,
+        )
+      ) {
+        if (!checking) {
+          new Notice(`Project blocked · resolve the dependency in ${activePath}`);
+        }
+        return true;
+      }
       const nextSymbol = this.getAdjacentSymbol(taskStatus.symbol, direction);
       if (!nextSymbol) {
         return false;
@@ -528,6 +547,7 @@ class TaskStatusCyclerCommandsMixin {
       : null;
     const seenResolvedTargets = new Set();
     let changed = false;
+    let projectBlockedSkipped = false;
     let startDepLineUntargeted = false;
     // `cycler_polish`: identities cycled into Done/Cancelled, finalized as
     // one batch after the loop (Done links, Cancelled recovers only).
@@ -599,6 +619,18 @@ class TaskStatusCyclerCommandsMixin {
       const taskStatus = getTaskStatusForLine(lineText, line);
       if (taskStatus) {
         if (!isCyclableTaskStatus(taskStatus)) {
+          continue;
+        }
+
+        if (
+          taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL &&
+          isProjectBlockedResidentTaskInDocument(
+            lines.join("\n"),
+            activePath,
+            line,
+          )
+        ) {
+          projectBlockedSkipped = true;
           continue;
         }
 
@@ -727,6 +759,9 @@ class TaskStatusCyclerCommandsMixin {
 
     if (!changed && startDepLineUntargeted) {
       new Notice("⛓ Put the cursor on a dependency link to cycle it");
+    }
+    if (projectBlockedSkipped) {
+      new Notice(`Project blocked · resolve the dependency in ${activePath}`);
     }
 
     // One batched pass for the whole counted range (partitioned Done vs

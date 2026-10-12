@@ -646,17 +646,31 @@ function planSuccessors(options = {}) {
   }
 
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [...byTaskId.values()];
-  const candidates = allTasks
-    .filter(
-      (task) =>
-        task &&
-        typeof task === "object" &&
-        DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
-        !(task.taskId && closedTaskIds.has(String(task.taskId))) &&
-        !successorIsDonePath(task.path) &&
-        Array.isArray(task.dependsOn) &&
-        task.dependsOn.some((id) => closedTaskIds.has(String(id))),
-    )
+  const { projectInfoByPath, projectRecoveryPaths } =
+    projectSuccessorRecoveryState(noteTexts, closedTaskIds, openIdsAfter, today);
+  const candidateByLocation = new Map();
+  for (const task of allTasks) {
+    if (
+      task &&
+      typeof task === "object" &&
+      DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+      !(task.taskId && closedTaskIds.has(String(task.taskId))) &&
+      !successorIsDonePath(task.path) &&
+      Array.isArray(task.dependsOn) &&
+      task.dependsOn.some((id) => closedTaskIds.has(String(id)))
+    ) {
+      candidateByLocation.set(`${task.path}\0${task.line}`, task);
+    }
+  }
+  for (const task of projectSuccessorRecoveryMembers(
+    projectInfoByPath,
+    projectRecoveryPaths,
+  )) {
+    if (!successorIsDonePath(task.path)) {
+      candidateByLocation.set(`${task.path}\0${task.line}`, task);
+    }
+  }
+  const candidates = [...candidateByLocation.values()]
     .sort(
       (left, right) =>
         String(left.path || "").localeCompare(String(right.path || "")) ||
@@ -732,6 +746,35 @@ function planSuccessors(options = {}) {
       });
       continue;
     }
+    const project = projectInfoByPath.get(String(task.path || ""));
+    const projectResident = project && task.blockId !== "prj" &&
+      project.tasks.some((candidate) => candidate.line === task.line);
+    const projectTask = project && task.blockId === "prj";
+    if (
+      project && (projectResident || projectTask) &&
+      projectIsBlockedAfter(project, openIdsAfter, today, closedTaskIds)
+    ) {
+      const projectOpenCount = project.dependencyIds.filter((id) => {
+        const localIds = new Set(
+          project.tasks.map((candidate) => candidate.taskId).filter(Boolean),
+        );
+        return !localIds.has(String(id)) && openIdsAfter.has(String(id)) &&
+          !closedTaskIds.has(String(id));
+      }).length;
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: successorDisplayText(task),
+        status_symbol: task.status,
+        reason: "project",
+        waits_on: projectOpenCount,
+        scheduled: projectHasFutureSchedule(project, today)
+          ? project.scheduled
+          : null,
+      });
+      continue;
+    }
     const predecessors = closed.filter(
       (identity) =>
         identity &&
@@ -750,6 +793,24 @@ function planSuccessors(options = {}) {
     // 3. Project tasks recover but never link.
     if (successorIsProjectTask(task.blockId)) {
       recovers.push({ task, reason: "project_task", predecessorRows });
+      continue;
+    }
+    if (project && projectResident && projectRecoveryPaths.has(task.path)) {
+      const projectPredecessors = closed.filter(
+        (identity) => identity && identity.taskId &&
+          project.dependencyIds.some((id) =>
+            String(id) === String(identity.taskId)
+          ),
+      ).map((identity) => ({
+        note_path: String(identity.path || ""),
+        block_id: String(identity.blockId || ""),
+        text: String(identity.text || ""),
+      }));
+      recovers.push({
+        task,
+        reason: "project_member",
+        predecessorRows: projectPredecessors,
+      });
       continue;
     }
     // 4. Hidden tasks recover but never link.

@@ -1552,6 +1552,250 @@ function resolveTaskDependencyState(rawLine, index) {
   };
 }
 
+function parseProjectFrontmatter(sourceText, path = "") {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  if (
+    /(?:^|\/)\d{4}\/\d{8}\.md$/i.test(String(path || "")) ||
+    !startsWithFrontmatter(lines)
+  ) {
+    return null;
+  }
+  const readScalar = (key) => {
+    for (let line = 1; line < lines.length; line += 1) {
+      if (FRONTMATTER_DELIMITER_RE.test(lines[line])) {
+        break;
+      }
+      const match = lines[line].match(new RegExp(`^${key}\\s*:\\s*(.*?)\\s*$`));
+      if (!match) {
+        continue;
+      }
+      let value = match[1].replace(/\s+#.*$/, "").trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      return value;
+    }
+    return null;
+  };
+  const type = readScalar("type");
+  const status = readScalar("status");
+  if (
+    !type || !/^\[\[project\]\]$/i.test(type) ||
+    !status || /^(?:done|canceled|cancelled)$/i.test(status)
+  ) {
+    return null;
+  }
+  const scheduled = readScalar("scheduled");
+  const parsedSchedule = scheduled && parseStrictCalendarDate(scheduled);
+  return {
+    path: String(path || ""),
+    scheduled: parsedSchedule ? formatCalendarDate(parsedSchedule) : null,
+  };
+}
+
+function taskDependencyRecordsFromDocuments(documents) {
+  const records = [];
+  for (const document of Array.from(documents || [])) {
+    const path = String((document && document.path) || "");
+    const content = String((document && document.text) || "");
+    forEachTaskPickerContentLine(content, (line, lineNumber) => {
+      const match = getObsidianTaskLineMatch(line);
+      if (!match || !PROJECT_TASK_TAG_RE.test(match[2] || "")) {
+        return;
+      }
+      const blockId = getTrailingBlockId(line);
+      const taskId = parseInlineIdField(line) || blockId;
+      records.push({
+        path,
+        line: lineNumber,
+        lineText: line,
+        status: match[1],
+        blockId,
+        taskId,
+        dependsOn: parseDependsOnIds(line),
+      });
+    });
+  }
+  return records;
+}
+
+function canonicalDependencyId(path, blockId) {
+  if (!path || !blockId) {
+    return null;
+  }
+  return `${String(path).replace(/\.md$/i, "").replace(/\//g, "__")}__${blockId}`;
+}
+
+function projectDependencyInfoForRecords(document, records) {
+  const metadata = parseProjectFrontmatter(document.text, document.path);
+  if (!metadata) {
+    return null;
+  }
+  const tasks = records.filter((task) => task.path === metadata.path);
+  const projectTasks = tasks.filter(
+    (task) => task.blockId === "prj" && OPEN_OBSIDIAN_TASK_STATUSES.has(task.status),
+  );
+  return projectTasks.length === 1
+    ? { ...metadata, tasks, projectTask: projectTasks[0] }
+    : null;
+}
+
+function isDependencyTargetOpen(task) {
+  return !!task && OPEN_OBSIDIAN_TASK_STATUSES.has(task.status);
+}
+
+function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today = new Date()) {
+  const docs = Array.from(documents || []).map((document) => ({
+    path: String((document && document.path) || ""),
+    text: String((document && document.text) || ""),
+  }));
+  const records = taskDependencyRecordsFromDocuments(docs);
+  const target = records.find(
+    (task) => task.path === String(targetPath || "") && task.line === targetLine,
+  );
+  if (!target || !OPEN_OBSIDIAN_TASK_STATUSES.has(target.status)) {
+    return null;
+  }
+  const byId = new Map();
+  for (const task of records) {
+    const keys = dedupeNonEmptyValues([
+      task.taskId,
+      canonicalDependencyId(task.path, task.blockId),
+    ]);
+    for (const key of keys) {
+      const existing = byId.get(key);
+      if (!existing || (!isDependencyTargetOpen(existing) && isDependencyTargetOpen(task))) {
+        byId.set(key, task);
+      }
+    }
+  }
+  const projects = new Map();
+  for (const document of docs) {
+    const project = projectDependencyInfoForRecords(document, records);
+    if (project) {
+      projects.set(project.path, project);
+    }
+  }
+  const project = projects.get(target.path);
+  const resident = project && target.blockId !== "prj" &&
+    project.tasks.some((task) => task.line === target.line);
+  const resolveOpenIds = (ids, internalOnly = false) => ids.filter((id) => {
+    const dependency = byId.get(String(id));
+    if (!isDependencyTargetOpen(dependency)) {
+      return false;
+    }
+    return !internalOnly || dependency.path !== target.path;
+  });
+  const ownOpen = resolveOpenIds(target.dependsOn, target.blockId === "prj");
+  const projectOpen = project && (resident || target.blockId === "prj")
+    ? resolveOpenIds(project.projectTask.dependsOn, true)
+    : [];
+  const requiredIds = [...new Set([
+    ...target.dependsOn.filter((id) => {
+      if (target.blockId !== "prj") {
+        return true;
+      }
+      const dependency = byId.get(String(id));
+      return !dependency || dependency.path !== target.path;
+    }),
+    ...(project && (resident || target.blockId === "prj")
+      ? project.projectTask.dependsOn.filter((id) => {
+        const dependency = byId.get(String(id));
+        return !dependency || dependency.path !== target.path;
+      })
+      : []),
+  ])];
+  const unresolvedIds = requiredIds.filter((id) => !byId.has(String(id)));
+  const todayParts = today instanceof Date
+    ? localTodayParts(today)
+    : today;
+  const ownSchedule = findSingleFutureScheduledField(
+    target.lineText,
+    todayParts,
+  );
+  const projectSchedule = project && (resident || target.blockId === "prj")
+    ? project.scheduled && parseStrictCalendarDate(project.scheduled)
+    : null;
+  const projectScheduleIsFuture = !!projectSchedule &&
+    compareCalendarDates(projectSchedule, todayParts) > 0;
+  const dependencyBlocked = ownOpen.length > 0 || projectOpen.length > 0;
+  if (!dependencyBlocked && !projectScheduleIsFuture) {
+    return { blocked: false, target, ownSchedule };
+  }
+
+  const documentByPath = new Map(docs.map((document) => [document.path, document]));
+  const updatesByPath = new Map();
+  const promoted = [];
+  const visited = new Set();
+  const queue = [...new Set([...ownOpen, ...projectOpen])];
+  while (queue.length > 0) {
+    const id = String(queue.shift());
+    if (visited.has(id)) {
+      continue;
+    }
+    visited.add(id);
+    const task = byId.get(id);
+    if (!isDependencyTargetOpen(task)) {
+      continue;
+    }
+    const dependencyProject = projects.get(task.path);
+    const isProjectTask = task.blockId === "prj";
+    const isProjectResident = dependencyProject && !isProjectTask &&
+      dependencyProject.tasks.some((candidate) => candidate.line === task.line);
+    if (task.status === " " && !isProjectTask && !isProjectResident) {
+      const statusStart = task.lineText.indexOf("[") + 1;
+      const after = `${task.lineText.slice(0, statusStart)}*${task.lineText.slice(statusStart + 1)}`;
+      const document = documentByPath.get(task.path);
+      if (!updatesByPath.has(task.path)) {
+        updatesByPath.set(task.path, {
+          preimage: document.text,
+          text: document.text,
+          edits: [],
+        });
+      }
+      const lines = updatesByPath.get(task.path).text.split("\n");
+      let start = 0;
+      for (let line = 0; line < task.line; line += 1) {
+        start += lines[line].length + 1;
+      }
+      updatesByPath.get(task.path).edits.push({
+        start: start + statusStart,
+        end: start + statusStart + 1,
+        replacement: "*",
+      });
+      promoted.push(id);
+    }
+    const edges = [...task.dependsOn];
+    if (dependencyProject && (isProjectTask || isProjectResident)) {
+      edges.push(...dependencyProject.projectTask.dependsOn);
+    }
+    queue.push(...edges);
+  }
+  for (const [path, update] of updatesByPath) {
+    for (const edit of [...update.edits].sort((left, right) => right.start - left.start)) {
+      const before = update.text.slice(edit.start, edit.end);
+      if (before !== " ") {
+        continue;
+      }
+      update.text = `${update.text.slice(0, edit.start)}${edit.replacement}${update.text.slice(edit.end)}`;
+    }
+  }
+  return {
+    blocked: true,
+    dependencyBlocked,
+    projectScheduleIsFuture,
+    projectSchedule: projectScheduleIsFuture ? formatCalendarDate(projectSchedule) : null,
+    projectPath: project ? project.path : null,
+    unresolvedIds,
+    target,
+    promoted,
+    updatesByPath,
+  };
+}
+
 function collectTaskPickerItems(content) {
   const dependencyIndex = buildTaskDependencyIndex(content);
 
@@ -7895,6 +8139,130 @@ class BlockIdPromptPomodoroLinksMixin {
     return cleanup.removedCount > 0;
   }
 
+  async readTaskDependencyDocuments(source, targetFile) {
+    const vault = this.app && this.app.vault;
+    const files = vault && typeof vault.getMarkdownFiles === "function"
+      ? vault.getMarkdownFiles().filter((file) => file && file.path)
+      : [];
+    if (targetFile && !files.some((file) => file.path === targetFile.path)) {
+      files.push(targetFile);
+    }
+    const documents = [];
+    const fileByPath = new Map(files.map((file) => [file.path, file]));
+    const failures = [];
+    for (const file of files) {
+      let content = null;
+      if (
+        file.path === source.sourcePath && source.editor &&
+        typeof source.editor.getValue === "function"
+      ) {
+        content = source.editor.getValue();
+      } else if (typeof readAuthoritativePromptTargetContent === "function") {
+        try {
+          const snapshot = await readAuthoritativePromptTargetContent(
+            this,
+            source,
+            file,
+          );
+          if (!snapshot || snapshot.ambiguous) {
+            failures.push(file.path);
+            continue;
+          }
+          content = snapshot.content;
+        } catch (error) {
+          content = null;
+        }
+      } else if (typeof this.readFileSnapshot === "function") {
+        content = await this.readFileSnapshot(file, source);
+      }
+      if (typeof content !== "string") {
+        failures.push(file.path);
+        continue;
+      }
+      documents.push({ path: file.path, text: content });
+    }
+    return { documents, fileByPath, failures };
+  }
+
+  async consumeBlockedTaskPomodoroLink(source, targetFile) {
+    const { documents, fileByPath, failures } =
+      await this.readTaskDependencyDocuments(source, targetFile);
+    const plan = planTaskLinkBlockConsumption(
+      documents,
+      source.sourcePath,
+      source.line,
+      this.now(),
+    );
+    if (!plan) {
+      return false;
+    }
+    if (
+      plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
+      failures.length > 0
+    ) {
+      new Notice(
+        "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
+      );
+      return true;
+    }
+    if (!plan.blocked) {
+      return false;
+    }
+
+    let applied = 0;
+    let failed = false;
+    const updates = [...plan.updatesByPath.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    for (const [path, update] of updates) {
+      if (update.text === update.preimage) {
+        continue;
+      }
+      const file = fileByPath.get(path) ||
+        (this.app.vault &&
+        typeof this.app.vault.getAbstractFileByPath === "function"
+          ? this.app.vault.getAbstractFileByPath(path)
+          : null);
+      if (!file) {
+        failed = true;
+        continue;
+      }
+      const statusPlan = {
+        hasChanges: true,
+        content: update.text,
+        edits: update.edits,
+      };
+      if (
+        await this.applyTargetTaskPlan(
+          file,
+          source,
+          statusPlan,
+          update.preimage,
+          { noticePrefix: "Task consumption stopped" },
+        )
+      ) {
+        applied += update.edits.length;
+      } else {
+        failed = true;
+      }
+    }
+
+    if (plan.dependencyBlocked) {
+      const promotionText = applied > 0
+        ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
+        : "prerequisites already raised";
+      const suffix = failed ? " · some updates failed" : "";
+      new Notice(
+        `Task blocked · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
+      );
+    } else {
+      new Notice(
+        `Project blocked until ${plan.projectSchedule} · move its Schedule in ${plan.projectPath} · no Pomodoro link created`,
+      );
+    }
+    return true;
+  }
+
   // The cursor/task-eligibility half of openPomodoroTaskLink, split out so it
   // is testable without an Obsidian MarkdownView/TFile: single cursor, not
   // fenced, an open task line (including a `#hide` project task) under it,
@@ -8228,20 +8596,31 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
+    let taskFile = this.app && this.app.vault
+      ? this.resolveTaskFile(source.sourcePath)
+      : null;
+    if (taskFile) {
+      const taskContent = source.editor.getValue();
+      if (await this.consumeBlockedTaskPomodoroLink(source, taskFile)) {
+        return false;
+      }
+    }
+
     const dailyFile = this.resolveTodayDailyFile();
     if (!dailyFile) {
       new Notice("Task link blocked: today's daily note could not be found");
       return false;
     }
 
-    const taskFile = this.resolveTaskFile(source.sourcePath);
+    taskFile = taskFile || this.resolveTaskFile(source.sourcePath);
     if (!taskFile) {
       new Notice("Task link blocked: active note could not be resolved");
       return false;
     }
 
-    const sameNote = dailyFile.path === taskFile.path;
     const taskContent = source.editor.getValue();
+
+    const sameNote = dailyFile.path === taskFile.path;
     const dailyContent = sameNote
       ? taskContent
       : await this.readFileSnapshot(dailyFile, source);
@@ -10200,11 +10579,15 @@ module.exports.helpers = {
   planAllOpenPomodoroLinkCleanup,
   planFuturePomodoroLinkCleanup,
   planPomodoroLinkInsertion,
+  planTaskLinkBlockConsumption,
   planTargetTaskUpdate,
   planTaskLinkDeletion,
   planWorkLogInsertion,
   resolvePomodoroLinkCreateIntent,
   resolveTaskDependencyState,
+  taskDependencyRecordsFromDocuments,
+  parseProjectFrontmatter,
+  projectDependencyInfoForRecords,
   selectPomodoroInsertionTarget,
   sourceQualifiesForPomodoroActivation,
   spanRemovalEdit,

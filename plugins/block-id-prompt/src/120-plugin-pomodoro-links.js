@@ -177,6 +177,130 @@ class BlockIdPromptPomodoroLinksMixin {
     return cleanup.removedCount > 0;
   }
 
+  async readTaskDependencyDocuments(source, targetFile) {
+    const vault = this.app && this.app.vault;
+    const files = vault && typeof vault.getMarkdownFiles === "function"
+      ? vault.getMarkdownFiles().filter((file) => file && file.path)
+      : [];
+    if (targetFile && !files.some((file) => file.path === targetFile.path)) {
+      files.push(targetFile);
+    }
+    const documents = [];
+    const fileByPath = new Map(files.map((file) => [file.path, file]));
+    const failures = [];
+    for (const file of files) {
+      let content = null;
+      if (
+        file.path === source.sourcePath && source.editor &&
+        typeof source.editor.getValue === "function"
+      ) {
+        content = source.editor.getValue();
+      } else if (typeof readAuthoritativePromptTargetContent === "function") {
+        try {
+          const snapshot = await readAuthoritativePromptTargetContent(
+            this,
+            source,
+            file,
+          );
+          if (!snapshot || snapshot.ambiguous) {
+            failures.push(file.path);
+            continue;
+          }
+          content = snapshot.content;
+        } catch (error) {
+          content = null;
+        }
+      } else if (typeof this.readFileSnapshot === "function") {
+        content = await this.readFileSnapshot(file, source);
+      }
+      if (typeof content !== "string") {
+        failures.push(file.path);
+        continue;
+      }
+      documents.push({ path: file.path, text: content });
+    }
+    return { documents, fileByPath, failures };
+  }
+
+  async consumeBlockedTaskPomodoroLink(source, targetFile) {
+    const { documents, fileByPath, failures } =
+      await this.readTaskDependencyDocuments(source, targetFile);
+    const plan = planTaskLinkBlockConsumption(
+      documents,
+      source.sourcePath,
+      source.line,
+      this.now(),
+    );
+    if (!plan) {
+      return false;
+    }
+    if (
+      plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
+      failures.length > 0
+    ) {
+      new Notice(
+        "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
+      );
+      return true;
+    }
+    if (!plan.blocked) {
+      return false;
+    }
+
+    let applied = 0;
+    let failed = false;
+    const updates = [...plan.updatesByPath.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    for (const [path, update] of updates) {
+      if (update.text === update.preimage) {
+        continue;
+      }
+      const file = fileByPath.get(path) ||
+        (this.app.vault &&
+        typeof this.app.vault.getAbstractFileByPath === "function"
+          ? this.app.vault.getAbstractFileByPath(path)
+          : null);
+      if (!file) {
+        failed = true;
+        continue;
+      }
+      const statusPlan = {
+        hasChanges: true,
+        content: update.text,
+        edits: update.edits,
+      };
+      if (
+        await this.applyTargetTaskPlan(
+          file,
+          source,
+          statusPlan,
+          update.preimage,
+          { noticePrefix: "Task consumption stopped" },
+        )
+      ) {
+        applied += update.edits.length;
+      } else {
+        failed = true;
+      }
+    }
+
+    if (plan.dependencyBlocked) {
+      const promotionText = applied > 0
+        ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
+        : "prerequisites already raised";
+      const suffix = failed ? " · some updates failed" : "";
+      new Notice(
+        `Task blocked · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
+      );
+    } else {
+      new Notice(
+        `Project blocked until ${plan.projectSchedule} · move its Schedule in ${plan.projectPath} · no Pomodoro link created`,
+      );
+    }
+    return true;
+  }
+
   // The cursor/task-eligibility half of openPomodoroTaskLink, split out so it
   // is testable without an Obsidian MarkdownView/TFile: single cursor, not
   // fenced, an open task line (including a `#hide` project task) under it,
@@ -510,20 +634,31 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
+    let taskFile = this.app && this.app.vault
+      ? this.resolveTaskFile(source.sourcePath)
+      : null;
+    if (taskFile) {
+      const taskContent = source.editor.getValue();
+      if (await this.consumeBlockedTaskPomodoroLink(source, taskFile)) {
+        return false;
+      }
+    }
+
     const dailyFile = this.resolveTodayDailyFile();
     if (!dailyFile) {
       new Notice("Task link blocked: today's daily note could not be found");
       return false;
     }
 
-    const taskFile = this.resolveTaskFile(source.sourcePath);
+    taskFile = taskFile || this.resolveTaskFile(source.sourcePath);
     if (!taskFile) {
       new Notice("Task link blocked: active note could not be resolved");
       return false;
     }
 
-    const sameNote = dailyFile.path === taskFile.path;
     const taskContent = source.editor.getValue();
+
+    const sameNote = dailyFile.path === taskFile.path;
     const dailyContent = sameNote
       ? taskContent
       : await this.readFileSnapshot(dailyFile, source);

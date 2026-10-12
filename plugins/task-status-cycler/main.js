@@ -4499,6 +4499,156 @@ function parseTaskDependencyDocument(sourceText, path = "") {
   return tasks;
 }
 
+function parseFrontmatterScalar(sourceText, key) {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  if (lines.length === 0 || !/^\s*---\s*$/.test(lines[0])) {
+    return null;
+  }
+  for (let line = 1; line < lines.length; line += 1) {
+    if (/^\s*---\s*$/.test(lines[line])) {
+      break;
+    }
+    const match = lines[line].match(new RegExp(`^${key}\\s*:\\s*(.*?)\\s*$`));
+    if (!match) {
+      continue;
+    }
+    let value = match[1].replace(/\s+#.*$/, "").trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    return value;
+  }
+  return null;
+}
+
+function isCanonicalDailyNotePath(path) {
+  return /(?:^|\/)\d{4}\/\d{8}\.md$/i.test(String(path || ""));
+}
+
+function projectDependencyInfo(sourceText, path = "") {
+  if (isCanonicalDailyNotePath(path)) {
+    return null;
+  }
+  const type = parseFrontmatterScalar(sourceText, "type");
+  const status = parseFrontmatterScalar(sourceText, "status");
+  if (
+    !type || !/^\[\[project\]\]$/i.test(type) ||
+    !status || /^(?:done|canceled|cancelled)$/i.test(status)
+  ) {
+    return null;
+  }
+  const tasks = parseTaskDependencyDocument(sourceText, path).filter(
+    (task) => !/^\s*>/.test(task.lineText),
+  );
+  const projectTasks = tasks.filter(
+    (task) => task.blockId === "prj" && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status),
+  );
+  if (projectTasks.length !== 1) {
+    return null;
+  }
+  const scheduled = parseFrontmatterScalar(sourceText, "scheduled");
+  const scheduledDate = scheduled && parseStrictCalendarDate(scheduled);
+  return {
+    path: String(path || ""),
+    tasks,
+    projectTask: projectTasks[0],
+    dependencyIds: projectTasks[0].dependsOn.slice(),
+    scheduled: scheduledDate ? formatCalendarDate(scheduledDate) : null,
+  };
+}
+
+function projectHasFutureSchedule(project, today) {
+  if (!project || !project.scheduled) {
+    return false;
+  }
+  const scheduled = parseStrictCalendarDate(project.scheduled);
+  const anchor = parseStrictCalendarDate(today);
+  return !!scheduled && !!anchor && compareCalendarDates(scheduled, anchor) > 0;
+}
+
+function projectHasOpenDependency(project, openIds, closedIds = new Set()) {
+  if (!project) {
+    return false;
+  }
+  const ownTaskIds = new Set(
+    project.tasks.map((task) => task.taskId).filter(Boolean),
+  );
+  return project.dependencyIds.some((id) =>
+    !ownTaskIds.has(String(id)) &&
+    !closedIds.has(String(id)) &&
+    openIds.has(String(id))
+  );
+}
+
+function projectIsBlockedAfter(project, openIds, today, closedIds = new Set()) {
+  return projectHasFutureSchedule(project, today) ||
+    projectHasOpenDependency(project, openIds, closedIds);
+}
+
+function projectSuccessorRecoveryState(noteTexts, closedIds, openIdsAfter, today) {
+  const projectInfoByPath = new Map();
+  const projectRecoveryPaths = new Set();
+  for (const [path, text] of Object.entries(noteTexts || {})) {
+    const project = projectDependencyInfo(text, path);
+    if (!project) {
+      continue;
+    }
+    projectInfoByPath.set(path, project);
+    const projectTask = project.projectTask;
+    if (
+      projectTask.status === "?" &&
+      project.dependencyIds.some((id) => closedIds.has(String(id))) &&
+      !findSingleFutureScheduledField(projectTask.lineText, today) &&
+      !projectIsBlockedAfter(project, openIdsAfter, today, closedIds)
+    ) {
+      projectRecoveryPaths.add(path);
+    }
+  }
+  return { projectInfoByPath, projectRecoveryPaths };
+}
+
+function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
+  const members = [];
+  for (const path of recoveryPaths || []) {
+    const project = projectInfoByPath.get(path);
+    for (const task of project ? project.tasks : []) {
+      if (task.blockId === "prj" || task.status !== "?") {
+        continue;
+      }
+      members.push({
+        path,
+        line: task.line,
+        status: task.status,
+        blockId: task.blockId,
+        taskId: task.taskId,
+        dependsOn: task.dependsOn.slice(),
+        text: task.lineText,
+        rawLine: task.lineText,
+        scheduled: null,
+      });
+    }
+  }
+  return members;
+}
+
+function isProjectBlockedResidentTaskInDocument(sourceText, path, line) {
+  const project = projectDependencyInfo(sourceText, path);
+  if (!project || project.projectTask.status !== "?") {
+    return false;
+  }
+  const task = project.tasks.find((candidate) => candidate.line === line);
+  if (!task || task.blockId === "prj" || task.status !== "?") {
+    return false;
+  }
+  // The editor shortcut is allowed to use the project's current `[?]` as its
+  // immediate blocked-state signal. Reconcile remains authoritative for the
+  // underlying reasons.
+  return true;
+}
+
 function closedTaskIdentity(path, lineText) {
   const blockId = getTrailingBlockId(lineText);
   const taskId = lineMatchesTasksGlobalFilterText(lineText)
@@ -4630,15 +4780,38 @@ function buildBlockedDependentRecoveryPlan(
     }
   }
 
+  const projectsByPath = new Map();
+  const recoveringProjects = new Map();
+  for (const document of parsedDocuments) {
+    const project = projectDependencyInfo(document.text, document.path);
+    if (!project) {
+      continue;
+    }
+    projectsByPath.set(document.path, project);
+    const projectTask = project.projectTask;
+    const isUnblockedProjectTask =
+      projectTask.status === "?" &&
+      project.dependencyIds.some((id) => closedIds.has(String(id))) &&
+      !findSingleFutureScheduledField(projectTask.lineText, today) &&
+      !projectIsBlockedAfter(project, openIds, today);
+    if (isUnblockedProjectTask) {
+      recoveringProjects.set(document.path, project);
+    }
+  }
+
   const edits = [];
   const seenEdits = new Set();
   for (const document of parsedDocuments) {
     for (const task of document.tasks) {
+      const project = projectsByPath.get(task.path);
       if (
         task.status !== "?" ||
         !task.dependsOn.some((id) => closedIds.has(id)) ||
-        task.dependsOn.some((id) => openIds.has(id)) ||
-        findSingleFutureScheduledField(task.lineText, today)
+        task.dependsOn.some((id) =>
+          openIds.has(String(id))
+        ) ||
+        findSingleFutureScheduledField(task.lineText, today) ||
+        (project && projectIsBlockedAfter(project, openIds, today))
       ) {
         continue;
       }
@@ -4649,6 +4822,37 @@ function buildBlockedDependentRecoveryPlan(
       seenEdits.add(key);
       edits.push({
         path: task.path,
+        line: task.line,
+        sourceLineText: task.lineText,
+        statusStart: task.statusStart,
+        taskId: task.taskId,
+        dependsOn: task.dependsOn.slice(),
+      });
+    }
+  }
+
+  // A recovered `^prj` releases its resident tasks in the same gesture.
+  // Residents recover only when their own dependency and schedule reasons
+  // have also cleared, and never become successor candidates here.
+  for (const [path, project] of recoveringProjects) {
+    for (const task of project.tasks) {
+      if (
+        task.blockId === "prj" ||
+        task.status !== "?" ||
+        task.dependsOn.some((id) =>
+          openIds.has(String(id))
+        ) ||
+        findSingleFutureScheduledField(task.lineText, today)
+      ) {
+        continue;
+      }
+      const key = `${path}\0${task.line}`;
+      if (seenEdits.has(key)) {
+        continue;
+      }
+      seenEdits.add(key);
+      edits.push({
+        path,
         line: task.line,
         sourceLineText: task.lineText,
         statusStart: task.statusStart,
@@ -5548,17 +5752,31 @@ function planSuccessors(options = {}) {
   }
 
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [...byTaskId.values()];
-  const candidates = allTasks
-    .filter(
-      (task) =>
-        task &&
-        typeof task === "object" &&
-        DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
-        !(task.taskId && closedTaskIds.has(String(task.taskId))) &&
-        !successorIsDonePath(task.path) &&
-        Array.isArray(task.dependsOn) &&
-        task.dependsOn.some((id) => closedTaskIds.has(String(id))),
-    )
+  const { projectInfoByPath, projectRecoveryPaths } =
+    projectSuccessorRecoveryState(noteTexts, closedTaskIds, openIdsAfter, today);
+  const candidateByLocation = new Map();
+  for (const task of allTasks) {
+    if (
+      task &&
+      typeof task === "object" &&
+      DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+      !(task.taskId && closedTaskIds.has(String(task.taskId))) &&
+      !successorIsDonePath(task.path) &&
+      Array.isArray(task.dependsOn) &&
+      task.dependsOn.some((id) => closedTaskIds.has(String(id)))
+    ) {
+      candidateByLocation.set(`${task.path}\0${task.line}`, task);
+    }
+  }
+  for (const task of projectSuccessorRecoveryMembers(
+    projectInfoByPath,
+    projectRecoveryPaths,
+  )) {
+    if (!successorIsDonePath(task.path)) {
+      candidateByLocation.set(`${task.path}\0${task.line}`, task);
+    }
+  }
+  const candidates = [...candidateByLocation.values()]
     .sort(
       (left, right) =>
         String(left.path || "").localeCompare(String(right.path || "")) ||
@@ -5634,6 +5852,35 @@ function planSuccessors(options = {}) {
       });
       continue;
     }
+    const project = projectInfoByPath.get(String(task.path || ""));
+    const projectResident = project && task.blockId !== "prj" &&
+      project.tasks.some((candidate) => candidate.line === task.line);
+    const projectTask = project && task.blockId === "prj";
+    if (
+      project && (projectResident || projectTask) &&
+      projectIsBlockedAfter(project, openIdsAfter, today, closedTaskIds)
+    ) {
+      const projectOpenCount = project.dependencyIds.filter((id) => {
+        const localIds = new Set(
+          project.tasks.map((candidate) => candidate.taskId).filter(Boolean),
+        );
+        return !localIds.has(String(id)) && openIdsAfter.has(String(id)) &&
+          !closedTaskIds.has(String(id));
+      }).length;
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: successorDisplayText(task),
+        status_symbol: task.status,
+        reason: "project",
+        waits_on: projectOpenCount,
+        scheduled: projectHasFutureSchedule(project, today)
+          ? project.scheduled
+          : null,
+      });
+      continue;
+    }
     const predecessors = closed.filter(
       (identity) =>
         identity &&
@@ -5652,6 +5899,24 @@ function planSuccessors(options = {}) {
     // 3. Project tasks recover but never link.
     if (successorIsProjectTask(task.blockId)) {
       recovers.push({ task, reason: "project_task", predecessorRows });
+      continue;
+    }
+    if (project && projectResident && projectRecoveryPaths.has(task.path)) {
+      const projectPredecessors = closed.filter(
+        (identity) => identity && identity.taskId &&
+          project.dependencyIds.some((id) =>
+            String(id) === String(identity.taskId)
+          ),
+      ).map((identity) => ({
+        note_path: String(identity.path || ""),
+        block_id: String(identity.blockId || ""),
+        text: String(identity.text || ""),
+      }));
+      recovers.push({
+        task,
+        reason: "project_member",
+        predecessorRows: projectPredecessors,
+      });
       continue;
     }
     // 4. Hidden tasks recover but never link.
@@ -12182,6 +12447,25 @@ class TaskStatusCyclerCommandsMixin {
 
     const taskStatus = this.getActiveTaskStatus(editor);
     if (taskStatus) {
+      const activePath = view.file && view.file.path
+        ? view.file.path
+        : this.app.workspace &&
+            typeof this.app.workspace.getActiveFile === "function"
+          ? (this.app.workspace.getActiveFile() || {}).path
+          : "";
+      if (
+        taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL &&
+        isProjectBlockedResidentTaskInDocument(
+          editor.getValue(),
+          activePath,
+          taskStatus.line,
+        )
+      ) {
+        if (!checking) {
+          new Notice(`Project blocked · resolve the dependency in ${activePath}`);
+        }
+        return true;
+      }
       const nextSymbol = this.getAdjacentSymbol(taskStatus.symbol, direction);
       if (!nextSymbol) {
         return false;
@@ -12704,6 +12988,7 @@ class TaskStatusCyclerCommandsMixin {
       : null;
     const seenResolvedTargets = new Set();
     let changed = false;
+    let projectBlockedSkipped = false;
     let startDepLineUntargeted = false;
     // `cycler_polish`: identities cycled into Done/Cancelled, finalized as
     // one batch after the loop (Done links, Cancelled recovers only).
@@ -12775,6 +13060,18 @@ class TaskStatusCyclerCommandsMixin {
       const taskStatus = getTaskStatusForLine(lineText, line);
       if (taskStatus) {
         if (!isCyclableTaskStatus(taskStatus)) {
+          continue;
+        }
+
+        if (
+          taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL &&
+          isProjectBlockedResidentTaskInDocument(
+            lines.join("\n"),
+            activePath,
+            line,
+          )
+        ) {
+          projectBlockedSkipped = true;
           continue;
         }
 
@@ -12903,6 +13200,9 @@ class TaskStatusCyclerCommandsMixin {
 
     if (!changed && startDepLineUntargeted) {
       new Notice("⛓ Put the cursor on a dependency link to cycle it");
+    }
+    if (projectBlockedSkipped) {
+      new Notice(`Project blocked · resolve the dependency in ${activePath}`);
     }
 
     // One batched pass for the whole counted range (partitioned Done vs
@@ -13684,6 +13984,19 @@ class TaskStatusCyclerCompletionMixin {
     }
 
     const sourceSymbol = resolvedTarget.taskStatus.symbol;
+    if (
+      sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL &&
+      isProjectBlockedResidentTaskInDocument(
+        resolvedTarget.sourceText,
+        resolvedTarget.file && resolvedTarget.file.path,
+        resolvedTarget.line,
+      )
+    ) {
+      new Notice(
+        `Project blocked · resolve the dependency in ${resolvedTarget.file.path}`,
+      );
+      return false;
+    }
     const nextSymbol = this.getAdjacentSymbol(sourceSymbol, direction);
     if (!nextSymbol) {
       return false;
@@ -16506,8 +16819,17 @@ module.exports.helpers = {
   lineContainsStandaloneBlockId,
   lineHasCreatedField,
   lineMatchesTasksGlobalFilterText,
+  parseFrontmatterScalar,
   parseEmbeddedBlockTransclusions,
   isTaskDependencyLine,
+  isCanonicalDailyNotePath,
+  isProjectBlockedResidentTaskInDocument,
+  projectDependencyInfo,
+  projectHasFutureSchedule,
+  projectHasOpenDependency,
+  projectIsBlockedAfter,
+  projectSuccessorRecoveryMembers,
+  projectSuccessorRecoveryState,
   parseTaskDependencyDocument,
   parseTaskDependencyLine,
   parseTaskDependencyMetadata,

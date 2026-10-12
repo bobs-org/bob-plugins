@@ -1011,6 +1011,42 @@ test("convertProjectNoteToTask refusals leave every file untouched", async () =>
   );
 });
 
+test("convertProjectNoteToTask repoints #^prj links before the parent write so cleanup consumes them", async () => {
+  notices.length = 0;
+  const rewriteFailure = createProjectReversalHarness({
+    projectContent: workedExampleProjectNote(),
+    parentContent: workedExampleParentNote(),
+    backlinks: {
+      "Missing.md": [
+        {
+          original: "[[Health_gym_habit#^prj]]",
+          link: "Health_gym_habit#^prj",
+        },
+      ],
+    },
+  });
+  assert.equal(
+    await rewriteFailure.plugin.createProjectNoteFromTask(
+      rewriteFailure.editor,
+      rewriteFailure.view,
+    ),
+    false,
+  );
+  assert.match(notices.at(-1), /nothing was converted/);
+  assert.deepEqual(rewriteFailure.trashCalls, []);
+  assert.equal(
+    rewriteFailure.contents["Health.md"],
+    workedExampleParentNote(),
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      rewriteFailure.contents,
+      "Health_gym_habit.md",
+    ),
+    true,
+  );
+});
+
 test("convertProjectNoteToTask reports post-write failures without rolling back", async () => {
   notices.length = 0;
   const trashFailure = createProjectReversalHarness({
@@ -1035,35 +1071,6 @@ test("convertProjectNoteToTask reports post-write failures without rolling back"
     true,
   );
 
-  notices.length = 0;
-  const rewriteFailure = createProjectReversalHarness({
-    projectContent: workedExampleProjectNote(),
-    parentContent: workedExampleParentNote(),
-    backlinks: {
-      "Missing.md": [
-        {
-          original: "[[Health_gym_habit#^prj]]",
-          link: "Health_gym_habit#^prj",
-        },
-      ],
-    },
-  });
-  assert.equal(
-    await rewriteFailure.plugin.createProjectNoteFromTask(
-      rewriteFailure.editor,
-      rewriteFailure.view,
-    ),
-    true,
-  );
-  assert.match(notices.at(-1), /links could not be updated/);
-  assert.deepEqual(rewriteFailure.trashCalls, []);
-  assert.equal(
-    Object.prototype.hasOwnProperty.call(
-      rewriteFailure.contents,
-      "Health_gym_habit.md",
-    ),
-    true,
-  );
 });
 
 // ---------------------------------------------------------------------------

@@ -875,3 +875,13 @@ test("nav api v3 resolves results and never throws", async () => {
     null,
   );
 });
+
+test("getDependencyInsertLine lands after a Cancel Log subtree", () => {
+  const lines = [
+    "- [ ] #task Parent ^parent",
+    "  - ❌ **CANCEL LOG**",
+    "    - gave up on this",
+    "  - [ ] #task Kid ^kid",
+  ];
+  assert.equal(helpers.getDependencyInsertLine(lines, 0), 3);
+});

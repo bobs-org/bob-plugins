@@ -601,6 +601,8 @@ class BobNavigationHotkeysInboxRouteMixin {
         notice: formatInboxRouteMoveNotice({
           count,
           destinationName: result.destinationName,
+          blocked: result.plan && result.plan.blockedOnDestinationCount,
+          recovered: result.plan && result.plan.recoveredOnMoveCount,
         }),
         handledRefs,
         reason: null,

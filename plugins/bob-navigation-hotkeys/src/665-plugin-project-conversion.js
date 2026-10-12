@@ -264,6 +264,14 @@ class BobNavigationHotkeysProjectConversionMixin {
           normalizeVaultRelativePath(createdFile.path),
         ],
         resolveLinkpath: this.dependencyLinkpathResolver(),
+        // Design §5: the seed may already have flipped residents to `[?]`
+        // (future inline date), so transfer reads their pre-seed lanes.
+        projectLaneStatuses: [
+          parsedTask.status,
+          ...convertedChildTaskLines.map((line) =>
+            getObsidianTaskCheckboxStatus(String(line || ""))
+          ),
+        ],
       });
       if (!dependencyPlan.ok) {
         new Notice(`Could not preserve the Depends-On line (${dependencyPlan.reason}); the source task was kept`);
@@ -569,6 +577,8 @@ class BobNavigationHotkeysProjectConversionMixin {
       destination.kind === "project" &&
       projectLooksBlockedByPrjShortcut(parentContent);
     let restoredLines = [...restored.lines];
+    let reversedBlockedCount = 0;
+    let reversedRecoveredCount = 0;
     const sourceRows = collectProjectNoteTaskRows(content).residents;
     const sourceRowsById = new Map(
       sourceRows.filter((row) => row.blockId).map((row) => [row.blockId, row]),
@@ -596,14 +606,18 @@ class BobNavigationHotkeysProjectConversionMixin {
       const recoveryIndex = recovery
         ? { ...recovery, projectBlocked }
         : null;
-      const markUnblockedLine = (line, markOptions) => {
-        const freshness = this.getFreshnessApi();
-        return freshness && typeof freshness.markUnblockedLine === "function"
-          ? freshness.markUnblockedLine(line, markOptions)
-          : line;
-      };
+      const markUnblockedLine = navFreshnessMarkUnblockedLine(
+        this.getFreshnessApi(),
+      );
       restoredLines = restoredLines.map((line, index) => {
-        if (index === 0 || !taskHasProjectBlockedTag(line)) return line;
+        // Closed lines are never edited: a legacy tag on one stays put.
+        if (
+          index === 0 ||
+          !taskHasProjectBlockedTag(line) ||
+          !isOpenObsidianTaskLine(line)
+        ) {
+          return line;
+        }
         const blockId = getTrailingBlockId(line);
         const row = blockId ? sourceRowsById.get(blockId) : null;
         const metadata = row && recoveryIndex
@@ -613,17 +627,34 @@ class BobNavigationHotkeysProjectConversionMixin {
               row.line,
             )
           : deferredScheduledRecovery("project task recovery is unavailable");
-        return recoverProjectResidentLine(line, metadata, {
+        const result = recoverProjectResidentLine(line, metadata, {
           today,
           markUnblockedLine,
-        }).line;
+          isDailyNote: Boolean(
+            canonicalRecoveryDailyDate(
+              normalizeVaultRelativePath(parentFile.path),
+            ),
+          ),
+          isToday: false,
+        });
+        if (result.recovered) {
+          reversedRecoveredCount += 1;
+        }
+        return result.line;
       });
     }
 
     if (parentProjectBlocked) {
-      restoredLines = restoredLines.map((line) =>
-        isOpenObsidianTaskLine(line) ? blockProjectResidentLine(line) : line,
-      );
+      restoredLines = restoredLines.map((line) => {
+        if (!isOpenObsidianTaskLine(line)) {
+          return line;
+        }
+        const next = blockProjectResidentLine(line);
+        if (next !== line) {
+          reversedBlockedCount += 1;
+        }
+        return next;
+      });
     }
 
     const finalInsertion = insertTaskMoveBlocks(
@@ -712,6 +743,43 @@ class BobNavigationHotkeysProjectConversionMixin {
       parentContentToWrite = plan.nextContent;
     }
 
+    const classification = this.getProjectNoteBacklinkClassification(
+      sourceFile,
+      parentFile.path,
+    );
+    if (classification.otherPaths.length > 0) {
+      new Notice(
+        `${classification.otherPaths.length} notes link to "${noteBasename}"; update them before converting (first: ${classification.otherPaths[0]})`,
+      );
+      return false;
+    }
+    if (classification.blockRewrites.length > 0 && !restored.blockId) {
+      new Notice(
+        "Could not derive a task block ID for the links that point at ^prj",
+      );
+      return false;
+    }
+
+    // Repoint `#^prj` links BEFORE planning the Pomodoro cleanup (§13.10):
+    // the cleanup targets the restored block id, so the live links must
+    // already carry it to be consumed. A rewrite failure aborts before any
+    // write, leaving the project note intact for a retry.
+    let updatedLinkCount = 0;
+    if (classification.blockRewrites.length > 0) {
+      const rewriteResult = await this.applyBlockIdLinkRewrites(
+        classification.blockRewrites,
+        parentBasename,
+        restored.blockId,
+      );
+      updatedLinkCount = rewriteResult.updatedLinkCount;
+      if (rewriteResult.failed) {
+        new Notice(
+          `Could not update every link to "^prj" (${rewriteResult.failedLinkCount} failed); nothing was converted`,
+        );
+        return false;
+      }
+    }
+
     let dailyCleanup = null;
     let dailyCleanupSnapshot = null;
     if (parentProjectBlocked) {
@@ -744,23 +812,6 @@ class BobNavigationHotkeysProjectConversionMixin {
       }
     }
 
-    const classification = this.getProjectNoteBacklinkClassification(
-      sourceFile,
-      parentFile.path,
-    );
-    if (classification.otherPaths.length > 0) {
-      new Notice(
-        `${classification.otherPaths.length} notes link to "${noteBasename}"; update them before converting (first: ${classification.otherPaths[0]})`,
-      );
-      return false;
-    }
-    if (classification.blockRewrites.length > 0 && !restored.blockId) {
-      new Notice(
-        "Could not derive a task block ID for the links that point at ^prj",
-      );
-      return false;
-    }
-
     let wroteParent = false;
     try {
       await vault.process(parentFile, (current) => {
@@ -789,23 +840,6 @@ class BobNavigationHotkeysProjectConversionMixin {
           ))
         : false;
 
-    let updatedLinkCount = 0;
-    if (classification.blockRewrites.length > 0) {
-      const rewriteResult = await this.applyBlockIdLinkRewrites(
-        classification.blockRewrites,
-        parentBasename,
-        restored.blockId,
-      );
-      updatedLinkCount = rewriteResult.updatedLinkCount;
-      if (rewriteResult.failed) {
-        const failed = rewriteResult.failedLinkCount;
-        new Notice(
-          `Restored the task in ${parentBasename}, but ${failed} links could not be updated; "${noteBasename}" was kept`,
-        );
-        return true;
-      }
-    }
-
     await this.focusTaskMoveDestination(parentFile, {
       line: finalInsertion.insertedLine,
       text: restoredLines[0],
@@ -833,6 +867,8 @@ class BobNavigationHotkeysProjectConversionMixin {
       restored.taskCount,
       restored.sectionCount,
       updatedLinkCount,
+      reversedBlockedCount,
+      reversedRecoveredCount,
     );
     if (dailyCleanupFailed) notice += " · Pomodoro links not removed";
     new Notice(notice);

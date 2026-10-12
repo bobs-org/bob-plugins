@@ -493,7 +493,11 @@ class BobNavigationHotkeysMoveCommitMixin {
       ? ` (requested ${session.discovery.requestedCount}; reached end of note)`
       : "";
     const moveNoticeText =
-      `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}`;
+      `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}` +
+      formatTaskMoveProjectCountsNotice(
+        plan.blockedOnDestinationCount,
+        plan.recoveredOnMoveCount,
+      );
     new Notice(moveNoticeText);
     return true;
   }

@@ -200,7 +200,23 @@ function planDependencyStageView(args = {}) {
           cycleLabels: labelDependencyStageCycle(selfCycle),
         };
       }
-      const cycle = findDependencyStageCycle(edges, dependentKey, key);
+      let cycle = findDependencyStageCycle(edges, dependentKey, key);
+      // A `^prj` add implicitly adds resident `→ X` for every open
+      // resident (§13.10), so X depending on a resident is refused too.
+      if (!cycle && isProjectPrjDependent && key) {
+        const residentKeys = Array.isArray(dependent.projectResidentKeys)
+          ? dependent.projectResidentKeys
+          : [];
+        for (const residentKey of residentKeys) {
+          if (!residentKey || residentKey === dependentKey) {
+            continue;
+          }
+          cycle = findDependencyStageCycle(edges, residentKey, key);
+          if (cycle) {
+            break;
+          }
+        }
+      }
       if (cycle) {
         return {
           disabled: true,

@@ -133,6 +133,10 @@ class BobNavigationHotkeysCountedRollMixin {
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
+        markUnblockedLine: navFreshnessMarkUnblockedLine(
+          this.getFreshnessApi(),
+        ),
+        ...navNoteScopeFlags(filePath),
       },
     );
     if (!plan.valid) {
@@ -175,6 +179,7 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -196,6 +201,7 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
           }
@@ -405,6 +411,10 @@ class BobNavigationHotkeysCountedRollMixin {
         schedulingWorkLog: options.schedulingWorkLog || options.workLog,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
+        markUnblockedLine: navFreshnessMarkUnblockedLine(
+          this.getFreshnessApi(),
+        ),
+        ...navNoteScopeFlags(filePath),
       },
     );
     if (!plan.valid) {
@@ -473,6 +483,7 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -494,6 +505,7 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
+                removeEmptiedEntries: true,
               },
             );
           }

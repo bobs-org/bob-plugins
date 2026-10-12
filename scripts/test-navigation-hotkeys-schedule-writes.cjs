@@ -472,3 +472,65 @@ test("task status helpers keep Blocked open but rankless", () => {
     );
   }
 });
+
+test("a due project date keeps the tag while ^prj holds Depends-On links", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-30] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[job#^linkedin]]",
+    "- [?] #task Work [scheduled:: 2026-07-30] #prj_is_blocked [fresh:: 2026-07-01] ^work",
+  ].join("\n");
+  const calls = [];
+  const plan = helpers.planProjectScheduledUpdate(
+    input,
+    3,
+    "2026-07-11",
+    new Date(2026, 6, 11),
+    {
+      recoveryByLine: new Map([
+        [3, { state: "blocked", rank: null, reason: "open dependency: job__linkedin" }],
+        [5, { state: "blocked", rank: null, reason: "project_dependency: job.md#^linkedin" }],
+      ]),
+      markUnblockedLine: (line) => {
+        calls.push(line);
+        return line;
+      },
+    },
+  );
+  assert.equal(plan.valid, true, plan.error);
+  const out = plan.content.split("\n");
+  assert.match(out[3], /\[scheduled:: 2026-07-11\]/);
+  assert.ok(out[3].startsWith("- [?]"), out[3]);
+  const resident = out.find((line) => line.includes("^work"));
+  assert.ok(resident.startsWith("- [?]"), resident);
+  assert.ok(resident.includes("#prj_is_blocked"), resident);
+  assert.equal(calls.length, 0);
+});
+
+test("counted scheduled deletes recover with [unblocked::] when the writer is passed", () => {
+  const input = ["- [?] #task Ready [scheduled:: 2099-01-01] ^ready"].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 0);
+  const calls = [];
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    null,
+    {
+      operation: "delete",
+      today: new Date(2026, 9, 12),
+      recoveryByLine: new Map([[0, { state: "ready", rank: " " }]]),
+      markUnblockedLine: (line, options) => {
+        calls.push(options);
+        return `${line} [unblocked:: 2026-10-12]`;
+      },
+    },
+  );
+  assert.equal(plan.valid, true, plan.error);
+  assert.match(plan.content, /\[unblocked:: 2026-10-12\]/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].isDailyNote, false);
+  assert.equal(calls[0].isToday, false);
+});

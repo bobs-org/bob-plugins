@@ -377,7 +377,13 @@ function planDependencyEdit(args = {}) {
   const residentBlockEdits = residentBlockPlan.edits;
   const projectNewlyBlockedLines = residentBlockPlan.newlyBlocked;
 
-  const projectLaneStatuses = projectPromotionLaneStatuses(projectPrj, lines);
+  // Commitment-transfer lanes (Design §5): callers converting or seeding a
+  // project pass the residents' pre-write lanes when the content no longer
+  // shows them (e.g. a future-date seed already flipped residents to `[?]`);
+  // otherwise lanes read off the current lines.
+  const projectLaneStatuses = Array.isArray(args.projectLaneStatuses)
+    ? args.projectLaneStatuses
+    : projectPromotionLaneStatuses(projectPrj, lines);
   for (const row of (mirrorTouch ? [] : addedOpen)) {
     const desired = getDependencyPromotionStatus(
       parentStatusBefore,
@@ -530,15 +536,22 @@ function planDependencyEdit(args = {}) {
     openRemaining === 0 &&
     getObsidianTaskCheckboxStatus(parentText) === "?" &&
     !dependencyParentHasFutureSchedule(parentText, recoveryToday);
-  const projectWantsResidentRecovery = shouldRecoverProjectResidents(
-    projectPrj,
-    args.recovery,
-    removedCount,
-    fieldCleared,
-    openRemaining,
-    parentText,
-    recoveryToday,
-  );
+  // Resident recovery runs only when `^prj` itself was Blocked before the
+  // gesture (§13.10): removing a closed link from an unblocked `^prj` must
+  // not flip residents that stay Blocked on their own prerequisites (the
+  // vault snapshot loads only for `[?]` dependents, so unknown ids would
+  // otherwise read as recovered).
+  const projectWantsResidentRecovery =
+    parentStatusBefore === "?" &&
+    shouldRecoverProjectResidents(
+      projectPrj,
+      args.recovery,
+      removedCount,
+      fieldCleared,
+      openRemaining,
+      parentText,
+      recoveryToday,
+    );
   let recoveredOutcome = null;
   let projectRecoveredLines = [];
   let projectReadyLines = [];
@@ -617,6 +630,10 @@ function planDependencyEdit(args = {}) {
         structural,
         recoveryToday,
         markUnblockedLine,
+        {
+          isDailyNote: args.recovery && args.recovery.isDailyNote === true,
+          isToday: args.recovery && args.recovery.isToday === true,
+        },
       );
       residentRecoveryEdits = recovery.edits;
       projectRecoveredLines = recovery.recovered;

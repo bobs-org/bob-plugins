@@ -51,12 +51,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       {
         today,
         recoveryByLine,
-        markUnblockedLine: (line, markOptions) => {
-          const freshness = this.getFreshnessApi();
-          return freshness && typeof freshness.markUnblockedLine === "function"
-            ? freshness.markUnblockedLine(line, markOptions)
-            : line;
-        },
+        markUnblockedLine: navFreshnessMarkUnblockedLine(
+          this.getFreshnessApi(),
+        ),
+        ...navNoteScopeFlags(filePath),
       },
     );
     if (!plan.valid) {
@@ -213,9 +211,8 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       recoveryOutcome = reconciliation.outcome;
     }
 
-    // Freshness is the last transformation of the task line (nav-stamps).
-    // Project-frontmatter edits never stamp; the stamper itself refuses
-    // closed and recurring lines.
+    // Freshness is the last transformation of the task line (nav-stamps);
+    // the stamper itself refuses closed and recurring lines.
     if (nextLine !== lineText) {
       const inlineStamper = this.getFreshnessStampLine();
       if (typeof inlineStamper === "function") {
@@ -828,15 +825,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       const vaultContents = needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch, add)
         ? await this.readDependencyRecoveryVaultContents(parentPath, content)
         : null;
-      const markUnblockedLine = (line, markOptions) => {
-        const freshness =
-          typeof this.getFreshnessApi === "function"
-            ? this.getFreshnessApi()
-            : null;
-        return freshness && typeof freshness.markUnblockedLine === "function"
-          ? freshness.markUnblockedLine(line, markOptions)
-          : line;
-      };
+      const scopeFlags = navNoteScopeFlags(parentPath);
       const plan = planDependencyEdit({
         content,
         parentLine,
@@ -851,7 +840,12 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           registry,
           today: args.today || new Date(),
           vaultContents,
-          markUnblockedLine,
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            typeof this.getFreshnessApi === "function"
+              ? this.getFreshnessApi()
+              : null,
+          ),
+          ...scopeFlags,
         },
       });
       if (!plan.ok) {

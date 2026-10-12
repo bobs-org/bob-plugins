@@ -30,6 +30,12 @@ const {
   detectProjectPrjDependencyParent,
   blockProjectResidentLine,
   mapLineThroughStructural,
+  projectDependentResidentKeys,
+  parseProjectNoteFrontmatter,
+  formatTaskMoveProjectCountsNotice,
+  navNoteScopeFlags,
+  navFreshnessMarkUnblockedLine,
+  reconcileBlockedScheduledTaskLine,
 } = helpers;
 
 function openProjectNote(overrides = {}) {
@@ -689,4 +695,207 @@ test("internal links stay on the line but leave the field (PDR7)", () => {
   assert.ok(plan.nextContent.includes("[[#^pitch]]"));
   assert.equal(plan.field, "job__linkedin");
   assert.equal(plan.summary.openRemaining, 1);
+});
+
+test("removal from an unblocked ^prj never recovers own-reason residents (§13.10)", () => {
+  const content = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [ ] #task #prj Ship it [dependsOn:: job__linkedin] [fresh:: 2026-10-10] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[job#^linkedin]]",
+    "- [?] #task Draft the pitch [dependsOn:: other__x] [fresh:: 2026-10-10] #prj_is_blocked ^pitch",
+  ].join("\n");
+  const calls = [];
+  const plan = planDependencyEdit({
+    content,
+    parentLine: 5,
+    parentPath: "Project.md",
+    add: [],
+    remove: [{ path: "job.md", blockId: "linkedin" }],
+    files: { "Project.md": content, "job.md": CLOSED_JOB },
+    recovery: {
+      registry: recoveryRegistry(),
+      today: TODAY,
+      vaultContents: null,
+      markUnblockedLine: markUnblockedStub(calls),
+    },
+  });
+  assert.equal(plan.ok, true);
+  const out = plan.nextContent.split("\n");
+  assert.ok(out[5].startsWith("- [ ]"), out[5]);
+  const resident = out.find((line) => line.includes("^pitch"));
+  assert.ok(resident.startsWith("- [?]"), resident);
+  assert.ok(resident.includes("#prj_is_blocked"), resident);
+  assert.ok(!resident.includes("[unblocked::"), resident);
+  assert.equal(calls.length, 0);
+});
+
+test("resident recovery touches only tagged residents (§13.10)", () => {
+  const content = blockedProjectNote({
+    residents: [
+      "- [?] #task Draft the pitch [fresh:: 2026-10-10] #prj_is_blocked ^pitch",
+      "- [?] #task Solo effort [fresh:: 2026-10-10] ^solo",
+    ],
+  });
+  const calls = [];
+  const plan = planDependencyEdit({
+    content,
+    parentLine: 5,
+    parentPath: "Project.md",
+    add: [],
+    remove: [{ path: "job.md", blockId: "linkedin" }],
+    files: { "Project.md": content, "job.md": CLOSED_JOB },
+    recovery: {
+      registry: recoveryRegistry(),
+      today: TODAY,
+      vaultContents: null,
+      markUnblockedLine: markUnblockedStub(calls),
+    },
+  });
+  assert.equal(plan.ok, true);
+  const out = plan.nextContent.split("\n");
+  const pitch = out.find((line) => line.includes("^pitch"));
+  assert.ok(pitch.startsWith("- [ ]"), pitch);
+  assert.ok(pitch.includes("[unblocked:: 2026-10-12]"), pitch);
+  const solo = out.find((line) => line.includes("^solo"));
+  assert.ok(solo.startsWith("- [?]"), solo);
+  assert.ok(!solo.includes("[unblocked::"), solo);
+  assert.equal(plan.summary.project.recovered, 1);
+  assert.equal(plan.summary.project.ready, 1);
+});
+
+test("stage guard refuses a candidate that closes a cycle through a resident edge (§13.10)", () => {
+  const prjKey = dependencyStageRowKey("Project.md", "prj");
+  const residentKey = dependencyStageRowKey("Project.md", "pitch");
+  const extKey = dependencyStageRowKey("job.md", "ext");
+  const view = planDependencyStageView({
+    current: [],
+    candidates: [
+      {
+        path: "job.md",
+        route: "job",
+        note: "job",
+        line: 0,
+        rawLine: "- [ ] #task External ^ext",
+        status: " ",
+        displayText: "External",
+        text: "External",
+        blockId: "ext",
+        existingBlockId: "ext",
+        idField: null,
+        existingIdField: null,
+        section: null,
+        open: true,
+        blocked: false,
+        hidden: false,
+      },
+    ],
+    query: "External",
+    dependent: {
+      path: "Project.md",
+      line: 5,
+      key: prjKey,
+      displayText: "Ship",
+      text: "Ship",
+      isProjectPrj: true,
+      projectResidentKeys: [residentKey],
+    },
+    edges: new Map([[extKey, [residentKey]]]),
+    linkedKeys: new Set(),
+  });
+  const row = view.find((entry) => entry.blockId === "ext");
+  assert.ok(row, "candidate is listed");
+  assert.equal(row.disabled, true);
+  assert.equal(row.disabledReason, "would create a cycle");
+});
+
+test("projectDependentResidentKeys lists open residents with block ids", () => {
+  const content = openProjectNote();
+  assert.deepEqual(projectDependentResidentKeys(content, "Project.md", 5), [
+    dependencyStageRowKey("Project.md", "pitch"),
+    dependencyStageRowKey("Project.md", "sponsor"),
+  ]);
+  assert.deepEqual(projectDependentResidentKeys(content, "Project.md", 6), []);
+});
+
+test("navNoteScopeFlags marks daily notes; a missing writer stays null", () => {
+  assert.equal(navNoteScopeFlags("Areas/Project.md").isDailyNote, false);
+  assert.equal(navNoteScopeFlags("2026/20261012.md").isDailyNote, true);
+  assert.equal(navNoteScopeFlags("2026/20261012.md").isToday, false);
+  assert.equal(navFreshnessMarkUnblockedLine(null), null);
+  assert.equal(navFreshnessMarkUnblockedLine({}), null);
+  const seen = [];
+  const writer = navFreshnessMarkUnblockedLine({
+    markUnblockedLine: (line, options) => {
+      seen.push(options);
+      return `${line} [unblocked:: 2026-10-12]`;
+    },
+  });
+  assert.equal(typeof writer, "function");
+  assert.equal(
+    writer("- [ ] #task A ^a", { today: TODAY, status: " " }),
+    "- [ ] #task A ^a [unblocked:: 2026-10-12]",
+  );
+  assert.equal(seen.length, 1);
+});
+
+test("reconcileBlockedScheduledTaskLine forwards scope flags to the writer", () => {
+  const seen = [];
+  const outcome = reconcileBlockedScheduledTaskLine(
+    "- [?] #task Draft the pitch [fresh:: 2026-10-10] ^pitch",
+    { state: "ready", rank: " " },
+    {
+      today: TODAY,
+      ownLine: false,
+      markUnblockedLine: (line, options) => {
+        seen.push(options);
+        return line;
+      },
+      isDailyNote: true,
+      isToday: false,
+    },
+  );
+  assert.equal(outcome.outcome, "ready");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].isDailyNote, true);
+  assert.equal(seen[0].isToday, false);
+});
+
+test("parseProjectNoteFrontmatter ignores leftover scheduled keys", () => {
+  const multiple = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "scheduled: 2026-10-01",
+    "scheduled: 2026-11-01",
+    "---",
+    "",
+    "- [ ] #task #prj Ship ^prj",
+  ].join("\n");
+  const parsedMultiple = parseProjectNoteFrontmatter(multiple, {});
+  assert.equal(parsedMultiple.valid, true, parsedMultiple.error);
+  const invalid = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "scheduled: soon",
+    "---",
+    "",
+    "- [ ] #task #prj Ship ^prj",
+  ].join("\n");
+  const parsedInvalid = parseProjectNoteFrontmatter(invalid, {});
+  assert.equal(parsedInvalid.valid, true, parsedInvalid.error);
+});
+
+test("formatTaskMoveProjectCountsNotice names blocked and recovered counts", () => {
+  assert.equal(formatTaskMoveProjectCountsNotice(0, 0), "");
+  assert.equal(formatTaskMoveProjectCountsNotice(2, 0), " · 2 Blocked");
+  assert.equal(formatTaskMoveProjectCountsNotice(0, 1), " · 1 Ready again");
+  assert.equal(
+    formatTaskMoveProjectCountsNotice(2, 1),
+    " · 2 Blocked · 1 Ready again",
+  );
 });

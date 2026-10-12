@@ -266,6 +266,15 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       for (const [from, targets] of stage.edges) {
         trial.set(from, targets.slice());
       }
+      // A `^prj` add implicitly adds resident `→ X` for every open
+      // resident (§13.10): trial those edges too, so X depending on a
+      // resident is refused.
+      const residentKeys =
+        stage && stage.dependent && Array.isArray(stage.dependent.projectResidentKeys)
+          ? stage.dependent.projectResidentKeys.filter(
+              (residentKey) => residentKey && residentKey !== dependentKey,
+            )
+          : [];
       const dropKeys = new Set(
         removeRefs
           .map((ref) => dependencyStageRowKey(ref.path, ref.blockId))
@@ -279,14 +288,31 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         if (key && !current.includes(key)) {
           current.push(key);
         }
+        for (const residentKey of residentKeys) {
+          const residentTargets = trial.get(residentKey) || [];
+          if (key && !residentTargets.includes(key)) {
+            residentTargets.push(key);
+            trial.set(residentKey, residentTargets);
+          }
+        }
       }
       trial.set(dependentKey, current);
       for (const ref of addRefs) {
         const key = dependencyStageRowKey(ref.path, ref.blockId);
-        const cycle =
+        let cycle =
           key === dependentKey
             ? [dependentKey]
             : findDependencyStageCycle(trial, dependentKey, key);
+        if (!cycle && key) {
+          for (const residentKey of residentKeys) {
+            cycle = key === residentKey
+              ? [residentKey]
+              : findDependencyStageCycle(trial, residentKey, key);
+            if (cycle) {
+              break;
+            }
+          }
+        }
         if (key && cycle) {
           new Notice(
             `⛓ Could not update dependencies (would create a cycle: ${cycle.length - 1} back-link${cycle.length - 1 === 1 ? "" : "s"})`,

@@ -17,6 +17,35 @@ function getTargetScheduledRecovery(options, line) {
   return null;
 }
 
+// Nav `markUnblockedLine` callback for planners: forwards to ledger
+// freshness v12 when present, else null so the planner's missing-API
+// `console.warn` fires instead of a silent identity write.
+function navFreshnessMarkUnblockedLine(freshnessApi) {
+  if (
+    !freshnessApi ||
+    typeof freshnessApi.markUnblockedLine !== "function"
+  ) {
+    return null;
+  }
+  return (line, markOptions) =>
+    freshnessApi.markUnblockedLine(line, markOptions);
+}
+
+// Out-of-scope scope flags for `[unblocked::]` writes on one note path: a
+// daily-note task never takes the field. `isToday` (a Task Link under
+// today's open Pomodoros) defaults false; callers that know the target is
+// linked today pass true explicitly.
+function navNoteScopeFlags(notePath, overrides = {}) {
+  const scope =
+    overrides && typeof overrides === "object" ? overrides : {};
+  return Object.freeze({
+    isDailyNote: Boolean(
+      canonicalRecoveryDailyDate(normalizeVaultRelativePath(notePath || "")),
+    ),
+    isToday: scope.isToday === true,
+  });
+}
+
 function setProjectBlockedTag(line, on) {
   const text = String(line || "");
   const spans = getWholeTaskTagSpans(text, PROJECT_BLOCKED_TAG);
@@ -75,6 +104,10 @@ function reconcileBlockedScheduledTaskLine(lineText, recovery, options = {}) {
         mark(nextLine, {
           today: options.today,
           status: " ",
+          // Out-of-scope skips: a daily-note task, or a task linked under
+          // today's open Pomodoros, never takes an inert `[unblocked::]`.
+          isDailyNote: options.isDailyNote === true,
+          isToday: options.isToday === true,
         }) || nextLine,
       );
     } else {
@@ -161,7 +194,7 @@ function getCountedTaskNoticeSuffix(session, unchangedTaskCount = 0) {
 }
 
 // Plan one counted set/delete without mutating the editor. Scheduled values on
-// ^prj sources are composed through project frontmatter and task schedules first;
+// ^prj sources are composed through the ^prj inline date first;
 // every other source remains an inline Dataview edit. `options.priorityValueByLine`
 // (a Map from original line to priority value) overrides the shared
 // `options.priorityValue` per target for `set-priority`; callers that omit it get
@@ -404,9 +437,8 @@ function planCountedBulletPropertyBatch(
     }
   }
 
-  // Freshness is the last transformation of the task line (nav-stamps).
-  // Project-frontmatter edits never stamp; the stamper itself refuses closed
-  // and recurring lines.
+  // Freshness is the last transformation of the task line (nav-stamps);
+  // the stamper itself refuses closed and recurring lines.
   const countedStamper = resolveFreshStamper(options);
   const countedFreshDateText = resolveFreshDateText(options);
   const source = splitMarkdownContent(nextContent);
@@ -468,7 +500,17 @@ function planCountedBulletPropertyBatch(
           const recovery = reconcileBlockedScheduledTaskLine(
             nextLine,
             getTargetScheduledRecovery(options, target.line),
-            { today: options.today, ownLine: true },
+            {
+              today: options.today,
+              // Only the `^prj` line itself is the gesture's own line; a
+              // recovering resident takes `[unblocked::]` (§13.10).
+              ownLine: Boolean(
+                scheduledState.context && scheduledState.context.isProjectTask,
+              ),
+              markUnblockedLine: options.markUnblockedLine,
+              isDailyNote: options.isDailyNote === true,
+              isToday: options.isToday === true,
+            },
           );
           nextLine = recovery.line;
           targetChanged ||= recovery.changed;
@@ -504,6 +546,16 @@ function planCountedBulletPropertyBatch(
           const recovery = reconcileBlockedScheduledTaskLine(
             nextLine,
             getTargetScheduledRecovery(options, target.line),
+            {
+              today: options.today,
+              // Counted and batch recoveries take `[unblocked::]` (UB
+              // WRITE); the single-gesture own-line exclusion does not
+              // apply to batch rows.
+              ownLine: false,
+              markUnblockedLine: options.markUnblockedLine,
+              isDailyNote: options.isDailyNote === true,
+              isToday: options.isToday === true,
+            },
           );
           nextLine = recovery.line;
           targetChanged ||= recovery.changed;
@@ -534,6 +586,16 @@ function planCountedBulletPropertyBatch(
         const recovery = reconcileBlockedScheduledTaskLine(
           nextLine,
           getTargetScheduledRecovery(options, target.line),
+          {
+            today: options.today,
+            // Counted and batch recoveries take `[unblocked::]` (UB
+            // WRITE); the single-gesture own-line exclusion does not
+            // apply to batch rows.
+            ownLine: false,
+            markUnblockedLine: options.markUnblockedLine,
+            isDailyNote: options.isDailyNote === true,
+            isToday: options.isToday === true,
+          },
         );
         nextLine = recovery.line;
         targetChanged ||= recovery.changed;

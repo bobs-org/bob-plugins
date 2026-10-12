@@ -136,6 +136,10 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           schedulingWorkLog: options.schedulingWorkLog || options.workLog,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            this.getFreshnessApi(),
+          ),
+          ...navNoteScopeFlags(group.path),
         },
       );
       if (!plan.valid) {
@@ -394,9 +398,14 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       null,
       {
         operation: "delete",
+        today: new Date(),
         recoveryByLine,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
+        markUnblockedLine: navFreshnessMarkUnblockedLine(
+          this.getFreshnessApi(),
+        ),
+        ...navNoteScopeFlags(filePath),
       },
     );
     if (!plan.valid) {
@@ -689,12 +698,10 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         recoveryByLine,
         previousScheduled: expectedValue,
         today,
-        markUnblockedLine: (line, markOptions) => {
-          const freshness = this.getFreshnessApi();
-          return freshness && typeof freshness.markUnblockedLine === "function"
-            ? freshness.markUnblockedLine(line, markOptions)
-            : line;
-        },
+        markUnblockedLine: navFreshnessMarkUnblockedLine(
+          this.getFreshnessApi(),
+        ),
+        ...navNoteScopeFlags(filePath),
       },
     );
     if (!plan.valid) {

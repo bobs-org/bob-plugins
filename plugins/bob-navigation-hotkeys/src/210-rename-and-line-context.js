@@ -492,53 +492,10 @@ function parseProjectNoteFrontmatter(content, options = {}) {
     });
   }
 
-  const scheduledLines = [];
-  for (let lineIndex = 1; lineIndex < closingLine; lineIndex += 1) {
-    const match = /^scheduled[ \t]*:(.*)$/.exec(lines[lineIndex]);
-    if (match) {
-      scheduledLines.push({ line: lineIndex, rawValue: match[1] });
-    }
-  }
-  if (scheduledLines.length > 1) {
-    return Object.freeze({
-      valid: false,
-      error: "Project note has multiple scheduled properties",
-    });
-  }
-
-  const scheduledDefined = Object.prototype.hasOwnProperty.call(
-    data,
-    "scheduled",
-  );
-  if (scheduledDefined !== (scheduledLines.length === 1)) {
-    return Object.freeze({
-      valid: false,
-      error: "Project scheduled must be a top-level YAML property",
-    });
-  }
-
-  let scheduledValue = "";
-  if (scheduledDefined) {
-    const parsedValue = data.scheduled;
-    if (
-      parsedValue !== null &&
-      parsedValue !== undefined &&
-      typeof parsedValue !== "string" &&
-      !(parsedValue instanceof Date)
-    ) {
-      return Object.freeze({
-        valid: false,
-        error: "Project scheduled must be a YYYY-MM-DD date",
-      });
-    }
-    scheduledValue = getYamlScalarText(scheduledLines[0].rawValue);
-    const validation = validateProjectScheduledDate(scheduledValue);
-    if (!validation.valid) {
-      return Object.freeze({ valid: false, error: validation.message });
-    }
-    scheduledValue = validation.value;
-  }
-
+  // Project scheduling lives on the `^prj` task line (§13.10): a leftover
+  // frontmatter `scheduled` key — multiple, misplaced, or invalid — is
+  // ignored here so it never blocks the `^prj` context, reversal, or sync
+  // (which deliberately leaves invalid values in place).
   return Object.freeze({
     valid: true,
     error: null,
@@ -546,9 +503,9 @@ function parseProjectNoteFrontmatter(content, options = {}) {
     lines,
     lineEnding,
     closingLine,
-    scheduledDefined,
-    scheduledValue,
-    scheduledLine: scheduledDefined ? scheduledLines[0].line : null,
+    scheduledDefined: false,
+    scheduledValue: "",
+    scheduledLine: null,
   });
 }
 

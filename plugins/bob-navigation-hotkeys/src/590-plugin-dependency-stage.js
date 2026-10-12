@@ -442,6 +442,11 @@ class BobNavigationHotkeysDependencyStageMixin {
         isProjectPrj:
           primary >= 0 &&
           Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
+        // §13.10: implicit resident `→ X` edges for the cycle guards.
+        projectResidentKeys:
+          primary >= 0
+            ? projectDependentResidentKeys(text, ownerPath, primary)
+            : Object.freeze([]),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)
@@ -607,6 +612,11 @@ class BobNavigationHotkeysDependencyStageMixin {
         isProjectPrj:
           primary >= 0 &&
           Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
+        // §13.10: implicit resident `→ X` edges for the cycle guards.
+        projectResidentKeys:
+          primary >= 0
+            ? projectDependentResidentKeys(text, ownerPath, primary)
+            : Object.freeze([]),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)

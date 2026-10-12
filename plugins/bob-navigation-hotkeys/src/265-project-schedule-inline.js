@@ -51,6 +51,35 @@ function upsertProjectTaskScheduledField(
   });
 }
 
+// Whether the note's `^prj` task still carries Depends-On links (a child
+// Depends-On bullet or a non-empty `[dependsOn::]` field). A due or deleted
+// project date strips `#prj_is_blocked` from residents only when no such
+// reason remains (§13.10, every_resident); with links left, the tag stays
+// unless the recovery snapshot proves the resident ready, and reconcile
+// repairs the tag once the last prerequisite closes.
+function projectPrjKeepsDependsOnReason(content) {
+  const text = String(content || "");
+  if (findProjectLifecycleTaskIndex(text) === -1) {
+    return false;
+  }
+  const lines = text.split(/\r?\n/);
+  const prjLine = String(lines[findProjectLifecycleTaskIndex(text)] || "");
+  const field = findBulletPropertyField(prjLine, "dependsOn");
+  if (field && normalizeBulletPropertyValue(field.value)) {
+    return true;
+  }
+  return collectProjectTaskDependencyItems(text, "").length > 0;
+}
+
+// True when the recovery snapshot already proves the resident leaves
+// Blocked (ready, next, or in-progress): the tag comes off even while the
+// `^prj` line still lists Depends-On links.
+function projectResidentRecoveryClears(recovery) {
+  return Boolean(
+    recovery && ["ready", "next", "in-progress"].includes(recovery.state),
+  );
+}
+
 function planProjectTaskSchedules(
   content,
   scheduled,
@@ -106,6 +135,7 @@ function planProjectTaskSchedules(
   const ambiguousTaskLines = [];
   const futureScheduledTaskLines = [];
   const recoveryCounts = emptyScheduledRecoveryCounts();
+  const prjKeepsDependsOn = projectPrjKeepsDependsOnReason(original);
 
   for (const task of tasks) {
     let nextLine = task.text;
@@ -147,6 +177,8 @@ function planProjectTaskSchedules(
             today,
             ownLine: true,
             markUnblockedLine: options.markUnblockedLine,
+            isDailyNote: options.isDailyNote === true,
+            isToday: options.isToday === true,
           },
         );
         nextLine = recovery.line;
@@ -166,7 +198,12 @@ function planProjectTaskSchedules(
           if (blockedLine !== nextLine) blockedTaskCount += 1;
           nextLine = blockedLine;
           futureScheduledTaskLines.push(task.line);
-        } else {
+        } else if (
+          !prjKeepsDependsOn ||
+          projectResidentRecoveryClears(
+            getTargetScheduledRecovery(options, task.line),
+          )
+        ) {
           nextLine = setProjectBlockedTag(nextLine, false);
         }
       } else {
@@ -195,7 +232,14 @@ function planProjectTaskSchedules(
           nextLine = blockedLine;
           futureScheduledTaskLines.push(task.line);
         } else {
-          nextLine = setProjectBlockedTag(nextLine, false);
+          if (
+            !prjKeepsDependsOn ||
+            projectResidentRecoveryClears(
+              getTargetScheduledRecovery(options, task.line),
+            )
+          ) {
+            nextLine = setProjectBlockedTag(nextLine, false);
+          }
           if (ownFuture) {
             const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
             if (blockedLine !== nextLine) blockedTaskCount += 1;
@@ -209,6 +253,8 @@ function planProjectTaskSchedules(
                 today,
                 ownLine: false,
                 markUnblockedLine: options.markUnblockedLine,
+                isDailyNote: options.isDailyNote === true,
+                isToday: options.isToday === true,
               },
             );
             nextLine = recovery.line;
@@ -309,6 +355,7 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
   let changedTaskCount = 0;
   let removedScheduledTaskCount = 0;
   const futureScheduledTaskLines = [];
+  const prjKeepsDependsOn = projectPrjKeepsDependsOnReason(original);
   for (const task of tasks) {
     let nextLine = task.text;
     const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
@@ -328,6 +375,8 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
           today: options.today,
           ownLine: true,
           markUnblockedLine: options.markUnblockedLine,
+          isDailyNote: options.isDailyNote === true,
+          isToday: options.isToday === true,
         },
       );
       nextLine = recovery.line;
@@ -339,7 +388,14 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
       );
       nextLine = removed.line;
       if (removed.removedCount > 0) removedScheduledTaskCount += 1;
-      nextLine = setProjectBlockedTag(nextLine, false);
+      if (
+        !prjKeepsDependsOn ||
+        projectResidentRecoveryClears(
+          getTargetScheduledRecovery(options, task.line),
+        )
+      ) {
+        nextLine = setProjectBlockedTag(nextLine, false);
+      }
       const ownFields = parseProjectTaskScheduledFields(nextLine);
       const ownFuture =
         ownFields.length === 1 &&
@@ -359,6 +415,8 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
             today: options.today,
             ownLine: false,
             markUnblockedLine: options.markUnblockedLine,
+            isDailyNote: options.isDailyNote === true,
+            isToday: options.isToday === true,
           },
         );
         nextLine = recovery.line;

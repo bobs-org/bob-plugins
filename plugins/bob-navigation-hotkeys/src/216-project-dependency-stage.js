@@ -103,6 +103,8 @@ function recoverProjectResidentLine(lineText, metadata, options = {}) {
     today: options.today,
     ownLine: false,
     markUnblockedLine: options.markUnblockedLine,
+    isDailyNote: options.isDailyNote === true,
+    isToday: options.isToday === true,
   });
   if (
     reconciled.outcome === "ready" ||
@@ -196,6 +198,31 @@ function detectProjectPrjDependencyParent(args, content, parentPath, parentLine)
     return null;
   }
   return isProjectPrjDependencyParent(content, parentPath, parentLine);
+}
+
+// Dependency-graph row keys for every open resident of a `^prj` parent
+// note that carries a block id (§13.10): adding `^prj → X` implicitly adds
+// resident `→ X` for each one, so cycle guards must test those edges too.
+// Returns a frozen array, empty when the parent is not a `^prj`.
+function projectDependentResidentKeys(content, parentPath, parentLine) {
+  const projectPrj = isProjectPrjDependencyParent(content, parentPath, parentLine)
+    ? getProjectPrjDependencyResidents(content, parentPath)
+    : null;
+  if (!projectPrj) {
+    return Object.freeze([]);
+  }
+  const path = normalizeVaultRelativePath(parentPath);
+  const keys = [];
+  for (const resident of projectPrj.residents) {
+    if (!resident.blockId) {
+      continue;
+    }
+    const key = dependencyStageRowKey(path, resident.blockId);
+    if (key) {
+      keys.push(key);
+    }
+  }
+  return Object.freeze(keys);
 }
 
 // Refusal reason when the gesture adds a same-note target to `^prj`, or
@@ -334,16 +361,32 @@ function recoverProjectResidents(
   structural,
   today,
   markUnblockedLine,
+  scopeFlags = {},
 ) {
   const edits = [];
   const recovered = [];
   const ready = [];
+  const scope = scopeFlags && typeof scopeFlags === "object" ? scopeFlags : {};
+  // The parent is a project note (never a daily note), but keep the
+  // explicit override for callers that already know better.
+  const isDailyNote = scope.isDailyNote === undefined
+    ? Boolean(
+        canonicalRecoveryDailyDate(normalizeVaultRelativePath(parentPath)),
+      )
+    : scope.isDailyNote === true;
+  const isToday = scope.isToday === true;
   for (const resident of projectPrj.residents) {
     const previewLine = mapLineThroughStructural(resident.line, structural);
     if (previewLine < 0 || previewLine >= previewLines.length) {
       continue;
     }
     const current = String(previewLines[previewLine] || "");
+    // Only tagged residents recover here (§13.10): an untagged resident was
+    // never project-blocked, so its own `[?]` reasons are none of this
+    // gesture's business.
+    if (!taskHasProjectBlockedTag(current)) {
+      continue;
+    }
     const metadata = getScheduledRecoveryMetadata(
       recoveryIndex,
       parentPath,
@@ -352,6 +395,8 @@ function recoverProjectResidents(
     const result = recoverProjectResidentLine(current, metadata, {
       today,
       markUnblockedLine,
+      isDailyNote,
+      isToday,
     });
     if (result.line !== current) {
       edits.push(

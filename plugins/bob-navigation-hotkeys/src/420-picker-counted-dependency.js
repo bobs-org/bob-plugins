@@ -272,7 +272,18 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         files: planFiles,
         vaultFiles,
         resolveLinkpath,
-        recovery: { registry, today, vaultContents: baseVaultContents },
+        recovery: {
+          registry,
+          today,
+          vaultContents: baseVaultContents,
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            this.plugin &&
+              typeof this.plugin.getFreshnessApi === "function"
+              ? this.plugin.getFreshnessApi()
+              : null,
+          ),
+          ...navNoteScopeFlags(ownerPath),
+        },
       });
       if (!plan.ok) {
         new Notice(
@@ -482,6 +493,13 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
           registry: countedRegistry,
           today: new Date(),
           vaultContents: countedVaultContents,
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            this.plugin &&
+              typeof this.plugin.getFreshnessApi === "function"
+              ? this.plugin.getFreshnessApi()
+              : null,
+          ),
+          ...navNoteScopeFlags(ownerPath),
         },
       });
       if (!plan.ok) {

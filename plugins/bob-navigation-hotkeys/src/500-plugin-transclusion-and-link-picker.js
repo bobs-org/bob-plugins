@@ -663,6 +663,10 @@ class BobNavigationHotkeysTransclusionLinkMixin {
           recoveryByLine,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            this.getFreshnessApi(),
+          ),
+          ...navNoteScopeFlags(group.path),
         },
       );
       if (!plan.valid) {
@@ -739,6 +743,10 @@ class BobNavigationHotkeysTransclusionLinkMixin {
           schedulingWorkLog: options.schedulingWorkLog || options.workLog,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            this.getFreshnessApi(),
+          ),
+          ...navNoteScopeFlags(group.path),
         },
       );
       if (!plan.valid) {
@@ -872,6 +880,10 @@ class BobNavigationHotkeysTransclusionLinkMixin {
           schedulingWorkLog: options.schedulingWorkLog || options.workLog,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            this.getFreshnessApi(),
+          ),
+          ...navNoteScopeFlags(group.path),
         },
       );
       if (!plan.valid) {

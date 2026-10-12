@@ -214,14 +214,20 @@ function formatInboxRouteActionLabel(action) {
 }
 
 // Move notice appended after a routed action: `Moved to <dest>`,
-// counted `Moved <N> tasks to <dest>`.
+// counted `Moved <N> tasks to <dest>`, each with a `· N Blocked ·
+// M Ready again` suffix when the destination project blocked or recovered
+// residents (§13.10).
 function formatInboxRouteMoveNotice(options = {}) {
   const name = String(options.destinationName || "destination");
   const count = Math.max(1, Math.floor(numericOrDefault(options.count, 1)) || 1);
+  const suffix = formatTaskMoveProjectCountsNotice(
+    options.blocked,
+    options.recovered,
+  );
   if (count === 1) {
-    return `Moved to ${name}`;
+    return `Moved to ${name}${suffix}`;
   }
-  return `Moved ${count} tasks to ${name}`;
+  return `Moved ${count} tasks to ${name}${suffix}`;
 }
 
 function truncateInboxRouteText(text, limit = INBOX_ROUTE_TASK_SUBTITLE_LIMIT) {

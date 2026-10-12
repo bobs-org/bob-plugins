@@ -715,10 +715,13 @@ function buildProjectContentFromTask(content, parsedTask, options = {}) {
       ).line;
     }
     const today = options.today instanceof Date ? options.today : new Date();
+    // A `[?]` source alone never blocks the new project (§13.10): only a
+    // carried open prerequisite (applied later through the Depends-On
+    // planner) or a future inline date does. An explicit caller override
+    // still wins.
     const projectBlocked =
       options.projectBlocked === true ||
-      String(parsedTask.status || "") === "?" ||
-      (scheduled && isFutureInlineScheduledValue(scheduled, today));
+      Boolean(scheduled && isFutureInlineScheduledValue(scheduled, today));
     if (projectBlocked) {
       lifecycleLine = replaceObsidianTaskCheckboxStatus(lifecycleLine, "?");
     }
@@ -877,6 +880,8 @@ function getProjectNoteToTaskNoticeText(
   taskCount,
   sectionCount,
   updatedLinkCount,
+  blockedCount = 0,
+  recoveredCount = 0,
 ) {
   const note = String(noteBasename || "").trim() || "note";
   const parent = String(parentBasename || "").trim() || "parent";
@@ -904,7 +909,10 @@ function getProjectNoteToTaskNoticeText(
 
   const detailText =
     details.length > 0 ? details.join("; ") : "no child content";
-  return `Converted ${note} into a task in ${parent} (${detailText})`;
+  return (
+    `Converted ${note} into a task in ${parent} (${detailText})` +
+    formatTaskMoveProjectCountsNotice(blockedCount, recoveredCount)
+  );
 }
 
 function backlinkTextReferencesBlockId(text, blockId) {

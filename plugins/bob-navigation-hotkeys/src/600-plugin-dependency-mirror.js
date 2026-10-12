@@ -352,11 +352,8 @@ class BobNavigationHotkeysDependencyMirrorMixin {
           registry,
           today,
           vaultContents: baseVaultContents,
-          markUnblockedLine:
-            freshnessApi && typeof freshnessApi.markUnblockedLine === "function"
-              ? (line, markOptions) =>
-                  freshnessApi.markUnblockedLine(line, markOptions)
-              : null,
+          markUnblockedLine: navFreshnessMarkUnblockedLine(freshnessApi),
+          ...navNoteScopeFlags(parentPath),
         },
       });
       if (!plan.ok) {

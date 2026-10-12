@@ -207,3 +207,71 @@ test("task move destinations include areas and only open projects", () => {
   );
 });
 
+
+function blockedProjectDestination() {
+  return [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [?] #task #prj Ship it [dependsOn:: job__linkedin] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[job#^linkedin]]",
+    "## Tasks",
+    "",
+  ].join("\n");
+}
+
+test("moves into a blocked project leave closed tagged lines alone", () => {
+  const source = [
+    "- [?] #task Old [fresh:: 2026-10-10] #prj_is_blocked ^old",
+    "- [x] #task Done #prj_is_blocked ^done",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 1);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Dest.md",
+    sourceContent: source,
+    destinationContent: blockedProjectDestination(),
+    targets: discovery.targets,
+    otherContents: new Map([["job.md", "- [x] #task Fix ^linkedin"]]),
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const nextDestination = plan.changes.get("Dest.md").after;
+  assert.match(
+    nextDestination,
+    /- \[x\] #task Done #prj_is_blocked \[id:: Dest__done\] \^done/,
+  );
+  assert.match(
+    nextDestination,
+    /- \[\?\] #task Old \[fresh:: 2026-10-10\] \[id:: Dest__old\] #prj_is_blocked \^old/,
+  );
+});
+
+test("moves into a blocked project promote open prerequisites to the moved lane", () => {
+  const source = [
+    "- [*] #task Next up [dependsOn:: Pre__one] ^next",
+    "  - ⛓️ **DEPENDS ON:** [[Pre#^one]]",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 0);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Dest.md",
+    sourceContent: source,
+    destinationContent: blockedProjectDestination(),
+    targets: discovery.targets,
+    otherContents: new Map([
+      ["job.md", "- [x] #task Fix ^linkedin"],
+      ["Pre.md", "- [ ] #task Prereq ^one"],
+    ]),
+  });
+  assert.equal(plan.valid, true, plan.error);
+  assert.equal(plan.blockedOnDestinationCount, 1);
+  assert.equal(plan.promotedOnMoveCount, 1);
+  const nextDestination = plan.changes.get("Dest.md").after;
+  assert.match(
+    nextDestination,
+    /- \[\?\] #task Next up \[dependsOn:: [^\n]*\] #prj_is_blocked \^next/,
+  );
+  assert.equal(plan.changes.get("Pre.md").after, "- [*] #task Prereq ^one");
+});

@@ -1006,3 +1006,30 @@ test("getProjectFromTaskNoticeText reports moved log kinds in a fixed order", ()
   );
 });
 
+
+test("forward conversion leaves the project Ready when only the source status was Blocked", () => {
+  const content = [
+    "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+  ].join("\n");
+  const parsed = helpers.parseProjectSourceTaskLine(
+    "- [?] #task Ship it ^ship",
+  );
+  assert.equal(parsed.status, "?");
+  const result = helpers.buildProjectContentFromTask(content, parsed, {
+    projectPath: "Projects/Ship.md",
+    today: new Date(2026, 6, 10),
+    childTaskLines: ["- [ ] #task Follow up ^follow-up"],
+  });
+  assert.equal(result.seeded, true);
+  assert.equal(result.projectBlocked, false);
+  const lines = result.content.split("\n");
+  const root = lines.find((line) => /\^prj$/.test(line));
+  assert.match(root, /^- \[ \] #task #prj Ship it .*\^prj$/);
+  assert.doesNotMatch(root, /#prj_is_blocked/);
+  const resident = lines.find((line) => /Follow up/.test(line));
+  assert.doesNotMatch(resident, /#prj_is_blocked/);
+});

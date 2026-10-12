@@ -625,11 +625,8 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
         registry,
         today: new Date(),
         vaultContents,
-        markUnblockedLine:
-          freshnessApi && typeof freshnessApi.markUnblockedLine === "function"
-            ? (line, markOptions) =>
-                freshnessApi.markUnblockedLine(line, markOptions)
-            : null,
+        markUnblockedLine: navFreshnessMarkUnblockedLine(freshnessApi),
+        ...navNoteScopeFlags(filePath),
       },
     });
     if (!plan.ok) {

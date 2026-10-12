@@ -168,6 +168,9 @@ function planRecommendedRollBatch(
             ? details.stampLine
             : undefined,
         freshDateText: details.freshDateText,
+        markUnblockedLine: details.markUnblockedLine,
+        isDailyNote: details.isDailyNote === true,
+        isToday: details.isToday === true,
       },
     );
     if (!priorityPlan.valid) {
@@ -523,8 +526,9 @@ function computeFinalDependencyLinkOrder(existingIds, addIds, removeIds) {
   return finalTargets;
 }
 
-// Insertion point for a new Depends-On line: the first direct child, or the
-// second when a `❌ **CANCEL LOG**` child exists.
+// Insertion point for a new Depends-On line: the first direct child, or
+// after the whole `❌ **CANCEL LOG**` subtree when one exists (inserting at
+// `cancel.line + 1` would split the log from its entries).
 function getDependencyInsertLine(lines, parentLine) {
   const sourceLines = Array.isArray(lines)
     ? lines
@@ -541,7 +545,8 @@ function getDependencyInsertLine(lines, parentLine) {
     cancel.line < block.endLineExclusive &&
     findNearestParentListItem(sourceLines, cancel.line) === parentIndex
   ) {
-    return cancel.line + 1;
+    return findCurrentBulletChildBlock(sourceLines, cancel.line)
+      .endLineExclusive;
   }
   return block.startLine;
 }

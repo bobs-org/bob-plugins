@@ -1559,6 +1559,56 @@ function hasProjectBlockedResidentTag(lineText) {
   return PROJECT_BLOCKED_RESIDENT_TAG_RE.test(String(lineText || ""));
 }
 
+function projectParentTarget(sourceText) {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  if (!startsWithFrontmatter(lines)) {
+    return null;
+  }
+  let count = 0;
+  for (let line = 1; line < lines.length; line += 1) {
+    if (FRONTMATTER_DELIMITER_RE.test(lines[line])) {
+      break;
+    }
+    if (/^parent\s*:/.test(lines[line])) {
+      count += 1;
+    }
+  }
+  if (count !== 1) {
+    return null;
+  }
+  const value = readProjectFrontmatterScalar(lines, "parent");
+  const match = value && value.match(/^\[\[([^\]\n]+)\]\]$/);
+  if (!match) {
+    return null;
+  }
+  const target = String(match[1] || "")
+    .split("|")[0]
+    .split("#")[0]
+    .trim();
+  return target || null;
+}
+
+function readProjectFrontmatterScalar(lines, key) {
+  for (let line = 1; line < lines.length; line += 1) {
+    if (FRONTMATTER_DELIMITER_RE.test(lines[line])) {
+      break;
+    }
+    const match = lines[line].match(new RegExp(`^${key}\\s*:\\s*(.*?)\\s*$`));
+    if (!match) {
+      continue;
+    }
+    let value = match[1].replace(/\s+#.*$/, "").trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    return value;
+  }
+  return null;
+}
+
 function parseProjectFrontmatter(sourceText, path = "", records = null) {
   const lines = String(sourceText || "").split(/\r?\n/);
   if (
@@ -1617,6 +1667,7 @@ function parseProjectFrontmatter(sourceText, path = "", records = null) {
   return {
     path: String(path || ""),
     scheduled: parsedSchedule ? formatCalendarDate(parsedSchedule) : null,
+    parent: projectParentTarget(sourceText),
   };
 }
 
@@ -1710,6 +1761,9 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
   const project = projects.get(target.path);
   const resident = target.blockId !== "prj" &&
     hasProjectBlockedResidentTag(target.lineText);
+  const inheritedProjectBlocked = !!(
+    project && hasProjectBlockedResidentTag(project.projectTask.lineText)
+  );
   const resolveOpenIds = (ids, internalOnly = false) => ids.filter((id) => {
     const dependency = byId.get(String(id));
     if (!isDependencyTargetOpen(dependency)) {
@@ -1750,6 +1804,7 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
   const projectScheduleIsFuture = !!projectSchedule &&
     compareCalendarDates(projectSchedule, todayParts) > 0;
   const projectDependencyBlocked =
+    inheritedProjectBlocked ||
     (resident && (projectOpen.length > 0 || !projectScheduleIsFuture)) ||
     (target.blockId === "prj" && ownOpen.length > 0);
   const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
@@ -1823,6 +1878,8 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     blocked: true,
     dependencyBlocked,
     projectDependencyBlocked,
+    inheritedProjectBlocked,
+    projectParent: inheritedProjectBlocked ? project.parent : null,
     projectScheduleIsFuture,
     projectDateRefusal,
     ownSchedule,
@@ -8306,7 +8363,11 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    if (plan.dependencyBlocked) {
+    if (plan.inheritedProjectBlocked) {
+      new Notice(
+        `Project blocked by parent project · ${plan.projectParent || plan.projectPath || source.sourcePath} · no Pomodoro link was created`,
+      );
+    } else if (plan.dependencyBlocked) {
       const promotionText = applied > 0
         ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
         : "prerequisites already raised";

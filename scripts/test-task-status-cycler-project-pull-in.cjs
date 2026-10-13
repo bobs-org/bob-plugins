@@ -100,6 +100,51 @@ test("PP22 pins #hide bytes to normalize_task_hide_tag(line, false, true)", () =
   );
 });
 
+test("PDS6/PDS15 resolve only one scalar project parent with NoteIndex rules", () => {
+  const note = (parent) => ["---", `parent: ${parent}`, "---"].join("\n");
+  const aliased = note('"[[dir/N#Heading|Alias]]"');
+  assert.equal(helpers.projectParentTarget(aliased), "dir/N");
+  assert.equal(
+    helpers.resolveProjectParentPath(
+      helpers.projectParentTarget(aliased),
+      "child.md",
+      ["dir/N.md", "archive/N.md"],
+    ),
+    "dir/N.md",
+    "an exact path wins even when its basename is ambiguous",
+  );
+  assert.equal(
+    helpers.resolveProjectParentPath("N#Heading", "child.md", ["dir/N.md"]),
+    "dir/N.md",
+  );
+  assert.equal(
+    helpers.resolveProjectParentPath("N", "child.md", ["dir/N.md", "old/N.md"]),
+    null,
+    "an ambiguous basename is not a parent",
+  );
+  assert.equal(helpers.projectParentTarget(note('["[[N]]"]')), null);
+  assert.equal(
+    helpers.projectParentTarget(note('"[[N]]"\nparent: "[[Other]]"')),
+    null,
+    "duplicate parent keys are not a scalar parent",
+  );
+  assert.equal(
+    helpers.resolveProjectParentPath("child", "child.md", ["child.md"]),
+    null,
+    "a note cannot parent itself",
+  );
+  assert.equal(
+    helpers.resolveProjectParentPath("20261009", "child.md", ["2026/20261009.md"]),
+    null,
+    "canonical daily notes are excluded",
+  );
+  assert.equal(
+    helpers.resolveProjectParentPath("old", "child.md", ["done/old.md"]),
+    null,
+    "archive notes are excluded",
+  );
+});
+
 test("PP1 links the emptied project's ^prj as Next and strips #hide", () => {
   const { plan } = planFixture({
     day: shipDay(),
@@ -123,6 +168,183 @@ test("PP1 links the emptied project's ^prj as Next and strips #hide", () => {
   assert.equal(plan.edits[0].before, HIDDEN_PRJ);
   assert.equal(plan.edits[0].after, "- [*] #task #prj Ship it! ^prj");
   assert.equal(plan.placements.length, 1);
+});
+
+test("PP29 closing a child ^prj pulls in its empty parent project", () => {
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const child = projectNote(
+    ["- [x] #task #prj Child project ^prj"],
+    ['parent: "[[projects/parent#Overview|Parent]]"'],
+  );
+  const parent = projectNote([
+    "- [ ] #task #prj Parent project ^prj",
+    "  - 🧩 **Sub-projects:** [[projects/child|Child]]",
+  ]);
+  const closed = [{
+    path: childPath,
+    blockId: "prj",
+    taskId: "child__prj",
+    text: "Child project",
+  }];
+  const { plan } = planFixture({
+    day: shipDay("\t- [[projects/child#^prj]]"),
+    notes: { [childPath]: child, [parentPath]: parent },
+    closed,
+  });
+  const pulledIn = plan.unblocked.find((row) => row.block_id === "prj");
+  assert.ok(pulledIn);
+  assert.equal(pulledIn.note_path, parentPath);
+  assert.equal(pulledIn.trigger, "project_empty");
+  assert.equal(pulledIn.status_symbol, "*");
+  assert.deepEqual(pulledIn.unblocked_by, [
+    { note_path: childPath, block_id: "prj", text: "Child project" },
+  ]);
+  assert.equal(plan.edits.some((edit) => edit.path === parentPath), true);
+});
+
+test("PP32/PP36 leave a parent-tagged ^prj blocked and hide the tag in row text", () => {
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const child = projectNote(
+    ["- [x] #task #prj Child project ^prj"],
+    ['parent: "[[projects/parent]]"'],
+  );
+  const parent = projectNote([
+    "- [?] #task #prj #prj_is_blocked Parent project ^prj",
+    "  - 🧩 **Sub-projects:** [[projects/child]]",
+  ], ['parent: "[[root]]"']);
+  const closed = [{ path: childPath, blockId: "prj", taskId: "", text: "Child project" }];
+  const { plan } = planFixture({
+    day: shipDay("\t- [[projects/child#^prj]]"),
+    notes: { [childPath]: child, [parentPath]: parent },
+    closed,
+  });
+  const row = plan.still_blocked.find((item) => item.note_path === parentPath);
+  assert.ok(row);
+  assert.equal(row.reason, "project");
+  assert.equal(row.project, "root");
+  assert.equal(row.text, "Parent project");
+  assert.equal(plan.edits.length, 0);
+});
+
+test("PP30 keeps the parent untouched while another child or task remains", () => {
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const child = projectNote(
+    ["- [x] #task #prj Child project ^prj"],
+    ['parent: "[[projects/parent]]"'],
+  );
+  const closed = [{ path: childPath, blockId: "prj", taskId: "", text: "Child" }];
+  for (const parent of [
+    projectNote([
+      "- [ ] #task #prj Parent project ^prj",
+      "  - 🧩 **Sub-projects:** [[projects/child]] [[projects/other]]",
+    ]),
+    projectNote([
+      "- [ ] #task #prj Parent project ^prj",
+      "  - 🧩 **Sub-projects:** [[projects/child]]",
+      "- [ ] #task Remaining parent work ^remaining",
+    ]),
+  ]) {
+    const { plan } = planFixture({
+      day: shipDay("\t- [[projects/child#^prj]]"),
+      notes: { [childPath]: child, [parentPath]: parent },
+      closed,
+    });
+    assert.equal(plan.unblocked.length, 0);
+    assert.equal(plan.still_blocked.length, 0);
+  }
+});
+
+test("PP31 skips missing, ambiguous, and non-project parents", () => {
+  const childPath = "projects/child.md";
+  const childBase = ["---", 'type: "[[project]]"', "status: wip", "---"];
+  const child = (parentLine) => [
+    ...childBase.slice(0, -1),
+    ...(parentLine ? [parentLine] : []),
+    "---",
+    "- [x] #task #prj Child project ^prj",
+  ].join("\n");
+  const parentProject = projectNote([
+    "- [ ] #task #prj Parent project ^prj",
+    "  - 🧩 **Sub-projects:** [[projects/child]]",
+  ]);
+  const cases = [
+    {
+      childText: child(null),
+      notes: { [childPath]: child(null), "projects/parent.md": parentProject },
+    },
+    {
+      childText: child('parent: "[[missing]]"'),
+      notes: { [childPath]: child('parent: "[[missing]]"') },
+    },
+    {
+      childText: child('parent: "[[parent]]"'),
+      notes: {
+        [childPath]: child('parent: "[[parent]]"'),
+        "projects/parent.md": parentProject,
+        "archive/parent.md": parentProject,
+      },
+    },
+    {
+      childText: child('parent: "[[projects/parent]]"'),
+      notes: {
+        [childPath]: child('parent: "[[projects/parent]]"'),
+        "projects/parent.md": [
+          "---",
+          'type: "[[area]]"',
+          "status: wip",
+          "---",
+          "- [ ] #task Parent task ^prj",
+          "  - 🧩 **Sub-projects:** [[projects/child]]",
+        ].join("\n"),
+      },
+    },
+  ];
+  for (const { childText, notes } of cases) {
+    const { plan } = planFixture({
+      day: shipDay("\t- [[projects/child#^prj]]"),
+      notes: { ...notes, [childPath]: childText },
+      closed: [{ path: childPath, blockId: "prj", taskId: "", text: "Child" }],
+    });
+    assert.equal(plan.unblocked.length, 0);
+    assert.equal(plan.still_blocked.length, 0);
+  }
+});
+
+test("PP33 cancellation surfaces the parent without linking it", () => {
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const child = projectNote(
+    ["- [-] #task #prj Child project ^prj"],
+    ['parent: "[[projects/parent]]"'],
+  );
+  const parent = projectNote([
+    "- [ ] #task #prj Parent project #hide ^prj",
+    "  - 🧩 **Sub-projects:** [[projects/child]]",
+  ]);
+  const closed = [{ path: childPath, blockId: "prj", taskId: "", text: "Child" }];
+  const notPlanned = planFixture({
+    day: shipDay(),
+    notes: { [childPath]: child, [parentPath]: parent },
+    closed,
+  }).plan.unblocked[0];
+  assert.equal(notPlanned.note_path, parentPath);
+  assert.equal(notPlanned.not_linked, "not_planned_today");
+  assert.equal(notPlanned.link, null);
+
+  const cancelled = planFixture({
+    day: shipDay(),
+    notes: { [childPath]: child, [parentPath]: parent },
+    closed,
+    options: { cancelled: true },
+  }).plan.unblocked[0];
+  assert.equal(cancelled.note_path, parentPath);
+  assert.equal(cancelled.not_linked, "cancelled");
+  assert.equal(cancelled.link, null);
+  assert.equal(cancelled.status_symbol, " ");
+  assert.equal(cancelled.hide_removed, true);
 });
 
 test("PP2 and PP3 leave a project with remaining work alone", () => {
@@ -844,6 +1066,61 @@ test("Ctrl+Enter on the last task link inserts the ^prj and rewrites R", async (
   assert.equal(seen[0].unblocked[0].trigger, "project_empty");
   assert.equal(seen[0].unblocked[0].hide_removed, true);
   assert.equal(notices.length, 0);
+});
+
+test("PP29 runtime close and reopen use the parent pull-in receipt", async () => {
+  notices.length = 0;
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const daily = [
+    `# ${LIVE_TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — CHILD",
+    "\t- [[projects/child#^prj]]",
+  ].join("\n");
+  const child = projectNote(
+    ["- [ ] #task #prj Child project ^prj"],
+    ['parent: "[[projects/parent|Parent]]"'],
+  );
+  const parent = projectNote([
+    "- [ ] #task #prj Parent project #hide ^prj",
+    "  - 🧩 **Sub-projects:** [[projects/child|Child]]",
+  ]);
+  const harness = createInMemoryObsidianApp({
+    [childPath]: child,
+    [parentPath]: parent,
+    [LIVE_DAILY]: daily,
+  });
+  const editor = createTextEditor(daily, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, LIVE_DAILY);
+  const seen = [];
+  installNavStub(plugin, seen);
+
+  const closed = await plugin.handleActiveTaskBlockLinkOpenDone(editor, {
+    path: LIVE_DAILY,
+  });
+  assert.equal(closed.changed, true);
+  assert.match(harness.getSource(childPath), /^- \[x\] #task #prj Child project.*\^prj$/m);
+  assert.match(harness.getSource(parentPath), /^- \[\*\] #task #prj Parent project \^prj$/m);
+  assert.doesNotMatch(harness.getSource(parentPath), /#hide/);
+  assert.match(editor.getValue(), /~~\[\[projects\/child#\^prj\]\]~~/);
+  assert.match(editor.getValue(), /\[\[parent#\^prj\]\]/);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].unblocked[0].trigger, "project_empty");
+  assert.deepEqual(seen[0].unblocked[0].unblocked_by, [
+    { note_path: childPath, block_id: "prj", text: "#prj Child project" },
+  ]);
+
+  editor.setCursor({ line: 4, ch: 5 });
+  const reopened = await plugin.handleActiveTaskBlockLinkOpenDone(editor, {
+    path: LIVE_DAILY,
+  });
+  assert.equal(reopened.changed, true);
+  assert.match(harness.getSource(childPath), /^- \[ \] #task #prj Child project.*\^prj$/m);
+  assert.match(harness.getSource(parentPath), /^- \[ \] #task #prj Parent project #hide \^prj$/m);
+  assert.match(editor.getValue(), /\t- \[\[projects\/child#\^prj\]\]/);
+  assert.doesNotMatch(editor.getValue(), /\[\[projects\/parent#\^prj\]\]/);
 });
 
 test("PP18 Alt+[ cancel of the last task surfaces R without linking", async () => {

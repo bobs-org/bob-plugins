@@ -4588,7 +4588,8 @@ function projectHasOpenDependency(project, openIds, closedIds = new Set()) {
 }
 
 function projectIsBlockedAfter(project, openIds, today, closedIds = new Set()) {
-  return projectHasFutureSchedule(project, today) ||
+  return !!(project && prjInheritsBlock(project.projectTask.lineText)) ||
+    projectHasFutureSchedule(project, today) ||
     projectHasOpenDependency(project, openIds, closedIds);
 }
 
@@ -4617,6 +4618,9 @@ function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
   const members = [];
   for (const path of recoveryPaths || []) {
     const project = projectInfoByPath.get(path);
+    if (project && prjInheritsBlock(project.projectTask.lineText)) {
+      continue;
+    }
     for (const task of project ? project.tasks : []) {
       if (
         task.blockId === "prj" || task.status !== "?" ||
@@ -4644,6 +4648,9 @@ function projectSuccessorTagStripEdits(projectInfoByPath, recoveryPaths, openIds
   const edits = [];
   for (const path of recoveryPaths || []) {
     const project = projectInfoByPath.get(path);
+    if (project && prjInheritsBlock(project.projectTask.lineText)) {
+      continue;
+    }
     for (const task of project ? project.tasks : []) {
       if (task.blockId === "prj" || !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
           !hasProjectBlockedResidentTag(task.lineText)) continue;
@@ -4670,9 +4677,12 @@ function isProjectBlockedResidentTaskInDocument(sourceText, path, line) {
     line,
   );
   if (
-    !task || task.blockId === "prj" || task.status !== "?" ||
+    !task || task.status !== "?" ||
     !hasProjectBlockedResidentTag(task.lineText)
   ) {
+    return false;
+  }
+  if (task.blockId === "prj" && !projectDependencyInfo(sourceText, path)) {
     return false;
   }
   return true;
@@ -4690,6 +4700,12 @@ function projectBlockedResidentNotice(sourceText, path, line, today = formatLoca
     return null;
   }
   const project = projectDependencyInfo(sourceText, path);
+  if (project && prjInheritsBlock(resident.lineText)) {
+    const parent = projectParentTarget(sourceText);
+    return parent
+      ? `Project blocked by parent project · ${parent}`
+      : "Project blocked by parent project";
+  }
   if (!project) {
     return `Project blocked · resolve the project's ^prj reason in ${path}`;
   }
@@ -5165,6 +5181,186 @@ function restoreReopenedTaskReferencesInText(
 
   const text = sourceLines.map((line) => `${line.text}${line.ending}`).join("");
   return { text, changed: text !== String(sourceText || ""), restored };
+}
+// ---- src/084-project-parent.js ----
+// Project-parent parsing and resolution (docs/task-dependencies.md §13).
+// Keep this pure so the cycler can mirror reconcile without metadataCache.
+
+const PROJECT_PARENT_EXCLUDED_DIRECTORIES = new Set([
+  ".git",
+  ".obsidian",
+  "_conflicts",
+  "_generated",
+  "_templates",
+  "done",
+]);
+
+function projectParentPathIsIndexed(path) {
+  const value = String(path || "").replace(/\\/g, "/");
+  if (!value || value === "dash.md" || isCanonicalDailyNotePath(value)) {
+    return false;
+  }
+  return !value.split("/").some((part) =>
+    PROJECT_PARENT_EXCLUDED_DIRECTORIES.has(part)
+  );
+}
+
+function projectParentTarget(sourceText) {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  if (lines.length === 0 || !/^\s*---\s*$/.test(lines[0])) {
+    return null;
+  }
+  let count = 0;
+  for (let line = 1; line < lines.length; line += 1) {
+    if (/^\s*---\s*$/.test(lines[line])) {
+      break;
+    }
+    if (/^parent\s*:/.test(lines[line])) {
+      count += 1;
+    }
+  }
+  if (count !== 1) {
+    return null;
+  }
+  const value = parseFrontmatterScalar(sourceText, "parent");
+  const match = value && value.match(/^\[\[([^\]\n]+)\]\]$/);
+  if (!match) {
+    return null;
+  }
+  const target = String(match[1] || "")
+    .split("|")[0]
+    .split("#")[0]
+    .trim();
+  return target || null;
+}
+
+function resolveProjectParentPath(target, sourcePath = "", notePaths = []) {
+  let value = String(target || "").trim();
+  const wrapped = value.match(/^\[\[([^\]\n]+)\]\]$/);
+  if (wrapped) {
+    value = String(wrapped[1] || "").split("|")[0].split("#")[0].trim();
+  } else {
+    value = value.split("|")[0].split("#")[0].trim();
+  }
+  if (!value) {
+    return null;
+  }
+  const parts = value.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) {
+    return null;
+  }
+  const paths = [...new Set(Array.from(notePaths || [], (path) =>
+    String(path || "").replace(/\\/g, "/")
+  ).filter(projectParentPathIsIndexed))];
+  const targetPath = value.replace(/\\/g, "/");
+  const candidate = /\.md$/i.test(targetPath) ? targetPath : `${targetPath}.md`;
+  let resolved = paths.includes(candidate) ? candidate : null;
+  if (!resolved && !targetPath.includes("/") && !targetPath.includes("\\")) {
+    const basename = targetPath.replace(/\.md$/i, "").toLocaleLowerCase();
+    const matches = paths.filter((path) =>
+      path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/i, "").toLocaleLowerCase() === basename
+    );
+    if (matches.length === 1) {
+      resolved = matches[0];
+    }
+  }
+  return resolved && resolved !== String(sourcePath || "") ? resolved : null;
+}
+
+function prjInheritsBlock(prjLineText) {
+  return getTrailingBlockId(prjLineText) === "prj" &&
+    hasProjectBlockedResidentTag(prjLineText);
+}
+
+function projectPullInParentPathMap(closed, noteTexts, notePaths) {
+  const paths = Array.isArray(notePaths) ? notePaths : Object.keys(noteTexts || {});
+  const parents = new Map();
+  for (const identity of Array.isArray(closed) ? closed : []) {
+    if (!identity || !identity.path || !projectIdentityIsPrj(identity)) {
+      continue;
+    }
+    const childPath = String(identity.path);
+    const target = projectParentTarget(projectNoteTextFor(noteTexts, childPath));
+    const parentPath = resolveProjectParentPath(target, childPath, paths);
+    if (!parentPath) {
+      continue;
+    }
+    if (!parents.has(parentPath)) {
+      parents.set(parentPath, new Set());
+    }
+    parents.get(parentPath).add(childPath);
+  }
+  return parents;
+}
+
+function projectPullInParentPaths(closed, noteTexts, notePaths) {
+  return [...projectPullInParentPathMap(closed, noteTexts, notePaths).keys()];
+}
+
+function projectPullInParentCandidatePaths(closed, noteTexts, today, notePaths) {
+  const paths = Array.isArray(notePaths) ? notePaths : Object.keys(noteTexts || {});
+  const skipKeys = projectClosedSkipKeys(closed);
+  const candidates = [];
+  const parentPaths = projectPullInParentPathMap(closed, noteTexts, paths);
+  for (const [path, closedChildPaths] of parentPaths) {
+    const surface = projectSurfaceState(
+      projectNoteTextFor(noteTexts, path),
+      path,
+      today,
+      { skipKeys, notePaths: paths, closedChildPaths },
+    );
+    if (surface && surface.empty) {
+      candidates.push(path);
+    }
+  }
+  return candidates;
+}
+
+function projectPullInNeedsDependents(closed, noteTexts, today, notePaths) {
+  if (projectClosedTaskIds(closed).size > 0) {
+    return true;
+  }
+  const skipKeys = projectClosedSkipKeys(closed);
+  const candidates = new Map();
+  for (const path of projectPullInCandidatePaths(closed, noteTexts, today)) {
+    candidates.set(path, new Set());
+  }
+  const parentPaths = projectPullInParentPathMap(closed, noteTexts, notePaths);
+  for (const [path, childPaths] of parentPaths) {
+    const surface = projectSurfaceState(
+      projectNoteTextFor(noteTexts, path),
+      path,
+      today,
+      { skipKeys, notePaths, closedChildPaths: childPaths },
+    );
+    if (surface && surface.empty) {
+      candidates.set(path, childPaths);
+    }
+  }
+  for (const [path, closedChildPaths] of candidates) {
+    const surface = projectSurfaceState(
+      projectNoteTextFor(noteTexts, path),
+      path,
+      today,
+      { skipKeys, notePaths, closedChildPaths },
+    );
+    if (!surface || !surface.task) {
+      continue;
+    }
+    if ((surface.task.dependsOn || []).length > 0) {
+      return true;
+    }
+    if (surface.task.status === "?") {
+      const text = projectNoteTextFor(noteTexts, path);
+      const tasks = parseTaskDependencyDocument(text, path).filter(
+        (task) => task && task.status && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status),
+      );
+      if (tasks.some((task) => task.blockId !== "prj" && Array.isArray(task.dependsOn) && task.dependsOn.length > 0)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 // ---- src/085-successor-plan.js ----
 // Pure successor-link planner (docs/task-dependencies.md §12).
@@ -5785,6 +5981,9 @@ function planSuccessors(options = {}) {
     : null;
   const noteTexts =
     options.noteTexts && typeof options.noteTexts === "object" ? options.noteTexts : {};
+  const notePaths = Array.isArray(options.notePaths)
+    ? options.notePaths
+    : Object.keys(noteTexts);
 
   const empty = {
     unblocked: [],
@@ -5810,6 +6009,7 @@ function planSuccessors(options = {}) {
     cancelled: cancelledClose,
     closingEntry,
     noteTexts,
+    notePaths,
   });
   const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink) =>
     applySuccessorVerdicts({
@@ -7266,6 +7466,9 @@ function dependencyIdIsOpen(id, tasks, openIds) {
 }
 
 function projectHasRemainingBlockingReason(project, today, openIds) {
+  if (project && prjInheritsBlock(project.projectTask.lineText)) {
+    return true;
+  }
   if (projectHasFutureSchedule(project, today)) {
     return true;
   }
@@ -7291,6 +7494,9 @@ function planProjectResidentRecoveryEdits(sourceText, path, options = {}) {
   const today = options.today || formatLocalDate();
   const openIds = asProjectRecoveryIdSet(options.openIds);
   const project = projectDependencyInfo(sourceText, path);
+  if (project && prjInheritsBlock(project.projectTask.lineText)) {
+    return [];
+  }
   // No open `^prj` means the note is not project(T) and has no project
   // reason: recover tagged open residents the same way as an unblocked
   // `^prj` (Alt+[ to Cancelled, or any cycle out of Blocked).
@@ -7416,6 +7622,9 @@ async function applyProjectResidentRecovery(plugin, sourceText, path, context) {
     ? plugin.getScheduleLogDateString()
     : formatLocalDate();
   const project = projectDependencyInfo(sourceText, path);
+  if (project && prjInheritsBlock(project.projectTask.lineText)) {
+    return;
+  }
   const tasks = projectResidentRecoveryTasks(sourceText, path, project);
   const openIds = await resolveProjectRecoveryOpenIds(plugin, tasks, context);
   const markUnblockedLine = plugin &&
@@ -7623,6 +7832,7 @@ function projectPullInRecoveryMembersForIdless(noteTexts, index, pullIns, today)
 const PROJECT_SUBPROJECTS_MARKER = "🧩 **Sub-projects:**";
 const PROJECT_HIDE_TAG = "#hide";
 const PROJECT_PRJ_TAG = "#prj";
+const PROJECT_BLOCKED_TAG = "#prj_is_blocked";
 const PROJECT_CLOSED_MARKS = new Set(["x", "X", "-"]);
 const PROJECT_WIKILINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 
@@ -7805,7 +8015,14 @@ function projectHasScanIssue(sourceText) {
   return false;
 }
 
-function projectMarkerHasOpenChild(lines, prjLine) {
+function projectMarkerHasOpenChild(lines, prjLine, options = {}) {
+  const closedChildPaths = options.closedChildPaths instanceof Set
+    ? options.closedChildPaths
+    : new Set(Array.from(options.closedChildPaths || [], String));
+  const notePaths = Array.isArray(options.notePaths)
+    ? options.notePaths
+    : [];
+  const parentPath = String(options.path || "");
   const prjIndent = getLineIndentation(String(lines[prjLine] || "")).length;
   const seen = new Set();
   for (let line = prjLine + 1; line < lines.length; line += 1) {
@@ -7829,11 +8046,16 @@ function projectMarkerHasOpenChild(lines, prjLine) {
     let match;
     let foundOpen = false;
     while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
-      const name = String(match[1] || "").split("#")[0].split("|")[0].trim();
+      const target = String(match[1] || "").split("|")[0].split("#")[0].trim();
+      const name = target;
       if (!name || seen.has(name)) {
         continue;
       }
       seen.add(name);
+      const linkedPath = resolveProjectParentPath(target, parentPath, notePaths);
+      if (linkedPath && closedChildPaths.has(linkedPath)) {
+        continue;
+      }
       const start = match.index;
       const end = start + match[0].length;
       const before = text.slice(0, start).trimEnd();
@@ -7935,7 +8157,11 @@ function projectSurfaceState(text, path, today, options = {}) {
   const skipKeys = options.skipKeys instanceof Set ? options.skipKeys : null;
   const remaining = projectRemainingCount(source, scheduleApplies, skipKeys, notePath);
   const lines = source.split(/\r?\n/);
-  const subopen = projectMarkerHasOpenChild(lines, project.projectTask.line);
+  const subopen = projectMarkerHasOpenChild(lines, project.projectTask.line, {
+    path: notePath,
+    notePaths: options.notePaths,
+    closedChildPaths: options.closedChildPaths,
+  });
   return {
     path: notePath,
     project,
@@ -8018,7 +8244,9 @@ function projectPullInDisplayText(task, lineText) {
   );
   return cleaned
     .split(/\s+/)
-    .filter((token) => token && token !== PROJECT_PRJ_TAG && projectWholeTagSpans(token, PROJECT_HIDE_TAG).length === 0)
+    .filter((token) => token && token !== PROJECT_PRJ_TAG &&
+      token !== PROJECT_BLOCKED_TAG &&
+      projectWholeTagSpans(token, PROJECT_HIDE_TAG).length === 0)
     .join(" ");
 }
 
@@ -8058,37 +8286,6 @@ function projectPullInCandidatePaths(closed, noteTexts, today) {
   return paths;
 }
 
-function projectPullInNeedsDependents(closed, noteTexts, today) {
-  if (projectClosedTaskIds(closed).size > 0) {
-    return true;
-  }
-  const skipKeys = projectClosedSkipKeys(closed);
-  for (const path of projectPullInCandidatePaths(closed, noteTexts, today)) {
-    const surface = projectSurfaceState(
-      projectNoteTextFor(noteTexts, path),
-      path,
-      today,
-      { skipKeys },
-    );
-    if (!surface || !surface.task) {
-      continue;
-    }
-    if ((surface.task.dependsOn || []).length > 0) {
-      return true;
-    }
-    if (surface.task.status === "?") {
-      const text = projectNoteTextFor(noteTexts, path);
-      const tasks = parseTaskDependencyDocument(text, path).filter(
-        (task) => task && task.status && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status),
-      );
-      if (tasks.some((task) => task.blockId !== "prj" && Array.isArray(task.dependsOn) && task.dependsOn.length > 0)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 function projectEarliestAnchor(preds, closed, anchors) {
   const anchored = preds.map((identity) => {
     const position = closed.findIndex((candidate) => candidate === identity);
@@ -8118,6 +8315,9 @@ function planProjectPullIns(options = {}) {
       : { byDependsOn: new Map(), byTaskId: new Map(), tasks: [] };
   const noteTexts =
     options.noteTexts && typeof options.noteTexts === "object" ? options.noteTexts : {};
+  const notePaths = Array.isArray(options.notePaths)
+    ? options.notePaths
+    : Object.keys(noteTexts);
   const today =
     typeof options.today === "string" && options.today
       ? options.today
@@ -8132,12 +8332,17 @@ function planProjectPullIns(options = {}) {
   const skipKeys = projectClosedSkipKeys(closed);
   const closedTaskIds = projectClosedTaskIds(closed);
   const surfaceCache = new Map();
-  const cachedSurface = (noteText, path) => {
-    const key = String(path || "");
+  const cachedSurface = (noteText, path, closedChildPaths = new Set()) => {
+    const childKey = [...closedChildPaths].sort().join("\0");
+    const key = `${String(path || "")}\0${childKey}`;
     if (surfaceCache.has(key)) {
       return surfaceCache.get(key);
     }
-    const surface = projectSurfaceState(noteText, path, today, { skipKeys });
+    const surface = projectSurfaceState(noteText, path, today, {
+      skipKeys,
+      notePaths,
+      closedChildPaths,
+    });
     surfaceCache.set(key, surface);
     return surface;
   };
@@ -8170,7 +8375,7 @@ function planProjectPullIns(options = {}) {
     );
 
   const candidates = new Map();
-  const addCandidate = (surface, preds) => {
+  const addCandidate = (surface, preds, { parentPullIn = false } = {}) => {
     if (!surface || !surface.empty || !surface.task) {
       return;
     }
@@ -8195,7 +8400,11 @@ function planProjectPullIns(options = {}) {
         merged.push(pred);
       }
     }
-    candidates.set(key, { surface, preds: merged });
+    candidates.set(key, {
+      surface,
+      preds: merged,
+      parentPullIn: parentPullIn || Boolean(existing && existing.parentPullIn),
+    });
   };
 
   const seenNotes = new Set();
@@ -8212,6 +8421,25 @@ function planProjectPullIns(options = {}) {
     if (surface) {
       addCandidate(surface, projectPredsForNote(closed, path));
     }
+  }
+
+  // Trigger (c): closing a child project's ^prj can empty its parent's
+  // Sub-projects marker. Treat only the closed child links as resolved.
+  for (const [parentPath, closedChildPaths] of projectPullInParentPathMap(
+    closed,
+    noteTexts,
+    notePaths,
+  )) {
+    const surface = cachedSurface(
+      projectNoteTextFor(noteTexts, parentPath),
+      parentPath,
+      closedChildPaths,
+    );
+    const preds = closed.filter((identity) =>
+      identity && projectIdentityIsPrj(identity) &&
+      closedChildPaths.has(String(identity.path || ""))
+    );
+    addCandidate(surface, preds, { parentPullIn: true });
   }
 
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [];
@@ -8240,11 +8468,34 @@ function planProjectPullIns(options = {}) {
   const locations = new Set();
   const cascadePaths = new Set();
 
-  for (const { surface, preds } of candidates.values()) {
+  for (const { surface, preds, parentPullIn } of candidates.values()) {
     const task = surface.task;
     const key = projectLocationKey(task.path, task.line);
     locations.add(key);
     const predecessorRows = projectPredecessorRows(preds);
+    if (prjInheritsBlock(task.rawLine)) {
+      const target = projectParentTarget(
+        projectNoteTextFor(noteTexts, task.path),
+      );
+      const parentPath = resolveProjectParentPath(
+        target,
+        task.path,
+        notePaths,
+      );
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: projectPullInDisplayText(task, task.rawLine),
+        status_symbol: task.status,
+        reason: "project",
+        waits_on: 0,
+        scheduled: null,
+        project: parentPath || target || task.path,
+        trigger: "project_empty",
+      });
+      continue;
+    }
     const postOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
     if (postOpen.length > 0) {
       stillBlocked.push({
@@ -8294,6 +8545,16 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
+    if (cancelledClose && parentPullIn) {
+      recovers.push({
+        task,
+        reason: "cancelled",
+        predecessorRows,
+        pullIn: true,
+        hideRemoved,
+      });
+      continue;
+    }
     if (!hasAnchor) {
       recovers.push({
         task,
@@ -8304,10 +8565,20 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
-    if (cancelledClose || !linkUnblocked) {
+    if (cancelledClose) {
       recovers.push({
         task,
-        reason: cancelledClose ? "cancelled" : "disabled",
+        reason: "cancelled",
+        predecessorRows,
+        pullIn: true,
+        hideRemoved,
+      });
+      continue;
+    }
+    if (!linkUnblocked) {
+      recovers.push({
+        task,
+        reason: "disabled",
         predecessorRows,
         pullIn: true,
         hideRemoved,
@@ -12768,8 +13039,43 @@ class TaskStatusCyclerSuccessorProjectMixin {
         closedNoteTexts,
         today,
       );
-      const needsDependents = projectPullInNeedsDependents(identities, closedNoteTexts, today);
-      if (closedTaskIds.size === 0 && pullInPaths.length === 0) {
+      const hasClosedProjectTask = identities.some(projectIdentityIsPrj);
+      const notePaths = hasClosedProjectTask && vault &&
+          typeof vault.getMarkdownFiles === "function"
+        ? vault.getMarkdownFiles()
+          .map((file) => file && file.path)
+          .filter((path) => typeof path === "string" && path)
+        : Object.keys(closedNoteTexts);
+      const pullInParentPaths = projectPullInParentPaths(
+        identities,
+        closedNoteTexts,
+        notePaths,
+      );
+      for (const path of pullInParentPaths) {
+        if (!cache.has(path)) {
+          await this.readSuccessorNoteText(path, active, cache);
+        }
+        const text = cache.get(path);
+        if (typeof text === "string") {
+          closedNoteTexts[path] = text;
+        }
+      }
+      const pullInParentCandidates = projectPullInParentCandidatePaths(
+        identities,
+        closedNoteTexts,
+        today,
+        notePaths,
+      );
+      const needsDependents = projectPullInNeedsDependents(
+        identities,
+        closedNoteTexts,
+        today,
+        notePaths,
+      );
+      if (
+        closedTaskIds.size === 0 && pullInPaths.length === 0 &&
+        pullInParentCandidates.length === 0
+      ) {
         return quietGate;
       }
       let linkUnblocked = true;
@@ -12856,7 +13162,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
           }
         }
       }
-      for (const path of [...pullInPaths, ...identities.map((item) => item && item.path)]) {
+      for (const path of [
+        ...pullInPaths,
+        ...pullInParentPaths,
+        ...identities.map((item) => item && item.path),
+      ]) {
         if (!path || noteTexts.has(path)) {
           continue;
         }
@@ -12892,6 +13202,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           basenameCounts,
           closingEntry: planClosingEntry,
           noteTexts: noteTextsObject,
+          notePaths,
         });
       } catch (error) {
         return null;
@@ -18318,6 +18629,7 @@ module.exports.helpers = {
   planProjectPullIns,
   planSuccessorInsertions,
   projectPullInCandidatePaths,
+  projectPullInParentPaths,
   projectPullInNeedsDependents,
   projectPullInRewriteLine,
   projectSurfaceState,
@@ -18385,6 +18697,9 @@ module.exports.helpers = {
   lineHasCreatedField,
   lineMatchesTasksGlobalFilterText,
   parseFrontmatterScalar,
+  projectParentTarget,
+  resolveProjectParentPath,
+  prjInheritsBlock,
   parseEmbeddedBlockTransclusions,
   isTaskDependencyLine,
   isCanonicalDailyNotePath,

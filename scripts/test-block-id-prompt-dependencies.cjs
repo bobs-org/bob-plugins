@@ -110,6 +110,30 @@ test("project-blocked resident consumption promotes the project's open prerequis
   );
 });
 
+test("a tagged inherited ^prj target is refused with its parent named", () => {
+  const child = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    'parent: "[[projects/parent#Overview|Parent]]"',
+    "---",
+    "- [?] #task #prj #prj_is_blocked Child project ^prj",
+  ].join("\n");
+  const plan = helpers.planTaskLinkBlockConsumption(
+    [{ path: "projects/child.md", text: child }],
+    "projects/child.md",
+    5,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(plan.blocked, true);
+  assert.equal(plan.dependencyBlocked, true);
+  assert.equal(plan.projectDependencyBlocked, true);
+  assert.equal(plan.inheritedProjectBlocked, true);
+  assert.equal(plan.projectParent, "projects/parent");
+  assert.deepEqual(plan.promoted, []);
+  assert.equal(plan.updatesByPath.size, 0);
+});
+
 test("project schedule blocks residents without promotion, while a task's own schedule stays pull-forward eligible", () => {
   const project = [
     "---",

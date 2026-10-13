@@ -299,7 +299,11 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    if (plan.dependencyBlocked) {
+    if (plan.inheritedProjectBlocked) {
+      new Notice(
+        `Project blocked by parent project · ${plan.projectParent || plan.projectPath || source.sourcePath} · no Pomodoro link was created`,
+      );
+    } else if (plan.dependencyBlocked) {
       const promotionText = applied > 0
         ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
         : "prerequisites already raised";

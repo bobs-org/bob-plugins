@@ -64,8 +64,43 @@ class TaskStatusCyclerSuccessorProjectMixin {
         closedNoteTexts,
         today,
       );
-      const needsDependents = projectPullInNeedsDependents(identities, closedNoteTexts, today);
-      if (closedTaskIds.size === 0 && pullInPaths.length === 0) {
+      const hasClosedProjectTask = identities.some(projectIdentityIsPrj);
+      const notePaths = hasClosedProjectTask && vault &&
+          typeof vault.getMarkdownFiles === "function"
+        ? vault.getMarkdownFiles()
+          .map((file) => file && file.path)
+          .filter((path) => typeof path === "string" && path)
+        : Object.keys(closedNoteTexts);
+      const pullInParentPaths = projectPullInParentPaths(
+        identities,
+        closedNoteTexts,
+        notePaths,
+      );
+      for (const path of pullInParentPaths) {
+        if (!cache.has(path)) {
+          await this.readSuccessorNoteText(path, active, cache);
+        }
+        const text = cache.get(path);
+        if (typeof text === "string") {
+          closedNoteTexts[path] = text;
+        }
+      }
+      const pullInParentCandidates = projectPullInParentCandidatePaths(
+        identities,
+        closedNoteTexts,
+        today,
+        notePaths,
+      );
+      const needsDependents = projectPullInNeedsDependents(
+        identities,
+        closedNoteTexts,
+        today,
+        notePaths,
+      );
+      if (
+        closedTaskIds.size === 0 && pullInPaths.length === 0 &&
+        pullInParentCandidates.length === 0
+      ) {
         return quietGate;
       }
       let linkUnblocked = true;
@@ -152,7 +187,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
           }
         }
       }
-      for (const path of [...pullInPaths, ...identities.map((item) => item && item.path)]) {
+      for (const path of [
+        ...pullInPaths,
+        ...pullInParentPaths,
+        ...identities.map((item) => item && item.path),
+      ]) {
         if (!path || noteTexts.has(path)) {
           continue;
         }
@@ -188,6 +227,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           basenameCounts,
           closingEntry: planClosingEntry,
           noteTexts: noteTextsObject,
+          notePaths,
         });
       } catch (error) {
         return null;

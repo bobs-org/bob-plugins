@@ -616,6 +616,9 @@ function planSuccessors(options = {}) {
     : null;
   const noteTexts =
     options.noteTexts && typeof options.noteTexts === "object" ? options.noteTexts : {};
+  const notePaths = Array.isArray(options.notePaths)
+    ? options.notePaths
+    : Object.keys(noteTexts);
 
   const empty = {
     unblocked: [],
@@ -641,6 +644,7 @@ function planSuccessors(options = {}) {
     cancelled: cancelledClose,
     closingEntry,
     noteTexts,
+    notePaths,
   });
   const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink) =>
     applySuccessorVerdicts({

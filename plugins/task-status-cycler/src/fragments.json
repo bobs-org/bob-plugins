@@ -7,6 +7,7 @@
   "060-pomodoro.js",
   "070-block-links.js",
   "080-dependencies.js",
+  "084-project-parent.js",
   "085-successor-plan.js",
   "086-successor-ids.js",
   "087-successor-place.js",

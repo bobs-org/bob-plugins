@@ -90,6 +90,63 @@ test("option-bracket refuses to change a member while its project is Blocked", (
   }
 });
 
+test("tagged inherited ^prj remains Blocked, refuses cycling, and names its parent", () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    'parent: "[[projects/parent|Parent]]"',
+    "---",
+    "- [?] #task #prj #prj_is_blocked Child project ^prj",
+    "- [?] #task #prj_is_blocked Child work ^work",
+  ].join("\n");
+  const project = helpers.projectDependencyInfo(source, "projects/child.md");
+  assert.equal(helpers.prjInheritsBlock(project.projectTask.lineText), true);
+  assert.equal(
+    helpers.projectIsBlockedAfter(project, new Set(), "2026-08-15"),
+    true,
+  );
+  assert.equal(
+    helpers.projectHasRemainingBlockingReason(project, "2026-08-15", new Set()),
+    true,
+  );
+  assert.deepEqual(
+    helpers.planProjectResidentRecoveryEdits(source, "projects/child.md", {
+      today: "2026-08-15",
+      openIds: new Set(),
+    }),
+    [],
+  );
+  assert.equal(
+    helpers.isProjectBlockedResidentTaskInDocument(
+      source,
+      "projects/child.md",
+      5,
+    ),
+    true,
+  );
+  assert.equal(
+    helpers.projectBlockedResidentNotice(
+      source,
+      "projects/child.md",
+      5,
+      "2026-08-15",
+    ),
+    "Project blocked by parent project · projects/parent",
+  );
+
+  const editor = createTextEditor(source, { line: 5, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = { commands: { commands: {}, executeCommandById: () => false } };
+  const view = Object.assign(new MarkdownView(), {
+    editor,
+    file: { path: "projects/child.md" },
+  });
+  assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+  assert.equal(editor.getValue(), source);
+  assert.ok(notices.some((notice) => notice.includes("projects/parent")));
+});
+
 test("project resident notice reads the inline ^prj date and ignores frontmatter scheduled", () => {
   const source = [
     "---",

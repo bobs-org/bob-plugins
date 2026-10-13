@@ -673,6 +673,59 @@ test("PDC3 keeps a project resident Blocked when its own prerequisite remains op
   assert.equal(recovered.status_symbol, " ");
 });
 
+test("PDC4/PDC5/PDC6 leave inherited child-project rows for reconcile", () => {
+  const rootPath = "projects/root.md";
+  const childPath = "projects/child.md";
+  const closedCause = [{
+    path: "blocker.md",
+    blockId: "cause",
+    taskId: "cause__x",
+    text: "Resolve ancestor blocker",
+  }];
+  for (const childDependency of ["", " [dependsOn:: cause__x]"]) {
+    const root = [
+      "---",
+      'type: "[[project]]"',
+      "status: wip",
+      "---",
+      "- [?] #task #prj Root project [id:: root__prj] [dependsOn:: cause__x] ^prj",
+      "- [?] #task Root work #prj_is_blocked ^root-work",
+    ].join("\n");
+    const child = [
+      "---",
+      'type: "[[project]]"',
+      "status: wip",
+      'parent: "[[projects/root]]"',
+      "---",
+      `- [?] #task #prj #prj_is_blocked Child project${childDependency} ^prj`,
+      "- [?] #task #prj_is_blocked Child work ^child-work",
+    ].join("\n");
+    const { plan } = planFixture({
+      day: FIX_DAY,
+      notes: {
+        [rootPath]: root,
+        [childPath]: child,
+        "blocker.md": "- [x] #task Resolve ancestor blocker [id:: cause__x] ^cause",
+      },
+      closed: closedCause,
+    });
+    assert.equal(
+      plan.edits.some((edit) => edit.path === childPath),
+      false,
+      `child recovery is deferred for ${childDependency || "inherited-only"}`,
+    );
+    assert.equal(
+      plan.unblocked.some((row) => row.note_path === childPath),
+      false,
+      `no child recovery row is emitted for ${childDependency || "inherited-only"}`,
+    );
+    assert.equal(
+      child.split("\n").filter((line) => line.includes("^prj"))[0],
+      "- [?] #task #prj #prj_is_blocked Child project" + childDependency + " ^prj",
+    );
+  }
+});
+
 test("SL12 one gesture closing two prerequisites links once with both causes", () => {
   const day = [
     "# 2026-10-09",

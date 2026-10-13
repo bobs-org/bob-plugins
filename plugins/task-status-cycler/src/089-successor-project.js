@@ -5,6 +5,7 @@
 const PROJECT_SUBPROJECTS_MARKER = "🧩 **Sub-projects:**";
 const PROJECT_HIDE_TAG = "#hide";
 const PROJECT_PRJ_TAG = "#prj";
+const PROJECT_BLOCKED_TAG = "#prj_is_blocked";
 const PROJECT_CLOSED_MARKS = new Set(["x", "X", "-"]);
 const PROJECT_WIKILINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 
@@ -187,7 +188,14 @@ function projectHasScanIssue(sourceText) {
   return false;
 }
 
-function projectMarkerHasOpenChild(lines, prjLine) {
+function projectMarkerHasOpenChild(lines, prjLine, options = {}) {
+  const closedChildPaths = options.closedChildPaths instanceof Set
+    ? options.closedChildPaths
+    : new Set(Array.from(options.closedChildPaths || [], String));
+  const notePaths = Array.isArray(options.notePaths)
+    ? options.notePaths
+    : [];
+  const parentPath = String(options.path || "");
   const prjIndent = getLineIndentation(String(lines[prjLine] || "")).length;
   const seen = new Set();
   for (let line = prjLine + 1; line < lines.length; line += 1) {
@@ -211,11 +219,16 @@ function projectMarkerHasOpenChild(lines, prjLine) {
     let match;
     let foundOpen = false;
     while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
-      const name = String(match[1] || "").split("#")[0].split("|")[0].trim();
+      const target = String(match[1] || "").split("|")[0].split("#")[0].trim();
+      const name = target;
       if (!name || seen.has(name)) {
         continue;
       }
       seen.add(name);
+      const linkedPath = resolveProjectParentPath(target, parentPath, notePaths);
+      if (linkedPath && closedChildPaths.has(linkedPath)) {
+        continue;
+      }
       const start = match.index;
       const end = start + match[0].length;
       const before = text.slice(0, start).trimEnd();
@@ -317,7 +330,11 @@ function projectSurfaceState(text, path, today, options = {}) {
   const skipKeys = options.skipKeys instanceof Set ? options.skipKeys : null;
   const remaining = projectRemainingCount(source, scheduleApplies, skipKeys, notePath);
   const lines = source.split(/\r?\n/);
-  const subopen = projectMarkerHasOpenChild(lines, project.projectTask.line);
+  const subopen = projectMarkerHasOpenChild(lines, project.projectTask.line, {
+    path: notePath,
+    notePaths: options.notePaths,
+    closedChildPaths: options.closedChildPaths,
+  });
   return {
     path: notePath,
     project,
@@ -400,7 +417,9 @@ function projectPullInDisplayText(task, lineText) {
   );
   return cleaned
     .split(/\s+/)
-    .filter((token) => token && token !== PROJECT_PRJ_TAG && projectWholeTagSpans(token, PROJECT_HIDE_TAG).length === 0)
+    .filter((token) => token && token !== PROJECT_PRJ_TAG &&
+      token !== PROJECT_BLOCKED_TAG &&
+      projectWholeTagSpans(token, PROJECT_HIDE_TAG).length === 0)
     .join(" ");
 }
 
@@ -440,37 +459,6 @@ function projectPullInCandidatePaths(closed, noteTexts, today) {
   return paths;
 }
 
-function projectPullInNeedsDependents(closed, noteTexts, today) {
-  if (projectClosedTaskIds(closed).size > 0) {
-    return true;
-  }
-  const skipKeys = projectClosedSkipKeys(closed);
-  for (const path of projectPullInCandidatePaths(closed, noteTexts, today)) {
-    const surface = projectSurfaceState(
-      projectNoteTextFor(noteTexts, path),
-      path,
-      today,
-      { skipKeys },
-    );
-    if (!surface || !surface.task) {
-      continue;
-    }
-    if ((surface.task.dependsOn || []).length > 0) {
-      return true;
-    }
-    if (surface.task.status === "?") {
-      const text = projectNoteTextFor(noteTexts, path);
-      const tasks = parseTaskDependencyDocument(text, path).filter(
-        (task) => task && task.status && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status),
-      );
-      if (tasks.some((task) => task.blockId !== "prj" && Array.isArray(task.dependsOn) && task.dependsOn.length > 0)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 function projectEarliestAnchor(preds, closed, anchors) {
   const anchored = preds.map((identity) => {
     const position = closed.findIndex((candidate) => candidate === identity);
@@ -500,6 +488,9 @@ function planProjectPullIns(options = {}) {
       : { byDependsOn: new Map(), byTaskId: new Map(), tasks: [] };
   const noteTexts =
     options.noteTexts && typeof options.noteTexts === "object" ? options.noteTexts : {};
+  const notePaths = Array.isArray(options.notePaths)
+    ? options.notePaths
+    : Object.keys(noteTexts);
   const today =
     typeof options.today === "string" && options.today
       ? options.today
@@ -514,12 +505,17 @@ function planProjectPullIns(options = {}) {
   const skipKeys = projectClosedSkipKeys(closed);
   const closedTaskIds = projectClosedTaskIds(closed);
   const surfaceCache = new Map();
-  const cachedSurface = (noteText, path) => {
-    const key = String(path || "");
+  const cachedSurface = (noteText, path, closedChildPaths = new Set()) => {
+    const childKey = [...closedChildPaths].sort().join("\0");
+    const key = `${String(path || "")}\0${childKey}`;
     if (surfaceCache.has(key)) {
       return surfaceCache.get(key);
     }
-    const surface = projectSurfaceState(noteText, path, today, { skipKeys });
+    const surface = projectSurfaceState(noteText, path, today, {
+      skipKeys,
+      notePaths,
+      closedChildPaths,
+    });
     surfaceCache.set(key, surface);
     return surface;
   };
@@ -552,7 +548,7 @@ function planProjectPullIns(options = {}) {
     );
 
   const candidates = new Map();
-  const addCandidate = (surface, preds) => {
+  const addCandidate = (surface, preds, { parentPullIn = false } = {}) => {
     if (!surface || !surface.empty || !surface.task) {
       return;
     }
@@ -577,7 +573,11 @@ function planProjectPullIns(options = {}) {
         merged.push(pred);
       }
     }
-    candidates.set(key, { surface, preds: merged });
+    candidates.set(key, {
+      surface,
+      preds: merged,
+      parentPullIn: parentPullIn || Boolean(existing && existing.parentPullIn),
+    });
   };
 
   const seenNotes = new Set();
@@ -594,6 +594,25 @@ function planProjectPullIns(options = {}) {
     if (surface) {
       addCandidate(surface, projectPredsForNote(closed, path));
     }
+  }
+
+  // Trigger (c): closing a child project's ^prj can empty its parent's
+  // Sub-projects marker. Treat only the closed child links as resolved.
+  for (const [parentPath, closedChildPaths] of projectPullInParentPathMap(
+    closed,
+    noteTexts,
+    notePaths,
+  )) {
+    const surface = cachedSurface(
+      projectNoteTextFor(noteTexts, parentPath),
+      parentPath,
+      closedChildPaths,
+    );
+    const preds = closed.filter((identity) =>
+      identity && projectIdentityIsPrj(identity) &&
+      closedChildPaths.has(String(identity.path || ""))
+    );
+    addCandidate(surface, preds, { parentPullIn: true });
   }
 
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [];
@@ -622,11 +641,34 @@ function planProjectPullIns(options = {}) {
   const locations = new Set();
   const cascadePaths = new Set();
 
-  for (const { surface, preds } of candidates.values()) {
+  for (const { surface, preds, parentPullIn } of candidates.values()) {
     const task = surface.task;
     const key = projectLocationKey(task.path, task.line);
     locations.add(key);
     const predecessorRows = projectPredecessorRows(preds);
+    if (prjInheritsBlock(task.rawLine)) {
+      const target = projectParentTarget(
+        projectNoteTextFor(noteTexts, task.path),
+      );
+      const parentPath = resolveProjectParentPath(
+        target,
+        task.path,
+        notePaths,
+      );
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: projectPullInDisplayText(task, task.rawLine),
+        status_symbol: task.status,
+        reason: "project",
+        waits_on: 0,
+        scheduled: null,
+        project: parentPath || target || task.path,
+        trigger: "project_empty",
+      });
+      continue;
+    }
     const postOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
     if (postOpen.length > 0) {
       stillBlocked.push({
@@ -676,6 +718,16 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
+    if (cancelledClose && parentPullIn) {
+      recovers.push({
+        task,
+        reason: "cancelled",
+        predecessorRows,
+        pullIn: true,
+        hideRemoved,
+      });
+      continue;
+    }
     if (!hasAnchor) {
       recovers.push({
         task,
@@ -686,10 +738,20 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
-    if (cancelledClose || !linkUnblocked) {
+    if (cancelledClose) {
       recovers.push({
         task,
-        reason: cancelledClose ? "cancelled" : "disabled",
+        reason: "cancelled",
+        predecessorRows,
+        pullIn: true,
+        hideRemoved,
+      });
+      continue;
+    }
+    if (!linkUnblocked) {
+      recovers.push({
+        task,
+        reason: "disabled",
         predecessorRows,
         pullIn: true,
         hideRemoved,

@@ -227,7 +227,8 @@ function projectHasOpenDependency(project, openIds, closedIds = new Set()) {
 }
 
 function projectIsBlockedAfter(project, openIds, today, closedIds = new Set()) {
-  return projectHasFutureSchedule(project, today) ||
+  return !!(project && prjInheritsBlock(project.projectTask.lineText)) ||
+    projectHasFutureSchedule(project, today) ||
     projectHasOpenDependency(project, openIds, closedIds);
 }
 
@@ -256,6 +257,9 @@ function projectSuccessorRecoveryMembers(projectInfoByPath, recoveryPaths) {
   const members = [];
   for (const path of recoveryPaths || []) {
     const project = projectInfoByPath.get(path);
+    if (project && prjInheritsBlock(project.projectTask.lineText)) {
+      continue;
+    }
     for (const task of project ? project.tasks : []) {
       if (
         task.blockId === "prj" || task.status !== "?" ||
@@ -283,6 +287,9 @@ function projectSuccessorTagStripEdits(projectInfoByPath, recoveryPaths, openIds
   const edits = [];
   for (const path of recoveryPaths || []) {
     const project = projectInfoByPath.get(path);
+    if (project && prjInheritsBlock(project.projectTask.lineText)) {
+      continue;
+    }
     for (const task of project ? project.tasks : []) {
       if (task.blockId === "prj" || !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
           !hasProjectBlockedResidentTag(task.lineText)) continue;
@@ -309,9 +316,12 @@ function isProjectBlockedResidentTaskInDocument(sourceText, path, line) {
     line,
   );
   if (
-    !task || task.blockId === "prj" || task.status !== "?" ||
+    !task || task.status !== "?" ||
     !hasProjectBlockedResidentTag(task.lineText)
   ) {
+    return false;
+  }
+  if (task.blockId === "prj" && !projectDependencyInfo(sourceText, path)) {
     return false;
   }
   return true;
@@ -329,6 +339,12 @@ function projectBlockedResidentNotice(sourceText, path, line, today = formatLoca
     return null;
   }
   const project = projectDependencyInfo(sourceText, path);
+  if (project && prjInheritsBlock(resident.lineText)) {
+    const parent = projectParentTarget(sourceText);
+    return parent
+      ? `Project blocked by parent project · ${parent}`
+      : "Project blocked by parent project";
+  }
   if (!project) {
     return `Project blocked · resolve the project's ^prj reason in ${path}`;
   }

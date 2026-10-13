@@ -94,6 +94,9 @@ function dependencyIdIsOpen(id, tasks, openIds) {
 }
 
 function projectHasRemainingBlockingReason(project, today, openIds) {
+  if (project && prjInheritsBlock(project.projectTask.lineText)) {
+    return true;
+  }
   if (projectHasFutureSchedule(project, today)) {
     return true;
   }
@@ -119,6 +122,9 @@ function planProjectResidentRecoveryEdits(sourceText, path, options = {}) {
   const today = options.today || formatLocalDate();
   const openIds = asProjectRecoveryIdSet(options.openIds);
   const project = projectDependencyInfo(sourceText, path);
+  if (project && prjInheritsBlock(project.projectTask.lineText)) {
+    return [];
+  }
   // No open `^prj` means the note is not project(T) and has no project
   // reason: recover tagged open residents the same way as an unblocked
   // `^prj` (Alt+[ to Cancelled, or any cycle out of Blocked).
@@ -244,6 +250,9 @@ async function applyProjectResidentRecovery(plugin, sourceText, path, context) {
     ? plugin.getScheduleLogDateString()
     : formatLocalDate();
   const project = projectDependencyInfo(sourceText, path);
+  if (project && prjInheritsBlock(project.projectTask.lineText)) {
+    return;
+  }
   const tasks = projectResidentRecoveryTasks(sourceText, path, project);
   const openIds = await resolveProjectRecoveryOpenIds(plugin, tasks, context);
   const markUnblockedLine = plugin &&

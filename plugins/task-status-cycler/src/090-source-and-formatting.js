@@ -579,9 +579,10 @@ function getPlainListItemFormattingTarget(lineText) {
 
 function getPlainBulletFormatToggle(lineText, direction) {
   const line = String(lineText || "");
-  // Depends-On lines are managed by the dependency stage; Alt+]/Alt+[ cycle
-  // the link under the cursor there and must never reformat the bullet.
-  if (isTaskDependencyLine(line)) {
+  // Managed dependency lines are managed elsewhere; Alt+]/Alt+[ cycle the
+  // link under the cursor there and must never reformat the bullet (MC:
+  // BLOCKS cycles the dependent like Depends-On).
+  if (isManagedDependencyLine(line)) {
     return null;
   }
   const target = getPlainListItemFormattingTarget(line);

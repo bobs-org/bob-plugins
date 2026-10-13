@@ -366,8 +366,13 @@ function findTransclusionToggleTargets(line) {
   const text = String(line || "");
   // A Depends-On line is never a transclusion target: `!` is refused there
   // and dependencies are edited through Ctrl+Shift+P instead
-  // (`docs/task-dependencies.md` §7).
+  // (`docs/task-dependencies.md` §7). A BLOCKS line is a generated mirror
+  // (Rule 8, MC5): `!` is refused there too. (BK20: each parser returns
+  // not-a-line for the other's line, so both checks are needed.)
   if (parseDependencyLine(text, {}).verdict !== "not-a-line") {
+    return [];
+  }
+  if (parseBlocksLine(text, {}).verdict !== "not-a-line") {
     return [];
   }
   const dependencyBullet = parseDependencyTransclusionBulletDetails(text);

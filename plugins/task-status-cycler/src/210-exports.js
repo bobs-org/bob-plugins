@@ -215,6 +215,8 @@ module.exports.helpers = {
   prjInheritsBlock,
   parseEmbeddedBlockTransclusions,
   isTaskDependencyLine,
+  isTaskBlocksLine,
+  isManagedDependencyLine,
   isCanonicalDailyNotePath,
   isProjectBlockedResidentTaskInDocument,
   projectBlockedResidentNotice,

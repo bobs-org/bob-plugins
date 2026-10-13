@@ -492,6 +492,13 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (!plan) {
       return Object.freeze({ mirrored: false });
     }
+    // BW12 + Rule 8: a burst confined to a BLOCKS mirror line never changes
+    // edges. Show the generated-line notice once (this runs once per burst)
+    // and write nothing; reconcile restores the line.
+    if (plan.kind === "blocks-only") {
+      new Notice(BLOCKS_GENERATED_LINE_NOTICE);
+      return Object.freeze({ mirrored: false, reason: "blocks-only" });
+    }
     if (plan.kind === "touch") {
       // A touch projects the hand-edited line into the field with the same
       // status effects as the stage (block on a hand-added open
@@ -616,9 +623,19 @@ class BobNavigationHotkeysDependencyMirrorMixin {
 
   // CM6 update-listener entry for the hand-edit mirror: reads the real
   // changed ranges from the update (never `editor-change`, which carries no
-  // change object). Skips IME composition and open modals.
+  // change object). Skips IME composition and open modals. Machine BLOCKS
+  // writes carry an annotation the listener skips, so a programmatic mirror
+  // write never re-arms the mirror.
   scheduleDependencyHandEditMirrorFromUpdate(update) {
     if (!update || !update.docChanged) {
+      return;
+    }
+    if (
+      update &&
+      typeof update === "object" &&
+      (update.blocksMachineWrite === true ||
+        update.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION)
+    ) {
       return;
     }
     const view = update.view || null;

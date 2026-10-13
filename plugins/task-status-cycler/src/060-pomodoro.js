@@ -541,6 +541,12 @@ function classifyPomodoroSubBullets(lines, range) {
       noteBullets.push({ line, lineText });
       continue;
     }
+    // MC1/MC2: neither managed dependency line is ever a Task Link (this
+    // also fixes the latent Depends-On miscount).
+    if (isManagedDependencyLine(lineText)) {
+      noteBullets.push({ line, lineText });
+      continue;
+    }
 
     const embeddedTargets = parseEmbeddedBlockTransclusions(lineText);
 

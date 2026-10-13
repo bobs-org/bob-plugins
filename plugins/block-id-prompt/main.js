@@ -69,6 +69,8 @@ const TASK_LINK_DEPENDENCY_NOTICE =
   "Task link is a sub-task dependency; edit dependencies instead";
 const TASK_DEPENDENCY_LINE_NOTICE =
   "⛓ Dependency link — edit it with Ctrl+Shift+P";
+const TASK_BLOCKS_LINE_NOTICE =
+  "🧱 BLOCKS is generated from DEPENDS ON lines · change it on the dependent (Ctrl+Shift+P)";
 const TASK_LINK_CLOSED_NOTICE =
   "Task link target is closed; use Ctrl+Enter to reopen it";
 const TASK_LINK_NOT_A_TASK_NOTICE = "Task link does not point to a task";
@@ -3363,6 +3365,10 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     if (reference.oldId !== targetBlockId) {
       continue;
     }
+    // MC1/MC2: neither managed dependency line is ever a Task Link.
+    if (isManagedDependencyLine(lines[reference.line] || "")) {
+      continue;
+    }
 
     const pomodoroRange = ranges.find(
       (range) =>
@@ -3758,6 +3764,63 @@ function isMalformedTaskDependencyLine(lineText) {
     return false;
   }
   return !isTaskDependencyLine(lineText);
+}
+
+// BLOCKS line recogniser (contract docs/task-dependencies.md §14, BK
+// vectors). Copied per-plugin: deployed plugins must not import one
+// another's main.js. Writer form `🧱 **BLOCKS:**` plus reader tolerance
+// (missing emoji, `🚧` / `⛓️` / `⛓`, `BLOCKING` label, `•` / `·` / `,` /
+// whitespace separators, aliased / struck / embedded links). True for
+// accept, empty, and malformed (every verdict but not-a-line). BK16
+// (lowercase), BK17 (BLOCKED BY), BK18 (fenced/grandchild/Work-Log/
+// blockquoted/marker-less) stay false. BK20: a Depends-On line is never a
+// BLOCKS line. Glyph decision: brick (`🧱`).
+const TASK_BLOCKS_LINE_LINK_RE = /(?:~~)?!?(?:~~)?\[\[[^\]\n]+\]\](?:~~)?/g;
+const TASK_BLOCKS_LINE_REMAINDER_RE =
+  /^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*[ \t•·,]*$/u;
+
+function isTaskBlocksLine(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  const prefix = LIST_ITEM_PREFIX_RE.exec(line);
+  if (!prefix) {
+    return false;
+  }
+  const body = line.slice(prefix[0].length);
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  const remainder = body.replace(TASK_BLOCKS_LINE_LINK_RE, "");
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  if (remainder === body) {
+    // No block links: only a bare label line (BK12 empty) still counts.
+    return TASK_BLOCKS_LINE_REMAINDER_RE.test(body);
+  }
+  return TASK_BLOCKS_LINE_REMAINDER_RE.test(remainder);
+}
+
+// A malformed BLOCKS line (BK13 half-typed, BK14 trailing/prose-only) is
+// refused by Ctrl+Shift+Enter with the BLOCKS notice instead of deleting
+// the link token. BK15 variants stay guard-true through `isTaskBlocksLine`
+// instead. Every not-a-line vector stays false here.
+function isMalformedTaskBlocksLine(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  if (!LIST_ITEM_PREFIX_RE.test(line)) {
+    return false;
+  }
+  if (!/\*\*(?:BLOCKS|BLOCKING):\*\*/.test(line)) {
+    return false;
+  }
+  return !isTaskBlocksLine(lineText);
+}
+
+// True for either managed dependency line (Depends-On or BLOCKS, accepted
+// or malformed). Neither line is ever a Task Link (Rule 11, MC1/MC2).
+function isManagedDependencyLine(lineText) {
+  const text = String(lineText || "");
+  return (
+    isTaskDependencyLine(text) ||
+    isMalformedTaskDependencyLine(text) ||
+    isTaskBlocksLine(text) ||
+    isMalformedTaskBlocksLine(text)
+  );
 }
 
 // An embedded link that is the sole content of a direct child bullet of a
@@ -4616,6 +4679,10 @@ function collectPomodoroEntryBlockLinks(lines, entryLine, entryEndLine) {
   const links = [];
   for (let line = entryLine; line <= entryEndLine; line += 1) {
     const lineText = normalizeMarkdownLine(lines[line] || "");
+    // MC1/MC2: neither managed dependency line is ever a Task Link.
+    if (isManagedDependencyLine(lineText)) {
+      continue;
+    }
     let match = null;
     WIKI_LINK_RE.lastIndex = 0;
     while ((match = WIKI_LINK_RE.exec(lineText)) !== null) {
@@ -8557,6 +8624,12 @@ class BlockIdPromptPomodoroLinksMixin {
         new Notice(TASK_DEPENDENCY_LINE_NOTICE);
         return;
       }
+      // MC5 + Rule 8: `!` / Ctrl+Shift+Enter on a BLOCKS mirror is refused
+      // with the generated-line notice, never a Task Link open.
+      if (isTaskBlocksLine(lineText) || isMalformedTaskBlocksLine(lineText)) {
+        new Notice(TASK_BLOCKS_LINE_NOTICE);
+        return;
+      }
       if (
         isDependencyTransclusionLink(editor.getValue().split("\n"), lineNumber, link)
       ) {
@@ -9543,6 +9616,11 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     const activeLineText = activeContent.split("\n")[source.line];
     if (isTaskDependencyLine(activeLineText) || isMalformedTaskDependencyLine(activeLineText)) {
       new Notice(TASK_DEPENDENCY_LINE_NOTICE);
+      return false;
+    }
+    // MC5 + Rule 8: refuse with the generated-line notice on a BLOCKS mirror.
+    if (isTaskBlocksLine(activeLineText) || isMalformedTaskBlocksLine(activeLineText)) {
+      new Notice(TASK_BLOCKS_LINE_NOTICE);
       return false;
     }
     if (isDependencyTransclusionLink(activeContent.split("\n"), source.line, link)) {
@@ -10857,6 +10935,10 @@ module.exports.helpers = {
   isSoleContentLinkBullet,
   isTaskDependencyLine,
   isMalformedTaskDependencyLine,
+  isTaskBlocksLine,
+  isMalformedTaskBlocksLine,
+  isManagedDependencyLine,
+  TASK_BLOCKS_LINE_NOTICE,
   lineIsInsideCodeFence,
   listItemBodyBounds,
   localTodayParts,
@@ -10875,6 +10957,8 @@ module.exports.helpers = {
   partitionTaskPickerItems,
   planAllOpenPomodoroLinkCleanup,
   planFuturePomodoroLinkCleanup,
+  planPomodoroLinkCleanupForRanges,
+  collectPomodoroEntryBlockLinks,
   planPomodoroLinkInsertion,
   planTaskLinkBlockConsumption,
   planTargetTaskUpdate,

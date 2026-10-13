@@ -67,6 +67,8 @@ const TASK_LINK_DEPENDENCY_NOTICE =
   "Task link is a sub-task dependency; edit dependencies instead";
 const TASK_DEPENDENCY_LINE_NOTICE =
   "⛓ Dependency link — edit it with Ctrl+Shift+P";
+const TASK_BLOCKS_LINE_NOTICE =
+  "🧱 BLOCKS is generated from DEPENDS ON lines · change it on the dependent (Ctrl+Shift+P)";
 const TASK_LINK_CLOSED_NOTICE =
   "Task link target is closed; use Ctrl+Enter to reopen it";
 const TASK_LINK_NOT_A_TASK_NOTICE = "Task link does not point to a task";

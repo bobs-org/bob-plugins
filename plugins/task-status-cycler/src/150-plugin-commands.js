@@ -688,10 +688,11 @@ class TaskStatusCyclerCommandsMixin {
         continue;
       }
 
-      // Depends-On lines cycle the prerequisite under the cursor (cursor-ch
-      // only on the start line; a lone link is unambiguous elsewhere), with
-      // the same resolve-and-cycle worker as transcluded targets.
-      const target = isTaskDependencyLine(lineText)
+      // Managed dependency lines cycle the link under the cursor
+      // (cursor-ch only on the start line; a lone link is unambiguous
+      // elsewhere), with the same resolve-and-cycle worker as transcluded
+      // targets. On a BLOCKS line this is the dependent (Rule 8).
+      const target = isManagedDependencyLine(lineText)
         ? getTaskBlockLinkTargetFromLine(
             lineText,
             activePath,
@@ -705,9 +706,9 @@ class TaskStatusCyclerCommandsMixin {
             line === startLine ? cursor.ch : null,
           );
       if (!target) {
-        // As in the single form, a Depends-On start line with the cursor
-        // off every link reports instead of silently doing nothing.
-        if (line === startLine && isTaskDependencyLine(lineText)) {
+        // As in the single form, a managed-dependency start line with the
+        // cursor off every link reports instead of silently doing nothing.
+        if (line === startLine && isManagedDependencyLine(lineText)) {
           startDepLineUntargeted = true;
         }
         continue;

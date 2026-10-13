@@ -469,6 +469,12 @@ class BlockIdPromptPomodoroLinksMixin {
         new Notice(TASK_DEPENDENCY_LINE_NOTICE);
         return;
       }
+      // MC5 + Rule 8: `!` / Ctrl+Shift+Enter on a BLOCKS mirror is refused
+      // with the generated-line notice, never a Task Link open.
+      if (isTaskBlocksLine(lineText) || isMalformedTaskBlocksLine(lineText)) {
+        new Notice(TASK_BLOCKS_LINE_NOTICE);
+        return;
+      }
       if (
         isDependencyTransclusionLink(editor.getValue().split("\n"), lineNumber, link)
       ) {

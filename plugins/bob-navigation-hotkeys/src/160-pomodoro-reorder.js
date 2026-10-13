@@ -586,6 +586,10 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
         continue;
       }
       const lineText = String(lines[line] || "");
+      // MC1/MC2: neither managed dependency line is ever a Task Link.
+      if (isManagedDependencyLine(lineText)) {
+        continue;
+      }
       const occurrences = collectPomodoroBlockLinkOccurrences(lineText);
       for (const occurrence of occurrences) {
         if (occurrence.struck) {

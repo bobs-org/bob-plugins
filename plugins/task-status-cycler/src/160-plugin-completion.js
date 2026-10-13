@@ -455,11 +455,12 @@ class TaskStatusCyclerCompletionMixin {
       return { resolved: false, changed: false };
     }
 
-    // A link on a Depends-On line closes or reopens its prerequisite target
+    // A link on a managed dependency line closes or reopens its target
     // root-only: the Blocked-dependent recovery in finalizeClosedTasks still
     // runs, but nothing is ever struck, restored, or embedded on the line and
-    // no transcluded tree is closed.
-    const onDependencyLine = isTaskDependencyLine(candidate.activeLineText);
+    // no transcluded tree is closed. On a BLOCKS line this is the dependent
+    // under the cursor (Rule 8).
+    const onDependencyLine = isManagedDependencyLine(candidate.activeLineText);
 
     const context = {
       editor,

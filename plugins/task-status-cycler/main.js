@@ -2612,8 +2612,9 @@ function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLi
   const targets = [];
   for (let line = range.startLine + 1; line <= range.endLine; line += 1) {
     // Depends-On lines hold the dependent's prerequisites, which closing the
-    // dependent must never close.
-    if (isTaskDependencyLine(lines[line])) {
+    // dependent must never close. BLOCKS lines hold the reverse mirror
+    // (MC3): closing T must never close D through `![[#^d]]` there.
+    if (isTaskDependencyLine(lines[line]) || isTaskBlocksLine(lines[line])) {
       continue;
     }
     for (const target of parseEmbeddedBlockTransclusions(lines[line])) {
@@ -3052,6 +3053,65 @@ function isTaskDependencyLine(lineText) {
     }
   }
   return false;
+}
+
+// BLOCKS line recogniser (contract docs/task-dependencies.md §14, BK
+// vectors). Copied per-plugin like `isTaskDependencyLine`: deployed plugins
+// must not import one another's main.js. Writer form `🧱 **BLOCKS:**` plus
+// reader tolerance (missing emoji, `🚧` / `⛓️` / `⛓`, `BLOCKING` label, `•` /
+// `·` / `,` / whitespace separators, aliased / struck / embedded links).
+// True for accept, empty, and malformed (every verdict but not-a-line).
+// BK16 (lowercase), BK17 (BLOCKED BY), BK18 (fenced/grandchild/Work-Log/
+// blockquoted/marker-less) stay false. BK20: a Depends-On line is never a
+// BLOCKS line. Glyph decision: brick (`🧱`).
+const TASK_BLOCKS_LINE_LINK_RE = /(?:~~)?!?(?:~~)?\[\[[^\]\n]+\]\](?:~~)?/g;
+const TASK_BLOCKS_LINE_REMAINDER_RE =
+  /^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*[ \t•·,]*$/u;
+
+function isTaskBlocksLine(lineText) {
+  const line = String(lineText || "");
+  // BK18: a blockquoted line is never a BLOCKS line.
+  if (/^[ \t]*>/.test(line)) {
+    return false;
+  }
+  const marker = line.match(LIST_ITEM_MARKER_RE);
+  if (!marker) {
+    return false;
+  }
+  const body = marker[2] || "";
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  const remainder = body.replace(TASK_BLOCKS_LINE_LINK_RE, "");
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  if (TASK_BLOCKS_LINE_REMAINDER_RE.test(remainder)) {
+    // Accepted and empty (BK12) lines, plus the malformed vectors whose
+    // links strip cleanly (BK15 bare/heading links, separator-only): all
+    // guarded.
+    return true;
+  }
+  // Malformed lines (BK13 half-typed, BK14 trailing prose) are still managed
+  // lines: guard them exactly like accepted ones. Only the not-a-line
+  // vectors stay unguarded (BK16 lowercase has no label match; BK17
+  // BLOCKED BY has no label match; BK18 no marker rejected above).
+  if (/\*\*(?:BLOCKS|BLOCKING):\*\*/.test(body) && /(\[\[|\]\])/.test(body)) {
+    return true;
+  }
+  // BK14 prose-only variant: the label shape leads the line but prose
+  // follows with no block link. Guard it so the cycler never strikes or
+  // reformats it.
+  if (/^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*/u.test(body)) {
+    const afterLabel = body.replace(/^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*/u, "");
+    if (/[^\s•·,]/.test(afterLabel)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// True for either managed dependency line (Depends-On or BLOCKS, any verdict
+// but not-a-line). Neither line is ever a Task Link (Rule 11, MC1/MC2).
+function isManagedDependencyLine(lineText) {
+  const text = String(lineText || "");
+  return isTaskDependencyLine(text) || isTaskBlocksLine(text);
 }
 
 // ---- src/060-pomodoro.js ----
@@ -3595,6 +3655,12 @@ function classifyPomodoroSubBullets(lines, range) {
   for (let line = range.startLine; line < range.endLine; line += 1) {
     const lineText = stripPomodoroMarkersFromLine(lines[line]);
     if (fenced.has(line)) {
+      noteBullets.push({ line, lineText });
+      continue;
+    }
+    // MC1/MC2: neither managed dependency line is ever a Task Link (this
+    // also fixes the latent Depends-On miscount).
+    if (isManagedDependencyLine(lineText)) {
       noteBullets.push({ line, lineText });
       continue;
     }
@@ -5033,7 +5099,8 @@ function retireClosedTaskReferencesInText(
     if (
       fenced.has(lineNumber) ||
       !lines[lineNumber].includes("![[") ||
-      isTaskDependencyLine(lines[lineNumber])
+      isTaskDependencyLine(lines[lineNumber]) ||
+      isTaskBlocksLine(lines[lineNumber])
     ) {
       continue;
     }
@@ -5113,7 +5180,8 @@ function restoreReopenedTaskReferencesInText(
     if (
       fenced.has(lineNumber) ||
       !lines[lineNumber].includes("[[") ||
-      isTaskDependencyLine(lines[lineNumber])
+      isTaskDependencyLine(lines[lineNumber]) ||
+      isTaskBlocksLine(lines[lineNumber])
     ) {
       continue;
     }
@@ -5558,11 +5626,12 @@ function successorTokenSpansListBody(lineText, startIndex, endIndex) {
 
 // Whether a single sub-bullet line is a live Task Link: after stripping 🍅
 // markers, its body is exactly one block link (plain, embed, or
-// `#`-deferred) and the link is unstruck. Struck links and Depends-On lines
-// are history, not plans. Returns `{ pathPart, blockId, embedded }` or null.
+// `#`-deferred) and the link is unstruck. Struck links and managed
+// dependency lines (MC1/MC2) are history, not plans. Returns
+// `{ pathPart, blockId, embedded }` or null.
 function parseSuccessorLiveLink(lineText) {
   const stripped = stripPomodoroMarkersFromLine(lineText);
-  if (isTaskDependencyLine(stripped)) {
+  if (isManagedDependencyLine(stripped)) {
     return null;
   }
   const spans = getStrikethroughSpans(stripped);
@@ -10596,9 +10665,10 @@ function getPlainListItemFormattingTarget(lineText) {
 
 function getPlainBulletFormatToggle(lineText, direction) {
   const line = String(lineText || "");
-  // Depends-On lines are managed by the dependency stage; Alt+]/Alt+[ cycle
-  // the link under the cursor there and must never reformat the bullet.
-  if (isTaskDependencyLine(line)) {
+  // Managed dependency lines are managed elsewhere; Alt+]/Alt+[ cycle the
+  // link under the cursor there and must never reformat the bullet (MC:
+  // BLOCKS cycles the dependent like Depends-On).
+  if (isManagedDependencyLine(line)) {
     return null;
   }
   const target = getPlainListItemFormattingTarget(line);
@@ -16453,10 +16523,11 @@ class TaskStatusCyclerCommandsMixin {
         continue;
       }
 
-      // Depends-On lines cycle the prerequisite under the cursor (cursor-ch
-      // only on the start line; a lone link is unambiguous elsewhere), with
-      // the same resolve-and-cycle worker as transcluded targets.
-      const target = isTaskDependencyLine(lineText)
+      // Managed dependency lines cycle the link under the cursor
+      // (cursor-ch only on the start line; a lone link is unambiguous
+      // elsewhere), with the same resolve-and-cycle worker as transcluded
+      // targets. On a BLOCKS line this is the dependent (Rule 8).
+      const target = isManagedDependencyLine(lineText)
         ? getTaskBlockLinkTargetFromLine(
             lineText,
             activePath,
@@ -16470,9 +16541,9 @@ class TaskStatusCyclerCommandsMixin {
             line === startLine ? cursor.ch : null,
           );
       if (!target) {
-        // As in the single form, a Depends-On start line with the cursor
-        // off every link reports instead of silently doing nothing.
-        if (line === startLine && isTaskDependencyLine(lineText)) {
+        // As in the single form, a managed-dependency start line with the
+        // cursor off every link reports instead of silently doing nothing.
+        if (line === startLine && isManagedDependencyLine(lineText)) {
           startDepLineUntargeted = true;
         }
         continue;
@@ -17107,11 +17178,12 @@ class TaskStatusCyclerCompletionMixin {
       return { resolved: false, changed: false };
     }
 
-    // A link on a Depends-On line closes or reopens its prerequisite target
+    // A link on a managed dependency line closes or reopens its target
     // root-only: the Blocked-dependent recovery in finalizeClosedTasks still
     // runs, but nothing is ever struck, restored, or embedded on the line and
-    // no transcluded tree is closed.
-    const onDependencyLine = isTaskDependencyLine(candidate.activeLineText);
+    // no transcluded tree is closed. On a BLOCKS line this is the dependent
+    // under the cursor (Rule 8).
+    const onDependencyLine = isManagedDependencyLine(candidate.activeLineText);
 
     const context = {
       editor,
@@ -19219,8 +19291,10 @@ class TaskStatusCyclerTargetsMixin {
     );
   }
 
-  // Whether the cursor sits on a Depends-On line. Gestures key off the line
-  // shape; the fenced-code and task-parentage rules stay hooks concerns.
+  // Whether the cursor sits on a managed dependency line (Depends-On or
+  // BLOCKS). Gestures key off the line shape; the fenced-code and
+  // task-parentage rules stay hooks concerns. BLOCKS cycles the dependent
+  // under the cursor without reformatting (Rule 8).
   isActiveTaskDependencyLine(editor) {
     if (
       !editor ||
@@ -19235,12 +19309,13 @@ class TaskStatusCyclerTargetsMixin {
       return false;
     }
 
-    return isTaskDependencyLine(editor.getLine(cursor.line));
+    return isManagedDependencyLine(editor.getLine(cursor.line));
   }
 
-  // The dependency link under the cursor on a Depends-On line (plain,
-  // embedded, or struck while canonicalisation is pending), or null when the
-  // active line is not one or the cursor names no single link.
+  // The dependency link under the cursor on a managed dependency line
+  // (plain, embedded, or struck while canonicalisation is pending), or null
+  // when the active line is not one or the cursor names no single link.
+  // On a BLOCKS line this is the dependent under the cursor (Rule 8).
   getActiveTaskDependencyLinkTarget(editor, sourcePath) {
     if (
       !sourcePath ||
@@ -19257,7 +19332,7 @@ class TaskStatusCyclerTargetsMixin {
     }
 
     const lineText = editor.getLine(cursor.line);
-    if (!isTaskDependencyLine(lineText)) {
+    if (!isManagedDependencyLine(lineText)) {
       return null;
     }
 
@@ -20261,6 +20336,8 @@ module.exports.helpers = {
   prjInheritsBlock,
   parseEmbeddedBlockTransclusions,
   isTaskDependencyLine,
+  isTaskBlocksLine,
+  isManagedDependencyLine,
   isCanonicalDailyNotePath,
   isProjectBlockedResidentTaskInDocument,
   projectBlockedResidentNotice,

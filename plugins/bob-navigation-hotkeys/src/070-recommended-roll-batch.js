@@ -818,7 +818,69 @@ function planDependencyHandEditMirror(
   if (removedDependsOn && field) {
     return Object.freeze({ kind: "clear-field", owning });
   }
+  // BW12: a hand edit confined to a BLOCKS mirror line is never an edge
+  // change. Report it as `blocks-only` so the caller shows the Rule 8
+  // generated-line notice once per burst; reconcile restores the line.
+  if (handEditTouchesBlocksLine(oldLines, lines, owning, removed)) {
+    return Object.freeze({ kind: "blocks-only", owning });
+  }
   return null;
+}
+
+// True when the burst's only change under the owning task touches a BLOCKS
+// line: the edited line is one, a BLOCKS child differs between snapshots, or
+// removed text held one. Depends-On state is unchanged by construction here
+// (callers reach this only after the touch/clear paths miss).
+function handEditTouchesBlocksLine(oldLines, newLines, owning, removedLines) {
+  const removed = Array.isArray(removedLines) ? removedLines : [];
+  if (
+    removed.some(
+      (line) => parseBlocksLine(String(line || ""), {}).verdict !== "not-a-line",
+    )
+  ) {
+    return true;
+  }
+  const at = Math.floor(numericOrDefault(owning, Number.NaN));
+  const candidates = new Set();
+  if (Number.isFinite(at) && at >= 0) {
+    candidates.add(at);
+  }
+  for (const lines of [oldLines, newLines]) {
+    if (!Array.isArray(lines) || !Number.isFinite(at)) {
+      continue;
+    }
+    if (at >= 0 && at < lines.length) {
+      candidates.add(at);
+    }
+    const block = findCurrentBulletChildBlock(lines, at);
+    for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+      if (findNearestParentListItem(lines, index) !== at) {
+        continue;
+      }
+      if (
+        parseBlocksLine(String(lines[index] || ""), {
+          isDirectChildOfTask: true,
+        }).verdict !== "not-a-line"
+      ) {
+        candidates.add(index);
+      }
+    }
+  }
+  const oldText = Array.isArray(oldLines) ? oldLines : [];
+  const nextText = Array.isArray(newLines) ? newLines : [];
+  for (const line of candidates) {
+    if (String(oldText[line] || "") !== String(nextText[line] || "")) {
+      const before = String(oldText[line] || "");
+      const after = String(nextText[line] || "");
+      if (
+        parseBlocksLine(before, {}).verdict !== "not-a-line" ||
+        parseBlocksLine(after, {}).verdict !== "not-a-line"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // ---------- Depends-On identity, link form, planner, and writer ----------

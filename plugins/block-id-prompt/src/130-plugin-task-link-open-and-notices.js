@@ -23,6 +23,11 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       new Notice(TASK_DEPENDENCY_LINE_NOTICE);
       return false;
     }
+    // MC5 + Rule 8: refuse with the generated-line notice on a BLOCKS mirror.
+    if (isTaskBlocksLine(activeLineText) || isMalformedTaskBlocksLine(activeLineText)) {
+      new Notice(TASK_BLOCKS_LINE_NOTICE);
+      return false;
+    }
     if (isDependencyTransclusionLink(activeContent.split("\n"), source.line, link)) {
       new Notice(TASK_LINK_DEPENDENCY_NOTICE);
       return false;

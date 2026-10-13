@@ -662,10 +662,13 @@ function editorSelectionSpansTasks(cm, content) {
   }
 }
 
-// Entry-point resolution (`docs/task-dependencies.md` §6.1): anywhere on a
-// Depends-On line resolves to the owning task and skips the property step;
-// a `#task` line (or any other line of its block) resolves to the owning
-// task through the property step; prose with no owning task is refused.
+// Entry-point resolution (`docs/task-dependencies.md` §6.1, §14 Rule 8):
+// anywhere on a Depends-On line resolves to the owning task and skips the
+// property step; anywhere on a BLOCKS mirror line resolves to the owning
+// task through the property step (its Task Card / Depends on stage), never
+// to the chip under the cursor; a `#task` line (or any other line of its
+// block) resolves to the owning task through the property step; prose with
+// no owning task is refused.
 function resolveDependencyStageEntry(content, line) {
   const text = String(content || "");
   const lines = text.split(/\r?\n/);
@@ -686,6 +689,20 @@ function resolveDependencyStageEntry(content, line) {
       ok: true,
       parentLine: owning,
       skipPropertyStep: true,
+      reason: null,
+    });
+  }
+  // Rule 8 (BK20): a BLOCKS line acts on the owning task, never on the chip
+  // under the cursor. Route through the property step so the owner’s Task
+  // Card / Depends on stage opens.
+  if (
+    parseBlocksLine(String(lines[at] || ""), { isDirectChildOfTask: true })
+      .verdict !== "not-a-line"
+  ) {
+    return Object.freeze({
+      ok: true,
+      parentLine: owning,
+      skipPropertyStep: false,
       reason: null,
     });
   }

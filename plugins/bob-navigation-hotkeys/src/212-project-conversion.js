@@ -46,9 +46,23 @@ function collectProjectSourceDependencyBlock(content, parentLine) {
   });
 }
 
+// Named recogniser for the machine-owned Sub-projects child (Rule 11, MC7):
+// never claims a BLOCKS line and the BLOCKS parser never claims it.
+function isProjectSubprojectsLine(lineText) {
+  const text = String(lineText || "");
+  if (parseBlocksLine(text, {}).verdict !== "not-a-line") {
+    return false;
+  }
+  if (parseDependencyLine(text, {}).verdict !== "not-a-line") {
+    return false;
+  }
+  return /\*\*\s*Sub-projects?\s*:?\s*\*\*/i.test(text);
+}
+
 // On reversal, the managed dependency child moves first. The machine-owned
 // Sub-projects child and its nested links describe note hierarchy, not task
-// content, so it is dropped with its whole subtree.
+// content, so it is dropped with its whole subtree. A BLOCKS mirror line is
+// generated (Rule 1, BW18): it is never copied as a user child either.
 function splitProjectLifecycleChildren(parentLine, childLines) {
   const children = Array.isArray(childLines) ? childLines.map(String) : [];
   const synthetic = [String(parentLine || ""), ...children];
@@ -81,7 +95,14 @@ function splitProjectLifecycleChildren(parentLine, childLines) {
       for (let index = start; index < end; index += 1) skipped.add(index);
       continue;
     }
-    if (/\*\*\s*Sub-projects?\s*:?\s*\*\*/i.test(line)) {
+    // BW18 + MC7: a BLOCKS mirror is never copied as a user child; drop it
+    // like Sub-projects. Owners naming the converted source are left to
+    // reconcile.
+    if (parseBlocksLine(line, {}).verdict !== "not-a-line") {
+      for (let index = start; index < end; index += 1) skipped.add(index);
+      continue;
+    }
+    if (isProjectSubprojectsLine(line)) {
       for (let index = start; index < end; index += 1) skipped.add(index);
     }
   }

@@ -8,6 +8,7 @@
   "060-decay-card-modal.js",
   "070-recommended-roll-batch.js",
   "080-dependency-identity.js",
+  "081-blocks-line-grammar.js",
   "090-local-task-ids.js",
   "100-yank-and-paths.js",
   "110-project-seed.js",

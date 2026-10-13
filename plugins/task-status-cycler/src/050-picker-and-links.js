@@ -383,8 +383,9 @@ function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLi
   const targets = [];
   for (let line = range.startLine + 1; line <= range.endLine; line += 1) {
     // Depends-On lines hold the dependent's prerequisites, which closing the
-    // dependent must never close.
-    if (isTaskDependencyLine(lines[line])) {
+    // dependent must never close. BLOCKS lines hold the reverse mirror
+    // (MC3): closing T must never close D through `![[#^d]]` there.
+    if (isTaskDependencyLine(lines[line]) || isTaskBlocksLine(lines[line])) {
       continue;
     }
     for (const target of parseEmbeddedBlockTransclusions(lines[line])) {
@@ -823,5 +824,64 @@ function isTaskDependencyLine(lineText) {
     }
   }
   return false;
+}
+
+// BLOCKS line recogniser (contract docs/task-dependencies.md §14, BK
+// vectors). Copied per-plugin like `isTaskDependencyLine`: deployed plugins
+// must not import one another's main.js. Writer form `🧱 **BLOCKS:**` plus
+// reader tolerance (missing emoji, `🚧` / `⛓️` / `⛓`, `BLOCKING` label, `•` /
+// `·` / `,` / whitespace separators, aliased / struck / embedded links).
+// True for accept, empty, and malformed (every verdict but not-a-line).
+// BK16 (lowercase), BK17 (BLOCKED BY), BK18 (fenced/grandchild/Work-Log/
+// blockquoted/marker-less) stay false. BK20: a Depends-On line is never a
+// BLOCKS line. Glyph decision: brick (`🧱`).
+const TASK_BLOCKS_LINE_LINK_RE = /(?:~~)?!?(?:~~)?\[\[[^\]\n]+\]\](?:~~)?/g;
+const TASK_BLOCKS_LINE_REMAINDER_RE =
+  /^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*[ \t•·,]*$/u;
+
+function isTaskBlocksLine(lineText) {
+  const line = String(lineText || "");
+  // BK18: a blockquoted line is never a BLOCKS line.
+  if (/^[ \t]*>/.test(line)) {
+    return false;
+  }
+  const marker = line.match(LIST_ITEM_MARKER_RE);
+  if (!marker) {
+    return false;
+  }
+  const body = marker[2] || "";
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  const remainder = body.replace(TASK_BLOCKS_LINE_LINK_RE, "");
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  if (TASK_BLOCKS_LINE_REMAINDER_RE.test(remainder)) {
+    // Accepted and empty (BK12) lines, plus the malformed vectors whose
+    // links strip cleanly (BK15 bare/heading links, separator-only): all
+    // guarded.
+    return true;
+  }
+  // Malformed lines (BK13 half-typed, BK14 trailing prose) are still managed
+  // lines: guard them exactly like accepted ones. Only the not-a-line
+  // vectors stay unguarded (BK16 lowercase has no label match; BK17
+  // BLOCKED BY has no label match; BK18 no marker rejected above).
+  if (/\*\*(?:BLOCKS|BLOCKING):\*\*/.test(body) && /(\[\[|\]\])/.test(body)) {
+    return true;
+  }
+  // BK14 prose-only variant: the label shape leads the line but prose
+  // follows with no block link. Guard it so the cycler never strikes or
+  // reformats it.
+  if (/^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*/u.test(body)) {
+    const afterLabel = body.replace(/^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*/u, "");
+    if (/[^\s•·,]/.test(afterLabel)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// True for either managed dependency line (Depends-On or BLOCKS, any verdict
+// but not-a-line). Neither line is ever a Task Link (Rule 11, MC1/MC2).
+function isManagedDependencyLine(lineText) {
+  const text = String(lineText || "");
+  return isTaskDependencyLine(text) || isTaskBlocksLine(text);
 }
 

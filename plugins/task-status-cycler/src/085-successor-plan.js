@@ -193,11 +193,12 @@ function successorTokenSpansListBody(lineText, startIndex, endIndex) {
 
 // Whether a single sub-bullet line is a live Task Link: after stripping 🍅
 // markers, its body is exactly one block link (plain, embed, or
-// `#`-deferred) and the link is unstruck. Struck links and Depends-On lines
-// are history, not plans. Returns `{ pathPart, blockId, embedded }` or null.
+// `#`-deferred) and the link is unstruck. Struck links and managed
+// dependency lines (MC1/MC2) are history, not plans. Returns
+// `{ pathPart, blockId, embedded }` or null.
 function parseSuccessorLiveLink(lineText) {
   const stripped = stripPomodoroMarkersFromLine(lineText);
-  if (isTaskDependencyLine(stripped)) {
+  if (isManagedDependencyLine(stripped)) {
     return null;
   }
   const spans = getStrikethroughSpans(stripped);

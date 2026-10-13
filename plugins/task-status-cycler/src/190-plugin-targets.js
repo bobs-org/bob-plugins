@@ -49,8 +49,10 @@ class TaskStatusCyclerTargetsMixin {
     );
   }
 
-  // Whether the cursor sits on a Depends-On line. Gestures key off the line
-  // shape; the fenced-code and task-parentage rules stay hooks concerns.
+  // Whether the cursor sits on a managed dependency line (Depends-On or
+  // BLOCKS). Gestures key off the line shape; the fenced-code and
+  // task-parentage rules stay hooks concerns. BLOCKS cycles the dependent
+  // under the cursor without reformatting (Rule 8).
   isActiveTaskDependencyLine(editor) {
     if (
       !editor ||
@@ -65,12 +67,13 @@ class TaskStatusCyclerTargetsMixin {
       return false;
     }
 
-    return isTaskDependencyLine(editor.getLine(cursor.line));
+    return isManagedDependencyLine(editor.getLine(cursor.line));
   }
 
-  // The dependency link under the cursor on a Depends-On line (plain,
-  // embedded, or struck while canonicalisation is pending), or null when the
-  // active line is not one or the cursor names no single link.
+  // The dependency link under the cursor on a managed dependency line
+  // (plain, embedded, or struck while canonicalisation is pending), or null
+  // when the active line is not one or the cursor names no single link.
+  // On a BLOCKS line this is the dependent under the cursor (Rule 8).
   getActiveTaskDependencyLinkTarget(editor, sourcePath) {
     if (
       !sourcePath ||
@@ -87,7 +90,7 @@ class TaskStatusCyclerTargetsMixin {
     }
 
     const lineText = editor.getLine(cursor.line);
-    if (!isTaskDependencyLine(lineText)) {
+    if (!isManagedDependencyLine(lineText)) {
       return null;
     }
 

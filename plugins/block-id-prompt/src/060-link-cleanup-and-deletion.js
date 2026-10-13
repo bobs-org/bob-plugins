@@ -117,6 +117,10 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     if (reference.oldId !== targetBlockId) {
       continue;
     }
+    // MC1/MC2: neither managed dependency line is ever a Task Link.
+    if (isManagedDependencyLine(lines[reference.line] || "")) {
+      continue;
+    }
 
     const pomodoroRange = ranges.find(
       (range) =>
@@ -512,6 +516,63 @@ function isMalformedTaskDependencyLine(lineText) {
     return false;
   }
   return !isTaskDependencyLine(lineText);
+}
+
+// BLOCKS line recogniser (contract docs/task-dependencies.md §14, BK
+// vectors). Copied per-plugin: deployed plugins must not import one
+// another's main.js. Writer form `🧱 **BLOCKS:**` plus reader tolerance
+// (missing emoji, `🚧` / `⛓️` / `⛓`, `BLOCKING` label, `•` / `·` / `,` /
+// whitespace separators, aliased / struck / embedded links). True for
+// accept, empty, and malformed (every verdict but not-a-line). BK16
+// (lowercase), BK17 (BLOCKED BY), BK18 (fenced/grandchild/Work-Log/
+// blockquoted/marker-less) stay false. BK20: a Depends-On line is never a
+// BLOCKS line. Glyph decision: brick (`🧱`).
+const TASK_BLOCKS_LINE_LINK_RE = /(?:~~)?!?(?:~~)?\[\[[^\]\n]+\]\](?:~~)?/g;
+const TASK_BLOCKS_LINE_REMAINDER_RE =
+  /^[ \t]*(?:🧱|🚧|⛓️|⛓)?[ \t]*\*\*(?:BLOCKS|BLOCKING):\*\*[ \t•·,]*$/u;
+
+function isTaskBlocksLine(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  const prefix = LIST_ITEM_PREFIX_RE.exec(line);
+  if (!prefix) {
+    return false;
+  }
+  const body = line.slice(prefix[0].length);
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  const remainder = body.replace(TASK_BLOCKS_LINE_LINK_RE, "");
+  TASK_BLOCKS_LINE_LINK_RE.lastIndex = 0;
+  if (remainder === body) {
+    // No block links: only a bare label line (BK12 empty) still counts.
+    return TASK_BLOCKS_LINE_REMAINDER_RE.test(body);
+  }
+  return TASK_BLOCKS_LINE_REMAINDER_RE.test(remainder);
+}
+
+// A malformed BLOCKS line (BK13 half-typed, BK14 trailing/prose-only) is
+// refused by Ctrl+Shift+Enter with the BLOCKS notice instead of deleting
+// the link token. BK15 variants stay guard-true through `isTaskBlocksLine`
+// instead. Every not-a-line vector stays false here.
+function isMalformedTaskBlocksLine(lineText) {
+  const line = normalizeMarkdownLine(lineText);
+  if (!LIST_ITEM_PREFIX_RE.test(line)) {
+    return false;
+  }
+  if (!/\*\*(?:BLOCKS|BLOCKING):\*\*/.test(line)) {
+    return false;
+  }
+  return !isTaskBlocksLine(lineText);
+}
+
+// True for either managed dependency line (Depends-On or BLOCKS, accepted
+// or malformed). Neither line is ever a Task Link (Rule 11, MC1/MC2).
+function isManagedDependencyLine(lineText) {
+  const text = String(lineText || "");
+  return (
+    isTaskDependencyLine(text) ||
+    isMalformedTaskDependencyLine(text) ||
+    isTaskBlocksLine(text) ||
+    isMalformedTaskBlocksLine(text)
+  );
 }
 
 // An embedded link that is the sole content of a direct child bullet of a

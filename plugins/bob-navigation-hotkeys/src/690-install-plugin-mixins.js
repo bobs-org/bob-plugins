@@ -33,6 +33,8 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysCountedRollMixin,
   BobNavigationHotkeysLinkRollScheduleMixin,
   BobNavigationHotkeysPropertyDependencyMixin,
+  BobNavigationHotkeysProjectSubtreeMixin,
+  BobNavigationHotkeysProjectSubtreeWritersMixin,
   BobNavigationHotkeysDependencyStageMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysJumpKeyMixin,

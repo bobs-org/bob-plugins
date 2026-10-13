@@ -156,11 +156,13 @@ function mapLineThroughStructural(line, structural) {
   return mapped;
 }
 
-// Project notices (§13.10). `details` carries the planner summary shape:
-// `{added, removed, blocked, recovered, pomodoroRemoved,
-// pomodoroPruneFailed}` plus `firstAdded` / `firstRemoved` display names.
-// The planner omits the Pomodoro counts (unknown until the daily-note
-// write); the plugin writer rebuilds the notice with them.
+// Project notices (§13.10, §13.19 PDG8–PDG9, PDG14). `details` carries the
+// planner summary shape: `{added, removed, blocked, recovered,
+// pomodoroRemoved, pomodoroPruneFailed}` plus `firstAdded` / `firstRemoved`
+// display names and the subtree result (`subBlocked`, `subRecovered`,
+// `subSkipped` count descendant notes, never N's own residents). The planner
+// omits the Pomodoro counts (unknown until the daily-note write); the plugin
+// writer rebuilds the notice with them.
 function formatProjectDependencyNotice(details = {}) {
   const added = Math.max(0, Math.floor(numericOrDefault(details.added, 0)));
   const removed = Math.max(0, Math.floor(numericOrDefault(details.removed, 0)));
@@ -175,6 +177,13 @@ function formatProjectDependencyNotice(details = {}) {
   const pomodoroPruneFailed = details.pomodoroPruneFailed === true;
   const firstAdded = String(details.firstAdded || "");
   const firstRemoved = String(details.firstRemoved || "");
+  const subtreeSuffix = subtreePassNoticeSuffix({
+    blocked: details.subBlocked,
+    recovered: details.subRecovered,
+    skipped: details.subSkipped,
+  });
+  const withSubtree = (text) =>
+    subtreeSuffix ? `${text} ${subtreeSuffix}` : text;
   const pomodoroSuffix =
     pomodoroRemoved !== null && pomodoroRemoved > 0
       ? ` · removed ${formatCountLabel(pomodoroRemoved, "Pomodoro link")}`
@@ -182,12 +191,29 @@ function formatProjectDependencyNotice(details = {}) {
         ? "; Pomodoro links not removed"
         : "";
   if (added > 0 && blocked > 0 && firstAdded) {
-    return `⛓ Project waits on "${firstAdded}" · ${formatCountLabel(blocked, "task")} Blocked${pomodoroSuffix}`;
+    return withSubtree(
+      `⛓ Project waits on "${firstAdded}" · ${formatCountLabel(blocked, "task")} Blocked${pomodoroSuffix}`,
+    );
   }
   if (removed > 0 && added === 0 && recovered > 0 && firstRemoved) {
-    return `⛓ Project no longer waits on "${firstRemoved}" · ${formatCountLabel(recovered, "task")} Ready again${pomodoroSuffix}`;
+    return withSubtree(
+      `⛓ Project no longer waits on "${firstRemoved}" · ${formatCountLabel(recovered, "task")} Ready again${pomodoroSuffix}`,
+    );
   }
   return null;
+}
+
+// Append a subtree suffix (`· N sub-projects Blocked / Ready again /
+// not updated`) to any dependency notice. Returns the notice unchanged when
+// the pass is null or changed nothing.
+function withSubtreePassNotice(notice, subtree) {
+  const suffix = subtree
+    ? subtreePassNoticeSuffix(subtree)
+    : "";
+  if (!suffix || !notice) {
+    return notice;
+  }
+  return `${notice} ${suffix}`;
 }
 
 // Detect a project `^prj` edit for the writer. The hand-edit mirror keeps

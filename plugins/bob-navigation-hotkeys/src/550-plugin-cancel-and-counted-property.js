@@ -805,6 +805,44 @@ class BobNavigationHotkeysCancelPropertyMixin {
         : pomodoroPruneFailed
           ? "; Pomodoro links not removed"
           : "";
+    // §13.19: under schedule_cascade a counted `scheduled` write on a `^prj`
+    // cascades like the single writer; other properties gate out inside the
+    // pass (no blocked change, no reads beyond the file list).
+    let countedPropertySubtreeSuffix = "";
+    if (
+      finalContent !== writeContext.content &&
+      typeof this.applySubtreePassesForRoots === "function"
+    ) {
+      try {
+        const countedPropertySubtree = await this.applySubtreePassesForRoots(
+          [
+            {
+              path: normalizeVaultRelativePath(filePath),
+              beforeText: writeContext.content,
+              afterText: String(cm.getValue ? cm.getValue() : finalContent) ||
+                finalContent,
+            },
+          ],
+          { today },
+        );
+        if (countedPropertySubtree) {
+          if (countedPropertySubtree.pomodoroTargets.length > 0) {
+            await this.runSubtreePomodoroCleanup(
+              countedPropertySubtree.pomodoroTargets,
+              normalizeVaultRelativePath(filePath),
+              String(cm.getValue ? cm.getValue() : finalContent) || finalContent,
+              today,
+            );
+          }
+          const suffix = subtreePassNoticeSuffix(countedPropertySubtree);
+          if (suffix) {
+            countedPropertySubtreeSuffix = ` ${suffix}`;
+          }
+        }
+      } catch (_error) {
+        // The cascade never fails the gesture.
+      }
+    }
     new Notice(
       `${name} → ${normalizeBulletPropertyValue(value)} on ${formatCountLabel(
         plan.changedTaskCount,
@@ -812,7 +850,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       )}${this.getCountedTaskNoticeSuffix(
         session,
         plan.unchangedTaskCount,
-      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${workLogSuffix}${pomodoroPruneSuffix}`,
+      )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${workLogSuffix}${pomodoroPruneSuffix}${countedPropertySubtreeSuffix}`,
     );
     return true;
   }

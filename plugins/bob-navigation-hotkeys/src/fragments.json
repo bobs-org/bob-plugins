@@ -27,6 +27,8 @@
   "215-project-blocking.js",
   "216-project-dependency-stage.js",
   "217-project-subprojects.js",
+  "218-plugin-project-subtree.js",
+  "219-plugin-project-subtree-writers.js",
   "220-property-targets.js",
   "230-schedule-review.js",
   "240-cancel-and-lanes.js",

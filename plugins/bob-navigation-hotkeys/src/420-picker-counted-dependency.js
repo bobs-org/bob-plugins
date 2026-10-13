@@ -251,6 +251,25 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         ? await this.plugin.readDependencyRecoveryVaultContents(ownerPath, originalContent)
         : null;
     const today = new Date();
+    // §13.19: counted batches process `^prj` roots with the subtree lanes
+    // read up front, and plan each descendant note once after the commit.
+    const sameNoteSubtreePrep = this.plugin &&
+      typeof this.plugin.prepareSubtreeForDependencyPlan === "function"
+      ? await this.plugin.prepareSubtreeForDependencyPlan(
+          ownerPath,
+          originalContent,
+          {
+            files: new Map([[ownerPath, originalContent]]),
+            add: [],
+            remove: [true],
+            today,
+          },
+        )
+      : null;
+    const sameNoteSubtreeLanes = sameNoteSubtreePrep &&
+        sameNoteSubtreePrep.lanes.length > 0
+      ? sameNoteSubtreePrep.lanes
+      : null;
     let working = originalContent;
     let removed = 0;
     const preparations = new Map();
@@ -263,6 +282,10 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       }
       const planFiles = new Map(baseFiles);
       planFiles.set(ownerPath, working);
+      const sourceIsPrj = sameNoteSubtreeLanes &&
+        isProjectLifecycleTaskLine(
+          String(String(working).split(/\r?\n/)[target.line] || ""),
+        );
       const plan = planDependencyEdit({
         content: working,
         parentLine: target.line,
@@ -272,6 +295,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         files: planFiles,
         vaultFiles,
         resolveLinkpath,
+        ...(sourceIsPrj ? { projectLaneStatuses: sameNoteSubtreeLanes } : {}),
         recovery: {
           registry,
           today,
@@ -335,8 +359,32 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
+    // §13.19: descendants land after the counted commit; a stale one is
+    // skipped and counted, never rolled back.
+    let sameNoteSubtree = null;
+    if (this.plugin && typeof this.plugin.applySubtreePassesForRoots === "function") {
+      try {
+        sameNoteSubtree = await this.plugin.applySubtreePassesForRoots(
+          [
+            {
+              path: ownerPath,
+              beforeText: originalContent,
+              afterText: String(this.editor.getValue() || "") || working,
+            },
+          ],
+          { today: new Date() },
+        );
+      } catch (_error) {
+        sameNoteSubtree = null;
+      }
+    }
+    const sameNoteSuffix = sameNoteSubtree
+      ? subtreePassNoticeSuffix(sameNoteSubtree)
+      : "";
     new Notice(
-      `⛓ Removed from ${removed} task${removed === 1 ? "" : "s"}`,
+      `⛓ Removed from ${removed} task${removed === 1 ? "" : "s"}${
+        sameNoteSuffix ? ` ${sameNoteSuffix}` : ""
+      }`,
     );
     return true;
   }
@@ -468,6 +516,25 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       this.plugin && countedNeedsRecovery
         ? await this.plugin.readDependencyRecoveryVaultContents(ownerPath, originalContent)
         : null;
+    // §13.19: counted batches process `^prj` roots with the subtree lanes
+    // read up front, and plan each descendant note once after the commit.
+    const vaultCountedSubtreePrep = this.plugin &&
+      typeof this.plugin.prepareSubtreeForDependencyPlan === "function"
+      ? await this.plugin.prepareSubtreeForDependencyPlan(
+          ownerPath,
+          originalContent,
+          {
+            files: new Map([[ownerPath, originalContent]]),
+            add: snapshot.remove ? [] : [true],
+            remove: snapshot.remove ? [true] : [],
+            today: new Date(),
+          },
+        )
+      : null;
+    const vaultCountedSubtreeLanes = vaultCountedSubtreePrep &&
+        vaultCountedSubtreePrep.lanes.length > 0
+      ? vaultCountedSubtreePrep.lanes
+      : null;
     for (const target of orderedSources) {
       const targetContent = files.get(targetPath);
       const planFiles = new Map();
@@ -480,6 +547,10 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
           planFiles.set(path, String(content));
         }
       }
+      const vaultSourceIsPrj = vaultCountedSubtreeLanes &&
+        isProjectLifecycleTaskLine(
+          String(String(working).split(/\r?\n/)[target.line] || ""),
+        );
       const plan = planDependencyEdit({
         content: working,
         parentLine: target.line,
@@ -489,6 +560,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         files: planFiles,
         vaultFiles,
         resolveLinkpath,
+        ...(vaultSourceIsPrj ? { projectLaneStatuses: vaultCountedSubtreeLanes } : {}),
         recovery: {
           registry: countedRegistry,
           today: new Date(),
@@ -553,10 +625,34 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       return false;
     }
     const applied = changedSources;
+    // §13.19: descendants land after the counted commit; a stale one is
+    // skipped and counted, never rolled back.
+    let vaultCountedSubtree = null;
+    if (this.plugin && typeof this.plugin.applySubtreePassesForRoots === "function") {
+      try {
+        vaultCountedSubtree = await this.plugin.applySubtreePassesForRoots(
+          [
+            {
+              path: ownerPath,
+              beforeText: originalContent,
+              afterText: String(this.editor.getValue() || "") || working,
+            },
+          ],
+          { today: new Date() },
+        );
+      } catch (_error) {
+        vaultCountedSubtree = null;
+      }
+    }
+    const vaultCountedSuffix = vaultCountedSubtree
+      ? subtreePassNoticeSuffix(vaultCountedSubtree)
+      : "";
     new Notice(
-      snapshot.remove
-        ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
-        : `⛓ Linked ${applied} task${applied === 1 ? "" : "s"}`,
+      `${
+        snapshot.remove
+          ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
+          : `⛓ Linked ${applied} task${applied === 1 ? "" : "s"}`
+      }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}`,
     );
     return true;
   }

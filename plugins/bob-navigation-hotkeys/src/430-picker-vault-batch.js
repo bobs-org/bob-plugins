@@ -608,6 +608,21 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       this.plugin && typeof this.plugin.getFreshnessApi === "function"
         ? this.plugin.getFreshnessApi()
         : null;
+    // §13.19: the stage batch bypasses the shared transaction, so it reads
+    // the descendants up front (lanes) and writes them after its commit.
+    const batchSubtreePrep = this.plugin &&
+      typeof this.plugin.prepareSubtreeForDependencyPlan === "function"
+      ? await this.plugin.prepareSubtreeForDependencyPlan(
+          filePath,
+          workingContent,
+          {
+            files: new Map([[filePath, workingContent]]),
+            add: addRefs,
+            remove: removeRefs,
+            today: new Date(),
+          },
+        )
+      : null;
     const plan = planDependencyEdit({
       content: workingContent,
       parentLine: this.cursor.line,
@@ -621,6 +636,9 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       resolveLinkpath: this.plugin
         ? this.plugin.dependencyLinkpathResolver()
         : null,
+      ...(batchSubtreePrep && batchSubtreePrep.lanes.length > 0
+        ? { projectLaneStatuses: batchSubtreePrep.lanes }
+        : {}),
       recovery: {
         registry,
         today: new Date(),
@@ -633,11 +651,48 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       new Notice(dependencyPlanFailureNotice(plan.reason, "update"));
       return false;
     }
+    const batchSubtreePlanned = batchSubtreePrep &&
+      this.plugin &&
+      typeof this.plugin.planSubtreePassForPrjEdit === "function"
+      ? await this.plugin.planSubtreePassForPrjEdit(
+          filePath,
+          workingContent,
+          plan.nextContent,
+          {
+            files: new Map([[filePath, workingContent]]),
+            descendantTexts: batchSubtreePrep.texts,
+            childrenMap: batchSubtreePrep.childrenMap,
+            notePaths: batchSubtreePrep.notePaths,
+            today: new Date(),
+            registry,
+            markUnblockedLine: navFreshnessMarkUnblockedLine(freshnessApi),
+          },
+        )
+      : null;
+    const batchSubtreeTargets = batchSubtreePlanned
+      ? batchSubtreePlanned.pass.pomodoroTargets || []
+      : [];
+    let batchPlan = plan;
+    if (batchSubtreeTargets.length > 0 && plan.summary && plan.summary.project) {
+      batchPlan = {
+        ...plan,
+        summary: {
+          ...plan.summary,
+          project: {
+            ...plan.summary.project,
+            pomodoroTargets: Object.freeze([
+              ...(plan.summary.project.pomodoroTargets || []),
+              ...batchSubtreeTargets,
+            ]),
+          },
+        },
+      };
+    }
     // §13.10: consume the live Pomodoro links of `^prj` and its newly
     // Blocked residents. A cleanup failure is reported, never rolled back.
-    let batchCommitContent = plan.nextContent;
+    let batchCommitContent = batchPlan.nextContent;
     let batchPomodoroPrep = null;
-    if (plan.changed && this.plugin) {
+    if (batchPlan.changed && this.plugin) {
       batchPomodoroPrep = await prepareProjectPomodoroCleanup(
         typeof this.plugin.readDeferredPomodoroSnapshot === "function"
           ? (snapshotOptions) =>
@@ -646,16 +701,16 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
                 snapshotOptions,
               )
           : null,
-        plan,
+        batchPlan,
         filePath,
         workingContent,
         new Date(),
       );
-      if (batchPomodoroPrep.commitContent !== plan.nextContent) {
+      if (batchPomodoroPrep.commitContent !== batchPlan.nextContent) {
         batchCommitContent = batchPomodoroPrep.commitContent;
       }
     }
-    if (plan.changed) {
+    if (batchPlan.changed) {
       const nextContent =
         this.plugin &&
         typeof this.plugin.stampDependencyParentLine === "function"
@@ -669,6 +724,27 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       if (!applyEditorContentTransaction(this.editor, originalContent, nextContent)) {
         new Notice("Could not update bullet property");
         return false;
+      }
+    }
+    // §13.19: descendants land after the dependent's own write; a stale one
+    // is skipped and counted, never rolled back.
+    let batchSubtree = null;
+    if (
+      batchPlan.changed &&
+      batchSubtreePlanned &&
+      this.plugin &&
+      typeof this.plugin.writeSubtreePass === "function"
+    ) {
+      try {
+        const wrote = await this.plugin.writeSubtreePass(batchSubtreePlanned.pass);
+        batchSubtree = Object.freeze({
+          blocked: batchSubtreePlanned.pass.blocked,
+          recovered: batchSubtreePlanned.pass.recovered,
+          written: wrote.written,
+          skipped: wrote.skipped,
+        });
+      } catch (_error) {
+        batchSubtree = null;
       }
     }
     let batchPomodoroRemoved = 0;
@@ -699,11 +775,14 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
 
     const skipped = skippedStale + skippedOther;
     const batchProjectNotice = projectPomodoroNotice(
-      plan,
+      batchPlan,
       batchPomodoroRemoved,
       batchPomodoroPruneFailed,
     );
-    const batchNotice = batchProjectNotice || plan.notice;
+    const batchNotice = withSubtreePassNotice(
+      batchProjectNotice || batchPlan.notice,
+      batchSubtree,
+    );
     new Notice(
       batchNotice + (skipped > 0 ? ` (${skipped} skipped)` : ""),
     );

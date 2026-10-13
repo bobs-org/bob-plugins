@@ -793,6 +793,12 @@ function describeRemovedDependencyTarget(ref, filesMap) {
 // the plugin method below wires the real editor and vault. Preparations are
 // awaited before the commit: a failed preparation aborts with the dependent
 // untouched, so a failed gesture can never leave a promoted target behind.
+// The sub-project cascade rides the same sequence (`docs/task-dependencies.md`
+// §13.19): `io.planSubtreePass` runs before the commit (off the predicted
+// content), `io.writeSubtreePass` runs after it, and the result carries the
+// pass as `subtree` (null when no pass applied). A subtree failure is
+// reported in counts, never rolled back: N's write stands (PDG14) and the
+// next reconcile repairs the descendants.
 async function applyDependencyEditTransaction(plan, io = {}) {
   if (!plan || plan.ok !== true) {
     return Object.freeze({
@@ -818,6 +824,14 @@ async function applyDependencyEditTransaction(plan, io = {}) {
       });
     }
   }
+  let subtreePass = null;
+  if (typeof io.planSubtreePass === "function") {
+    try {
+      subtreePass = await io.planSubtreePass(plan);
+    } catch (_error) {
+      subtreePass = null;
+    }
+  }
   const commit =
     typeof io.commitDependentContent === "function"
       ? io.commitDependentContent
@@ -832,9 +846,18 @@ async function applyDependencyEditTransaction(plan, io = {}) {
     return Object.freeze({
       ok: false,
       reason: (committed && committed.reason) || "commit-failed",
+      subtree: null,
     });
   }
-  return Object.freeze({ ok: true, reason: null, notice: plan.notice });
+  let subtree = null;
+  if (subtreePass && typeof io.writeSubtreePass === "function") {
+    try {
+      subtree = await io.writeSubtreePass(subtreePass);
+    } catch (_error) {
+      subtree = null;
+    }
+  }
+  return Object.freeze({ ok: true, reason: null, notice: plan.notice, subtree });
 }
 
 function formatCountLabel(count, singular, plural = `${singular}s`) {

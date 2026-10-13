@@ -187,7 +187,18 @@ function planCountedLocalTaskDependency(
   const orderedTargets = session.targets
     .slice()
     .sort((first, second) => second.line - first.line);
+  // §13.19: counted batches process `^prj` roots with the subtree lanes
+  // the writer read up front (`options.subtreeLaneStatuses`), so commitment
+  // transfer sees the lanes the pass is about to block. Ordinary sources
+  // keep the planner default.
+  const subtreeLanes = Array.isArray(options.subtreeLaneStatuses)
+    ? options.subtreeLaneStatuses
+    : null;
   for (const target of orderedTargets) {
+    const beforeLinesForLanes = nextContent.split(/\r?\n/);
+    const parentIsPrj = isProjectLifecycleTaskLine(
+      String(beforeLinesForLanes[target.line] || ""),
+    );
     const parentPlan = planDependencyEdit({
       content: nextContent,
       parentLine: target.line,
@@ -197,6 +208,9 @@ function planCountedLocalTaskDependency(
       files: { [normalizeVaultRelativePath(filePath)]: nextContent },
       vaultFiles: options.vaultFiles,
       resolveLinkpath: options.resolveLinkpath,
+      ...(parentIsPrj && subtreeLanes && subtreeLanes.length > 0
+        ? { projectLaneStatuses: subtreeLanes }
+        : {}),
       recovery: options.recovery,
     });
     if (!parentPlan.ok) {

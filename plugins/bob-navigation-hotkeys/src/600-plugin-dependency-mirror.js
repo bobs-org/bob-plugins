@@ -148,6 +148,54 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         return false;
       }
     }
+    // §13.19: the Task Link variant bypasses the shared transaction (this
+    // method stays synchronous for its boolean callers), so the subtree
+    // pass follows in a guarded continuation after the commit above. N's
+    // write stands; a stale descendant is skipped and reported (PDG14).
+    if (plan.changed && typeof this.applySubtreePassForPrjEdit === "function") {
+      try {
+        const committedContent =
+          String(cm.getValue ? cm.getValue() : nextContent) || nextContent;
+        const cascade = this.applySubtreePassForPrjEdit(
+          filePath,
+          content,
+          committedContent,
+          { files: { [filePath]: content } },
+        );
+        if (cascade && typeof cascade.then === "function") {
+          cascade.then(
+            (taskLinkSubtree) => {
+              try {
+                if (
+                  taskLinkSubtree &&
+                  taskLinkSubtree.pomodoroTargets &&
+                  taskLinkSubtree.pomodoroTargets.length > 0 &&
+                  typeof this.runSubtreePomodoroCleanup === "function"
+                ) {
+                  this.runSubtreePomodoroCleanup(
+                    taskLinkSubtree.pomodoroTargets,
+                    filePath,
+                    committedContent,
+                    new Date(),
+                  );
+                }
+                const suffix = taskLinkSubtree
+                  ? subtreePassNoticeSuffix(taskLinkSubtree)
+                  : "";
+                if (suffix && options.showNotice !== false) {
+                  new Notice(suffix);
+                }
+              } catch (_error) {
+                // The cascade never fails the gesture.
+              }
+            },
+            () => {},
+          );
+        }
+      } catch (_error) {
+        // The cascade never fails the gesture.
+      }
+    }
     const nextLines = nextContent.split(/\r?\n/);
     setEditorCursorSafely(
       cm,

@@ -310,6 +310,11 @@ function planProjectSubtreePass(args = {}) {
   if (rootPath) {
     files.push({ path: rootPath, text: String(args.rootText || "") });
   }
+  // Full vault paths for NoteIndex-like parent resolution (gesture writers
+  // pass the vault list; tests fall back to the pass notes plus the root).
+  const resolutionPaths = Array.isArray(args.notePaths) && args.notePaths.length > 0
+    ? args.notePaths.map((entry) => normalizeVaultRelativePath(entry)).filter(Boolean)
+    : [...byPath.keys(), rootPath].filter(Boolean);
   const childrenMap = buildProjectChildrenMap(files, (file) =>
     projectParentFieldFromNoteText(file.text),
   );
@@ -360,10 +365,7 @@ function planProjectSubtreePass(args = {}) {
     }
     const parentTarget = projectParentTarget(projectParentFieldFromNoteText(text));
     const parentPath = parentTarget
-      ? resolveProjectParentPath(parentTarget, path, [
-          ...byPath.keys(),
-          rootPath,
-        ].filter(Boolean))
+      ? resolveProjectParentPath(parentTarget, path, resolutionPaths)
       : null;
     let inheritedAfter = false;
     if (parentPath && blockedAfterByPath.has(parentPath)) {

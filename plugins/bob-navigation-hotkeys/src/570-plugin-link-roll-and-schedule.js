@@ -519,28 +519,62 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       return false;
     }
     let plan = preview;
+    let countedRecovery = countedRecoveryBase;
     if (preview.operation === "remove" && hasQuestionSource) {
+      countedRecovery = {
+        ...countedRecoveryBase,
+        vaultContents: await this.readDependencyRecoveryVaultContents(
+          normalizedPath,
+          writeContext.content,
+        ),
+      };
       plan = planCountedLocalTaskDependency(
         writeContext.content,
         session,
         dependencyTask,
         filePath,
-        {
-          ...countedOptions,
-          recovery: {
-            ...countedRecoveryBase,
-            vaultContents: await this.readDependencyRecoveryVaultContents(
-              normalizedPath,
-              writeContext.content,
-            ),
-          },
-        },
+        { ...countedOptions, recovery: countedRecovery },
       );
     }
     if (!plan.valid) {
       const suffix = plan.stale ? "; no tasks were updated" : "";
       new Notice(`${plan.error}${suffix}`);
       return false;
+    }
+    // §13.19: counted batches process `^prj` roots ancestor-first and plan
+    // each descendant note once. Lanes ride a re-plan below; descendants
+    // land after the commit.
+    let countedSubtreePrep = null;
+    if (plan.changed) {
+      countedSubtreePrep = await this.prepareSubtreeForDependencyPlan(
+        normalizedPath,
+        writeContext.content,
+        {
+          files: new Map([[normalizedPath, writeContext.content]]),
+          add: plan.operation === "add" ? [true] : [],
+          remove: plan.operation === "remove" ? [true] : [],
+          today: new Date(),
+        },
+      );
+      if (
+        countedSubtreePrep &&
+        countedSubtreePrep.lanes.length > 0
+      ) {
+        const relaned = planCountedLocalTaskDependency(
+          writeContext.content,
+          session,
+          dependencyTask,
+          filePath,
+          {
+            ...countedOptions,
+            subtreeLaneStatuses: countedSubtreePrep.lanes,
+            recovery: countedRecovery,
+          },
+        );
+        if (relaned.valid && relaned.operation === plan.operation) {
+          plan = relaned;
+        }
+      }
     }
     const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
     try {
@@ -562,87 +596,51 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
+    // §13.19: descendants land after the dependent's own write; a stale one
+    // is skipped and counted, never rolled back.
+    let countedSubtree = null;
+    if (plan.changed && typeof this.applySubtreePassesForRoots === "function") {
+      try {
+        countedSubtree = await this.applySubtreePassesForRoots(
+          [
+            {
+              path: normalizedPath,
+              beforeText: writeContext.content,
+              afterText: String(cm.getValue ? cm.getValue() : plan.content) ||
+                plan.content,
+            },
+          ],
+          { today: new Date() },
+        );
+        if (countedSubtree && countedSubtree.pomodoroTargets.length > 0) {
+          await this.runSubtreePomodoroCleanup(
+            countedSubtree.pomodoroTargets,
+            normalizedPath,
+            String(cm.getValue ? cm.getValue() : plan.content) || plan.content,
+            new Date(),
+          );
+        }
+      } catch (_error) {
+        countedSubtree = null;
+      }
+    }
     const verb = plan.operation === "remove" ? "Removed" : "Added";
     const identity = plan.targetIdentityChanged
       ? `; prepared ^${plan.linkBlockId}`
+      : "";
+    const countedSubtreeSuffix = countedSubtree
+      ? subtreePassNoticeSuffix(countedSubtree)
       : "";
     new Notice(
       `${verb} ${plan.dependencyValue} ${
         plan.operation === "remove" ? "from" : "to"
       } ${formatCountLabel(plan.targetCount, "task")}${identity}${
         this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)
-      }`,
+      }${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}`,
     );
     return true;
   }
 
-  getProjectScheduledWriteContext(
-    cm,
-    cursor,
-    filePath,
-    expectedLine,
-    expectedValue,
-    operation = "updated",
-  ) {
-    const activeView = this.getActiveMarkdownView();
-    if (
-      !activeView ||
-      activeView.editor !== cm ||
-      !activeView.file ||
-      activeView.file.path !== filePath
-    ) {
-      return Object.freeze({
-        valid: false,
-        error: `Active project note changed; scheduled was not ${operation}`,
-      });
-    }
-    if (!cm || typeof cm.getValue !== "function") {
-      return Object.freeze({
-        valid: false,
-        error: "No active markdown editor",
-      });
-    }
-
-    const content = String(cm.getValue() || "");
-    const liveCursor = getEditorCursor(cm);
-    if (!liveCursor || liveCursor.line !== cursor.line) {
-      return Object.freeze({
-        valid: false,
-        error: `Cursor moved from the ^prj task; scheduled was not ${operation}`,
-      });
-    }
-    const lineText = getEditorLine(cm, cursor.line);
-    if (lineText !== expectedLine) {
-      return Object.freeze({
-        valid: false,
-        error: `The ^prj task changed; scheduled was not ${operation}`,
-      });
-    }
-
-    const propertyContext = getProjectNotePropertyContext(content, cursor.line);
-    if (!propertyContext.valid || !propertyContext.isProjectTask) {
-      return Object.freeze({
-        valid: false,
-        error:
-          propertyContext.error ||
-          "Cursor is no longer on a valid ^prj task",
-      });
-    }
-    const scheduledField = findBulletPropertyField(lineText, "scheduled");
-    const currentValue = scheduledField ? scheduledField.value : "";
-    if (currentValue !== normalizeBulletPropertyValue(expectedValue)) {
-      return Object.freeze({
-        valid: false,
-        error: `Project scheduled changed while the picker was open; it was not ${operation}`,
-      });
-    }
-
-    return Object.freeze({
-      valid: true,
-      content,
-      propertyContext,
-    });
-  }
 
   async setProjectNoteScheduledValue(
     cm,
@@ -871,6 +869,22 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       return false;
     }
 
+    // §13.19 schedule_cascade: a future date, a due date and a delete run
+    // the same subtree pass as Depends on; a tagged `^prj` keeps its tag
+    // through every Schedule write.
+    let scheduledSubtree = null;
+    let scheduledSubtreePomodoroRemoved = 0;
+    if (finalContent !== writeContext.content) {
+      const scheduledCascade = await this.applyScheduleSubtreePass(
+        filePath,
+        writeContext.content,
+        String(cm.getValue ? cm.getValue() : finalContent) || finalContent,
+        { today },
+      );
+      scheduledSubtree = scheduledCascade.subtree;
+      scheduledSubtreePomodoroRemoved = scheduledCascade.pomodoroRemoved;
+    }
+
     let removedPomodoroLinkCount = 0;
     let pomodoroPruneFailed = false;
     if (
@@ -896,6 +910,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     ) {
       removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
     }
+    removedPomodoroLinkCount += scheduledSubtreePomodoroRemoved;
 
     const parts = [`scheduled → ${plan.scheduled}`];
     if (plan.scheduledTaskCount > 0) {
@@ -943,18 +958,21 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     };
     if (typeof options.buildNotice === "function") {
       showPriorityNotice(
-        options.buildNotice({
-          scheduled: plan.scheduled,
-          scheduledTaskCount: plan.scheduledTaskCount,
-          removedHideTaskCount: plan.removedHideTaskCount,
-          blockedTaskCount: plan.blockedTaskCount,
-          ambiguousTaskCount: plan.ambiguousTaskLines.length,
-          recoveryCounts,
-          scheduleLogOutcome,
-          schedulingWorkLogWrittenCount: projectWorkLogWritten ? 1 : 0,
-          removedPomodoroLinkCount,
-          pomodoroPruneFailed,
-        }),
+        withSubtreePassNotice(
+          options.buildNotice({
+            scheduled: plan.scheduled,
+            scheduledTaskCount: plan.scheduledTaskCount,
+            removedHideTaskCount: plan.removedHideTaskCount,
+            blockedTaskCount: plan.blockedTaskCount,
+            ambiguousTaskCount: plan.ambiguousTaskLines.length,
+            recoveryCounts,
+            scheduleLogOutcome,
+            schedulingWorkLogWrittenCount: projectWorkLogWritten ? 1 : 0,
+            removedPomodoroLinkCount,
+            pomodoroPruneFailed,
+          }),
+          scheduledSubtree,
+        ),
         { ...(options || {}), app: this.app },
       );
     } else {
@@ -964,8 +982,13 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           : pomodoroPruneFailed
             ? "; Pomodoro links not removed"
             : "";
+      const scheduledSubtreeSuffix = scheduledSubtree
+        ? subtreePassNoticeSuffix(scheduledSubtree)
+        : "";
       new Notice(
-        `${parts.join("; ")}${scheduledRecoveryNoticeSuffix(recoveryCounts)}${pomodoroPruneSuffix}`,
+        `${parts.join("; ")}${scheduledRecoveryNoticeSuffix(recoveryCounts)}${pomodoroPruneSuffix}${
+          scheduledSubtreeSuffix ? ` ${scheduledSubtreeSuffix}` : ""
+        }`,
       );
     }
     return true;

@@ -52,6 +52,21 @@ function installNavStub(plugin, seen) {
               return true;
             },
           },
+          // SO picker fake: explicitly return all offers (select-all).
+          successors: {
+            version: 1,
+            async pick(model) {
+              const picks = [];
+              for (const group of (model && model.groups) || []) {
+                for (const row of (group && group.rows) || []) {
+                  if (row && row.selectable && row.key) {
+                    picks.push({ key: String(row.key) });
+                  }
+                }
+              }
+              return { picks };
+            },
+          },
         },
       },
     },
@@ -287,10 +302,10 @@ test("cold fallback still recovers and links without a Tasks cache", async () =>
   assert.equal(seen.length, 1);
 });
 
-test("recovered-only close reports unblocked without linking", async () => {
+test("recovered-only close reports unblocked without linking (SO4 Esc)", async () => {
   notices.length = 0;
-  // The predecessor was never planned today, so the dependent recovers to
-  // Ready with `not_planned_today` and no link is written.
+  // SO4/SO14: implicit offer exists (one open entry), but the picker returns
+  // none (Esc) → recovery stands with not_selected, no mint, no link.
   const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX"].join("\n");
   const harness = createInMemoryObsidianApp({
     "sase.md": [FIX_LINE, DEPENDENT_LINE].join("\n"),
@@ -300,6 +315,7 @@ test("recovered-only close reports unblocked without linking", async () => {
   const plugin = makePlugin(harness, editor, DAILY_PATH);
   const seen = [];
   installNavStub(plugin, seen);
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.successors.pick = async () => null;
 
   const result = await plugin.finalizeClosedTasks(
     [
@@ -318,7 +334,7 @@ test("recovered-only close reports unblocked without linking", async () => {
   const row = result.successors.unblocked[0];
   assert.equal(row.status_symbol, " ");
   assert.equal(row.link, null);
-  assert.equal(row.not_linked, "not_planned_today");
+  assert.equal(row.not_linked, "not_selected");
   assert.equal(
     harness.getSource("sase.md").split("\n")[1],
     `- [ ] #task Re-launch all failed agents on apollo! [unblocked:: ${TODAY}] [dependsOn:: sase__fix-apollo] ^relaunch-failed`,
@@ -385,7 +401,7 @@ test("walk landing composes a single toast and shows no card", async () => {
   assert.equal(notices.length, 0);
 });
 
-test("nav absent falls back to a plain Notice", async () => {
+test("nav absent falls back to a plain Notice with no link (SO missing picker)", async () => {
   notices.length = 0;
   const day = fixDay();
   const harness = createInMemoryObsidianApp({
@@ -399,13 +415,19 @@ test("nav absent falls back to a plain Notice", async () => {
     path: DAILY_PATH,
   });
 
+  // SO: without a picker API, recovery with no picks (plain not-pulled-in
+  // fallback), even though the close itself still lands.
   assert.equal(result.changed, true);
-  assert.equal(editor.getLine(5), "\t- [[sase#^relaunch-failed]]");
+  assert.equal(editor.lineCount(), 5);
+  assert.equal(
+    harness.getSource("sase.md").split("\n")[1],
+    `- [ ] #task Re-launch all failed agents on apollo! [unblocked:: ${TODAY}] [dependsOn:: sase__fix-apollo] ^relaunch-failed`,
+  );
   assert.equal(notices.length, 1);
-  assert.match(notices[0], /🔓 Next in FIX/);
+  assert.match(notices[0], /not pulled in/);
 });
 
-test("stale cache line yields a failed row and a warning notice", async () => {
+test("stale cache heals via re-plan from fresh text (SO30)", async () => {
   notices.length = 0;
   const day = fixDay();
   const liveDependent =
@@ -418,8 +440,8 @@ test("stale cache line yields a failed row and a warning notice", async () => {
   const plugin = makePlugin(harness, editor, DAILY_PATH);
   const seen = [];
   installNavStub(plugin, seen);
-  // Warm cache with a stale copy of the dependent line: the plan's
-  // preimage (`before`) will not match the vault text at apply time.
+  // Warm cache with a stale copy: re-plan from fresh vault text heals it and
+  // links the fresh row (same stable key path#^id).
   installTasksStub(plugin, [
     {
       path: "sase.md",
@@ -451,21 +473,17 @@ test("stale cache line yields a failed row and a warning notice", async () => {
   assert.ok(result.successors);
   assert.equal(result.successors.unblocked.length, 1);
   const row = result.successors.unblocked[0];
-  assert.equal(row.link, null);
-  assert.equal(row.not_linked, "failed");
-  assert.equal(result.successors.failure.count, 1);
-  // No link was written for the failed row, and with the single gated
-  // plan there is no legacy backstop rewrite either: the stale line is
-  // left untouched and the failure is reported, exactly as the contract
-  // promises.
+  assert.ok(row.link);
+  assert.equal(row.not_linked, null);
+  assert.equal(result.successors.failure, null);
   assert.equal(
     harness.getSource("sase.md").split("\n")[1],
-    "- [?] #task Re-launch all failed agents TODAY! [dependsOn:: sase__fix-apollo] ^relaunch-failed",
+    "- [*] #task Re-launch all failed agents TODAY! [dependsOn:: sase__fix-apollo] ^relaunch-failed",
   );
   assert.equal(seen.length, 1);
   assert.match(
     plugin.successorNoticeForModel(result.successors),
-    /⚠ Closed/,
+    /🔓 Next in FIX/,
   );
 });
 
@@ -561,6 +579,8 @@ test("successor apply recovers project residents without ledger v12", async () =
   plugin.getFreshnessMarkUnblockedLine = () => null;
   const seen = [];
   installNavStub(plugin, seen);
+  // Recovery-only (Esc) to exercise the WRITE-rule warning without ledger v12.
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.successors.pick = async () => null;
   const warnings = [];
   const originalWarn = console.warn;
   console.warn = (...args) => {

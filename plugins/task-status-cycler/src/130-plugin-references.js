@@ -98,11 +98,25 @@ class TaskStatusCyclerReferencesMixin {
           recoveryFailures = [
             successors.failure.reason || "blocked dependents could not be checked",
           ];
-          new Notice("Closed tasks, but blocked dependents could not be checked.");
+          const walkReturn = context && context.successorNoticeTarget === "return";
+          if (!walkReturn) {
+            try {
+              new Notice("Closed tasks, but blocked dependents could not be checked.");
+            } catch (error) {
+              // Best effort.
+            }
+          }
         }
       } else {
         recoveryFailures = ["blocked dependents could not be checked"];
-        new Notice("Closed tasks, but blocked dependents could not be checked.");
+        const walkReturn = context && context.successorNoticeTarget === "return";
+        if (!walkReturn) {
+          try {
+            new Notice("Closed tasks, but blocked dependents could not be checked.");
+          } catch (error) {
+            // Best effort.
+          }
+        }
       }
       const retirement = await this.retireClosedTaskReferencesNow(
         normalizeTaskReferenceIdentities(closed),

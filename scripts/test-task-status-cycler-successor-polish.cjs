@@ -52,6 +52,21 @@ function installNavStub(plugin, seen) {
               return true;
             },
           },
+          // SO picker fake: explicitly return all offers (select-all).
+          successors: {
+            version: 1,
+            async pick(model) {
+              const picks = [];
+              for (const group of (model && model.groups) || []) {
+                for (const row of (group && group.rows) || []) {
+                  if (row && row.selectable && row.key) {
+                    picks.push({ key: String(row.key) });
+                  }
+                }
+              }
+              return { picks };
+            },
+          },
         },
       },
     },

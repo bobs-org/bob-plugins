@@ -718,26 +718,6 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
-    if (cancelledClose && parentPullIn) {
-      recovers.push({
-        task,
-        reason: "cancelled",
-        predecessorRows,
-        pullIn: true,
-        hideRemoved,
-      });
-      continue;
-    }
-    if (!hasAnchor) {
-      recovers.push({
-        task,
-        reason: "not_planned_today",
-        predecessorRows,
-        pullIn: true,
-        hideRemoved,
-      });
-      continue;
-    }
     if (cancelledClose) {
       recovers.push({
         task,
@@ -758,6 +738,31 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
+    if (!hasAnchor) {
+      const implicitPull = resolveSuccessorImplicitDestination(dailyBefore);
+      if (!implicitPull) {
+        recovers.push({
+          task,
+          reason: "no_destination",
+          predecessorRows,
+          pullIn: true,
+          hideRemoved,
+        });
+        continue;
+      }
+      successorMarks.push({
+        task,
+        anchor: { kind: "implicit", entryLine: implicitPull.entryLine, bulletLine: null },
+        implicit: implicitPull,
+        predecessorRows,
+        notePath: task.path,
+        line: task.line,
+        pullIn: true,
+        hideRemoved,
+        group: "project_finished",
+      });
+      continue;
+    }
     successorMarks.push({
       task,
       anchor: anchored.anchor,
@@ -766,6 +771,7 @@ function planProjectPullIns(options = {}) {
       line: task.line,
       pullIn: true,
       hideRemoved,
+      group: "project_finished",
     });
   }
 
@@ -794,177 +800,5 @@ function projectPullInRewriteLine(before, rank, options = {}) {
   return replaceTaskStatusSymbol(stripped, rank);
 }
 
-function applySuccessorVerdicts(context) {
-  const recovers = Array.isArray(context.recovers) ? context.recovers : [];
-  const successorMarks = Array.isArray(context.successorMarks)
-    ? context.successorMarks
-    : [];
-  const stillBlocked = Array.isArray(context.stillBlocked) ? context.stillBlocked : [];
-  const edits = Array.isArray(context.projectTagStripEdits)
-    ? context.projectTagStripEdits.slice()
-    : [];
-  const dailyPath = context.dailyPath || "";
-  const today = context.today;
-  const markUnblockedLine = context.markUnblockedLine;
-  const isInbox = context.isInbox;
-  const basenameCounts = context.basenameCounts;
-  const noteTexts = context.noteTexts || {};
-  const hasLiveLink = context.hasLiveLink;
-
-  const unblocked = [];
-  let placements = [];
-
-  const pushRow = (task, rank, extra) => {
-    const pullIn = extra.pullIn === true;
-    const before = task.rawLine != null ? String(task.rawLine) : null;
-    let after = before;
-    if (before != null) {
-      after = pullIn
-        ? projectPullInRewriteLine(before, rank, {
-          recoverRank: extra.recoverRank === true,
-          markUnblockedLine,
-          today,
-          isDailyNote: isDailyNotePath(task.path),
-          isToday: hasLiveLink(task),
-        })
-        : extra.linked
-          ? extra.after
-          : rewriteRecoveredTaskLine(before, rank, {
-            markUnblockedLine,
-            today,
-            isDailyNote: isDailyNotePath(task.path),
-            isToday: hasLiveLink(task),
-          });
-    }
-    const hideRemoved = pullIn && before != null &&
-      removeProjectHideTags(before) !== before;
-    if (rank === task.status && !extra.always && !hideRemoved && !extra.linked) {
-      return null;
-    }
-    if (before !== after && after != null) {
-      edits.push({ path: task.path, line: task.line, before, after });
-    }
-    const text = pullIn
-      ? projectPullInDisplayText(task, after != null ? after : before)
-      : successorDisplayText(task);
-    const row = {
-      note_path: task.path,
-      block_id: extra.blockId || task.blockId || "",
-      line: task.line,
-      text,
-      previous_status_symbol: task.status,
-      previous_status_name: successorStatusName(task.status),
-      status_symbol: rank,
-      status_name: successorStatusName(rank),
-      inbox: isInbox(task.path) === true,
-      unblocked_by: extra.predecessorRows || [],
-      link: extra.link || null,
-      not_linked: extra.not_linked == null ? null : extra.not_linked,
-      trigger: pullIn ? "project_empty" : "dependency",
-      hide_removed: hideRemoved,
-    };
-    unblocked.push(row);
-    return unblocked.length - 1;
-  };
-
-  const pushRecover = (recover, alwaysReason) => {
-    const task = recover.task;
-    const pullIn = recover.pullIn === true;
-    const rank = recover.raiseToNext
-      ? (task.status === "?" || task.status === " " ? "*" : task.status)
-      : (task.status === "?"
-        ? (hasLiveLink(task) ? "*" : " ")
-        : task.status);
-    const reason = alwaysReason || recover.reason;
-    pushRow(task, rank, {
-      pullIn,
-      recoverRank: pullIn && !recover.raiseToNext,
-      always: recover.hideRemoved === true || alwaysReason === "breaker",
-      predecessorRows: recover.predecessorRows,
-      not_linked: reason,
-    });
-  };
-
-  const pullInMarks = successorMarks.filter((mark) => mark.pullIn);
-  const regularMarks = successorMarks.filter((mark) => !mark.pullIn);
-  const broken = regularMarks.length > SUCCESSOR_BREAKER_LIMIT;
-  for (const recover of recovers) {
-    pushRecover(recover, false);
-  }
-  const linkedMarks = broken ? pullInMarks : successorMarks.slice().sort(successorOrderCompare);
-  if (broken) {
-    pullInMarks.sort(successorOrderCompare);
-  }
-  const mintedByNote = new Map();
-  for (const mark of linkedMarks) {
-    const task = mark.task;
-    const rank = task.status === "?" || task.status === " " ? "*" : task.status;
-    let blockId = task.blockId || "";
-    let blockIdCreated = false;
-    const before = task.rawLine != null ? String(task.rawLine) : null;
-    let after = null;
-    if (mark.pullIn) {
-      after = null;
-    } else {
-      if (!blockId) {
-        if (!mintedByNote.has(task.path)) {
-          mintedByNote.set(
-            task.path,
-            collectSuccessorUsedIds(noteTexts[task.path] ?? ""),
-          );
-        }
-        const used = mintedByNote.get(task.path);
-        blockId = mintBlockId(
-          cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"),
-          used,
-        );
-        used.add(blockId);
-        blockIdCreated = true;
-      }
-      after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
-      if (after != null && blockIdCreated) {
-        after = `${after.replace(/\s+$/, "")} ^${blockId}`;
-      }
-    }
-    const rowIndex = pushRow(task, rank, {
-      pullIn: mark.pullIn === true,
-      linked: true,
-      after,
-      blockId,
-      predecessorRows: mark.predecessorRows,
-      not_linked: null,
-      link: {
-        day_file: dailyPath,
-        entry_name: "",
-        entry_line: null,
-        entry_created: false,
-        next_up: false,
-        line: null,
-        block_link: successorLinkText(task.path, blockId, dailyPath, basenameCounts),
-        block_id_created: blockIdCreated,
-      },
-    });
-    if (rowIndex != null) {
-      placements.push({
-        key: `${task.path}|${blockId}`,
-        rowIndex,
-        anchor: mark.anchor,
-        blockLink: unblocked[rowIndex].link.block_link,
-      });
-    }
-  }
-  if (broken) {
-    for (const mark of regularMarks) {
-      pushRecover(mark, "breaker");
-    }
-    // Pull-ins still link; only regular successors are broken.
-  }
-
-  return {
-    unblocked,
-    still_blocked: stillBlocked,
-    edits,
-    placements,
-    unblocked_check: "checked",
-  };
-}
+// applySuccessorVerdicts lives in 089b-successor-verdicts.js (offer-aware
+// SELECTION/PICK writer). This fragment keeps the pull-in planner only.

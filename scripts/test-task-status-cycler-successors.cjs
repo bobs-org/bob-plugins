@@ -30,6 +30,7 @@ function planFixture({ day, notes, closed, options = {} }) {
     linkUnblocked: true,
     basenameCounts: { sase: 1 },
     noteTexts: notes,
+    selection: "all",
     ...options,
   });
   return { documents, tasks, index, plan };
@@ -510,7 +511,7 @@ test("SL8 closing anchors append after carried lines in the continuation", () =>
   assert.equal(inserted.links[0].entry_created, true);
 });
 
-test("SL9 unplanned predecessors recover without touching the ledger", () => {
+test("SL9 unplanned predecessors offer at the implicit destination (SO14)", () => {
   const day = [
     "# 2026-10-09",
     "",
@@ -523,12 +524,26 @@ test("SL9 unplanned predecessors recover without touching the ledger", () => {
     notes: saseNotes(RELAUNCH_LINE),
     closed: FIX_CLOSED,
   });
+  // SO14: no anchor → implicit destination (single open entry FIX), offered
+  // and linked when picked (select-all fixture).
   assert.equal(plan.unblocked.length, 1);
-  assert.equal(plan.unblocked[0].not_linked, "not_planned_today");
-  assert.equal(plan.unblocked[0].status_symbol, " ");
-  assert.equal(plan.placements.length, 0);
-  const inserted = helpers.planSuccessorInsertions(day, plan.placements, {});
-  assert.equal(inserted.text, day);
+  assert.equal(plan.unblocked[0].not_linked, null);
+  assert.ok(plan.unblocked[0].link);
+  assert.equal(plan.unblocked[0].status_symbol, "*");
+  assert.ok(plan.unblocked[0].offer);
+  assert.equal(plan.unblocked[0].offer.group, "hand_off");
+  assert.equal(plan.unblocked[0].offer.destination.entry_role, "implicit");
+  assert.equal(plan.unblocked[0].offer.destination.fallback, true);
+  assert.equal(plan.placements.length, 1);
+  // No selection plans offers only (SO4): recovery stands, no mint, no link.
+  const { plan: nonePlan } = planFixture({
+    day,
+    notes: saseNotes(RELAUNCH_LINE),
+    closed: FIX_CLOSED,
+    options: { selection: null },
+  });
+  assert.equal(nonePlan.unblocked[0].not_linked, "not_selected");
+  assert.equal(nonePlan.unblocked[0].link, null);
 });
 
 test("SL10 missing block IDs mint through the SB rule", () => {
@@ -600,7 +615,7 @@ test("PDC1 leaves a dependency-ready resident Blocked while its project still wa
   );
 });
 
-test("PDC2 recovers the project and all eligible residents without successor links", () => {
+test("PDC2 residents are offered under the project group (SO1)", () => {
   const project = [
     "---",
     'type: "[[project]]"',
@@ -622,20 +637,25 @@ test("PDC2 recovers the project and all eligible residents without successor lin
         line.replace(/(\s+\^[A-Za-z0-9_-]+$)/, ` [unblocked:: ${today}]$1`),
     },
   });
-  assert.equal(plan.placements.length, 0);
-  assert.deepEqual(
-    plan.unblocked.map((row) => [row.block_id, row.not_linked, row.status_symbol]),
-    [
-      ["prj", "project_task", " "],
-      ["release-notes", "project_member", " "],
-      ["publish", "project_member", " "],
-    ],
-  );
+  // SO1/PDC2: ^prj is the header (recover-only); residents are offered.
+  // Publish is also a direct dependent → single hand_off row (SO7 dedup).
+  const byId = new Map(plan.unblocked.map((row) => [row.block_id, row]));
+  assert.equal(byId.get("prj").not_linked, "project_task");
+  assert.equal(byId.get("prj").link, null);
+  const release = byId.get("release-notes");
+  assert.ok(release.offer);
+  assert.equal(release.offer.group, "project");
+  assert.ok(release.link);
+  assert.equal(release.status_symbol, "*");
+  const publish = byId.get("publish");
+  assert.ok(publish.offer);
+  assert.equal(publish.offer.group, "hand_off");
+  assert.ok(publish.link);
+  assert.equal(plan.placements.length, 2);
   for (const edit of plan.edits.filter((candidate) =>
     candidate.path === "projects/release.md" &&
     candidate.before.includes("#prj_is_blocked")
   )) {
-    assert.match(edit.after, /\[unblocked:: 2026-10-09\]/);
     assert.doesNotMatch(edit.after, /#prj_is_blocked/);
   }
 });
@@ -664,13 +684,17 @@ test("PDC3 keeps a project resident Blocked when its own prerequisite remains op
   const resident = plan.still_blocked.find((row) => row.block_id === "release-notes");
   assert.equal(resident.reason, "waits_on");
   assert.equal(resident.waits_on, 1);
+  assert.equal(resident.project, "projects/release.md");
   const tagStrip = plan.edits.find((edit) => edit.before.includes("^release-notes"));
   assert.ok(tagStrip);
   assert.match(tagStrip.after, /^- \[\?\]/);
   assert.doesNotMatch(tagStrip.after, /#prj_is_blocked/);
-  const recovered = plan.unblocked.find((row) => row.block_id === "publish");
-  assert.equal(recovered.not_linked, "project_member");
-  assert.equal(recovered.status_symbol, " ");
+  // SO9: the unblocked resident is offered (project), linked when picked.
+  const offered = plan.unblocked.find((row) => row.block_id === "publish");
+  assert.ok(offered.offer);
+  assert.equal(offered.offer.group, "project");
+  assert.ok(offered.link);
+  assert.equal(offered.status_symbol, "*");
 });
 
 test("PDC4/PDC5/PDC6 leave inherited child-project rows for reconcile", () => {
@@ -823,9 +847,9 @@ test("SL16 gates on [id::]: no identity means no lookup and empty rows", () => {
   assert.deepEqual(plan.placements, []);
 });
 
-test("SL17 breakers link nothing and recover every successor", () => {
+test("SO2 11-way fan-out has no cap; all offered, none pre-checked (SL17 retired)", () => {
   const dependents = [];
-  for (let n = 1; n <= 6; n += 1) {
+  for (let n = 1; n <= 11; n += 1) {
     dependents.push(
       `- [?] #task Follower ${n} [dependsOn:: sase__fix-apollo] ^follower-${n}`,
     );
@@ -840,14 +864,34 @@ test("SL17 breakers link nothing and recover every successor", () => {
     },
     closed: FIX_CLOSED,
   });
-  assert.equal(plan.unblocked.length, 6);
+  // No breaker, no cap: 11 hand_off offers, all linked with select-all.
+  assert.equal(plan.unblocked.length, 11);
   for (const row of plan.unblocked) {
-    assert.equal(row.not_linked, "breaker");
-    assert.equal(row.link, null);
-    assert.equal(row.status_symbol, " ");
+    assert.equal(row.not_linked, null);
+    assert.ok(row.link);
+    assert.equal(row.status_symbol, "*");
+    assert.ok(row.offer);
+    assert.equal(row.offer.group, "hand_off");
   }
-  assert.equal(plan.placements.length, 0);
-  assert.equal(plan.edits.length, 6);
+  assert.equal(plan.placements.length, 11);
+  // SO4: no selection links nothing, mints nothing, creates no placeholder.
+  const { plan: nonePlan } = planFixture({
+    day: FIX_DAY,
+    notes: {
+      "sase.md": [
+        "- [?] #task Fix apollo machine! [id:: sase__fix-apollo] ^fix-apollo",
+        ...dependents,
+      ].join("\n"),
+    },
+    closed: FIX_CLOSED,
+    options: { selection: null },
+  });
+  for (const row of nonePlan.unblocked) {
+    assert.equal(row.not_linked, "not_selected");
+    assert.equal(row.link, null);
+    assert.equal(row.block_id === "" ? "" : row.block_id, row.block_id);
+  }
+  assert.equal(nonePlan.placements.length, 0);
 });
 
 test("SL18 the kill switch recovers without linking or minting", () => {
@@ -1380,12 +1424,15 @@ test("successor anchors never guess across roots", () => {
       },
     ],
   });
-  // The child's own root was never planned: it recovers instead of
-  // borrowing the first root's anchor.
+  // The child's own root was never planned: it never borrows the first
+  // root's slot anchor; with an implicit destination it is offered there
+  // (SO14), otherwise it recovers with no_destination (SO15-16).
   assert.equal(plan.unblocked.length, 1);
   assert.equal(plan.unblocked[0].block_id, "d");
-  assert.equal(plan.unblocked[0].link, null);
-  assert.equal(plan.unblocked[0].not_linked, "not_planned_today");
+  assert.ok(plan.unblocked[0].link);
+  assert.ok(plan.unblocked[0].offer);
+  assert.equal(plan.unblocked[0].offer.destination.entry_role, "implicit");
+  assert.equal(plan.unblocked[0].offer.destination.fallback, true);
 });
 
 test("a child with its own live link keeps its own slot", () => {

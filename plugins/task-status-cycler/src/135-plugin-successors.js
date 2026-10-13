@@ -522,6 +522,22 @@ class TaskStatusCyclerSuccessorsMixin {
       const editors = this.getOpenMarkdownEditors(context || {});
       const editor = dailyPath ? editors.get(dailyPath) : null;
       if (editor && typeof editor.getValue === "function") {
+        // Snapshot guard mirroring vault.process: a daily note edited while
+        // the picker was open fails loudly instead of splicing stale.
+        try {
+          const live = editor.getValue();
+          if (typeof insertion.snapshot === "string" && String(live || "") !== insertion.snapshot) {
+            for (const placement of placements) {
+              failPlacement(placement, "daily note changed before write");
+            }
+            return { failed, failureReason };
+          }
+        } catch (error) {
+          for (const placement of placements) {
+            failPlacement(placement, error.message || String(error));
+          }
+          return { failed, failureReason };
+        }
         const cursor = typeof editor.getCursor === "function"
           ? editor.getCursor()
           : null;

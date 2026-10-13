@@ -48,11 +48,10 @@ class TaskStatusCyclerSuccessorReceiptMixin {
   // Store the reopen receipt for a successful pass. `plan` carries the
   // applied `edits` and the final `unblocked` rows (failed rows already
   // unlinked); `insertion.text` is the post-insertion daily text the row
-  // line numbers address. Linked rows and project pull-in rows (linked or
-  // surfaced) are remembered; pull-in receipts store `before_line` so a
-  // same-day reopen can restore R byte-for-byte. Capture closes never
-  // reach this method, so they never gain a receipt (Alt+N is their
-  // per-link undo). Never throws.
+  // line numbers address. Each successfully picked row saves the complete
+  // pre-pass line and the exact post-write line (freshness/keeps/unblocked
+  // fields and any newly minted ID included); project pull-in rows save R
+  // byte-for-byte. Failed picks gain no receipt. Never throws.
   rememberSuccessorPass(closedIdentities, plan, insertion, info) {
     try {
       const rows = plan && Array.isArray(plan.unblocked)
@@ -104,10 +103,11 @@ class TaskStatusCyclerSuccessorReceiptMixin {
         const after = afterByEdit.get(`${row.note_path}\0${row.line}`);
         if (typeof after === "string") {
           const before = beforeByEdit.get(`${row.note_path}\0${row.line}`);
+          const picked = !!(row.link && !row.not_linked) || !!(row.offer && row.offer.selected);
           statuses.push({
             path: row.note_path,
             after_line: after,
-            before_line: row.trigger === "project_empty" && typeof before === "string"
+            before_line: typeof before === "string" && (picked || row.trigger === "project_empty")
               ? before
               : null,
             previous_symbol: row.previous_status_symbol,

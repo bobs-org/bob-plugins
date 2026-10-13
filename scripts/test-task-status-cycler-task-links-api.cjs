@@ -526,11 +526,12 @@ test("future-scheduled dependents stay Blocked on the planner, api, and close pa
   );
   // One gated plan recovers Plain to its derived rank, so the reopened
   // count propagates from that same plan instead of a legacy second scan.
+  // SO15: no day/section/open entry → no_destination (not_planned_today retired).
   assert.equal(finalized.reopened, 1);
   assert.equal(finalized.successors.unblocked.length, 1);
   assert.equal(
     finalized.successors.unblocked[0].not_linked,
-    "not_planned_today",
+    "no_destination",
   );
   assert.match(closeHarness.getSource("Tasks.md"), /^- \[\?\] #task Future/m);
   assert.match(closeHarness.getSource("Tasks.md"), /^- \[ \] #task Plain .* \^plain/m);

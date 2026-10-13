@@ -5363,13 +5363,9 @@ function projectPullInNeedsDependents(closed, noteTexts, today, notePaths) {
   return false;
 }
 // ---- src/085-successor-plan.js ----
-// Pure successor-link planner (docs/task-dependencies.md §12).
-// Mirrors the Rust capture planner's rule: dependents index, eligibility,
-// anchors, ordering, the breaker, placement edits, notice text, and the
-// config and today-path loaders. Pure code only: no vault reads, no editor
-// writes, no behavior change. The wiring phase consumes these helpers.
+// Pure successor-offer planner (docs/task-dependencies.md §12). Pure code
+// only: no vault reads, no editor writes.
 
-const SUCCESSOR_BREAKER_LIMIT = 5;
 const SUCCESSOR_NOTICE_TEXT_LIMIT = 48;
 
 // Status-type names, matching bob-cli's capture output (`/` is In Progress,
@@ -5914,8 +5910,7 @@ function successorOrderCompare(left, right) {
   );
 }
 
-// Plan the successor-link write set for one close gesture (§12.2 steps 1–8,
-// the breaker, and ordering). Options:
+// Plan the successor-offer write set (§12.2). Options:
 //
 // - `closed`: identities this gesture moved open → Done
 //   (`[{ path, blockId, taskId, text, rootKey? }]`); matching uses only the
@@ -5938,6 +5933,12 @@ function successorOrderCompare(left, right) {
 //   §12.4 link form.
 // - `closingEntry`: 0-based line of the Pomodoro this gesture closes.
 // - `noteTexts`: `{ path: text }` staged note bodies for mint used-IDs.
+// - `selection`: offer selection — null/undefined/[] links nothing (plan
+//   offers only); `"all"` links every selectable offer; an array/Set of
+//   offer keys links that subset (SO2–SO5, vector fixtures).
+// - `stampLine`: freshness stamper `(line, dateText) => string` from
+//   `this.getFreshnessStampLine()`; null preserves the safe no-stamp
+//   behavior (§12.4 PICK).
 //
 // Note `line` in rows is 0-based (mirroring Rust's `line_index`); day-file
 // `entry_line`/`line` in placements are 1-based (per §12.5). Returns
@@ -5984,6 +5985,8 @@ function planSuccessors(options = {}) {
   const notePaths = Array.isArray(options.notePaths)
     ? options.notePaths
     : Object.keys(noteTexts);
+  const selection = normalizeSuccessorSelection(options.selection);
+  const stampLine = typeof options.stampLine === "function" ? options.stampLine : null;
 
   const empty = {
     unblocked: [],
@@ -6003,6 +6006,7 @@ function planSuccessors(options = {}) {
     closed,
     index,
     dailyBefore,
+    dailyAfter,
     dailyPath,
     today,
     linkUnblocked,
@@ -6010,20 +6014,31 @@ function planSuccessors(options = {}) {
     closingEntry,
     noteTexts,
     notePaths,
+    selection,
+    stampLine,
   });
-  const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink) =>
+  const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink, extra = {}) =>
     applySuccessorVerdicts({
       recovers,
       successorMarks,
       stillBlocked,
       projectTagStripEdits,
       dailyPath,
+      dailyBefore,
+      dailyAfter,
       today,
       markUnblockedLine,
+      stampLine,
+      selection,
       isInbox,
       basenameCounts,
       noteTexts,
+      notePaths,
+      closingEntry,
       hasLiveLink,
+      projectOffers: extra.projectOffers || [],
+      foldedByProject: extra.foldedByProject || new Map(),
+      projectHeaders: extra.projectHeaders || new Map(),
     });
   // GATE: no `[id::]` in C and no pull-in candidate → nothing.
   // A `[?]` R pull-in still recovers N's residents via the same
@@ -6092,6 +6107,7 @@ function planSuccessors(options = {}) {
       candidateByLocation.set(`${task.path}\0${task.line}`, task);
     }
   }
+  collectProjectResidentCandidates(candidateByLocation, projectInfoByPath, projectRecoveryPaths, noteTexts);
   const candidates = [...candidateByLocation.values()]
     .sort(
       (left, right) =>
@@ -6140,45 +6156,32 @@ function planSuccessors(options = {}) {
     ) {
       continue;
     }
-    const postOpen = (task.dependsOn || []).filter((id) =>
-      openIdsAfter.has(String(id)),
-    );
-    // 1. Still waiting on another open prerequisite.
-    if (postOpen.length > 0) {
-      stillBlocked.push({
-        note_path: task.path,
-        block_id: task.blockId || "",
-        line: task.line,
-        text: successorDisplayText(task),
-        status_symbol: task.status,
-        reason: "waits_on",
-        waits_on: postOpen.length,
-        scheduled: null,
-        trigger: "dependency",
-      });
-      continue;
-    }
-    // 2. Future-scheduled dependents stay Blocked.
-    const futureScheduled = task.rawLine
-      ? findSingleFutureScheduledField(task.rawLine, today)
-      : null;
-    if (futureScheduled) {
-      stillBlocked.push({
-        note_path: task.path,
-        block_id: task.blockId || "",
-        line: task.line,
-        text: successorDisplayText(task),
-        status_symbol: task.status,
-        reason: "scheduled",
-        waits_on: 0,
-        scheduled: futureScheduled.value,
-        trigger: "dependency",
-      });
-      continue;
-    }
     const project = projectInfoByPath.get(String(task.path || ""));
     const projectResident = project && task.blockId !== "prj" &&
       project.tasks.some((candidate) => candidate.line === task.line);
+    const inRecovered = !!(project && projectResident && projectRecoveryPaths.has(task.path));
+    const postOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
+    if (postOpen.length > 0) {
+      stillBlocked.push({
+        note_path: task.path, block_id: task.blockId || "", line: task.line,
+        text: successorDisplayText(task), status_symbol: task.status,
+        reason: "waits_on", waits_on: postOpen.length, scheduled: null,
+        ...(inRecovered ? { project: String(task.path || ""), mutedProject: true } : {}),
+        trigger: "dependency",
+      });
+      continue;
+    }
+    const futureScheduled = task.rawLine ? findSingleFutureScheduledField(task.rawLine, today) : null;
+    if (futureScheduled) {
+      stillBlocked.push({
+        note_path: task.path, block_id: task.blockId || "", line: task.line,
+        text: successorDisplayText(task), status_symbol: task.status,
+        reason: "scheduled", waits_on: 0, scheduled: futureScheduled.value,
+        ...(inRecovered ? { project: String(task.path || ""), mutedProject: true } : {}),
+        trigger: "dependency",
+      });
+      continue;
+    }
     const projectTask = project && task.blockId === "prj";
     if (
       project && (projectResident || projectTask) &&
@@ -6231,22 +6234,33 @@ function planSuccessors(options = {}) {
       continue;
     }
     if (project && projectResident && projectRecoveryPaths.has(task.path)) {
-      const projectPredecessors = closed.filter(
-        (identity) => identity && identity.taskId &&
-          project.dependencyIds.some((id) =>
-            String(id) === String(identity.taskId)
-          ),
-      ).map((identity) => ({
-        note_path: String(identity.path || ""),
-        block_id: String(identity.blockId || ""),
-        text: String(identity.text || ""),
-      }));
-      recovers.push({
-        task,
-        reason: "project_member",
-        predecessorRows: projectPredecessors,
-      });
-      continue;
+      // DEDUP (§12.2): a resident also directly dependent appears once in
+      // hand_off, merging causes. Let it fall through to the hand-off offer
+      // path below.
+      if (!Array.isArray(task.dependsOn) || !task.dependsOn.some((id) => closedTaskIds.has(String(id)))) {
+        const unblocking = closed.filter(
+          (identity) => identity && identity.taskId &&
+            project.dependencyIds.some((id) => String(id) === String(identity.taskId)),
+        );
+        const verdict = decideProjectResidentVerdict(task, project, unblocking, {
+          openIdsAfter, today, hasLiveLinkBefore: (candidate) => hasLiveLink(liveBefore, candidate),
+          cancelledClose, linkUnblocked, anchorOf, dailyBefore,
+        });
+        if (verdict.kind === "stillBlocked") {
+          stillBlocked.push(verdict.row);
+          continue;
+        }
+        if (verdict.kind === "recover") {
+          recovers.push({ task, reason: verdict.reason, predecessorRows: verdict.predecessorRows, foldedProject: verdict.foldedProject });
+          continue;
+        }
+        successorMarks.push({
+          task, anchor: verdict.anchor, implicit: verdict.implicit,
+          predecessorRows: verdict.predecessorRows, notePath: task.path, line: task.line,
+          group: verdict.group, project: verdict.project,
+        });
+        continue;
+      }
     }
     // 4. Hidden tasks recover but never link.
     if (
@@ -6263,12 +6277,9 @@ function planSuccessors(options = {}) {
       recovers.push({ task, reason: "already_planned", predecessorRows });
       continue;
     }
-    // 6. No predecessor planned today → the ledger is left alone.
-    if (!anchored.some((pred) => pred.anchor.kind !== "none")) {
-      recovers.push({ task, reason: "not_planned_today", predecessorRows });
-      continue;
-    }
-    // 7. Kill switch: linking and minting off, recovery still runs.
+    // 6-7. Kill switch / cancel: recovery only, never an offer (§12.2
+    // steps 8–9). Checked before anchor resolution so disabled/cancelled
+    // closes never prompt.
     if (cancelledClose || !linkUnblocked) {
       recovers.push({
         task,
@@ -6277,18 +6288,41 @@ function planSuccessors(options = {}) {
       });
       continue;
     }
-    // 8. SUCCESSOR, anchored at the earliest anchor among its predecessors.
+    // 8. Anchor or implicit destination (§12.2 step 7 + §12.3). A direct
+    // offer uses the earliest predecessor slot/closing/inherit anchor; with
+    // no anchor, resolve the implicit destination from the staged daily
+    // text. Missing day/section/open entries or several open timed entries
+    // yields no_destination and no offer.
     anchored.sort(
       (left, right) =>
         successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor) ||
         (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1),
     );
+    const withAnchor = anchored.filter((pred) => pred.anchor.kind !== "none");
+    if (withAnchor.length > 0) {
+      successorMarks.push({
+        task,
+        anchor: withAnchor[0].anchor,
+        predecessorRows,
+        notePath: task.path,
+        line: task.line,
+        group: "hand_off",
+      });
+      continue;
+    }
+    const implicit = resolveSuccessorImplicitDestination(dailyBefore);
+    if (!implicit) {
+      recovers.push({ task, reason: "no_destination", predecessorRows });
+      continue;
+    }
     successorMarks.push({
       task,
-      anchor: anchored[0].anchor,
+      anchor: { kind: "implicit", entryLine: implicit.entryLine, bulletLine: null },
+      implicit,
       predecessorRows,
       notePath: task.path,
       line: task.line,
+      group: "hand_off",
     });
   }
 
@@ -6296,11 +6330,16 @@ function planSuccessors(options = {}) {
     recovers.push(recover);
   }
   for (const mark of pullIns.successorMarks) {
+    if (!mark.group) {
+      mark.group = "project_finished";
+    }
     successorMarks.push(mark);
   }
   for (const row of pullIns.still_blocked) {
     stillBlocked.push(row);
   }
+
+  const { foldedByProject, projectHeaders } = computeProjectFoldedAndHeaders(projectInfoByPath, projectRecoveryPaths, noteTexts, recovers);
 
   return applyContext(
     recovers,
@@ -6308,7 +6347,664 @@ function planSuccessors(options = {}) {
     stillBlocked,
     projectTagStripEdits,
     (task) => hasLiveLink(liveAfter, task),
+    { foldedByProject, projectHeaders },
   );
+}
+// ---- src/085b-successor-offers.js ----
+// Successor offer keys, implicit destination, and picker model
+// (docs/task-dependencies.md §12.2 KEYS, §12.3 implicit, §12.13).
+// Pure code only: no vault reads, no editor writes. Shared scope with
+// 085-successor-plan.js / 089-successor-project.js.
+
+function successorFnv1aHex(text) {
+  let hash = 0x811c9dc5;
+  const source = String(text || "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0").slice(0, 8).toLowerCase();
+}
+
+// Digest input: the mint-pipeline clean description of the body after the
+// status box, exactly as the mint helper sees it.
+function successorDigestForTask(task) {
+  try {
+    const raw = task && task.rawLine != null
+      ? successorBodyAfterStatusBox(task.rawLine)
+      : String((task && task.text) || "");
+    const cleaned = cleanDescription(raw, "#task", (task && task.blockId) || null);
+    return successorFnv1aHex(cleaned);
+  } catch (error) {
+    return "00000000";
+  }
+}
+
+// Assign stable offer keys for candidate tasks. Tasks with a block ID use
+// `<path>#^<id>`; idless rows use `<path>@<8 hex>` with `~k` for the k-th
+// duplicate digest in the same note in document order. Ordinals derive from
+// the note's full task rows (noteTasksByPath), not the selected subset, so
+// keys survive subset selections. `candidates` is the offer-candidate list
+// in planning order; `noteTasksByPath` maps path -> [{digest,line}] in
+// document order. Returns Map(candidate -> key).
+function assignSuccessorOfferKeys(candidates, noteTasksByPath) {
+  const keys = new Map();
+  const seenInSelection = new Map();
+  for (const task of Array.isArray(candidates) ? candidates : []) {
+    if (!task || !task.path) {
+      continue;
+    }
+    if (task.blockId) {
+      keys.set(task, `${task.path}#^${String(task.blockId)}`);
+      continue;
+    }
+    const digest = successorDigestForTask(task);
+    const base = `${task.path}@${digest}`;
+    // Ordinal among same-note same-digest rows in document order: count how
+    // many earlier rows in that note share the digest.
+    const noteRows = (noteTasksByPath && noteTasksByPath.get
+      ? noteTasksByPath.get(task.path)
+      : (noteTasksByPath || {})[task.path]) || null;
+    let ordinal = 0;
+    if (Array.isArray(noteRows)) {
+      for (const row of noteRows) {
+        if (!row || row.digest !== digest) {
+          continue;
+        }
+        if (Number(row.line) < Number(task.line)) {
+          ordinal += 1;
+        } else if (Number(row.line) === Number(task.line)) {
+          break;
+        }
+      }
+      // When the note rows lack this exact line (cache task without line),
+      // fall back to selection-order counting.
+      const hasLine = noteRows.some((row) => Number(row.line) === Number(task.line));
+      if (!hasLine) {
+        const count = seenInSelection.get(base) || 0;
+        ordinal = count;
+        seenInSelection.set(base, count + 1);
+      } else {
+        ordinal += 1;
+      }
+    } else {
+      const count = seenInSelection.get(base) || 0;
+      ordinal = count + 1;
+      seenInSelection.set(base, count + 1);
+    }
+    keys.set(task, ordinal <= 1 ? base : `${base}~${ordinal}`);
+  }
+  return keys;
+}
+
+// Build the per-note digest table from staged note texts (document order).
+// Each entry: path -> [{digest, line}] sorted by line.
+function buildSuccessorNoteDigestTable(noteTexts) {
+  const table = new Map();
+  const source = noteTexts && typeof noteTexts.get === "function"
+    ? [...noteTexts.entries()]
+    : Object.entries(noteTexts || {});
+  for (const [path, text] of source) {
+    const lines = String(text || "").split(/\r?\n/);
+    const rows = [];
+    for (let line = 0; line < lines.length; line += 1) {
+      const parsed = parseTaskDependencyLine(lines[line], path, line);
+      if (!parsed) {
+        continue;
+      }
+      const fake = { rawLine: parsed.lineText, text: parsed.lineText, blockId: parsed.blockId };
+      rows.push({ digest: successorDigestForTask(fake), line });
+    }
+    rows.sort((a, b) => a.line - b.line);
+    table.set(String(path), rows);
+  }
+  return table;
+}
+
+// Normalize a selection input to { mode, keys }. Missing/null/empty links
+// nothing. "all" links every offer. An array/Set of keys links that subset.
+// The runtime passes only the picker's returned keys.
+function normalizeSuccessorSelection(selection) {
+  if (selection === "all" || selection === true) {
+    return { mode: "all", keys: new Set() };
+  }
+  if (typeof selection === "string") {
+    const trimmed = selection.trim();
+    if (!trimmed || trimmed.toLowerCase() === "none") {
+      return { mode: "none", keys: new Set() };
+    }
+    if (trimmed.toLowerCase() === "all") {
+      return { mode: "all", keys: new Set() };
+    }
+    return { mode: "set", keys: new Set([trimmed]) };
+  }
+  if (Array.isArray(selection)) {
+    const keys = new Set(
+      selection.map((key) => String(key || "").trim()).filter(Boolean),
+    );
+    return keys.size === 0 ? { mode: "none", keys } : { mode: "set", keys };
+  }
+  if (selection instanceof Set) {
+    const keys = new Set(
+      [...selection].map((key) => String(key || "").trim()).filter(Boolean),
+    );
+    return keys.size === 0 ? { mode: "none", keys } : { mode: "set", keys };
+  }
+  return { mode: "none", keys: new Set() };
+}
+
+function successorSelectionPicks(normalized, key) {
+  if (!normalized || !key) {
+    return false;
+  }
+  if (normalized.mode === "all") {
+    return true;
+  }
+  if (normalized.mode === "set") {
+    return normalized.keys.has(String(key));
+  }
+  return false;
+}
+
+// Implicit destination: today's single open timed entry, else the first
+// open entry in document order (the plain @route:id Ensure-Next rule).
+// Returns { entryLine, name } or null when it fails (no day file, no
+// section, no open entry, or several open timed entries).
+function resolveSuccessorImplicitDestination(dailyLines) {
+  const lines = successorNormalizeLines(dailyLines);
+  const section = findPomodorosSectionInLines(lines);
+  if (!section) {
+    return null;
+  }
+  const entries = parseSuccessorLedgerEntries(lines);
+  const open = entries.filter((entry) => entry && entry.open);
+  if (open.length === 0) {
+    return null;
+  }
+  const timed = open.filter((entry) => {
+    try {
+      const parts = parsePomodoroEntryLineParts(String(lines[entry.entryLine] || ""));
+      return !!parts && parts.placeholder !== true;
+    } catch (error) {
+      return false;
+    }
+  });
+  if (timed.length === 1) {
+    const entry = timed[0];
+    return { entryLine: entry.entryLine, name: entry.name || "" };
+  }
+  if (timed.length > 1) {
+    return null;
+  }
+  const first = open[0];
+  return { entryLine: first.entryLine, name: first.name || "" };
+}
+
+// Destination label for the picker model (§12.13): the entry name, or the
+// line number for unnamed entries.
+function successorDestinationLabel(destination) {
+  if (!destination || typeof destination !== "object") {
+    return "";
+  }
+  if (destination.entry_name) {
+    return String(destination.entry_name);
+  }
+  if (Number.isInteger(destination.entry_line)) {
+    return `line ${destination.entry_line}`;
+  }
+  return "";
+}
+
+// Build the §12.13 picker model from a planned offer set. `offers` are the
+// selectable rows in ORDER with { key, text, notePath, status, destination,
+// needsBlockId, group, project }; `stillBlocked` supplies muted rows;
+// `foldedByProject` maps project path -> { hidden, alreadyPlanned,
+// subProjects }; `headers` maps project path -> header text (the ^prj line).
+// `budget` is { links, max } or null. Every offer is unselected.
+function buildSuccessorPickerModel(options = {}) {
+  const predecessors = Array.isArray(options.predecessors) ? options.predecessors : [];
+  const offers = Array.isArray(options.offers) ? options.offers : [];
+  const stillBlocked = Array.isArray(options.stillBlocked) ? options.stillBlocked : [];
+  const foldedByProject = options.foldedByProject instanceof Map
+    ? options.foldedByProject
+    : new Map(Object.entries(options.foldedByProject || {}));
+  const headers = options.headers instanceof Map
+    ? options.headers
+    : new Map(Object.entries(options.headers || {}));
+  const byGroup = new Map();
+  const ensureGroup = (group, project) => {
+    const key = `${group}\0${project || ""}`;
+    if (!byGroup.has(key)) {
+      let header = "";
+      if (group === "hand_off") {
+        header = "Hand-offs";
+      } else if (group === "project_finished") {
+        header = "Project finished";
+      } else if (group === "project") {
+        header = headers.get(project) || `Project ${String(project || "").split("/").pop() || project}`;
+      }
+      byGroup.set(key, {
+        group,
+        ...(project ? { project } : {}),
+        header,
+        rows: [],
+      });
+    }
+    return byGroup.get(key);
+  };
+  for (const offer of offers) {
+    if (!offer || !offer.key) {
+      continue;
+    }
+    const entry = ensureGroup(offer.group || "hand_off", offer.project || null);
+    entry.rows.push({
+      key: String(offer.key),
+      text: String(offer.text || ""),
+      notePath: String(offer.notePath || ""),
+      status: String(offer.status || " "),
+      destinationLabel: successorDestinationLabel(offer.destination),
+      needsBlockId: offer.needsBlockId === true,
+      selectable: true,
+    });
+  }
+  // Muted still-blocked project residents join their project group as
+  // unselectable rows.
+  for (const row of stillBlocked) {
+    if (!row || !row.project || (row.reason !== "project" && row.reason !== "waits_on" && row.reason !== "scheduled")) {
+      continue;
+    }
+    // Only project-group muted rows (those carrying a project path) are
+    // shown; dependency still-blocked rows stay in the card only.
+    if (!row.mutedProject) {
+      continue;
+    }
+    const entry = ensureGroup("project", row.project);
+    entry.rows.push({
+      key: String(row.mutedKey || `${row.note_path}@muted-${row.line}`),
+      text: String(row.text || ""),
+      notePath: String(row.note_path || ""),
+      status: String(row.status_symbol || "?"),
+      destinationLabel: "",
+      needsBlockId: false,
+      selectable: false,
+      mutedReason: String(row.reason || "project"),
+    });
+  }
+  const groups = [];
+  for (const group of ["hand_off", "project", "project_finished"]) {
+    for (const entry of byGroup.values()) {
+      if (entry.group !== group) {
+        continue;
+      }
+      const folded = foldedByProject.get(entry.project || "") || null;
+      if (folded && (folded.hidden > 0 || folded.alreadyPlanned > 0 || folded.subProjects > 0)) {
+        entry.folded = {
+          hidden: folded.hidden || 0,
+          alreadyPlanned: folded.alreadyPlanned || 0,
+          subProjects: folded.subProjects || 0,
+        };
+      }
+      groups.push(entry);
+    }
+  }
+  const model = {
+    title: predecessors.length === 1
+      ? `Pull in successors of ${predecessors[0].text || "task"}`
+      : `Pull in successors (${predecessors.length} closed)`,
+    predecessors: predecessors.map((pred) => ({
+      notePath: String(pred.note_path || pred.notePath || ""),
+      blockId: String(pred.block_id || pred.blockId || ""),
+      text: String(pred.text || ""),
+    })),
+    groups,
+  };
+  if (options.budget && typeof options.budget === "object" &&
+      Number.isFinite(options.budget.links) && Number.isFinite(options.budget.max)) {
+    model.budget = { links: options.budget.links, max: options.budget.max };
+  }
+  return model;
+}
+
+// Normalize a picker result to an array of keys. Null, empty, malformed,
+// and picker exceptions all mean no picks. Preserves the optional
+// destination seam without implementing it (§SO23 belongs to a later phase).
+function normalizeSuccessorPicks(result) {
+  try {
+    if (!result || typeof result !== "object") {
+      return [];
+    }
+    const picks = Array.isArray(result.picks) ? result.picks : null;
+    if (!picks) {
+      return [];
+    }
+    const keys = [];
+    for (const pick of picks) {
+      if (!pick || typeof pick !== "object") {
+        continue;
+      }
+      const key = String(pick.key || "").trim();
+      if (key && !keys.includes(key)) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  } catch (error) {
+    return [];
+  }
+}
+
+// Collect every open resident ([?] or [ ], including #ref/inbox/stale) of
+// each recovered project for PROJECT OFFERS. The ^prj itself is skipped.
+// Mutates candidateByLocation (Map location -> task). Pure apart from the
+// map write; never throws.
+function collectProjectResidentCandidates(candidateByLocation, projectInfoByPath, projectRecoveryPaths, noteTexts) {
+  try {
+    for (const recoveryPath of projectRecoveryPaths || []) {
+      const project = (projectInfoByPath instanceof Map ? projectInfoByPath.get(String(recoveryPath || "")) : (projectInfoByPath || {})[String(recoveryPath || "")]);
+      if (!project) {
+        continue;
+      }
+      const staged = noteTexts instanceof Map ? noteTexts.get(String(recoveryPath || "")) : noteTexts[String(recoveryPath || "")];
+      const stagedText = typeof staged === "string" ? staged : projectNoteTextFor(noteTexts, recoveryPath);
+      if (typeof stagedText !== "string" || !stagedText) {
+        continue;
+      }
+      const lines = stagedText.split(/\r?\n/);
+      const fenced = getFencedLineNumbers(lines);
+      for (let line = 0; line < lines.length; line += 1) {
+        if (fenced.has(line)) {
+          continue;
+        }
+        const text = String(lines[line] || "");
+        let status = null;
+        try {
+          status = getTaskStatusForLine(text, line);
+        } catch (error) {
+          status = null;
+        }
+        if (!status || (status.symbol !== "?" && status.symbol !== " ")) {
+          continue;
+        }
+        if (/^\s*>/.test(text)) {
+          continue;
+        }
+        const blockId = getTrailingBlockId(text);
+        if (successorIsProjectTask(blockId)) {
+          continue;
+        }
+        const locationKey = `${recoveryPath}\0${line}`;
+        if (candidateByLocation.has(locationKey)) {
+          continue;
+        }
+        if (successorIsDonePath(recoveryPath)) {
+          continue;
+        }
+        const metadata = parseTaskDependencyMetadata(text);
+        const scheduledMatches = findScheduledFieldMatches(text);
+        candidateByLocation.set(locationKey, {
+          path: String(recoveryPath),
+          line,
+          status: status.symbol,
+          blockId: blockId || null,
+          taskId: metadata.taskId || null,
+          dependsOn: Array.isArray(metadata.dependsOn) ? metadata.dependsOn.slice() : [],
+          text,
+          rawLine: text,
+          scheduled: scheduledMatches.length > 0 ? scheduledMatches[0].value : null,
+          hidden: successorHasHideTag(text),
+        });
+      }
+    }
+  } catch (error) {
+    // Best effort.
+  }
+}
+
+// Folded counts + headers for the picker model (§12.5 pull_in.groups).
+// Returns { foldedByProject: Map, projectHeaders: Map }.
+function computeProjectFoldedAndHeaders(projectInfoByPath, projectRecoveryPaths, noteTexts, recovers) {
+  const foldedByProject = new Map();
+  const projectHeaders = new Map();
+  const ensureFolded = (projectPath) => {
+    if (!foldedByProject.has(projectPath)) {
+      foldedByProject.set(projectPath, { hidden: 0, alreadyPlanned: 0, subProjects: 0 });
+    }
+    return foldedByProject.get(projectPath);
+  };
+  try {
+    for (const recover of recovers || []) {
+      if (recover && recover.foldedProject) {
+        const folded = ensureFolded(String(recover.foldedProject));
+        if (recover.reason === "hidden") {
+          folded.hidden += 1;
+        } else if (recover.reason === "already_planned") {
+          folded.alreadyPlanned += 1;
+        }
+      }
+    }
+  } catch (error) {
+    // Best effort.
+  }
+  try {
+    for (const path of projectRecoveryPaths || []) {
+      const project = projectInfoByPath instanceof Map
+        ? projectInfoByPath.get(String(path || ""))
+        : (projectInfoByPath || {})[String(path || "")];
+      if (!project || !project.projectTask) {
+        continue;
+      }
+      try {
+        const header = successorDisplayText({
+          rawLine: project.projectTask.lineText,
+          blockId: project.projectTask.blockId,
+          text: project.projectTask.lineText,
+        });
+        if (header) {
+          projectHeaders.set(String(path), header);
+        }
+      } catch (error) {
+        // Best effort.
+      }
+      try {
+        const staged = noteTexts instanceof Map ? noteTexts.get(String(path || "")) : noteTexts[String(path || "")];
+        const stagedText = typeof staged === "string" ? staged : projectNoteTextFor(noteTexts, path);
+        if (typeof stagedText === "string") {
+          const lines = stagedText.split(/\r?\n/);
+          const markerLine = project.projectTask.line;
+          let subCount = 0;
+          if (Number.isInteger(markerLine) && markerLine >= 0 && markerLine < lines.length) {
+            const prjIndent = getLineIndentation(String(lines[markerLine] || "")).length;
+            for (let line = markerLine + 1; line < lines.length; line += 1) {
+              const text = String(lines[line] || "");
+              if (!text.trim()) {
+                break;
+              }
+              const indent = getLineIndentation(text).length;
+              if (indent <= prjIndent && parseListItemPrefix(text)) {
+                break;
+              }
+              if (!parseListItemPrefix(text) || !text.includes(PROJECT_SUBPROJECTS_MARKER)) {
+                continue;
+              }
+              PROJECT_WIKILINK_RE.lastIndex = 0;
+              let match;
+              const seen = new Set();
+              while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
+                const target = String(match[1] || "").split("|")[0].split("#")[0].trim();
+                if (!target || seen.has(target)) {
+                  continue;
+                }
+                seen.add(target);
+                const start = match.index;
+                const end = start + match[0].length;
+                const before = text.slice(0, start).trimEnd();
+                const after = text.slice(end).trimStart();
+                if (before.endsWith("~~") && after.startsWith("~~")) {
+                  const marker = after.slice(2).trimStart();
+                  if (marker.startsWith("✅") || marker.startsWith("❌")) {
+                    continue;
+                  }
+                }
+                subCount += 1;
+              }
+              break;
+            }
+          }
+          if (subCount > 0) {
+            ensureFolded(String(path)).subProjects = subCount;
+          }
+        }
+      } catch (error) {
+        // Best effort.
+      }
+    }
+  } catch (error) {
+    // Best effort.
+  }
+  return { foldedByProject, projectHeaders };
+}
+
+// Group order for §12.2 ORDER: hand_off, project, project_finished.
+function successorGroupOrder(group) {
+  if (group === "hand_off") {
+    return 0;
+  }
+  if (group === "project") {
+    return 1;
+  }
+  return 2;
+}
+
+function successorOfferOrderCompare(left, right) {
+  return successorGroupOrder(left.group) - successorGroupOrder(right.group) ||
+    successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor) ||
+    (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1) ||
+    String(left.notePath || "").localeCompare(String(right.notePath || "")) ||
+    (Number(left.line) || 0) - (Number(right.line) || 0);
+}
+
+// One project-resident verdict for PROJECT OFFERS (§12.2). Returns a
+// descriptor consumed by planSuccessors' candidate loop; never throws.
+// `ctx` carries { openIdsAfter, today, hasLiveLinkBefore, cancelledClose,
+// linkUnblocked, anchorOf, dailyBefore }.
+function decideProjectResidentVerdict(task, project, unblocking, ctx = {}) {
+  const openIdsAfter = ctx.openIdsAfter instanceof Set ? ctx.openIdsAfter : new Set();
+  const today = typeof ctx.today === "string" ? ctx.today : formatLocalDate();
+  const hasLiveLinkBefore = typeof ctx.hasLiveLinkBefore === "function" ? ctx.hasLiveLinkBefore : () => false;
+  const cancelledClose = ctx.cancelledClose === true;
+  const linkUnblocked = ctx.linkUnblocked !== false;
+  const anchorOf = typeof ctx.anchorOf === "function" ? ctx.anchorOf : () => ({ kind: "none", entryLine: null, bulletLine: null });
+  const dailyBefore = ctx.dailyBefore || [];
+  const projectPredecessors = unblocking.map((identity) => ({
+    note_path: String(identity.path || ""),
+    block_id: String(identity.blockId || ""),
+    text: String(identity.text || ""),
+  }));
+  const ownOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
+  let ownFuture = null;
+  try {
+    ownFuture = task.rawLine ? findSingleFutureScheduledField(task.rawLine, today) : null;
+  } catch (error) {
+    ownFuture = null;
+  }
+  if (ownOpen.length > 0 || ownFuture) {
+    return {
+      kind: "stillBlocked",
+      row: {
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: successorDisplayText(task),
+        status_symbol: task.status,
+        reason: ownFuture && ownOpen.length === 0 ? "scheduled" : "waits_on",
+        waits_on: ownOpen.length,
+        scheduled: ownFuture ? ownFuture.value : null,
+        project: String(task.path || ""),
+        mutedProject: true,
+        trigger: "dependency",
+      },
+    };
+  }
+  if (task.hidden === true || (task.rawLine && successorHasHideTag(task.rawLine))) {
+    return { kind: "recover", reason: "hidden", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
+  }
+  if (hasLiveLinkBefore(task)) {
+    return { kind: "recover", reason: "already_planned", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
+  }
+  if (cancelledClose || linkUnblocked === false) {
+    return { kind: "recover", reason: cancelledClose ? "cancelled" : "disabled", predecessorRows: projectPredecessors };
+  }
+  const predAnchors = unblocking.map((identity) => ({ identity, anchor: anchorOf(identity) }))
+    .filter((entry) => entry.anchor.kind !== "none")
+    .sort((l, r) => successorAnchorPosition(l.anchor) - successorAnchorPosition(r.anchor) ||
+      (l.anchor.bulletLine ?? -1) - (r.anchor.bulletLine ?? -1));
+  if (predAnchors.length > 0) {
+    return {
+      kind: "offer",
+      anchor: predAnchors[0].anchor,
+      predecessorRows: projectPredecessors,
+      group: "project",
+      project: String(task.path || ""),
+    };
+  }
+  const implicitResident = resolveSuccessorImplicitDestination(dailyBefore);
+  if (!implicitResident) {
+    return { kind: "recover", reason: "no_destination", predecessorRows: projectPredecessors };
+  }
+  return {
+    kind: "offer",
+    anchor: { kind: "implicit", entryLine: implicitResident.entryLine, bulletLine: null },
+    implicit: implicitResident,
+    predecessorRows: projectPredecessors,
+    group: "project",
+    project: String(task.path || ""),
+  };
+}
+
+// Destination object for an offer (§12.5): { day_file, entry_name,
+// entry_role, fallback }. entry_role is slot|closing|implicit|created;
+// fallback true when the implicit path was used because no §12.3 anchor
+// existed. `anchor` is the offer's anchor; `implicit` is the resolved
+// implicit entry when anchor.kind === "implicit".
+function successorOfferDestination(anchor, implicit, dailyLines, dailyPath) {
+  const dayFile = String(dailyPath || "");
+  try {
+    if (anchor && anchor.kind === "implicit" && implicit) {
+      const name = typeof implicit.name === "string" ? implicit.name : successorEntryNameAt(successorNormalizeLines(dailyLines), implicit.entryLine);
+      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "implicit", fallback: true };
+    }
+    if (anchor && anchor.kind === "closing") {
+      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
+      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "closing", fallback: false };
+    }
+    if (anchor && anchor.entryLine != null) {
+      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
+      const role = anchor.kind === "inherit" ? "slot" : "slot";
+      return { day_file: dayFile, entry_name: String(name || ""), entry_role: role, fallback: false };
+    }
+  } catch (error) {
+    // Fall through.
+  }
+  return { day_file: dayFile, entry_name: "", entry_role: "implicit", fallback: true };
+}
+
+// Defensive feature detection for nav api.successors v1 (§12.13).
+function getSuccessorPickerApi(app) {
+  try {
+    const plugins = (app && app.plugins && app.plugins.plugins) || {};
+    const nav = plugins["bob-navigation-hotkeys"];
+    const api = nav && nav.api;
+    const successors = api && api.successors;
+    if (!successors || !(Number(successors.version) >= 1)) {
+      return null;
+    }
+    if (typeof successors.pick !== "function") {
+      return null;
+    }
+    return successors;
+  } catch (error) {
+    return null;
+  }
 }
 // ---- src/086-successor-ids.js ----
 // Successor block-ID minting (docs/task-dependencies.md §12.4, §11.7 SB
@@ -6781,6 +7477,7 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
   let seq = 0;
 
   const slotGroups = new Map();
+  const implicitGroups = new Map();
   const closingItems = [];
   list.forEach((placement, order) => {
     const anchor = placement && placement.anchor;
@@ -6789,6 +7486,16 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
         slotGroups.set(anchor.bulletLine, []);
       }
       slotGroups.get(anchor.bulletLine).push({ placement, order });
+    } else if (anchor && anchor.kind === "implicit") {
+      const target = Number.isInteger(anchor.entryLine) ? anchor.entryLine : (placement.implicit && placement.implicit.entryLine);
+      if (!Number.isInteger(target)) {
+        closingItems.push({ placement, order });
+      } else {
+        if (!implicitGroups.has(target)) {
+          implicitGroups.set(target, []);
+        }
+        implicitGroups.get(target).push({ placement, order });
+      }
     } else {
       closingItems.push({ placement, order });
     }
@@ -6839,6 +7546,43 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
         entryCreated: false,
       })),
     });
+  }
+
+  // Implicit destinations (§12.3): entry children, one tab, after existing
+  // children, replacing a lone stub. Never a closing placeholder.
+  for (const [targetLine, items] of implicitGroups) {
+    if (!Number.isInteger(targetLine) || targetLine < 0 || targetLine >= lines.length) {
+      for (const item of items) {
+        skipped.push({ key: (item.placement && item.placement.key) || null, order: item.order, reason: "no-implicit-entry" });
+      }
+      continue;
+    }
+    const target = entries.find((entry) => entry.entryLine === targetLine);
+    if (!target || !target.open) {
+      for (const item of items) {
+        skipped.push({ key: (item.placement && item.placement.key) || null, order: item.order, reason: "no-implicit-entry" });
+      }
+      continue;
+    }
+    const range = section ? getSubBulletBlockRange(lines, targetLine, section) : { startLine: targetLine + 1, endLine: targetLine + 1 };
+    const children = lines.slice(range.startLine, range.endLine);
+    if (children.length === 1 && children[0].trim() === "-") {
+      ops.push({
+        at: range.startLine,
+        deleteCount: 1,
+        lines: items.map((item) => `\t- ${item.placement.blockLink}`),
+        seq: seq++,
+        marks: items.map((item, index) => ({ order: item.order, index, entryOriginal: targetLine, entryCreated: false })),
+      });
+    } else {
+      ops.push({
+        at: range.endLine,
+        deleteCount: 0,
+        lines: items.map((item) => `\t- ${item.placement.blockLink}`),
+        seq: seq++,
+        marks: items.map((item, index) => ({ order: item.order, index, entryOriginal: targetLine, entryCreated: false })),
+      });
+    }
   }
 
   if (closingItems.length > 0) {
@@ -7032,6 +7776,11 @@ function successorNoticeText(model = {}) {
     const count = Number(failure.count);
     return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})`;
   }
+  // Mixed picked/unpicked batches (§12.6 pulled-in summary) before single.
+  if (linked.length > 0 && notLinked.length > 0) {
+    const total = linked.length + notLinked.length;
+    return `🔓 Pulled in ${linked.length} of ${total}`;
+  }
   if (linked.length === 1) {
     const row = linked[0];
     const text = truncateSuccessorNoticeText(row.text);
@@ -7066,9 +7815,33 @@ function successorNoticeText(model = {}) {
     }
     return `🔓 ${linked.length} linked · ${names.join(", ")}${suffix}`;
   }
+  // Legacy breaker copy: kept for older payloads only. New output never
+  // emits breaker rows (§12.2 BREAKER deleted).
   const breaker = notLinked.filter((row) => row.not_linked === "breaker");
   if (breaker.length > 0 && breaker.length === notLinked.length) {
     return `🔓 ${breaker.length} unblocked · not linked (more than 5)`;
+  }
+  if (linked.length === 0 && notLinked.length > 0) {
+    const notSelected = notLinked.filter((row) => row.not_linked === "not_selected");
+    const noDestination = notLinked.filter((row) => row.not_linked === "no_destination");
+    if (notSelected.length > 0 && notSelected.length === notLinked.length) {
+      if (notLinked.length === 1) {
+        const row = notLinked[0];
+        const lane = row.status_name || successorStatusName(row.status_symbol);
+        const suffix = isProjectEmptyRow(row) ? projectEmptySuffix : "";
+        return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · not pulled in${suffix}`;
+      }
+      const suffix = notLinked.every(isProjectEmptyRow) ? projectEmptySuffix : "";
+      return `🔓 ${notLinked.length} unblocked · not pulled in${suffix}`;
+    }
+    if (noDestination.length > 0 && noDestination.length === notLinked.length) {
+      if (notLinked.length === 1) {
+        const row = notLinked[0];
+        const lane = row.status_name || successorStatusName(row.status_symbol);
+        return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · no open Pomodoro`;
+      }
+      return `🔓 ${notLinked.length} unblocked · no open Pomodoro`;
+    }
   }
   if (notLinked.length === 1) {
     const row = notLinked[0];
@@ -7078,6 +7851,15 @@ function successorNoticeText(model = {}) {
     }
     if (isProjectEmptyRow(row)) {
       return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})${projectEmptySuffix}`;
+    }
+    if (row.not_linked === "project_member") {
+      return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · project member`;
+    }
+    if (row.not_linked === "no_destination") {
+      return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · no open Pomodoro`;
+    }
+    if (row.not_linked === "not_selected") {
+      return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · not pulled in`;
     }
     return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})`;
   }
@@ -8545,26 +9327,6 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
-    if (cancelledClose && parentPullIn) {
-      recovers.push({
-        task,
-        reason: "cancelled",
-        predecessorRows,
-        pullIn: true,
-        hideRemoved,
-      });
-      continue;
-    }
-    if (!hasAnchor) {
-      recovers.push({
-        task,
-        reason: "not_planned_today",
-        predecessorRows,
-        pullIn: true,
-        hideRemoved,
-      });
-      continue;
-    }
     if (cancelledClose) {
       recovers.push({
         task,
@@ -8585,6 +9347,31 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
+    if (!hasAnchor) {
+      const implicitPull = resolveSuccessorImplicitDestination(dailyBefore);
+      if (!implicitPull) {
+        recovers.push({
+          task,
+          reason: "no_destination",
+          predecessorRows,
+          pullIn: true,
+          hideRemoved,
+        });
+        continue;
+      }
+      successorMarks.push({
+        task,
+        anchor: { kind: "implicit", entryLine: implicitPull.entryLine, bulletLine: null },
+        implicit: implicitPull,
+        predecessorRows,
+        notePath: task.path,
+        line: task.line,
+        pullIn: true,
+        hideRemoved,
+        group: "project_finished",
+      });
+      continue;
+    }
     successorMarks.push({
       task,
       anchor: anchored.anchor,
@@ -8593,6 +9380,7 @@ function planProjectPullIns(options = {}) {
       line: task.line,
       pullIn: true,
       hideRemoved,
+      group: "project_finished",
     });
   }
 
@@ -8621,51 +9409,138 @@ function projectPullInRewriteLine(before, rank, options = {}) {
   return replaceTaskStatusSymbol(stripped, rank);
 }
 
+// applySuccessorVerdicts lives in 089b-successor-verdicts.js (offer-aware
+// SELECTION/PICK writer). This fragment keeps the pull-in planner only.
+// ---- src/089b-successor-verdicts.js ----
+// Offer-aware verdict applier (docs/task-dependencies.md §12.2 SELECTION,
+// §12.4 PICK, §12.5 reporting). Pure code: no vault reads, no editor writes.
+// Extracted from 089 so both fragments stay ≤1000 lines. Shared scope.
+
 function applySuccessorVerdicts(context) {
   const recovers = Array.isArray(context.recovers) ? context.recovers : [];
-  const successorMarks = Array.isArray(context.successorMarks)
-    ? context.successorMarks
-    : [];
+  const successorMarks = Array.isArray(context.successorMarks) ? context.successorMarks : [];
   const stillBlocked = Array.isArray(context.stillBlocked) ? context.stillBlocked : [];
-  const edits = Array.isArray(context.projectTagStripEdits)
-    ? context.projectTagStripEdits.slice()
-    : [];
+  const edits = Array.isArray(context.projectTagStripEdits) ? context.projectTagStripEdits.slice() : [];
   const dailyPath = context.dailyPath || "";
+  const dailyBefore = context.dailyBefore != null ? context.dailyBefore : [];
   const today = context.today;
   const markUnblockedLine = context.markUnblockedLine;
+  const stampLine = typeof context.stampLine === "function" ? context.stampLine : null;
+  const rawSelection = context.selection;
+  const selection = rawSelection && typeof rawSelection === "object" && rawSelection.mode
+    ? rawSelection
+    : normalizeSuccessorSelection(rawSelection);
   const isInbox = context.isInbox;
   const basenameCounts = context.basenameCounts;
   const noteTexts = context.noteTexts || {};
   const hasLiveLink = context.hasLiveLink;
+  const foldedByProject = context.foldedByProject instanceof Map ? context.foldedByProject : new Map();
+  const projectHeaders = context.projectHeaders instanceof Map ? context.projectHeaders : new Map();
 
   const unblocked = [];
   let placements = [];
+
+  // DEDUP (§12.2): one row per task identity; a resident also directly
+  // dependent appears once in hand_off, merging causes.
+  const deduped = new Map();
+  const priorityOf = (mark) => {
+    const group = mark.group || (mark.pullIn ? "project_finished" : "hand_off");
+    if (group === "hand_off") {
+      return 0;
+    }
+    if (group === "project") {
+      return 1;
+    }
+    return 2;
+  };
+  for (const mark of successorMarks) {
+    if (!mark || !mark.task || !mark.task.path) {
+      continue;
+    }
+    const location = `${mark.task.path}\0${mark.task.line}`;
+    const existing = deduped.get(location);
+    if (!existing) {
+      deduped.set(location, mark);
+      continue;
+    }
+    if (priorityOf(mark) < priorityOf(existing)) {
+      const mergedRows = [...(existing.predecessorRows || [])];
+      for (const row of mark.predecessorRows || []) {
+        if (!mergedRows.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
+          mergedRows.push(row);
+        }
+      }
+      deduped.set(location, { ...mark, predecessorRows: mergedRows });
+    } else {
+      const mergedRows = [...(existing.predecessorRows || [])];
+      for (const row of mark.predecessorRows || []) {
+        if (!mergedRows.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
+          mergedRows.push(row);
+        }
+      }
+      existing.predecessorRows = mergedRows;
+    }
+  }
+  const uniqueMarks = [...deduped.values()];
+  for (const mark of uniqueMarks) {
+    if (!mark.group) {
+      mark.group = mark.pullIn ? "project_finished" : "hand_off";
+    }
+  }
+
+  // Stable keys (§12.2 KEYS). Ordinals derive from the note's full task rows.
+  let digestTable = null;
+  try {
+    digestTable = buildSuccessorNoteDigestTable(noteTexts);
+  } catch (error) {
+    digestTable = new Map();
+  }
+  const keyByTask = assignSuccessorOfferKeys(uniqueMarks.map((mark) => mark.task), digestTable);
+  // Fallback for cache tasks whose note rows lack the line: assign by digest.
+  for (const mark of uniqueMarks) {
+    if (!keyByTask.has(mark.task)) {
+      if (mark.task.blockId) {
+        keyByTask.set(mark.task, `${mark.task.path}#^${String(mark.task.blockId)}`);
+      } else {
+        keyByTask.set(mark.task, `${mark.task.path}@${successorDigestForTask(mark.task)}`);
+      }
+    }
+  }
+
+  // ORDER (§12.2): group, anchor ledger position, note path, line.
+  uniqueMarks.sort(successorOfferOrderCompare);
+  const offerNumberByKey = new Map();
+  uniqueMarks.forEach((mark, index) => {
+    offerNumberByKey.set(keyByTask.get(mark.task), index + 1);
+  });
 
   const pushRow = (task, rank, extra) => {
     const pullIn = extra.pullIn === true;
     const before = task.rawLine != null ? String(task.rawLine) : null;
     let after = before;
     if (before != null) {
-      after = pullIn
-        ? projectPullInRewriteLine(before, rank, {
+      if (extra.linked) {
+        after = extra.after;
+      } else if (pullIn) {
+        after = projectPullInRewriteLine(before, rank, {
           recoverRank: extra.recoverRank === true,
           markUnblockedLine,
           today,
           isDailyNote: isDailyNotePath(task.path),
-          isToday: hasLiveLink(task),
-        })
-        : extra.linked
-          ? extra.after
-          : rewriteRecoveredTaskLine(before, rank, {
-            markUnblockedLine,
-            today,
-            isDailyNote: isDailyNotePath(task.path),
-            isToday: hasLiveLink(task),
-          });
+          isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+        });
+      } else {
+        after = rewriteRecoveredTaskLine(before, rank, {
+          markUnblockedLine,
+          today,
+          isDailyNote: isDailyNotePath(task.path),
+          isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+        });
+      }
     }
-    const hideRemoved = pullIn && before != null &&
-      removeProjectHideTags(before) !== before;
-    if (rank === task.status && !extra.always && !hideRemoved && !extra.linked) {
+    const hideRemoved = pullIn && before != null && removeProjectHideTags(before) !== before;
+    const isOffer = extra.offer != null;
+    if (!isOffer && rank === task.status && !extra.always && !hideRemoved && !extra.linked) {
       return null;
     }
     if (before !== after && after != null) {
@@ -8683,13 +9558,16 @@ function applySuccessorVerdicts(context) {
       previous_status_name: successorStatusName(task.status),
       status_symbol: rank,
       status_name: successorStatusName(rank),
-      inbox: isInbox(task.path) === true,
+      inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
       unblocked_by: extra.predecessorRows || [],
       link: extra.link || null,
       not_linked: extra.not_linked == null ? null : extra.not_linked,
       trigger: pullIn ? "project_empty" : "dependency",
       hide_removed: hideRemoved,
     };
+    if (isOffer) {
+      row.offer = extra.offer;
+    }
     unblocked.push(row);
     return unblocked.length - 1;
   };
@@ -8699,59 +9577,146 @@ function applySuccessorVerdicts(context) {
     const pullIn = recover.pullIn === true;
     const rank = recover.raiseToNext
       ? (task.status === "?" || task.status === " " ? "*" : task.status)
-      : (task.status === "?"
-        ? (hasLiveLink(task) ? "*" : " ")
-        : task.status);
+      : (task.status === "?" ? (typeof hasLiveLink === "function" && hasLiveLink(task) ? "*" : " ") : task.status);
     const reason = alwaysReason || recover.reason;
     pushRow(task, rank, {
       pullIn,
       recoverRank: pullIn && !recover.raiseToNext,
-      always: recover.hideRemoved === true || alwaysReason === "breaker",
+      always: recover.hideRemoved === true,
       predecessorRows: recover.predecessorRows,
       not_linked: reason,
     });
   };
 
-  const pullInMarks = successorMarks.filter((mark) => mark.pullIn);
-  const regularMarks = successorMarks.filter((mark) => !mark.pullIn);
-  const broken = regularMarks.length > SUCCESSOR_BREAKER_LIMIT;
   for (const recover of recovers) {
     pushRecover(recover, false);
   }
-  const linkedMarks = broken ? pullInMarks : successorMarks.slice().sort(successorOrderCompare);
-  if (broken) {
-    pullInMarks.sort(successorOrderCompare);
-  }
+
   const mintedByNote = new Map();
-  for (const mark of linkedMarks) {
+  const offers = [];
+  for (const mark of uniqueMarks) {
     const task = mark.task;
+    const key = keyByTask.get(task);
+    const group = mark.group || (mark.pullIn ? "project_finished" : "hand_off");
+    const destination = successorOfferDestination(mark.anchor, mark.implicit, dailyBefore, dailyPath);
+    const selected = successorSelectionPicks(selection, key);
+    const needsBlockId = !task.blockId;
+    const offer = {
+      key: String(key),
+      n: offerNumberByKey.get(key) || 0,
+      group,
+      ...(mark.project || group === "project" ? { project: String(mark.project || task.path) } : {}),
+      destination,
+      selected,
+      block_id_needed: needsBlockId,
+    };
+    offers.push({
+      key: offer.key, text: successorDisplayText(task), notePath: task.path, status: task.status,
+      destination, needsBlockId, group, project: offer.project || null,
+      anchor: mark.anchor, implicit: mark.implicit || null, predecessorRows: mark.predecessorRows || [],
+      task, line: task.line,
+    });
+    if (!selected) {
+      // Unpicked: recover exactly as today's recover rule (WRITE rule kept),
+      // no mint, no link, no stamp. Emitted even when unchanged (SO8).
+      const rank = mark.pullIn && mark.raiseToNext
+        ? (task.status === "?" || task.status === " " ? "*" : task.status)
+        : (task.status === "?" ? (typeof hasLiveLink === "function" && hasLiveLink(task) ? "*" : " ") : task.status);
+      const before = task.rawLine != null ? String(task.rawLine) : null;
+      let after = before;
+      if (before != null) {
+        if (mark.pullIn) {
+          after = projectPullInRewriteLine(before, rank, {
+            recoverRank: true,
+            markUnblockedLine,
+            today,
+            isDailyNote: isDailyNotePath(task.path),
+            isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+          });
+        } else {
+          after = rewriteRecoveredTaskLine(before, rank, {
+            markUnblockedLine,
+            today,
+            isDailyNote: isDailyNotePath(task.path),
+            isToday: typeof hasLiveLink === "function" ? hasLiveLink(task) : false,
+          });
+        }
+      }
+      const hideRemoved = mark.pullIn === true && before != null && removeProjectHideTags(before) !== before;
+      if (before !== after && after != null) {
+        edits.push({ path: task.path, line: task.line, before, after });
+      }
+      const text = mark.pullIn ? projectPullInDisplayText(task, after != null ? after : before) : successorDisplayText(task);
+      unblocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text,
+        previous_status_symbol: task.status,
+        previous_status_name: successorStatusName(task.status),
+        status_symbol: rank,
+        status_name: successorStatusName(rank),
+        inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
+        unblocked_by: mark.predecessorRows || [],
+        link: null,
+        not_linked: "not_selected",
+        trigger: mark.pullIn ? "project_empty" : "dependency",
+        hide_removed: hideRemoved,
+        offer: { ...offer, selected: false },
+      });
+      continue;
+    }
+    // Picked (§12.4 PICK): raise Ready/Blocked to Next without demoting
+    // Next/Pending, mint only when necessary, strip the project tag, stamp
+    // freshness through ledger-tools. One guarded edit per task line.
     const rank = task.status === "?" || task.status === " " ? "*" : task.status;
     let blockId = task.blockId || "";
     let blockIdCreated = false;
     const before = task.rawLine != null ? String(task.rawLine) : null;
-    let after = null;
-    if (mark.pullIn) {
-      after = null;
-    } else {
-      if (!blockId) {
-        if (!mintedByNote.has(task.path)) {
-          mintedByNote.set(
-            task.path,
-            collectSuccessorUsedIds(noteTexts[task.path] ?? ""),
-          );
+    let after = before;
+    if (before != null) {
+      if (mark.pullIn) {
+        const raised = projectPullInRewriteLine(before, rank, {
+          recoverRank: false,
+          markUnblockedLine,
+          today,
+          isDailyNote: isDailyNotePath(task.path),
+          isToday: true,
+        });
+        after = applyFreshStampLine(raised != null ? raised : before, stampLine, today);
+      } else {
+        if (!blockId) {
+          if (!mintedByNote.has(task.path)) {
+            let stagedText = "";
+            try {
+              stagedText = noteTexts instanceof Map ? noteTexts.get(task.path) : noteTexts[task.path];
+            } catch (error) {
+              stagedText = "";
+            }
+            mintedByNote.set(task.path, collectSuccessorUsedIds(stagedText ?? ""));
+          }
+          const used = mintedByNote.get(task.path);
+          blockId = mintBlockId(cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"), used);
+          used.add(blockId);
+          blockIdCreated = true;
         }
-        const used = mintedByNote.get(task.path);
-        blockId = mintBlockId(
-          cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"),
-          used,
-        );
-        used.add(blockId);
-        blockIdCreated = true;
+        let raised = replaceTaskStatusSymbol(before, rank);
+        if (blockIdCreated) {
+          raised = `${raised.replace(/\s+$/, "")} ^${blockId}`;
+        }
+        // Strip the inherited project tag per PDC3 without touching own
+        // reasons (schedules/IDs/dependency fields never change here).
+        raised = stripProjectBlockedResidentTag(raised);
+        after = applyFreshStampLine(raised, stampLine, today);
       }
-      after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
-      if (after != null && blockIdCreated) {
-        after = `${after.replace(/\s+$/, "")} ^${blockId}`;
+    } else if (!blockId && !mark.pullIn) {
+      if (!mintedByNote.has(task.path)) {
+        mintedByNote.set(task.path, collectSuccessorUsedIds(""));
       }
+      const used = mintedByNote.get(task.path);
+      blockId = mintBlockId(cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"), used);
+      used.add(blockId);
+      blockIdCreated = true;
     }
     const rowIndex = pushRow(task, rank, {
       pullIn: mark.pullIn === true,
@@ -8762,7 +9727,7 @@ function applySuccessorVerdicts(context) {
       not_linked: null,
       link: {
         day_file: dailyPath,
-        entry_name: "",
+        entry_name: destination.entry_name || "",
         entry_line: null,
         entry_created: false,
         next_up: false,
@@ -8770,29 +9735,34 @@ function applySuccessorVerdicts(context) {
         block_link: successorLinkText(task.path, blockId, dailyPath, basenameCounts),
         block_id_created: blockIdCreated,
       },
+      offer: { ...offer, selected: true },
     });
+    // Fix the queued edit to the consolidated pick line (pushRow queued the
+    // pre-stamp line for non-pullIn picks via extra.after pre-mint? No: we
+    // passed the stamped line, so the edit is already consolidated. For
+    // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
       placements.push({
-        key: `${task.path}|${blockId}`,
+        key: String(key),
         rowIndex,
         anchor: mark.anchor,
+        implicit: mark.implicit || null,
         blockLink: unblocked[rowIndex].link.block_link,
       });
     }
   }
-  if (broken) {
-    for (const mark of regularMarks) {
-      pushRecover(mark, "breaker");
-    }
-    // Pull-ins still link; only regular successors are broken.
-  }
 
+  // Placements already in ORDER (offers sorted); keep that order for the
+  // insertion planner.
   return {
     unblocked,
     still_blocked: stillBlocked,
     edits,
     placements,
     unblocked_check: "checked",
+    offers,
+    foldedByProject,
+    projectHeaders,
   };
 }
 // ---- src/090-source-and-formatting.js ----
@@ -10921,11 +11891,25 @@ class TaskStatusCyclerReferencesMixin {
           recoveryFailures = [
             successors.failure.reason || "blocked dependents could not be checked",
           ];
-          new Notice("Closed tasks, but blocked dependents could not be checked.");
+          const walkReturn = context && context.successorNoticeTarget === "return";
+          if (!walkReturn) {
+            try {
+              new Notice("Closed tasks, but blocked dependents could not be checked.");
+            } catch (error) {
+              // Best effort.
+            }
+          }
         }
       } else {
         recoveryFailures = ["blocked dependents could not be checked"];
-        new Notice("Closed tasks, but blocked dependents could not be checked.");
+        const walkReturn = context && context.successorNoticeTarget === "return";
+        if (!walkReturn) {
+          try {
+            new Notice("Closed tasks, but blocked dependents could not be checked.");
+          } catch (error) {
+            // Best effort.
+          }
+        }
       }
       const retirement = await this.retireClosedTaskReferencesNow(
         normalizeTaskReferenceIdentities(closed),
@@ -12231,6 +13215,22 @@ class TaskStatusCyclerSuccessorsMixin {
       const editors = this.getOpenMarkdownEditors(context || {});
       const editor = dailyPath ? editors.get(dailyPath) : null;
       if (editor && typeof editor.getValue === "function") {
+        // Snapshot guard mirroring vault.process: a daily note edited while
+        // the picker was open fails loudly instead of splicing stale.
+        try {
+          const live = editor.getValue();
+          if (typeof insertion.snapshot === "string" && String(live || "") !== insertion.snapshot) {
+            for (const placement of placements) {
+              failPlacement(placement, "daily note changed before write");
+            }
+            return { failed, failureReason };
+          }
+        } catch (error) {
+          for (const placement of placements) {
+            failPlacement(placement, error.message || String(error));
+          }
+          return { failed, failureReason };
+        }
         const cursor = typeof editor.getCursor === "function"
           ? editor.getCursor()
           : null;
@@ -12452,11 +13452,10 @@ class TaskStatusCyclerSuccessorReceiptMixin {
   // Store the reopen receipt for a successful pass. `plan` carries the
   // applied `edits` and the final `unblocked` rows (failed rows already
   // unlinked); `insertion.text` is the post-insertion daily text the row
-  // line numbers address. Linked rows and project pull-in rows (linked or
-  // surfaced) are remembered; pull-in receipts store `before_line` so a
-  // same-day reopen can restore R byte-for-byte. Capture closes never
-  // reach this method, so they never gain a receipt (Alt+N is their
-  // per-link undo). Never throws.
+  // line numbers address. Each successfully picked row saves the complete
+  // pre-pass line and the exact post-write line (freshness/keeps/unblocked
+  // fields and any newly minted ID included); project pull-in rows save R
+  // byte-for-byte. Failed picks gain no receipt. Never throws.
   rememberSuccessorPass(closedIdentities, plan, insertion, info) {
     try {
       const rows = plan && Array.isArray(plan.unblocked)
@@ -12508,10 +13507,11 @@ class TaskStatusCyclerSuccessorReceiptMixin {
         const after = afterByEdit.get(`${row.note_path}\0${row.line}`);
         if (typeof after === "string") {
           const before = beforeByEdit.get(`${row.note_path}\0${row.line}`);
+          const picked = !!(row.link && !row.not_linked) || !!(row.offer && row.offer.selected);
           statuses.push({
             path: row.note_path,
             after_line: after,
-            before_line: row.trigger === "project_empty" && typeof before === "string"
+            before_line: typeof before === "string" && (picked || row.trigger === "project_empty")
               ? before
               : null,
             previous_symbol: row.previous_status_symbol,
@@ -12973,16 +13973,15 @@ function removeSuccessorReceiptLineFromEditor(editor, at) {
   }
 }
 // ---- src/137-plugin-successor-project.js ----
-// Project pull-in wiring (plan:202610/project_pull_in_line_model.md `cycler`).
-// Owns `planAndApplySuccessorsNow` so 135 stays at the 1000-line cap: the
-// `[id::]` gate no longer suppresses a last-task pull-in, C's notes feed
-// `noteTexts`, and the dependents snapshot is built only per §12.10 Gate.
+// Successor-offer wiring (plan:202610/cycler_successor_offers.md).
+// Owns planAndApplySuccessorsNow: plan with no selection, await one nav
+// picker for the batch, re-plan from fresh text with the picks, then apply.
 
 class TaskStatusCyclerSuccessorProjectMixin {
-  // The gated recover-and-link pass inside `finalizeClosedTasks`: gate on
-  // `[id::]` for dependents, still run a project pull-in when C's own notes
-  // empty a project, apply, and return the §12.5 model (or null). The close
-  // never depends on this result. Never throws.
+  // The gated offer pass inside finalizeClosedTasks: plan offers with no
+  // selection, await one nav picker for the batch when offers exist,
+  // re-plan from fresh text with the picks, apply, and return the §12.5
+  // model (or null). The close never depends on this result. Never throws.
   async planAndApplySuccessorsNow(closed, context) {
     try {
       const active = context && typeof context === "object" ? context : {};
@@ -13110,12 +14109,12 @@ class TaskStatusCyclerSuccessorProjectMixin {
           typeof active.closingEntry === "object"
         ? active.closingEntry
         : null;
-      const dailyBefore = Array.isArray(active.dailyBefore)
+      let dailyBefore = Array.isArray(active.dailyBefore)
         ? active.dailyBefore.map((line) => String(line ?? ""))
         : typeof dailyCurrent === "string"
           ? dailyCurrent.split(/\r?\n/)
           : [];
-      const dailyAfter = typeof dailyCurrent === "string"
+      let dailyAfter = typeof dailyCurrent === "string"
         ? dailyCurrent.split(/\r?\n/)
         : dailyBefore;
       let planClosingEntry = null;
@@ -13175,40 +14174,293 @@ class TaskStatusCyclerSuccessorProjectMixin {
           noteTexts.set(path, text);
         }
       }
-      const basenameCounts = countSuccessorBasenames(
+      let basenameCounts = countSuccessorBasenames(
         this.app,
         tasks,
         identities,
         dailyPath,
         noteTexts,
       );
+      const stampLineForPass = (() => {
+        try {
+          return typeof this.getFreshnessStampLine === "function" ? this.getFreshnessStampLine() : null;
+        } catch (error) {
+          return null;
+        }
+      })();
       const noteTextsObject = {};
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
       }
-      let plan = null;
-      try {
-        plan = planSuccessors({
-          closed: identities,
-          index: buildDependentsIndex(tasks),
-          dailyBefore,
-          dailyAfter,
-          dailyPath: dailyPath || "",
-          today,
-          markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
-          linkUnblocked,
-          cancelled: cancelledClose,
-          isInbox: getSuccessorIsInbox(this.app),
-          basenameCounts,
-          closingEntry: planClosingEntry,
-          noteTexts: noteTextsObject,
-          notePaths,
-        });
-      } catch (error) {
-        return null;
-      }
+      const planFirst = (selection, dailyB, dailyA, tasksForPlan, notesObj, closingForPlan) => {
+        try {
+          return planSuccessors({
+            closed: identities,
+            index: buildDependentsIndex(tasksForPlan),
+            dailyBefore: dailyB,
+            dailyAfter: dailyA,
+            dailyPath: dailyPath || "",
+            today,
+            markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
+            stampLine: stampLineForPass,
+            selection,
+            linkUnblocked,
+            cancelled: cancelledClose,
+            isInbox: getSuccessorIsInbox(this.app),
+            basenameCounts,
+            closingEntry: closingForPlan,
+            noteTexts: notesObj,
+            notePaths,
+          });
+        } catch (error) {
+          return null;
+        }
+      };
+      // First pass: plan with no selection (offers only, no IDs minted).
+      let plan = planFirst(null, dailyBefore, dailyAfter, tasks, noteTextsObject, planClosingEntry);
       if (!plan) {
         return null;
+      }
+      // One picker for the entire close batch (§12.13). Defensive detection;
+      // null/empty/malformed/exception means no picks. Without a picker API,
+      // apply recovery with no picks (plain "not pulled in" fallback).
+      const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
+      let selectedKeys = [];
+      let originalOfferByKey = new Map();
+      try {
+        for (const offer of selectableOffers) {
+          if (offer && offer.key) {
+            originalOfferByKey.set(String(offer.key), offer);
+          }
+        }
+      } catch (error) {
+        originalOfferByKey = new Map();
+      }
+      const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
+      if (selectableOffers.length > 0 && pickerApi) {
+        let model = null;
+        try {
+          const predecessorsForModel = identities.map((identity) => ({
+            note_path: String(identity.path || ""),
+            block_id: identity.blockId ? String(identity.blockId) : "",
+            text: identity.text ? String(identity.text) : "",
+          }));
+          const stillMuted = Array.isArray(plan.still_blocked) ? plan.still_blocked : [];
+          const folded = plan.foldedByProject instanceof Map ? plan.foldedByProject : new Map();
+          const headers = plan.projectHeaders instanceof Map ? plan.projectHeaders : new Map();
+          model = buildSuccessorPickerModel({
+            predecessors: predecessorsForModel,
+            offers: selectableOffers,
+            stillBlocked: stillMuted,
+            foldedByProject: folded,
+            headers,
+          });
+        } catch (error) {
+          model = null;
+        }
+        let picks = [];
+        if (model && Array.isArray(model.groups) && model.groups.some((group) => Array.isArray(group.rows) && group.rows.some((row) => row.selectable))) {
+          try {
+            const result = await pickerApi.pick(model);
+            picks = normalizeSuccessorPicks(result);
+          } catch (error) {
+            picks = [];
+          }
+        }
+        selectedKeys = picks;
+        if (selectedKeys.length > 0) {
+          // Re-read fresh texts (editor buffers first), invalidating caches.
+          const affected = new Set();
+          for (const identity of identities) {
+            if (identity && identity.path) {
+              affected.add(String(identity.path));
+            }
+          }
+          for (const offer of selectableOffers) {
+            if (offer && offer.notePath) {
+              affected.add(String(offer.notePath));
+            }
+          }
+          for (const row of plan.unblocked || []) {
+            if (row && row.note_path) {
+              affected.add(String(row.note_path));
+            }
+          }
+          for (const row of plan.still_blocked || []) {
+            if (row && row.note_path) {
+              affected.add(String(row.note_path));
+            }
+          }
+          for (const path of noteTexts.keys()) {
+            affected.add(String(path));
+          }
+          if (dailyPath) {
+            affected.add(String(dailyPath));
+          }
+          for (const path of affected) {
+            try {
+              cache.delete(path);
+            } catch (error) {
+              // Best effort.
+            }
+          }
+          let dailyFresh = null;
+          if (dailyPath) {
+            dailyFresh = await this.readSuccessorNoteText(dailyPath, active, cache);
+          }
+          const freshNoteTexts = new Map();
+          for (const path of affected) {
+            if (path === dailyPath) {
+              continue;
+            }
+            const text = await this.readSuccessorNoteText(path, active, cache);
+            if (typeof text === "string") {
+              freshNoteTexts.set(path, text);
+            }
+          }
+          // Preserve C's notes when re-read misses (deleted notes stay missing).
+          for (const [path, text] of noteTexts) {
+            if (!freshNoteTexts.has(path) && affected.has(String(path))) {
+              freshNoteTexts.set(path, text);
+            } else if (!freshNoteTexts.has(path)) {
+              freshNoteTexts.set(path, text);
+            }
+          }
+          const freshNotesObj = {};
+          for (const [path, text] of freshNoteTexts) {
+            freshNotesObj[path] = text;
+          }
+          // Rebuild the dependents index with fresh affected docs overriding
+          // stale cache locations (warm) or fresh overlay (cold). No new
+          // full-vault scan on a warm pass.
+          let freshTasks = tasks;
+          try {
+            const freshCache = typeof this.readSuccessorTasksCache === "function" ? this.readSuccessorTasksCache() : { ready: false, tasks: [] };
+            if (freshCache && freshCache.ready) {
+              const freshBuffered = new Set(freshNoteTexts.keys());
+              const base = [];
+              for (const task of freshCache.tasks || []) {
+                if (!freshBuffered.has(task.path)) {
+                  base.push(task);
+                }
+              }
+              for (const [path, text] of freshNoteTexts) {
+                if (affected.has(String(path))) {
+                  for (const task of tasksFromDocuments([{ path, text }])) {
+                    base.push(task);
+                  }
+                }
+              }
+              freshTasks = base;
+            } else {
+              const oldByPath = new Map();
+              for (const task of tasks || []) {
+                if (!task || !task.path) {
+                  continue;
+                }
+                if (!oldByPath.has(task.path)) {
+                  oldByPath.set(task.path, []);
+                }
+                oldByPath.get(task.path).push(task);
+              }
+              const next = [];
+              for (const [path, list] of oldByPath) {
+                if (affected.has(String(path))) {
+                  continue;
+                }
+                for (const task of list) {
+                  next.push(task);
+                }
+              }
+              for (const [path, text] of freshNoteTexts) {
+                if (!affected.has(String(path))) {
+                  continue;
+                }
+                for (const task of tasksFromDocuments([{ path, text }])) {
+                  next.push(task);
+                }
+              }
+              freshTasks = next;
+            }
+          } catch (error) {
+            freshTasks = tasks;
+          }
+          const dailyFreshLines = typeof dailyFresh === "string" ? dailyFresh.split(/\r?\n/) : dailyAfter;
+          // Relocate the closing entry against fresh text; never carry an old
+          // bullet offset into a newly edited ledger.
+          let freshClosing = null;
+          if (hint && Number.isInteger(hint.line)) {
+            try {
+              const relocated = this.relocateSuccessorClosingEntry(dailyFreshLines, hint);
+              freshClosing = relocated;
+            } catch (error) {
+              freshClosing = null;
+            }
+          } else if (Number.isInteger(planClosingEntry)) {
+            freshClosing = planClosingEntry < dailyFreshLines.length ? planClosingEntry : null;
+          }
+          const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
+          basenameCounts = freshBasenames;
+          let replanned = planFirst(selectedKeys, dailyFreshLines, dailyFreshLines, freshTasks, freshNotesObj, freshClosing);
+          if (!replanned) {
+            replanned = plan;
+            selectedKeys = [];
+          } else {
+            // Refuse stale/ambiguous picks individually; newly appearing
+            // offers stay unpicked (no second picker).
+            const freshKeys = new Set((replanned.offers || []).map((offer) => String(offer.key)));
+            const refused = selectedKeys.filter((key) => !freshKeys.has(String(key)));
+            // Ambiguous idless rebinding: when a note's digest count changed,
+            // refuse every idless pick for that digest in that note.
+            try {
+              const origTable = buildSuccessorNoteDigestTable(noteTextsObject);
+              const freshTable = buildSuccessorNoteDigestTable(freshNotesObj);
+              const countFor = (table, path, digest) => {
+                const rows = table instanceof Map ? table.get(String(path)) : (table || {})[String(path)];
+                if (!Array.isArray(rows)) {
+                  return 0;
+                }
+                return rows.filter((row) => row.digest === digest).length;
+              };
+              const ambiguous = new Set();
+              for (const key of selectedKeys) {
+                const at = String(key).lastIndexOf("@");
+                const hash = String(key).indexOf("#^");
+                if (at === -1 || hash !== -1) {
+                  continue;
+                }
+                const path = String(key).slice(0, at);
+                const rest = String(key).slice(at + 1);
+                const digest = rest.split("~")[0];
+                if (countFor(origTable, path, digest) !== countFor(freshTable, path, digest)) {
+                  ambiguous.add(String(key));
+                }
+              }
+              for (const key of ambiguous) {
+                if (!refused.includes(key)) {
+                  refused.push(key);
+                }
+              }
+            } catch (error) {
+              // Best effort.
+            }
+            if (refused.length > 0) {
+              replanned.refusedKeys = refused;
+            }
+            plan = replanned;
+            // Swap working sets to the fresh texts for the apply below.
+            tasks = freshTasks;
+            for (const [path, text] of freshNoteTexts) {
+              noteTexts.set(path, text);
+            }
+            dailyCurrent = dailyFresh;
+            // dailyBefore/dailyAfter for insertion planning become fresh.
+            dailyBefore = dailyFreshLines;
+            dailyAfter = dailyFreshLines;
+            planClosingEntry = freshClosing;
+            selectedKeys = selectedKeys.filter((key) => !refused.includes(String(key)));
+          }
+        }
       }
       const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
       if (noteOutcome.failed > 0) {
@@ -13222,6 +14474,23 @@ class TaskStatusCyclerSuccessorProjectMixin {
           (placement) => !failedRows.has(placement && placement.rowIndex),
         );
       }
+      // Same-file task-line edits in the daily note itself must not cause a
+      // false stale failure: refresh the snapshot source after note writes.
+      if (plan.placements.length > 0 && dailyPath) {
+        try {
+          const neededDaily = plan.edits.some((edit) => edit && edit.path === dailyPath);
+          if (neededDaily) {
+            cache.delete(dailyPath);
+            const refreshed = await this.readSuccessorNoteText(dailyPath, active, cache);
+            if (typeof refreshed === "string") {
+              dailyCurrent = refreshed;
+              dailyAfter = refreshed.split(/\r?\n/);
+            }
+          }
+        } catch (error) {
+          // Best effort: snapshot below still guards.
+        }
+      }
       let insertion = { splices: [], links: [], skipped: [], text: null };
       if (plan.placements.length > 0 && dailyPath && dailyCurrent != null) {
         let relocated = null;
@@ -13231,13 +14500,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
           if (
             relocated == null &&
             plan.placements.some((placement) =>
-              !placement || !placement.anchor || placement.anchor.bulletLine == null
+              placement && placement.anchor && placement.anchor.bulletLine == null && placement.anchor.kind !== "implicit"
             )
           ) {
             for (const placement of plan.placements) {
               if (
                 !placement || !placement.anchor ||
-                placement.anchor.bulletLine != null
+                placement.anchor.bulletLine != null ||
+                placement.anchor.kind === "implicit"
               ) {
                 continue;
               }
@@ -13300,6 +14570,12 @@ class TaskStatusCyclerSuccessorProjectMixin {
               noteOutcome.failureReason = "daily note unavailable";
             }
           }
+        }
+      }
+      if (Array.isArray(plan.refusedKeys) && plan.refusedKeys.length > 0) {
+        noteOutcome.failed += plan.refusedKeys.length;
+        if (!noteOutcome.failureReason) {
+          noteOutcome.failureReason = "task changed before write";
         }
       }
       try {
@@ -18626,6 +19902,22 @@ module.exports.helpers = {
   isExcludedSuccessorVaultPath,
   successorDefaultIsInbox,
   planSuccessors,
+  normalizeSuccessorSelection,
+  successorFnv1aHex,
+  successorDigestForTask,
+  assignSuccessorOfferKeys,
+  buildSuccessorNoteDigestTable,
+  resolveSuccessorImplicitDestination,
+  successorDestinationLabel,
+  buildSuccessorPickerModel,
+  normalizeSuccessorPicks,
+  getSuccessorPickerApi,
+  successorOfferDestination,
+  successorGroupOrder,
+  successorOfferOrderCompare,
+  collectProjectResidentCandidates,
+  computeProjectFoldedAndHeaders,
+  decideProjectResidentVerdict,
   planProjectPullIns,
   planSuccessorInsertions,
   projectPullInCandidatePaths,

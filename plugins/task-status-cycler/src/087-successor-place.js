@@ -60,6 +60,7 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
   let seq = 0;
 
   const slotGroups = new Map();
+  const implicitGroups = new Map();
   const closingItems = [];
   list.forEach((placement, order) => {
     const anchor = placement && placement.anchor;
@@ -68,6 +69,16 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
         slotGroups.set(anchor.bulletLine, []);
       }
       slotGroups.get(anchor.bulletLine).push({ placement, order });
+    } else if (anchor && anchor.kind === "implicit") {
+      const target = Number.isInteger(anchor.entryLine) ? anchor.entryLine : (placement.implicit && placement.implicit.entryLine);
+      if (!Number.isInteger(target)) {
+        closingItems.push({ placement, order });
+      } else {
+        if (!implicitGroups.has(target)) {
+          implicitGroups.set(target, []);
+        }
+        implicitGroups.get(target).push({ placement, order });
+      }
     } else {
       closingItems.push({ placement, order });
     }
@@ -118,6 +129,43 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
         entryCreated: false,
       })),
     });
+  }
+
+  // Implicit destinations (§12.3): entry children, one tab, after existing
+  // children, replacing a lone stub. Never a closing placeholder.
+  for (const [targetLine, items] of implicitGroups) {
+    if (!Number.isInteger(targetLine) || targetLine < 0 || targetLine >= lines.length) {
+      for (const item of items) {
+        skipped.push({ key: (item.placement && item.placement.key) || null, order: item.order, reason: "no-implicit-entry" });
+      }
+      continue;
+    }
+    const target = entries.find((entry) => entry.entryLine === targetLine);
+    if (!target || !target.open) {
+      for (const item of items) {
+        skipped.push({ key: (item.placement && item.placement.key) || null, order: item.order, reason: "no-implicit-entry" });
+      }
+      continue;
+    }
+    const range = section ? getSubBulletBlockRange(lines, targetLine, section) : { startLine: targetLine + 1, endLine: targetLine + 1 };
+    const children = lines.slice(range.startLine, range.endLine);
+    if (children.length === 1 && children[0].trim() === "-") {
+      ops.push({
+        at: range.startLine,
+        deleteCount: 1,
+        lines: items.map((item) => `\t- ${item.placement.blockLink}`),
+        seq: seq++,
+        marks: items.map((item, index) => ({ order: item.order, index, entryOriginal: targetLine, entryCreated: false })),
+      });
+    } else {
+      ops.push({
+        at: range.endLine,
+        deleteCount: 0,
+        lines: items.map((item) => `\t- ${item.placement.blockLink}`),
+        seq: seq++,
+        marks: items.map((item, index) => ({ order: item.order, index, entryOriginal: targetLine, entryCreated: false })),
+      });
+    }
   }
 
   if (closingItems.length > 0) {
@@ -311,6 +359,11 @@ function successorNoticeText(model = {}) {
     const count = Number(failure.count);
     return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})`;
   }
+  // Mixed picked/unpicked batches (§12.6 pulled-in summary) before single.
+  if (linked.length > 0 && notLinked.length > 0) {
+    const total = linked.length + notLinked.length;
+    return `🔓 Pulled in ${linked.length} of ${total}`;
+  }
   if (linked.length === 1) {
     const row = linked[0];
     const text = truncateSuccessorNoticeText(row.text);
@@ -345,9 +398,33 @@ function successorNoticeText(model = {}) {
     }
     return `🔓 ${linked.length} linked · ${names.join(", ")}${suffix}`;
   }
+  // Legacy breaker copy: kept for older payloads only. New output never
+  // emits breaker rows (§12.2 BREAKER deleted).
   const breaker = notLinked.filter((row) => row.not_linked === "breaker");
   if (breaker.length > 0 && breaker.length === notLinked.length) {
     return `🔓 ${breaker.length} unblocked · not linked (more than 5)`;
+  }
+  if (linked.length === 0 && notLinked.length > 0) {
+    const notSelected = notLinked.filter((row) => row.not_linked === "not_selected");
+    const noDestination = notLinked.filter((row) => row.not_linked === "no_destination");
+    if (notSelected.length > 0 && notSelected.length === notLinked.length) {
+      if (notLinked.length === 1) {
+        const row = notLinked[0];
+        const lane = row.status_name || successorStatusName(row.status_symbol);
+        const suffix = isProjectEmptyRow(row) ? projectEmptySuffix : "";
+        return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · not pulled in${suffix}`;
+      }
+      const suffix = notLinked.every(isProjectEmptyRow) ? projectEmptySuffix : "";
+      return `🔓 ${notLinked.length} unblocked · not pulled in${suffix}`;
+    }
+    if (noDestination.length > 0 && noDestination.length === notLinked.length) {
+      if (notLinked.length === 1) {
+        const row = notLinked[0];
+        const lane = row.status_name || successorStatusName(row.status_symbol);
+        return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · no open Pomodoro`;
+      }
+      return `🔓 ${notLinked.length} unblocked · no open Pomodoro`;
+    }
   }
   if (notLinked.length === 1) {
     const row = notLinked[0];
@@ -357,6 +434,15 @@ function successorNoticeText(model = {}) {
     }
     if (isProjectEmptyRow(row)) {
       return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})${projectEmptySuffix}`;
+    }
+    if (row.not_linked === "project_member") {
+      return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · project member`;
+    }
+    if (row.not_linked === "no_destination") {
+      return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · no open Pomodoro`;
+    }
+    if (row.not_linked === "not_selected") {
+      return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane}) · not pulled in`;
     }
     return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})`;
   }

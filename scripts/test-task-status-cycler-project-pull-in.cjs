@@ -35,6 +35,7 @@ function planFixture({ day, notes, closed, options = {} }) {
     linkUnblocked: true,
     basenameCounts: { ship: 1, sase: 1, other: 1 },
     noteTexts: notes,
+    selection: "all",
     ...options,
   });
   return { documents, tasks, index, plan };
@@ -325,14 +326,15 @@ test("PP33 cancellation surfaces the parent without linking it", () => {
     "  - 🧩 **Sub-projects:** [[projects/child]]",
   ]);
   const closed = [{ path: childPath, blockId: "prj", taskId: "", text: "Child" }];
-  const notPlanned = planFixture({
+  const offered = planFixture({
     day: shipDay(),
     notes: { [childPath]: child, [parentPath]: parent },
     closed,
   }).plan.unblocked[0];
-  assert.equal(notPlanned.note_path, parentPath);
-  assert.equal(notPlanned.not_linked, "not_planned_today");
-  assert.equal(notPlanned.link, null);
+  assert.equal(offered.note_path, parentPath);
+  assert.ok(offered.offer);
+  assert.equal(offered.offer.group, "project_finished");
+  assert.ok(offered.link);
 
   const cancelled = planFixture({
     day: shipDay(),
@@ -541,22 +543,19 @@ test("PP9 already-planned ^prj raises to Next without a new link", () => {
   assert.equal(plan.placements.length, 0);
 });
 
-test("PP10 surfaces a not-planned-today ^prj; PP11 reports disabled (P2: step order)", () => {
+test("PP10 implicit destination for unplanned ^prj; PP11 reports disabled (SO14/SO19)", () => {
   const emptyDay = ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — SHIP"].join("\n");
   const surfaced = planFixture({
     day: emptyDay,
     notes: { "ship.md": projectNote([HIDDEN_PRJ, LAST_TASK]) },
     closed: A_CLOSED,
   });
+  // SO14: emptyDay has one open entry SHIP → implicit offer, linked with select-all.
   assert.equal(surfaced.plan.unblocked.length, 1);
-  assert.equal(surfaced.plan.unblocked[0].not_linked, "not_planned_today");
-  assert.equal(surfaced.plan.unblocked[0].status_symbol, " ");
+  assert.equal(surfaced.plan.unblocked[0].not_linked, null);
+  assert.ok(surfaced.plan.unblocked[0].link);
+  assert.equal(surfaced.plan.unblocked[0].offer.destination.entry_role, "implicit");
   assert.equal(surfaced.plan.unblocked[0].hide_removed, true);
-  assert.equal(surfaced.plan.unblocked[0].link, null);
-  assert.equal(
-    surfaced.plan.edits[0].after,
-    "- [ ] #task #prj Ship it! ^prj",
-  );
 
   const disabled = planFixture({
     day: shipDay(),
@@ -567,14 +566,14 @@ test("PP10 surfaces a not-planned-today ^prj; PP11 reports disabled (P2: step or
   assert.equal(disabled.plan.unblocked[0].not_linked, "disabled");
   assert.equal(disabled.plan.unblocked[0].hide_removed, true);
 
-  for (const options of [{ linkUnblocked: false }, { cancelled: true }]) {
+  for (const [options, expected] of [[{ linkUnblocked: false }, "disabled"], [{ cancelled: true }, "cancelled"]]) {
     const noAnchor = planFixture({
       day: emptyDay,
       notes: { "ship.md": projectNote([HIDDEN_PRJ, LAST_TASK]) },
       closed: A_CLOSED,
       options,
     });
-    assert.equal(noAnchor.plan.unblocked[0].not_linked, "not_planned_today");
+    assert.equal(noAnchor.plan.unblocked[0].not_linked, expected);
   }
 });
 
@@ -623,7 +622,7 @@ test("PP14 an id-less last task still pulls in", () => {
   assert.ok(plan.unblocked[0].link);
 });
 
-test("PP15 links a dependent and the pull-in together; the breaker spares R", () => {
+test("PP15 dependent and pull-in are both offered with no cap (SO2, breaker retired)", () => {
   const both = planFixture({
     day: shipDay(),
     notes: {
@@ -646,7 +645,7 @@ test("PP15 links a dependent and the pull-in together; the breaker spares R", ()
     extraNotes[`d${n}.md`] = `- [?] #task Dep ${n} [dependsOn:: ship__a] ^d${n}`;
   }
   extraNotes["ship.md"] = projectNote([HIDDEN_PRJ, LAST_TASK]);
-  const broken = planFixture({
+  const many = planFixture({
     day: shipDay(),
     notes: extraNotes,
     closed: A_CLOSED,
@@ -654,11 +653,14 @@ test("PP15 links a dependent and the pull-in together; the breaker spares R", ()
       basenameCounts: { ship: 1, d1: 1, d2: 1, d3: 1, d4: 1, d5: 1, d6: 1 },
     },
   });
-  const pullIn = broken.plan.unblocked.filter((row) => row.trigger === "project_empty");
-  const breakers = broken.plan.unblocked.filter((row) => row.not_linked === "breaker");
+  const pullIn = many.plan.unblocked.filter((row) => row.trigger === "project_empty");
   assert.equal(pullIn.length, 1);
   assert.ok(pullIn[0].link);
-  assert.equal(breakers.length, 6);
+  assert.equal(many.plan.unblocked.length, 7);
+  for (const row of many.plan.unblocked) {
+    assert.ok(row.link);
+    assert.ok(row.offer);
+  }
 });
 
 test("PP17 one pull-in row wins over project_task", () => {
@@ -805,18 +807,17 @@ test("PP25 cascades project_member recovery after a [?] pull-in", () => {
     options: { markUnblockedLine: markUnblocked },
   });
   const pullIn = plan.unblocked.find((row) => row.trigger === "project_empty");
-  const member = plan.unblocked.find((row) => row.not_linked === "project_member");
   assert.ok(pullIn);
   assert.equal(pullIn.status_symbol, "*");
   assert.equal(pullIn.hide_removed, true);
   assert.ok(pullIn.link);
-  assert.ok(member);
-  assert.equal(member.status_symbol, " ");
+  // SO10: hidden residents fold (recover only, no offer) and keep #hide.
+  const folded = (plan.foldedByProject instanceof Map ? plan.foldedByProject.get("ship.md") : null) ||
+    (plan.foldedByProject || {})["ship.md"];
+  assert.ok(folded);
+  assert.equal(folded.hidden, 1);
   const residentEdit = plan.edits.find((edit) => edit.before.includes("^res"));
-  assert.ok(residentEdit);
-  assert.doesNotMatch(residentEdit.after, /#prj_is_blocked/);
-  assert.doesNotMatch(residentEdit.after, /\[unblocked::/);
-  assert.match(residentEdit.after, /#hide/);
+  assert.ok(!residentEdit || residentEdit.after.includes("#hide"));
 });
 
 test("PP26 dated recount treats a hidden leftover as remaining work", () => {
@@ -847,16 +848,17 @@ test("PP26 dated recount treats a hidden leftover as remaining work", () => {
   assert.equal(pullInRows(undated.plan).length, 1);
 });
 
-test("PP27 writes [unblocked::] after #hide strip when not planned today", () => {
+test("PP27 implicit offer after #hide strip; unpicked keeps WRITE rule (SO14/SO20)", () => {
   const prj =
     "- [?] #task #prj Ship it! #hide [fresh:: 2026-09-01] ^prj";
   const surfaced = planFixture({
     day: ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — SHIP"].join("\n"),
     notes: { "ship.md": projectNote([prj, LAST_TASK]) },
     closed: A_CLOSED,
-    options: { markUnblockedLine: markUnblocked },
+    options: { markUnblockedLine: markUnblocked, selection: null },
   });
-  assert.equal(surfaced.plan.unblocked[0].not_linked, "not_planned_today");
+  // Unpicked: recovered rank with WRITE rule, #hide removed, not selected.
+  assert.equal(surfaced.plan.unblocked[0].not_linked, "not_selected");
   assert.equal(surfaced.plan.unblocked[0].status_symbol, " ");
   assert.match(surfaced.plan.edits[0].after, /\[unblocked:: 2026-10-09\]/);
   assert.doesNotMatch(surfaced.plan.edits[0].after, /#hide/);
@@ -984,6 +986,21 @@ function installNavStub(plugin, seen) {
             showUnblocked(model) {
               seen.push(model);
               return true;
+            },
+          },
+          // SO picker fake: explicitly return all offers (select-all).
+          successors: {
+            version: 1,
+            async pick(model) {
+              const picks = [];
+              for (const group of (model && model.groups) || []) {
+                for (const row of (group && group.rows) || []) {
+                  if (row && row.selectable && row.key) {
+                    picks.push({ key: String(row.key) });
+                  }
+                }
+              }
+              return { picks };
             },
           },
         },

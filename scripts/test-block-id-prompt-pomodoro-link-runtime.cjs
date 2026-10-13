@@ -94,6 +94,41 @@ test("resolvePomodoroLinkTaskFromEditor accepts a #hide project task directly un
   assert.equal(result.task.displayText, "Secret errand");
 });
 
+test("blocked-link consumption reports dependency reasons before the project date", async () => {
+  const plugin = new Plugin();
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch [scheduled:: 2026-08-20] [dependsOn:: jobs__review] ^prj",
+    "- [?] #task Resident #prj_is_blocked ^resident",
+  ].join("\n");
+  const jobsFile = createTFile("jobs.md");
+  plugin.readTaskDependencyDocuments = async () => ({
+    documents: [
+      { path: "projects/launch.md", text: project },
+      { path: "jobs.md", text: "- [ ] #task Review [id:: jobs__review] ^review" },
+    ],
+    fileByPath: new Map([["jobs.md", jobsFile]]),
+    failures: [],
+  });
+  plugin.applyTargetTaskPlan = async () => true;
+  plugin.now = () => localDate(2026, 8, 15);
+  resetNotices();
+  const editor = createEditor(project);
+  const source = { editor, line: 5, sourcePath: "projects/launch.md" };
+  assert.equal(
+    await plugin.consumeBlockedTaskPomodoroLink(
+      source,
+      createTFile("projects/launch.md"),
+    ),
+    true,
+  );
+  assert.match(lastNotice(), /Project blocked by dependency|Task blocked/);
+  assert.doesNotMatch(lastNotice(), /Project date blocked|blocked by date/);
+});
+
 test("Pomodoro link checks do not read other notes for a non-Blocked task", async () => {
   const plugin = new Plugin();
   const editor = createEditor("- [ ] #task Ready task ^ready");

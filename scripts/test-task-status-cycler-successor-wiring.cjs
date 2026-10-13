@@ -538,3 +538,63 @@ test("completeTaskAtCursor returns the notice and shows nothing itself", async (
   assert.equal(seen.length, 0);
   assert.equal(notices.length, 0);
 });
+
+test("successor apply recovers project residents without ledger v12", async () => {
+  notices.length = 0;
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Release [id:: project__prj] [dependsOn:: sase__fix-apollo] ^prj",
+    "- [?] #task Prepare the release #prj_is_blocked ^release-notes",
+    "- [x] #task Already done #prj_is_blocked ✅ 2026-10-01 ^done",
+  ].join("\n");
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX"].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "sase.md": FIX_LINE,
+    "projects/release.md": project,
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 3, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  plugin.getFreshnessMarkUnblockedLine = () => null;
+  const seen = [];
+  installNavStub(plugin, seen);
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args.map(String).join(" "));
+  };
+
+  let result;
+  try {
+    result = await plugin.finalizeClosedTasks(
+      [
+        {
+          path: "sase.md",
+          blockId: "fix-apollo",
+          taskId: "sase__fix-apollo",
+          text: "Fix apollo machine!",
+        },
+      ],
+      { editor, activePath: DAILY_PATH },
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.ok(result.successors);
+  const release = harness.getSource("projects/release.md");
+  assert.match(release, /^- \[ \] #task #prj Release .* \^prj$/m);
+  assert.match(release, /^- \[ \] #task Prepare the release \^release-notes$/m);
+  assert.doesNotMatch(release, /\[unblocked::/);
+  assert.match(
+    release,
+    /^- \[x\] #task Already done #prj_is_blocked ✅ 2026-10-01 \^done$/m,
+  );
+  assert.equal(
+    warnings.filter((line) => line.includes("without [unblocked::]")).length,
+    1,
+  );
+});

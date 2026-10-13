@@ -310,9 +310,7 @@ class TaskStatusCyclerReferencesMixin {
     }
     const markUnblockedLine = this.getFreshnessMarkUnblockedLine();
     if (plan.edits.length > 0 && typeof markUnblockedLine !== "function") {
-      console.warn(
-        "Task Status Cycler: recovering blocked tasks without [unblocked::]; update bob-ledger-tools to freshness v12 to record review ticklers.",
-      );
+      warnProjectRecoveryWithoutUnblocked();
     }
     const editsByPath = new Map();
     for (const edit of plan.edits) {
@@ -336,6 +334,7 @@ class TaskStatusCyclerReferencesMixin {
             : null;
           if (
             !task ||
+            !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
             (edit.recover && (task.status !== "?" || task.statusStart !== edit.statusStart)) ||
             typeof editor.replaceRange !== "function"
           ) {

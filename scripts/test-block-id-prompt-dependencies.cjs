@@ -61,21 +61,37 @@ test("project-blocked member consumption promotes the project's open prerequisit
     "- [?] #task Prepare launch notes #prj_is_blocked ^notes",
   ].join("\n");
   const prerequisite = "- [ ] #task Release approval [id:: jobs__release] ^release";
-  const plan = helpers.planTaskLinkBlockConsumption(
-    [
-      { path: "projects/release.md", text: project },
-      { path: "jobs.md", text: prerequisite },
-    ],
+  const documents = [
+    { path: "projects/release.md", text: project },
+    { path: "jobs.md", text: prerequisite },
+  ];
+  const prjPlan = helpers.planTaskLinkBlockConsumption(
+    documents,
     "projects/release.md",
     4,
     new Date(2026, 7, 15),
   );
-  assert.equal(plan.blocked, true);
-  assert.equal(plan.dependencyBlocked, true);
-  assert.equal(plan.projectPath, "projects/release.md");
-  assert.deepEqual(plan.promoted, ["jobs__release"]);
+  assert.equal(prjPlan.blocked, true);
+  assert.equal(prjPlan.dependencyBlocked, true);
+  assert.equal(prjPlan.projectPath, "projects/release.md");
+  assert.deepEqual(prjPlan.promoted, ["jobs__release"]);
   assert.equal(
-    plan.updatesByPath.get("jobs.md").text,
+    prjPlan.updatesByPath.get("jobs.md").text,
+    "- [*] #task Release approval [id:: jobs__release] ^release",
+  );
+
+  const residentPlan = helpers.planTaskLinkBlockConsumption(
+    documents,
+    "projects/release.md",
+    5,
+    new Date(2026, 7, 15),
+  );
+  assert.equal(residentPlan.blocked, true);
+  assert.equal(residentPlan.dependencyBlocked, true);
+  assert.equal(residentPlan.projectPath, "projects/release.md");
+  assert.deepEqual(residentPlan.promoted, ["jobs__release"]);
+  assert.equal(
+    residentPlan.updatesByPath.get("jobs.md").text,
     "- [*] #task Release approval [id:: jobs__release] ^release",
   );
 });

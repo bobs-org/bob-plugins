@@ -451,9 +451,9 @@ class TaskStatusCyclerTargetsMixin {
     }
   }
 
-  // Automatic Blocked → Ready recovery must enter the TICKLER review tier.
-  // Require the v12 namespace so older ledger-tools builds cannot silently
-  // recover a task without recording that transition.
+  // Automatic Blocked → Ready recovery records `[unblocked::]` through
+  // ledger-tools freshness v12 when present. Older builds still recover;
+  // callers warn once instead of leaving a mixed project.
   getFreshnessMarkUnblockedLine() {
     try {
       const plugins = this.app && this.app.plugins;

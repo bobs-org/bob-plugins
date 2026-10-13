@@ -7,6 +7,8 @@ const {
   createInMemoryObsidianApp,
   getEmbeddedTarget,
   createTextEditor,
+  attachActiveMarkdownView,
+  flushAsyncActions,
   notices,
 } = require("./task-status-cycler-harness.cjs");
 
@@ -562,5 +564,76 @@ test("pressing again after Blocked retirement performs an ordinary transition wi
       "\t\t- *2026-08-20 → 2026-08-17* — 🔓 unblocked by hand",
     ].join("\n"),
   );
+});
+
+test("Alt+] on a date-blocked ^prj recovers open residents in step", async () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch the project [scheduled:: 2026-08-20] ^prj",
+    "- [?] #task Prepare the launch #prj_is_blocked ^notes",
+    "- [?] #task Own blocker [dependsOn:: open__root] #prj_is_blocked ^own",
+    "- [x] #task Done #prj_is_blocked ✅ 2026-10-01 ^done",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "projects/launch.md": source });
+  const editor = createTextEditor(source, { line: 4, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getScheduleLogDateString = () => "2026-08-17";
+  const { view } = attachActiveMarkdownView(
+    plugin,
+    harness,
+    editor,
+    "projects/launch.md",
+  );
+  plugin.app.commands = { commands: {}, executeCommandById: () => false };
+
+  assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+  await flushAsyncActions();
+  await flushAsyncActions();
+
+  const text = editor.getValue();
+  assert.match(text, /^- \[ \] #task #prj Launch the project \^prj$/m);
+  assert.match(text, /^- \[ \] #task Prepare the launch \[unblocked:: 2026-08-17\] \^notes$/m);
+  assert.match(
+    text,
+    /^- \[\?\] #task Own blocker \[dependsOn:: open__root\] \^own$/m,
+  );
+  assert.doesNotMatch(
+    text.split("\n").find((line) => line.includes("^own")),
+    /#prj_is_blocked/,
+  );
+  assert.match(text, /^- \[x\] #task Done #prj_is_blocked ✅ 2026-10-01 \^done$/m);
+});
+
+test("Alt+] on a ^prj keeps residents tagged while an open Depends-On target remains", async () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch [scheduled:: 2026-08-20] [dependsOn:: jobs__review] ^prj",
+    "- [?] #task Resident #prj_is_blocked ^resident",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "projects/launch.md": source });
+  const editor = createTextEditor(source, { line: 4, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getScheduleLogDateString = () => "2026-08-17";
+  const { view } = attachActiveMarkdownView(
+    plugin,
+    harness,
+    editor,
+    "projects/launch.md",
+  );
+  plugin.app.commands = { commands: {}, executeCommandById: () => false };
+
+  assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+  await flushAsyncActions();
+  await flushAsyncActions();
+
+  const text = editor.getValue();
+  assert.match(text, /^- \[ \] #task #prj Launch \[dependsOn:: jobs__review\] \^prj$/m);
+  assert.match(text, /^- \[\?\] #task Resident #prj_is_blocked \^resident$/m);
 });
 

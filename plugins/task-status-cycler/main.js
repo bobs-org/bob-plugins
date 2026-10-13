@@ -4892,7 +4892,8 @@ function buildBlockedDependentRecoveryPlan(
       const hasOwnReason = task.dependsOn.some((id) => openIds.has(String(id))) ||
         !!findSingleFutureScheduledField(task.lineText, today);
       const recover = task.status === "?" && !hasOwnReason;
-      const stripTag = hasProjectBlockedResidentTag(task.lineText);
+      const stripTag = DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+        hasProjectBlockedResidentTag(task.lineText);
       if (!recover && !stripTag) continue;
       const key = `${path}\0${task.line}`;
       if (seenEdits.has(key)) {
@@ -4942,6 +4943,7 @@ function applyBlockedDependentRecoveryEdits(sourceText, edits, options = {}) {
     );
     if (
       !task ||
+      !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
       (edit.recover && (task.status !== "?" || task.statusStart !== edit.statusStart))
     ) {
       stale.push(edit);
@@ -7268,41 +7270,81 @@ function successorReadyRecoveryEdits(plan) {
   });
 }
 
+const PROJECT_RECOVERY_MISSING_UNBLOCKED_WARNING =
+  "Task Status Cycler: recovering blocked tasks without [unblocked::]; update bob-ledger-tools to freshness v12 to record review ticklers.";
+
+function warnProjectRecoveryWithoutUnblocked() {
+  console.warn(PROJECT_RECOVERY_MISSING_UNBLOCKED_WARNING);
+}
+
+// Cross-note ids that this note cannot prove closed still count as a
+// remaining project reason, so Alt+] on a date-only `^prj` recovers
+// residents while a still-open Depends-On target does not.
+function projectHasRemainingBlockingReason(project, today) {
+  if (projectHasFutureSchedule(project, today)) {
+    return true;
+  }
+  if (!project || project.dependencyIds.length === 0) {
+    return false;
+  }
+  const closedIds = new Set();
+  for (const task of project.tasks) {
+    if (task.taskId && !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)) {
+      closedIds.add(String(task.taskId));
+    }
+  }
+  return project.dependencyIds.some((id) => !closedIds.has(String(id)));
+}
+
+function planProjectResidentRecoveryEdits(sourceText, path, options = {}) {
+  const today = options.today || formatLocalDate();
+  const project = projectDependencyInfo(sourceText, path);
+  if (!project || projectHasRemainingBlockingReason(project, today)) {
+    return [];
+  }
+  const edits = [];
+  for (const task of project.tasks) {
+    if (
+      task.blockId === "prj" ||
+      !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
+      !hasProjectBlockedResidentTag(task.lineText)
+    ) {
+      continue;
+    }
+    const hasOwnReason = task.dependsOn.some((id) => {
+      const dependency = project.tasks.find((candidate) =>
+        candidate.taskId === String(id)
+      );
+      return !dependency || DEPENDENCY_OPEN_TASK_SYMBOLS.has(dependency.status);
+    }) || !!findSingleFutureScheduledField(task.lineText, today);
+    const recover = task.status === "?" && !hasOwnReason;
+    const after = rewriteRecoveredTaskLine(
+      task.lineText,
+      recover ? " " : task.status,
+      { ...options, today, task, isDailyNote: isDailyNotePath(path) },
+    );
+    if (typeof after === "string" && after !== task.lineText) {
+      edits.push({
+        path,
+        line: task.line,
+        before: task.lineText,
+        after,
+      });
+    }
+  }
+  return edits;
+}
+
 async function applySuccessorNoteEditsWithUnblockedGuard(plugin, plan, context) {
   const required = successorReadyRecoveryEdits(plan);
   const markUnblockedLine = plugin &&
     typeof plugin.getFreshnessMarkUnblockedLine === "function"
     ? plugin.getFreshnessMarkUnblockedLine()
     : null;
-  if (required.length === 0 || typeof markUnblockedLine === "function") {
-    return plugin.applySuccessorNoteEdits(plan, context);
+  if (required.length > 0 && typeof markUnblockedLine !== "function") {
+    warnProjectRecoveryWithoutUnblocked();
   }
-
-  const failedLocations = new Set(required.map((edit) =>
-    `${edit.path}\0${edit.line}`
-  ));
-  const failedRows = new Set();
-  for (let index = 0; index < plan.unblocked.length; index += 1) {
-    const row = plan.unblocked[index];
-    if (
-      row && failedLocations.has(`${row.note_path}\0${row.line}`)
-    ) {
-      row.link = null;
-      row.not_linked = "failed";
-      failedRows.add(index);
-    }
-  }
-  plan.edits = plan.edits.filter((edit) =>
-    !failedLocations.has(`${edit.path}\0${edit.line}`)
-  );
-  plan.placements = plan.placements.filter((placement) =>
-    !failedRows.has(placement && placement.rowIndex)
-  );
-  const outcome = await plugin.applySuccessorNoteEdits(plan, context);
-  outcome.failed += Math.max(required.length, failedRows.size);
-  outcome.failureReason = outcome.failureReason ||
-    "bob-ledger-tools freshness namespace v12 is required for recovery";
-  return outcome;
+  return plugin.applySuccessorNoteEdits(plan, context);
 }
 // ---- src/090-source-and-formatting.js ----
 function getLineTextFromSourceText(sourceText, lineNumber) {
@@ -9642,9 +9684,7 @@ class TaskStatusCyclerReferencesMixin {
     }
     const markUnblockedLine = this.getFreshnessMarkUnblockedLine();
     if (plan.edits.length > 0 && typeof markUnblockedLine !== "function") {
-      console.warn(
-        "Task Status Cycler: recovering blocked tasks without [unblocked::]; update bob-ledger-tools to freshness v12 to record review ticklers.",
-      );
+      warnProjectRecoveryWithoutUnblocked();
     }
     const editsByPath = new Map();
     for (const edit of plan.edits) {
@@ -9668,6 +9708,7 @@ class TaskStatusCyclerReferencesMixin {
             : null;
           if (
             !task ||
+            !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
             (edit.recover && (task.status !== "?" || task.statusStart !== edit.statusStart)) ||
             typeof editor.replaceRange !== "function"
           ) {
@@ -12683,6 +12724,7 @@ class TaskStatusCyclerCommandsMixin {
       const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
       if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
         this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
+        void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
       }
       // `cycler_polish` (bead bob-cli-3k): a cycle into Done joins the same
       // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
@@ -13418,6 +13460,10 @@ class TaskStatusCyclerCommandsMixin {
         projectBlockedNotice ||
           `Project blocked · resolve the ^prj reason in ${activePath}`,
       );
+    }
+
+    if (changed && activePath) {
+      void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
     }
 
     // One batched pass for the whole counted range (partitioned Done vs
@@ -14230,6 +14276,16 @@ class TaskStatusCyclerCompletionMixin {
 
     if (wrote && sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL) {
       await this.applyBlockedStatusRetirementToTranscludedTarget(resolvedTarget, context);
+      const targetPath = resolvedTarget.file && resolvedTarget.file.path;
+      if (
+        targetPath &&
+        this.fileMatchesPath(resolvedTarget.file, context && context.activePath)
+      ) {
+        await this.recoverProjectResidentsAfterPrjUnblock(
+          context && context.editor,
+          targetPath,
+        );
+      }
     }
 
     // `cycler_polish` (bead bob-cli-3k): a transcluded-target cycle into
@@ -16001,6 +16057,43 @@ class TaskStatusCyclerEditorEditsMixin {
     return true;
   }
 
+  // After Alt+] / Alt+[ leaves a `^prj` with no remaining reason, strip
+  // `#prj_is_blocked` from every open resident and recover those whose only
+  // reason was the project, through the same successor apply helper.
+  async recoverProjectResidentsAfterPrjUnblock(editor, path) {
+    if (!editor || typeof editor.getValue !== "function" || !path) {
+      return;
+    }
+    const today = typeof this.getScheduleLogDateString === "function"
+      ? this.getScheduleLogDateString()
+      : formatLocalDate();
+    const markUnblockedLine = typeof this.getFreshnessMarkUnblockedLine === "function"
+      ? this.getFreshnessMarkUnblockedLine()
+      : null;
+    const edits = planProjectResidentRecoveryEdits(editor.getValue(), path, {
+      today,
+      markUnblockedLine,
+      isToday: (task) => projectRecoveryTaskIsToday(this, task),
+    });
+    if (edits.length === 0) {
+      return;
+    }
+    const plan = {
+      edits,
+      unblocked: successorReadyRecoveryEdits({ edits }).map((edit) => ({
+        note_path: edit.path,
+        line: edit.line,
+        link: null,
+        not_linked: "project_member",
+      })),
+      placements: [],
+    };
+    await applySuccessorNoteEditsWithUnblockedGuard(this, plan, {
+      editor,
+      activePath: path,
+    });
+  }
+
 }
 // ---- src/190-plugin-targets.js ----
 class TaskStatusCyclerTargetsMixin {
@@ -16456,9 +16549,9 @@ class TaskStatusCyclerTargetsMixin {
     }
   }
 
-  // Automatic Blocked → Ready recovery must enter the TICKLER review tier.
-  // Require the v12 namespace so older ledger-tools builds cannot silently
-  // recover a task without recording that transition.
+  // Automatic Blocked → Ready recovery records `[unblocked::]` through
+  // ledger-tools freshness v12 when present. Older builds still recover;
+  // callers warn once instead of leaving a mixed project.
   getFreshnessMarkUnblockedLine() {
     try {
       const plugins = this.app && this.app.plugins;
@@ -17073,7 +17166,9 @@ module.exports.helpers = {
   projectDependencyInfo,
   projectHasFutureSchedule,
   projectHasOpenDependency,
+  projectHasRemainingBlockingReason,
   projectIsBlockedAfter,
+  planProjectResidentRecoveryEdits,
   projectSuccessorRecoveryMembers,
   projectSuccessorRecoveryState,
   rewriteRecoveredTaskLine,

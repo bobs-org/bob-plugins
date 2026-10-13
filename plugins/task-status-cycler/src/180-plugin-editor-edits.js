@@ -898,4 +898,41 @@ class TaskStatusCyclerEditorEditsMixin {
     return true;
   }
 
+  // After Alt+] / Alt+[ leaves a `^prj` with no remaining reason, strip
+  // `#prj_is_blocked` from every open resident and recover those whose only
+  // reason was the project, through the same successor apply helper.
+  async recoverProjectResidentsAfterPrjUnblock(editor, path) {
+    if (!editor || typeof editor.getValue !== "function" || !path) {
+      return;
+    }
+    const today = typeof this.getScheduleLogDateString === "function"
+      ? this.getScheduleLogDateString()
+      : formatLocalDate();
+    const markUnblockedLine = typeof this.getFreshnessMarkUnblockedLine === "function"
+      ? this.getFreshnessMarkUnblockedLine()
+      : null;
+    const edits = planProjectResidentRecoveryEdits(editor.getValue(), path, {
+      today,
+      markUnblockedLine,
+      isToday: (task) => projectRecoveryTaskIsToday(this, task),
+    });
+    if (edits.length === 0) {
+      return;
+    }
+    const plan = {
+      edits,
+      unblocked: successorReadyRecoveryEdits({ edits }).map((edit) => ({
+        note_path: edit.path,
+        line: edit.line,
+        link: null,
+        not_linked: "project_member",
+      })),
+      placements: [],
+    };
+    await applySuccessorNoteEditsWithUnblockedGuard(this, plan, {
+      editor,
+      activePath: path,
+    });
+  }
+
 }

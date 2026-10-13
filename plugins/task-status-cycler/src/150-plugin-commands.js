@@ -43,6 +43,7 @@ class TaskStatusCyclerCommandsMixin {
       const wrote = this.setActiveCheckboxStatus(editor, taskStatus, nextSymbol);
       if (wrote && taskStatus.symbol === BLOCKED_TASK_STATUS_SYMBOL) {
         this.applyBlockedStatusRetirementInEditor(editor, taskStatus.line);
+        void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
       }
       // `cycler_polish` (bead bob-cli-3k): a cycle into Done joins the same
       // recover-and-link pass as Ctrl+Enter; a cycle into Cancelled recovers
@@ -778,6 +779,10 @@ class TaskStatusCyclerCommandsMixin {
         projectBlockedNotice ||
           `Project blocked · resolve the ^prj reason in ${activePath}`,
       );
+    }
+
+    if (changed && activePath) {
+      void this.recoverProjectResidentsAfterPrjUnblock(editor, activePath);
     }
 
     // One batched pass for the whole counted range (partitioned Done vs

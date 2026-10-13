@@ -531,7 +531,8 @@ function buildBlockedDependentRecoveryPlan(
       const hasOwnReason = task.dependsOn.some((id) => openIds.has(String(id))) ||
         !!findSingleFutureScheduledField(task.lineText, today);
       const recover = task.status === "?" && !hasOwnReason;
-      const stripTag = hasProjectBlockedResidentTag(task.lineText);
+      const stripTag = DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+        hasProjectBlockedResidentTag(task.lineText);
       if (!recover && !stripTag) continue;
       const key = `${path}\0${task.line}`;
       if (seenEdits.has(key)) {
@@ -581,6 +582,7 @@ function applyBlockedDependentRecoveryEdits(sourceText, edits, options = {}) {
     );
     if (
       !task ||
+      !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
       (edit.recover && (task.status !== "?" || task.statusStart !== edit.statusStart))
     ) {
       stale.push(edit);

@@ -7,6 +7,7 @@ const {
   notices,
   createInMemoryObsidianApp,
   createTextEditor,
+  attachActiveMarkdownView,
 } = require("./task-status-cycler-harness.cjs");
 
 test("dependency normalizer writes path-qualified IDs and is idempotent", () => {
@@ -209,6 +210,7 @@ test("project recovery strips resident tags and works without freshness v12", ()
     "- [?] #task Own blocker [dependsOn:: open__root] #prj_is_blocked ^own-blocked",
     "- [*] #task Already Next #prj_is_blocked ^already-next",
     "- [?] #task Ready to recover #prj_is_blocked ^recover",
+    "- [x] #task Done #prj_is_blocked ✅ 2026-10-01 ^done",
   ].join("\n");
   const docs = [
     { path: "projects/release.md", text: project },
@@ -225,6 +227,7 @@ test("project recovery strips resident tags and works without freshness v12", ()
     residentEdits.map((edit) => [edit.line, edit.recover]),
     [[4, true], [5, false], [6, false], [7, true]],
   );
+  assert.equal(residentEdits.some((edit) => edit.line === 8), false);
   const applied = helpers.applyBlockedDependentRecoveryEdits(
     project,
     residentEdits,
@@ -233,7 +236,21 @@ test("project recovery strips resident tags and works without freshness v12", ()
   assert.match(applied.text, /^- \[\?\] #task Own blocker \[dependsOn:: open__root\] \^own-blocked$/m);
   assert.match(applied.text, /^- \[\*\] #task Already Next \^already-next$/m);
   assert.match(applied.text, /^- \[ \] #task Ready to recover \^recover$/m);
-  assert.doesNotMatch(applied.text, /#prj_is_blocked/);
+  assert.match(applied.text, /^- \[x\] #task Done #prj_is_blocked ✅ 2026-10-01 \^done$/m);
+  const forcedClosed = helpers.applyBlockedDependentRecoveryEdits(
+    project,
+    [{
+      path: "projects/release.md",
+      line: 8,
+      sourceLineText: "- [x] #task Done #prj_is_blocked ✅ 2026-10-01 ^done",
+      statusStart: 3,
+      recover: false,
+    }],
+    { today: "2026-10-12" },
+  );
+  assert.equal(forcedClosed.reopened, 0);
+  assert.equal(forcedClosed.stale.length, 1);
+  assert.match(forcedClosed.text, /^- \[x\] #task Done #prj_is_blocked ✅ 2026-10-01 \^done$/m);
 });
 
 test("recovery passes daily-note and Today skip flags to ledger freshness", () => {
@@ -662,4 +679,33 @@ test("note rename rewrites fields while leaving Depends-On lines alone", () => {
   assert.match(result.text, /\[id:: New__Home__review\] \^review/);
   // Link healing across the rename is R3 territory, owned by nav-model.
   assert.ok(result.text.includes(depLine));
+});
+
+test("recoverBlockedDependents leaves a closed tagged resident untouched (PDT7)", async () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Release [dependsOn:: closed__root] ^prj",
+    "- [?] #task Ready to recover #prj_is_blocked ^recover",
+    "- [x] #task Done #prj_is_blocked ✅ 2026-10-01 ^done",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "projects/release.md": project,
+    "closed.md": "- [x] #task Closed [id:: closed__root] ^root",
+  });
+  const editor = createTextEditor(project, { line: 4, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "projects/release.md");
+  const result = await plugin.recoverBlockedDependentsNow(
+    [{ path: "closed.md", taskId: "closed__root" }],
+    { editor, activePath: "projects/release.md" },
+  );
+  assert.equal(result.reopened >= 1, true);
+  assert.match(
+    editor.getValue(),
+    /^- \[ \] #task Ready to recover(?: \[unblocked:: \d{4}-\d{2}-\d{2}\])? \^recover$/m,
+  );
+  assert.match(editor.getValue(), /^- \[x\] #task Done #prj_is_blocked ✅ 2026-10-01 \^done$/m);
 });

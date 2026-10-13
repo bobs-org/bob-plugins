@@ -62,39 +62,79 @@ function successorReadyRecoveryEdits(plan) {
   });
 }
 
+const PROJECT_RECOVERY_MISSING_UNBLOCKED_WARNING =
+  "Task Status Cycler: recovering blocked tasks without [unblocked::]; update bob-ledger-tools to freshness v12 to record review ticklers.";
+
+function warnProjectRecoveryWithoutUnblocked() {
+  console.warn(PROJECT_RECOVERY_MISSING_UNBLOCKED_WARNING);
+}
+
+// Cross-note ids that this note cannot prove closed still count as a
+// remaining project reason, so Alt+] on a date-only `^prj` recovers
+// residents while a still-open Depends-On target does not.
+function projectHasRemainingBlockingReason(project, today) {
+  if (projectHasFutureSchedule(project, today)) {
+    return true;
+  }
+  if (!project || project.dependencyIds.length === 0) {
+    return false;
+  }
+  const closedIds = new Set();
+  for (const task of project.tasks) {
+    if (task.taskId && !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)) {
+      closedIds.add(String(task.taskId));
+    }
+  }
+  return project.dependencyIds.some((id) => !closedIds.has(String(id)));
+}
+
+function planProjectResidentRecoveryEdits(sourceText, path, options = {}) {
+  const today = options.today || formatLocalDate();
+  const project = projectDependencyInfo(sourceText, path);
+  if (!project || projectHasRemainingBlockingReason(project, today)) {
+    return [];
+  }
+  const edits = [];
+  for (const task of project.tasks) {
+    if (
+      task.blockId === "prj" ||
+      !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
+      !hasProjectBlockedResidentTag(task.lineText)
+    ) {
+      continue;
+    }
+    const hasOwnReason = task.dependsOn.some((id) => {
+      const dependency = project.tasks.find((candidate) =>
+        candidate.taskId === String(id)
+      );
+      return !dependency || DEPENDENCY_OPEN_TASK_SYMBOLS.has(dependency.status);
+    }) || !!findSingleFutureScheduledField(task.lineText, today);
+    const recover = task.status === "?" && !hasOwnReason;
+    const after = rewriteRecoveredTaskLine(
+      task.lineText,
+      recover ? " " : task.status,
+      { ...options, today, task, isDailyNote: isDailyNotePath(path) },
+    );
+    if (typeof after === "string" && after !== task.lineText) {
+      edits.push({
+        path,
+        line: task.line,
+        before: task.lineText,
+        after,
+      });
+    }
+  }
+  return edits;
+}
+
 async function applySuccessorNoteEditsWithUnblockedGuard(plugin, plan, context) {
   const required = successorReadyRecoveryEdits(plan);
   const markUnblockedLine = plugin &&
     typeof plugin.getFreshnessMarkUnblockedLine === "function"
     ? plugin.getFreshnessMarkUnblockedLine()
     : null;
-  if (required.length === 0 || typeof markUnblockedLine === "function") {
-    return plugin.applySuccessorNoteEdits(plan, context);
+  if (required.length > 0 && typeof markUnblockedLine !== "function") {
+    warnProjectRecoveryWithoutUnblocked();
   }
-
-  const failedLocations = new Set(required.map((edit) =>
-    `${edit.path}\0${edit.line}`
-  ));
-  const failedRows = new Set();
-  for (let index = 0; index < plan.unblocked.length; index += 1) {
-    const row = plan.unblocked[index];
-    if (
-      row && failedLocations.has(`${row.note_path}\0${row.line}`)
-    ) {
-      row.link = null;
-      row.not_linked = "failed";
-      failedRows.add(index);
-    }
-  }
-  plan.edits = plan.edits.filter((edit) =>
-    !failedLocations.has(`${edit.path}\0${edit.line}`)
-  );
-  plan.placements = plan.placements.filter((placement) =>
-    !failedRows.has(placement && placement.rowIndex)
-  );
-  const outcome = await plugin.applySuccessorNoteEdits(plan, context);
-  outcome.failed += Math.max(required.length, failedRows.size);
-  outcome.failureReason = outcome.failureReason ||
-    "bob-ledger-tools freshness namespace v12 is required for recovery";
-  return outcome;
+  return plugin.applySuccessorNoteEdits(plan, context);
 }

@@ -4,6 +4,9 @@
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
+const { ModalStub, pressKey } = require("./modal-harness.cjs");
+
+global.window = global.window || { setTimeout: (callback) => callback() };
 
 class TestMarkdownView {}
 class TestPlugin {}
@@ -18,7 +21,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     return {
       MarkdownView: TestMarkdownView,
-      Modal: class Modal {},
+      Modal: class TestModal extends ModalStub {},
       Notice: TestNotice,
       Platform: { isDesktopApp: true },
       Plugin: TestPlugin,
@@ -212,6 +215,10 @@ function makePlugin({ rows, activePath, cursorLine = 0, freshnessOptions = {}, w
   plugin.reviewLandingEpoch = 0;
   plugin.reviewGestureSeq = 0;
   plugin.reviewWalkLock = null;
+  plugin.successorPickerUnavailable = false;
+  plugin.activeSuccessorPicker = null;
+  plugin.reviewSuccessorGestureOwner = null;
+  plugin.reviewSuccessorWalkHold = null;
   plugin.reviewAnsweredKeys = { day: null, keys: new Set() };
   plugin.vimJumpHistory = helpers.createVimJumpHistory();
   plugin.vimJumpOperationToken = 0;
@@ -230,6 +237,7 @@ function makePlugin({ rows, activePath, cursorLine = 0, freshnessOptions = {}, w
   };
   const clock = { now: Date.now() };
   plugin.reviewAdvanceNow = () => clock.now;
+  plugin.successorPickerNow = () => clock.now;
   plugin.advanceReviewClock = (ms) => {
     clock.now += ms;
   };
@@ -619,6 +627,69 @@ test("capture: frozen origin shape, BUSY while locked, expiry", async () => {
   const second = plugin.captureReviewGesture(editor);
   assert.ok(second && !second.busy, "the lock expires");
   assert.equal(second.seq, 2);
+});
+
+test("successor picker keeps a captured completion locked through selection and one walk toast", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.api.reviewWalk.capture(editor);
+  assert.ok(origin && !origin.busy);
+  const startingEpoch = plugin.reviewLandingEpoch;
+  const startingJumps = helpers.getVimJumpHistoryLength(plugin.vimJumpHistory);
+  const model = {
+    title: "Choose successors",
+    predecessors: [{ notePath: "walk.md", blockId: "one", text: "One" }],
+    groups: [{
+      group: "hand_off",
+      header: "Hand-offs",
+      rows: [{ key: "opaque:one", text: "Successor", notePath: "work.md", status: "Ready", destinationLabel: "BOB", needsBlockId: true, selectable: true }],
+    }],
+  };
+  clearNotices();
+  const completion = (async () => {
+    const selection = await plugin.api.successors.pick(model);
+    assert.deepEqual(selection, { picks: [{ key: "opaque:one" }] });
+    editor.state.lines[0] = editor.state.lines[0].replace(/\[[ *\/?]\]/, "[x]");
+    return plugin.api.reviewWalk.continue(origin, {
+      kind: "complete",
+      notice: "✓ Done · One",
+      successorNotice: "🔓 1 pulled in → BOB",
+    });
+  })();
+  await Promise.resolve();
+  const modal = plugin.activeSuccessorPicker;
+  assert.ok(modal, "the actual nav API opened its modal");
+  assert.equal(editor.getLine(0), fixture.queueState[0].originalMarkdown, "no close write occurs before the choice settles");
+  plugin.advanceReviewClock(3001);
+  assert.equal(plugin.reviewWalkBusy(), true, "the explicit picker hold outlives the 3000 ms timer");
+  assert.equal(plugin.api.reviewWalk.capture(editor).busy, true, "duplicate completion is swallowed");
+  assert.deepEqual(await plugin.claimReviewWalkCtrlEnter(editor), { ok: false, reason: "busy" });
+  assert.equal(await plugin.jumpToDueTask(1), false, "manual ]s cannot stale the origin");
+  assert.equal(plugin.reviewLandingEpoch, startingEpoch, "opening the chooser does not change the landing epoch");
+  assert.equal(editor.getCursor().line, 0, "duplicate completion and jump do not move the cursor");
+  pressKey(modal, "Tab");
+  pressKey(modal, "Enter");
+  assert.equal(plugin.activeSuccessorPicker, null, "modal tracking clears before the picker promise resumes");
+  assert.equal(plugin.reviewWalkBusy(), true, "dismissal is not an unlocked gap before continuation");
+
+  assert.deepEqual(await completion, { ok: true, advanced: true, stopped: false });
+  await flushed(plugin);
+  assert.match(editor.getLine(editor.getCursor().line), /#task Two/);
+  assert.equal(editor.getLine(0).includes("[x]"), true, "the captured close remains committed");
+  assert.equal(plugin.reviewSuccessorWalkHold, null, "the matching owner releases after continuation");
+  assert.equal(helpers.getVimJumpHistoryLength(plugin.vimJumpHistory), startingJumps + 2, "one final landing records one Vim jump transition");
+  assert.equal(notices.length, 1, "picker and walk compose a single toast");
+  assert.match(notices[0], /🔓 1 pulled in → BOB/);
+
+  const cursor = { ...editor.getCursor() };
+  clearNotices();
+  assert.deepEqual(await plugin.api.reviewWalk.continue(origin, { kind: "complete", notice: "duplicate" }), {
+    ok: true, advanced: false, stopped: false,
+  });
+  assert.deepEqual(editor.getCursor(), cursor, "a duplicate continuation cannot advance again");
+  await flushed(plugin);
+  assert.equal(helpers.getVimJumpHistoryLength(plugin.vimJumpHistory), startingJumps + 2, "a double continuation records no second jump");
 });
 
 test("continue: refuses stale origins, showing the notice once", async () => {

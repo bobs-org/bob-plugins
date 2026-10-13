@@ -346,6 +346,10 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.reviewLandingEpoch = 0;
     this.reviewGestureSeq = 0;
     this.reviewWalkLock = null;
+    this.successorPickerUnavailable = false;
+    this.activeSuccessorPicker = null;
+    this.reviewSuccessorGestureOwner = null;
+    this.reviewSuccessorWalkHold = null;
     this.reviewAnsweredKeys = { day: null, keys: new Set(), texts: new Map() };
     // At most one review-walk decision card at a time; the guard also
     // prevents nested cards.
@@ -384,6 +388,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
+    this.successorPickerUnavailable = true;
+    try {
+      this.closeSuccessorPickerForUnload();
+    } catch (_error) {
+      this.activeSuccessorPicker = null;
+      this.reviewSuccessorGestureOwner = null;
+      this.reviewSuccessorWalkHold = null;
+    }
     if (this.reviewJournalRetryTimer !== null) {
       clearTimeout(this.reviewJournalRetryTimer);
       this.reviewJournalRetryTimer = null;

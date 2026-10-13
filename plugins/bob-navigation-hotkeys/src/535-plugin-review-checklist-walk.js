@@ -117,6 +117,16 @@ class BobNavigationHotkeysChecklistWalkMixin {
       }
       // The completion holds the gesture lock, settling afterwards.
       this.takeReviewWalkLock(REVIEW_GESTURE_LOCK_MS);
+      try {
+        this.reviewGestureSeq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0)) + 1;
+      } catch (_error) {
+        this.reviewGestureSeq = 1;
+      }
+      const successorOwner = this.beginReviewSuccessorGestureOwner({
+        seq: this.reviewGestureSeq,
+        epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
+        key: reviewQueueEntryKey(entry),
+      }, "checklist");
       return Promise.resolve(
         this.completeReviewChecklistRow(editor, {
           api,
@@ -126,6 +136,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
           dateText: todayText,
           advance: true,
           withinGroup: true,
+          successorOwner,
         }),
       )
         .then((ok) => {
@@ -137,6 +148,9 @@ class BobNavigationHotkeysChecklistWalkMixin {
         .catch(() => {
           this.settleReviewWalkLock(false);
           return { ok: false, reason: "not-completed" };
+        })
+        .finally(() => {
+          this.releaseReviewSuccessorGestureOwner(successorOwner);
         });
     } catch (error) {
       return null;

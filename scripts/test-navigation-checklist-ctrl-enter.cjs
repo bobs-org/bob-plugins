@@ -3,6 +3,9 @@
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
+const { ModalStub, pressKey } = require("./modal-harness.cjs");
+
+global.window = global.window || { setTimeout: (callback) => callback() };
 
 class TestMarkdownView {}
 class TestPlugin {}
@@ -17,7 +20,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     return {
       MarkdownView: TestMarkdownView,
-      Modal: class Modal {},
+      Modal: class TestModal extends ModalStub {},
       Notice: TestNotice,
       Platform: { isDesktopApp: true },
       Plugin: TestPlugin,
@@ -194,11 +197,23 @@ function makePlugin({ queue, chores, posts, content, complete, cyclerVersion = 2
   plugin.reviewLandingEpoch = 0;
   plugin.reviewGestureSeq = 0;
   plugin.reviewWalkLock = null;
+  plugin.successorPickerUnavailable = false;
+  plugin.activeSuccessorPicker = null;
+  plugin.reviewSuccessorGestureOwner = null;
+  plugin.reviewSuccessorWalkHold = null;
   plugin.reviewAnsweredKeys = { day: null, keys: new Set() };
+  plugin.vimJumpHistory = helpers.createVimJumpHistory();
+  plugin.vimJumpOperationToken = 0;
+  plugin.vimJumpHistoryChain = Promise.resolve();
+  plugin.vimJumpSuppressNativeMirror = false;
+  plugin.filePositions = new Map();
+  plugin.findMarkdownLeafByPath = () => null;
   // Human-paced presses: the gesture lock settles ~350 ms after each
   // advance, so rapid test presses tick the clock past the settle window.
   const clock = { now: Date.now() };
   plugin.reviewAdvanceNow = () => clock.now;
+  plugin.successorPickerNow = () => clock.now;
+  plugin.advanceReviewClock = (ms) => { clock.now += ms; };
   plugin.advanceReviewClock = (ms) => {
     clock.now += ms;
   };
@@ -306,6 +321,58 @@ test("a real [S landing lets Ctrl+Enter complete and land on the next live PRE r
     notices.at(-1),
     "✓ Done · Check weather · Ctrl+Enter → next PRE\nReview 2/8 · PRE 2/7 · checklist",
   );
+});
+
+test("checklist Ctrl+Enter holds its landing through the actual successor picker", async () => {
+  const queue = queueFor(["Check weather", "Brush teeth"]);
+  const model = {
+    title: "Choose successors",
+    predecessors: [{ notePath: "gtd_daily.md", blockId: "weather", text: "Check weather" }],
+    groups: [{
+      group: "hand_off",
+      header: "Hand-offs",
+      rows: [{ key: "opaque:check-weather", text: "Successor task", notePath: "work.md", status: "Ready", destinationLabel: "JOB", needsBlockId: true, selectable: true }],
+    }],
+  };
+  let plugin = null;
+  const complete = async (editor) => {
+    const picks = await plugin.api.successors.pick(model);
+    assert.deepEqual(picks, { picks: [{ key: "opaque:check-weather" }] });
+    return {
+      ...await completeAtCursor()(editor),
+      successorNotice: "🔓 1 pulled in → JOB",
+    };
+  };
+  const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n"), complete });
+  plugin = fixture.plugin;
+  await land(plugin, "first");
+  const startingEpoch = plugin.reviewLandingEpoch;
+  const startingJumps = helpers.getVimJumpHistoryLength(plugin.vimJumpHistory);
+  clearNotices();
+  const completion = claim(plugin, fixture.editor);
+  await Promise.resolve();
+  const modal = plugin.activeSuccessorPicker;
+  assert.ok(modal, "the checklist path opened the actual nav picker API");
+  plugin.advanceReviewClock(3001);
+  assert.equal(plugin.reviewWalkBusy(), true, "checklist ownership survives the numeric lock timeout");
+  assert.deepEqual(await claim(plugin, fixture.editor), { ok: false, reason: "busy" }, "duplicate Ctrl+Enter is swallowed");
+  assert.equal(await plugin.jumpToDueTask(1), false, "manual ]s cannot change the origin while the picker is open");
+  assert.equal(plugin.reviewLandingEpoch, startingEpoch);
+  assert.match(fixture.editor.getLine(0), /^- \[ \] #task #gtd #pre Check weather/);
+  assert.equal(fixture.editor.getCursor().line, 0);
+  pressKey(modal, "Tab");
+  pressKey(modal, "Enter");
+  assert.equal(plugin.reviewLandingEpoch, startingEpoch, "closing the picker does not itself advance the landing");
+  assert.deepEqual(await completion, { ok: true });
+  await plugin.vimJumpHistoryChain;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await plugin.vimJumpHistoryChain;
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /#pre Brush teeth/);
+  assert.match(fixture.editor.getLine(0), /^- \[x\]/, "the checklist close remains committed");
+  assert.equal(plugin.reviewSuccessorWalkHold, null, "the checklist owner releases after continuation");
+  assert.equal(helpers.getVimJumpHistoryLength(plugin.vimJumpHistory), startingJumps + 2, "one completion records one Vim jump transition");
+  assert.equal(notices.length, 1, "the picker and walk use one toast");
+  assert.match(notices[0], /🔓 1 pulled in → JOB/);
 });
 
 test("seven Ctrl+Enter presses walk PRE with stale queues and either recurrence insertion mode", async () => {

@@ -280,6 +280,54 @@ test("unblocked card renders recovered-only and still-blocked rows", () => {
   assert.ok(suffixes.includes("· waits on 2 more"));
 });
 
+test("current offer summaries report pulled-in, unselected, mixed destinations, and new reasons", () => {
+  const picked = linkedRow({
+    text: "Ship the project task",
+    link: { ...linkedRow().link, entry_name: "JOB" },
+  });
+  const unselectedA = linkedRow({
+    block_id: "unpicked-a",
+    text: "Unpicked A",
+    link: null,
+    not_linked: "not_selected",
+  });
+  const unselectedB = linkedRow({
+    block_id: "unpicked-b",
+    text: "Unpicked B",
+    link: null,
+    not_linked: "not_selected",
+  });
+  const mixed = helpers.buildUnblockedNoticeModel(singleLinkedModel({
+    unblocked: [picked, unselectedA, unselectedB],
+    pull_in: { supported: true, offer_count: 3, choice: "subset", picked_count: 1 },
+  }), {});
+  assert.equal(mixed.countPill, "1 pulled in · 2 not pulled in → JOB");
+  assert.equal(mixed.text, "🔓 1 pulled in · 2 not pulled in → JOB");
+  assert.equal(mixed.pullIn.offerCount, 3);
+  assert.equal(mixed.pullIn.pulledIn, 1);
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(mixed, root, {});
+  const chips = collectFragmentNodes(root, nodeHasClass("bob-nh-notice-chip")).map((node) => node.text);
+  assert.ok(chips.includes("not pulled in"));
+  assert.match(findFragmentNode(root, nodeHasClass("bob-nh-notice-count")).text, /→ JOB/);
+
+  const none = helpers.buildUnblockedNoticeModel(singleLinkedModel({
+    unblocked: [unselectedA, unselectedB],
+    pull_in: { supported: true, offer_count: 2, choice: "none", picked_count: 0 },
+  }), {});
+  assert.equal(none.countPill, "0 pulled in · 2 not pulled in");
+  assert.equal(none.text, "🔓 0 pulled in · 2 not pulled in");
+
+  const noDestination = helpers.buildUnblockedNoticeModel(singleLinkedModel({
+    unblocked: [linkedRow({ link: null, not_linked: "no_destination" })],
+  }), {});
+  assert.match(noDestination.text, /no open Pomodoro/);
+  const noDestinationRoot = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(noDestination, noDestinationRoot, {});
+  assert.ok(collectFragmentNodes(noDestinationRoot, nodeHasClass("bob-nh-notice-chip"))
+    .some((node) => node.text === "no open Pomodoro"));
+});
+
 test("project pull-in rows label empty projects and preserve project blocking reasons", () => {
   const linked = linkedRow({
     text: "Ship the outcome!",

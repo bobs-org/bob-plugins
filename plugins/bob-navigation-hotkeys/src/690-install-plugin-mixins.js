@@ -25,6 +25,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysFreshnessDecayMixin,
   BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysReviewAdvanceMixin,
+  BobNavigationHotkeysSuccessorPickerMixin,
   BobNavigationHotkeysReviewMoveMixin,
   BobNavigationHotkeysReviewReturnMixin,
   BobNavigationHotkeysReviewJournalMixin,

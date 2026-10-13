@@ -932,6 +932,7 @@ function createDependencyNavApi(plugin) {
     inboxRoute: createInboxRouteApi(plugin),
     taskLinkLane: createTaskLinkLaneApi(plugin),
     notice: createNoticeApi(plugin),
+    successors: createSuccessorPickerApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

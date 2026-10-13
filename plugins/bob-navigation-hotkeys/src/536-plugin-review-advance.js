@@ -86,6 +86,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   // never sees it.
   reviewWalkBusy() {
     try {
+      if (this.isReviewSuccessorWalkHeld()) {
+        return true;
+      }
       const until = this.reviewWalkLock;
       if (until === null || until === undefined) {
         return false;
@@ -310,7 +313,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       } catch (error) {
         rowKey = landing.key;
       }
-      return Object.freeze({
+      const origin = Object.freeze({
         seq: this.reviewGestureSeq,
         epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
         day: todayText,
@@ -328,6 +331,8 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         priorKeys: Object.freeze(priorKeys),
         priorKeyTexts,
       });
+      this.beginReviewSuccessorGestureOwner(origin, "capture");
+      return origin;
     } catch (error) {
       return null;
     }
@@ -360,8 +365,11 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       // closed and focus has returned before the state is read.
       await new Promise((resolve) => setTimeout(resolve, 0));
       const input = outcome && typeof outcome === "object" ? outcome : null;
-      if (input && typeof input.notice === "string" && input.notice) {
-        notice = input.notice;
+      if (input) {
+        notice = [input.notice, input.successorNotice]
+          .filter((value) => typeof value === "string" && value.trim())
+          .map((value) => value.trim())
+          .join("\n");
       }
       const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
       const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
@@ -473,6 +481,8 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     } catch (error) {
       showNotice(notice);
       return Object.freeze({ ok: false, advanced: false, stopped: false });
+    } finally {
+      this.releaseReviewSuccessorGestureOwner(origin);
     }
   }
 

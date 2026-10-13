@@ -1,4 +1,4 @@
-// Unblocked successor notice card (plan:202610/successor_links.md §12.6,
+// Unblocked successor notice card (plan:202610/successor_offers.md §12.6,
 // `nav_card`). Pure model plus the `bob-nh-notice is-unblock` fragment and
 // the additive `api.notice` v1 factory. Nothing here reads the vault; the
 // cycler passes the shared snake_case notice model and this file renders it.
@@ -8,6 +8,8 @@ const UNBLOCKED_NOTICE_NOT_LINKED_REASONS = Object.freeze({
   already_planned: "already planned",
   not_planned_today: "not planned today",
   breaker: "not linked · more than 5",
+  not_selected: "not pulled in",
+  no_destination: "no open Pomodoro",
   project_task: "project task",
   project_member: "project member",
   hidden: "hidden",
@@ -118,6 +120,43 @@ function unblockedShortNoteName(notePath) {
   return base.endsWith(".md") ? base.slice(0, -3) : base;
 }
 
+function unblockedPullInSummary(model, linked, recovered) {
+  const source = model && (model.pull_in || model.pullIn);
+  const hasCurrentReasons = recovered.some((row) =>
+    ["not_selected", "no_destination"].includes(row.notLinked),
+  );
+  if ((!source || typeof source !== "object") && !hasCurrentReasons) {
+    return null;
+  }
+  const offersValue = source && (
+    source.offer_count ?? source.offerCount ??
+    (typeof source.offers === "number" ? source.offers : undefined) ??
+    (Array.isArray(source.offers) ? source.offers.length : undefined)
+  );
+  const offerCount = Number.isFinite(Number(offersValue))
+    ? Math.max(0, Math.floor(Number(offersValue)))
+    : Math.max(linked.length, recovered.filter((row) => row.notLinked === "not_selected").length + linked.length);
+  const pulledIn = linked.length;
+  const notPulledIn = Math.max(
+    recovered.filter((row) => row.notLinked === "not_selected").length,
+    offerCount - pulledIn,
+  );
+  const noDestination = recovered.filter((row) => row.notLinked === "no_destination").length;
+  const destinations = [];
+  for (const row of linked) {
+    const name = unblockedEntryDisplayName(row.entryName);
+    if (name && !destinations.includes(name)) destinations.push(name);
+  }
+  return Object.freeze({
+    offerCount,
+    pulledIn,
+    notPulledIn,
+    noDestination,
+    destinations: Object.freeze(destinations),
+    current: Boolean((source && source.supported === true) || hasCurrentReasons),
+  });
+}
+
 function unblockedEntryDisplayName(entryName) {
   const name = unblockedNoticeText(entryName);
   return name || "today";
@@ -141,6 +180,18 @@ function unblockedFallbackText(summary) {
     const reason = unblockedNoticeText(summary.failure.reason);
     const noun = count === 1 ? "successor" : "successors";
     return `⚠ Closed ${predText} — couldn't link ${count} ${noun}${reason ? ` (${reason})` : ""}`;
+  }
+  if (summary.pullIn && summary.pullIn.current) {
+    const destinationText = summary.pullIn.destinations.length > 0
+      ? ` → ${summary.pullIn.destinations.join(", ")}`
+      : "";
+    const notPulled = summary.pullIn.notPulledIn > 0
+      ? ` · ${summary.pullIn.notPulledIn} not pulled in`
+      : "";
+    const noDestination = summary.pullIn.noDestination > 0
+      ? ` · ${summary.pullIn.noDestination} no open Pomodoro${summary.pullIn.noDestination === 1 ? "" : "s"}`
+      : "";
+    return `🔓 ${summary.pullIn.pulledIn} pulled in${notPulled}${noDestination}${destinationText}`;
   }
   if (summary.isBreaker) {
     return `🔓 ${summary.total} unblocked · not linked (more than 5)`;
@@ -315,6 +366,8 @@ function buildUnblockedNoticeModel(model, options = {}) {
       recovered.length > 0 &&
       breakerCount === recovered.length;
 
+    const pullIn = unblockedPullInSummary(model, linked, recovered);
+
     const total = unblocked.length + still.length;
     const ordered = Object.freeze([
       ...linked.map((row) => ({ kind: "linked", row })),
@@ -325,7 +378,15 @@ function buildUnblockedNoticeModel(model, options = {}) {
     const moreCount = Math.max(0, ordered.length - visibleRows.length);
 
     let countPill = "";
-    if (isBreaker) {
+    if (pullIn && pullIn.current) {
+      const destinationText = pullIn.destinations.length > 0
+        ? ` → ${pullIn.destinations.join(", ")}`
+        : "";
+      const noDestination = pullIn.noDestination > 0
+        ? ` · ${pullIn.noDestination} no open Pomodoro${pullIn.noDestination === 1 ? "" : "s"}`
+        : "";
+      countPill = `${pullIn.pulledIn} pulled in${pullIn.notPulledIn > 0 ? ` · ${pullIn.notPulledIn} not pulled in` : ""}${noDestination}${destinationText}`;
+    } else if (isBreaker) {
       countPill = `${unblocked.length} · not linked`;
     } else if (linked.length > 0) {
       const names = [];
@@ -390,8 +451,10 @@ function buildUnblockedNoticeModel(model, options = {}) {
       linked,
       recovered,
       predecessors,
+      pullIn,
       failure: hasFailure ? failure : null,
       isBreaker,
+      showLegacyBreaker: isBreaker && !(pullIn && pullIn.current),
       total: unblocked.length,
     };
     const text = unblockedFallbackText(summary);
@@ -408,6 +471,8 @@ function buildUnblockedNoticeModel(model, options = {}) {
       visibleRows: Object.freeze(visibleRows),
       moreCount,
       isBreaker,
+      pullIn,
+      showLegacyBreaker: isBreaker && !(pullIn && pullIn.current),
       failure: hasFailure ? Object.freeze(failure) : null,
       dailyPath,
       countPill,
@@ -514,7 +579,7 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
     text: model.receipt,
   });
 
-  if (model.isBreaker) {
+  if (model.showLegacyBreaker === true || (model.showLegacyBreaker === undefined && model.isBreaker)) {
     const reasonEl = card.createDiv({ cls: "bob-nh-notice-reason" });
     reasonEl.createSpan({
       cls: "bob-nh-notice-reason-text",

@@ -46,5 +46,6 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysProjectNoteMixin,
   BobNavigationHotkeysProjectConversionMixin,
   BobNavigationHotkeysProjectFileMixin,
+  BobNavigationHotkeysGoToTaskUriMixin,
   BobNavigationHotkeysLinkParseMixin,
 ]);

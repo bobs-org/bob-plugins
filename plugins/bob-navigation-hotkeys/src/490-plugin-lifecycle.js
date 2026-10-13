@@ -289,6 +289,12 @@ class BobNavigationHotkeysPlugin extends Plugin {
       });
     });
 
+    if (typeof this.registerObsidianProtocolHandler === "function") {
+      this.registerObsidianProtocolHandler("bob-goto-task", (params) => {
+        void this.handleGoToTaskUri(params);
+      });
+    }
+
     this.app.workspace.onLayoutReady(() => {
       const activeFile = this.app.workspace.getActiveFile();
       if (this.isMarkdownFile(activeFile)) {

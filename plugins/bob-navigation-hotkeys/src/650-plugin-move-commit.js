@@ -503,16 +503,27 @@ class BobNavigationHotkeysMoveCommitMixin {
   }
 
   async focusTaskMoveDestination(file, anchor, vimJumpContext = null) {
-    this.captureActiveFilePosition();
-
     const destinationName =
       file.basename || getVaultPathBasenameWithoutExtension(file.path);
+    return this.focusTaskAnchor(file, anchor, {
+      vimJumpContext,
+      failureNotice: `Moved tasks, but could not open ${destinationName}`,
+      ensureEditing: false,
+    });
+  }
+
+  async focusTaskAnchor(file, anchor, options = {}) {
+    const opts = options && typeof options === "object" ? options : {};
+    const vimJumpContext = opts.vimJumpContext || null;
+    const failureNotice =
+      typeof opts.failureNotice === "string" ? opts.failureNotice : null;
+    const ensureEditing = opts.ensureEditing === true;
+
+    this.captureActiveFilePosition();
+
     let opened = false;
     try {
-      opened = await this.openMarkdownFileWithLeafReuse(
-        file,
-        `Moved tasks, but could not open ${destinationName}`,
-      );
+      opened = await this.openMarkdownFileWithLeafReuse(file, failureNotice);
     } catch (error) {
       opened = false;
     }
@@ -520,12 +531,27 @@ class BobNavigationHotkeysMoveCommitMixin {
       return false;
     }
 
+    if (
+      ensureEditing &&
+      typeof this.ensureGoToTaskEditingLeaf === "function"
+    ) {
+      try {
+        await this.ensureGoToTaskEditingLeaf(file);
+      } catch (error) {
+        // Best-effort switch from Reading view.
+      }
+    }
+
     const hasMoveContext =
       vimJumpContext &&
       vimJumpContext.origin &&
       normalizeVimJumpLocation(vimJumpContext.origin);
     if (!hasMoveContext) {
-      return this.jumpOrDeferTaskMoveDestination(file.path, anchor);
+      const placed = this.jumpOrDeferTaskMoveDestination(file.path, anchor);
+      if (ensureEditing && typeof this.focusGoToTaskEditor === "function") {
+        this.focusGoToTaskEditor();
+      }
+      return placed;
     }
 
     if (vimJumpContext.token !== this.vimJumpOperationToken) {
@@ -567,6 +593,10 @@ class BobNavigationHotkeysMoveCommitMixin {
       landing = await completionPromise;
     } catch (error) {
       landing = { ok: false, reason: "error" };
+    }
+
+    if (ensureEditing && typeof this.focusGoToTaskEditor === "function") {
+      this.focusGoToTaskEditor();
     }
 
     if (!landing || !landing.ok || !landing.destination) {

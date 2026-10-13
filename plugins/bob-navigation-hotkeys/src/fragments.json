@@ -90,6 +90,7 @@
   "665-plugin-project-conversion.js",
   "666-project-reversal-rewrites.js",
   "670-plugin-project-files.js",
+  "675-plugin-goto-task-uri.js",
   "680-plugin-link-parse.js",
   "690-install-plugin-mixins.js",
   "700-exports.js"

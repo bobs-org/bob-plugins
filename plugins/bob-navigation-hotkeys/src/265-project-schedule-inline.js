@@ -55,6 +55,12 @@ function projectPrjLineIsBlocked(lineText) {
   return getObsidianTaskCheckboxStatus(lineText) === "?";
 }
 
+function projectPrjLineStaysBlocked(lineText) {
+  return (
+    projectPrjLineIsBlocked(lineText) || taskHasProjectBlockedTag(lineText)
+  );
+}
+
 function planProjectTaskSchedules(
   content,
   scheduled,
@@ -147,6 +153,8 @@ function planProjectTaskSchedules(
         if (blockedLine !== nextLine) blockedTaskCount += 1;
         nextLine = blockedLine;
         futureScheduledTaskLines.push(task.line);
+      } else if (taskHasProjectBlockedTag(nextLine)) {
+        nextLine = blockObsidianTaskCheckboxStatus(nextLine);
       } else {
         nextLine = setProjectBlockedTag(nextLine, false);
         const recovery = reconcileBlockedScheduledTaskLine(
@@ -163,7 +171,7 @@ function planProjectTaskSchedules(
         nextLine = recovery.line;
         recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
       }
-      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
+      prjStaysBlocked = projectPrjLineStaysBlocked(nextLine);
       if (!priorField && scheduleResult.changed && !future) {
         // A due date is still an explicit project schedule; only the blocked
         // state changes when its reason clears.
@@ -345,21 +353,25 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
         false,
         tasks.length === 1,
       );
-      nextLine = setProjectBlockedTag(nextLine, false);
-      const recovery = reconcileBlockedScheduledTaskLine(
-        nextLine,
-        getTargetScheduledRecovery(options, task.line),
-        {
-          today: options.today,
-          ownLine: true,
-          markUnblockedLine: options.markUnblockedLine,
-          isDailyNote: options.isDailyNote === true,
-          isToday: options.isToday === true,
-        },
-      );
-      nextLine = recovery.line;
-      recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
-      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
+      if (taskHasProjectBlockedTag(nextLine)) {
+        nextLine = blockObsidianTaskCheckboxStatus(nextLine);
+      } else {
+        nextLine = setProjectBlockedTag(nextLine, false);
+        const recovery = reconcileBlockedScheduledTaskLine(
+          nextLine,
+          getTargetScheduledRecovery(options, task.line),
+          {
+            today: options.today,
+            ownLine: true,
+            markUnblockedLine: options.markUnblockedLine,
+            isDailyNote: options.isDailyNote === true,
+            isToday: options.isToday === true,
+          },
+        );
+        nextLine = recovery.line;
+        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      }
+      prjStaysBlocked = projectPrjLineStaysBlocked(nextLine);
     } else {
       const removed = removeProjectTaskScheduledFields(
         nextLine,

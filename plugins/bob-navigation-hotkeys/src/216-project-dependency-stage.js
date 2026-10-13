@@ -227,14 +227,35 @@ function projectDependentResidentKeys(content, parentPath, parentLine) {
 
 // Refusal reason when the gesture adds a same-note target to `^prj`, or
 // null when the adds are clean.
-function failProjectPrjInternalAdd(projectPrj, add, parentPath) {
+function failProjectPrjInternalAdd(
+  projectPrj,
+  add,
+  parentPath,
+  descendantPaths,
+) {
   if (!projectPrj) {
     return null;
   }
   const internal = (Array.isArray(add) ? add : []).filter((ref) =>
     isSameNoteDependencyTargetRef(ref, parentPath),
   );
-  return internal.length > 0 ? "project-internal-target" : null;
+  if (internal.length > 0) {
+    return "project-internal-target";
+  }
+  const descendants = new Set(
+    (Array.isArray(descendantPaths) ? descendantPaths : []).map((path) =>
+      normalizeVaultRelativePath(path),
+    ),
+  );
+  if (descendants.size === 0) {
+    return null;
+  }
+  const descendant = (Array.isArray(add) ? add : []).some((ref) => {
+    const target = normalizeDependencyTargetRef(ref);
+    const path = normalizeVaultRelativePath(target.path || "");
+    return Boolean(path && descendants.has(path));
+  });
+  return descendant ? "project-descendant-target" : null;
 }
 
 // Kept-link rows comparable against the old `[dependsOn::]` field by
@@ -344,6 +365,7 @@ function shouldRecoverProjectResidents(
       recovery.registry &&
       (removedCount > 0 || fieldCleared) &&
       openRemaining === 0 &&
+      !taskHasProjectBlockedTag(parentText) &&
       !dependencyParentHasFutureSchedule(parentText, today),
   );
 }

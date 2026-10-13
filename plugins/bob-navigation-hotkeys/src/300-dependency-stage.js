@@ -174,6 +174,12 @@ function planDependencyStageView(args = {}) {
     labelByKey.set(dependentKey, dependent.displayText || dependent.text);
   }
   const isProjectPrjDependent = dependent && dependent.isProjectPrj === true;
+  const descendantPaths = new Set(
+    (Array.isArray(dependent.projectDescendantPaths)
+      ? dependent.projectDescendantPaths
+      : []
+    ).map((path) => normalizeVaultRelativePath(path)),
+  );
   const guard = (candidate) => {
     const key =
       candidate.path && candidate.blockId
@@ -186,6 +192,18 @@ function planDependencyStageView(args = {}) {
       return {
         disabled: true,
         reason: "inside this project",
+        cycle: null,
+        cycleLabels: null,
+      };
+    }
+    if (
+      isProjectPrjDependent &&
+      candidate.path &&
+      descendantPaths.has(normalizeVaultRelativePath(candidate.path))
+    ) {
+      return {
+        disabled: true,
+        reason: "inside a sub-project of this project",
         cycle: null,
         cycleLabels: null,
       };

@@ -724,6 +724,7 @@ function parseProjectLifecycleTaskBody(lineText) {
       .replace(PROJECT_LIFECYCLE_TAG_GLOBAL_RE, "$1"),
   );
   description = removeProjectDerivedTaskFields(description);
+  description = setProjectBlockedTag(description, false);
 
   return Object.freeze({ status, description });
 }

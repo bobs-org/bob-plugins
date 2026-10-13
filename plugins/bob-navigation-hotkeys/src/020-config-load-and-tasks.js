@@ -518,6 +518,9 @@ function dependencyPlanFailureNotice(reason, verb = "update") {
   if (reason === "in-blockquote") {
     return "⛓ Dependencies can't be edited inside a blockquote";
   }
+  if (reason === "project-descendant-target") {
+    return "⛓ inside a sub-project of this project";
+  }
   return `⛓ Could not ${verb} dependencies (${reason})`;
 }
 

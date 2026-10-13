@@ -26,6 +26,7 @@
   "212-project-conversion.js",
   "215-project-blocking.js",
   "216-project-dependency-stage.js",
+  "217-project-subprojects.js",
   "220-property-targets.js",
   "230-schedule-review.js",
   "240-cancel-and-lanes.js",

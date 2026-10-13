@@ -1879,6 +1879,9 @@ function dependencyPlanFailureNotice(reason, verb = "update") {
   if (reason === "in-blockquote") {
     return "⛓ Dependencies can't be edited inside a blockquote";
   }
+  if (reason === "project-descendant-target") {
+    return "⛓ inside a sub-project of this project";
+  }
   return `⛓ Could not ${verb} dependencies (${reason})`;
 }
 
@@ -6172,10 +6175,14 @@ function planDependencyEdit(args = {}) {
     parentPath,
     parentIndex,
   );
+  const descendantPaths = Array.isArray(args.descendantPaths)
+    ? args.descendantPaths
+    : collectProjectDescendantPathsFromNotes(parentPath, filesMap);
   const internalAddReason = failProjectPrjInternalAdd(
     projectPrj,
     add,
     parentPath,
+    descendantPaths,
   );
   if (internalAddReason) {
     return fail(internalAddReason);
@@ -6570,6 +6577,7 @@ function planDependencyEdit(args = {}) {
     (removedCount > 0 || fieldCleared || mirrorTouch) &&
     openRemaining === 0 &&
     getObsidianTaskCheckboxStatus(parentText) === "?" &&
+    !taskHasProjectBlockedTag(parentText) &&
     !dependencyParentHasFutureSchedule(parentText, recoveryToday);
   // Resident recovery runs only when `^prj` itself was Blocked before the
   // gesture (§13.10): removing a closed link from an unblocked `^prj` must
@@ -8618,6 +8626,7 @@ function parseProjectLifecycleTaskBody(lineText) {
       .replace(PROJECT_LIFECYCLE_TAG_GLOBAL_RE, "$1"),
   );
   description = removeProjectDerivedTaskFields(description);
+  description = setProjectBlockedTag(description, false);
 
   return Object.freeze({ status, description });
 }
@@ -19534,6 +19543,20 @@ function getProjectBlockState(content, path, today, lookupOpen, options = {}) {
       }),
     );
   }
+  // Tag proxy (§13.3): `#prj_is_blocked` on `^prj` means this project
+  // inherits a reason from an ancestor. Engines that do not walk the
+  // tree treat that as an extra project reason (`project_parent`).
+  if (taskHasProjectBlockedTag(rows.prj[0].text)) {
+    const parentTarget = projectParentTarget(
+      projectParentFieldFromNoteText(content),
+    );
+    reasons.push(
+      Object.freeze({
+        kind: "project_parent",
+        projectPath: parentTarget || "",
+      }),
+    );
+  }
 
   return Object.freeze({
     isProject: true,
@@ -19753,6 +19776,14 @@ function formatProjectRecoveryReason(reasons) {
   );
   if (scheduled && scheduled.scheduled) {
     return `project_schedule: ${scheduled.scheduled}`;
+  }
+  const inherited = (Array.isArray(reasons) ? reasons : []).find(
+    (reason) => reason.kind === "project_parent",
+  );
+  if (inherited) {
+    return inherited.projectPath
+      ? `project_parent: ${inherited.projectPath}`
+      : "project_parent";
   }
   return "project_dependency";
 }
@@ -20080,14 +20111,35 @@ function projectDependentResidentKeys(content, parentPath, parentLine) {
 
 // Refusal reason when the gesture adds a same-note target to `^prj`, or
 // null when the adds are clean.
-function failProjectPrjInternalAdd(projectPrj, add, parentPath) {
+function failProjectPrjInternalAdd(
+  projectPrj,
+  add,
+  parentPath,
+  descendantPaths,
+) {
   if (!projectPrj) {
     return null;
   }
   const internal = (Array.isArray(add) ? add : []).filter((ref) =>
     isSameNoteDependencyTargetRef(ref, parentPath),
   );
-  return internal.length > 0 ? "project-internal-target" : null;
+  if (internal.length > 0) {
+    return "project-internal-target";
+  }
+  const descendants = new Set(
+    (Array.isArray(descendantPaths) ? descendantPaths : []).map((path) =>
+      normalizeVaultRelativePath(path),
+    ),
+  );
+  if (descendants.size === 0) {
+    return null;
+  }
+  const descendant = (Array.isArray(add) ? add : []).some((ref) => {
+    const target = normalizeDependencyTargetRef(ref);
+    const path = normalizeVaultRelativePath(target.path || "");
+    return Boolean(path && descendants.has(path));
+  });
+  return descendant ? "project-descendant-target" : null;
 }
 
 // Kept-link rows comparable against the old `[dependsOn::]` field by
@@ -20197,6 +20249,7 @@ function shouldRecoverProjectResidents(
       recovery.registry &&
       (removedCount > 0 || fieldCleared) &&
       openRemaining === 0 &&
+      !taskHasProjectBlockedTag(parentText) &&
       !dependencyParentHasFutureSchedule(parentText, today),
   );
 }
@@ -20521,6 +20574,462 @@ function buildDependencyEditNoticeWithProject(summary, names = {}) {
     }
   }
   return buildDependencyEditNotice(summary, names);
+}
+// ---- src/217-project-subprojects.js ----
+// Sub-project discovery and the pure top-down subtree planner
+// (`docs/task-dependencies.md` §13.3, §13.6, §13.19 PDS6/PDS15, PDG8–PDG13).
+// parent(K) matches bob projects sync's scalar wikilink (alias and heading
+// dropped, path kept) and resolves like NoteIndex::resolve.
+
+const PROJECT_SUBTREE_MAX_DEPTH = 16;
+
+function projectParentTarget(frontmatterParent) {
+  if (frontmatterParent == null) {
+    return null;
+  }
+  if (Array.isArray(frontmatterParent)) {
+    return null;
+  }
+  if (typeof frontmatterParent === "object") {
+    return null;
+  }
+  const raw = getYamlScalarText(String(frontmatterParent));
+  if (!raw) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("[[") || !trimmed.endsWith("]]")) {
+    return null;
+  }
+  let inner = trimmed.slice(2, -2).trim();
+  const pipe = inner.indexOf("|");
+  if (pipe !== -1) {
+    inner = inner.slice(0, pipe);
+  }
+  const hash = inner.indexOf("#");
+  if (hash !== -1) {
+    inner = inner.slice(0, hash);
+  }
+  inner = inner.trim();
+  return inner || null;
+}
+
+function projectParentFieldFromNoteText(content) {
+  const { lines } = splitMarkdownContent(content);
+  if (!startsWithFrontmatter(lines)) {
+    return null;
+  }
+  let closingLine = -1;
+  for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
+    if (FRONTMATTER_DELIMITER_RE.test(lines[lineIndex])) {
+      closingLine = lineIndex;
+      break;
+    }
+  }
+  if (closingLine === -1) {
+    return null;
+  }
+  for (let lineIndex = 1; lineIndex < closingLine; lineIndex += 1) {
+    const match = /^parent[ \t]*:(.*)$/.exec(lines[lineIndex]);
+    if (!match) {
+      continue;
+    }
+    const scalar = getYamlScalarText(match[1]);
+    return scalar || [];
+  }
+  return null;
+}
+
+function resolveProjectParentPath(target, sourcePath, notePaths) {
+  const source = normalizeVaultRelativePath(sourcePath);
+  const raw = String(target || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const paths = (Array.isArray(notePaths) ? notePaths : [])
+    .map((entry) => normalizeVaultRelativePath(entry))
+    .filter(Boolean);
+  const pathSet = new Set(paths);
+  const exact = canonicalRecoveryMarkdownPath(raw);
+  if (exact && pathSet.has(exact)) {
+    return exact === source ? null : exact;
+  }
+  if (raw.includes("/") || raw.includes("\\")) {
+    return null;
+  }
+  const base = recoveryMarkdownBasename(exact || raw).toLowerCase();
+  if (!base) {
+    return null;
+  }
+  let found = null;
+  for (const filePath of paths) {
+    if (recoveryMarkdownBasename(filePath).toLowerCase() !== base) {
+      continue;
+    }
+    if (found && found !== filePath) {
+      return null;
+    }
+    found = filePath;
+  }
+  if (!found || found === source) {
+    return null;
+  }
+  return found;
+}
+
+function parentFieldFromFrontmatter(frontmatter) {
+  if (frontmatter == null) {
+    return null;
+  }
+  if (typeof frontmatter === "string" || Array.isArray(frontmatter)) {
+    return frontmatter;
+  }
+  if (typeof frontmatter === "object") {
+    return Object.prototype.hasOwnProperty.call(frontmatter, "parent")
+      ? frontmatter.parent
+      : null;
+  }
+  return null;
+}
+
+function frontmatterLooksLikeProject(frontmatter, path) {
+  if (canonicalRecoveryDailyDate(normalizeVaultRelativePath(path))) {
+    return false;
+  }
+  if (frontmatter == null || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(frontmatter, "type")) {
+    const typeValue = getYamlScalarText(frontmatter.type);
+    if (typeValue && typeValue !== PROJECT_TYPE_WIKILINK) {
+      return false;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(frontmatter, "status")) {
+    const status = normalizeStatus(frontmatter.status);
+    if (PROJECT_TERMINAL_STATUSES.has(status)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function filePathOf(file) {
+  if (!file) {
+    return "";
+  }
+  if (typeof file === "string") {
+    return normalizeVaultRelativePath(file);
+  }
+  return normalizeVaultRelativePath(file.path);
+}
+
+function frontmatterForProjectChild(file, frontmatterOf) {
+  const text =
+    file && typeof file === "object" ? file.text || file.content : null;
+  if (typeof text === "string") {
+    const recognition = readProjectFrontmatterRecognition(text);
+    if (!recognition.isProjectType) {
+      return { type: "[[other]]" };
+    }
+    return {
+      parent: projectParentFieldFromNoteText(text),
+      type: PROJECT_TYPE_WIKILINK,
+      status: recognition.status,
+    };
+  }
+  if (typeof frontmatterOf === "function") {
+    const provided = frontmatterOf(file);
+    if (provided && typeof provided === "object" && !Array.isArray(provided)) {
+      return provided;
+    }
+    if (provided != null) {
+      return { parent: provided };
+    }
+  }
+  return null;
+}
+
+function buildProjectChildrenMap(files, frontmatterOf) {
+  const list = Array.isArray(files) ? files : [];
+  const records = [];
+  const notePaths = [];
+  for (const file of list) {
+    const path = filePathOf(file);
+    if (!path) {
+      continue;
+    }
+    notePaths.push(path);
+    records.push({ path, file });
+  }
+  const children = new Map();
+  for (const { path, file } of records) {
+    const frontmatter = frontmatterForProjectChild(file, frontmatterOf);
+    if (!frontmatterLooksLikeProject(frontmatter, path)) {
+      continue;
+    }
+    const target = projectParentTarget(parentFieldFromFrontmatter(frontmatter));
+    if (!target) {
+      continue;
+    }
+    const parentPath = resolveProjectParentPath(target, path, notePaths);
+    if (!parentPath) {
+      continue;
+    }
+    if (!children.has(parentPath)) {
+      children.set(parentPath, []);
+    }
+    children.get(parentPath).push(path);
+  }
+  for (const [parentPath, kids] of children) {
+    kids.sort((first, second) => first.localeCompare(second));
+    children.set(parentPath, Object.freeze(kids.slice()));
+  }
+  return children;
+}
+
+function collectProjectDescendants(
+  rootPath,
+  childrenMap,
+  maxDepth = PROJECT_SUBTREE_MAX_DEPTH,
+) {
+  const root = normalizeVaultRelativePath(rootPath);
+  if (!root) {
+    return Object.freeze([]);
+  }
+  const descendants = [];
+  const visited = new Set([root]);
+  const queue = [{ path: root, depth: 0 }];
+  const limit = Math.max(0, Math.floor(numericOrDefault(maxDepth, PROJECT_SUBTREE_MAX_DEPTH)));
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current.depth >= limit) {
+      continue;
+    }
+    const kids =
+      childrenMap instanceof Map ? childrenMap.get(current.path) || [] : [];
+    for (const child of kids) {
+      const childPath = normalizeVaultRelativePath(child);
+      if (!childPath || visited.has(childPath)) {
+        continue;
+      }
+      visited.add(childPath);
+      descendants.push(childPath);
+      queue.push({ path: childPath, depth: current.depth + 1 });
+    }
+  }
+  return Object.freeze(descendants);
+}
+
+function collectProjectDescendantPathsFromNotes(rootPath, filesMap) {
+  const files = [];
+  const map = filesMap instanceof Map ? filesMap : new Map();
+  for (const [path, text] of map) {
+    files.push({ path, text: String(text || "") });
+  }
+  return collectProjectDescendants(
+    rootPath,
+    buildProjectChildrenMap(files, (file) =>
+      projectParentFieldFromNoteText(file.text),
+    ),
+  );
+}
+
+function ownProjectReasons(state) {
+  const reasons = state && Array.isArray(state.reasons) ? state.reasons : [];
+  return reasons.filter((reason) => reason && reason.kind !== "project_parent");
+}
+
+function rewriteNoteLines(content, replacements) {
+  const source = splitMarkdownContent(content);
+  let changed = false;
+  for (const [line, text] of replacements) {
+    const at = Math.floor(numericOrDefault(line, Number.NaN));
+    if (!Number.isFinite(at) || at < 0 || at >= source.lines.length) {
+      continue;
+    }
+    if (source.lines[at] !== text) {
+      source.lines[at] = text;
+      changed = true;
+    }
+  }
+  return Object.freeze({
+    before: String(content || ""),
+    after: source.lines.join(source.lineEnding),
+    changed,
+  });
+}
+
+function planProjectSubtreePass(args = {}) {
+  const rootPath = normalizeVaultRelativePath(args.rootPath || "");
+  const rootBlockedAfter = Boolean(args.rootBlockedAfter);
+  const descendants = Array.isArray(args.descendants) ? args.descendants : [];
+  const lookupOpen =
+    typeof args.lookupOpen === "function" ? args.lookupOpen : () => false;
+  const today = args.today instanceof Date ? args.today : new Date();
+  const markUnblockedLine =
+    typeof args.markUnblockedLine === "function" ? args.markUnblockedLine : null;
+  const recoveryFor =
+    typeof args.recoveryFor === "function"
+      ? args.recoveryFor
+      : () => Object.freeze({ state: "ready", rank: " ", reason: null });
+  const byPath = new Map();
+  for (const entry of descendants) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const path = normalizeVaultRelativePath(entry.path);
+    if (!path || path === rootPath) {
+      continue;
+    }
+    byPath.set(path, String(entry.text || ""));
+  }
+  const files = [...byPath.entries()].map(([path, text]) => ({ path, text }));
+  if (rootPath) {
+    files.push({ path: rootPath, text: String(args.rootText || "") });
+  }
+  const childrenMap = buildProjectChildrenMap(files, (file) =>
+    projectParentFieldFromNoteText(file.text),
+  );
+  const ordered = rootPath
+    ? collectProjectDescendants(rootPath, childrenMap).filter((path) =>
+        byPath.has(path),
+      )
+    : [...byPath.keys()];
+  const blockedAfterByPath = new Map();
+  if (rootPath) {
+    blockedAfterByPath.set(rootPath, rootBlockedAfter);
+  }
+  const notes = [];
+  const pomodoroTargets = [];
+  const laneStatuses = [];
+  let blocked = 0;
+  let recovered = 0;
+  const recoverOptions = (path) =>
+    Object.freeze({
+      today,
+      markUnblockedLine,
+      isDailyNote: Boolean(canonicalRecoveryDailyDate(path)),
+      isToday: false,
+    });
+  const recordNewlyBlocked = (path, before, after, blockId) => {
+    const beforeStatus = getObsidianTaskCheckboxStatus(before);
+    const afterStatus = getObsidianTaskCheckboxStatus(after);
+    if (beforeStatus === afterStatus || afterStatus !== "?") {
+      return;
+    }
+    if (OPEN_OBSIDIAN_TASK_STATUSES.has(beforeStatus) && beforeStatus !== "?") {
+      laneStatuses.push(beforeStatus);
+    }
+    if (blockId) {
+      pomodoroTargets.push(Object.freeze({ path, blockId }));
+    }
+  };
+
+  for (const path of ordered) {
+    const text = byPath.get(path);
+    if (text == null) {
+      continue;
+    }
+    const state = getProjectBlockState(text, path, today, lookupOpen);
+    if (!state.isProject) {
+      blockedAfterByPath.set(path, false);
+      continue;
+    }
+    const parentTarget = projectParentTarget(projectParentFieldFromNoteText(text));
+    const parentPath = parentTarget
+      ? resolveProjectParentPath(parentTarget, path, [
+          ...byPath.keys(),
+          rootPath,
+        ].filter(Boolean))
+      : null;
+    let inheritedAfter = false;
+    if (parentPath && blockedAfterByPath.has(parentPath)) {
+      inheritedAfter = Boolean(blockedAfterByPath.get(parentPath));
+    } else if (parentPath && parentPath === rootPath) {
+      inheritedAfter = rootBlockedAfter;
+    } else if (!parentPath || !byPath.has(parentPath)) {
+      inheritedAfter = rootBlockedAfter;
+    }
+    const ownBlocked = ownProjectReasons(state).length > 0;
+    const blockedAfter = ownBlocked || inheritedAfter;
+    blockedAfterByPath.set(path, blockedAfter);
+    const prjWasTagged = taskHasProjectBlockedTag(state.prjLine >= 0
+      ? String(splitMarkdownContent(text).lines[state.prjLine] || "")
+      : "");
+    const replacements = [];
+    if (state.prjLine >= 0) {
+      const current = String(splitMarkdownContent(text).lines[state.prjLine] || "");
+      let next = current;
+      if (inheritedAfter) {
+        next = setProjectBlockedTag(blockObsidianTaskCheckboxStatus(current), true);
+      } else {
+        next = setProjectBlockedTag(current, false);
+        if (
+          prjWasTagged &&
+          !ownBlocked &&
+          getObsidianTaskCheckboxStatus(current) === "?"
+        ) {
+          next = recoverProjectResidentLine(
+            current,
+            recoveryFor(path, state.prjLine, current),
+            recoverOptions(path),
+          ).line;
+        }
+      }
+      if (next !== current) {
+        replacements.push([state.prjLine, next]);
+        recordNewlyBlocked(
+          path,
+          current,
+          next,
+          getTrailingBlockId(current) || "prj",
+        );
+      }
+    }
+    for (const resident of state.residents) {
+      const current = String(
+        splitMarkdownContent(text).lines[resident.line] || resident.text || "",
+      );
+      let next = current;
+      if (blockedAfter) {
+        next = blockProjectResidentLine(current);
+      } else if (taskHasProjectBlockedTag(current)) {
+        next = recoverProjectResidentLine(
+          current,
+          recoveryFor(path, resident.line, current),
+          recoverOptions(path),
+        ).line;
+      }
+      if (next !== current) {
+        replacements.push([resident.line, next]);
+        recordNewlyBlocked(path, current, next, resident.blockId);
+      }
+    }
+    if (inheritedAfter) {
+      blocked += 1;
+    } else if (prjWasTagged && !ownBlocked) {
+      recovered += 1;
+    }
+    const rewritten = rewriteNoteLines(text, replacements);
+    if (rewritten.changed) {
+      notes.push(
+        Object.freeze({
+          path,
+          before: rewritten.before,
+          after: rewritten.after,
+        }),
+      );
+    }
+  }
+
+  return Object.freeze({
+    notes: Object.freeze(notes),
+    pomodoroTargets: Object.freeze(pomodoroTargets),
+    laneStatuses: Object.freeze(laneStatuses),
+    blocked,
+    recovered,
+  });
 }
 // ---- src/220-property-targets.js ----
 function resolveBulletPropertyTarget(name, context = {}) {
@@ -25324,6 +25833,12 @@ function projectPrjLineIsBlocked(lineText) {
   return getObsidianTaskCheckboxStatus(lineText) === "?";
 }
 
+function projectPrjLineStaysBlocked(lineText) {
+  return (
+    projectPrjLineIsBlocked(lineText) || taskHasProjectBlockedTag(lineText)
+  );
+}
+
 function planProjectTaskSchedules(
   content,
   scheduled,
@@ -25416,6 +25931,8 @@ function planProjectTaskSchedules(
         if (blockedLine !== nextLine) blockedTaskCount += 1;
         nextLine = blockedLine;
         futureScheduledTaskLines.push(task.line);
+      } else if (taskHasProjectBlockedTag(nextLine)) {
+        nextLine = blockObsidianTaskCheckboxStatus(nextLine);
       } else {
         nextLine = setProjectBlockedTag(nextLine, false);
         const recovery = reconcileBlockedScheduledTaskLine(
@@ -25432,7 +25949,7 @@ function planProjectTaskSchedules(
         nextLine = recovery.line;
         recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
       }
-      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
+      prjStaysBlocked = projectPrjLineStaysBlocked(nextLine);
       if (!priorField && scheduleResult.changed && !future) {
         // A due date is still an explicit project schedule; only the blocked
         // state changes when its reason clears.
@@ -25614,21 +26131,25 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
         false,
         tasks.length === 1,
       );
-      nextLine = setProjectBlockedTag(nextLine, false);
-      const recovery = reconcileBlockedScheduledTaskLine(
-        nextLine,
-        getTargetScheduledRecovery(options, task.line),
-        {
-          today: options.today,
-          ownLine: true,
-          markUnblockedLine: options.markUnblockedLine,
-          isDailyNote: options.isDailyNote === true,
-          isToday: options.isToday === true,
-        },
-      );
-      nextLine = recovery.line;
-      recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
-      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
+      if (taskHasProjectBlockedTag(nextLine)) {
+        nextLine = blockObsidianTaskCheckboxStatus(nextLine);
+      } else {
+        nextLine = setProjectBlockedTag(nextLine, false);
+        const recovery = reconcileBlockedScheduledTaskLine(
+          nextLine,
+          getTargetScheduledRecovery(options, task.line),
+          {
+            today: options.today,
+            ownLine: true,
+            markUnblockedLine: options.markUnblockedLine,
+            isDailyNote: options.isDailyNote === true,
+            isToday: options.isToday === true,
+          },
+        );
+        nextLine = recovery.line;
+        recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      }
+      prjStaysBlocked = projectPrjLineStaysBlocked(nextLine);
     } else {
       const removed = removeProjectTaskScheduledFields(
         nextLine,
@@ -29062,6 +29583,12 @@ function planDependencyStageView(args = {}) {
     labelByKey.set(dependentKey, dependent.displayText || dependent.text);
   }
   const isProjectPrjDependent = dependent && dependent.isProjectPrj === true;
+  const descendantPaths = new Set(
+    (Array.isArray(dependent.projectDescendantPaths)
+      ? dependent.projectDescendantPaths
+      : []
+    ).map((path) => normalizeVaultRelativePath(path)),
+  );
   const guard = (candidate) => {
     const key =
       candidate.path && candidate.blockId
@@ -29074,6 +29601,18 @@ function planDependencyStageView(args = {}) {
       return {
         disabled: true,
         reason: "inside this project",
+        cycle: null,
+        cycleLabels: null,
+      };
+    }
+    if (
+      isProjectPrjDependent &&
+      candidate.path &&
+      descendantPaths.has(normalizeVaultRelativePath(candidate.path))
+    ) {
+      return {
+        disabled: true,
+        reason: "inside a sub-project of this project",
         cycle: null,
         cycleLabels: null,
       };
@@ -53023,6 +53562,27 @@ class BobNavigationHotkeysPropertyDependencyMixin {
   }
 }
 // ---- src/590-plugin-dependency-stage.js ----
+function collectProjectDescendantPathsFromApp(app, rootPath, enabled) {
+  if (!enabled) {
+    return Object.freeze([]);
+  }
+  const vault = app && app.vault;
+  const cache = app && app.metadataCache;
+  if (!vault || typeof vault.getMarkdownFiles !== "function") {
+    return Object.freeze([]);
+  }
+  return collectProjectDescendants(
+    rootPath,
+    buildProjectChildrenMap(vault.getMarkdownFiles() || [], (file) => {
+      const fileCache =
+        cache && typeof cache.getFileCache === "function"
+          ? cache.getFileCache(file)
+          : null;
+      return fileCache && fileCache.frontmatter;
+    }),
+  );
+}
+
 class BobNavigationHotkeysDependencyStageMixin {
 
   // Vault linkpath resolver for the writer (`docs/task-dependencies.md` §3):
@@ -53472,6 +54032,12 @@ class BobNavigationHotkeysDependencyStageMixin {
           primary >= 0
             ? projectDependentResidentKeys(text, ownerPath, primary)
             : Object.freeze([]),
+        projectDescendantPaths: collectProjectDescendantPathsFromApp(
+          this && this.app,
+          ownerPath,
+          primary >= 0 &&
+            Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
+        ),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)
@@ -53642,6 +54208,12 @@ class BobNavigationHotkeysDependencyStageMixin {
           primary >= 0
             ? projectDependentResidentKeys(text, ownerPath, primary)
             : Object.freeze([]),
+        projectDescendantPaths: collectProjectDescendantPathsFromApp(
+          this && this.app,
+          ownerPath,
+          primary >= 0 &&
+            Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
+        ),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)
@@ -63160,6 +63732,13 @@ module.exports.helpers = {
   collectOpenTaskDependsOnLinks,
   promoteMovePrerequisiteTarget,
   applyProjectRecoveryEdges,
+  projectParentTarget,
+  projectParentFieldFromNoteText,
+  resolveProjectParentPath,
+  buildProjectChildrenMap,
+  collectProjectDescendants,
+  collectProjectDescendantPathsFromNotes,
+  planProjectSubtreePass,
   setProjectBlockedTag,
   buildDependencyEditNoticeWithProject,
   detectProjectPrjDependencyParent,

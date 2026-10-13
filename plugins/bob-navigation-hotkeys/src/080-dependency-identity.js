@@ -137,10 +137,14 @@ function planDependencyEdit(args = {}) {
     parentPath,
     parentIndex,
   );
+  const descendantPaths = Array.isArray(args.descendantPaths)
+    ? args.descendantPaths
+    : collectProjectDescendantPathsFromNotes(parentPath, filesMap);
   const internalAddReason = failProjectPrjInternalAdd(
     projectPrj,
     add,
     parentPath,
+    descendantPaths,
   );
   if (internalAddReason) {
     return fail(internalAddReason);
@@ -535,6 +539,7 @@ function planDependencyEdit(args = {}) {
     (removedCount > 0 || fieldCleared || mirrorTouch) &&
     openRemaining === 0 &&
     getObsidianTaskCheckboxStatus(parentText) === "?" &&
+    !taskHasProjectBlockedTag(parentText) &&
     !dependencyParentHasFutureSchedule(parentText, recoveryToday);
   // Resident recovery runs only when `^prj` itself was Blocked before the
   // gesture (§13.10): removing a closed link from an unblocked `^prj` must

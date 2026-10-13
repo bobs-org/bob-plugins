@@ -1,3 +1,24 @@
+function collectProjectDescendantPathsFromApp(app, rootPath, enabled) {
+  if (!enabled) {
+    return Object.freeze([]);
+  }
+  const vault = app && app.vault;
+  const cache = app && app.metadataCache;
+  if (!vault || typeof vault.getMarkdownFiles !== "function") {
+    return Object.freeze([]);
+  }
+  return collectProjectDescendants(
+    rootPath,
+    buildProjectChildrenMap(vault.getMarkdownFiles() || [], (file) => {
+      const fileCache =
+        cache && typeof cache.getFileCache === "function"
+          ? cache.getFileCache(file)
+          : null;
+      return fileCache && fileCache.frontmatter;
+    }),
+  );
+}
+
 class BobNavigationHotkeysDependencyStageMixin {
 
   // Vault linkpath resolver for the writer (`docs/task-dependencies.md` §3):
@@ -447,6 +468,12 @@ class BobNavigationHotkeysDependencyStageMixin {
           primary >= 0
             ? projectDependentResidentKeys(text, ownerPath, primary)
             : Object.freeze([]),
+        projectDescendantPaths: collectProjectDescendantPathsFromApp(
+          this && this.app,
+          ownerPath,
+          primary >= 0 &&
+            Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
+        ),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)
@@ -617,6 +644,12 @@ class BobNavigationHotkeysDependencyStageMixin {
           primary >= 0
             ? projectDependentResidentKeys(text, ownerPath, primary)
             : Object.freeze([]),
+        projectDescendantPaths: collectProjectDescendantPathsFromApp(
+          this && this.app,
+          ownerPath,
+          primary >= 0 &&
+            Boolean(isProjectPrjDependencyParent(text, ownerPath, primary)),
+        ),
       }),
       parentLines: Object.freeze(parents.slice()),
       sourceValueSets: Array.isArray(args.dependencyValueSets)

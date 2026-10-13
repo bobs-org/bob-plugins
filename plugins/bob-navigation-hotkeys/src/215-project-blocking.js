@@ -217,6 +217,20 @@ function getProjectBlockState(content, path, today, lookupOpen, options = {}) {
       }),
     );
   }
+  // Tag proxy (§13.3): `#prj_is_blocked` on `^prj` means this project
+  // inherits a reason from an ancestor. Engines that do not walk the
+  // tree treat that as an extra project reason (`project_parent`).
+  if (taskHasProjectBlockedTag(rows.prj[0].text)) {
+    const parentTarget = projectParentTarget(
+      projectParentFieldFromNoteText(content),
+    );
+    reasons.push(
+      Object.freeze({
+        kind: "project_parent",
+        projectPath: parentTarget || "",
+      }),
+    );
+  }
 
   return Object.freeze({
     isProject: true,
@@ -436,6 +450,14 @@ function formatProjectRecoveryReason(reasons) {
   );
   if (scheduled && scheduled.scheduled) {
     return `project_schedule: ${scheduled.scheduled}`;
+  }
+  const inherited = (Array.isArray(reasons) ? reasons : []).find(
+    (reason) => reason.kind === "project_parent",
+  );
+  if (inherited) {
+    return inherited.projectPath
+      ? `project_parent: ${inherited.projectPath}`
+      : "project_parent";
   }
   return "project_dependency";
 }

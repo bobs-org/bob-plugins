@@ -216,6 +216,16 @@ function withSubtreePassNotice(notice, subtree) {
   return `${notice} ${suffix}`;
 }
 
+// A best-effort reverse-line write never rolls back Depends-On. Keep its
+// failure visible on the same notice used by the shared dependency writers.
+function withBlocksFollowUpNotice(notice, failedPaths) {
+  const failed = Array.isArray(failedPaths)
+    ? failedPaths.length > 0
+    : Boolean(failedPaths && Array.isArray(failedPaths.failed) && failedPaths.failed.length > 0);
+  if (!failed || !notice) return notice;
+  return `${notice} · 🧱 BLOCKS not updated`;
+}
+
 // Detect a project `^prj` edit for the writer. The hand-edit mirror keeps
 // today's field behavior and leaves resident side effects to reconcile,
 // so it never counts as a project edit.

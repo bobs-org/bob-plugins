@@ -655,7 +655,22 @@ function planDependencyEdit(args = {}) {
     lineText,
     lineEnding,
   );
-  const nextContent = next.lines.join(next.lineEnding);
+  const dependencyNextContent = next.lines.join(next.lineEnding);
+  const blocksPlan = planBlocksForDependencyEdit({
+    content,
+    nextContent: dependencyNextContent,
+    parentPath,
+    parentLine: parentIndex,
+    existing,
+    resolved,
+    files: filesMap,
+    preparations,
+    vaultFiles: rankPaths,
+    resolveLinkpath,
+    blocksLinesEnabled: args.blocksLinesEnabled === true,
+    today: args.recovery && args.recovery.today,
+  });
+  const nextContent = blocksPlan.nextContent;
   const summary = Object.freeze({
     added: addedCount,
     removed: removedCount,
@@ -688,6 +703,8 @@ function planDependencyEdit(args = {}) {
     }),
     targetEdits: Object.freeze(targetEdits),
     preparations: Object.freeze(preparations),
+    blocksFollowUps: blocksPlan.blocksFollowUps,
+    blocksFailedPaths: blocksPlan.failedPaths,
     promotions: Object.freeze(promotions),
     blockParent,
     recoverParent,
@@ -705,58 +722,6 @@ function planDependencyEdit(args = {}) {
         .map((ref) => describeRemovedDependencyTarget(ref, filesMap)),
     }),
   });
-}
-
-// Apply one plan's dependent-note edits to a line array: same-line
-// replacements first (indices stay valid), then deletions descending, then
-// the line insert adjusted past earlier deletions.
-function applyDependencyPlanLines(
-  lines,
-  parentIndex,
-  parentText,
-  sameNoteTargetEdits,
-  structural,
-  lineText,
-  lineEnding = "\n",
-) {
-  const sourceLines = Array.isArray(lines) ? lines.slice() : [];
-  const ending = lineEnding === "\r\n" ? "\r\n" : "\n";
-  sourceLines[parentIndex] = parentText;
-  for (const edit of sameNoteTargetEdits) {
-    if (
-      Number.isInteger(edit.line) &&
-      edit.line >= 0 &&
-      edit.line < sourceLines.length &&
-      edit.line !== parentIndex
-    ) {
-      sourceLines[edit.line] = edit.text;
-    }
-  }
-  const deletes = (structural.deleteLines || []).slice().sort((a, b) => b - a);
-  for (const lineIndex of deletes) {
-    if (lineIndex >= 0 && lineIndex < sourceLines.length) {
-      sourceLines.splice(lineIndex, 1);
-    }
-  }
-  let delta = 0;
-  if (structural.insertAt !== null && structural.insertAt !== undefined) {
-    delta = structural.insertAt;
-    for (const lineIndex of deletes) {
-      if (lineIndex < structural.insertAt) {
-        delta -= 1;
-      }
-    }
-    sourceLines.splice(Math.max(0, Math.min(delta, sourceLines.length)), 0, lineText);
-  } else if (structural.replaceLine !== null && structural.replaceLine !== undefined) {
-    let at = structural.replaceLine;
-    for (const lineIndex of deletes) {
-      if (lineIndex < structural.replaceLine) {
-        at -= 1;
-      }
-    }
-    sourceLines[at] = lineText;
-  }
-  return { lines: sourceLines, lineEnding: ending };
 }
 
 // Removal notices name the task's description, never its block id
@@ -849,6 +814,17 @@ async function applyDependencyEditTransaction(plan, io = {}) {
       subtree: null,
     });
   }
+  let blocks = Object.freeze({ ok: true, failed: Object.freeze([]) });
+  if (typeof io.applyBlocksFollowUps === "function") {
+    try {
+      blocks = await io.applyBlocksFollowUps(plan.blocksFollowUps || []);
+    } catch (_error) {
+      blocks = Object.freeze({
+        ok: false,
+        failed: Object.freeze((plan.blocksFollowUps || []).map((entry) => entry.path)),
+      });
+    }
+  }
   let subtree = null;
   if (subtreePass && typeof io.writeSubtreePass === "function") {
     try {
@@ -857,7 +833,7 @@ async function applyDependencyEditTransaction(plan, io = {}) {
       subtree = null;
     }
   }
-  return Object.freeze({ ok: true, reason: null, notice: plan.notice, subtree });
+  return Object.freeze({ ok: true, reason: null, notice: plan.notice, subtree, blocks });
 }
 
 function formatCountLabel(count, singular, plural = `${singular}s`) {

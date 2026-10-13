@@ -1,3 +1,48 @@
+let blocksLinesConfigCache = { key: null, value: true };
+
+function resetBlocksLinesConfigCache() {
+  blocksLinesConfigCache = { key: null, value: true };
+}
+
+function blocksLinesConfigStatKey(fsModule, configPath) {
+  try {
+    if (!fsModule || typeof fsModule.statSync !== "function") return null;
+    const stat = fsModule.statSync(configPath);
+    const mtime = stat && stat.mtimeMs != null ? stat.mtimeMs : stat && stat.mtime ? Number(stat.mtime) : "?";
+    const size = stat && stat.size != null ? stat.size : "?";
+    return `${mtime}:${size}`;
+  } catch (error) {
+    return error && error.code === "ENOENT" ? "missing" : null;
+  }
+}
+
+// The BLOCKS writer kill switch shares the Bob config file with the
+// successor planner. Missing, invalid, or unreadable values are enabled;
+// cache by mtime/size so a config edit takes effect on the next gesture.
+function loadBlocksLinesEnabled(options = {}) {
+  const env = options.env || (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined ? requireOptionalNodeModule("os") : options.osModule;
+  const fsModule = options.fsModule === undefined ? requireOptionalNodeModule("fs") : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return true;
+  const configPath = options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && blocksLinesConfigCache.key === key) return blocksLinesConfigCache.value;
+  let enabled = true;
+  try {
+    const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+    if (typeof parse === "function") {
+      const config = parse(fsModule.readFileSync(configPath, "utf8"));
+      const value = config && config.dependencies && config.dependencies.blocks_lines;
+      if (typeof value === "boolean") enabled = value;
+    }
+  } catch (_error) {
+    enabled = true;
+  }
+  if (key != null) blocksLinesConfigCache = { key, value: enabled };
+  return enabled;
+}
+
 function loadBulletPropertyConfig(options = {}) {
   const fsModule =
     options.fsModule === undefined

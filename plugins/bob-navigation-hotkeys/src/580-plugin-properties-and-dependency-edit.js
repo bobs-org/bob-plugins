@@ -447,6 +447,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         files,
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         mirrorTouch,
         ...(subtreePrep && subtreePrep.lanes.length > 0
           ? { projectLaneStatuses: subtreePrep.lanes }
@@ -537,6 +538,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           ? async () => ({ ok: true })
           : (filePath, preparation) =>
               this.prepareDependencyTargetNote(filePath, preparation),
+        applyBlocksFollowUps: (followUps) => this.applyBlocksFollowUps(followUps),
         planSubtreePass: subtreePlanned ? async () => subtreePlanned : null,
         writeSubtreePass: async (planned) => {
           const wrote = await this.writeSubtreePass(planned.pass);
@@ -570,6 +572,8 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             editor,
             content,
             finalContent,
+            null,
+            BLOCKS_MACHINE_WRITE_ANNOTATION,
           );
           return committed
             ? { ok: true }
@@ -582,6 +586,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!outcome.ok) {
         return outcome;
       }
+      const blocksFailedPaths = [
+        ...(plan.blocksFailedPaths || []),
+        ...((outcome.blocks && outcome.blocks.failed) || []),
+      ];
       // Cross-note daily cleanup lands after the dependent's own write and
       // is never rolled back (§13.10).
       const pomodoroDone = pomodoroPrep
@@ -601,7 +609,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withSubtreePassNotice(projectNotice, outcome.subtree),
+          notice: withBlocksFollowUpNotice(
+            withSubtreePassNotice(projectNotice, outcome.subtree),
+            blocksFailedPaths,
+          ),
           subtree: outcome.subtree || null,
         });
       }
@@ -609,14 +620,20 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withSubtreePassNotice(
-            outcome.notice || "⛓ Dependencies updated",
-            outcome.subtree,
+          notice: withBlocksFollowUpNotice(
+            withSubtreePassNotice(
+              outcome.notice || "⛓ Dependencies updated",
+              outcome.subtree,
+            ),
+            blocksFailedPaths,
           ),
           subtree: outcome.subtree,
         });
       }
-      return outcome;
+      return Object.freeze({
+        ...outcome,
+        notice: withBlocksFollowUpNotice(outcome.notice, blocksFailedPaths),
+      });
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "apply-failed" });
     }

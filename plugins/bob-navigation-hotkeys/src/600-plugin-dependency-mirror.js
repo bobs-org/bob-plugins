@@ -128,6 +128,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       files: { [filePath]: content },
       vaultFiles: this.readDependencyVaultFileList(),
       resolveLinkpath: this.dependencyLinkpathResolver(),
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
     });
     if (!plan.ok) {
       new Notice(dependencyPlanFailureNotice(plan.reason, "add"));
@@ -143,7 +144,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       );
     }
     if (nextContent !== originalContent) {
-      if (!applyEditorContentTransaction(cm, originalContent, nextContent)) {
+      if (!applyEditorContentTransaction(cm, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -206,7 +207,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       ),
     );
     if (options.showNotice !== false) {
-      new Notice(plan.notice);
+      new Notice(withBlocksFollowUpNotice(plan.notice, plan.blocksFailedPaths || []));
     }
     return true;
   }
@@ -630,11 +631,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (!update || !update.docChanged) {
       return;
     }
+    const annotatedBlocksWrite = Array.isArray(update.transactions) && update.transactions.some((transaction) =>
+      transaction && transaction.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION,
+    );
     if (
       update &&
       typeof update === "object" &&
       (update.blocksMachineWrite === true ||
-        update.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION)
+        update.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION ||
+        annotatedBlocksWrite)
     ) {
       return;
     }

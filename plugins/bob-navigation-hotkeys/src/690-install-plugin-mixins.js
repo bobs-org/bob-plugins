@@ -37,6 +37,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysProjectSubtreeMixin,
   BobNavigationHotkeysProjectSubtreeWritersMixin,
   BobNavigationHotkeysDependencyStageMixin,
+  BobNavigationHotkeysBlocksFollowUpsMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysVimJumpMixin,

@@ -1359,6 +1359,51 @@ function suggestPromptBlockId(rawLine, content, options = {}) {
   return candidate;
 }
 // ---- src/020-config-load-and-tasks.js ----
+let blocksLinesConfigCache = { key: null, value: true };
+
+function resetBlocksLinesConfigCache() {
+  blocksLinesConfigCache = { key: null, value: true };
+}
+
+function blocksLinesConfigStatKey(fsModule, configPath) {
+  try {
+    if (!fsModule || typeof fsModule.statSync !== "function") return null;
+    const stat = fsModule.statSync(configPath);
+    const mtime = stat && stat.mtimeMs != null ? stat.mtimeMs : stat && stat.mtime ? Number(stat.mtime) : "?";
+    const size = stat && stat.size != null ? stat.size : "?";
+    return `${mtime}:${size}`;
+  } catch (error) {
+    return error && error.code === "ENOENT" ? "missing" : null;
+  }
+}
+
+// The BLOCKS writer kill switch shares the Bob config file with the
+// successor planner. Missing, invalid, or unreadable values are enabled;
+// cache by mtime/size so a config edit takes effect on the next gesture.
+function loadBlocksLinesEnabled(options = {}) {
+  const env = options.env || (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined ? requireOptionalNodeModule("os") : options.osModule;
+  const fsModule = options.fsModule === undefined ? requireOptionalNodeModule("fs") : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return true;
+  const configPath = options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && blocksLinesConfigCache.key === key) return blocksLinesConfigCache.value;
+  let enabled = true;
+  try {
+    const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+    if (typeof parse === "function") {
+      const config = parse(fsModule.readFileSync(configPath, "utf8"));
+      const value = config && config.dependencies && config.dependencies.blocks_lines;
+      if (typeof value === "boolean") enabled = value;
+    }
+  } catch (_error) {
+    enabled = true;
+  }
+  if (key != null) blocksLinesConfigCache = { key, value: enabled };
+  return enabled;
+}
+
 function loadBulletPropertyConfig(options = {}) {
   const fsModule =
     options.fsModule === undefined
@@ -6755,7 +6800,22 @@ function planDependencyEdit(args = {}) {
     lineText,
     lineEnding,
   );
-  const nextContent = next.lines.join(next.lineEnding);
+  const dependencyNextContent = next.lines.join(next.lineEnding);
+  const blocksPlan = planBlocksForDependencyEdit({
+    content,
+    nextContent: dependencyNextContent,
+    parentPath,
+    parentLine: parentIndex,
+    existing,
+    resolved,
+    files: filesMap,
+    preparations,
+    vaultFiles: rankPaths,
+    resolveLinkpath,
+    blocksLinesEnabled: args.blocksLinesEnabled === true,
+    today: args.recovery && args.recovery.today,
+  });
+  const nextContent = blocksPlan.nextContent;
   const summary = Object.freeze({
     added: addedCount,
     removed: removedCount,
@@ -6788,6 +6848,8 @@ function planDependencyEdit(args = {}) {
     }),
     targetEdits: Object.freeze(targetEdits),
     preparations: Object.freeze(preparations),
+    blocksFollowUps: blocksPlan.blocksFollowUps,
+    blocksFailedPaths: blocksPlan.failedPaths,
     promotions: Object.freeze(promotions),
     blockParent,
     recoverParent,
@@ -6805,58 +6867,6 @@ function planDependencyEdit(args = {}) {
         .map((ref) => describeRemovedDependencyTarget(ref, filesMap)),
     }),
   });
-}
-
-// Apply one plan's dependent-note edits to a line array: same-line
-// replacements first (indices stay valid), then deletions descending, then
-// the line insert adjusted past earlier deletions.
-function applyDependencyPlanLines(
-  lines,
-  parentIndex,
-  parentText,
-  sameNoteTargetEdits,
-  structural,
-  lineText,
-  lineEnding = "\n",
-) {
-  const sourceLines = Array.isArray(lines) ? lines.slice() : [];
-  const ending = lineEnding === "\r\n" ? "\r\n" : "\n";
-  sourceLines[parentIndex] = parentText;
-  for (const edit of sameNoteTargetEdits) {
-    if (
-      Number.isInteger(edit.line) &&
-      edit.line >= 0 &&
-      edit.line < sourceLines.length &&
-      edit.line !== parentIndex
-    ) {
-      sourceLines[edit.line] = edit.text;
-    }
-  }
-  const deletes = (structural.deleteLines || []).slice().sort((a, b) => b - a);
-  for (const lineIndex of deletes) {
-    if (lineIndex >= 0 && lineIndex < sourceLines.length) {
-      sourceLines.splice(lineIndex, 1);
-    }
-  }
-  let delta = 0;
-  if (structural.insertAt !== null && structural.insertAt !== undefined) {
-    delta = structural.insertAt;
-    for (const lineIndex of deletes) {
-      if (lineIndex < structural.insertAt) {
-        delta -= 1;
-      }
-    }
-    sourceLines.splice(Math.max(0, Math.min(delta, sourceLines.length)), 0, lineText);
-  } else if (structural.replaceLine !== null && structural.replaceLine !== undefined) {
-    let at = structural.replaceLine;
-    for (const lineIndex of deletes) {
-      if (lineIndex < structural.replaceLine) {
-        at -= 1;
-      }
-    }
-    sourceLines[at] = lineText;
-  }
-  return { lines: sourceLines, lineEnding: ending };
 }
 
 // Removal notices name the task's description, never its block id
@@ -6949,6 +6959,17 @@ async function applyDependencyEditTransaction(plan, io = {}) {
       subtree: null,
     });
   }
+  let blocks = Object.freeze({ ok: true, failed: Object.freeze([]) });
+  if (typeof io.applyBlocksFollowUps === "function") {
+    try {
+      blocks = await io.applyBlocksFollowUps(plan.blocksFollowUps || []);
+    } catch (_error) {
+      blocks = Object.freeze({
+        ok: false,
+        failed: Object.freeze((plan.blocksFollowUps || []).map((entry) => entry.path)),
+      });
+    }
+  }
   let subtree = null;
   if (subtreePass && typeof io.writeSubtreePass === "function") {
     try {
@@ -6957,7 +6978,7 @@ async function applyDependencyEditTransaction(plan, io = {}) {
       subtree = null;
     }
   }
-  return Object.freeze({ ok: true, reason: null, notice: plan.notice, subtree });
+  return Object.freeze({ ok: true, reason: null, notice: plan.notice, subtree, blocks });
 }
 
 function formatCountLabel(count, singular, plural = `${singular}s`) {
@@ -7334,6 +7355,451 @@ function findBlocksChildren(lines, taskLine) {
 // line, which already skips a first-child Cancel Log.
 function blocksInsertLine(lines, parentLine) {
   return getDependencyInsertLine(lines, parentLine);
+}
+
+// Shared Blocks-line edit planner. The input links are canonical wikilink
+// strings (or `{link}` records); resolved identities belong to the caller.
+// Existing lines stay in place, malformed lines are never overwritten, and
+// canonical no-ops return the original bytes (Rule 6, BW6/BW8/BW17).
+function planBlocksLineEdit(content, ownerLine, desiredLinks) {
+  const text = String(content || "");
+  const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  const lineIndex = Math.floor(Number(ownerLine));
+  if (
+    !Number.isFinite(lineIndex) ||
+    lineIndex < 0 ||
+    lineIndex >= lines.length ||
+    !isObsidianTaskAtLine(text, lineIndex)
+  ) {
+    return Object.freeze({ ok: false, reason: "not-task", changed: false, nextContent: text });
+  }
+
+  const children = findBlocksChildren(lines, lineIndex);
+  const parsed = children.map((index) => parseBlocksLine(lines[index], {
+    isDirectChildOfTask: true,
+  }));
+  if (parsed.some((entry) => entry.verdict === "malformed")) {
+    return Object.freeze({ ok: false, reason: "malformed-blocks-line", changed: false, nextContent: text });
+  }
+
+  const links = sortBlocksLinks((Array.isArray(desiredLinks) ? desiredLinks : [])
+    .map((entry) => typeof entry === "string" ? entry : String(entry && entry.link || ""))
+    .filter(Boolean));
+  const uniqueLinks = links.filter((link, index) => index === 0 || link !== links[index - 1]);
+  const nextLines = lines.slice();
+  if (children.length > 0) {
+    const first = children[0];
+    if (uniqueLinks.length === 0) {
+      for (const index of children.slice().sort((a, b) => b - a)) {
+        nextLines.splice(index, 1);
+      }
+    } else {
+      const current = parsed[0];
+      const rendered = formatBlocksLine(current.indent || "", uniqueLinks);
+      nextLines[first] = rendered;
+      for (const index of children.slice(1).sort((a, b) => b - a)) {
+        nextLines.splice(index, 1);
+      }
+    }
+  } else if (uniqueLinks.length > 0) {
+    const indent = getDependencyChildIndent(lines, lineIndex);
+    nextLines.splice(blocksInsertLine(lines, lineIndex), 0, formatBlocksLine(indent, uniqueLinks));
+  }
+  const nextContent = nextLines.join(lineEnding);
+  return Object.freeze({
+    ok: true,
+    reason: null,
+    changed: nextContent !== text,
+    nextContent,
+    lineEnding,
+    ownerLine: lineIndex,
+  });
+}
+
+// Delta API shared by same-note planning and the cross-note writer. `resolve`
+// maps an existing link record to its stable identity. Unknown entries are
+// retained verbatim (as canonical plain links) so an unavailable note never
+// causes a real reverse edge to be pruned.
+function blocksDesiredAfterDelta(existing, resolve, add, remove) {
+  const desired = new Map();
+  let unknown = 0;
+  for (const entry of Array.isArray(existing) ? existing : []) {
+    const link = typeof entry === "string"
+      ? entry
+      : entry && entry.link
+        ? String(entry.link)
+        : formatBlocksLinkRef(entry);
+    let identity = null;
+    try {
+      identity = typeof resolve === "function" ? resolve(entry) : null;
+    } catch (_error) {
+      identity = null;
+    }
+    if (identity && typeof identity === "object") {
+      identity = identity.identity || null;
+    }
+    if (identity == null || identity === "") {
+      desired.set(`?${unknown++}`, link);
+    } else {
+      desired.set(String(identity), link);
+    }
+  }
+  const removals = new Set((Array.isArray(remove) ? remove : []).map((entry) =>
+    typeof entry === "string" ? entry : String(entry && entry.identity || ""),
+  ));
+  for (const identity of removals) {
+    if (identity) desired.delete(identity);
+  }
+  for (const entry of Array.isArray(add) ? add : []) {
+    const identity = String(entry && entry.identity || "");
+    const link = String(entry && entry.link || "");
+    if (identity && link) desired.set(identity, link);
+  }
+  return Object.freeze(sortBlocksLinks([...desired.values()]));
+}
+// ---- src/082-blocks-mint.js ----
+// BLOCKS dependent-id minting, ported from task-status-cycler's
+// `mintBlockId` and pinned by docs/task-dependencies.md §11.7 (SB1–SB9).
+const BLOCKS_ID_STOPWORDS = new Set([
+  "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "into",
+  "is", "it", "its", "my", "of", "on", "or", "our", "so", "that", "the",
+  "their", "this", "to", "via", "with", "your",
+]);
+const BLOCKS_ID_LEADING_VERBS = new Set([
+  "add", "build", "check", "clean", "create", "delete", "document", "enable",
+  "ensure", "finish", "fix", "implement", "improve", "investigate", "make",
+  "migrate", "move", "plan", "read", "refactor", "remove", "rename", "research",
+  "review", "run", "start", "stop", "support", "test", "try", "update", "use", "write",
+]);
+const BLOCKS_ID_INLINE_FIELD_RE = /\[[A-Za-z][A-Za-z0-9_-]*::\s*[^\]]*\]/g;
+
+function blocksIdWords(text) {
+  const words = [];
+  let current = "";
+  const flush = () => {
+    if (current && !BLOCKS_ID_STOPWORDS.has(current)) words.push(current);
+    current = "";
+  };
+  for (const character of String(text || "")) {
+    if (/^[A-Za-z0-9]$/.test(character)) current += character.toLowerCase();
+    else flush();
+  }
+  flush();
+  return words;
+}
+
+function blocksIdPhraseSpans(body) {
+  const text = String(body || "");
+  const phrases = [];
+  const pattern = /`([^`]+)`|"([^"]+)"|“([^”]+)”|\(([^)]+)\)|\[\[([^\]]+)\]\]/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    let phrase = match.slice(1).find((part) => part !== undefined) || "";
+    if (match[5]) {
+      const alias = match[5].indexOf("|");
+      if (alias !== -1) phrase = match[5].slice(alias + 1);
+      else {
+        const target = match[5].split("#")[0];
+        phrase = target.slice(target.lastIndexOf("/") + 1);
+      }
+    }
+    phrases.push(phrase);
+  }
+  return phrases;
+}
+
+function blocksIdJoin(words) {
+  if (!words.length) return null;
+  const joined = words.join("-");
+  if (joined.length <= 32) return joined;
+  const cut = joined.slice(0, 32).lastIndexOf("-");
+  return cut > 0 ? joined.slice(0, cut) : null;
+}
+
+function blocksBodyAfterStatusBox(rawLine) {
+  const line = String(rawLine || "");
+  const match = line.match(/^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+\[[^\]\n]\][ \t]*/);
+  if (match) return line.slice(match[0].length);
+  const index = line.indexOf("] ");
+  return index === -1 ? line : line.slice(index + 2);
+}
+
+function suggestDependentBlockIds(description, usedIds) {
+  const used = new Set(Array.from(usedIds || []).map((id) => String(id || "")));
+  const text = String(description || "");
+  const prose = blocksIdWords(text);
+  const candidates = [];
+  for (const phrase of blocksIdPhraseSpans(text)) {
+    const words = blocksIdWords(phrase);
+    const joined = blocksIdJoin(words.slice(0, 4));
+    if (joined) candidates.push(joined);
+    if (joined) break;
+  }
+  const firstThree = blocksIdJoin(prose.slice(0, 3));
+  if (firstThree) candidates.push(firstThree);
+  if (prose.length > 1 && BLOCKS_ID_LEADING_VERBS.has(prose[0])) {
+    const afterVerb = blocksIdJoin(prose.slice(1, 4));
+    if (afterVerb) candidates.push(afterVerb);
+  }
+  const seen = new Set(candidates);
+  for (const candidate of candidates) {
+    if (!used.has(candidate)) return candidate;
+    for (let suffix = 2; suffix <= 9; suffix += 1) {
+      const suffixed = `${candidate}-${suffix}`;
+      if (suffixed.length <= 64 && !used.has(suffixed) && !seen.has(suffixed)) {
+        seen.add(suffixed);
+        return suffixed;
+      }
+    }
+  }
+  if (!used.has("task")) return "task";
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `task-${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+function blocksDependentDescription(rawLine, globalFilter = "#task") {
+  const line = String(rawLine || "");
+  const status = line.match(/^[ \t]*(?:>\s*)?(?:[-+*]|\d+[.)])[ \t]+\[[^\]\n]\][ \t]*/);
+  let body = status ? line.slice(status[0].length) : blocksBodyAfterStatusBox(line);
+  body = body.replace(/\s+\^[A-Za-z0-9-]+\s*$/, " ");
+  body = body.replace(BLOCKS_ID_INLINE_FIELD_RE, " ");
+  const filter = globalFilter === undefined ? "#task" : globalFilter;
+  return body.split(/\s+/).filter((token) => token && (filter === "" || token !== filter)).join(" ");
+}
+
+function mintDependentBlockId(rawTaskLine, usedIds, globalFilter = "#task") {
+  return suggestDependentBlockIds(blocksDependentDescription(rawTaskLine, globalFilter), usedIds);
+}
+// ---- src/083-blocks-dependency-plan.js ----
+// The nav mirror of the shared Rust BLOCKS planner. This seam computes the
+// changed owner notes from the forward-edge delta; same-note edits join the
+// dependent transaction and cross-note edits are returned for a checked
+// post-commit write (docs/task-dependencies.md §14.7).
+function blocksIdentity(path, blockId) {
+  const normalized = normalizeVaultRelativePath(path);
+  const id = normalizeBulletPropertyValue(blockId);
+  return normalized && id ? `${normalized}#^${id}` : "";
+}
+
+function blocksPathIsWritable(path, previousDailyPath) {
+  const normalized = normalizeVaultRelativePath(path);
+  return Boolean(
+    normalized &&
+      !/^done\//i.test(normalized) &&
+      normalized !== normalizeVaultRelativePath(previousDailyPath || ""),
+  );
+}
+
+function blocksNotePreimage(path, files, preparations) {
+  const original = files instanceof Map ? files.get(path) : null;
+  if (original === undefined || original === null) return null;
+  const newline = String(original).includes("\r\n") ? "\r\n" : "\n";
+  const lines = String(original).split(/\r?\n/);
+  for (const edit of Array.isArray(preparations) ? preparations : []) {
+    if (edit.path !== path || !Number.isInteger(edit.line) || edit.line < 0 || edit.line >= lines.length) continue;
+    if (lines[edit.line] === edit.from) lines[edit.line] = edit.text;
+  }
+  return lines.join(newline);
+}
+
+function blocksOwnerState(path, blockId, content) {
+  const lines = String(content || "").split(/\r?\n/);
+  const line = findTaskLineByTrailingBlockId(lines, blockId);
+  if (line === null) return null;
+  const status = getObsidianTaskCheckboxStatus(lines[line]);
+  return Object.freeze({ line, status, open: OPEN_OBSIDIAN_TASK_STATUSES.has(status) });
+}
+
+function blocksLinkForIdentity(identity, ownerPath, vaultFiles) {
+  const split = String(identity || "").match(/^(.*)#\^([A-Za-z0-9-]+)$/);
+  if (!split) return "";
+  return canonicalDependencyLink(
+    { path: split[1], blockId: split[2] },
+    ownerPath,
+    vaultFiles,
+  ).text;
+}
+
+function blocksExistingRows(ownerPath, lineText, resolveLinkpath, vaultFiles) {
+  const parsed = parseBlocksLine(lineText, { isDirectChildOfTask: true });
+  return parsed.links.map((entry) => {
+    const targetPath = dependencyPathForLinkNote(entry.note, ownerPath, resolveLinkpath);
+    const identity = blocksIdentity(targetPath, entry.blockId);
+    const link = targetPath
+      ? canonicalDependencyLink({ path: targetPath, blockId: entry.blockId }, ownerPath, vaultFiles).text
+      : `[[${entry.note ? `${entry.note}#` : "#"}^${entry.blockId}]]`;
+    return Object.freeze({ note: entry.note, blockId: entry.blockId, identity, link });
+  });
+}
+
+function planBlocksForDependencyEdit(args = {}) {
+  const original = String(args.content || "");
+  let nextContent = String(args.nextContent === undefined ? original : args.nextContent);
+  if (args.blocksLinesEnabled !== true) {
+    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]) });
+  }
+  const parentPath = normalizeVaultRelativePath(args.parentPath || "");
+  const parentLine = Math.floor(Number(args.parentLine));
+  const files = args.files instanceof Map ? args.files : new Map(Object.entries(args.files || {}));
+  const vaultFiles = Array.isArray(args.vaultFiles) ? args.vaultFiles : [...files.keys()];
+  const resolveLinkpath = typeof args.resolveLinkpath === "function" ? args.resolveLinkpath : null;
+  const today = args.today || new Date();
+  const dailyPaths = scheduledRecoveryDailyPaths(vaultFiles.map((path) => typeof path === "string" ? { path } : path), today);
+  const previousDailyPath = dailyPaths && dailyPaths.previous;
+  const originalLines = original.split(/\r?\n/);
+  const nextLines = nextContent.split(/\r?\n/);
+  if (!parentPath || !Number.isInteger(parentLine) || !isObsidianTaskAtLine(original, parentLine)) {
+    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]) });
+  }
+
+  const oldByKey = new Map();
+  for (const ref of Array.isArray(args.existing) ? args.existing : []) {
+    const key = dependencyTargetRefKey(ref);
+    if (!oldByKey.has(key)) oldByKey.set(key, ref);
+  }
+  const newByKey = new Map();
+  for (const row of Array.isArray(args.resolved) ? args.resolved : []) {
+    const ref = row && row.ref ? row.ref : row;
+    const key = ref && dependencyTargetRefKey(ref);
+    if (key && !newByKey.has(key)) newByKey.set(key, ref);
+  }
+  const edgeAdded = [...newByKey].some(([key]) => !oldByKey.has(key));
+  const dependentOpen = OPEN_OBSIDIAN_TASK_STATUSES.has(getObsidianTaskCheckboxStatus(originalLines[parentLine]));
+  const parentWritable = blocksPathIsWritable(parentPath, previousDailyPath);
+  let dependentBlockId = getTrailingBlockId(nextLines[parentLine]);
+
+  // Mint only when this forward edit will newly list the dependent. Once
+  // minted, all of its existing open prerequisites can receive the link too.
+  let mintNeeded = !dependentBlockId && edgeAdded && dependentOpen && parentWritable;
+  const ownerContentFor = (path) => {
+    if (path === parentPath) return nextContent;
+    return blocksNotePreimage(path, files, args.preparations) ?? String(files.get(path) || "");
+  };
+  const eligibleNewOwners = [...newByKey.values()].filter((ref) => {
+    if (!ref || !blocksPathIsWritable(ref.path, previousDailyPath)) return false;
+    const state = blocksOwnerState(ref.path, ref.blockId, ownerContentFor(ref.path));
+    return Boolean(state && state.open);
+  });
+  if (mintNeeded && eligibleNewOwners.length === 0) mintNeeded = false;
+  if (mintNeeded) {
+    const used = new Set();
+    for (const match of String(nextContent).matchAll(/\^([A-Za-z0-9-]+)(?=\s|$)/g)) used.add(match[1]);
+    dependentBlockId = mintDependentBlockId(originalLines[parentLine], used);
+    nextLines[parentLine] = appendBlockIdToLine(nextLines[parentLine], dependentBlockId);
+    nextContent = nextLines.join(nextContent.includes("\r\n") ? "\r\n" : "\n");
+  }
+  if (!dependentBlockId) {
+    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]) });
+  }
+
+  const dependentIdentity = blocksIdentity(parentPath, dependentBlockId);
+  const additions = [];
+  const removals = [];
+  for (const [key, ref] of newByKey) {
+    if (mintNeeded || !oldByKey.has(key)) additions.push(ref);
+  }
+  for (const [key, ref] of oldByKey) {
+    if (!newByKey.has(key)) removals.push(ref);
+  }
+  const byOwner = new Map();
+  const register = (ref, kind) => {
+    const ownerPath = normalizeVaultRelativePath(ref && ref.path);
+    const ownerBlockId = normalizeBulletPropertyValue(ref && ref.blockId);
+    if (!ownerPath || !ownerBlockId || !blocksPathIsWritable(ownerPath, previousDailyPath)) return;
+    const ownerContent = ownerContentFor(ownerPath);
+    const state = blocksOwnerState(ownerPath, ownerBlockId, ownerContent);
+    // Closed owners freeze as history. Closed dependents are only removed,
+    // never newly projected.
+    if (!state || !state.open || (kind === "add" && !dependentOpen)) return;
+    const key = `${ownerPath}#^${ownerBlockId}`;
+    if (!byOwner.has(key)) {
+      byOwner.set(key, { path: ownerPath, ownerBlockId, add: [], remove: [], preimage: ownerContent });
+    }
+    const row = byOwner.get(key);
+    if (kind === "add") {
+      const link = canonicalDependencyLink({ path: parentPath, blockId: dependentBlockId }, ownerPath, vaultFiles).text;
+      row.add.push(Object.freeze({ identity: dependentIdentity, link }));
+    } else {
+      row.remove.push(dependentIdentity);
+    }
+  };
+  for (const ref of additions) register(ref, "add");
+  for (const ref of removals) register(ref, "remove");
+
+  const failedPaths = new Set();
+  const followUps = [];
+  for (const row of byOwner.values()) {
+    const ownerContent = row.path === parentPath ? nextContent : row.preimage;
+    const ownerLines = ownerContent.split(/\r?\n/);
+    const ownerLine = findTaskLineByTrailingBlockId(ownerLines, row.ownerBlockId);
+    if (ownerLine === null) continue;
+    const childLines = findBlocksChildren(ownerLines, ownerLine);
+    const parsed = childLines.map((index) => parseBlocksLine(ownerLines[index], { isDirectChildOfTask: true }));
+    if (parsed.some((entry) => entry.verdict === "malformed")) {
+      failedPaths.add(row.path);
+      continue;
+    }
+    const existingRows = childLines.flatMap((index) =>
+      blocksExistingRows(row.path, ownerLines[index], resolveLinkpath, vaultFiles),
+    );
+    const desired = blocksDesiredAfterDelta(
+      existingRows,
+      (entry) => entry.identity || null,
+      row.add,
+      row.remove,
+    );
+    if (row.path === parentPath) {
+      const plan = planBlocksLineEdit(nextContent, ownerLine, desired);
+      if (!plan.ok) {
+        failedPaths.add(row.path);
+        continue;
+      }
+      nextContent = plan.nextContent;
+    } else {
+      followUps.push(Object.freeze({
+        path: row.path,
+        ownerBlockId: row.ownerBlockId,
+        add: Object.freeze(row.add.map((entry) => entry.link)),
+        remove: Object.freeze(row.remove.slice()),
+        preimage: blocksNotePreimage(row.path, files, args.preparations),
+        today,
+      }));
+    }
+  }
+  return Object.freeze({
+    nextContent,
+    blocksFollowUps: Object.freeze(followUps),
+    failedPaths: Object.freeze([...failedPaths]),
+  });
+}
+
+// Apply line substitutions and structural inserts/deletes for the forward
+// Depends-On planner. Kept beside the BLOCKS seam so 080 stays below the
+// source fragment's 1000-line limit.
+function applyDependencyPlanLines(lines, parentIndex, parentText, sameNoteTargetEdits, structural, lineText, lineEnding = "\n") {
+  const sourceLines = Array.isArray(lines) ? lines.slice() : [];
+  const ending = lineEnding === "\r\n" ? "\r\n" : "\n";
+  sourceLines[parentIndex] = parentText;
+  for (const edit of sameNoteTargetEdits) {
+    if (Number.isInteger(edit.line) && edit.line >= 0 && edit.line < sourceLines.length && edit.line !== parentIndex) {
+      sourceLines[edit.line] = edit.text;
+    }
+  }
+  const deletes = (structural.deleteLines || []).slice().sort((a, b) => b - a);
+  for (const lineIndex of deletes) if (lineIndex >= 0 && lineIndex < sourceLines.length) sourceLines.splice(lineIndex, 1);
+  if (structural.insertAt !== null && structural.insertAt !== undefined) {
+    let at = structural.insertAt;
+    for (const lineIndex of deletes) if (lineIndex < structural.insertAt) at -= 1;
+    sourceLines.splice(Math.max(0, Math.min(at, sourceLines.length)), 0, lineText);
+  } else if (structural.replaceLine !== null && structural.replaceLine !== undefined) {
+    let at = structural.replaceLine;
+    for (const lineIndex of deletes) if (lineIndex < structural.replaceLine) at -= 1;
+    sourceLines[at] = lineText;
+  }
+  return { lines: sourceLines, lineEnding: ending };
 }
 // ---- src/090-local-task-ids.js ----
 function getUniqueLocalTaskIdValues(values) {
@@ -15508,7 +15974,7 @@ function getTransclusionCommitFinalCursor(cm, options) {
 }
 
 // ---- src/180-editor-transactions.js ----
-function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null) {
+function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null, annotation = null) {
   if (
     !cm ||
     !Array.isArray(originalLines) ||
@@ -15540,6 +16006,7 @@ function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null
   const cursor = normalizePosition(finalCursor);
   if (typeof cm.transaction === "function") {
     const transaction = { changes };
+    if (annotation) transaction.annotation = annotation;
     if (cursor) {
       transaction.selection = { from: cursor, to: cursor };
     }
@@ -15565,6 +16032,7 @@ function applyEditorContentTransaction(
   originalContent,
   nextContent,
   finalCursor = null,
+  annotation = null,
 ) {
   if (!cm) {
     return false;
@@ -15576,7 +16044,7 @@ function applyEditorContentTransaction(
   const cursor = normalizePosition(finalCursor);
 
   if (original.lines.length === next.lines.length) {
-    return applyEditorLineChanges(cm, original.lines, next.lines, cursor);
+    return applyEditorLineChanges(cm, original.lines, next.lines, cursor, annotation);
   }
   if (originalText === nextText) {
     return true;
@@ -15593,6 +16061,7 @@ function applyEditorContentTransaction(
   };
   if (typeof cm.transaction === "function") {
     const transaction = { changes: [change] };
+    if (annotation) transaction.annotation = annotation;
     if (cursor) {
       transaction.selection = { from: cursor, to: cursor };
     }
@@ -21370,6 +21839,16 @@ function withSubtreePassNotice(notice, subtree) {
     return notice;
   }
   return `${notice} ${suffix}`;
+}
+
+// A best-effort reverse-line write never rolls back Depends-On. Keep its
+// failure visible on the same notice used by the shared dependency writers.
+function withBlocksFollowUpNotice(notice, failedPaths) {
+  const failed = Array.isArray(failedPaths)
+    ? failedPaths.length > 0
+    : Boolean(failedPaths && Array.isArray(failedPaths.failed) && failedPaths.failed.length > 0);
+  if (!failed || !notice) return notice;
+  return `${notice} · 🧱 BLOCKS not updated`;
 }
 
 // Detect a project `^prj` edit for the writer. The hand-edit mirror keeps
@@ -56226,6 +56705,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         files,
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         mirrorTouch,
         ...(subtreePrep && subtreePrep.lanes.length > 0
           ? { projectLaneStatuses: subtreePrep.lanes }
@@ -56316,6 +56796,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           ? async () => ({ ok: true })
           : (filePath, preparation) =>
               this.prepareDependencyTargetNote(filePath, preparation),
+        applyBlocksFollowUps: (followUps) => this.applyBlocksFollowUps(followUps),
         planSubtreePass: subtreePlanned ? async () => subtreePlanned : null,
         writeSubtreePass: async (planned) => {
           const wrote = await this.writeSubtreePass(planned.pass);
@@ -56349,6 +56830,8 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             editor,
             content,
             finalContent,
+            null,
+            BLOCKS_MACHINE_WRITE_ANNOTATION,
           );
           return committed
             ? { ok: true }
@@ -56361,6 +56844,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       if (!outcome.ok) {
         return outcome;
       }
+      const blocksFailedPaths = [
+        ...(plan.blocksFailedPaths || []),
+        ...((outcome.blocks && outcome.blocks.failed) || []),
+      ];
       // Cross-note daily cleanup lands after the dependent's own write and
       // is never rolled back (§13.10).
       const pomodoroDone = pomodoroPrep
@@ -56380,7 +56867,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withSubtreePassNotice(projectNotice, outcome.subtree),
+          notice: withBlocksFollowUpNotice(
+            withSubtreePassNotice(projectNotice, outcome.subtree),
+            blocksFailedPaths,
+          ),
           subtree: outcome.subtree || null,
         });
       }
@@ -56388,14 +56878,20 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({
           ok: true,
           reason: null,
-          notice: withSubtreePassNotice(
-            outcome.notice || "⛓ Dependencies updated",
-            outcome.subtree,
+          notice: withBlocksFollowUpNotice(
+            withSubtreePassNotice(
+              outcome.notice || "⛓ Dependencies updated",
+              outcome.subtree,
+            ),
+            blocksFailedPaths,
           ),
           subtree: outcome.subtree,
         });
       }
-      return outcome;
+      return Object.freeze({
+        ...outcome,
+        notice: withBlocksFollowUpNotice(outcome.notice, blocksFailedPaths),
+      });
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "apply-failed" });
     }
@@ -57400,6 +57896,145 @@ class BobNavigationHotkeysDependencyStageMixin {
     }
   }
 }
+// ---- src/591-blocks-follow-ups.js ----
+// Cross-note BLOCKS courtesy writes. Each note is planned once from its
+// preimage and committed after the Depends-On transaction; an open editor
+// receives its own undo entry, while vault.process protects a closed note.
+class BobNavigationHotkeysBlocksFollowUpsMixin {
+  async applyBlocksFollowUps(followUps) {
+    const entries = Array.isArray(followUps) ? followUps : [];
+    if (entries.length === 0) return Object.freeze({ ok: true, failed: Object.freeze([]) });
+    const vault = this.app && this.app.vault;
+    const workspace = this.app && this.app.workspace;
+    const resolver = this.dependencyLinkpathResolver();
+    const vaultFiles = this.readDependencyVaultFileList() || [];
+    const dateEntry = entries.find((entry) => entry && entry.today);
+    const today = dateEntry ? dateEntry.today : new Date();
+    const dailyPaths = scheduledRecoveryDailyPaths(vaultFiles.map((path) => ({ path })), today);
+    const grouped = new Map();
+    for (const entry of entries) {
+      const path = normalizeVaultRelativePath(entry && entry.path);
+      if (!path || /^done\//i.test(path) || path === (dailyPaths && dailyPaths.previous)) continue;
+      if (!grouped.has(path)) grouped.set(path, { path, preimage: entry.preimage, owners: new Map() });
+      const note = grouped.get(path);
+      if (note.preimage !== entry.preimage) note.preimage = null;
+      const id = normalizeBulletPropertyValue(entry.ownerBlockId);
+      if (!id) continue;
+      if (!note.owners.has(id)) note.owners.set(id, { add: [], remove: [] });
+      const owner = note.owners.get(id);
+      owner.add.push(...(Array.isArray(entry.add) ? entry.add : []));
+      owner.remove.push(...(Array.isArray(entry.remove) ? entry.remove : []));
+    }
+
+    const failed = new Set();
+    for (const note of grouped.values()) {
+      if (typeof note.preimage !== "string") {
+        failed.add(note.path);
+        continue;
+      }
+      let editor = null;
+      if (workspace && typeof workspace.getLeavesOfType === "function") {
+        for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+          const view = leaf && leaf.view;
+          if (view && view.file && normalizeVaultRelativePath(view.file.path) === note.path && view.editor && typeof view.editor.getValue === "function") {
+            editor = view.editor;
+            break;
+          }
+        }
+      }
+      let current = null;
+      if (editor) {
+        current = String(editor.getValue() || "");
+      } else {
+        try {
+          const file = vault && typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(note.path)
+            : null;
+          if (file && vault && typeof vault.cachedRead === "function") current = String(await vault.cachedRead(file));
+          else if (file && vault && typeof vault.read === "function") current = String(await vault.read(file));
+        } catch (_error) {
+          current = null;
+        }
+      }
+      if (current === null || current !== note.preimage) {
+        failed.add(note.path);
+        continue;
+      }
+
+      let nextContent = note.preimage;
+      let noteFailed = false;
+      for (const [ownerBlockId, delta] of note.owners) {
+        const lines = nextContent.split(/\r?\n/);
+        const ownerLine = findTaskLineByTrailingBlockId(lines, ownerBlockId);
+        if (ownerLine === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(getObsidianTaskCheckboxStatus(lines[ownerLine]))) continue;
+        const children = findBlocksChildren(lines, ownerLine);
+        const parsed = children.map((index) => parseBlocksLine(lines[index], { isDirectChildOfTask: true }));
+        if (parsed.some((item) => item.verdict === "malformed")) {
+          noteFailed = true;
+          continue;
+        }
+        const existing = children.flatMap((index) =>
+          blocksExistingRows(note.path, lines[index], resolver, vaultFiles),
+        );
+        const add = [];
+        for (const link of delta.add) {
+          const parsedLink = extractDependencyLineLinks(String(link || ""))[0];
+          if (!parsedLink) continue;
+          const targetPath = dependencyPathForLinkNote(parsedLink.note, note.path, resolver);
+          const identity = blocksIdentity(targetPath, parsedLink.blockId);
+          if (!identity) continue;
+          const canonical = canonicalDependencyLink({ path: targetPath, blockId: parsedLink.blockId }, note.path, vaultFiles).text;
+          add.push({ identity, link: canonical });
+        }
+        const desired = blocksDesiredAfterDelta(
+          existing,
+          (entry) => entry.identity || null,
+          add,
+          [...new Set(delta.remove)],
+        );
+        const planned = planBlocksLineEdit(nextContent, ownerLine, desired);
+        if (!planned.ok) {
+          noteFailed = true;
+          continue;
+        }
+        nextContent = planned.nextContent;
+      }
+
+      if (nextContent !== note.preimage) {
+        if (editor) {
+          if (String(editor.getValue() || "") !== note.preimage || !applyEditorContentTransaction(editor, note.preimage, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+            failed.add(note.path);
+            continue;
+          }
+        } else {
+          const file = vault && typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(note.path)
+            : null;
+          if (!file || !vault || typeof vault.process !== "function") {
+            failed.add(note.path);
+            continue;
+          }
+          let applied = false;
+          try {
+            await vault.process(file, (data) => {
+              if (String(data || "") !== note.preimage) return data;
+              applied = true;
+              return nextContent;
+            });
+          } catch (_error) {
+            applied = false;
+          }
+          if (!applied) {
+            failed.add(note.path);
+            continue;
+          }
+        }
+      }
+      if (noteFailed) failed.add(note.path);
+    }
+    return Object.freeze({ ok: failed.size === 0, failed: Object.freeze([...failed]) });
+  }
+}
 // ---- src/600-plugin-dependency-mirror.js ----
 class BobNavigationHotkeysDependencyMirrorMixin {
 
@@ -57531,6 +58166,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       files: { [filePath]: content },
       vaultFiles: this.readDependencyVaultFileList(),
       resolveLinkpath: this.dependencyLinkpathResolver(),
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
     });
     if (!plan.ok) {
       new Notice(dependencyPlanFailureNotice(plan.reason, "add"));
@@ -57546,7 +58182,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       );
     }
     if (nextContent !== originalContent) {
-      if (!applyEditorContentTransaction(cm, originalContent, nextContent)) {
+      if (!applyEditorContentTransaction(cm, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -57609,7 +58245,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       ),
     );
     if (options.showNotice !== false) {
-      new Notice(plan.notice);
+      new Notice(withBlocksFollowUpNotice(plan.notice, plan.blocksFailedPaths || []));
     }
     return true;
   }
@@ -58033,11 +58669,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (!update || !update.docChanged) {
       return;
     }
+    const annotatedBlocksWrite = Array.isArray(update.transactions) && update.transactions.some((transaction) =>
+      transaction && transaction.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION,
+    );
     if (
       update &&
       typeof update === "object" &&
       (update.blocksMachineWrite === true ||
-        update.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION)
+        update.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION ||
+        annotatedBlocksWrite)
     ) {
       return;
     }
@@ -66799,6 +67439,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysProjectSubtreeMixin,
   BobNavigationHotkeysProjectSubtreeWritersMixin,
   BobNavigationHotkeysDependencyStageMixin,
+  BobNavigationHotkeysBlocksFollowUpsMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysVimJumpMixin,
@@ -67058,6 +67699,8 @@ module.exports.helpers = {
   cancelDeferred,
   getBulletPropertyConfigPath,
   loadBulletPropertyConfig,
+  loadBlocksLinesEnabled,
+  resetBlocksLinesConfigCache,
   validateBulletPropertyConfig,
   isValidBulletPropertyName,
   isBulletLine,
@@ -67379,6 +68022,11 @@ module.exports.helpers = {
   compareBlocksStringsByCodePoint,
   findBlocksChildren,
   blocksInsertLine,
+  planBlocksLineEdit,
+  blocksDesiredAfterDelta,
+  mintDependentBlockId,
+  planBlocksForDependencyEdit,
+  withBlocksFollowUpNotice,
   handEditTouchesBlocksLine,
   isProjectSubprojectsLine,
   parseDependencyLegacyChildDetails,

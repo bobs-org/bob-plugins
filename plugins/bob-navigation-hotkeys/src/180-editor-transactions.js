@@ -1,4 +1,4 @@
-function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null) {
+function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null, annotation = null) {
   if (
     !cm ||
     !Array.isArray(originalLines) ||
@@ -30,6 +30,7 @@ function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null
   const cursor = normalizePosition(finalCursor);
   if (typeof cm.transaction === "function") {
     const transaction = { changes };
+    if (annotation) transaction.annotation = annotation;
     if (cursor) {
       transaction.selection = { from: cursor, to: cursor };
     }
@@ -55,6 +56,7 @@ function applyEditorContentTransaction(
   originalContent,
   nextContent,
   finalCursor = null,
+  annotation = null,
 ) {
   if (!cm) {
     return false;
@@ -66,7 +68,7 @@ function applyEditorContentTransaction(
   const cursor = normalizePosition(finalCursor);
 
   if (original.lines.length === next.lines.length) {
-    return applyEditorLineChanges(cm, original.lines, next.lines, cursor);
+    return applyEditorLineChanges(cm, original.lines, next.lines, cursor, annotation);
   }
   if (originalText === nextText) {
     return true;
@@ -83,6 +85,7 @@ function applyEditorContentTransaction(
   };
   if (typeof cm.transaction === "function") {
     const transaction = { changes: [change] };
+    if (annotation) transaction.annotation = annotation;
     if (cursor) {
       transaction.selection = { from: cursor, to: cursor };
     }

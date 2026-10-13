@@ -235,3 +235,105 @@ function findBlocksChildren(lines, taskLine) {
 function blocksInsertLine(lines, parentLine) {
   return getDependencyInsertLine(lines, parentLine);
 }
+
+// Shared Blocks-line edit planner. The input links are canonical wikilink
+// strings (or `{link}` records); resolved identities belong to the caller.
+// Existing lines stay in place, malformed lines are never overwritten, and
+// canonical no-ops return the original bytes (Rule 6, BW6/BW8/BW17).
+function planBlocksLineEdit(content, ownerLine, desiredLinks) {
+  const text = String(content || "");
+  const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  const lineIndex = Math.floor(Number(ownerLine));
+  if (
+    !Number.isFinite(lineIndex) ||
+    lineIndex < 0 ||
+    lineIndex >= lines.length ||
+    !isObsidianTaskAtLine(text, lineIndex)
+  ) {
+    return Object.freeze({ ok: false, reason: "not-task", changed: false, nextContent: text });
+  }
+
+  const children = findBlocksChildren(lines, lineIndex);
+  const parsed = children.map((index) => parseBlocksLine(lines[index], {
+    isDirectChildOfTask: true,
+  }));
+  if (parsed.some((entry) => entry.verdict === "malformed")) {
+    return Object.freeze({ ok: false, reason: "malformed-blocks-line", changed: false, nextContent: text });
+  }
+
+  const links = sortBlocksLinks((Array.isArray(desiredLinks) ? desiredLinks : [])
+    .map((entry) => typeof entry === "string" ? entry : String(entry && entry.link || ""))
+    .filter(Boolean));
+  const uniqueLinks = links.filter((link, index) => index === 0 || link !== links[index - 1]);
+  const nextLines = lines.slice();
+  if (children.length > 0) {
+    const first = children[0];
+    if (uniqueLinks.length === 0) {
+      for (const index of children.slice().sort((a, b) => b - a)) {
+        nextLines.splice(index, 1);
+      }
+    } else {
+      const current = parsed[0];
+      const rendered = formatBlocksLine(current.indent || "", uniqueLinks);
+      nextLines[first] = rendered;
+      for (const index of children.slice(1).sort((a, b) => b - a)) {
+        nextLines.splice(index, 1);
+      }
+    }
+  } else if (uniqueLinks.length > 0) {
+    const indent = getDependencyChildIndent(lines, lineIndex);
+    nextLines.splice(blocksInsertLine(lines, lineIndex), 0, formatBlocksLine(indent, uniqueLinks));
+  }
+  const nextContent = nextLines.join(lineEnding);
+  return Object.freeze({
+    ok: true,
+    reason: null,
+    changed: nextContent !== text,
+    nextContent,
+    lineEnding,
+    ownerLine: lineIndex,
+  });
+}
+
+// Delta API shared by same-note planning and the cross-note writer. `resolve`
+// maps an existing link record to its stable identity. Unknown entries are
+// retained verbatim (as canonical plain links) so an unavailable note never
+// causes a real reverse edge to be pruned.
+function blocksDesiredAfterDelta(existing, resolve, add, remove) {
+  const desired = new Map();
+  let unknown = 0;
+  for (const entry of Array.isArray(existing) ? existing : []) {
+    const link = typeof entry === "string"
+      ? entry
+      : entry && entry.link
+        ? String(entry.link)
+        : formatBlocksLinkRef(entry);
+    let identity = null;
+    try {
+      identity = typeof resolve === "function" ? resolve(entry) : null;
+    } catch (_error) {
+      identity = null;
+    }
+    if (identity && typeof identity === "object") {
+      identity = identity.identity || null;
+    }
+    if (identity == null || identity === "") {
+      desired.set(`?${unknown++}`, link);
+    } else {
+      desired.set(String(identity), link);
+    }
+  }
+  const removals = new Set((Array.isArray(remove) ? remove : []).map((entry) =>
+    typeof entry === "string" ? entry : String(entry && entry.identity || ""),
+  ));
+  for (const identity of removals) {
+    if (identity) desired.delete(identity);
+  }
+  for (const entry of Array.isArray(add) ? add : []) {
+    const identity = String(entry && entry.identity || "");
+    const link = String(entry && entry.link || "");
+    if (identity && link) desired.set(identity, link);
+  }
+  return Object.freeze(sortBlocksLinks([...desired.values()]));
+}

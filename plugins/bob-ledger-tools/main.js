@@ -2510,6 +2510,20 @@ function planCanonicalTarget(target, dailyPath) {
 
 function planBlockLinks(line, dailyPath) {
   const text = String(line || "");
+  // Managed dependency rows are never Task Links. Keep the budget scanner
+  // aligned with Rust for both Depends-On and generated BLOCKS children.
+  try {
+    const dependency = typeof parseDependencyLine === "function" ? parseDependencyLine(text) : null;
+    const blocks = typeof parseBlocksLine === "function" ? parseBlocksLine(text) : null;
+    if (
+      (dependency && dependency.verdict !== "not-a-line") ||
+      (blocks && blocks.verdict !== "not-a-line")
+    ) {
+      return [];
+    }
+  } catch (error) {
+    // A failed recogniser must not suppress ordinary Task Link counting.
+  }
   const struck = planStruckInnerSpans(text);
   const links = [];
   let base = 0;
@@ -12067,6 +12081,555 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
   }
 }
 
+// ---- src/141-blocks-model.js ----
+// Generated BLOCKS chips (bob-cli-7e chips). The row is a read-only
+// projection of the in-memory Tasks memo's `id` / `dependsOn` fields.
+// Never use this parser as dependency input.
+function parseBlocksLine(lineText, opts) {
+  try {
+    const options = opts && typeof opts === "object" ? opts : {};
+    if (options.inCode === true || options.inWorkLog === true || options.isDirectChild === false) {
+      return { verdict: "not-a-line" };
+    }
+    if (typeof lineText !== "string" || /^\s*>/.test(lineText)) {
+      return { verdict: "not-a-line" };
+    }
+    if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(lineText)) {
+      return { verdict: "not-a-line" };
+    }
+    const content = lineText.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/^\s+/, "");
+    const labelRe = /\*\*\s*(BLOCKS|BLOCKING)\s*:\s*\*\*/;
+    const label = labelRe.exec(content);
+    if (!label) {
+      return { verdict: "not-a-line" };
+    }
+    const before = content.slice(0, label.index);
+    const glyphRe = /^(?:🧱|🚧|⛓️|⛓)?\s*$/u;
+    if (!glyphRe.test(before)) {
+      return { verdict: "malformed" };
+    }
+    const emojiMatch = /🧱|🚧|⛓️|⛓/u.exec(before);
+    const emoji = emojiMatch ? emojiMatch[0] : "missing";
+    const linkRe = /(~~)?(!)?\[\[([^\[\]\n]+?)\]\](~~)?/g;
+    const targets = [];
+    let hasInvalidTarget = false;
+    let match = null;
+    while ((match = linkRe.exec(content)) !== null) {
+      try {
+        const inner = String(match[3] || "");
+        const pipeAt = inner.indexOf("|");
+        const linkBody = pipeAt === -1 ? inner : inner.slice(0, pipeAt);
+        const hashAt = linkBody.indexOf("#");
+        if (hashAt === -1 || linkBody.slice(hashAt + 1, hashAt + 2) !== "^") {
+          hasInvalidTarget = true;
+          continue;
+        }
+        const blockId = linkBody.slice(hashAt + 2);
+        if (!blockId) {
+          hasInvalidTarget = true;
+          continue;
+        }
+        targets.push({
+          raw: match[0],
+          linkpath: linkBody.slice(0, hashAt),
+          blockId,
+          alias: pipeAt === -1 ? null : inner.slice(pipeAt + 1),
+          embedded: Boolean(match[2]),
+          struck: Boolean(match[1] || match[4]),
+          linktext: linkBody,
+        });
+      } catch (error) {
+        hasInvalidTarget = true;
+      }
+    }
+    if (hasInvalidTarget) {
+      return { verdict: "malformed" };
+    }
+    let remainder = content.replace(linkRe, "");
+    const remainingLabel = labelRe.exec(remainder);
+    if (!remainingLabel) {
+      return { verdict: "not-a-line" };
+    }
+    const after = remainder.slice(remainingLabel.index + remainingLabel[0].length);
+    if (!/^[\s•·,]*$/.test(after)) {
+      return { verdict: "malformed" };
+    }
+    if (targets.length === 0) {
+      if (!/^[\s]*$/.test(after)) {
+        return { verdict: "malformed" };
+      }
+      return {
+        verdict: "empty",
+        targets: [],
+        canonical: false,
+        emoji,
+        legacyLabel: label[1] === "BLOCKING",
+      };
+    }
+    let canonical = emoji === "🧱" && label[1] === "BLOCKS";
+    if (targets.some((target) => target.alias !== null || target.embedded || target.struck)) {
+      canonical = false;
+    }
+    const unique = new Set(targets.map((target) => target.linktext));
+    if (unique.size !== targets.length) {
+      canonical = false;
+    }
+    if (targets.length > 1) {
+      const separators = [];
+      let cursor = label.index + label[0].length;
+      for (const target of targets) {
+        const at = content.indexOf(target.raw, cursor);
+        if (at === -1) {
+          canonical = false;
+          break;
+        }
+        separators.push(content.slice(cursor, at));
+        cursor = at + target.raw.length;
+      }
+      separators.push(content.slice(cursor));
+      if (separators[0] !== " " || separators[separators.length - 1] !== "" || separators.slice(1, -1).some((part) => part !== " • ")) {
+        canonical = false;
+      }
+    } else {
+      const at = content.indexOf(targets[0].raw, label.index + label[0].length);
+      if (at === -1 || content.slice(label.index + label[0].length, at) !== " " || content.slice(at + targets[0].raw.length) !== "") {
+        canonical = false;
+      }
+    }
+    if (canonical) {
+      const sorted = blocksSortLinks(targets).map((target) => target.linktext);
+      if (!targets.every((target, index) => target.linktext === sorted[index])) {
+        canonical = false;
+      }
+    }
+    return {
+      verdict: "accept",
+      count: targets.length,
+      targets,
+      canonical,
+      emoji,
+      legacyLabel: label[1] === "BLOCKING",
+    };
+  } catch (error) {
+    return { verdict: "not-a-line" };
+  }
+}
+
+function blocksSortLinks(targets) {
+  const rows = Array.isArray(targets) ? targets.slice() : [];
+  const fold = (value) => String(value || "").replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  const compareCodePoints = (left, right) => {
+    const a = Array.from(left);
+    const b = Array.from(right);
+    const size = Math.min(a.length, b.length);
+    for (let index = 0; index < size; index += 1) {
+      const delta = a[index].codePointAt(0) - b[index].codePointAt(0);
+      if (delta !== 0) {
+        return delta;
+      }
+    }
+    return a.length - b.length;
+  };
+  return rows.sort((left, right) => {
+    const a = String(left && left.linktext || "");
+    const b = String(right && right.linktext || "");
+    return compareCodePoints(fold(a), fold(b)) || compareCodePoints(a, b);
+  });
+}
+
+function blocksTaskIsOpen(task) {
+  try {
+    const type = task && task.status && task.status.type;
+    return type === "TODO" || type === "IN_PROGRESS" || type === "ON_HOLD";
+  } catch (error) {
+    return false;
+  }
+}
+
+function blocksTaskIds(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => blocksTaskIds(item));
+  }
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value.split(",").map((id) => id.trim()).filter(Boolean);
+}
+
+function blocksTaskKey(task) {
+  try {
+    const path = planTaskPath(task) || "";
+    const blockId = planTaskBlockId(task) || "";
+    return path && blockId ? path + "\u0000" + blockId : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+// Memo-local so the reverse index is built once per Tasks memo generation.
+// The index is keyed by the prerequisite's `[id::]` value, not its block ID.
+function blocksDependentsIndex(memo) {
+  try {
+    if (!memo || typeof memo !== "object") {
+      return new Map();
+    }
+    if (memo.blocksDependentsIndex instanceof Map) {
+      return memo.blocksDependentsIndex;
+    }
+    const index = new Map();
+    const tasks = Array.isArray(memo.tasks) ? memo.tasks : [];
+    for (const dependent of tasks) {
+      if (!blocksTaskIsOpen(dependent)) {
+        continue;
+      }
+      const ids = blocksTaskIds(dependent.dependsOn);
+      for (const id of ids) {
+        if (!index.has(id)) {
+          index.set(id, []);
+        }
+        const rows = index.get(id);
+        const key = blocksTaskKey(dependent);
+        if (key && !rows.some((task) => blocksTaskKey(task) === key)) {
+          rows.push(dependent);
+        }
+      }
+    }
+    try {
+      memo.blocksDependentsIndex = index;
+    } catch (error) {
+      // A frozen memo still returns a usable index.
+    }
+    return index;
+  } catch (error) {
+    return new Map();
+  }
+}
+
+function blocksTagPresent(task, expected) {
+  try {
+    const want = String(expected || "").replace(/^#/, "");
+    return Array.isArray(task && task.tags) && task.tags.some((tag) => String(tag || "").replace(/^#/, "") === want);
+  } catch (error) {
+    return false;
+  }
+}
+
+function blocksProjectName(task) {
+  try {
+    const rawPath = planTaskPath(task) || "";
+    const name = rawPath.split("/").pop() || "project";
+    return name.replace(/\.md$/i, "");
+  } catch (error) {
+    return "project";
+  }
+}
+
+function blocksLastBlocker(dependent, owner, memo, today) {
+  try {
+    const ownerId = String(owner && owner.id || "").trim();
+    const depends = blocksTaskIds(dependent && dependent.dependsOn);
+    if (!ownerId || !depends.includes(ownerId)) {
+      return { lastBlocker: false, reasons: [] };
+    }
+    const allTasks = Array.isArray(memo && memo.tasks) ? memo.tasks : [];
+    const reasons = [];
+    const otherIds = Array.from(new Set(depends.filter((id) => id !== ownerId)));
+    for (const id of otherIds) {
+      const open = allTasks.find((task) => String(task && task.id || "").trim() === id && blocksTaskIsOpen(task));
+      if (open) {
+        reasons.push('also waits on "' + (dependencyCleanTaskText(planTaskDescription(open) || "") || "another task") + '"');
+      }
+    }
+    const scheduledDay = planTaskScheduledDay(dependent);
+    const todayDay = planDayNumber(today || memo && memo.dateText);
+    if (scheduledDay !== null && todayDay !== null && scheduledDay > todayDay) {
+      reasons.push(blocksTaskScheduledText(dependent, scheduledDay));
+    }
+    const projectBlocked = blocksTagPresent(dependent, "prj_is_blocked");
+    if (projectBlocked) {
+      reasons.push("project " + blocksProjectName(dependent));
+    }
+    return { lastBlocker: reasons.length === 0, reasons };
+  } catch (error) {
+    return { lastBlocker: false, reasons: [] };
+  }
+}
+
+function blocksTaskScheduledText(task, dayNumber) {
+  try {
+    for (const key of ["scheduled", "scheduledDate", "scheduledDay"]) {
+      const value = task && task[key];
+      if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+        return value.slice(0, 10);
+      }
+      if (value && typeof value.format === "function") {
+        const formatted = value.format("YYYY-MM-DD");
+        if (typeof formatted === "string" && /^\d{4}-\d{2}-\d{2}$/.test(formatted)) {
+          return formatted;
+        }
+      }
+      if (value instanceof Date && !Number.isNaN(value.getTime())) {
+        return value.toISOString().slice(0, 10);
+      }
+    }
+    const text = String(dayNumber || "");
+    if (/^\d{8}$/.test(text)) {
+      return text.slice(0, 4) + "-" + text.slice(4, 6) + "-" + text.slice(6);
+    }
+    return "scheduled in the future";
+  } catch (error) {
+    return "scheduled in the future";
+  }
+}
+
+function blocksCanonicalLinktext(task, sourcePath) {
+  try {
+    const blockId = planTaskBlockId(task) || "";
+    const path = planTaskPath(task) || "";
+    if (!blockId) {
+      return "";
+    }
+    if (path && path === String(sourcePath || "")) {
+      return "#^" + blockId;
+    }
+    const stem = path.split("/").pop().replace(/\.md$/i, "");
+    return (stem ? stem : "") + "#^" + blockId;
+  } catch (error) {
+    return "";
+  }
+}
+
+function blocksBuildChip(task, linkpath, blockId, sourcePath, owner, memo, isLive, frozen, today) {
+  const taskPath = planTaskPath(task) || "";
+  const id = String(blockId || planTaskBlockId(task) || "");
+  const projectTask = id === "prj";
+  const fullText = projectTask ? blocksProjectName(task) : (dependencyCleanTaskText(planTaskDescription(task) || "") || ("^" + id));
+  const shortText = fullText.length > 40 ? fullText.slice(0, 40) + "…" : fullText;
+  const symbol = projectTask ? "🧩" : dependencySymbolForState(dependencyStateFromSymbol(planTaskStatusSymbol(task), task));
+  const state = projectTask ? dependencyStateFromSymbol(planTaskStatusSymbol(task), task) : dependencyStateFromSymbol(planTaskStatusSymbol(task), task);
+  const noteStem = String(linkpath || "").split("/").pop().replace(/\.md$/i, "");
+  const crossNote = Boolean(taskPath && taskPath !== sourcePath);
+  const noteLabel = crossNote ? "↗ " + (noteStem || taskPath.split("/").pop().replace(/\.md$/i, "")) : null;
+  const last = isLive && !frozen ? blocksLastBlocker(task, owner, memo, today) : { lastBlocker: false, reasons: [] };
+  const hidden = blocksTagPresent(task, "hide");
+  const tooltipParts = [fullText, taskPath || sourcePath || "", dependencyStatusName(state)];
+  if (last.reasons.length > 0) {
+    tooltipParts.push(last.reasons.join(" · "));
+  }
+  if (!isLive && !frozen) {
+    tooltipParts.push("No longer waiting on this task · refreshes on the next reconcile");
+  }
+  const canonical = linkpath
+    ? String(linkpath).replace(/\.md$/i, "") + "#^" + id
+    : blocksCanonicalLinktext(task, sourcePath);
+  return {
+    blockId: id,
+    linktext: canonical,
+    linkpath: linkpath || "",
+    path: taskPath,
+    state: isLive || frozen ? state : "stale",
+    symbol,
+    text: shortText,
+    fullText,
+    noteLabel,
+    lastBlocker: Boolean(last.lastBlocker && !frozen),
+    tooltip: tooltipParts.filter(Boolean).join(" — "),
+    ariaLabel: fullText + (last.lastBlocker && !frozen ? ", last blocker" : "") + (hidden ? ", hidden task" : ""),
+    hidden,
+    stale: !isLive && !frozen,
+    projectTask,
+    live: Boolean(isLive),
+  };
+}
+
+// Build one row model from the stored line and the memo's live reverse index.
+// `lookup(linkpath, blockId)` resolves a stored link to a Tasks task or null.
+function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today) {
+  try {
+    const parsed = parseBlocksLine(String(lineText || ""));
+    if (!parsed || (parsed.verdict !== "accept" && parsed.verdict !== "empty")) {
+      return null;
+    }
+    const source = String(sourcePath || "");
+    const frozen = !blocksTaskIsOpen(owner);
+    const reverse = blocksDependentsIndex(memo);
+    const ownerId = String(owner && owner.id || "").trim();
+    const liveTasks = !frozen && ownerId ? (reverse.get(ownerId) || []) : [];
+    const liveByKey = new Map();
+    for (const task of liveTasks) {
+      const key = blocksTaskKey(task);
+      if (key && !liveByKey.has(key)) {
+        liveByKey.set(key, task);
+      }
+    }
+    const lookupFn = typeof lookup === "function" ? lookup : () => null;
+    const chips = [];
+    const represented = new Set();
+    const stored = parsed.verdict === "accept" ? parsed.targets : [];
+    for (const target of stored) {
+      const resolved = lookupFn(target.linkpath, target.blockId);
+      const task = resolved && resolved.isTask === false ? null : resolved;
+      const key = blocksTaskKey(task);
+      const liveTask = key ? liveByKey.get(key) : null;
+      const chip = blocksBuildChip(task, target.linkpath, target.blockId, source, owner, memo, Boolean(liveTask), frozen, today);
+      if (!task) {
+        chip.state = frozen ? "broken" : "stale";
+        chip.symbol = "⚠";
+        chip.text = "^" + target.blockId + (frozen ? " not found" : "");
+        chip.fullText = chip.text;
+        chip.tooltip = frozen ? "⚠ ^" + target.blockId + " not found" : "No longer waiting on this task · refreshes on the next reconcile";
+        chip.ariaLabel = frozen ? "Missing task ^" + target.blockId : "Stale dependent ^" + target.blockId;
+        chip.live = false;
+        chip.stale = !frozen;
+      }
+      if (key && liveTask) {
+        represented.add(key);
+      }
+      const rowKey = key || String(target.linkpath || "") + "\u0000" + target.blockId;
+      if (!represented.has("stored:" + rowKey)) {
+        chips.push(chip);
+        represented.add("stored:" + rowKey);
+      }
+    }
+    if (!frozen) {
+      const missing = [];
+      for (const task of liveTasks) {
+        const key = blocksTaskKey(task);
+        if (key && !represented.has(key)) {
+          missing.push(task);
+        }
+      }
+      const sorted = blocksSortLinks(missing.map((task) => ({
+        task,
+        linktext: blocksCanonicalLinktext(task, source),
+      })));
+      for (const row of sorted) {
+        const task = row.task;
+        const blockId = planTaskBlockId(task) || "";
+        const linktext = row.linktext;
+        const hashAt = linktext.indexOf("#^");
+        const linkpath = hashAt > 0 ? linktext.slice(0, hashAt) : "";
+        chips.push(blocksBuildChip(task, linkpath, blockId, source, owner, memo, true, false, today));
+      }
+    }
+    const liveCount = chips.filter((chip) => chip.live).length;
+    const lastCount = chips.filter((chip) => chip.live && chip.lastBlocker).length;
+    let summary = "";
+    if (frozen) {
+      const count = chips.length;
+      if (count > 0) {
+        summary = "✓ freed " + count;
+      }
+    } else if (liveCount > 0) {
+      summary = lastCount === liveCount
+        ? "frees " + liveCount
+        : "frees " + lastCount + " of " + liveCount;
+    }
+    return {
+      chips,
+      frozen,
+      label: frozen ? "🧱 was blocking" : "🧱 blocks",
+      summary,
+      liveCount,
+      storedCount: chips.length,
+      tooltip: "Generated from DEPENDS ON lines · edit on the dependent",
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildBlocksChipElement(doc, model, options) {
+  try {
+    if (!doc || !model || typeof model !== "object") {
+      return null;
+    }
+    const opts = options && typeof options === "object" ? options : {};
+    const row = doc.createElement("span");
+    row.setAttribute("class", "bob-dep-row bob-blocks-row" + (model.frozen ? " is-frozen" : ""));
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", String(model.label || "BLOCKS") + (model.summary ? ", " + model.summary : ""));
+    row.setAttribute("title", String(model.tooltip || "Generated from DEPENDS ON lines · edit on the dependent"));
+    const label = doc.createElement("span");
+    label.setAttribute("class", "bob-dep-label bob-blocks-label");
+    label.setAttribute("aria-hidden", "true");
+    label.appendChild(doc.createTextNode(String(model.label || "🧱 blocks")));
+    row.appendChild(label);
+    for (const chip of Array.isArray(model.chips) ? model.chips : []) {
+      const el = doc.createElement("span");
+      const classes = ["bob-dep-chip", "bob-blocks-chip", "is-" + String(chip.state || "todo")];
+      if (chip.stale) classes.push("is-stale");
+      if (chip.hidden) classes.push("is-muted");
+      if (chip.projectTask) classes.push("is-project");
+      el.setAttribute("class", classes.join(" "));
+      el.setAttribute("data-state", String(chip.state || "todo"));
+      el.setAttribute("role", "link");
+      el.setAttribute("tabindex", "0");
+      el.setAttribute("aria-label", String(chip.ariaLabel || chip.tooltip || chip.text || ""));
+      if (chip.tooltip) el.setAttribute("title", String(chip.tooltip));
+      const box = doc.createElement("span");
+      box.setAttribute("class", "bob-dep-chip-box");
+      box.setAttribute("aria-hidden", "true");
+      box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+      el.appendChild(box);
+      const text = doc.createElement("span");
+      text.setAttribute("class", "bob-dep-chip-text");
+      text.appendChild(doc.createTextNode(String(chip.text || "")));
+      el.appendChild(text);
+      if (chip.noteLabel) {
+        const note = doc.createElement("span");
+        note.setAttribute("class", "bob-dep-chip-note");
+        note.appendChild(doc.createTextNode(String(chip.noteLabel)));
+        el.appendChild(note);
+      }
+      if (chip.lastBlocker) {
+        const key = doc.createElement("span");
+        key.setAttribute("class", "bob-blocks-key");
+        key.setAttribute("aria-label", "Last blocking reason");
+        key.setAttribute("title", "This is the last reason keeping this task Blocked");
+        key.appendChild(doc.createTextNode("🔑"));
+        el.appendChild(key);
+      }
+      if (typeof el.addEventListener === "function") {
+        const open = (event) => {
+          try {
+            if (opts.plugin && typeof opts.plugin.dependencyOpenTarget === "function") {
+              opts.plugin.dependencyOpenTarget(chip.linktext, opts.sourcePath || "", event);
+            }
+          } catch (error) {
+            // A failed open never breaks other chips.
+          }
+        };
+        el.addEventListener("click", open);
+        el.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            open(event);
+          }
+        });
+        el.addEventListener("mouseover", (event) => {
+          try {
+            if (opts.plugin && typeof opts.plugin.dependencyHoverTarget === "function") {
+              opts.plugin.dependencyHoverTarget(chip.linktext, opts.sourcePath || "", event, el, row);
+            }
+          } catch (error) {
+            // Hover preview is best-effort.
+          }
+        });
+      }
+      row.appendChild(el);
+    }
+    if (model.summary) {
+      const summary = doc.createElement("span");
+      summary.setAttribute("class", "bob-dep-summary bob-blocks-summary");
+      summary.appendChild(doc.createTextNode(String(model.summary)));
+      row.appendChild(summary);
+    }
+    return row;
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/150-dependency-element.js ----
 // Dependency chips: Live Preview row element. `model` is
 // `dependencyChipModel(...)`; `options` carries `{ sourcePath,
@@ -12279,6 +12842,36 @@ function buildDependencyChipElement(doc, model, options) {
   }
 }
 
+// ---- src/152-blocks-widget.js ----
+// Live Preview widget for one generated BLOCKS row. It has navigation only:
+// no dependency-writing controls are exposed from the prerequisite side.
+let BlocksChipWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  BlocksChipWidget = class extends WidgetType {
+    constructor(model, meta) {
+      super();
+      this.model = model;
+      this.meta = meta && typeof meta === "object" ? meta : {};
+      try {
+        this.key = JSON.stringify([model, this.meta.sourcePath || "", this.meta.lineNumber]);
+      } catch (error) {
+        this.key = String(model && model.summary || "");
+      }
+    }
+
+    eq(other) {
+      return Boolean(other && other instanceof BlocksChipWidget && other.key === this.key);
+    }
+
+    toDOM() {
+      return buildBlocksChipElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+        { plugin: this.meta.plugin, sourcePath: this.meta.sourcePath || "" },
+      );
+    }
+  };
+}
 // ---- src/160-widgets-and-row.js ----
 // Live Preview chip widget for one Depends-On line. `eq` compares a key
 // built from `JSON.stringify(model)` so an unchanged line never flickers.
@@ -29085,6 +29678,240 @@ class BobLedgerToolsDependencyModelMixin {
   }
 
 }
+// ---- src/272-plugin-blocks-model.js ----
+class BobLedgerToolsBlocksModelMixin {
+  blocksChipModelForLine({ path, text, owner }) {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      const sourcePath = String(path || "");
+      let ownerTask = owner || null;
+      if (!ownerTask) {
+        const parsedOwner = /(?:^|\s)\^([A-Za-z0-9_-]+)\s*$/.exec(String(text || ""));
+        if (parsedOwner) {
+          const index = this.dependencyTasksIndex();
+          ownerTask = index.get(sourcePath + "\u0000" + parsedOwner[1]) || null;
+        }
+      }
+      if (!ownerTask) {
+        return null;
+      }
+      const index = this.dependencyTasksIndex();
+      const self = this;
+      const lookup = (linkpath, blockId) => {
+        try {
+          const resolved = self.dependencyResolveLink(linkpath, sourcePath);
+          const key = String(resolved.path || "") + "\u0000" + String(blockId || "");
+          return index.has(key) ? index.get(key) : null;
+        } catch (error) {
+          return null;
+        }
+      };
+      return blocksChipModel(String(text || ""), sourcePath, ownerTask, memo, lookup, memo && memo.dateText);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blocksChipsAvailable() {
+    try {
+      return Boolean(ViewPlugin && Decoration && WidgetType && RangeSetBuilder && editorInfoField && editorLivePreviewField && BlocksChipWidget);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createBlocksChipExtension() {
+    try {
+      if (!this.blocksChipsAvailable() || !ViewPlugin || typeof ViewPlugin.fromClass !== "function" || typeof Prec.highest !== "function") {
+        return null;
+      }
+      const plugin = this;
+      const BlocksPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildBlocksChipDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.blocksChipShouldRebuild(update)) {
+              this.decorations = plugin.buildBlocksChipDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the previous decorations if a single refresh fails.
+          }
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(BlocksPluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blocksChipShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") {
+        return false;
+      }
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+        return true;
+      }
+      const refresh = ensureDependencyChipsRefresh();
+      const transactions = update.transactions || [];
+      for (const transaction of transactions) {
+        const effects = transaction && transaction.effects;
+        for (const effect of Array.isArray(effects) ? effects : (effects ? [effects] : [])) {
+          if (effect === refresh || (refresh && effect && typeof effect.is === "function" && effect.is(refresh))) {
+            return true;
+          }
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state) {
+        try {
+          if (update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) {
+            return true;
+          }
+        } catch (error) {
+          // A missing field is not a reason to force a rebuild.
+        }
+      }
+      if (editorInfoField && update.startState && update.state) {
+        try {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          if ((before && before.file && before.file.path) !== (after && after.file && after.file.path)) {
+            return true;
+          }
+        } catch (error) {
+          // A missing field is not a reason to force a rebuild.
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildBlocksChipDecorations(view) {
+    try {
+      if (!this.dependencyChipsEnabled || !Decoration || !RangeSetBuilder || !BlocksChipWidget || !editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      const live = view.state.field(editorLivePreviewField);
+      if (!live) {
+        return Decoration.none;
+      }
+      const info = view.state.field(editorInfoField);
+      const path = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!path) {
+        return Decoration.none;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") {
+        return Decoration.none;
+      }
+      const builder = new RangeSetBuilder();
+      const ranges = Array.isArray(view.visibleRanges) ? view.visibleRanges : [];
+      const selections = view.state.selection && view.state.selection.ranges || [];
+      const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      let tree = null;
+      try {
+        tree = syntaxTree && typeof syntaxTree === "function" ? syntaxTree(view.state) : syntaxTree;
+      } catch (error) {
+        tree = null;
+      }
+      for (const range of ranges) {
+        if (!range || typeof range.from !== "number") {
+          continue;
+        }
+        let pos = Math.max(0, range.from);
+        const end = Math.min(typeof range.to === "number" ? range.to : docLength, docLength);
+        let guard = 0;
+        while (pos <= end && guard < 10000) {
+          guard += 1;
+          let line = null;
+          try {
+            line = doc.lineAt(pos);
+          } catch (error) {
+            break;
+          }
+          if (!line || typeof line.text !== "string") {
+            break;
+          }
+          try {
+            if (line.text.indexOf("BLOCKS") !== -1 || line.text.indexOf("BLOCKING") !== -1) {
+              const parsed = parseBlocksLine(line.text);
+              if (parsed && (parsed.verdict === "accept" || parsed.verdict === "empty")) {
+                const number = typeof line.number === "number" ? line.number : null;
+                const owned = number !== null && dependencyChipLineOwnedByTaskAtDoc(doc, number);
+                const revealed = selections.some((selection) => selection && selection.from <= line.to && selection.to >= line.from);
+                const inCode = tree ? freshnessMarkPosInCode(tree, line.from) : false;
+                if (owned && !revealed && !inCode) {
+                  const ownerLine = blocksOwnerTaskLineAtDoc(doc, number);
+                  const id = blocksMarkdownBlockId(ownerLine && ownerLine.text);
+                  const owner = id ? this.dependencyTasksIndex().get(path + "\u0000" + id) : null;
+                  const model = owner ? this.blocksChipModelForLine({ path, text: line.text, owner }) : null;
+                  if (model && model.chips.length > 0) {
+                    const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line.text);
+                    const from = line.from + (marker ? marker[0].length : 0);
+                    builder.add(from, line.to, Decoration.replace({
+                      widget: new BlocksChipWidget(model, { plugin: this, sourcePath: path, lineNumber: number === null ? null : number - 1 }),
+                    }));
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            // Ignore a single row and continue through the visible range.
+          }
+          if (typeof line.to !== "number" || line.to >= end || line.to < pos) {
+            break;
+          }
+          pos = line.to + 1;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+}
+
+function blocksMarkdownBlockId(taskLine) {
+  const match = /(?:^|\s)\^([A-Za-z0-9_-]+)\s*$/.exec(String(taskLine || ""));
+  return match ? match[1] : null;
+}
+
+// Return the nearest list-item parent line for a managed child row.
+function blocksOwnerTaskLineAtDoc(doc, lineNumber) {
+  try {
+    if (!doc || typeof doc.line !== "function" || !Number.isInteger(lineNumber)) {
+      return null;
+    }
+    const child = doc.line(lineNumber);
+    const childIndent = /^\s*/.exec(child.text)[0].replace(/\t/g, "    ").length;
+    for (let current = lineNumber - 1; current >= 1; current -= 1) {
+      const line = doc.line(current);
+      if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(line.text)) {
+        continue;
+      }
+      const indent = /^\s*/.exec(line.text)[0].replace(/\t/g, "    ").length;
+      if (indent < childIndent) {
+        return /#task(?![A-Za-z0-9_/-])/.test(line.text) ? line : null;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/271-plugin-unblocked-glyph.js ----
 // --- Unblocked hand-off glyph: Live Preview, Reading view, api ---------
 // `BobLedgerToolsUnblockedGlyphMixin`, installed in
@@ -30578,6 +31405,7 @@ class BobLedgerToolsDependencyRenderMixin {
       } catch (error) {
         // Rendered-view chips are best-effort.
       }
+      this.setupBlocksChips();
     } catch (error) {
       // Chips setup never throws.
     }
@@ -30672,6 +31500,323 @@ class BobLedgerToolsDependencyRenderMixin {
     }
   }
 
+}
+// ---- src/281-plugin-blocks-render.js ----
+class BobLedgerToolsBlocksRenderMixin {
+  setupBlocksChips() {
+    try {
+      const extension = this.createBlocksChipExtension();
+      if (extension && typeof this.registerEditorExtension === "function") {
+        this.registerEditorExtension(extension);
+      }
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor((el, ctx) => this.renderBlocksChipsIn(el, ctx), 50);
+      }
+    } catch (error) {
+      // BLOCKS chips are read-only decoration and never block plugin startup.
+    }
+  }
+
+  async renderBlocksChipsIn(el, ctx) {
+    try {
+      if (!this.dependencyChipsEnabled || !el || !ctx) {
+        return;
+      }
+      const path = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      const memo = this.freshnessEnsureMemo();
+      if (!path || !memo) {
+        return;
+      }
+      let items = [];
+      try {
+        if (typeof el.querySelectorAll === "function") {
+          items = Array.from(el.querySelectorAll("li"));
+        } else if (Array.isArray(el.children)) {
+          items = el.children.slice();
+        }
+      } catch (error) {
+        return;
+      }
+      const candidates = [];
+      for (const li of items) {
+        try {
+          if (!li || li.nodeType !== 1 || li.dataset && li.dataset.bobBlocksProcessed === "1") {
+            continue;
+          }
+          if (this.dependencyExcludedAncestor(li, el)) {
+            continue;
+          }
+          const ownText = dependencyReadingOwnText(li);
+          if (!/^\s*(?:🧱|🚧|⛓️|⛓)?\s*\*{0,2}(?:BLOCKS|BLOCKING)\b/.test(ownText)) {
+            continue;
+          }
+          if (!dependencyReadingOwningTask(li, el)) {
+            continue;
+          }
+          const anchors = [];
+          const found = li.querySelectorAll ? li.querySelectorAll("a.internal-link") : [];
+          for (const anchor of Array.from(found || [])) {
+            if (dependencyReadingAnchorOwner(anchor, el) === li) {
+              anchors.push(anchor);
+            }
+          }
+          let section = null;
+          try {
+            if (typeof ctx.getSectionInfo === "function") {
+              section = ctx.getSectionInfo(el) || null;
+            }
+          } catch (error) {
+            section = null;
+          }
+          candidates.push({ li, anchors, rowIndex: items.indexOf(li), rowCount: items.length, section });
+        } catch (error) {
+          continue;
+        }
+      }
+      if (candidates.length === 0) {
+        return;
+      }
+      const sections = new Map();
+      for (const candidate of candidates) {
+        const section = candidate.section;
+        const key = section && Number.isInteger(section.lineStart) && Number.isInteger(section.lineEnd)
+          ? section.lineStart + ":" + section.lineEnd
+          : "none";
+        if (!sections.has(key)) {
+          sections.set(key, await this.blocksReadSectionLines(path, section));
+        }
+        const source = sections.get(key);
+        if (!source) {
+          continue;
+        }
+        const rowLine = blocksReadingMappedLine(source.lines, source.low, source.high, candidate.rowIndex, candidate.rowCount);
+        if (rowLine === null) {
+          continue;
+        }
+        const parsed = parseBlocksLine(source.lines[rowLine]);
+        if (!parsed || (parsed.verdict !== "accept" && parsed.verdict !== "empty")) {
+          continue;
+        }
+        const ownerLine = blocksReadingOwnerLine(source.lines, rowLine);
+        if (ownerLine === null) {
+          continue;
+        }
+        const owner = (memo.tasks || []).find((task) => planTaskPath(task) === path && task.lineNumber === ownerLine) || null;
+        if (!owner) {
+          continue;
+        }
+        const model = this.blocksChipModelForLine({ path, text: source.lines[rowLine], owner });
+        if (!model || model.chips.length === 0) {
+          continue;
+        }
+        const docNode = candidate.li.ownerDocument || (typeof document !== "undefined" ? document : null);
+        if (!docNode) {
+          continue;
+        }
+        this.blocksDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path);
+      }
+    } catch (error) {
+      // One reading-view row never breaks the post-processor.
+    }
+  }
+
+  async blocksReadSectionLines(path, section) {
+    try {
+      if (!section || !Number.isInteger(section.lineStart) || !Number.isInteger(section.lineEnd)) {
+        return null;
+      }
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function" ? vault.getAbstractFileByPath(path) : null;
+      if (!file || !vault || typeof vault.cachedRead !== "function") {
+        return null;
+      }
+      const text = await vault.cachedRead(file);
+      if (typeof text !== "string") {
+        return null;
+      }
+      const lines = text.split("\n");
+      return { lines, low: Math.max(0, section.lineStart), high: Math.min(lines.length - 1, section.lineEnd) };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blocksDecorateReadingRow(li, anchors, model, doc, sourcePath) {
+    try {
+      const label = blocksReadingLabelElement(li);
+      if (label) {
+        label.style.display = "none";
+        label.setAttribute("data-bob-blocks-hidden", "1");
+      }
+      li.classList.add("bob-dep-row", "bob-blocks-row");
+      if (model.frozen) li.classList.add("is-frozen");
+      li.setAttribute("role", "group");
+      li.setAttribute("aria-label", model.label + (model.summary ? ", " + model.summary : ""));
+      li.setAttribute("title", model.tooltip);
+      if (li.dataset) li.dataset.bobBlocksProcessed = "1";
+
+      const available = anchors.slice();
+      for (const chip of model.chips) {
+        let anchor = null;
+        const foundAt = available.findIndex((candidate) => dependencyReadingBlockId(candidate) === chip.blockId);
+        if (foundAt >= 0) {
+          anchor = available.splice(foundAt, 1)[0];
+          this.blocksDecorateReadingAnchor(anchor, chip, doc);
+        } else if (chip.live) {
+          anchor = this.blocksCreateReadingAnchor(chip, doc, sourcePath);
+          if (anchor) {
+            li.appendChild(anchor);
+          }
+        }
+      }
+      // Hide the source glyph, label punctuation, and raw separators after
+      // the original link anchors have been matched in stored line order.
+      for (const node of Array.from(li.childNodes || [])) {
+        if (node.nodeType !== 3) continue;
+        const value = String(node.nodeValue || node.textContent || "");
+        if (/^[\s•·,🧱🚧⛓\uFE0F]*$/u.test(value)) {
+          node.nodeValue = "";
+          node.textContent = "";
+        }
+      }
+      if (model.summary) {
+        const summary = doc.createElement("span");
+        summary.setAttribute("class", "bob-dep-summary bob-blocks-summary");
+        summary.textContent = model.summary;
+        li.appendChild(summary);
+      }
+    } catch (error) {
+      // The raw Markdown stays usable if a DOM implementation rejects a decoration.
+    }
+  }
+
+  blocksDecorateReadingAnchor(anchor, chip, doc) {
+    try {
+      const classes = ["bob-dep-chip", "bob-blocks-chip", "is-" + String(chip.state || "todo")];
+      if (chip.stale) classes.push("is-stale");
+      if (chip.hidden) classes.push("is-muted");
+      if (chip.projectTask) classes.push("is-project");
+      anchor.classList.add(...classes);
+      anchor.setAttribute("role", "link");
+      anchor.setAttribute("aria-label", String(chip.ariaLabel || chip.tooltip || chip.text || ""));
+      if (chip.tooltip) anchor.setAttribute("title", chip.tooltip);
+      anchor.setAttribute("data-state", String(chip.state || "todo"));
+      for (const child of Array.from(anchor.childNodes || [])) {
+        if (child.nodeType === 1 && child.classList && child.classList.contains("bob-dep-chip-box")) {
+          child.remove();
+        }
+      }
+      while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
+      this.blocksAppendAnchorContent(anchor, chip, doc);
+    } catch (error) {
+      // Leave the existing internal link navigable.
+    }
+  }
+
+  blocksCreateReadingAnchor(chip, doc, sourcePath) {
+    try {
+      const anchor = doc.createElement("a");
+      const notePart = String(chip.linktext || "").replace(/#\^.*$/, "");
+      const target = String(chip.linktext || "").replace(/^#/, "");
+      anchor.setAttribute("class", "internal-link");
+      anchor.setAttribute("data-href", target);
+      anchor.setAttribute("href", target ? (target.indexOf("#") === -1 ? "#" + target : target) : "#");
+      anchor.setAttribute("aria-label", String(chip.ariaLabel || chip.tooltip || chip.text || ""));
+      anchor.setAttribute("title", String(chip.tooltip || ""));
+      if (notePart && typeof anchor.setAttribute === "function") {
+        anchor.setAttribute("data-bob-source-path", String(sourcePath || ""));
+      }
+      this.blocksDecorateReadingAnchor(anchor, chip, doc);
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blocksAppendAnchorContent(anchor, chip, doc) {
+    const box = doc.createElement("span");
+    box.setAttribute("class", "bob-dep-chip-box");
+    box.setAttribute("aria-hidden", "true");
+    box.textContent = String(chip.symbol || "○");
+    anchor.appendChild(box);
+    const text = doc.createElement("span");
+    text.setAttribute("class", "bob-dep-chip-text");
+    text.textContent = String(chip.text || "");
+    anchor.appendChild(text);
+    if (chip.noteLabel) {
+      const note = doc.createElement("span");
+      note.setAttribute("class", "bob-dep-chip-note");
+      note.textContent = String(chip.noteLabel);
+      anchor.appendChild(note);
+    }
+    if (chip.lastBlocker) {
+      const key = doc.createElement("span");
+      key.setAttribute("class", "bob-blocks-key");
+      key.setAttribute("aria-label", "Last blocking reason");
+      key.setAttribute("title", "This is the last reason keeping this task Blocked");
+      key.textContent = "🔑";
+      anchor.appendChild(key);
+    }
+  }
+}
+
+function blocksReadingMappedLine(lines, low, high, rowIndex, rowCount) {
+  try {
+    const fenced = planFencedLines(lines, low, high);
+    const items = [];
+    for (let index = low; index <= high; index += 1) {
+      if (!fenced.has(index) && dependencyChipHasMarker(lines[index])) {
+        items.push(index);
+      }
+    }
+    if (items.length !== rowCount || !Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= items.length) {
+      return null;
+    }
+    const line = items[rowIndex];
+    const parsed = parseBlocksLine(lines[line]);
+    return parsed && (parsed.verdict === "accept" || parsed.verdict === "empty") && dependencyChipLineOwnedByTask(lines, line) ? line : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function blocksReadingOwnerLine(lines, childIndex) {
+  try {
+    const child = String(lines[childIndex] || "");
+    const childIndent = /^\s*/.exec(child)[0].replace(/\t/g, "    ").length;
+    for (let index = childIndex - 1; index >= 0; index -= 1) {
+      const line = String(lines[index] || "");
+      if (!dependencyChipHasMarker(line)) continue;
+      const indent = /^\s*/.exec(line)[0].replace(/\t/g, "    ").length;
+      if (indent < childIndent) {
+        return /#task(?![A-Za-z0-9_/-])/.test(line) ? index : null;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function blocksReadingLabelElement(li) {
+  try {
+    const stack = [li];
+    let guard = 0;
+    while (stack.length > 0 && guard < 500) {
+      guard += 1;
+      const node = stack.pop();
+      if (!node || node.nodeType !== 1) continue;
+      if (node !== li) {
+        const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+        if (tag === "UL" || tag === "OL" || tag === "LI") continue;
+        if ((tag === "STRONG" || tag === "B") && /^(?:BLOCKS|BLOCKING):?$/.test(String(node.textContent || "").trim())) return node;
+      }
+      for (const child of Array.from(node.childNodes || []).reverse()) stack.push(child);
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
 }
 // ---- src/290-plugin-today-and-location.js ----
 class BobLedgerToolsTodayLocationMixin {
@@ -31749,8 +32894,10 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsProgressMarksMixin,
   BobLedgerToolsProgressMarksReadingMixin,
   BobLedgerToolsDependencyModelMixin,
+  BobLedgerToolsBlocksModelMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
+  BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsVimSnippetsMixin,
 ]);
@@ -33740,6 +34887,7 @@ module.exports.helpers = {
   normalizePlanComponent,
   splitPlanComponents,
   computePlanBudget,
+  planBlockLinks,
   emptyPlanBudget,
   computeTodayLinks,
   resolveTodayKeys,
@@ -33918,6 +35066,17 @@ module.exports.helpers = {
   buildUnblockedGlyphElement,
   ensureUnblockedGlyphRefresh,
   parseDependencyLine,
+  parseBlocksLine,
+  blocksSortLinks,
+  blocksTaskIsOpen,
+  blocksDependentsIndex,
+  blocksLastBlocker,
+  blocksCanonicalLinktext,
+  blocksChipModel,
+  buildBlocksChipElement,
+  blocksReadingMappedLine,
+  blocksReadingOwnerLine,
+  blocksReadingLabelElement,
   dependencyChipLineOwnedByTask,
   dependencyReadingOwnText,
   dependencyReadingAnchorOwner,

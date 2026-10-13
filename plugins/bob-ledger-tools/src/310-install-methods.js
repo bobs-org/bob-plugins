@@ -39,8 +39,10 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsProgressMarksMixin,
   BobLedgerToolsProgressMarksReadingMixin,
   BobLedgerToolsDependencyModelMixin,
+  BobLedgerToolsBlocksModelMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
+  BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsVimSnippetsMixin,
 ]);

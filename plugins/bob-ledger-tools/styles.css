@@ -861,6 +861,40 @@ body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-fiel
   }
 }
 
+/* Generated prerequisite-side BLOCKS chips (bob-cli-7e chips). */
+.bob-blocks-row {
+  flex-wrap: wrap;
+}
+
+.bob-blocks-label {
+  color: var(--text-muted);
+}
+
+.bob-blocks-chip.is-stale {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+.bob-blocks-chip.is-muted {
+  opacity: 0.58;
+}
+
+.bob-blocks-row.is-frozen .bob-blocks-chip {
+  opacity: 0.68;
+}
+
+.bob-blocks-key {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-accent, var(--interactive-accent));
+  font-size: 0.9em;
+  line-height: 1;
+}
+
+.bob-blocks-summary {
+  font-variant-numeric: tabular-nums;
+}
+
 /* Task priority marks (bob-cli-4p ledger-marks): one compact signal-bar
    glyph for each canonical `[priority:: …]` task field. Display-only;
    nothing ever writes it. The glyph is a 4-bar signal staircase in a

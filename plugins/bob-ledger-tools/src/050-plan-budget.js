@@ -514,6 +514,20 @@ function planCanonicalTarget(target, dailyPath) {
 
 function planBlockLinks(line, dailyPath) {
   const text = String(line || "");
+  // Managed dependency rows are never Task Links. Keep the budget scanner
+  // aligned with Rust for both Depends-On and generated BLOCKS children.
+  try {
+    const dependency = typeof parseDependencyLine === "function" ? parseDependencyLine(text) : null;
+    const blocks = typeof parseBlocksLine === "function" ? parseBlocksLine(text) : null;
+    if (
+      (dependency && dependency.verdict !== "not-a-line") ||
+      (blocks && blocks.verdict !== "not-a-line")
+    ) {
+      return [];
+    }
+  } catch (error) {
+    // A failed recogniser must not suppress ordinary Task Link counting.
+  }
   const struck = planStruckInnerSpans(text);
   const links = [];
   let base = 0;

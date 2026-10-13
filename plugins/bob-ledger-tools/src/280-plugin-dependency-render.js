@@ -733,6 +733,7 @@ class BobLedgerToolsDependencyRenderMixin {
       } catch (error) {
         // Rendered-view chips are best-effort.
       }
+      this.setupBlocksChips();
     } catch (error) {
       // Chips setup never throws.
     }

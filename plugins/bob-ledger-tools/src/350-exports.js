@@ -289,6 +289,8 @@ module.exports.helpers = {
   STATS_RANGE_PRESETS,
   statsExpandHome,
   statsHomeDir,
+  statsBobCandidatePaths,
+  statsBobTriedList,
   statsResolveBobPath,
   statsReadConfigValue,
   statsNormalizeRange,

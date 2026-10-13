@@ -12,11 +12,14 @@ const {
 
 const {
   STATS_SCHEMA_VERSION,
+  statsBobCandidatePaths,
+  statsBobTriedList,
   statsBuildArgs,
   statsCacheKey,
   statsDecodeReport,
   statsErrorModel,
   statsExpandHome,
+  statsHomeDir,
   statsNormalizeOffset,
   statsNormalizeRange,
   statsResolveBobPath,
@@ -314,6 +317,123 @@ test("stats api v2 keeps append and adds fetch plus bobPath", async () => {
       const resolved = plugin.api.stats.bobPath();
       assert.equal(typeof resolved.path, "string");
       assert.ok(["config", "candidate", "path"].includes(resolved.source));
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("statsHomeDir defaults to the real home and strips a trailing slash", () => {
+  const os = require("node:os");
+  assert.equal(statsHomeDir(), os.homedir());
+  assert.equal(statsHomeDir({ osModule: null, env: { HOME: "/Users/x" } }), "/Users/x");
+  assert.equal(statsHomeDir({ osModule: null, env: {} }), "");
+  assert.equal(
+    statsHomeDir({ osModule: null, env: { HOME: "/Users/b/" } }),
+    "/Users/b",
+  );
+});
+
+test("stats mac regression: un-injected resolution probes the real home first", () => {
+  const os = require("node:os");
+  const expectedHome = os.homedir();
+  const probes = [];
+  const resolved = statsResolveBobPath({
+    configured: "",
+    existsSync: (candidate) => {
+      probes.push(candidate);
+      return candidate === `${expectedHome}/.cargo/bin/bob`;
+    },
+  });
+  assert.equal(probes[0], `${expectedHome}/.cargo/bin/bob`);
+  assert.deepEqual(resolved, {
+    path: `${expectedHome}/.cargo/bin/bob`,
+    source: "candidate",
+  });
+});
+
+test("stats absolute candidates are probed verbatim with no doubled slashes", () => {
+  const probes = [];
+  const resolved = statsResolveBobPath({
+    configured: "",
+    home: "/Users/b",
+    existsSync: (candidate) => {
+      probes.push(candidate);
+      return candidate === "/opt/homebrew/bin/bob";
+    },
+  });
+  assert.deepEqual(resolved, { path: "/opt/homebrew/bin/bob", source: "candidate" });
+  for (const probe of probes) {
+    assert.ok(!probe.includes("//"), `probe must not contain //: ${probe}`);
+  }
+});
+
+test("stats with no home probes only absolute candidates", () => {
+  const probes = [];
+  const resolved = statsResolveBobPath({
+    configured: "",
+    home: "",
+    osModule: null,
+    env: {},
+    existsSync: (candidate) => {
+      probes.push(candidate);
+      return false;
+    },
+  });
+  assert.deepEqual(resolved, { path: "bob", source: "path" });
+  assert.deepEqual(probes, ["/opt/homebrew/bin/bob", "/usr/local/bin/bob"]);
+  for (const probe of probes) {
+    assert.ok(!probe.startsWith("."), `no relative probe: ${probe}`);
+  }
+});
+
+test("stats tilde config expands against the real home", () => {
+  const os = require("node:os");
+  const resolved = statsResolveBobPath({ configured: "~/.cargo/bin/bob" });
+  assert.deepEqual(resolved, {
+    path: `${os.homedir()}/.cargo/bin/bob`,
+    source: "config",
+  });
+});
+
+test("stats candidate and tried lists share one source of truth", () => {
+  assert.deepEqual(statsBobCandidatePaths("/Users/b"), [
+    "/Users/b/.cargo/bin/bob",
+    "/Users/b/.local/bin/bob",
+    "/opt/homebrew/bin/bob",
+    "/usr/local/bin/bob",
+  ]);
+  assert.deepEqual(statsBobTriedList({ home: "/Users/b" }), [
+    "/Users/b/.cargo/bin/bob",
+    "/Users/b/.local/bin/bob",
+    "/opt/homebrew/bin/bob",
+    "/usr/local/bin/bob",
+    "bob (PATH)",
+  ]);
+  assert.deepEqual(statsBobTriedList({ resolved: { path: "/x/bob", source: "config" } }), [
+    "/x/bob",
+  ]);
+});
+
+test("stats spawn bob-not-found tried list uses the real home", async () => {
+  await withMissingConfig(async () => {
+    const os = require("node:os");
+    const plugin = makePlugin();
+    try {
+      const result = await plugin.statsSpawnFetch([], {
+        execFile: (path, args, options, callback) => {
+          const error = new Error("spawn ENOENT");
+          error.code = "ENOENT";
+          callback(error, "", "");
+        },
+        resolved: { path: "bob", source: "path" },
+      });
+      assert.equal(result.code, "bob-not-found");
+      assert.equal(result.tried[0], `${os.homedir()}/.cargo/bin/bob`);
+      for (const entry of result.tried) {
+        assert.ok(!entry.startsWith("//"), `tried must not start with //: ${entry}`);
+        assert.ok(!entry.startsWith("/."), `tried must not start with /.: ${entry}`);
+      }
     } finally {
       plugin.onunload();
     }

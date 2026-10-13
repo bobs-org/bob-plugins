@@ -696,16 +696,7 @@ class BobLedgerToolsStatsBlockMixin {
 
   statsErrorCard(doc, error, view) {
     const tried =
-      error && Array.isArray(error.tried)
-        ? error.tried
-        : (() => {
-            try {
-              const home = statsHomeDir({});
-              return [...STATS_BOB_CANDIDATES.map((relative) => `${home}/${relative}`), "bob (PATH)"];
-            } catch (inner) {
-              return ["bob (PATH)"];
-            }
-          })();
+      error && Array.isArray(error.tried) ? error.tried : statsBobTriedList({});
     const model = statsErrorModel(error || { code: "failed" }, { tried });
     const card = statsEl(doc, "div", { class: "bob-stats-error", role: "alert" });
     card.appendChild(statsEl(doc, "div", { class: "bob-stats-error-title" }, model.title));

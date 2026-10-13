@@ -18581,7 +18581,8 @@ const STATS_SCHEMA_VERSION = 1;
 const STATS_RANGE_PRESETS = ["7d", "4w", "3m", "1y", "all"];
 const STATS_DEFAULT_RANGE = "4w";
 // GUI Obsidian on macOS lacks the shell PATH, so desktop `bob` resolution
-// tries these before falling back to `bob` on PATH.
+// tries these before falling back to `bob` on PATH. Entries without a
+// leading `/` are relative to the home directory.
 const STATS_BOB_CANDIDATES = [
   ".cargo/bin/bob",
   ".local/bin/bob",
@@ -18600,27 +18601,96 @@ function statsExpandHome(rawPath, home) {
   return text;
 }
 
+function statsStripOneTrailingSlash(home) {
+  if (typeof home === "string" && home.length > 1 && home.endsWith("/")) {
+    return home.slice(0, -1);
+  }
+  return home;
+}
+
 function statsHomeDir(options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  let osModule = opts.osModule;
+  if (osModule === undefined) {
+    try {
+      osModule = planRequireOptionalNodeModule("os");
+    } catch (error) {
+      osModule = null;
+    }
+  }
   try {
-    const osModule = options.osModule;
     if (osModule && typeof osModule.homedir === "function") {
       const home = osModule.homedir();
       if (typeof home === "string" && home.trim()) {
-        return home;
+        return statsStripOneTrailingSlash(home);
       }
     }
   } catch (error) {
     // Fall through to $HOME below.
   }
+  let env = opts.env;
+  if (env === undefined) {
+    try {
+      env =
+        typeof process !== "undefined" && process && process.env
+          ? process.env
+          : {};
+    } catch (error) {
+      env = {};
+    }
+  }
   try {
-    const env = options.env;
     if (env && typeof env.HOME === "string" && env.HOME.trim()) {
-      return env.HOME;
+      return statsStripOneTrailingSlash(env.HOME);
     }
   } catch (error) {
     // Fall through to "" below.
   }
   return "";
+}
+
+// Absolute paths to probe for `bob`, in STATS_BOB_CANDIDATES order.
+// Entries starting with `/` are used verbatim; home-relative entries
+// join under `home` only when it is non-empty, so a cwd-relative path
+// is never probed. Never throws.
+function statsBobCandidatePaths(home) {
+  try {
+    const base = typeof home === "string" && home ? home : "";
+    const paths = [];
+    for (const entry of STATS_BOB_CANDIDATES) {
+      if (typeof entry !== "string" || !entry) {
+        continue;
+      }
+      if (entry.startsWith("/")) {
+        paths.push(entry);
+      } else if (base) {
+        paths.push(`${base}/${entry}`);
+      }
+    }
+    return paths;
+  } catch (error) {
+    return [];
+  }
+}
+
+// User-facing "Tried" list from the same source of truth as resolution.
+// When the resolved path came from config, only it was attempted.
+// Never throws; on failure falls back to `["bob (PATH)"]`.
+function statsBobTriedList(options = {}) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    const resolved = opts.resolved;
+    if (resolved && typeof resolved === "object" && resolved.source === "config") {
+      if (typeof resolved.path === "string" && resolved.path) {
+        return [resolved.path];
+      }
+    }
+    const home =
+      opts.home !== undefined ? opts.home : statsHomeDir(opts);
+    return [...statsBobCandidatePaths(home), "bob (PATH)"];
+  } catch (error) {
+    return ["bob (PATH)"];
+  }
 }
 
 // Resolve the `bob` binary: `stats.bob_path` (tilde-expanded) first, then
@@ -18653,9 +18723,8 @@ function statsResolveBobPath(options = {}) {
         return () => false;
       }
     })();
-  for (const relative of STATS_BOB_CANDIDATES) {
+  for (const candidate of statsBobCandidatePaths(home)) {
     try {
-      const candidate = home ? `${home}/${relative}` : relative;
       if (existsSync(candidate)) {
         return { path: candidate, source: "candidate" };
       }
@@ -18964,19 +19033,7 @@ class BobLedgerToolsStatsDataMixin {
       options.resolved || (typeof this.apiStatsBobPath === "function"
         ? this.apiStatsBobPath()
         : { path: "bob", source: "path" });
-    const tried =
-      options.tried ||
-      (() => {
-        try {
-          const home = statsHomeDir({});
-          return [
-            ...STATS_BOB_CANDIDATES.map((relative) => `${home}/${relative}`),
-            "bob (PATH)",
-          ];
-        } catch (error) {
-          return ["bob (PATH)"];
-        }
-      })();
+    const tried = options.tried || statsBobTriedList({ resolved });
     return new Promise((resolve) => {
       if (typeof execFile !== "function") {
         // Desktop-only spawn: no child_process off desktop.
@@ -20323,16 +20380,7 @@ class BobLedgerToolsStatsBlockMixin {
 
   statsErrorCard(doc, error, view) {
     const tried =
-      error && Array.isArray(error.tried)
-        ? error.tried
-        : (() => {
-            try {
-              const home = statsHomeDir({});
-              return [...STATS_BOB_CANDIDATES.map((relative) => `${home}/${relative}`), "bob (PATH)"];
-            } catch (inner) {
-              return ["bob (PATH)"];
-            }
-          })();
+      error && Array.isArray(error.tried) ? error.tried : statsBobTriedList({});
     const model = statsErrorModel(error || { code: "failed" }, { tried });
     const card = statsEl(doc, "div", { class: "bob-stats-error", role: "alert" });
     card.appendChild(statsEl(doc, "div", { class: "bob-stats-error-title" }, model.title));
@@ -33909,6 +33957,8 @@ module.exports.helpers = {
   STATS_RANGE_PRESETS,
   statsExpandHome,
   statsHomeDir,
+  statsBobCandidatePaths,
+  statsBobTriedList,
   statsResolveBobPath,
   statsReadConfigValue,
   statsNormalizeRange,

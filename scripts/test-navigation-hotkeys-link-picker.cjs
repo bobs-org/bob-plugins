@@ -5,6 +5,7 @@ const {
   notices,
   helpers,
   TransactionEditor,
+  compatibleTasksSettings,
   openPropertyStage,
   confirmScheduleReasonStage,
   createLinkPickerEnergyConfig,
@@ -260,6 +261,48 @@ test("counted link mode writes across notes through both the open buffer and the
     "- [ ] #task Other thing [energy:: low] ^b1",
   );
   assert.match(notices.at(-1), /energy → low · 2 tasks via Task Links/);
+});
+
+test("Task Link scheduled delete recovers a Blocked task through the wired freshness API", async () => {
+  notices.length = 0;
+  const taskEditor = new TransactionEditor(
+    "- [?] #task Ship it [scheduled:: 2000-01-01] ^a1",
+    { line: 0, ch: 0 },
+  );
+  const harness = createLinkPickerHarness({
+    linkContent: "- [[Tasks#^a1]]",
+    notes: { "Tasks.md": "- [?] #task Ship it [scheduled:: 2000-01-01] ^a1" },
+    openEditors: { "Tasks.md": taskEditor },
+  });
+  harness.plugin.app.vault.adapter = {
+    read: async () => JSON.stringify(compatibleTasksSettings()),
+  };
+  // The writer under test; removing the markUnblockedLine wiring in the Task
+  // Link batch paths must fail this test.
+  harness.plugin.getFreshnessApi = () => ({
+    markUnblockedLine(line, options) {
+      const today =
+        options.today instanceof Date
+          ? `${options.today.getFullYear()}-${String(options.today.getMonth() + 1).padStart(2, "0")}-${String(options.today.getDate()).padStart(2, "0")}`
+          : String(options.today || "2026-10-12");
+      return line.replace(
+        /(?= \^[A-Za-z0-9-]+\s*$)/,
+        ` [unblocked:: ${today}]`,
+      );
+    },
+  });
+  assert.equal(await harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.ok(picker.isLinkSession());
+  const result = await harness.plugin.deleteLinkPickerPropertyValue(picker, {
+    property: { name: "scheduled" },
+  });
+  assert.deepEqual(result, { deleted: true });
+  assert.match(
+    taskEditor.content,
+    /- \[ \] #task Ship it \[unblocked:: \d{4}-\d{2}-\d{2}\] \^a1/,
+  );
+  assert.doesNotMatch(taskEditor.content, /\[scheduled::/);
 });
 
 test("link mode refuses the whole operation when a linked note changed", async () => {

@@ -1190,6 +1190,133 @@ test("convertProjectNoteToTask reports post-write failures without rolling back"
 
 });
 
+test("convertProjectNoteToTask keeps the project note when a link rewrite finds changed content", async () => {
+  notices.length = 0;
+  const linkingPath = "Notes.md";
+  const linkingContent = "- Related: [[Health_gym_habit#^prj]]\n";
+  let liveContents = null;
+  let tampered = false;
+  const harness = createProjectReversalHarness({
+    projectContent: workedExampleProjectNote(),
+    parentContent: workedExampleParentNote(),
+    extraFiles: [{ path: linkingPath, content: linkingContent }],
+    backlinks: {
+      [linkingPath]: [
+        {
+          original: "[[Health_gym_habit#^prj]]",
+          link: "Health_gym_habit#^prj",
+        },
+      ],
+    },
+    process: async (file, fn) => {
+      if (file.path === "Health.md" && !tampered) {
+        tampered = true;
+        // An external edit lands after planning, before the linking rewrite.
+        liveContents[linkingPath] =
+          `${liveContents[linkingPath]}- Another line\n`;
+      }
+      const next = fn(liveContents[file.path]);
+      liveContents[file.path] = next;
+      return next;
+    },
+  });
+  liveContents = harness.contents;
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(
+      harness.editor,
+      harness.view,
+    ),
+    true,
+  );
+  // The parent keeps the restored task, but the project note is kept and the
+  // dangling link is reported instead of counted as updated.
+  assert.match(
+    notices.at(-1),
+    /Restored the task in Health, but 1 link could not be updated; "Health_gym_habit" was kept/,
+  );
+  assert.deepEqual(harness.trashCalls, []);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      harness.contents,
+      "Health_gym_habit.md",
+    ),
+    true,
+  );
+  assert.match(
+    harness.contents["Health.md"],
+    /^- \[ \] #task Build a gym habit .* \^gym-habit$/m,
+  );
+  assert.match(harness.contents[linkingPath], /\[\[Health_gym_habit#\^prj\]\]/);
+});
+
+test("convertProjectNoteToTask keeps the Pomodoro suffix when the daily rewrite fails", async () => {
+  notices.length = 0;
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  const dailyPath = `${year}/${year}${month}${day}.md`;
+  const parentContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [?] #task #prj Parent [scheduled::2099-12-31] #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::2026-08-01]",
+  ].join("\n");
+  const dailyContent = [
+    "## Pomodoros",
+    "",
+    "- [ ] Current (0900-0930)",
+    "  - [[Health_gym_habit#^prj]]",
+  ].join("\n");
+  const harness = createProjectReversalHarness({
+    projectContent: workedExampleProjectNote(),
+    parentContent,
+    extraFiles: [{ path: dailyPath, content: dailyContent }],
+    backlinks: {
+      [dailyPath]: [
+        {
+          original: "[[Health_gym_habit#^prj]]",
+          link: "Health_gym_habit#^prj",
+        },
+      ],
+    },
+    process: async (file, fn) => {
+      if (file.path === dailyPath) {
+        throw new Error("daily write failed");
+      }
+      const next = fn(harness.contents[file.path]);
+      harness.contents[file.path] = next;
+      return next;
+    },
+  });
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(
+      harness.editor,
+      harness.view,
+    ),
+    true,
+  );
+  assert.match(
+    notices.at(-1),
+    /Restored the task in Health, but 1 link could not be updated; "Health_gym_habit" was kept · Pomodoro links not removed/,
+  );
+  assert.deepEqual(harness.trashCalls, []);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      harness.contents,
+      "Health_gym_habit.md",
+    ),
+    true,
+  );
+  assert.match(harness.contents[dailyPath], /\[\[Health_gym_habit#\^prj\]\]/);
+});
+
 // ---------------------------------------------------------------------------
 // link-picker: Ctrl+Shift+P edits the task behind a Task Link bullet.
 // ---------------------------------------------------------------------------

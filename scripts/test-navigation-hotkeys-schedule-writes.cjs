@@ -636,6 +636,61 @@ test("a due project date keeps the tag while ^prj holds Depends-On links", () =>
   assert.equal(calls.length, 0);
 });
 
+test("a due project date strips the tag while a resident with its own reason stays Blocked", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-30] ^prj",
+    "  - ⛓️ **DEPENDS ON:** ~~[[job#^done]]~~",
+    "- [?] #task Work [scheduled:: 2026-07-30] #prj_is_blocked [fresh:: 2026-07-01] ^work",
+    "  - ⛓️ **DEPENDS ON:** [[job#^open]]",
+  ].join("\n");
+  const plan = helpers.planProjectScheduledUpdate(
+    input,
+    3,
+    "2026-07-11",
+    new Date(2026, 6, 11),
+    {
+      // The ^prj recovers, but the resident's own Depends-On is still open,
+      // so it has no recovery: the tag follows ^prj while it stays [?].
+      recoveryByLine: new Map([
+        [3, { state: "ready", rank: " ", reason: null }],
+      ]),
+    },
+  );
+  assert.equal(plan.valid, true, plan.error);
+  const out = plan.content.split("\n");
+  assert.match(out[3], /^- \[ \] #task Ship/);
+  const resident = out.find((line) => line.includes("^work"));
+  assert.ok(resident.startsWith("- [?]"), resident);
+  assert.doesNotMatch(resident, /#prj_is_blocked/);
+});
+
+test("Ctrl+D strips the tag while a resident with its own reason stays Blocked", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-16] ^prj",
+    "  - ⛓️ **DEPENDS ON:** ~~[[job#^done]]~~",
+    "- [?] #task Work #prj_is_blocked [scheduled:: 2026-07-16] [fresh:: 2026-07-01] ^work",
+    "  - ⛓️ **DEPENDS ON:** [[job#^open]]",
+  ].join("\n");
+  const deleted = helpers.planProjectScheduledDelete(input, 3, {
+    today: new Date(2026, 6, 15),
+    recoveryByLine: new Map([
+      [3, { state: "ready", rank: " ", reason: null }],
+    ]),
+  });
+  assert.equal(deleted.valid, true, deleted.error);
+  const out = deleted.content.split("\n");
+  assert.match(out[3], /^- \[ \] #task Ship/);
+  const resident = out.find((line) => line.includes("^work"));
+  assert.ok(resident.startsWith("- [?]"), resident);
+  assert.doesNotMatch(resident, /#prj_is_blocked/);
+});
+
 test("counted scheduled deletes recover with [unblocked::] when the writer is passed", () => {
   const input = ["- [?] #task Ready [scheduled:: 2099-01-01] ^ready"].join("\n");
   const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 0);

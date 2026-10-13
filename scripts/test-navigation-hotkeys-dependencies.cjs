@@ -266,6 +266,71 @@ test("counted Depends-on removal recovers residents with [unblocked::]", () => {
   assert.ok(calls.length >= 1);
 });
 
+test("counted Depends-on removal writes [unblocked::] through the wired freshness API", async () => {
+  notices.length = 0;
+  const input = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [?] #task #prj Ship [dependsOn:: Project__setup] [fresh:: 2026-10-10] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[#^setup]]",
+    "- [?] #task Draft [fresh:: 2026-10-10] #prj_is_blocked ^draft",
+    "- [ ] #task Setup ^setup",
+  ].join("\n");
+  const cursor = { line: 5, ch: 8 };
+  const editor = new TransactionEditor(input, cursor);
+  const file = { path: "Project.md", extension: "md" };
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 5, 0);
+  const dependencyTask = helpers
+    .getOpenLocalTasks(input)
+    .find((task) => task.existingBlockId === "setup");
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: {
+      getMarkdownFiles: () => [file],
+      cachedRead: async () => input,
+      adapter: {
+        read: async () => JSON.stringify(compatibleTasksSettings()),
+      },
+    },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  // The writer under test; removing the markUnblockedLine wiring in
+  // applyCountedLocalTaskDependency must fail this test.
+  plugin.getFreshnessApi = () => ({
+    markUnblockedLine(line, options) {
+      const today =
+        options.today instanceof Date
+          ? `${options.today.getFullYear()}-${String(options.today.getMonth() + 1).padStart(2, "0")}-${String(options.today.getDate()).padStart(2, "0")}`
+          : String(options.today || "2026-10-12");
+      return line.replace(
+        /(?= \^[A-Za-z0-9-]+\s*$)/,
+        ` [unblocked:: ${today}]`,
+      );
+    },
+  });
+
+  assert.equal(
+    await plugin.applyCountedLocalTaskDependency(
+      editor,
+      cursor,
+      file.path,
+      session,
+      dependencyTask,
+    ),
+    true,
+  );
+  assert.match(editor.content, /^- \[ \] #task #prj Ship/m);
+  assert.doesNotMatch(editor.content, /DEPENDS ON/);
+  const draft = editor.content.split("\n").find((line) => /Draft/.test(line));
+  assert.match(draft, /^- \[ \] #task Draft/);
+  assert.doesNotMatch(draft, /#prj_is_blocked/);
+  assert.match(draft, /\[unblocked:: \d{4}-\d{2}-\d{2}\]/);
+});
+
 test("cross-file toggle changes only the source link", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = [

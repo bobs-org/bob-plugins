@@ -85,6 +85,7 @@
   "655-plugin-inbox-route.js",
   "660-plugin-project-notes.js",
   "665-plugin-project-conversion.js",
+  "666-project-reversal-rewrites.js",
   "670-plugin-project-files.js",
   "680-plugin-link-parse.js",
   "690-install-plugin-mixins.js",

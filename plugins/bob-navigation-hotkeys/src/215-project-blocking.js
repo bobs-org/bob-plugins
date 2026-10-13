@@ -368,7 +368,15 @@ function promoteMovePrerequisiteTarget(
   }
   const text = String(contentLines[at] || "");
   const status = getObsidianTaskCheckboxStatus(text);
-  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || status === "?") {
+  // ADJ-11 walk-through runs before the `?` gate (like the dependency-edit
+  // path): a `[?]` `^prj` never promotes itself, but its open Depends-On
+  // targets still rise. Closed lines never promote.
+  const isPrjWalkThrough =
+    isProjectLifecycleTaskLine(text) && blockId === "prj";
+  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+    return 0;
+  }
+  if (status === "?" && !isPrjWalkThrough) {
     return 0;
   }
   let count = 0;

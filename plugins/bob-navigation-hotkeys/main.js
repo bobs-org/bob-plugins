@@ -19685,7 +19685,15 @@ function promoteMovePrerequisiteTarget(
   }
   const text = String(contentLines[at] || "");
   const status = getObsidianTaskCheckboxStatus(text);
-  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || status === "?") {
+  // ADJ-11 walk-through runs before the `?` gate (like the dependency-edit
+  // path): a `[?]` `^prj` never promotes itself, but its open Depends-On
+  // targets still rise. Closed lines never promote.
+  const isPrjWalkThrough =
+    isProjectLifecycleTaskLine(text) && blockId === "prj";
+  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+    return 0;
+  }
+  if (status === "?" && !isPrjWalkThrough) {
     return 0;
   }
   let count = 0;
@@ -25310,33 +25318,6 @@ function upsertProjectTaskScheduledField(
     changed: inserted.changed,
     ambiguous: false,
   });
-}
-
-// Whether the note's `^prj` task still carries Depends-On links (a child
-// Depends-On bullet or a non-empty `[dependsOn::]` field). Closed links stay
-// as history (§5) and do not by themselves keep the project Blocked; the
-// schedule writers follow `^prj`'s post-gesture status instead.
-function projectPrjKeepsDependsOnReason(content) {
-  const text = String(content || "");
-  if (findProjectLifecycleTaskIndex(text) === -1) {
-    return false;
-  }
-  const lines = text.split(/\r?\n/);
-  const prjLine = String(lines[findProjectLifecycleTaskIndex(text)] || "");
-  const field = findBulletPropertyField(prjLine, "dependsOn");
-  if (field && normalizeBulletPropertyValue(field.value)) {
-    return true;
-  }
-  return collectProjectTaskDependencyItems(text, "").length > 0;
-}
-
-// True when the recovery snapshot already proves the resident leaves
-// Blocked (ready, next, or in-progress). Schedule writers no longer use
-// this to strip the tag while `^prj` stays `[?]`: the tag follows `^prj`.
-function projectResidentRecoveryClears(recovery) {
-  return Boolean(
-    recovery && ["ready", "next", "in-progress"].includes(recovery.state),
-  );
 }
 
 function projectPrjLineIsBlocked(lineText) {
@@ -61378,25 +61359,21 @@ class BobNavigationHotkeysProjectConversionMixin {
       return false;
     }
 
-    for (const change of rewritePlan.changes) {
-      if (change.path === parentPath) {
-        continue;
-      }
-      const file =
-        vault && typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(change.path)
-          : null;
-      if (!this.isMarkdownFile(file)) {
-        continue;
-      }
-      try {
-        await vault.process(file, (current) =>
-          current === change.before ? change.after : current,
-        );
-      } catch (_error) {
-        // Post-write rewrite failures do not roll the parent back.
-      }
-    }
+    // Post-write link rewrites report their failures instead of rolling the
+    // parent back (§13.10): when any failed, the project note is kept for a
+    // retry and the notice says so.
+    const postWriteRewrites = await applyPlannedBlockIdLinkRewrites({
+      vault,
+      isMarkdownFile: (file) => this.isMarkdownFile(file),
+      changes: rewritePlan.changes,
+      parentPath,
+      plannedLinksByPath: countPlannedRewriteLinksByPath(
+        classification.blockRewrites,
+        parentPath,
+      ),
+    });
+    const postWriteFailedLinkCount = postWriteRewrites.failedLinkCount;
+    const postWriteFailedPaths = postWriteRewrites.failedPaths;
 
     const dailyPath = dailyCleanupSnapshot
       ? normalizeVaultRelativePath(dailyCleanupSnapshot.dailyPath)
@@ -61404,6 +61381,25 @@ class BobNavigationHotkeysProjectConversionMixin {
     const dailyHandledInRewrites =
       Boolean(dailyPath) &&
       rewritePlan.changes.some((change) => change.path === dailyPath);
+    if (postWriteFailedLinkCount > 0) {
+      let keptNotice =
+        `Restored the task in ${parentBasename}, but ${postWriteFailedLinkCount} ` +
+        `${postWriteFailedLinkCount === 1 ? "link" : "links"} could not be updated; ` +
+        `"${noteBasename}" was kept`;
+      if (
+        dailyCleanup &&
+        dailyCleanup.changed &&
+        dailyCleanupSnapshot &&
+        !dailyCleanupSnapshot.sameFile &&
+        dailyHandledInRewrites &&
+        dailyPath &&
+        postWriteFailedPaths.has(dailyPath)
+      ) {
+        keptNotice += " · Pomodoro links not removed";
+      }
+      new Notice(keptNotice);
+      return true;
+    }
     const dailyCleanupFailed =
       dailyCleanup && dailyCleanup.changed && dailyCleanupSnapshot &&
       !dailyCleanupSnapshot.sameFile && !dailyHandledInRewrites
@@ -61447,6 +61443,76 @@ class BobNavigationHotkeysProjectConversionMixin {
     new Notice(notice);
     return true;
   }
+}
+// ---- src/666-project-reversal-rewrites.js ----
+// Post-write `#^prj` rewrite application for project reversal (§13.10).
+// Rewrites are planned in memory and the parent is written first; each
+// rewrite that throws or finds changed content then counts its planned
+// links as failed, so the caller keeps the project note and reports it
+// instead of counting the links as updated.
+function countPlannedRewriteLinksByPath(blockRewrites, parentPath) {
+  const counts = new Map();
+  for (const rewrite of Array.isArray(blockRewrites) ? blockRewrites : []) {
+    const rewritePath = normalizeVaultRelativePath(rewrite && rewrite.path);
+    if (!rewritePath || rewritePath === parentPath) {
+      continue;
+    }
+    const originals = Array.isArray(rewrite && rewrite.originals)
+      ? rewrite.originals
+      : [];
+    counts.set(
+      rewritePath,
+      (counts.get(rewritePath) || 0) + (originals.length || 1),
+    );
+  }
+  return counts;
+}
+
+async function applyPlannedBlockIdLinkRewrites(args = {}) {
+  const vault = args.vault;
+  const isMarkdownFile =
+    typeof args.isMarkdownFile === "function" ? args.isMarkdownFile : null;
+  const changes = Array.isArray(args.changes) ? args.changes : [];
+  const parentPath = args.parentPath;
+  const plannedLinksByPath =
+    args.plannedLinksByPath instanceof Map
+      ? args.plannedLinksByPath
+      : new Map();
+  let failedLinkCount = 0;
+  const failedPaths = new Set();
+  const recordFailure = (path) => {
+    failedLinkCount += plannedLinksByPath.get(path) || 1;
+    failedPaths.add(path);
+  };
+  for (const change of changes) {
+    if (!change || change.path === parentPath) {
+      continue;
+    }
+    const file =
+      vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(change.path)
+        : null;
+    if (!isMarkdownFile || !isMarkdownFile(file)) {
+      recordFailure(change.path);
+      continue;
+    }
+    let applied = false;
+    try {
+      await vault.process(file, (current) => {
+        if (current !== change.before) {
+          return current;
+        }
+        applied = true;
+        return change.after;
+      });
+    } catch (_error) {
+      applied = false;
+    }
+    if (!applied) {
+      recordFailure(change.path);
+    }
+  }
+  return Object.freeze({ failedLinkCount, failedPaths });
 }
 // ---- src/670-plugin-project-files.js ----
 class BobNavigationHotkeysProjectFileMixin {
@@ -62885,6 +62951,8 @@ module.exports.helpers = {
   splitProjectLifecycleChildren,
   rewriteProjectDependencyLineForDestination,
   planBlockIdLinkContentRewrites,
+  countPlannedRewriteLinksByPath,
+  applyPlannedBlockIdLinkRewrites,
   getProjectNoteToTaskNoticeText,
   formatProjectSectionTitle,
   parseProjectSectionBulletTitle,
@@ -63052,8 +63120,6 @@ module.exports.helpers = {
   mergeProjectResidentBlockEdits,
   projectDependentResidentKeys,
   formatTaskMoveProjectCountsNotice,
-  projectPrjKeepsDependsOnReason,
-  projectResidentRecoveryClears,
   shouldRecoverProjectResidents,
   recoverProjectResidents,
   summarizeProjectDependencyEdit,

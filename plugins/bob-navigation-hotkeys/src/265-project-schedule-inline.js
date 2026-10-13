@@ -51,33 +51,6 @@ function upsertProjectTaskScheduledField(
   });
 }
 
-// Whether the note's `^prj` task still carries Depends-On links (a child
-// Depends-On bullet or a non-empty `[dependsOn::]` field). Closed links stay
-// as history (§5) and do not by themselves keep the project Blocked; the
-// schedule writers follow `^prj`'s post-gesture status instead.
-function projectPrjKeepsDependsOnReason(content) {
-  const text = String(content || "");
-  if (findProjectLifecycleTaskIndex(text) === -1) {
-    return false;
-  }
-  const lines = text.split(/\r?\n/);
-  const prjLine = String(lines[findProjectLifecycleTaskIndex(text)] || "");
-  const field = findBulletPropertyField(prjLine, "dependsOn");
-  if (field && normalizeBulletPropertyValue(field.value)) {
-    return true;
-  }
-  return collectProjectTaskDependencyItems(text, "").length > 0;
-}
-
-// True when the recovery snapshot already proves the resident leaves
-// Blocked (ready, next, or in-progress). Schedule writers no longer use
-// this to strip the tag while `^prj` stays `[?]`: the tag follows `^prj`.
-function projectResidentRecoveryClears(recovery) {
-  return Boolean(
-    recovery && ["ready", "next", "in-progress"].includes(recovery.state),
-  );
-}
-
 function projectPrjLineIsBlocked(lineText) {
   return getObsidianTaskCheckboxStatus(lineText) === "?";
 }

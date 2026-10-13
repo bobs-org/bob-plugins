@@ -487,6 +487,46 @@ test("move promotion walks through a ^prj target without raising it", () => {
   assert.equal(plan.promotedOnMoveCount, 1);
 });
 
+test("move promotion walks through a [?] ^prj to its open prerequisite", () => {
+  const sourceContent = "- [*] #task Move this ^move";
+  const destinationContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[Q#^prj]]",
+    "## Tasks",
+  ].join("\n");
+  const qContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Q ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[R#^r]]",
+  ].join("\n");
+  const rContent = "- [ ] #task R work ^r";
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 0);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "P.md",
+    sourceContent,
+    destinationContent,
+    otherContents: new Map([
+      ["Q.md", qContent],
+      ["R.md", rContent],
+    ]),
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  // Q's ^prj stays [?] and unchanged: the walk-through never raises it.
+  assert.equal(plan.changes.has("Q.md"), false);
+  const rAfter = plan.changes.get("R.md").after;
+  assert.match(rAfter, /^- \[\*\] #task R work \^r$/m);
+  assert.equal(plan.promotedOnMoveCount, 1);
+});
+
 test("move promotion uses each open task's own lane, not the strongest moved lane", () => {
   const sourceContent = [
     "- [*] #task Next up ^next",

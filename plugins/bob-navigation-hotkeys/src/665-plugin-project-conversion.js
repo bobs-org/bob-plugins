@@ -892,25 +892,21 @@ class BobNavigationHotkeysProjectConversionMixin {
       return false;
     }
 
-    for (const change of rewritePlan.changes) {
-      if (change.path === parentPath) {
-        continue;
-      }
-      const file =
-        vault && typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(change.path)
-          : null;
-      if (!this.isMarkdownFile(file)) {
-        continue;
-      }
-      try {
-        await vault.process(file, (current) =>
-          current === change.before ? change.after : current,
-        );
-      } catch (_error) {
-        // Post-write rewrite failures do not roll the parent back.
-      }
-    }
+    // Post-write link rewrites report their failures instead of rolling the
+    // parent back (§13.10): when any failed, the project note is kept for a
+    // retry and the notice says so.
+    const postWriteRewrites = await applyPlannedBlockIdLinkRewrites({
+      vault,
+      isMarkdownFile: (file) => this.isMarkdownFile(file),
+      changes: rewritePlan.changes,
+      parentPath,
+      plannedLinksByPath: countPlannedRewriteLinksByPath(
+        classification.blockRewrites,
+        parentPath,
+      ),
+    });
+    const postWriteFailedLinkCount = postWriteRewrites.failedLinkCount;
+    const postWriteFailedPaths = postWriteRewrites.failedPaths;
 
     const dailyPath = dailyCleanupSnapshot
       ? normalizeVaultRelativePath(dailyCleanupSnapshot.dailyPath)
@@ -918,6 +914,25 @@ class BobNavigationHotkeysProjectConversionMixin {
     const dailyHandledInRewrites =
       Boolean(dailyPath) &&
       rewritePlan.changes.some((change) => change.path === dailyPath);
+    if (postWriteFailedLinkCount > 0) {
+      let keptNotice =
+        `Restored the task in ${parentBasename}, but ${postWriteFailedLinkCount} ` +
+        `${postWriteFailedLinkCount === 1 ? "link" : "links"} could not be updated; ` +
+        `"${noteBasename}" was kept`;
+      if (
+        dailyCleanup &&
+        dailyCleanup.changed &&
+        dailyCleanupSnapshot &&
+        !dailyCleanupSnapshot.sameFile &&
+        dailyHandledInRewrites &&
+        dailyPath &&
+        postWriteFailedPaths.has(dailyPath)
+      ) {
+        keptNotice += " · Pomodoro links not removed";
+      }
+      new Notice(keptNotice);
+      return true;
+    }
     const dailyCleanupFailed =
       dailyCleanup && dailyCleanup.changed && dailyCleanupSnapshot &&
       !dailyCleanupSnapshot.sameFile && !dailyHandledInRewrites

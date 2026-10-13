@@ -200,6 +200,44 @@ function planBlocksForDependencyEdit(args = {}) {
   });
 }
 
+// Burst-baseline Depends-On targets for the hand-edit mirror (BW10/BW11).
+// Parsed with reader tolerance and resolved to identities so the BLOCKS
+// seam can diff them against the final line without treating the user's
+// already-typed links as a planner add/remove.
+function collectBlocksExistingRefs(content, parentLine, parentPath, resolveLinkpath) {
+  const collection = collectDependencyNavigationBullets(String(content || ""), parentLine);
+  if (!collection || collection.reason) return Object.freeze([]);
+  return Object.freeze(
+    collection.targets.map((target) =>
+      Object.freeze({
+        path: dependencyPathForLinkNote(target.note, parentPath, resolveLinkpath),
+        blockId: target.blockId,
+        note: String(target.note || "").trim(),
+      }),
+    ),
+  );
+}
+
+// Empty `DEPENDS ON:` children are not in the navigation collection (R9
+// clear-empty). When the planned list is empty they still have to go.
+function collectEmptyDependencyLineIndices(lines, parentIndex) {
+  const source = Array.isArray(lines) ? lines : [];
+  const parent = Math.floor(numericOrDefault(parentIndex, Number.NaN));
+  if (!Number.isFinite(parent) || parent < 0 || parent >= source.length) {
+    return Object.freeze([]);
+  }
+  const block = findCurrentBulletChildBlock(source, parent);
+  const indices = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(source, index) !== parent) continue;
+    const parsed = parseDependencyLine(String(source[index] || ""), {
+      isDirectChildOfTask: true,
+    });
+    if (parsed.verdict === "empty") indices.push(index);
+  }
+  return Object.freeze(indices);
+}
+
 // Apply line substitutions and structural inserts/deletes for the forward
 // Depends-On planner. Kept beside the BLOCKS seam so 080 stays below the
 // source fragment's 1000-line limit.

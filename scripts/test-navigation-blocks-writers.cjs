@@ -263,3 +263,283 @@ test("duplicate BLOCKS children merge their known dependents and preserve CRLF",
   assert.equal(plan.changed, true);
   assert.equal(plan.nextContent, "- [ ] #task Owner ^owner\r\n\t- 🧱 **BLOCKS:** [[#^a]] • [[#^b]]\r\n");
 });
+
+function resolveSameNote(note) {
+  return note ? `${note}.md` : "Tasks.md";
+}
+
+test("BW9 counted same-note add-to-all lists every dependent on one sorted BLOCKS line (570/270)", () => {
+  const input = [
+    "- [ ] #task One ^one",
+    "- [ ] #task Two ^two",
+    "- [ ] #task Three ^three",
+    "- [ ] #task Target [id:: Tasks__target] ^target",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 0, 2);
+  const dependencyTask = helpers.getOpenLocalTasks(input).find((task) => task.line === 3);
+  const added = helpers.planCountedLocalTaskDependency(input, session, dependencyTask, "Tasks.md", {
+    blocksLinesEnabled: true,
+  });
+  assert.equal(added.valid, true);
+  assert.equal(added.operation, "add");
+  // BK21: Unicode code-point order (`three` before `two`).
+  assert.match(added.content, /🧱 \*\*BLOCKS:\*\* \[\[#\^one\]\] • \[\[#\^three\]\] • \[\[#\^two\]\]/);
+  assert.equal(added.blocksFollowUps.length, 0);
+});
+
+test("counted remove-from-all drops every dependent from the same-note BLOCKS line (420)", () => {
+  const input = [
+    "- [?] #task One [dependsOn:: Tasks__target] ^one",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [?] #task Two [dependsOn:: Tasks__target] ^two",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Target [id:: Tasks__target] ^target",
+    "  - 🧱 **BLOCKS:** [[#^one]] • [[#^two]]",
+  ].join("\n");
+  let working = input;
+  for (const parentLine of [2, 0]) {
+    const plan = helpers.planDependencyEdit({
+      content: working,
+      parentPath: "Tasks.md",
+      parentLine,
+      remove: [{ path: "Tasks.md", blockId: "target" }],
+      files: { "Tasks.md": working },
+      vaultFiles: ["Tasks.md"],
+      resolveLinkpath: resolveSameNote,
+      blocksLinesEnabled: true,
+    });
+    assert.equal(plan.ok, true);
+    working = plan.nextContent;
+  }
+  assert.doesNotMatch(working, /🧱 \*\*BLOCKS:/);
+  assert.doesNotMatch(working, /DEPENDS ON/);
+});
+
+test("vault counted add composes cross-note follow-ups for every source (420)", () => {
+  const source = [
+    "- [ ] #task One ^one",
+    "- [ ] #task Two ^two",
+  ].join("\n");
+  const target = "- [ ] #task Prerequisite [id:: prerequisite] ^target";
+  const followUps = [];
+  let working = source;
+  for (const parentLine of [1, 0]) {
+    const plan = helpers.planDependencyEdit({
+      content: working,
+      parentPath: "Tasks.md",
+      parentLine,
+      add: [{ path: "Other.md", blockId: "target" }],
+      files: { "Tasks.md": working, "Other.md": target },
+      vaultFiles: ["Tasks.md", "Other.md"],
+      resolveLinkpath: (note) => (note === "Other" ? "Other.md" : "Tasks.md"),
+      blocksLinesEnabled: true,
+    });
+    assert.equal(plan.ok, true);
+    followUps.push(...plan.blocksFollowUps);
+    working = plan.nextContent;
+  }
+  assert.equal(followUps.length, 2);
+  assert.deepEqual(followUps.map((entry) => entry.path), ["Other.md", "Other.md"]);
+});
+
+test("marked batch add writes every same-note target onto BLOCKS in one plan (430)", () => {
+  const content = [
+    "- [ ] #task Dependent ^dependent",
+    "- [ ] #task Alpha [id:: alpha] ^alpha",
+    "- [ ] #task Beta [id:: beta] ^beta",
+  ].join("\n");
+  const plan = helpers.planDependencyEdit({
+    content,
+    parentPath: "Tasks.md",
+    parentLine: 0,
+    add: [
+      { path: "Tasks.md", blockId: "alpha" },
+      { path: "Tasks.md", blockId: "beta" },
+    ],
+    files: { "Tasks.md": content },
+    vaultFiles: ["Tasks.md"],
+    resolveLinkpath: resolveSameNote,
+    blocksLinesEnabled: true,
+  });
+  assert.equal(plan.ok, true);
+  assert.match(plan.nextContent, /🧱 \*\*BLOCKS:\*\* \[\[#\^dependent\]\]/);
+  assert.equal((plan.nextContent.match(/🧱 \*\*BLOCKS:/g) || []).length, 2);
+});
+
+test("counted Ctrl+D clears same-note BLOCKS when the last dependents leave (600)", async () => {
+  const lines = [
+    "- [?] #task P [dependsOn:: Here__a] ^p",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [?] #task Q [dependsOn:: Here__a] ^q",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] #task A [id:: Here__a] ^a",
+    "  - 🧱 **BLOCKS:** [[#^p]] • [[#^q]]",
+  ];
+  const content = lines.join("\n");
+  const editor = new TestEditor(content);
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
+  const file = { path: "Here.md", extension: "md" };
+  const h = makePlugin({ "Here.md": content });
+  h.plugin.getActiveMarkdownView = () => ({ editor, file });
+  h.plugin.app.workspace.getActiveFile = () => file;
+  h.openEditors.set("Here.md", editor);
+  const result = await h.plugin.deleteCountedDependencyLinesAndFields(
+    editor,
+    { line: 0, ch: 2 },
+    file.path,
+    session,
+  );
+  assert.equal(result.deleted, true);
+  assert.doesNotMatch(editor.getValue(), /DEPENDS ON|dependsOn|🧱 \*\*BLOCKS:/);
+});
+
+test("BW10 hand-edit add mirrors the new target onto BLOCKS when the cursor leaves", async () => {
+  const oldContent = [
+    "- [ ] #task Dependent ^dependent",
+    "- [ ] #task Prerequisite [id:: prerequisite] ^target",
+  ].join("\n");
+  const newContent = [
+    "- [ ] #task Dependent ^dependent",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Prerequisite [id:: prerequisite] ^target",
+  ].join("\n");
+  const h = makePlugin({ "Tasks.md": newContent });
+  const editor = new TestEditor(newContent);
+  h.openEditors.set("Tasks.md", editor);
+  const outcome = await h.plugin.mirrorDependencyHandEdit(
+    editor,
+    "Tasks.md",
+    oldContent,
+    1,
+    "",
+    { baselineLine: 0 },
+  );
+  assert.equal(outcome.mirrored, true);
+  assert.match(editor.getValue(), /🧱 \*\*BLOCKS:\*\* \[\[#\^dependent\]\]/);
+  assert.match(editor.getValue(), /\[dependsOn:: prerequisite\]/);
+});
+
+test("BW10 hand-edit remove and BW11 undo re-fire drop the dependent from BLOCKS", async () => {
+  const oldContent = [
+    "- [?] #task Dependent [dependsOn:: prerequisite] ^dependent",
+    "  - ⛓️ **DEPENDS ON:** [[Other#^target]]",
+  ].join("\n");
+  const newContent = "- [?] #task Dependent [dependsOn:: prerequisite] ^dependent";
+  const target = [
+    "- [ ] #task Prerequisite [id:: prerequisite] ^target",
+    "  - 🧱 **BLOCKS:** [[Tasks#^dependent]]",
+  ].join("\n");
+  const h = makePlugin({ "Tasks.md": newContent, "Other.md": target });
+  const editor = new TestEditor(newContent);
+  h.openEditors.set("Tasks.md", editor);
+  const outcome = await h.plugin.mirrorDependencyHandEdit(
+    editor,
+    "Tasks.md",
+    oldContent,
+    0,
+    "  - ⛓️ **DEPENDS ON:** [[Other#^target]]",
+    { baselineLine: 1 },
+  );
+  assert.equal(outcome.mirrored, true);
+  assert.doesNotMatch(h.store.get("Other.md"), /🧱 \*\*BLOCKS:/);
+  assert.doesNotMatch(editor.getValue(), /dependsOn|DEPENDS ON/);
+});
+
+test("hand-edit clear path routes through the BLOCKS seam (600)", () => {
+  const oldContent = [
+    "- [?] #task Dependent [dependsOn:: prerequisite] ^dependent",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Prerequisite [id:: prerequisite] ^target",
+    "  - 🧱 **BLOCKS:** [[#^dependent]]",
+  ].join("\n");
+  const newContent = [
+    "- [?] #task Dependent [dependsOn:: prerequisite] ^dependent",
+    "- [ ] #task Prerequisite [id:: prerequisite] ^target",
+    "  - 🧱 **BLOCKS:** [[#^dependent]]",
+  ].join("\n");
+  const plan = helpers.planDependencyHandEditMirror(oldContent, newContent, 0, "  - ⛓️ **DEPENDS ON:** [[#^target]]", 1);
+  assert.ok(plan);
+  assert.ok(plan.kind === "clear-field" || plan.kind === "clear-empty" || plan.kind === "touch");
+  const existing = helpers.collectBlocksExistingRefs(oldContent, 0, "Tasks.md", resolveSameNote);
+  assert.equal(existing.length, 1);
+  assert.equal(existing[0].blockId, "target");
+  const edit = helpers.planDependencyEdit({
+    content: newContent,
+    parentPath: "Tasks.md",
+    parentLine: 0,
+    add: [],
+    remove: [],
+    files: { "Tasks.md": newContent },
+    vaultFiles: ["Tasks.md"],
+    resolveLinkpath: resolveSameNote,
+    blocksLinesEnabled: true,
+    blocksExisting: existing,
+    mirrorTouch: true,
+  });
+  assert.equal(edit.ok, true);
+  assert.doesNotMatch(edit.nextContent, /🧱 \*\*BLOCKS:/);
+});
+
+test("BW18 conversion never copies a BLOCKS line as a user child", () => {
+  const parent = "- [?] #task Convert me ^t";
+  const forward = helpers.splitProjectLifecycleChildren(parent, [
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - 🧱 **BLOCKS:** [[#^d]]",
+    "  - 🧩 **Sub-projects:** [[#^s]]",
+    "  - keep me",
+  ]);
+  assert.equal(forward.valid, true);
+  assert.equal(forward.dependencyLine, "  - ⛓️ **DEPENDS ON:** [[#^a]]");
+  assert.deepEqual(forward.otherLines, ["  - keep me"]);
+  const reverse = helpers.splitProjectLifecycleChildren(parent, [
+    "  - 🧱 **BLOCKS:** [[#^d]]",
+    "  - user child",
+  ]);
+  assert.equal(reverse.valid, true);
+  assert.equal(reverse.dependencyLine, null);
+  assert.deepEqual(reverse.otherLines, ["  - user child"]);
+});
+
+test("BW19 Ctrl+Shift+M moves the owner's BLOCKS line with rebased links and never duplicates it", () => {
+  const source = [
+    "- [ ] #task Owner ^owner",
+    "  - 🧱 **BLOCKS:** [[#^d]]",
+    "- [ ] #task Dependent ^d",
+  ].join("\n");
+  const destination = [
+    "---",
+    'type: "[[project]]"',
+    "status: waiting",
+    "---",
+    "## Tasks",
+    "",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(source, 0, 0);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "Dest.md",
+    sourceContent: source,
+    destinationContent: destination,
+    targets: discovery.targets,
+    parseYaml: (text) => {
+      const result = {};
+      for (const line of String(text || "").split(/\r?\n/)) {
+        const match = /^([^:]+):(.*)$/.exec(line);
+        if (!match) continue;
+        let value = match[2].trim();
+        if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+          value = value.slice(1, -1);
+        }
+        result[match[1].trim()] = value;
+      }
+      return result;
+    },
+  });
+  assert.equal(plan.valid, true, plan.error);
+  const nextDestination = plan.changes.get("Dest.md").after;
+  const nextSource = plan.changes.get("Source.md").after;
+  assert.equal((nextDestination.match(/🧱 \*\*BLOCKS:/g) || []).length, 1);
+  assert.match(nextDestination, /🧱 \*\*BLOCKS:\*\* \[\[Source#\^d\]\]/);
+  assert.doesNotMatch(nextSource, /🧱 \*\*BLOCKS:/);
+  assert.match(nextSource, /#task Dependent \^d/);
+});

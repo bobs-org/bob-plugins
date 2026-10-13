@@ -149,6 +149,9 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         return false;
       }
     }
+    if (typeof this.applyBlocksFollowUps === "function") {
+      void this.applyBlocksFollowUps(plan.blocksFollowUps || []);
+    }
     // §13.19: the Task Link variant bypasses the shared transaction (this
     // method stays synchronous for its boolean callers), so the subtree
     // pass follows in a guarded continuation after the commit above. N's
@@ -352,6 +355,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     let cleared = 0;
     let unchanged = 0;
     const preparations = [];
+    const blocksFollowUps = [];
     for (const target of ordered) {
       if (!Number.isInteger(target.line)) {
         continue;
@@ -397,6 +401,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         files,
         vaultFiles,
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         recovery: {
           registry,
           today,
@@ -415,6 +420,9 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       }
       for (const preparation of plan.preparations || []) {
         preparations.push(preparation);
+      }
+      if (Array.isArray(plan.blocksFollowUps)) {
+        blocksFollowUps.push(...plan.blocksFollowUps);
       }
       if (!plan.changed) {
         unchanged += 1;
@@ -456,12 +464,13 @@ class BobNavigationHotkeysDependencyMirrorMixin {
           Math.max(cursor.ch, 0),
           String(finalLines[anchor] || "").length,
         ),
-      })
+      }, BLOCKS_MACHINE_WRITE_ANNOTATION)
     ) {
       new Notice("Could not delete task dependencies; no tasks were updated");
       return null;
     }
-    new Notice(
+    await this.finishBlocksFollowUps(
+      blocksFollowUps,
       `⛓ Cleared dependencies from ${cleared} ${cleared === 1 ? "task" : "tasks"}` +
         (unchanged > 0 ? ` (${unchanged} unchanged)` : ""),
     );
@@ -500,11 +509,24 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       new Notice(BLOCKS_GENERATED_LINE_NOTICE);
       return Object.freeze({ mirrored: false, reason: "blocks-only" });
     }
-    if (plan.kind === "touch") {
-      // A touch projects the hand-edited line into the field with the same
-      // status effects as the stage (block on a hand-added open
-      // prerequisite, recover when none remains), except commitment
-      // transfer, and never stamps freshness or writes cross-note `[id::]`.
+    // BW10/BW11: diff the burst baseline's Depends-On targets against the
+    // final line and feed that delta to the BLOCKS seam. Same-note edits
+    // join the mirror transaction; cross-note edits are follow-ups. Undo
+    // re-fires this path because the reverted document is a new burst.
+    const oldText = oldContent === undefined ? content : oldContent;
+    const oldLines = String(oldText).split(/\r?\n/);
+    const baselineAt = Number.isInteger(opts.baselineLine) ? opts.baselineLine : editedLine;
+    const baselineOwning = findOwningTaskLine(
+      oldLines,
+      Math.max(0, Math.min(baselineAt, Math.max(oldLines.length - 1, 0))),
+    );
+    const blocksExisting = collectBlocksExistingRefs(
+      oldText,
+      baselineOwning,
+      parentPath,
+      this.dependencyLinkpathResolver(),
+    );
+    if (plan.kind === "touch" || plan.kind === "clear-empty" || plan.kind === "clear-field") {
       const outcome = await this.applyDependencyEdit({
         editor,
         parentPath,
@@ -512,6 +534,10 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         add: [],
         remove: [],
         mirrorTouch: true,
+        blocksExisting,
+        today: opts.today,
+        registry: opts.registry,
+        vaultContents: opts.vaultContents,
       });
       if (!outcome.ok) {
         return Object.freeze({ mirrored: false, reason: outcome.reason });

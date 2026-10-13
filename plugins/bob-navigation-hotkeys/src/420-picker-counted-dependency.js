@@ -273,6 +273,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let working = originalContent;
     let removed = 0;
     const preparations = new Map();
+    const blocksFollowUps = [];
     for (const target of ordered) {
       if (!Number.isInteger(target.line)) {
         new Notice(
@@ -295,6 +296,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         files: planFiles,
         vaultFiles,
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         ...(sourceIsPrj ? { projectLaneStatuses: sameNoteSubtreeLanes } : {}),
         recovery: {
           registry,
@@ -322,6 +324,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         if (!preparations.has(key)) {
           preparations.set(key, preparation);
         }
+      }
+      if (Array.isArray(plan.blocksFollowUps)) {
+        blocksFollowUps.push(...plan.blocksFollowUps);
       }
       if (plan.changed) {
         removed += 1;
@@ -355,7 +360,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (String(this.editor.getValue() || "") !== originalContent) {
       return this.refuseDependencyStale();
     }
-    if (!applyEditorContentTransaction(this.editor, originalContent, working)) {
+    if (!applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
@@ -381,7 +386,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const sameNoteSuffix = sameNoteSubtree
       ? subtreePassNoticeSuffix(sameNoteSubtree)
       : "";
-    new Notice(
+    await this.plugin.finishBlocksFollowUps(
+      blocksFollowUps,
       `⛓ Removed from ${removed} task${removed === 1 ? "" : "s"}${
         sameNoteSuffix ? ` ${sameNoteSuffix}` : ""
       }`,
@@ -495,6 +501,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let working = originalContent;
     let changedSources = 0;
     const preparations = new Map();
+    const blocksFollowUps = [];
     const vaultFiles =
       this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
         ? this.plugin.readDependencyVaultFileList()
@@ -560,6 +567,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         files: planFiles,
         vaultFiles,
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         ...(vaultSourceIsPrj ? { projectLaneStatuses: vaultCountedSubtreeLanes } : {}),
         recovery: {
           registry: countedRegistry,
@@ -589,6 +597,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         }
       }
       let nextWorking = plan.nextContent;
+      if (Array.isArray(plan.blocksFollowUps)) {
+        blocksFollowUps.push(...plan.blocksFollowUps);
+      }
       if (plan.changed) {
         changedSources += 1;
       }
@@ -619,7 +630,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       return this.refuseDependencyStale();
     }
     if (
-      !applyEditorContentTransaction(this.editor, originalContent, working)
+      !applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)
     ) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
@@ -647,7 +658,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const vaultCountedSuffix = vaultCountedSubtree
       ? subtreePassNoticeSuffix(vaultCountedSubtree)
       : "";
-    new Notice(
+    await this.plugin.finishBlocksFollowUps(
+      blocksFollowUps,
       `${
         snapshot.remove
           ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`

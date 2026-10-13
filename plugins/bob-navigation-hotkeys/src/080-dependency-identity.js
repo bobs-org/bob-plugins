@@ -518,6 +518,11 @@ function planDependencyEdit(args = {}) {
       structural.deleteLines.push(structural.replaceLine);
       structural.replaceLine = null;
     }
+    for (const emptyIndex of collectEmptyDependencyLineIndices(lines, parentIndex)) {
+      if (!structural.deleteLines.includes(emptyIndex)) {
+        structural.deleteLines.push(emptyIndex);
+      }
+    }
   } else if (structural.replaceLine === null) {
     structural.insertAt = getDependencyInsertLine(lines, parentIndex);
   }
@@ -656,12 +661,17 @@ function planDependencyEdit(args = {}) {
     lineEnding,
   );
   const dependencyNextContent = next.lines.join(next.lineEnding);
+  const blocksExisting = Array.isArray(args.blocksExisting)
+    ? args.blocksExisting
+        .map(normalizeDependencyTargetRef)
+        .filter((ref) => ref.path && ref.blockId)
+    : existing;
   const blocksPlan = planBlocksForDependencyEdit({
     content,
     nextContent: dependencyNextContent,
     parentPath,
     parentLine: parentIndex,
-    existing,
+    existing: blocksExisting,
     resolved,
     files: filesMap,
     preparations,

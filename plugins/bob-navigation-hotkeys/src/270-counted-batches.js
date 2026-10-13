@@ -184,6 +184,7 @@ function planCountedLocalTaskDependency(
   });
   let navigationChangedCount = 0;
   const sourceResults = [];
+  const blocksFollowUps = [];
   const orderedTargets = session.targets
     .slice()
     .sort((first, second) => second.line - first.line);
@@ -208,6 +209,7 @@ function planCountedLocalTaskDependency(
       files: { [normalizeVaultRelativePath(filePath)]: nextContent },
       vaultFiles: options.vaultFiles,
       resolveLinkpath: options.resolveLinkpath,
+      blocksLinesEnabled: options.blocksLinesEnabled === true,
       ...(parentIsPrj && subtreeLanes && subtreeLanes.length > 0
         ? { projectLaneStatuses: subtreeLanes }
         : {}),
@@ -248,6 +250,9 @@ function planCountedLocalTaskDependency(
     ) {
       navigationChangedCount += 1;
     }
+    if (Array.isArray(parentPlan.blocksFollowUps)) {
+      blocksFollowUps.push(...parentPlan.blocksFollowUps);
+    }
     sourceResults.push({
       target,
       dependencyChanged: parentChanged,
@@ -274,6 +279,7 @@ function planCountedLocalTaskDependency(
     targetCount: session.targets.length,
     navigationChangedCount,
     cursorLine: session.targets[0].line,
+    blocksFollowUps: Object.freeze(blocksFollowUps),
   });
 }
 

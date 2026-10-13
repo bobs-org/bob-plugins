@@ -636,6 +636,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       resolveLinkpath: this.plugin
         ? this.plugin.dependencyLinkpathResolver()
         : null,
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
       ...(batchSubtreePrep && batchSubtreePrep.lanes.length > 0
         ? { projectLaneStatuses: batchSubtreePrep.lanes }
         : {}),
@@ -721,7 +722,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
               undefined,
             )
           : batchCommitContent;
-      if (!applyEditorContentTransaction(this.editor, originalContent, nextContent)) {
+      if (!applyEditorContentTransaction(this.editor, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -783,7 +784,8 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       batchProjectNotice || batchPlan.notice,
       batchSubtree,
     );
-    new Notice(
+    await this.plugin.finishBlocksFollowUps(
+      batchPlan.blocksFollowUps,
       batchNotice + (skipped > 0 ? ` (${skipped} skipped)` : ""),
     );
     return true;

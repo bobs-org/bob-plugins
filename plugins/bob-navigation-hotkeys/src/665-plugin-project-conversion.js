@@ -264,6 +264,7 @@ class BobNavigationHotkeysProjectConversionMixin {
           normalizeVaultRelativePath(createdFile.path),
         ],
         resolveLinkpath: this.dependencyLinkpathResolver(),
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         // Design §5: the seed may already have flipped residents to `[?]`
         // (future inline date), so transfer reads their pre-seed lanes.
         projectLaneStatuses: [
@@ -303,6 +304,7 @@ class BobNavigationHotkeysProjectConversionMixin {
           return true;
         }
         projectContent = dependencyPlan.nextContent;
+        await this.finishBlocksFollowUps(dependencyPlan.blocksFollowUps);
       }
     }
 
@@ -701,6 +703,7 @@ class BobNavigationHotkeysProjectConversionMixin {
     }
 
     let parentContentToWrite = finalInsertion.content;
+    let conversionBlocksFollowUps = [];
     if (dependencyRefs.length > 0) {
       const files = new Map([[normalizeVaultRelativePath(parentFile.path), finalInsertion.content]]);
       for (const target of dependencyRefs) {
@@ -725,6 +728,7 @@ class BobNavigationHotkeysProjectConversionMixin {
         files,
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath: this.dependencyLinkpathResolver(),
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
       });
       if (!plan.ok) {
         new Notice(`Could not preserve the Depends-On line (${plan.reason}); nothing was converted`);
@@ -741,6 +745,7 @@ class BobNavigationHotkeysProjectConversionMixin {
         }
       }
       parentContentToWrite = plan.nextContent;
+      conversionBlocksFollowUps = plan.blocksFollowUps || [];
     }
 
     const classification = this.getProjectNoteBacklinkClassification(
@@ -891,6 +896,7 @@ class BobNavigationHotkeysProjectConversionMixin {
       new Notice("Parent note changed; nothing was converted");
       return false;
     }
+    await this.finishBlocksFollowUps(conversionBlocksFollowUps);
 
     // Post-write link rewrites report their failures instead of rolling the
     // parent back (§13.10): when any failed, the project note is kept for a

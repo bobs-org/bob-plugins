@@ -366,6 +366,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       }
       const add = Array.isArray(args.add) ? args.add : [];
       const remove = Array.isArray(args.remove) ? args.remove : [];
+      const blocksExisting = Array.isArray(args.blocksExisting) ? args.blocksExisting : null;
       const files = new Map();
       if (args.files instanceof Map) {
         for (const [filePath, fileContent] of args.files) {
@@ -389,7 +390,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       // never blocks every other add or remove.
       const resolveLinkpath = this.dependencyLinkpathResolver();
       const wanted = new Set([parentPath]);
-      for (const ref of [...add, ...remove]) {
+      for (const ref of [...add, ...remove, ...(blocksExisting || [])]) {
         const normalized = normalizeDependencyTargetRef(ref);
         if (normalized.path && normalized.blockId) {
           wanted.add(normalized.path);
@@ -426,10 +427,13 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         files.set(filePath, loaded);
       }
       const mirrorTouch = args.mirrorTouch === true;
-      const registry = await readTasksStatusRegistry(this.app);
-      const vaultContents = needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch, add)
-        ? await this.readDependencyRecoveryVaultContents(parentPath, content)
-        : null;
+      const registry = args.registry || (await readTasksStatusRegistry(this.app));
+      const vaultContents =
+        args.vaultContents !== undefined
+          ? args.vaultContents
+          : needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch, add)
+            ? await this.readDependencyRecoveryVaultContents(parentPath, content)
+            : null;
       const scopeFlags = navNoteScopeFlags(parentPath);
       // §13.19: read the sub-project descendants before planning, so
       // commitment transfer sees the lanes the pass is about to block.
@@ -448,6 +452,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath,
         blocksLinesEnabled: loadBlocksLinesEnabled(),
+        ...(blocksExisting ? { blocksExisting } : {}),
         mirrorTouch,
         ...(subtreePrep && subtreePrep.lanes.length > 0
           ? { projectLaneStatuses: subtreePrep.lanes }
@@ -468,6 +473,29 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({ ok: false, reason: plan.reason });
       }
       if (!plan.changed) {
+        // The dependent's bytes can already match (a hand-typed canonical
+        // line) while cross-note BLOCKS follow-ups still have work (BW10).
+        if ((plan.blocksFollowUps || []).length > 0) {
+          let blocks = Object.freeze({ ok: true, failed: Object.freeze([]) });
+          try {
+            blocks = await this.applyBlocksFollowUps(plan.blocksFollowUps);
+          } catch (_error) {
+            blocks = Object.freeze({
+              ok: false,
+              failed: Object.freeze((plan.blocksFollowUps || []).map((entry) => entry.path)),
+            });
+          }
+          const failed = [
+            ...(plan.blocksFailedPaths || []),
+            ...((blocks && blocks.failed) || []),
+          ];
+          return Object.freeze({
+            ok: true,
+            reason: null,
+            notice: withBlocksFollowUpNotice(plan.notice, failed),
+            blocks,
+          });
+        }
         return Object.freeze({ ok: true, reason: "unchanged", notice: plan.notice });
       }
       // §13.19: plan the subtree pass before the commit, off the predicted

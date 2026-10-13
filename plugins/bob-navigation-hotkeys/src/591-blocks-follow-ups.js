@@ -135,4 +135,20 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     }
     return Object.freeze({ ok: failed.size === 0, failed: Object.freeze([...failed]) });
   }
+
+  // Remaining direct-planner paths commit their own transaction, then call
+  // this once so every cross-note BLOCKS follow-up shares one notice suffix.
+  async finishBlocksFollowUps(followUps, notice) {
+    let failed = [];
+    try {
+      const result = await this.applyBlocksFollowUps(followUps || []);
+      failed = (result && result.failed) || [];
+    } catch (_error) {
+      failed = (Array.isArray(followUps) ? followUps : [])
+        .map((entry) => entry && entry.path)
+        .filter(Boolean);
+    }
+    if (notice) new Notice(withBlocksFollowUpNotice(notice, failed));
+    return Object.freeze({ failed: Object.freeze(failed) });
+  }
 }

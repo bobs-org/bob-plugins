@@ -500,6 +500,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       freshDateText: this.getFreshnessDateText(),
       vaultFiles: this.readDependencyVaultFileList(),
       resolveLinkpath: this.dependencyLinkpathResolver(),
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
     };
     // The toggle direction comes from the pure planner: adds never recover
     // (contract), so the vault snapshot is only read when the toggle will
@@ -588,6 +589,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          BLOCKS_MACHINE_WRITE_ANNOTATION,
         )
       ) {
         throw new Error("Editor cannot apply a counted dependency transaction");
@@ -631,7 +633,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const countedSubtreeSuffix = countedSubtree
       ? subtreePassNoticeSuffix(countedSubtree)
       : "";
-    new Notice(
+    await this.finishBlocksFollowUps(
+      plan.blocksFollowUps,
       `${verb} ${plan.dependencyValue} ${
         plan.operation === "remove" ? "from" : "to"
       } ${formatCountLabel(plan.targetCount, "task")}${identity}${

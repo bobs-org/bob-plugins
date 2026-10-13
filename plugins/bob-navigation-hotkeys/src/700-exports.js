@@ -570,6 +570,7 @@ module.exports.helpers = {
   blocksDesiredAfterDelta,
   mintDependentBlockId,
   planBlocksForDependencyEdit,
+  collectBlocksExistingRefs,
   withBlocksFollowUpNotice,
   handEditTouchesBlocksLine,
   isProjectSubprojectsLine,

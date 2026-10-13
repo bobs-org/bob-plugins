@@ -6663,6 +6663,11 @@ function planDependencyEdit(args = {}) {
       structural.deleteLines.push(structural.replaceLine);
       structural.replaceLine = null;
     }
+    for (const emptyIndex of collectEmptyDependencyLineIndices(lines, parentIndex)) {
+      if (!structural.deleteLines.includes(emptyIndex)) {
+        structural.deleteLines.push(emptyIndex);
+      }
+    }
   } else if (structural.replaceLine === null) {
     structural.insertAt = getDependencyInsertLine(lines, parentIndex);
   }
@@ -6801,12 +6806,17 @@ function planDependencyEdit(args = {}) {
     lineEnding,
   );
   const dependencyNextContent = next.lines.join(next.lineEnding);
+  const blocksExisting = Array.isArray(args.blocksExisting)
+    ? args.blocksExisting
+        .map(normalizeDependencyTargetRef)
+        .filter((ref) => ref.path && ref.blockId)
+    : existing;
   const blocksPlan = planBlocksForDependencyEdit({
     content,
     nextContent: dependencyNextContent,
     parentPath,
     parentLine: parentIndex,
-    existing,
+    existing: blocksExisting,
     resolved,
     files: filesMap,
     preparations,
@@ -7774,6 +7784,44 @@ function planBlocksForDependencyEdit(args = {}) {
     blocksFollowUps: Object.freeze(followUps),
     failedPaths: Object.freeze([...failedPaths]),
   });
+}
+
+// Burst-baseline Depends-On targets for the hand-edit mirror (BW10/BW11).
+// Parsed with reader tolerance and resolved to identities so the BLOCKS
+// seam can diff them against the final line without treating the user's
+// already-typed links as a planner add/remove.
+function collectBlocksExistingRefs(content, parentLine, parentPath, resolveLinkpath) {
+  const collection = collectDependencyNavigationBullets(String(content || ""), parentLine);
+  if (!collection || collection.reason) return Object.freeze([]);
+  return Object.freeze(
+    collection.targets.map((target) =>
+      Object.freeze({
+        path: dependencyPathForLinkNote(target.note, parentPath, resolveLinkpath),
+        blockId: target.blockId,
+        note: String(target.note || "").trim(),
+      }),
+    ),
+  );
+}
+
+// Empty `DEPENDS ON:` children are not in the navigation collection (R9
+// clear-empty). When the planned list is empty they still have to go.
+function collectEmptyDependencyLineIndices(lines, parentIndex) {
+  const source = Array.isArray(lines) ? lines : [];
+  const parent = Math.floor(numericOrDefault(parentIndex, Number.NaN));
+  if (!Number.isFinite(parent) || parent < 0 || parent >= source.length) {
+    return Object.freeze([]);
+  }
+  const block = findCurrentBulletChildBlock(source, parent);
+  const indices = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(source, index) !== parent) continue;
+    const parsed = parseDependencyLine(String(source[index] || ""), {
+      isDirectChildOfTask: true,
+    });
+    if (parsed.verdict === "empty") indices.push(index);
+  }
+  return Object.freeze(indices);
 }
 
 // Apply line substitutions and structural inserts/deletes for the forward
@@ -29710,6 +29758,7 @@ function planCountedLocalTaskDependency(
   });
   let navigationChangedCount = 0;
   const sourceResults = [];
+  const blocksFollowUps = [];
   const orderedTargets = session.targets
     .slice()
     .sort((first, second) => second.line - first.line);
@@ -29734,6 +29783,7 @@ function planCountedLocalTaskDependency(
       files: { [normalizeVaultRelativePath(filePath)]: nextContent },
       vaultFiles: options.vaultFiles,
       resolveLinkpath: options.resolveLinkpath,
+      blocksLinesEnabled: options.blocksLinesEnabled === true,
       ...(parentIsPrj && subtreeLanes && subtreeLanes.length > 0
         ? { projectLaneStatuses: subtreeLanes }
         : {}),
@@ -29774,6 +29824,9 @@ function planCountedLocalTaskDependency(
     ) {
       navigationChangedCount += 1;
     }
+    if (Array.isArray(parentPlan.blocksFollowUps)) {
+      blocksFollowUps.push(...parentPlan.blocksFollowUps);
+    }
     sourceResults.push({
       target,
       dependencyChanged: parentChanged,
@@ -29800,6 +29853,7 @@ function planCountedLocalTaskDependency(
     targetCount: session.targets.length,
     navigationChangedCount,
     cursorLine: session.targets[0].line,
+    blocksFollowUps: Object.freeze(blocksFollowUps),
   });
 }
 
@@ -40272,6 +40326,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let working = originalContent;
     let removed = 0;
     const preparations = new Map();
+    const blocksFollowUps = [];
     for (const target of ordered) {
       if (!Number.isInteger(target.line)) {
         new Notice(
@@ -40294,6 +40349,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         files: planFiles,
         vaultFiles,
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         ...(sourceIsPrj ? { projectLaneStatuses: sameNoteSubtreeLanes } : {}),
         recovery: {
           registry,
@@ -40321,6 +40377,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         if (!preparations.has(key)) {
           preparations.set(key, preparation);
         }
+      }
+      if (Array.isArray(plan.blocksFollowUps)) {
+        blocksFollowUps.push(...plan.blocksFollowUps);
       }
       if (plan.changed) {
         removed += 1;
@@ -40354,7 +40413,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (String(this.editor.getValue() || "") !== originalContent) {
       return this.refuseDependencyStale();
     }
-    if (!applyEditorContentTransaction(this.editor, originalContent, working)) {
+    if (!applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
@@ -40380,7 +40439,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const sameNoteSuffix = sameNoteSubtree
       ? subtreePassNoticeSuffix(sameNoteSubtree)
       : "";
-    new Notice(
+    await this.plugin.finishBlocksFollowUps(
+      blocksFollowUps,
       `⛓ Removed from ${removed} task${removed === 1 ? "" : "s"}${
         sameNoteSuffix ? ` ${sameNoteSuffix}` : ""
       }`,
@@ -40494,6 +40554,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let working = originalContent;
     let changedSources = 0;
     const preparations = new Map();
+    const blocksFollowUps = [];
     const vaultFiles =
       this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
         ? this.plugin.readDependencyVaultFileList()
@@ -40559,6 +40620,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         files: planFiles,
         vaultFiles,
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         ...(vaultSourceIsPrj ? { projectLaneStatuses: vaultCountedSubtreeLanes } : {}),
         recovery: {
           registry: countedRegistry,
@@ -40588,6 +40650,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         }
       }
       let nextWorking = plan.nextContent;
+      if (Array.isArray(plan.blocksFollowUps)) {
+        blocksFollowUps.push(...plan.blocksFollowUps);
+      }
       if (plan.changed) {
         changedSources += 1;
       }
@@ -40618,7 +40683,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       return this.refuseDependencyStale();
     }
     if (
-      !applyEditorContentTransaction(this.editor, originalContent, working)
+      !applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)
     ) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
@@ -40646,7 +40711,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const vaultCountedSuffix = vaultCountedSubtree
       ? subtreePassNoticeSuffix(vaultCountedSubtree)
       : "";
-    new Notice(
+    await this.plugin.finishBlocksFollowUps(
+      blocksFollowUps,
       `${
         snapshot.remove
           ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
@@ -41413,6 +41479,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       resolveLinkpath: this.plugin
         ? this.plugin.dependencyLinkpathResolver()
         : null,
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
       ...(batchSubtreePrep && batchSubtreePrep.lanes.length > 0
         ? { projectLaneStatuses: batchSubtreePrep.lanes }
         : {}),
@@ -41498,7 +41565,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
               undefined,
             )
           : batchCommitContent;
-      if (!applyEditorContentTransaction(this.editor, originalContent, nextContent)) {
+      if (!applyEditorContentTransaction(this.editor, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -41560,7 +41627,8 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       batchProjectNotice || batchPlan.notice,
       batchSubtree,
     );
-    new Notice(
+    await this.plugin.finishBlocksFollowUps(
+      batchPlan.blocksFollowUps,
       batchNotice + (skipped > 0 ? ` (${skipped} skipped)` : ""),
     );
     return true;
@@ -55761,6 +55829,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       freshDateText: this.getFreshnessDateText(),
       vaultFiles: this.readDependencyVaultFileList(),
       resolveLinkpath: this.dependencyLinkpathResolver(),
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
     };
     // The toggle direction comes from the pure planner: adds never recover
     // (contract), so the vault snapshot is only read when the toggle will
@@ -55849,6 +55918,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
             line: plan.cursorLine,
             ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
           },
+          BLOCKS_MACHINE_WRITE_ANNOTATION,
         )
       ) {
         throw new Error("Editor cannot apply a counted dependency transaction");
@@ -55892,7 +55962,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     const countedSubtreeSuffix = countedSubtree
       ? subtreePassNoticeSuffix(countedSubtree)
       : "";
-    new Notice(
+    await this.finishBlocksFollowUps(
+      plan.blocksFollowUps,
       `${verb} ${plan.dependencyValue} ${
         plan.operation === "remove" ? "from" : "to"
       } ${formatCountLabel(plan.targetCount, "task")}${identity}${
@@ -56624,6 +56695,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       }
       const add = Array.isArray(args.add) ? args.add : [];
       const remove = Array.isArray(args.remove) ? args.remove : [];
+      const blocksExisting = Array.isArray(args.blocksExisting) ? args.blocksExisting : null;
       const files = new Map();
       if (args.files instanceof Map) {
         for (const [filePath, fileContent] of args.files) {
@@ -56647,7 +56719,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       // never blocks every other add or remove.
       const resolveLinkpath = this.dependencyLinkpathResolver();
       const wanted = new Set([parentPath]);
-      for (const ref of [...add, ...remove]) {
+      for (const ref of [...add, ...remove, ...(blocksExisting || [])]) {
         const normalized = normalizeDependencyTargetRef(ref);
         if (normalized.path && normalized.blockId) {
           wanted.add(normalized.path);
@@ -56684,10 +56756,13 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         files.set(filePath, loaded);
       }
       const mirrorTouch = args.mirrorTouch === true;
-      const registry = await readTasksStatusRegistry(this.app);
-      const vaultContents = needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch, add)
-        ? await this.readDependencyRecoveryVaultContents(parentPath, content)
-        : null;
+      const registry = args.registry || (await readTasksStatusRegistry(this.app));
+      const vaultContents =
+        args.vaultContents !== undefined
+          ? args.vaultContents
+          : needsDependencyRecoverySnapshot(content, parentLine, remove, mirrorTouch, add)
+            ? await this.readDependencyRecoveryVaultContents(parentPath, content)
+            : null;
       const scopeFlags = navNoteScopeFlags(parentPath);
       // §13.19: read the sub-project descendants before planning, so
       // commitment transfer sees the lanes the pass is about to block.
@@ -56706,6 +56781,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath,
         blocksLinesEnabled: loadBlocksLinesEnabled(),
+        ...(blocksExisting ? { blocksExisting } : {}),
         mirrorTouch,
         ...(subtreePrep && subtreePrep.lanes.length > 0
           ? { projectLaneStatuses: subtreePrep.lanes }
@@ -56726,6 +56802,29 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         return Object.freeze({ ok: false, reason: plan.reason });
       }
       if (!plan.changed) {
+        // The dependent's bytes can already match (a hand-typed canonical
+        // line) while cross-note BLOCKS follow-ups still have work (BW10).
+        if ((plan.blocksFollowUps || []).length > 0) {
+          let blocks = Object.freeze({ ok: true, failed: Object.freeze([]) });
+          try {
+            blocks = await this.applyBlocksFollowUps(plan.blocksFollowUps);
+          } catch (_error) {
+            blocks = Object.freeze({
+              ok: false,
+              failed: Object.freeze((plan.blocksFollowUps || []).map((entry) => entry.path)),
+            });
+          }
+          const failed = [
+            ...(plan.blocksFailedPaths || []),
+            ...((blocks && blocks.failed) || []),
+          ];
+          return Object.freeze({
+            ok: true,
+            reason: null,
+            notice: withBlocksFollowUpNotice(plan.notice, failed),
+            blocks,
+          });
+        }
         return Object.freeze({ ok: true, reason: "unchanged", notice: plan.notice });
       }
       // §13.19: plan the subtree pass before the commit, off the predicted
@@ -58034,6 +58133,22 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     }
     return Object.freeze({ ok: failed.size === 0, failed: Object.freeze([...failed]) });
   }
+
+  // Remaining direct-planner paths commit their own transaction, then call
+  // this once so every cross-note BLOCKS follow-up shares one notice suffix.
+  async finishBlocksFollowUps(followUps, notice) {
+    let failed = [];
+    try {
+      const result = await this.applyBlocksFollowUps(followUps || []);
+      failed = (result && result.failed) || [];
+    } catch (_error) {
+      failed = (Array.isArray(followUps) ? followUps : [])
+        .map((entry) => entry && entry.path)
+        .filter(Boolean);
+    }
+    if (notice) new Notice(withBlocksFollowUpNotice(notice, failed));
+    return Object.freeze({ failed: Object.freeze(failed) });
+  }
 }
 // ---- src/600-plugin-dependency-mirror.js ----
 class BobNavigationHotkeysDependencyMirrorMixin {
@@ -58186,6 +58301,9 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         new Notice("Could not update bullet property");
         return false;
       }
+    }
+    if (typeof this.applyBlocksFollowUps === "function") {
+      void this.applyBlocksFollowUps(plan.blocksFollowUps || []);
     }
     // §13.19: the Task Link variant bypasses the shared transaction (this
     // method stays synchronous for its boolean callers), so the subtree
@@ -58390,6 +58508,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     let cleared = 0;
     let unchanged = 0;
     const preparations = [];
+    const blocksFollowUps = [];
     for (const target of ordered) {
       if (!Number.isInteger(target.line)) {
         continue;
@@ -58435,6 +58554,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         files,
         vaultFiles,
         resolveLinkpath,
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         recovery: {
           registry,
           today,
@@ -58453,6 +58573,9 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       }
       for (const preparation of plan.preparations || []) {
         preparations.push(preparation);
+      }
+      if (Array.isArray(plan.blocksFollowUps)) {
+        blocksFollowUps.push(...plan.blocksFollowUps);
       }
       if (!plan.changed) {
         unchanged += 1;
@@ -58494,12 +58617,13 @@ class BobNavigationHotkeysDependencyMirrorMixin {
           Math.max(cursor.ch, 0),
           String(finalLines[anchor] || "").length,
         ),
-      })
+      }, BLOCKS_MACHINE_WRITE_ANNOTATION)
     ) {
       new Notice("Could not delete task dependencies; no tasks were updated");
       return null;
     }
-    new Notice(
+    await this.finishBlocksFollowUps(
+      blocksFollowUps,
       `⛓ Cleared dependencies from ${cleared} ${cleared === 1 ? "task" : "tasks"}` +
         (unchanged > 0 ? ` (${unchanged} unchanged)` : ""),
     );
@@ -58538,11 +58662,24 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       new Notice(BLOCKS_GENERATED_LINE_NOTICE);
       return Object.freeze({ mirrored: false, reason: "blocks-only" });
     }
-    if (plan.kind === "touch") {
-      // A touch projects the hand-edited line into the field with the same
-      // status effects as the stage (block on a hand-added open
-      // prerequisite, recover when none remains), except commitment
-      // transfer, and never stamps freshness or writes cross-note `[id::]`.
+    // BW10/BW11: diff the burst baseline's Depends-On targets against the
+    // final line and feed that delta to the BLOCKS seam. Same-note edits
+    // join the mirror transaction; cross-note edits are follow-ups. Undo
+    // re-fires this path because the reverted document is a new burst.
+    const oldText = oldContent === undefined ? content : oldContent;
+    const oldLines = String(oldText).split(/\r?\n/);
+    const baselineAt = Number.isInteger(opts.baselineLine) ? opts.baselineLine : editedLine;
+    const baselineOwning = findOwningTaskLine(
+      oldLines,
+      Math.max(0, Math.min(baselineAt, Math.max(oldLines.length - 1, 0))),
+    );
+    const blocksExisting = collectBlocksExistingRefs(
+      oldText,
+      baselineOwning,
+      parentPath,
+      this.dependencyLinkpathResolver(),
+    );
+    if (plan.kind === "touch" || plan.kind === "clear-empty" || plan.kind === "clear-field") {
       const outcome = await this.applyDependencyEdit({
         editor,
         parentPath,
@@ -58550,6 +58687,10 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         add: [],
         remove: [],
         mirrorTouch: true,
+        blocksExisting,
+        today: opts.today,
+        registry: opts.registry,
+        vaultContents: opts.vaultContents,
       });
       if (!outcome.ok) {
         return Object.freeze({ mirrored: false, reason: outcome.reason });
@@ -64930,6 +65071,7 @@ class BobNavigationHotkeysProjectConversionMixin {
           normalizeVaultRelativePath(createdFile.path),
         ],
         resolveLinkpath: this.dependencyLinkpathResolver(),
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
         // Design §5: the seed may already have flipped residents to `[?]`
         // (future inline date), so transfer reads their pre-seed lanes.
         projectLaneStatuses: [
@@ -64969,6 +65111,7 @@ class BobNavigationHotkeysProjectConversionMixin {
           return true;
         }
         projectContent = dependencyPlan.nextContent;
+        await this.finishBlocksFollowUps(dependencyPlan.blocksFollowUps);
       }
     }
 
@@ -65367,6 +65510,7 @@ class BobNavigationHotkeysProjectConversionMixin {
     }
 
     let parentContentToWrite = finalInsertion.content;
+    let conversionBlocksFollowUps = [];
     if (dependencyRefs.length > 0) {
       const files = new Map([[normalizeVaultRelativePath(parentFile.path), finalInsertion.content]]);
       for (const target of dependencyRefs) {
@@ -65391,6 +65535,7 @@ class BobNavigationHotkeysProjectConversionMixin {
         files,
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath: this.dependencyLinkpathResolver(),
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
       });
       if (!plan.ok) {
         new Notice(`Could not preserve the Depends-On line (${plan.reason}); nothing was converted`);
@@ -65407,6 +65552,7 @@ class BobNavigationHotkeysProjectConversionMixin {
         }
       }
       parentContentToWrite = plan.nextContent;
+      conversionBlocksFollowUps = plan.blocksFollowUps || [];
     }
 
     const classification = this.getProjectNoteBacklinkClassification(
@@ -65557,6 +65703,7 @@ class BobNavigationHotkeysProjectConversionMixin {
       new Notice("Parent note changed; nothing was converted");
       return false;
     }
+    await this.finishBlocksFollowUps(conversionBlocksFollowUps);
 
     // Post-write link rewrites report their failures instead of rolling the
     // parent back (§13.10): when any failed, the project note is kept for a
@@ -68026,6 +68173,7 @@ module.exports.helpers = {
   blocksDesiredAfterDelta,
   mintDependentBlockId,
   planBlocksForDependencyEdit,
+  collectBlocksExistingRefs,
   withBlocksFollowUpNotice,
   handEditTouchesBlocksLine,
   isProjectSubprojectsLine,

@@ -177,7 +177,10 @@ function createProjectReversalHarness(options) {
 
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
-    workspace: { getLeavesOfType: () => [] },
+    workspace: {
+      getLeavesOfType: () => [],
+      getActiveViewOfType: () => null,
+    },
     vault: {
       process:
         options.process ||
@@ -1011,7 +1014,121 @@ test("convertProjectNoteToTask refusals leave every file untouched", async () =>
   );
 });
 
-test("convertProjectNoteToTask repoints #^prj links before the parent write so cleanup consumes them", async () => {
+test("planBlockIdLinkContentRewrites plans parent #^prj rewrites in memory", () => {
+  const parentBefore = [
+    "- [ ] #task Stay healthy ^stay",
+    "  - ⛓️ **DEPENDS ON:** [[Health_gym_habit#^prj]]",
+  ].join("\n");
+  const plan = helpers.planBlockIdLinkContentRewrites(
+    [
+      {
+        path: "Health.md",
+        originals: ["[[Health_gym_habit#^prj]]"],
+      },
+    ],
+    "Health",
+    "gym-habit",
+    { "Health.md": parentBefore },
+  );
+  assert.equal(plan.failed, false);
+  assert.equal(plan.updatedLinkCount, 1);
+  assert.equal(plan.changes.length, 1);
+  assert.equal(plan.changes[0].path, "Health.md");
+  assert.match(
+    plan.changes[0].after,
+    /⛓️ \*\*DEPENDS ON:\*\* \[\[Health#\^gym-habit\]\]/,
+  );
+});
+
+test("convertProjectNoteToTask writes the parent first when it links to #^prj", async () => {
+  notices.length = 0;
+  const parentContent = workedExampleParentNote({
+    tasks: [
+      "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::2026-08-01]",
+      "- [ ] #task Stay healthy ^stay",
+      "  - ⛓️ **DEPENDS ON:** [[Health_gym_habit#^prj]]",
+    ],
+  });
+  const harness = createProjectReversalHarness({
+    projectContent: workedExampleProjectNote(),
+    parentContent,
+    backlinks: {
+      "Health.md": [
+        {
+          original: "[[Health_gym_habit#^prj]]",
+          link: "Health_gym_habit#^prj",
+        },
+      ],
+    },
+  });
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(
+      harness.editor,
+      harness.view,
+    ),
+    true,
+  );
+  const parent = harness.contents["Health.md"];
+  assert.match(parent, /^- \[ \] #task Build a gym habit .* \^gym-habit$/m);
+  assert.match(parent, /⛓️ \*\*DEPENDS ON:\*\* \[\[Health#\^gym-habit\]\]/);
+  assert.doesNotMatch(parent, /Health_gym_habit#\^prj/);
+  assert.deepEqual(harness.trashCalls, ["Health_gym_habit.md"]);
+  assert.match(notices.at(-1), /Converted .* into a task in Health/);
+});
+
+test("convertProjectNoteToTask removes today's live #^prj Pomodoro link when the parent is blocked", async () => {
+  notices.length = 0;
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  const dailyPath = `${year}/${year}${month}${day}.md`;
+  const parentContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [?] #task #prj Parent [scheduled::2099-12-31] #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::2026-08-01]",
+  ].join("\n");
+  const dailyContent = [
+    "## Pomodoros",
+    "",
+    "- [ ] Current (0900-0930)",
+    "  - [[Health_gym_habit#^prj]]",
+  ].join("\n");
+  const harness = createProjectReversalHarness({
+    projectContent: workedExampleProjectNote(),
+    parentContent,
+    extraFiles: [{ path: dailyPath, content: dailyContent }],
+    backlinks: {
+      [dailyPath]: [
+        {
+          original: "[[Health_gym_habit#^prj]]",
+          link: "Health_gym_habit#^prj",
+        },
+      ],
+    },
+  });
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(
+      harness.editor,
+      harness.view,
+    ),
+    true,
+  );
+  const parent = harness.contents["Health.md"];
+  assert.match(parent, /^- \[\?\] #task Build a gym habit .*#prj_is_blocked.* \^gym-habit$/m);
+  assert.doesNotMatch(harness.contents[dailyPath], /Health_gym_habit#\^prj/);
+  assert.doesNotMatch(harness.contents[dailyPath], /Health#\^gym-habit/);
+  assert.deepEqual(harness.trashCalls, ["Health_gym_habit.md"]);
+});
+
+test("convertProjectNoteToTask leaves every file unchanged when a #^prj rewrite target is missing", async () => {
   notices.length = 0;
   const rewriteFailure = createProjectReversalHarness({
     projectContent: workedExampleProjectNote(),

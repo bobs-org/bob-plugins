@@ -221,6 +221,51 @@ test("counted dependency runtime applies target, parents, and navigation in one 
   assert.match(editor.content, /Target \[id:: Tasks__target\] \^target/);
 });
 
+test("counted Depends-on removal recovers residents with [unblocked::]", () => {
+  const input = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [?] #task #prj Ship [dependsOn:: Project__setup] [fresh:: 2026-10-10] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[#^setup]]",
+    "- [?] #task Draft [fresh:: 2026-10-10] #prj_is_blocked ^draft",
+    "- [ ] #task Setup ^setup",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 5, 0);
+  const dependencyTask = helpers
+    .getOpenLocalTasks(input)
+    .find((task) => task.existingBlockId === "setup");
+  const calls = [];
+  const plan = helpers.planCountedLocalTaskDependency(
+    input,
+    session,
+    dependencyTask,
+    "Project.md",
+    {
+      recovery: {
+        registry: helpers.parseTasksStatusRegistry(compatibleTasksSettings()),
+        today: new Date(2026, 9, 12, 12),
+        vaultContents: null,
+        markUnblockedLine: (line) => {
+          calls.push(line);
+          return `${line} [unblocked:: 2026-10-12]`;
+        },
+      },
+    },
+  );
+  assert.equal(plan.valid, true, plan.error);
+  assert.equal(plan.operation, "remove");
+  assert.match(plan.content, /^- \[ \] #task #prj Ship/m);
+  assert.doesNotMatch(plan.content, /DEPENDS ON/);
+  const draft = plan.content.split("\n").find((line) => /Draft/.test(line));
+  assert.match(draft, /^- \[ \] #task Draft/);
+  assert.doesNotMatch(draft, /#prj_is_blocked/);
+  assert.match(draft, /\[unblocked:: 2026-10-12\]/);
+  assert.ok(calls.length >= 1);
+});
+
 test("cross-file toggle changes only the source link", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = [

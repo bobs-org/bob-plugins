@@ -760,24 +760,67 @@ class BobNavigationHotkeysProjectConversionMixin {
       return false;
     }
 
-    // Repoint `#^prj` links BEFORE planning the Pomodoro cleanup (§13.10):
-    // the cleanup targets the restored block id, so the live links must
-    // already carry it to be consumed. A rewrite failure aborts before any
-    // write, leaving the project note intact for a retry.
-    let updatedLinkCount = 0;
+    // Plan `#^prj` rewrites in memory and write the parent first. Writing
+    // other files before the parent (a7fafed) edited Health.md when it
+    // linked to the project's `^prj`, then the parent write saw changed
+    // content and aborted with dangling links. A rewrite failure still
+    // aborts before any write.
+    const parentPath = normalizeVaultRelativePath(parentFile.path);
+    const rewriteContents = new Map();
+    let rewriteReadFailed = false;
     if (classification.blockRewrites.length > 0) {
-      const rewriteResult = await this.applyBlockIdLinkRewrites(
+      for (const rewrite of classification.blockRewrites) {
+        const path = normalizeVaultRelativePath(rewrite.path);
+        if (!path) {
+          rewriteReadFailed = true;
+          break;
+        }
+        if (path === parentPath) {
+          rewriteContents.set(path, parentContentToWrite);
+          continue;
+        }
+        const file =
+          vault && typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(path)
+            : null;
+        if (!this.isMarkdownFile(file)) {
+          rewriteReadFailed = true;
+          break;
+        }
+        try {
+          rewriteContents.set(path, String((await vault.read(file)) || ""));
+        } catch (_error) {
+          rewriteReadFailed = true;
+          break;
+        }
+      }
+    }
+    let rewritePlan = {
+      updatedLinkCount: 0,
+      failedLinkCount: rewriteReadFailed ? 1 : 0,
+      failed: rewriteReadFailed,
+      changes: [],
+    };
+    if (classification.blockRewrites.length > 0 && !rewriteReadFailed) {
+      rewritePlan = planBlockIdLinkContentRewrites(
         classification.blockRewrites,
         parentBasename,
         restored.blockId,
+        rewriteContents,
       );
-      updatedLinkCount = rewriteResult.updatedLinkCount;
-      if (rewriteResult.failed) {
-        new Notice(
-          `Could not update every link to "^prj" (${rewriteResult.failedLinkCount} failed); nothing was converted`,
-        );
-        return false;
-      }
+    }
+    const updatedLinkCount = rewritePlan.updatedLinkCount;
+    if (classification.blockRewrites.length > 0 && rewritePlan.failed) {
+      new Notice(
+        `Could not update every link to "^prj" (${rewritePlan.failedLinkCount} failed); nothing was converted`,
+      );
+      return false;
+    }
+    const parentRewrite = rewritePlan.changes.find(
+      (change) => change.path === parentPath,
+    );
+    if (parentRewrite) {
+      parentContentToWrite = parentRewrite.after;
     }
 
     let dailyCleanup = null;
@@ -788,15 +831,29 @@ class BobNavigationHotkeysProjectConversionMixin {
         sourceContent: parentContent,
         today,
       });
-      const targets = [...restoredLines]
-        .filter((line) => isOpenObsidianTaskLine(line) && taskHasProjectBlockedTag(line))
-        .map((line) => getTrailingBlockId(line))
-        .filter(Boolean)
-        .map((blockId) => ({ path: parentFile.path, blockId }));
+      const targets = [
+        { path: sourceFile.path, blockId: "prj" },
+        restored.blockId
+          ? { path: parentFile.path, blockId: restored.blockId }
+          : null,
+        ...restoredLines
+          .filter((line) => isOpenObsidianTaskLine(line) && taskHasProjectBlockedTag(line))
+          .map((line) => getTrailingBlockId(line))
+          .filter(Boolean)
+          .map((blockId) => ({ path: parentFile.path, blockId })),
+      ].filter(Boolean);
       if (dailyCleanupSnapshot && targets.length > 0) {
+        const dailyPath = normalizeVaultRelativePath(
+          dailyCleanupSnapshot.dailyPath,
+        );
+        const dailyRewrite = rewritePlan.changes.find(
+          (change) => change.path === dailyPath,
+        );
         const dailyContent = dailyCleanupSnapshot.sameFile
           ? parentContentToWrite
-          : dailyCleanupSnapshot.content;
+          : dailyRewrite
+            ? dailyRewrite.after
+            : dailyCleanupSnapshot.content;
         dailyCleanup = planDeferredPomodoroLinkCleanup(
           dailyContent,
           targets,
@@ -806,8 +863,12 @@ class BobNavigationHotkeysProjectConversionMixin {
             removeEmptiedEntries: true,
           },
         );
-        if (dailyCleanupSnapshot.sameFile && dailyCleanup.changed) {
-          parentContentToWrite = dailyCleanup.content;
+        if (dailyCleanup.changed) {
+          if (dailyCleanupSnapshot.sameFile) {
+            parentContentToWrite = dailyCleanup.content;
+          } else if (dailyRewrite) {
+            dailyRewrite.after = dailyCleanup.content;
+          }
         }
       }
     }
@@ -831,9 +892,35 @@ class BobNavigationHotkeysProjectConversionMixin {
       return false;
     }
 
+    for (const change of rewritePlan.changes) {
+      if (change.path === parentPath) {
+        continue;
+      }
+      const file =
+        vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(change.path)
+          : null;
+      if (!this.isMarkdownFile(file)) {
+        continue;
+      }
+      try {
+        await vault.process(file, (current) =>
+          current === change.before ? change.after : current,
+        );
+      } catch (_error) {
+        // Post-write rewrite failures do not roll the parent back.
+      }
+    }
+
+    const dailyPath = dailyCleanupSnapshot
+      ? normalizeVaultRelativePath(dailyCleanupSnapshot.dailyPath)
+      : null;
+    const dailyHandledInRewrites =
+      Boolean(dailyPath) &&
+      rewritePlan.changes.some((change) => change.path === dailyPath);
     const dailyCleanupFailed =
       dailyCleanup && dailyCleanup.changed && dailyCleanupSnapshot &&
-      !dailyCleanupSnapshot.sameFile
+      !dailyCleanupSnapshot.sameFile && !dailyHandledInRewrites
         ? !(await this.writeDeferredPomodoroCleanup(
             dailyCleanupSnapshot,
             dailyCleanup,

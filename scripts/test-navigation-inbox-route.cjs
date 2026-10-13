@@ -615,6 +615,89 @@ test("commitInboxRoute moves the verified task with its children", async () => {
   assert.deepEqual(opened, []);
 });
 
+test("commitInboxRoute into a blocked project tags the moved task", async () => {
+  const sourceContent = [
+    "---",
+    'type: "[[area]]"',
+    "parent: [[inbox]]",
+    "---",
+    "",
+    "- [ ] #task Triage me ^abc",
+    "  - child kept",
+    "- [ ] #task Second ^second",
+  ].join("\n");
+  const destContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] #hide ^prj",
+    "",
+    "## Tasks",
+    "",
+  ].join("\n");
+  const store = new Map(
+    Object.entries({
+      "inbox.md": ["---", 'type: "[[area]]"', "---", ""].join("\n"),
+      "mac_inbox.md": sourceContent,
+      "Blocked.md": destContent,
+    }),
+  );
+  const fileFor = (path) => ({
+    path,
+    basename: path.split("/").pop().replace(/\.md$/, ""),
+    extension: "md",
+  });
+  const editor = new TransactionEditor(sourceContent, { line: 5, ch: 0 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    metadataCache: {
+      getFileCache: (file) =>
+        file.path === "mac_inbox.md"
+          ? { frontmatter: { type: "[[area]]", parent: "[[inbox]]" } }
+          : file.path === "Blocked.md"
+            ? { frontmatter: { type: "[[project]]", status: "wip" } }
+            : null,
+      getFirstLinkpathDest: (linkpath) => {
+        const want = String(linkpath || "").replace(/\.md$/, "");
+        return (
+          Array.from(store.keys())
+            .map(fileFor)
+            .find(
+              (file) =>
+                file.path.replace(/\.md$/, "") === want || file.basename === want,
+            ) || null
+        );
+      },
+    },
+    vault: {
+      getMarkdownFiles: () => Array.from(store.keys()).map(fileFor),
+      cachedRead: async (file) => store.get(file.path),
+      process: async (file, fn) => {
+        store.set(file.path, fn(store.get(file.path)));
+      },
+    },
+  };
+  const sourceFile = fileFor("mac_inbox.md");
+  plugin.getActiveMarkdownView = () => ({ editor, file: sourceFile });
+  plugin.getOpenMarkdownEditorForPath = (path) =>
+    path === "mac_inbox.md" ? editor : undefined;
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 5, 0);
+  const expected = helpers.captureInboxRouteExpected(discovery.targets);
+  const result = await plugin.commitInboxRoute({
+    editor,
+    sourcePath: "mac_inbox.md",
+    startLine: 5,
+    expected,
+    destinationPath: "Blocked.md",
+  });
+  assert.equal(result.ok, true, result.error || result.notice);
+  const blocked = store.get("Blocked.md");
+  const moved = blocked.split("\n").find((line) => /Triage me/.test(line));
+  assert.match(moved, /^- \[\?\] #task Triage me/);
+  assert.match(moved, /#prj_is_blocked/);
+});
+
 test("commitInboxRoute moves a counted run and refuses on identity drift", async () => {
   {
     const { plugin, store, editor, sourceContent } = routedCommitFixture();

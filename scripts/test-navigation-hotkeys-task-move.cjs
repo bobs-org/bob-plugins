@@ -448,6 +448,104 @@ test("task move out of a blocked project recovers through the shared gate and wr
   assert.equal(plan.recoveredOnMoveCount, 2);
 });
 
+test("move promotion walks through a ^prj target without raising it", () => {
+  const sourceContent = "- [*] #task Move this ^move";
+  const destinationContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[Q#^prj]]",
+    "## Tasks",
+  ].join("\n");
+  const qContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [ ] #task #prj Q ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[R#^r]]",
+  ].join("\n");
+  const rContent = "- [ ] #task R work ^r";
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 0);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "P.md",
+    sourceContent,
+    destinationContent,
+    otherContents: new Map([
+      ["Q.md", qContent],
+      ["R.md", rContent],
+    ]),
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  assert.equal(plan.changes.has("Q.md"), false);
+  const rAfter = plan.changes.get("R.md").after;
+  assert.match(rAfter, /^- \[\*\] #task R work \^r$/m);
+  assert.equal(plan.promotedOnMoveCount, 1);
+});
+
+test("move promotion uses each open task's own lane, not the strongest moved lane", () => {
+  const sourceContent = [
+    "- [*] #task Next up ^next",
+    "  - ⛓️ **DEPENDS ON:** [[X#^x]]",
+    "- [/] #task Working ^work",
+    "  - ⛓️ **DEPENDS ON:** [[Y#^y]]",
+  ].join("\n");
+  const destinationContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] ^prj",
+    "## Tasks",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 1);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "P.md",
+    sourceContent,
+    destinationContent,
+    otherContents: new Map([
+      ["X.md", "- [ ] #task X ^x"],
+      ["Y.md", "- [ ] #task Y ^y"],
+    ]),
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  assert.match(plan.changes.get("X.md").after, /^- \[\*\] #task X \^x$/m);
+  assert.match(plan.changes.get("Y.md").after, /^- \[\/\] #task Y \^y$/m);
+});
+
+test("move promotion skips Depends-On lines of closed tasks", () => {
+  const sourceContent = [
+    "- [x] #task Done ^done",
+    "  - ⛓️ **DEPENDS ON:** [[Z#^z]]",
+    "- [*] #task Open ^open",
+  ].join("\n");
+  const destinationContent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Waiting [scheduled::2099-12-31] ^prj",
+    "## Tasks",
+  ].join("\n");
+  const discovery = helpers.discoverMovableObsidianTaskTargets(sourceContent, 0, 1);
+  const plan = helpers.planTaskMoveAcrossFiles({
+    sourcePath: "Source.md",
+    destinationPath: "P.md",
+    sourceContent,
+    destinationContent,
+    otherContents: new Map([["Z.md", "- [ ] #task Z ^z"]]),
+    targets: discovery.targets,
+  });
+  assert.equal(plan.valid, true, plan.error);
+  assert.equal(plan.changes.has("Z.md"), false);
+});
+
 test("task move planning rejects destination collisions and malformed identities", () => {
   const destination = [
     "---",

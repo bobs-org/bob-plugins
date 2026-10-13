@@ -65,7 +65,10 @@ function createProjectForwardHarness(options) {
   const plugin = new NavigationHotkeysPlugin();
   plugin.promotionTodayForTests = options.today || new Date(2026, 8, 30);
   plugin.app = {
-    workspace: { getLeavesOfType: () => options.leaves || [] },
+    workspace: {
+      getLeavesOfType: () => options.leaves || [],
+      getActiveViewOfType: () => null,
+    },
     vault: {
       process:
         options.process ||
@@ -654,5 +657,84 @@ test("forward promotion discovers live links without a backlink cache and uses o
   assert.match(openDaily.getValue(), /\[\[Work_ship#\^design\]\]/);
   assert.doesNotMatch(openDaily.getValue(), /Areas\/Work#\^ship/);
   assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
+});
+
+test("forward conversion carries a Depends-On line and reverse restores it", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const sourceContent = [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it [dependsOn:: Areas__Work__prereq] ^ship",
+    "  - ⛓️ **DEPENDS ON:** [[#^prereq]]",
+    "  - [ ] #task Follow up ^follow-up",
+    "- [ ] #task Prereq ^prereq",
+  ].join("\n");
+  let harness;
+  harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent,
+    today,
+    processFrontMatter: async (file, fn) => {
+      const frontmatter = {};
+      fn(frontmatter);
+      const yaml = Object.entries(frontmatter)
+        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+        .join("\n");
+      const current = harness.contents[file.path] || "";
+      harness.contents[file.path] = current.startsWith("---\n")
+        ? current.replace(/^---\n/, `---\n${yaml}\n`)
+        : `---\n${yaml}\n---\n\n${current}`;
+      return frontmatter;
+    },
+  });
+  harness.plugin.app.fileManager.trashFile = async (file) => {
+    delete harness.contents[file.path];
+    delete harness.fileByPath[file.path];
+  };
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
+    true,
+  );
+  const createdPath = "Work_ship.md";
+  assert.ok(Object.prototype.hasOwnProperty.call(harness.contents, createdPath));
+  const projectContent = harness.contents[createdPath];
+  assert.match(projectContent, /^- \[\?\] #task #prj Ship it/m);
+  assert.match(projectContent, /⛓️ \*\*DEPENDS ON:\*\* \[\[Work#\^prereq\]\]/);
+  assert.match(
+    projectContent,
+    /^- \[\?\] #task Follow up .*#prj_is_blocked \^follow-up$/m,
+  );
+  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
+  assert.match(harness.contents["Areas/Work.md"], /\^prereq/);
+
+  const reverseEditor = new TransactionEditor(projectContent, {
+    line: projectContent.split("\n").findIndex((line) => /\^prj(?:\s|$)/.test(line)),
+    ch: 0,
+  });
+  const reverseView = {
+    file: harness.fileByPath[createdPath],
+    editor: reverseEditor,
+    save: async () => {
+      harness.contents[createdPath] = reverseEditor.getValue();
+    },
+  };
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(reverseEditor, reverseView),
+    true,
+  );
+  const restored = harness.contents["Areas/Work.md"];
+  assert.match(restored, /^- \[\?\] #task Ship it/m);
+  assert.match(restored, /⛓️ \*\*DEPENDS ON:\*\*/);
+  assert.match(restored, /\^prereq/);
+  assert.doesNotMatch(restored, /Work_ship#\^prj/);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(harness.contents, createdPath),
+    false,
+  );
 });
 

@@ -52,11 +52,9 @@ function upsertProjectTaskScheduledField(
 }
 
 // Whether the note's `^prj` task still carries Depends-On links (a child
-// Depends-On bullet or a non-empty `[dependsOn::]` field). A due or deleted
-// project date strips `#prj_is_blocked` from residents only when no such
-// reason remains (§13.10, every_resident); with links left, the tag stays
-// unless the recovery snapshot proves the resident ready, and reconcile
-// repairs the tag once the last prerequisite closes.
+// Depends-On bullet or a non-empty `[dependsOn::]` field). Closed links stay
+// as history (§5) and do not by themselves keep the project Blocked; the
+// schedule writers follow `^prj`'s post-gesture status instead.
 function projectPrjKeepsDependsOnReason(content) {
   const text = String(content || "");
   if (findProjectLifecycleTaskIndex(text) === -1) {
@@ -72,12 +70,16 @@ function projectPrjKeepsDependsOnReason(content) {
 }
 
 // True when the recovery snapshot already proves the resident leaves
-// Blocked (ready, next, or in-progress): the tag comes off even while the
-// `^prj` line still lists Depends-On links.
+// Blocked (ready, next, or in-progress). Schedule writers no longer use
+// this to strip the tag while `^prj` stays `[?]`: the tag follows `^prj`.
 function projectResidentRecoveryClears(recovery) {
   return Boolean(
     recovery && ["ready", "next", "in-progress"].includes(recovery.state),
   );
+}
+
+function projectPrjLineIsBlocked(lineText) {
+  return getObsidianTaskCheckboxStatus(lineText) === "?";
 }
 
 function planProjectTaskSchedules(
@@ -135,9 +137,13 @@ function planProjectTaskSchedules(
   const ambiguousTaskLines = [];
   const futureScheduledTaskLines = [];
   const recoveryCounts = emptyScheduledRecoveryCounts();
-  const prjKeepsDependsOn = projectPrjKeepsDependsOnReason(original);
+  const orderedTasks = [
+    ...tasks.filter((task) => task.isProjectTask),
+    ...tasks.filter((task) => !task.isProjectTask),
+  ];
+  let prjStaysBlocked = future;
 
-  for (const task of tasks) {
+  for (const task of orderedTasks) {
     let nextLine = task.text;
     const statusMatch = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
     const status = statusMatch ? statusMatch[1] : null;
@@ -184,6 +190,7 @@ function planProjectTaskSchedules(
         nextLine = recovery.line;
         recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
       }
+      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
       if (!priorField && scheduleResult.changed && !future) {
         // A due date is still an explicit project schedule; only the blocked
         // state changes when its reason clears.
@@ -198,12 +205,7 @@ function planProjectTaskSchedules(
           if (blockedLine !== nextLine) blockedTaskCount += 1;
           nextLine = blockedLine;
           futureScheduledTaskLines.push(task.line);
-        } else if (
-          !prjKeepsDependsOn ||
-          projectResidentRecoveryClears(
-            getTargetScheduledRecovery(options, task.line),
-          )
-        ) {
+        } else if (!prjStaysBlocked) {
           nextLine = setProjectBlockedTag(nextLine, false);
         }
       } else {
@@ -232,12 +234,11 @@ function planProjectTaskSchedules(
           nextLine = blockedLine;
           futureScheduledTaskLines.push(task.line);
         } else {
-          if (
-            !prjKeepsDependsOn ||
-            projectResidentRecoveryClears(
-              getTargetScheduledRecovery(options, task.line),
-            )
-          ) {
+          // The tag follows `^prj`'s post-gesture status (§13.8): strip it
+          // from every open resident when `^prj` leaves Blocked, and keep
+          // it while `^prj` stays `[?]`. Closed Depends-On history does
+          // not keep the tag by itself.
+          if (!prjStaysBlocked) {
             nextLine = setProjectBlockedTag(nextLine, false);
           }
           if (ownFuture) {
@@ -245,7 +246,7 @@ function planProjectTaskSchedules(
             if (blockedLine !== nextLine) blockedTaskCount += 1;
             nextLine = blockedLine;
             futureScheduledTaskLines.push(task.line);
-          } else {
+          } else if (!prjStaysBlocked) {
             const recovery = reconcileBlockedScheduledTaskLine(
               nextLine,
               getTargetScheduledRecovery(options, task.line),
@@ -355,8 +356,12 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
   let changedTaskCount = 0;
   let removedScheduledTaskCount = 0;
   const futureScheduledTaskLines = [];
-  const prjKeepsDependsOn = projectPrjKeepsDependsOnReason(original);
-  for (const task of tasks) {
+  const orderedTasks = [
+    ...tasks.filter((task) => task.isProjectTask),
+    ...tasks.filter((task) => !task.isProjectTask),
+  ];
+  let prjStaysBlocked = false;
+  for (const task of orderedTasks) {
     let nextLine = task.text;
     const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
     if (!match || !OPEN_OBSIDIAN_TASK_STATUSES.has(match[1])) continue;
@@ -381,6 +386,7 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
       );
       nextLine = recovery.line;
       recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
     } else {
       const removed = removeProjectTaskScheduledFields(
         nextLine,
@@ -388,12 +394,7 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
       );
       nextLine = removed.line;
       if (removed.removedCount > 0) removedScheduledTaskCount += 1;
-      if (
-        !prjKeepsDependsOn ||
-        projectResidentRecoveryClears(
-          getTargetScheduledRecovery(options, task.line),
-        )
-      ) {
+      if (!prjStaysBlocked) {
         nextLine = setProjectBlockedTag(nextLine, false);
       }
       const ownFields = parseProjectTaskScheduledFields(nextLine);
@@ -407,7 +408,7 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
         const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
         if (blockedLine !== nextLine) nextLine = blockedLine;
         futureScheduledTaskLines.push(task.line);
-      } else {
+      } else if (!prjStaysBlocked) {
         const recovery = reconcileBlockedScheduledTaskLine(
           nextLine,
           getTargetScheduledRecovery(options, task.line),

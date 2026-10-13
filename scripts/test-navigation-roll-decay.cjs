@@ -1315,6 +1315,46 @@ test("picker-counted refuses a recurring cancel as one batch", () => {
   assert.equal(plan.recurring, true);
 });
 
+test("recommended roll recovers with [unblocked::] when the writer is passed", () => {
+  const property = decayProperty();
+  const content =
+    "- [?] #task Ready [priority:: medium] [scheduled:: 2099-01-01] ^ready";
+  const session = {
+    valid: true,
+    explicit: true,
+    targets: [{ line: 0, rawLine: content }],
+  };
+  const level =
+    property.levels.find((item) => item.value === "medium") ||
+    property.levels[0];
+  const byLine = new Map([
+    [
+      0,
+      {
+        kind: "roll",
+        date: "2026-10-12",
+        level,
+        reason: "🎲 P2 roll · today",
+      },
+    ],
+  ]);
+  const calls = [];
+  const plan = helpers.planRecommendedRollBatch(content, session, byLine, {
+    property,
+    dateText: "2026-10-12",
+    baseDate: new Date(2026, 9, 12),
+    recoveryByLine: new Map([[0, { state: "ready", rank: " " }]]),
+    markUnblockedLine: (line) => {
+      calls.push(line);
+      return `${line} [unblocked:: 2026-10-12]`;
+    },
+  });
+  assert.equal(plan.valid, true, plan.error);
+  assert.match(plan.content, /\[unblocked:: 2026-10-12\]/);
+  assert.match(plan.content, /^- \[ \] #task Ready/);
+  assert.equal(calls.length, 1);
+});
+
 test("picker-counted stale lines refuse and new options stay byte-identical", () => {
   const property = decayProperty();
   const content = countedContent();

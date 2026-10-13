@@ -122,3 +122,61 @@ function rewriteProjectDependencyLineForDestination(line, options = {}) {
     sourceBlockIds,
   }).content;
 }
+
+// Plan `#^prj` → restored-block-id rewrites in memory. Callers write the
+// parent first, then apply the remaining files. A missing original or an
+// unreadable path fails the whole plan so conversion can abort before any
+// write.
+function planBlockIdLinkContentRewrites(
+  rewrites,
+  newBasename,
+  blockId,
+  contentsByPath,
+) {
+  let updatedLinkCount = 0;
+  let failedLinkCount = 0;
+  const contents =
+    contentsByPath instanceof Map
+      ? contentsByPath
+      : new Map(Object.entries(contentsByPath || {}));
+  const changes = [];
+  for (const rewrite of Array.isArray(rewrites) ? rewrites : []) {
+    const path = normalizeVaultRelativePath(rewrite && rewrite.path);
+    const originals = Array.isArray(rewrite && rewrite.originals)
+      ? rewrite.originals
+      : [];
+    if (!path || !contents.has(path)) {
+      failedLinkCount += originals.length || 1;
+      continue;
+    }
+    const replacements = [];
+    originals.forEach((original) => {
+      const replacement = rewriteBlockIdLinkOriginal(
+        original,
+        newBasename,
+        blockId,
+      );
+      if (!replacement) {
+        failedLinkCount += 1;
+        return;
+      }
+      replacements.push({ original, replacement });
+    });
+    if (replacements.length === 0) {
+      continue;
+    }
+    const before = String(contents.get(path) || "");
+    const result = replaceLinkOriginalsInContent(before, replacements);
+    failedLinkCount += result.missing.length;
+    updatedLinkCount += replacements.length - result.missing.length;
+    if (result.content !== before) {
+      changes.push({ path, before, after: result.content });
+    }
+  }
+  return Object.freeze({
+    updatedLinkCount,
+    failedLinkCount,
+    failed: failedLinkCount > 0,
+    changes,
+  });
+}

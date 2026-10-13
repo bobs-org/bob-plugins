@@ -489,6 +489,10 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       registry: await readTasksStatusRegistry(this.app),
       today: new Date(),
       vaultContents: null,
+      markUnblockedLine: navFreshnessMarkUnblockedLine(
+        this.getFreshnessApi(),
+      ),
+      ...navNoteScopeFlags(normalizedPath),
     };
     const countedOptions = {
       ...options,

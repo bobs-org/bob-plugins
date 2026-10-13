@@ -19256,6 +19256,64 @@ function rewriteProjectDependencyLineForDestination(line, options = {}) {
     sourceBlockIds,
   }).content;
 }
+
+// Plan `#^prj` → restored-block-id rewrites in memory. Callers write the
+// parent first, then apply the remaining files. A missing original or an
+// unreadable path fails the whole plan so conversion can abort before any
+// write.
+function planBlockIdLinkContentRewrites(
+  rewrites,
+  newBasename,
+  blockId,
+  contentsByPath,
+) {
+  let updatedLinkCount = 0;
+  let failedLinkCount = 0;
+  const contents =
+    contentsByPath instanceof Map
+      ? contentsByPath
+      : new Map(Object.entries(contentsByPath || {}));
+  const changes = [];
+  for (const rewrite of Array.isArray(rewrites) ? rewrites : []) {
+    const path = normalizeVaultRelativePath(rewrite && rewrite.path);
+    const originals = Array.isArray(rewrite && rewrite.originals)
+      ? rewrite.originals
+      : [];
+    if (!path || !contents.has(path)) {
+      failedLinkCount += originals.length || 1;
+      continue;
+    }
+    const replacements = [];
+    originals.forEach((original) => {
+      const replacement = rewriteBlockIdLinkOriginal(
+        original,
+        newBasename,
+        blockId,
+      );
+      if (!replacement) {
+        failedLinkCount += 1;
+        return;
+      }
+      replacements.push({ original, replacement });
+    });
+    if (replacements.length === 0) {
+      continue;
+    }
+    const before = String(contents.get(path) || "");
+    const result = replaceLinkOriginalsInContent(before, replacements);
+    failedLinkCount += result.missing.length;
+    updatedLinkCount += replacements.length - result.missing.length;
+    if (result.content !== before) {
+      changes.push({ path, before, after: result.content });
+    }
+  }
+  return Object.freeze({
+    updatedLinkCount,
+    failedLinkCount,
+    failed: failedLinkCount > 0,
+    changes,
+  });
+}
 // ---- src/215-project-blocking.js ----
 // Project blocking from the `^prj` line: recognition, block state, ADJ-11
 // walk-through, recovery edges, and the resident-tag signal.
@@ -19566,6 +19624,113 @@ function collectProjectDependencyPromotionRows(
     );
   }
   return rows;
+}
+
+// Direct-child Depends-On links of open tasks in `lines`, each carrying
+// that task's own checkbox status. Closed tasks never promote (ADJ-11
+// move path).
+function collectOpenTaskDependsOnLinks(lines) {
+  const source = Array.isArray(lines) ? lines : [];
+  const items = [];
+  for (let line = 0; line < source.length; line += 1) {
+    const text = String(source[line] || "");
+    if (!isOpenObsidianTaskLine(text)) {
+      continue;
+    }
+    const status = getObsidianTaskCheckboxStatus(text);
+    const indent = getBulletIndentWidth(text);
+    for (let child = line + 1; child < source.length; child += 1) {
+      const childText = String(source[child] || "");
+      if (!childText.trim()) {
+        continue;
+      }
+      if (getBulletIndentWidth(childText) <= indent) {
+        break;
+      }
+      if (findNearestParentListItem(source, child) !== line) {
+        continue;
+      }
+      const details = parseDependencyNavigationBulletDetails(childText);
+      if (!details) {
+        continue;
+      }
+      for (const link of details.links || []) {
+        items.push(Object.freeze({ status, link }));
+      }
+    }
+  }
+  return Object.freeze(items);
+}
+
+// Promote one open prerequisite for a move into a blocked project
+// (ADJ-11/PDB9): never raise a `^prj` target; walk through to that
+// project's open Depends-On links. Returns how many lines changed.
+function promoteMovePrerequisiteTarget(
+  files,
+  changes,
+  otherContents,
+  refPath,
+  blockId,
+  desiredLane,
+) {
+  const path = normalizeVaultRelativePath(refPath);
+  if (!path || !blockId || !files || !files.has(path) || !desiredLane) {
+    return 0;
+  }
+  const content = String(files.get(path) || "");
+  const contentLines = content.split(/\r?\n/);
+  const at = findTaskLineByTrailingBlockId(contentLines, blockId);
+  if (at === null) {
+    return 0;
+  }
+  const text = String(contentLines[at] || "");
+  const status = getObsidianTaskCheckboxStatus(text);
+  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || status === "?") {
+    return 0;
+  }
+  let count = 0;
+  const applyPromotion = (targetPath, line, from, to) => {
+    if (from === to) {
+      return;
+    }
+    const current = String(files.get(targetPath) || "");
+    const ending = current.includes("\r\n") ? "\r\n" : "\n";
+    const nextLines = current.split(/\r?\n/);
+    if (line < 0 || line >= nextLines.length) {
+      return;
+    }
+    nextLines[line] = to;
+    const after = nextLines.join(ending);
+    files.set(targetPath, after);
+    const before = changes.has(targetPath)
+      ? changes.get(targetPath).before
+      : otherContents && otherContents.get(targetPath);
+    if (after !== before) {
+      changes.set(
+        targetPath,
+        Object.freeze({ before: String(before || ""), after }),
+      );
+      count += 1;
+    }
+  };
+  if (isProjectLifecycleTaskLine(text) && blockId === "prj") {
+    for (const walked of collectProjectDependencyPromotionRows(files, path)) {
+      applyPromotion(
+        walked.path,
+        walked.line,
+        walked.text,
+        promoteObsidianTaskCheckboxStatus(walked.text, desiredLane),
+      );
+    }
+    return count;
+  }
+  applyPromotion(
+    path,
+    at,
+    text,
+    promoteObsidianTaskCheckboxStatus(text, desiredLane),
+  );
+  return count;
 }
 
 function formatProjectRecoveryReason(reasons) {
@@ -23453,64 +23618,34 @@ function planTaskMoveAcrossFiles(options = {}) {
   }
 
   // Design §5 commitment transfer for a move into a blocked project: the
-  // moved tasks lose their lanes to `[?]`, so every open prerequisite now
-  // blocking them — the destination project's `^prj` prerequisites and the
-  // moved tasks' own carried prerequisites — rises to the strongest moved
-  // lane. Only targets verifiably open in loaded contents promote; unknown
-  // notes are left for reconcile.
+  // moved tasks lose their lanes to `[?]`. The destination project's `^prj`
+  // prerequisites rise to the strongest moved lane; each moved open task's
+  // own Depends-On targets rise to that task's lane. ADJ-11/PDB9: never
+  // raise a `^prj` target — walk through to that project's open deps.
+  // Closed tasks never promote. Unknown notes are left for reconcile.
   let promotedOnMoveCount = 0;
   if (destinationIsBlockedProject) {
-    const movedLane = strongestDependencyPromotionLane(
+    const working = new Map([
+      [sourcePath, changes.get(sourcePath).after],
+      [destinationPath, changes.get(destinationPath).after],
+      ...otherContents,
+    ]);
+    const promote = (refPath, blockId, desiredLane) => {
+      promotedOnMoveCount += promoteMovePrerequisiteTarget(
+        working,
+        changes,
+        otherContents,
+        refPath,
+        blockId,
+        desiredLane,
+      );
+    };
+    const projectLane = strongestDependencyPromotionLane(
       rewrittenMovedBlocks
         .flat()
         .map((line) => getObsidianTaskCheckboxStatus(String(line || ""))),
     );
-    if (movedLane) {
-      const working = new Map([
-        [sourcePath, changes.get(sourcePath).after],
-        [destinationPath, changes.get(destinationPath).after],
-        ...otherContents,
-      ]);
-      const promoteMovePrerequisite = (refPath, blockId) => {
-        const path = normalizeVaultRelativePath(refPath);
-        if (!path || !blockId || !working.has(path)) {
-          return;
-        }
-        const content = String(working.get(path) || "");
-        const contentLines = content.split(/\r?\n/);
-        const at = findTaskLineByTrailingBlockId(contentLines, blockId);
-        if (at === null) {
-          return;
-        }
-        const status = getObsidianTaskCheckboxStatus(
-          String(contentLines[at] || ""),
-        );
-        if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || status === "?") {
-          return;
-        }
-        const promoted = promoteObsidianTaskCheckboxStatus(
-          contentLines[at],
-          movedLane,
-        );
-        if (promoted === contentLines[at]) {
-          return;
-        }
-        const nextLines = contentLines.slice();
-        nextLines[at] = promoted;
-        const ending = content.includes("\r\n") ? "\r\n" : "\n";
-        const after = nextLines.join(ending);
-        working.set(path, after);
-        const before = changes.has(path)
-          ? changes.get(path).before
-          : otherContents.get(path);
-        if (after !== before) {
-          changes.set(
-            path,
-            Object.freeze({ before: String(before || ""), after }),
-          );
-          promotedOnMoveCount += 1;
-        }
-      };
+    if (projectLane) {
       for (
         const item of collectProjectTaskDependencyItems(
           changes.get(destinationPath).after,
@@ -23520,26 +23655,25 @@ function planTaskMoveAcrossFiles(options = {}) {
         if (item.internal || item.archive || !item.blockId) {
           continue;
         }
-        promoteMovePrerequisite(item.path, item.blockId);
+        promote(item.path, item.blockId, projectLane);
       }
-      for (const block of movedBlocks) {
-        for (const line of block) {
-          const details = parseDependencyNavigationBulletDetails(line);
-          if (!details) {
-            continue;
-          }
-          for (const link of details.links || []) {
-            const note = String((link && link.note) || "").trim();
-            const depPath = note
-              ? canonicalProjectDependencyPath(note, destinationPath)
-              : (
-                  identities.movedBlockIds.has(link && link.blockId)
-                    ? destinationPath
-                    : sourcePath
-                );
-            promoteMovePrerequisite(depPath, link && link.blockId);
-          }
+    }
+    for (const block of rewrittenMovedBlocks) {
+      for (const item of collectOpenTaskDependsOnLinks(block)) {
+        const link = item.link;
+        const note = String((link && link.note) || "").trim();
+        const depPath = note
+          ? canonicalProjectDependencyPath(note, destinationPath)
+          : (
+              identities.movedBlockIds.has(link && link.blockId)
+                ? destinationPath
+                : sourcePath
+            );
+        const desired = getDependencyPromotionStatus(item.status);
+        if (!desired) {
+          continue;
         }
+        promote(depPath, link && link.blockId, desired);
       }
     }
   }
@@ -25179,11 +25313,9 @@ function upsertProjectTaskScheduledField(
 }
 
 // Whether the note's `^prj` task still carries Depends-On links (a child
-// Depends-On bullet or a non-empty `[dependsOn::]` field). A due or deleted
-// project date strips `#prj_is_blocked` from residents only when no such
-// reason remains (§13.10, every_resident); with links left, the tag stays
-// unless the recovery snapshot proves the resident ready, and reconcile
-// repairs the tag once the last prerequisite closes.
+// Depends-On bullet or a non-empty `[dependsOn::]` field). Closed links stay
+// as history (§5) and do not by themselves keep the project Blocked; the
+// schedule writers follow `^prj`'s post-gesture status instead.
 function projectPrjKeepsDependsOnReason(content) {
   const text = String(content || "");
   if (findProjectLifecycleTaskIndex(text) === -1) {
@@ -25199,12 +25331,16 @@ function projectPrjKeepsDependsOnReason(content) {
 }
 
 // True when the recovery snapshot already proves the resident leaves
-// Blocked (ready, next, or in-progress): the tag comes off even while the
-// `^prj` line still lists Depends-On links.
+// Blocked (ready, next, or in-progress). Schedule writers no longer use
+// this to strip the tag while `^prj` stays `[?]`: the tag follows `^prj`.
 function projectResidentRecoveryClears(recovery) {
   return Boolean(
     recovery && ["ready", "next", "in-progress"].includes(recovery.state),
   );
+}
+
+function projectPrjLineIsBlocked(lineText) {
+  return getObsidianTaskCheckboxStatus(lineText) === "?";
 }
 
 function planProjectTaskSchedules(
@@ -25262,9 +25398,13 @@ function planProjectTaskSchedules(
   const ambiguousTaskLines = [];
   const futureScheduledTaskLines = [];
   const recoveryCounts = emptyScheduledRecoveryCounts();
-  const prjKeepsDependsOn = projectPrjKeepsDependsOnReason(original);
+  const orderedTasks = [
+    ...tasks.filter((task) => task.isProjectTask),
+    ...tasks.filter((task) => !task.isProjectTask),
+  ];
+  let prjStaysBlocked = future;
 
-  for (const task of tasks) {
+  for (const task of orderedTasks) {
     let nextLine = task.text;
     const statusMatch = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
     const status = statusMatch ? statusMatch[1] : null;
@@ -25311,6 +25451,7 @@ function planProjectTaskSchedules(
         nextLine = recovery.line;
         recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
       }
+      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
       if (!priorField && scheduleResult.changed && !future) {
         // A due date is still an explicit project schedule; only the blocked
         // state changes when its reason clears.
@@ -25325,12 +25466,7 @@ function planProjectTaskSchedules(
           if (blockedLine !== nextLine) blockedTaskCount += 1;
           nextLine = blockedLine;
           futureScheduledTaskLines.push(task.line);
-        } else if (
-          !prjKeepsDependsOn ||
-          projectResidentRecoveryClears(
-            getTargetScheduledRecovery(options, task.line),
-          )
-        ) {
+        } else if (!prjStaysBlocked) {
           nextLine = setProjectBlockedTag(nextLine, false);
         }
       } else {
@@ -25359,12 +25495,11 @@ function planProjectTaskSchedules(
           nextLine = blockedLine;
           futureScheduledTaskLines.push(task.line);
         } else {
-          if (
-            !prjKeepsDependsOn ||
-            projectResidentRecoveryClears(
-              getTargetScheduledRecovery(options, task.line),
-            )
-          ) {
+          // The tag follows `^prj`'s post-gesture status (§13.8): strip it
+          // from every open resident when `^prj` leaves Blocked, and keep
+          // it while `^prj` stays `[?]`. Closed Depends-On history does
+          // not keep the tag by itself.
+          if (!prjStaysBlocked) {
             nextLine = setProjectBlockedTag(nextLine, false);
           }
           if (ownFuture) {
@@ -25372,7 +25507,7 @@ function planProjectTaskSchedules(
             if (blockedLine !== nextLine) blockedTaskCount += 1;
             nextLine = blockedLine;
             futureScheduledTaskLines.push(task.line);
-          } else {
+          } else if (!prjStaysBlocked) {
             const recovery = reconcileBlockedScheduledTaskLine(
               nextLine,
               getTargetScheduledRecovery(options, task.line),
@@ -25482,8 +25617,12 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
   let changedTaskCount = 0;
   let removedScheduledTaskCount = 0;
   const futureScheduledTaskLines = [];
-  const prjKeepsDependsOn = projectPrjKeepsDependsOnReason(original);
-  for (const task of tasks) {
+  const orderedTasks = [
+    ...tasks.filter((task) => task.isProjectTask),
+    ...tasks.filter((task) => !task.isProjectTask),
+  ];
+  let prjStaysBlocked = false;
+  for (const task of orderedTasks) {
     let nextLine = task.text;
     const match = OBSIDIAN_TASK_LINE_RE.exec(nextLine);
     if (!match || !OPEN_OBSIDIAN_TASK_STATUSES.has(match[1])) continue;
@@ -25508,6 +25647,7 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
       );
       nextLine = recovery.line;
       recordScheduledRecoveryOutcome(recoveryCounts, recovery.outcome);
+      prjStaysBlocked = projectPrjLineIsBlocked(nextLine);
     } else {
       const removed = removeProjectTaskScheduledFields(
         nextLine,
@@ -25515,12 +25655,7 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
       );
       nextLine = removed.line;
       if (removed.removedCount > 0) removedScheduledTaskCount += 1;
-      if (
-        !prjKeepsDependsOn ||
-        projectResidentRecoveryClears(
-          getTargetScheduledRecovery(options, task.line),
-        )
-      ) {
+      if (!prjStaysBlocked) {
         nextLine = setProjectBlockedTag(nextLine, false);
       }
       const ownFields = parseProjectTaskScheduledFields(nextLine);
@@ -25534,7 +25669,7 @@ function planProjectScheduledDelete(content, cursorLine, options = {}) {
         const blockedLine = blockObsidianTaskCheckboxStatus(nextLine);
         if (blockedLine !== nextLine) nextLine = blockedLine;
         futureScheduledTaskLines.push(task.line);
-      } else {
+      } else if (!prjStaysBlocked) {
         const recovery = reconcileBlockedScheduledTaskLine(
           nextLine,
           getTargetScheduledRecovery(options, task.line),
@@ -51380,6 +51515,10 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       registry: await readTasksStatusRegistry(this.app),
       today: new Date(),
       vaultContents: null,
+      markUnblockedLine: navFreshnessMarkUnblockedLine(
+        this.getFreshnessApi(),
+      ),
+      ...navNoteScopeFlags(normalizedPath),
     };
     const countedOptions = {
       ...options,
@@ -61107,24 +61246,67 @@ class BobNavigationHotkeysProjectConversionMixin {
       return false;
     }
 
-    // Repoint `#^prj` links BEFORE planning the Pomodoro cleanup (§13.10):
-    // the cleanup targets the restored block id, so the live links must
-    // already carry it to be consumed. A rewrite failure aborts before any
-    // write, leaving the project note intact for a retry.
-    let updatedLinkCount = 0;
+    // Plan `#^prj` rewrites in memory and write the parent first. Writing
+    // other files before the parent (a7fafed) edited Health.md when it
+    // linked to the project's `^prj`, then the parent write saw changed
+    // content and aborted with dangling links. A rewrite failure still
+    // aborts before any write.
+    const parentPath = normalizeVaultRelativePath(parentFile.path);
+    const rewriteContents = new Map();
+    let rewriteReadFailed = false;
     if (classification.blockRewrites.length > 0) {
-      const rewriteResult = await this.applyBlockIdLinkRewrites(
+      for (const rewrite of classification.blockRewrites) {
+        const path = normalizeVaultRelativePath(rewrite.path);
+        if (!path) {
+          rewriteReadFailed = true;
+          break;
+        }
+        if (path === parentPath) {
+          rewriteContents.set(path, parentContentToWrite);
+          continue;
+        }
+        const file =
+          vault && typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(path)
+            : null;
+        if (!this.isMarkdownFile(file)) {
+          rewriteReadFailed = true;
+          break;
+        }
+        try {
+          rewriteContents.set(path, String((await vault.read(file)) || ""));
+        } catch (_error) {
+          rewriteReadFailed = true;
+          break;
+        }
+      }
+    }
+    let rewritePlan = {
+      updatedLinkCount: 0,
+      failedLinkCount: rewriteReadFailed ? 1 : 0,
+      failed: rewriteReadFailed,
+      changes: [],
+    };
+    if (classification.blockRewrites.length > 0 && !rewriteReadFailed) {
+      rewritePlan = planBlockIdLinkContentRewrites(
         classification.blockRewrites,
         parentBasename,
         restored.blockId,
+        rewriteContents,
       );
-      updatedLinkCount = rewriteResult.updatedLinkCount;
-      if (rewriteResult.failed) {
-        new Notice(
-          `Could not update every link to "^prj" (${rewriteResult.failedLinkCount} failed); nothing was converted`,
-        );
-        return false;
-      }
+    }
+    const updatedLinkCount = rewritePlan.updatedLinkCount;
+    if (classification.blockRewrites.length > 0 && rewritePlan.failed) {
+      new Notice(
+        `Could not update every link to "^prj" (${rewritePlan.failedLinkCount} failed); nothing was converted`,
+      );
+      return false;
+    }
+    const parentRewrite = rewritePlan.changes.find(
+      (change) => change.path === parentPath,
+    );
+    if (parentRewrite) {
+      parentContentToWrite = parentRewrite.after;
     }
 
     let dailyCleanup = null;
@@ -61135,15 +61317,29 @@ class BobNavigationHotkeysProjectConversionMixin {
         sourceContent: parentContent,
         today,
       });
-      const targets = [...restoredLines]
-        .filter((line) => isOpenObsidianTaskLine(line) && taskHasProjectBlockedTag(line))
-        .map((line) => getTrailingBlockId(line))
-        .filter(Boolean)
-        .map((blockId) => ({ path: parentFile.path, blockId }));
+      const targets = [
+        { path: sourceFile.path, blockId: "prj" },
+        restored.blockId
+          ? { path: parentFile.path, blockId: restored.blockId }
+          : null,
+        ...restoredLines
+          .filter((line) => isOpenObsidianTaskLine(line) && taskHasProjectBlockedTag(line))
+          .map((line) => getTrailingBlockId(line))
+          .filter(Boolean)
+          .map((blockId) => ({ path: parentFile.path, blockId })),
+      ].filter(Boolean);
       if (dailyCleanupSnapshot && targets.length > 0) {
+        const dailyPath = normalizeVaultRelativePath(
+          dailyCleanupSnapshot.dailyPath,
+        );
+        const dailyRewrite = rewritePlan.changes.find(
+          (change) => change.path === dailyPath,
+        );
         const dailyContent = dailyCleanupSnapshot.sameFile
           ? parentContentToWrite
-          : dailyCleanupSnapshot.content;
+          : dailyRewrite
+            ? dailyRewrite.after
+            : dailyCleanupSnapshot.content;
         dailyCleanup = planDeferredPomodoroLinkCleanup(
           dailyContent,
           targets,
@@ -61153,8 +61349,12 @@ class BobNavigationHotkeysProjectConversionMixin {
             removeEmptiedEntries: true,
           },
         );
-        if (dailyCleanupSnapshot.sameFile && dailyCleanup.changed) {
-          parentContentToWrite = dailyCleanup.content;
+        if (dailyCleanup.changed) {
+          if (dailyCleanupSnapshot.sameFile) {
+            parentContentToWrite = dailyCleanup.content;
+          } else if (dailyRewrite) {
+            dailyRewrite.after = dailyCleanup.content;
+          }
         }
       }
     }
@@ -61178,9 +61378,35 @@ class BobNavigationHotkeysProjectConversionMixin {
       return false;
     }
 
+    for (const change of rewritePlan.changes) {
+      if (change.path === parentPath) {
+        continue;
+      }
+      const file =
+        vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(change.path)
+          : null;
+      if (!this.isMarkdownFile(file)) {
+        continue;
+      }
+      try {
+        await vault.process(file, (current) =>
+          current === change.before ? change.after : current,
+        );
+      } catch (_error) {
+        // Post-write rewrite failures do not roll the parent back.
+      }
+    }
+
+    const dailyPath = dailyCleanupSnapshot
+      ? normalizeVaultRelativePath(dailyCleanupSnapshot.dailyPath)
+      : null;
+    const dailyHandledInRewrites =
+      Boolean(dailyPath) &&
+      rewritePlan.changes.some((change) => change.path === dailyPath);
     const dailyCleanupFailed =
       dailyCleanup && dailyCleanup.changed && dailyCleanupSnapshot &&
-      !dailyCleanupSnapshot.sameFile
+      !dailyCleanupSnapshot.sameFile && !dailyHandledInRewrites
         ? !(await this.writeDeferredPomodoroCleanup(
             dailyCleanupSnapshot,
             dailyCleanup,
@@ -62658,6 +62884,7 @@ module.exports.helpers = {
   collectProjectSourceDependencyBlock,
   splitProjectLifecycleChildren,
   rewriteProjectDependencyLineForDestination,
+  planBlockIdLinkContentRewrites,
   getProjectNoteToTaskNoticeText,
   formatProjectSectionTitle,
   parseProjectSectionBulletTitle,
@@ -62811,6 +63038,8 @@ module.exports.helpers = {
   navFreshnessMarkUnblockedLine,
   navNoteScopeFlags,
   collectProjectDependencyPromotionRows,
+  collectOpenTaskDependsOnLinks,
+  promoteMovePrerequisiteTarget,
   applyProjectRecoveryEdges,
   setProjectBlockedTag,
   buildDependencyEditNoticeWithProject,

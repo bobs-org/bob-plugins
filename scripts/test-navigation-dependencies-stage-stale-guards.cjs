@@ -78,6 +78,44 @@ test("stage vault commit with a stale write notifies once and reopens", async ()
   assert.equal(editor.content, mutated);
 });
 
+test("commitVaultRefs refuses a cycle through implicit resident edges", async () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "",
+    "- [?] #task #prj Ship it [dependsOn:: job__linkedin] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[job#^linkedin]]",
+    "- [ ] #task Draft the pitch ^pitch",
+  ].join("\n");
+  const job = "- [?] #task Fix LinkedIn now ^linkedin";
+  const { plugin } = stubPlugin({
+    "Project.md": project,
+    "job.md": job,
+  });
+  const editor = new TransactionEditor(project, { line: 5, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Project.md", 5);
+  modal.vaultStage = {
+    dependent: {
+      path: "Project.md",
+      line: 5,
+      key: "Project.md\x00prj",
+      projectResidentKeys: ["Project.md\x00pitch"],
+    },
+    edges: new Map([["job.md\x00linkedin", ["Project.md\x00pitch"]]]),
+  };
+  const before = notices.length;
+  const applied = await modal.commitVaultRefs(
+    [{ path: "job.md", blockId: "linkedin" }],
+    [],
+    { stale: 0, other: 0 },
+  );
+  assert.equal(applied, false);
+  assert.match(notices[before], /would create a cycle/);
+  assert.doesNotMatch(editor.content, /Fix LinkedIn now/);
+});
+
 // A stale single-remove write notifies exactly once through the same real
 // path: the writer's notice is the only one, and the stage reopens fresh.
 test("stage single remove with a stale write notifies once and reopens", async () => {

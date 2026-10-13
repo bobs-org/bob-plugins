@@ -309,6 +309,113 @@ function collectProjectDependencyPromotionRows(
   return rows;
 }
 
+// Direct-child Depends-On links of open tasks in `lines`, each carrying
+// that task's own checkbox status. Closed tasks never promote (ADJ-11
+// move path).
+function collectOpenTaskDependsOnLinks(lines) {
+  const source = Array.isArray(lines) ? lines : [];
+  const items = [];
+  for (let line = 0; line < source.length; line += 1) {
+    const text = String(source[line] || "");
+    if (!isOpenObsidianTaskLine(text)) {
+      continue;
+    }
+    const status = getObsidianTaskCheckboxStatus(text);
+    const indent = getBulletIndentWidth(text);
+    for (let child = line + 1; child < source.length; child += 1) {
+      const childText = String(source[child] || "");
+      if (!childText.trim()) {
+        continue;
+      }
+      if (getBulletIndentWidth(childText) <= indent) {
+        break;
+      }
+      if (findNearestParentListItem(source, child) !== line) {
+        continue;
+      }
+      const details = parseDependencyNavigationBulletDetails(childText);
+      if (!details) {
+        continue;
+      }
+      for (const link of details.links || []) {
+        items.push(Object.freeze({ status, link }));
+      }
+    }
+  }
+  return Object.freeze(items);
+}
+
+// Promote one open prerequisite for a move into a blocked project
+// (ADJ-11/PDB9): never raise a `^prj` target; walk through to that
+// project's open Depends-On links. Returns how many lines changed.
+function promoteMovePrerequisiteTarget(
+  files,
+  changes,
+  otherContents,
+  refPath,
+  blockId,
+  desiredLane,
+) {
+  const path = normalizeVaultRelativePath(refPath);
+  if (!path || !blockId || !files || !files.has(path) || !desiredLane) {
+    return 0;
+  }
+  const content = String(files.get(path) || "");
+  const contentLines = content.split(/\r?\n/);
+  const at = findTaskLineByTrailingBlockId(contentLines, blockId);
+  if (at === null) {
+    return 0;
+  }
+  const text = String(contentLines[at] || "");
+  const status = getObsidianTaskCheckboxStatus(text);
+  if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || status === "?") {
+    return 0;
+  }
+  let count = 0;
+  const applyPromotion = (targetPath, line, from, to) => {
+    if (from === to) {
+      return;
+    }
+    const current = String(files.get(targetPath) || "");
+    const ending = current.includes("\r\n") ? "\r\n" : "\n";
+    const nextLines = current.split(/\r?\n/);
+    if (line < 0 || line >= nextLines.length) {
+      return;
+    }
+    nextLines[line] = to;
+    const after = nextLines.join(ending);
+    files.set(targetPath, after);
+    const before = changes.has(targetPath)
+      ? changes.get(targetPath).before
+      : otherContents && otherContents.get(targetPath);
+    if (after !== before) {
+      changes.set(
+        targetPath,
+        Object.freeze({ before: String(before || ""), after }),
+      );
+      count += 1;
+    }
+  };
+  if (isProjectLifecycleTaskLine(text) && blockId === "prj") {
+    for (const walked of collectProjectDependencyPromotionRows(files, path)) {
+      applyPromotion(
+        walked.path,
+        walked.line,
+        walked.text,
+        promoteObsidianTaskCheckboxStatus(walked.text, desiredLane),
+      );
+    }
+    return count;
+  }
+  applyPromotion(
+    path,
+    at,
+    text,
+    promoteObsidianTaskCheckboxStatus(text, desiredLane),
+  );
+  return count;
+}
+
 function formatProjectRecoveryReason(reasons) {
   const dependency = (Array.isArray(reasons) ? reasons : []).find(
     (reason) => reason.kind === "project_dependency",

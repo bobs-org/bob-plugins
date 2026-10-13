@@ -473,6 +473,133 @@ test("task status helpers keep Blocked open but rankless", () => {
   }
 });
 
+test("a due project date with only closed Depends-On history strips the tag", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-30] ^prj",
+    "  - ⛓️ **DEPENDS ON:** ~~[[job#^done]]~~",
+    "- [?] #task Work [scheduled:: 2026-07-30] #prj_is_blocked [fresh:: 2026-07-01] ^work",
+  ].join("\n");
+  const plan = helpers.planProjectScheduledUpdate(
+    input,
+    3,
+    "2026-07-11",
+    new Date(2026, 6, 11),
+    {
+      recoveryByLine: new Map([
+        [3, { state: "ready", rank: " ", reason: null }],
+        [5, { state: "ready", rank: " ", reason: null }],
+      ]),
+      markUnblockedLine: (line, options) => {
+        const date =
+          options.today instanceof Date
+            ? `${options.today.getFullYear()}-${String(options.today.getMonth() + 1).padStart(2, "0")}-${String(options.today.getDate()).padStart(2, "0")}`
+            : String(options.today);
+        return line.replace(
+          /(?= \^[A-Za-z0-9-]+\s*$)/,
+          ` [unblocked:: ${date}]`,
+        );
+      },
+    },
+  );
+  assert.equal(plan.valid, true, plan.error);
+  const out = plan.content.split("\n");
+  assert.match(out[3], /^- \[ \] #task Ship/);
+  assert.doesNotMatch(out[3], /#prj_is_blocked/);
+  const resident = out.find((line) => line.includes("^work"));
+  assert.match(resident, /^- \[ \] #task Work/);
+  assert.doesNotMatch(resident, /#prj_is_blocked/);
+  assert.match(resident, /\[unblocked:: 2026-07-11\]/);
+});
+
+test("Ctrl+D with only closed Depends-On history strips the tag", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-16] ^prj",
+    "  - ⛓️ **DEPENDS ON:** ~~[[job#^done]]~~",
+    "- [?] #task Work #prj_is_blocked [scheduled:: 2026-07-16] [fresh:: 2026-07-01] ^work",
+  ].join("\n");
+  const deleted = helpers.planProjectScheduledDelete(input, 3, {
+    today: new Date(2026, 6, 15),
+    recoveryByLine: new Map([
+      [3, { state: "ready", rank: " ", reason: null }],
+      [5, { state: "ready", rank: " ", reason: null }],
+    ]),
+    markUnblockedLine: (line) =>
+      line.replace(/(?= \^[A-Za-z0-9-]+\s*$)/, " [unblocked:: 2026-07-15]"),
+  });
+  assert.equal(deleted.valid, true, deleted.error);
+  const out = deleted.content.split("\n");
+  assert.match(out[3], /^- \[ \] #task Ship/);
+  const resident = out.find((line) => line.includes("^work"));
+  assert.match(resident, /^- \[ \] #task Work/);
+  assert.doesNotMatch(deleted.content, /#prj_is_blocked/);
+  assert.match(resident, /\[unblocked:: 2026-07-15\]/);
+});
+
+test("Ctrl+D with an open Depends-On link remaining keeps the tag", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2026-07-16] ^prj",
+    "  - ⛓️ **DEPENDS ON:** [[job#^linkedin]]",
+    "- [?] #task Work #prj_is_blocked [scheduled:: 2026-07-16] [fresh:: 2026-07-01] ^work",
+  ].join("\n");
+  const deleted = helpers.planProjectScheduledDelete(input, 3, {
+    today: new Date(2026, 6, 15),
+    recoveryByLine: new Map([
+      [3, { state: "blocked", rank: null, reason: "open dependency: job__linkedin" }],
+      [5, { state: "blocked", rank: null, reason: "project_dependency: job.md#^linkedin" }],
+    ]),
+  });
+  assert.equal(deleted.valid, true, deleted.error);
+  const out = deleted.content.split("\n");
+  assert.ok(out[3].startsWith("- [?]"), out[3]);
+  const resident = out.find((line) => line.includes("^work"));
+  assert.ok(resident.startsWith("- [?]"), resident);
+  assert.ok(resident.includes("#prj_is_blocked"), resident);
+});
+
+test("counted ^prj schedule sessions write [unblocked::] when the writer is passed", () => {
+  const input = [
+    "---",
+    "type: [[project]]",
+    "---",
+    "- [?] #task Ship #hide [scheduled:: 2099-01-01] ^prj",
+    "- [?] #task Work #prj_is_blocked [scheduled:: 2099-01-01] [fresh:: 2026-07-01] ^work",
+  ].join("\n");
+  const session = helpers.discoverCountedObsidianTaskTargets(input, 3, 0);
+  const calls = [];
+  const plan = helpers.planCountedBulletPropertyBatch(
+    input,
+    session,
+    "scheduled",
+    "2026-10-12",
+    {
+      operation: "set",
+      today: new Date(2026, 9, 12),
+      recoveryByLine: new Map([
+        [3, { state: "ready", rank: " " }],
+        [4, { state: "ready", rank: " " }],
+      ]),
+      markUnblockedLine: (line, options) => {
+        calls.push(options);
+        return `${line} [unblocked:: 2026-10-12]`;
+      },
+    },
+  );
+  assert.equal(plan.valid, true, plan.error);
+  assert.match(plan.content, /^- \[ \] #task Ship/m);
+  assert.match(plan.content, /\^work[^\n]*\[unblocked:: 2026-10-12\]|\[unblocked:: 2026-10-12\][^\n]*\^work/);
+  assert.doesNotMatch(plan.content, /#prj_is_blocked/);
+  assert.ok(calls.length >= 1);
+});
+
 test("a due project date keeps the tag while ^prj holds Depends-On links", () => {
   const input = [
     "---",

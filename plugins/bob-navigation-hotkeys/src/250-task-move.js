@@ -257,64 +257,34 @@ function planTaskMoveAcrossFiles(options = {}) {
   }
 
   // Design §5 commitment transfer for a move into a blocked project: the
-  // moved tasks lose their lanes to `[?]`, so every open prerequisite now
-  // blocking them — the destination project's `^prj` prerequisites and the
-  // moved tasks' own carried prerequisites — rises to the strongest moved
-  // lane. Only targets verifiably open in loaded contents promote; unknown
-  // notes are left for reconcile.
+  // moved tasks lose their lanes to `[?]`. The destination project's `^prj`
+  // prerequisites rise to the strongest moved lane; each moved open task's
+  // own Depends-On targets rise to that task's lane. ADJ-11/PDB9: never
+  // raise a `^prj` target — walk through to that project's open deps.
+  // Closed tasks never promote. Unknown notes are left for reconcile.
   let promotedOnMoveCount = 0;
   if (destinationIsBlockedProject) {
-    const movedLane = strongestDependencyPromotionLane(
+    const working = new Map([
+      [sourcePath, changes.get(sourcePath).after],
+      [destinationPath, changes.get(destinationPath).after],
+      ...otherContents,
+    ]);
+    const promote = (refPath, blockId, desiredLane) => {
+      promotedOnMoveCount += promoteMovePrerequisiteTarget(
+        working,
+        changes,
+        otherContents,
+        refPath,
+        blockId,
+        desiredLane,
+      );
+    };
+    const projectLane = strongestDependencyPromotionLane(
       rewrittenMovedBlocks
         .flat()
         .map((line) => getObsidianTaskCheckboxStatus(String(line || ""))),
     );
-    if (movedLane) {
-      const working = new Map([
-        [sourcePath, changes.get(sourcePath).after],
-        [destinationPath, changes.get(destinationPath).after],
-        ...otherContents,
-      ]);
-      const promoteMovePrerequisite = (refPath, blockId) => {
-        const path = normalizeVaultRelativePath(refPath);
-        if (!path || !blockId || !working.has(path)) {
-          return;
-        }
-        const content = String(working.get(path) || "");
-        const contentLines = content.split(/\r?\n/);
-        const at = findTaskLineByTrailingBlockId(contentLines, blockId);
-        if (at === null) {
-          return;
-        }
-        const status = getObsidianTaskCheckboxStatus(
-          String(contentLines[at] || ""),
-        );
-        if (!OPEN_OBSIDIAN_TASK_STATUSES.has(status) || status === "?") {
-          return;
-        }
-        const promoted = promoteObsidianTaskCheckboxStatus(
-          contentLines[at],
-          movedLane,
-        );
-        if (promoted === contentLines[at]) {
-          return;
-        }
-        const nextLines = contentLines.slice();
-        nextLines[at] = promoted;
-        const ending = content.includes("\r\n") ? "\r\n" : "\n";
-        const after = nextLines.join(ending);
-        working.set(path, after);
-        const before = changes.has(path)
-          ? changes.get(path).before
-          : otherContents.get(path);
-        if (after !== before) {
-          changes.set(
-            path,
-            Object.freeze({ before: String(before || ""), after }),
-          );
-          promotedOnMoveCount += 1;
-        }
-      };
+    if (projectLane) {
       for (
         const item of collectProjectTaskDependencyItems(
           changes.get(destinationPath).after,
@@ -324,26 +294,25 @@ function planTaskMoveAcrossFiles(options = {}) {
         if (item.internal || item.archive || !item.blockId) {
           continue;
         }
-        promoteMovePrerequisite(item.path, item.blockId);
+        promote(item.path, item.blockId, projectLane);
       }
-      for (const block of movedBlocks) {
-        for (const line of block) {
-          const details = parseDependencyNavigationBulletDetails(line);
-          if (!details) {
-            continue;
-          }
-          for (const link of details.links || []) {
-            const note = String((link && link.note) || "").trim();
-            const depPath = note
-              ? canonicalProjectDependencyPath(note, destinationPath)
-              : (
-                  identities.movedBlockIds.has(link && link.blockId)
-                    ? destinationPath
-                    : sourcePath
-                );
-            promoteMovePrerequisite(depPath, link && link.blockId);
-          }
+    }
+    for (const block of rewrittenMovedBlocks) {
+      for (const item of collectOpenTaskDependsOnLinks(block)) {
+        const link = item.link;
+        const note = String((link && link.note) || "").trim();
+        const depPath = note
+          ? canonicalProjectDependencyPath(note, destinationPath)
+          : (
+              identities.movedBlockIds.has(link && link.blockId)
+                ? destinationPath
+                : sourcePath
+            );
+        const desired = getDependencyPromotionStatus(item.status);
+        if (!desired) {
+          continue;
         }
+        promote(depPath, link && link.blockId, desired);
       }
     }
   }

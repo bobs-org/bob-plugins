@@ -530,6 +530,47 @@ test("Pomodoro-line close appends the successor to the created continuation", as
   assert.equal(notices.length, 0);
 });
 
+test("Pomodoro-line close keeps the closing anchor after the picker re-plan", async () => {
+  // The re-plan reads the day after the close, where the closed entry is
+  // [x]; the pick must still anchor `closing` (a FIX placeholder after the
+  // closed entry), never the implicit destination under another entry.
+  notices.length = 0;
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] (09:00-09:25) — FIX",
+    "\t- ![[sase#^fix-apollo]]",
+    "- [ ] (10:00-10:25) — OTHER",
+    "\t- ",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "sase.md": [FIX_LINE, DEPENDENT_LINE].join("\n"),
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 3, ch: 4 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const seen = [];
+  installNavStub(plugin, seen);
+
+  const completed = await plugin.completeActivePomodoroTask(
+    editor,
+    { path: DAILY_PATH },
+    { pomodoroLine: 3 },
+  );
+
+  assert.equal(completed, true);
+  const value = editor.getValue();
+  assert.match(
+    value,
+    /^- \[x\] \(09:00-09:25\) — FIX\n\t- .*\n- \[ \] \(\) — FIX\n\t- \[\[sase#\^relaunch-failed\]\]\n- \[ \] \(10:00-10:25\) — OTHER\n\t- $/m,
+  );
+  assert.equal(seen.length, 1);
+  const row = seen[0].unblocked[0];
+  assert.equal(row.link.entry_name, "FIX");
+  assert.equal(row.link.entry_created, true);
+});
+
 test("completeTaskAtCursor returns the notice and shows nothing itself", async () => {
   notices.length = 0;
   const walkLine = "- [ ] #task Walk task [id:: walk__task] ^walk-task";

@@ -14726,9 +14726,22 @@ class TaskStatusCyclerSuccessorProjectMixin {
           } else if (Number.isInteger(planClosingEntry)) {
             freshClosing = planClosingEntry < dailyFreshLines.length ? planClosingEntry : null;
           }
+          // The anchor / already-planned baseline is the day before this
+          // gesture: the fresh text with the closed entry's headline restored
+          // to its pre-close form, so its links still anchor `closing`
+          // instead of falling through to the implicit destination.
+          let freshBefore = dailyFreshLines;
+          if (
+            hint && typeof hint.lineText === "string" &&
+            Number.isInteger(freshClosing) &&
+            freshClosing >= 0 && freshClosing < dailyFreshLines.length
+          ) {
+            freshBefore = dailyFreshLines.slice();
+            freshBefore[freshClosing] = hint.lineText;
+          }
           const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
           basenameCounts = freshBasenames;
-          let replanned = planFirst(selectedKeys, dailyFreshLines, dailyFreshLines, freshTasks, freshNotesObj, freshClosing, selectedDestinations);
+          let replanned = planFirst(selectedKeys, freshBefore, dailyFreshLines, freshTasks, freshNotesObj, freshClosing, selectedDestinations);
           if (!replanned) {
             replanned = plan;
             selectedKeys = [];

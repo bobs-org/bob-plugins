@@ -280,6 +280,110 @@ test("unblocked card renders recovered-only and still-blocked rows", () => {
   assert.ok(suffixes.includes("· waits on 2 more"));
 });
 
+test("project pull-in rows label empty projects and preserve project blocking reasons", () => {
+  const linked = linkedRow({
+    text: "Ship the outcome!",
+    trigger: "project_empty",
+    hide_removed: true,
+  });
+  const linkedView = helpers.buildUnblockedNoticeModel(
+    singleLinkedModel({ unblocked: [linked] }),
+    {},
+  );
+  assert.equal(linkedView.title, "Project empty");
+  assert.equal(
+    linkedView.text,
+    "🔓 Next in FIX: Ship the outcome! · project has no open tasks",
+  );
+  const linkedRoot = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(linkedView, linkedRoot, {});
+  assert.equal(
+    findFragmentNode(linkedRoot, nodeHasClass("bob-nh-notice-level")).text,
+    "Project empty",
+  );
+  const linkedChips = collectFragmentNodes(
+    linkedRoot,
+    nodeHasClass("bob-nh-notice-chip"),
+  ).map((node) => node.text);
+  assert.ok(linkedChips.includes("no open tasks"));
+
+  const surfaced = linkedRow({
+    text: "Ship the outcome!",
+    previous_status_symbol: " ",
+    status_symbol: " ",
+    status_name: "Ready",
+    link: null,
+    not_linked: null,
+    trigger: "project_empty",
+    hide_removed: true,
+  });
+  const surfacedView = helpers.buildUnblockedNoticeModel(
+    singleLinkedModel({ unblocked: [surfaced] }),
+    {},
+  );
+  assert.equal(
+    surfacedView.text,
+    "🔓 Surfaced: Ship the outcome! (Ready) · project has no open tasks",
+  );
+  const surfacedRoot = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(surfacedView, surfacedRoot, {});
+  assert.ok(
+    collectFragmentNodes(surfacedRoot, nodeHasClass("bob-nh-notice-chip"))
+      .some((node) => node.text === "no open tasks"),
+  );
+
+  const projectReasons = [
+    { reason: "project", suffix: "· blocked by project" },
+    { reason: "project_dependency", suffix: "· blocked by project" },
+    { reason: "project_schedule", scheduled: "2026-10-13", suffix: "· project until Oct 13" },
+  ];
+  for (const row of projectReasons) {
+    const view = helpers.buildUnblockedNoticeModel(
+      singleLinkedModel({
+        unblocked: [linkedRow({ link: null, not_linked: "project_member" })],
+        still_blocked: [
+          {
+            note_path: "proj.md",
+            block_id: "resident",
+            text: "Resident task",
+            trigger: "project_empty",
+            reason: row.reason,
+            scheduled: row.scheduled,
+          },
+        ],
+      }),
+      {},
+    );
+    assert.ok(view);
+    assert.equal(view.title, "Unblocked");
+    assert.equal(view.stillBlocked[0].suffix, `· no open tasks ${row.suffix}`);
+    const root = createFragmentNode();
+    helpers.renderUnblockedNoticeFragment(view, root, {});
+    assert.ok(
+      collectFragmentNodes(root, nodeHasClass("bob-nh-notice-chip"))
+        .some((node) => node.text === "project member"),
+    );
+  }
+
+  const blockedOnly = helpers.buildUnblockedNoticeModel(
+    singleLinkedModel({
+      unblocked: [],
+      still_blocked: [
+        {
+          note_path: "proj.md",
+          block_id: "resident",
+          text: "Resident task",
+          trigger: "project_empty",
+          reason: "project",
+        },
+      ],
+    }),
+    {},
+  );
+  assert.equal(blockedOnly.title, "Project empty");
+  assert.equal(blockedOnly.stillBlocked[0].suffix, "· no open tasks · blocked by project");
+});
+
 test("unblocked card caps visible rows with +N more", () => {
   const rows = [
     linkedRow(),

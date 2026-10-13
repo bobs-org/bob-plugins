@@ -27477,6 +27477,7 @@ const UNBLOCKED_NOTICE_NOT_LINKED_REASONS = Object.freeze({
   not_planned_today: "not planned today",
   breaker: "not linked · more than 5",
   project_task: "project task",
+  project_member: "project member",
   hidden: "hidden",
   disabled: "linking off",
   failed: "couldn't link",
@@ -27615,11 +27616,12 @@ function unblockedFallbackText(summary) {
   if (linked.length === 1) {
     const row = linked[0];
     const name = unblockedEntryDisplayName(row.entryName);
+    const projectEmpty = row.projectEmpty ? " · project has no open tasks" : "";
     if (row.entryCreated) {
       const nextUp = row.nextUp ? " (next up)" : "";
-      return `🔓 Next in new ${name} session${nextUp}: ${truncateUnblockedText(row.text)}`;
+      return `🔓 Next in new ${name} session${nextUp}: ${truncateUnblockedText(row.text)}${projectEmpty}`;
     }
-    return `🔓 Next in ${name}: ${truncateUnblockedText(row.text)}`;
+    return `🔓 Next in ${name}: ${truncateUnblockedText(row.text)}${projectEmpty}`;
   }
   if (linked.length > 1) {
     const names = [];
@@ -27634,14 +27636,29 @@ function unblockedFallbackText(summary) {
         .slice(0, 2)
         .map((row) => truncateUnblockedText(row.text));
       const tail = linked.length > 2 ? `, +${linked.length - 2}` : "";
-      return `🔓 ${linked.length} linked → ${names[0]}: ${texts.join(", ")}${tail}`;
+      const projectEmpty = linked.every((row) => row.projectEmpty)
+        ? " · project has no open tasks"
+        : "";
+      return `🔓 ${linked.length} linked → ${names[0]}: ${texts.join(", ")}${tail}${projectEmpty}`;
     }
-    return `🔓 ${linked.length} linked · ${names.join(", ")}`;
+    const projectEmpty = linked.every((row) => row.projectEmpty)
+      ? " · project has no open tasks"
+      : "";
+    return `🔓 ${linked.length} linked · ${names.join(", ")}${projectEmpty}`;
   }
   if (recovered.length > 0) {
     const first = recovered[0];
     const lane = unblockedNoticeText(first.lane);
-    return `🔓 Unblocked: ${truncateUnblockedText(first.text)}${lane ? ` (${lane})` : ""}`;
+    const projectRows = recovered.filter((row) => row.projectEmpty);
+    if (
+      projectRows.length === 1 &&
+      first.hideRemoved &&
+      first.previousStatusSymbol === first.statusSymbol
+    ) {
+      return `🔓 Surfaced: ${truncateUnblockedText(first.text)}${lane ? ` (${lane})` : ""} · project has no open tasks`;
+    }
+    const projectEmpty = first.projectEmpty ? " · project has no open tasks" : "";
+    return `🔓 Unblocked: ${truncateUnblockedText(first.text)}${lane ? ` (${lane})` : ""}${projectEmpty}`;
   }
   return "🔓 Unblocked";
 }
@@ -27678,7 +27695,10 @@ function buildUnblockedNoticeModel(model, options = {}) {
           }
         : null;
     const hasFailure = failure !== null && failure.count > 0;
-    if (unblocked.length === 0 && !hasFailure) {
+    const hasProjectStillBlocked = stillBlocked.some(
+      (row) => unblockedNoticeText(row.trigger) === "project_empty",
+    );
+    if (unblocked.length === 0 && !hasFailure && !hasProjectStillBlocked) {
       return null;
     }
     const dailyPath = unblockedNoticeText(model.daily_path);
@@ -27697,6 +27717,11 @@ function buildUnblockedNoticeModel(model, options = {}) {
         fullText: unblockedNoticeText(row.text),
         inbox: row.inbox === true,
         lane: unblockedRowLane(row),
+        trigger: unblockedNoticeText(row.trigger),
+        projectEmpty: unblockedNoticeText(row.trigger) === "project_empty",
+        previousStatusSymbol: unblockedNoticeText(row.previous_status_symbol),
+        statusSymbol: unblockedNoticeText(row.status_symbol),
+        hideRemoved: row.hide_removed === true,
       };
       if (link) {
         linked.push(
@@ -27726,16 +27751,26 @@ function buildUnblockedNoticeModel(model, options = {}) {
       );
       const reason = unblockedNoticeText(row.reason);
       const scheduled = unblockedNoticeText(row.scheduled);
-      const suffix =
-        reason === "scheduled" && scheduled
-          ? `· waits until ${formatUnblockedScheduledDate(scheduled)}`
-          : `· waits on ${waitsOn} more`;
+      const projectEmpty = unblockedNoticeText(row.trigger) === "project_empty";
+      let reasonSuffix = "";
+      if (["project", "project_dependency", "project_schedule"].includes(reason)) {
+        reasonSuffix = scheduled
+          ? `· project until ${formatUnblockedScheduledDate(scheduled)}`
+          : "· blocked by project";
+      } else if (reason === "scheduled" && scheduled) {
+        reasonSuffix = `· waits until ${formatUnblockedScheduledDate(scheduled)}`;
+      } else {
+        reasonSuffix = `· waits on ${waitsOn} more`;
+      }
+      const suffix = `${projectEmpty ? "· no open tasks " : ""}${reasonSuffix}`;
       return Object.freeze({
         note_path: unblockedNoticeText(row.note_path),
         block_id: unblockedNoticeText(row.block_id),
         text: truncateUnblockedText(row.text),
         fullText: unblockedNoticeText(row.text),
         inbox: row.inbox === true,
+        trigger: unblockedNoticeText(row.trigger),
+        projectEmpty,
         suffix,
       });
     });
@@ -27827,7 +27862,10 @@ function buildUnblockedNoticeModel(model, options = {}) {
       isBreaker,
       total: unblocked.length,
     };
-    const text = unblockedFallbackText(summary);
+    const text = unblockedFallbackText({
+      ...summary,
+      projectEmpty: ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty),
+    });
     const durationMs = Math.min(
       10000,
       6000 + 1000 * Math.max(0, Math.min(3, ordered.length) - 1),
@@ -27847,6 +27885,10 @@ function buildUnblockedNoticeModel(model, options = {}) {
       receipt,
       chips: Object.freeze(chips),
       text,
+      title:
+        ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty)
+          ? "Project empty"
+          : "Unblocked",
       durationMs,
     });
   } catch (error) {
@@ -27931,7 +27973,7 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
     text: "🔓",
     attr: { "aria-hidden": "true" },
   });
-  headerEl.createSpan({ cls: "bob-nh-notice-level", text: "Unblocked" });
+  headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.title || "Unblocked" });
   if (model.countPill) {
     headerEl.createSpan({
       cls: "bob-nh-notice-count",
@@ -27976,6 +28018,12 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
           rowEl.createSpan({
             cls: "bob-nh-notice-chip is-ok",
             text: row.lane,
+          });
+        }
+        if (row.projectEmpty) {
+          rowEl.createSpan({
+            cls: "bob-nh-notice-chip is-muted",
+            text: "no open tasks",
           });
         }
         const extra = [];
@@ -28025,6 +28073,12 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
           rowEl.createSpan({
             cls: "bob-nh-notice-chip is-muted",
             text: row.lane,
+          });
+        }
+        if (row.projectEmpty) {
+          rowEl.createSpan({
+            cls: "bob-nh-notice-chip is-muted",
+            text: "no open tasks",
           });
         }
         if (row.reason) {

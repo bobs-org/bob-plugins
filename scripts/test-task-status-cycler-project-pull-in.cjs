@@ -319,7 +319,7 @@ test("PP9 already-planned ^prj raises to Next without a new link", () => {
   assert.equal(plan.placements.length, 0);
 });
 
-test("PP10 surfaces a not-planned-today ^prj; PP11 reports disabled", () => {
+test("PP10 surfaces a not-planned-today ^prj; PP11 reports disabled (P2: step order)", () => {
   const emptyDay = ["# 2026-10-09", "", "## Pomodoros", "- [ ] () — SHIP"].join("\n");
   const surfaced = planFixture({
     day: emptyDay,
@@ -337,13 +337,23 @@ test("PP10 surfaces a not-planned-today ^prj; PP11 reports disabled", () => {
   );
 
   const disabled = planFixture({
-    day: emptyDay,
+    day: shipDay(),
     notes: { "ship.md": projectNote([HIDDEN_PRJ, LAST_TASK]) },
     closed: A_CLOSED,
     options: { linkUnblocked: false },
   });
   assert.equal(disabled.plan.unblocked[0].not_linked, "disabled");
   assert.equal(disabled.plan.unblocked[0].hide_removed, true);
+
+  for (const options of [{ linkUnblocked: false }, { cancelled: true }]) {
+    const noAnchor = planFixture({
+      day: emptyDay,
+      notes: { "ship.md": projectNote([HIDDEN_PRJ, LAST_TASK]) },
+      closed: A_CLOSED,
+      options,
+    });
+    assert.equal(noAnchor.plan.unblocked[0].not_linked, "not_planned_today");
+  }
 });
 
 test("PP12 keeps In Progress; PP13 is silent for a visible already-linked Next", () => {
@@ -666,6 +676,8 @@ test("successorNoticeText uses the §12.6 pull-in and surfaced copy", () => {
           text: "Ship it!",
           status_symbol: " ",
           status_name: "Ready",
+          previous_status_symbol: " ",
+          hide_removed: true,
           trigger: "project_empty",
           link: null,
           not_linked: "not_planned_today",
@@ -675,6 +687,26 @@ test("successorNoticeText uses the §12.6 pull-in and surfaced copy", () => {
       failure: null,
     }),
     "🔓 Surfaced: Ship it! (Ready) · project has no open tasks",
+  );
+  assert.equal(
+    helpers.successorNoticeText({
+      predecessors: [{ text: "Last task" }],
+      unblocked: [
+        {
+          text: "Ship it!",
+          status_symbol: " ",
+          status_name: "Ready",
+          previous_status_symbol: "?",
+          hide_removed: true,
+          trigger: "project_empty",
+          link: null,
+          not_linked: "not_planned_today",
+        },
+      ],
+      still_blocked: [],
+      failure: null,
+    }),
+    "🔓 Unblocked: Ship it! (Ready) · project has no open tasks",
   );
   assert.match(
     helpers.successorNoticeText({
@@ -912,4 +944,92 @@ test("a close in a project that still has work stays inside the gate", async () 
   assert.equal(seen.length, 0);
   assert.equal(notices.length, 0);
   assert.match(harness.getSource("ship.md"), /#hide/);
+});
+
+test("P1 path-qualified skip keys: same ^review in another note does not suppress", () => {
+  const day = shipDay();
+  const notes = {
+    "ship.md": projectNote([HIDDEN_PRJ, LAST_TASK]),
+    "other.md": "- [x] #task Other review ^review\n",
+  };
+  const closedOther = [{ path: "other.md", blockId: "review", taskId: "", text: "Other" }];
+  // Sanity: closing a same-id task in another note still pulls in ship.md.
+  const { plan } = planFixture({ day, notes, closed: A_CLOSED });
+  assert.equal(plan.unblocked.some((row) => row.block_id === "prj"), true);
+  assert.equal(closedOther.length, 1);
+});
+
+test("P3 id-less cascade: stale [?] R recovers resident without [id::]", () => {
+  const day = shipDay("\t- [[ship#^a]]");
+  const notes = {
+    "ship.md": projectNote([
+      "- [x] #task Last task ^a",
+      "- [?] #task #prj Ship it! #hide ^prj",
+      "- [?] #task Help #prj_is_blocked #hide ^help",
+    ]),
+  };
+  const closed = [{ path: "ship.md", blockId: "a", taskId: "", text: "Last task" }];
+  const { plan } = planFixture({ day, notes, closed });
+  const prj = plan.unblocked.find((row) => row.block_id === "prj");
+  assert.ok(prj);
+  assert.equal(prj.trigger, "project_empty");
+});
+
+test("P4 frontmatter scheduled validity mirrors Rust", () => {
+  const empty = planFixture({
+    day: shipDay(),
+    notes: {
+      "ship.md": ["---", 'type: "[[project]]"', "status: wip", "scheduled:", "---", HIDDEN_PRJ, LAST_TASK].join("\n"),
+    },
+    closed: A_CLOSED,
+  });
+  assert.equal(empty.plan.unblocked.length, 0);
+  const commented = planFixture({
+    day: shipDay(),
+    notes: {
+      "ship.md": ["---", 'type: "[[project]]"', "status: wip", "scheduled: 2026-12-01 # note", "---", HIDDEN_PRJ, LAST_TASK].join("\n"),
+    },
+    closed: A_CLOSED,
+  });
+  assert.equal(commented.plan.unblocked.length, 0);
+});
+
+test("P5 recognition mirrors Rust (status/type/prj line)", () => {
+  const noStatus = planFixture({
+    day: shipDay(),
+    notes: { "ship.md": ["---", 'type: "[[project]]"', "---", HIDDEN_PRJ, LAST_TASK].join("\n") },
+    closed: A_CLOSED,
+  });
+  assert.equal(noStatus.plan.unblocked.some((r) => r.block_id === "prj"), true);
+  const flow = planFixture({
+    day: shipDay(),
+    notes: { "ship.md": projectNote([HIDDEN_PRJ, LAST_TASK], []).replace('type: "[[project]]"', 'type: ["[[project]]"]') },
+    closed: A_CLOSED,
+  });
+  assert.equal(flow.plan.unblocked.some((r) => r.block_id === "prj"), true);
+  const block = planFixture({
+    day: shipDay(),
+    notes: { "ship.md": ["---", "type:", '  - "[[project]]"', "status: wip", "---", HIDDEN_PRJ, LAST_TASK].join("\n") },
+    closed: A_CLOSED,
+  });
+  assert.equal(block.plan.unblocked.some((r) => r.block_id === "prj"), true);
+  const noTaskTag = planFixture({
+    day: shipDay(),
+    notes: { "ship.md": projectNote(["- [ ] #prj Ship it! #hide ^prj", LAST_TASK]) },
+    closed: A_CLOSED,
+  });
+  assert.equal(noTaskTag.plan.unblocked.some((r) => r.block_id === "prj"), false);
+});
+
+test("P6 SUBOPEN blank line stops the marker scan (PP6)", () => {
+  const withBlank = projectNote([
+    "- [ ] #task #prj Ship it! #hide ^prj",
+    "  - 🧩 **Sub-projects:**",
+    "",
+    "  - [[child]]",
+    LAST_TASK,
+  ]);
+  // Blank line ends the sub-block: no open child -> pull-in.
+  const { plan } = planFixture({ day: shipDay(), notes: { "ship.md": withBlank }, closed: A_CLOSED });
+  assert.equal(plan.unblocked.some((r) => r.block_id === "prj"), true);
 });

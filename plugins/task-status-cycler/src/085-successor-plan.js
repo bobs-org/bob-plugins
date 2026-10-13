@@ -635,7 +635,6 @@ function planSuccessors(options = {}) {
     closed,
     index,
     dailyBefore,
-    dailyAfter,
     dailyPath,
     today,
     linkUnblocked,
@@ -658,6 +657,8 @@ function planSuccessors(options = {}) {
       hasLiveLink,
     });
   // GATE: no `[id::]` in C and no pull-in candidate → nothing.
+  // A `[?]` R pull-in still recovers N's residents via the same
+  // project-recovery wiring as the id branch (P3).
   if (closedTaskIds.size === 0) {
     if (!pullIns.hasCandidates) {
       return empty;
@@ -673,11 +674,12 @@ function planSuccessors(options = {}) {
           ),
         ),
       );
+    const idlessRecovery = projectPullInRecoveryMembersForIdless(noteTexts, index, pullIns, today);
     return applyContext(
-      pullIns.recovers,
+      [...pullIns.recovers, ...idlessRecovery.recovers],
       pullIns.successorMarks,
       pullIns.still_blocked,
-      [],
+      idlessRecovery.projectTagStripEdits,
       hasLiveLink,
     );
   }
@@ -695,23 +697,10 @@ function planSuccessors(options = {}) {
   }
 
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [...byTaskId.values()];
-  const { projectInfoByPath, projectRecoveryPaths } =
-    projectSuccessorRecoveryState(noteTexts, closedTaskIds, openIdsAfter, today);
-  for (const path of pullIns.cascadePaths) {
-    projectRecoveryPaths.add(path);
-    if (!projectInfoByPath.has(path)) {
-      const info = projectDependencyInfo(noteTexts[path] || "", path);
-      if (info) {
-        projectInfoByPath.set(path, info);
-      }
-    }
-  }
-  const projectTagStripEdits = projectSuccessorTagStripEdits(
-    projectInfoByPath,
-    projectRecoveryPaths,
-    openIdsAfter,
-    today,
-  );
+  const wiring = projectPullInRecoveryWiring(noteTexts, index, pullIns, today, closedTaskIds);
+  const projectInfoByPath = wiring.projectInfoByPath;
+  const projectRecoveryPaths = wiring.projectRecoveryPaths;
+  const projectTagStripEdits = wiring.projectTagStripEdits;
   const candidateByLocation = new Map();
   for (const task of allTasks) {
     if (

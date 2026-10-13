@@ -5,7 +5,7 @@
 const PROJECT_SUBPROJECTS_MARKER = "🧩 **Sub-projects:**";
 const PROJECT_HIDE_TAG = "#hide";
 const PROJECT_PRJ_TAG = "#prj";
-const PROJECT_OPEN_MARKS = new Set(["x", "X", "-"]);
+const PROJECT_CLOSED_MARKS = new Set(["x", "X", "-"]);
 const PROJECT_WIKILINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 
 function projectNoteTextFor(noteTexts, path) {
@@ -121,8 +121,11 @@ function lineHasTrailingPrjAnchor(line) {
 
 function projectFrontmatterScheduled(sourceText) {
   const value = parseFrontmatterScalar(sourceText, "scheduled");
-  if (value == null || value === "") {
+  if (value == null) {
     return { value: null, count: 0, valid: true };
+  }
+  if (value === "") {
+    return { value: "", count: 1, valid: false };
   }
   const parsed = parseStrictCalendarDate(value);
   return {
@@ -186,18 +189,33 @@ function projectHasScanIssue(sourceText) {
 
 function projectMarkerHasOpenChild(lines, prjLine) {
   const prjIndent = getLineIndentation(String(lines[prjLine] || "")).length;
+  const seen = new Set();
   for (let line = prjLine + 1; line < lines.length; line += 1) {
     const text = String(lines[line] || "");
-    const indent = getLineIndentation(text).length;
-    if (text.trim() && indent <= prjIndent && parseListItemPrefix(text)) {
+    if (!text.trim()) {
       break;
     }
-    if (!text.includes(PROJECT_SUBPROJECTS_MARKER)) {
+    const indent = getLineIndentation(text).length;
+    if (indent <= prjIndent && parseListItemPrefix(text)) {
+      break;
+    }
+    const prefix = parseListItemPrefix(text);
+    if (!prefix) {
+      continue;
+    }
+    const content = text.replace(/^([ \t]*)([-*+]|\d+[.)])[ \t]+/, "").trimStart();
+    if (!content.startsWith(PROJECT_SUBPROJECTS_MARKER)) {
       continue;
     }
     PROJECT_WIKILINK_RE.lastIndex = 0;
     let match;
+    let foundOpen = false;
     while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
+      const name = String(match[1] || "").split("#")[0].split("|")[0].trim();
+      if (!name || seen.has(name)) {
+        continue;
+      }
+      seen.add(name);
       const start = match.index;
       const end = start + match[0].length;
       const before = text.slice(0, start).trimEnd();
@@ -208,14 +226,14 @@ function projectMarkerHasOpenChild(lines, prjLine) {
           continue;
         }
       }
-      return true;
+      foundOpen = true;
     }
-    return false;
+    return foundOpen;
   }
   return false;
 }
 
-function projectRemainingCount(sourceText, scheduleApplies, skipKeys) {
+function projectRemainingCount(sourceText, scheduleApplies, skipKeys, notePath) {
   const lines = String(sourceText || "").split(/\r?\n/);
   const fenced = getFencedLineNumbers(lines);
   let remaining = 0;
@@ -225,7 +243,7 @@ function projectRemainingCount(sourceText, scheduleApplies, skipKeys) {
     }
     const text = String(lines[line] || "");
     const status = getTaskStatusForLine(text, line);
-    if (!status || PROJECT_OPEN_MARKS.has(status.rawSymbol)) {
+    if (!status || PROJECT_CLOSED_MARKS.has(status.rawSymbol)) {
       continue;
     }
     if (!lineMatchesTasksGlobalFilterText(text)) {
@@ -235,9 +253,9 @@ function projectRemainingCount(sourceText, scheduleApplies, skipKeys) {
       continue;
     }
     const parsed = parseTaskDependencyLine(text, "", line);
-    if (parsed && skipKeys && (
-      (parsed.blockId && skipKeys.has(`^${parsed.blockId}`)) ||
-      (parsed.taskId && skipKeys.has(`id:${parsed.taskId}`))
+    if (parsed && skipKeys && notePath && (
+      (parsed.blockId && skipKeys.has(`${notePath}\0^${parsed.blockId}`)) ||
+      (parsed.taskId && skipKeys.has(`${notePath}\0id:${parsed.taskId}`))
     )) {
       continue;
     }
@@ -276,10 +294,16 @@ function projectSurfaceState(text, path, today, options = {}) {
   if (!notePath || successorIsDonePath(notePath) || isCanonicalDailyNotePath(notePath)) {
     return null;
   }
+  if (!project089TypeIsProject(source)) {
+    return null;
+  }
+  if (project089StatusIsTerminal(source)) {
+    return null;
+  }
   if (projectHasScanIssue(source)) {
     return null;
   }
-  const project = projectDependencyInfo(source, notePath);
+  const project = project089Info(source, notePath);
   if (!project || !project.projectTask) {
     return null;
   }
@@ -291,7 +315,7 @@ function projectSurfaceState(text, path, today, options = {}) {
     ? leftover.value
     : project.scheduled;
   const skipKeys = options.skipKeys instanceof Set ? options.skipKeys : null;
-  const remaining = projectRemainingCount(source, scheduleApplies, skipKeys);
+  const remaining = projectRemainingCount(source, scheduleApplies, skipKeys, notePath);
   const lines = source.split(/\r?\n/);
   const subopen = projectMarkerHasOpenChild(lines, project.projectTask.line);
   return {
@@ -309,7 +333,6 @@ function projectSurfaceState(text, path, today, options = {}) {
       ),
       PROJECT_HIDE_TAG,
     ),
-    today: today || formatLocalDate(),
   };
 }
 
@@ -319,11 +342,12 @@ function projectClosedSkipKeys(closed) {
     if (!identity) {
       continue;
     }
+    const path = String(identity.path || "");
     if (identity.blockId) {
-      keys.add(`^${identity.blockId}`);
+      keys.add(`${path}\0^${identity.blockId}`);
     }
     if (identity.taskId) {
-      keys.add(`id:${identity.taskId}`);
+      keys.add(`${path}\0id:${identity.taskId}`);
     }
   }
   return keys;
@@ -376,7 +400,7 @@ function projectPullInDisplayText(task, lineText) {
   );
   return cleaned
     .split(/\s+/)
-    .filter((token) => token && token !== PROJECT_PRJ_TAG && token !== PROJECT_HIDE_TAG)
+    .filter((token) => token && token !== PROJECT_PRJ_TAG && projectWholeTagSpans(token, PROJECT_HIDE_TAG).length === 0)
     .join(" ");
 }
 
@@ -428,8 +452,20 @@ function projectPullInNeedsDependents(closed, noteTexts, today) {
       today,
       { skipKeys },
     );
-    if (surface && surface.task && (surface.task.dependsOn || []).length > 0) {
+    if (!surface || !surface.task) {
+      continue;
+    }
+    if ((surface.task.dependsOn || []).length > 0) {
       return true;
+    }
+    if (surface.task.status === "?") {
+      const text = projectNoteTextFor(noteTexts, path);
+      const tasks = parseTaskDependencyDocument(text, path).filter(
+        (task) => task && task.status && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status),
+      );
+      if (tasks.some((task) => task.blockId !== "prj" && Array.isArray(task.dependsOn) && task.dependsOn.length > 0)) {
+        return true;
+      }
     }
   }
   return false;
@@ -455,6 +491,7 @@ function projectEarliestAnchor(preds, closed, anchors) {
 
 // Plan pull-in verdicts in planSuccessors' recover / mark / still-blocked
 // shapes. One row per R; pull-ins replace SL11 project_task / hidden.
+
 function planProjectPullIns(options = {}) {
   const closed = Array.isArray(options.closed) ? options.closed : [];
   const index =
@@ -476,6 +513,16 @@ function planProjectPullIns(options = {}) {
   const cancelledClose = options.cancelled === true;
   const skipKeys = projectClosedSkipKeys(closed);
   const closedTaskIds = projectClosedTaskIds(closed);
+  const surfaceCache = new Map();
+  const cachedSurface = (noteText, path) => {
+    const key = String(path || "");
+    if (surfaceCache.has(key)) {
+      return surfaceCache.get(key);
+    }
+    const surface = projectSurfaceState(noteText, path, today, { skipKeys });
+    surfaceCache.set(key, surface);
+    return surface;
+  };
   const byTaskId = index.byTaskId instanceof Map ? index.byTaskId : new Map();
   const openIdsAfter = new Set();
   for (const [id, task] of byTaskId) {
@@ -543,12 +590,7 @@ function planProjectPullIns(options = {}) {
       continue;
     }
     seenNotes.add(path);
-    const surface = projectSurfaceState(
-      projectNoteTextFor(noteTexts, path),
-      path,
-      today,
-      { skipKeys },
-    );
+    const surface = cachedSurface(projectNoteTextFor(noteTexts, path), path);
     if (surface) {
       addCandidate(surface, projectPredsForNote(closed, path));
     }
@@ -568,7 +610,7 @@ function planProjectPullIns(options = {}) {
     if (!noteText) {
       continue;
     }
-    const surface = projectSurfaceState(noteText, task.path, today, { skipKeys });
+    const surface = cachedSurface(noteText, task.path);
     if (surface) {
       addCandidate(surface, projectPredsForDepends(closed, task.dependsOn));
     }
@@ -596,6 +638,7 @@ function planProjectPullIns(options = {}) {
         reason: "waits_on",
         waits_on: postOpen.length,
         scheduled: null,
+        project: task.path,
         trigger: "project_empty",
       });
       continue;
@@ -610,6 +653,7 @@ function planProjectPullIns(options = {}) {
         reason: "scheduled",
         waits_on: 0,
         scheduled: surface.scheduled,
+        project: task.path,
         trigger: "project_empty",
       });
       continue;
@@ -632,20 +676,20 @@ function planProjectPullIns(options = {}) {
       });
       continue;
     }
-    if (cancelledClose || !linkUnblocked) {
+    if (!hasAnchor) {
       recovers.push({
         task,
-        reason: cancelledClose ? "cancelled" : "disabled",
+        reason: "not_planned_today",
         predecessorRows,
         pullIn: true,
         hideRemoved,
       });
       continue;
     }
-    if (!hasAnchor) {
+    if (cancelledClose || !linkUnblocked) {
       recovers.push({
         task,
-        reason: "not_planned_today",
+        reason: cancelledClose ? "cancelled" : "disabled",
         predecessorRows,
         pullIn: true,
         hideRemoved,
@@ -796,11 +840,9 @@ function applySuccessorVerdicts(context) {
     let blockId = task.blockId || "";
     let blockIdCreated = false;
     const before = task.rawLine != null ? String(task.rawLine) : null;
-    let after = before;
+    let after = null;
     if (mark.pullIn) {
-      if (before != null) {
-        after = projectPullInRewriteLine(before, rank, { recoverRank: false });
-      }
+      after = null;
     } else {
       if (!blockId) {
         if (!mintedByNote.has(task.path)) {

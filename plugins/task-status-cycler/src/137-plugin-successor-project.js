@@ -64,8 +64,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         closedNoteTexts,
         today,
       );
-      const needsDependents = closedTaskIds.size > 0 ||
-        projectPullInNeedsDependents(identities, closedNoteTexts, today);
+      const needsDependents = projectPullInNeedsDependents(identities, closedNoteTexts, today);
       if (closedTaskIds.size === 0 && pullInPaths.length === 0) {
         return quietGate;
       }
@@ -90,7 +89,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         }
       }
       let dailyCurrent = null;
-      if (dailyPath && (closedTaskIds.size > 0 || pullInPaths.length > 0)) {
+      if (dailyPath) {
         dailyCurrent = await this.readSuccessorNoteText(
           dailyPath,
           active,

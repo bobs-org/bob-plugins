@@ -27862,10 +27862,7 @@ function buildUnblockedNoticeModel(model, options = {}) {
       isBreaker,
       total: unblocked.length,
     };
-    const text = unblockedFallbackText({
-      ...summary,
-      projectEmpty: ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty),
-    });
+    const text = unblockedFallbackText(summary);
     const durationMs = Math.min(
       10000,
       6000 + 1000 * Math.max(0, Math.min(3, ordered.length) - 1),

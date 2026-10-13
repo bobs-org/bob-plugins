@@ -283,3 +283,163 @@ async function applySuccessorNoteEditsWithUnblockedGuard(plugin, plan, context) 
   }
   return plugin.applySuccessorNoteEdits(plan, context);
 }
+
+// Project pull-in recognition + recovery wiring (P3/P5): kept in 088 so 089 stays ≤1000 lines.
+function project089TrimScalar(value) {
+  let text = String(value || "").trim();
+  if ((text.startsWith('"') && text.endsWith('"') && text.length >= 2) ||
+      (text.startsWith("'") && text.endsWith("'") && text.length >= 2)) {
+    text = text.slice(1, -1).trim();
+  }
+  return text;
+}
+
+function project089TypeIsProject(sourceText) {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  if (lines.length === 0 || !/^\s*---\s*$/.test(lines[0])) {
+    return false;
+  }
+  let inFrontmatter = true;
+  let inTypeList = false;
+  for (let line = 1; line < lines.length; line += 1) {
+    const text = lines[line];
+    if (/^\s*---\s*$/.test(text)) {
+      break;
+    }
+    if (!inTypeList) {
+      const match = text.match(/^type\s*:\s*(.*?)\s*$/);
+      if (!match) {
+        continue;
+      }
+      const rest = match[1];
+      if (!rest) {
+        inTypeList = true;
+        continue;
+      }
+      const trimmed = rest.trim();
+      if (trimmed.startsWith("[")) {
+        const inner = trimmed.replace(/^\[/, "").replace(/\]$/, "");
+        for (const item of inner.split(",")) {
+          const clean = project089TrimScalar(item).replace(/^\[+|\]+$/g, "").replace(/^["']+|["']+$/g, "").trim();
+          if (clean === "[[project]]" || clean === "project") {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (project089TrimScalar(trimmed) === "[[project]]") {
+        return true;
+      }
+      return false;
+    }
+    if (!text.trim()) {
+      continue;
+    }
+    const item = text.trimStart().match(/^-\s*(.*?)\s*$/);
+    if (!item) {
+      break;
+    }
+    const clean = project089TrimScalar(item[1]).replace(/^\[+|\]+$/g, "").replace(/^["']+|["']+$/g, "").trim();
+    if (clean === "[[project]]" || clean === "project") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function project089StatusIsTerminal(sourceText) {
+  const value = parseFrontmatterScalar(sourceText, "status");
+  if (value == null) {
+    return false;
+  }
+  const normalized = project089TrimScalar(value).toLowerCase();
+  if (normalized === "" || normalized === "wip") {
+    return false;
+  }
+  return normalized === "done" || normalized === "canceled" || normalized === "cancelled";
+}
+
+function project089IsValidPrjLine(lineText) {
+  if (!lineHasTrailingPrjAnchor(lineText)) {
+    return false;
+  }
+  const offset = projectTaskTextOffset(lineText);
+  return projectWholeTagSpans(String(lineText).slice(offset), "#task").length > 0;
+}
+
+function project089Info(sourceText, path) {
+  const notePath = String(path || "");
+  const tasks = parseTaskDependencyDocument(sourceText, notePath).filter(
+    (task) => !/^\s*>/.test(task.lineText),
+  );
+  const prjTasks = tasks.filter(
+    (task) => task.blockId === "prj" && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) && project089IsValidPrjLine(task.lineText),
+  );
+  if (prjTasks.length !== 1) {
+    return null;
+  }
+  const scheduledFields = findScheduledFieldMatches(prjTasks[0].lineText);
+  const scheduledField = scheduledFields.find((field) =>
+    parseStrictCalendarDate(field.value)
+  );
+  const scheduledDate = scheduledField &&
+    parseStrictCalendarDate(scheduledField.value);
+  return {
+    path: notePath,
+    tasks,
+    projectTask: prjTasks[0],
+    dependencyIds: prjTasks[0].dependsOn.slice(),
+    scheduled: scheduledDate ? formatCalendarDate(scheduledDate) : null,
+  };
+}
+
+// Shared project-recovery wiring for pull-in cascades (§12.10 + §12.2): the
+// same path for the `[id::]` branch and the id-less branch (P3), so a `[?]`
+// R pull-in recovers N's residents even when A has no `[id::]`.
+function projectPullInRecoveryWiring(noteTexts, index, pullIns, today, closedTaskIds) {
+  const byTaskId = index && index.byTaskId instanceof Map ? index.byTaskId : new Map();
+  const openIdsAfter = new Set();
+  for (const [id, task] of byTaskId) {
+    if (task && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) && !closedTaskIds.has(String(id))) {
+      openIdsAfter.add(String(id));
+    }
+  }
+  const state = projectSuccessorRecoveryState(noteTexts, closedTaskIds, openIdsAfter, today);
+  const projectInfoByPath = state.projectInfoByPath;
+  const projectRecoveryPaths = state.projectRecoveryPaths;
+  for (const path of pullIns.cascadePaths) {
+    projectRecoveryPaths.add(path);
+    if (!projectInfoByPath.has(path)) {
+      const info = project089Info(noteTexts[path] || "", path);
+      if (info) {
+        projectInfoByPath.set(path, info);
+      }
+    }
+  }
+  const projectTagStripEdits = projectSuccessorTagStripEdits(projectInfoByPath, projectRecoveryPaths, openIdsAfter, today);
+  return { projectInfoByPath, projectRecoveryPaths, projectTagStripEdits, openIdsAfter };
+}
+
+function projectPullInRecoveryMembersForIdless(noteTexts, index, pullIns, today) {
+  const closedTaskIds = new Set();
+  const wiring = projectPullInRecoveryWiring(noteTexts, index, pullIns, today, closedTaskIds);
+  const members = projectSuccessorRecoveryMembers(wiring.projectInfoByPath, wiring.projectRecoveryPaths);
+  const recovers = [];
+  for (const task of members) {
+    const open = Array.isArray(task.dependsOn) && task.dependsOn.some((id) => wiring.openIdsAfter.has(String(id)));
+    if (open) {
+      continue;
+    }
+    if (task.rawLine && findSingleFutureScheduledField(task.rawLine, today)) {
+      continue;
+    }
+    const project = wiring.projectInfoByPath.get(task.path);
+    const preds = project ? (project.dependencyIds || []) : [];
+    recovers.push({
+      task,
+      reason: "project_member",
+      predecessorRows: [],
+    });
+  }
+  return { recovers, projectTagStripEdits: wiring.projectTagStripEdits };
+}

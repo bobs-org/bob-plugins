@@ -334,14 +334,16 @@ function successorNoticeText(model = {}) {
         names.push(label);
       }
     }
+    const allProjectEmpty = linked.every(isProjectEmptyRow);
+    const suffix = allProjectEmpty ? projectEmptySuffix : "";
     if (names.length === 1) {
       const shown = linked
         .slice(0, 2)
         .map((row) => truncateSuccessorNoticeText(row.text));
       const more = linked.length > 2 ? `, +${linked.length - 2}` : "";
-      return `🔓 ${linked.length} linked → ${names[0]}: ${shown.join(", ")}${more}`;
+      return `🔓 ${linked.length} linked → ${names[0]}: ${shown.join(", ")}${more}${suffix}`;
     }
-    return `🔓 ${linked.length} linked · ${names.join(", ")}`;
+    return `🔓 ${linked.length} linked · ${names.join(", ")}${suffix}`;
   }
   const breaker = notLinked.filter((row) => row.not_linked === "breaker");
   if (breaker.length > 0 && breaker.length === notLinked.length) {
@@ -350,8 +352,11 @@ function successorNoticeText(model = {}) {
   if (notLinked.length === 1) {
     const row = notLinked[0];
     const lane = row.status_name || successorStatusName(row.status_symbol);
-    if (isProjectEmptyRow(row)) {
+    if (isProjectEmptyRow(row) && row.hide_removed && row.previous_status_symbol === row.status_symbol) {
       return `🔓 Surfaced: ${truncateSuccessorNoticeText(row.text)} (${lane})${projectEmptySuffix}`;
+    }
+    if (isProjectEmptyRow(row)) {
+      return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})${projectEmptySuffix}`;
     }
     return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})`;
   }
@@ -360,7 +365,8 @@ function successorNoticeText(model = {}) {
       (row) => `${truncateSuccessorNoticeText(row.text)} (${row.status_name || successorStatusName(row.status_symbol)})`,
     );
     const more = notLinked.length > 3 ? `, +${notLinked.length - 3} more` : "";
-    return `🔓 Unblocked: ${shown.join(", ")}${more}`;
+    const suffix = notLinked.every(isProjectEmptyRow) ? projectEmptySuffix : "";
+    return `🔓 Unblocked: ${shown.join(", ")}${more}${suffix}`;
   }
   return "";
 }

@@ -577,7 +577,10 @@ test("Alt+] on a date-blocked ^prj recovers open residents in step", async () =>
     "- [?] #task Own blocker [dependsOn:: open__root] #prj_is_blocked ^own",
     "- [x] #task Done #prj_is_blocked ✅ 2026-10-01 ^done",
   ].join("\n");
-  const harness = createInMemoryObsidianApp({ "projects/launch.md": source });
+  const harness = createInMemoryObsidianApp({
+    "projects/launch.md": source,
+    "roots.md": "- [ ] #task Open root [id:: open__root] ^root",
+  });
   const editor = createTextEditor(source, { line: 4, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
   plugin.getScheduleLogDateString = () => "2026-08-17";
@@ -616,7 +619,10 @@ test("Alt+] on a ^prj keeps residents tagged while an open Depends-On target rem
     "- [?] #task #prj Launch [scheduled:: 2026-08-20] [dependsOn:: jobs__review] ^prj",
     "- [?] #task Resident #prj_is_blocked ^resident",
   ].join("\n");
-  const harness = createInMemoryObsidianApp({ "projects/launch.md": source });
+  const harness = createInMemoryObsidianApp({
+    "projects/launch.md": source,
+    "jobs.md": "- [ ] #task Review [id:: jobs__review] ^review",
+  });
   const editor = createTextEditor(source, { line: 4, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
   plugin.getScheduleLogDateString = () => "2026-08-17";
@@ -635,5 +641,166 @@ test("Alt+] on a ^prj keeps residents tagged while an open Depends-On target rem
   const text = editor.getValue();
   assert.match(text, /^- \[ \] #task #prj Launch \[dependsOn:: jobs__review\] \^prj$/m);
   assert.match(text, /^- \[\?\] #task Resident #prj_is_blocked \^resident$/m);
+});
+
+test("planProjectResidentRecoveryEdits recovers when a cross-note id is not open", () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [ ] #task #prj Launch [dependsOn:: jobs__review] ^prj",
+    "- [?] #task Resident #prj_is_blocked ^resident",
+  ].join("\n");
+  const recovered = helpers.planProjectResidentRecoveryEdits(
+    source,
+    "projects/launch.md",
+    { today: "2026-08-17", openIds: [] },
+  );
+  assert.equal(recovered.length, 1);
+  assert.match(recovered[0].after, /^- \[ \] #task Resident \^resident$/);
+
+  const stillBlocked = helpers.planProjectResidentRecoveryEdits(
+    source,
+    "projects/launch.md",
+    { today: "2026-08-17", openIds: ["jobs__review"] },
+  );
+  assert.deepEqual(stillBlocked, []);
+});
+
+test("Alt+] on a ^prj recovers residents when the remaining Depends-On target is closed", async () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch [scheduled:: 2026-08-20] [dependsOn:: jobs__review] ^prj",
+    "- [?] #task Resident #prj_is_blocked ^resident",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "projects/launch.md": source,
+    "jobs.md": "- [x] #task Review [id:: jobs__review] ^review",
+  });
+  const editor = createTextEditor(source, { line: 4, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getScheduleLogDateString = () => "2026-08-17";
+  const { view } = attachActiveMarkdownView(
+    plugin,
+    harness,
+    editor,
+    "projects/launch.md",
+  );
+  plugin.app.commands = { commands: {}, executeCommandById: () => false };
+
+  assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+  await flushAsyncActions();
+  await flushAsyncActions();
+
+  const text = editor.getValue();
+  assert.match(text, /^- \[ \] #task #prj Launch \[dependsOn:: jobs__review\] \^prj$/m);
+  assert.match(
+    text,
+    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \^resident$/m,
+  );
+});
+
+test("Alt+] recovers a resident whose own closed cross-note prerequisite was the last reason", async () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch [scheduled:: 2026-08-20] ^prj",
+    "- [?] #task Resident [dependsOn:: jobs__review] #prj_is_blocked ^resident",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "projects/launch.md": source,
+    "jobs.md": "- [x] #task Review [id:: jobs__review] ^review",
+  });
+  const editor = createTextEditor(source, { line: 4, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getScheduleLogDateString = () => "2026-08-17";
+  const { view } = attachActiveMarkdownView(
+    plugin,
+    harness,
+    editor,
+    "projects/launch.md",
+  );
+  plugin.app.commands = { commands: {}, executeCommandById: () => false };
+
+  assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+  await flushAsyncActions();
+  await flushAsyncActions();
+
+  const text = editor.getValue();
+  assert.match(text, /^- \[ \] #task #prj Launch \^prj$/m);
+  assert.match(
+    text,
+    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \[dependsOn:: jobs__review\] \^resident$/m,
+  );
+});
+
+test("Alt+[ on a [?] ^prj to Cancelled recovers tagged residents", async () => {
+  const source = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch [scheduled:: 2026-08-20] ^prj",
+    "- [?] #task Resident #prj_is_blocked ^resident",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "projects/launch.md": source });
+  const editor = createTextEditor(source, { line: 4, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getScheduleLogDateString = () => "2026-08-17";
+  const { view } = attachActiveMarkdownView(
+    plugin,
+    harness,
+    editor,
+    "projects/launch.md",
+  );
+  plugin.app.commands = { commands: {}, executeCommandById: () => false };
+
+  assert.equal(plugin.handleCycleCommand(false, editor, view, -1), true);
+  await flushAsyncActions();
+  await flushAsyncActions();
+
+  const text = editor.getValue();
+  assert.match(text, /^- \[-\] #task #prj Launch \^prj$/m);
+  assert.match(
+    text,
+    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \^resident$/m,
+  );
+});
+
+test("cycling a transcluded ^prj recovers residents in the source note", async () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Launch [scheduled:: 2026-08-20] ^prj",
+    "- [?] #task Resident #prj_is_blocked ^resident",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "Daily.md": "- ![[launch#^prj]]",
+    "projects/launch.md": project,
+  });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = harness.app;
+  plugin.getScheduleLogDateString = () => "2026-08-17";
+
+  const wrote = await plugin.cycleResolvedTranscludedTaskLink(
+    getEmbeddedTarget("![[launch#^prj]]"),
+    { activePath: "Daily.md", originPath: "Daily.md", editor: null },
+    1,
+  );
+  assert.equal(wrote, true);
+  const text = harness.getSource("projects/launch.md");
+  assert.match(text, /^- \[ \] #task #prj Launch \^prj$/m);
+  assert.match(
+    text,
+    /^- \[ \] #task Resident \[unblocked:: 2026-08-17\] \^resident$/m,
+  );
 });
 

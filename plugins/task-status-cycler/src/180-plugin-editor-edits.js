@@ -898,41 +898,28 @@ class TaskStatusCyclerEditorEditsMixin {
     return true;
   }
 
-  // After Alt+] / Alt+[ leaves a `^prj` with no remaining reason, strip
+  // After Alt+] / Alt+[ leaves a `^prj` with no remaining reason — including
+  // cycling it to Cancelled, so the note is no longer project(T) — strip
   // `#prj_is_blocked` from every open resident and recover those whose only
-  // reason was the project, through the same successor apply helper.
+  // reason was the project. Works through the active editor or, for a
+  // transcluded `^prj` in another note, through `vault.process`.
   async recoverProjectResidentsAfterPrjUnblock(editor, path) {
-    if (!editor || typeof editor.getValue !== "function" || !path) {
+    if (!path) {
       return;
     }
-    const today = typeof this.getScheduleLogDateString === "function"
-      ? this.getScheduleLogDateString()
-      : formatLocalDate();
-    const markUnblockedLine = typeof this.getFreshnessMarkUnblockedLine === "function"
-      ? this.getFreshnessMarkUnblockedLine()
-      : null;
-    const edits = planProjectResidentRecoveryEdits(editor.getValue(), path, {
-      today,
-      markUnblockedLine,
-      isToday: (task) => projectRecoveryTaskIsToday(this, task),
-    });
-    if (edits.length === 0) {
+    const context = editor && typeof editor.getValue === "function"
+      ? { editor, activePath: path }
+      : { activePath: path };
+    let sourceText = null;
+    if (context.editor) {
+      sourceText = context.editor.getValue();
+    } else if (typeof this.readSuccessorNoteText === "function") {
+      sourceText = await this.readSuccessorNoteText(path, context, new Map());
+    }
+    if (typeof sourceText !== "string") {
       return;
     }
-    const plan = {
-      edits,
-      unblocked: successorReadyRecoveryEdits({ edits }).map((edit) => ({
-        note_path: edit.path,
-        line: edit.line,
-        link: null,
-        not_linked: "project_member",
-      })),
-      placements: [],
-    };
-    await applySuccessorNoteEditsWithUnblockedGuard(this, plan, {
-      editor,
-      activePath: path,
-    });
+    await applyProjectResidentRecovery(this, sourceText, path, context);
   }
 
 }

@@ -125,7 +125,8 @@ test("blocked-link consumption reports dependency reasons before the project dat
     ),
     true,
   );
-  assert.match(lastNotice(), /Project blocked by dependency|Task blocked/);
+  assert.match(lastNotice(), /^Project blocked by dependency · /);
+  assert.doesNotMatch(lastNotice(), /Task blocked · project reason/);
   assert.doesNotMatch(lastNotice(), /Project date blocked|blocked by date/);
 });
 

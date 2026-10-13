@@ -7277,33 +7277,65 @@ function warnProjectRecoveryWithoutUnblocked() {
   console.warn(PROJECT_RECOVERY_MISSING_UNBLOCKED_WARNING);
 }
 
-// Cross-note ids that this note cannot prove closed still count as a
-// remaining project reason, so Alt+] on a date-only `^prj` recovers
-// residents while a still-open Depends-On target does not.
-function projectHasRemainingBlockingReason(project, today) {
+// Only an id that resolves to an open task is a remaining reason
+// (DC7: a missing id never blocks). Callers resolve cross-note ids
+// against the vault and pass them as `openIds` before planning.
+function asProjectRecoveryIdSet(value) {
+  if (!value) {
+    return new Set();
+  }
+  if (value instanceof Set) {
+    return value;
+  }
+  return new Set(Array.from(value, String));
+}
+
+function dependencyIdIsOpen(id, tasks, openIds) {
+  const key = String(id);
+  const local = (Array.isArray(tasks) ? tasks : []).find(
+    (candidate) => candidate && candidate.taskId === key,
+  );
+  if (local) {
+    return DEPENDENCY_OPEN_TASK_SYMBOLS.has(local.status);
+  }
+  return openIds.has(key);
+}
+
+function projectHasRemainingBlockingReason(project, today, openIds) {
   if (projectHasFutureSchedule(project, today)) {
     return true;
   }
   if (!project || project.dependencyIds.length === 0) {
     return false;
   }
-  const closedIds = new Set();
-  for (const task of project.tasks) {
-    if (task.taskId && !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)) {
-      closedIds.add(String(task.taskId));
-    }
+  const resolvedOpen = asProjectRecoveryIdSet(openIds);
+  return project.dependencyIds.some((id) =>
+    dependencyIdIsOpen(id, project.tasks, resolvedOpen)
+  );
+}
+
+function projectResidentRecoveryTasks(sourceText, path, project) {
+  if (project) {
+    return project.tasks;
   }
-  return project.dependencyIds.some((id) => !closedIds.has(String(id)));
+  return parseTaskDependencyDocument(sourceText, path).filter(
+    (task) => !/^\s*>/.test(task.lineText),
+  );
 }
 
 function planProjectResidentRecoveryEdits(sourceText, path, options = {}) {
   const today = options.today || formatLocalDate();
+  const openIds = asProjectRecoveryIdSet(options.openIds);
   const project = projectDependencyInfo(sourceText, path);
-  if (!project || projectHasRemainingBlockingReason(project, today)) {
+  // No open `^prj` means the note is not project(T) and has no project
+  // reason: recover tagged open residents the same way as an unblocked
+  // `^prj` (Alt+[ to Cancelled, or any cycle out of Blocked).
+  if (project && projectHasRemainingBlockingReason(project, today, openIds)) {
     return [];
   }
+  const tasks = projectResidentRecoveryTasks(sourceText, path, project);
   const edits = [];
-  for (const task of project.tasks) {
+  for (const task of tasks) {
     if (
       task.blockId === "prj" ||
       !DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) ||
@@ -7311,12 +7343,9 @@ function planProjectResidentRecoveryEdits(sourceText, path, options = {}) {
     ) {
       continue;
     }
-    const hasOwnReason = task.dependsOn.some((id) => {
-      const dependency = project.tasks.find((candidate) =>
-        candidate.taskId === String(id)
-      );
-      return !dependency || DEPENDENCY_OPEN_TASK_SYMBOLS.has(dependency.status);
-    }) || !!findSingleFutureScheduledField(task.lineText, today);
+    const hasOwnReason = task.dependsOn.some((id) =>
+      dependencyIdIsOpen(id, tasks, openIds)
+    ) || !!findSingleFutureScheduledField(task.lineText, today);
     const recover = task.status === "?" && !hasOwnReason;
     const after = rewriteRecoveredTaskLine(
       task.lineText,
@@ -7333,6 +7362,122 @@ function planProjectResidentRecoveryEdits(sourceText, path, options = {}) {
     }
   }
   return edits;
+}
+
+async function resolveProjectRecoveryOpenIds(plugin, tasks, context) {
+  const openIds = new Set();
+  const localIds = new Set();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!task || !task.taskId) {
+      continue;
+    }
+    const id = String(task.taskId);
+    localIds.add(id);
+    if (DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)) {
+      openIds.add(id);
+    }
+  }
+  const wanted = new Set();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    for (const id of task && Array.isArray(task.dependsOn) ? task.dependsOn : []) {
+      const key = String(id);
+      if (!localIds.has(key)) {
+        wanted.add(key);
+      }
+    }
+  }
+  if (wanted.size === 0 || !plugin) {
+    return openIds;
+  }
+  try {
+    const cacheRead = typeof plugin.readSuccessorTasksCache === "function"
+      ? plugin.readSuccessorTasksCache()
+      : null;
+    if (cacheRead && cacheRead.ready && Array.isArray(cacheRead.tasks)) {
+      for (const task of cacheRead.tasks) {
+        if (
+          task &&
+          task.taskId &&
+          wanted.has(String(task.taskId)) &&
+          DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)
+        ) {
+          openIds.add(String(task.taskId));
+        }
+      }
+      return openIds;
+    }
+  } catch (_error) {
+    // Fall through to the vault scan.
+  }
+  const vault = plugin.app && plugin.app.vault;
+  const files = vault && typeof vault.getMarkdownFiles === "function"
+    ? vault.getMarkdownFiles()
+    : [];
+  const cache = new Map();
+  const localPath = context && context.activePath;
+  for (const file of files) {
+    if (wanted.size === 0) {
+      break;
+    }
+    const path = file && file.path;
+    if (!path || path === localPath) {
+      continue;
+    }
+    let text = null;
+    try {
+      text = typeof plugin.readSuccessorNoteText === "function"
+        ? await plugin.readSuccessorNoteText(path, context || {}, cache)
+        : null;
+    } catch (_error) {
+      text = null;
+    }
+    if (typeof text !== "string") {
+      continue;
+    }
+    for (const task of parseTaskDependencyDocument(text, path)) {
+      if (!task.taskId || !wanted.has(String(task.taskId))) {
+        continue;
+      }
+      wanted.delete(String(task.taskId));
+      if (DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status)) {
+        openIds.add(String(task.taskId));
+      }
+    }
+  }
+  return openIds;
+}
+
+async function applyProjectResidentRecovery(plugin, sourceText, path, context) {
+  const today = plugin && typeof plugin.getScheduleLogDateString === "function"
+    ? plugin.getScheduleLogDateString()
+    : formatLocalDate();
+  const project = projectDependencyInfo(sourceText, path);
+  const tasks = projectResidentRecoveryTasks(sourceText, path, project);
+  const openIds = await resolveProjectRecoveryOpenIds(plugin, tasks, context);
+  const markUnblockedLine = plugin &&
+    typeof plugin.getFreshnessMarkUnblockedLine === "function"
+    ? plugin.getFreshnessMarkUnblockedLine()
+    : null;
+  const edits = planProjectResidentRecoveryEdits(sourceText, path, {
+    today,
+    markUnblockedLine,
+    openIds,
+    isToday: (task) => projectRecoveryTaskIsToday(plugin, task),
+  });
+  if (edits.length === 0) {
+    return;
+  }
+  const plan = {
+    edits,
+    unblocked: successorReadyRecoveryEdits({ edits }).map((edit) => ({
+      note_path: edit.path,
+      line: edit.line,
+      link: null,
+      not_linked: "project_member",
+    })),
+    placements: [],
+  };
+  await applySuccessorNoteEditsWithUnblockedGuard(plugin, plan, context);
 }
 
 async function applySuccessorNoteEditsWithUnblockedGuard(plugin, plan, context) {
@@ -14277,12 +14422,13 @@ class TaskStatusCyclerCompletionMixin {
     if (wrote && sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL) {
       await this.applyBlockedStatusRetirementToTranscludedTarget(resolvedTarget, context);
       const targetPath = resolvedTarget.file && resolvedTarget.file.path;
-      if (
-        targetPath &&
-        this.fileMatchesPath(resolvedTarget.file, context && context.activePath)
-      ) {
+      if (targetPath) {
+        const sameNote = this.fileMatchesPath(
+          resolvedTarget.file,
+          context && context.activePath,
+        );
         await this.recoverProjectResidentsAfterPrjUnblock(
-          context && context.editor,
+          sameNote ? context && context.editor : null,
           targetPath,
         );
       }
@@ -16057,41 +16203,28 @@ class TaskStatusCyclerEditorEditsMixin {
     return true;
   }
 
-  // After Alt+] / Alt+[ leaves a `^prj` with no remaining reason, strip
+  // After Alt+] / Alt+[ leaves a `^prj` with no remaining reason — including
+  // cycling it to Cancelled, so the note is no longer project(T) — strip
   // `#prj_is_blocked` from every open resident and recover those whose only
-  // reason was the project, through the same successor apply helper.
+  // reason was the project. Works through the active editor or, for a
+  // transcluded `^prj` in another note, through `vault.process`.
   async recoverProjectResidentsAfterPrjUnblock(editor, path) {
-    if (!editor || typeof editor.getValue !== "function" || !path) {
+    if (!path) {
       return;
     }
-    const today = typeof this.getScheduleLogDateString === "function"
-      ? this.getScheduleLogDateString()
-      : formatLocalDate();
-    const markUnblockedLine = typeof this.getFreshnessMarkUnblockedLine === "function"
-      ? this.getFreshnessMarkUnblockedLine()
-      : null;
-    const edits = planProjectResidentRecoveryEdits(editor.getValue(), path, {
-      today,
-      markUnblockedLine,
-      isToday: (task) => projectRecoveryTaskIsToday(this, task),
-    });
-    if (edits.length === 0) {
+    const context = editor && typeof editor.getValue === "function"
+      ? { editor, activePath: path }
+      : { activePath: path };
+    let sourceText = null;
+    if (context.editor) {
+      sourceText = context.editor.getValue();
+    } else if (typeof this.readSuccessorNoteText === "function") {
+      sourceText = await this.readSuccessorNoteText(path, context, new Map());
+    }
+    if (typeof sourceText !== "string") {
       return;
     }
-    const plan = {
-      edits,
-      unblocked: successorReadyRecoveryEdits({ edits }).map((edit) => ({
-        note_path: edit.path,
-        line: edit.line,
-        link: null,
-        not_linked: "project_member",
-      })),
-      placements: [],
-    };
-    await applySuccessorNoteEditsWithUnblockedGuard(this, plan, {
-      editor,
-      activePath: path,
-    });
+    await applyProjectResidentRecovery(this, sourceText, path, context);
   }
 
 }

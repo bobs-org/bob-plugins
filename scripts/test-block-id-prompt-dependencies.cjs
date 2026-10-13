@@ -79,7 +79,21 @@ test("project-blocked member consumption promotes the project's open prerequisit
     prjPlan.updatesByPath.get("jobs.md").text,
     "- [*] #task Release approval [id:: jobs__release] ^release",
   );
+});
 
+test("project-blocked resident consumption promotes the project's open prerequisite", () => {
+  const project = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    "- [?] #task #prj Ship the project [dependsOn:: jobs__release] ^prj",
+    "- [?] #task Prepare launch notes #prj_is_blocked ^notes",
+  ].join("\n");
+  const documents = [
+    { path: "projects/release.md", text: project },
+    { path: "jobs.md", text: "- [ ] #task Release approval [id:: jobs__release] ^release" },
+  ];
   const residentPlan = helpers.planTaskLinkBlockConsumption(
     documents,
     "projects/release.md",

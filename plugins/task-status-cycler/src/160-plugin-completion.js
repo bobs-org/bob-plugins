@@ -709,12 +709,13 @@ class TaskStatusCyclerCompletionMixin {
     if (wrote && sourceSymbol === BLOCKED_TASK_STATUS_SYMBOL) {
       await this.applyBlockedStatusRetirementToTranscludedTarget(resolvedTarget, context);
       const targetPath = resolvedTarget.file && resolvedTarget.file.path;
-      if (
-        targetPath &&
-        this.fileMatchesPath(resolvedTarget.file, context && context.activePath)
-      ) {
+      if (targetPath) {
+        const sameNote = this.fileMatchesPath(
+          resolvedTarget.file,
+          context && context.activePath,
+        );
         await this.recoverProjectResidentsAfterPrjUnblock(
-          context && context.editor,
+          sameNote ? context && context.editor : null,
           targetPath,
         );
       }

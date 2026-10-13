@@ -48,13 +48,20 @@ class TaskStatusCyclerSuccessorReceiptMixin {
   // Store the reopen receipt for a successful pass. `plan` carries the
   // applied `edits` and the final `unblocked` rows (failed rows already
   // unlinked); `insertion.text` is the post-insertion daily text the row
-  // line numbers address. Only rows still linked are remembered. Capture
-  // closes never reach this method, so they never gain a receipt (Alt+N is
-  // their per-link undo). Never throws.
+  // line numbers address. Linked rows and project pull-in rows (linked or
+  // surfaced) are remembered; pull-in receipts store `before_line` so a
+  // same-day reopen can restore R byte-for-byte. Capture closes never
+  // reach this method, so they never gain a receipt (Alt+N is their
+  // per-link undo). Never throws.
   rememberSuccessorPass(closedIdentities, plan, insertion, info) {
     try {
       const rows = plan && Array.isArray(plan.unblocked)
-        ? plan.unblocked.filter((row) => row && row.link && !row.not_linked)
+        ? plan.unblocked.filter((row) =>
+          row && (
+            (row.link && !row.not_linked) ||
+            row.trigger === "project_empty"
+          )
+        )
         : [];
       if (rows.length === 0) {
         return;
@@ -62,42 +69,47 @@ class TaskStatusCyclerSuccessorReceiptMixin {
       const text = insertion && typeof insertion.text === "string"
         ? insertion.text
         : null;
-      if (!text) {
-        return;
-      }
-      const lines = text.split(/\r?\n/);
+      const lines = typeof text === "string" ? text.split(/\r?\n/) : [];
       const afterByEdit = new Map();
+      const beforeByEdit = new Map();
       for (const edit of (plan && plan.edits) || []) {
         if (edit && edit.path != null && Number.isInteger(edit.line)) {
           afterByEdit.set(`${edit.path}\0${edit.line}`, edit.after);
+          beforeByEdit.set(`${edit.path}\0${edit.line}`, edit.before);
         }
       }
       const links = [];
       const statuses = [];
       for (const row of rows) {
-        const link = row.link || {};
-        if (!Number.isInteger(link.line) || !Number.isInteger(link.entry_line)) {
-          continue;
-        }
-        const lineText = lines[link.line - 1];
-        const headline = lines[link.entry_line - 1];
-        if (typeof lineText !== "string" || typeof headline !== "string") {
-          continue;
-        }
         const by = (row.unblocked_by || []).map((pred) =>
           `${pred && pred.note_path ? pred.note_path : ""}#^${pred && pred.block_id ? pred.block_id : ""}`
         );
-        links.push({
-          line_text: lineText,
-          entry_headline: headline,
-          entry_created: link.entry_created === true,
-          by,
-        });
+        const link = row.link || {};
+        if (
+          text &&
+          row.link && !row.not_linked &&
+          Number.isInteger(link.line) && Number.isInteger(link.entry_line)
+        ) {
+          const lineText = lines[link.line - 1];
+          const headline = lines[link.entry_line - 1];
+          if (typeof lineText === "string" && typeof headline === "string") {
+            links.push({
+              line_text: lineText,
+              entry_headline: headline,
+              entry_created: link.entry_created === true,
+              by,
+            });
+          }
+        }
         const after = afterByEdit.get(`${row.note_path}\0${row.line}`);
         if (typeof after === "string") {
+          const before = beforeByEdit.get(`${row.note_path}\0${row.line}`);
           statuses.push({
             path: row.note_path,
             after_line: after,
+            before_line: row.trigger === "project_empty" && typeof before === "string"
+              ? before
+              : null,
             previous_symbol: row.previous_status_symbol,
             by,
           });
@@ -394,10 +406,12 @@ class TaskStatusCyclerSuccessorReceiptMixin {
               if (at < 0) {
                 continue;
               }
-              const next = replaceTaskStatusSymbol(
-                status.after_line,
-                status.previous_symbol,
-              );
+              const next = typeof status.before_line === "string"
+                ? status.before_line
+                : replaceTaskStatusSymbol(
+                  status.after_line,
+                  status.previous_symbol,
+                );
               if (next === status.after_line) {
                 continue;
               }
@@ -438,10 +452,12 @@ class TaskStatusCyclerSuccessorReceiptMixin {
               if (at < 0) {
                 continue;
               }
-              const next = replaceTaskStatusSymbol(
-                status.after_line,
-                status.previous_symbol,
-              );
+              const next = typeof status.before_line === "string"
+                ? status.before_line
+                : replaceTaskStatusSymbol(
+                  status.after_line,
+                  status.previous_symbol,
+                );
               if (next === status.after_line) {
                 continue;
               }

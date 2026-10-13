@@ -22,6 +22,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerReferencesMixin,
   TaskStatusCyclerSuccessorsMixin,
   TaskStatusCyclerSuccessorReceiptMixin,
+  TaskStatusCyclerSuccessorProjectMixin,
   TaskStatusCyclerVimMixin,
   TaskStatusCyclerCommandsMixin,
   TaskStatusCyclerCompletionMixin,

@@ -631,9 +631,55 @@ function planSuccessors(options = {}) {
       closedTaskIds.add(String(identity.taskId));
     }
   }
-  // GATE: no `[id::]` in C → no lookup, no reads, empty arrays.
+  const pullIns = planProjectPullIns({
+    closed,
+    index,
+    dailyBefore,
+    dailyAfter,
+    dailyPath,
+    today,
+    linkUnblocked,
+    cancelled: cancelledClose,
+    closingEntry,
+    noteTexts,
+  });
+  const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink) =>
+    applySuccessorVerdicts({
+      recovers,
+      successorMarks,
+      stillBlocked,
+      projectTagStripEdits,
+      dailyPath,
+      today,
+      markUnblockedLine,
+      isInbox,
+      basenameCounts,
+      noteTexts,
+      hasLiveLink,
+    });
+  // GATE: no `[id::]` in C and no pull-in candidate → nothing.
   if (closedTaskIds.size === 0) {
-    return empty;
+    if (!pullIns.hasCandidates) {
+      return empty;
+    }
+    const liveAfterEntries = parseSuccessorLedgerEntries(dailyAfter);
+    const hasLiveLink = (task) =>
+      liveAfterEntries.some((entry) =>
+        entry.links.some((link) =>
+          successorLinkMatchesIdentity(
+            link,
+            { path: task.path, blockId: task.blockId },
+            dailyPath,
+          ),
+        ),
+      );
+    return applyContext(
+      pullIns.recovers,
+      pullIns.successorMarks,
+      pullIns.still_blocked,
+      [],
+      hasLiveLink,
+    );
   }
 
   const byTaskId = index.byTaskId instanceof Map ? index.byTaskId : new Map();
@@ -651,6 +697,15 @@ function planSuccessors(options = {}) {
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [...byTaskId.values()];
   const { projectInfoByPath, projectRecoveryPaths } =
     projectSuccessorRecoveryState(noteTexts, closedTaskIds, openIdsAfter, today);
+  for (const path of pullIns.cascadePaths) {
+    projectRecoveryPaths.add(path);
+    if (!projectInfoByPath.has(path)) {
+      const info = projectDependencyInfo(noteTexts[path] || "", path);
+      if (info) {
+        projectInfoByPath.set(path, info);
+      }
+    }
+  }
   const projectTagStripEdits = projectSuccessorTagStripEdits(
     projectInfoByPath,
     projectRecoveryPaths,
@@ -721,6 +776,12 @@ function planSuccessors(options = {}) {
   const successorMarks = [];
 
   for (const task of candidates) {
+    if (
+      successorIsProjectTask(task.blockId) &&
+      pullIns.locations.has(`${task.path}\0${task.line}`)
+    ) {
+      continue;
+    }
     const postOpen = (task.dependsOn || []).filter((id) =>
       openIdsAfter.has(String(id)),
     );
@@ -735,6 +796,7 @@ function planSuccessors(options = {}) {
         reason: "waits_on",
         waits_on: postOpen.length,
         scheduled: null,
+        trigger: "dependency",
       });
       continue;
     }
@@ -752,6 +814,7 @@ function planSuccessors(options = {}) {
         reason: "scheduled",
         waits_on: 0,
         scheduled: futureScheduled.value,
+        trigger: "dependency",
       });
       continue;
     }
@@ -777,9 +840,11 @@ function planSuccessors(options = {}) {
         line: task.line,
         text: successorDisplayText(task),
         status_symbol: task.status,
-        reason: projectDateBlocked ? "project_schedule" : "project_dependency",
+        reason: "project",
         waits_on: projectOpenCount,
         scheduled: projectDateBlocked ? project.scheduled : null,
+        project: String(task.path || ""),
+        trigger: "dependency",
       });
       continue;
     }
@@ -798,9 +863,13 @@ function planSuccessors(options = {}) {
       identity,
       anchor: anchorOf(identity),
     }));
-    // 3. Project tasks recover but never link.
+    const locationKey = `${task.path}\0${task.line}`;
+    // 3. Project tasks recover but never link. A §12.10 pull-in replaces
+    // this row (and a hidden recover) for the emptied project's ^prj.
     if (successorIsProjectTask(task.blockId)) {
-      recovers.push({ task, reason: "project_task", predecessorRows });
+      if (!pullIns.locations.has(locationKey)) {
+        recovers.push({ task, reason: "project_task", predecessorRows });
+      }
       continue;
     }
     if (project && projectResident && projectRecoveryPaths.has(task.path)) {
@@ -826,7 +895,9 @@ function planSuccessors(options = {}) {
       task.hidden === true ||
       (task.rawLine && successorHasHideTag(task.rawLine))
     ) {
-      recovers.push({ task, reason: "hidden", predecessorRows });
+      if (!pullIns.locations.has(locationKey)) {
+        recovers.push({ task, reason: "hidden", predecessorRows });
+      }
       continue;
     }
     // 5. Already planned today: recover to the derived rank, never duplicate.
@@ -863,129 +934,21 @@ function planSuccessors(options = {}) {
     });
   }
 
-  const unblocked = [];
-  const edits = [...projectTagStripEdits];
-  let placements = [];
-
-  const pushRecover = (task, reason, predecessorRows, always) => {
-    const rank = task.status === "?"
-      ? (hasLiveLink(liveAfter, task) ? "*" : " ")
-      : task.status;
-    if (rank === task.status && !always) {
-      return;
-    }
-    const before = task.rawLine != null ? String(task.rawLine) : null;
-    const after = before != null
-      ? rewriteRecoveredTaskLine(before, rank, {
-        markUnblockedLine,
-        today,
-        isDailyNote: isDailyNotePath(task.path),
-        isToday: hasLiveLink(liveAfter, task),
-      })
-      : null;
-    if (before !== after) {
-      edits.push({ path: task.path, line: task.line, before, after });
-    }
-    unblocked.push({
-      note_path: task.path,
-      block_id: task.blockId || "",
-      line: task.line,
-      text: successorDisplayText(task),
-      previous_status_symbol: task.status,
-      previous_status_name: successorStatusName(task.status),
-      status_symbol: rank,
-      status_name: successorStatusName(rank),
-      inbox: isInbox(task.path) === true,
-      unblocked_by: predecessorRows,
-      link: null,
-      not_linked: reason,
-    });
-  };
-
-  // BREAKER: more than 5 successors in one gesture → link none; each
-  // recovers to its derived rank with `not_linked: "breaker"`. Breaker rows
-  // always report (even with an unchanged rank): the gesture refused their
-  // links, and the notice counts them.
-  if (successorMarks.length > SUCCESSOR_BREAKER_LIMIT) {
-    for (const recover of recovers) {
-      pushRecover(recover.task, recover.reason, recover.predecessorRows, false);
-    }
-    for (const mark of successorMarks) {
-      pushRecover(mark.task, "breaker", mark.predecessorRows, true);
-    }
-    placements = [];
-  } else {
-    for (const recover of recovers) {
-      pushRecover(recover.task, recover.reason, recover.predecessorRows, false);
-    }
-    successorMarks.sort(successorOrderCompare);
-    const mintedByNote = new Map();
-    for (const mark of successorMarks) {
-      const task = mark.task;
-      const rank = task.status === "?" || task.status === " " ? "*" : task.status;
-      let blockId = task.blockId || "";
-      let blockIdCreated = false;
-      if (!blockId) {
-        if (!mintedByNote.has(task.path)) {
-          mintedByNote.set(
-            task.path,
-            collectSuccessorUsedIds(noteTexts[task.path] ?? ""),
-          );
-        }
-        const used = mintedByNote.get(task.path);
-        blockId = mintBlockId(
-          cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"),
-          used,
-        );
-        used.add(blockId);
-        blockIdCreated = true;
-      }
-      const before = task.rawLine != null ? String(task.rawLine) : null;
-      let after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
-      if (after != null && blockIdCreated) {
-        after = `${after.replace(/\s+$/, "")} ^${blockId}`;
-      }
-      if (before !== after) {
-        edits.push({ path: task.path, line: task.line, before, after });
-      }
-      const rowIndex = unblocked.length;
-      unblocked.push({
-        note_path: task.path,
-        block_id: blockId,
-        line: task.line,
-        text: successorDisplayText(task),
-        previous_status_symbol: task.status,
-        previous_status_name: successorStatusName(task.status),
-        status_symbol: rank,
-        status_name: successorStatusName(rank),
-        inbox: isInbox(task.path) === true,
-        unblocked_by: mark.predecessorRows,
-        link: {
-          day_file: dailyPath,
-          entry_name: "",
-          entry_line: null,
-          entry_created: false,
-          next_up: false,
-          line: null,
-          block_link: successorLinkText(task.path, blockId, dailyPath, basenameCounts),
-          block_id_created: blockIdCreated,
-        },
-        not_linked: null,
-      });
-      placements.push({
-        key: `${task.path}|${blockId}`,
-        rowIndex,
-        anchor: mark.anchor,
-        blockLink: unblocked[rowIndex].link.block_link,
-      });
-    }
+  for (const recover of pullIns.recovers) {
+    recovers.push(recover);
+  }
+  for (const mark of pullIns.successorMarks) {
+    successorMarks.push(mark);
+  }
+  for (const row of pullIns.still_blocked) {
+    stillBlocked.push(row);
   }
 
-  return {
-    unblocked,
-    still_blocked: stillBlocked,
-    edits,
-    placements,
-    unblocked_check: "checked",
-  };
+  return applyContext(
+    recovers,
+    successorMarks,
+    stillBlocked,
+    projectTagStripEdits,
+    (task) => hasLiveLink(liveAfter, task),
+  );
 }

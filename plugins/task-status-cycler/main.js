@@ -5800,9 +5800,55 @@ function planSuccessors(options = {}) {
       closedTaskIds.add(String(identity.taskId));
     }
   }
-  // GATE: no `[id::]` in C → no lookup, no reads, empty arrays.
+  const pullIns = planProjectPullIns({
+    closed,
+    index,
+    dailyBefore,
+    dailyAfter,
+    dailyPath,
+    today,
+    linkUnblocked,
+    cancelled: cancelledClose,
+    closingEntry,
+    noteTexts,
+  });
+  const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink) =>
+    applySuccessorVerdicts({
+      recovers,
+      successorMarks,
+      stillBlocked,
+      projectTagStripEdits,
+      dailyPath,
+      today,
+      markUnblockedLine,
+      isInbox,
+      basenameCounts,
+      noteTexts,
+      hasLiveLink,
+    });
+  // GATE: no `[id::]` in C and no pull-in candidate → nothing.
   if (closedTaskIds.size === 0) {
-    return empty;
+    if (!pullIns.hasCandidates) {
+      return empty;
+    }
+    const liveAfterEntries = parseSuccessorLedgerEntries(dailyAfter);
+    const hasLiveLink = (task) =>
+      liveAfterEntries.some((entry) =>
+        entry.links.some((link) =>
+          successorLinkMatchesIdentity(
+            link,
+            { path: task.path, blockId: task.blockId },
+            dailyPath,
+          ),
+        ),
+      );
+    return applyContext(
+      pullIns.recovers,
+      pullIns.successorMarks,
+      pullIns.still_blocked,
+      [],
+      hasLiveLink,
+    );
   }
 
   const byTaskId = index.byTaskId instanceof Map ? index.byTaskId : new Map();
@@ -5820,6 +5866,15 @@ function planSuccessors(options = {}) {
   const allTasks = Array.isArray(index.tasks) ? index.tasks : [...byTaskId.values()];
   const { projectInfoByPath, projectRecoveryPaths } =
     projectSuccessorRecoveryState(noteTexts, closedTaskIds, openIdsAfter, today);
+  for (const path of pullIns.cascadePaths) {
+    projectRecoveryPaths.add(path);
+    if (!projectInfoByPath.has(path)) {
+      const info = projectDependencyInfo(noteTexts[path] || "", path);
+      if (info) {
+        projectInfoByPath.set(path, info);
+      }
+    }
+  }
   const projectTagStripEdits = projectSuccessorTagStripEdits(
     projectInfoByPath,
     projectRecoveryPaths,
@@ -5890,6 +5945,12 @@ function planSuccessors(options = {}) {
   const successorMarks = [];
 
   for (const task of candidates) {
+    if (
+      successorIsProjectTask(task.blockId) &&
+      pullIns.locations.has(`${task.path}\0${task.line}`)
+    ) {
+      continue;
+    }
     const postOpen = (task.dependsOn || []).filter((id) =>
       openIdsAfter.has(String(id)),
     );
@@ -5904,6 +5965,7 @@ function planSuccessors(options = {}) {
         reason: "waits_on",
         waits_on: postOpen.length,
         scheduled: null,
+        trigger: "dependency",
       });
       continue;
     }
@@ -5921,6 +5983,7 @@ function planSuccessors(options = {}) {
         reason: "scheduled",
         waits_on: 0,
         scheduled: futureScheduled.value,
+        trigger: "dependency",
       });
       continue;
     }
@@ -5946,9 +6009,11 @@ function planSuccessors(options = {}) {
         line: task.line,
         text: successorDisplayText(task),
         status_symbol: task.status,
-        reason: projectDateBlocked ? "project_schedule" : "project_dependency",
+        reason: "project",
         waits_on: projectOpenCount,
         scheduled: projectDateBlocked ? project.scheduled : null,
+        project: String(task.path || ""),
+        trigger: "dependency",
       });
       continue;
     }
@@ -5967,9 +6032,13 @@ function planSuccessors(options = {}) {
       identity,
       anchor: anchorOf(identity),
     }));
-    // 3. Project tasks recover but never link.
+    const locationKey = `${task.path}\0${task.line}`;
+    // 3. Project tasks recover but never link. A §12.10 pull-in replaces
+    // this row (and a hidden recover) for the emptied project's ^prj.
     if (successorIsProjectTask(task.blockId)) {
-      recovers.push({ task, reason: "project_task", predecessorRows });
+      if (!pullIns.locations.has(locationKey)) {
+        recovers.push({ task, reason: "project_task", predecessorRows });
+      }
       continue;
     }
     if (project && projectResident && projectRecoveryPaths.has(task.path)) {
@@ -5995,7 +6064,9 @@ function planSuccessors(options = {}) {
       task.hidden === true ||
       (task.rawLine && successorHasHideTag(task.rawLine))
     ) {
-      recovers.push({ task, reason: "hidden", predecessorRows });
+      if (!pullIns.locations.has(locationKey)) {
+        recovers.push({ task, reason: "hidden", predecessorRows });
+      }
       continue;
     }
     // 5. Already planned today: recover to the derived rank, never duplicate.
@@ -6032,131 +6103,23 @@ function planSuccessors(options = {}) {
     });
   }
 
-  const unblocked = [];
-  const edits = [...projectTagStripEdits];
-  let placements = [];
-
-  const pushRecover = (task, reason, predecessorRows, always) => {
-    const rank = task.status === "?"
-      ? (hasLiveLink(liveAfter, task) ? "*" : " ")
-      : task.status;
-    if (rank === task.status && !always) {
-      return;
-    }
-    const before = task.rawLine != null ? String(task.rawLine) : null;
-    const after = before != null
-      ? rewriteRecoveredTaskLine(before, rank, {
-        markUnblockedLine,
-        today,
-        isDailyNote: isDailyNotePath(task.path),
-        isToday: hasLiveLink(liveAfter, task),
-      })
-      : null;
-    if (before !== after) {
-      edits.push({ path: task.path, line: task.line, before, after });
-    }
-    unblocked.push({
-      note_path: task.path,
-      block_id: task.blockId || "",
-      line: task.line,
-      text: successorDisplayText(task),
-      previous_status_symbol: task.status,
-      previous_status_name: successorStatusName(task.status),
-      status_symbol: rank,
-      status_name: successorStatusName(rank),
-      inbox: isInbox(task.path) === true,
-      unblocked_by: predecessorRows,
-      link: null,
-      not_linked: reason,
-    });
-  };
-
-  // BREAKER: more than 5 successors in one gesture → link none; each
-  // recovers to its derived rank with `not_linked: "breaker"`. Breaker rows
-  // always report (even with an unchanged rank): the gesture refused their
-  // links, and the notice counts them.
-  if (successorMarks.length > SUCCESSOR_BREAKER_LIMIT) {
-    for (const recover of recovers) {
-      pushRecover(recover.task, recover.reason, recover.predecessorRows, false);
-    }
-    for (const mark of successorMarks) {
-      pushRecover(mark.task, "breaker", mark.predecessorRows, true);
-    }
-    placements = [];
-  } else {
-    for (const recover of recovers) {
-      pushRecover(recover.task, recover.reason, recover.predecessorRows, false);
-    }
-    successorMarks.sort(successorOrderCompare);
-    const mintedByNote = new Map();
-    for (const mark of successorMarks) {
-      const task = mark.task;
-      const rank = task.status === "?" || task.status === " " ? "*" : task.status;
-      let blockId = task.blockId || "";
-      let blockIdCreated = false;
-      if (!blockId) {
-        if (!mintedByNote.has(task.path)) {
-          mintedByNote.set(
-            task.path,
-            collectSuccessorUsedIds(noteTexts[task.path] ?? ""),
-          );
-        }
-        const used = mintedByNote.get(task.path);
-        blockId = mintBlockId(
-          cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"),
-          used,
-        );
-        used.add(blockId);
-        blockIdCreated = true;
-      }
-      const before = task.rawLine != null ? String(task.rawLine) : null;
-      let after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
-      if (after != null && blockIdCreated) {
-        after = `${after.replace(/\s+$/, "")} ^${blockId}`;
-      }
-      if (before !== after) {
-        edits.push({ path: task.path, line: task.line, before, after });
-      }
-      const rowIndex = unblocked.length;
-      unblocked.push({
-        note_path: task.path,
-        block_id: blockId,
-        line: task.line,
-        text: successorDisplayText(task),
-        previous_status_symbol: task.status,
-        previous_status_name: successorStatusName(task.status),
-        status_symbol: rank,
-        status_name: successorStatusName(rank),
-        inbox: isInbox(task.path) === true,
-        unblocked_by: mark.predecessorRows,
-        link: {
-          day_file: dailyPath,
-          entry_name: "",
-          entry_line: null,
-          entry_created: false,
-          next_up: false,
-          line: null,
-          block_link: successorLinkText(task.path, blockId, dailyPath, basenameCounts),
-          block_id_created: blockIdCreated,
-        },
-        not_linked: null,
-      });
-      placements.push({
-        key: `${task.path}|${blockId}`,
-        rowIndex,
-        anchor: mark.anchor,
-        blockLink: unblocked[rowIndex].link.block_link,
-      });
-    }
+  for (const recover of pullIns.recovers) {
+    recovers.push(recover);
+  }
+  for (const mark of pullIns.successorMarks) {
+    successorMarks.push(mark);
+  }
+  for (const row of pullIns.still_blocked) {
+    stillBlocked.push(row);
   }
 
-  return {
-    unblocked,
-    still_blocked: stillBlocked,
-    edits,
-    placements,
-    unblocked_check: "checked",
-  };
+  return applyContext(
+    recovers,
+    successorMarks,
+    stillBlocked,
+    projectTagStripEdits,
+    (task) => hasLiveLink(liveAfter, task),
+  );
 }
 // ---- src/086-successor-ids.js ----
 // Successor block-ID minting (docs/task-dependencies.md §12.4, §11.7 SB
@@ -6870,6 +6833,8 @@ function successorNoticeText(model = {}) {
   const linked = unblocked.filter((row) => row && row.link);
   const notLinked = unblocked.filter((row) => row && !row.link);
   const failure = source.failure && typeof source.failure === "object" ? source.failure : null;
+  const projectEmptySuffix = " · project has no open tasks";
+  const isProjectEmptyRow = (row) => row && row.trigger === "project_empty";
 
   if (failure && Number(failure.count) > 0) {
     const pred = predecessors[0] && predecessors[0].text
@@ -6882,14 +6847,15 @@ function successorNoticeText(model = {}) {
     const row = linked[0];
     const text = truncateSuccessorNoticeText(row.text);
     const name = (row.link && row.link.entry_name) || "";
+    const suffix = isProjectEmptyRow(row) ? projectEmptySuffix : "";
     if (row.link && row.link.entry_created) {
       return name
-        ? `🔓 Next in new ${name} session (next up): ${text}`
-        : `🔓 Next in new session (next up): ${text}`;
+        ? `🔓 Next in new ${name} session (next up): ${text}${suffix}`
+        : `🔓 Next in new session (next up): ${text}${suffix}`;
     }
     return name
-      ? `🔓 Next in ${name}: ${text}`
-      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}`;
+      ? `🔓 Next in ${name}: ${text}${suffix}`
+      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}${suffix}`;
   }
   if (linked.length > 1) {
     const names = [];
@@ -6916,6 +6882,9 @@ function successorNoticeText(model = {}) {
   if (notLinked.length === 1) {
     const row = notLinked[0];
     const lane = row.status_name || successorStatusName(row.status_symbol);
+    if (isProjectEmptyRow(row)) {
+      return `🔓 Surfaced: ${truncateSuccessorNoticeText(row.text)} (${lane})${projectEmptySuffix}`;
+    }
     return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})`;
   }
   if (notLinked.length > 1) {
@@ -7490,6 +7459,873 @@ async function applySuccessorNoteEditsWithUnblockedGuard(plugin, plan, context) 
     warnProjectRecoveryWithoutUnblocked();
   }
   return plugin.applySuccessorNoteEdits(plan, context);
+}
+// ---- src/089-successor-project.js ----
+// Project pull-in helpers (docs/task-dependencies.md §12.10 / §12.11).
+// Pure code: the cycler mirror of sync's surface predicate, #hide bytes,
+// and the pull-in planner. Consumed by 085-successor-plan.js.
+
+const PROJECT_SUBPROJECTS_MARKER = "🧩 **Sub-projects:**";
+const PROJECT_HIDE_TAG = "#hide";
+const PROJECT_PRJ_TAG = "#prj";
+const PROJECT_OPEN_MARKS = new Set(["x", "X", "-"]);
+const PROJECT_WIKILINK_RE = /\[\[([^\]\n]+?)\]\]/g;
+
+function projectNoteTextFor(noteTexts, path) {
+  if (!noteTexts || !path) {
+    return "";
+  }
+  if (typeof noteTexts.get === "function") {
+    const value = noteTexts.get(path);
+    return typeof value === "string" ? value : "";
+  }
+  const value = noteTexts[path];
+  return typeof value === "string" ? value : "";
+}
+
+function projectHideTagLeftBoundary(character) {
+  return /\s/.test(character) || character === "(" || character === "[" ||
+    character === "{";
+}
+
+function projectHideTagRightBoundary(character) {
+  return /\s/.test(character) ||
+    "])}:.,;!?".includes(character);
+}
+
+function projectWholeTagSpans(text, tag) {
+  const source = String(text || "");
+  const spans = [];
+  let offset = 0;
+  while (offset < source.length) {
+    const index = source.indexOf(tag, offset);
+    if (index === -1) {
+      break;
+    }
+    const end = index + tag.length;
+    const before = index === 0 ? null : source[index - 1];
+    const after = end >= source.length ? null : source[end];
+    if (
+      (before == null || projectHideTagLeftBoundary(before)) &&
+      (after == null || projectHideTagRightBoundary(after))
+    ) {
+      spans.push({ start: index, end });
+      offset = end;
+    } else {
+      offset = index + 1;
+    }
+  }
+  return spans;
+}
+
+function projectLineHasWholeTag(text, tag) {
+  return projectWholeTagSpans(text, tag).length > 0;
+}
+
+function projectTaskTextOffset(line) {
+  const match = String(line || "").match(TASK_LINE_RE);
+  return match ? match[0].length : 0;
+}
+
+function projectTagRemovalRange(line, start, end) {
+  let after = end;
+  while (after < line.length && (line[after] === " " || line[after] === "\t")) {
+    after += 1;
+  }
+  if (after > end) {
+    return { start, end: after };
+  }
+  let before = start;
+  while (before > 0 && (line[before - 1] === " " || line[before - 1] === "\t")) {
+    before -= 1;
+  }
+  return { start: before, end };
+}
+
+// Byte-identical to Rust `normalize_task_hide_tag(line, false, true)` (PP22).
+function removeProjectHideTags(line) {
+  const source = String(line || "");
+  if (!getTaskStatusForLine(source)) {
+    return source;
+  }
+  const offset = projectTaskTextOffset(source);
+  const spans = projectWholeTagSpans(source.slice(offset), PROJECT_HIDE_TAG)
+    .map((span) => ({ start: span.start + offset, end: span.end + offset }));
+  if (spans.length === 0) {
+    return source;
+  }
+  const ranges = spans
+    .map((span) => projectTagRemovalRange(source, span.start, span.end))
+    .sort((left, right) => left.start - right.start);
+  const merged = [];
+  for (const range of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ start: range.start, end: range.end });
+    }
+  }
+  let output = "";
+  let cursor = 0;
+  for (const range of merged) {
+    output += source.slice(cursor, range.start);
+    cursor = range.end;
+  }
+  output += source.slice(cursor);
+  return output;
+}
+
+function lineHasTrailingPrjAnchor(line) {
+  const trimmed = String(line || "").replace(/[ \t]+$/, "");
+  return trimmed === "^prj" || trimmed.endsWith(" ^prj") ||
+    trimmed.endsWith("\t^prj");
+}
+
+function projectFrontmatterScheduled(sourceText) {
+  const value = parseFrontmatterScalar(sourceText, "scheduled");
+  if (value == null || value === "") {
+    return { value: null, count: 0, valid: true };
+  }
+  const parsed = parseStrictCalendarDate(value);
+  return {
+    value: parsed ? formatCalendarDate(parsed) : value,
+    count: 1,
+    valid: !!parsed,
+  };
+}
+
+function projectFrontmatterScheduledCount(sourceText) {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  if (lines.length === 0 || !/^\s*---\s*$/.test(lines[0])) {
+    return 0;
+  }
+  let count = 0;
+  for (let line = 1; line < lines.length; line += 1) {
+    if (/^\s*---\s*$/.test(lines[line])) {
+      break;
+    }
+    if (/^scheduled\s*:/.test(lines[line])) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function projectHasScanIssue(sourceText) {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  const fenced = getFencedLineNumbers(lines);
+  const prjLines = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    if (lineHasTrailingPrjAnchor(lines[line])) {
+      prjLines.push(line);
+    }
+  }
+  if (prjLines.length !== 1) {
+    return prjLines.length > 1;
+  }
+  const scheduled = findScheduledFieldMatches(lines[prjLines[0]]);
+  if (scheduled.length > 1) {
+    return true;
+  }
+  if (scheduled.length === 1 && !parseStrictCalendarDate(scheduled[0].value)) {
+    return true;
+  }
+  const frontmatterCount = projectFrontmatterScheduledCount(sourceText);
+  if (frontmatterCount > 1) {
+    return true;
+  }
+  if (frontmatterCount === 1) {
+    const leftover = projectFrontmatterScheduled(sourceText);
+    if (!leftover.valid) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function projectMarkerHasOpenChild(lines, prjLine) {
+  const prjIndent = getLineIndentation(String(lines[prjLine] || "")).length;
+  for (let line = prjLine + 1; line < lines.length; line += 1) {
+    const text = String(lines[line] || "");
+    const indent = getLineIndentation(text).length;
+    if (text.trim() && indent <= prjIndent && parseListItemPrefix(text)) {
+      break;
+    }
+    if (!text.includes(PROJECT_SUBPROJECTS_MARKER)) {
+      continue;
+    }
+    PROJECT_WIKILINK_RE.lastIndex = 0;
+    let match;
+    while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
+      const start = match.index;
+      const end = start + match[0].length;
+      const before = text.slice(0, start).trimEnd();
+      const after = text.slice(end).trimStart();
+      if (before.endsWith("~~") && after.startsWith("~~")) {
+        const marker = after.slice(2).trimStart();
+        if (marker.startsWith("✅") || marker.startsWith("❌")) {
+          continue;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+function projectRemainingCount(sourceText, scheduleApplies, skipKeys) {
+  const lines = String(sourceText || "").split(/\r?\n/);
+  const fenced = getFencedLineNumbers(lines);
+  let remaining = 0;
+  for (let line = 0; line < lines.length; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    const text = String(lines[line] || "");
+    const status = getTaskStatusForLine(text, line);
+    if (!status || PROJECT_OPEN_MARKS.has(status.rawSymbol)) {
+      continue;
+    }
+    if (!lineMatchesTasksGlobalFilterText(text)) {
+      continue;
+    }
+    if (lineHasTrailingPrjAnchor(text)) {
+      continue;
+    }
+    const parsed = parseTaskDependencyLine(text, "", line);
+    if (parsed && skipKeys && (
+      (parsed.blockId && skipKeys.has(`^${parsed.blockId}`)) ||
+      (parsed.taskId && skipKeys.has(`id:${parsed.taskId}`))
+    )) {
+      continue;
+    }
+    const hidden = projectLineHasWholeTag(
+      text.slice(projectTaskTextOffset(text)),
+      PROJECT_HIDE_TAG,
+    );
+    const scheduledCount = findScheduledFieldMatches(text).length;
+    if (hidden && !(scheduleApplies && scheduledCount < 2)) {
+      continue;
+    }
+    remaining += 1;
+  }
+  return remaining;
+}
+
+function projectTaskAsSuccessor(project) {
+  const task = project.projectTask;
+  return {
+    path: project.path,
+    line: task.line,
+    status: task.status,
+    blockId: task.blockId,
+    taskId: task.taskId,
+    dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn.slice() : [],
+    text: task.lineText,
+    rawLine: task.lineText,
+    scheduled: project.scheduled,
+  };
+}
+
+// Sync's surface predicate on one note (PP2–PP6, PP20, PP26, PP28).
+function projectSurfaceState(text, path, today, options = {}) {
+  const source = String(text || "");
+  const notePath = String(path || "");
+  if (!notePath || successorIsDonePath(notePath) || isCanonicalDailyNotePath(notePath)) {
+    return null;
+  }
+  if (projectHasScanIssue(source)) {
+    return null;
+  }
+  const project = projectDependencyInfo(source, notePath);
+  if (!project || !project.projectTask) {
+    return null;
+  }
+  const leftover = projectFrontmatterScheduled(source);
+  const scheduleApplies = leftover.count > 0
+    ? leftover.valid
+    : !!project.scheduled;
+  const scheduled = leftover.count > 0 && leftover.valid
+    ? leftover.value
+    : project.scheduled;
+  const skipKeys = options.skipKeys instanceof Set ? options.skipKeys : null;
+  const remaining = projectRemainingCount(source, scheduleApplies, skipKeys);
+  const lines = source.split(/\r?\n/);
+  const subopen = projectMarkerHasOpenChild(lines, project.projectTask.line);
+  return {
+    path: notePath,
+    project,
+    projectTask: project.projectTask,
+    task: projectTaskAsSuccessor(project),
+    scheduled: scheduled || null,
+    remaining,
+    subopen,
+    empty: remaining === 0 && !subopen,
+    hidden: projectLineHasWholeTag(
+      project.projectTask.lineText.slice(
+        projectTaskTextOffset(project.projectTask.lineText),
+      ),
+      PROJECT_HIDE_TAG,
+    ),
+    today: today || formatLocalDate(),
+  };
+}
+
+function projectClosedSkipKeys(closed) {
+  const keys = new Set();
+  for (const identity of Array.isArray(closed) ? closed : []) {
+    if (!identity) {
+      continue;
+    }
+    if (identity.blockId) {
+      keys.add(`^${identity.blockId}`);
+    }
+    if (identity.taskId) {
+      keys.add(`id:${identity.taskId}`);
+    }
+  }
+  return keys;
+}
+
+function projectClosedTaskIds(closed) {
+  const ids = new Set();
+  for (const identity of Array.isArray(closed) ? closed : []) {
+    if (identity && identity.taskId) {
+      ids.add(String(identity.taskId));
+    }
+  }
+  return ids;
+}
+
+function projectIdentityIsPrj(identity) {
+  return identity && String(identity.blockId || "").toLowerCase() === "prj";
+}
+
+function projectPredsForNote(closed, path) {
+  return (Array.isArray(closed) ? closed : []).filter(
+    (identity) =>
+      identity &&
+      String(identity.path || "") === String(path || "") &&
+      !projectIdentityIsPrj(identity),
+  );
+}
+
+function projectPredsForDepends(closed, dependsOn) {
+  const ids = new Set((dependsOn || []).map((id) => String(id)));
+  return (Array.isArray(closed) ? closed : []).filter(
+    (identity) => identity && identity.taskId && ids.has(String(identity.taskId)),
+  );
+}
+
+function projectPredecessorRows(preds) {
+  return preds.map((identity) => ({
+    note_path: String(identity.path || ""),
+    block_id: String(identity.blockId || ""),
+    text: String(identity.text || ""),
+  }));
+}
+
+function projectPullInDisplayText(task, lineText) {
+  const raw = lineText != null ? String(lineText) : (task && task.rawLine) || "";
+  const cleaned = cleanDescription(
+    successorBodyAfterStatusBox(raw),
+    "#task",
+    (task && task.blockId) || null,
+  );
+  return cleaned
+    .split(/\s+/)
+    .filter((token) => token && token !== PROJECT_PRJ_TAG && token !== PROJECT_HIDE_TAG)
+    .join(" ");
+}
+
+function projectScheduledIsFuture(scheduled, today) {
+  const date = parseStrictCalendarDate(scheduled);
+  const anchor = parseStrictCalendarDate(today);
+  return !!date && !!anchor && compareCalendarDates(date, anchor) > 0;
+}
+
+function projectLocationKey(path, line) {
+  return `${path}\0${line}`;
+}
+
+function projectPullInCandidatePaths(closed, noteTexts, today) {
+  const skipKeys = projectClosedSkipKeys(closed);
+  const paths = [];
+  const seen = new Set();
+  for (const identity of Array.isArray(closed) ? closed : []) {
+    if (!identity || !identity.path || projectIdentityIsPrj(identity)) {
+      continue;
+    }
+    const path = String(identity.path);
+    if (seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    const surface = projectSurfaceState(
+      projectNoteTextFor(noteTexts, path),
+      path,
+      today,
+      { skipKeys },
+    );
+    if (surface && surface.empty) {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
+function projectPullInNeedsDependents(closed, noteTexts, today) {
+  if (projectClosedTaskIds(closed).size > 0) {
+    return true;
+  }
+  const skipKeys = projectClosedSkipKeys(closed);
+  for (const path of projectPullInCandidatePaths(closed, noteTexts, today)) {
+    const surface = projectSurfaceState(
+      projectNoteTextFor(noteTexts, path),
+      path,
+      today,
+      { skipKeys },
+    );
+    if (surface && surface.task && (surface.task.dependsOn || []).length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function projectEarliestAnchor(preds, closed, anchors) {
+  const anchored = preds.map((identity) => {
+    const position = closed.findIndex((candidate) => candidate === identity);
+    return {
+      identity,
+      anchor: position === -1
+        ? { kind: "none", entryLine: null, bulletLine: null }
+        : anchors[position],
+    };
+  });
+  anchored.sort(
+    (left, right) =>
+      successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor) ||
+      (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1),
+  );
+  return anchored[0] || null;
+}
+
+// Plan pull-in verdicts in planSuccessors' recover / mark / still-blocked
+// shapes. One row per R; pull-ins replace SL11 project_task / hidden.
+function planProjectPullIns(options = {}) {
+  const closed = Array.isArray(options.closed) ? options.closed : [];
+  const index =
+    options.index && typeof options.index === "object"
+      ? options.index
+      : { byDependsOn: new Map(), byTaskId: new Map(), tasks: [] };
+  const noteTexts =
+    options.noteTexts && typeof options.noteTexts === "object" ? options.noteTexts : {};
+  const today =
+    typeof options.today === "string" && options.today
+      ? options.today
+      : formatLocalDate();
+  const dailyBefore = successorNormalizeLines(options.dailyBefore ?? []);
+  const closingEntry = Number.isInteger(options.closingEntry)
+    ? options.closingEntry
+    : null;
+  const dailyPath = typeof options.dailyPath === "string" ? options.dailyPath : "";
+  const linkUnblocked = options.linkUnblocked !== false;
+  const cancelledClose = options.cancelled === true;
+  const skipKeys = projectClosedSkipKeys(closed);
+  const closedTaskIds = projectClosedTaskIds(closed);
+  const byTaskId = index.byTaskId instanceof Map ? index.byTaskId : new Map();
+  const openIdsAfter = new Set();
+  for (const [id, task] of byTaskId) {
+    if (
+      task &&
+      DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+      !closedTaskIds.has(String(id))
+    ) {
+      openIdsAfter.add(String(id));
+    }
+  }
+
+  const anchors = computeSuccessorAnchors(closed, dailyBefore, {
+    closingEntry,
+    dailyPath,
+  });
+  const liveBefore = parseSuccessorLedgerEntries(dailyBefore);
+  const hasLiveLinkBefore = (task) =>
+    liveBefore.some((entry) =>
+      entry.links.some((link) =>
+        successorLinkMatchesIdentity(
+          link,
+          { path: task.path, blockId: task.blockId },
+          dailyPath,
+        ),
+      ),
+    );
+
+  const candidates = new Map();
+  const addCandidate = (surface, preds) => {
+    if (!surface || !surface.empty || !surface.task) {
+      return;
+    }
+    const task = surface.task;
+    if (closed.some((identity) =>
+      identity &&
+      String(identity.path || "") === String(task.path) &&
+      (
+        (identity.blockId && String(identity.blockId) === String(task.blockId || "")) ||
+        (identity.taskId && task.taskId && String(identity.taskId) === String(task.taskId))
+      )
+    )) {
+      return;
+    }
+    const key = projectLocationKey(task.path, task.line);
+    const existing = candidates.get(key);
+    const merged = existing
+      ? [...existing.preds]
+      : [];
+    for (const pred of preds) {
+      if (!merged.includes(pred)) {
+        merged.push(pred);
+      }
+    }
+    candidates.set(key, { surface, preds: merged });
+  };
+
+  const seenNotes = new Set();
+  for (const identity of closed) {
+    if (!identity || !identity.path || projectIdentityIsPrj(identity)) {
+      continue;
+    }
+    const path = String(identity.path);
+    if (seenNotes.has(path)) {
+      continue;
+    }
+    seenNotes.add(path);
+    const surface = projectSurfaceState(
+      projectNoteTextFor(noteTexts, path),
+      path,
+      today,
+      { skipKeys },
+    );
+    if (surface) {
+      addCandidate(surface, projectPredsForNote(closed, path));
+    }
+  }
+
+  const allTasks = Array.isArray(index.tasks) ? index.tasks : [];
+  for (const task of allTasks) {
+    if (
+      !task ||
+      !successorIsProjectTask(task.blockId) ||
+      !Array.isArray(task.dependsOn) ||
+      !task.dependsOn.some((id) => closedTaskIds.has(String(id)))
+    ) {
+      continue;
+    }
+    const noteText = projectNoteTextFor(noteTexts, task.path);
+    if (!noteText) {
+      continue;
+    }
+    const surface = projectSurfaceState(noteText, task.path, today, { skipKeys });
+    if (surface) {
+      addCandidate(surface, projectPredsForDepends(closed, task.dependsOn));
+    }
+  }
+
+  const stillBlocked = [];
+  const recovers = [];
+  const successorMarks = [];
+  const locations = new Set();
+  const cascadePaths = new Set();
+
+  for (const { surface, preds } of candidates.values()) {
+    const task = surface.task;
+    const key = projectLocationKey(task.path, task.line);
+    locations.add(key);
+    const predecessorRows = projectPredecessorRows(preds);
+    const postOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
+    if (postOpen.length > 0) {
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: projectPullInDisplayText(task, task.rawLine),
+        status_symbol: task.status,
+        reason: "waits_on",
+        waits_on: postOpen.length,
+        scheduled: null,
+        trigger: "project_empty",
+      });
+      continue;
+    }
+    if (projectScheduledIsFuture(surface.scheduled, today)) {
+      stillBlocked.push({
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: projectPullInDisplayText(task, task.rawLine),
+        status_symbol: task.status,
+        reason: "scheduled",
+        waits_on: 0,
+        scheduled: surface.scheduled,
+        trigger: "project_empty",
+      });
+      continue;
+    }
+    if (task.status === "?") {
+      cascadePaths.add(task.path);
+    }
+    const hideRemoved = surface.hidden === true;
+    const anchored = projectEarliestAnchor(preds, closed, anchors);
+    const hasAnchor = anchored && anchored.anchor && anchored.anchor.kind !== "none";
+    const alreadyPlanned = hasLiveLinkBefore(task);
+    if (alreadyPlanned) {
+      recovers.push({
+        task,
+        reason: "already_planned",
+        predecessorRows,
+        pullIn: true,
+        hideRemoved,
+        raiseToNext: true,
+      });
+      continue;
+    }
+    if (cancelledClose || !linkUnblocked) {
+      recovers.push({
+        task,
+        reason: cancelledClose ? "cancelled" : "disabled",
+        predecessorRows,
+        pullIn: true,
+        hideRemoved,
+      });
+      continue;
+    }
+    if (!hasAnchor) {
+      recovers.push({
+        task,
+        reason: "not_planned_today",
+        predecessorRows,
+        pullIn: true,
+        hideRemoved,
+      });
+      continue;
+    }
+    successorMarks.push({
+      task,
+      anchor: anchored.anchor,
+      predecessorRows,
+      notePath: task.path,
+      line: task.line,
+      pullIn: true,
+      hideRemoved,
+    });
+  }
+
+  return {
+    hasCandidates: candidates.size > 0,
+    locations,
+    still_blocked: stillBlocked,
+    recovers,
+    successorMarks,
+    cascadePaths,
+  };
+}
+
+function projectPullInRewriteLine(before, rank, options = {}) {
+  const stripped = removeProjectHideTags(before);
+  const recoverRank = options.recoverRank === true;
+  if (recoverRank) {
+    const rewritten = rewriteRecoveredTaskLine(stripped, rank, {
+      markUnblockedLine: options.markUnblockedLine,
+      today: options.today,
+      isDailyNote: options.isDailyNote,
+      isToday: options.isToday,
+    });
+    return rewritten == null ? stripped : rewritten;
+  }
+  return replaceTaskStatusSymbol(stripped, rank);
+}
+
+function applySuccessorVerdicts(context) {
+  const recovers = Array.isArray(context.recovers) ? context.recovers : [];
+  const successorMarks = Array.isArray(context.successorMarks)
+    ? context.successorMarks
+    : [];
+  const stillBlocked = Array.isArray(context.stillBlocked) ? context.stillBlocked : [];
+  const edits = Array.isArray(context.projectTagStripEdits)
+    ? context.projectTagStripEdits.slice()
+    : [];
+  const dailyPath = context.dailyPath || "";
+  const today = context.today;
+  const markUnblockedLine = context.markUnblockedLine;
+  const isInbox = context.isInbox;
+  const basenameCounts = context.basenameCounts;
+  const noteTexts = context.noteTexts || {};
+  const hasLiveLink = context.hasLiveLink;
+
+  const unblocked = [];
+  let placements = [];
+
+  const pushRow = (task, rank, extra) => {
+    const pullIn = extra.pullIn === true;
+    const before = task.rawLine != null ? String(task.rawLine) : null;
+    let after = before;
+    if (before != null) {
+      after = pullIn
+        ? projectPullInRewriteLine(before, rank, {
+          recoverRank: extra.recoverRank === true,
+          markUnblockedLine,
+          today,
+          isDailyNote: isDailyNotePath(task.path),
+          isToday: hasLiveLink(task),
+        })
+        : extra.linked
+          ? extra.after
+          : rewriteRecoveredTaskLine(before, rank, {
+            markUnblockedLine,
+            today,
+            isDailyNote: isDailyNotePath(task.path),
+            isToday: hasLiveLink(task),
+          });
+    }
+    const hideRemoved = pullIn && before != null &&
+      removeProjectHideTags(before) !== before;
+    if (rank === task.status && !extra.always && !hideRemoved && !extra.linked) {
+      return null;
+    }
+    if (before !== after && after != null) {
+      edits.push({ path: task.path, line: task.line, before, after });
+    }
+    const text = pullIn
+      ? projectPullInDisplayText(task, after != null ? after : before)
+      : successorDisplayText(task);
+    const row = {
+      note_path: task.path,
+      block_id: extra.blockId || task.blockId || "",
+      line: task.line,
+      text,
+      previous_status_symbol: task.status,
+      previous_status_name: successorStatusName(task.status),
+      status_symbol: rank,
+      status_name: successorStatusName(rank),
+      inbox: isInbox(task.path) === true,
+      unblocked_by: extra.predecessorRows || [],
+      link: extra.link || null,
+      not_linked: extra.not_linked == null ? null : extra.not_linked,
+      trigger: pullIn ? "project_empty" : "dependency",
+      hide_removed: hideRemoved,
+    };
+    unblocked.push(row);
+    return unblocked.length - 1;
+  };
+
+  const pushRecover = (recover, alwaysReason) => {
+    const task = recover.task;
+    const pullIn = recover.pullIn === true;
+    const rank = recover.raiseToNext
+      ? (task.status === "?" || task.status === " " ? "*" : task.status)
+      : (task.status === "?"
+        ? (hasLiveLink(task) ? "*" : " ")
+        : task.status);
+    const reason = alwaysReason || recover.reason;
+    pushRow(task, rank, {
+      pullIn,
+      recoverRank: pullIn && !recover.raiseToNext,
+      always: recover.hideRemoved === true || alwaysReason === "breaker",
+      predecessorRows: recover.predecessorRows,
+      not_linked: reason,
+    });
+  };
+
+  const pullInMarks = successorMarks.filter((mark) => mark.pullIn);
+  const regularMarks = successorMarks.filter((mark) => !mark.pullIn);
+  const broken = regularMarks.length > SUCCESSOR_BREAKER_LIMIT;
+  for (const recover of recovers) {
+    pushRecover(recover, false);
+  }
+  const linkedMarks = broken ? pullInMarks : successorMarks.slice().sort(successorOrderCompare);
+  if (broken) {
+    pullInMarks.sort(successorOrderCompare);
+  }
+  const mintedByNote = new Map();
+  for (const mark of linkedMarks) {
+    const task = mark.task;
+    const rank = task.status === "?" || task.status === " " ? "*" : task.status;
+    let blockId = task.blockId || "";
+    let blockIdCreated = false;
+    const before = task.rawLine != null ? String(task.rawLine) : null;
+    let after = before;
+    if (mark.pullIn) {
+      if (before != null) {
+        after = projectPullInRewriteLine(before, rank, { recoverRank: false });
+      }
+    } else {
+      if (!blockId) {
+        if (!mintedByNote.has(task.path)) {
+          mintedByNote.set(
+            task.path,
+            collectSuccessorUsedIds(noteTexts[task.path] ?? ""),
+          );
+        }
+        const used = mintedByNote.get(task.path);
+        blockId = mintBlockId(
+          cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"),
+          used,
+        );
+        used.add(blockId);
+        blockIdCreated = true;
+      }
+      after = before != null ? replaceTaskStatusSymbol(before, rank) : null;
+      if (after != null && blockIdCreated) {
+        after = `${after.replace(/\s+$/, "")} ^${blockId}`;
+      }
+    }
+    const rowIndex = pushRow(task, rank, {
+      pullIn: mark.pullIn === true,
+      linked: true,
+      after,
+      blockId,
+      predecessorRows: mark.predecessorRows,
+      not_linked: null,
+      link: {
+        day_file: dailyPath,
+        entry_name: "",
+        entry_line: null,
+        entry_created: false,
+        next_up: false,
+        line: null,
+        block_link: successorLinkText(task.path, blockId, dailyPath, basenameCounts),
+        block_id_created: blockIdCreated,
+      },
+    });
+    if (rowIndex != null) {
+      placements.push({
+        key: `${task.path}|${blockId}`,
+        rowIndex,
+        anchor: mark.anchor,
+        blockLink: unblocked[rowIndex].link.block_link,
+      });
+    }
+  }
+  if (broken) {
+    for (const mark of regularMarks) {
+      pushRecover(mark, "breaker");
+    }
+    // Pull-ins still link; only regular successors are broken.
+  }
+
+  return {
+    unblocked,
+    still_blocked: stillBlocked,
+    edits,
+    placements,
+    unblocked_check: "checked",
+  };
 }
 // ---- src/090-source-and-formatting.js ----
 function getLineTextFromSourceText(sourceText, lineNumber) {
@@ -10404,13 +11240,11 @@ class TaskStatusCyclerReferencesMixin {
 }
 // ---- src/135-plugin-successors.js ----
 // Successor-link wiring (plan:202610/successor_links.md `cycler_wiring`).
-// Runs the gated recover-and-link pass inside `finalizeClosedTasks`: with at
-// least one `[id::]` in the closed set, dependents are recovered and linked
-// in one planned pass (pure helpers from 085/086/087), then embeds retire as
-// today. Writes go through open editors or preimage-checked `vault.process`.
-// Exactly one notice per gesture: the nav Unblocked card, the walk toast, or
-// a plain-text fallback. Linking is best-effort: a close is never rolled
-// back for a linking failure.
+// Pool, identity, and apply helpers for the recover-and-link pass. The
+// gated entry point `planAndApplySuccessorsNow` lives on 137 so this
+// fragment stays under the 1000-line cap. Writes go through open editors
+// or preimage-checked `vault.process`. Linking is best-effort: a close is
+// never rolled back for a linking failure.
 
 class TaskStatusCyclerSuccessorsMixin {
   // Nav `api.notice` v1 for the Unblocked card (plan 202610/successor_links.md
@@ -11047,310 +11881,6 @@ class TaskStatusCyclerSuccessorsMixin {
     return { failed, failureReason };
   }
 
-  // The gated recover-and-link pass inside `finalizeClosedTasks`: gate on
-  // `[id::]`, plan with `planSuccessors`, apply, and return the §12.5 model
-  // (or null). The close never depends on this result. Never throws.
-  async planAndApplySuccessorsNow(closed, context) {
-    try {
-      const active = context && typeof context === "object" ? context : {};
-      const vault = this.app && this.app.vault;
-      const cache = new Map();
-      const gate = await this.resolveSuccessorClosedIdentities(
-        closed,
-        active,
-        cache,
-      );
-      // Gated (no `[id::]` in C): nothing can be blocked on this close.
-      // Return a quiet marker, not a failure: callers stay silent and the
-      // read budget proves no vault-wide scan ran.
-      const quietGate = {
-        version: 1,
-        gated: true,
-        predecessors: [],
-        unblocked: [],
-        still_blocked: [],
-        daily_path: "",
-        daily_content: null,
-        failure: null,
-      };
-      if (gate.gated) {
-        return quietGate;
-      }
-      const identities = gate.identities;
-      const closedTaskIds = new Set(
-        identities.filter((identity) => identity.taskId).map((identity) =>
-          String(identity.taskId)
-        ),
-      );
-      if (closedTaskIds.size === 0) {
-        return quietGate;
-      }
-      let linkUnblocked = true;
-      try {
-        linkUnblocked = loadLinkUnblocked() !== false;
-      } catch (error) {
-        linkUnblocked = true;
-      }
-      // `cycler_polish`: a cancel close (`closeKind: "cancelled"`) recovers
-      // only — no links, no mints, rows report `cancelled`.
-      const cancelledClose = active.closeKind === "cancelled";
-      if (cancelledClose) {
-        linkUnblocked = false;
-      }
-      let today = null;
-      try {
-        today = typeof active.today === "string" && active.today
-          ? active.today
-          : typeof this.getScheduleLogDateString === "function"
-            ? this.getScheduleLogDateString()
-            : formatLocalDate();
-      } catch (error) {
-        today = formatLocalDate();
-      }
-      let dailyPath = typeof active.dailyPath === "string" && active.dailyPath
-        ? active.dailyPath
-        : null;
-      if (!dailyPath) {
-        try {
-          dailyPath = todayDailyPath(this.app);
-        } catch (error) {
-          dailyPath = null;
-        }
-      }
-      let dailyCurrent = null;
-      if (dailyPath) {
-        dailyCurrent = await this.readSuccessorNoteText(
-          dailyPath,
-          active,
-          cache,
-        );
-      }
-      const hint = active.closingEntry &&
-          typeof active.closingEntry === "object"
-        ? active.closingEntry
-        : null;
-      const dailyBefore = Array.isArray(active.dailyBefore)
-        ? active.dailyBefore.map((line) => String(line ?? ""))
-        : typeof dailyCurrent === "string"
-          ? dailyCurrent.split(/\r?\n/)
-          : [];
-      const dailyAfter = typeof dailyCurrent === "string"
-        ? dailyCurrent.split(/\r?\n/)
-        : dailyBefore;
-      let planClosingEntry = null;
-      if (
-        hint && Number.isInteger(hint.line) && hint.line >= 0 &&
-        hint.line < dailyBefore.length
-      ) {
-        planClosingEntry = hint.line;
-      }
-      const pool = await this.buildSuccessorPool(closedTaskIds, active, cache);
-      let tasks = pool.tasks;
-      let noteTexts = pool.noteTexts;
-      if (!pool.warm) {
-        const cold = await this.readSuccessorColdDocuments(active, cache);
-        if (cold.documents.length === 0 && !vault) {
-          return null;
-        }
-        tasks = tasksFromDocuments(cold.documents);
-        noteTexts = new Map(
-          cold.documents.map((document) => [document.path, document.text]),
-        );
-        for (const [path, text] of pool.noteTexts) {
-          if (!noteTexts.has(path)) {
-            noteTexts.set(path, text);
-          }
-        }
-      }
-      // Basename uniqueness over the same eligible Markdown path set
-      // capture walks (`vault_note_paths`): every vault `.md` file minus
-      // dot-directories and always-excluded names, unioned with staged
-      // and open-editor paths — without reading note bodies. A prose-only
-      // same-named sibling must still force the long link form.
-      const basenameCounts = countSuccessorBasenames(
-        this.app,
-        tasks,
-        identities,
-        dailyPath,
-        noteTexts,
-      );
-      const noteTextsObject = {};
-      for (const [path, text] of noteTexts) {
-        noteTextsObject[path] = text;
-      }
-      let plan = null;
-      try {
-        plan = planSuccessors({
-          closed: identities,
-          index: buildDependentsIndex(tasks),
-          dailyBefore,
-          dailyAfter,
-          dailyPath: dailyPath || "",
-          today,
-          markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
-          linkUnblocked,
-          cancelled: cancelledClose,
-          isInbox: getSuccessorIsInbox(this.app),
-          basenameCounts,
-          closingEntry: planClosingEntry,
-          noteTexts: noteTextsObject,
-        });
-      } catch (error) {
-        return null;
-      }
-      if (!plan) {
-        return null;
-      }
-      const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
-      // A dependent whose status edit failed is recovered-but-unlinked:
-      // drop its placement so no link is inserted for it.
-      if (noteOutcome.failed > 0) {
-        const failedRows = new Set();
-        for (let index = 0; index < plan.unblocked.length; index += 1) {
-          if (plan.unblocked[index].not_linked === "failed") {
-            failedRows.add(index);
-          }
-        }
-        plan.placements = plan.placements.filter(
-          (placement) => !failedRows.has(placement && placement.rowIndex),
-        );
-      }
-      let insertion = { splices: [], links: [], skipped: [], text: null };
-      if (plan.placements.length > 0 && dailyPath && dailyCurrent != null) {
-        let relocated = null;
-        let createdEntry = null;
-        if (hint) {
-          relocated = this.relocateSuccessorClosingEntry(dailyAfter, hint);
-          if (
-            relocated == null &&
-            plan.placements.some((placement) =>
-              !placement || !placement.anchor || placement.anchor.bulletLine == null
-            )
-          ) {
-            for (const placement of plan.placements) {
-              if (
-                !placement || !placement.anchor ||
-                placement.anchor.bulletLine != null
-              ) {
-                continue;
-              }
-              const row = plan.unblocked[placement.rowIndex];
-              if (row && typeof row === "object" && row.link) {
-                row.link = null;
-                row.not_linked = "failed";
-                noteOutcome.failed += 1;
-                if (!noteOutcome.failureReason) {
-                  noteOutcome.failureReason = "daily note changed";
-                }
-              }
-            }
-          }
-          if (relocated != null && hint.createdPomodoro === true) {
-            try {
-              const entries = parseSuccessorLedgerEntries(dailyAfter);
-              const createdName = typeof hint.createdName === "string"
-                ? hint.createdName
-                : "";
-              const created = entries.find((entry) =>
-                entry.open && entry.entryLine > relocated &&
-                String(entry.name || "") === createdName
-              ) || null;
-              if (created) {
-                createdEntry = { line: created.entryLine };
-              }
-            } catch (error) {
-              createdEntry = null;
-            }
-          }
-        }
-        try {
-          insertion = planSuccessorInsertions(dailyAfter, plan.placements, {
-            ...(relocated != null ? { closingEntry: relocated } : {}),
-            ...(createdEntry ? { createdEntry } : {}),
-          });
-        } catch (error) {
-          insertion = { splices: [], links: [], skipped: [], text: null };
-        }
-        insertion.snapshot = dailyCurrent;
-        const dailyOutcome = await this.applySuccessorDailyInsertions(
-          plan,
-          insertion,
-          active,
-          dailyPath,
-        );
-        noteOutcome.failed += dailyOutcome.failed;
-        if (!noteOutcome.failureReason && dailyOutcome.failureReason) {
-          noteOutcome.failureReason = dailyOutcome.failureReason;
-        }
-      } else if (plan.placements.length > 0) {
-        for (const placement of plan.placements) {
-          const row = plan.unblocked[placement && placement.rowIndex];
-          if (row && typeof row === "object" && row.link) {
-            row.link = null;
-            row.not_linked = "failed";
-            noteOutcome.failed += 1;
-            if (!noteOutcome.failureReason) {
-              noteOutcome.failureReason = "daily note unavailable";
-            }
-          }
-        }
-      }
-      // `cycler_polish`: remember linked rows for the same-day reopen
-      // take-back. Capture closes never reach this pass, so they gain no
-      // receipt (Alt+N is their per-link undo).
-      try {
-        if (typeof this.rememberSuccessorPass === "function") {
-          this.rememberSuccessorPass(identities, plan, insertion, {
-            dailyPath,
-            today,
-          });
-        }
-      } catch (error) {
-        // Best effort: a missed receipt only loses the take-back shortcut.
-      }
-      const predecessors = identities.map((identity) => ({
-        note_path: String(identity.path || ""),
-        block_id: identity.blockId ? String(identity.blockId) : "",
-        text: identity.text ? String(identity.text) : "",
-      }));
-      let dailyContent = null;
-      if (
-        dailyPath &&
-        (plan.unblocked.length > 0 || noteOutcome.failed > 0)
-      ) {
-        try {
-          cache.delete(dailyPath);
-          dailyContent = await this.readSuccessorNoteText(
-            dailyPath,
-            active,
-            cache,
-          );
-        } catch (error) {
-          dailyContent = null;
-        }
-        if (typeof dailyContent !== "string") {
-          dailyContent = null;
-        }
-      }
-      return {
-        version: 1,
-        predecessors,
-        unblocked: plan.unblocked,
-        still_blocked: plan.still_blocked,
-        daily_path: dailyPath || "",
-        daily_content: dailyContent,
-        failure: noteOutcome.failed > 0
-          ? {
-            count: noteOutcome.failed,
-            reason: noteOutcome.failureReason || "daily note changed",
-          }
-          : null,
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
   // Plain-text form of a successor model for the walk toast, the
   // `completeTaskAtCursor` additive result, and the no-nav fallback. Null
   // when there is nothing to say (no unblocked rows and no failure).
@@ -11454,13 +11984,20 @@ class TaskStatusCyclerSuccessorReceiptMixin {
   // Store the reopen receipt for a successful pass. `plan` carries the
   // applied `edits` and the final `unblocked` rows (failed rows already
   // unlinked); `insertion.text` is the post-insertion daily text the row
-  // line numbers address. Only rows still linked are remembered. Capture
-  // closes never reach this method, so they never gain a receipt (Alt+N is
-  // their per-link undo). Never throws.
+  // line numbers address. Linked rows and project pull-in rows (linked or
+  // surfaced) are remembered; pull-in receipts store `before_line` so a
+  // same-day reopen can restore R byte-for-byte. Capture closes never
+  // reach this method, so they never gain a receipt (Alt+N is their
+  // per-link undo). Never throws.
   rememberSuccessorPass(closedIdentities, plan, insertion, info) {
     try {
       const rows = plan && Array.isArray(plan.unblocked)
-        ? plan.unblocked.filter((row) => row && row.link && !row.not_linked)
+        ? plan.unblocked.filter((row) =>
+          row && (
+            (row.link && !row.not_linked) ||
+            row.trigger === "project_empty"
+          )
+        )
         : [];
       if (rows.length === 0) {
         return;
@@ -11468,42 +12005,47 @@ class TaskStatusCyclerSuccessorReceiptMixin {
       const text = insertion && typeof insertion.text === "string"
         ? insertion.text
         : null;
-      if (!text) {
-        return;
-      }
-      const lines = text.split(/\r?\n/);
+      const lines = typeof text === "string" ? text.split(/\r?\n/) : [];
       const afterByEdit = new Map();
+      const beforeByEdit = new Map();
       for (const edit of (plan && plan.edits) || []) {
         if (edit && edit.path != null && Number.isInteger(edit.line)) {
           afterByEdit.set(`${edit.path}\0${edit.line}`, edit.after);
+          beforeByEdit.set(`${edit.path}\0${edit.line}`, edit.before);
         }
       }
       const links = [];
       const statuses = [];
       for (const row of rows) {
-        const link = row.link || {};
-        if (!Number.isInteger(link.line) || !Number.isInteger(link.entry_line)) {
-          continue;
-        }
-        const lineText = lines[link.line - 1];
-        const headline = lines[link.entry_line - 1];
-        if (typeof lineText !== "string" || typeof headline !== "string") {
-          continue;
-        }
         const by = (row.unblocked_by || []).map((pred) =>
           `${pred && pred.note_path ? pred.note_path : ""}#^${pred && pred.block_id ? pred.block_id : ""}`
         );
-        links.push({
-          line_text: lineText,
-          entry_headline: headline,
-          entry_created: link.entry_created === true,
-          by,
-        });
+        const link = row.link || {};
+        if (
+          text &&
+          row.link && !row.not_linked &&
+          Number.isInteger(link.line) && Number.isInteger(link.entry_line)
+        ) {
+          const lineText = lines[link.line - 1];
+          const headline = lines[link.entry_line - 1];
+          if (typeof lineText === "string" && typeof headline === "string") {
+            links.push({
+              line_text: lineText,
+              entry_headline: headline,
+              entry_created: link.entry_created === true,
+              by,
+            });
+          }
+        }
         const after = afterByEdit.get(`${row.note_path}\0${row.line}`);
         if (typeof after === "string") {
+          const before = beforeByEdit.get(`${row.note_path}\0${row.line}`);
           statuses.push({
             path: row.note_path,
             after_line: after,
+            before_line: row.trigger === "project_empty" && typeof before === "string"
+              ? before
+              : null,
             previous_symbol: row.previous_status_symbol,
             by,
           });
@@ -11800,10 +12342,12 @@ class TaskStatusCyclerSuccessorReceiptMixin {
               if (at < 0) {
                 continue;
               }
-              const next = replaceTaskStatusSymbol(
-                status.after_line,
-                status.previous_symbol,
-              );
+              const next = typeof status.before_line === "string"
+                ? status.before_line
+                : replaceTaskStatusSymbol(
+                  status.after_line,
+                  status.previous_symbol,
+                );
               if (next === status.after_line) {
                 continue;
               }
@@ -11844,10 +12388,12 @@ class TaskStatusCyclerSuccessorReceiptMixin {
               if (at < 0) {
                 continue;
               }
-              const next = replaceTaskStatusSymbol(
-                status.after_line,
-                status.previous_symbol,
-              );
+              const next = typeof status.before_line === "string"
+                ? status.before_line
+                : replaceTaskStatusSymbol(
+                  status.after_line,
+                  status.previous_symbol,
+                );
               if (next === status.after_line) {
                 continue;
               }
@@ -11956,6 +12502,350 @@ function removeSuccessorReceiptLineFromEditor(editor, at) {
     return true;
   } catch (error) {
     return false;
+  }
+}
+// ---- src/137-plugin-successor-project.js ----
+// Project pull-in wiring (plan:202610/project_pull_in_line_model.md `cycler`).
+// Owns `planAndApplySuccessorsNow` so 135 stays at the 1000-line cap: the
+// `[id::]` gate no longer suppresses a last-task pull-in, C's notes feed
+// `noteTexts`, and the dependents snapshot is built only per §12.10 Gate.
+
+class TaskStatusCyclerSuccessorProjectMixin {
+  // The gated recover-and-link pass inside `finalizeClosedTasks`: gate on
+  // `[id::]` for dependents, still run a project pull-in when C's own notes
+  // empty a project, apply, and return the §12.5 model (or null). The close
+  // never depends on this result. Never throws.
+  async planAndApplySuccessorsNow(closed, context) {
+    try {
+      const active = context && typeof context === "object" ? context : {};
+      const vault = this.app && this.app.vault;
+      const cache = new Map();
+      const gate = await this.resolveSuccessorClosedIdentities(
+        closed,
+        active,
+        cache,
+      );
+      const quietGate = {
+        version: 1,
+        gated: true,
+        predecessors: [],
+        unblocked: [],
+        still_blocked: [],
+        daily_path: "",
+        daily_content: null,
+        failure: null,
+      };
+      const identities = gate.identities || [];
+      const closedTaskIds = new Set(
+        identities.filter((identity) => identity.taskId).map((identity) =>
+          String(identity.taskId)
+        ),
+      );
+      let today = null;
+      try {
+        today = typeof active.today === "string" && active.today
+          ? active.today
+          : typeof this.getScheduleLogDateString === "function"
+            ? this.getScheduleLogDateString()
+            : formatLocalDate();
+      } catch (error) {
+        today = formatLocalDate();
+      }
+      for (const identity of identities) {
+        if (identity && identity.path && !cache.has(identity.path)) {
+          await this.readSuccessorNoteText(identity.path, active, cache);
+        }
+      }
+      const closedNoteTexts = {};
+      for (const identity of identities) {
+        if (!identity || !identity.path || !cache.has(identity.path)) {
+          continue;
+        }
+        const text = cache.get(identity.path);
+        if (typeof text === "string") {
+          closedNoteTexts[identity.path] = text;
+        }
+      }
+      const pullInPaths = projectPullInCandidatePaths(
+        identities,
+        closedNoteTexts,
+        today,
+      );
+      const needsDependents = closedTaskIds.size > 0 ||
+        projectPullInNeedsDependents(identities, closedNoteTexts, today);
+      if (closedTaskIds.size === 0 && pullInPaths.length === 0) {
+        return quietGate;
+      }
+      let linkUnblocked = true;
+      try {
+        linkUnblocked = loadLinkUnblocked() !== false;
+      } catch (error) {
+        linkUnblocked = true;
+      }
+      const cancelledClose = active.closeKind === "cancelled";
+      if (cancelledClose) {
+        linkUnblocked = false;
+      }
+      let dailyPath = typeof active.dailyPath === "string" && active.dailyPath
+        ? active.dailyPath
+        : null;
+      if (!dailyPath) {
+        try {
+          dailyPath = todayDailyPath(this.app);
+        } catch (error) {
+          dailyPath = null;
+        }
+      }
+      let dailyCurrent = null;
+      if (dailyPath && (closedTaskIds.size > 0 || pullInPaths.length > 0)) {
+        dailyCurrent = await this.readSuccessorNoteText(
+          dailyPath,
+          active,
+          cache,
+        );
+      }
+      const hint = active.closingEntry &&
+          typeof active.closingEntry === "object"
+        ? active.closingEntry
+        : null;
+      const dailyBefore = Array.isArray(active.dailyBefore)
+        ? active.dailyBefore.map((line) => String(line ?? ""))
+        : typeof dailyCurrent === "string"
+          ? dailyCurrent.split(/\r?\n/)
+          : [];
+      const dailyAfter = typeof dailyCurrent === "string"
+        ? dailyCurrent.split(/\r?\n/)
+        : dailyBefore;
+      let planClosingEntry = null;
+      if (
+        hint && Number.isInteger(hint.line) && hint.line >= 0 &&
+        hint.line < dailyBefore.length
+      ) {
+        planClosingEntry = hint.line;
+      }
+      let tasks = [];
+      let noteTexts = new Map();
+      for (const [path, text] of Object.entries(closedNoteTexts)) {
+        noteTexts.set(path, text);
+      }
+      if (needsDependents) {
+        const pool = await this.buildSuccessorPool(closedTaskIds, active, cache);
+        tasks = pool.tasks;
+        noteTexts = pool.noteTexts;
+        if (!pool.warm) {
+          const cold = await this.readSuccessorColdDocuments(active, cache);
+          if (cold.documents.length === 0 && !vault) {
+            return null;
+          }
+          tasks = tasksFromDocuments(cold.documents);
+          noteTexts = new Map(
+            cold.documents.map((document) => [document.path, document.text]),
+          );
+          for (const [path, text] of pool.noteTexts) {
+            if (!noteTexts.has(path)) {
+              noteTexts.set(path, text);
+            }
+          }
+        }
+      } else {
+        const editors = this.getOpenMarkdownEditors(active);
+        for (const [path, editor] of editors) {
+          try {
+            const text = editor.getValue();
+            if (typeof text === "string") {
+              noteTexts.set(path, text);
+            }
+          } catch (error) {
+            // Best effort: cache already holds C's notes.
+          }
+        }
+      }
+      for (const path of [...pullInPaths, ...identities.map((item) => item && item.path)]) {
+        if (!path || noteTexts.has(path)) {
+          continue;
+        }
+        const text = await this.readSuccessorNoteText(path, active, cache);
+        if (typeof text === "string") {
+          noteTexts.set(path, text);
+        }
+      }
+      const basenameCounts = countSuccessorBasenames(
+        this.app,
+        tasks,
+        identities,
+        dailyPath,
+        noteTexts,
+      );
+      const noteTextsObject = {};
+      for (const [path, text] of noteTexts) {
+        noteTextsObject[path] = text;
+      }
+      let plan = null;
+      try {
+        plan = planSuccessors({
+          closed: identities,
+          index: buildDependentsIndex(tasks),
+          dailyBefore,
+          dailyAfter,
+          dailyPath: dailyPath || "",
+          today,
+          markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
+          linkUnblocked,
+          cancelled: cancelledClose,
+          isInbox: getSuccessorIsInbox(this.app),
+          basenameCounts,
+          closingEntry: planClosingEntry,
+          noteTexts: noteTextsObject,
+        });
+      } catch (error) {
+        return null;
+      }
+      if (!plan) {
+        return null;
+      }
+      const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
+      if (noteOutcome.failed > 0) {
+        const failedRows = new Set();
+        for (let index = 0; index < plan.unblocked.length; index += 1) {
+          if (plan.unblocked[index].not_linked === "failed") {
+            failedRows.add(index);
+          }
+        }
+        plan.placements = plan.placements.filter(
+          (placement) => !failedRows.has(placement && placement.rowIndex),
+        );
+      }
+      let insertion = { splices: [], links: [], skipped: [], text: null };
+      if (plan.placements.length > 0 && dailyPath && dailyCurrent != null) {
+        let relocated = null;
+        let createdEntry = null;
+        if (hint) {
+          relocated = this.relocateSuccessorClosingEntry(dailyAfter, hint);
+          if (
+            relocated == null &&
+            plan.placements.some((placement) =>
+              !placement || !placement.anchor || placement.anchor.bulletLine == null
+            )
+          ) {
+            for (const placement of plan.placements) {
+              if (
+                !placement || !placement.anchor ||
+                placement.anchor.bulletLine != null
+              ) {
+                continue;
+              }
+              const row = plan.unblocked[placement.rowIndex];
+              if (row && typeof row === "object" && row.link) {
+                row.link = null;
+                row.not_linked = "failed";
+                noteOutcome.failed += 1;
+                if (!noteOutcome.failureReason) {
+                  noteOutcome.failureReason = "daily note changed";
+                }
+              }
+            }
+          }
+          if (relocated != null && hint.createdPomodoro === true) {
+            try {
+              const entries = parseSuccessorLedgerEntries(dailyAfter);
+              const createdName = typeof hint.createdName === "string"
+                ? hint.createdName
+                : "";
+              const created = entries.find((entry) =>
+                entry.open && entry.entryLine > relocated &&
+                String(entry.name || "") === createdName
+              ) || null;
+              if (created) {
+                createdEntry = { line: created.entryLine };
+              }
+            } catch (error) {
+              createdEntry = null;
+            }
+          }
+        }
+        try {
+          insertion = planSuccessorInsertions(dailyAfter, plan.placements, {
+            ...(relocated != null ? { closingEntry: relocated } : {}),
+            ...(createdEntry ? { createdEntry } : {}),
+          });
+        } catch (error) {
+          insertion = { splices: [], links: [], skipped: [], text: null };
+        }
+        insertion.snapshot = dailyCurrent;
+        const dailyOutcome = await this.applySuccessorDailyInsertions(
+          plan,
+          insertion,
+          active,
+          dailyPath,
+        );
+        noteOutcome.failed += dailyOutcome.failed;
+        if (!noteOutcome.failureReason && dailyOutcome.failureReason) {
+          noteOutcome.failureReason = dailyOutcome.failureReason;
+        }
+      } else if (plan.placements.length > 0) {
+        for (const placement of plan.placements) {
+          const row = plan.unblocked[placement && placement.rowIndex];
+          if (row && typeof row === "object" && row.link) {
+            row.link = null;
+            row.not_linked = "failed";
+            noteOutcome.failed += 1;
+            if (!noteOutcome.failureReason) {
+              noteOutcome.failureReason = "daily note unavailable";
+            }
+          }
+        }
+      }
+      try {
+        if (typeof this.rememberSuccessorPass === "function") {
+          this.rememberSuccessorPass(identities, plan, insertion, {
+            dailyPath,
+            today,
+          });
+        }
+      } catch (error) {
+        // Best effort: a missed receipt only loses the take-back shortcut.
+      }
+      const predecessors = identities.map((identity) => ({
+        note_path: String(identity.path || ""),
+        block_id: identity.blockId ? String(identity.blockId) : "",
+        text: identity.text ? String(identity.text) : "",
+      }));
+      let dailyContent = null;
+      if (
+        dailyPath &&
+        (plan.unblocked.length > 0 || noteOutcome.failed > 0)
+      ) {
+        try {
+          cache.delete(dailyPath);
+          dailyContent = await this.readSuccessorNoteText(
+            dailyPath,
+            active,
+            cache,
+          );
+        } catch (error) {
+          dailyContent = null;
+        }
+        if (typeof dailyContent !== "string") {
+          dailyContent = null;
+        }
+      }
+      return {
+        version: 1,
+        predecessors,
+        unblocked: plan.unblocked,
+        still_blocked: plan.still_blocked,
+        daily_path: dailyPath || "",
+        daily_content: dailyContent,
+        failure: noteOutcome.failed > 0
+          ? {
+            count: noteOutcome.failed,
+            reason: noteOutcome.failureReason || "daily note changed",
+          }
+          : null,
+      };
+    } catch (error) {
+      return null;
+    }
   }
 }
 // ---- src/140-plugin-vim.js ----
@@ -17096,6 +17986,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerReferencesMixin,
   TaskStatusCyclerSuccessorsMixin,
   TaskStatusCyclerSuccessorReceiptMixin,
+  TaskStatusCyclerSuccessorProjectMixin,
   TaskStatusCyclerVimMixin,
   TaskStatusCyclerCommandsMixin,
   TaskStatusCyclerCompletionMixin,
@@ -17228,7 +18119,14 @@ module.exports.helpers = {
   isExcludedSuccessorVaultPath,
   successorDefaultIsInbox,
   planSuccessors,
+  planProjectPullIns,
   planSuccessorInsertions,
+  projectPullInCandidatePaths,
+  projectPullInNeedsDependents,
+  projectPullInRewriteLine,
+  projectSurfaceState,
+  removeProjectHideTags,
+  applySuccessorVerdicts,
   successorNoticeText,
   successorStatusName,
   successorBodyAfterStatusBox,

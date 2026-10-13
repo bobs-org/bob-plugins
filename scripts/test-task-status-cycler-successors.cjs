@@ -591,7 +591,8 @@ test("PDC1 leaves a dependency-ready resident Blocked while its project still wa
     closed: FIX_CLOSED,
   });
   const resident = plan.still_blocked.find((row) => row.block_id === "release-notes");
-  assert.equal(resident.reason, "project_dependency");
+  assert.equal(resident.reason, "project");
+  assert.equal(resident.project, "projects/release.md");
   assert.equal(resident.status_symbol, "?");
   assert.equal(
     plan.unblocked.some((row) => row.block_id === "release-notes" && row.link),

@@ -301,6 +301,8 @@ function successorNoticeText(model = {}) {
   const linked = unblocked.filter((row) => row && row.link);
   const notLinked = unblocked.filter((row) => row && !row.link);
   const failure = source.failure && typeof source.failure === "object" ? source.failure : null;
+  const projectEmptySuffix = " · project has no open tasks";
+  const isProjectEmptyRow = (row) => row && row.trigger === "project_empty";
 
   if (failure && Number(failure.count) > 0) {
     const pred = predecessors[0] && predecessors[0].text
@@ -313,14 +315,15 @@ function successorNoticeText(model = {}) {
     const row = linked[0];
     const text = truncateSuccessorNoticeText(row.text);
     const name = (row.link && row.link.entry_name) || "";
+    const suffix = isProjectEmptyRow(row) ? projectEmptySuffix : "";
     if (row.link && row.link.entry_created) {
       return name
-        ? `🔓 Next in new ${name} session (next up): ${text}`
-        : `🔓 Next in new session (next up): ${text}`;
+        ? `🔓 Next in new ${name} session (next up): ${text}${suffix}`
+        : `🔓 Next in new session (next up): ${text}${suffix}`;
     }
     return name
-      ? `🔓 Next in ${name}: ${text}`
-      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}`;
+      ? `🔓 Next in ${name}: ${text}${suffix}`
+      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}${suffix}`;
   }
   if (linked.length > 1) {
     const names = [];
@@ -347,6 +350,9 @@ function successorNoticeText(model = {}) {
   if (notLinked.length === 1) {
     const row = notLinked[0];
     const lane = row.status_name || successorStatusName(row.status_symbol);
+    if (isProjectEmptyRow(row)) {
+      return `🔓 Surfaced: ${truncateSuccessorNoticeText(row.text)} (${lane})${projectEmptySuffix}`;
+    }
     return `🔓 Unblocked: ${truncateSuccessorNoticeText(row.text)} (${lane})`;
   }
   if (notLinked.length > 1) {

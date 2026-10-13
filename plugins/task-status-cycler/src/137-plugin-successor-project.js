@@ -217,7 +217,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
       }
-      const planFirst = (selection, dailyB, dailyA, tasksForPlan, notesObj, closingForPlan) => {
+      const planFirst = (selection, dailyB, dailyA, tasksForPlan, notesObj, closingForPlan, destinations) => {
         try {
           return planSuccessors({
             closed: identities,
@@ -229,6 +229,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
             stampLine: stampLineForPass,
             selection,
+            destinations,
             linkUnblocked,
             cancelled: cancelledClose,
             isInbox: getSuccessorIsInbox(this.app),
@@ -262,6 +263,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         originalOfferByKey = new Map();
       }
       const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
+      let selectedDestinations = new Map();
       if (selectableOffers.length > 0 && pickerApi) {
         let model = null;
         try {
@@ -292,7 +294,13 @@ class TaskStatusCyclerSuccessorProjectMixin {
             picks = [];
           }
         }
-        selectedKeys = picks;
+        selectedKeys = picks.map((pick) => pick && pick.key).filter(Boolean);
+        selectedDestinations = new Map();
+        for (const pick of picks) {
+          if (pick && pick.key && pick.destination) {
+            selectedDestinations.set(String(pick.key), pick.destination);
+          }
+        }
         if (selectedKeys.length > 0) {
           // Re-read fresh texts (editor buffers first), invalidating caches.
           const affected = new Set();
@@ -426,10 +434,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
           }
           const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
           basenameCounts = freshBasenames;
-          let replanned = planFirst(selectedKeys, dailyFreshLines, dailyFreshLines, freshTasks, freshNotesObj, freshClosing);
+          let replanned = planFirst(selectedKeys, dailyFreshLines, dailyFreshLines, freshTasks, freshNotesObj, freshClosing, selectedDestinations);
           if (!replanned) {
             replanned = plan;
             selectedKeys = [];
+            selectedDestinations = new Map();
           } else {
             // Refuse stale/ambiguous picks individually; newly appearing
             // offers stay unpicked (no second picker).
@@ -484,6 +493,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
             dailyAfter = dailyFreshLines;
             planClosingEntry = freshClosing;
             selectedKeys = selectedKeys.filter((key) => !refused.includes(String(key)));
+            if (refused.length > 0) {
+              const refusedSet = new Set(refused.map(String));
+              for (const key of [...selectedDestinations.keys()]) {
+                if (refusedSet.has(String(key))) {
+                  selectedDestinations.delete(key);
+                }
+              }
+            }
           }
         }
       }

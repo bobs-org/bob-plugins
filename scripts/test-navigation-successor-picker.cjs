@@ -299,6 +299,103 @@ test("the review-walk hold survives the 3000 ms timeout and releases with the ma
   assert.equal(plugin.reviewWalkBusy(), true, "the normal post-answer settling lock remains after owner release");
 });
 
+function makePluginWithDestination(pickImpl) {
+  const plugin = makePlugin();
+  plugin.app.plugins.plugins["block-id-prompt"] = {
+    api: { pomodoroLinkPicker: { version: 1, pick: pickImpl } },
+  };
+  return plugin;
+}
+
+test("destination override shapes normalize and label", () => {
+  const { normalizeSuccessorDestinationOverride, successorDestinationOverrideLabel } = helpers;
+  assert.deepEqual(
+    normalizeSuccessorDestinationOverride({ kind: "existing", entryLine: 4, entryText: "- [ ] () — DEEP", title: "DEEP" }),
+    { kind: "existing", entryLine: 4, entryText: "- [ ] () — DEEP", title: "DEEP" },
+  );
+  assert.deepEqual(normalizeSuccessorDestinationOverride({ kind: "new", name: "  WRITE " }), { kind: "new", name: "WRITE" });
+  assert.equal(normalizeSuccessorDestinationOverride({ kind: "existing", entryLine: -1, entryText: "x" }), null);
+  assert.equal(normalizeSuccessorDestinationOverride({ kind: "new", name: "" }), null);
+  assert.equal(normalizeSuccessorDestinationOverride({ kind: "other" }), null);
+  assert.equal(normalizeSuccessorDestinationOverride(null), null);
+  assert.equal(successorDestinationOverrideLabel({ kind: "new", name: "WRITE" }), "WRITE");
+  assert.equal(successorDestinationOverrideLabel({ kind: "existing", entryLine: 4, entryText: "x", title: "DEEP" }), "DEEP");
+  assert.equal(successorDestinationOverrideLabel(null), "");
+});
+
+test("destination picker detection needs block-id-prompt api v1 with pick", () => {
+  const { getSuccessorDestinationPickerApi } = helpers;
+  assert.equal(getSuccessorDestinationPickerApi(null), null);
+  assert.equal(getSuccessorDestinationPickerApi({ plugins: { plugins: {} } }), null);
+  assert.equal(getSuccessorDestinationPickerApi({ plugins: { plugins: { "block-id-prompt": { api: { pomodoroLinkPicker: { version: 0, pick: async () => null } } } } } }), null);
+  const api = { version: 1, pick: async () => null };
+  assert.equal(getSuccessorDestinationPickerApi({ plugins: { plugins: { "block-id-prompt": { api: { pomodoroLinkPicker: api } } } } }), api);
+});
+
+test("Ctrl+Shift+Enter retargets marked rows, shows the override, and returns it with the picks", async () => {
+  const plugin = makePluginWithDestination(async () => ({ kind: "new", name: "DEEP" }));
+  const { pending, modal } = await openPicker(plugin, modelFor(3));
+  assert.ok(modal.footerHints.some((hint) => hint.label === "retarget"), "hint appears when the picker exists");
+  pressKey(modal, "Tab");
+  pressKey(modal, "Tab");
+  assert.equal(await modal.retargetRowsForDestination(), true);
+  assert.deepEqual(
+    Array.from(modal.destinationOverrides.entries()),
+    [["opaque:key/0#0", { kind: "new", name: "DEEP" }], ["opaque:key/1#1", { kind: "new", name: "DEEP" }]],
+  );
+  assert.match(allText(modal.resultsEl), /→ DEEP/);
+  await finishWithEnter(plugin, modal);
+  assert.deepEqual(await pending, {
+    picks: [
+      { key: "opaque:key/0#0", destination: { kind: "new", name: "DEEP" } },
+      { key: "opaque:key/1#1", destination: { kind: "new", name: "DEEP" } },
+    ],
+  });
+});
+
+test("Ctrl+Shift+Enter keypress retargets the highlighted row when nothing is marked", async () => {
+  let calls = 0;
+  const plugin = makePluginWithDestination(async () => {
+    calls += 1;
+    return { kind: "existing", entryLine: 5, entryText: "- [ ] () — DEEP", title: "DEEP" };
+  });
+  const { pending, modal } = await openPicker(plugin, modelFor(2));
+  pressKey(modal, "Enter", { ctrlKey: true, shiftKey: true });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  assert.equal(modal.destinationOverrides.size, 1);
+  await finishWithEnter(plugin, modal);
+  const result = await pending;
+  assert.equal(result.picks.length, 1);
+  assert.deepEqual(result.picks[0].destination, { kind: "existing", entryLine: 5, entryText: "- [ ] () — DEEP", title: "DEEP" });
+});
+
+test("a cancelled destination pick and a missing picker leave rows untouched", async () => {
+  const cancelled = makePluginWithDestination(async () => null);
+  const first = await openPicker(cancelled, modelFor(1));
+  assert.equal(await first.modal.retargetRowsForDestination(), false);
+  assert.equal(first.modal.destinationOverrides.size, 0);
+  first.modal.close();
+  assert.equal(await first.pending, null);
+
+  const malformed = makePluginWithDestination(async () => ({ kind: "new", name: "" }));
+  const second = await openPicker(malformed, modelFor(1));
+  assert.equal(await second.modal.retargetRowsForDestination(), false);
+  assert.equal(second.modal.destinationOverrides.size, 0);
+  second.modal.close();
+  assert.equal(await second.pending, null);
+
+  const plain = makePlugin();
+  const third = await openPicker(plain, modelFor(1));
+  assert.ok(!third.modal.footerHints.some((hint) => hint.label === "retarget"), "no hint without the picker");
+  assert.equal(await third.modal.retargetRowsForDestination(), false);
+  pressKey(third.modal, "Enter", { ctrlKey: true, shiftKey: true });
+  assert.ok(plain.activeSuccessorPicker, "the keypress is a no-op without the picker");
+  third.modal.close();
+  assert.equal(await third.pending, null);
+});
+
 test("unload closes a pending modal, settles old and replacement APIs to null, and open failure cleans up", async () => {
   const plugin = makePlugin();
   plugin.cleanupVimJumpHistoryMappings = () => {};

@@ -1,6 +1,95 @@
 const SUCCESSOR_PICKER_ENTER_GUARD_MS = 350;
 const SUCCESSOR_PICKER_COLLAPSE_THRESHOLD = 12;
 const SUCCESSOR_PICKER_PREVIEW_ROWS = 4;
+const SUCCESSOR_PICKER_FOOTER_HINTS = [
+  { keys: ["Tab"], label: "toggle and move" },
+  { keys: ["Ctrl+A"], label: "mark group" },
+  { keys: ["↵"], label: "pull in" },
+  { keys: ["Esc"], label: "none" },
+];
+const SUCCESSOR_PICKER_RETARGET_HINT = { keys: ["Ctrl+Shift+Enter"], label: "retarget" };
+
+// Per-row destination override (docs/task-dependencies.md §12.13,
+// obsidian_destination): `{kind: "existing", entryLine, entryText, title?} |
+// {kind: "new", name}`. Null unless the shape is exact.
+function normalizeSuccessorDestinationOverride(choice) {
+  try {
+    if (!choice || typeof choice !== "object") {
+      return null;
+    }
+    if (choice.kind === "existing") {
+      if (!Number.isInteger(choice.entryLine) || choice.entryLine < 0) {
+        return null;
+      }
+      if (typeof choice.entryText !== "string" || !choice.entryText) {
+        return null;
+      }
+      const title = typeof choice.title === "string" ? choice.title.trim() : "";
+      return Object.freeze({
+        kind: "existing",
+        entryLine: choice.entryLine,
+        entryText: choice.entryText,
+        ...(title ? { title } : {}),
+      });
+    }
+    if (choice.kind === "new") {
+      const name = typeof choice.name === "string" ? choice.name.trim() : "";
+      if (!name || /[\r\n]/.test(name)) {
+        return null;
+      }
+      return Object.freeze({ kind: "new", name });
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function successorDestinationOverrideLabel(destination) {
+  try {
+    if (!destination || typeof destination !== "object") {
+      return "";
+    }
+    if (destination.kind === "new") {
+      return typeof destination.name === "string" ? destination.name.trim() : "";
+    }
+    if (destination.kind === "existing") {
+      if (typeof destination.title === "string" && destination.title.trim()) {
+        return destination.title.trim();
+      }
+      if (typeof destination.name === "string" && destination.name.trim()) {
+        return destination.name.trim();
+      }
+      if (Number.isInteger(destination.entryLine)) {
+        return `line ${destination.entryLine + 1}`;
+      }
+    }
+    return "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+// Defensive feature detection for block-id-prompt
+// `api.pomodoroLinkPicker` v1 (§12.13). Null when the plugin is missing,
+// older, or torn down.
+function getSuccessorDestinationPickerApi(app) {
+  try {
+    const plugins = (app && app.plugins && app.plugins.plugins) || {};
+    const prompt = plugins["block-id-prompt"];
+    const api = prompt && prompt.api;
+    const picker = api && api.pomodoroLinkPicker;
+    if (!picker || !(Number(picker.version) >= 1)) {
+      return null;
+    }
+    if (typeof picker.pick !== "function") {
+      return null;
+    }
+    return picker;
+  } catch (_error) {
+    return null;
+  }
+}
 
 function successorPickerText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -157,18 +246,25 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",
       emptyText: "No matching offers",
-      footerHints: [
-        { keys: ["Tab"], label: "toggle and move" },
-        { keys: ["Ctrl+A"], label: "mark group" },
-        { keys: ["↵"], label: "pull in" },
-        { keys: ["Esc"], label: "none" },
-      ],
+      footerHints: SUCCESSOR_PICKER_FOOTER_HINTS.slice(),
     });
     this.model = normalized;
     this.onSettle = typeof onSettle === "function" ? onSettle : () => {};
     this.now = typeof options.now === "function" ? options.now : () => Date.now();
     this.openedAt = null;
     this.markedKeys = new Set();
+    // Per-row destination overrides (key → normalized destination). Shown
+    // in the row (`→ NAME`) and returned with the picks. The retarget hint
+    // appears only when the destination picker is available.
+    this.destinationOverrides = new Map();
+    this.retargetingDestination = false;
+    try {
+      if (getSuccessorDestinationPickerApi(this.app)) {
+        this.footerHints = SUCCESSOR_PICKER_FOOTER_HINTS.concat([SUCCESSOR_PICKER_RETARGET_HINT]);
+      }
+    } catch (_error) {
+      // No hint without a picker; Ctrl+Shift+Enter stays a no-op.
+    }
     this.expandedGroups = new Set();
     this.visibleItems = [];
     this.result = null;
@@ -225,8 +321,75 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
   }
 
+  // Ctrl+Shift+Enter retargets the marked (or highlighted) rows through
+  // block-id-prompt's Pomodoro link picker when available; a cancelled
+  // destination pick leaves this picker exactly as it was. Never throws.
+  async retargetRowsForDestination() {
+    if (this.retargetingDestination === true || this.didSettle === true) {
+      return false;
+    }
+    let api = null;
+    try {
+      api = getSuccessorDestinationPickerApi(this.app);
+    } catch (_error) {
+      return false;
+    }
+    if (!api || !this.model) {
+      return false;
+    }
+    const targets = [];
+    try {
+      if (this.markedKeys.size > 0) {
+        for (const group of this.model.groups) {
+          for (const row of group.rows) {
+            if (row.selectable && this.markedKeys.has(row.key)) {
+              targets.push(row.key);
+            }
+          }
+        }
+      } else {
+        const active = this.visibleItems[this.selectedIndex];
+        if (active && active.kind === "offer" && active.row.selectable) {
+          targets.push(active.row.key);
+        }
+      }
+    } catch (_error) {
+      return false;
+    }
+    if (targets.length === 0) {
+      return false;
+    }
+    this.retargetingDestination = true;
+    try {
+      const choice = await api.pick();
+      const destination = normalizeSuccessorDestinationOverride(choice);
+      if (!destination) {
+        return false;
+      }
+      for (const key of targets) {
+        this.destinationOverrides.set(key, destination);
+      }
+      this.renderAll();
+      return true;
+    } catch (_error) {
+      return false;
+    } finally {
+      this.retargetingDestination = false;
+    }
+  }
+
   handleKeydown(event) {
     if (!event || typeof event !== "object") {
+      return;
+    }
+    if (
+      event.key === "Enter" &&
+      (event.ctrlKey === true || event.metaKey === true) &&
+      event.shiftKey === true && event.altKey !== true
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.retargetRowsForDestination();
       return;
     }
     if (event.key === "Enter") {
@@ -433,7 +596,17 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         const details = [];
         if (note) details.push(note);
         if (row.status) details.push(row.status);
-        if (row.destinationLabel) details.push(`→ ${row.destinationLabel}`);
+        let shownDestination = row.destinationLabel;
+        try {
+          const override = this.destinationOverrides && this.destinationOverrides.get(row.key);
+          const overrideLabel = successorDestinationOverrideLabel(override);
+          if (overrideLabel) {
+            shownDestination = overrideLabel;
+          }
+        } catch (_error) {
+          // Fall through to the planned destination label.
+        }
+        if (shownDestination) details.push(`→ ${shownDestination}`);
         if (row.needsBlockId) details.push("needs ^id");
         if (!row.selectable && row.mutedReason) details.push(row.mutedReason);
         if (details.length > 0) {
@@ -508,7 +681,20 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       }
       selected = [active.row.key];
     }
-    this.settle({ picks: selected.map((key) => ({ key })) });
+    this.settle({
+      picks: selected.map((key) => {
+        const item = { key };
+        try {
+          const override = this.destinationOverrides && this.destinationOverrides.get(key);
+          if (override && typeof override === "object") {
+            item.destination = override;
+          }
+        } catch (_error) {
+          // A pick without an override still links at its planned spot.
+        }
+        return item;
+      }),
+    });
     return true;
   }
 
@@ -670,8 +856,9 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 if (!allowed.has(key) || pickedKeys.has(key)) continue;
                 pickedKeys.add(key);
                 const item = { key };
-                if (pick.destination && typeof pick.destination === "object") {
-                  item.destination = pick.destination;
+                const destination = normalizeSuccessorDestinationOverride(pick && pick.destination);
+                if (destination) {
+                  item.destination = destination;
                 }
                 picks.push(item);
               }

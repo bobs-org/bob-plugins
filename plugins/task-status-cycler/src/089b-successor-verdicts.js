@@ -16,6 +16,11 @@ function applySuccessorVerdicts(context) {
   const selection = rawSelection && typeof rawSelection === "object" && rawSelection.mode
     ? rawSelection
     : normalizeSuccessorSelection(rawSelection);
+  const destinations = context.destinations instanceof Map
+    ? context.destinations
+    : (context.destinations && typeof context.destinations === "object"
+      ? new Map(Object.entries(context.destinations))
+      : new Map());
   const isInbox = context.isInbox;
   const basenameCounts = context.basenameCounts;
   const noteTexts = context.noteTexts || {};
@@ -328,13 +333,20 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
-      placements.push({
+      const placement = {
         key: String(key),
         rowIndex,
         anchor: mark.anchor,
         implicit: mark.implicit || null,
         blockLink: unblocked[rowIndex].link.block_link,
-      });
+      };
+      // Per-row destination override (§12.13): validated here so a stale
+      // shape from an older picker falls back to the planned anchor.
+      const override = normalizeSuccessorPickDestination(destinations.get(String(key)));
+      if (override) {
+        placement.override = override;
+      }
+      placements.push(placement);
     }
   }
 

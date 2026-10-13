@@ -173,9 +173,16 @@ test("SO picker model, pick normalization, and API detection", () => {
   });
   assert.equal(model.groups[0].rows[0].key, "sase.md#^dep");
   assert.equal(model.groups[0].rows[0].selectable, true);
-  assert.deepEqual(helpers.normalizeSuccessorPicks({ picks: [{ key: "a" }, { key: "a" }, {}] }), ["a"]);
+  assert.deepEqual(helpers.normalizeSuccessorPicks({ picks: [{ key: "a" }, { key: "a" }, {}] }), [{ key: "a" }]);
   assert.deepEqual(helpers.normalizeSuccessorPicks(null), []);
   assert.deepEqual(helpers.normalizeSuccessorPicks({ picks: [] }), []);
+  assert.deepEqual(
+    helpers.normalizeSuccessorPicks({ picks: [{ key: "a", destination: { kind: "new", name: "DEEP" } }, { key: "b", destination: { kind: "nope" } }] }),
+    [{ key: "a", destination: { kind: "new", name: "DEEP" } }, { key: "b" }],
+  );
+  assert.equal(helpers.normalizeSuccessorPickDestination({ kind: "existing", entryLine: 4, entryText: "- [ ] () — DEEP" }).kind, "existing");
+  assert.equal(helpers.normalizeSuccessorPickDestination({ kind: "existing", entryLine: -1, entryText: "x" }), null);
+  assert.equal(helpers.normalizeSuccessorPickDestination({ kind: "new", name: "  " }), null);
   assert.equal(helpers.getSuccessorPickerApi({ plugins: { plugins: {} } }), null);
   assert.ok(helpers.getSuccessorPickerApi({ plugins: { plugins: { "bob-navigation-hotkeys": { api: { successors: { version: 1, pick: async () => null } } } } } }));
 });
@@ -191,4 +198,93 @@ test("SO notice copy for offers (SO20, mixed, failure)", () => {
   assert.match(helpers.successorNoticeText({
     predecessors: [], unblocked: [row({ link: { entry_name: "FIX" }, not_linked: null }), row()], still_blocked: [], failure: null,
   }), /Pulled in 1 of 2/);
+});
+
+// Per-row destination override (§12.13 obsidian_destination): an `existing`
+// pick inserts under the verified entry, a stale preimage skips loudly, a
+// `new` pick creates one placeholder at the creation anchor, and a `new`
+// pick racing an open same-name entry joins it without creating.
+const DEST_DAY = [
+  "# 2026-10-09",
+  "",
+  "## Pomodoros",
+  "- [ ] (09:00-09:25) — FIX",
+  "\t- [[sase#^fix-apollo]]",
+  "- [ ] () — DEEP",
+].join("\n");
+
+const DEST_NOTES = {
+  "sase.md": "- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [dependsOn:: sase__fix-apollo] ^follower",
+};
+
+function planWithDestination(destination) {
+  const offered = planFixture({ day: DEST_DAY, notes: DEST_NOTES, closed: FIX_CLOSED, options: { selection: [] } });
+  assert.equal(offered.plan.unblocked.length, 1);
+  const key = offered.plan.unblocked[0].offer.key;
+  return planFixture({
+    day: DEST_DAY,
+    notes: DEST_NOTES,
+    closed: FIX_CLOSED,
+    options: { selection: [key], destinations: new Map([[key, destination]]) },
+  });
+}
+
+test("destination override to an existing entry inserts as its child", () => {
+  const { plan } = planWithDestination({ kind: "existing", entryLine: 5, entryText: "- [ ] () — DEEP" });
+  assert.equal(plan.placements.length, 1);
+  assert.equal(plan.placements[0].override.kind, "existing");
+  const inserted = helpers.planSuccessorInsertions(DEST_DAY, plan.placements, {});
+  assert.equal(inserted.skipped.length, 0);
+  assert.equal(inserted.links.length, 1);
+  assert.equal(inserted.links[0].entry_name, "DEEP");
+  assert.equal(inserted.links[0].entry_created, false);
+  assert.ok(inserted.text.includes("- [ ] () — DEEP\n\t- [[sase#^follower]]"));
+});
+
+test("destination override with a stale preimage skips loudly", () => {
+  const { plan } = planWithDestination({ kind: "existing", entryLine: 5, entryText: "- [ ] (10:00-10:25) — MOVED" });
+  assert.equal(plan.placements.length, 1);
+  const inserted = helpers.planSuccessorInsertions(DEST_DAY, plan.placements, {});
+  assert.equal(inserted.links.length, 0);
+  assert.equal(inserted.skipped.length, 1);
+  assert.equal(inserted.skipped[0].reason, "destination-moved");
+});
+
+test("destination override with a closed entry skips loudly", () => {
+  const closedDay = DEST_DAY.replace("- [ ] () — DEEP", "- [x] () — DEEP");
+  const offered = planFixture({ day: closedDay, notes: DEST_NOTES, closed: FIX_CLOSED, options: { selection: [] } });
+  const key = offered.plan.unblocked[0].offer.key;
+  const { plan } = planFixture({
+    day: closedDay,
+    notes: DEST_NOTES,
+    closed: FIX_CLOSED,
+    options: { selection: [key], destinations: new Map([[key, { kind: "existing", entryLine: 5, entryText: "- [x] () — DEEP" }]]) },
+  });
+  const inserted = helpers.planSuccessorInsertions(closedDay, plan.placements, {});
+  assert.equal(inserted.links.length, 0);
+  assert.equal(inserted.skipped.length, 1);
+  assert.equal(inserted.skipped[0].reason, "destination-closed");
+});
+
+test("destination override with a new name creates one placeholder after the running entry", () => {
+  const { plan } = planWithDestination({ kind: "new", name: "WRITE" });
+  assert.equal(plan.placements.length, 1);
+  const inserted = helpers.planSuccessorInsertions(DEST_DAY, plan.placements, {});
+  assert.equal(inserted.skipped.length, 0);
+  assert.equal(inserted.links.length, 1);
+  assert.equal(inserted.links[0].entry_name, "WRITE");
+  assert.equal(inserted.links[0].entry_created, true);
+  assert.ok(inserted.text.includes("- [ ] () — WRITE\n\t- [[sase#^follower]]"));
+  // After the running FIX block, not before it.
+  assert.ok(inserted.text.indexOf("- [ ] () — WRITE") > inserted.text.indexOf("[[sase#^fix-apollo]]"));
+});
+
+test("destination override with a new name racing an open entry joins it", () => {
+  const { plan } = planWithDestination({ kind: "new", name: "deep" });
+  const inserted = helpers.planSuccessorInsertions(DEST_DAY, plan.placements, {});
+  assert.equal(inserted.skipped.length, 0);
+  assert.equal(inserted.links.length, 1);
+  assert.equal(inserted.links[0].entry_name, "DEEP");
+  assert.equal(inserted.links[0].entry_created, false);
+  assert.ok(!inserted.text.includes("- [ ] () — deep"));
 });

@@ -571,6 +571,9 @@ function successorOrderCompare(left, right) {
 // - `selection`: offer selection — null/undefined/[] links nothing (plan
 //   offers only); `"all"` links every selectable offer; an array/Set of
 //   offer keys links that subset (SO2–SO5, vector fixtures).
+// - `destinations`: per-row override Map (key → `{kind: "existing",
+//   entryLine, entryText} | {kind: "new", name}`); a picked row with one
+//   inserts at the overridden entry instead of its anchor (§12.13).
 // - `stampLine`: freshness stamper `(line, dateText) => string` from
 //   `this.getFreshnessStampLine()`; null preserves the safe no-stamp
 //   behavior (§12.4 PICK).
@@ -621,6 +624,11 @@ function planSuccessors(options = {}) {
     ? options.notePaths
     : Object.keys(noteTexts);
   const selection = normalizeSuccessorSelection(options.selection);
+  const destinations = options.destinations instanceof Map
+    ? options.destinations
+    : (options.destinations && typeof options.destinations === "object"
+      ? new Map(Object.entries(options.destinations))
+      : new Map());
   const stampLine = typeof options.stampLine === "function" ? options.stampLine : null;
 
   const empty = {
@@ -665,6 +673,7 @@ function planSuccessors(options = {}) {
       markUnblockedLine,
       stampLine,
       selection,
+      destinations,
       isInbox,
       basenameCounts,
       noteTexts,

@@ -21,6 +21,7 @@ installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptBlockIdSubmitMixin,
   BlockIdPromptPomodoroLinksMixin,
   BlockIdPromptPomodoroLinkPickerMixin,
+  BlockIdPromptPomodoroLinkPickerApiMixin,
   BlockIdPromptPomodoroInboxRouteMixin,
   BlockIdPromptTaskLinkOpenAndNoticesMixin,
   BlockIdPromptTargetPlansAndRewritesMixin,

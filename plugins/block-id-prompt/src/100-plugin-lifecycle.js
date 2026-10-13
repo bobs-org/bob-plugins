@@ -1,10 +1,16 @@
 class BlockIdPromptPlugin extends Plugin {
   onload() {
     this.promptOpen = false;
+    this.activePomodoroLinkPicker = null;
     this.scanTimer = null;
     this.scanView = null;
     this.suppressUntil = 0;
     this.lastPromptKey = null;
+    // Versioned Pomodoro link picker api (docs/task-dependencies.md
+    // §12.13): nav feature-detects `api?.pomodoroLinkPicker?.version >= 1`.
+    this.api = Object.freeze({
+      pomodoroLinkPicker: createPomodoroLinkPickerApi(this),
+    });
 
     this.addCommand({
       id: "rename-selected-block-id",
@@ -402,5 +408,23 @@ class BlockIdPromptPlugin extends Plugin {
     }
     this.lastPromptKey = null;
     return true;
+  }
+
+  onunload() {
+    try {
+      this.closePomodoroLinkPickerForUnload();
+    } catch (_error) {
+      this.activePomodoroLinkPicker = null;
+    }
+    // Drop the picker capability first so nav retargeting degrades to no
+    // hint the moment this plugin unloads (mixed-version sessions never
+    // call into a torn-down picker).
+    try {
+      this.api = Object.freeze({
+        pomodoroLinkPicker: createPomodoroLinkPickerApi(null),
+      });
+    } catch (_error) {
+      // Best effort: Obsidian is tearing down.
+    }
   }
 }

@@ -131,6 +131,7 @@ module.exports.helpers = {
   successorDestinationLabel,
   buildSuccessorPickerModel,
   normalizeSuccessorPicks,
+  normalizeSuccessorPickDestination,
   getSuccessorPickerApi,
   successorOfferDestination,
   successorGroupOrder,

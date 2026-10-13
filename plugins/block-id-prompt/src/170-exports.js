@@ -56,6 +56,8 @@ module.exports.helpers = {
   parsePomodoroEntryParts,
   planExplicitPomodoroLinkInsertion,
   PomodoroLinkPickerModal,
+  createPomodoroLinkPickerApi,
+  normalizePomodoroLinkPickerChoice,
   pomodoroLinkSelectorSlug,
   pomodoroRunProgress,
   parseStrictCalendarDate,

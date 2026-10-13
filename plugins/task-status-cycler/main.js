@@ -5936,6 +5936,9 @@ function successorOrderCompare(left, right) {
 // - `selection`: offer selection — null/undefined/[] links nothing (plan
 //   offers only); `"all"` links every selectable offer; an array/Set of
 //   offer keys links that subset (SO2–SO5, vector fixtures).
+// - `destinations`: per-row override Map (key → `{kind: "existing",
+//   entryLine, entryText} | {kind: "new", name}`); a picked row with one
+//   inserts at the overridden entry instead of its anchor (§12.13).
 // - `stampLine`: freshness stamper `(line, dateText) => string` from
 //   `this.getFreshnessStampLine()`; null preserves the safe no-stamp
 //   behavior (§12.4 PICK).
@@ -5986,6 +5989,11 @@ function planSuccessors(options = {}) {
     ? options.notePaths
     : Object.keys(noteTexts);
   const selection = normalizeSuccessorSelection(options.selection);
+  const destinations = options.destinations instanceof Map
+    ? options.destinations
+    : (options.destinations && typeof options.destinations === "object"
+      ? new Map(Object.entries(options.destinations))
+      : new Map());
   const stampLine = typeof options.stampLine === "function" ? options.stampLine : null;
 
   const empty = {
@@ -6030,6 +6038,7 @@ function planSuccessors(options = {}) {
       markUnblockedLine,
       stampLine,
       selection,
+      destinations,
       isInbox,
       basenameCounts,
       noteTexts,
@@ -6665,9 +6674,43 @@ function buildSuccessorPickerModel(options = {}) {
   return model;
 }
 
-// Normalize a picker result to an array of keys. Null, empty, malformed,
-// and picker exceptions all mean no picks. Preserves the optional
-// destination seam without implementing it (§SO23 belongs to a later phase).
+// Normalize a per-row destination override (§12.13 obsidian_destination):
+// `{kind: "existing", entryLine, entryText} | {kind: "new", name}`. Null
+// unless the shape is exact; a malformed override never blocks the pick.
+function normalizeSuccessorPickDestination(choice) {
+  try {
+    if (!choice || typeof choice !== "object") {
+      return null;
+    }
+    if (choice.kind === "existing") {
+      if (!Number.isInteger(choice.entryLine) || choice.entryLine < 0) {
+        return null;
+      }
+      if (typeof choice.entryText !== "string" || !choice.entryText) {
+        return null;
+      }
+      return {
+        kind: "existing",
+        entryLine: choice.entryLine,
+        entryText: choice.entryText,
+      };
+    }
+    if (choice.kind === "new") {
+      const name = typeof choice.name === "string" ? choice.name.trim() : "";
+      if (!name || /[\r\n]/.test(name)) {
+        return null;
+      }
+      return { kind: "new", name };
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Normalize a picker result to `[{key, destination?}]`. Null, empty,
+// malformed, and picker exceptions all mean no picks. Validated
+// destinations ride along for the override-aware insertion planner.
 function normalizeSuccessorPicks(result) {
   try {
     if (!result || typeof result !== "object") {
@@ -6677,17 +6720,25 @@ function normalizeSuccessorPicks(result) {
     if (!picks) {
       return [];
     }
-    const keys = [];
+    const items = [];
+    const seen = new Set();
     for (const pick of picks) {
       if (!pick || typeof pick !== "object") {
         continue;
       }
       const key = String(pick.key || "").trim();
-      if (key && !keys.includes(key)) {
-        keys.push(key);
+      if (!key || seen.has(key)) {
+        continue;
       }
+      seen.add(key);
+      const item = { key };
+      const destination = normalizeSuccessorPickDestination(pick.destination);
+      if (destination) {
+        item.destination = destination;
+      }
+      items.push(item);
     }
-    return keys;
+    return items;
   } catch (error) {
     return [];
   }
@@ -7479,7 +7530,29 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
   const slotGroups = new Map();
   const implicitGroups = new Map();
   const closingItems = [];
+  // Per-row destination overrides (§12.13 obsidian_destination): an
+  // `existing` pick names its entry outright (verified by line + text
+  // preimage below); a `new` pick names a placeholder to create.
+  const overrideExistingGroups = new Map();
+  const overrideNewGroups = new Map();
   list.forEach((placement, order) => {
+    const override = placement && placement.override;
+    if (override && override.kind === "existing" && Number.isInteger(override.entryLine)) {
+      const target = override.entryLine;
+      if (!overrideExistingGroups.has(target)) {
+        overrideExistingGroups.set(target, []);
+      }
+      overrideExistingGroups.get(target).push({ placement, order });
+      return;
+    }
+    if (override && override.kind === "new" && typeof override.name === "string" && override.name.trim()) {
+      const name = override.name.trim();
+      if (!overrideNewGroups.has(name)) {
+        overrideNewGroups.set(name, []);
+      }
+      overrideNewGroups.get(name).push({ placement, order });
+      return;
+    }
     const anchor = placement && placement.anchor;
     if (anchor && anchor.bulletLine != null) {
       if (!slotGroups.has(anchor.bulletLine)) {
@@ -7583,6 +7656,170 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
         marks: items.map((item, index) => ({ order: item.order, index, entryOriginal: targetLine, entryCreated: false })),
       });
     }
+  }
+
+  // Overridden existing entries (§12.13): the pick's entry line + text
+  // preimage must still hold and the entry must still be open; a moved or
+  // closed entry fails its rows loudly instead of writing elsewhere.
+  // Verified against these same staged lines, so a re-plan on fresh text
+  // already re-checked them and the editor/vault snapshot guards the write.
+  const insertOverrideChildren = (targetLine, items) => {
+    const range = section
+      ? getSubBulletBlockRange(lines, targetLine, section)
+      : { startLine: targetLine + 1, endLine: targetLine + 1 };
+    const children = lines.slice(range.startLine, range.endLine);
+    if (children.length === 1 && children[0].trim() === "-") {
+      ops.push({
+        at: range.startLine,
+        deleteCount: 1,
+        lines: items.map((item) => `\t- ${item.placement.blockLink}`),
+        seq: seq++,
+        marks: items.map((item, index) => ({ order: item.order, index, entryOriginal: targetLine, entryCreated: false })),
+      });
+    } else {
+      ops.push({
+        at: range.endLine,
+        deleteCount: 0,
+        lines: items.map((item) => `\t- ${item.placement.blockLink}`),
+        seq: seq++,
+        marks: items.map((item, index) => ({ order: item.order, index, entryOriginal: targetLine, entryCreated: false })),
+      });
+    }
+  };
+  for (const [targetLine, items] of overrideExistingGroups) {
+    const fail = (reason) => {
+      for (const item of items) {
+        skipped.push({
+          key: (item.placement && item.placement.key) || null,
+          order: item.order,
+          reason,
+        });
+      }
+    };
+    if (!Number.isInteger(targetLine) || targetLine < 0 || targetLine >= lines.length) {
+      fail("destination-moved");
+      continue;
+    }
+    const pick = items[0].placement.override;
+    if (String(lines[targetLine]).replace(/\r$/, "") !== pick.entryText) {
+      fail("destination-moved");
+      continue;
+    }
+    const target = entries.find((entry) => entry.entryLine === targetLine);
+    if (!target || !target.open) {
+      fail("destination-closed");
+      continue;
+    }
+    insertOverrideChildren(targetLine, items);
+  }
+
+  // Overridden new names (§12.13): an open entry of the same name wins the
+  // race (insert as its child); otherwise create one `- [ ] () — NAME`
+  // placeholder per name at the same position block-id-prompt uses for new
+  // entries (after the running entry's block, else after the last completed
+  // entry's block, else before the first open entry, else top of section),
+  // then insert beneath it. Several open timed entries fail the rows, as in
+  // block-id-prompt. Created entries are marked so the reopen receipt owns
+  // them exactly like closing placeholders.
+  const canonicalOverrideName = (name) => String(name || "").trim().toUpperCase();
+  const overrideOpenEntries = entries.filter((entry) => entry.open);
+  const overrideTimedOpen = overrideOpenEntries.filter((entry) => {
+    try {
+      const parts = parsePomodoroEntryLineParts(String(lines[entry.entryLine] || ""));
+      return !!parts && parts.placeholder !== true;
+    } catch (_error) {
+      return false;
+    }
+  });
+  const overrideBlockEnd = (entryLine) => {
+    const range = section
+      ? getSubBulletBlockRange(lines, entryLine, section)
+      : { startLine: entryLine + 1, endLine: entryLine + 1 };
+    let end = range.endLine;
+    while (end - 1 > entryLine && !String(lines[end - 1] || "").trim()) {
+      end -= 1;
+    }
+    return end;
+  };
+  for (const [name, items] of overrideNewGroups) {
+    const fail = (reason) => {
+      for (const item of items) {
+        skipped.push({
+          key: (item.placement && item.placement.key) || null,
+          order: item.order,
+          reason,
+        });
+      }
+    };
+    const raced = overrideOpenEntries.find(
+      (entry) => canonicalOverrideName(entry.name) === canonicalOverrideName(name),
+    );
+    if (raced) {
+      insertOverrideChildren(raced.entryLine, items);
+      continue;
+    }
+    if (overrideTimedOpen.length > 1) {
+      fail("destination-ambiguous");
+      continue;
+    }
+    let insertLine = null;
+    if (overrideTimedOpen.length === 1) {
+      insertLine = overrideBlockEnd(overrideTimedOpen[0].entryLine);
+    } else {
+      let lastCompleted = -1;
+      if (section) {
+        for (let line = section.startLine; line <= section.endLine; line += 1) {
+          const text = String(lines[line] || "");
+          if (!isTopLevelTaskLine(text)) {
+            continue;
+          }
+          let status = null;
+          try {
+            status = getTaskStatusForLine(text, line);
+          } catch (_error) {
+            status = null;
+          }
+          if (!status || (status.symbol !== "x" && status.symbol !== "X")) {
+            continue;
+          }
+          let parts = null;
+          try {
+            parts = parsePomodoroEntryLineParts(text);
+          } catch (_error) {
+            parts = null;
+          }
+          if (parts) {
+            lastCompleted = line;
+          }
+        }
+      }
+      if (lastCompleted >= 0) {
+        insertLine = overrideBlockEnd(lastCompleted);
+      } else if (overrideOpenEntries.length > 0) {
+        insertLine = overrideOpenEntries[0].entryLine;
+      } else if (section) {
+        insertLine = section.startLine;
+      }
+    }
+    if (!Number.isInteger(insertLine) || insertLine < 0 || insertLine > lines.length) {
+      fail("destination-unavailable");
+      continue;
+    }
+    ops.push({
+      at: insertLine,
+      deleteCount: 0,
+      lines: [
+        formatPomodoroPlaceholderLine(name),
+        ...items.map((item) => `\t- ${item.placement.blockLink}`),
+      ],
+      seq: seq++,
+      marks: items.map((item, index) => ({
+        order: item.order,
+        index: 1 + index,
+        entryOriginal: null,
+        entryCreated: true,
+      })),
+    });
   }
 
   if (closingItems.length > 0) {
@@ -9430,6 +9667,11 @@ function applySuccessorVerdicts(context) {
   const selection = rawSelection && typeof rawSelection === "object" && rawSelection.mode
     ? rawSelection
     : normalizeSuccessorSelection(rawSelection);
+  const destinations = context.destinations instanceof Map
+    ? context.destinations
+    : (context.destinations && typeof context.destinations === "object"
+      ? new Map(Object.entries(context.destinations))
+      : new Map());
   const isInbox = context.isInbox;
   const basenameCounts = context.basenameCounts;
   const noteTexts = context.noteTexts || {};
@@ -9742,13 +9984,20 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
-      placements.push({
+      const placement = {
         key: String(key),
         rowIndex,
         anchor: mark.anchor,
         implicit: mark.implicit || null,
         blockLink: unblocked[rowIndex].link.block_link,
-      });
+      };
+      // Per-row destination override (§12.13): validated here so a stale
+      // shape from an older picker falls back to the planned anchor.
+      const override = normalizeSuccessorPickDestination(destinations.get(String(key)));
+      if (override) {
+        placement.override = override;
+      }
+      placements.push(placement);
     }
   }
 
@@ -14192,7 +14441,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
       }
-      const planFirst = (selection, dailyB, dailyA, tasksForPlan, notesObj, closingForPlan) => {
+      const planFirst = (selection, dailyB, dailyA, tasksForPlan, notesObj, closingForPlan, destinations) => {
         try {
           return planSuccessors({
             closed: identities,
@@ -14204,6 +14453,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
             stampLine: stampLineForPass,
             selection,
+            destinations,
             linkUnblocked,
             cancelled: cancelledClose,
             isInbox: getSuccessorIsInbox(this.app),
@@ -14237,6 +14487,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         originalOfferByKey = new Map();
       }
       const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
+      let selectedDestinations = new Map();
       if (selectableOffers.length > 0 && pickerApi) {
         let model = null;
         try {
@@ -14267,7 +14518,13 @@ class TaskStatusCyclerSuccessorProjectMixin {
             picks = [];
           }
         }
-        selectedKeys = picks;
+        selectedKeys = picks.map((pick) => pick && pick.key).filter(Boolean);
+        selectedDestinations = new Map();
+        for (const pick of picks) {
+          if (pick && pick.key && pick.destination) {
+            selectedDestinations.set(String(pick.key), pick.destination);
+          }
+        }
         if (selectedKeys.length > 0) {
           // Re-read fresh texts (editor buffers first), invalidating caches.
           const affected = new Set();
@@ -14401,10 +14658,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
           }
           const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
           basenameCounts = freshBasenames;
-          let replanned = planFirst(selectedKeys, dailyFreshLines, dailyFreshLines, freshTasks, freshNotesObj, freshClosing);
+          let replanned = planFirst(selectedKeys, dailyFreshLines, dailyFreshLines, freshTasks, freshNotesObj, freshClosing, selectedDestinations);
           if (!replanned) {
             replanned = plan;
             selectedKeys = [];
+            selectedDestinations = new Map();
           } else {
             // Refuse stale/ambiguous picks individually; newly appearing
             // offers stay unpicked (no second picker).
@@ -14459,6 +14717,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
             dailyAfter = dailyFreshLines;
             planClosingEntry = freshClosing;
             selectedKeys = selectedKeys.filter((key) => !refused.includes(String(key)));
+            if (refused.length > 0) {
+              const refusedSet = new Set(refused.map(String));
+              for (const key of [...selectedDestinations.keys()]) {
+                if (refusedSet.has(String(key))) {
+                  selectedDestinations.delete(key);
+                }
+              }
+            }
           }
         }
       }
@@ -19911,6 +20177,7 @@ module.exports.helpers = {
   successorDestinationLabel,
   buildSuccessorPickerModel,
   normalizeSuccessorPicks,
+  normalizeSuccessorPickDestination,
   getSuccessorPickerApi,
   successorOfferDestination,
   successorGroupOrder,

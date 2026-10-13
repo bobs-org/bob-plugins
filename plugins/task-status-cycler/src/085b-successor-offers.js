@@ -312,9 +312,43 @@ function buildSuccessorPickerModel(options = {}) {
   return model;
 }
 
-// Normalize a picker result to an array of keys. Null, empty, malformed,
-// and picker exceptions all mean no picks. Preserves the optional
-// destination seam without implementing it (§SO23 belongs to a later phase).
+// Normalize a per-row destination override (§12.13 obsidian_destination):
+// `{kind: "existing", entryLine, entryText} | {kind: "new", name}`. Null
+// unless the shape is exact; a malformed override never blocks the pick.
+function normalizeSuccessorPickDestination(choice) {
+  try {
+    if (!choice || typeof choice !== "object") {
+      return null;
+    }
+    if (choice.kind === "existing") {
+      if (!Number.isInteger(choice.entryLine) || choice.entryLine < 0) {
+        return null;
+      }
+      if (typeof choice.entryText !== "string" || !choice.entryText) {
+        return null;
+      }
+      return {
+        kind: "existing",
+        entryLine: choice.entryLine,
+        entryText: choice.entryText,
+      };
+    }
+    if (choice.kind === "new") {
+      const name = typeof choice.name === "string" ? choice.name.trim() : "";
+      if (!name || /[\r\n]/.test(name)) {
+        return null;
+      }
+      return { kind: "new", name };
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Normalize a picker result to `[{key, destination?}]`. Null, empty,
+// malformed, and picker exceptions all mean no picks. Validated
+// destinations ride along for the override-aware insertion planner.
 function normalizeSuccessorPicks(result) {
   try {
     if (!result || typeof result !== "object") {
@@ -324,17 +358,25 @@ function normalizeSuccessorPicks(result) {
     if (!picks) {
       return [];
     }
-    const keys = [];
+    const items = [];
+    const seen = new Set();
     for (const pick of picks) {
       if (!pick || typeof pick !== "object") {
         continue;
       }
       const key = String(pick.key || "").trim();
-      if (key && !keys.includes(key)) {
-        keys.push(key);
+      if (!key || seen.has(key)) {
+        continue;
       }
+      seen.add(key);
+      const item = { key };
+      const destination = normalizeSuccessorPickDestination(pick.destination);
+      if (destination) {
+        item.destination = destination;
+      }
+      items.push(item);
     }
-    return keys;
+    return items;
   } catch (error) {
     return [];
   }

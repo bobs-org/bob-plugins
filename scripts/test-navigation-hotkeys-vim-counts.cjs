@@ -595,3 +595,103 @@ test("physical counted property chord consumes only explicit normal-mode Vim cou
   assert.equal(unfocused.calls.prevent, 0);
   assert.equal(opens.length, 1);
 });
+
+test("physical counted Ctrl+Shift+B opens the Depends on row; KeyP options stay unchanged", () => {
+  const makeEvent = (overrides = {}) => {
+    const calls = { prevent: 0, stop: 0, immediate: 0 };
+    return {
+      key: "B",
+      code: "KeyB",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      metaKey: false,
+      preventDefault: () => {
+        calls.prevent += 1;
+      },
+      stopPropagation: () => {
+        calls.stop += 1;
+      },
+      stopImmediatePropagation: () => {
+        calls.immediate += 1;
+      },
+      calls,
+      ...overrides,
+    };
+  };
+  const inputState = {
+    keyBuffer: ["2"],
+    repeat: 2,
+    getRepeat: () => 2,
+  };
+  const cm = {
+    state: { vim: { mode: "normal", inputState } },
+    getCursor: () => ({ line: 0, ch: 0 }),
+  };
+  const editor = { cm: { cm } };
+  const view = { editor };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.handledCountedBulletPropertyEvents = new WeakSet();
+  plugin.getFocusedMarkdownEditorView = () => view;
+  const opens = [];
+  plugin.openBulletPropertyPicker = (_editor, options) => {
+    opens.push(options);
+    return true;
+  };
+
+  assert.equal(plugin.isCountedBulletPropertyKeydown(makeEvent()), true);
+  assert.equal(
+    plugin.isCountedBulletPropertyKeydown(makeEvent({ key: "P", code: "KeyP" })),
+    true,
+  );
+
+  const repeated = makeEvent({ repeat: true });
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(repeated), false);
+  assert.deepEqual(repeated.calls, { prevent: 0, stop: 0, immediate: 0 });
+  assert.deepEqual(opens, []);
+
+  const countedB = makeEvent({ repeat: false });
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(countedB), true);
+  assert.deepEqual(opens, [
+    {
+      countExplicit: true,
+      additionalTaskCount: 2,
+      initialTaskCardRow: "depends-on",
+    },
+  ]);
+  assert.deepEqual(countedB.calls, { prevent: 1, stop: 1, immediate: 1 });
+
+  inputState.keyBuffer = ["2"];
+  inputState.repeat = 2;
+  inputState.getRepeat = () => 2;
+  plugin.handledCountedBulletPropertyEvents = new WeakSet();
+  const countedP = makeEvent({ key: "P", code: "KeyP" });
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(countedP), true);
+  assert.deepEqual(opens[1], { countExplicit: true, additionalTaskCount: 2 });
+
+  inputState.getRepeat = () => null;
+  const bare = makeEvent();
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(bare), false);
+  assert.deepEqual(bare.calls, { prevent: 0, stop: 0, immediate: 0 });
+
+  for (const mode of ["insert", "visual", "visual-line", "replace"]) {
+    cm.state.vim.mode = mode;
+    inputState.keyBuffer = ["3"];
+    inputState.getRepeat = () => 3;
+    const event = makeEvent();
+    assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+
+  cm.state.vim.mode = "normal";
+  for (const overrides of [
+    { ctrlKey: false },
+    { shiftKey: false },
+    { altKey: true },
+    { metaKey: true },
+  ]) {
+    const event = makeEvent(overrides);
+    assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(event), false);
+    assert.equal(event.calls.prevent, 0);
+  }
+});

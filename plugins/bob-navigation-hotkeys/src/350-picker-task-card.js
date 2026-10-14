@@ -318,6 +318,31 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     });
   }
 
+  // One-shot Ctrl+Shift+B dispatch: run the same intent `b` would, then
+  // forget the row so Back / returnToTaskCard never re-triggers it.
+  dispatchInitialTaskCardRow() {
+    if (
+      !this.hasTaskCard ||
+      !this.pickerOpen ||
+      this.stage !== "task-card" ||
+      !this.taskCardModel ||
+      this.linkResolving ||
+      !this.initialTaskCardRow
+    ) {
+      return;
+    }
+    const rowId = this.initialTaskCardRow;
+    this.initialTaskCardRow = null;
+    const row = (this.taskCardModel.rows || []).find((item) => item.id === rowId);
+    const intent = taskCardIntentForRow(row);
+    void this.dispatchTaskCardIntent(intent).catch(() => {
+      new Notice("Could not apply Task Card action");
+    });
+    if (intent && intent.type === "unavailable" && this.pickerOpen) {
+      this.close();
+    }
+  }
+
   async dispatchTaskCardIntent(intent) {
     if (!intent) return false;
     if (intent.type === "unavailable") {

@@ -5,11 +5,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
-const { ElementStub, ModalStub, click, defer, pressKey } = require("./modal-harness.cjs");
+const { ElementStub, ModalStub, click, defer, flushDeferred, pressKey } = require("./modal-harness.cjs");
 
 global.window = { setTimeout: defer };
 
 const openedModals = [];
+const notices = [];
 const originalLoad = Module._load;
 function parseTestYaml(text) {
   const result = {};
@@ -36,7 +37,11 @@ Module._load = function loadWithModalHarness(request, parent, isMain) {
           openedModals.push(this);
         }
       },
-      Notice: class {},
+      Notice: class {
+        constructor(message) {
+          notices.push(String(message));
+        }
+      },
       Plugin: class {},
       parseYaml: parseTestYaml,
     };
@@ -182,9 +187,18 @@ function makeModel(overrides = {}) {
 function makeEditor(content) {
   const lines = String(content || "").split(/\n/);
   let writes = 0;
+  let cursor = { line: 0, ch: 0 };
   return {
     getValue: () => content,
     getLine: (line) => (line >= 0 && line < lines.length ? lines[line] : null),
+    getCursor: () => cursor,
+    setCursor(line, ch) {
+      if (line && typeof line === "object") {
+        cursor = { line: line.line, ch: line.ch };
+      } else {
+        cursor = { line, ch };
+      }
+    },
     setValue() {
       writes += 1;
     },
@@ -193,6 +207,28 @@ function makeEditor(content) {
     },
     writes: () => writes,
   };
+}
+
+function openPickerRoute(content, pickerOptions = {}, extras = {}) {
+  const editor = extras.editor || makeEditor(content);
+  if (Number.isInteger(extras.line)) {
+    editor.setCursor(extras.line, 0);
+  }
+  const plugin = extras.plugin || new NavigationHotkeysPlugin();
+  plugin.app = extras.app || plugin.app || {};
+  plugin.getFreshnessApi = () =>
+    Object.prototype.hasOwnProperty.call(extras, "freshnessApi")
+      ? extras.freshnessApi
+      : freshnessApi();
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: extras.filePath || "Tasks.md" },
+  });
+  const opened = plugin.openBulletPropertyPicker(editor, {
+    config: extras.config || buildConfig(),
+    ...pickerOptions,
+  });
+  return { plugin, editor, modal: plugin.activeBulletPropertyPicker, opened };
 }
 
 function openPropertyPicker(options = {}) {
@@ -908,6 +944,38 @@ test("Task Link opens focused while resolving and consumes keys without replay",
   assert.equal(modal.isOpen, false);
 });
 
+test("Ctrl+Shift+B on a Task Link opens the linked Depends on stage and closes the card", async () => {
+  const content = "- [[Tasks/Alpha#^alpha]]";
+  const editor = makeEditor(content);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
+  const target = {
+    path: "Tasks/Alpha.md",
+    file: { path: "Tasks/Alpha.md" },
+    content: "- [ ] #task Alpha [priority:: high] [scheduled:: 2026-10-12] ^alpha\n",
+    line: 0,
+    rawLine: "- [ ] #task Alpha [priority:: high] [scheduled:: 2026-10-12] ^alpha",
+    blockId: "alpha",
+    displayText: "Alpha",
+  };
+  plugin.resolveLinkPickerTargets = async () => ({ error: null, targets: [target] });
+  const linked = [];
+  plugin.openLinkedDependencyStage = async (resolved) => {
+    linked.push(resolved);
+    return true;
+  };
+  const result = await plugin.openLinkPicker(editor, {
+    config: buildConfig(),
+    baseDate: BASE_DATE,
+    initialTaskCardRow: "depends-on",
+  });
+  assert.equal(result, true);
+  assert.equal(linked.length, 1);
+  assert.equal(linked[0], target);
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+});
+
 test("Task Link count replacement and source edits invalidate old resolutions", async () => {
   let content = "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]";
   const editor = {
@@ -1035,6 +1103,121 @@ test("a refused direct stage closes instead of landing on a card or a list", () 
   modal.returnHome();
   assert.equal(modal.isOpen, false);
   assert.equal(editor.writes(), 0);
+});
+
+test("Ctrl+Shift+B lands on the Depends on stage with the same intent as card b", () => {
+  const content =
+    "- [ ] #task Parent [priority:: medium] [scheduled:: 2026-10-12] ^parent";
+  const viaP = openPickerRoute(content);
+  assert.equal(viaP.opened, true);
+  const expectedIntent = helpers.resolveTaskCardKey(viaP.modal.taskCardModel, { key: "b" });
+  dispatchCardKey(viaP.modal, "b");
+  flushDeferred();
+  assert.equal(viaP.modal.stage, "value");
+  assert.equal(viaP.modal.selectedPropertyItem.property.values, "local_task_id");
+  assert.equal(viaP.modal.hasTaskCard, true);
+  assert.equal(viaP.modal.inputEl.focused, true);
+
+  const viaB = openPickerRoute(content, { initialTaskCardRow: "depends-on" });
+  assert.equal(viaB.opened, true);
+  flushDeferred();
+  assert.equal(viaB.modal.stage, "value");
+  assert.equal(viaB.modal.selectedPropertyItem.property.values, "local_task_id");
+  assert.equal(viaB.modal.hasTaskCard, true);
+  assert.equal(viaB.modal.inputEl.focused, true);
+  assert.equal(viaB.modal.stage, viaP.modal.stage);
+  assert.equal(
+    viaB.modal.selectedPropertyItem.property.values,
+    viaP.modal.selectedPropertyItem.property.values,
+  );
+  assert.equal(viaB.modal.hasTaskCard, viaP.modal.hasTaskCard);
+  assert.deepEqual(
+    helpers.resolveTaskCardKey(viaB.modal.taskCardModel, { key: "b" }),
+    expectedIntent,
+  );
+  assert.equal(expectedIntent.type, "open-action");
+  assert.equal(expectedIntent.rowId, "depends-on");
+});
+
+test("Ctrl+Shift+B Back returns to the card without re-dispatching", () => {
+  const content =
+    "- [ ] #task Parent [priority:: medium] [scheduled:: 2026-10-12] ^parent";
+  const { modal } = openPickerRoute(content, { initialTaskCardRow: "depends-on" });
+  assert.equal(modal.stage, "value");
+  assert.equal(modal.initialTaskCardRow, null);
+  modal.returnToTaskCard();
+  assert.equal(modal.stage, "task-card");
+  assert.equal(modal.initialTaskCardRow, null);
+  assert.equal(modal.isOpen, true);
+});
+
+test("Ctrl+Shift+B on a plain bullet notices and closes the card", () => {
+  const content = "- Plain bullet [scheduled:: 2026-10-12]";
+  const before = notices.length;
+  const { plugin, opened } = openPickerRoute(content, {
+    initialTaskCardRow: "depends-on",
+  });
+  assert.equal(opened, true);
+  assert.match(notices[before], /Depends on requires a #task checkbox/);
+  const modal = openedModals[openedModals.length - 1];
+  assert.ok(modal);
+  assert.equal(modal.isOpen, false);
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+});
+
+test("Ctrl+Shift+B on a Depends-On line opens the direct stage without auto-dispatch", () => {
+  const content = [
+    "- [ ] #task Parent [priority:: medium] ^parent",
+    "  - ⛓️ **DEPENDS ON:** [[#^child]]",
+    "- [ ] #task Child ^child",
+  ].join("\n");
+  const { modal, opened, editor } = openPickerRoute(
+    content,
+    { initialTaskCardRow: "depends-on" },
+    { line: 1 },
+  );
+  assert.equal(opened, true);
+  assert.ok(modal);
+  assert.equal(modal.directStage, true);
+  assert.equal(modal.hasTaskCard, false);
+  assert.equal(modal.stage, "value");
+  assert.equal(modal.selectedPropertyItem.property.values, "local_task_id");
+  assert.equal(modal.initialTaskCardRow, "depends-on");
+  assert.equal(editor.getCursor().line, 0);
+});
+
+test("Ctrl+Shift+B captures review origin like Ctrl+Shift+P; a direct stage does not", () => {
+  const content = "- [ ] #task Parent [priority:: medium] ^parent";
+  const captures = [];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.captureReviewGesture = (cm) => {
+    captures.push(cm);
+    return { origin: "landing" };
+  };
+
+  const viaB = openPickerRoute(
+    content,
+    { initialTaskCardRow: "depends-on" },
+    { plugin },
+  );
+  assert.equal(captures.length, 1);
+  assert.equal(viaB.modal.reviewOrigin.origin, "landing");
+  viaB.modal.close();
+
+  captures.length = 0;
+  const viaP = openPickerRoute(content, {}, { plugin });
+  assert.equal(captures.length, 1);
+  viaP.modal.close();
+
+  captures.length = 0;
+  const direct = openPickerRoute(
+    content,
+    { initialProperty: "dependsOn" },
+    { plugin },
+  );
+  assert.equal(captures.length, 0);
+  assert.equal(direct.modal.reviewOrigin, null);
+  direct.modal.close();
 });
 
 test("priority gesture writes the frozen date and duplicate dispatch is single-flight", async () => {

@@ -514,6 +514,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         propertyContext: { ...basePropertyContext, isObsidianTask: false },
         linkSession,
         linkResolving: true,
+        initialTaskCardRow: options.initialTaskCardRow || null,
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -582,6 +583,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     picker.refreshLinkRollBatch();
     picker.refreshPropertyItems();
     picker.showTaskCard({ rebuild: true });
+    picker.dispatchInitialTaskCardRow();
     return true;
   }
 

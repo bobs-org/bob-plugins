@@ -287,8 +287,7 @@ test("stage batch cycle rows stay guarded and write nothing", async () => {
 // The `edit-task-dependencies` palette command ships with no default
 // hotkey: capture the real `addCommand` registration and assert it carries
 // no `hotkeys`, so it opens only from the palette (or a user-bound chord).
-test("stage edit-task-dependencies registers with no default hotkey", () => {
-  const { plugin } = stubPlugin({ "Tasks.md": "- [ ] #task T ^t\n" });
+function stubOnloadAndRegister(plugin) {
   const registered = [];
   plugin.addCommand = (command) => {
     registered.push(command);
@@ -312,9 +311,34 @@ test("stage edit-task-dependencies registers with no default hotkey", () => {
   plugin.app.workspace.on = () => ({});
   plugin.app.workspace.getActiveFile = () => null;
   plugin.onload();
+  return registered;
+}
+
+test("stage edit-task-dependencies registers with no default hotkey", () => {
+  const { plugin } = stubPlugin({ "Tasks.md": "- [ ] #task T ^t\n" });
+  const registered = stubOnloadAndRegister(plugin);
   const entry = registered.find((command) => command.id === "edit-task-dependencies");
   assert.ok(entry, "edit-task-dependencies is registered");
   assert.equal(entry.hotkeys, undefined);
+});
+
+test("task-card-depends-on registers Ctrl+Shift+B and opens the Depends on row", () => {
+  const { plugin } = stubPlugin({ "Tasks.md": "- [ ] #task T ^t\n" });
+  const registered = stubOnloadAndRegister(plugin);
+  const entry = registered.find((command) => command.id === "task-card-depends-on");
+  assert.ok(entry, "task-card-depends-on is registered");
+  assert.equal(entry.name, "Task card: Blocked by (Depends on)");
+  assert.deepEqual(entry.hotkeys, [{ modifiers: ["Ctrl", "Shift"], key: "B" }]);
+  const opens = [];
+  plugin.openBulletPropertyPicker = (editor, options) => {
+    opens.push({ editor, options });
+    return true;
+  };
+  const editor = { id: "cursor-editor" };
+  entry.editorCallback(editor);
+  assert.equal(opens.length, 1);
+  assert.equal(opens[0].editor, editor);
+  assert.deepEqual(opens[0].options, { initialTaskCardRow: "depends-on" });
 });
 
 // The BLOCKED `🔒 waits on N` badge counts open prerequisites only: one

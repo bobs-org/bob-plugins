@@ -446,6 +446,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         propertyContext,
         taskSession,
         initialProperty: options.initialProperty || null,
+        initialTaskCardRow: options.initialTaskCardRow || null,
         random: options.random,
         baseDate: options.baseDate,
         reviewOrigin,
@@ -465,6 +466,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
     }
     // `initialProperty: "dependsOn"` skips the property step: the Depends
     // on value stage opens straight away (`docs/task-dependencies.md` §6.1).
+    // `initialProperty` always wins over `initialTaskCardRow` (Ctrl+Shift+B),
+    // so a Depends-On-line redirect stays a direct stage.
     if (options.initialProperty) {
       const wanted = (picker.propertyItems || []).find(
         (item) =>
@@ -480,6 +483,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
         return false;
       }
       picker.showValueStage(wanted);
+    } else {
+      picker.dispatchInitialTaskCardRow();
     }
     return true;
   }

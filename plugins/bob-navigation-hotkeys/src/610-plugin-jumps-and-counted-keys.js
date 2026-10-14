@@ -554,7 +554,8 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (event && event.repeat) {
       return false;
     }
-    if (!this.isCountedBulletPropertyKeydown(event)) {
+    const chord = this.countedBulletPropertyChord(event);
+    if (!chord) {
       return false;
     }
     if (
@@ -583,21 +584,37 @@ class BobNavigationHotkeysJumpKeyMixin {
       event.stopImmediatePropagation();
     }
     resetPendingVimInputState(cm, "counted-bullet-property");
-    return this.openBulletPropertyPicker(view.editor, {
+    const options = {
       countExplicit: true,
       additionalTaskCount: pendingRepeat.repeat,
-    });
+    };
+    if (chord === "depends-on") {
+      options.initialTaskCardRow = "depends-on";
+    }
+    return this.openBulletPropertyPicker(view.editor, options);
+  }
+
+  countedBulletPropertyChord(event) {
+    if (
+      !event ||
+      !event.ctrlKey ||
+      !event.shiftKey ||
+      event.altKey ||
+      event.metaKey
+    ) {
+      return null;
+    }
+    if (event.code === "KeyP" || event.key === "p" || event.key === "P") {
+      return "property";
+    }
+    if (event.code === "KeyB" || event.key === "b" || event.key === "B") {
+      return "depends-on";
+    }
+    return null;
   }
 
   isCountedBulletPropertyKeydown(event) {
-    return Boolean(
-      event &&
-      event.ctrlKey &&
-      event.shiftKey &&
-      !event.altKey &&
-      !event.metaKey &&
-      (event.code === "KeyP" || event.key === "p" || event.key === "P"),
-    );
+    return this.countedBulletPropertyChord(event) != null;
   }
 
   // Capture-phase fallback so counted N<Alt+N> reaches the lane toggle when

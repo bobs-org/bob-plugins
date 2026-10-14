@@ -51,6 +51,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // `initialProperty` skip. `initialProperty: "dependsOn"` opens the
     // Depends on value stage straight from the cursor entry points.
     this.initialProperty = context.initialProperty || null;
+    this.initialTaskCardRow = context.initialTaskCardRow || null;
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;

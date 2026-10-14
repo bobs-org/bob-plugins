@@ -36091,6 +36091,7 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // `initialProperty` skip. `initialProperty: "dependsOn"` opens the
     // Depends on value stage straight from the cursor entry points.
     this.initialProperty = context.initialProperty || null;
+    this.initialTaskCardRow = context.initialTaskCardRow || null;
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;
@@ -36451,6 +36452,31 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     void this.dispatchTaskCardIntent(intent).catch(() => {
       new Notice("Could not apply Task Card action");
     });
+  }
+
+  // One-shot Ctrl+Shift+B dispatch: run the same intent `b` would, then
+  // forget the row so Back / returnToTaskCard never re-triggers it.
+  dispatchInitialTaskCardRow() {
+    if (
+      !this.hasTaskCard ||
+      !this.pickerOpen ||
+      this.stage !== "task-card" ||
+      !this.taskCardModel ||
+      this.linkResolving ||
+      !this.initialTaskCardRow
+    ) {
+      return;
+    }
+    const rowId = this.initialTaskCardRow;
+    this.initialTaskCardRow = null;
+    const row = (this.taskCardModel.rows || []).find((item) => item.id === rowId);
+    const intent = taskCardIntentForRow(row);
+    void this.dispatchTaskCardIntent(intent).catch(() => {
+      new Notice("Could not apply Task Card action");
+    });
+    if (intent && intent.type === "unavailable" && this.pickerOpen) {
+      this.close();
+    }
   }
 
   async dispatchTaskCardIntent(intent) {
@@ -46025,6 +46051,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
       editorCallback: (editor) => this.openBulletPropertyPicker(editor),
     });
 
+    this.addCommand({
+      id: "task-card-depends-on",
+      name: "Task card: Blocked by (Depends on)",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "B" }],
+      editorCallback: (editor) =>
+        this.openBulletPropertyPicker(editor, { initialTaskCardRow: "depends-on" }),
+    });
+
     // No default hotkey (Q6): the vault-wide Depends on stage for the task
     // under the cursor (`docs/task-dependencies.md` §6.1).
     this.addCommand({
@@ -46883,6 +46917,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         propertyContext: { ...basePropertyContext, isObsidianTask: false },
         linkSession,
         linkResolving: true,
+        initialTaskCardRow: options.initialTaskCardRow || null,
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -46951,6 +46986,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     picker.refreshLinkRollBatch();
     picker.refreshPropertyItems();
     picker.showTaskCard({ rebuild: true });
+    picker.dispatchInitialTaskCardRow();
     return true;
   }
 
@@ -54615,6 +54651,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         propertyContext,
         taskSession,
         initialProperty: options.initialProperty || null,
+        initialTaskCardRow: options.initialTaskCardRow || null,
         random: options.random,
         baseDate: options.baseDate,
         reviewOrigin,
@@ -54634,6 +54671,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
     }
     // `initialProperty: "dependsOn"` skips the property step: the Depends
     // on value stage opens straight away (`docs/task-dependencies.md` §6.1).
+    // `initialProperty` always wins over `initialTaskCardRow` (Ctrl+Shift+B),
+    // so a Depends-On-line redirect stays a direct stage.
     if (options.initialProperty) {
       const wanted = (picker.propertyItems || []).find(
         (item) =>
@@ -54649,6 +54688,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
         return false;
       }
       picker.showValueStage(wanted);
+    } else {
+      picker.dispatchInitialTaskCardRow();
     }
     return true;
   }
@@ -59988,7 +60029,8 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (event && event.repeat) {
       return false;
     }
-    if (!this.isCountedBulletPropertyKeydown(event)) {
+    const chord = this.countedBulletPropertyChord(event);
+    if (!chord) {
       return false;
     }
     if (
@@ -60017,21 +60059,37 @@ class BobNavigationHotkeysJumpKeyMixin {
       event.stopImmediatePropagation();
     }
     resetPendingVimInputState(cm, "counted-bullet-property");
-    return this.openBulletPropertyPicker(view.editor, {
+    const options = {
       countExplicit: true,
       additionalTaskCount: pendingRepeat.repeat,
-    });
+    };
+    if (chord === "depends-on") {
+      options.initialTaskCardRow = "depends-on";
+    }
+    return this.openBulletPropertyPicker(view.editor, options);
+  }
+
+  countedBulletPropertyChord(event) {
+    if (
+      !event ||
+      !event.ctrlKey ||
+      !event.shiftKey ||
+      event.altKey ||
+      event.metaKey
+    ) {
+      return null;
+    }
+    if (event.code === "KeyP" || event.key === "p" || event.key === "P") {
+      return "property";
+    }
+    if (event.code === "KeyB" || event.key === "b" || event.key === "B") {
+      return "depends-on";
+    }
+    return null;
   }
 
   isCountedBulletPropertyKeydown(event) {
-    return Boolean(
-      event &&
-      event.ctrlKey &&
-      event.shiftKey &&
-      !event.altKey &&
-      !event.metaKey &&
-      (event.code === "KeyP" || event.key === "p" || event.key === "P"),
-    );
+    return this.countedBulletPropertyChord(event) != null;
   }
 
   // Capture-phase fallback so counted N<Alt+N> reaches the lane toggle when

@@ -502,11 +502,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       resolveLinkpath: this.dependencyLinkpathResolver(),
       blocksLinesEnabled: loadBlocksLinesEnabled(),
     };
-    // The toggle direction comes from the pure planner: adds never recover
-    // (contract), so the vault snapshot is only read when the toggle will
-    // remove from a `[?]` source. The preview below is valid exactly when
-    // the final plan is (recovery never changes validity or direction), so
-    // an invalid toggle reads nothing.
+    // Adds never recover, so the vault snapshot is only for `[?]` removals.
     const preview = planCountedLocalTaskDependency(
       writeContext.content,
       session,
@@ -542,10 +538,9 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       new Notice(`${plan.error}${suffix}`);
       return false;
     }
-    // §13.19: counted batches process `^prj` roots ancestor-first and plan
-    // each descendant note once. Lanes ride a re-plan below; descendants
-    // land after the commit.
+    // §13.19: counted `^prj` roots; descendants land after the commit.
     let countedSubtreePrep = null;
+    let countedPomodoroPrep = null;
     if (plan.changed) {
       countedSubtreePrep = await this.prepareSubtreeForDependencyPlan(
         normalizedPath,
@@ -576,30 +571,34 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           plan = relaned;
         }
       }
+      countedPomodoroPrep = await prepareDependencyPomodoroCleanup(
+        (opts) => this.readDeferredPomodoroSnapshot(this.app, opts),
+        plan.pomodoroTargets || [],
+        normalizedPath, writeContext.content, plan.content, new Date(),
+      );
+      plan = { ...plan, content: countedPomodoroPrep.commitContent };
     }
     const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(
-          cm,
-          writeContext.content,
-          plan.content,
-          {
-            line: plan.cursorLine,
-            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-          },
-          BLOCKS_MACHINE_WRITE_ANNOTATION,
-        )
+        !applyEditorContentTransaction(cm, writeContext.content, plan.content, {
+          line: plan.cursorLine,
+          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+        }, BLOCKS_MACHINE_WRITE_ANNOTATION)
       ) {
-        throw new Error("Editor cannot apply a counted dependency transaction");
+        throw new Error("counted-dependency-transaction");
       }
-    } catch (error) {
+    } catch (_error) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
-    // §13.19: descendants land after the dependent's own write; a stale one
-    // is skipped and counted, never rolled back.
+    const countedPomodoroDone = countedPomodoroPrep
+      ? await finishProjectPomodoroCleanup(
+          (snapshot, cleanup) => this.writeDeferredPomodoroCleanup(snapshot, cleanup),
+          countedPomodoroPrep.snapshot, countedPomodoroPrep.cleanup,
+        )
+      : { removed: 0, failed: false };
     let countedSubtree = null;
     if (plan.changed && typeof this.applySubtreePassesForRoots === "function") {
       try {
@@ -639,7 +638,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         plan.operation === "remove" ? "from" : "to"
       } ${formatCountLabel(plan.targetCount, "task")}${identity}${
         this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)
-      }${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}`,
+      }${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}${dependencyPomodoroNoticeSuffix(countedPomodoroDone.removed, countedPomodoroDone.failed)}`,
     );
     return true;
   }

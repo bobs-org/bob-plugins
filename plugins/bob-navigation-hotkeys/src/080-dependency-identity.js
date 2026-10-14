@@ -681,12 +681,22 @@ function planDependencyEdit(args = {}) {
     today: args.recovery && args.recovery.today,
   });
   const nextContent = blocksPlan.nextContent;
+  const parentBlockId = getTrailingBlockId(String(lines[parentIndex] || ""));
   const summary = Object.freeze({
     added: addedCount,
     removed: removedCount,
     openRemaining,
     blockedAfter: getObsidianTaskCheckboxStatus(parentText) === "?",
     recoveredOutcome,
+    pomodoroTargets: Object.freeze(
+      !projectPrj &&
+        !mirrorTouch &&
+        addedOpen.length > 0 &&
+        getObsidianTaskCheckboxStatus(parentText) === "?" &&
+        parentBlockId
+        ? [Object.freeze({ path: parentPath, blockId: parentBlockId })]
+        : [],
+    ),
     project: summarizeProjectDependencyEdit(projectPrj, {
       lines,
       parentIndex,

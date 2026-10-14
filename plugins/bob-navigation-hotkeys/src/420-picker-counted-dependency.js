@@ -502,6 +502,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let changedSources = 0;
     const preparations = new Map();
     const blocksFollowUps = [];
+    const countedPomodoroPlans = [];
     const vaultFiles =
       this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
         ? this.plugin.readDependencyVaultFileList()
@@ -590,6 +591,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         );
         return false;
       }
+      countedPomodoroPlans.push(plan);
       for (const preparation of plan.preparations || []) {
         const key = `${preparation.path}\x00${preparation.line}\x00${preparation.from}\x00${preparation.text}`;
         if (!preparations.has(key)) {
@@ -629,6 +631,18 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (String(this.editor.getValue() || "") !== originalContent) {
       return this.refuseDependencyStale();
     }
+    let vaultPomodoroPrep = null;
+    vaultPomodoroPrep = await prepareDependencyPomodoroCleanup(
+      this.plugin && typeof this.plugin.readDeferredPomodoroSnapshot === "function"
+        ? (opts) => this.plugin.readDeferredPomodoroSnapshot(this.plugin.app, opts)
+        : null,
+      collectDependencyPlanPomodoroTargets(countedPomodoroPlans),
+      ownerPath,
+      originalContent,
+      working,
+      new Date(),
+    );
+    working = vaultPomodoroPrep.commitContent;
     if (
       !applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)
     ) {
@@ -636,6 +650,14 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       return false;
     }
     const applied = changedSources;
+    const vaultPomodoroDone = await finishProjectPomodoroCleanup(
+      this.plugin && typeof this.plugin.writeDeferredPomodoroCleanup === "function"
+        ? (snapshot, cleanup) =>
+            this.plugin.writeDeferredPomodoroCleanup(snapshot, cleanup)
+        : null,
+      vaultPomodoroPrep.snapshot,
+      vaultPomodoroPrep.cleanup,
+    );
     // §13.19: descendants land after the counted commit; a stale one is
     // skipped and counted, never rolled back.
     let vaultCountedSubtree = null;
@@ -664,7 +686,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         snapshot.remove
           ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
           : `⛓ Linked ${applied} task${applied === 1 ? "" : "s"}`
-      }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}`,
+      }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}${dependencyPomodoroNoticeSuffix(vaultPomodoroDone.removed, vaultPomodoroDone.failed)}`,
     );
     return true;
   }

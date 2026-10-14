@@ -775,7 +775,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
     );
 
     const skipped = skippedStale + skippedOther;
-    const batchProjectNotice = projectPomodoroNotice(
+    const batchProjectNotice = dependencyPomodoroNotice(
       batchPlan,
       batchPomodoroRemoved,
       batchPomodoroPruneFailed,

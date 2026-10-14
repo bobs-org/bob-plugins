@@ -184,12 +184,10 @@ function formatProjectDependencyNotice(details = {}) {
   });
   const withSubtree = (text) =>
     subtreeSuffix ? `${text} ${subtreeSuffix}` : text;
-  const pomodoroSuffix =
-    pomodoroRemoved !== null && pomodoroRemoved > 0
-      ? ` · removed ${formatCountLabel(pomodoroRemoved, "Pomodoro link")}`
-      : pomodoroPruneFailed
-        ? "; Pomodoro links not removed"
-        : "";
+  const pomodoroSuffix = dependencyPomodoroNoticeSuffix(
+    pomodoroRemoved,
+    pomodoroPruneFailed,
+  );
   if (added > 0 && blocked > 0 && firstAdded) {
     return withSubtree(
       `⛓ Project waits on "${firstAdded}" · ${formatCountLabel(blocked, "task")} Blocked${pomodoroSuffix}`,
@@ -519,34 +517,160 @@ function summarizeProjectDependencyEdit(projectPrj, details = {}) {
   });
 }
 
-// Plan the Pomodoro-link consumption for a project edit. Returns
+// Deduplicated `{path, blockId}` union of an ordinary dependent's
+// consumption targets and a `^prj` project's (callers that append subtree
+// targets onto `summary.project.pomodoroTargets` stay in the union).
+function dependencyPlanPomodoroTargets(plan) {
+  const seen = new Set();
+  const targets = [];
+  const lists = [
+    plan && plan.summary ? plan.summary.pomodoroTargets : null,
+    plan && plan.summary && plan.summary.project
+      ? plan.summary.project.pomodoroTargets
+      : null,
+  ];
+  for (const list of lists) {
+    for (const target of Array.isArray(list) ? list : []) {
+      const path = normalizeVaultRelativePath(target && target.path);
+      const blockId = normalizeBulletPropertyValue(target && target.blockId);
+      if (!path || !blockId) {
+        continue;
+      }
+      const key = `${path}\0${blockId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      targets.push(Object.freeze({ path, blockId }));
+    }
+  }
+  return Object.freeze(targets);
+}
+
+function collectDependencyPlanPomodoroTargets(plans) {
+  const seen = new Set();
+  const targets = [];
+  for (const plan of Array.isArray(plans) ? plans : []) {
+    for (const target of dependencyPlanPomodoroTargets(plan)) {
+      const key = `${target.path}\0${target.blockId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      targets.push(target);
+    }
+  }
+  return Object.freeze(targets);
+}
+
+function dependencyPomodoroNoticeSuffix(removed, failed) {
+  const count = Math.max(0, Math.floor(numericOrDefault(removed, 0)));
+  if (count > 0) {
+    return ` · removed ${formatCountLabel(count, "Pomodoro link")}`;
+  }
+  if (failed) {
+    return "; Pomodoro links not removed";
+  }
+  return "";
+}
+
+// Synchronous same-file fold for writers that must stay boolean-sync.
+// `hasDaily` is true when today's daily note exists, even when it is a
+// different file (the caller then runs the follow-up write).
+function foldSameNotePomodoroCleanup(
+  nextContent,
+  targets,
+  parentPath,
+  today,
+  markdownFiles,
+) {
+  const content = String(nextContent || "");
+  const empty = Object.freeze({
+    content,
+    removed: 0,
+    sameFile: false,
+    hasDaily: false,
+  });
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return empty;
+  }
+  const files = Array.isArray(markdownFiles) ? markdownFiles : [];
+  let dailyPath = null;
+  try {
+    dailyPath = scheduledRecoveryDailyPaths(files, today).current;
+  } catch (_error) {
+    dailyPath = null;
+  }
+  if (!dailyPath) {
+    return empty;
+  }
+  if (dailyPath !== normalizeVaultRelativePath(parentPath)) {
+    return Object.freeze({
+      content,
+      removed: 0,
+      sameFile: false,
+      hasDaily: true,
+    });
+  }
+  const noteIndex = createScheduledRecoveryNoteIndex(
+    files.map((file) => ({
+      path: normalizeVaultRelativePath(
+        file && typeof file === "object" ? file.path : file,
+      ),
+    })),
+  );
+  let cleanup = null;
+  try {
+    cleanup = planDeferredPomodoroLinkCleanup(content, targets, {
+      dailyPath,
+      noteIndex,
+      removeEmptiedEntries: true,
+    });
+  } catch (_error) {
+    cleanup = null;
+  }
+  if (!cleanup || !cleanup.changed) {
+    return Object.freeze({
+      content,
+      removed: 0,
+      sameFile: true,
+      hasDaily: true,
+    });
+  }
+  return Object.freeze({
+    content: cleanup.content,
+    removed: cleanup.removedLinkCount,
+    sameFile: true,
+    hasDaily: true,
+  });
+}
+
+// Plan Pomodoro-link consumption from an explicit target list. Returns
 // `{commitContent, snapshot, cleanup}`: the dependent note's content to
 // commit (with the same-file cleanup folded in), plus the daily snapshot
 // and cleanup for the writer's follow-up write. Never throws.
-async function prepareProjectPomodoroCleanup(
+async function prepareDependencyPomodoroCleanup(
   readSnapshot,
-  plan,
+  targets,
   parentPath,
-  content,
+  beforeContent,
+  nextContent,
   today,
 ) {
   const empty = Object.freeze({
-    commitContent: plan.nextContent,
+    commitContent: nextContent,
     snapshot: null,
     cleanup: null,
   });
-  const targets =
-    plan && plan.summary && plan.summary.project
-      ? plan.summary.project.pomodoroTargets || []
-      : [];
-  if (targets.length === 0 || typeof readSnapshot !== "function") {
+  const list = Array.isArray(targets) ? targets : [];
+  if (list.length === 0 || typeof readSnapshot !== "function") {
     return empty;
   }
   let snapshot = null;
   try {
     snapshot = await readSnapshot({
       sourcePath: parentPath,
-      sourceContent: content,
+      sourceContent: beforeContent,
       today,
     });
   } catch (_snapshotError) {
@@ -558,8 +682,8 @@ async function prepareProjectPomodoroCleanup(
   let cleanup = null;
   try {
     cleanup = planDeferredPomodoroLinkCleanup(
-      snapshot.sameFile ? plan.nextContent : snapshot.content,
-      targets,
+      snapshot.sameFile ? nextContent : snapshot.content,
+      list,
       {
         dailyPath: snapshot.dailyPath,
         noteIndex: snapshot.noteIndex,
@@ -571,7 +695,7 @@ async function prepareProjectPomodoroCleanup(
   }
   if (!cleanup || !cleanup.changed) {
     return Object.freeze({
-      commitContent: plan.nextContent,
+      commitContent: nextContent,
       snapshot,
       cleanup: null,
     });
@@ -583,7 +707,28 @@ async function prepareProjectPomodoroCleanup(
       cleanup,
     });
   }
-  return Object.freeze({ commitContent: plan.nextContent, snapshot, cleanup });
+  return Object.freeze({ commitContent: nextContent, snapshot, cleanup });
+}
+
+// Plan the Pomodoro-link consumption for a dependency edit. Returns
+// `{commitContent, snapshot, cleanup}`: the dependent note's content to
+// commit (with the same-file cleanup folded in), plus the daily snapshot
+// and cleanup for the writer's follow-up write. Never throws.
+async function prepareProjectPomodoroCleanup(
+  readSnapshot,
+  plan,
+  parentPath,
+  content,
+  today,
+) {
+  return prepareDependencyPomodoroCleanup(
+    readSnapshot,
+    dependencyPlanPomodoroTargets(plan),
+    parentPath,
+    content,
+    plan.nextContent,
+    today,
+  );
 }
 
 // Complete the cross-note daily cleanup after the dependent's own write.
@@ -628,14 +773,25 @@ function projectPomodoroNotice(plan, removed, failed) {
   if (rebuilt) {
     return rebuilt;
   }
-  if (removed > 0 || failed) {
-    const suffix =
-      removed > 0
-        ? ` · removed ${formatCountLabel(removed, "Pomodoro link")}`
-        : "; Pomodoro links not removed";
+  const suffix = dependencyPomodoroNoticeSuffix(removed, failed);
+  if (suffix) {
     return `${plan.notice || "⛓ Dependencies updated"}${suffix}`;
   }
   return null;
+}
+
+// Project notice when residents flipped, else the ordinary notice plus
+// the Pomodoro suffix when links were removed or the follow-up failed.
+function dependencyPomodoroNotice(plan, removed, failed) {
+  const projectNotice = projectPomodoroNotice(plan, removed, failed);
+  if (projectNotice) {
+    return projectNotice;
+  }
+  const suffix = dependencyPomodoroNoticeSuffix(removed, failed);
+  if (!suffix) {
+    return null;
+  }
+  return `${(plan && plan.notice) || "⛓ Dependencies updated"}${suffix}`;
 }
 
 // Contract §6.7 notices for one dependency gesture.

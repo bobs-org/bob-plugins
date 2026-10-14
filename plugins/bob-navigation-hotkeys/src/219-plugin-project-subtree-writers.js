@@ -539,4 +539,174 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       propertyContext,
     });
   }
+
+  foldLocalDependencyPomodoroCleanup(nextContent, targets, parentPath, today) {
+    let markdownFiles = [];
+    try {
+      markdownFiles =
+        this.app &&
+        this.app.vault &&
+        typeof this.app.vault.getMarkdownFiles === "function"
+          ? this.app.vault.getMarkdownFiles() || []
+          : [];
+    } catch (_error) {
+      markdownFiles = [];
+    }
+    return foldSameNotePomodoroCleanup(
+      nextContent,
+      targets,
+      parentPath,
+      today instanceof Date ? today : new Date(),
+      markdownFiles,
+    );
+  }
+
+  continueLocalTaskDependencyFollowUps(args = {}) {
+    const plan = args.plan;
+    const filePath = normalizeVaultRelativePath(args.filePath);
+    const beforeContent = String(args.beforeContent || "");
+    const committedContent = String(args.committedContent || "");
+    const targets = Array.isArray(args.targets) ? args.targets : [];
+    const folded = args.folded || {
+      sameFile: false,
+      hasDaily: false,
+      removed: 0,
+    };
+    const showNotice = args.showNotice !== false;
+    const today = args.today instanceof Date ? args.today : new Date();
+    const pendingCrossFile =
+      Boolean(plan && plan.changed) &&
+      targets.length > 0 &&
+      folded.hasDaily === true &&
+      folded.sameFile !== true;
+    if (showNotice && !pendingCrossFile) {
+      new Notice(
+        withBlocksFollowUpNotice(
+          dependencyPomodoroNotice(plan, folded.removed || 0, false) ||
+            (plan && plan.notice),
+          (plan && plan.blocksFailedPaths) || [],
+        ),
+      );
+    } else if (
+      !showNotice &&
+      !pendingCrossFile &&
+      (folded.removed || 0) > 0
+    ) {
+      const foldedSuffix = dependencyPomodoroNoticeSuffix(
+        folded.removed || 0,
+        false,
+      );
+      if (foldedSuffix) {
+        new Notice(
+          `${(plan && plan.notice) || "⛓ Dependencies updated"}${foldedSuffix}`,
+        );
+      }
+    }
+    if (
+      !(plan && plan.changed) ||
+      (typeof this.applySubtreePassForPrjEdit !== "function" &&
+        !pendingCrossFile)
+    ) {
+      return;
+    }
+    try {
+      const cascade =
+        typeof this.applySubtreePassForPrjEdit === "function"
+          ? this.applySubtreePassForPrjEdit(
+              filePath,
+              beforeContent,
+              committedContent,
+              { files: { [filePath]: beforeContent } },
+            )
+          : null;
+      const cleanup =
+        pendingCrossFile && typeof this.runSubtreePomodoroCleanup === "function"
+          ? this.runSubtreePomodoroCleanup(
+              targets,
+              filePath,
+              committedContent,
+              today,
+            )
+          : null;
+      const finish = (subtree, pomodoroDone) => {
+        if (
+          subtree &&
+          subtree.pomodoroTargets &&
+          subtree.pomodoroTargets.length > 0 &&
+          typeof this.runSubtreePomodoroCleanup === "function"
+        ) {
+          this.runSubtreePomodoroCleanup(
+            subtree.pomodoroTargets,
+            filePath,
+            committedContent,
+            today,
+          );
+        }
+        if (pendingCrossFile) {
+          if (showNotice) {
+            new Notice(
+              withBlocksFollowUpNotice(
+                withSubtreePassNotice(
+                  dependencyPomodoroNotice(
+                    plan,
+                    pomodoroDone.removed,
+                    pomodoroDone.failed,
+                  ) || (plan && plan.notice),
+                  subtree,
+                ),
+                (plan && plan.blocksFailedPaths) || [],
+              ),
+            );
+          } else if (pomodoroDone.removed > 0 || pomodoroDone.failed) {
+            const suffix = dependencyPomodoroNoticeSuffix(
+              pomodoroDone.removed,
+              pomodoroDone.failed,
+            );
+            if (suffix) {
+              new Notice(
+                `${(plan && plan.notice) || "⛓ Dependencies updated"}${suffix}`,
+              );
+            }
+          }
+          return;
+        }
+        const suffix = subtree ? subtreePassNoticeSuffix(subtree) : "";
+        if (suffix && showNotice) {
+          new Notice(suffix);
+        }
+      };
+      const wait = Promise.all([
+        cascade && typeof cascade.then === "function"
+          ? cascade.catch(() => null)
+          : Promise.resolve(cascade),
+        cleanup && typeof cleanup.then === "function"
+          ? cleanup.catch(() => ({
+              removed: folded.removed || 0,
+              failed: true,
+            }))
+          : Promise.resolve(
+              cleanup || {
+                removed: folded.removed || 0,
+                failed: false,
+              },
+            ),
+      ]);
+      wait.then(
+        ([subtree, pomodoroDone]) => {
+          try {
+            finish(subtree, {
+              removed:
+                (pomodoroDone && pomodoroDone.removed) || folded.removed || 0,
+              failed: Boolean(pomodoroDone && pomodoroDone.failed),
+            });
+          } catch (_error) {
+            // The cascade never fails the gesture.
+          }
+        },
+        () => {},
+      );
+    } catch (_error) {
+      // The cascade never fails the gesture.
+    }
+  }
 }

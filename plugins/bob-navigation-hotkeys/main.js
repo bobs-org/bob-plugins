@@ -6826,12 +6826,22 @@ function planDependencyEdit(args = {}) {
     today: args.recovery && args.recovery.today,
   });
   const nextContent = blocksPlan.nextContent;
+  const parentBlockId = getTrailingBlockId(String(lines[parentIndex] || ""));
   const summary = Object.freeze({
     added: addedCount,
     removed: removedCount,
     openRemaining,
     blockedAfter: getObsidianTaskCheckboxStatus(parentText) === "?",
     recoveredOutcome,
+    pomodoroTargets: Object.freeze(
+      !projectPrj &&
+        !mirrorTouch &&
+        addedOpen.length > 0 &&
+        getObsidianTaskCheckboxStatus(parentText) === "?" &&
+        parentBlockId
+        ? [Object.freeze({ path: parentPath, blockId: parentBlockId })]
+        : [],
+    ),
     project: summarizeProjectDependencyEdit(projectPrj, {
       lines,
       parentIndex,
@@ -21857,12 +21867,10 @@ function formatProjectDependencyNotice(details = {}) {
   });
   const withSubtree = (text) =>
     subtreeSuffix ? `${text} ${subtreeSuffix}` : text;
-  const pomodoroSuffix =
-    pomodoroRemoved !== null && pomodoroRemoved > 0
-      ? ` · removed ${formatCountLabel(pomodoroRemoved, "Pomodoro link")}`
-      : pomodoroPruneFailed
-        ? "; Pomodoro links not removed"
-        : "";
+  const pomodoroSuffix = dependencyPomodoroNoticeSuffix(
+    pomodoroRemoved,
+    pomodoroPruneFailed,
+  );
   if (added > 0 && blocked > 0 && firstAdded) {
     return withSubtree(
       `⛓ Project waits on "${firstAdded}" · ${formatCountLabel(blocked, "task")} Blocked${pomodoroSuffix}`,
@@ -22192,34 +22200,160 @@ function summarizeProjectDependencyEdit(projectPrj, details = {}) {
   });
 }
 
-// Plan the Pomodoro-link consumption for a project edit. Returns
+// Deduplicated `{path, blockId}` union of an ordinary dependent's
+// consumption targets and a `^prj` project's (callers that append subtree
+// targets onto `summary.project.pomodoroTargets` stay in the union).
+function dependencyPlanPomodoroTargets(plan) {
+  const seen = new Set();
+  const targets = [];
+  const lists = [
+    plan && plan.summary ? plan.summary.pomodoroTargets : null,
+    plan && plan.summary && plan.summary.project
+      ? plan.summary.project.pomodoroTargets
+      : null,
+  ];
+  for (const list of lists) {
+    for (const target of Array.isArray(list) ? list : []) {
+      const path = normalizeVaultRelativePath(target && target.path);
+      const blockId = normalizeBulletPropertyValue(target && target.blockId);
+      if (!path || !blockId) {
+        continue;
+      }
+      const key = `${path}\0${blockId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      targets.push(Object.freeze({ path, blockId }));
+    }
+  }
+  return Object.freeze(targets);
+}
+
+function collectDependencyPlanPomodoroTargets(plans) {
+  const seen = new Set();
+  const targets = [];
+  for (const plan of Array.isArray(plans) ? plans : []) {
+    for (const target of dependencyPlanPomodoroTargets(plan)) {
+      const key = `${target.path}\0${target.blockId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      targets.push(target);
+    }
+  }
+  return Object.freeze(targets);
+}
+
+function dependencyPomodoroNoticeSuffix(removed, failed) {
+  const count = Math.max(0, Math.floor(numericOrDefault(removed, 0)));
+  if (count > 0) {
+    return ` · removed ${formatCountLabel(count, "Pomodoro link")}`;
+  }
+  if (failed) {
+    return "; Pomodoro links not removed";
+  }
+  return "";
+}
+
+// Synchronous same-file fold for writers that must stay boolean-sync.
+// `hasDaily` is true when today's daily note exists, even when it is a
+// different file (the caller then runs the follow-up write).
+function foldSameNotePomodoroCleanup(
+  nextContent,
+  targets,
+  parentPath,
+  today,
+  markdownFiles,
+) {
+  const content = String(nextContent || "");
+  const empty = Object.freeze({
+    content,
+    removed: 0,
+    sameFile: false,
+    hasDaily: false,
+  });
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return empty;
+  }
+  const files = Array.isArray(markdownFiles) ? markdownFiles : [];
+  let dailyPath = null;
+  try {
+    dailyPath = scheduledRecoveryDailyPaths(files, today).current;
+  } catch (_error) {
+    dailyPath = null;
+  }
+  if (!dailyPath) {
+    return empty;
+  }
+  if (dailyPath !== normalizeVaultRelativePath(parentPath)) {
+    return Object.freeze({
+      content,
+      removed: 0,
+      sameFile: false,
+      hasDaily: true,
+    });
+  }
+  const noteIndex = createScheduledRecoveryNoteIndex(
+    files.map((file) => ({
+      path: normalizeVaultRelativePath(
+        file && typeof file === "object" ? file.path : file,
+      ),
+    })),
+  );
+  let cleanup = null;
+  try {
+    cleanup = planDeferredPomodoroLinkCleanup(content, targets, {
+      dailyPath,
+      noteIndex,
+      removeEmptiedEntries: true,
+    });
+  } catch (_error) {
+    cleanup = null;
+  }
+  if (!cleanup || !cleanup.changed) {
+    return Object.freeze({
+      content,
+      removed: 0,
+      sameFile: true,
+      hasDaily: true,
+    });
+  }
+  return Object.freeze({
+    content: cleanup.content,
+    removed: cleanup.removedLinkCount,
+    sameFile: true,
+    hasDaily: true,
+  });
+}
+
+// Plan Pomodoro-link consumption from an explicit target list. Returns
 // `{commitContent, snapshot, cleanup}`: the dependent note's content to
 // commit (with the same-file cleanup folded in), plus the daily snapshot
 // and cleanup for the writer's follow-up write. Never throws.
-async function prepareProjectPomodoroCleanup(
+async function prepareDependencyPomodoroCleanup(
   readSnapshot,
-  plan,
+  targets,
   parentPath,
-  content,
+  beforeContent,
+  nextContent,
   today,
 ) {
   const empty = Object.freeze({
-    commitContent: plan.nextContent,
+    commitContent: nextContent,
     snapshot: null,
     cleanup: null,
   });
-  const targets =
-    plan && plan.summary && plan.summary.project
-      ? plan.summary.project.pomodoroTargets || []
-      : [];
-  if (targets.length === 0 || typeof readSnapshot !== "function") {
+  const list = Array.isArray(targets) ? targets : [];
+  if (list.length === 0 || typeof readSnapshot !== "function") {
     return empty;
   }
   let snapshot = null;
   try {
     snapshot = await readSnapshot({
       sourcePath: parentPath,
-      sourceContent: content,
+      sourceContent: beforeContent,
       today,
     });
   } catch (_snapshotError) {
@@ -22231,8 +22365,8 @@ async function prepareProjectPomodoroCleanup(
   let cleanup = null;
   try {
     cleanup = planDeferredPomodoroLinkCleanup(
-      snapshot.sameFile ? plan.nextContent : snapshot.content,
-      targets,
+      snapshot.sameFile ? nextContent : snapshot.content,
+      list,
       {
         dailyPath: snapshot.dailyPath,
         noteIndex: snapshot.noteIndex,
@@ -22244,7 +22378,7 @@ async function prepareProjectPomodoroCleanup(
   }
   if (!cleanup || !cleanup.changed) {
     return Object.freeze({
-      commitContent: plan.nextContent,
+      commitContent: nextContent,
       snapshot,
       cleanup: null,
     });
@@ -22256,7 +22390,28 @@ async function prepareProjectPomodoroCleanup(
       cleanup,
     });
   }
-  return Object.freeze({ commitContent: plan.nextContent, snapshot, cleanup });
+  return Object.freeze({ commitContent: nextContent, snapshot, cleanup });
+}
+
+// Plan the Pomodoro-link consumption for a dependency edit. Returns
+// `{commitContent, snapshot, cleanup}`: the dependent note's content to
+// commit (with the same-file cleanup folded in), plus the daily snapshot
+// and cleanup for the writer's follow-up write. Never throws.
+async function prepareProjectPomodoroCleanup(
+  readSnapshot,
+  plan,
+  parentPath,
+  content,
+  today,
+) {
+  return prepareDependencyPomodoroCleanup(
+    readSnapshot,
+    dependencyPlanPomodoroTargets(plan),
+    parentPath,
+    content,
+    plan.nextContent,
+    today,
+  );
 }
 
 // Complete the cross-note daily cleanup after the dependent's own write.
@@ -22301,14 +22456,25 @@ function projectPomodoroNotice(plan, removed, failed) {
   if (rebuilt) {
     return rebuilt;
   }
-  if (removed > 0 || failed) {
-    const suffix =
-      removed > 0
-        ? ` · removed ${formatCountLabel(removed, "Pomodoro link")}`
-        : "; Pomodoro links not removed";
+  const suffix = dependencyPomodoroNoticeSuffix(removed, failed);
+  if (suffix) {
     return `${plan.notice || "⛓ Dependencies updated"}${suffix}`;
   }
   return null;
+}
+
+// Project notice when residents flipped, else the ordinary notice plus
+// the Pomodoro suffix when links were removed or the follow-up failed.
+function dependencyPomodoroNotice(plan, removed, failed) {
+  const projectNotice = projectPomodoroNotice(plan, removed, failed);
+  if (projectNotice) {
+    return projectNotice;
+  }
+  const suffix = dependencyPomodoroNoticeSuffix(removed, failed);
+  if (!suffix) {
+    return null;
+  }
+  return `${(plan && plan.notice) || "⛓ Dependencies updated"}${suffix}`;
 }
 
 // Contract §6.7 notices for one dependency gesture.
@@ -24389,6 +24555,176 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       content,
       propertyContext,
     });
+  }
+
+  foldLocalDependencyPomodoroCleanup(nextContent, targets, parentPath, today) {
+    let markdownFiles = [];
+    try {
+      markdownFiles =
+        this.app &&
+        this.app.vault &&
+        typeof this.app.vault.getMarkdownFiles === "function"
+          ? this.app.vault.getMarkdownFiles() || []
+          : [];
+    } catch (_error) {
+      markdownFiles = [];
+    }
+    return foldSameNotePomodoroCleanup(
+      nextContent,
+      targets,
+      parentPath,
+      today instanceof Date ? today : new Date(),
+      markdownFiles,
+    );
+  }
+
+  continueLocalTaskDependencyFollowUps(args = {}) {
+    const plan = args.plan;
+    const filePath = normalizeVaultRelativePath(args.filePath);
+    const beforeContent = String(args.beforeContent || "");
+    const committedContent = String(args.committedContent || "");
+    const targets = Array.isArray(args.targets) ? args.targets : [];
+    const folded = args.folded || {
+      sameFile: false,
+      hasDaily: false,
+      removed: 0,
+    };
+    const showNotice = args.showNotice !== false;
+    const today = args.today instanceof Date ? args.today : new Date();
+    const pendingCrossFile =
+      Boolean(plan && plan.changed) &&
+      targets.length > 0 &&
+      folded.hasDaily === true &&
+      folded.sameFile !== true;
+    if (showNotice && !pendingCrossFile) {
+      new Notice(
+        withBlocksFollowUpNotice(
+          dependencyPomodoroNotice(plan, folded.removed || 0, false) ||
+            (plan && plan.notice),
+          (plan && plan.blocksFailedPaths) || [],
+        ),
+      );
+    } else if (
+      !showNotice &&
+      !pendingCrossFile &&
+      (folded.removed || 0) > 0
+    ) {
+      const foldedSuffix = dependencyPomodoroNoticeSuffix(
+        folded.removed || 0,
+        false,
+      );
+      if (foldedSuffix) {
+        new Notice(
+          `${(plan && plan.notice) || "⛓ Dependencies updated"}${foldedSuffix}`,
+        );
+      }
+    }
+    if (
+      !(plan && plan.changed) ||
+      (typeof this.applySubtreePassForPrjEdit !== "function" &&
+        !pendingCrossFile)
+    ) {
+      return;
+    }
+    try {
+      const cascade =
+        typeof this.applySubtreePassForPrjEdit === "function"
+          ? this.applySubtreePassForPrjEdit(
+              filePath,
+              beforeContent,
+              committedContent,
+              { files: { [filePath]: beforeContent } },
+            )
+          : null;
+      const cleanup =
+        pendingCrossFile && typeof this.runSubtreePomodoroCleanup === "function"
+          ? this.runSubtreePomodoroCleanup(
+              targets,
+              filePath,
+              committedContent,
+              today,
+            )
+          : null;
+      const finish = (subtree, pomodoroDone) => {
+        if (
+          subtree &&
+          subtree.pomodoroTargets &&
+          subtree.pomodoroTargets.length > 0 &&
+          typeof this.runSubtreePomodoroCleanup === "function"
+        ) {
+          this.runSubtreePomodoroCleanup(
+            subtree.pomodoroTargets,
+            filePath,
+            committedContent,
+            today,
+          );
+        }
+        if (pendingCrossFile) {
+          if (showNotice) {
+            new Notice(
+              withBlocksFollowUpNotice(
+                withSubtreePassNotice(
+                  dependencyPomodoroNotice(
+                    plan,
+                    pomodoroDone.removed,
+                    pomodoroDone.failed,
+                  ) || (plan && plan.notice),
+                  subtree,
+                ),
+                (plan && plan.blocksFailedPaths) || [],
+              ),
+            );
+          } else if (pomodoroDone.removed > 0 || pomodoroDone.failed) {
+            const suffix = dependencyPomodoroNoticeSuffix(
+              pomodoroDone.removed,
+              pomodoroDone.failed,
+            );
+            if (suffix) {
+              new Notice(
+                `${(plan && plan.notice) || "⛓ Dependencies updated"}${suffix}`,
+              );
+            }
+          }
+          return;
+        }
+        const suffix = subtree ? subtreePassNoticeSuffix(subtree) : "";
+        if (suffix && showNotice) {
+          new Notice(suffix);
+        }
+      };
+      const wait = Promise.all([
+        cascade && typeof cascade.then === "function"
+          ? cascade.catch(() => null)
+          : Promise.resolve(cascade),
+        cleanup && typeof cleanup.then === "function"
+          ? cleanup.catch(() => ({
+              removed: folded.removed || 0,
+              failed: true,
+            }))
+          : Promise.resolve(
+              cleanup || {
+                removed: folded.removed || 0,
+                failed: false,
+              },
+            ),
+      ]);
+      wait.then(
+        ([subtree, pomodoroDone]) => {
+          try {
+            finish(subtree, {
+              removed:
+                (pomodoroDone && pomodoroDone.removed) || folded.removed || 0,
+              failed: Boolean(pomodoroDone && pomodoroDone.failed),
+            });
+          } catch (_error) {
+            // The cascade never fails the gesture.
+          }
+        },
+        () => {},
+      );
+    } catch (_error) {
+      // The cascade never fails the gesture.
+    }
   }
 }
 // ---- src/220-property-targets.js ----
@@ -29759,6 +30095,7 @@ function planCountedLocalTaskDependency(
   let navigationChangedCount = 0;
   const sourceResults = [];
   const blocksFollowUps = [];
+  const parentPlans = [];
   const orderedTargets = session.targets
     .slice()
     .sort((first, second) => second.line - first.line);
@@ -29827,6 +30164,7 @@ function planCountedLocalTaskDependency(
     if (Array.isArray(parentPlan.blocksFollowUps)) {
       blocksFollowUps.push(...parentPlan.blocksFollowUps);
     }
+    parentPlans.push(parentPlan);
     sourceResults.push({
       target,
       dependencyChanged: parentChanged,
@@ -29854,6 +30192,7 @@ function planCountedLocalTaskDependency(
     navigationChangedCount,
     cursorLine: session.targets[0].line,
     blocksFollowUps: Object.freeze(blocksFollowUps),
+    pomodoroTargets: collectDependencyPlanPomodoroTargets(parentPlans),
   });
 }
 
@@ -40555,6 +40894,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let changedSources = 0;
     const preparations = new Map();
     const blocksFollowUps = [];
+    const countedPomodoroPlans = [];
     const vaultFiles =
       this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
         ? this.plugin.readDependencyVaultFileList()
@@ -40643,6 +40983,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         );
         return false;
       }
+      countedPomodoroPlans.push(plan);
       for (const preparation of plan.preparations || []) {
         const key = `${preparation.path}\x00${preparation.line}\x00${preparation.from}\x00${preparation.text}`;
         if (!preparations.has(key)) {
@@ -40682,6 +41023,18 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (String(this.editor.getValue() || "") !== originalContent) {
       return this.refuseDependencyStale();
     }
+    let vaultPomodoroPrep = null;
+    vaultPomodoroPrep = await prepareDependencyPomodoroCleanup(
+      this.plugin && typeof this.plugin.readDeferredPomodoroSnapshot === "function"
+        ? (opts) => this.plugin.readDeferredPomodoroSnapshot(this.plugin.app, opts)
+        : null,
+      collectDependencyPlanPomodoroTargets(countedPomodoroPlans),
+      ownerPath,
+      originalContent,
+      working,
+      new Date(),
+    );
+    working = vaultPomodoroPrep.commitContent;
     if (
       !applyEditorContentTransaction(this.editor, originalContent, working, null, BLOCKS_MACHINE_WRITE_ANNOTATION)
     ) {
@@ -40689,6 +41042,14 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       return false;
     }
     const applied = changedSources;
+    const vaultPomodoroDone = await finishProjectPomodoroCleanup(
+      this.plugin && typeof this.plugin.writeDeferredPomodoroCleanup === "function"
+        ? (snapshot, cleanup) =>
+            this.plugin.writeDeferredPomodoroCleanup(snapshot, cleanup)
+        : null,
+      vaultPomodoroPrep.snapshot,
+      vaultPomodoroPrep.cleanup,
+    );
     // §13.19: descendants land after the counted commit; a stale one is
     // skipped and counted, never rolled back.
     let vaultCountedSubtree = null;
@@ -40717,7 +41078,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         snapshot.remove
           ? `⛓ Removed from ${applied} task${applied === 1 ? "" : "s"}`
           : `⛓ Linked ${applied} task${applied === 1 ? "" : "s"}`
-      }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}`,
+      }${vaultCountedSuffix ? ` ${vaultCountedSuffix}` : ""}${dependencyPomodoroNoticeSuffix(vaultPomodoroDone.removed, vaultPomodoroDone.failed)}`,
     );
     return true;
   }
@@ -41618,7 +41979,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
     );
 
     const skipped = skippedStale + skippedOther;
-    const batchProjectNotice = projectPomodoroNotice(
+    const batchProjectNotice = dependencyPomodoroNotice(
       batchPlan,
       batchPomodoroRemoved,
       batchPomodoroPruneFailed,
@@ -55831,11 +56192,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       resolveLinkpath: this.dependencyLinkpathResolver(),
       blocksLinesEnabled: loadBlocksLinesEnabled(),
     };
-    // The toggle direction comes from the pure planner: adds never recover
-    // (contract), so the vault snapshot is only read when the toggle will
-    // remove from a `[?]` source. The preview below is valid exactly when
-    // the final plan is (recovery never changes validity or direction), so
-    // an invalid toggle reads nothing.
+    // Adds never recover, so the vault snapshot is only for `[?]` removals.
     const preview = planCountedLocalTaskDependency(
       writeContext.content,
       session,
@@ -55871,10 +56228,9 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       new Notice(`${plan.error}${suffix}`);
       return false;
     }
-    // §13.19: counted batches process `^prj` roots ancestor-first and plan
-    // each descendant note once. Lanes ride a re-plan below; descendants
-    // land after the commit.
+    // §13.19: counted `^prj` roots; descendants land after the commit.
     let countedSubtreePrep = null;
+    let countedPomodoroPrep = null;
     if (plan.changed) {
       countedSubtreePrep = await this.prepareSubtreeForDependencyPlan(
         normalizedPath,
@@ -55905,30 +56261,34 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           plan = relaned;
         }
       }
+      countedPomodoroPrep = await prepareDependencyPomodoroCleanup(
+        (opts) => this.readDeferredPomodoroSnapshot(this.app, opts),
+        plan.pomodoroTargets || [],
+        normalizedPath, writeContext.content, plan.content, new Date(),
+      );
+      plan = { ...plan, content: countedPomodoroPrep.commitContent };
     }
     const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
     try {
       if (
         plan.changed &&
-        !applyEditorContentTransaction(
-          cm,
-          writeContext.content,
-          plan.content,
-          {
-            line: plan.cursorLine,
-            ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
-          },
-          BLOCKS_MACHINE_WRITE_ANNOTATION,
-        )
+        !applyEditorContentTransaction(cm, writeContext.content, plan.content, {
+          line: plan.cursorLine,
+          ch: Math.min(Math.max(cursor.ch, 0), finalLine.length),
+        }, BLOCKS_MACHINE_WRITE_ANNOTATION)
       ) {
-        throw new Error("Editor cannot apply a counted dependency transaction");
+        throw new Error("counted-dependency-transaction");
       }
-    } catch (error) {
+    } catch (_error) {
       new Notice("Could not update counted dependencies; no tasks were updated");
       return false;
     }
-    // §13.19: descendants land after the dependent's own write; a stale one
-    // is skipped and counted, never rolled back.
+    const countedPomodoroDone = countedPomodoroPrep
+      ? await finishProjectPomodoroCleanup(
+          (snapshot, cleanup) => this.writeDeferredPomodoroCleanup(snapshot, cleanup),
+          countedPomodoroPrep.snapshot, countedPomodoroPrep.cleanup,
+        )
+      : { removed: 0, failed: false };
     let countedSubtree = null;
     if (plan.changed && typeof this.applySubtreePassesForRoots === "function") {
       try {
@@ -55968,7 +56328,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         plan.operation === "remove" ? "from" : "to"
       } ${formatCountLabel(plan.targetCount, "task")}${identity}${
         this.getCountedTaskNoticeSuffix(session, plan.unchangedTaskCount)
-      }${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}`,
+      }${countedSubtreeSuffix ? ` ${countedSubtreeSuffix}` : ""}${dependencyPomodoroNoticeSuffix(countedPomodoroDone.removed, countedPomodoroDone.failed)}`,
     );
     return true;
   }
@@ -56957,17 +57317,17 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             pomodoroPrep.cleanup,
           )
         : { removed: 0, failed: false };
-      const projectNotice = projectPomodoroNotice(
+      const pomodoroNotice = dependencyPomodoroNotice(
         plan,
         pomodoroDone.removed,
         pomodoroDone.failed,
       );
-      if (projectNotice) {
+      if (pomodoroNotice) {
         return Object.freeze({
           ok: true,
           reason: null,
           notice: withBlocksFollowUpNotice(
-            withSubtreePassNotice(projectNotice, outcome.subtree),
+            withSubtreePassNotice(pomodoroNotice, outcome.subtree),
             blocksFailedPaths,
           ),
           subtree: outcome.subtree || null,
@@ -58287,7 +58647,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       new Notice(dependencyPlanFailureNotice(plan.reason, "add"));
       return false;
     }
-    let nextContent = plan.nextContent;
+    const today = new Date();
+    const pomodoroTargets = dependencyPlanPomodoroTargets(plan);
+    const folded = this.foldLocalDependencyPomodoroCleanup(
+      plan.nextContent,
+      pomodoroTargets,
+      filePath,
+      today,
+    );
+    let nextContent = folded.content;
     if (plan.changed) {
       nextContent = this.stampDependencyParentLine(
         nextContent,
@@ -58305,54 +58673,17 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (typeof this.applyBlocksFollowUps === "function") {
       void this.applyBlocksFollowUps(plan.blocksFollowUps || []);
     }
-    // §13.19: the Task Link variant bypasses the shared transaction (this
-    // method stays synchronous for its boolean callers), so the subtree
-    // pass follows in a guarded continuation after the commit above. N's
-    // write stands; a stale descendant is skipped and reported (PDG14).
-    if (plan.changed && typeof this.applySubtreePassForPrjEdit === "function") {
-      try {
-        const committedContent =
-          String(cm.getValue ? cm.getValue() : nextContent) || nextContent;
-        const cascade = this.applySubtreePassForPrjEdit(
-          filePath,
-          content,
-          committedContent,
-          { files: { [filePath]: content } },
-        );
-        if (cascade && typeof cascade.then === "function") {
-          cascade.then(
-            (taskLinkSubtree) => {
-              try {
-                if (
-                  taskLinkSubtree &&
-                  taskLinkSubtree.pomodoroTargets &&
-                  taskLinkSubtree.pomodoroTargets.length > 0 &&
-                  typeof this.runSubtreePomodoroCleanup === "function"
-                ) {
-                  this.runSubtreePomodoroCleanup(
-                    taskLinkSubtree.pomodoroTargets,
-                    filePath,
-                    committedContent,
-                    new Date(),
-                  );
-                }
-                const suffix = taskLinkSubtree
-                  ? subtreePassNoticeSuffix(taskLinkSubtree)
-                  : "";
-                if (suffix && options.showNotice !== false) {
-                  new Notice(suffix);
-                }
-              } catch (_error) {
-                // The cascade never fails the gesture.
-              }
-            },
-            () => {},
-          );
-        }
-      } catch (_error) {
-        // The cascade never fails the gesture.
-      }
-    }
+    this.continueLocalTaskDependencyFollowUps({
+      plan,
+      filePath,
+      beforeContent: content,
+      committedContent:
+        String(cm.getValue ? cm.getValue() : nextContent) || nextContent,
+      targets: pomodoroTargets,
+      folded,
+      showNotice: options.showNotice,
+      today,
+    });
     const nextLines = nextContent.split(/\r?\n/);
     setEditorCursorSafely(
       cm,
@@ -58362,9 +58693,6 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         String(nextLines[cursor.line] || "").length,
       ),
     );
-    if (options.showNotice !== false) {
-      new Notice(withBlocksFollowUpNotice(plan.notice, plan.blocksFailedPaths || []));
-    }
     return true;
   }
 
@@ -67898,9 +68226,15 @@ module.exports.helpers = {
   shouldRecoverProjectResidents,
   recoverProjectResidents,
   summarizeProjectDependencyEdit,
+  dependencyPlanPomodoroTargets,
+  collectDependencyPlanPomodoroTargets,
+  dependencyPomodoroNoticeSuffix,
+  foldSameNotePomodoroCleanup,
+  prepareDependencyPomodoroCleanup,
   prepareProjectPomodoroCleanup,
   finishProjectPomodoroCleanup,
   projectPomodoroNotice,
+  dependencyPomodoroNotice,
   mapLineThroughStructural,
   getProjectPrjDependencyResidents,
   isProjectPrjDependencyParent,

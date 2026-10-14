@@ -628,17 +628,17 @@ class BobNavigationHotkeysPropertyDependencyMixin {
             pomodoroPrep.cleanup,
           )
         : { removed: 0, failed: false };
-      const projectNotice = projectPomodoroNotice(
+      const pomodoroNotice = dependencyPomodoroNotice(
         plan,
         pomodoroDone.removed,
         pomodoroDone.failed,
       );
-      if (projectNotice) {
+      if (pomodoroNotice) {
         return Object.freeze({
           ok: true,
           reason: null,
           notice: withBlocksFollowUpNotice(
-            withSubtreePassNotice(projectNotice, outcome.subtree),
+            withSubtreePassNotice(pomodoroNotice, outcome.subtree),
             blocksFailedPaths,
           ),
           subtree: outcome.subtree || null,

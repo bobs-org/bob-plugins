@@ -134,7 +134,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       new Notice(dependencyPlanFailureNotice(plan.reason, "add"));
       return false;
     }
-    let nextContent = plan.nextContent;
+    const today = new Date();
+    const pomodoroTargets = dependencyPlanPomodoroTargets(plan);
+    const folded = this.foldLocalDependencyPomodoroCleanup(
+      plan.nextContent,
+      pomodoroTargets,
+      filePath,
+      today,
+    );
+    let nextContent = folded.content;
     if (plan.changed) {
       nextContent = this.stampDependencyParentLine(
         nextContent,
@@ -152,54 +160,17 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (typeof this.applyBlocksFollowUps === "function") {
       void this.applyBlocksFollowUps(plan.blocksFollowUps || []);
     }
-    // §13.19: the Task Link variant bypasses the shared transaction (this
-    // method stays synchronous for its boolean callers), so the subtree
-    // pass follows in a guarded continuation after the commit above. N's
-    // write stands; a stale descendant is skipped and reported (PDG14).
-    if (plan.changed && typeof this.applySubtreePassForPrjEdit === "function") {
-      try {
-        const committedContent =
-          String(cm.getValue ? cm.getValue() : nextContent) || nextContent;
-        const cascade = this.applySubtreePassForPrjEdit(
-          filePath,
-          content,
-          committedContent,
-          { files: { [filePath]: content } },
-        );
-        if (cascade && typeof cascade.then === "function") {
-          cascade.then(
-            (taskLinkSubtree) => {
-              try {
-                if (
-                  taskLinkSubtree &&
-                  taskLinkSubtree.pomodoroTargets &&
-                  taskLinkSubtree.pomodoroTargets.length > 0 &&
-                  typeof this.runSubtreePomodoroCleanup === "function"
-                ) {
-                  this.runSubtreePomodoroCleanup(
-                    taskLinkSubtree.pomodoroTargets,
-                    filePath,
-                    committedContent,
-                    new Date(),
-                  );
-                }
-                const suffix = taskLinkSubtree
-                  ? subtreePassNoticeSuffix(taskLinkSubtree)
-                  : "";
-                if (suffix && options.showNotice !== false) {
-                  new Notice(suffix);
-                }
-              } catch (_error) {
-                // The cascade never fails the gesture.
-              }
-            },
-            () => {},
-          );
-        }
-      } catch (_error) {
-        // The cascade never fails the gesture.
-      }
-    }
+    this.continueLocalTaskDependencyFollowUps({
+      plan,
+      filePath,
+      beforeContent: content,
+      committedContent:
+        String(cm.getValue ? cm.getValue() : nextContent) || nextContent,
+      targets: pomodoroTargets,
+      folded,
+      showNotice: options.showNotice,
+      today,
+    });
     const nextLines = nextContent.split(/\r?\n/);
     setEditorCursorSafely(
       cm,
@@ -209,9 +180,6 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         String(nextLines[cursor.line] || "").length,
       ),
     );
-    if (options.showNotice !== false) {
-      new Notice(withBlocksFollowUpNotice(plan.notice, plan.blocksFailedPaths || []));
-    }
     return true;
   }
 

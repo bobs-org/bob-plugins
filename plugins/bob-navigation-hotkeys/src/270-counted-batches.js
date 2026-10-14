@@ -185,6 +185,7 @@ function planCountedLocalTaskDependency(
   let navigationChangedCount = 0;
   const sourceResults = [];
   const blocksFollowUps = [];
+  const parentPlans = [];
   const orderedTargets = session.targets
     .slice()
     .sort((first, second) => second.line - first.line);
@@ -253,6 +254,7 @@ function planCountedLocalTaskDependency(
     if (Array.isArray(parentPlan.blocksFollowUps)) {
       blocksFollowUps.push(...parentPlan.blocksFollowUps);
     }
+    parentPlans.push(parentPlan);
     sourceResults.push({
       target,
       dependencyChanged: parentChanged,
@@ -280,6 +282,7 @@ function planCountedLocalTaskDependency(
     navigationChangedCount,
     cursorLine: session.targets[0].line,
     blocksFollowUps: Object.freeze(blocksFollowUps),
+    pomodoroTargets: collectDependencyPlanPomodoroTargets(parentPlans),
   });
 }
 

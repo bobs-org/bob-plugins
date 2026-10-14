@@ -411,9 +411,13 @@ class DemotionSectionPickerModal extends Modal {
     const headerIcon = header.createDiv({ cls: "tsc-sdp-header-icon" });
     applyIcon(headerIcon, "list-tree");
     const headerText = header.createDiv({ cls: "tsc-sdp-header-text" });
+    const plan = this.snapshot && this.snapshot.plan;
+    const multipleItems = plan && plan.itemCount > 1;
     headerText.createDiv({
       cls: "tsc-sdp-title",
-      text: DEMOTION_PICKER_TITLE,
+      text: multipleItems
+        ? `Move ${plan.itemCount} bullets to section`
+        : DEMOTION_PICKER_TITLE,
     });
     headerText.createDiv({
       cls: "tsc-sdp-subtitle",
@@ -425,10 +429,20 @@ class DemotionSectionPickerModal extends Modal {
       cls: "tsc-sdp-preview-label",
       text: "Moving",
     });
-    this.previewEl = preview.createDiv({ cls: "tsc-sdp-preview-text" });
-    this.previewEl.textContent =
-      (this.snapshot && this.snapshot.plan && this.snapshot.plan.previewText) ||
-      "";
+    if (multipleItems) {
+      for (const text of plan.previewLines.slice(0, 5)) {
+        preview.createDiv({ cls: "tsc-sdp-preview-text", text });
+      }
+      if (plan.previewLines.length > 5) {
+        preview.createDiv({
+          cls: "tsc-sdp-preview-text",
+          text: `+${plan.previewLines.length - 5} more`,
+        });
+      }
+    } else {
+      this.previewEl = preview.createDiv({ cls: "tsc-sdp-preview-text" });
+      this.previewEl.textContent = (plan && plan.previewText) || "";
+    }
 
     const searchEl = contentEl.createDiv({ cls: "tsc-sdp-search" });
     const searchIcon = searchEl.createDiv({ cls: "tsc-sdp-search-icon" });

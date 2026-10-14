@@ -202,19 +202,23 @@ function getVimRepeat(actionArgs) {
   return normalizeVimRepeat(actionArgs && actionArgs.repeat);
 }
 
-function getPomodoroMoveOnlyAdditionalLines(actionArgs) {
+function getExplicitVimAdditionalCount(actionArgs) {
   if (!actionArgs) {
     return 0;
   }
 
   // CodeMirror Vim supplies repeat=1 even when no count was typed. Its
-  // repeatIsExplicit flag is what distinguishes bare `#` (the cursor line
-  // only) from `1#` (the cursor line and one additional physical line).
+  // repeatIsExplicit flag distinguishes a bare key (the cursor item only)
+  // from an explicit count (that many additional items or lines).
   const repeatIsExplicit =
     typeof actionArgs.repeatIsExplicit === "boolean"
       ? actionArgs.repeatIsExplicit
       : actionArgs.repeat !== undefined && actionArgs.repeat !== null;
   return repeatIsExplicit ? getVimRepeat(actionArgs) : 0;
+}
+
+function getPomodoroMoveOnlyAdditionalLines(actionArgs) {
+  return getExplicitVimAdditionalCount(actionArgs);
 }
 
 function getPendingVimRepeat(cm) {

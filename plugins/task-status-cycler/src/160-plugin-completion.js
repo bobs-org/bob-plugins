@@ -180,7 +180,40 @@ class TaskStatusCyclerCompletionMixin {
       return true;
     }
 
-    return this.toggleActiveObsidianTask(editor, obsidianTaskToggle, view);
+    const additional = this.consumePendingObsidianTaskToggleCount(editor, view);
+    return this.toggleActiveObsidianTask(
+      editor,
+      this.getActiveObsidianTaskToggle(editor, additional),
+      view,
+    );
+  }
+
+  consumePendingObsidianTaskToggleCount(editor, view) {
+    // A hotkeys.json binding wins the keydown before CodeMirror Vim sees the
+    // chord. Consume its pending count here so it is neither dropped nor
+    // leaked into the next Vim command (as with nav's Ctrl+Shift+J/K).
+    const cm = this.resolveNormalModeVimCm(editor, view);
+    if (!cm) {
+      return 0;
+    }
+    const pending = getPendingVimRepeat(cm);
+    if (!pending.explicit) {
+      return 0;
+    }
+    resetPendingVimInputState(cm, "counted-toggle-obsidian-task");
+    return pending.repeat;
+  }
+
+  applyObsidianTaskReplaceLinesPlan(editor, plan) {
+    this.applyDocumentLineReplacement(
+      editor, this.getEditorLineArray(editor), plan.nextLines,
+    );
+    if (typeof editor.setCursor === "function") {
+      const line = Math.max(0, Math.min(plan.cursorLine, plan.nextLines.length - 1));
+      const ch = Math.max(0, Math.min(plan.cursorCh, plan.nextLines[line].length));
+      editor.setCursor({ line, ch });
+    }
+    return true;
   }
 
   toggleActiveCheckboxOpenDone(editor, taskStatus = this.getActiveTaskStatus(editor)) {

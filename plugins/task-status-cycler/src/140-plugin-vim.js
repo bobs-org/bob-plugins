@@ -21,8 +21,8 @@ class TaskStatusCyclerVimMixin {
     vim.defineAction("taskStatusCyclerToggleCheckboxMarker", () =>
       this.handleVimToggleCheckboxMarker(),
     );
-    vim.defineAction("taskStatusCyclerToggleObsidianTask", () =>
-      this.handleVimToggleObsidianTask(),
+    vim.defineAction("taskStatusCyclerToggleObsidianTask", (cm, actionArgs) =>
+      this.handleVimToggleObsidianTask(cm, actionArgs),
     );
     vim.defineAction("taskStatusCyclerOpenLineBelow", (cm) =>
       this.handleVimOpenLineBelow(cm),
@@ -286,13 +286,18 @@ class TaskStatusCyclerVimMixin {
     this.toggleActiveCheckboxMarker(view.editor);
   }
 
-  handleVimToggleObsidianTask() {
+  handleVimToggleObsidianTask(cm, actionArgs) {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view || !view.editor) {
       return;
     }
 
-    this.toggleActiveObsidianTask(view.editor, undefined, view);
+    const additional = getExplicitVimAdditionalCount(actionArgs);
+    this.toggleActiveObsidianTask(
+      view.editor,
+      this.getActiveObsidianTaskToggle(view.editor, additional),
+      view,
+    );
   }
 
   handleVimBackspaceLinkOrFallthrough(cm, actionArgs) {

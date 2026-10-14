@@ -40,6 +40,10 @@ class TaskStatusCyclerEditorEditsMixin {
       return this.applyObsidianTaskMovePlan(editor, plan, view);
     }
 
+    if (plan.mode === "replaceLines") {
+      return this.applyObsidianTaskReplaceLinesPlan(editor, plan);
+    }
+
     return this.applyObsidianTaskReplacePlan(editor, plan);
   }
 
@@ -516,18 +520,19 @@ class TaskStatusCyclerEditorEditsMixin {
     );
   }
 
-  getActiveObsidianTaskToggle(editor) {
+  getActiveObsidianTaskToggle(editor, additionalItems = 0) {
     const cursor = editor.getCursor();
     if (!cursor || typeof cursor.line !== "number") {
       return null;
     }
 
     const lines = this.getEditorLineArray(editor);
-    return getObsidianTaskToggleDocumentPlan(
+    return getObsidianTaskToggleRangeDocumentPlan(
       lines,
       cursor.line,
       cursor.ch,
       this.getCreatedDateString(),
+      additionalItems,
     );
   }
 

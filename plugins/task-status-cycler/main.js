@@ -204,19 +204,23 @@ function getVimRepeat(actionArgs) {
   return normalizeVimRepeat(actionArgs && actionArgs.repeat);
 }
 
-function getPomodoroMoveOnlyAdditionalLines(actionArgs) {
+function getExplicitVimAdditionalCount(actionArgs) {
   if (!actionArgs) {
     return 0;
   }
 
   // CodeMirror Vim supplies repeat=1 even when no count was typed. Its
-  // repeatIsExplicit flag is what distinguishes bare `#` (the cursor line
-  // only) from `1#` (the cursor line and one additional physical line).
+  // repeatIsExplicit flag distinguishes a bare key (the cursor item only)
+  // from an explicit count (that many additional items or lines).
   const repeatIsExplicit =
     typeof actionArgs.repeatIsExplicit === "boolean"
       ? actionArgs.repeatIsExplicit
       : actionArgs.repeat !== undefined && actionArgs.repeat !== null;
   return repeatIsExplicit ? getVimRepeat(actionArgs) : 0;
+}
+
+function getPomodoroMoveOnlyAdditionalLines(actionArgs) {
+  return getExplicitVimAdditionalCount(actionArgs);
 }
 
 function getPendingVimRepeat(cm) {
@@ -1877,10 +1881,12 @@ function removeSourceBlockForTaskPrompt(prompt, destinationHeadingIdentity = nul
   }
 
   const state = createLineRemovalState(prompt.sourceLines);
-  const { splicedSeam } = removeSourceListItemBlockFromState(
-    state,
-    prompt.sourceBlock,
-  );
+  let splicedSeam = false;
+  const sourceBlocks = prompt.sourceBlocks || [prompt.sourceBlock];
+  for (const block of sourceBlocks.slice().reverse()) {
+    const removal = removeSourceListItemBlockFromState(state, block);
+    splicedSeam = removal.splicedSeam || splicedSeam;
+  }
   const removedSourceSection =
     prompt.promptKind === TASK_SECTION_PROMPT_KIND.promotion
       ? removeEmptySourceSectionFromState(
@@ -2075,7 +2081,10 @@ function resolveSameSourceTasksPromotion(prompt) {
   }
 
   const nextLines = prompt.sourceLines.slice();
-  nextLines[prompt.sourceLine] = prompt.lineText;
+  const items = prompt.items || [{ line: prompt.sourceLine, lineText: prompt.lineText }];
+  for (const item of items) {
+    nextLines[item.line] = item.lineText;
+  }
   const convertedFirstLine = String(nextLines[prompt.sourceLine] || "");
   const cursorLine = Number.isInteger(prompt.cursorLine)
     ? prompt.cursorLine
@@ -3114,6 +3123,137 @@ function isManagedDependencyLine(lineText) {
   return isTaskDependencyLine(text) || isTaskBlocksLine(text);
 }
 
+// ---- src/055-obsidian-task-toggle-ranges.js ----
+// Counts reach sibling items, not physical lines. Children travel with their
+// item; loose continuations and blank separators do not spend the count.
+function collectObsidianTaskToggleRangeItems(lines, activeLine, additionalItems) {
+  const firstBlock = getListItemBlockRange(lines, activeLine);
+  if (!firstBlock || !LIST_ITEM_MARKER_RE.test(String(lines[activeLine] || ""))) {
+    return [];
+  }
+
+  const prefixPattern = /^[ \t]*(?:>[ \t]*)*/;
+  const prefix = String(lines[activeLine]).match(prefixPattern)[0];
+  const additional = Number.isInteger(additionalItems) && additionalItems > 0
+    ? additionalItems
+    : 0;
+  const items = [{ line: activeLine, block: firstBlock }];
+  let line = firstBlock.endLine + 1;
+
+  while (line < lines.length && items.length <= additional) {
+    const lineText = String(lines[line] || "");
+    if (parseMarkdownHeadingLine(lineText)) {
+      break;
+    }
+    if (lineText.trim() === "") {
+      line += 1;
+      continue;
+    }
+
+    const nextPrefix = lineText.match(prefixPattern)[0];
+    if (nextPrefix.length > prefix.length) {
+      line += 1;
+      continue;
+    }
+    if (nextPrefix !== prefix || !LIST_ITEM_MARKER_RE.test(lineText)) {
+      break;
+    }
+
+    const block = getListItemBlockRange(lines, line);
+    items.push({ line, block });
+    line = block.endLine + 1;
+  }
+
+  return items;
+}
+
+function getObsidianTaskToggleRangeDocumentPlan(
+  lines,
+  activeLine,
+  cursorCh,
+  createdDateString,
+  additionalItems,
+) {
+  const single = getObsidianTaskToggleDocumentPlan(
+    lines, activeLine, cursorCh, createdDateString,
+  );
+  if (!single || !Number.isInteger(additionalItems) || additionalItems <= 0) {
+    return single;
+  }
+
+  const demoting = isProperObsidianTaskLine(lines[activeLine]);
+  const selected = collectObsidianTaskToggleRangeItems(
+    lines, activeLine, additionalItems,
+  ).filter(({ line }) =>
+    isProperObsidianTaskLine(lines[line]) === demoting &&
+    (single.mode === "replace" || isTopLevelDashListToggleLine(lines[line])),
+  );
+  if (selected.length <= 1) {
+    return single;
+  }
+
+  const items = selected.map(({ line }) => ({
+    line,
+    sourceLineText: String(lines[line]),
+    lineText: getObsidianTaskToggle(lines[line], createdDateString).lineText,
+  }));
+  const nextLines = lines.slice();
+  for (const item of items) {
+    nextLines[item.line] = item.lineText;
+  }
+  const replacePlan = {
+    mode: "replaceLines",
+    nextLines,
+    cursorLine: activeLine,
+    cursorCh: single.cursorCh,
+  };
+  if (single.mode === "replace") {
+    return replacePlan;
+  }
+
+  const sourceBlocks = selected.map(({ block }) => block);
+  const movedBlock = selected.flatMap(({ line, block }, index) => [
+    items[index].lineText,
+    ...lines.slice(line + 1, block.endLine + 1),
+  ]);
+  if (single.mode === "prompt") {
+    const previewLines = items.map((item) =>
+      demoting ? item.lineText : item.sourceLineText,
+    );
+    return {
+      ...single,
+      sourceBlocks,
+      items,
+      movedBlock,
+      originalMovedBlock: sourceBlocks.flatMap((block) =>
+        lines.slice(block.startLine, block.endLine + 1),
+      ),
+      itemCount: items.length,
+      previewLines,
+      previewText: previewLines.join("\n"),
+    };
+  }
+
+  const state = createLineRemovalState(lines);
+  for (const block of sourceBlocks.slice().reverse()) {
+    removeSourceListItemBlockFromState(state, block);
+  }
+  const remaining = state.lines;
+  const nextSection = findNextMarkdownSection(remaining, sourceBlocks[0].startLine);
+  if (!nextSection) {
+    return replacePlan;
+  }
+  return buildObsidianTaskSectionMovePlan(
+    remaining,
+    getNextSectionBulletInsertion(remaining, nextSection),
+    movedBlock,
+    single.sourceLineText,
+    single.lineText,
+    single.cursorCh,
+    "nextSection",
+    documentHasFinalNewline(lines),
+  ) || replacePlan;
+}
 // ---- src/060-pomodoro.js ----
 function getPomodoroMarkerPrefix(lineText, tokenStart) {
   const line = String(lineText || "");
@@ -11139,9 +11279,13 @@ class DemotionSectionPickerModal extends Modal {
     const headerIcon = header.createDiv({ cls: "tsc-sdp-header-icon" });
     applyIcon(headerIcon, "list-tree");
     const headerText = header.createDiv({ cls: "tsc-sdp-header-text" });
+    const plan = this.snapshot && this.snapshot.plan;
+    const multipleItems = plan && plan.itemCount > 1;
     headerText.createDiv({
       cls: "tsc-sdp-title",
-      text: DEMOTION_PICKER_TITLE,
+      text: multipleItems
+        ? `Move ${plan.itemCount} bullets to section`
+        : DEMOTION_PICKER_TITLE,
     });
     headerText.createDiv({
       cls: "tsc-sdp-subtitle",
@@ -11153,10 +11297,20 @@ class DemotionSectionPickerModal extends Modal {
       cls: "tsc-sdp-preview-label",
       text: "Moving",
     });
-    this.previewEl = preview.createDiv({ cls: "tsc-sdp-preview-text" });
-    this.previewEl.textContent =
-      (this.snapshot && this.snapshot.plan && this.snapshot.plan.previewText) ||
-      "";
+    if (multipleItems) {
+      for (const text of plan.previewLines.slice(0, 5)) {
+        preview.createDiv({ cls: "tsc-sdp-preview-text", text });
+      }
+      if (plan.previewLines.length > 5) {
+        preview.createDiv({
+          cls: "tsc-sdp-preview-text",
+          text: `+${plan.previewLines.length - 5} more`,
+        });
+      }
+    } else {
+      this.previewEl = preview.createDiv({ cls: "tsc-sdp-preview-text" });
+      this.previewEl.textContent = (plan && plan.previewText) || "";
+    }
 
     const searchEl = contentEl.createDiv({ cls: "tsc-sdp-search" });
     const searchIcon = searchEl.createDiv({ cls: "tsc-sdp-search-icon" });
@@ -15004,8 +15158,8 @@ class TaskStatusCyclerVimMixin {
     vim.defineAction("taskStatusCyclerToggleCheckboxMarker", () =>
       this.handleVimToggleCheckboxMarker(),
     );
-    vim.defineAction("taskStatusCyclerToggleObsidianTask", () =>
-      this.handleVimToggleObsidianTask(),
+    vim.defineAction("taskStatusCyclerToggleObsidianTask", (cm, actionArgs) =>
+      this.handleVimToggleObsidianTask(cm, actionArgs),
     );
     vim.defineAction("taskStatusCyclerOpenLineBelow", (cm) =>
       this.handleVimOpenLineBelow(cm),
@@ -15269,13 +15423,18 @@ class TaskStatusCyclerVimMixin {
     this.toggleActiveCheckboxMarker(view.editor);
   }
 
-  handleVimToggleObsidianTask() {
+  handleVimToggleObsidianTask(cm, actionArgs) {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view || !view.editor) {
       return;
     }
 
-    this.toggleActiveObsidianTask(view.editor, undefined, view);
+    const additional = getExplicitVimAdditionalCount(actionArgs);
+    this.toggleActiveObsidianTask(
+      view.editor,
+      this.getActiveObsidianTaskToggle(view.editor, additional),
+      view,
+    );
   }
 
   handleVimBackspaceLinkOrFallthrough(cm, actionArgs) {
@@ -16916,7 +17075,40 @@ class TaskStatusCyclerCompletionMixin {
       return true;
     }
 
-    return this.toggleActiveObsidianTask(editor, obsidianTaskToggle, view);
+    const additional = this.consumePendingObsidianTaskToggleCount(editor, view);
+    return this.toggleActiveObsidianTask(
+      editor,
+      this.getActiveObsidianTaskToggle(editor, additional),
+      view,
+    );
+  }
+
+  consumePendingObsidianTaskToggleCount(editor, view) {
+    // A hotkeys.json binding wins the keydown before CodeMirror Vim sees the
+    // chord. Consume its pending count here so it is neither dropped nor
+    // leaked into the next Vim command (as with nav's Ctrl+Shift+J/K).
+    const cm = this.resolveNormalModeVimCm(editor, view);
+    if (!cm) {
+      return 0;
+    }
+    const pending = getPendingVimRepeat(cm);
+    if (!pending.explicit) {
+      return 0;
+    }
+    resetPendingVimInputState(cm, "counted-toggle-obsidian-task");
+    return pending.repeat;
+  }
+
+  applyObsidianTaskReplaceLinesPlan(editor, plan) {
+    this.applyDocumentLineReplacement(
+      editor, this.getEditorLineArray(editor), plan.nextLines,
+    );
+    if (typeof editor.setCursor === "function") {
+      const line = Math.max(0, Math.min(plan.cursorLine, plan.nextLines.length - 1));
+      const ch = Math.max(0, Math.min(plan.cursorCh, plan.nextLines[line].length));
+      editor.setCursor({ line, ch });
+    }
+    return true;
   }
 
   toggleActiveCheckboxOpenDone(editor, taskStatus = this.getActiveTaskStatus(editor)) {
@@ -18369,6 +18561,10 @@ class TaskStatusCyclerEditorEditsMixin {
       return this.applyObsidianTaskMovePlan(editor, plan, view);
     }
 
+    if (plan.mode === "replaceLines") {
+      return this.applyObsidianTaskReplaceLinesPlan(editor, plan);
+    }
+
     return this.applyObsidianTaskReplacePlan(editor, plan);
   }
 
@@ -18845,18 +19041,19 @@ class TaskStatusCyclerEditorEditsMixin {
     );
   }
 
-  getActiveObsidianTaskToggle(editor) {
+  getActiveObsidianTaskToggle(editor, additionalItems = 0) {
     const cursor = editor.getCursor();
     if (!cursor || typeof cursor.line !== "number") {
       return null;
     }
 
     const lines = this.getEditorLineArray(editor);
-    return getObsidianTaskToggleDocumentPlan(
+    return getObsidianTaskToggleRangeDocumentPlan(
       lines,
       cursor.line,
       cursor.ch,
       this.getCreatedDateString(),
+      additionalItems,
     );
   }
 
@@ -20234,6 +20431,8 @@ module.exports.helpers = {
   getObsidianTaskToggle,
   getObsidianTaskToggleCursorCh,
   getObsidianTaskToggleDocumentPlan,
+  collectObsidianTaskToggleRangeItems,
+  getObsidianTaskToggleRangeDocumentPlan,
   getPomodoroBulletToggle,
   getPomodoroBulletToggleKeydown,
   getPomodoroCursorTargetCh,
@@ -20312,6 +20511,7 @@ module.exports.helpers = {
   getTaskBlockLinkTargetFromLine,
   identityFreshStampLine,
   getVimRepeat,
+  getExplicitVimAdditionalCount,
   getPomodoroMoveOnlyAdditionalLines,
   getPendingVimRepeat,
   resolveObsidianTaskDemotionDestination,

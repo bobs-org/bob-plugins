@@ -570,10 +570,12 @@ function removeSourceBlockForTaskPrompt(prompt, destinationHeadingIdentity = nul
   }
 
   const state = createLineRemovalState(prompt.sourceLines);
-  const { splicedSeam } = removeSourceListItemBlockFromState(
-    state,
-    prompt.sourceBlock,
-  );
+  let splicedSeam = false;
+  const sourceBlocks = prompt.sourceBlocks || [prompt.sourceBlock];
+  for (const block of sourceBlocks.slice().reverse()) {
+    const removal = removeSourceListItemBlockFromState(state, block);
+    splicedSeam = removal.splicedSeam || splicedSeam;
+  }
   const removedSourceSection =
     prompt.promptKind === TASK_SECTION_PROMPT_KIND.promotion
       ? removeEmptySourceSectionFromState(
@@ -768,7 +770,10 @@ function resolveSameSourceTasksPromotion(prompt) {
   }
 
   const nextLines = prompt.sourceLines.slice();
-  nextLines[prompt.sourceLine] = prompt.lineText;
+  const items = prompt.items || [{ line: prompt.sourceLine, lineText: prompt.lineText }];
+  for (const item of items) {
+    nextLines[item.line] = item.lineText;
+  }
   const convertedFirstLine = String(nextLines[prompt.sourceLine] || "");
   const cursorLine = Number.isInteger(prompt.cursorLine)
     ? prompt.cursorLine

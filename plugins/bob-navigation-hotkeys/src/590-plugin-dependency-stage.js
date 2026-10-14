@@ -798,8 +798,8 @@ class BobNavigationHotkeysDependencyStageMixin {
     }
   }
 
-  // Task Link mode: the Depends on row edits the linked task in its own
-  // note, named in the stage title (`docs/task-dependencies.md` §6.1).
+  // Task Link mode: focus the linked note's tab first, even when it is already
+  // open in a background tab, because the stage needs the active view's editor.
   async openLinkedDependencyStage(target) {
     try {
       const path = normalizeVaultRelativePath((target && target.path) || "");
@@ -807,42 +807,37 @@ class BobNavigationHotkeysDependencyStageMixin {
         new Notice("Linked task has no note");
         return false;
       }
-      let editor =
-        typeof this.getOpenMarkdownEditorForPath === "function"
-          ? this.getOpenMarkdownEditorForPath(path)
+      const vault = this.app && this.app.vault;
+      const file =
+        vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
           : null;
-      if (!editor) {
-        const vault = this.app && this.app.vault;
-        const file =
-          vault && typeof vault.getAbstractFileByPath === "function"
-            ? vault.getAbstractFileByPath(path)
-            : null;
-        if (!file) {
-          new Notice(`Linked note not found: ${path}`);
-          return false;
-        }
-        const opened = await openMarkdownFileWithLeafReuse(
-          this,
-          file,
-          `Could not open ${path}`,
-        );
-        if (!opened) {
-          return false;
-        }
-        editor =
-          typeof this.getOpenMarkdownEditorForPath === "function"
-            ? this.getOpenMarkdownEditorForPath(path)
-            : null;
-        if (!editor) {
-          new Notice(`Could not open ${path}`);
-          return false;
-        }
+      if (!file) {
+        new Notice(`Linked note not found: ${path}`);
+        return false;
+      }
+      const opened = await this.openMarkdownFileWithLeafReuse(
+        file,
+        `Could not open ${path}`,
+      );
+      if (!opened) {
+        return false;
+      }
+      const view = this.getActiveMarkdownView();
+      if (
+        !view ||
+        !view.editor ||
+        !view.file ||
+        normalizeVaultRelativePath(view.file.path) !== path
+      ) {
+        new Notice(`Could not open ${path}`);
+        return false;
       }
       const line = Math.floor(numericOrDefault(target.line, Number.NaN));
       if (Number.isFinite(line)) {
-        setEditorCursorSafely(editor, line, 0);
+        setEditorCursorSafely(view.editor, line, 0);
       }
-      return this.openBulletPropertyPicker(editor, {
+      return this.openBulletPropertyPicker(view.editor, {
         initialProperty: "dependsOn",
       });
     } catch (_error) {

@@ -315,3 +315,107 @@ test("stage stale single add refuses and reopens", async () => {
   assert.doesNotMatch(editor.content, /DEPENDS ON/);
 });
 
+test("Task Link Depends on focuses a linked note open in a background tab", async () => {
+  const { plugin } = stubPlugin({
+    "daily.md": "- [[job#^job-task]]\n",
+    "job.md": "heading\n- [ ] #task Job task ^job-task",
+  });
+  const dailyEditor = new TransactionEditor("- [[job#^job-task]]\n", {
+    line: 0,
+    ch: 0,
+  });
+  const jobEditor = new TransactionEditor(
+    "heading\n- [ ] #task Job task ^job-task",
+    { line: 0, ch: 0 },
+  );
+  let activeView = { file: { path: "daily.md" }, editor: dailyEditor };
+  plugin.getActiveMarkdownView = () => activeView;
+  plugin.getOpenMarkdownEditorForPath = (path) =>
+    path === "job.md" ? jobEditor : null;
+  const opened = [];
+  plugin.openMarkdownFileWithLeafReuse = async (file, failureNotice) => {
+    opened.push({ file, failureNotice });
+    activeView = { file, editor: jobEditor };
+    return true;
+  };
+  const pickerCalls = [];
+  plugin.openBulletPropertyPicker = async (editor, options) => {
+    pickerCalls.push({
+      editor,
+      options,
+      activeEditorMatches: plugin.getActiveMarkdownView().editor === editor,
+    });
+    return true;
+  };
+
+  const before = notices.length;
+  await plugin.openLinkedDependencyStage({ path: "job.md", line: 1 });
+
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].file.path, "job.md");
+  assert.equal(opened[0].failureNotice, "Could not open job.md");
+  assert.equal(pickerCalls.length, 1);
+  assert.equal(pickerCalls[0].editor, jobEditor);
+  assert.deepEqual(pickerCalls[0].options, { initialProperty: "dependsOn" });
+  assert.equal(pickerCalls[0].activeEditorMatches, true);
+  assert.deepEqual(jobEditor.getCursor(), { line: 1, ch: 0 });
+  assert.ok(
+    !notices.slice(before).includes("No active markdown note"),
+    "the stage should not hit the active-view guard",
+  );
+});
+
+test("Task Link Depends on refuses clearly when the linked note cannot be focused", async (t) => {
+  await t.test("focus reports success but the active view stays elsewhere", async () => {
+    const { plugin } = stubPlugin({
+      "daily.md": "- [[job#^job-task]]\n",
+      "job.md": "- [ ] #task Job task ^job-task",
+    });
+    const dailyEditor = new TransactionEditor("- [[job#^job-task]]\n", {
+      line: 0,
+      ch: 0,
+    });
+    plugin.getActiveMarkdownView = () => ({
+      file: { path: "daily.md" },
+      editor: dailyEditor,
+    });
+    plugin.openMarkdownFileWithLeafReuse = async () => true;
+    let pickerCalled = false;
+    plugin.openBulletPropertyPicker = async () => {
+      pickerCalled = true;
+      return true;
+    };
+
+    const before = notices.length;
+    const result = await plugin.openLinkedDependencyStage({
+      path: "job.md",
+      line: 0,
+    });
+
+    assert.equal(result, false);
+    assert.equal(pickerCalled, false);
+    assert.deepEqual(notices.slice(before), ["Could not open job.md"]);
+  });
+
+  await t.test("focus reports failure", async () => {
+    const { plugin } = stubPlugin({
+      "daily.md": "- [[job#^job-task]]\n",
+      "job.md": "- [ ] #task Job task ^job-task",
+    });
+    plugin.openMarkdownFileWithLeafReuse = async () => false;
+    let pickerCalled = false;
+    plugin.openBulletPropertyPicker = async () => {
+      pickerCalled = true;
+      return true;
+    };
+
+    const result = await plugin.openLinkedDependencyStage({
+      path: "job.md",
+      line: 0,
+    });
+
+    assert.equal(result, false);
+    assert.equal(pickerCalled, false);
+  });
+});
+

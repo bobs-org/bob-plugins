@@ -19998,6 +19998,25 @@ class BobNavigationHotkeysSuccessorPickerMixin {
   }
 }
 // ---- src/210-rename-and-line-context.js ----
+function isManagedRefNote(path, frontmatter) {
+  const normalizedPath = normalizeVaultRelativePath(path);
+  if (
+    !normalizedPath ||
+    !normalizedPath.startsWith("ref/") ||
+    !normalizedPath.toLowerCase().endsWith(".md")
+  ) {
+    return false;
+  }
+
+  const sourcePdf = frontmatter && frontmatter.source_pdf;
+  return typeof sourcePdf === "string" && sourcePdf.trim().length > 0;
+}
+
+function getManagedRefRenameNoticeText(path) {
+  const notePath = normalizeVaultRelativePath(path) || String(path || "");
+  return `Managed reference note: rename it with \`bob ref rename ${notePath} <new-name>\` so its PDF, reading task, and links move together.`;
+}
+
 class RenameCurrentFileModal extends Modal {
   constructor(app, plugin, file) {
     super(app);
@@ -66712,6 +66731,17 @@ class BobNavigationHotkeysProjectFileMixin {
       return;
     }
 
+    const frontmatter =
+      this.app &&
+      this.app.metadataCache &&
+      typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)?.frontmatter
+        : null;
+    if (isManagedRefNote(file.path, frontmatter)) {
+      new Notice(getManagedRefRenameNoticeText(file.path));
+      return;
+    }
+
     new RenameCurrentFileModal(this.app, this, file).open();
   }
 
@@ -66719,6 +66749,17 @@ class BobNavigationHotkeysProjectFileMixin {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
+      return false;
+    }
+
+    const frontmatter =
+      this.app &&
+      this.app.metadataCache &&
+      typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)?.frontmatter
+        : null;
+    if (isManagedRefNote(file.path, frontmatter)) {
+      new Notice(getManagedRefRenameNoticeText(file.path));
       return false;
     }
 
@@ -68070,6 +68111,8 @@ module.exports.helpers = {
   normalizeRenameInput,
   getRenameTargetPath,
   getRenamedFileNoticeText,
+  isManagedRefNote,
+  getManagedRefRenameNoticeText,
   validateProjectScheduledDate,
   extractProjectSourceSchedule,
   parseProjectSourceTaskLine,

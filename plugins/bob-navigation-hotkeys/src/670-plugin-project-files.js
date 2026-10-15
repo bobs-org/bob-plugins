@@ -468,6 +468,17 @@ class BobNavigationHotkeysProjectFileMixin {
       return;
     }
 
+    const frontmatter =
+      this.app &&
+      this.app.metadataCache &&
+      typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)?.frontmatter
+        : null;
+    if (isManagedRefNote(file.path, frontmatter)) {
+      new Notice(getManagedRefRenameNoticeText(file.path));
+      return;
+    }
+
     new RenameCurrentFileModal(this.app, this, file).open();
   }
 
@@ -475,6 +486,17 @@ class BobNavigationHotkeysProjectFileMixin {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
+      return false;
+    }
+
+    const frontmatter =
+      this.app &&
+      this.app.metadataCache &&
+      typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)?.frontmatter
+        : null;
+    if (isManagedRefNote(file.path, frontmatter)) {
+      new Notice(getManagedRefRenameNoticeText(file.path));
       return false;
     }
 

@@ -1,3 +1,22 @@
+function isManagedRefNote(path, frontmatter) {
+  const normalizedPath = normalizeVaultRelativePath(path);
+  if (
+    !normalizedPath ||
+    !normalizedPath.startsWith("ref/") ||
+    !normalizedPath.toLowerCase().endsWith(".md")
+  ) {
+    return false;
+  }
+
+  const sourcePdf = frontmatter && frontmatter.source_pdf;
+  return typeof sourcePdf === "string" && sourcePdf.trim().length > 0;
+}
+
+function getManagedRefRenameNoticeText(path) {
+  const notePath = normalizeVaultRelativePath(path) || String(path || "");
+  return `Managed reference note: rename it with \`bob ref rename ${notePath} <new-name>\` so its PDF, reading task, and links move together.`;
+}
+
 class RenameCurrentFileModal extends Modal {
   constructor(app, plugin, file) {
     super(app);

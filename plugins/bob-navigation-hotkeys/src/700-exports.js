@@ -86,6 +86,8 @@ module.exports.helpers = {
   normalizeRenameInput,
   getRenameTargetPath,
   getRenamedFileNoticeText,
+  isManagedRefNote,
+  getManagedRefRenameNoticeText,
   validateProjectScheduledDate,
   extractProjectSourceSchedule,
   parseProjectSourceTaskLine,

@@ -727,3 +727,155 @@ test("Ctrl+Enter groups worked-on links above deferred marked links, keeping a n
   );
 });
 
+test("deferred-only close deletes the emptied entry and carries stripped links", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (1000-1025) — FOCUS",
+    "\t- [[Tasks#^a|A]]#",
+    "\t- [[Tasks#^b|B]]#",
+    "- [ ] Later",
+    "\t- [[Tasks#^later|Keep later]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.equal(plan.deferredOnlyClose, true);
+  // The `#` deferral markers are stripped for the carried copies.
+  assert.deepEqual(plan.copiedBulletLines, [
+    "\t- [[Tasks#^a|A]]",
+    "\t- [[Tasks#^b|B]]",
+  ]);
+  // The entry line goes as a removal, not an `[x]` rewrite, and the
+  // placeholder insert still addresses the pre-edit block end.
+  assert.deepEqual(
+    plan.edits.map((edit) => [edit.type, edit.line]),
+    [
+      ["removeLine", 1],
+      ["removeLine", 2],
+      ["removeLine", 3],
+      ["insertLines", 4],
+    ],
+  );
+  // The cursor lands on the placeholder at the entry's former start.
+  assert.equal(plan.cursorTargetLine, 1);
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(
+    plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()),
+    true,
+  );
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [ ] () — FOCUS",
+      "\t- [[Tasks#^a|A]]",
+      "\t- [[Tasks#^b|B]]",
+      "- [ ] Later",
+      "\t- [[Tasks#^later|Keep later]]",
+    ].join("\n"),
+  );
+  assert.deepEqual(editor.getCursor(), { line: 1, ch: 7 });
+});
+
+test("deferred-only close at EOF leaves no dangling newline", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (1000-1025) — FOCUS",
+    "\t- [[Tasks#^a|A]]#",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.equal(plan.deferredOnlyClose, true);
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor());
+  assert.equal(
+    editor.getValue(),
+    ["## Pomodoros", "- [ ] () — FOCUS", "\t- [[Tasks#^a|A]]"].join("\n"),
+  );
+});
+
+test("a close with a remaining copyable link keeps the [x] entry", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (1000-1025) — FOCUS",
+    "\t- [[Tasks#^a|A]]#",
+    "\t- [[Tasks#^b|B]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.equal(plan.deferredOnlyClose, false);
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor());
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [x] (1000-1025) — FOCUS",
+      "\t- 🍅 [[Tasks#^b|B]]",
+      "- [ ] () — FOCUS",
+      "\t- [[Tasks#^b|B]]",
+      "\t- [[Tasks#^a|A]]",
+    ].join("\n"),
+  );
+});
+
+test("a prose sibling keeps the closed entry on a deferred close", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (1000-1025) — FOCUS",
+    "\t- [[Tasks#^a|A]]#",
+    "\t- keep this note",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.equal(plan.deferredOnlyClose, false);
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor());
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [x] (1000-1025) — FOCUS",
+      "\t- keep this note",
+      "- [ ] () — FOCUS",
+      "\t- [[Tasks#^a|A]]",
+    ].join("\n"),
+  );
+});
+
+test("Ctrl+Enter deferred-only close deletes the entry in one gesture", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] (1000-1025) — FOCUS",
+    "\t- [[Tasks#^a|A]]#",
+    "\t- [[Tasks#^b|B]]#",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const editor = createTextEditor(daily, { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await flushAsyncActions();
+
+  assert.equal(
+    editor.getValue(),
+    ["## Pomodoros", "- [ ] () — FOCUS", "\t- [[Tasks#^a|A]]", "\t- [[Tasks#^b|B]]"].join(
+      "\n",
+    ),
+  );
+});
+

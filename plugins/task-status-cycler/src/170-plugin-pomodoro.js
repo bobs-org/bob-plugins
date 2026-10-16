@@ -356,6 +356,25 @@ class TaskStatusCyclerPomodoroMixin {
         } catch (error) {
           name = "";
         }
+        // A deferred-only close deletes the closed entry, so the relocation
+        // pass cannot find its `[x]` headline afterward: hand it the exact
+        // inserted placeholder headline, which lands at the entry's former
+        // start, instead.
+        let createdLineText = null;
+        if (plan.deferredOnlyClose === true && Array.isArray(plan.edits)) {
+          try {
+            const insert = plan.edits.find((edit) =>
+              edit && edit.type === "insertLines" && Array.isArray(edit.lines)
+            );
+            if (
+              insert && typeof insert.lines[0] === "string" && insert.lines[0]
+            ) {
+              createdLineText = insert.lines[0];
+            }
+          } catch (error) {
+            createdLineText = null;
+          }
+        }
         successorDailyBefore = lines.slice();
         successorClosingEntry = {
           line: context.pomodoroLine,
@@ -365,6 +384,9 @@ class TaskStatusCyclerPomodoroMixin {
           createdName: typeof plan.createdPomodoroName === "string"
             ? plan.createdPomodoroName
             : "",
+          ...(createdLineText != null
+            ? { deletedClosedEntry: true, createdLineText }
+            : {}),
         };
       }
     } catch (error) {

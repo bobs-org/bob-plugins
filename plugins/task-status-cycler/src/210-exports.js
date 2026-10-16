@@ -143,6 +143,7 @@ module.exports.helpers = {
   decideProjectResidentVerdict,
   planProjectPullIns,
   planSuccessorInsertions,
+  successorTakeBackEmptiedEntryLine,
   projectPullInCandidatePaths,
   projectPullInParentPaths,
   projectPullInNeedsDependents,

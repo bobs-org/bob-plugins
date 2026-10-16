@@ -290,11 +290,37 @@ class TaskStatusCyclerSuccessorsMixin {
   }
 
   // Re-locate a Pomodoro-line close's entry by pre-edit headline (Work Log
-  // writes can shift it). Returns the 0-based line or null (callers report
-  // `failed` rather than guess). Never throws.
+  // writes can shift it). A deferred-only close deletes the closed entry, so
+  // its hint instead carries the inserted placeholder headline
+  // (`deletedClosedEntry`/`createdLineText`): the verbatim placeholder wins,
+  // preferring the first match at or after the pre-edit line. Returns the
+  // 0-based line or null (callers report `failed` rather than guess). Never
+  // throws.
   relocateSuccessorClosingEntry(currentLines, hint) {
     try {
       const lines = Array.isArray(currentLines) ? currentLines : [];
+      if (
+        hint && hint.deletedClosedEntry === true &&
+        typeof hint.createdLineText === "string" && hint.createdLineText
+      ) {
+        const wanted = hint.createdLineText;
+        let fallback = null;
+        for (let line = 0; line < lines.length; line += 1) {
+          if (String(lines[line] || "") !== wanted) {
+            continue;
+          }
+          if (Number.isInteger(hint.line) && line < hint.line) {
+            if (fallback == null) {
+              fallback = line;
+            }
+            continue;
+          }
+          return line;
+        }
+        if (fallback != null) {
+          return fallback;
+        }
+      }
       const lineText = hint && typeof hint.lineText === "string"
         ? hint.lineText
         : null;

@@ -302,6 +302,149 @@ test("Alt+] on a planned prerequisite links its successor", async () => {
   assert.ok(seen[0].unblocked[0].link);
 });
 
+test("take-back deletes a pre-existing entry it empties", async () => {
+  notices.length = 0;
+  const { harness, editor, plugin } = await closePlannedPredecessor();
+  notices.length = 0;
+
+  // The user deletes the struck planned link between close and reopen, so the
+  // taken-back successor is the entry's last remaining child.
+  assert.match(editor.getLine(4), /fix-apollo/);
+  editor.replaceRange("", { line: 4, ch: 0 }, { line: 5, ch: 0 });
+  assert.equal(editor.getLine(4), "\t- [[sase#^relaunch-failed]]");
+
+  const taken = await plugin.consumeSuccessorReopenReceipt(
+    [{ path: "sase.md", blockId: "fix-apollo" }],
+    { editor, activePath: DAILY_PATH },
+  );
+  assert.equal(taken.linksRemoved, 1);
+  assert.equal(taken.statusesRestored, 1);
+  // The successor bullet and its now-empty pre-existing entry are gone; no
+  // bare headline or blank seam is left behind.
+  assert.equal(
+    editor.getValue(),
+    [`# ${TODAY}`, "", "## Pomodoros"].join("\n"),
+  );
+  assert.equal(
+    harness.getSource("sase.md").split("\n")[1],
+    DEPENDENT_LINE,
+  );
+  assert.ok(
+    notices.some((message) => message.startsWith("↩ Reopened")),
+    JSON.stringify(notices),
+  );
+});
+
+test("take-back deletes a stub-replaced entry through the vault", async () => {
+  // Post-placement state after 087 replaced a lone `-` stub: the entry holds
+  // only the inserted successor bullet, and no editor is open on the daily
+  // note, so the take-back runs through `vault.process`.
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[sase#^relaunch-failed]]",
+  ].join("\r\n");
+  const harness = createInMemoryObsidianApp({ [DAILY_PATH]: day });
+  const editor = createTextEditor(day, { line: 3, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  harness.app.workspace = {};
+  const receipt = { daily_path: DAILY_PATH };
+  const links = [
+    {
+      line_text: "\t- [[sase#^relaunch-failed]]",
+      entry_headline: "- [ ] () — FIX",
+      entry_created: false,
+    },
+  ];
+  const removed = await plugin.takeBackSuccessorLinks(receipt, links, {});
+  assert.equal(removed, 1);
+  const after = harness.getSource(DAILY_PATH);
+  assert.equal(after.includes("\r\n"), true);
+  assert.equal(
+    after,
+    [`# ${TODAY}`, "", "## Pomodoros"].join("\r\n"),
+  );
+});
+
+test("take-back keeps entries that are closed or keep another child", () => {
+  const openHeadline = "- [ ] () — FIX";
+  const closedHeadline = "- [x] () — FIX";
+  const childless = (headline) =>
+    ["## Pomodoros", headline].join("\n").split("\n");
+  assert.equal(
+    helpers.successorTakeBackEmptiedEntryLine(childless(openHeadline), 1),
+    1,
+  );
+  // A surviving prose bullet keeps the entry (childless emptiness).
+  assert.equal(
+    helpers.successorTakeBackEmptiedEntryLine(
+      ["## Pomodoros", openHeadline, "\t- keep this note"].join("\n").split("\n"),
+      1,
+    ),
+    -1,
+  );
+  // A surviving second link keeps the entry.
+  assert.equal(
+    helpers.successorTakeBackEmptiedEntryLine(
+      ["## Pomodoros", openHeadline, "\t- [[sase#^other]]"].join("\n").split("\n"),
+      1,
+    ),
+    -1,
+  );
+  // Closed entries are never take-back candidates.
+  assert.equal(
+    helpers.successorTakeBackEmptiedEntryLine(childless(closedHeadline), 1),
+    -1,
+  );
+  // Non-entry lines never match.
+  assert.equal(
+    helpers.successorTakeBackEmptiedEntryLine(
+      ["## Pomodoros", "- not a task line"].join("\n").split("\n"),
+      1,
+    ),
+    -1,
+  );
+});
+
+test("closing-entry relocation finds a deferred-only placeholder", () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  const lines = [
+    "## Pomodoros",
+    "- [ ] () — FOCUS",
+    "\t- [[Tasks#^a|A]]",
+    "- [ ] Later",
+  ];
+  // A deferred-only close relocates onto the inserted placeholder headline.
+  assert.equal(
+    plugin.relocateSuccessorClosingEntry(lines, {
+      line: 1,
+      lineText: "- [ ] (1000-1025) — FOCUS",
+      name: "FOCUS",
+      createdPomodoro: true,
+      createdName: "FOCUS",
+      deletedClosedEntry: true,
+      createdLineText: "- [ ] () — FOCUS",
+    }),
+    1,
+  );
+  // An ordinary close still relocates onto the `[x]` headline.
+  assert.equal(
+    plugin.relocateSuccessorClosingEntry(
+      ["## Pomodoros", "- [x] (1000-1025) — FOCUS", "\t- note"],
+      {
+        line: 1,
+        lineText: "- [ ] (1000-1025) — FOCUS",
+        name: "FOCUS",
+        createdPomodoro: true,
+        createdName: "FOCUS",
+      },
+    ),
+    1,
+  );
+});
+
 test("Alt+[ into Cancelled recovers its dependents without linking", async () => {
   notices.length = 0;
   const day = fixDay();

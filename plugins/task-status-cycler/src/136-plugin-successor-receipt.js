@@ -278,9 +278,12 @@ class TaskStatusCyclerSuccessorReceiptMixin {
   // Remove remembered successor bullets (`{ line_text, entry_headline,
   // entry_created }`) from the receipt's daily note. A bullet goes only
   // when it still exists verbatim under its entry headline and the next
-  // line is not one of its children; a created placeholder headline goes
-  // only when it has no child bullets left. Resolves to the removed count.
-  // Never throws.
+  // line is not one of its children. Every open entry the take-back empties
+  // is then deleted in the same pass — not just created placeholders — so a
+  // pre-existing entry left childless (including one whose lone `-` stub the
+  // placement replaced) goes rather than standing bare. Entries that keep
+  // another child, closed entries, and already-childless placeholders are
+  // never touched. Resolves to the removed link count. Never throws.
   async takeBackSuccessorLinks(receipt, links, context) {
     try {
       if (!receipt || !receipt.daily_path || links.length === 0) {
@@ -289,7 +292,15 @@ class TaskStatusCyclerSuccessorReceiptMixin {
       const path = String(receipt.daily_path);
       const editors = this.getOpenMarkdownEditors(context || {});
       const editor = editors.get(path);
-      const createdHeadlines = [];
+      const emptiedHeadlines = [];
+      const trackEmptiedHeadline = (link) => {
+        if (
+          link && typeof link.entry_headline === "string" &&
+          !emptiedHeadlines.includes(link.entry_headline)
+        ) {
+          emptiedHeadlines.push(link.entry_headline);
+        }
+      };
       let removed = 0;
       if (editor && typeof editor.getValue === "function") {
         for (const link of links) {
@@ -302,18 +313,12 @@ class TaskStatusCyclerSuccessorReceiptMixin {
             continue;
           }
           removed += 1;
-          if (link.entry_created && !createdHeadlines.includes(link.entry_headline)) {
-            createdHeadlines.push(link.entry_headline);
-          }
+          trackEmptiedHeadline(link);
         }
-        for (const headline of createdHeadlines) {
+        for (const headline of emptiedHeadlines) {
           const lines = String(editor.getValue() || "").split(/\r?\n/);
           const at = lines.findIndex((line) => line === headline);
-          if (at < 0) {
-            continue;
-          }
-          const next = lines[at + 1];
-          if (next !== undefined && INDENTED_LIST_LINE_RE.test(next)) {
+          if (successorTakeBackEmptiedEntryLine(lines, at) !== at) {
             continue;
           }
           removeSuccessorReceiptLineFromEditor(editor, at);
@@ -333,29 +338,45 @@ class TaskStatusCyclerSuccessorReceiptMixin {
       if (!target || typeof vault.process !== "function") {
         return 0;
       }
-      const created = links.filter((link) => link.entry_created)
-        .map((link) => link.entry_headline);
+      const emptied = [];
+      for (const link of links) {
+        if (
+          link && typeof link.entry_headline === "string" &&
+          !emptied.includes(link.entry_headline)
+        ) {
+          emptied.push(link.entry_headline);
+        }
+      }
       try {
         await vault.process(target, (liveText) => {
           const ending = String(liveText || "").includes("\r\n") ? "\r\n" : "\n";
           const lines = String(liveText || "").split(/\r?\n/);
           let changed = false;
-          const order = links
-            .map((link) => findSuccessorReceiptLine(lines, link))
-            .filter((at) => at >= 0)
-            .sort((left, right) => right - left);
-          for (const at of order) {
-            lines.splice(at, 1);
+          const hits = links
+            .map((link) => ({
+              link,
+              at: findSuccessorReceiptLine(lines, link),
+            }))
+            .filter((hit) => hit.at >= 0)
+            .sort((left, right) => right.at - left.at);
+          const removedHeadlines = new Set();
+          for (const hit of hits) {
+            lines.splice(hit.at, 1);
             changed = true;
             removed += 1;
+            if (typeof hit.link.entry_headline === "string") {
+              removedHeadlines.add(hit.link.entry_headline);
+            }
           }
-          for (const headline of created) {
-            const at = lines.findIndex((line) => line === headline);
-            if (at < 0) {
+          // Only entries the take-back actually emptied are eligible; a link
+          // the receipt could not find leaves its child in place, so its
+          // headline can never look empty here.
+          for (const headline of emptied) {
+            if (!removedHeadlines.has(headline)) {
               continue;
             }
-            const next = lines[at + 1];
-            if (next !== undefined && INDENTED_LIST_LINE_RE.test(next)) {
+            const at = lines.findIndex((line) => line === headline);
+            if (successorTakeBackEmptiedEntryLine(lines, at) !== at) {
               continue;
             }
             lines.splice(at, 1);
@@ -475,6 +496,59 @@ class TaskStatusCyclerSuccessorReceiptMixin {
     } catch (error) {
       return 0;
     }
+  }
+}
+
+// An entry the take-back emptied: `at` is an open Pomodoro headline whose
+// sub-bullet block holds no remaining child bullet of any kind (childless
+// emptiness, like reconcile — a surviving prose bullet keeps the entry).
+// Returns `at` when the headline should be deleted, else -1. Never throws.
+function successorTakeBackEmptiedEntryLine(lines, at) {
+  try {
+    const list = Array.isArray(lines) ? lines : [];
+    if (!Number.isInteger(at) || at < 0 || at >= list.length) {
+      return -1;
+    }
+    const headline = String(list[at] || "");
+    if (!isTopLevelTaskLine(headline)) {
+      return -1;
+    }
+    let parts = null;
+    try {
+      parts = parsePomodoroEntryLineParts(headline);
+    } catch (error) {
+      parts = null;
+    }
+    if (!parts) {
+      return -1;
+    }
+    let status = null;
+    try {
+      status = getTaskStatusForLine(headline, at);
+    } catch (error) {
+      status = null;
+    }
+    if (!status || status.symbol !== " ") {
+      return -1;
+    }
+    let section = null;
+    try {
+      section = findPomodorosSectionInLines(list);
+    } catch (error) {
+      section = null;
+    }
+    let range = null;
+    try {
+      range = getSubBulletBlockRange(list, at, section);
+    } catch (error) {
+      range = null;
+    }
+    if (!range || range.startLine !== range.endLine) {
+      return -1;
+    }
+    return at;
+  } catch (error) {
+    return -1;
   }
 }
 

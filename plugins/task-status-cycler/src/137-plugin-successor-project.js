@@ -578,20 +578,26 @@ class TaskStatusCyclerSuccessorProjectMixin {
             }
           }
           if (relocated != null && hint.createdPomodoro === true) {
-            try {
-              const entries = parseSuccessorLedgerEntries(dailyAfter);
-              const createdName = typeof hint.createdName === "string"
-                ? hint.createdName
-                : "";
-              const created = entries.find((entry) =>
-                entry.open && entry.entryLine > relocated &&
-                String(entry.name || "") === createdName
-              ) || null;
-              if (created) {
-                createdEntry = { line: created.entryLine };
+            // A deferred-only close relocates straight onto the inserted
+            // placeholder: it IS the created entry, not its predecessor.
+            if (hint.deletedClosedEntry === true) {
+              createdEntry = { line: relocated };
+            } else {
+              try {
+                const entries = parseSuccessorLedgerEntries(dailyAfter);
+                const createdName = typeof hint.createdName === "string"
+                  ? hint.createdName
+                  : "";
+                const created = entries.find((entry) =>
+                  entry.open && entry.entryLine > relocated &&
+                  String(entry.name || "") === createdName
+                ) || null;
+                if (created) {
+                  createdEntry = { line: created.entryLine };
+                }
+              } catch (error) {
+                createdEntry = null;
               }
-            } catch (error) {
-              createdEntry = null;
             }
           }
         }

@@ -465,6 +465,7 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 
   openTaskMoveOrPomodoroBulletPicker(editor, view, options = {}) {
+    options = this.withPendingTaskMoveCount(editor, view, options);
     const cursor = getEditorCursor(editor);
     if (editor && typeof editor.getValue === "function" && cursor) {
       const sourceContent = String(editor.getValue() || "");

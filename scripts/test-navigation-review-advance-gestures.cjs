@@ -931,6 +931,61 @@ test("a counted move from a landing resumes past every moved target", async () =
   assert.equal(fixture.plugin.reviewLanding.text, "- [*] #task Three");
 });
 
+test("counted Ctrl+Shift+M command dispatch preserves a landed move count", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two", "Three"], "Source.md"),
+    activePath: "Source.md",
+    areaPaths: ["Area.md"],
+  });
+  await land(fixture, "first");
+  const inputState = {
+    keyBuffer: ["1"],
+    prefixRepeat: [],
+    motionRepeat: [],
+    getRepeat: () => 1,
+  };
+  fixture.editor.cm = {
+    cm: {
+      state: { vim: { mode: "normal", inputState } },
+      getCursor: () => fixture.editor.getCursor(),
+    },
+  };
+
+  assert.equal(
+    fixture.plugin.openTaskMoveOrPomodoroBulletPicker(
+      fixture.editor,
+      fixture.view(),
+    ),
+    true,
+  );
+  const event = {
+    key: "M",
+    code: "KeyM",
+    ctrlKey: true,
+    shiftKey: true,
+    altKey: false,
+    metaKey: false,
+    repeat: false,
+    defaultPrevented: true,
+    preventDefault() { assert.fail("handled event must not be canceled again"); },
+    stopPropagation() { assert.fail("handled event must not stop again"); },
+  };
+  assert.equal(
+    fixture.plugin.handleCountedTaskMovePhysicalKeydown(event),
+    false,
+  );
+  assert.deepEqual(inputState.keyBuffer, []);
+
+  const picker = fixture.plugin.activeTaskMoveDestinationPicker;
+  assert.ok(picker, "exactly one picker is active");
+  assert.equal(picker.session.countExplicit, true);
+  assert.equal(picker.session.discovery.actualCount, 2);
+  assert.ok(picker.session.reviewOrigin);
+  await picker.openItemAtIndex(0);
+  await flushAll(fixture.plugin);
+  assert.equal(fixture.plugin.reviewAnchor.resumeNext.text, "- [*] #task Three");
+});
+
 test("a stale landing is not parked", async () => {
   const fixture = makePlugin({
     rows: nextQueue(["One", "Two"], "Source.md"),

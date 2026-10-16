@@ -86,6 +86,7 @@
   "591-blocks-follow-ups.js",
   "600-plugin-dependency-mirror.js",
   "610-plugin-jumps-and-counted-keys.js",
+  "615-plugin-counted-task-move.js",
   "620-plugin-dash-and-vim-jumps.js",
   "630-plugin-vim-link-and-leaves.js",
   "640-plugin-notes-and-task-move.js",

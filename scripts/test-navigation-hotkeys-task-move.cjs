@@ -6,8 +6,43 @@ const {
   NavigationHotkeysPlugin,
   helpers,
   TransactionEditor,
+  createTaskMovePickerHarness,
   createTaskMoveDestinationFocusHarness,
+  createPomodoroMovePickerHarness,
 } = require("./navigation-hotkeys-harness.cjs");
+
+function taskMoveDispatchEvent(overrides = {}) {
+  const calls = { prevent: 0, stop: 0, immediate: 0 };
+  return {
+    key: "M",
+    code: "KeyM",
+    ctrlKey: true,
+    shiftKey: true,
+    altKey: false,
+    metaKey: false,
+    repeat: false,
+    preventDefault: () => calls.prevent += 1,
+    stopPropagation: () => calls.stop += 1,
+    stopImmediatePropagation: () => calls.immediate += 1,
+    calls,
+    ...overrides,
+  };
+}
+
+function vimTaskMoveCount(count = "2", mode = "normal") {
+  const inputState = {
+    keyBuffer: [count],
+    prefixRepeat: [],
+    motionRepeat: [],
+    repeat: Number(count),
+    getRepeat: () => Number(count),
+  };
+  const cm = {
+    state: { vim: { mode, inputState } },
+    getCursor: () => ({ line: 0, ch: 0 }),
+  };
+  return { cm, inputState };
+}
 
 test("task move insertion preserves exact task and section spacing", () => {
   const moved = [
@@ -862,6 +897,153 @@ test("physical task move chord declines auto-repeat and consumes Vim normal inpu
     assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(event), false);
     assert.equal(event.calls.prevent, 0);
   }
+});
+
+test("counted task move dispatch keeps its count through cold async destinations", async () => {
+  const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+  const areaFile = { path: "Area.md", basename: "Area", extension: "md" };
+  const projectFile = { path: "Project.md", basename: "Project", extension: "md" };
+  const editor = new TransactionEditor(
+    "- [ ] #task One ^one\n- [ ] #task Two ^two\n- [ ] #task Three ^three",
+    { line: 0, ch: 0 },
+  );
+  const { cm, inputState } = vimTaskMoveCount("2");
+  editor.cm = { cm };
+  const view = { editor, file: sourceFile };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => view;
+  plugin.getOpenMarkdownEditorForPath = () => null;
+  plugin.app = {
+    metadataCache: {
+      getFileCache: (file) => file.path === areaFile.path
+        ? { frontmatter: { type: "[[area]]" } }
+        : file.path === projectFile.path
+          ? { frontmatter: { type: "[[project]]", status: "wip" } }
+          : null,
+    },
+    vault: {
+      getMarkdownFiles: () => [sourceFile, areaFile, projectFile],
+      cachedRead: () => new Promise((resolve) => setTimeout(() => resolve(""), 0)),
+    },
+  };
+
+  assert.equal(plugin.openTaskMoveOrPomodoroBulletPicker(editor, view), true);
+  const event = taskMoveDispatchEvent({ defaultPrevented: true });
+  assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(event), false);
+  assert.deepEqual(event.calls, { prevent: 0, stop: 0, immediate: 0 });
+  assert.deepEqual(inputState.keyBuffer, []);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  assert.ok(picker instanceof helpers.TaskMoveDestinationPickerModal);
+  assert.equal(picker.session.countExplicit, true);
+  assert.equal(picker.session.discovery.actualCount, 3);
+});
+
+test("counted task move dispatch with warm async destinations opens one counted picker", async () => {
+  const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+  const areaFile = { path: "Area.md", basename: "Area", extension: "md" };
+  const projectFile = { path: "Project.md", basename: "Project", extension: "md" };
+  const editor = new TransactionEditor(
+    "- [ ] #task One ^one\n- [ ] #task Two ^two\n- [ ] #task Three ^three",
+    { line: 0, ch: 0 },
+  );
+  const { cm, inputState } = vimTaskMoveCount("2");
+  editor.cm = { cm };
+  const view = { editor, file: sourceFile };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.getActiveMarkdownView = () => view;
+  plugin.getOpenMarkdownEditorForPath = () => null;
+  plugin.app = {
+    metadataCache: {
+      getFileCache: (file) => file.path === areaFile.path
+        ? { frontmatter: { type: "[[area]]" } }
+        : file.path === projectFile.path
+          ? { frontmatter: { type: "[[project]]", status: "wip" } }
+          : null,
+    },
+    vault: {
+      getMarkdownFiles: () => [sourceFile, areaFile, projectFile],
+      cachedRead: async () => "",
+    },
+  };
+
+  assert.equal(plugin.openTaskMoveOrPomodoroBulletPicker(editor, view), true);
+  assert.equal(
+    plugin.handleCountedTaskMovePhysicalKeydown(
+      taskMoveDispatchEvent({ defaultPrevented: true }),
+    ),
+    false,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  assert.ok(picker instanceof helpers.TaskMoveDestinationPickerModal);
+  assert.equal(picker.session.countExplicit, true);
+  assert.equal(picker.session.discovery.actualCount, 3);
+  assert.equal(inputState.keyBuffer.length, 0);
+});
+
+test("bare task move command ignores stale Vim count outside normal mode", () => {
+  const harness = createTaskMovePickerHarness();
+  const { editor, plugin, view } = harness;
+  const { cm, inputState } = vimTaskMoveCount("2", "insert");
+  editor.cm = { cm };
+  assert.equal(plugin.openTaskMoveOrPomodoroBulletPicker(editor, view), true);
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  assert.ok(picker instanceof helpers.TaskMoveDestinationPickerModal);
+  assert.equal(picker.session.countExplicit, false);
+  assert.equal(picker.session.discovery.actualCount, 1);
+  assert.deepEqual(inputState.keyBuffer, ["2"]);
+});
+
+test("bare task move command opens one uncounted target in Vim normal mode", () => {
+  const { editor, plugin, view } = createTaskMovePickerHarness();
+  const inputState = {
+    keyBuffer: [],
+    prefixRepeat: [],
+    motionRepeat: [],
+    getRepeat: () => null,
+  };
+  editor.cm = {
+    cm: { state: { vim: { mode: "normal", inputState } } },
+  };
+  assert.equal(plugin.openTaskMoveOrPomodoroBulletPicker(editor, view), true);
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  assert.ok(picker instanceof helpers.TaskMoveDestinationPickerModal);
+  assert.equal(picker.session.countExplicit, false);
+  assert.equal(picker.session.discovery.actualCount, 1);
+});
+
+test("already handled task move event leaves pending Vim state alone", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const inputState = { prefixRepeat: ["2"] };
+  const cm = { state: { vim: { mode: "normal", inputState } } };
+  const editor = { cm: { cm } };
+  const event = taskMoveDispatchEvent({ defaultPrevented: true });
+  plugin.getFocusedMarkdownEditorView = () => ({ editor });
+  assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(event), false);
+  assert.deepEqual(inputState.prefixRepeat, ["2"]);
+  assert.deepEqual(event.calls, { prevent: 0, stop: 0, immediate: 0 });
+});
+
+test("counted task move command dispatch counts Pomodoro sub-bullets once", () => {
+  const { editor, plugin, view } = createPomodoroMovePickerHarness();
+  const { cm, inputState } = vimTaskMoveCount("1");
+  editor.cm = { cm };
+  assert.equal(plugin.openTaskMoveOrPomodoroBulletPicker(editor, view), true);
+  assert.equal(
+    plugin.handleCountedTaskMovePhysicalKeydown(
+      taskMoveDispatchEvent({ defaultPrevented: true }),
+    ),
+    false,
+  );
+  const picker = plugin.activeTaskMoveDestinationPicker;
+  assert.ok(picker instanceof helpers.PomodoroBulletMovePickerModal);
+  assert.equal(picker.session.countExplicit, true);
+  assert.equal(picker.session.discovery.actualCount, 1);
+  assert.equal(picker.session.discovery.clamped, true);
+  assert.deepEqual(inputState.keyBuffer, []);
 });
 
 test("physical transclusion toggle owns bare and counted Vim normal input", () => {

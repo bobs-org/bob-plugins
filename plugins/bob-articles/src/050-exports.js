@@ -1,0 +1,22 @@
+module.exports = BobArticlesPlugin;
+module.exports.helpers = {
+  ARTICLE_PLAN_SCHEMA_VERSION,
+  ARTICLE_BOB_TIMEOUT_MS,
+  ARTICLE_BOB_CANDIDATES,
+  articleExpandHome,
+  articleHomeDir,
+  articleBobCandidatePaths,
+  articleResolveBobPath,
+  articleNormalizeType,
+  articleHasArticleType,
+  articleDecodePlan,
+  articleSplitText,
+  articleNormalizeEdits,
+  articleApplyEditsToText,
+  articleBuildChanges,
+  articleApplyChangesToText,
+  articleNoticeText,
+  articleEditPreviewLines,
+  articleSpawnBob,
+  articleDefaultSettings,
+};

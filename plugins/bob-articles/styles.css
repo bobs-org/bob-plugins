@@ -1,0 +1,10 @@
+/* Article presentation is filled in by the bob-articles look phase. */
+.bob-articles-diff-context {
+  color: var(--text-muted);
+}
+.bob-articles-diff-remove {
+  color: var(--text-error);
+}
+.bob-articles-diff-add {
+  color: var(--text-success);
+}

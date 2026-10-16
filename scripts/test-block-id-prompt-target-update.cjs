@@ -610,7 +610,6 @@ test("same-note activation shifts the Pomodoro source line when the Schedule Log
       "## Pomodoros",
       "- [ ] Current ()",
       "  - [[#^ship]]",
-      "- [ ] Later ()",
       "## Notes",
       "- keep this section",
     ].join("\n"),

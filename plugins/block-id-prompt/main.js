@@ -3307,6 +3307,34 @@ function listItemBodyBounds(lineText) {
 
 function isDedicatedLinkBullet(lines, reference, removalRange) {
   const bounds = lineContentBounds(lines, reference.line);
+  // Preferred path: judge the bare link token with the same decorations
+  // `isDedicatedTaskLinkBullet` accepts (an optional checkbox, a run of
+  // `🍅 ` markers, an optional `~~` strike opener, an optional `!`, and a
+  // trailing ` #` move-only directive), so a single-link dedicated bullet
+  // in those forms is removed whole instead of leaving a `- [ ]`, `- #`,
+  // or `- 🍅` stub behind.
+  if (
+    reference &&
+    Number.isInteger(reference.start) &&
+    Number.isInteger(reference.end) &&
+    reference.end > reference.start
+  ) {
+    const tokenStartCh = reference.start - bounds.start;
+    const tokenEndCh = reference.end - bounds.start;
+    if (
+      tokenStartCh >= 0 &&
+      tokenEndCh <= bounds.line.length &&
+      bounds.line.slice(tokenStartCh, tokenEndCh) === reference.raw
+    ) {
+      return isDedicatedTaskLinkBullet(bounds.line, {
+        startCh: tokenStartCh,
+        endCh: tokenEndCh,
+      });
+    }
+
+    return false;
+  }
+
   const bodyBounds = listItemBodyBounds(bounds.line);
   if (!bodyBounds) {
     return false;
@@ -3343,6 +3371,229 @@ function editContainsReference(edit, reference) {
   return edit.start <= reference.start && edit.end >= reference.end;
 }
 
+// ---------------------------------------------------------------------------
+// Emptied Pomodoro entries: every link-removing gesture also deletes the
+// entries it empties, in the same write. An entry is emptied when the
+// gesture's edits remove at least one line or Task Link token inside its
+// block and no list-item child remains in the block afterwards (the
+// childless rule: prose bullets keep the entry, exactly like
+// `bob task reconcile`'s empty-Pomodoro rule; fenced example bullets never
+// count). Entries that were already childless, such as freshly planned
+// placeholders, are never touched.
+// ---------------------------------------------------------------------------
+
+// Every Pomodoro entry in `section` that may be deleted: unfenced, of an
+// eligible status (`statuses: "any"` for the selected-link deletion, which
+// can hit an entry of any status; anything else means open-only), and
+// holding at least one unfenced list-item child in the snapshot.
+function collectEmptiedEntryCandidates(lines, section, fencedLines, statuses) {
+  const candidates = [];
+  for (let line = section.startLine; line <= section.endLine; line += 1) {
+    if (fencedLines[line] || !isPomodoroEntryLine(lines[line])) {
+      continue;
+    }
+
+    const endLine = pomodoroEntryEndLine(lines, line, section.endLine);
+    if (
+      statuses !== "any" &&
+      !isOpenPomodoroStatus(pomodoroEntryStatus(lines[line]))
+    ) {
+      line = endLine;
+      continue;
+    }
+
+    const childLines = [];
+    for (let child = line + 1; child <= endLine; child += 1) {
+      if (fencedLines[child]) {
+        continue;
+      }
+
+      if (LIST_ITEM_PREFIX_RE.test(normalizeMarkdownLine(lines[child]))) {
+        childLines.push(child);
+      }
+    }
+
+    if (childLines.length > 0) {
+      candidates.push({ entryLine: line, endLine, childLines });
+    }
+
+    line = endLine;
+  }
+
+  return candidates;
+}
+
+function lineContentRange(lines, lineNumber) {
+  const start = lineStartIndexFromLines(lines, lineNumber);
+  return {
+    start,
+    end: start + normalizeMarkdownLine(lines[lineNumber]).length,
+  };
+}
+
+// Block-deletion edits for every entry `edits` empties, judged over all of
+// those edits at once. Only removal edits (a range, never an insertion)
+// count as touching an entry, and a snapshot child line counts as remaining
+// unless a removal edit covers it whole (token edits shorten their line but
+// leave the bullet in place). Returns `{ edits, removedEntryCount }`.
+function planEmptiedPomodoroEntryEdits(content, edits, options = {}) {
+  const empty = { edits: [], removedEntryCount: 0 };
+  const snapshot = String(content || "");
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return empty;
+  }
+
+  const removals = edits.filter(
+    (edit) =>
+      edit &&
+      Number.isInteger(edit.start) &&
+      Number.isInteger(edit.end) &&
+      edit.end > edit.start,
+  );
+  if (removals.length === 0) {
+    return empty;
+  }
+
+  const lines = snapshot.split("\n");
+  const section = findPomodorosSectionRange(lines);
+  if (!section) {
+    return empty;
+  }
+
+  const fencedLines = computeFencedLineFlags(lines);
+  const candidates = collectEmptiedEntryCandidates(
+    lines,
+    section,
+    fencedLines,
+    options.statuses,
+  );
+  if (candidates.length === 0) {
+    return empty;
+  }
+
+  const entryEdits = [];
+  for (const candidate of candidates) {
+    const blockStart = lineStartIndexFromLines(lines, candidate.entryLine);
+    const blockEnd =
+      candidate.endLine + 1 < lines.length
+        ? lineStartIndexFromLines(lines, candidate.endLine + 1)
+        : snapshot.length;
+    const touched = removals.some(
+      (edit) => edit.start < blockEnd && edit.end > blockStart,
+    );
+    if (!touched) {
+      continue;
+    }
+
+    const remaining = candidate.childLines.filter((childLine) => {
+      const range = lineContentRange(lines, childLine);
+      return !removals.some(
+        (edit) => edit.start <= range.start && edit.end >= range.end,
+      );
+    });
+    if (remaining.length === 0) {
+      entryEdits.push(
+        listItemSubtreeEdit(snapshot, lines, candidate.entryLine, section.endLine),
+      );
+    }
+  }
+
+  return { edits: entryEdits, removedEntryCount: entryEdits.length };
+}
+
+// Combine link-insertion edits with link-cleanup edits that may include
+// emptied-entry block deletions: an insertion covered by a block deletion
+// (the tie at the deleted block's start, or strictly inside it) is folded
+// into that deletion so the inserted lines replace the deleted block and
+// land in the surviving neighbour; every other insertion passes through.
+function composeInsertionWithLinkCleanup(insertionEdits, cleanup) {
+  const members = new Set((cleanup && cleanup.edits) || []);
+  const originals = ((cleanup && cleanup.entryEdits) || []).filter((edit) =>
+    members.has(edit),
+  );
+  const entryDeletions = [...originals];
+  const leftovers = [];
+  for (const insertion of insertionEdits) {
+    const index = entryDeletions.findIndex(
+      (edit) =>
+        edit &&
+        edit.start <= insertion.start &&
+        edit.end > insertion.start,
+    );
+    if (index === -1) {
+      leftovers.push(insertion);
+      continue;
+    }
+
+    const deletion = entryDeletions[index];
+    let replacement = insertion.replacement;
+    // An EOF-append insertion carries its own leading separator while the
+    // deletion already removes the block's trailing newline: drop one so
+    // no blank line is left behind.
+    if (deletion.start > 0) {
+      if (replacement.startsWith("\r\n")) {
+        replacement = replacement.slice(2);
+      } else if (replacement.startsWith("\n")) {
+        replacement = replacement.slice(1);
+      }
+    }
+    entryDeletions[index] = {
+      start: deletion.start,
+      end: deletion.end,
+      replacement,
+    };
+  }
+
+  const replaced = new Map();
+  entryDeletions.forEach((edit, index) => {
+    if (edit !== originals[index]) {
+      replaced.set(originals[index], edit);
+    }
+  });
+  const rest = [...members].filter((edit) => !replaced.has(edit));
+  return [...leftovers, ...rest, ...replaced.values()];
+}
+
+// Locate a newly created `- [ ] () — NAME` entry in post-write content: an
+// open placeholder with exactly the canonical name that owns the inserted
+// link line. The name is unique among open entries (a raced open name links
+// into that entry instead), so at most one entry can match. Returns the
+// 0-based entry line, or null.
+function findCreatedPomodoroEntryLine(nextContent, linkOptions) {
+  const snapshot = String(nextContent || "");
+  const lines = snapshot.split("\n");
+  const section = findPomodorosSectionRange(lines);
+  if (!section) {
+    return null;
+  }
+
+  const { name, targetPath, blockId, resolveTarget, sourcePath } = linkOptions;
+  const candidates = collectPomodoroLinkEntries(snapshot).entries.filter(
+    (entry) =>
+      entry.open &&
+      entry.placeholder &&
+      canonicalPomodoroEntryName(entry.name) === name,
+  );
+  for (const entry of candidates) {
+    const createdEnd = pomodoroEntryEndLine(lines, entry.entryLine, section.endLine);
+    if (
+      rangeContainsMatchingLink(
+        snapshot,
+        entry.entryLine + 1,
+        createdEnd,
+        targetPath,
+        blockId,
+        resolveTarget,
+        sourcePath,
+      )
+    ) {
+      return entry.entryLine;
+    }
+  }
+
+  return null;
+}
+
 function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   const snapshot = String(content || "");
   const lines = snapshot.split("\n");
@@ -3357,7 +3608,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     !targetBlockId ||
     typeof resolveTarget !== "function"
   ) {
-    return { edits: [], removedCount: 0 };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
   }
 
   const matches = [];
@@ -3397,7 +3648,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   }
 
   if (matches.length === 0) {
-    return { edits: [], removedCount: 0 };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
   }
 
   const subtreeCandidates = matches
@@ -3428,17 +3679,31 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
       !subtreeEdits.some((edit) => editContainsReference(edit, reference)),
     )
     .map(({ removalRange }) => ({ ...removalRange, replacement: "" }));
-  const edits = [...subtreeEdits, ...tokenEdits].sort(
+  const linkEdits = [...subtreeEdits, ...tokenEdits].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+
+  if (!validateNonOverlappingEdits(linkEdits)) {
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+  }
+
+  // Every cleanup caller passes open ranges only, so the emptied-entry pass
+  // stays open-only here: unlink, link duplicate removal, and `^^` future
+  // cleanup. `removedCount` keeps counting links, never entries.
+  const emptied = planEmptiedPomodoroEntryEdits(snapshot, linkEdits);
+  const edits = mergeCoveringEdits([...linkEdits, ...emptied.edits]).sort(
     (left, right) => left.start - right.start || left.end - right.end,
   );
 
   if (!validateNonOverlappingEdits(edits)) {
-    return { edits: [], removedCount: 0 };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
   }
 
   return {
     edits,
     removedCount: matches.length,
+    removedEntryCount: emptied.removedEntryCount,
+    entryEdits: emptied.edits,
     references: matches.map(({ reference }) => reference),
   };
 }
@@ -3458,7 +3723,7 @@ function planFuturePomodoroLinkCleanup(content, options = {}) {
       : findPomodoroSourceContext(lines, options.sourceLine);
 
   if (!context || !context.isOpen) {
-    return { edits: [], removedCount: 0 };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
   }
 
   const futureRanges = collectFutureOpenPomodoroRanges(lines, context);
@@ -3475,6 +3740,8 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
       ranges: [],
       edits: [],
       removedCount: 0,
+      removedEntryCount: 0,
+      entryEdits: [],
       references: [],
       content: snapshot,
       hasChanges: false,
@@ -3488,6 +3755,8 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
     ranges,
     edits: cleanup.edits,
     removedCount: cleanup.removedCount,
+    removedEntryCount: cleanup.removedEntryCount,
+    entryEdits: cleanup.entryEdits,
     references: cleanup.references || [],
     content: cleanup.edits.length > 0 ? applyTextEdits(snapshot, cleanup.edits) : snapshot,
     hasChanges: cleanup.edits.length > 0,
@@ -4188,7 +4457,7 @@ function planPomodoroLinkInsertion(content, options = {}) {
     );
   }
 
-  const edits = [...insertionEdits, ...cleanup.edits];
+  const edits = composeInsertionWithLinkCleanup(insertionEdits, cleanup);
   if (!validateNonOverlappingEdits(edits)) {
     return { error: "overlap" };
   }
@@ -4201,6 +4470,7 @@ function planPomodoroLinkInsertion(content, options = {}) {
     edits,
     content: edits.length > 0 ? applyTextEdits(snapshot, edits) : snapshot,
     removedCount: cleanup.removedCount,
+    removedEntryCount: cleanup.removedEntryCount,
     hasChanges: edits.length > 0,
   };
 }
@@ -5204,7 +5474,10 @@ function planExistingPomodoroLinkInsertion(
     );
   }
 
-  const edits = [...insertionEdits, ...cleanup.edits];
+  // An insertion into the chosen entry can sit at the same offset where an
+  // emptied neighbouring entry's deletion starts: fold it into that deletion
+  // so the inserted link lands in the chosen entry.
+  const edits = composeInsertionWithLinkCleanup(insertionEdits, cleanup);
   if (!validateNonOverlappingEdits(edits)) {
     return { error: "overlap" };
   }
@@ -5225,6 +5498,7 @@ function planExistingPomodoroLinkInsertion(
     edits,
     content: edits.length > 0 ? applyTextEdits(snapshot, edits) : snapshot,
     removedCount: cleanup.removedCount,
+    removedEntryCount: cleanup.removedEntryCount,
     hasChanges: edits.length > 0,
     destination: {
       kind: "existing",
@@ -5317,10 +5591,12 @@ function planNewPomodoroLinkInsertion(
     resolveTarget,
   });
 
-  const edits = [
-    insertionEditAtLine(snapshot, lines, insertLine, [entryLineText, childLineText], lineEnding),
-    ...cleanup.edits,
-  ];
+  const edits = composeInsertionWithLinkCleanup(
+    [
+      insertionEditAtLine(snapshot, lines, insertLine, [entryLineText, childLineText], lineEnding),
+    ],
+    cleanup,
+  );
   if (!validateNonOverlappingEdits(edits)) {
     return { error: "overlap" };
   }
@@ -5328,41 +5604,28 @@ function planNewPomodoroLinkInsertion(
   const nextContent = applyTextEdits(snapshot, edits);
   const nextLines = nextContent.split("\n");
   const nextSection = findPomodorosSectionRange(nextLines);
-  let verified = false;
-  if (nextSection && insertLine >= 0 && insertLine < nextLines.length) {
-    const createdText = normalizeMarkdownLine(nextLines[insertLine]);
-    if (
-      isPomodoroEntryLine(nextLines[insertLine]) &&
-      isOpenPomodoroStatus(pomodoroEntryStatus(nextLines[insertLine]))
-    ) {
-      const parts = parsePomodoroEntryParts(nextLines[insertLine]);
-      const placeholder = POMODORO_LINK_PLACEHOLDER_RE.test(createdText);
-      if (placeholder && parts.name === name) {
-        const createdEnd = pomodoroEntryEndLine(nextLines, insertLine, nextSection.endLine);
-        verified = rangeContainsMatchingLink(
-          nextContent,
-          insertLine + 1,
-          createdEnd,
-          targetPath,
-          blockId,
-          resolveTarget,
-          sourcePath,
-        );
-      }
-    }
-  }
-  if (!verified) {
+  // Located by content: the insertion may have been folded into an emptied
+  // neighbouring entry's deletion, taking that block's place.
+  const createdLine = findCreatedPomodoroEntryLine(nextContent, {
+    name,
+    targetPath,
+    blockId,
+    resolveTarget,
+    sourcePath,
+  });
+  if (createdLine === null) {
     return { error: "verify-failed" };
   }
 
   return {
     section,
     entryLine: insertLine,
-    entryEndLine: pomodoroEntryEndLine(nextLines, insertLine, nextSection.endLine),
+    entryEndLine: pomodoroEntryEndLine(nextLines, createdLine, nextSection.endLine),
     alreadyLinked: false,
     edits,
     content: nextContent,
     removedCount: cleanup.removedCount,
+    removedEntryCount: cleanup.removedEntryCount,
     hasChanges: true,
     destination: {
       kind: "created",
@@ -9058,7 +9321,7 @@ class BlockIdPromptPomodoroLinksMixin {
             );
           }
 
-          setEditorCursorIfPossible(source.editor, originalCursor);
+          this.restoreCursorClampedToContent(source.editor, originalCursor);
           return this.finishPomodoroUnlinkWithInboxRoute(
             source,
             cleanupPlan,
@@ -9103,7 +9366,7 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    setEditorCursorIfPossible(source.editor, originalCursor);
+    this.restoreCursorClampedToContent(source.editor, originalCursor);
     return this.finishPomodoroUnlinkWithInboxRoute(
       source,
       cleanupPlan,
@@ -9727,7 +9990,19 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
 
     for (const group of groups.values()) {
-      group.edits = [...mergeCoveringEdits(group.linkEdits), ...group.taskEdits];
+      const mergedLinks = mergeCoveringEdits(group.linkEdits);
+      // Judge emptiness over all of this note's link edits at once: when the
+      // selected link sits in today's daily note, the selected deletion and
+      // the all-open cleanup compose. The selected link's owner is eligible
+      // in any status, in any note with a Pomodoros section; today's cleanup
+      // stays open-only from its own planner.
+      const emptied = planEmptiedPomodoroEntryEdits(group.content, mergedLinks, {
+        statuses: "any",
+      });
+      group.edits = [
+        ...mergeCoveringEdits([...mergedLinks, ...emptied.edits]),
+        ...group.taskEdits,
+      ];
       if (!validateNonOverlappingEdits(group.edits)) {
         new Notice(`Task link stopped: overlapping edits in ${group.file.path}`);
         return false;
@@ -10958,6 +11233,8 @@ module.exports.helpers = {
   planAllOpenPomodoroLinkCleanup,
   planFuturePomodoroLinkCleanup,
   planPomodoroLinkCleanupForRanges,
+  planEmptiedPomodoroEntryEdits,
+  composeInsertionWithLinkCleanup,
   collectPomodoroEntryBlockLinks,
   planPomodoroLinkInsertion,
   planTaskLinkBlockConsumption,

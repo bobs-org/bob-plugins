@@ -69,6 +69,8 @@ module.exports.helpers = {
   planAllOpenPomodoroLinkCleanup,
   planFuturePomodoroLinkCleanup,
   planPomodoroLinkCleanupForRanges,
+  planEmptiedPomodoroEntryEdits,
+  composeInsertionWithLinkCleanup,
   collectPomodoroEntryBlockLinks,
   planPomodoroLinkInsertion,
   planTaskLinkBlockConsumption,

@@ -330,7 +330,7 @@ function planPomodoroLinkInsertion(content, options = {}) {
     );
   }
 
-  const edits = [...insertionEdits, ...cleanup.edits];
+  const edits = composeInsertionWithLinkCleanup(insertionEdits, cleanup);
   if (!validateNonOverlappingEdits(edits)) {
     return { error: "overlap" };
   }
@@ -343,6 +343,7 @@ function planPomodoroLinkInsertion(content, options = {}) {
     edits,
     content: edits.length > 0 ? applyTextEdits(snapshot, edits) : snapshot,
     removedCount: cleanup.removedCount,
+    removedEntryCount: cleanup.removedEntryCount,
     hasChanges: edits.length > 0,
   };
 }

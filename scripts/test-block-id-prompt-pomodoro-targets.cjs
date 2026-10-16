@@ -428,9 +428,29 @@ test("planExplicitPomodoroLinkInsertion is idempotent and cleans other opens", (
   }));
   assert.equal(plan.alreadyLinked, true);
   assert.equal(plan.removedCount, 1);
+  assert.equal(plan.removedEntryCount, 1);
   assert.equal(
     plan.content,
-    ["## Pomodoros", "- [ ] (09:00-09:25) — FIRST", "\t- [[Tasks#^task1]]", "- [ ] () — SECOND", ""].join("\n"),
+    ["## Pomodoros", "- [ ] (09:00-09:25) — FIRST", "\t- [[Tasks#^task1]]", ""].join("\n"),
+  );
+});
+
+test("planExplicitPomodoroLinkInsertion lands the link in the chosen entry when it ties an emptied neighbour deletion", () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] (09:00-09:25) — FIRST",
+    "- [ ] () — SECOND",
+    "\t- [[Tasks#^task1]]",
+  ].join("\n");
+  const plan = helpers.planExplicitPomodoroLinkInsertion(daily, linkBase({
+    target: existingChoice(1, "- [ ] (09:00-09:25) — FIRST", "FIRST"),
+  }));
+  assert.equal(plan.alreadyLinked, false);
+  assert.equal(plan.removedCount, 1);
+  assert.equal(plan.removedEntryCount, 1);
+  assert.equal(
+    plan.content,
+    ["## Pomodoros", "- [ ] (09:00-09:25) — FIRST", "\t- [[Tasks#^task1]]", ""].join("\n"),
   );
 });
 

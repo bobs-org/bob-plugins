@@ -132,7 +132,7 @@ test("Pomodoro source context distinguishes ledger ancestry and open state", () 
       targetBlockId: "ship",
       resolveTarget: () => "Tasks.md",
     });
-    assert.deepEqual(plan, { edits: [], removedCount: 0 });
+    assert.deepEqual(plan, { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] });
   }
 });
 
@@ -220,7 +220,7 @@ test("cleanup resolves aliases, embeds, same-note links, and alternate paths", (
     targetBlockId: "same",
     resolveTarget: (reference) => paths.get(reference.targetText) || null,
   });
-  assert.deepEqual(noMatch, { edits: [], removedCount: 0 });
+  assert.deepEqual(noMatch, { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] });
   assert.equal(applyPlannedEdits(content, noMatch.edits), content);
 });
 

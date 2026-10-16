@@ -216,7 +216,7 @@ test("task-mode toggle: linked Next unlinks and stays Next; unlinked Next links 
 
   assert.equal(prompted, false);
   assert.equal(linked.editor.getValue(), "- [*] #task Ship it ^ship");
-  assert.deepEqual(linked.writes, [{ path: "Daily.md", content: `${UNLINKED_DAILY}\n` }]);
+  assert.deepEqual(linked.writes, [{ path: "Daily.md", content: "## Pomodoros\n" }]);
   assert.equal(lastNotice(), "Unlinked · stays Next");
 
   const unlinked = createTaskModeHarness({

@@ -183,9 +183,10 @@ test("planPomodoroLinkInsertion is idempotent and prunes a matching link from a 
   });
   assert.equal(plan.alreadyLinked, true);
   assert.equal(plan.removedCount, 1);
+  assert.equal(plan.removedEntryCount, 1);
   assert.equal(
     plan.content,
-    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^foobar]]", "- [ ] Next ()", ""].join(
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^foobar]]", ""].join(
       "\n",
     ),
   );
@@ -398,6 +399,7 @@ test("planPomodoroLinkInsertion before separators composes with future cleanup, 
     ].join("\n") + "\n";
   const plan = helpers.planPomodoroLinkInsertion(input, pomodoroLinkBase());
   assert.equal(plan.removedCount, 1);
+  assert.equal(plan.removedEntryCount, 1);
   assert.equal(
     plan.content,
     [
@@ -406,7 +408,6 @@ test("planPomodoroLinkInsertion before separators composes with future cleanup, 
       "  - [[Other#^abc]]",
       "  - [[Tasks#^foobar]]",
       "",
-      "- [ ] Later ()",
       "- [x] Done (09:00-09:25)",
       "  - [[Tasks#^foobar]]",
       "",
@@ -575,8 +576,11 @@ test("all-open cleanup removes current and future links while preserving history
   const result = applyPlannedEdits(content, plan.edits);
 
   assert.equal(plan.removedCount, 3);
+  assert.equal(plan.removedEntryCount, 2);
   assert.equal(plan.hasChanges, true);
   assert.doesNotMatch(result, /remove this child too/);
+  assert.doesNotMatch(result, /- \[ \] Current \(10:00-10:25\)/);
+  assert.doesNotMatch(result, /- \[ \] Later \(\)/);
   assert.match(result, /Keep  and \[\[Other#\^ship\]\] and \[\[Missing#\^ship\]\]/);
   assert.match(result, /```md\n  - \[\[#\^ship\]\]\n  ```/);
   assert.match(result, /\[x\] Earlier done[\s\S]*\[\[#\^ship\]\]/);
@@ -584,6 +588,64 @@ test("all-open cleanup removes current and future links while preserving history
   assert.match(result, /## Notes\n- \[\[#\^ship\]\]/);
   assert.doesNotMatch(result, /Alias#\^ship/);
   assert.doesNotMatch(result, /\.\.\/daily\/Daily#\^ship/);
+});
+
+test("all-open cleanup removes decorated dedicated bullets whole and deletes the entries it empties", () => {
+  const base = {
+    sourcePath: "Daily.md",
+    targetPath: "Tasks.md",
+    targetBlockId: "ship",
+    resolveTarget: () => "Tasks.md",
+  };
+  const cases = [
+    // [child bullet, expected postimage]
+    ["  - [ ] [[Tasks#^ship]] #", "## Pomodoros\n"],
+    ["  - 🍅 [[Tasks#^ship]]", "## Pomodoros\n"],
+    ["  - 🍅 🍅 ![[Tasks#^ship|Ship]]#", "## Pomodoros\n"],
+    ["  - ~~[[Tasks#^ship]]~~", "## Pomodoros\n"],
+    [
+      "  - [[Tasks#^ship]]\n  - keep",
+      "## Pomodoros\n- [ ] Current ()\n  - keep",
+    ],
+    [
+      "  - [[Tasks#^ship]]\n  - prose note",
+      "## Pomodoros\n- [ ] Current ()\n  - prose note",
+    ],
+  ];
+
+  for (const [child, expected] of cases) {
+    const content = ["## Pomodoros", "- [ ] Current ()", child].join("\n");
+    const plan = helpers.planAllOpenPomodoroLinkCleanup(content, base);
+    const result = applyPlannedEdits(content, plan.edits);
+    assert.equal(result, expected, child);
+    assert.doesNotMatch(result, /(?:- \[ \]|- #|- 🍅)$/m, `no stub left by ${child}`);
+  }
+
+  // An already-childless placeholder is never touched, while an emptied
+  // neighbour is deleted.
+  const mixed = ["## Pomodoros", "- [ ] Current ()", "- [ ] Later ()", "  - [[Tasks#^ship]]"].join("\n");
+  const mixedPlan = helpers.planAllOpenPomodoroLinkCleanup(mixed, base);
+  assert.equal(mixedPlan.removedEntryCount, 1);
+  assert.equal(
+    applyPlannedEdits(mixed, mixedPlan.edits),
+    ["## Pomodoros", "- [ ] Current ()", ""].join("\n"),
+  );
+});
+
+test("all-open cleanup deletes an emptied entry under CRLF without disturbing line endings", () => {
+  const content = ["## Pomodoros", "- [ ] Current ()", "  - [[Tasks#^ship]]"].join("\r\n");
+  const plan = helpers.planAllOpenPomodoroLinkCleanup(content, {
+    sourcePath: "Daily.md",
+    targetPath: "Tasks.md",
+    targetBlockId: "ship",
+    resolveTarget: () => "Tasks.md",
+  });
+  const result = applyPlannedEdits(content, plan.edits);
+
+  assert.equal(plan.removedCount, 1);
+  assert.equal(plan.removedEntryCount, 1);
+  assert.equal(result, "## Pomodoros\r\n");
+  assert.doesNotMatch(result, /(^|[^\r])\n/);
 });
 
 test("all-open cleanup treats missing section, no open entries, and no matches as no-op successes", () => {

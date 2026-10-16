@@ -147,7 +147,6 @@ test("Next task unlink removes current and future links and keeps the Next lane"
     path: "Daily.md",
     content: [
       "## Pomodoros",
-      "- [ ] Current (10:00-10:25)",
       "- [ ] Later ()",
       "  - Work  and [[Other#^ship]]",
       "- [x] Done (09:00-09:25)",
@@ -193,7 +192,6 @@ test("In Progress unlink removes cross-note Pomodoro links and logs work without
     path: "Daily.md",
     content: [
       "## Pomodoros",
-      "- [ ] Current (10:00-10:25)",
       "- [x] Done (09:00-09:25)",
       "  - [[Tasks#^ship]]",
     ].join("\n"),
@@ -242,7 +240,6 @@ test("same-note Next unlink merges the Work Log and all-open cleanup in the acti
     [
       "- [*] #task Ship it ^ship",
       "## Pomodoros",
-      "- [ ] Current (10:00-10:25)",
       "- [ ] Later ()",
       "  - Keep  and notes",
       "- [x] Done (09:00-09:25)",
@@ -287,7 +284,6 @@ test("same-note In Progress unlink merges cleanup and Work Log in the active edi
       "\t- 🛠️ **WORK LOG**",
       "\t\t- *2026-08-15* — Paused after tests",
       "## Pomodoros",
-      "- [ ] Current (10:00-10:25)",
       "- [x] Done (09:00-09:25)",
       "  - [[#^ship]]",
     ].join("\n"),
@@ -362,7 +358,7 @@ test("Next unlink reports retryable partial failure when cleanup succeeds but th
   assert.equal(result, false);
   assert.deepEqual(written, {
     path: "Daily.md",
-    content: ["## Pomodoros", "- [ ] Current ()", ""].join("\n"),
+    content: "## Pomodoros\n",
   });
   assert.equal(editor.getValue(), "- [*] #task Ship it NOW ^ship");
   assert.equal(lastNotice(), "Removed 1 open Pomodoro link, but task stays Next and work summary was not logged");
@@ -398,7 +394,7 @@ test("In Progress unlink reports retryable partial failure when cleanup succeeds
   assert.equal(result, false);
   assert.deepEqual(written, {
     path: "Daily.md",
-    content: ["## Pomodoros", "- [ ] Current ()", ""].join("\n"),
+    content: "## Pomodoros\n",
   });
   assert.equal(editor.getValue(), "- [/] #task Ship it NOW ^ship");
   assert.equal(

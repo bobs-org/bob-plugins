@@ -732,7 +732,10 @@ function planExistingPomodoroLinkInsertion(
     );
   }
 
-  const edits = [...insertionEdits, ...cleanup.edits];
+  // An insertion into the chosen entry can sit at the same offset where an
+  // emptied neighbouring entry's deletion starts: fold it into that deletion
+  // so the inserted link lands in the chosen entry.
+  const edits = composeInsertionWithLinkCleanup(insertionEdits, cleanup);
   if (!validateNonOverlappingEdits(edits)) {
     return { error: "overlap" };
   }
@@ -753,6 +756,7 @@ function planExistingPomodoroLinkInsertion(
     edits,
     content: edits.length > 0 ? applyTextEdits(snapshot, edits) : snapshot,
     removedCount: cleanup.removedCount,
+    removedEntryCount: cleanup.removedEntryCount,
     hasChanges: edits.length > 0,
     destination: {
       kind: "existing",
@@ -845,10 +849,12 @@ function planNewPomodoroLinkInsertion(
     resolveTarget,
   });
 
-  const edits = [
-    insertionEditAtLine(snapshot, lines, insertLine, [entryLineText, childLineText], lineEnding),
-    ...cleanup.edits,
-  ];
+  const edits = composeInsertionWithLinkCleanup(
+    [
+      insertionEditAtLine(snapshot, lines, insertLine, [entryLineText, childLineText], lineEnding),
+    ],
+    cleanup,
+  );
   if (!validateNonOverlappingEdits(edits)) {
     return { error: "overlap" };
   }
@@ -856,41 +862,28 @@ function planNewPomodoroLinkInsertion(
   const nextContent = applyTextEdits(snapshot, edits);
   const nextLines = nextContent.split("\n");
   const nextSection = findPomodorosSectionRange(nextLines);
-  let verified = false;
-  if (nextSection && insertLine >= 0 && insertLine < nextLines.length) {
-    const createdText = normalizeMarkdownLine(nextLines[insertLine]);
-    if (
-      isPomodoroEntryLine(nextLines[insertLine]) &&
-      isOpenPomodoroStatus(pomodoroEntryStatus(nextLines[insertLine]))
-    ) {
-      const parts = parsePomodoroEntryParts(nextLines[insertLine]);
-      const placeholder = POMODORO_LINK_PLACEHOLDER_RE.test(createdText);
-      if (placeholder && parts.name === name) {
-        const createdEnd = pomodoroEntryEndLine(nextLines, insertLine, nextSection.endLine);
-        verified = rangeContainsMatchingLink(
-          nextContent,
-          insertLine + 1,
-          createdEnd,
-          targetPath,
-          blockId,
-          resolveTarget,
-          sourcePath,
-        );
-      }
-    }
-  }
-  if (!verified) {
+  // Located by content: the insertion may have been folded into an emptied
+  // neighbouring entry's deletion, taking that block's place.
+  const createdLine = findCreatedPomodoroEntryLine(nextContent, {
+    name,
+    targetPath,
+    blockId,
+    resolveTarget,
+    sourcePath,
+  });
+  if (createdLine === null) {
     return { error: "verify-failed" };
   }
 
   return {
     section,
     entryLine: insertLine,
-    entryEndLine: pomodoroEntryEndLine(nextLines, insertLine, nextSection.endLine),
+    entryEndLine: pomodoroEntryEndLine(nextLines, createdLine, nextSection.endLine),
     alreadyLinked: false,
     edits,
     content: nextContent,
     removedCount: cleanup.removedCount,
+    removedEntryCount: cleanup.removedEntryCount,
     hasChanges: true,
     destination: {
       kind: "created",

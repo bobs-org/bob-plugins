@@ -903,7 +903,7 @@ class BlockIdPromptPomodoroLinksMixin {
             );
           }
 
-          setEditorCursorIfPossible(source.editor, originalCursor);
+          this.restoreCursorClampedToContent(source.editor, originalCursor);
           return this.finishPomodoroUnlinkWithInboxRoute(
             source,
             cleanupPlan,
@@ -948,7 +948,7 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    setEditorCursorIfPossible(source.editor, originalCursor);
+    this.restoreCursorClampedToContent(source.editor, originalCursor);
     return this.finishPomodoroUnlinkWithInboxRoute(
       source,
       cleanupPlan,

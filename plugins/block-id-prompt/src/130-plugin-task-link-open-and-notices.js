@@ -132,7 +132,19 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
 
     for (const group of groups.values()) {
-      group.edits = [...mergeCoveringEdits(group.linkEdits), ...group.taskEdits];
+      const mergedLinks = mergeCoveringEdits(group.linkEdits);
+      // Judge emptiness over all of this note's link edits at once: when the
+      // selected link sits in today's daily note, the selected deletion and
+      // the all-open cleanup compose. The selected link's owner is eligible
+      // in any status, in any note with a Pomodoros section; today's cleanup
+      // stays open-only from its own planner.
+      const emptied = planEmptiedPomodoroEntryEdits(group.content, mergedLinks, {
+        statuses: "any",
+      });
+      group.edits = [
+        ...mergeCoveringEdits([...mergedLinks, ...emptied.edits]),
+        ...group.taskEdits,
+      ];
       if (!validateNonOverlappingEdits(group.edits)) {
         new Notice(`Task link stopped: overlapping edits in ${group.file.path}`);
         return false;

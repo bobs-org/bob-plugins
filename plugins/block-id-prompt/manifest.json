@@ -1,7 +1,7 @@
 {
   "id": "block-id-prompt",
   "name": "Block ID Prompt",
-  "version": "1.32.0",
+  "version": "1.33.0",
   "minAppVersion": "1.8.7",
   "description": "Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, Ctrl+Shift+Enter asks where the task goes before linking or unlinking, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites.",
   "author": "Bryan",

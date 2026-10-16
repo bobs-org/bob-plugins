@@ -624,7 +624,6 @@ function foldSameNotePomodoroCleanup(
     cleanup = planDeferredPomodoroLinkCleanup(content, targets, {
       dailyPath,
       noteIndex,
-      removeEmptiedEntries: true,
     });
   } catch (_error) {
     cleanup = null;
@@ -687,7 +686,6 @@ async function prepareDependencyPomodoroCleanup(
       {
         dailyPath: snapshot.dailyPath,
         noteIndex: snapshot.noteIndex,
-        removeEmptiedEntries: true,
       },
     );
   } catch (_cleanupError) {

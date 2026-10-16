@@ -341,7 +341,6 @@ function planTaskMoveAcrossFiles(options = {}) {
       pomodoroCleanup = planDeferredPomodoroLinkCleanup(dailyBefore, targets, {
         dailyPath,
         noteIndex,
-        removeEmptiedEntries: true,
       });
       if (pomodoroCleanup.changed) {
         pomodoroCleanupPath = dailyPath;

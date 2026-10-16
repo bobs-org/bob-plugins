@@ -461,7 +461,7 @@ test("recovery gate blocks residents on a future inline project date with no dep
   assert.match(resident.reason, /project_schedule: 2099-01-01/);
 });
 
-test("planDeferredPomodoroLinkCleanup removeEmptiedEntries deletes a last-child open entry", () => {
+test("planDeferredPomodoroLinkCleanup always deletes a last-child open entry", () => {
   const noteIndex = helpers.createScheduledRecoveryNoteIndex([
     { path: "2026/20260807.md" },
     { path: "Tasks.md" },
@@ -475,18 +475,9 @@ test("planDeferredPomodoroLinkCleanup removeEmptiedEntries deletes a last-child 
     "- [ ] Keep (0930-1000)",
     "  - keep me",
   ].join("\n");
-  const kept = helpers.planDeferredPomodoroLinkCleanup(content, targets, {
-    dailyPath: "2026/20260807.md",
-    noteIndex,
-  });
-  assert.equal(kept.changed, true);
-  assert.equal(kept.removedEntryCount, 0);
-  assert.match(kept.content, /- \[ \] Current \(0900-0930\)/);
-
   const emptied = helpers.planDeferredPomodoroLinkCleanup(content, targets, {
     dailyPath: "2026/20260807.md",
     noteIndex,
-    removeEmptiedEntries: true,
   });
   assert.equal(emptied.changed, true);
   assert.equal(emptied.removedEntryCount, 1);

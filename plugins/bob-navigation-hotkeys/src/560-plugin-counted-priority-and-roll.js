@@ -179,7 +179,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -201,7 +200,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }
@@ -483,7 +481,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -505,7 +502,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }

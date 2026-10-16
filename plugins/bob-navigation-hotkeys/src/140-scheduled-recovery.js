@@ -438,8 +438,8 @@ function pomodoroBulletBodyBounds(lineText) {
 }
 
 // True when one or more matched link occurrences make up a bullet's entire
-// body (only whitespace, if anything, between adjacent occurrences). Two
-// matched links on one otherwise-empty bullet still count as dedicated.
+// body, with the same checkbox/marker/strike/embed/move-only decorations
+// accepted by Task Links. Two matched links may be separated by whitespace.
 function isDedicatedPomodoroLinkLine(lineText, occurrences) {
   const bounds = pomodoroBulletBodyBounds(lineText);
   const list = Array.isArray(occurrences) ? occurrences : [];
@@ -447,13 +447,18 @@ function isDedicatedPomodoroLinkLine(lineText, occurrences) {
     return false;
   }
   const sorted = list.slice().sort((left, right) => left.start - right.start);
+  const line = String(lineText || "");
+  const before = /^(?:\[[^\]\n]\][ \t]+)?(?:🍅[ \t]+)*(~~)?!?$/u.exec(
+    line.slice(bounds.start, sorted[0].start),
+  );
+  const after = /^(~~)?(?:[ \t]*#)?$/.exec(
+    line.slice(sorted[sorted.length - 1].end, bounds.end),
+  );
   if (
-    sorted[0].start !== bounds.start ||
-    sorted[sorted.length - 1].end !== bounds.end
+    !before || !after || Boolean(before[1]) !== Boolean(after[1])
   ) {
     return false;
   }
-  const line = String(lineText || "");
   for (let index = 1; index < sorted.length; index += 1) {
     if (line.slice(sorted[index - 1].end, sorted[index].start).trim() !== "") {
       return false;

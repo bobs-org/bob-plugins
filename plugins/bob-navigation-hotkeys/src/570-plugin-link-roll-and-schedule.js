@@ -821,7 +821,6 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -843,7 +842,6 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }

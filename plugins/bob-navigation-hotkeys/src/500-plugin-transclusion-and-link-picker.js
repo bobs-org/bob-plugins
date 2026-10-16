@@ -164,6 +164,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
           editor,
           snapshot.content,
           plan.content,
+          pomodoroCleanupCursor(editor, plan),
         );
         return applied && String(editor.getValue() || "") === plan.content;
       }
@@ -590,13 +591,16 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Write one planned link-picker note change: through the open editor when
   // one exists, otherwise through vault.process with a preimage guard, as
   // writeTaskMoveChange does. Throws when the preimage changed.
-  async writeLinkPickerNoteChange(path, file, before, after) {
+  async writeLinkPickerNoteChange(path, file, before, after, cleanupPlan = null, beforeCleanup = null) {
     const editor = this.getOpenMarkdownEditorForPath(path);
     if (editor && typeof editor.getValue === "function") {
       if (String(editor.getValue() || "") !== before) {
         throw new Error(`Task Link preimage changed: ${path}`);
       }
-      const applied = applyEditorContentTransaction(editor, before, after);
+      const applied = applyEditorContentTransaction(
+        editor, before, after,
+        cleanupPlan ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup) : null,
+      );
       if (!applied || String(editor.getValue() || "") !== after) {
         throw new Error(`Task Link editor transaction failed: ${path}`);
       }

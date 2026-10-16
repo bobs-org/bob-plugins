@@ -107,7 +107,7 @@ test("planDeferredPomodoroLinkCleanup is a clean no-op with no section, no open 
   assert.equal(noSection.removedLinkCount, 0);
 
   const emptySection = helpers.planDeferredPomodoroLinkCleanup(
-    "## Pomodoros\n",
+    "## Pomodoros",
     targets,
     options,
   );
@@ -220,7 +220,7 @@ test("planDeferredPomodoroLinkCleanup removes an embed and resolves same-note an
   assert.equal(result.unresolvedCount, 0);
   assert.equal(
     result.content,
-    ["## Pomodoros", "", "- [ ] Current (0900-0930)"].join("\n"),
+    "## Pomodoros",
   );
 });
 
@@ -300,7 +300,7 @@ test("planDeferredPomodoroLinkCleanup treats two matched links on one bullet as 
   assert.equal(result.removedLinkCount, 2);
   assert.equal(
     result.content,
-    ["## Pomodoros", "", "- [ ] Current (0900-0930)"].join("\n"),
+    "## Pomodoros",
   );
 });
 
@@ -363,7 +363,7 @@ test("planDeferredPomodoroLinkCleanup preserves CRLF line endings", () => {
   assert.equal(result.content.includes("\r\n"), true);
   assert.equal(
     result.content,
-    ["## Pomodoros", "", "- [ ] Current (0900-0930)", "- [x] Done (0930-1000)"].join(
+    ["## Pomodoros", "", "- [x] Done (0930-1000)"].join(
       "\r\n",
     ),
   );
@@ -384,3 +384,94 @@ test("deferredPomodoroTargetsFromLines resolves block IDs and skips lines with n
   );
 });
 
+
+for (const bullet of [
+  "  - [ ] [[Tasks#^x]] #",
+  "  - [/] 🍅 🍅 ![[Tasks#^x|alias]] #",
+  "  - ![[Tasks#^x]]",
+  "  - 🍅 [[Tasks#^x]]",
+]) {
+  test(`cleanup deletes a decorated dedicated bullet without leaving a stub: ${bullet}`, () => {
+    const noteIndex = buildDeferredPomodoroNoteIndex(["Tasks.md"]);
+    const result = helpers.planDeferredPomodoroLinkCleanup(
+      ["## Pomodoros", "- [ ] ()", bullet].join("\n"),
+      [{ path: "Tasks.md", blockId: "x" }],
+      { noteIndex },
+    );
+    assert.equal(result.content, "## Pomodoros");
+    assert.equal(result.removedEntryCount, 1);
+    assert.equal(result.removedBulletCount, 1);
+    assert.equal(result.removedLinkCount, 1);
+    assert.deepEqual(result.removedLineRanges, [{ startLine: 1, endLineExclusive: 3 }]);
+  });
+}
+
+test("dedicated decoration check accepts paired strikes but cleanup never removes struck links", () => {
+  for (const bullet of ["  - ~~[[Tasks#^x]]~~ #", "  - [ ] 🍅 ~~![[Tasks#^x]]~~ #"]) {
+    const occurrences = helpers.collectPomodoroBlockLinkOccurrences(bullet);
+    assert.equal(helpers.isDedicatedPomodoroLinkLine(bullet, occurrences), true);
+    const content = `## Pomodoros\n- [ ] ()\n${bullet}`;
+    const result = helpers.planDeferredPomodoroLinkCleanup(content,
+      [{ path: "Tasks.md", blockId: "x" }],
+      { noteIndex: buildDeferredPomodoroNoteIndex(["Tasks.md"]) });
+    assert.equal(result.content, content);
+    assert.equal(result.removedEntryCount, 0);
+  }
+  for (const bullet of ["  - ~~[[Tasks#^x]]", "  - [[Tasks#^x]]~~", "  - [[Tasks#^x]] #tag"]) {
+    assert.equal(helpers.isDedicatedPomodoroLinkLine(bullet,
+      helpers.collectPomodoroBlockLinkOccurrences(bullet)), false);
+  }
+});
+
+test("cleanup deletes only touched childless entries, preserving prose, placeholders and closed history", () => {
+  const content = [
+    "## Pomodoros", "",
+    "- [ ] () — EMPTY", "",
+    "- [ ] () — DELETE",
+    "  - [[Tasks#^x]]",
+    "  continuation",
+    "  ```md",
+    "  - fenced example",
+    "  ```", "",
+    "- [ ] () — KEEP",
+    "  - [[Tasks#^x]]",
+    "  - prose child", "",
+    "- [x] (0900-0930)", "  - [[Tasks#^x]]",
+    "- [-] ()", "  - [[Tasks#^x]]", "",
+    "## Tasks", "Body",
+  ].join("\n");
+  const result = helpers.planDeferredPomodoroLinkCleanup(content,
+    [{ path: "Tasks.md", blockId: "x" }],
+    { noteIndex: buildDeferredPomodoroNoteIndex(["Tasks.md"]) });
+  assert.equal(result.content, [
+    "## Pomodoros", "",
+    "- [ ] () — EMPTY", "",
+    "- [ ] () — KEEP", "  - prose child", "",
+    "- [x] (0900-0930)", "  - [[Tasks#^x]]",
+    "- [-] ()", "  - [[Tasks#^x]]", "",
+    "## Tasks", "Body",
+  ].join("\n"));
+  assert.equal(result.removedEntryCount, 1);
+  assert.equal(result.removedBulletCount, 2);
+  assert.equal(result.removedLinkCount, 2);
+  assert.deepEqual(result.removedLineRanges, [
+    { startLine: 4, endLineExclusive: 11 },
+    { startLine: 12, endLineExclusive: 13 },
+  ]);
+});
+
+for (const newline of ["\n", "\r\n"]) {
+  for (const finalNewline of [false, true]) {
+    test(`cleanup handles adjacent EOF entries (${JSON.stringify(newline)}, final newline ${finalNewline})`, () => {
+      const content = ["## Pomodoros", "", "- [ ] ()", "  - [[Tasks#^x]]",
+        "", "- [/] (0900-0930)", "  - [[Tasks#^x]]"].join(newline) + (finalNewline ? newline : "");
+      const result = helpers.planDeferredPomodoroLinkCleanup(content,
+        [{ path: "Tasks.md", blockId: "x" }],
+        { noteIndex: buildDeferredPomodoroNoteIndex(["Tasks.md"]) });
+      assert.equal(result.content, "## Pomodoros" + (finalNewline ? newline : ""));
+      assert.equal(result.removedEntryCount, 2);
+      assert.equal(result.removedBulletCount, 2);
+      assert.equal(result.removedLinkCount, 2);
+    });
+  }
+}

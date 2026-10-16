@@ -12829,8 +12829,8 @@ function pomodoroBulletBodyBounds(lineText) {
 }
 
 // True when one or more matched link occurrences make up a bullet's entire
-// body (only whitespace, if anything, between adjacent occurrences). Two
-// matched links on one otherwise-empty bullet still count as dedicated.
+// body, with the same checkbox/marker/strike/embed/move-only decorations
+// accepted by Task Links. Two matched links may be separated by whitespace.
 function isDedicatedPomodoroLinkLine(lineText, occurrences) {
   const bounds = pomodoroBulletBodyBounds(lineText);
   const list = Array.isArray(occurrences) ? occurrences : [];
@@ -12838,13 +12838,18 @@ function isDedicatedPomodoroLinkLine(lineText, occurrences) {
     return false;
   }
   const sorted = list.slice().sort((left, right) => left.start - right.start);
+  const line = String(lineText || "");
+  const before = /^(?:\[[^\]\n]\][ \t]+)?(?:🍅[ \t]+)*(~~)?!?$/u.exec(
+    line.slice(bounds.start, sorted[0].start),
+  );
+  const after = /^(~~)?(?:[ \t]*#)?$/.exec(
+    line.slice(sorted[sorted.length - 1].end, bounds.end),
+  );
   if (
-    sorted[0].start !== bounds.start ||
-    sorted[sorted.length - 1].end !== bounds.end
+    !before || !after || Boolean(before[1]) !== Boolean(after[1])
   ) {
     return false;
   }
-  const line = String(lineText || "");
   for (let index = 1; index < sorted.length; index += 1) {
     if (line.slice(sorted[index - 1].end, sorted[index].start).trim() !== "") {
       return false;
@@ -14738,7 +14743,9 @@ function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
 // used to resolve `[[target#^id]]` links to a vault path). Struck links and
 // links under a closed/cancelled entry are never candidates. A dedicated link
 // bullet (the link, its marker, and nothing else) is removed subtree and all;
-// otherwise only the matched token is removed from its bullet.
+// otherwise only the matched token is removed from its bullet. Every entry
+// emptied by these removals is deleted in the same plan; untouched placeholders
+// and entries retaining a non-fenced list item are preserved.
 function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   const snapshot = String(dailyContent || "");
   const targetList = Array.from(targets || []).filter(
@@ -14852,70 +14859,105 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       endLineExclusive: block.endLineExclusive,
     });
   }
+  const removedBulletCount = subtreeCandidates.length;
   let removedEntryCount = 0;
-  if (options.removeEmptiedEntries === true) {
-    // Same open-ledger definition this cleanup already uses
-    // (`collectOpenPomodoroRanges` / `isOpenPomodoroLedgerEntryLine`), not
-    // `collectPomodoroEntries`' picker grammar, so a childless
-    // `- [ ] Current (0900-0930)` entry is eligible.
-    for (const range of openRanges) {
-      const entryBlock = findCurrentBulletChildBlock(lines, range.entryLine);
-      const childEndExclusive = Math.min(
-        entryBlock.endLineExclusive,
-        section.endLine + 1,
-      );
-      const entryStart = lineStarts[range.entryLine];
-      const entryEnd =
-        childEndExclusive < lines.length
-          ? lineStarts[childEndExclusive]
-          : snapshot.length;
-      const removedChild = subtreeCandidates.some(
-        (candidate) => candidate.start >= entryStart && candidate.start < entryEnd,
-      );
-      const tokenChild = matches.some(
-        (match) =>
-          match.line > range.entryLine && match.line < childEndExclusive,
-      );
-      if (!removedChild && !tokenChild) {
+  // Same open-ledger definition this cleanup already uses
+  // (`collectOpenPomodoroRanges` / `isOpenPomodoroLedgerEntryLine`), not
+  // `collectPomodoroEntries`' picker grammar, so a childless
+  // `- [ ] Current (0900-0930)` entry is eligible.
+  for (const range of openRanges) {
+    const entryBlock = findCurrentBulletChildBlock(lines, range.entryLine);
+    const childEndExclusive = Math.min(
+      entryBlock.endLineExclusive,
+      section.endLine + 1,
+    );
+    const entryStart = lineStarts[range.entryLine];
+    const entryEnd =
+      childEndExclusive < lines.length
+        ? lineStarts[childEndExclusive]
+        : snapshot.length;
+    const removedChild = subtreeCandidates.some(
+      (candidate) => candidate.start >= entryStart && candidate.start < entryEnd,
+    );
+    const tokenChild = matches.some(
+      (match) =>
+        match.line > range.entryLine && match.line < childEndExclusive,
+    );
+    if (!removedChild && !tokenChild) {
+      continue;
+    }
+    let remaining = 0;
+    for (let line = entryBlock.startLine; line < childEndExclusive; line += 1) {
+      if (
+        contexts[line]?.inFence ||
+        !PROJECT_LIST_ITEM_RE.test(String(lines[line] || ""))
+      ) {
         continue;
       }
-      let remaining = 0;
-      for (let line = entryBlock.startLine; line < childEndExclusive; line += 1) {
-        if (!PROJECT_LIST_ITEM_RE.test(String(lines[line] || ""))) {
-          continue;
-        }
-        const lineStart = lineStarts[line];
-        const lineEnd = lineStart + String(lines[line] || "").length;
-        const gone = subtreeCandidates.some(
-          (candidate) => candidate.start <= lineStart && candidate.end >= lineEnd,
-        );
-        if (!gone) {
-          remaining += 1;
-        }
-      }
-      if (remaining === 0) {
-        subtreeCandidates.push({
-          start: entryStart,
-          end: entryEnd,
-          replacement: "",
-          startLine: range.entryLine,
-          endLineExclusive: childEndExclusive,
-        });
-        removedEntryCount += 1;
+      const lineStart = lineStarts[line];
+      const lineEnd = lineStart + String(lines[line] || "").length;
+      const gone = subtreeCandidates.some(
+        (candidate) => candidate.start <= lineStart && candidate.end >= lineEnd,
+      );
+      if (!gone) {
+        remaining += 1;
       }
     }
+    if (remaining === 0) {
+      // Match the bullet-move seam rule: do not join two blank separators.
+      let endLineExclusive = childEndExclusive;
+      if (
+        range.entryLine > 0 &&
+        lines[range.entryLine - 1].trim() === "" &&
+        endLineExclusive < lines.length &&
+        lines[endLineExclusive].trim() === ""
+      ) {
+        endLineExclusive += 1;
+      }
+      subtreeCandidates.push({
+        start: entryStart,
+        end: endLineExclusive < lines.length
+          ? lineStarts[endLineExclusive]
+          : snapshot.length,
+        replacement: "",
+        startLine: range.entryLine,
+        endLineExclusive,
+      });
+      removedEntryCount += 1;
+    }
   }
+
+  // At EOF, consume separators made trailing by the deletion and preserve
+  // whether the original file ended in a newline. Normalize before merging:
+  // consuming a blank seam can join candidates that were originally separate.
+  const normalizeEofDeletion = (candidate) => {
+    if (lines.slice(candidate.endLineExclusive).some((line) => line.trim() !== "")) {
+      return;
+    }
+    while (candidate.startLine > 0 && lines[candidate.startLine - 1].trim() === "") {
+      candidate.startLine -= 1;
+    }
+    candidate.start = lineStarts[candidate.startLine];
+    candidate.end = snapshot.length;
+    candidate.endLineExclusive = lines.length;
+    if (candidate.startLine > 0) {
+      candidate.start -= lineEnding.length;
+      candidate.replacement = snapshot.endsWith(lineEnding) ? lineEnding : "";
+    }
+  };
+  subtreeCandidates.forEach(normalizeEofDeletion);
 
   subtreeCandidates.sort(
     (left, right) => left.start - right.start || right.end - left.end,
   );
 
   // Merge overlapping or contained candidates into one edit (adjacent
-  // dedicated bullets can overlap once the EOF adjustment below is applied).
+  // dedicated bullets can overlap after the EOF adjustment above).
   const subtreeEdits = [];
   for (const candidate of subtreeCandidates) {
     const last = subtreeEdits[subtreeEdits.length - 1];
     if (last && candidate.start <= last.end) {
+      if (candidate.end >= last.end) last.replacement = candidate.replacement;
       last.end = Math.max(last.end, candidate.end);
       last.endLineExclusive = Math.max(
         last.endLineExclusive,
@@ -14925,16 +14967,8 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     }
     subtreeEdits.push({ ...candidate });
   }
-
-  // A merged edit reaching EOF removes each deleted line's own trailing
-  // separator except the very last one, which has none — so its *leading*
-  // separator (the newline ending the line before the run) is removed
-  // instead, to avoid leaving a dangling trailing blank line.
-  for (const edit of subtreeEdits) {
-    if (edit.endLineExclusive >= lines.length && edit.startLine > 0) {
-      edit.start -= lineEnding.length;
-    }
-  }
+  // A merged EOF run may now start earlier, after a different blank seam.
+  if (subtreeEdits.length > 0) normalizeEofDeletion(subtreeEdits.at(-1));
 
   const tokenMatches = matches.filter(
     (match) =>
@@ -14996,7 +15030,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     changed: nextContent !== snapshot,
     // Counts dedicated bullets found, not text-splice operations — adjacent
     // dedicated bullets can merge into one contiguous edit above.
-    removedBulletCount: subtreeCandidates.length,
+    removedBulletCount,
     removedLinkCount: matches.length,
     removedTargets: Object.freeze(
       targetList.filter((target) =>
@@ -16083,6 +16117,35 @@ function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null
     setEditorCursorSafely(cm, cursor.line, cursor.ch);
   }
   return true;
+}
+
+// Preserve the cursor through whole-entry deletions, including when the invoking
+// Task Link was inside a removed block. A deleted EOF entry clamps to the last line.
+function pomodoroCleanupCursor(editor, plan, beforeCleanup = null) {
+  const cursor = getEditorCursor(editor);
+  if (!cursor) return null;
+  // Folded task writes may insert logs before the invoking Task Link. Those
+  // writes preserve link lines and their order; locate the same occurrence
+  // in the intermediate snapshot before applying its cleanup coordinates.
+  if (beforeCleanup !== null) {
+    const before = splitMarkdownContent(editor.getValue()).lines;
+    const raw = before[cursor.line];
+    if (collectPomodoroBlockLinkOccurrences(raw).length > 0) {
+      let occurrence = before.slice(0, cursor.line + 1).filter((line) => line === raw).length;
+      const mapped = splitMarkdownContent(beforeCleanup).lines.findIndex(
+        (line) => line === raw && --occurrence === 0,
+      );
+      if (mapped >= 0) cursor.line = mapped;
+    }
+  }
+  let line = cursor.line;
+  for (const range of plan.removedLineRanges) {
+    if (cursor.line < range.startLine) break;
+    line -= Math.min(cursor.line, range.endLineExclusive) - range.startLine;
+  }
+  const lines = splitMarkdownContent(plan.content).lines;
+  line = Math.max(0, Math.min(line, lines.length - 1));
+  return { line, ch: Math.min(cursor.ch, String(lines[line] || "").length) };
 }
 
 function applyEditorContentTransaction(
@@ -22326,7 +22389,6 @@ function foldSameNotePomodoroCleanup(
     cleanup = planDeferredPomodoroLinkCleanup(content, targets, {
       dailyPath,
       noteIndex,
-      removeEmptiedEntries: true,
     });
   } catch (_error) {
     cleanup = null;
@@ -22389,7 +22451,6 @@ async function prepareDependencyPomodoroCleanup(
       {
         dailyPath: snapshot.dailyPath,
         noteIndex: snapshot.noteIndex,
-        removeEmptiedEntries: true,
       },
     );
   } catch (_cleanupError) {
@@ -24007,7 +24068,6 @@ class BobNavigationHotkeysProjectSubtreeMixin {
         {
           dailyPath: snapshot.dailyPath,
           noteIndex: snapshot.noteIndex,
-          removeEmptiedEntries: true,
         },
       );
       if (!cleanup || !cleanup.changed) {
@@ -27934,7 +27994,6 @@ function planTaskMoveAcrossFiles(options = {}) {
       pomodoroCleanup = planDeferredPomodoroLinkCleanup(dailyBefore, targets, {
         dailyPath,
         noteIndex,
-        removeEmptiedEntries: true,
       });
       if (pomodoroCleanup.changed) {
         pomodoroCleanupPath = dailyPath;
@@ -46586,6 +46645,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
           editor,
           snapshot.content,
           plan.content,
+          pomodoroCleanupCursor(editor, plan),
         );
         return applied && String(editor.getValue() || "") === plan.content;
       }
@@ -47012,13 +47072,16 @@ class BobNavigationHotkeysTransclusionLinkMixin {
   // Write one planned link-picker note change: through the open editor when
   // one exists, otherwise through vault.process with a preimage guard, as
   // writeTaskMoveChange does. Throws when the preimage changed.
-  async writeLinkPickerNoteChange(path, file, before, after) {
+  async writeLinkPickerNoteChange(path, file, before, after, cleanupPlan = null, beforeCleanup = null) {
     const editor = this.getOpenMarkdownEditorForPath(path);
     if (editor && typeof editor.getValue === "function") {
       if (String(editor.getValue() || "") !== before) {
         throw new Error(`Task Link preimage changed: ${path}`);
       }
-      const applied = applyEditorContentTransaction(editor, before, after);
+      const applied = applyEditorContentTransaction(
+        editor, before, after,
+        cleanupPlan ? pomodoroCleanupCursor(editor, cleanupPlan, beforeCleanup) : null,
+      );
       if (!applied || String(editor.getValue() || "") !== after) {
         throw new Error(`Task Link editor transaction failed: ${path}`);
       }
@@ -47398,6 +47461,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
             group.file,
             group.content,
             after,
+            group.path === foldedDailyPath ? dailyCleanupPlan : null,
+            plan.content,
           );
           written.push({
             path: group.path,
@@ -54912,7 +54977,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -54934,7 +54998,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }
@@ -55266,7 +55329,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -55288,7 +55350,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }
@@ -55570,7 +55631,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -55592,7 +55652,6 @@ class BobNavigationHotkeysCountedRollMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }
@@ -56571,7 +56630,6 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -56593,7 +56651,6 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }
@@ -65571,7 +65628,6 @@ class BobNavigationHotkeysProjectConversionMixin {
           {
             dailyPath: snapshot.dailyPath,
             noteIndex: snapshot.noteIndex,
-            removeEmptiedEntries: true,
           },
         );
         if (cleanup.changed) {
@@ -65663,7 +65719,6 @@ class BobNavigationHotkeysProjectConversionMixin {
               {
                 dailyPath: sameFileCleanup.dailyPath,
                 noteIndex: sameFileCleanup.noteIndex,
-                removeEmptiedEntries: true,
               },
             ).content
           : content;
@@ -66103,7 +66158,6 @@ class BobNavigationHotkeysProjectConversionMixin {
           {
             dailyPath: dailyCleanupSnapshot.dailyPath,
             noteIndex: dailyCleanupSnapshot.noteIndex,
-            removeEmptiedEntries: true,
           },
         );
         if (dailyCleanup.changed) {

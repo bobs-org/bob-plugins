@@ -549,12 +549,13 @@ test("same-file cancel folds today's Pomodoro prune into one transaction", async
   assert.deepEqual(editor.content.split("\n"), [
     "## Pomodoros",
     "",
-    "- [ ] Current (0900-0930)",
     `- [-] #task Ship it [cancelled:: ${dateText}] ^ship`,
     "\t- ❌ **CANCEL LOG**",
     `\t\t- *${dateText}* — done`,
   ]);
   assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.undoGroups, 1);
+  assert.equal(editor.cursor.line, 2);
   assert.match(notices.at(-1), /removed 1 Pomodoro link/);
   plugin.activeBulletPropertyPicker = null;
 });
@@ -607,11 +608,9 @@ test("link session cancels the target and removes the invoking link bullet", asy
     "\t- ❌ **CANCEL LOG**",
     `\t\t- *${dateText}* — superseded`,
   ]);
-  assert.deepEqual(harness.linkEditor.content.split("\n"), [
-    "## Pomodoros",
-    "",
-    "- [ ] Current (0900-0930)",
-  ]);
+  assert.equal(harness.linkEditor.content, "## Pomodoros");
+  assert.equal(harness.linkEditor.undoGroups, 1);
+  assert.equal(harness.linkEditor.cursor.line, 0);
   assert.match(
     notices.at(-1),
     /Cancelled task via Task Link · “superseded” · removed 1 Pomodoro link/,

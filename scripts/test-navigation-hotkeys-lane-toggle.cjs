@@ -655,3 +655,64 @@ test("Alt+N fallback still dispatches once with the Vim count", async () => {
   assert.match(notices.at(-1), /→ Next · 2 tasks/);
 });
 
+
+function cleanupDailyPath() {
+  const date = helpers.formatBulletPropertyDate(new Date());
+  return `${date.slice(0, 4)}/${date.replaceAll("-", "")}.md`;
+}
+
+for (const sameFile of [false, true]) {
+  for (const viaCard of [false, true]) {
+    test(`lane release deletes an emptied entry (${sameFile ? "same" : "cross"}-file, ${viaCard ? "card" : "Alt+N"})`, async () => {
+      const dailyPath = cleanupDailyPath();
+      const task = "- [*] #task Ship it ^ship";
+      const ledger = ["## Pomodoros", "", "- [ ] () — EMPTY ME",
+        `  - [[${sameFile ? "" : "Tasks"}#^ship]]`, "", "## Tasks"].join("\n");
+      const harness = createLinkPickerHarness({
+        linkPath: sameFile ? dailyPath : "Tasks.md",
+        linkContent: sameFile ? `${ledger}\n${task}` : task,
+        cursor: { line: sameFile ? 6 : 0, ch: 3 },
+        notes: sameFile ? {} : { [dailyPath]: ledger },
+      });
+      if (viaCard) {
+        assert.equal(harness.plugin.openBulletPropertyPicker(harness.linkEditor,
+          { config: harness.config }), true);
+        await runCardAction(harness.plugin.activeBulletPropertyPicker, "lane");
+      } else {
+        assert.equal(await harness.plugin.toggleTaskLane(harness.linkEditor), true);
+      }
+      assert.match(harness.linkEditor.content, /- \[ \] #task Ship it/);
+      assert.equal(sameFile ? harness.linkEditor.content : harness.notes[dailyPath],
+        ["## Pomodoros", "", "## Tasks", ...(sameFile ? ["- [ ] #task Ship it ^ship"] : [])].join("\n"));
+      assert.equal(harness.linkEditor.undoGroups, 1);
+      assert.equal(harness.linkEditor.cursor.line, sameFile ? 3 : 0);
+    });
+  }
+}
+
+for (const sameFile of [false, true]) {
+  for (const viaCard of [false, true]) {
+    test(`Task Link release deletes its entry in one undo group (${sameFile ? "folded" : "separate"}, ${viaCard ? "card" : "Alt+N"})`, async () => {
+      const task = "- [*] #task Ship it ^ship";
+      const harness = createLinkPickerHarness({
+        linkPath: cleanupDailyPath(),
+        linkContent: ["## Pomodoros", "- [ ] ()",
+          `  - [[${sameFile ? "" : "Tasks"}#^ship]]`, "## Tasks",
+          ...(sameFile ? [task] : [])].join("\n"),
+        cursor: { line: 2, ch: 0 },
+        notes: sameFile ? {} : { "Tasks.md": task },
+      });
+      if (viaCard) {
+        assert.equal(await harness.open({ baseDate: new Date() }), true);
+        await runCardAction(harness.plugin.activeBulletPropertyPicker, "lane");
+      } else {
+        assert.equal(await harness.plugin.toggleTaskLane(harness.linkEditor), true);
+      }
+      assert.equal(harness.linkEditor.content, ["## Pomodoros", "## Tasks",
+        ...(sameFile ? ["- [ ] #task Ship it ^ship"] : [])].join("\n"));
+      assert.equal(harness.linkEditor.undoGroups, 1);
+      assert.deepEqual(harness.linkEditor.cursor, { line: 1, ch: 0 });
+      if (!sameFile) assert.equal(harness.notes["Tasks.md"], "- [ ] #task Ship it ^ship");
+    });
+  }
+}

@@ -509,7 +509,6 @@ test("writer: Pomodoro links of `^prj` and its residents are consumed with empti
     {
       dailyPath: "2026/20261012.md",
       noteIndex,
-      removeEmptiedEntries: true,
     },
   );
   assert.equal(cleanup.changed, true);

@@ -414,3 +414,42 @@ test("bare Ctrl+Shift+P on a #task line keeps the existing task behavior", () =>
 // task-lane: Commit Ready to Next, or release Next/In Progress to Ready.
 // ---------------------------------------------------------------------------
 
+
+for (const sameFile of [false, true]) {
+  test(`Task Link scheduled write deletes its entry (${sameFile ? "folded" : "separate"})`, async () => {
+    const harness = createLinkPickerHarness({
+      linkPath: "2026/20260803.md",
+      linkContent: ["## Pomodoros", "- [ ] ()",
+        `  - [[${sameFile ? "" : "Tasks"}#^a1]]`, "## Tasks",
+        ...(sameFile ? ["- [ ] #task Ship it ^a1"] : [])].join("\n"),
+      cursor: { line: 2, ch: 0 },
+      notes: sameFile ? {} : { "Tasks.md": "- [ ] #task Ship it ^a1" },
+    });
+    const picker = await openLinkPickerValueStage(harness, "scheduled");
+    const index = picker.visibleItems.findIndex((item) => item.label === "In 2 days");
+    assert.notEqual(index, -1);
+    await picker.openItemAtIndex(index);
+    await confirmScheduleReasonStage(picker, "defer it");
+    assert.equal(harness.linkEditor.content.split("\n").slice(0, 2).join("\n"), "## Pomodoros\n## Tasks");
+    assert.doesNotMatch(harness.linkEditor.content, /\(\)|\[\[#\^a1\]\]/);
+    assert.equal(harness.linkEditor.undoGroups, 1);
+    assert.deepEqual(harness.linkEditor.cursor, { line: 1, ch: 0 });
+    assert.match(sameFile ? harness.linkEditor.content : harness.notes["Tasks.md"], /scheduled:: 2026-08-05/);
+  });
+}
+
+test("folded Task Link scheduling maps the cursor past logs inserted before the emptied entry", async () => {
+  const harness = createLinkPickerHarness({
+    linkPath: "2026/20260803.md",
+    linkContent: ["## Tasks", "- [ ] #task Ship it ^a1", "",
+      "## Pomodoros", "- [ ] ()", "  - [[#^a1]]", "## After"].join("\n"),
+    cursor: { line: 5, ch: 0 },
+  });
+  const picker = await openLinkPickerValueStage(harness, "scheduled");
+  await picker.openItemAtIndex(picker.visibleItems.findIndex((item) => item.label === "In 2 days"));
+  await confirmScheduleReasonStage(picker, "defer it");
+  assert.match(harness.linkEditor.content, /SCHEDULE LOG/);
+  assert.doesNotMatch(harness.linkEditor.content, /\(\)|\[\[#\^a1\]\]/);
+  assert.equal(harness.linkEditor.getLine(harness.linkEditor.cursor.line), "## After");
+  assert.equal(harness.linkEditor.undoGroups, 1);
+});

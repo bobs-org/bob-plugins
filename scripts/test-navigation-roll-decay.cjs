@@ -2726,3 +2726,20 @@ test("counted recommended mixed batch logs only eligible roll and decay targets"
   assert.equal((after.match(/Batch work/g) || []).length, 2);
   assert.doesNotMatch(after.split("- [ ] #task C")[1] || "", /Batch work/);
 });
+
+test("Task Link recommended roll deletes the emptied Pomodoro in the same daily write", async () => {
+  const harness = createLinkRollHarness({
+    linkPath: "2026/20260930.md",
+    linkContent: ["## Pomodoros", "- [ ] ()", "  - [[Tasks#^a1]]", "## Tasks"].join("\n"),
+    cursor: { line: 2, ch: 0 },
+    notes: { "Tasks.md": "- [ ] #task Ship it [priority:: medium] [scheduled:: 2026-10-01] ^a1" },
+  });
+  let writes = 0;
+  const transact = harness.linkEditor.transaction.bind(harness.linkEditor);
+  harness.linkEditor.transaction = (tx) => { writes += 1; transact(tx); };
+  assert.equal(await harness.open(), true);
+  assert.equal(await harness.plugin.activeBulletPropertyPicker.applyLinkRecommendedRoll(), true);
+  assert.equal(harness.linkEditor.content, "## Pomodoros\n## Tasks");
+  assert.equal(writes, 1);
+  assert.match(harness.notes["Tasks.md"], /scheduled:: 2026-10-08/);
+});

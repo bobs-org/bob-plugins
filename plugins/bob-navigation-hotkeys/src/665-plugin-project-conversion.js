@@ -333,7 +333,6 @@ class BobNavigationHotkeysProjectConversionMixin {
           {
             dailyPath: snapshot.dailyPath,
             noteIndex: snapshot.noteIndex,
-            removeEmptiedEntries: true,
           },
         );
         if (cleanup.changed) {
@@ -425,7 +424,6 @@ class BobNavigationHotkeysProjectConversionMixin {
               {
                 dailyPath: sameFileCleanup.dailyPath,
                 noteIndex: sameFileCleanup.noteIndex,
-                removeEmptiedEntries: true,
               },
             ).content
           : content;
@@ -865,7 +863,6 @@ class BobNavigationHotkeysProjectConversionMixin {
           {
             dailyPath: dailyCleanupSnapshot.dailyPath,
             noteIndex: dailyCleanupSnapshot.noteIndex,
-            removeEmptiedEntries: true,
           },
         );
         if (dailyCleanup.changed) {

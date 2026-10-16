@@ -961,7 +961,6 @@ class BobNavigationHotkeysProjectSubtreeMixin {
         {
           dailyPath: snapshot.dailyPath,
           noteIndex: snapshot.noteIndex,
-          removeEmptiedEntries: true,
         },
       );
       if (!cleanup || !cleanup.changed) {

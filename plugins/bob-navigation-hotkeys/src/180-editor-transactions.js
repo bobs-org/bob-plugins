@@ -51,6 +51,35 @@ function applyEditorLineChanges(cm, originalLines, nextLines, finalCursor = null
   return true;
 }
 
+// Preserve the cursor through whole-entry deletions, including when the invoking
+// Task Link was inside a removed block. A deleted EOF entry clamps to the last line.
+function pomodoroCleanupCursor(editor, plan, beforeCleanup = null) {
+  const cursor = getEditorCursor(editor);
+  if (!cursor) return null;
+  // Folded task writes may insert logs before the invoking Task Link. Those
+  // writes preserve link lines and their order; locate the same occurrence
+  // in the intermediate snapshot before applying its cleanup coordinates.
+  if (beforeCleanup !== null) {
+    const before = splitMarkdownContent(editor.getValue()).lines;
+    const raw = before[cursor.line];
+    if (collectPomodoroBlockLinkOccurrences(raw).length > 0) {
+      let occurrence = before.slice(0, cursor.line + 1).filter((line) => line === raw).length;
+      const mapped = splitMarkdownContent(beforeCleanup).lines.findIndex(
+        (line) => line === raw && --occurrence === 0,
+      );
+      if (mapped >= 0) cursor.line = mapped;
+    }
+  }
+  let line = cursor.line;
+  for (const range of plan.removedLineRanges) {
+    if (cursor.line < range.startLine) break;
+    line -= Math.min(cursor.line, range.endLineExclusive) - range.startLine;
+  }
+  const lines = splitMarkdownContent(plan.content).lines;
+  line = Math.max(0, Math.min(line, lines.length - 1));
+  return { line, ch: Math.min(cursor.ch, String(lines[line] || "").length) };
+}
+
 function applyEditorContentTransaction(
   cm,
   originalContent,

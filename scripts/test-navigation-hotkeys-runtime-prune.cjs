@@ -129,7 +129,7 @@ test("runtime: a future scheduled write prunes the task's live link from today's
   assert.match(editor.content, /\[\?\]/);
   assert.equal(
     contents.get(dailyFile.path),
-    ["## Pomodoros", "", "- [ ] Current (0900-0930)"].join("\n"),
+    "## Pomodoros",
   );
   assert.match(notices.at(-1), /removed 1 Pomodoro link/);
 });
@@ -351,7 +351,7 @@ test("runtime: the daily note open in another editor is written through that edi
   assert.equal(dailyEditor.undoGroups, 1);
   assert.equal(
     dailyEditor.content,
-    ["## Pomodoros", "", "- [ ] Current (0900-0930)"].join("\n"),
+    "## Pomodoros",
   );
   assert.match(notices.at(-1), /removed 1 Pomodoro link/);
 });
@@ -508,7 +508,7 @@ test("runtime: a ^prj project schedule prunes the propagated tasks and the ^prj 
   );
   assert.equal(
     contents.get(dailyFile.path),
-    "## Pomodoros\n",
+    "## Pomodoros",
   );
   assert.match(notices.at(-1), /removed 2 Pomodoro links/);
 });
@@ -558,8 +558,6 @@ test("runtime: the source note being today's daily note folds the prune into a s
     editor.content,
     [
       "## Pomodoros",
-      "",
-      "- [ ] Current (0900-0930)",
       "",
       "## Tasks",
       "",

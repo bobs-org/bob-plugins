@@ -688,7 +688,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
             if (dailyCleanupPlan.changed) {
@@ -710,7 +709,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
               {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
-                removeEmptiedEntries: true,
               },
             );
           }

@@ -62,6 +62,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
             group.file,
             group.content,
             after,
+            group.path === foldedDailyPath ? dailyCleanupPlan : null,
+            plan.content,
           );
           written.push({
             path: group.path,

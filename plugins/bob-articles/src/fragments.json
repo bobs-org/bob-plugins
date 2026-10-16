@@ -1,7 +1,9 @@
 [
   "010-load.js",
   "020-article-core.js",
+  "025-article-look.js",
   "030-plugin.js",
+  "035-plugin-look.js",
   "040-modal-settings.js",
   "050-exports.js"
 ]

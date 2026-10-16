@@ -4,6 +4,7 @@ const {
   MarkdownView,
   Modal,
   Notice,
+  Platform,
   Plugin,
   PluginSettingTab,
   Setting,
@@ -11,14 +12,33 @@ const {
 
 let ArticleEditorView = null;
 let ArticleTransaction = null;
+let ArticleViewPlugin = null;
+let ArticleDecoration = null;
+let ArticleRangeSetBuilder = null;
+let ArticlePrec = null;
+let ArticleEditorInfoField = null;
 try {
   const state = require("@codemirror/state");
   const view = require("@codemirror/view");
   ArticleTransaction = state.Transaction || null;
+  ArticleRangeSetBuilder = state.RangeSetBuilder || null;
+  ArticlePrec = state.Prec || null;
   ArticleEditorView = view.EditorView || null;
+  ArticleViewPlugin = view.ViewPlugin || null;
+  ArticleDecoration = view.Decoration || null;
 } catch (error) {
   ArticleEditorView = null;
   ArticleTransaction = null;
+  ArticleViewPlugin = null;
+  ArticleDecoration = null;
+  ArticleRangeSetBuilder = null;
+  ArticlePrec = null;
+}
+try {
+  const obsidian = require("obsidian");
+  ArticleEditorInfoField = obsidian.editorInfoField || null;
+} catch (error) {
+  ArticleEditorInfoField = null;
 }
 // ---- src/020-article-core.js ----
 const ARTICLE_PLAN_SCHEMA_VERSION = 1;
@@ -287,6 +307,270 @@ function articleEditPreviewLines(text, edits) {
   }
   return result;
 }
+// ---- src/025-article-look.js ----
+const ARTICLE_STALE_HINT_MS = 400;
+const ARTICLE_SECTION_NUMBER = /^(\d{1,3}\.|\d{1,3}(?:\.\d{1,3})+\.?)(?:[ \t]+|$)/;
+
+function articleStripSectionNumber(title) {
+  const source = String(title || "");
+  const match = source.match(ARTICLE_SECTION_NUMBER);
+  if (!match) return { token: null, rest: source };
+  return { token: match[1], rest: source.slice(match[0].length) };
+}
+
+function articleLineStartOffsets(text) {
+  const split = articleSplitText(text);
+  const starts = [];
+  let offset = 0;
+  for (let index = 0; index < split.lines.length; index += 1) {
+    starts.push(offset);
+    offset += split.lines[index].length;
+    if (index < split.separators.length) offset += split.separators[index].length;
+  }
+  return { lines: split.lines, starts };
+}
+
+function articleSecnoRangeOnLine(lineText, lineStart, written) {
+  const source = String(lineText || "");
+  const atx = source.match(/^( {0,3}#{1,6}[ \t]+)(.*)$/);
+  const title = atx ? atx[2] : source.replace(/^[ \t]+/, "");
+  const titleStart = atx ? atx[1].length : source.length - title.length;
+  const stripped = articleStripSectionNumber(title);
+  if (!stripped.token) return null;
+  if (written != null && stripped.token !== written) return null;
+  const from = lineStart + titleStart;
+  return { from, to: from + stripped.token.length, token: stripped.token };
+}
+
+function articleStaleNumberTitle(section) {
+  if (!section || !section.stale || section.number == null || section.number === "") return "";
+  return `Becomes ${section.number} on save`;
+}
+
+function articleSecnoDecorationRanges(text, outline) {
+  if (!outline || !Array.isArray(outline.sections)) return [];
+  const { lines, starts } = articleLineStartOffsets(text);
+  const ranges = [];
+  for (const section of outline.sections) {
+    if (!section || !Number.isInteger(section.line) || !section.written) continue;
+    const index = section.line - 1;
+    if (index < 0 || index >= lines.length) continue;
+    const range = articleSecnoRangeOnLine(lines[index], starts[index], section.written);
+    if (!range) continue;
+    ranges.push({
+      from: range.from,
+      to: range.to,
+      token: range.token,
+      stale: Boolean(section.stale),
+      number: section.number || null,
+      title: section.title || "",
+      titleAttr: articleStaleNumberTitle(section),
+      line: section.line,
+    });
+  }
+  return ranges;
+}
+
+function articleMapDecorationRanges(ranges, changes) {
+  if (!Array.isArray(ranges)) return [];
+  if (!changes || typeof changes.mapPos !== "function") return ranges.slice();
+  const mapped = [];
+  for (const range of ranges) {
+    let from;
+    let to;
+    try {
+      from = changes.mapPos(range.from, 1);
+      to = changes.mapPos(range.to, -1);
+    } catch (error) {
+      continue;
+    }
+    if (from < to) mapped.push({ ...range, from, to });
+  }
+  return mapped;
+}
+
+function articleSectionAtLine(outline, line) {
+  if (!outline || !Array.isArray(outline.sections) || !Number.isInteger(line)) return null;
+  let match = null;
+  for (const section of outline.sections) {
+    if (!section || !Number.isInteger(section.line)) continue;
+    const end = Number.isInteger(section.end_line) ? section.end_line : Number.POSITIVE_INFINITY;
+    if (line >= section.line && line <= end) match = section;
+  }
+  return match;
+}
+
+function articleStatusBarModel(outline, line) {
+  if (!outline || outline.numbering === false) return null;
+  const section = articleSectionAtLine(outline, line);
+  if (!section || section.number == null || section.number === "") return null;
+  return {
+    text: `§ ${String(section.number).replace(/\.$/, "")}`,
+    title: section.title || "",
+  };
+}
+
+function articleHeadingWrapSpec(headingText, section) {
+  if (!section || !section.written) return null;
+  const source = String(headingText || "");
+  const leading = source.match(/^[ \t]*/)[0];
+  const rest = source.slice(leading.length);
+  const stripped = articleStripSectionNumber(rest);
+  if (stripped.token !== section.written) return null;
+  return {
+    from: leading.length,
+    to: leading.length + stripped.token.length,
+    className: section.stale ? "bob-secno is-stale" : "bob-secno",
+    title: articleStaleNumberTitle(section),
+  };
+}
+
+function articleWrappedHeadingChildren(headingText, section) {
+  const source = String(headingText || "");
+  const spec = articleHeadingWrapSpec(source, section);
+  if (!spec) return [{ type: "text", value: source }];
+  const children = [];
+  if (spec.from > 0) children.push({ type: "text", value: source.slice(0, spec.from) });
+  children.push({
+    type: "span",
+    className: spec.className,
+    title: spec.title,
+    value: source.slice(spec.from, spec.to),
+  });
+  if (spec.to < source.length) children.push({ type: "text", value: source.slice(spec.to) });
+  return children;
+}
+
+function articleFirstTextNode(node) {
+  if (!node) return null;
+  if (node.nodeType === 3 || node.nodeName === "#text") {
+    return typeof node.nodeValue === "string" && node.nodeValue.length ? node : null;
+  }
+  const tag = String(node.tagName || node.nodeName || "").toLowerCase();
+  if (tag === "code" || tag === "pre") return null;
+  const children = node.childNodes || [];
+  for (let index = 0; index < children.length; index += 1) {
+    const found = articleFirstTextNode(children[index]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function articleCreateTextNode(documentRef, value) {
+  if (documentRef && typeof documentRef.createTextNode === "function") {
+    return documentRef.createTextNode(value);
+  }
+  return { nodeType: 3, nodeName: "#text", nodeValue: value };
+}
+
+function articleWrapHeadingElement(heading, section, documentRef) {
+  if (!heading || !section) return false;
+  try {
+    if (typeof heading.querySelector === "function" && heading.querySelector(".bob-secno")) {
+      return false;
+    }
+  } catch (error) {
+    // Keep wrapping when querySelector is unavailable.
+  }
+  const textNode = articleFirstTextNode(heading);
+  if (!textNode) return false;
+  const value = String(textNode.nodeValue || "");
+  const spec = articleHeadingWrapSpec(value, section);
+  if (!spec) return false;
+  const doc = documentRef
+    || heading.ownerDocument
+    || (typeof document !== "undefined" ? document : null);
+  if (!doc || typeof doc.createElement !== "function") return false;
+  const parent = textNode.parentNode || heading;
+  if (!parent || typeof parent.insertBefore !== "function" || typeof parent.removeChild !== "function") {
+    return false;
+  }
+  const span = doc.createElement("span");
+  span.className = spec.className;
+  if (spec.title) {
+    if (typeof span.setAttribute === "function") span.setAttribute("title", spec.title);
+    else span.title = spec.title;
+  }
+  if (typeof span.appendChild === "function") {
+    span.appendChild(articleCreateTextNode(doc, value.slice(spec.from, spec.to)));
+  } else {
+    span.textContent = value.slice(spec.from, spec.to);
+  }
+  const parts = [];
+  if (spec.from > 0) parts.push(articleCreateTextNode(doc, value.slice(0, spec.from)));
+  parts.push(span);
+  if (spec.to < value.length) parts.push(articleCreateTextNode(doc, value.slice(spec.to)));
+  for (const part of parts) parent.insertBefore(part, textNode);
+  parent.removeChild(textNode);
+  return true;
+}
+
+function articleOutlineForCurrentBuffer(outline, applied) {
+  if (!outline || typeof outline !== "object") return outline || null;
+  if (!applied) return outline;
+  const sections = Array.isArray(outline.sections)
+    ? outline.sections.map((section) => ({
+      ...section,
+      line: Number.isInteger(section.output_line) && section.output_line > 0
+        ? section.output_line
+        : section.line,
+      written: section.number != null ? section.number : section.written,
+      stale: false,
+    }))
+    : [];
+  return { ...outline, sections };
+}
+
+function articleCreateLookState() {
+  return {
+    versions: new Map(),
+    inFlight: new Map(),
+    pending: new Map(),
+    composing: new Set(),
+  };
+}
+
+function articleNoteStaleHintEdit(state, path) {
+  const version = (state.versions.get(path) || 0) + 1;
+  state.versions.set(path, version);
+  state.pending.set(path, true);
+  return { action: "schedule", delay: ARTICLE_STALE_HINT_MS, version };
+}
+
+function articleNoteStaleHintTimer(state, path, options = {}) {
+  const desktop = options.desktop !== false;
+  const enabled = options.enabled !== false;
+  if (!desktop || !enabled) {
+    state.pending.delete(path);
+    return { action: "idle" };
+  }
+  if (state.composing.has(path) || options.composing) {
+    return { action: "schedule", delay: ARTICLE_STALE_HINT_MS, version: state.versions.get(path) || 0 };
+  }
+  if (state.inFlight.has(path)) return { action: "wait" };
+  if (!state.pending.get(path)) return { action: "idle" };
+  const version = state.versions.get(path) || 0;
+  state.inFlight.set(path, version);
+  state.pending.delete(path);
+  return { action: "spawn", version };
+}
+
+function articleNoteStaleHintResult(state, path, version) {
+  const inFlight = state.inFlight.get(path);
+  if (inFlight === version) state.inFlight.delete(path);
+  const current = state.versions.get(path);
+  const accept = inFlight === version && current === version;
+  const reschedule = Boolean(state.pending.get(path)) || current !== version;
+  return { accept, reschedule, version: current };
+}
+
+function articleIsDesktopApp() {
+  try {
+    return !Platform || Platform.isDesktopApp !== false;
+  } catch (error) {
+    return true;
+  }
+}
 // ---- src/030-plugin.js ----
 class BobArticlesPlugin extends Plugin {
   async onload() {
@@ -299,6 +583,11 @@ class BobArticlesPlugin extends Plugin {
     this.articleBobErrorNoticed = false;
     this.articleLeaveTimers = new Set();
     this.articleSaveCommand = null;
+    this.articleOutlines = new Map();
+    this.articleLookGeneration = new Map();
+    this.articleLookState = articleCreateLookState();
+    this.articleStaleTimers = new Map();
+    this.articleStatusEl = null;
 
     this.addSettingTab(new BobArticlesSettingTab(this.app, this));
     this.addCommand({
@@ -342,6 +631,7 @@ class BobArticlesPlugin extends Plugin {
       );
     }
     this.articleWrapSaveCommand();
+    this.articleSetupLook();
     this.articleHandleActiveChange(true);
   }
 
@@ -350,6 +640,7 @@ class BobArticlesPlugin extends Plugin {
       this.articleSaveCommand.command.callback = this.articleSaveCommand.original;
     }
     for (const timer of this.articleLeaveTimers || []) clearTimeout(timer);
+    this.articleTeardownLook();
     const workspace = this.app && this.app.workspace;
     if (workspace && typeof workspace.getLeavesOfType === "function") {
       for (const leaf of workspace.getLeavesOfType("markdown")) {
@@ -402,6 +693,9 @@ class BobArticlesPlugin extends Plugin {
     }
     this.articleActiveSnapshot = current;
     this.articleRefreshViewClasses();
+    const pathChanged = !previous || !current || previous.path !== current.path;
+    if (current && (initial || pathChanged)) this.articleEnsureOutline(current, { force: pathChanged });
+    this.articleRefreshStatusBar(current && current.view);
   }
 
   articleRefreshViewClasses() {
@@ -413,6 +707,9 @@ class BobArticlesPlugin extends Plugin {
       if (!element || !element.classList) continue;
       const isArticle = view.file && articleHasArticleType(this.articleFrontmatter(view.file));
       element.classList.toggle("bob-article", Boolean(isArticle));
+      const serif = Boolean(isArticle) && (!this.settings || this.settings.articleTypeface !== "theme");
+      element.classList.toggle("bob-article-serif", serif);
+      if (!isArticle && view.file && this.articleOutlines) this.articleOutlines.delete(view.file.path);
     }
   }
 
@@ -437,25 +734,27 @@ class BobArticlesPlugin extends Plugin {
   articleObserveEditorUpdate(update) {
     const view = this.articleActiveMarkdownView();
     const path = view && view.file && view.file.path;
-    if (!path || !update || !Array.isArray(update.transactions)) return;
-    const history = this.articleFormatHistory.get(path);
-    for (const transaction of update.transactions) {
-      const event = String(
-        (ArticleTransaction && ArticleTransaction.userEvent
-          ? transaction.annotation(ArticleTransaction.userEvent)
-          : "") || "",
-      );
-      if ((event === "undo" || event === "input.undo") && history) {
-        const current = update.state.doc.toString();
-        if (current === history.before) this.articleUndoBlocked.add(path);
-      } else if (
-        event === "paste" || event === "input.paste" ||
-        event === "input" || event.startsWith("input.") || event.startsWith("delete.")
-      ) {
-        this.articleUndoBlocked.delete(path);
-        this.articleFormatHistory.delete(path);
+    if (path && update && Array.isArray(update.transactions)) {
+      const history = this.articleFormatHistory.get(path);
+      for (const transaction of update.transactions) {
+        const event = String(
+          (ArticleTransaction && ArticleTransaction.userEvent
+            ? transaction.annotation(ArticleTransaction.userEvent)
+            : "") || "",
+        );
+        if ((event === "undo" || event === "input.undo") && history) {
+          const current = update.state.doc.toString();
+          if (current === history.before) this.articleUndoBlocked.add(path);
+        } else if (
+          event === "paste" || event === "input.paste" ||
+          event === "input" || event.startsWith("input.") || event.startsWith("delete.")
+        ) {
+          this.articleUndoBlocked.delete(path);
+          this.articleFormatHistory.delete(path);
+        }
       }
     }
+    this.articleObserveLookUpdate(update);
   }
 
   async articleFormatActive(view, options = {}) {
@@ -496,6 +795,7 @@ class BobArticlesPlugin extends Plugin {
     }
     if (formatted !== sent && !this.articleDispatchChanges(view, sent, formatted, changes)) return false;
     if (formatted !== sent) this.articleFormatHistory.set(path, { before: sent, after: formatted });
+    this.articleRememberPlan(path, plan, { applied: formatted !== sent });
     await this.articleApplyInbound(plan);
     if (plan.status === "changed") this.articleShowNotice(articleNoticeText(plan));
     return formatted !== sent;
@@ -556,6 +856,7 @@ class BobArticlesPlugin extends Plugin {
       if (!this.articleDispatchChanges(view, sent, formatted, changes)) return false;
       this.articleFormatHistory.set(view.file.path, { before: sent, after: formatted });
     }
+    this.articleRememberPlan(view.file.path, plan, { applied: formatted !== sent });
     await this.articleApplyInbound(plan);
     if (plan.status === "changed") this.articleShowNotice(articleNoticeText(plan));
     if (typeof view.save === "function") {
@@ -643,7 +944,10 @@ class BobArticlesPlugin extends Plugin {
         applied = false;
       }
     }
-    if (applied || formatted === sent) await this.articleApplyInbound(plan);
+    if (applied || formatted === sent) {
+      this.articleRememberPlan(file.path, plan, { applied });
+      await this.articleApplyInbound(plan);
+    }
     if (plan.status === "changed" && (applied || formatted === sent)) {
       this.articleShowNotice(articleNoticeText(plan));
     }
@@ -743,9 +1047,334 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     catch (error) { finish({ ok: false, code: "stdin-error", message: String(error && error.message || error) }); }
   });
 }
+// ---- src/035-plugin-look.js ----
+BobArticlesPlugin.prototype.articleSetupLook = function articleSetupLook() {
+  this.articleOutlines = this.articleOutlines || new Map();
+  this.articleLookGeneration = this.articleLookGeneration || new Map();
+  this.articleLookState = this.articleLookState || articleCreateLookState();
+  this.articleStaleTimers = this.articleStaleTimers || new Map();
+
+  const extension = this.articleCreateSecnoExtension();
+  if (extension && typeof this.registerEditorExtension === "function") {
+    this.registerEditorExtension(extension);
+  }
+  if (typeof this.registerMarkdownPostProcessor === "function") {
+    this.registerMarkdownPostProcessor((el, ctx) => this.articleRenderReadingSecnos(el, ctx), 50);
+  }
+  if (typeof this.registerDomEvent === "function") {
+    this.registerDomEvent(window, "compositionstart", () => this.articleSetComposing(true));
+    this.registerDomEvent(window, "compositionend", () => {
+      this.articleSetComposing(false);
+      const view = this.articleActiveMarkdownView();
+      if (view && view.file) this.articleArmStaleHintTimer(view.file.path, view);
+    });
+  }
+  this.articleSetupStatusBar();
+};
+
+BobArticlesPlugin.prototype.articleTeardownLook = function articleTeardownLook() {
+  for (const timer of (this.articleStaleTimers || new Map()).values()) clearTimeout(timer);
+  if (this.articleStaleTimers) this.articleStaleTimers.clear();
+  this.articlePaintStatusBar(null);
+};
+
+BobArticlesPlugin.prototype.articleSetComposing = function articleSetComposing(composing) {
+  const view = this.articleActiveMarkdownView();
+  const path = view && view.file && view.file.path;
+  if (!path || !this.articleLookState) return;
+  if (composing) this.articleLookState.composing.add(path);
+  else this.articleLookState.composing.delete(path);
+};
+
+BobArticlesPlugin.prototype.articleCreateSecnoExtension = function articleCreateSecnoExtension() {
+  if (!ArticleViewPlugin || typeof ArticleViewPlugin.fromClass !== "function" || !ArticleDecoration) {
+    return null;
+  }
+  const plugin = this;
+  const SecnoPlugin = class {
+    constructor(view) {
+      this.decorations = plugin.articleBuildSecnoDecorations(view);
+      this.generation = plugin.articleLookGenerationForView(view);
+    }
+
+    update(update) {
+      const generation = plugin.articleLookGenerationForView(update.view);
+      if (generation !== this.generation) {
+        this.generation = generation;
+        this.decorations = plugin.articleBuildSecnoDecorations(update.view);
+        return;
+      }
+      if (update.docChanged && this.decorations && typeof this.decorations.map === "function") {
+        this.decorations = this.decorations.map(update.changes);
+      }
+    }
+  };
+  const extension = ArticleViewPlugin.fromClass(SecnoPlugin, {
+    decorations: (value) => value.decorations,
+  });
+  if (ArticlePrec && typeof ArticlePrec.high === "function") return ArticlePrec.high(extension);
+  return extension;
+};
+
+BobArticlesPlugin.prototype.articleLookGenerationForView = function articleLookGenerationForView(view) {
+  const path = this.articlePathForCmView(view);
+  return path && this.articleLookGeneration ? (this.articleLookGeneration.get(path) || 0) : 0;
+};
+
+BobArticlesPlugin.prototype.articlePathForCmView = function articlePathForCmView(view) {
+  try {
+    if (ArticleEditorInfoField && view && view.state) {
+      const info = view.state.field(ArticleEditorInfoField);
+      if (info && info.file && info.file.path) return info.file.path;
+    }
+  } catch (error) {
+    // Fall through to workspace matching.
+  }
+  try {
+    const workspace = this.app && this.app.workspace;
+    if (workspace && typeof workspace.getLeavesOfType === "function") {
+      for (const leaf of workspace.getLeavesOfType("markdown")) {
+        const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+        if (cm === view) return leaf.view.file && leaf.view.file.path;
+      }
+    }
+  } catch (error) {
+    // Fall through to the active view.
+  }
+  const active = this.articleActiveMarkdownView();
+  if (active && active.editor && active.editor.cm === view && active.file) return active.file.path;
+  return null;
+};
+
+BobArticlesPlugin.prototype.articleBuildSecnoDecorations = function articleBuildSecnoDecorations(view) {
+  try {
+    if (!ArticleDecoration) return null;
+    const path = this.articlePathForCmView(view);
+    const outline = path && this.articleOutlines ? this.articleOutlines.get(path) : null;
+    const text = view && view.state && view.state.doc && typeof view.state.doc.toString === "function"
+      ? view.state.doc.toString()
+      : "";
+    const ranges = articleSecnoDecorationRanges(text, outline);
+    if (!ranges.length) return ArticleDecoration.none;
+    if (!ArticleRangeSetBuilder) return ArticleDecoration.none;
+    const builder = new ArticleRangeSetBuilder();
+    for (const range of ranges) {
+      const spec = { class: range.stale ? "bob-secno is-stale" : "bob-secno" };
+      if (range.titleAttr) spec.attributes = { title: range.titleAttr };
+      builder.add(range.from, range.to, ArticleDecoration.mark(spec));
+    }
+    return builder.finish();
+  } catch (error) {
+    return ArticleDecoration && ArticleDecoration.none;
+  }
+};
+
+BobArticlesPlugin.prototype.articleRefreshSecnoViews = function articleRefreshSecnoViews(path) {
+  const workspace = this.app && this.app.workspace;
+  if (!workspace || typeof workspace.getLeavesOfType !== "function") return;
+  for (const leaf of workspace.getLeavesOfType("markdown")) {
+    const view = leaf && leaf.view;
+    if (!view || !view.file || view.file.path !== path) continue;
+    const cm = view.editor && view.editor.cm;
+    if (!cm || typeof cm.dispatch !== "function") continue;
+    try { cm.dispatch({}); } catch (error) { /* A later edit still remaps. */ }
+  }
+};
+
+BobArticlesPlugin.prototype.articleRememberPlan = function articleRememberPlan(path, plan, options = {}) {
+  if (!path || !plan || !plan.outline) return;
+  if (!this.articleOutlines) this.articleOutlines = new Map();
+  if (!this.articleLookGeneration) this.articleLookGeneration = new Map();
+  this.articleOutlines.set(path, articleOutlineForCurrentBuffer(plan.outline, Boolean(options.applied)));
+  this.articleLookGeneration.set(path, (this.articleLookGeneration.get(path) || 0) + 1);
+  this.articleRefreshSecnoViews(path);
+};
+
+BobArticlesPlugin.prototype.articleEnsureOutline = function articleEnsureOutline(snapshot, options = {}) {
+  if (!snapshot || !snapshot.file || !snapshot.view || !snapshot.view.editor) return;
+  if (!articleHasArticleType(this.articleFrontmatter(snapshot.file))) return;
+  const path = snapshot.file.path;
+  if (!options.force && this.articleOutlines && this.articleOutlines.has(path)) {
+    this.articleRefreshStatusBar(snapshot.view);
+    this.articleRefreshSecnoViews(path);
+    return;
+  }
+  void this.articleRefreshOutlineFromBuffer(path, snapshot.view.editor.getValue(), snapshot.view);
+};
+
+BobArticlesPlugin.prototype.articleRefreshOutlineFromBuffer = async function articleRefreshOutlineFromBuffer(path, text, view) {
+  const result = await this.articleRunPlan("format", path, text);
+  if (!result.ok || !result.plan) return;
+  if (result.plan.status === "skipped" || result.plan.status === "error") return;
+  this.articleRememberPlan(path, result.plan, { applied: false });
+  if (view) this.articleRefreshStatusBar(view);
+};
+
+BobArticlesPlugin.prototype.articleObserveLookUpdate = function articleObserveLookUpdate(update) {
+  if (!this.articleLookState || !update) return;
+  const path = this.articlePathForCmView(update.view);
+  const view = this.articleViewForPath(path) || this.articleActiveMarkdownView();
+  const active = this.articleActiveMarkdownView();
+  if (!path || !view || !view.file || !articleHasArticleType(this.articleFrontmatter(view.file))) {
+    if (active && view && active.file && view.file && active.file.path === view.file.path) {
+      this.articlePaintStatusBar(null);
+    }
+    return;
+  }
+  if (update.view && update.view.composing) this.articleLookState.composing.add(path);
+  else this.articleLookState.composing.delete(path);
+  if (update.docChanged) this.articleScheduleStaleHint(path, view);
+  if (view.file.path === path) this.articleRefreshStatusBar(view);
+};
+
+BobArticlesPlugin.prototype.articleViewForPath = function articleViewForPath(path) {
+  if (!path) return null;
+  const workspace = this.app && this.app.workspace;
+  if (workspace && typeof workspace.getLeavesOfType === "function") {
+    for (const leaf of workspace.getLeavesOfType("markdown")) {
+      const view = leaf && leaf.view;
+      if (view && view.file && view.file.path === path && view.editor) return view;
+    }
+  }
+  const active = this.articleActiveMarkdownView();
+  return active && active.file && active.file.path === path ? active : null;
+};
+
+BobArticlesPlugin.prototype.articleScheduleStaleHint = function articleScheduleStaleHint(path, view) {
+  if (!this.articleLookState) return;
+  articleNoteStaleHintEdit(this.articleLookState, path);
+  this.articleArmStaleHintTimer(path, view);
+};
+
+BobArticlesPlugin.prototype.articleArmStaleHintTimer = function articleArmStaleHintTimer(path, view) {
+  if (!this.articleStaleTimers) this.articleStaleTimers = new Map();
+  const existing = this.articleStaleTimers.get(path);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    this.articleStaleTimers.delete(path);
+    void this.articleFireStaleHint(path, view);
+  }, ARTICLE_STALE_HINT_MS);
+  this.articleStaleTimers.set(path, timer);
+};
+
+BobArticlesPlugin.prototype.articleFireStaleHint = async function articleFireStaleHint(path, view) {
+  if (!this.articleLookState) return;
+  const liveView = this.articleViewForPath(path) || view;
+  const composing = this.articleLookState.composing.has(path)
+    || Boolean(liveView && liveView.editor && liveView.editor.cm && liveView.editor.cm.composing);
+  const decision = articleNoteStaleHintTimer(this.articleLookState, path, {
+    desktop: articleIsDesktopApp(),
+    enabled: !(this.settings && this.settings.staleNumberHints === false),
+    composing,
+  });
+  if (decision.action === "schedule") {
+    this.articleArmStaleHintTimer(path, liveView);
+    return;
+  }
+  if (decision.action !== "spawn") return;
+  if (!liveView || !liveView.editor) {
+    articleNoteStaleHintResult(this.articleLookState, path, decision.version);
+    return;
+  }
+  const text = liveView.editor.getValue();
+  const result = await this.articleRunPlan("format", path, text);
+  const settled = articleNoteStaleHintResult(this.articleLookState, path, decision.version);
+  if (settled.reschedule) this.articleArmStaleHintTimer(path, liveView);
+  if (!settled.accept) return;
+  if (!result.ok || !result.plan || result.plan.status === "skipped" || result.plan.status === "error") return;
+  if (liveView.editor.getValue() !== text) return;
+  this.articleRememberPlan(path, result.plan, { applied: false });
+  this.articleRefreshStatusBar(liveView);
+};
+
+BobArticlesPlugin.prototype.articleRenderReadingSecnos = function articleRenderReadingSecnos(el, ctx) {
+  if (!el || !ctx || !this.articleOutlines) return;
+  const path = ctx.sourcePath;
+  if (!path) return;
+  const outline = this.articleOutlines.get(path);
+  if (!outline) return;
+  let headings = [];
+  try {
+    headings = typeof el.querySelectorAll === "function" ? el.querySelectorAll("h1, h2, h3, h4, h5, h6") : [];
+  } catch (error) {
+    headings = [];
+  }
+  for (const heading of headings) {
+    let info = null;
+    try {
+      info = typeof ctx.getSectionInfo === "function"
+        ? (ctx.getSectionInfo(heading) || ctx.getSectionInfo(el))
+        : null;
+    } catch (error) {
+      info = null;
+    }
+    if (!info || !Number.isInteger(info.lineStart)) continue;
+    const line = info.lineStart + 1;
+    const section = articleSectionAtLine(outline, line);
+    if (!section || section.line !== line) continue;
+    articleWrapHeadingElement(heading, section);
+  }
+};
+
+BobArticlesPlugin.prototype.articleSetupStatusBar = function articleSetupStatusBar() {
+  if (typeof this.addStatusBarItem !== "function") return;
+  const el = this.addStatusBarItem();
+  if (!el) return;
+  this.articleStatusEl = el;
+  if (typeof el.addClass === "function") el.addClass("bob-article-status");
+  else if (el.classList && typeof el.classList.add === "function") el.classList.add("bob-article-status");
+  this.articlePaintStatusBar(null);
+};
+
+BobArticlesPlugin.prototype.articleRefreshStatusBar = function articleRefreshStatusBar(view) {
+  if (!view || !view.file || !articleHasArticleType(this.articleFrontmatter(view.file))) {
+    this.articlePaintStatusBar(null);
+    return;
+  }
+  const outline = this.articleOutlines ? this.articleOutlines.get(view.file.path) : null;
+  let line = 1;
+  try {
+    if (view.editor && typeof view.editor.getCursor === "function") {
+      const cursor = view.editor.getCursor();
+      line = (cursor && Number.isInteger(cursor.line) ? cursor.line : 0) + 1;
+    } else if (view.editor && view.editor.cm && view.editor.cm.state) {
+      const head = view.editor.cm.state.selection.main.head;
+      line = view.editor.cm.state.doc.lineAt(head).number;
+    }
+  } catch (error) {
+    line = 1;
+  }
+  this.articlePaintStatusBar(articleStatusBarModel(outline, line));
+};
+
+BobArticlesPlugin.prototype.articlePaintStatusBar = function articlePaintStatusBar(model) {
+  const el = this.articleStatusEl;
+  if (!el) return;
+  const hide = !model;
+  if (typeof el.toggleClass === "function") {
+    el.toggleClass("bob-article-status-hidden", hide);
+  } else if (el.classList && typeof el.classList.toggle === "function") {
+    el.classList.toggle("bob-article-status-hidden", hide);
+  }
+  const text = hide ? "" : model.text;
+  if (typeof el.setText === "function") el.setText(text);
+  else el.textContent = text;
+  const title = hide ? "" : (model.title || "");
+  if (typeof el.setAttribute === "function") {
+    if (title) el.setAttribute("aria-label", title);
+    else el.removeAttribute("aria-label");
+  }
+  el.title = title;
+};
 // ---- src/040-modal-settings.js ----
 function articleDefaultSettings() {
-  return { formatOnSave: true, formatOnLeave: true, bobPath: "" };
+  return {
+    formatOnSave: true,
+    formatOnLeave: true,
+    bobPath: "",
+    articleTypeface: "serif",
+    staleNumberHints: true,
+  };
 }
 
 class BobArticleAdoptModal extends Modal {
@@ -834,6 +1463,27 @@ class BobArticlesSettingTab extends PluginSettingTab {
           await this.plugin.saveData(this.plugin.settings);
         }));
     new Setting(containerEl)
+      .setName("Article typeface")
+      .setDesc("Serif body text with the theme's heading face, or keep the theme typeface.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("serif", "Serif")
+        .addOption("theme", "Theme")
+        .setValue(this.plugin.settings.articleTypeface || "serif")
+        .onChange(async (value) => {
+          this.plugin.settings.articleTypeface = value === "theme" ? "theme" : "serif";
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.articleRefreshViewClasses();
+        }));
+    new Setting(containerEl)
+      .setName("Show stale-number hints")
+      .setDesc("After you pause typing, underline section numbers that will change on save.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.staleNumberHints !== false)
+        .onChange(async (value) => {
+          this.plugin.settings.staleNumberHints = value;
+          await this.plugin.saveData(this.plugin.settings);
+        }));
+    new Setting(containerEl)
       .setName("bob path")
       .setDesc("Leave blank to find bob in its usual install locations or on PATH.")
       .addText((text) => text
@@ -851,6 +1501,7 @@ module.exports.helpers = {
   ARTICLE_PLAN_SCHEMA_VERSION,
   ARTICLE_BOB_TIMEOUT_MS,
   ARTICLE_BOB_CANDIDATES,
+  ARTICLE_STALE_HINT_MS,
   articleExpandHome,
   articleHomeDir,
   articleBobCandidatePaths,
@@ -867,4 +1518,19 @@ module.exports.helpers = {
   articleEditPreviewLines,
   articleSpawnBob,
   articleDefaultSettings,
+  articleStripSectionNumber,
+  articleSecnoRangeOnLine,
+  articleSecnoDecorationRanges,
+  articleMapDecorationRanges,
+  articleSectionAtLine,
+  articleStatusBarModel,
+  articleHeadingWrapSpec,
+  articleWrappedHeadingChildren,
+  articleWrapHeadingElement,
+  articleOutlineForCurrentBuffer,
+  articleCreateLookState,
+  articleNoteStaleHintEdit,
+  articleNoteStaleHintTimer,
+  articleNoteStaleHintResult,
+  articleIsDesktopApp,
 };

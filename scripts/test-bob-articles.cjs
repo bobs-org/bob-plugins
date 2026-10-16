@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 
 class TestMarkdownView {}
@@ -229,4 +231,206 @@ test("format drops its response if the editor changed while bob was running", as
   assert.equal(await plugin.articleFormatView(view), false);
   assert.equal(dispatches, 0);
   assert.equal(value, "## Fresh edit\n");
+});
+
+const LOOK_TEXT = "# 1. Start\n\n## 1.1 Draft\nBody\n";
+const LOOK_OUTLINE = {
+  numbering: true,
+  sections: [
+    { line: 1, end_line: 2, written: "1.", number: "1.", stale: false, title: "Start", output_line: 1 },
+    { line: 3, end_line: 4, written: "1.1", number: "1.2", stale: true, title: "Draft", output_line: 3 },
+  ],
+};
+
+test("decoration ranges mark written section numbers from the outline", () => {
+  const ranges = helpers.articleSecnoDecorationRanges(LOOK_TEXT, LOOK_OUTLINE);
+  assert.deepEqual(ranges.map((range) => ({
+    from: range.from,
+    to: range.to,
+    token: range.token,
+    stale: range.stale,
+    titleAttr: range.titleAttr,
+  })), [
+    { from: 2, to: 4, token: "1.", stale: false, titleAttr: "" },
+    { from: 15, to: 18, token: "1.1", stale: true, titleAttr: "Becomes 1.2 on save" },
+  ]);
+  const mapped = helpers.articleMapDecorationRanges(ranges, { mapPos: (pos) => pos + 3 });
+  assert.equal(mapped[0].from, 5);
+  assert.equal(mapped[0].to, 7);
+  assert.deepEqual(helpers.articleSecnoDecorationRanges(LOOK_TEXT, { sections: [] }), []);
+});
+
+test("section at a given line uses the innermost outline range", () => {
+  assert.equal(helpers.articleSectionAtLine(LOOK_OUTLINE, 1).title, "Start");
+  assert.equal(helpers.articleSectionAtLine(LOOK_OUTLINE, 2).title, "Start");
+  assert.equal(helpers.articleSectionAtLine(LOOK_OUTLINE, 3).title, "Draft");
+  assert.equal(helpers.articleSectionAtLine(LOOK_OUTLINE, 4).title, "Draft");
+  assert.equal(helpers.articleSectionAtLine(LOOK_OUTLINE, 0), null);
+  const nested = {
+    numbering: true,
+    sections: [
+      { line: 1, end_line: 10, number: "1.", title: "Outer" },
+      { line: 4, end_line: 7, number: "1.1", title: "Inner" },
+    ],
+  };
+  assert.equal(helpers.articleSectionAtLine(nested, 5).title, "Inner");
+  assert.equal(helpers.articleSectionAtLine(nested, 9).title, "Outer");
+  assert.deepEqual(helpers.articleStatusBarModel(LOOK_OUTLINE, 3), {
+    text: "§ 1.2",
+    title: "Draft",
+  });
+  assert.deepEqual(helpers.articleStatusBarModel(LOOK_OUTLINE, 1), {
+    text: "§ 1",
+    title: "Start",
+  });
+  assert.equal(helpers.articleStatusBarModel({ numbering: false, sections: LOOK_OUTLINE.sections }, 3), null);
+  assert.equal(helpers.articleStatusBarModel({ numbering: true, sections: [{ line: 8, end_line: 12, number: "1.", title: "Later" }] }, 2), null);
+});
+
+test("stale-hint debounce and in-flight state machine", () => {
+  const state = helpers.articleCreateLookState();
+  const edit = helpers.articleNoteStaleHintEdit(state, "a.md");
+  assert.equal(edit.action, "schedule");
+  assert.equal(edit.delay, helpers.ARTICLE_STALE_HINT_MS);
+  assert.equal(edit.version, 1);
+
+  const composing = helpers.articleNoteStaleHintTimer(state, "a.md", {
+    composing: true,
+    desktop: true,
+    enabled: true,
+  });
+  assert.equal(composing.action, "schedule");
+
+  const spawn = helpers.articleNoteStaleHintTimer(state, "a.md", { desktop: true, enabled: true });
+  assert.equal(spawn.action, "spawn");
+  assert.equal(spawn.version, 1);
+  assert.equal(helpers.articleNoteStaleHintTimer(state, "a.md", { desktop: true, enabled: true }).action, "wait");
+
+  helpers.articleNoteStaleHintEdit(state, "a.md");
+  const dropped = helpers.articleNoteStaleHintResult(state, "a.md", 1);
+  assert.equal(dropped.accept, false);
+  assert.equal(dropped.reschedule, true);
+
+  const spawn2 = helpers.articleNoteStaleHintTimer(state, "a.md", { desktop: true, enabled: true });
+  assert.equal(spawn2.action, "spawn");
+  assert.equal(spawn2.version, 2);
+  const accepted = helpers.articleNoteStaleHintResult(state, "a.md", 2);
+  assert.equal(accepted.accept, true);
+  assert.equal(accepted.reschedule, false);
+
+  const mobile = helpers.articleCreateLookState();
+  helpers.articleNoteStaleHintEdit(mobile, "a.md");
+  assert.equal(helpers.articleNoteStaleHintTimer(mobile, "a.md", { desktop: false, enabled: true }).action, "idle");
+  const disabled = helpers.articleCreateLookState();
+  helpers.articleNoteStaleHintEdit(disabled, "a.md");
+  assert.equal(helpers.articleNoteStaleHintTimer(disabled, "a.md", { desktop: true, enabled: false }).action, "idle");
+});
+
+test("reading-view wrapping puts the leading number token in span.bob-secno", () => {
+  assert.deepEqual(
+    helpers.articleWrappedHeadingChildren("1. The Abstractions", {
+      written: "1.",
+      number: "1.",
+      stale: false,
+    }),
+    [
+      { type: "span", className: "bob-secno", title: "", value: "1." },
+      { type: "text", value: " The Abstractions" },
+    ],
+  );
+  assert.deepEqual(
+    helpers.articleWrappedHeadingChildren("1.2 Draft", {
+      written: "1.2",
+      number: "1.3",
+      stale: true,
+    }),
+    [
+      { type: "span", className: "bob-secno is-stale", title: "Becomes 1.3 on save", value: "1.2" },
+      { type: "text", value: " Draft" },
+    ],
+  );
+  assert.equal(helpers.articleHeadingWrapSpec("No number", { written: "1." }), null);
+
+  const textNode = { nodeType: 3, nodeName: "#text", nodeValue: "1. Title", parentNode: null };
+  const heading = {
+    childNodes: [textNode],
+    querySelector(selector) {
+      return selector === ".bob-secno"
+        ? this.childNodes.find((node) => node.className && String(node.className).includes("bob-secno")) || null
+        : null;
+    },
+    insertBefore(node, ref) {
+      const index = this.childNodes.indexOf(ref);
+      this.childNodes.splice(index, 0, node);
+      node.parentNode = this;
+    },
+    removeChild(node) {
+      this.childNodes.splice(this.childNodes.indexOf(node), 1);
+    },
+  };
+  textNode.parentNode = heading;
+  const documentRef = {
+    createElement() {
+      return {
+        className: "",
+        title: "",
+        childNodes: [],
+        setAttribute(name, value) { this[name] = value; },
+        appendChild(node) { this.childNodes.push(node); this.textContent = node.nodeValue; },
+      };
+    },
+    createTextNode(value) {
+      return { nodeType: 3, nodeName: "#text", nodeValue: value };
+    },
+  };
+  assert.equal(
+    helpers.articleWrapHeadingElement(heading, { written: "1.", number: "1.1", stale: true }, documentRef),
+    true,
+  );
+  assert.equal(heading.childNodes[0].className, "bob-secno is-stale");
+  assert.equal(heading.childNodes[0].title, "Becomes 1.1 on save");
+  assert.equal(heading.childNodes[1].nodeValue, " Title");
+  assert.equal(helpers.articleWrapHeadingElement(heading, { written: "1.", stale: true }, documentRef), false);
+});
+
+test("applied plans remap outline lines onto the formatted buffer", () => {
+  const remapped = helpers.articleOutlineForCurrentBuffer({
+    numbering: true,
+    sections: [{ line: 4, output_line: 6, written: "3.", number: "1.2", stale: true, title: "Draft" }],
+  }, true);
+  assert.deepEqual(remapped.sections[0], {
+    line: 6,
+    output_line: 6,
+    written: "1.2",
+    number: "1.2",
+    stale: false,
+    title: "Draft",
+  });
+});
+
+test("article styles scope the reading look under .bob-article", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-articles/styles.css"),
+    "utf8",
+  );
+  assert.match(css, /\.bob-article\s*\{/);
+  assert.match(css, /--file-line-width:\s*40rem/);
+  assert.match(css, /--line-height-normal:\s*1\.65/);
+  assert.match(css, /bob-article-serif/);
+  assert.match(css, /ui-serif/);
+  assert.match(css, /\.bob-secno/);
+  assert.match(css, /tabular-nums/);
+  assert.match(css, /is-stale/);
+  assert.match(css, /@container/);
+  assert.match(css, /@media print/);
+});
+
+test("look settings default to serif typeface and stale-number hints", () => {
+  assert.deepEqual(helpers.articleDefaultSettings(), {
+    formatOnSave: true,
+    formatOnLeave: true,
+    bobPath: "",
+    articleTypeface: "serif",
+    staleNumberHints: true,
+  });
 });

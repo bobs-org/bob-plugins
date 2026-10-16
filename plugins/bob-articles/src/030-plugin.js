@@ -9,6 +9,11 @@ class BobArticlesPlugin extends Plugin {
     this.articleBobErrorNoticed = false;
     this.articleLeaveTimers = new Set();
     this.articleSaveCommand = null;
+    this.articleOutlines = new Map();
+    this.articleLookGeneration = new Map();
+    this.articleLookState = articleCreateLookState();
+    this.articleStaleTimers = new Map();
+    this.articleStatusEl = null;
 
     this.addSettingTab(new BobArticlesSettingTab(this.app, this));
     this.addCommand({
@@ -52,6 +57,7 @@ class BobArticlesPlugin extends Plugin {
       );
     }
     this.articleWrapSaveCommand();
+    this.articleSetupLook();
     this.articleHandleActiveChange(true);
   }
 
@@ -60,6 +66,7 @@ class BobArticlesPlugin extends Plugin {
       this.articleSaveCommand.command.callback = this.articleSaveCommand.original;
     }
     for (const timer of this.articleLeaveTimers || []) clearTimeout(timer);
+    this.articleTeardownLook();
     const workspace = this.app && this.app.workspace;
     if (workspace && typeof workspace.getLeavesOfType === "function") {
       for (const leaf of workspace.getLeavesOfType("markdown")) {
@@ -112,6 +119,9 @@ class BobArticlesPlugin extends Plugin {
     }
     this.articleActiveSnapshot = current;
     this.articleRefreshViewClasses();
+    const pathChanged = !previous || !current || previous.path !== current.path;
+    if (current && (initial || pathChanged)) this.articleEnsureOutline(current, { force: pathChanged });
+    this.articleRefreshStatusBar(current && current.view);
   }
 
   articleRefreshViewClasses() {
@@ -123,6 +133,9 @@ class BobArticlesPlugin extends Plugin {
       if (!element || !element.classList) continue;
       const isArticle = view.file && articleHasArticleType(this.articleFrontmatter(view.file));
       element.classList.toggle("bob-article", Boolean(isArticle));
+      const serif = Boolean(isArticle) && (!this.settings || this.settings.articleTypeface !== "theme");
+      element.classList.toggle("bob-article-serif", serif);
+      if (!isArticle && view.file && this.articleOutlines) this.articleOutlines.delete(view.file.path);
     }
   }
 
@@ -147,25 +160,27 @@ class BobArticlesPlugin extends Plugin {
   articleObserveEditorUpdate(update) {
     const view = this.articleActiveMarkdownView();
     const path = view && view.file && view.file.path;
-    if (!path || !update || !Array.isArray(update.transactions)) return;
-    const history = this.articleFormatHistory.get(path);
-    for (const transaction of update.transactions) {
-      const event = String(
-        (ArticleTransaction && ArticleTransaction.userEvent
-          ? transaction.annotation(ArticleTransaction.userEvent)
-          : "") || "",
-      );
-      if ((event === "undo" || event === "input.undo") && history) {
-        const current = update.state.doc.toString();
-        if (current === history.before) this.articleUndoBlocked.add(path);
-      } else if (
-        event === "paste" || event === "input.paste" ||
-        event === "input" || event.startsWith("input.") || event.startsWith("delete.")
-      ) {
-        this.articleUndoBlocked.delete(path);
-        this.articleFormatHistory.delete(path);
+    if (path && update && Array.isArray(update.transactions)) {
+      const history = this.articleFormatHistory.get(path);
+      for (const transaction of update.transactions) {
+        const event = String(
+          (ArticleTransaction && ArticleTransaction.userEvent
+            ? transaction.annotation(ArticleTransaction.userEvent)
+            : "") || "",
+        );
+        if ((event === "undo" || event === "input.undo") && history) {
+          const current = update.state.doc.toString();
+          if (current === history.before) this.articleUndoBlocked.add(path);
+        } else if (
+          event === "paste" || event === "input.paste" ||
+          event === "input" || event.startsWith("input.") || event.startsWith("delete.")
+        ) {
+          this.articleUndoBlocked.delete(path);
+          this.articleFormatHistory.delete(path);
+        }
       }
     }
+    this.articleObserveLookUpdate(update);
   }
 
   async articleFormatActive(view, options = {}) {
@@ -206,6 +221,7 @@ class BobArticlesPlugin extends Plugin {
     }
     if (formatted !== sent && !this.articleDispatchChanges(view, sent, formatted, changes)) return false;
     if (formatted !== sent) this.articleFormatHistory.set(path, { before: sent, after: formatted });
+    this.articleRememberPlan(path, plan, { applied: formatted !== sent });
     await this.articleApplyInbound(plan);
     if (plan.status === "changed") this.articleShowNotice(articleNoticeText(plan));
     return formatted !== sent;
@@ -266,6 +282,7 @@ class BobArticlesPlugin extends Plugin {
       if (!this.articleDispatchChanges(view, sent, formatted, changes)) return false;
       this.articleFormatHistory.set(view.file.path, { before: sent, after: formatted });
     }
+    this.articleRememberPlan(view.file.path, plan, { applied: formatted !== sent });
     await this.articleApplyInbound(plan);
     if (plan.status === "changed") this.articleShowNotice(articleNoticeText(plan));
     if (typeof view.save === "function") {
@@ -353,7 +370,10 @@ class BobArticlesPlugin extends Plugin {
         applied = false;
       }
     }
-    if (applied || formatted === sent) await this.articleApplyInbound(plan);
+    if (applied || formatted === sent) {
+      this.articleRememberPlan(file.path, plan, { applied });
+      await this.articleApplyInbound(plan);
+    }
     if (plan.status === "changed" && (applied || formatted === sent)) {
       this.articleShowNotice(articleNoticeText(plan));
     }

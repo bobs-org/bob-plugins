@@ -1,5 +1,11 @@
 function articleDefaultSettings() {
-  return { formatOnSave: true, formatOnLeave: true, bobPath: "" };
+  return {
+    formatOnSave: true,
+    formatOnLeave: true,
+    bobPath: "",
+    articleTypeface: "serif",
+    staleNumberHints: true,
+  };
 }
 
 class BobArticleAdoptModal extends Modal {
@@ -85,6 +91,27 @@ class BobArticlesSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.formatOnLeave)
         .onChange(async (value) => {
           this.plugin.settings.formatOnLeave = value;
+          await this.plugin.saveData(this.plugin.settings);
+        }));
+    new Setting(containerEl)
+      .setName("Article typeface")
+      .setDesc("Serif body text with the theme's heading face, or keep the theme typeface.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("serif", "Serif")
+        .addOption("theme", "Theme")
+        .setValue(this.plugin.settings.articleTypeface || "serif")
+        .onChange(async (value) => {
+          this.plugin.settings.articleTypeface = value === "theme" ? "theme" : "serif";
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.articleRefreshViewClasses();
+        }));
+    new Setting(containerEl)
+      .setName("Show stale-number hints")
+      .setDesc("After you pause typing, underline section numbers that will change on save.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.staleNumberHints !== false)
+        .onChange(async (value) => {
+          this.plugin.settings.staleNumberHints = value;
           await this.plugin.saveData(this.plugin.settings);
         }));
     new Setting(containerEl)

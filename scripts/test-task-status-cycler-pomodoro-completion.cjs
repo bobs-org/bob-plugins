@@ -879,3 +879,90 @@ test("Ctrl+Enter deferred-only close deletes the entry in one gesture", async ()
   );
 });
 
+test("deferred-only close keeps a separated prose child and deletes fence-only leftovers whole", () => {
+  // Exact move-only spelling: immediately adjacent `#`.
+  const withProse = [
+    "## Pomodoros",
+    "- [ ] (1000-1025) — FOCUS",
+    "  - [[Tasks#^a|A]]#",
+    "",
+    "  - retain this prose",
+    "- [ ] () — NEXT",
+  ];
+  {
+    const section = helpers.findPomodorosSectionInLines(withProse);
+    const plan = helpers.buildPomodoroCompletionPlan(withProse, section, 1);
+    assert.equal(plan.deferredOnlyClose, false);
+    assert.equal(plan.cursorTargetLine, 4);
+  }
+  // Fence-only remainder: whole block goes, stripped link carried.
+  const fenced = [
+    "## Pomodoros",
+    "- [ ] (1000-1025) — FOCUS",
+    "  - [[Tasks#^a|A]]#",
+    "  ```",
+    "  - example",
+    "  ```",
+    "- [ ] () — NEXT",
+  ];
+  {
+    const section = helpers.findPomodorosSectionInLines(fenced);
+    const plan = helpers.buildPomodoroCompletionPlan(fenced, section, 1);
+    assert.equal(plan.deferredOnlyClose, true);
+    assert.deepEqual(plan.copiedBulletLines, ["  - [[Tasks#^a|A]]"]);
+    const editor = createTextEditor(fenced.join("\n"), { line: 1, ch: 4 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.scheduleCenterEditorLineInView = () => {};
+    plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor());
+    assert.equal(
+      editor.getValue(),
+      [
+        "## Pomodoros",
+        "- [ ] () — FOCUS",
+        "  - [[Tasks#^a|A]]",
+        "- [ ] () — NEXT",
+      ].join("\n"),
+    );
+  }
+  // LF/CRLF with and without final newline: the planner sees editor lines
+  // (split by the file's own ending, so no stray `\r`), and a
+  // continuation-only remainder still deletes whole-block.
+  for (const ending of ["\n", "\r\n"]) {
+    for (const finalNewline of [false, true]) {
+      const build = (body) => body.join(ending) + (finalNewline ? ending : "");
+      const raw = build([
+        "## Pomodoros",
+        "- [ ] (1000-1025) — FOCUS",
+        "  - [[Tasks#^a|A]]#",
+        "  continuation only",
+        "- [ ] () — NEXT",
+      ]).split(ending);
+      const section = helpers.findPomodorosSectionInLines(raw);
+      const plan = helpers.buildPomodoroCompletionPlan(raw, section, 1);
+      assert.equal(plan.deferredOnlyClose, true);
+    }
+  }
+});
+
+test("deferred-only successor relocation uses the inserted placeholder", () => {
+  const plugin = new TaskStatusCyclerPlugin();
+  const lines = [
+    "## Pomodoros",
+    "- [ ] () — FOCUS",
+    "  - [[Tasks#^a|A]]",
+    "- [ ] Later",
+  ];
+  assert.equal(
+    plugin.relocateSuccessorClosingEntry(lines, {
+      line: 1,
+      lineText: "- [ ] (1000-1025) — FOCUS",
+      name: "FOCUS",
+      createdPomodoro: true,
+      createdName: "FOCUS",
+      deletedClosedEntry: true,
+      createdLineText: "- [ ] () — FOCUS",
+    }),
+    1,
+  );
+});
+

@@ -396,3 +396,51 @@ function unstrikeSelectedTaskBlockLinkInLine(lineText, selection) {
   return nextLine === line ? null : nextLine;
 }
 
+// Full fence-aware entry-block end (inclusive), bounded by the Pomodoros
+// section and the next column-0 non-blank line. Unlike
+// getSubBulletBlockRange (contiguous indented list lines only), this spans
+// blank lines, continuation text, and fenced blocks, exactly like
+// block-id-prompt's pomodoroEntryEndLine. Never throws.
+function getFullPomodoroEntryEndLine(lines, pomodoroLine, section = null) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(pomodoroLine)) {
+      return pomodoroLine;
+    }
+    const endLine = section
+      ? Math.min(section.endLine, lines.length - 1)
+      : lines.length - 1;
+    let end = pomodoroLine;
+    for (let line = pomodoroLine + 1; line <= endLine; line += 1) {
+      const lineText = String(lines[line] || "");
+      if (lineText.trim() && getLineIndentation(lineText).length === 0) {
+        break;
+      }
+      end = line;
+    }
+    return end;
+  } catch (error) {
+    return pomodoroLine;
+  }
+}
+
+// True when the full entry block owns at least one surviving unfenced
+// list-item child. Fenced example bullets never count; blank lines and
+// indented continuation text never count. Never throws.
+function fullPomodoroEntryHasUnfencedListChild(lines, entryLine, fullEndLine, fenced) {
+  try {
+    const list = Array.isArray(lines) ? lines : [];
+    const fenceSet = fenced instanceof Set ? fenced : getFencedLineNumbers(list);
+    for (let line = entryLine + 1; line <= fullEndLine; line += 1) {
+      if (fenceSet.has(line)) {
+        continue;
+      }
+      if (LIST_ITEM_MARKER_RE.test(String(list[line] || ""))) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    return true;
+  }
+}
+

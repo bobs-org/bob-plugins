@@ -296,7 +296,7 @@ test("same-note Task Link: one merged editor write, overlapping edits deduped, c
   assert.equal(h.replaceCalls.length, 2, "deduped entry deletion and one token edit, no status write");
   const starts = h.replaceCalls.map((call) => call.from.line * 1000 + call.from.ch);
   assert.deepEqual(starts, [...starts].sort((left, right) => right - left));
-  assert.deepEqual(h.editor.cursor, { line: 3, ch: 6 });
+  assert.deepEqual(h.editor.cursor, { line: 2, ch: 6 });
   assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
 });
 
@@ -319,9 +319,9 @@ test("same-note Task Link deletion clamps the restored cursor to the shortened n
 
   assert.equal(
     h.editor.getValue(),
-    ["- [*] #task Ship it ^ship", "## Pomodoros", ""].join("\n"),
+    ["- [*] #task Ship it ^ship", "## Pomodoros"].join("\n"),
   );
-  assert.deepEqual(h.editor.cursor, { line: 2, ch: 0 });
+  assert.deepEqual(h.editor.cursor, { line: 1, ch: 12 });
 });
 
 test("a cleanup subtree that covers a nested selected link wins and links are not double counted", async () => {
@@ -345,7 +345,7 @@ test("a cleanup subtree that covers a nested selected link wins and links are no
 
   assert.equal(
     h.editor.getValue(),
-    ["- [ ] #task Ship it ^ship", "## Pomodoros", ""].join("\n"),
+    ["- [ ] #task Ship it ^ship", "## Pomodoros"].join("\n"),
   );
   // Three links matched; the lane never changes.
   assert.deepEqual(noticeMessages, ["Task Link removed · stays Ready"]);
@@ -389,8 +389,8 @@ test("Task Link in another day's note deletes the emptied entry there and in tod
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.equal(h.editor.getValue(), "## Pomodoros\n");
-  assert.deepEqual(h.writes, [{ path: "Daily.md", content: "## Pomodoros\n" }]);
+  assert.equal(h.editor.getValue(), "## Pomodoros");
+  assert.deepEqual(h.writes, [{ path: "Daily.md", content: "## Pomodoros" }]);
   assert.equal(h.store["Tasks.md"], NEXT_TASK);
   assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
 });
@@ -453,7 +453,7 @@ test("Task Link on an In Progress target with a blank summary logs nothing", asy
 
   assert.deepEqual(h.writes, []);
   assert.equal(h.store["Tasks.md"], "- [/] #task Ship it ^ship");
-  assert.equal(h.editor.getValue(), "## Pomodoros\n");
+  assert.equal(h.editor.getValue(), "## Pomodoros");
   assert.deepEqual(noticeMessages, ["Task Link removed · stays In Progress"]);
 });
 
@@ -803,4 +803,50 @@ test("Task Link subtree deletion removes a nested target task without any status
   assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
   assert.equal(h.editor.getValue(), "");
   assert.deepEqual(h.writes, []);
+});
+
+test("whole-entry deletion at EOF preserves final-newline state (LF/CRLF)", () => {
+  const base = {
+    targetPath: "Tasks.md",
+    targetBlockId: "a",
+    sourcePath: "Daily.md",
+    resolveTarget: () => "Tasks.md",
+  };
+  for (const ending of ["\n", "\r\n"]) {
+    for (const withFinal of [false, true]) {
+      const body = ["## Pomodoros", "", "- [ ] () — LAST", "  - [[Tasks#^a]]"];
+      const content = body.join(ending) + (withFinal ? ending : "");
+      const plan = helpers.planAllOpenPomodoroLinkCleanup(content, base);
+      assert.equal(plan.removedEntryCount, 1);
+      assert.equal(plan.removedCount, 1);
+      const expected = "## Pomodoros" + (withFinal ? ending : "");
+      assert.equal(plan.content, expected);
+    }
+  }
+});
+
+test("selected-link deletion maps a cursor inside a removed entry to its former start", async () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — REMOVE",
+    "  - [[Tasks#^ship]]",
+    "- [ ] () — KEEP",
+    "  - note",
+    "## Notes",
+    "more",
+  ].join("\n");
+  const h = createTaskLinkHarness({
+    files: { "Daily.md": content, "Tasks.md": NEXT_TASK },
+    activePath: "Daily.md",
+    cursor: { line: 2, ch: 6 },
+    targets: { Tasks: "Tasks.md" },
+    dailyPath: "Daily.md",
+  });
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.equal(
+    h.editor.getValue(),
+    ["## Pomodoros", "- [ ] () — KEEP", "  - note", "## Notes", "more"].join("\n"),
+  );
+  assert.deepEqual(h.editor.cursor, { line: 1, ch: 6 });
+  assert.deepEqual(noticeMessages, ["Task Link removed · stays Next"]);
 });

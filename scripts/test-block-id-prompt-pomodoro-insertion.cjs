@@ -186,7 +186,7 @@ test("planPomodoroLinkInsertion is idempotent and prunes a matching link from a 
   assert.equal(plan.removedEntryCount, 1);
   assert.equal(
     plan.content,
-    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^foobar]]", ""].join(
+    ["## Pomodoros", "- [ ] Current (10:00-10:25)", "  - [[Tasks#^foobar]]"].join(
       "\n",
     ),
   );
@@ -599,10 +599,10 @@ test("all-open cleanup removes decorated dedicated bullets whole and deletes the
   };
   const cases = [
     // [child bullet, expected postimage]
-    ["  - [ ] [[Tasks#^ship]] #", "## Pomodoros\n"],
-    ["  - 🍅 [[Tasks#^ship]]", "## Pomodoros\n"],
-    ["  - 🍅 🍅 ![[Tasks#^ship|Ship]]#", "## Pomodoros\n"],
-    ["  - ~~[[Tasks#^ship]]~~", "## Pomodoros\n"],
+    ["  - [ ] [[Tasks#^ship]] #", "## Pomodoros"],
+    ["  - 🍅 [[Tasks#^ship]]", "## Pomodoros"],
+    ["  - 🍅 🍅 ![[Tasks#^ship|Ship]]#", "## Pomodoros"],
+    ["  - ~~[[Tasks#^ship]]~~", "## Pomodoros"],
     [
       "  - [[Tasks#^ship]]\n  - keep",
       "## Pomodoros\n- [ ] Current ()\n  - keep",
@@ -628,7 +628,7 @@ test("all-open cleanup removes decorated dedicated bullets whole and deletes the
   assert.equal(mixedPlan.removedEntryCount, 1);
   assert.equal(
     applyPlannedEdits(mixed, mixedPlan.edits),
-    ["## Pomodoros", "- [ ] Current ()", ""].join("\n"),
+    ["## Pomodoros", "- [ ] Current ()"].join("\n"),
   );
 });
 
@@ -644,7 +644,7 @@ test("all-open cleanup deletes an emptied entry under CRLF without disturbing li
 
   assert.equal(plan.removedCount, 1);
   assert.equal(plan.removedEntryCount, 1);
-  assert.equal(result, "## Pomodoros\r\n");
+  assert.equal(result, "## Pomodoros");
   assert.doesNotMatch(result, /(^|[^\r])\n/);
 });
 
@@ -667,4 +667,36 @@ test("all-open cleanup treats missing section, no open entries, and no matches a
     assert.deepEqual(plan.edits, []);
     assert.equal(plan.content, content);
   }
+});
+
+test("composeInsertionWithLinkCleanup preserves an insertion at a deletion boundary (EOF and neighbour)", () => {
+  // Neighbour deletion + insertion into the surviving entry: the inserted
+  // link must land in the chosen entry, not vanish with the neighbour.
+  const content = [
+    "## Pomodoros",
+    "- [ ] Keep ()",
+    "  - keep",
+    "- [ ] Remove ()",
+    "  - [[Tasks#^a]]",
+  ].join("\n");
+  const cleanup = helpers.planAllOpenPomodoroLinkCleanup(content, {
+    sourcePath: "Daily.md",
+    targetPath: "Tasks.md",
+    targetBlockId: "a",
+    resolveTarget: () => "Tasks.md",
+  });
+  assert.equal(cleanup.removedEntryCount, 1);
+  // Insertion at the start of the deleted block (tie) folds into the deletion
+  // so it replaces the block and lands in the surviving neighbour.
+  const atDeletedStart = cleanup.entryEdits[0];
+  const insertion = {
+    start: atDeletedStart.start,
+    end: atDeletedStart.start,
+    replacement: "  - [[Tasks#^b]]\n",
+  };
+  const composed = helpers.composeInsertionWithLinkCleanup([insertion], cleanup);
+  const result = applyPlannedEdits(content, composed);
+  assert.ok(result.includes("[[Tasks#^b]]"));
+  assert.ok(!result.includes("Remove ()"));
+  assert.ok(result.includes("  - keep"));
 });

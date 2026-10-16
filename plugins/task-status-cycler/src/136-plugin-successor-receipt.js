@@ -321,7 +321,10 @@ class TaskStatusCyclerSuccessorReceiptMixin {
           if (successorTakeBackEmptiedEntryLine(lines, at) !== at) {
             continue;
           }
-          removeSuccessorReceiptLineFromEditor(editor, at);
+          const block = successorTakeBackEmptiedEntryBlock(lines, at);
+          for (let line = block.endLine; line >= block.startLine; line -= 1) {
+            removeSuccessorReceiptLineFromEditor(editor, line);
+          }
         }
         return removed;
       }
@@ -370,7 +373,9 @@ class TaskStatusCyclerSuccessorReceiptMixin {
           }
           // Only entries the take-back actually emptied are eligible; a link
           // the receipt could not find leaves its child in place, so its
-          // headline can never look empty here.
+          // headline can never look empty here. Delete the whole emptied
+          // block, preserving the file's final-newline state.
+          const blocksToDelete = [];
           for (const headline of emptied) {
             if (!removedHeadlines.has(headline)) {
               continue;
@@ -379,7 +384,18 @@ class TaskStatusCyclerSuccessorReceiptMixin {
             if (successorTakeBackEmptiedEntryLine(lines, at) !== at) {
               continue;
             }
-            lines.splice(at, 1);
+            const block = successorTakeBackEmptiedEntryBlock(lines, at);
+            let endLine = block.endLine;
+            if (endLine === lines.length - 1 && String(lines[endLine] || "") === "") {
+              endLine -= 1;
+            }
+            if (endLine >= block.startLine) {
+              blocksToDelete.push({ startLine: block.startLine, endLine });
+            }
+          }
+          blocksToDelete.sort((left, right) => right.startLine - left.startLine);
+          for (const block of blocksToDelete) {
+            lines.splice(block.startLine, block.endLine - block.startLine + 1);
             changed = true;
           }
           return changed ? lines.join(ending) : String(liveText || "");
@@ -500,9 +516,10 @@ class TaskStatusCyclerSuccessorReceiptMixin {
 }
 
 // An entry the take-back emptied: `at` is an open Pomodoro headline whose
-// sub-bullet block holds no remaining child bullet of any kind (childless
-// emptiness, like reconcile — a surviving prose bullet keeps the entry).
-// Returns `at` when the headline should be deleted, else -1. Never throws.
+// full fence-aware block holds no remaining unfenced list-item child
+// (childless emptiness, like reconcile — a surviving prose bullet keeps the
+// entry; blank lines, continuation text, and fenced examples never keep it).
+// Returns `at` when the whole block should be deleted, else -1. Never throws.
 function successorTakeBackEmptiedEntryLine(lines, at) {
   try {
     const list = Array.isArray(lines) ? lines : [];
@@ -537,18 +554,47 @@ function successorTakeBackEmptiedEntryLine(lines, at) {
     } catch (error) {
       section = null;
     }
-    let range = null;
+    let fullEnd = at;
     try {
-      range = getSubBulletBlockRange(list, at, section);
+      fullEnd = getFullPomodoroEntryEndLine(list, at, section);
     } catch (error) {
-      range = null;
+      fullEnd = at;
     }
-    if (!range || range.startLine !== range.endLine) {
+    let fenced = null;
+    try {
+      fenced = getFencedLineNumbers(list);
+    } catch (error) {
+      fenced = new Set();
+    }
+    if (fullPomodoroEntryHasUnfencedListChild(list, at, fullEnd, fenced)) {
       return -1;
     }
     return at;
   } catch (error) {
     return -1;
+  }
+}
+
+// Full inclusive block for a take-back emptied entry, for whole-block
+// deletion (headline through continuation and fenced remainder). Never throws.
+function successorTakeBackEmptiedEntryBlock(lines, at) {
+  try {
+    const list = Array.isArray(lines) ? lines : [];
+    let section = null;
+    try {
+      section = findPomodorosSectionInLines(list);
+    } catch (error) {
+      section = null;
+    }
+    let fullEnd = at;
+    try {
+      fullEnd = getFullPomodoroEntryEndLine(list, at, section);
+    } catch (error) {
+      fullEnd = at;
+    }
+    return { startLine: at, endLine: fullEnd };
+  } catch (error) {
+    return { startLine: at, endLine: at };
   }
 }
 

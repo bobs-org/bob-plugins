@@ -199,7 +199,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
 
       wroteAny = true;
       if (path === source.sourcePath) {
-        this.restoreCursorClampedToContent(editor, originalCursor);
+        this.restoreCursorClampedToContent(editor, originalCursor, group.content, group.edits);
       }
     }
 
@@ -219,17 +219,31 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     return true;
   }
 
-  // Put the cursor back where it was, clamped to the (possibly shorter) note.
-  restoreCursorClampedToContent(editor, cursor) {
+  // Put the cursor back where it was, mapped through the merged
+  // source-note edits (a cursor inside a deleted entry lands at that entry's
+  // former start) and clamped to the (possibly shorter) note. Never throws.
+  restoreCursorClampedToContent(editor, cursor, originalContent = null, edits = null) {
     if (!cursor) {
       return;
     }
 
-    const lines = editor.getValue().split("\n");
-    const line = Math.min(cursor.line, lines.length - 1);
+    let line = cursor.line;
+    try {
+      if (typeof originalContent === "string" && Array.isArray(edits) && edits.length > 0) {
+        const mapped = mapCursorLineThroughEdits(originalContent, edits, cursor);
+        if (Number.isInteger(mapped)) {
+          line = mapped;
+        }
+      }
+    } catch (error) {
+      line = cursor.line;
+    }
+
+    const lines = String(editor.getValue() || "").split("\n");
+    const clampedLine = Math.max(0, Math.min(line, lines.length - 1));
     setEditorCursorIfPossible(editor, {
-      line,
-      ch: Math.min(cursor.ch, lines[line].length),
+      line: clampedLine,
+      ch: Math.max(0, Math.min(cursor.ch, String(lines[clampedLine] || "").length)),
     });
   }
 

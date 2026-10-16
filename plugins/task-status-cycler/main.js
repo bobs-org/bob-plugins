@@ -4070,17 +4070,31 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   const movedSourceLines = new Set(
     sourceBullets.moveOnlyTaskLinkBullets.map((bullet) => bullet.line),
   );
-  // Deferred-only close (emptied-Pomodoro rule): every remaining child is a
-  // move-only `#` link the plan removes, so no list-item child would survive
-  // under the closed entry. Delete the entry line and its block instead of
-  // rewriting it to `[x]`; the carried placeholder below still lands at the
-  // entry's former start. Any prose, copyable, transcluded, or managed-line
-  // child keeps the entry (childless emptiness, like reconcile).
-  const deferredOnlyClose =
+  // Deferred-only close (emptied-Pomodoro rule): every unfenced list-item
+  // child in the full fence-aware entry block is a move-only `#` link the
+  // plan removes, so no list-item child would survive under the closed
+  // entry. Delete the entry line and its whole block instead of rewriting it
+  // to `[x]`; the carried placeholder below still lands at the entry's former
+  // start. Any surviving prose, copyable, transcluded, or managed-line list
+  // child keeps the entry (childless emptiness, like reconcile). Fenced
+  // example bullets and continuation text never keep it.
+  const fullEntryEndLine = getFullPomodoroEntryEndLine(lines, pomodoroLine, section);
+  let deferredOnlyClose =
     sourceBullets.moveOnlyTaskLinkBullets.length > 0 &&
     sourceBullets.copyableTaskLinkBullets.length === 0 &&
     sourceBullets.transcludedTaskLinkBullets.length === 0 &&
-    sourceBullets.noteBullets.length === 0;
+    sourceBullets.noteBullets.filter((bullet) => !fenced.has(bullet.line)).length === 0;
+  if (deferredOnlyClose) {
+    for (let line = sourceRange.endLine; line <= fullEntryEndLine; line += 1) {
+      if (fenced.has(line)) {
+        continue;
+      }
+      if (LIST_ITEM_MARKER_RE.test(String(lines[line] || ""))) {
+        deferredOnlyClose = false;
+        break;
+      }
+    }
+  }
   const edits = [
     deferredOnlyClose
       ? {
@@ -4116,6 +4130,19 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
       edits.push({ type: "replaceLine", line, sourceLineText, lineText });
     }
   }
+  // Deferred-only close deletes the whole emptied block, including trailing
+  // continuation and fenced remainder beyond the contiguous range.
+  const deferredExtraLines = [];
+  if (deferredOnlyClose) {
+    for (let line = sourceRange.endLine; line <= fullEntryEndLine; line += 1) {
+      deferredExtraLines.push(line);
+      edits.push({
+        type: "removeLine",
+        line,
+        sourceLineText: String(lines[line] || ""),
+      });
+    }
+  }
   // Only insert a fresh placeholder Pomodoro when there is something to carry
   // forward (an ordinary copyable link or a move-only link) or when this is the
   // last Pomodoro in the section. When a later Pomodoro already exists and
@@ -4142,7 +4169,8 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   const isLastPomodoro = nextPomodoroLine === null;
   const shouldCreatePomodoro = copyableBulletLines.length > 0 || isLastPomodoro;
   const removedLineCountBefore = (line) =>
-    [...movedSourceLines].filter((removedLine) => removedLine < line).length;
+    [...movedSourceLines, ...deferredExtraLines].filter((removedLine) => removedLine < line).length;
+  const insertLine = fullEntryEndLine + 1;
 
   let createdPomodoro = false;
   let plannedCreatedPomodoroName = null;
@@ -4157,7 +4185,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
     copiedBulletLines = copyableBulletLines;
     edits.push({
       type: "insertLines",
-      line: sourceRange.endLine,
+      line: insertLine,
       lines: [
         formatPomodoroPlaceholderLine(createdPomodoroName),
         ...(copiedBulletLines.length > 0
@@ -4169,9 +4197,9 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
       // The entry line and its whole block are deleted, so the descending
       // applier lands the inserted placeholder exactly at the entry's former
       // start. The insert offset itself needs no fixup: it still addresses
-      // the pre-edit block end.
+      // the pre-edit full-block end.
       ? pomodoroLine
-      : sourceRange.endLine - removedLineCountBefore(sourceRange.endLine);
+      : insertLine - removedLineCountBefore(insertLine);
   }
 
   return {
@@ -4585,6 +4613,54 @@ function unstrikeSelectedTaskBlockLinkInLine(lineText, selection) {
   const wikilink = line.slice(best.startIndex, best.endIndex);
   const nextLine = `${line.slice(0, exactStrike.start - 2)}${wikilink}${line.slice(exactStrike.end + 2)}`;
   return nextLine === line ? null : nextLine;
+}
+
+// Full fence-aware entry-block end (inclusive), bounded by the Pomodoros
+// section and the next column-0 non-blank line. Unlike
+// getSubBulletBlockRange (contiguous indented list lines only), this spans
+// blank lines, continuation text, and fenced blocks, exactly like
+// block-id-prompt's pomodoroEntryEndLine. Never throws.
+function getFullPomodoroEntryEndLine(lines, pomodoroLine, section = null) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(pomodoroLine)) {
+      return pomodoroLine;
+    }
+    const endLine = section
+      ? Math.min(section.endLine, lines.length - 1)
+      : lines.length - 1;
+    let end = pomodoroLine;
+    for (let line = pomodoroLine + 1; line <= endLine; line += 1) {
+      const lineText = String(lines[line] || "");
+      if (lineText.trim() && getLineIndentation(lineText).length === 0) {
+        break;
+      }
+      end = line;
+    }
+    return end;
+  } catch (error) {
+    return pomodoroLine;
+  }
+}
+
+// True when the full entry block owns at least one surviving unfenced
+// list-item child. Fenced example bullets never count; blank lines and
+// indented continuation text never count. Never throws.
+function fullPomodoroEntryHasUnfencedListChild(lines, entryLine, fullEndLine, fenced) {
+  try {
+    const list = Array.isArray(lines) ? lines : [];
+    const fenceSet = fenced instanceof Set ? fenced : getFencedLineNumbers(list);
+    for (let line = entryLine + 1; line <= fullEndLine; line += 1) {
+      if (fenceSet.has(line)) {
+        continue;
+      }
+      if (LIST_ITEM_MARKER_RE.test(String(list[line] || ""))) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    return true;
+  }
 }
 
 // ---- src/080-dependencies.js ----
@@ -14247,7 +14323,10 @@ class TaskStatusCyclerSuccessorReceiptMixin {
           if (successorTakeBackEmptiedEntryLine(lines, at) !== at) {
             continue;
           }
-          removeSuccessorReceiptLineFromEditor(editor, at);
+          const block = successorTakeBackEmptiedEntryBlock(lines, at);
+          for (let line = block.endLine; line >= block.startLine; line -= 1) {
+            removeSuccessorReceiptLineFromEditor(editor, line);
+          }
         }
         return removed;
       }
@@ -14296,7 +14375,9 @@ class TaskStatusCyclerSuccessorReceiptMixin {
           }
           // Only entries the take-back actually emptied are eligible; a link
           // the receipt could not find leaves its child in place, so its
-          // headline can never look empty here.
+          // headline can never look empty here. Delete the whole emptied
+          // block, preserving the file's final-newline state.
+          const blocksToDelete = [];
           for (const headline of emptied) {
             if (!removedHeadlines.has(headline)) {
               continue;
@@ -14305,7 +14386,18 @@ class TaskStatusCyclerSuccessorReceiptMixin {
             if (successorTakeBackEmptiedEntryLine(lines, at) !== at) {
               continue;
             }
-            lines.splice(at, 1);
+            const block = successorTakeBackEmptiedEntryBlock(lines, at);
+            let endLine = block.endLine;
+            if (endLine === lines.length - 1 && String(lines[endLine] || "") === "") {
+              endLine -= 1;
+            }
+            if (endLine >= block.startLine) {
+              blocksToDelete.push({ startLine: block.startLine, endLine });
+            }
+          }
+          blocksToDelete.sort((left, right) => right.startLine - left.startLine);
+          for (const block of blocksToDelete) {
+            lines.splice(block.startLine, block.endLine - block.startLine + 1);
             changed = true;
           }
           return changed ? lines.join(ending) : String(liveText || "");
@@ -14426,9 +14518,10 @@ class TaskStatusCyclerSuccessorReceiptMixin {
 }
 
 // An entry the take-back emptied: `at` is an open Pomodoro headline whose
-// sub-bullet block holds no remaining child bullet of any kind (childless
-// emptiness, like reconcile — a surviving prose bullet keeps the entry).
-// Returns `at` when the headline should be deleted, else -1. Never throws.
+// full fence-aware block holds no remaining unfenced list-item child
+// (childless emptiness, like reconcile — a surviving prose bullet keeps the
+// entry; blank lines, continuation text, and fenced examples never keep it).
+// Returns `at` when the whole block should be deleted, else -1. Never throws.
 function successorTakeBackEmptiedEntryLine(lines, at) {
   try {
     const list = Array.isArray(lines) ? lines : [];
@@ -14463,18 +14556,47 @@ function successorTakeBackEmptiedEntryLine(lines, at) {
     } catch (error) {
       section = null;
     }
-    let range = null;
+    let fullEnd = at;
     try {
-      range = getSubBulletBlockRange(list, at, section);
+      fullEnd = getFullPomodoroEntryEndLine(list, at, section);
     } catch (error) {
-      range = null;
+      fullEnd = at;
     }
-    if (!range || range.startLine !== range.endLine) {
+    let fenced = null;
+    try {
+      fenced = getFencedLineNumbers(list);
+    } catch (error) {
+      fenced = new Set();
+    }
+    if (fullPomodoroEntryHasUnfencedListChild(list, at, fullEnd, fenced)) {
       return -1;
     }
     return at;
   } catch (error) {
     return -1;
+  }
+}
+
+// Full inclusive block for a take-back emptied entry, for whole-block
+// deletion (headline through continuation and fenced remainder). Never throws.
+function successorTakeBackEmptiedEntryBlock(lines, at) {
+  try {
+    const list = Array.isArray(lines) ? lines : [];
+    let section = null;
+    try {
+      section = findPomodorosSectionInLines(list);
+    } catch (error) {
+      section = null;
+    }
+    let fullEnd = at;
+    try {
+      fullEnd = getFullPomodoroEntryEndLine(list, at, section);
+    } catch (error) {
+      fullEnd = at;
+    }
+    return { startLine: at, endLine: fullEnd };
+  } catch (error) {
+    return { startLine: at, endLine: at };
   }
 }
 

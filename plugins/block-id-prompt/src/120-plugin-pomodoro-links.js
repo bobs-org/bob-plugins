@@ -903,7 +903,7 @@ class BlockIdPromptPomodoroLinksMixin {
             );
           }
 
-          this.restoreCursorClampedToContent(source.editor, originalCursor);
+          this.restoreCursorClampedToContent(source.editor, originalCursor, taskContent, allEdits);
           return this.finishPomodoroUnlinkWithInboxRoute(
             source,
             cleanupPlan,
@@ -948,7 +948,12 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    this.restoreCursorClampedToContent(source.editor, originalCursor);
+    this.restoreCursorClampedToContent(
+      source.editor,
+      originalCursor,
+      taskContent,
+      workLogPlan && Array.isArray(workLogPlan.edits) ? workLogPlan.edits : [],
+    );
     return this.finishPomodoroUnlinkWithInboxRoute(
       source,
       cleanupPlan,

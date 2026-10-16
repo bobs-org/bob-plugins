@@ -358,7 +358,7 @@ test("Next unlink reports retryable partial failure when cleanup succeeds but th
   assert.equal(result, false);
   assert.deepEqual(written, {
     path: "Daily.md",
-    content: "## Pomodoros\n",
+    content: "## Pomodoros",
   });
   assert.equal(editor.getValue(), "- [*] #task Ship it NOW ^ship");
   assert.equal(lastNotice(), "Removed 1 open Pomodoro link, but task stays Next and work summary was not logged");
@@ -394,7 +394,7 @@ test("In Progress unlink reports retryable partial failure when cleanup succeeds
   assert.equal(result, false);
   assert.deepEqual(written, {
     path: "Daily.md",
-    content: "## Pomodoros\n",
+    content: "## Pomodoros",
   });
   assert.equal(editor.getValue(), "- [/] #task Ship it NOW ^ship");
   assert.equal(
@@ -731,4 +731,46 @@ test("inbox-route: unlink no-op with move never commits", async () => {
   );
   assert.equal(result, true);
   assert.deepEqual(routeCalls.filter((e) => e[0] === "commit"), []);
+});
+
+test("same-note unlink maps a task below removed entries through Work-summary inserts", async () => {
+  resetNotices();
+  const editor = createEditor(
+    [
+      "## Pomodoros",
+      "- [ ] Remove ()",
+      "  - [[#^ship]]",
+      "- [ ] Keep ()",
+      "  - keep",
+      "- [/] #task Ship it ^ship",
+    ].join("\n"),
+  );
+  editor.setCursor({ line: 5, ch: 9 });
+  const source = {
+    ...sourceForPomodoroLink(editor, "Daily.md", 5),
+    file: { path: "Daily.md" },
+  };
+  const plugin = new Plugin();
+  plugin.resolveTodayDailyFile = () => ({ path: "Daily.md" });
+  plugin.resolveReferenceDestination = (reference) =>
+    reference.targetText === "" ? { path: "Daily.md" } : null;
+  plugin.suppressEditorScans = () => {};
+  plugin.now = () => localDate(2026, 8, 15);
+
+  const result = await plugin.submitPomodoroWorkSummary(source, "Wrapped up");
+  assert.equal(result, true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [ ] Keep ()",
+      "  - keep",
+      "- [/] #task Ship it ^ship",
+      "\t- 🛠️ **WORK LOG**",
+      "\t\t- *2026-08-15* — Wrapped up",
+    ].join("\n"),
+  );
+  // Task was on line 5; the removed entry above shifts it to line 3. The
+  // Work Log inserts below it, so the cursor stays on the task line.
+  assert.deepEqual(editor.cursor, { line: 3, ch: 9 });
 });

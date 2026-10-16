@@ -813,17 +813,31 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   const movedSourceLines = new Set(
     sourceBullets.moveOnlyTaskLinkBullets.map((bullet) => bullet.line),
   );
-  // Deferred-only close (emptied-Pomodoro rule): every remaining child is a
-  // move-only `#` link the plan removes, so no list-item child would survive
-  // under the closed entry. Delete the entry line and its block instead of
-  // rewriting it to `[x]`; the carried placeholder below still lands at the
-  // entry's former start. Any prose, copyable, transcluded, or managed-line
-  // child keeps the entry (childless emptiness, like reconcile).
-  const deferredOnlyClose =
+  // Deferred-only close (emptied-Pomodoro rule): every unfenced list-item
+  // child in the full fence-aware entry block is a move-only `#` link the
+  // plan removes, so no list-item child would survive under the closed
+  // entry. Delete the entry line and its whole block instead of rewriting it
+  // to `[x]`; the carried placeholder below still lands at the entry's former
+  // start. Any surviving prose, copyable, transcluded, or managed-line list
+  // child keeps the entry (childless emptiness, like reconcile). Fenced
+  // example bullets and continuation text never keep it.
+  const fullEntryEndLine = getFullPomodoroEntryEndLine(lines, pomodoroLine, section);
+  let deferredOnlyClose =
     sourceBullets.moveOnlyTaskLinkBullets.length > 0 &&
     sourceBullets.copyableTaskLinkBullets.length === 0 &&
     sourceBullets.transcludedTaskLinkBullets.length === 0 &&
-    sourceBullets.noteBullets.length === 0;
+    sourceBullets.noteBullets.filter((bullet) => !fenced.has(bullet.line)).length === 0;
+  if (deferredOnlyClose) {
+    for (let line = sourceRange.endLine; line <= fullEntryEndLine; line += 1) {
+      if (fenced.has(line)) {
+        continue;
+      }
+      if (LIST_ITEM_MARKER_RE.test(String(lines[line] || ""))) {
+        deferredOnlyClose = false;
+        break;
+      }
+    }
+  }
   const edits = [
     deferredOnlyClose
       ? {
@@ -859,6 +873,19 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
       edits.push({ type: "replaceLine", line, sourceLineText, lineText });
     }
   }
+  // Deferred-only close deletes the whole emptied block, including trailing
+  // continuation and fenced remainder beyond the contiguous range.
+  const deferredExtraLines = [];
+  if (deferredOnlyClose) {
+    for (let line = sourceRange.endLine; line <= fullEntryEndLine; line += 1) {
+      deferredExtraLines.push(line);
+      edits.push({
+        type: "removeLine",
+        line,
+        sourceLineText: String(lines[line] || ""),
+      });
+    }
+  }
   // Only insert a fresh placeholder Pomodoro when there is something to carry
   // forward (an ordinary copyable link or a move-only link) or when this is the
   // last Pomodoro in the section. When a later Pomodoro already exists and
@@ -885,7 +912,8 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
   const isLastPomodoro = nextPomodoroLine === null;
   const shouldCreatePomodoro = copyableBulletLines.length > 0 || isLastPomodoro;
   const removedLineCountBefore = (line) =>
-    [...movedSourceLines].filter((removedLine) => removedLine < line).length;
+    [...movedSourceLines, ...deferredExtraLines].filter((removedLine) => removedLine < line).length;
+  const insertLine = fullEntryEndLine + 1;
 
   let createdPomodoro = false;
   let plannedCreatedPomodoroName = null;
@@ -900,7 +928,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
     copiedBulletLines = copyableBulletLines;
     edits.push({
       type: "insertLines",
-      line: sourceRange.endLine,
+      line: insertLine,
       lines: [
         formatPomodoroPlaceholderLine(createdPomodoroName),
         ...(copiedBulletLines.length > 0
@@ -912,9 +940,9 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
       // The entry line and its whole block are deleted, so the descending
       // applier lands the inserted placeholder exactly at the entry's former
       // start. The insert offset itself needs no fixup: it still addresses
-      // the pre-edit block end.
+      // the pre-edit full-block end.
       ? pomodoroLine
-      : sourceRange.endLine - removedLineCountBefore(sourceRange.endLine);
+      : insertLine - removedLineCountBefore(insertLine);
   }
 
   return {

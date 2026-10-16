@@ -431,7 +431,7 @@ test("planExplicitPomodoroLinkInsertion is idempotent and cleans other opens", (
   assert.equal(plan.removedEntryCount, 1);
   assert.equal(
     plan.content,
-    ["## Pomodoros", "- [ ] (09:00-09:25) — FIRST", "\t- [[Tasks#^task1]]", ""].join("\n"),
+    ["## Pomodoros", "- [ ] (09:00-09:25) — FIRST", "\t- [[Tasks#^task1]]"].join("\n"),
   );
 });
 
@@ -450,7 +450,7 @@ test("planExplicitPomodoroLinkInsertion lands the link in the chosen entry when 
   assert.equal(plan.removedEntryCount, 1);
   assert.equal(
     plan.content,
-    ["## Pomodoros", "- [ ] (09:00-09:25) — FIRST", "\t- [[Tasks#^task1]]", ""].join("\n"),
+    ["## Pomodoros", "- [ ] (09:00-09:25) — FIRST", "\t- [[Tasks#^task1]]"].join("\n"),
   );
 });
 

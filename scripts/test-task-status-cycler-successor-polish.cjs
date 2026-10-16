@@ -479,3 +479,118 @@ test("Alt+[ into Cancelled recovers its dependents without linking", async () =>
   assert.equal(seen[0].unblocked[0].link, null);
   assert.equal(seen[0].unblocked[0].not_linked, "cancelled");
 });
+
+test("take-back keeps an entry whose prose survives across a blank line (both paths)", async () => {
+  const day = [
+    "## Pomodoros",
+    "- [ ] () — KEEP",
+    "  - [[Tasks#^a]]",
+    "",
+    "  - retain this prose",
+    "- [ ] () — NEXT",
+    "  - next note",
+  ].join("\n");
+  const links = [
+    { line_text: "  - [[Tasks#^a]]", entry_headline: "- [ ] () — KEEP", entry_created: false },
+  ];
+  // Vault path.
+  {
+    const harness = createInMemoryObsidianApp({ [DAILY_PATH]: day });
+    const editor = createTextEditor(day, { line: 0, ch: 0 });
+    const plugin = makePlugin(harness, editor, DAILY_PATH);
+    harness.app.workspace = {};
+    const removed = await plugin.takeBackSuccessorLinks({ daily_path: DAILY_PATH }, links, {});
+    assert.equal(removed, 1);
+    assert.equal(harness.getSource(DAILY_PATH), [
+      "## Pomodoros",
+      "- [ ] () — KEEP",
+      "",
+      "  - retain this prose",
+      "- [ ] () — NEXT",
+      "  - next note",
+    ].join("\n"));
+  }
+  // Editor path (same expectation, one undo-group write sequence).
+  {
+    const harness = createInMemoryObsidianApp({ [DAILY_PATH]: day });
+    const editor = createTextEditor(day, { line: 0, ch: 0 });
+    const plugin = makePlugin(harness, editor, DAILY_PATH);
+    const removed = await plugin.takeBackSuccessorLinks(
+      { daily_path: DAILY_PATH },
+      links,
+      { editor, activePath: DAILY_PATH },
+    );
+    // When the daily note is open in an editor the harness routes through
+    // vault.process; the editor buffer keeps the pre-write snapshot while the
+    // vault source carries the repaired postimage.
+    assert.equal(removed, 1);
+    const after = harness.getSource(DAILY_PATH).includes("- [ ] () — KEEP")
+      ? harness.getSource(DAILY_PATH)
+      : editor.getValue();
+    assert.ok(after.includes("- [ ] () — KEEP"));
+    assert.ok(after.includes("retain this prose"));
+  }
+  // Predicate directly: blank + prose keeps, continuation/fence alone deletes.
+  assert.equal(
+    helpers.successorTakeBackEmptiedEntryLine(
+      ["## Pomodoros", "- [ ] () — KEEP", "", "  - retain this prose"].join("\n").split("\n"),
+      1,
+    ),
+    -1,
+  );
+  assert.equal(
+    helpers.successorTakeBackEmptiedEntryLine(
+      ["## Pomodoros", "- [ ] () — KEEP", "  continuation only"].join("\n").split("\n"),
+      1,
+    ),
+    1,
+  );
+});
+
+test("take-back deletes a whole block with continuation/fence leftovers (LF/CRLF, final newline)", async () => {
+  for (const ending of ["\n", "\r\n"]) {
+    for (const finalNewline of [false, true]) {
+      const build = (body) => body.join(ending) + (finalNewline ? ending : "");
+      const day = build([
+        "## Pomodoros",
+        "- [ ] () — KEEP",
+        "  - [[Tasks#^a]]",
+        "  continuation only",
+        "- [ ] () — NEXT",
+        "  - next note",
+      ]);
+      const harness = createInMemoryObsidianApp({ [DAILY_PATH]: day });
+      const editor = createTextEditor(day, { line: 0, ch: 0 });
+      const plugin = makePlugin(harness, editor, DAILY_PATH);
+      harness.app.workspace = {};
+      const links = [
+        { line_text: "  - [[Tasks#^a]]", entry_headline: "- [ ] () — KEEP", entry_created: false },
+      ];
+      const removed = await plugin.takeBackSuccessorLinks({ daily_path: DAILY_PATH }, links, {});
+      assert.equal(removed, 1);
+      const expected = build(["## Pomodoros", "- [ ] () — NEXT", "  - next note"]);
+      assert.equal(harness.getSource(DAILY_PATH), expected);
+    }
+  }
+  // Fence-only leftover goes whole-block too.
+  const fenced = [
+    "## Pomodoros",
+    "- [ ] () — KEEP",
+    "  - [[Tasks#^a]]",
+    "  ```",
+    "  - example",
+    "  ```",
+    "- [ ] () — NEXT",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ [DAILY_PATH]: fenced });
+  const editor = createTextEditor(fenced, { line: 0, ch: 0 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  harness.app.workspace = {};
+  const removed = await plugin.takeBackSuccessorLinks(
+    { daily_path: DAILY_PATH },
+    [{ line_text: "  - [[Tasks#^a]]", entry_headline: "- [ ] () — KEEP", entry_created: false }],
+    {},
+  );
+  assert.equal(removed, 1);
+  assert.equal(harness.getSource(DAILY_PATH), "## Pomodoros\n- [ ] () — NEXT");
+});

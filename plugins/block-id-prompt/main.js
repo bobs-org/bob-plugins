@@ -2567,6 +2567,68 @@ function lineEndingForInsertion(content, lines, lineNumber) {
   return String(content || "").includes("\r\n") ? "\r\n" : "\n";
 }
 
+// Map an old cursor through offset edits to its new line, preserving the
+// column (clamped later). Block deletions covering the cursor land it at the
+// deleted block's former start; edits after the cursor never touch it;
+// insertions and deletions before it shift it by net line delta. Never throws.
+function mapCursorLineThroughEdits(originalContent, edits, originalCursor) {
+  try {
+    if (!originalCursor || !Number.isInteger(originalCursor.line)) {
+      return null;
+    }
+    const snapshot = String(originalContent || "");
+    const originalLines = snapshot.split("\n");
+    const originalLine = Math.max(0, Math.min(originalCursor.line, originalLines.length - 1));
+    const list = Array.isArray(edits) ? edits.filter((edit) =>
+      edit && Number.isInteger(edit.start) && Number.isInteger(edit.end) && edit.end >= edit.start
+    ).slice().sort((left, right) => left.start - right.start) : [];
+    let newLine = originalLine;
+    let accumulated = 0;
+    const lineStarts = [];
+    let running = 0;
+    for (let index = 0; index < originalLines.length; index += 1) {
+      lineStarts.push(running);
+      running += originalLines[index].length + 1;
+    }
+    const lineOfOffset = (offset) => {
+      for (let line = lineStarts.length - 1; line >= 0; line -= 1) {
+        if (offset >= lineStarts[line]) {
+          return line;
+        }
+      }
+      return 0;
+    };
+    for (const edit of list) {
+      const deletedText = snapshot.slice(edit.start, edit.end);
+      const deletedNewlines = (deletedText.match(/\n/g) || []).length;
+      const insertedNewlines = String(edit.replacement || "").split("\n").length - 1;
+      const netDelta = insertedNewlines - deletedNewlines;
+      const startLine = lineOfOffset(edit.start);
+      let endExclusive;
+      if (edit.end === snapshot.length) {
+        endExclusive = originalLines.length;
+      } else if (edit.end === lineStarts[lineOfOffset(edit.end)]) {
+        endExclusive = lineOfOffset(edit.end);
+      } else {
+        endExclusive = lineOfOffset(edit.end) + 1;
+      }
+      if (originalLine < startLine) {
+        break;
+      }
+      if (originalLine >= endExclusive) {
+        newLine += netDelta;
+        accumulated += netDelta;
+        continue;
+      }
+      newLine = startLine + accumulated;
+      break;
+    }
+    return newLine;
+  } catch (error) {
+    return null;
+  }
+}
+
 function insertionEditAtLine(content, lines, insertLine, insertedLines, lineEnding) {
   if (insertLine < lines.length) {
     const insertionIndex = lineStartIndexFromLines(lines, insertLine);
@@ -3435,7 +3497,9 @@ function lineContentRange(lines, lineNumber) {
 // those edits at once. Only removal edits (a range, never an insertion)
 // count as touching an entry, and a snapshot child line counts as remaining
 // unless a removal edit covers it whole (token edits shorten their line but
-// leave the bullet in place). Returns `{ edits, removedEntryCount }`.
+// leave the bullet in place). Whole-entry deletions never leave a doubled
+// blank seam and preserve the file's final-newline state and CRLF endings,
+// following nav's EOF handling. Returns `{ edits, removedEntryCount }`.
 function planEmptiedPomodoroEntryEdits(content, edits, options = {}) {
   const empty = { edits: [], removedEntryCount: 0 };
   const snapshot = String(content || "");
@@ -3471,7 +3535,15 @@ function planEmptiedPomodoroEntryEdits(content, edits, options = {}) {
     return empty;
   }
 
-  const entryEdits = [];
+  const lineEnding = snapshot.includes("\r\n") ? "\r\n" : "\n";
+  const lineStarts = [];
+  let runningOffset = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    lineStarts.push(runningOffset);
+    runningOffset += lines[index].length + 1;
+  }
+
+  const rawDeletions = [];
   for (const candidate of candidates) {
     const blockStart = lineStartIndexFromLines(lines, candidate.entryLine);
     const blockEnd =
@@ -3492,12 +3564,79 @@ function planEmptiedPomodoroEntryEdits(content, edits, options = {}) {
       );
     });
     if (remaining.length === 0) {
-      entryEdits.push(
-        listItemSubtreeEdit(snapshot, lines, candidate.entryLine, section.endLine),
-      );
+      rawDeletions.push({
+        start: blockStart,
+        end: blockEnd,
+        replacement: "",
+        startLine: candidate.entryLine,
+        endLineExclusive: candidate.endLine + 1,
+      });
+    }
+  }
+  if (rawDeletions.length === 0) {
+    return empty;
+  }
+
+  // Collapse a doubled blank seam exactly like nav's bullet-move rule: when
+  // both the line before and the line after a deleted entry block are blank,
+  // also delete the after blank.
+  for (const deletion of rawDeletions) {
+    const before = deletion.startLine > 0 ? lines[deletion.startLine - 1] : undefined;
+    const after = deletion.endLineExclusive < lines.length
+      ? lines[deletion.endLineExclusive]
+      : undefined;
+    if (
+      before !== undefined &&
+      after !== undefined &&
+      String(before).trim() === "" &&
+      String(after).trim() === ""
+    ) {
+      deletion.endLineExclusive += 1;
+      deletion.end = deletion.endLineExclusive < lines.length
+        ? lineStarts[deletion.endLineExclusive]
+        : snapshot.length;
     }
   }
 
+  // At EOF, consume separators made trailing by the deletion and preserve
+  // whether the original file ended in a newline. Normalize before merging:
+  // consuming a blank seam can join candidates that were originally separate.
+  const normalizeEofDeletion = (candidate) => {
+    if (lines.slice(candidate.endLineExclusive).some((line) => String(line || "").trim() !== "")) {
+      return;
+    }
+    while (candidate.startLine > 0 && String(lines[candidate.startLine - 1] || "").trim() === "") {
+      candidate.startLine -= 1;
+    }
+    candidate.start = lineStarts[candidate.startLine];
+    candidate.end = snapshot.length;
+    candidate.endLineExclusive = lines.length;
+    if (candidate.startLine > 0) {
+      candidate.start -= lineEnding.length;
+      candidate.replacement = snapshot.endsWith(lineEnding) ? lineEnding : "";
+    }
+  };
+  rawDeletions.forEach(normalizeEofDeletion);
+
+  rawDeletions.sort((left, right) => left.start - right.start || right.end - left.end);
+  const merged = [];
+  for (const candidate of rawDeletions) {
+    const last = merged[merged.length - 1];
+    if (last && candidate.start <= last.end) {
+      if (candidate.end >= last.end) {
+        last.replacement = candidate.replacement;
+      }
+      last.end = Math.max(last.end, candidate.end);
+      last.endLineExclusive = Math.max(last.endLineExclusive, candidate.endLineExclusive);
+      continue;
+    }
+    merged.push({ ...candidate });
+  }
+  if (merged.length > 0) {
+    normalizeEofDeletion(merged[merged.length - 1]);
+  }
+
+  const entryEdits = merged.map(({ start, end, replacement }) => ({ start, end, replacement }));
   return { edits: entryEdits, removedEntryCount: entryEdits.length };
 }
 
@@ -3527,10 +3666,39 @@ function composeInsertionWithLinkCleanup(insertionEdits, cleanup) {
 
     const deletion = entryDeletions[index];
     let replacement = insertion.replacement;
-    // An EOF-append insertion carries its own leading separator while the
-    // deletion already removes the block's trailing newline: drop one so
-    // no blank line is left behind.
-    if (deletion.start > 0) {
+    // An EOF-normalized deletion includes its preceding newline (its start
+    // sits before the insertion tie) while an existing-entry insertion
+    // carries a trailing newline: rebuild as leading-separator + content,
+    // preserving the deletion's final-newline state, so the inserted lines
+    // land on their own lines instead of joining the previous headline.
+    const insertionLineEnding = String(replacement || "").includes("\r\n") ||
+      String(deletion.replacement || "").includes("\r\n")
+      ? "\r\n"
+      : "\n";
+    if (deletion.start < insertion.start) {
+      const stripEnding = (text) => {
+        let next = String(text || "");
+        if (next.startsWith("\r\n")) {
+          next = next.slice(2);
+        } else if (next.startsWith("\n")) {
+          next = next.slice(1);
+        }
+        if (next.endsWith("\r\n")) {
+          next = next.slice(0, -2);
+        } else if (next.endsWith("\n")) {
+          next = next.slice(0, -1);
+        }
+        return next;
+      };
+      const content = stripEnding(replacement);
+      const finalNewline = String(deletion.replacement || "").endsWith(insertionLineEnding);
+      replacement = (deletion.start > 0 ? insertionLineEnding : "") +
+        content +
+        (finalNewline ? insertionLineEnding : "");
+    } else if (deletion.start > 0) {
+      // An EOF-append insertion carries its own leading separator while the
+      // deletion already removes the block's trailing newline: drop one so
+      // no blank line is left behind.
       if (replacement.startsWith("\r\n")) {
         replacement = replacement.slice(2);
       } else if (replacement.startsWith("\n")) {
@@ -9321,7 +9489,7 @@ class BlockIdPromptPomodoroLinksMixin {
             );
           }
 
-          this.restoreCursorClampedToContent(source.editor, originalCursor);
+          this.restoreCursorClampedToContent(source.editor, originalCursor, taskContent, allEdits);
           return this.finishPomodoroUnlinkWithInboxRoute(
             source,
             cleanupPlan,
@@ -9366,7 +9534,12 @@ class BlockIdPromptPomodoroLinksMixin {
       }
     }
 
-    this.restoreCursorClampedToContent(source.editor, originalCursor);
+    this.restoreCursorClampedToContent(
+      source.editor,
+      originalCursor,
+      taskContent,
+      workLogPlan && Array.isArray(workLogPlan.edits) ? workLogPlan.edits : [],
+    );
     return this.finishPomodoroUnlinkWithInboxRoute(
       source,
       cleanupPlan,
@@ -10057,7 +10230,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
 
       wroteAny = true;
       if (path === source.sourcePath) {
-        this.restoreCursorClampedToContent(editor, originalCursor);
+        this.restoreCursorClampedToContent(editor, originalCursor, group.content, group.edits);
       }
     }
 
@@ -10077,17 +10250,31 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     return true;
   }
 
-  // Put the cursor back where it was, clamped to the (possibly shorter) note.
-  restoreCursorClampedToContent(editor, cursor) {
+  // Put the cursor back where it was, mapped through the merged
+  // source-note edits (a cursor inside a deleted entry lands at that entry's
+  // former start) and clamped to the (possibly shorter) note. Never throws.
+  restoreCursorClampedToContent(editor, cursor, originalContent = null, edits = null) {
     if (!cursor) {
       return;
     }
 
-    const lines = editor.getValue().split("\n");
-    const line = Math.min(cursor.line, lines.length - 1);
+    let line = cursor.line;
+    try {
+      if (typeof originalContent === "string" && Array.isArray(edits) && edits.length > 0) {
+        const mapped = mapCursorLineThroughEdits(originalContent, edits, cursor);
+        if (Number.isInteger(mapped)) {
+          line = mapped;
+        }
+      }
+    } catch (error) {
+      line = cursor.line;
+    }
+
+    const lines = String(editor.getValue() || "").split("\n");
+    const clampedLine = Math.max(0, Math.min(line, lines.length - 1));
     setEditorCursorIfPossible(editor, {
-      line,
-      ch: Math.min(cursor.ch, lines[line].length),
+      line: clampedLine,
+      ch: Math.max(0, Math.min(cursor.ch, String(lines[clampedLine] || "").length)),
     });
   }
 

@@ -482,6 +482,68 @@ function lineEndingForInsertion(content, lines, lineNumber) {
   return String(content || "").includes("\r\n") ? "\r\n" : "\n";
 }
 
+// Map an old cursor through offset edits to its new line, preserving the
+// column (clamped later). Block deletions covering the cursor land it at the
+// deleted block's former start; edits after the cursor never touch it;
+// insertions and deletions before it shift it by net line delta. Never throws.
+function mapCursorLineThroughEdits(originalContent, edits, originalCursor) {
+  try {
+    if (!originalCursor || !Number.isInteger(originalCursor.line)) {
+      return null;
+    }
+    const snapshot = String(originalContent || "");
+    const originalLines = snapshot.split("\n");
+    const originalLine = Math.max(0, Math.min(originalCursor.line, originalLines.length - 1));
+    const list = Array.isArray(edits) ? edits.filter((edit) =>
+      edit && Number.isInteger(edit.start) && Number.isInteger(edit.end) && edit.end >= edit.start
+    ).slice().sort((left, right) => left.start - right.start) : [];
+    let newLine = originalLine;
+    let accumulated = 0;
+    const lineStarts = [];
+    let running = 0;
+    for (let index = 0; index < originalLines.length; index += 1) {
+      lineStarts.push(running);
+      running += originalLines[index].length + 1;
+    }
+    const lineOfOffset = (offset) => {
+      for (let line = lineStarts.length - 1; line >= 0; line -= 1) {
+        if (offset >= lineStarts[line]) {
+          return line;
+        }
+      }
+      return 0;
+    };
+    for (const edit of list) {
+      const deletedText = snapshot.slice(edit.start, edit.end);
+      const deletedNewlines = (deletedText.match(/\n/g) || []).length;
+      const insertedNewlines = String(edit.replacement || "").split("\n").length - 1;
+      const netDelta = insertedNewlines - deletedNewlines;
+      const startLine = lineOfOffset(edit.start);
+      let endExclusive;
+      if (edit.end === snapshot.length) {
+        endExclusive = originalLines.length;
+      } else if (edit.end === lineStarts[lineOfOffset(edit.end)]) {
+        endExclusive = lineOfOffset(edit.end);
+      } else {
+        endExclusive = lineOfOffset(edit.end) + 1;
+      }
+      if (originalLine < startLine) {
+        break;
+      }
+      if (originalLine >= endExclusive) {
+        newLine += netDelta;
+        accumulated += netDelta;
+        continue;
+      }
+      newLine = startLine + accumulated;
+      break;
+    }
+    return newLine;
+  } catch (error) {
+    return null;
+  }
+}
+
 function insertionEditAtLine(content, lines, insertLine, insertedLines, lineEnding) {
   if (insertLine < lines.length) {
     const insertionIndex = lineStartIndexFromLines(lines, insertLine);

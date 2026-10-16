@@ -1,6 +1,7 @@
 BobArticlesPlugin.prototype.articleSetupLook = function articleSetupLook() {
   this.articleOutlines = this.articleOutlines || new Map();
   this.articleLookGeneration = this.articleLookGeneration || new Map();
+  this.articleReadingRenderGeneration = this.articleReadingRenderGeneration || new Map();
   this.articleLookState = this.articleLookState || articleCreateLookState();
   this.articleStaleTimers = this.articleStaleTimers || new Map();
 
@@ -25,6 +26,7 @@ BobArticlesPlugin.prototype.articleSetupLook = function articleSetupLook() {
 BobArticlesPlugin.prototype.articleTeardownLook = function articleTeardownLook() {
   for (const timer of (this.articleStaleTimers || new Map()).values()) clearTimeout(timer);
   if (this.articleStaleTimers) this.articleStaleTimers.clear();
+  if (this.articleReadingRenderGeneration) this.articleReadingRenderGeneration.clear();
   this.articlePaintStatusBar(null);
 };
 
@@ -104,7 +106,9 @@ BobArticlesPlugin.prototype.articleBuildSecnoDecorations = function articleBuild
     const text = view && view.state && view.state.doc && typeof view.state.doc.toString === "function"
       ? view.state.doc.toString()
       : "";
-    const ranges = articleSecnoDecorationRanges(text, outline);
+    const ranges = articleSecnoDecorationRanges(text, outline, {
+      savesBlocked: Boolean(path && this.articleUndoBlocked && this.articleUndoBlocked.has(path)),
+    });
     if (!ranges.length) return ArticleDecoration.none;
     if (!ArticleRangeSetBuilder) return ArticleDecoration.none;
     const builder = new ArticleRangeSetBuilder();
@@ -131,6 +135,26 @@ BobArticlesPlugin.prototype.articleRefreshSecnoViews = function articleRefreshSe
   }
 };
 
+BobArticlesPlugin.prototype.articleRefreshReadingViews = function articleRefreshReadingViews(path) {
+  const workspace = this.app && this.app.workspace;
+  if (!workspace || typeof workspace.getLeavesOfType !== "function") return;
+  const generation = this.articleLookGeneration && this.articleLookGeneration.get(path);
+  if (!generation) return;
+  if (!this.articleReadingRenderGeneration) this.articleReadingRenderGeneration = new Map();
+  if (this.articleReadingRenderGeneration.get(path) === generation) return;
+  this.articleReadingRenderGeneration.set(path, generation);
+  for (const leaf of workspace.getLeavesOfType("markdown")) {
+    const view = leaf && leaf.view;
+    if (!view || !view.file || view.file.path !== path) continue;
+    let mode = "";
+    try { mode = typeof view.getMode === "function" ? view.getMode() : ""; }
+    catch (error) { mode = ""; }
+    const preview = view.previewMode;
+    if (mode !== "preview" || !preview || typeof preview.rerender !== "function") continue;
+    try { preview.rerender(true); } catch (error) { /* Obsidian will render on the next view update. */ }
+  }
+};
+
 BobArticlesPlugin.prototype.articleRememberPlan = function articleRememberPlan(path, plan, options = {}) {
   if (!path || !plan || !plan.outline) return;
   if (!this.articleOutlines) this.articleOutlines = new Map();
@@ -138,6 +162,7 @@ BobArticlesPlugin.prototype.articleRememberPlan = function articleRememberPlan(p
   this.articleOutlines.set(path, articleOutlineForCurrentBuffer(plan.outline, Boolean(options.applied)));
   this.articleLookGeneration.set(path, (this.articleLookGeneration.get(path) || 0) + 1);
   this.articleRefreshSecnoViews(path);
+  this.articleRefreshReadingViews(path);
 };
 
 BobArticlesPlugin.prototype.articleEnsureOutline = function articleEnsureOutline(snapshot, options = {}) {
@@ -262,7 +287,9 @@ BobArticlesPlugin.prototype.articleRenderReadingSecnos = function articleRenderR
     const line = info.lineStart + 1;
     const section = articleSectionAtLine(outline, line);
     if (!section || section.line !== line) continue;
-    articleWrapHeadingElement(heading, section);
+    articleWrapHeadingElement(heading, section, undefined, {
+      savesBlocked: Boolean(this.articleUndoBlocked && this.articleUndoBlocked.has(path)),
+    });
   }
 };
 

@@ -32,12 +32,13 @@ function articleSecnoRangeOnLine(lineText, lineStart, written) {
   return { from, to: from + stripped.token.length, token: stripped.token };
 }
 
-function articleStaleNumberTitle(section) {
+function articleStaleNumberTitle(section, savesBlocked = false) {
+  if (savesBlocked) return "";
   if (!section || !section.stale || section.number == null || section.number === "") return "";
   return `Becomes ${section.number} on save`;
 }
 
-function articleSecnoDecorationRanges(text, outline) {
+function articleSecnoDecorationRanges(text, outline, options = {}) {
   if (!outline || !Array.isArray(outline.sections)) return [];
   const { lines, starts } = articleLineStartOffsets(text);
   const ranges = [];
@@ -54,7 +55,7 @@ function articleSecnoDecorationRanges(text, outline) {
       stale: Boolean(section.stale),
       number: section.number || null,
       title: section.title || "",
-      titleAttr: articleStaleNumberTitle(section),
+      titleAttr: articleStaleNumberTitle(section, options.savesBlocked),
       line: section.line,
     });
   }
@@ -100,7 +101,7 @@ function articleStatusBarModel(outline, line) {
   };
 }
 
-function articleHeadingWrapSpec(headingText, section) {
+function articleHeadingWrapSpec(headingText, section, options = {}) {
   if (!section || !section.written) return null;
   const source = String(headingText || "");
   const leading = source.match(/^[ \t]*/)[0];
@@ -111,13 +112,13 @@ function articleHeadingWrapSpec(headingText, section) {
     from: leading.length,
     to: leading.length + stripped.token.length,
     className: section.stale ? "bob-secno is-stale" : "bob-secno",
-    title: articleStaleNumberTitle(section),
+    title: articleStaleNumberTitle(section, options.savesBlocked),
   };
 }
 
-function articleWrappedHeadingChildren(headingText, section) {
+function articleWrappedHeadingChildren(headingText, section, options = {}) {
   const source = String(headingText || "");
-  const spec = articleHeadingWrapSpec(source, section);
+  const spec = articleHeadingWrapSpec(source, section, options);
   if (!spec) return [{ type: "text", value: source }];
   const children = [];
   if (spec.from > 0) children.push({ type: "text", value: source.slice(0, spec.from) });
@@ -153,7 +154,7 @@ function articleCreateTextNode(documentRef, value) {
   return { nodeType: 3, nodeName: "#text", nodeValue: value };
 }
 
-function articleWrapHeadingElement(heading, section, documentRef) {
+function articleWrapHeadingElement(heading, section, documentRef, options = {}) {
   if (!heading || !section) return false;
   try {
     if (typeof heading.querySelector === "function" && heading.querySelector(".bob-secno")) {
@@ -165,7 +166,7 @@ function articleWrapHeadingElement(heading, section, documentRef) {
   const textNode = articleFirstTextNode(heading);
   if (!textNode) return false;
   const value = String(textNode.nodeValue || "");
-  const spec = articleHeadingWrapSpec(value, section);
+  const spec = articleHeadingWrapSpec(value, section, options);
   if (!spec) return false;
   const doc = documentRef
     || heading.ownerDocument

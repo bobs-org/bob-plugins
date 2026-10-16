@@ -229,6 +229,7 @@ function articleBuildChanges(text, edits) {
   }
   const changes = [];
   for (const edit of articleNormalizeEdits(edits)) {
+    if (edit.delete === 0 && edit.insert.length === 0) continue;
     const index = edit.line - 1;
     if (index > split.lines.length || index + edit.delete > split.lines.length) {
       throw new Error("bob returned line edits outside the sent note.");
@@ -257,10 +258,16 @@ function articleBuildChanges(text, edits) {
       to += split.separators[last].length;
     } else if (
       edit.insert.length === 0 && last === split.lines.length - 1 &&
-      !split.trailingNewline && index > 0
+      index > 0
     ) {
       const precedingEol = split.separators[index - 1] || split.eol;
       from -= precedingEol.length;
+    }
+    if (
+      edit.insert.length === 0 && index === 0 &&
+      last === split.lines.length - 1 && split.trailingNewline
+    ) {
+      to += source.endsWith("\r\n") ? 2 : 1;
     }
     const oldText = source.slice(from, to);
     const newText = edit.insert.join(split.eol);
@@ -342,12 +349,13 @@ function articleSecnoRangeOnLine(lineText, lineStart, written) {
   return { from, to: from + stripped.token.length, token: stripped.token };
 }
 
-function articleStaleNumberTitle(section) {
+function articleStaleNumberTitle(section, savesBlocked = false) {
+  if (savesBlocked) return "";
   if (!section || !section.stale || section.number == null || section.number === "") return "";
   return `Becomes ${section.number} on save`;
 }
 
-function articleSecnoDecorationRanges(text, outline) {
+function articleSecnoDecorationRanges(text, outline, options = {}) {
   if (!outline || !Array.isArray(outline.sections)) return [];
   const { lines, starts } = articleLineStartOffsets(text);
   const ranges = [];
@@ -364,7 +372,7 @@ function articleSecnoDecorationRanges(text, outline) {
       stale: Boolean(section.stale),
       number: section.number || null,
       title: section.title || "",
-      titleAttr: articleStaleNumberTitle(section),
+      titleAttr: articleStaleNumberTitle(section, options.savesBlocked),
       line: section.line,
     });
   }
@@ -410,7 +418,7 @@ function articleStatusBarModel(outline, line) {
   };
 }
 
-function articleHeadingWrapSpec(headingText, section) {
+function articleHeadingWrapSpec(headingText, section, options = {}) {
   if (!section || !section.written) return null;
   const source = String(headingText || "");
   const leading = source.match(/^[ \t]*/)[0];
@@ -421,13 +429,13 @@ function articleHeadingWrapSpec(headingText, section) {
     from: leading.length,
     to: leading.length + stripped.token.length,
     className: section.stale ? "bob-secno is-stale" : "bob-secno",
-    title: articleStaleNumberTitle(section),
+    title: articleStaleNumberTitle(section, options.savesBlocked),
   };
 }
 
-function articleWrappedHeadingChildren(headingText, section) {
+function articleWrappedHeadingChildren(headingText, section, options = {}) {
   const source = String(headingText || "");
-  const spec = articleHeadingWrapSpec(source, section);
+  const spec = articleHeadingWrapSpec(source, section, options);
   if (!spec) return [{ type: "text", value: source }];
   const children = [];
   if (spec.from > 0) children.push({ type: "text", value: source.slice(0, spec.from) });
@@ -463,7 +471,7 @@ function articleCreateTextNode(documentRef, value) {
   return { nodeType: 3, nodeName: "#text", nodeValue: value };
 }
 
-function articleWrapHeadingElement(heading, section, documentRef) {
+function articleWrapHeadingElement(heading, section, documentRef, options = {}) {
   if (!heading || !section) return false;
   try {
     if (typeof heading.querySelector === "function" && heading.querySelector(".bob-secno")) {
@@ -475,7 +483,7 @@ function articleWrapHeadingElement(heading, section, documentRef) {
   const textNode = articleFirstTextNode(heading);
   if (!textNode) return false;
   const value = String(textNode.nodeValue || "");
-  const spec = articleHeadingWrapSpec(value, section);
+  const spec = articleHeadingWrapSpec(value, section, options);
   if (!spec) return false;
   const doc = documentRef
     || heading.ownerDocument
@@ -831,7 +839,7 @@ class BobArticlesPlugin extends Plugin {
     }
     const plan = result.plan;
     if (plan.status === "skipped" || plan.status === "error") {
-      this.articleReportRefusal(path, plan);
+      this.articleReportRefusal(path, plan, { always: true });
       return;
     }
     let formatted;
@@ -901,6 +909,7 @@ class BobArticlesPlugin extends Plugin {
 
   articleQueueLeave(snapshot) {
     if (!this.settings.formatOnLeave || !snapshot || !snapshot.file) return;
+    if (this.articleUndoBlocked && this.articleUndoBlocked.has(snapshot.file.path)) return;
     const timer = setTimeout(() => {
       this.articleLeaveTimers.delete(timer);
       const active = this.articleActiveMarkdownView();
@@ -913,6 +922,7 @@ class BobArticlesPlugin extends Plugin {
   async articleFormatSavedFile(file, previousView) {
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.read !== "function" || typeof vault.process !== "function") return;
+    if (this.articleUndoBlocked && this.articleUndoBlocked.has(file.path)) return;
     if (!articleHasArticleType(this.articleFrontmatter(file))) return;
     let sent;
     if (previousView && typeof previousView.save === "function") {
@@ -968,19 +978,23 @@ class BobArticlesPlugin extends Plugin {
     return articleSpawnBob(resolved.path, args, text, vaultPath);
   }
 
-  articleReportRefusal(path, plan) {
+  articleReportRefusal(path, plan, options = {}) {
     const reason = plan.reason || {};
-    if (reason.code === "not-article") return;
-    if (this.articleRefusalNotices.has(path)) return;
-    this.articleRefusalNotices.add(path);
+    const always = options.always === true;
+    if (!always && reason.code === "not-article") return;
+    if (!always && this.articleRefusalNotices.has(path)) return;
+    if (!always) this.articleRefusalNotices.add(path);
     this.articleShowNotice(reason.message || plan.notice || "bob skipped this article.");
   }
 
   articleReportRunFailure(result) {
-    if (result.code === "bob-not-found" || result.code === "timeout") {
+    if (result.code === "bob-not-found" || result.code === "timeout" || result.code === "bad-json") {
       if (this.articleBobErrorNoticed) return;
       this.articleBobErrorNoticed = true;
-      this.articleShowNotice(result.message || (result.code === "timeout" ? "bob timed out." : "bob was not found."));
+      const message = result.code === "bad-json"
+        ? "This version of bob does not support articles. Update bob to use Bob Articles."
+        : result.message || (result.code === "timeout" ? "bob timed out." : "bob was not found.");
+      this.articleShowNotice(message);
       return;
     }
     console.warn("Bob Articles could not read the bob plan", result.message || result.code);
@@ -1006,7 +1020,8 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     if (vaultPath) env.BOB_DIR = vaultPath;
     env.NO_COLOR = "1";
     let child;
-    let stdout = "";
+    const stdoutChunks = [];
+    let stdoutLength = 0;
     let stderr = "";
     let settled = false;
     let timer = null;
@@ -1027,8 +1042,10 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
       finish({ ok: false, code: "timeout", message: "bob articles timed out after 1.5 s." });
     }, options.timeout || ARTICLE_BOB_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-      if (stdout.length > ARTICLE_BOB_MAX_OUTPUT) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      stdoutChunks.push(buffer);
+      stdoutLength += buffer.length;
+      if (stdoutLength > ARTICLE_BOB_MAX_OUTPUT) {
         try { child.kill(); } catch (error) { /* The size error still wins. */ }
         finish({ ok: false, code: "output-too-large", message: "bob returned an oversized article plan." });
       }
@@ -1039,10 +1056,16 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     });
     child.on("close", () => {
       if (settled) return;
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const decoded = articleDecodePlan(stdout);
       if (decoded.ok) finish(decoded);
       else finish({ ...decoded, detail: stderr.split("\n")[0] || "" });
     });
+    if (child.stdin && typeof child.stdin.on === "function") {
+      child.stdin.on("error", (error) => {
+        finish({ ok: false, code: "stdin-error", message: String(error && error.message || error) });
+      });
+    }
     try { child.stdin.end(String(input || "")); }
     catch (error) { finish({ ok: false, code: "stdin-error", message: String(error && error.message || error) }); }
   });
@@ -1051,6 +1074,7 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
 BobArticlesPlugin.prototype.articleSetupLook = function articleSetupLook() {
   this.articleOutlines = this.articleOutlines || new Map();
   this.articleLookGeneration = this.articleLookGeneration || new Map();
+  this.articleReadingRenderGeneration = this.articleReadingRenderGeneration || new Map();
   this.articleLookState = this.articleLookState || articleCreateLookState();
   this.articleStaleTimers = this.articleStaleTimers || new Map();
 
@@ -1075,6 +1099,7 @@ BobArticlesPlugin.prototype.articleSetupLook = function articleSetupLook() {
 BobArticlesPlugin.prototype.articleTeardownLook = function articleTeardownLook() {
   for (const timer of (this.articleStaleTimers || new Map()).values()) clearTimeout(timer);
   if (this.articleStaleTimers) this.articleStaleTimers.clear();
+  if (this.articleReadingRenderGeneration) this.articleReadingRenderGeneration.clear();
   this.articlePaintStatusBar(null);
 };
 
@@ -1154,7 +1179,9 @@ BobArticlesPlugin.prototype.articleBuildSecnoDecorations = function articleBuild
     const text = view && view.state && view.state.doc && typeof view.state.doc.toString === "function"
       ? view.state.doc.toString()
       : "";
-    const ranges = articleSecnoDecorationRanges(text, outline);
+    const ranges = articleSecnoDecorationRanges(text, outline, {
+      savesBlocked: Boolean(path && this.articleUndoBlocked && this.articleUndoBlocked.has(path)),
+    });
     if (!ranges.length) return ArticleDecoration.none;
     if (!ArticleRangeSetBuilder) return ArticleDecoration.none;
     const builder = new ArticleRangeSetBuilder();
@@ -1181,6 +1208,26 @@ BobArticlesPlugin.prototype.articleRefreshSecnoViews = function articleRefreshSe
   }
 };
 
+BobArticlesPlugin.prototype.articleRefreshReadingViews = function articleRefreshReadingViews(path) {
+  const workspace = this.app && this.app.workspace;
+  if (!workspace || typeof workspace.getLeavesOfType !== "function") return;
+  const generation = this.articleLookGeneration && this.articleLookGeneration.get(path);
+  if (!generation) return;
+  if (!this.articleReadingRenderGeneration) this.articleReadingRenderGeneration = new Map();
+  if (this.articleReadingRenderGeneration.get(path) === generation) return;
+  this.articleReadingRenderGeneration.set(path, generation);
+  for (const leaf of workspace.getLeavesOfType("markdown")) {
+    const view = leaf && leaf.view;
+    if (!view || !view.file || view.file.path !== path) continue;
+    let mode = "";
+    try { mode = typeof view.getMode === "function" ? view.getMode() : ""; }
+    catch (error) { mode = ""; }
+    const preview = view.previewMode;
+    if (mode !== "preview" || !preview || typeof preview.rerender !== "function") continue;
+    try { preview.rerender(true); } catch (error) { /* Obsidian will render on the next view update. */ }
+  }
+};
+
 BobArticlesPlugin.prototype.articleRememberPlan = function articleRememberPlan(path, plan, options = {}) {
   if (!path || !plan || !plan.outline) return;
   if (!this.articleOutlines) this.articleOutlines = new Map();
@@ -1188,6 +1235,7 @@ BobArticlesPlugin.prototype.articleRememberPlan = function articleRememberPlan(p
   this.articleOutlines.set(path, articleOutlineForCurrentBuffer(plan.outline, Boolean(options.applied)));
   this.articleLookGeneration.set(path, (this.articleLookGeneration.get(path) || 0) + 1);
   this.articleRefreshSecnoViews(path);
+  this.articleRefreshReadingViews(path);
 };
 
 BobArticlesPlugin.prototype.articleEnsureOutline = function articleEnsureOutline(snapshot, options = {}) {
@@ -1312,7 +1360,9 @@ BobArticlesPlugin.prototype.articleRenderReadingSecnos = function articleRenderR
     const line = info.lineStart + 1;
     const section = articleSectionAtLine(outline, line);
     if (!section || section.line !== line) continue;
-    articleWrapHeadingElement(heading, section);
+    articleWrapHeadingElement(heading, section, undefined, {
+      savesBlocked: Boolean(this.articleUndoBlocked && this.articleUndoBlocked.has(path)),
+    });
   }
 };
 

@@ -52,7 +52,7 @@ function articlePlan(overrides = {}) {
       edits: [{ line: 1, delete: 1, insert: ["# 1. Article"] }],
       changes: {},
       replaced: [],
-      notice: "Article formatted · 1 sections numbered",
+      notice: "Article formatted · 1 section numbered",
       findings: [],
       outline: {},
       inbound: [],
@@ -127,6 +127,47 @@ test("bob stdin spawn passes the article contract and vault environment", async 
   assert.deepEqual(seen.options.stdio, ["pipe", "pipe", "pipe"]);
 });
 
+test("bob plan stdout decodes UTF-8 split across chunks", async () => {
+  const child = new EventEmitter();
+  child.stdin = new EventEmitter();
+  child.stdin.end = () => {};
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  const payload = Buffer.from(JSON.stringify(articlePlan({ notice: "Café 🍎" })), "utf8");
+  const split = payload.indexOf(Buffer.from("é")) + 1;
+  const resultPromise = helpers.articleSpawnBob("bob", [], "", "/vault", {
+    timeout: 100,
+    childProcess: {
+      spawn() {
+        queueMicrotask(() => {
+          child.stdout.emit("data", payload.subarray(0, split));
+          child.stdout.emit("data", payload.subarray(split));
+          child.emit("close", 0);
+        });
+        return child;
+      },
+    },
+  });
+  const result = await resultPromise;
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.notice, "Café 🍎");
+});
+
+test("early bob exit on stdin reports EPIPE as a run failure", async () => {
+  const child = new EventEmitter();
+  child.stdin = new EventEmitter();
+  child.stdin.end = () => queueMicrotask(() => child.stdin.emit("error", new Error("EPIPE")));
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  const result = await helpers.articleSpawnBob("bob", [], "buffer", "/vault", {
+    timeout: 100,
+    childProcess: { spawn: () => child },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "stdin-error");
+  assert.match(result.message, /EPIPE/);
+});
+
 test("line hunks become minimal cursor-preserving changes", () => {
   const source = "# 1. Start\n\n## Draft\nBody\n";
   const edits = [{ line: 3, delete: 1, insert: ["## 1.1 Draft"] }];
@@ -135,6 +176,12 @@ test("line hunks become minimal cursor-preserving changes", () => {
   assert.equal(formatted, "# 1. Start\n\n## 1.1 Draft\nBody\n");
   assert.deepEqual(changes, [{ from: 15, to: 15, insert: "1.1 " }]);
   assert.equal(helpers.articleApplyChangesToText(source, changes), formatted);
+  const cursor = source.indexOf("Body");
+  const change = changes[0];
+  const mappedCursor = cursor >= change.to
+    ? cursor + change.insert.length - (change.to - change.from)
+    : cursor;
+  assert.equal(formatted.slice(mappedCursor, mappedCursor + 4), "Body");
 });
 
 test("insert, multi-line replace, and deletion hunks reproduce the formatted note", () => {
@@ -143,6 +190,12 @@ test("insert, multi-line replace, and deletion hunks reproduce the formatted not
     ["A\nB\nC\n", [{ line: 2, delete: 2, insert: ["X", "Y", "Z"] }]],
     ["A\nB\nC", [{ line: 2, delete: 1, insert: [] }]],
     ["A\nB\nC", [{ line: 3, delete: 1, insert: [] }]],
+    ["A\nB\nC\n", [{ line: 2, delete: 2, insert: [] }]],
+    ["A\nB\nC\n", [{ line: 2, delete: 2, insert: ["X"] }]],
+    ["A\nB\n", [{ line: 1, delete: 2, insert: [] }]],
+    ["A\nB\nC\n\n\n", [{ line: 3, delete: 3, insert: [] }]],
+    ["A\r\nB\r\nC\r\n", [{ line: 2, delete: 2, insert: [] }]],
+    ["A\r\nB\r\n", [{ line: 1, delete: 2, insert: [] }]],
   ];
   for (const [source, edits] of examples) {
     const formatted = helpers.articleApplyEditsToText(source, edits);
@@ -156,6 +209,29 @@ test("insert, multi-line replace, and deletion hunks reproduce the formatted not
     helpers.articleApplyEditsToText(crlf, crlfEdits),
   );
   assert.equal(helpers.articleApplyEditsToText(crlf, crlfEdits), "## 1. Draft\r\nBody\r\n");
+
+  let seed = 0x6d2b79f5;
+  const random = (limit) => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed % limit;
+  };
+  for (let run = 0; run < 80; run += 1) {
+    const count = 1 + random(7);
+    const eol = random(2) ? "\n" : "\r\n";
+    const lines = Array.from({ length: count }, (_, index) => `line-${run}-${index}`);
+    const trailingNewline = random(2) === 1;
+    const source = lines.join(eol) + (trailingNewline ? eol : "");
+    const line = 1 + random(count + 1);
+    const deleteCount = line <= count ? random(count - line + 2) : 0;
+    const insertCount = random(4);
+    const insert = Array.from({ length: insertCount }, (_, index) => `new-${run}-${index}`);
+    const edits = [{ line, delete: deleteCount, insert }];
+    assert.equal(
+      helpers.articleApplyChangesToText(source, helpers.articleBuildChanges(source, edits)),
+      helpers.articleApplyEditsToText(source, edits),
+      `seeded edit ${run}: ${JSON.stringify(edits)} on ${JSON.stringify(source)}`,
+    );
+  }
 });
 
 test("notice shows bob's text and at most two warning findings", () => {
@@ -203,6 +279,58 @@ test("undo guard blocks a reformat until a fresh input or delete event", () => {
   assert.equal(plugin.articleUndoBlocked.has("article.md"), true);
   plugin.articleObserveEditorUpdate(update("input.type", "fresh"));
   assert.equal(plugin.articleUndoBlocked.has("article.md"), false);
+});
+
+test("leave formatting observes the undo guard before saving or reading", async () => {
+  const file = { path: "article.md" };
+  let saved = 0;
+  let read = 0;
+  const previousView = { save: async () => { saved += 1; } };
+  const plugin = new BobArticlesPlugin({
+    vault: {
+      read: async () => { read += 1; return "text"; },
+      process: async () => {},
+    },
+  }, {});
+  plugin.settings = { formatOnLeave: true };
+  plugin.articleUndoBlocked = new Set([file.path]);
+  plugin.articleLeaveTimers = new Set();
+  plugin.articleQueueLeave({ file, view: previousView });
+  assert.equal(plugin.articleLeaveTimers.size, 0);
+  await plugin.articleFormatSavedFile(file, previousView);
+  assert.equal(saved, 0);
+  assert.equal(read, 0);
+});
+
+test("Convert shows bob's refusal on every invocation", async () => {
+  const notices = [];
+  const file = { path: "plain.md" };
+  const plugin = new BobArticlesPlugin({}, {});
+  plugin.articleRunPlan = async () => ({
+    ok: true,
+    plan: {
+      status: "skipped",
+      reason: { code: "holds-anchor", message: "articles cannot be projects or refs" },
+    },
+  });
+  plugin.articleShowNotice = (message) => notices.push(message);
+  const view = { file, editor: { getValue: () => "text" } };
+  await plugin.articleAdoptActive(view);
+  await plugin.articleAdoptActive(view);
+  assert.deepEqual(notices, [
+    "articles cannot be projects or refs",
+    "articles cannot be projects or refs",
+  ]);
+});
+
+test("old bob's non-JSON article response gets one update notice per session", () => {
+  const notices = [];
+  const plugin = new BobArticlesPlugin({}, {});
+  plugin.articleShowNotice = (message) => notices.push(message);
+  plugin.articleReportRunFailure({ code: "bad-json" });
+  plugin.articleReportRunFailure({ code: "bad-json" });
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /Update bob/);
 });
 
 test("format drops its response if the editor changed while bob was running", async () => {
@@ -258,6 +386,40 @@ test("decoration ranges mark written section numbers from the outline", () => {
   assert.equal(mapped[0].from, 5);
   assert.equal(mapped[0].to, 7);
   assert.deepEqual(helpers.articleSecnoDecorationRanges(LOOK_TEXT, { sections: [] }), []);
+  assert.equal(
+    helpers.articleSecnoDecorationRanges(LOOK_TEXT, LOOK_OUTLINE, { savesBlocked: true })[1].titleAttr,
+    "",
+  );
+});
+
+test("a new outline rerenders each open Reading view once for that generation", () => {
+  let previewRenders = 0;
+  let otherRenders = 0;
+  const preview = {
+    file: { path: "article.md" },
+    getMode: () => "preview",
+    previewMode: { rerender() { previewRenders += 1; } },
+  };
+  const source = {
+    file: { path: "article.md" },
+    getMode: () => "source",
+    previewMode: { rerender() { otherRenders += 1; } },
+  };
+  const other = {
+    file: { path: "other.md" },
+    getMode: () => "preview",
+    previewMode: { rerender() { otherRenders += 1; } },
+  };
+  const plugin = new BobArticlesPlugin({
+    workspace: { getLeavesOfType: () => [{ view: preview }, { view: source }, { view: other }] },
+  }, {});
+  plugin.articleRefreshSecnoViews = () => {};
+  plugin.articleRememberPlan("article.md", { outline: { sections: [] } });
+  plugin.articleRefreshReadingViews("article.md");
+  assert.equal(previewRenders, 1);
+  assert.equal(otherRenders, 0);
+  plugin.articleRememberPlan("article.md", { outline: { sections: [{ line: 1 }] } });
+  assert.equal(previewRenders, 2);
 });
 
 test("section at a given line uses the innermost outline range", () => {
@@ -349,6 +511,12 @@ test("reading-view wrapping puts the leading number token in span.bob-secno", ()
       { type: "text", value: " Draft" },
     ],
   );
+  assert.equal(
+    helpers.articleHeadingWrapSpec("1.2 Draft", {
+      written: "1.2", number: "1.3", stale: true,
+    }, { savesBlocked: true }).title,
+    "",
+  );
   assert.equal(helpers.articleHeadingWrapSpec("No number", { written: "1." }), null);
 
   const textNode = { nodeType: 3, nodeName: "#text", nodeValue: "1. Title", parentNode: null };
@@ -423,6 +591,9 @@ test("article styles scope the reading look under .bob-article", () => {
   assert.match(css, /is-stale/);
   assert.match(css, /@container/);
   assert.match(css, /@media print/);
+  assert.doesNotMatch(css, /\.bob-article \.markdown-preview-view,\s*\.bob-article \.markdown-preview-sizer/);
+  assert.match(css, /\.HyperMD-header-1\s*\{[^}]*padding-block-start/s);
+  assert.doesNotMatch(css, /\.HyperMD-header-1\s*\{[^}]*margin-block/s);
 });
 
 test("look settings default to serif typeface and stale-number hints", () => {

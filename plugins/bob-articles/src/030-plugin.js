@@ -257,7 +257,7 @@ class BobArticlesPlugin extends Plugin {
     }
     const plan = result.plan;
     if (plan.status === "skipped" || plan.status === "error") {
-      this.articleReportRefusal(path, plan);
+      this.articleReportRefusal(path, plan, { always: true });
       return;
     }
     let formatted;
@@ -327,6 +327,7 @@ class BobArticlesPlugin extends Plugin {
 
   articleQueueLeave(snapshot) {
     if (!this.settings.formatOnLeave || !snapshot || !snapshot.file) return;
+    if (this.articleUndoBlocked && this.articleUndoBlocked.has(snapshot.file.path)) return;
     const timer = setTimeout(() => {
       this.articleLeaveTimers.delete(timer);
       const active = this.articleActiveMarkdownView();
@@ -339,6 +340,7 @@ class BobArticlesPlugin extends Plugin {
   async articleFormatSavedFile(file, previousView) {
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.read !== "function" || typeof vault.process !== "function") return;
+    if (this.articleUndoBlocked && this.articleUndoBlocked.has(file.path)) return;
     if (!articleHasArticleType(this.articleFrontmatter(file))) return;
     let sent;
     if (previousView && typeof previousView.save === "function") {
@@ -394,19 +396,23 @@ class BobArticlesPlugin extends Plugin {
     return articleSpawnBob(resolved.path, args, text, vaultPath);
   }
 
-  articleReportRefusal(path, plan) {
+  articleReportRefusal(path, plan, options = {}) {
     const reason = plan.reason || {};
-    if (reason.code === "not-article") return;
-    if (this.articleRefusalNotices.has(path)) return;
-    this.articleRefusalNotices.add(path);
+    const always = options.always === true;
+    if (!always && reason.code === "not-article") return;
+    if (!always && this.articleRefusalNotices.has(path)) return;
+    if (!always) this.articleRefusalNotices.add(path);
     this.articleShowNotice(reason.message || plan.notice || "bob skipped this article.");
   }
 
   articleReportRunFailure(result) {
-    if (result.code === "bob-not-found" || result.code === "timeout") {
+    if (result.code === "bob-not-found" || result.code === "timeout" || result.code === "bad-json") {
       if (this.articleBobErrorNoticed) return;
       this.articleBobErrorNoticed = true;
-      this.articleShowNotice(result.message || (result.code === "timeout" ? "bob timed out." : "bob was not found."));
+      const message = result.code === "bad-json"
+        ? "This version of bob does not support articles. Update bob to use Bob Articles."
+        : result.message || (result.code === "timeout" ? "bob timed out." : "bob was not found.");
+      this.articleShowNotice(message);
       return;
     }
     console.warn("Bob Articles could not read the bob plan", result.message || result.code);
@@ -432,7 +438,8 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     if (vaultPath) env.BOB_DIR = vaultPath;
     env.NO_COLOR = "1";
     let child;
-    let stdout = "";
+    const stdoutChunks = [];
+    let stdoutLength = 0;
     let stderr = "";
     let settled = false;
     let timer = null;
@@ -453,8 +460,10 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
       finish({ ok: false, code: "timeout", message: "bob articles timed out after 1.5 s." });
     }, options.timeout || ARTICLE_BOB_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-      if (stdout.length > ARTICLE_BOB_MAX_OUTPUT) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      stdoutChunks.push(buffer);
+      stdoutLength += buffer.length;
+      if (stdoutLength > ARTICLE_BOB_MAX_OUTPUT) {
         try { child.kill(); } catch (error) { /* The size error still wins. */ }
         finish({ ok: false, code: "output-too-large", message: "bob returned an oversized article plan." });
       }
@@ -465,10 +474,16 @@ function articleSpawnBob(binary, args, input, vaultPath, options = {}) {
     });
     child.on("close", () => {
       if (settled) return;
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const decoded = articleDecodePlan(stdout);
       if (decoded.ok) finish(decoded);
       else finish({ ...decoded, detail: stderr.split("\n")[0] || "" });
     });
+    if (child.stdin && typeof child.stdin.on === "function") {
+      child.stdin.on("error", (error) => {
+        finish({ ok: false, code: "stdin-error", message: String(error && error.message || error) });
+      });
+    }
     try { child.stdin.end(String(input || "")); }
     catch (error) { finish({ ok: false, code: "stdin-error", message: String(error && error.message || error) }); }
   });

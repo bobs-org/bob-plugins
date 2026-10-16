@@ -186,6 +186,7 @@ function articleBuildChanges(text, edits) {
   }
   const changes = [];
   for (const edit of articleNormalizeEdits(edits)) {
+    if (edit.delete === 0 && edit.insert.length === 0) continue;
     const index = edit.line - 1;
     if (index > split.lines.length || index + edit.delete > split.lines.length) {
       throw new Error("bob returned line edits outside the sent note.");
@@ -214,10 +215,16 @@ function articleBuildChanges(text, edits) {
       to += split.separators[last].length;
     } else if (
       edit.insert.length === 0 && last === split.lines.length - 1 &&
-      !split.trailingNewline && index > 0
+      index > 0
     ) {
       const precedingEol = split.separators[index - 1] || split.eol;
       from -= precedingEol.length;
+    }
+    if (
+      edit.insert.length === 0 && index === 0 &&
+      last === split.lines.length - 1 && split.trailingNewline
+    ) {
+      to += source.endsWith("\r\n") ? 2 : 1;
     }
     const oldText = source.slice(from, to);
     const newText = edit.insert.join(split.eol);

@@ -57,6 +57,7 @@ function stubOnloadPlugin(overrides = {}) {
   plugin.registerCountedTaskMoveInputListeners = () => {};
   plugin.registerCountedLaneToggleInputListeners = () => {};
   plugin.registerClearSearchHighlightInputListeners = () => {};
+  plugin.registerEditorExtension = () => {};
   Object.assign(plugin, overrides);
   return plugin;
 }
@@ -721,7 +722,7 @@ test("focusTaskMoveDestination still lands without switching Reading view", asyn
   assert.deepEqual(setViewStateCalls, []);
 });
 
-test("onload registers bob-goto-task when the protocol API exists", () => {
+test("onload registers both read-only navigation protocols when available", () => {
   const registrations = [];
   const plugin = stubOnloadPlugin({
     registerObsidianProtocolHandler: (name, handler) => {
@@ -729,9 +730,11 @@ test("onload registers bob-goto-task when the protocol API exists", () => {
     },
   });
   plugin.onload();
-  assert.equal(registrations.length, 1);
-  assert.equal(registrations[0].name, "bob-goto-task");
-  assert.equal(typeof registrations[0].handler, "function");
+  assert.deepEqual(
+    registrations.map((registration) => registration.name),
+    ["bob-goto-task", "bob-open-notes"],
+  );
+  assert.ok(registrations.every((registration) => typeof registration.handler === "function"));
 });
 
 test("onload skips protocol registration when the API is missing", () => {

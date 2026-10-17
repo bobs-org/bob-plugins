@@ -308,6 +308,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
       this.registerObsidianProtocolHandler("bob-goto-task", (params) => {
         void this.handleGoToTaskUri(params);
       });
+      this.registerObsidianProtocolHandler("bob-open-notes", (params) => {
+        void this.enqueueBobOpenNotesUri(params);
+      });
     }
 
     this.app.workspace.onLayoutReady(() => {
@@ -352,6 +355,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
           this.scheduleDependencyHandEditMirrorFromUpdate(update);
         }),
       );
+    }
+
+    if (
+      bobOpenNotesLandingFlashField &&
+      typeof this.registerEditorExtension === "function"
+    ) {
+      this.registerEditorExtension(bobOpenNotesLandingFlashField);
     }
 
     this.reviewAnchor = null;

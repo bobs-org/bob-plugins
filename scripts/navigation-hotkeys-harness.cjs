@@ -53,7 +53,32 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
     };
   }
   if (request === "@codemirror/view") {
-    return { EditorView: class EditorView {} };
+    class EditorView {}
+    EditorView.decorations = { from: (field) => ({ field }) };
+    const emptyDecoration = { map: () => emptyDecoration };
+    const Decoration = {
+      none: emptyDecoration,
+      line: (spec) => ({ range: (from) => ({ from, spec }) }),
+      set: (ranges) => ({ ranges, map: () => ({ ranges }) }),
+    };
+    return { EditorView, Decoration };
+  }
+  if (request === "@codemirror/state") {
+    const StateEffect = {
+      define: () => {
+        const effectType = {
+          of: (value) => ({
+            value,
+            is: (candidate) => candidate === effectType,
+          }),
+        };
+        return effectType;
+      },
+    };
+    const StateField = {
+      define: (spec) => Object.freeze({ ...spec }),
+    };
+    return { StateEffect, StateField };
   }
   return originalLoad.call(this, request, parent, isMain);
 };

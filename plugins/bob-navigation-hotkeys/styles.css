@@ -125,6 +125,30 @@
   color: var(--text-faint);
 }
 
+/* A brief, read-only landing cue for `obsidian://bob-open-notes`. */
+.cm-line.bob-landing-flash {
+  animation: bob-landing-flash 1.2s ease-out both;
+}
+
+@keyframes bob-landing-flash {
+  from {
+    background-color: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+    box-shadow: inset 2px 0 0 var(--interactive-accent);
+  }
+  to {
+    background-color: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-line.bob-landing-flash {
+    animation: none;
+    background-color: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+    box-shadow: inset 2px 0 0 var(--interactive-accent);
+  }
+}
+
 /* --- Results ------------------------------------------------------------ */
 
 .bob-cnp-results {

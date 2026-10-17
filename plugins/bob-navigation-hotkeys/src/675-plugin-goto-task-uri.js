@@ -183,7 +183,10 @@ async function refindGoToTaskLine(lines, options) {
     const content = sourceLines.join("\n");
     const matches = [];
     for (let index = 0; index < sourceLines.length; index += 1) {
-      if (!isObsidianTaskAtLine(content, index, null, sourceLines)) {
+      if (
+        !info.anyLineDigest &&
+        !isObsidianTaskAtLine(content, index, null, sourceLines)
+      ) {
         continue;
       }
       const lineDigest = await bobLineDigest(sourceLines[index]);

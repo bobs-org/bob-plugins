@@ -1,6 +1,13 @@
 const obsidian = require("obsidian");
 const { MarkdownView, Modal, Notice, Plugin, parseYaml } = obsidian;
-const { EditorView } = require("@codemirror/view");
+const { EditorView, Decoration } = require("@codemirror/view");
+let codeMirrorState = {};
+try {
+  codeMirrorState = require("@codemirror/state");
+} catch {
+  // Obsidian supplies CodeMirror at runtime; lightweight Node harnesses may not.
+}
+const { StateEffect, StateField } = codeMirrorState;
 
 const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;

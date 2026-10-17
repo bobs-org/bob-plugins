@@ -50,6 +50,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysProjectConversionMixin,
   BobNavigationHotkeysProjectFileMixin,
   BobNavigationHotkeysGoToTaskUriMixin,
+  BobNavigationHotkeysOpenNotesUriMixin,
   BobNavigationHotkeysRefPdfOpenMixin,
   BobNavigationHotkeysTemplaterTriggerMixin,
   BobNavigationHotkeysLinkParseMixin,

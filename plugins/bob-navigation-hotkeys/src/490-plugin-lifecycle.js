@@ -317,6 +317,8 @@ class BobNavigationHotkeysPlugin extends Plugin {
         this.captureActiveFilePosition();
       }
       this.refreshDashScrollCaptureTarget();
+      // Templater 2.25 made the trigger device-local (default off), and this restores the vault's folder-template intent on each device.
+      this.ensureTemplaterNewNoteTrigger();
     });
 
     this.registerVimMappingsWhenReady();

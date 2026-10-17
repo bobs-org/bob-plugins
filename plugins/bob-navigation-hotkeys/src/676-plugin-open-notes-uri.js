@@ -206,6 +206,46 @@ function resolveBobOpenNotesVaultFile(plugin, vaultPath) {
 }
 
 class BobNavigationHotkeysOpenNotesUriMixin {
+  createBobOpenNotesTabAtEnd(workspace) {
+    let anchor = null;
+    if (workspace && typeof workspace.getMostRecentLeaf === "function") {
+      try {
+        anchor = workspace.getMostRecentLeaf();
+      } catch (error) {
+        anchor = null;
+      }
+    }
+    if (!anchor) {
+      anchor = workspace && workspace.activeLeaf;
+    }
+    const group = anchor && anchor.parent;
+    if (
+      workspace &&
+      typeof workspace.createLeafInParent === "function" &&
+      group &&
+      Array.isArray(group.children)
+    ) {
+      try {
+        const leaf = workspace.createLeafInParent(group, group.children.length);
+        if (leaf && group.children.indexOf(leaf) !== -1) {
+          return leaf;
+        }
+        if (leaf && typeof leaf.detach === "function") {
+          try {
+            leaf.detach();
+          } catch (error) {
+            // The failed leaf is already unused.
+          }
+        }
+      } catch (error) {
+        // Fall through to Obsidian's default new-tab placement.
+      }
+    }
+    return typeof this.createNewTabLeaf === "function"
+      ? this.createNewTabLeaf(workspace, (workspace && workspace.activeLeaf) || null)
+      : null;
+  }
+
   enqueueBobOpenNotesUri(params) {
     const previous = this.bobOpenNotesQueue || Promise.resolve();
     const current = previous
@@ -335,7 +375,7 @@ class BobNavigationHotkeysOpenNotesUriMixin {
     }
   }
 
-  async openBobOpenNotesEntry(candidate, state, index, previousEntryLeaf) {
+  async openBobOpenNotesEntry(candidate, state, index) {
     const workspace = this.app && this.app.workspace;
     const file = state && state.file;
     if (!workspace || !file) {
@@ -343,6 +383,17 @@ class BobNavigationHotkeysOpenNotesUriMixin {
     }
 
     let leaf = findLeafShowingPath(this, file.path);
+    if (
+      leaf &&
+      leaf.isDeferred === true &&
+      typeof leaf.loadIfDeferred === "function"
+    ) {
+      try {
+        await leaf.loadIfDeferred();
+      } catch (error) {
+        // Continue with the leaf; openFile can still load it.
+      }
+    }
     if (!leaf && index === 0) {
       const activeLeaf = workspace.activeLeaf;
       const viewType =
@@ -355,20 +406,11 @@ class BobNavigationHotkeysOpenNotesUriMixin {
         leaf = activeLeaf;
       }
     }
-    let createdNewTab = false;
     if (!leaf) {
       leaf =
-        typeof this.createNewTabLeaf === "function"
-          ? this.createNewTabLeaf(workspace, workspace.activeLeaf || null)
+        typeof this.createBobOpenNotesTabAtEnd === "function"
+          ? this.createBobOpenNotesTabAtEnd(workspace)
           : null;
-      createdNewTab = Boolean(leaf);
-    }
-    if (
-      createdNewTab &&
-      previousEntryLeaf &&
-      typeof this.placeDuplicateTabAfterSource === "function"
-    ) {
-      this.placeDuplicateTabAfterSource(previousEntryLeaf, leaf);
     }
     if (!leaf || typeof leaf.openFile !== "function") {
       return null;
@@ -546,7 +588,6 @@ class BobNavigationHotkeysOpenNotesUriMixin {
 
     let openedCount = 0;
     let primary = null;
-    let previousEntryLeaf = null;
     for (let index = 0; index < candidates.length; index += 1) {
       const candidate = candidates[index];
       if (candidate.outside) {
@@ -571,12 +612,7 @@ class BobNavigationHotkeysOpenNotesUriMixin {
 
       let opened = null;
       try {
-        opened = await this.openBobOpenNotesEntry(
-          candidate,
-          state,
-          index,
-          previousEntryLeaf,
-        );
+        opened = await this.openBobOpenNotesEntry(candidate, state, index);
       } catch (error) {
         opened = null;
       }
@@ -588,7 +624,6 @@ class BobNavigationHotkeysOpenNotesUriMixin {
         continue;
       }
       openedCount += 1;
-      previousEntryLeaf = opened.leaf;
       if (!primary) {
         primary = { candidate, state, opened };
       }

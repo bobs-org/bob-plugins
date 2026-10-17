@@ -249,6 +249,62 @@ function resolveGoToVaultFile(plugin, vaultPath, options) {
   return null;
 }
 
+function leafIsInSidebar(workspace, leaf) {
+  if (!leaf || typeof leaf.getRoot !== "function") {
+    return false;
+  }
+  let root;
+  try {
+    root = leaf.getRoot();
+  } catch (error) {
+    return false;
+  }
+  return root === workspace.leftSplit || root === workspace.rightSplit;
+}
+
+function leafShowsPath(plugin, workspace, leaf, path, markdownOnly) {
+  if (!leaf || !path) {
+    return false;
+  }
+
+  const loadedFile = leaf.view && leaf.view.file;
+  if (loadedFile) {
+    if (loadedFile.path !== path) {
+      return false;
+    }
+    if (
+      markdownOnly &&
+      plugin &&
+      typeof plugin.isMarkdownFile === "function" &&
+      !plugin.isMarkdownFile(loadedFile)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  if (leaf.isDeferred !== true || leafIsInSidebar(workspace, leaf)) {
+    return false;
+  }
+
+  let viewState = null;
+  if (typeof leaf.getViewState === "function") {
+    try {
+      viewState = leaf.getViewState();
+    } catch (error) {
+      viewState = null;
+    }
+  }
+  const stateFile = viewState && viewState.state && viewState.state.file;
+  if (stateFile !== path) {
+    return false;
+  }
+  if (markdownOnly && (!viewState || viewState.type !== "markdown")) {
+    return false;
+  }
+  return true;
+}
+
 function findLeafShowingPath(plugin, path, options) {
   const workspace = plugin && plugin.app && plugin.app.workspace;
   if (!workspace || typeof workspace.iterateAllLeaves !== "function") {
@@ -256,29 +312,25 @@ function findLeafShowingPath(plugin, path, options) {
   }
 
   const markdownOnly = Boolean(options && options.markdownOnly);
-  let matchedLeaf = null;
+  let mainMatch = null;
+  let sidebarMatch = null;
   try {
     workspace.iterateAllLeaves((leaf) => {
-      if (matchedLeaf || !leaf || !leaf.view || !leaf.view.file) {
+      if (mainMatch || !leafShowsPath(plugin, workspace, leaf, path, markdownOnly)) {
         return;
       }
-      if (leaf.view.file.path !== path) {
+      if (leafIsInSidebar(workspace, leaf)) {
+        if (!sidebarMatch) {
+          sidebarMatch = leaf;
+        }
         return;
       }
-      if (
-        markdownOnly &&
-        plugin &&
-        typeof plugin.isMarkdownFile === "function" &&
-        !plugin.isMarkdownFile(leaf.view.file)
-      ) {
-        return;
-      }
-      matchedLeaf = leaf;
+      mainMatch = leaf;
     });
   } catch (error) {
     return null;
   }
-  return matchedLeaf;
+  return mainMatch || sidebarMatch;
 }
 
 async function readGoToNoteContent(plugin, file) {

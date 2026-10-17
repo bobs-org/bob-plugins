@@ -73,6 +73,7 @@ function createBobOpenNotesHarness(options = {}) {
   const leaves = [];
   const focusCalls = [];
   const registrations = [];
+  const loadIfDeferredCalls = [];
 
   for (const entry of options.files || []) {
     const file = entry.file || makeFile(entry.path, entry.extension || "md");
@@ -84,27 +85,79 @@ function createBobOpenNotesHarness(options = {}) {
   }
 
   const tabGroup = { children: [] };
-  const makeLeaf = (file = null, viewType = null) => {
+  const leftSplit = { children: [] };
+  const rightSplit = { children: [] };
+  const rootSplit = tabGroup;
+  let mostRecentMainLeaf = null;
+
+  const isMainAreaLeaf = (leaf) => {
+    if (!leaf || typeof leaf.getRoot !== "function") return true;
+    const root = leaf.getRoot();
+    return root !== leftSplit && root !== rightSplit;
+  };
+
+  const makeLeaf = (file = null, viewType = null, extras = {}) => {
+    const parent = extras.parent || tabGroup;
+    const deferred = Boolean(extras.deferred);
+    const deferredType =
+      extras.deferredType ||
+      (file && file.extension === "md" ? "markdown" : file ? file.extension : "empty");
+    const deferredPath = extras.deferredPath || (file && file.path) || null;
     const view = {
-      file,
-      editor: file && file.extension === "md" ? editors.get(file.path) || makeEditor("") : null,
+      file: deferred ? null : file,
+      editor:
+        !deferred && file && file.extension === "md"
+          ? editors.get(file.path) || makeEditor("")
+          : null,
       getState: () => ({ mode: "source" }),
       getViewType() {
         if (viewType) return viewType;
         if (this.file) {
           return this.file.extension === "md" ? "markdown" : this.file.extension;
         }
-        return "empty";
+        return deferred ? deferredType : "empty";
       },
     };
     const leaf = {
       view,
-      parent: tabGroup,
+      parent,
+      isDeferred: deferred,
+      getRoot() {
+        if (parent === leftSplit || parent === rightSplit) return parent;
+        return rootSplit;
+      },
+      getViewState() {
+        if (leaf.isDeferred) {
+          return { type: deferredType, state: { file: deferredPath } };
+        }
+        return {
+          type: view.getViewType(),
+          state: { file: view.file && view.file.path },
+        };
+      },
+      loadIfDeferred: async () => {
+        loadIfDeferredCalls.push(leaf);
+        if (!leaf.isDeferred) return;
+        leaf.isDeferred = false;
+        view.file = file;
+        view.editor =
+          file && file.extension === "md"
+            ? editors.get(file.path) || makeEditor(contents.get(file.path) || "")
+            : null;
+        if (view.editor && file && !editors.has(file.path)) {
+          editors.set(file.path, view.editor);
+        }
+      },
+      detach() {
+        const index = parent.children.indexOf(leaf);
+        if (index !== -1) parent.children.splice(index, 1);
+      },
       openFile: async (target, state) => {
         openCalls.push({ path: target.path, state, leaf });
         if (options.rejectOpenPath === target.path) {
           throw new Error("open failed");
         }
+        leaf.isDeferred = false;
         view.file = target;
         view.editor = target.extension === "md"
           ? editors.get(target.path) || makeEditor(contents.get(target.path) || "")
@@ -115,16 +168,23 @@ function createBobOpenNotesHarness(options = {}) {
       },
     };
     leaves.push(leaf);
-    tabGroup.children.push(leaf);
+    if (!extras.skipParentInsert) {
+      parent.children.push(leaf);
+    }
     return leaf;
   };
 
-  const activeLeaf = makeLeaf(
-    options.activeFile || null,
-    options.activeViewType || null,
-  );
+  const activeLeaf = options.skipDefaultLeaf
+    ? null
+    : makeLeaf(options.activeFile || null, options.activeViewType || null);
+  if (activeLeaf && isMainAreaLeaf(activeLeaf)) {
+    mostRecentMainLeaf = activeLeaf;
+  }
   const workspace = {
     activeLeaf,
+    leftSplit,
+    rightSplit,
+    rootSplit,
     onLayoutReady: (callback) => callback && callback(),
     getActiveFile: () => workspace.activeLeaf?.view?.file || null,
     on: () => ({}),
@@ -135,6 +195,12 @@ function createBobOpenNotesHarness(options = {}) {
         if (type === "pdf") return leaf.view.file?.extension === "pdf";
         return false;
       }),
+    getMostRecentLeaf: () => {
+      if (workspace.activeLeaf && isMainAreaLeaf(workspace.activeLeaf)) {
+        return workspace.activeLeaf;
+      }
+      return mostRecentMainLeaf;
+    },
     getLeaf: (type) => {
       assert.equal(type, "tab");
       const leaf = makeLeaf(null);
@@ -148,8 +214,22 @@ function createBobOpenNotesHarness(options = {}) {
     revealLeaf: async () => {},
     setActiveLeaf: (leaf) => {
       workspace.activeLeaf = leaf;
+      if (leaf && isMainAreaLeaf(leaf)) {
+        mostRecentMainLeaf = leaf;
+      }
     },
   };
+  if (options.createLeafInParentThrows) {
+    workspace.createLeafInParent = () => {
+      throw new Error("createLeafInParent failed");
+    };
+  } else if (!options.omitCreateLeafInParent) {
+    workspace.createLeafInParent = (parent, index) => {
+      const leaf = makeLeaf(null, null, { parent, skipParentInsert: true });
+      parent.children.splice(index, 0, leaf);
+      return leaf;
+    };
+  }
 
   const vault = {
     adapter: { getBasePath: () => vaultBase },
@@ -217,6 +297,7 @@ function createBobOpenNotesHarness(options = {}) {
     writes,
     listeners,
     openCalls,
+    loadIfDeferredCalls,
     tabGroup,
     leaves,
     focusCalls,
@@ -224,6 +305,7 @@ function createBobOpenNotesHarness(options = {}) {
     workspace,
     vault,
     emit,
+    makeLeaf,
   };
 }
 
@@ -642,10 +724,13 @@ test("onload registers bob-open-notes beside bob-goto-task", () => {
 
 test("a non-file sidebar view is not reused as an empty tab", async () => {
   const harness = createBobOpenNotesHarness({
-    activeViewType: "file-explorer",
     files: [{ path: "first.md", content: "- [ ] #task First" }],
   });
-  const sidebar = harness.workspace.activeLeaf;
+  const mainLeaf = harness.workspace.activeLeaf;
+  const sidebar = harness.makeLeaf(null, "file-explorer", {
+    parent: harness.workspace.leftSplit,
+  });
+  harness.workspace.setActiveLeaf(sidebar);
   notices.length = 0;
   assert.equal(
     await harness.plugin.handleBobOpenNotesUri(
@@ -657,6 +742,12 @@ test("a non-file sidebar view is not reused as an empty tab", async () => {
   assert.equal(sidebar.view.getViewType(), "file-explorer");
   assert.notEqual(harness.openCalls[0].leaf, sidebar);
   assert.equal(harness.openCalls[0].path, "first.md");
+  assert.equal(harness.openCalls[0].leaf.parent, harness.tabGroup);
+  assert.equal(
+    harness.tabGroup.children[harness.tabGroup.children.length - 1],
+    harness.openCalls[0].leaf,
+  );
+  assert.equal(mainLeaf.view.getViewType(), "empty");
   assert.deepEqual(notices, []);
 });
 
@@ -764,4 +855,270 @@ test("a missing file does not scan vault lists when getAbstractFileByPath exists
   assert.equal(getFilesCalls, 0);
   assert.equal(getMarkdownCalls, 0);
   assert.deepEqual(notices, ["Bob Open: missing.md not found"]);
+});
+
+test("new tabs append at the far right when the middle tab is active", async () => {
+  const a = makeFile("a.md");
+  const b = makeFile("b.md");
+  const c = makeFile("c.md");
+  const harness = createBobOpenNotesHarness({
+    skipDefaultLeaf: true,
+    files: [
+      { file: a, path: "a.md", content: "a" },
+      { file: b, path: "b.md", content: "b" },
+      { file: c, path: "c.md", content: "c" },
+      { path: "new1.md", content: "- [ ] #task New one" },
+      { path: "new2.md", content: "- [ ] #task New two" },
+    ],
+  });
+  harness.makeLeaf(a);
+  const middle = harness.makeLeaf(b);
+  harness.makeLeaf(c);
+  harness.workspace.setActiveLeaf(middle);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([
+        { path: "/Users/me/bob/new1.md", line: 1 },
+        { path: "/Users/me/bob/new2.md", line: 1 },
+      ]),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    harness.tabGroup.children.map((leaf) => leaf.view.file && leaf.view.file.path),
+    ["a.md", "b.md", "c.md", "new1.md", "new2.md"],
+  );
+  assert.equal(harness.workspace.activeLeaf.view.file.path, "new1.md");
+  assert.deepEqual(notices, []);
+});
+
+test("a reused tab stays put while a new one is appended", async () => {
+  const a = makeFile("a.md");
+  const x = makeFile("x.md");
+  const c = makeFile("c.md");
+  const harness = createBobOpenNotesHarness({
+    skipDefaultLeaf: true,
+    files: [
+      { file: a, path: "a.md", content: "a" },
+      { file: x, path: "x.md", content: "- [ ] #task X" },
+      { file: c, path: "c.md", content: "c" },
+      { path: "new.md", content: "- [ ] #task New" },
+    ],
+  });
+  const first = harness.makeLeaf(a);
+  const reused = harness.makeLeaf(x);
+  harness.makeLeaf(c);
+  harness.workspace.setActiveLeaf(first);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([
+        { path: "/Users/me/bob/x.md", line: 1 },
+        { path: "/Users/me/bob/new.md", line: 1 },
+      ]),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    harness.tabGroup.children.map((leaf) => leaf.view.file && leaf.view.file.path),
+    ["a.md", "x.md", "c.md", "new.md"],
+  );
+  assert.equal(harness.openCalls.length, 1);
+  assert.equal(harness.openCalls[0].path, "new.md");
+  assert.equal(harness.workspace.activeLeaf, reused);
+  assert.deepEqual(notices, []);
+});
+
+test("a deferred tab is reused and findMarkdownLeafByPath sees it", async () => {
+  const first = makeFile("first.md");
+  const harness = createBobOpenNotesHarness({
+    skipDefaultLeaf: true,
+    files: [{ file: first, path: "first.md", content: "- [ ] #task First" }],
+  });
+  const deferred = harness.makeLeaf(first, null, { deferred: true });
+  harness.workspace.setActiveLeaf(deferred);
+  const found = NavigationHotkeysPlugin.prototype.findMarkdownLeafByPath.call(
+    harness.plugin,
+    "first.md",
+  );
+  assert.equal(found, deferred);
+  const pdf = makeFile("chart.pdf", "pdf");
+  const deferredPdf = harness.makeLeaf(pdf, null, {
+    deferred: true,
+    deferredType: "pdf",
+    parent: harness.workspace.leftSplit,
+  });
+  assert.equal(
+    NavigationHotkeysPlugin.prototype.findMarkdownLeafByPath.call(
+      harness.plugin,
+      "chart.pdf",
+    ),
+    null,
+    "a deferred non-markdown leaf is skipped",
+  );
+  assert.equal(deferredPdf.isDeferred, true);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/first.md", line: 1 }]),
+    ),
+    true,
+  );
+  assert.equal(harness.openCalls.length, 0, "the deferred tab is reused");
+  assert.deepEqual(harness.loadIfDeferredCalls, [deferred]);
+  assert.equal(deferred.isDeferred, false);
+  assert.equal(deferred.view.file, first);
+  assert.deepEqual(
+    harness.tabGroup.children.map((leaf) => leaf.view.file && leaf.view.file.path),
+    ["first.md"],
+  );
+  assert.equal(harness.workspace.activeLeaf, deferred);
+  assert.deepEqual(notices, []);
+});
+
+test("a deferred sidebar leaf whose saved state names the note is not reused", async () => {
+  const source = makeFile("source.md");
+  const note = makeFile("note.md");
+  const harness = createBobOpenNotesHarness({
+    skipDefaultLeaf: true,
+    files: [
+      { file: source, path: "source.md", content: "source" },
+      { file: note, path: "note.md", content: "- [ ] #task Note" },
+    ],
+  });
+  const deferredSidebar = harness.makeLeaf(note, null, {
+    deferred: true,
+    parent: harness.workspace.leftSplit,
+  });
+  const mainSource = harness.makeLeaf(source);
+  harness.workspace.setActiveLeaf(mainSource);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/note.md", line: 1 }]),
+    ),
+    true,
+  );
+  assert.equal(deferredSidebar.isDeferred, true);
+  assert.equal(harness.loadIfDeferredCalls.length, 0);
+  assert.equal(harness.openCalls.length, 1);
+  assert.equal(harness.openCalls[0].path, "note.md");
+  assert.equal(harness.openCalls[0].leaf.parent, harness.tabGroup);
+  assert.deepEqual(
+    harness.tabGroup.children.map((leaf) => leaf.view.file && leaf.view.file.path),
+    ["source.md", "note.md"],
+  );
+  assert.deepEqual(notices, []);
+});
+
+test("a loaded main-area match beats an earlier loaded sidebar match", async () => {
+  const note = makeFile("note.md");
+  const other = makeFile("other.md");
+  const harness = createBobOpenNotesHarness({
+    skipDefaultLeaf: true,
+    files: [
+      { file: note, path: "note.md", content: "- [ ] #task Note" },
+      { file: other, path: "other.md", content: "other" },
+    ],
+  });
+  const loadedSidebar = harness.makeLeaf(note, null, {
+    parent: harness.workspace.leftSplit,
+  });
+  const mainMatch = harness.makeLeaf(note);
+  harness.makeLeaf(other);
+  harness.workspace.setActiveLeaf(mainMatch);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/note.md" }]),
+    ),
+    true,
+  );
+  assert.equal(harness.openCalls.length, 0);
+  assert.equal(harness.workspace.activeLeaf, mainMatch);
+  assert.notEqual(harness.workspace.activeLeaf, loadedSidebar);
+  assert.deepEqual(
+    harness.tabGroup.children.map((leaf) => leaf.view.file && leaf.view.file.path),
+    ["note.md", "other.md"],
+  );
+  assert.deepEqual(notices, []);
+});
+
+test("a new tab goes to the end of the main group when a sidebar leaf is active", async () => {
+  const a = makeFile("a.md");
+  const b = makeFile("b.md");
+  const harness = createBobOpenNotesHarness({
+    skipDefaultLeaf: true,
+    files: [
+      { file: a, path: "a.md", content: "a" },
+      { file: b, path: "b.md", content: "b" },
+      { path: "new.md", content: "- [ ] #task New" },
+    ],
+  });
+  harness.makeLeaf(a);
+  const recentMain = harness.makeLeaf(b);
+  harness.workspace.setActiveLeaf(recentMain);
+  const sidebar = harness.makeLeaf(null, "file-explorer", {
+    parent: harness.workspace.leftSplit,
+  });
+  harness.workspace.setActiveLeaf(sidebar);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/new.md", line: 1 }]),
+    ),
+    true,
+  );
+  assert.equal(sidebar.view.file, null);
+  assert.equal(harness.openCalls[0].leaf.parent, harness.tabGroup);
+  assert.deepEqual(
+    harness.tabGroup.children.map((leaf) => leaf.view.file && leaf.view.file.path),
+    ["a.md", "b.md", "new.md"],
+  );
+  assert.equal(harness.workspace.leftSplit.children.indexOf(harness.openCalls[0].leaf), -1);
+  assert.deepEqual(notices, []);
+});
+
+test("falling back without createLeafInParent still opens a new tab", async () => {
+  const source = makeFile("source.md");
+  const harness = createBobOpenNotesHarness({
+    omitCreateLeafInParent: true,
+    activeFile: source,
+    files: [
+      { file: source, path: "source.md", content: "source" },
+      { path: "first.md", content: "- [ ] #task First" },
+    ],
+  });
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/first.md", line: 1 }]),
+    ),
+    true,
+  );
+  assert.equal(harness.openCalls[0].path, "first.md");
+  assert.equal(typeof harness.workspace.createLeafInParent, "undefined");
+  assert.deepEqual(notices, []);
+});
+
+test("falling back when createLeafInParent throws still opens a new tab", async () => {
+  const source = makeFile("source.md");
+  const harness = createBobOpenNotesHarness({
+    createLeafInParentThrows: true,
+    activeFile: source,
+    files: [
+      { file: source, path: "source.md", content: "source" },
+      { path: "first.md", content: "- [ ] #task First" },
+    ],
+  });
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/first.md", line: 1 }]),
+    ),
+    true,
+  );
+  assert.equal(harness.openCalls[0].path, "first.md");
+  assert.deepEqual(notices, []);
 });

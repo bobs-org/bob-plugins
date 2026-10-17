@@ -97,6 +97,7 @@
   "666-project-reversal-rewrites.js",
   "670-plugin-project-files.js",
   "675-plugin-goto-task-uri.js",
+  "677-plugin-ref-pdf-open.js",
   "680-plugin-link-parse.js",
   "690-install-plugin-mixins.js",
   "700-exports.js"

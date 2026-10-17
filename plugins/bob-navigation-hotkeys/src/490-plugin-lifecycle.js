@@ -63,6 +63,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
       callback: () => this.openAltFileNote(),
     });
 
+    // The vault hotkeys.json binds Meta+Enter; a default loses to Obsidian's built-in Mod+Enter.
+    this.addCommand({
+      id: "open-reference-pdf-in-highlights",
+      name: "Open reference PDF in Highlights (or link in new tab)",
+      callback: () => void this.openReferencePdfInHighlightsOrLink(),
+    });
+
     this.addCommand({
       id: "open-dash-tasks",
       name: "Open dash Tasks section",

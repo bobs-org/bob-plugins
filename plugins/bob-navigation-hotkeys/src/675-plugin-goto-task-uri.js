@@ -209,26 +209,76 @@ async function refindGoToTaskLine(lines, options) {
   });
 }
 
-function resolveGoToVaultFile(plugin, vaultPath) {
+function resolveGoToVaultFile(plugin, vaultPath, options) {
   const vault = plugin && plugin.app && plugin.app.vault;
   if (!vault || !vaultPath) {
     return null;
   }
 
+  const info = options && typeof options === "object" ? options : {};
+  const acceptFile =
+    typeof info.acceptFile === "function"
+      ? info.acceptFile
+      : (file) =>
+          Boolean(
+            plugin &&
+              typeof plugin.isMarkdownFile === "function" &&
+              plugin.isMarkdownFile(file),
+          );
+
   if (typeof vault.getAbstractFileByPath === "function") {
     const file = vault.getAbstractFileByPath(vaultPath);
-    if (plugin.isMarkdownFile(file)) {
-      return file;
+    return acceptFile(file) ? file : null;
+  }
+
+  const fileLists = [];
+  if (info.allowNonMarkdown && typeof vault.getFiles === "function") {
+    fileLists.push(vault.getFiles());
+  }
+  if (typeof vault.getMarkdownFiles === "function") {
+    fileLists.push(vault.getMarkdownFiles());
+  }
+  for (const files of fileLists) {
+    const match = (files || []).find(
+      (file) => file && file.path === vaultPath && acceptFile(file),
+    );
+    if (match) {
+      return match;
     }
   }
+  return null;
+}
 
-  if (typeof vault.getMarkdownFiles === "function") {
-    const files = vault.getMarkdownFiles() || [];
-    const match = files.find((file) => file && file.path === vaultPath);
-    return plugin.isMarkdownFile(match) ? match : null;
+function findLeafShowingPath(plugin, path, options) {
+  const workspace = plugin && plugin.app && plugin.app.workspace;
+  if (!workspace || typeof workspace.iterateAllLeaves !== "function") {
+    return null;
   }
 
-  return null;
+  const markdownOnly = Boolean(options && options.markdownOnly);
+  let matchedLeaf = null;
+  try {
+    workspace.iterateAllLeaves((leaf) => {
+      if (matchedLeaf || !leaf || !leaf.view || !leaf.view.file) {
+        return;
+      }
+      if (leaf.view.file.path !== path) {
+        return;
+      }
+      if (
+        markdownOnly &&
+        plugin &&
+        typeof plugin.isMarkdownFile === "function" &&
+        !plugin.isMarkdownFile(leaf.view.file)
+      ) {
+        return;
+      }
+      matchedLeaf = leaf;
+    });
+  } catch (error) {
+    return null;
+  }
+  return matchedLeaf;
 }
 
 async function readGoToNoteContent(plugin, file) {

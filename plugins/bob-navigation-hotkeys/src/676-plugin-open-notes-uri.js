@@ -1,7 +1,4 @@
 const BOB_OPEN_NOTES_COUNT_RE = /^[1-8]$/;
-const BOB_OPEN_NOTES_INTEGER_RE = /^[1-9][0-9]*$/;
-const BOB_OPEN_NOTES_REF_RE = /^[1-9][0-9]*:[0-9a-f]{8}$/;
-const BOB_OPEN_NOTES_BLOCK_RE = /^[A-Za-z0-9-]+$/;
 const BOB_OPEN_NOTES_TIMEOUT_MS = 2000;
 const BOB_OPEN_NOTES_POLL_MS = 50;
 const BOB_OPEN_NOTES_FLASH_MS = 1200;
@@ -112,7 +109,7 @@ function parseBobOpenNotesParams(params) {
   const totalParam = bobOpenNotesParam(params, "total");
   let total = count;
   if (totalParam.present) {
-    if (!totalParam.valid || !BOB_OPEN_NOTES_INTEGER_RE.test(totalParam.value)) {
+    if (!totalParam.valid || !GO_TO_TASK_LINE_RE.test(totalParam.value)) {
       return null;
     }
     total = Number(totalParam.value);
@@ -139,7 +136,7 @@ function parseBobOpenNotesParams(params) {
     if (lineParam.present) {
       if (
         !lineParam.valid ||
-        !BOB_OPEN_NOTES_INTEGER_RE.test(lineParam.value)
+        !GO_TO_TASK_LINE_RE.test(lineParam.value)
       ) {
         return null;
       }
@@ -155,7 +152,7 @@ function parseBobOpenNotesParams(params) {
       if (
         !refParam.valid ||
         line === null ||
-        !BOB_OPEN_NOTES_REF_RE.test(refParam.value)
+        !GO_TO_TASK_REF_RE.test(refParam.value)
       ) {
         return null;
       }
@@ -167,7 +164,7 @@ function parseBobOpenNotesParams(params) {
     if (blockParam.present) {
       if (
         !blockParam.valid ||
-        !BOB_OPEN_NOTES_BLOCK_RE.test(blockParam.value)
+        !GO_TO_TASK_BLOCK_RE.test(blockParam.value)
       ) {
         return null;
       }
@@ -202,72 +199,10 @@ function isBobOpenNotesFile(plugin, file) {
 }
 
 function resolveBobOpenNotesVaultFile(plugin, vaultPath) {
-  const vault = plugin && plugin.app && plugin.app.vault;
-  if (!vault || !vaultPath) {
-    return null;
-  }
-
-  if (typeof vault.getAbstractFileByPath === "function") {
-    const file = vault.getAbstractFileByPath(vaultPath);
-    if (isBobOpenNotesFile(plugin, file)) {
-      return file;
-    }
-  }
-
-  const fileLists = [
-    typeof vault.getFiles === "function" ? vault.getFiles() : [],
-    typeof vault.getMarkdownFiles === "function" ? vault.getMarkdownFiles() : [],
-  ];
-  for (const files of fileLists) {
-    const match = (files || []).find(
-      (file) => file && file.path === vaultPath && isBobOpenNotesFile(plugin, file),
-    );
-    if (match) {
-      return match;
-    }
-  }
-  return null;
-}
-
-function findBobOpenNotesLeaf(plugin, path) {
-  const workspace = plugin && plugin.app && plugin.app.workspace;
-  if (!workspace) {
-    return null;
-  }
-
-  let matched = null;
-  if (typeof workspace.iterateAllLeaves === "function") {
-    try {
-      workspace.iterateAllLeaves((leaf) => {
-        if (leaf && leaf.view && leaf.view.file && leaf.view.file.path === path) {
-          matched = leaf;
-        }
-      });
-    } catch (error) {
-      matched = null;
-    }
-  }
-  if (matched) {
-    return matched;
-  }
-
-  if (typeof workspace.getLeavesOfType === "function") {
-    for (const type of ["markdown", "pdf", "image", "audio", "video"]) {
-      try {
-        const leaf = (workspace.getLeavesOfType(type) || []).find(
-          (candidate) =>
-            candidate && candidate.view && candidate.view.file &&
-            candidate.view.file.path === path,
-        );
-        if (leaf) {
-          return leaf;
-        }
-      } catch (error) {
-        // The requested view type may not be registered in this Obsidian build.
-      }
-    }
-  }
-  return null;
+  return resolveGoToVaultFile(plugin, vaultPath, {
+    acceptFile: (file) => isBobOpenNotesFile(plugin, file),
+    allowNonMarkdown: true,
+  });
 }
 
 class BobNavigationHotkeysOpenNotesUriMixin {
@@ -400,25 +335,40 @@ class BobNavigationHotkeysOpenNotesUriMixin {
     }
   }
 
-  async openBobOpenNotesEntry(candidate, state, index) {
+  async openBobOpenNotesEntry(candidate, state, index, previousEntryLeaf) {
     const workspace = this.app && this.app.workspace;
     const file = state && state.file;
     if (!workspace || !file) {
       return null;
     }
 
-    let leaf = findBobOpenNotesLeaf(this, file.path);
+    let leaf = findLeafShowingPath(this, file.path);
     if (!leaf && index === 0) {
       const activeLeaf = workspace.activeLeaf;
-      if (activeLeaf && !(activeLeaf.view && activeLeaf.view.file)) {
+      const viewType =
+        activeLeaf &&
+        activeLeaf.view &&
+        typeof activeLeaf.view.getViewType === "function"
+          ? activeLeaf.view.getViewType()
+          : null;
+      if (viewType === "empty") {
         leaf = activeLeaf;
       }
     }
+    let createdNewTab = false;
     if (!leaf) {
       leaf =
         typeof this.createNewTabLeaf === "function"
           ? this.createNewTabLeaf(workspace, workspace.activeLeaf || null)
           : null;
+      createdNewTab = Boolean(leaf);
+    }
+    if (
+      createdNewTab &&
+      previousEntryLeaf &&
+      typeof this.placeDuplicateTabAfterSource === "function"
+    ) {
+      this.placeDuplicateTabAfterSource(previousEntryLeaf, leaf);
     }
     if (!leaf || typeof leaf.openFile !== "function") {
       return null;
@@ -596,6 +546,7 @@ class BobNavigationHotkeysOpenNotesUriMixin {
 
     let openedCount = 0;
     let primary = null;
+    let previousEntryLeaf = null;
     for (let index = 0; index < candidates.length; index += 1) {
       const candidate = candidates[index];
       if (candidate.outside) {
@@ -620,7 +571,12 @@ class BobNavigationHotkeysOpenNotesUriMixin {
 
       let opened = null;
       try {
-        opened = await this.openBobOpenNotesEntry(candidate, state, index);
+        opened = await this.openBobOpenNotesEntry(
+          candidate,
+          state,
+          index,
+          previousEntryLeaf,
+        );
       } catch (error) {
         opened = null;
       }
@@ -632,6 +588,7 @@ class BobNavigationHotkeysOpenNotesUriMixin {
         continue;
       }
       openedCount += 1;
+      previousEntryLeaf = opened.leaf;
       if (!primary) {
         primary = { candidate, state, opened };
       }

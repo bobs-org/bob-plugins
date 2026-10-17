@@ -51,24 +51,7 @@ class BobNavigationHotkeysVimJumpMixin {
   }
 
   findMarkdownLeafByPath(filePath) {
-    const workspace = this.app && this.app.workspace;
-    if (!workspace || typeof workspace.iterateAllLeaves !== "function") {
-      return null;
-    }
-
-    let matchedLeaf = null;
-    workspace.iterateAllLeaves((leaf) => {
-      if (matchedLeaf || !leaf || !leaf.view) {
-        return;
-      }
-
-      const viewFile = leaf.view.file;
-      if (this.isMarkdownFile(viewFile) && viewFile.path === filePath) {
-        matchedLeaf = leaf;
-      }
-    });
-
-    return matchedLeaf;
+    return findLeafShowingPath(this, filePath, { markdownOnly: true });
   }
 
   async activateWorkspaceLeaf(leaf) {

@@ -7180,7 +7180,7 @@ const BLOCKS_NAVIGATION_BULLET_RE = new RegExp(
 // Notice shown once per burst when a hand edit is confined to a BLOCKS line,
 // and when a gesture targets one (Rule 8).
 const BLOCKS_GENERATED_LINE_NOTICE =
-  "🧱 BLOCKS is generated from DEPENDS ON lines · change it on the dependent (Ctrl+Shift+P)";
+  "🧱 BLOCKS is generated from DEPENDS ON lines · edit it with Ctrl+Shift+Alt+B";
 // Annotation machine BLOCKS writes carry so the hand-edit mirror listener
 // skips them (Rule 7: writers compare canonical output; machine writes are
 // annotated so nav's listeners ignore them).
@@ -34626,13 +34626,9 @@ function editorSelectionSpansTasks(cm, content) {
   }
 }
 
-// Entry-point resolution (`docs/task-dependencies.md` §6.1, §14 Rule 8):
-// anywhere on a Depends-On line resolves to the owning task and skips the
-// property step; anywhere on a BLOCKS mirror line resolves to the owning
-// task through the property step (its Task Card / Depends on stage), never
-// to the chip under the cursor; a `#task` line (or any other line of its
-// block) resolves to the owning task through the property step; prose with
-// no owning task is refused.
+// Entry-point resolution (`docs/task-dependencies.md` §§6.1, 15.2):
+// managed dependency lines resolve to their owning task, never the link under
+// the cursor. The direction-specific caller decides whether to skip the card.
 function resolveDependencyStageEntry(content, line) {
   const text = String(content || "");
   const lines = text.split(/\r?\n/);
@@ -34652,13 +34648,13 @@ function resolveDependencyStageEntry(content, line) {
     return Object.freeze({
       ok: true,
       parentLine: owning,
+      lineKind: "depends-on",
       skipPropertyStep: true,
       reason: null,
     });
   }
-  // Rule 8 (BK20): a BLOCKS line acts on the owning task, never on the chip
-  // under the cursor. Route through the property step so the owner’s Task
-  // Card / Depends on stage opens.
+  // Rule 8 (BK20): a BLOCKS line acts on its owner, never on the chip under
+  // the cursor. Ctrl+Shift+P opens that owner's reverse stage directly.
   if (
     parseBlocksLine(String(lines[at] || ""), { isDirectChildOfTask: true })
       .verdict !== "not-a-line"
@@ -34666,6 +34662,7 @@ function resolveDependencyStageEntry(content, line) {
     return Object.freeze({
       ok: true,
       parentLine: owning,
+      lineKind: "blocks",
       skipPropertyStep: false,
       reason: null,
     });
@@ -34673,6 +34670,7 @@ function resolveDependencyStageEntry(content, line) {
   return Object.freeze({
     ok: true,
     parentLine: owning,
+    lineKind: null,
     skipPropertyStep: false,
     reason: null,
   });
@@ -36435,6 +36433,18 @@ function planTaskCard(context = {}) {
   const dependencyAvailable = Boolean(
     dependencyProperty && dependencyItem && session.valid,
   );
+  const blocksUnavailableReason = taskCardBlocksAvailabilityReason(session, context);
+  const blocksSummary = taskCardBlocksSummary(
+    session,
+    context.taskCache,
+    context.baseDate,
+  );
+  const blocksDetail = blocksSummary
+    ? `${formatCountLabel(blocksSummary.count, "task")}${
+        blocksSummary.frees > 0 ? ` · frees ${blocksSummary.frees}` : ""
+      }`
+    : "";
+  const blocksAvailable = !blocksUnavailableReason;
   const refreshAvailable = Boolean(refreshDescription && session.valid);
   const cancelAvailable = Boolean(
     cancelDescription && !cancelDescription.recurring && session.valid,
@@ -36474,6 +36484,17 @@ function planTaskCard(context = {}) {
       propertyName: dependencyProperty ? dependencyProperty.name : "",
       detail: dependencyProjection && dependencyProjection.currentLabel,
       mixed: Boolean(dependencyProjection && dependencyProjection.mixed),
+      targetCount: session.targetCount,
+      deletable: false,
+    }),
+    row({
+      id: "blocks",
+      kind: "action",
+      action: "blocks",
+      label: "Blocks",
+      enabled: blocksAvailable,
+      unavailableReason: blocksAvailable ? null : blocksUnavailableReason,
+      detail: blocksDetail,
       targetCount: session.targetCount,
       deletable: false,
     }),
@@ -36610,6 +36631,7 @@ function planTaskCard(context = {}) {
       priority: priorityStrip.available,
       recommendation: Boolean(recommendation && recommendation.available),
       dependencies: dependencyAvailable,
+      blocks: blocksAvailable,
       refresh: refreshAvailable,
       cancel: cancelAvailable,
       lane: laneAvailable,
@@ -36680,6 +36702,7 @@ function resolveTaskCardKey(model, event) {
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
     (!modified && /^[0-9bfx]$/i.test(key)) ||
+    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || key === "B")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
     (alt && !ctrl && !meta && !shift && lower === "n");
@@ -36781,6 +36804,15 @@ function resolveTaskCardKey(model, event) {
   if (!modified && lower === "b") {
     return taskCardIntentForRow(rowById("depends-on"));
   }
+  if (
+    shift &&
+    !ctrl &&
+    !meta &&
+    !alt &&
+    (event.code === "KeyB" || key === "B")
+  ) {
+    return taskCardIntentForRow(rowById("blocks"));
+  }
   if (!modified && lower === "f") {
     return taskCardIntentForRow(rowById("review-every"));
   }
@@ -36802,6 +36834,7 @@ function resolveTaskCardKey(model, event) {
 const TASK_CARD_ROW_ORDER = Object.freeze([
   "schedule",
   "depends-on",
+  "blocks",
   "review-every",
   "lane",
   "cancel",
@@ -36810,6 +36843,7 @@ const TASK_CARD_ROW_ORDER = Object.freeze([
 const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   schedule: "Enter",
   "depends-on": "b",
+  blocks: "⇧B",
   "review-every": "f",
   lane: "Alt+N",
   cancel: "x",
@@ -36879,6 +36913,142 @@ function buildTaskCardDateDisplay(iso, baseDate) {
   });
 }
 
+// ---- src/311-task-card-blocks.js ----
+// Task Card Blocks… availability and its warm Tasks-cache summary.
+
+function taskCardBlocksAvailabilityReason(session, context = {}) {
+  if (!session || session.valid !== true) {
+    return (session && session.error) || "Task context is unavailable";
+  }
+  const targets = Array.isArray(session.targets) ? session.targets : [];
+  if (targets.length === 0) {
+    return "No task targets are available";
+  }
+  if (targets.some((target) => !isObsidianTaskLine(target && target.rawLine))) {
+    return "Blocks requires a #task checkbox";
+  }
+  if (
+    targets.some((target) =>
+      !OPEN_OBSIDIAN_TASK_STATUSES.has(
+        getObsidianTaskCheckboxStatus(target && target.rawLine),
+      ),
+    )
+  ) {
+    return "🧱 A finished task can't block another task · reopen it first";
+  }
+
+  const paths = targets
+    .map((target) => normalizeVaultRelativePath(target && target.path))
+    .filter(Boolean);
+  const filePaths = paths.length > 0
+    ? paths
+    : [normalizeVaultRelativePath(context.filePath || "")].filter(Boolean);
+  if (filePaths.some((path) => isArchivedRecoveryTarget(path))) {
+    return "This task is in a read-only note";
+  }
+  const today =
+    context.baseDate instanceof Date ? context.baseDate : new Date();
+  const vaultFiles = Array.isArray(context.vaultFiles)
+    ? context.vaultFiles.map((path) => ({ path }))
+    : [];
+  const dailyPaths = scheduledRecoveryDailyPaths(vaultFiles, today);
+  if (
+    dailyPaths &&
+    filePaths.includes(normalizeVaultRelativePath(dailyPaths.previous || ""))
+  ) {
+    return "The previous daily note is read-only";
+  }
+
+  for (const target of targets) {
+    const rawLine = String((target && target.rawLine) || "");
+    const id = findBulletPropertyField(rawLine, "id");
+    const path = normalizeVaultRelativePath(target && target.path) ||
+      normalizeVaultRelativePath(context.filePath || "");
+    if (
+      (!id || !normalizeBulletPropertyValue(id.value)) &&
+      !tryDependencyId(path, getTrailingBlockId(rawLine) || "task")
+    ) {
+      return "🧱 This note's path can't be a dependency id · add [id::] or rename the note";
+    }
+  }
+  if (
+    session.type === "single" &&
+    !isObsidianTaskAtLine(session.content, session.cursorLine)
+  ) {
+    return "Blocks requires a #task checkbox";
+  }
+  return null;
+}
+
+function taskCardBlocksEntryRefusal(context = {}) {
+  const session = taskCardSessionContext(context);
+  return taskCardBlocksAvailabilityReason(session, context);
+}
+
+function taskCardBlocksSummary(session, taskCache, baseDate = new Date()) {
+  if (!taskCache || taskCache.ready !== true || !Array.isArray(taskCache.tasks)) {
+    return null;
+  }
+  const targets = Array.isArray(session && session.targets) ? session.targets : [];
+  const sourceIds = new Set();
+  for (const target of targets) {
+    const field = findBulletPropertyField(String((target && target.rawLine) || ""), "id");
+    const id = normalizeBulletPropertyValue(field && field.value);
+    if (!id) {
+      return null;
+    }
+    sourceIds.add(id);
+  }
+  if (sourceIds.size === 0) {
+    return null;
+  }
+
+  const tasks = taskCache.tasks
+    .map((task) =>
+      task && task.path && Array.isArray(task.dependsOn)
+        ? task
+        : normalizeStageCacheTask(task),
+    )
+    .filter(Boolean);
+  const openAliases = new Set();
+  for (const task of tasks) {
+    if (!task.open) {
+      continue;
+    }
+    const id = normalizeBulletPropertyValue(task.idField || "");
+    const blockId = normalizeBulletPropertyValue(task.blockId || "");
+    if (id) openAliases.add(id);
+    if (blockId) {
+      openAliases.add(blockId);
+      const encoded = tryDependencyId(task.path, blockId);
+      if (encoded) openAliases.add(normalizeBulletPropertyValue(encoded));
+    }
+  }
+  const today = formatBulletPropertyDate(
+    baseDate instanceof Date ? getLocalDateStart(baseDate) : getLocalDateStart(new Date()),
+  );
+  const dependents = tasks.filter(
+    (task) =>
+      task.open &&
+      task.dependsOn.some((dependency) => sourceIds.has(normalizeBulletPropertyValue(dependency))),
+  );
+  const frees = dependents.filter((task) => {
+    const otherOpenPrerequisite = task.dependsOn.some((dependency) => {
+      const id = normalizeBulletPropertyValue(dependency);
+      return !sourceIds.has(id) && openAliases.has(id);
+    });
+    const scheduled =
+      task.scheduledDate ||
+      (findBulletPropertyField(String(task.rawLine || ""), "scheduled") || {}).value ||
+      "";
+    const futureScheduled = /^\d{4}-\d{2}-\d{2}$/.test(String(scheduled)) && scheduled > today;
+    const projectBlocked =
+      /(?:^|\s)#prj_is_blocked(?:\s|$)/.test(String(task.rawLine || "")) ||
+      (Array.isArray(task.tags) && task.tags.includes("prj_is_blocked"));
+    return !otherOpenPrerequisite && !futureScheduled && !projectBlocked;
+  }).length;
+  return Object.freeze({ count: dependents.length, frees });
+}
 // ---- src/320-task-card-header.js ----
 function buildTaskCardHeader(details = {}) {
   const session = details.session || {};
@@ -37123,6 +37293,8 @@ function presentTaskCardRow(row) {
     label = "Schedule…";
   } else if (row.id === "depends-on") {
     label = "Blocked by…";
+  } else if (row.id === "blocks") {
+    label = "Blocks…";
   } else if (row.id === "review-every") {
     label = "Review every…";
   } else if (row.id === "cancel" && label && !label.endsWith("…")) {
@@ -38045,6 +38217,21 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   buildTaskCardContext() {
+    let taskCache = null;
+    let vaultFiles = [];
+    try {
+      taskCache =
+        this.plugin && typeof this.plugin.readStageTasksCache === "function"
+          ? this.plugin.readStageTasksCache()
+          : null;
+      vaultFiles =
+        this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
+          ? this.plugin.readDependencyVaultFileList() || []
+          : [];
+    } catch (_error) {
+      taskCache = null;
+      vaultFiles = [];
+    }
     return {
       config: this.config,
       content: this.getEditorContent(),
@@ -38060,6 +38247,8 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       freshnessApi: this.getTaskCardFreshnessApi(),
       frozenRecommendation: this.getTaskCardFrozenRecommendation(),
       selectedRowId: this.taskCardSelectedRowId,
+      taskCache,
+      vaultFiles,
     };
   }
 
@@ -38413,6 +38602,25 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       }
       this.valueBaseDate = this.fixedValueBaseDate || this.valueBaseDate;
       this.openTaskCardStage(() => this.showValueStage(item));
+      return false;
+    }
+    if (rowId === "blocks" || action === "blocks") {
+      const resolved =
+        this.linkSession && Array.isArray(this.linkSession.resolved)
+          ? this.linkSession.resolved
+          : [];
+      if (resolved.length > 0) {
+        const [first, ...rest] = resolved;
+        this.close();
+        void this.plugin.openLinkedBlocksStage(first);
+        if (rest.length > 0) {
+          new Notice(
+            `🧱 Opened the first of ${resolved.length} linked tasks; reopen Blocks for the rest`,
+          );
+        }
+        return true;
+      }
+      this.openTaskCardStage(() => this.showBlocksStage());
       return false;
     }
     this.refreshPropertyItems();
@@ -48334,6 +48542,7 @@ function createDependencyNavApi(plugin) {
     taskLinkLane: createTaskLinkLaneApi(plugin),
     notice: createNoticeApi(plugin),
     successors: createSuccessorPickerApi(plugin),
+    blocks: createBlocksNavApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
@@ -48363,6 +48572,42 @@ function createDependencyNavApi(plugin) {
       } catch (error) {
         return null;
       }
+    },
+  });
+}
+// ---- src/485-blocks-nav-api.js ----
+// Additive reverse dependency capability for bob-ledger-tools (§15.8).
+function createBlocksNavApi(plugin) {
+  const settle = (call) => {
+    try {
+      return Promise.resolve()
+        .then(call)
+        .then(
+          (result) =>
+            result && typeof result === "object" && "ok" in result
+              ? result
+              : { ok: false, reason: "unexpected-result" },
+          () => ({ ok: false, reason: "api-failed" }),
+        );
+    } catch (_error) {
+      return Promise.resolve({ ok: false, reason: "api-failed" });
+    }
+  };
+  return Object.freeze({
+    version: 1,
+    openStage(ref) {
+      if (!plugin || typeof plugin.openBlocksStageForRef !== "function") {
+        return Promise.resolve({ ok: false, reason: "unavailable" });
+      }
+      return settle(() => plugin.openBlocksStageForRef(ref || {}));
+    },
+    removeDependent(ownerRef, target) {
+      if (!plugin || typeof plugin.removeBlocksDependentByRef !== "function") {
+        return Promise.resolve({ ok: false, reason: "unavailable" });
+      }
+      return settle(() =>
+        plugin.removeBlocksDependentByRef(ownerRef || {}, target || {}),
+      );
     },
   });
 }
@@ -48497,6 +48742,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
       hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "B" }],
       editorCallback: (editor) =>
         this.openBulletPropertyPicker(editor, { initialTaskCardRow: "depends-on" }),
+    });
+
+    this.addCommand({
+      id: "task-card-blocks",
+      name: "Task card: Blocks (reverse Depends on)",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift", "Alt"], key: "B" }],
+      editorCallback: (editor) =>
+        this.openBulletPropertyPicker(editor, { initialTaskCardRow: "blocks" }),
     });
 
     // No default hotkey (Q6): the vault-wide Depends on stage for the task
@@ -56971,13 +57224,35 @@ class BobNavigationHotkeysCancelPropertyMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
-    // Anywhere on a Depends-On line opens the owning task's Depends on
-    // stage, skipping the property step — never the link under the cursor
-    // (`docs/task-dependencies.md` §6.1).
+    // Managed-line gestures always move to the owning task first, so a
+    // direction-specific one-shot row never opens on the link bullet.
     if (!options.taskSession && !options.initialProperty) {
       const entry = resolveDependencyStageEntry(content, cursor.line);
-      if (entry.ok && entry.skipPropertyStep) {
+      if (entry.ok && entry.parentLine !== cursor.line) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
+        if (
+          options.initialTaskCardRow === "blocks" &&
+          (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
+        ) {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            reopenBlocksStage: true,
+          });
+        }
+        if (
+          entry.lineKind === "depends-on" &&
+          options.initialTaskCardRow !== "blocks"
+        ) {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            initialProperty: "dependsOn",
+          });
+        }
+        return this.openBulletPropertyPicker(cm, {
+          ...options,
+        });
+      }
+      if (entry.ok && entry.skipPropertyStep) {
         return this.openBulletPropertyPicker(cm, {
           ...options,
           initialProperty: "dependsOn",
@@ -57057,6 +57332,27 @@ class BobNavigationHotkeysCancelPropertyMixin {
       return false;
     }
     const filePath = activeView.file.path;
+    if (options.reopenBlocksStage) {
+      let vaultFiles = [];
+      try {
+        vaultFiles = this.readDependencyVaultFileList() || [];
+      } catch (_error) {
+        vaultFiles = [];
+      }
+      const refusal = taskCardBlocksEntryRefusal({
+        content,
+        lineText,
+        cursorLine: cursor.line,
+        filePath,
+        taskSession,
+        baseDate: options.baseDate,
+        vaultFiles,
+      });
+      if (refusal) {
+        new Notice(refusal);
+        return false;
+      }
+    }
     // Inbox routing (task-card-gate): arm once per card. Armed when the
     // file is an inbox note and the cursor task (counted: the first
     // target) is an open #task. Never armed for link sessions, non-task
@@ -60658,7 +60954,7 @@ class BobNavigationHotkeysDependencyStageMixin {
 
   // Task Link mode: focus the linked note's tab first, even when it is already
   // open in a background tab, because the stage needs the active view's editor.
-  async openLinkedDependencyStage(target) {
+  async openLinkedDependencyStage(target, options = {}) {
     try {
       const path = normalizeVaultRelativePath((target && target.path) || "");
       if (!path) {
@@ -60695,9 +60991,12 @@ class BobNavigationHotkeysDependencyStageMixin {
       if (Number.isFinite(line)) {
         setEditorCursorSafely(view.editor, line, 0);
       }
-      return this.openBulletPropertyPicker(view.editor, {
-        initialProperty: "dependsOn",
-      });
+      return this.openBulletPropertyPicker(
+        view.editor,
+        options.rowId === "blocks"
+          ? { reopenBlocksStage: true }
+          : { initialProperty: "dependsOn" },
+      );
     } catch (_error) {
       new Notice("Could not open the linked task");
       return false;
@@ -60722,6 +61021,11 @@ class BobNavigationHotkeysDependencyStageMixin {
     if (entry.ok) {
       if (entry.parentLine !== cursor.line) {
         setEditorCursorSafely(editor, entry.parentLine, 0);
+      }
+      if (entry.lineKind === "blocks") {
+        return this.openBulletPropertyPicker(editor, {
+          reopenBlocksStage: true,
+        });
       }
       return this.openBulletPropertyPicker(editor, {
         initialProperty: "dependsOn",
@@ -61548,6 +61852,147 @@ class BobNavigationHotkeysBlocksEditMixin {
         pomodoro: null,
         blocksFailed: Object.freeze([]),
       });
+    }
+  }
+}
+// ---- src/593-plugin-blocks-api.js ----
+class BobNavigationHotkeysBlocksApiMixin {
+  async openLinkedBlocksStage(target) {
+    return this.openLinkedDependencyStage(target, { rowId: "blocks" });
+  }
+
+  async openBlocksStageForRef(ref = {}) {
+    try {
+      const path = normalizeVaultRelativePath(ref.path || "");
+      const hitLine = Math.floor(numericOrDefault(ref.line, Number.NaN));
+      if (!path || !Number.isFinite(hitLine)) {
+        return Object.freeze({ ok: false, reason: "invalid-ref" });
+      }
+      const view = this.getActiveMarkdownView();
+      if (
+        !view ||
+        !view.editor ||
+        !view.file ||
+        normalizeVaultRelativePath(view.file.path) !== path
+      ) {
+        return Object.freeze({ ok: false, reason: "note-not-open" });
+      }
+      const content = String(view.editor.getValue() || "");
+      const lines = content.split(/\r?\n/);
+      if (hitLine < 0 || hitLine >= lines.length) {
+        return Object.freeze({ ok: false, reason: "line-out-of-range" });
+      }
+      const owning = findOwningTaskLine(lines, hitLine);
+      if (owning === null) {
+        return Object.freeze({ ok: false, reason: "no-owning-task" });
+      }
+      setEditorCursorSafely(view.editor, owning, 0);
+      const opened = this.openBulletPropertyPicker(view.editor, {
+        reopenBlocksStage: true,
+      });
+      return opened
+        ? Object.freeze({ ok: true })
+        : Object.freeze({ ok: false, reason: "picker-not-opened" });
+    } catch (_error) {
+      return Object.freeze({ ok: false, reason: "open-failed" });
+    }
+  }
+
+  async removeBlocksDependentByRef(ownerRef = {}, target = {}) {
+    try {
+      const path = normalizeVaultRelativePath(ownerRef.path || "");
+      const hitLine = Math.floor(numericOrDefault(ownerRef.line, Number.NaN));
+      const targetPath = normalizeVaultRelativePath(target.path || "");
+      const targetBlockId = normalizeBulletPropertyValue(target.blockId || "");
+      if (!path || !Number.isFinite(hitLine) || !targetPath || !targetBlockId) {
+        return Object.freeze({ ok: false, reason: "invalid-ref" });
+      }
+      const view = this.getActiveMarkdownView();
+      if (
+        !view ||
+        !view.editor ||
+        !view.file ||
+        normalizeVaultRelativePath(view.file.path) !== path
+      ) {
+        return Object.freeze({ ok: false, reason: "note-not-open" });
+      }
+      const ownerContent = String(view.editor.getValue() || "");
+      const ownerLines = ownerContent.split(/\r?\n/);
+      if (hitLine < 0 || hitLine >= ownerLines.length) {
+        return Object.freeze({ ok: false, reason: "line-out-of-range" });
+      }
+      const ownerLine = findOwningTaskLine(ownerLines, hitLine);
+      if (ownerLine === null) {
+        return Object.freeze({ ok: false, reason: "no-owning-task" });
+      }
+      const ownerBlockId = getTrailingBlockId(ownerLines[ownerLine]);
+      if (!ownerBlockId) {
+        return Object.freeze({ ok: false, reason: "source-id-missing" });
+      }
+
+      const dependentContent = await this.readDependencyNoteContent(
+        targetPath,
+        null,
+        path,
+      );
+      if (dependentContent === null) {
+        return Object.freeze({ ok: false, reason: "target-not-found" });
+      }
+      const dependentLines = dependentContent.split(/\r?\n/);
+      const dependentLine = findTaskLineByTrailingBlockId(
+        dependentLines,
+        targetBlockId,
+      );
+      if (dependentLine === null) {
+        new Notice("🧱 That task is not a dependent");
+        return Object.freeze({ ok: false, reason: "not-a-dependent" });
+      }
+      const dependencyLine = collectDependencyNavigationBullets(
+        dependentContent,
+        dependentLine,
+      );
+      if (dependencyLine.reason) {
+        return Object.freeze({ ok: false, reason: dependencyLine.reason });
+      }
+      const resolveLinkpath = this.dependencyLinkpathResolver();
+      const linked = dependencyLine.targets.some((entry) => {
+        const linkedPath = dependencyPathForLinkNote(
+          entry.note,
+          targetPath,
+          resolveLinkpath,
+        );
+        return (
+          normalizeVaultRelativePath(linkedPath) === path &&
+          normalizeBulletPropertyValue(entry.blockId) ===
+            normalizeBulletPropertyValue(ownerBlockId)
+        );
+      });
+      if (!linked) {
+        new Notice("🧱 That task is not a dependent");
+        return Object.freeze({ ok: false, reason: "not-a-dependent" });
+      }
+
+      const files = new Map([
+        [path, ownerContent],
+        [targetPath, dependentContent],
+      ]);
+      const outcome = await this.applyBlocksEdit({
+        sources: [{ path, line: ownerLine, blockId: ownerBlockId }],
+        add: [],
+        remove: [{ path: targetPath, line: dependentLine, blockId: targetBlockId }],
+        files,
+        expected: files,
+      });
+      if (!outcome.ok) {
+        new Notice(outcome.notice || `🧱 Could not remove dependent (${outcome.reason})`);
+        return Object.freeze({ ok: false, reason: outcome.reason });
+      }
+      if (outcome.notice) {
+        new Notice(outcome.notice);
+      }
+      return Object.freeze({ ok: true });
+    } catch (_error) {
+      return Object.freeze({ ok: false, reason: "remove-failed" });
     }
   }
 }
@@ -63002,6 +63447,8 @@ class BobNavigationHotkeysJumpKeyMixin {
     };
     if (chord === "depends-on") {
       options.initialTaskCardRow = "depends-on";
+    } else if (chord === "blocks") {
+      options.initialTaskCardRow = "blocks";
     }
     return this.openBulletPropertyPicker(view.editor, options);
   }
@@ -63011,10 +63458,13 @@ class BobNavigationHotkeysJumpKeyMixin {
       !event ||
       !event.ctrlKey ||
       !event.shiftKey ||
-      event.altKey ||
       event.metaKey
     ) {
       return null;
+    }
+    if (event.altKey) {
+      // Option may change `key` on macOS; the physical key identity remains B.
+      return event.code === "KeyB" ? "blocks" : null;
     }
     if (event.code === "KeyP" || event.key === "p" || event.key === "P") {
       return "property";
@@ -72245,6 +72695,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysDependencyStageMixin,
   BobNavigationHotkeysBlocksFollowUpsMixin,
   BobNavigationHotkeysBlocksEditMixin,
+  BobNavigationHotkeysBlocksApiMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysCountedTaskMoveMixin,
@@ -72597,6 +73048,8 @@ module.exports.helpers = {
   createBulletPropertyItems,
   buildTaskCardPriorityPreviews,
   planTaskCard,
+  taskCardBlocksAvailabilityReason,
+  taskCardBlocksSummary,
   resolveTaskCardKey,
   renderTaskCardView,
   orderedTaskCardRows,

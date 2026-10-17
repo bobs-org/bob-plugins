@@ -117,10 +117,11 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
   assert.equal(model.selectedRowId, "schedule");
   assert.deepEqual(
     model.rows.map((row) => row.id),
-    ["schedule", "depends-on", "review-every", "cancel", "lane"],
+    ["schedule", "depends-on", "blocks", "review-every", "cancel", "lane"],
   );
   assert.ok(model.rows.find((row) => row.id === "schedule").enabled);
   assert.ok(model.rows.find((row) => row.id === "depends-on").enabled);
+  assert.ok(model.rows.find((row) => row.id === "blocks").enabled);
   assert.ok(model.rows.find((row) => row.id === "review-every").enabled);
   assert.ok(model.recommendation.available);
   assert.equal(model.recommendation.source.kind, "roll");
@@ -308,6 +309,11 @@ test("priority, recommendation, navigation, action, deletion, and search keys re
   assert.equal(key(model, "p", { ctrlKey: true }).direction, "previous");
   assert.equal(key(model, "Enter").action, "schedule");
   assert.equal(key(model, "b").action, "dependencies");
+  assert.equal(key(model, "B", { shiftKey: true, code: "KeyB" }).rowId, "blocks");
+  assert.equal(
+    key(model, "B", { shiftKey: true, code: "KeyB", repeat: true }).type,
+    "ignored",
+  );
   assert.equal(key(model, "f").action, "refresh");
   assert.equal(key(model, "x").action, "cancel");
   assert.equal(key(model, "n", { altKey: true }).action, "toggle-lane");
@@ -420,6 +426,11 @@ test("unavailable actions, input composition, and repeats stay safe", () => {
   });
   assert.equal(plainBullet.rows.find((row) => row.id === "schedule").enabled, true);
   assert.equal(plainBullet.rows.find((row) => row.id === "depends-on").enabled, false);
+  assert.equal(plainBullet.rows.find((row) => row.id === "blocks").enabled, false);
+  assert.equal(
+    plainBullet.rows.find((row) => row.id === "blocks").unavailableReason,
+    "Blocks requires a #task checkbox",
+  );
   assert.equal(plainBullet.rows.find((row) => row.id === "lane").enabled, false);
   assert.equal(plainBullet.rows.find((row) => row.id === "cancel").enabled, false);
   assert.deepEqual(plainBullet.moreProperties.map((item) => item.propertyName), ["effort"]);
@@ -441,6 +452,105 @@ test("unavailable actions, input composition, and repeats stay safe", () => {
   assert.equal(key(noApi, "2", { keyCode: 229 }), null);
   assert.equal(key(noApi, "2", { inTextInput: true }), null);
   assert.equal(key(noApi, "2", { target: { tagName: "INPUT" } }), null);
+});
+
+test("Blocks row summarizes warm-cache dependents and their last open reason", () => {
+  const content = "- [/] #task Source [id:: source] ^source";
+  const tasks = [
+    {
+      path: "Tasks/Alpha.md",
+      line: 1,
+      rawLine: "- [?] #task One [id:: one] [dependsOn:: source] ^one",
+      idField: "one",
+      status: "?",
+      open: true,
+      dependsOn: ["source"],
+    },
+    {
+      path: "Tasks/Alpha.md",
+      line: 2,
+      rawLine: "- [?] #task Two [id:: two] [dependsOn:: source, other] ^two",
+      idField: "two",
+      status: "?",
+      open: true,
+      dependsOn: ["source", "other"],
+    },
+    {
+      path: "Tasks/Alpha.md",
+      line: 3,
+      rawLine: "- [ ] #task Other [id:: other] ^other",
+      idField: "other",
+      status: " ",
+      open: true,
+      dependsOn: [],
+    },
+  ];
+  const model = makeModel({
+    content,
+    lineText: content,
+    taskCache: { ready: true, tasks },
+  });
+  const blocks = model.rows.find((row) => row.id === "blocks");
+  assert.equal(blocks.detail, "2 tasks · frees 1");
+
+  const cold = makeModel({ content, lineText: content, taskCache: { ready: false, tasks } });
+  assert.equal(cold.rows.find((row) => row.id === "blocks").detail, "");
+});
+
+test("Blocks row refuses closed tasks and unencodable paths without an id", () => {
+  const closedLine = "- [x] #task Finished ^finished";
+  const closed = makeModel({ content: closedLine, lineText: closedLine });
+  assert.equal(
+    closed.rows.find((row) => row.id === "blocks").unavailableReason,
+    "🧱 A finished task can't block another task · reopen it first",
+  );
+
+  const unencodableLine = "- [ ] #task Task";
+  const unencodable = makeModel({
+    content: unencodableLine,
+    lineText: unencodableLine,
+    filePath: "bad path/ note.md",
+  });
+  assert.equal(
+    unencodable.rows.find((row) => row.id === "blocks").unavailableReason,
+    "🧱 This note's path can't be a dependency id · add [id::] or rename the note",
+  );
+
+  const archived = makeModel({
+    content: "- [ ] #task Archived [id:: archived] ^archived",
+    lineText: "- [ ] #task Archived [id:: archived] ^archived",
+    filePath: "done/Archived.md",
+  });
+  assert.equal(
+    archived.rows.find((row) => row.id === "blocks").unavailableReason,
+    "This task is in a read-only note",
+  );
+
+  const previousDaily = makeModel({
+    content: "- [ ] #task Yesterday [id:: yesterday] ^yesterday",
+    lineText: "- [ ] #task Yesterday [id:: yesterday] ^yesterday",
+    filePath: "2026/20261002.md",
+    vaultFiles: ["2026/20261002.md", "2026/20261003.md"],
+  });
+  assert.equal(
+    previousDaily.rows.find((row) => row.id === "blocks").unavailableReason,
+    "The previous daily note is read-only",
+  );
+
+  const fencedContent = [
+    "```markdown",
+    "- [ ] #task Fenced [id:: fenced] ^fenced",
+    "```",
+  ].join("\n");
+  const fenced = makeModel({
+    content: fencedContent,
+    lineText: "- [ ] #task Fenced [id:: fenced] ^fenced",
+    cursorLine: 1,
+  });
+  assert.equal(
+    fenced.rows.find((row) => row.id === "blocks").unavailableReason,
+    "Blocks requires a #task checkbox",
+  );
 });
 
 test("key resolver table covers lane state, API availability, and modifier guards", () => {

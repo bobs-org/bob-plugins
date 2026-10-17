@@ -32,6 +32,21 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   buildTaskCardContext() {
+    let taskCache = null;
+    let vaultFiles = [];
+    try {
+      taskCache =
+        this.plugin && typeof this.plugin.readStageTasksCache === "function"
+          ? this.plugin.readStageTasksCache()
+          : null;
+      vaultFiles =
+        this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
+          ? this.plugin.readDependencyVaultFileList() || []
+          : [];
+    } catch (_error) {
+      taskCache = null;
+      vaultFiles = [];
+    }
     return {
       config: this.config,
       content: this.getEditorContent(),
@@ -47,6 +62,8 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       freshnessApi: this.getTaskCardFreshnessApi(),
       frozenRecommendation: this.getTaskCardFrozenRecommendation(),
       selectedRowId: this.taskCardSelectedRowId,
+      taskCache,
+      vaultFiles,
     };
   }
 
@@ -400,6 +417,25 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       }
       this.valueBaseDate = this.fixedValueBaseDate || this.valueBaseDate;
       this.openTaskCardStage(() => this.showValueStage(item));
+      return false;
+    }
+    if (rowId === "blocks" || action === "blocks") {
+      const resolved =
+        this.linkSession && Array.isArray(this.linkSession.resolved)
+          ? this.linkSession.resolved
+          : [];
+      if (resolved.length > 0) {
+        const [first, ...rest] = resolved;
+        this.close();
+        void this.plugin.openLinkedBlocksStage(first);
+        if (rest.length > 0) {
+          new Notice(
+            `🧱 Opened the first of ${resolved.length} linked tasks; reopen Blocks for the rest`,
+          );
+        }
+        return true;
+      }
+      this.openTaskCardStage(() => this.showBlocksStage());
       return false;
     }
     this.refreshPropertyItems();

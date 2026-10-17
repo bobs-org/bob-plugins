@@ -32,7 +32,7 @@ const BLOCKS_NAVIGATION_BULLET_RE = new RegExp(
 // Notice shown once per burst when a hand edit is confined to a BLOCKS line,
 // and when a gesture targets one (Rule 8).
 const BLOCKS_GENERATED_LINE_NOTICE =
-  "🧱 BLOCKS is generated from DEPENDS ON lines · change it on the dependent (Ctrl+Shift+P)";
+  "🧱 BLOCKS is generated from DEPENDS ON lines · edit it with Ctrl+Shift+Alt+B";
 // Annotation machine BLOCKS writes carry so the hand-edit mirror listener
 // skips them (Rule 7: writers compare canonical output; machine writes are
 // annotated so nav's listeners ignore them).

@@ -596,7 +596,7 @@ test("physical counted property chord consumes only explicit normal-mode Vim cou
   assert.equal(opens.length, 1);
 });
 
-test("physical counted Ctrl+Shift+B opens the Depends on row; KeyP options stay unchanged", () => {
+test("physical counted Ctrl+Shift+B and Ctrl+Shift+Alt+B route to their Task Card rows", () => {
   const makeEvent = (overrides = {}) => {
     const calls = { prevent: 0, stop: 0, immediate: 0 };
     return {
@@ -669,6 +669,20 @@ test("physical counted Ctrl+Shift+B opens the Depends on row; KeyP options stay 
   assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(countedP), true);
   assert.deepEqual(opens[1], { countExplicit: true, additionalTaskCount: 2 });
 
+  inputState.keyBuffer = ["2"];
+  inputState.repeat = 2;
+  inputState.getRepeat = () => 2;
+  plugin.handledCountedBulletPropertyEvents = new WeakSet();
+  const countedBlocks = makeEvent({ key: "ø", code: "KeyB", altKey: true });
+  assert.equal(plugin.isCountedBulletPropertyKeydown(countedBlocks), true);
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(countedBlocks), true);
+  assert.deepEqual(opens[2], {
+    countExplicit: true,
+    additionalTaskCount: 2,
+    initialTaskCardRow: "blocks",
+  });
+  assert.deepEqual(countedBlocks.calls, { prevent: 1, stop: 1, immediate: 1 });
+
   inputState.getRepeat = () => null;
   const bare = makeEvent();
   assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(bare), false);
@@ -687,7 +701,7 @@ test("physical counted Ctrl+Shift+B opens the Depends on row; KeyP options stay 
   for (const overrides of [
     { ctrlKey: false },
     { shiftKey: false },
-    { altKey: true },
+    { altKey: true, key: "π", code: "KeyP" },
     { metaKey: true },
   ]) {
     const event = makeEvent(overrides);

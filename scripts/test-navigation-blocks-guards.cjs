@@ -116,6 +116,10 @@ test("nav BW12 BLOCKS-only hand edit reports blocks-only; Rule 7 annotation exis
   const plan = helpers.planDependencyHandEditMirror(before, after, 1, "");
   assert.equal(plan && plan.kind, "blocks-only");
   assert.equal(typeof helpers.BLOCKS_GENERATED_LINE_NOTICE, "string");
+  assert.equal(
+    helpers.BLOCKS_GENERATED_LINE_NOTICE,
+    "🧱 BLOCKS is generated from DEPENDS ON lines · edit it with Ctrl+Shift+Alt+B",
+  );
   assert.equal(typeof helpers.BLOCKS_MACHINE_WRITE_ANNOTATION, "string");
 });
 

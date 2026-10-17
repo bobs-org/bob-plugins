@@ -522,6 +522,8 @@ class BobNavigationHotkeysJumpKeyMixin {
     };
     if (chord === "depends-on") {
       options.initialTaskCardRow = "depends-on";
+    } else if (chord === "blocks") {
+      options.initialTaskCardRow = "blocks";
     }
     return this.openBulletPropertyPicker(view.editor, options);
   }
@@ -531,10 +533,13 @@ class BobNavigationHotkeysJumpKeyMixin {
       !event ||
       !event.ctrlKey ||
       !event.shiftKey ||
-      event.altKey ||
       event.metaKey
     ) {
       return null;
+    }
+    if (event.altKey) {
+      // Option may change `key` on macOS; the physical key identity remains B.
+      return event.code === "KeyB" ? "blocks" : null;
     }
     if (event.code === "KeyP" || event.key === "p" || event.key === "P") {
       return "property";

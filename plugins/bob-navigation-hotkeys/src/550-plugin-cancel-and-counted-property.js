@@ -308,13 +308,35 @@ class BobNavigationHotkeysCancelPropertyMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
-    // Anywhere on a Depends-On line opens the owning task's Depends on
-    // stage, skipping the property step — never the link under the cursor
-    // (`docs/task-dependencies.md` §6.1).
+    // Managed-line gestures always move to the owning task first, so a
+    // direction-specific one-shot row never opens on the link bullet.
     if (!options.taskSession && !options.initialProperty) {
       const entry = resolveDependencyStageEntry(content, cursor.line);
-      if (entry.ok && entry.skipPropertyStep) {
+      if (entry.ok && entry.parentLine !== cursor.line) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
+        if (
+          options.initialTaskCardRow === "blocks" &&
+          (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
+        ) {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            reopenBlocksStage: true,
+          });
+        }
+        if (
+          entry.lineKind === "depends-on" &&
+          options.initialTaskCardRow !== "blocks"
+        ) {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            initialProperty: "dependsOn",
+          });
+        }
+        return this.openBulletPropertyPicker(cm, {
+          ...options,
+        });
+      }
+      if (entry.ok && entry.skipPropertyStep) {
         return this.openBulletPropertyPicker(cm, {
           ...options,
           initialProperty: "dependsOn",
@@ -394,6 +416,27 @@ class BobNavigationHotkeysCancelPropertyMixin {
       return false;
     }
     const filePath = activeView.file.path;
+    if (options.reopenBlocksStage) {
+      let vaultFiles = [];
+      try {
+        vaultFiles = this.readDependencyVaultFileList() || [];
+      } catch (_error) {
+        vaultFiles = [];
+      }
+      const refusal = taskCardBlocksEntryRefusal({
+        content,
+        lineText,
+        cursorLine: cursor.line,
+        filePath,
+        taskSession,
+        baseDate: options.baseDate,
+        vaultFiles,
+      });
+      if (refusal) {
+        new Notice(refusal);
+        return false;
+      }
+    }
     // Inbox routing (task-card-gate): arm once per card. Armed when the
     // file is an inbox note and the cursor task (counted: the first
     // target) is an open #task. Never armed for link sessions, non-task

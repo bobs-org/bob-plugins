@@ -800,7 +800,7 @@ class BobNavigationHotkeysDependencyStageMixin {
 
   // Task Link mode: focus the linked note's tab first, even when it is already
   // open in a background tab, because the stage needs the active view's editor.
-  async openLinkedDependencyStage(target) {
+  async openLinkedDependencyStage(target, options = {}) {
     try {
       const path = normalizeVaultRelativePath((target && target.path) || "");
       if (!path) {
@@ -837,9 +837,12 @@ class BobNavigationHotkeysDependencyStageMixin {
       if (Number.isFinite(line)) {
         setEditorCursorSafely(view.editor, line, 0);
       }
-      return this.openBulletPropertyPicker(view.editor, {
-        initialProperty: "dependsOn",
-      });
+      return this.openBulletPropertyPicker(
+        view.editor,
+        options.rowId === "blocks"
+          ? { reopenBlocksStage: true }
+          : { initialProperty: "dependsOn" },
+      );
     } catch (_error) {
       new Notice("Could not open the linked task");
       return false;
@@ -864,6 +867,11 @@ class BobNavigationHotkeysDependencyStageMixin {
     if (entry.ok) {
       if (entry.parentLine !== cursor.line) {
         setEditorCursorSafely(editor, entry.parentLine, 0);
+      }
+      if (entry.lineKind === "blocks") {
+        return this.openBulletPropertyPicker(editor, {
+          reopenBlocksStage: true,
+        });
       }
       return this.openBulletPropertyPicker(editor, {
         initialProperty: "dependsOn",

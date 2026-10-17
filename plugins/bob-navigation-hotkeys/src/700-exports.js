@@ -332,6 +332,8 @@ module.exports.helpers = {
   createBulletPropertyItems,
   buildTaskCardPriorityPreviews,
   planTaskCard,
+  taskCardBlocksAvailabilityReason,
+  taskCardBlocksSummary,
   resolveTaskCardKey,
   renderTaskCardView,
   orderedTaskCardRows,

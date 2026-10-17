@@ -430,6 +430,18 @@ function planTaskCard(context = {}) {
   const dependencyAvailable = Boolean(
     dependencyProperty && dependencyItem && session.valid,
   );
+  const blocksUnavailableReason = taskCardBlocksAvailabilityReason(session, context);
+  const blocksSummary = taskCardBlocksSummary(
+    session,
+    context.taskCache,
+    context.baseDate,
+  );
+  const blocksDetail = blocksSummary
+    ? `${formatCountLabel(blocksSummary.count, "task")}${
+        blocksSummary.frees > 0 ? ` · frees ${blocksSummary.frees}` : ""
+      }`
+    : "";
+  const blocksAvailable = !blocksUnavailableReason;
   const refreshAvailable = Boolean(refreshDescription && session.valid);
   const cancelAvailable = Boolean(
     cancelDescription && !cancelDescription.recurring && session.valid,
@@ -469,6 +481,17 @@ function planTaskCard(context = {}) {
       propertyName: dependencyProperty ? dependencyProperty.name : "",
       detail: dependencyProjection && dependencyProjection.currentLabel,
       mixed: Boolean(dependencyProjection && dependencyProjection.mixed),
+      targetCount: session.targetCount,
+      deletable: false,
+    }),
+    row({
+      id: "blocks",
+      kind: "action",
+      action: "blocks",
+      label: "Blocks",
+      enabled: blocksAvailable,
+      unavailableReason: blocksAvailable ? null : blocksUnavailableReason,
+      detail: blocksDetail,
       targetCount: session.targetCount,
       deletable: false,
     }),
@@ -605,6 +628,7 @@ function planTaskCard(context = {}) {
       priority: priorityStrip.available,
       recommendation: Boolean(recommendation && recommendation.available),
       dependencies: dependencyAvailable,
+      blocks: blocksAvailable,
       refresh: refreshAvailable,
       cancel: cancelAvailable,
       lane: laneAvailable,
@@ -675,6 +699,7 @@ function resolveTaskCardKey(model, event) {
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
     (!modified && /^[0-9bfx]$/i.test(key)) ||
+    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || key === "B")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
     (alt && !ctrl && !meta && !shift && lower === "n");
@@ -776,6 +801,15 @@ function resolveTaskCardKey(model, event) {
   if (!modified && lower === "b") {
     return taskCardIntentForRow(rowById("depends-on"));
   }
+  if (
+    shift &&
+    !ctrl &&
+    !meta &&
+    !alt &&
+    (event.code === "KeyB" || key === "B")
+  ) {
+    return taskCardIntentForRow(rowById("blocks"));
+  }
   if (!modified && lower === "f") {
     return taskCardIntentForRow(rowById("review-every"));
   }
@@ -797,6 +831,7 @@ function resolveTaskCardKey(model, event) {
 const TASK_CARD_ROW_ORDER = Object.freeze([
   "schedule",
   "depends-on",
+  "blocks",
   "review-every",
   "lane",
   "cancel",
@@ -805,6 +840,7 @@ const TASK_CARD_ROW_ORDER = Object.freeze([
 const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   schedule: "Enter",
   "depends-on": "b",
+  blocks: "⇧B",
   "review-every": "f",
   lane: "Alt+N",
   cancel: "x",

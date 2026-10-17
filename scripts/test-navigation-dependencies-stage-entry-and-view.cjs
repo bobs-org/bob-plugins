@@ -14,6 +14,7 @@ const {
   describeRemovedDependencyTarget,
   buildDependencyEditNotice,
   notices,
+  NavigationHotkeysPlugin,
   TransactionEditor,
   stubPlugin,
   stubStageModal,
@@ -31,11 +32,101 @@ test("stage entry resolves the line itself and refuses prose", () => {
   assert.equal(onLine.ok, true);
   assert.equal(onLine.parentLine, 0);
   assert.equal(onLine.skipPropertyStep, true);
+  assert.equal(onLine.lineKind, "depends-on");
+  const blocksContent = [
+    "- [ ] #task Owner ^owner",
+    "  - 🧱 **BLOCKS:** [[#^dependent]]",
+    "- [?] #task Dependent ^dependent",
+  ].join("\n");
+  const onBlocks = resolveDependencyStageEntry(blocksContent, 1);
+  assert.equal(onBlocks.ok, true);
+  assert.equal(onBlocks.parentLine, 0);
+  assert.equal(onBlocks.lineKind, "blocks");
   const onTask = resolveDependencyStageEntry(content, 0);
   assert.equal(onTask.ok, true);
   assert.equal(onTask.skipPropertyStep, false);
   const onProse = resolveDependencyStageEntry(content, 4);
   assert.equal(onProse.ok, false);
+});
+
+test("Ctrl+Shift+P on a BLOCKS line opens the owner's Blocks stage directly", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "  - 🧱 **BLOCKS:** [[#^dependent]]",
+    "- [?] #task Dependent ^dependent",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 1, ch: 20 });
+  plugin.getActiveMarkdownView = () => ({
+    file: { path: "Tasks.md" },
+    editor,
+  });
+  const calls = [];
+  plugin.openBulletPropertyPicker = (receivedEditor, options) => {
+    calls.push({ receivedEditor, options });
+    return true;
+  };
+
+  assert.equal(plugin.openDependencyStageAtCursor(editor), true);
+  assert.deepEqual(editor.getCursor(), { line: 0, ch: 0 });
+  assert.deepEqual(calls, [
+    { receivedEditor: editor, options: { reopenBlocksStage: true } },
+  ]);
+});
+
+test("api.blocks opens the stage and removes only a listed dependent", async () => {
+  const ownerContent = [
+    "- [ ] #task Owner ^owner",
+    "  - 🧱 **BLOCKS:** [[dependent#^dependent]]",
+  ].join("\n");
+  const dependentContent = [
+    "- [?] #task Dependent ^dependent",
+    "  - ⛓️ **DEPENDS ON:** [[owner#^owner]]",
+  ].join("\n");
+  const { plugin } = stubPlugin({
+    "owner.md": ownerContent,
+    "dependent.md": dependentContent,
+  });
+  const editor = new TransactionEditor(ownerContent, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({ file: { path: "owner.md" }, editor });
+  const pickerCalls = [];
+  plugin.openBulletPropertyPicker = (receivedEditor, options) => {
+    pickerCalls.push({ receivedEditor, options });
+    return true;
+  };
+  const writes = [];
+  plugin.applyBlocksEdit = async (args) => {
+    writes.push(args);
+    return { ok: true, notice: "🧱 No longer blocks Dependent" };
+  };
+  const api = NavigationHotkeysPlugin.helpers.createDependencyNavApi(plugin);
+  assert.deepEqual(await api.blocks.openStage({ path: "owner.md", line: 1 }), {
+    ok: true,
+  });
+  assert.deepEqual(pickerCalls, [
+    { receivedEditor: editor, options: { reopenBlocksStage: true } },
+  ]);
+  assert.deepEqual(
+    await api.blocks.removeDependent(
+      { path: "owner.md", line: 0 },
+      { path: "dependent.md", blockId: "dependent" },
+    ),
+    { ok: true },
+  );
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].sources, [
+    { path: "owner.md", line: 0, blockId: "owner" },
+  ]);
+  assert.deepEqual(writes[0].remove, [
+    { path: "dependent.md", line: 0, blockId: "dependent" },
+  ]);
+
+  const absent = await api.blocks.removeDependent(
+    { path: "owner.md", line: 0 },
+    { path: "dependent.md", blockId: "missing" },
+  );
+  assert.deepEqual(absent, { ok: false, reason: "not-a-dependent" });
+  assert.equal(writes.length, 1);
 });
 
 test("stage canonical order ranks #hide last ahead of the lane", () => {
@@ -363,6 +454,41 @@ test("Task Link Depends on focuses a linked note open in a background tab", asyn
     !notices.slice(before).includes("No active markdown note"),
     "the stage should not hit the active-view guard",
   );
+});
+
+test("Task Link Blocks focuses the linked note and opens Blocks directly", async () => {
+  const { plugin } = stubPlugin({
+    "daily.md": "- [[job#^job-task]]\n",
+    "job.md": "heading\n- [ ] #task Job task [id:: job-task] ^job-task",
+  });
+  const dailyEditor = new TransactionEditor("- [[job#^job-task]]\n", {
+    line: 0,
+    ch: 0,
+  });
+  const jobEditor = new TransactionEditor(
+    "heading\n- [ ] #task Job task [id:: job-task] ^job-task",
+    { line: 0, ch: 0 },
+  );
+  let activeView = { file: { path: "daily.md" }, editor: dailyEditor };
+  plugin.getActiveMarkdownView = () => activeView;
+  plugin.getOpenMarkdownEditorForPath = (path) =>
+    path === "job.md" ? jobEditor : null;
+  plugin.openMarkdownFileWithLeafReuse = async (_file) => {
+    activeView = { file: { path: "job.md" }, editor: jobEditor };
+    return true;
+  };
+  const pickerCalls = [];
+  plugin.openBulletPropertyPicker = async (editor, options) => {
+    pickerCalls.push({ editor, options });
+    return true;
+  };
+
+  const result = await plugin.openLinkedBlocksStage({ path: "job.md", line: 1 });
+  assert.equal(result, true);
+  assert.equal(jobEditor.getCursor().line, 1);
+  assert.deepEqual(pickerCalls, [
+    { editor: jobEditor, options: { reopenBlocksStage: true } },
+  ]);
 });
 
 test("Task Link Depends on refuses clearly when the linked note cannot be focused", async (t) => {

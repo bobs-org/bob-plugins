@@ -341,6 +341,25 @@ test("task-card-depends-on registers Ctrl+Shift+B and opens the Depends on row",
   assert.deepEqual(opens[0].options, { initialTaskCardRow: "depends-on" });
 });
 
+test("task-card-blocks registers Ctrl+Shift+Alt+B and opens the Blocks row", () => {
+  const { plugin } = stubPlugin({ "Tasks.md": "- [ ] #task T ^t\n" });
+  const registered = stubOnloadAndRegister(plugin);
+  const entry = registered.find((command) => command.id === "task-card-blocks");
+  assert.ok(entry, "task-card-blocks is registered");
+  assert.equal(entry.name, "Task card: Blocks (reverse Depends on)");
+  assert.deepEqual(entry.hotkeys, [
+    { modifiers: ["Ctrl", "Shift", "Alt"], key: "B" },
+  ]);
+  const opens = [];
+  plugin.openBulletPropertyPicker = (editor, options) => {
+    opens.push({ editor, options });
+    return true;
+  };
+  const editor = { id: "cursor-editor" };
+  entry.editorCallback(editor);
+  assert.deepEqual(opens, [{ editor, options: { initialTaskCardRow: "blocks" } }]);
+});
+
 // The BLOCKED `🔒 waits on N` badge counts open prerequisites only: one
 // closed plus one open prerequisite reads `waits on 1` (DC7/DC8).
 test("stage waits-on badge counts open prerequisites only", () => {

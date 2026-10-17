@@ -241,6 +241,8 @@ function presentTaskCardRow(row) {
     label = "Schedule…";
   } else if (row.id === "depends-on") {
     label = "Blocked by…";
+  } else if (row.id === "blocks") {
+    label = "Blocks…";
   } else if (row.id === "review-every") {
     label = "Review every…";
   } else if (row.id === "cancel" && label && !label.endsWith("…")) {

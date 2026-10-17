@@ -364,6 +364,7 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
   assert.match(text, /Ctrl\+Enter/);
   assert.match(text, /Schedule…/);
   assert.match(text, /Blocked by…/);
+  assert.match(text, /Blocks…/);
   assert.match(text, /Review every…/);
   assert.match(text, /Cancel/);
   assert.match(text, /effort/);
@@ -378,10 +379,12 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
   assert.deepEqual(rows, [
     "schedule",
     "depends-on",
+    "blocks",
     "review-every",
     "lane",
     "cancel",
   ]);
+  assert.equal(orderedTaskCardRows(model).find((row) => row.id === "blocks").shortcut, "⇧B");
   const list = byClass(root, "bob-task-card-actions")[0];
   assert.equal(list.attributes.role, "listbox");
   const strip = byClass(root, "bob-task-card-strip")[0];
@@ -831,6 +834,16 @@ test("Task Card action keys enter the retained property, refresh, dependency, ca
       },
     },
     {
+      key: "B",
+      modifiers: { shiftKey: true },
+      content: "- [ ] #task Block another task [id:: source] ^source",
+      check(modal) {
+        assert.equal(modal.stage, "value");
+        assert.equal(modal.blocksStage, true);
+        assert.equal(modal.selectedPropertyItem.property.values, "local_task_id");
+      },
+    },
+    {
       key: "f",
       content: "- [ ] #task Change review [priority:: medium] ^refresh",
       check(modal) {
@@ -973,6 +986,38 @@ test("Ctrl+Shift+B on a Task Link opens the linked Depends on stage and closes t
   assert.equal(result, true);
   assert.equal(linked.length, 1);
   assert.equal(linked[0], target);
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+});
+
+test("Ctrl+Shift+Alt+B on a Task Link opens the linked Blocks stage", async () => {
+  const content = "- [[Tasks/Alpha#^alpha]]";
+  const editor = makeEditor(content);
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Projects/Work.md" } });
+  const target = {
+    path: "Tasks/Alpha.md",
+    file: { path: "Tasks/Alpha.md" },
+    content: "- [ ] #task Alpha [id:: alpha] ^alpha\n",
+    line: 0,
+    rawLine: "- [ ] #task Alpha [id:: alpha] ^alpha",
+    blockId: "alpha",
+    displayText: "Alpha",
+  };
+  plugin.resolveLinkPickerTargets = async () => ({ error: null, targets: [target] });
+  const opened = [];
+  plugin.openLinkedBlocksStage = async (resolved) => {
+    opened.push(resolved);
+    return true;
+  };
+
+  const result = await plugin.openLinkPicker(editor, {
+    config: buildConfig(),
+    baseDate: BASE_DATE,
+    initialTaskCardRow: "blocks",
+  });
+  assert.equal(result, true);
+  assert.deepEqual(opened, [target]);
   assert.equal(plugin.activeBulletPropertyPicker, null);
 });
 
@@ -1184,6 +1229,26 @@ test("Ctrl+Shift+B on a Depends-On line opens the direct stage without auto-disp
   assert.equal(modal.selectedPropertyItem.property.values, "local_task_id");
   assert.equal(modal.initialTaskCardRow, "depends-on");
   assert.equal(editor.getCursor().line, 0);
+});
+
+test("Ctrl+Shift+Alt+B on Depends-On and BLOCKS lines opens the owner's stage directly", () => {
+  for (const cursorLine of [1, 2]) {
+    const content = [
+      "- [ ] #task Owner [id:: owner] ^owner",
+      "  - ⛓️ **DEPENDS ON:** [[#^prerequisite]]",
+      "  - 🧱 **BLOCKS:** [[#^dependent]]",
+    ].join("\n");
+    const { modal, editor, opened } = openPickerRoute(
+      content,
+      { initialTaskCardRow: "blocks" },
+      { line: cursorLine },
+    );
+    assert.equal(opened, true);
+    assert.deepEqual(editor.getCursor(), { line: 0, ch: 0 });
+    assert.equal(modal.stage, "value");
+    assert.equal(modal.blocksStage, true);
+    assert.equal(modal.hasTaskCard, false);
+  }
 });
 
 test("Ctrl+Shift+B captures review origin like Ctrl+Shift+P; a direct stage does not", () => {

@@ -933,6 +933,7 @@ function createDependencyNavApi(plugin) {
     taskLinkLane: createTaskLinkLaneApi(plugin),
     notice: createNoticeApi(plugin),
     successors: createSuccessorPickerApi(plugin),
+    blocks: createBlocksNavApi(plugin),
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

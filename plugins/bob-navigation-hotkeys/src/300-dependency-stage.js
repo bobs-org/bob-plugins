@@ -662,13 +662,9 @@ function editorSelectionSpansTasks(cm, content) {
   }
 }
 
-// Entry-point resolution (`docs/task-dependencies.md` §6.1, §14 Rule 8):
-// anywhere on a Depends-On line resolves to the owning task and skips the
-// property step; anywhere on a BLOCKS mirror line resolves to the owning
-// task through the property step (its Task Card / Depends on stage), never
-// to the chip under the cursor; a `#task` line (or any other line of its
-// block) resolves to the owning task through the property step; prose with
-// no owning task is refused.
+// Entry-point resolution (`docs/task-dependencies.md` §§6.1, 15.2):
+// managed dependency lines resolve to their owning task, never the link under
+// the cursor. The direction-specific caller decides whether to skip the card.
 function resolveDependencyStageEntry(content, line) {
   const text = String(content || "");
   const lines = text.split(/\r?\n/);
@@ -688,13 +684,13 @@ function resolveDependencyStageEntry(content, line) {
     return Object.freeze({
       ok: true,
       parentLine: owning,
+      lineKind: "depends-on",
       skipPropertyStep: true,
       reason: null,
     });
   }
-  // Rule 8 (BK20): a BLOCKS line acts on the owning task, never on the chip
-  // under the cursor. Route through the property step so the owner’s Task
-  // Card / Depends on stage opens.
+  // Rule 8 (BK20): a BLOCKS line acts on its owner, never on the chip under
+  // the cursor. Ctrl+Shift+P opens that owner's reverse stage directly.
   if (
     parseBlocksLine(String(lines[at] || ""), { isDirectChildOfTask: true })
       .verdict !== "not-a-line"
@@ -702,6 +698,7 @@ function resolveDependencyStageEntry(content, line) {
     return Object.freeze({
       ok: true,
       parentLine: owning,
+      lineKind: "blocks",
       skipPropertyStep: false,
       reason: null,
     });
@@ -709,6 +706,7 @@ function resolveDependencyStageEntry(content, line) {
   return Object.freeze({
     ok: true,
     parentLine: owning,
+    lineKind: null,
     skipPropertyStep: false,
     reason: null,
   });

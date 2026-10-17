@@ -809,6 +809,8 @@ test("nav api v3 resolves results and never throws", async () => {
   const api = helpers.createDependencyNavApi(null);
   assert.equal(api.version, 3);
   assert.equal(Object.isFrozen(api), true);
+  assert.equal(api.blocks.version, 1);
+  assert.equal(Object.isFrozen(api.blocks), true);
   assert.equal(typeof api.claimReviewWalkCompletion, "function");
   assert.equal(api.claimReviewWalkCompletion({}), null);
   assert.deepEqual(await api.openDependencyStage(null), {
@@ -819,9 +821,20 @@ test("nav api v3 resolves results and never throws", async () => {
     ok: false,
     reason: "unavailable",
   });
+  assert.deepEqual(await api.blocks.openStage(null), {
+    ok: false,
+    reason: "unavailable",
+  });
+  assert.deepEqual(await api.blocks.removeDependent(null, null), {
+    ok: false,
+    reason: "unavailable",
+  });
 
   const throwing = helpers.createDependencyNavApi({
     openDependencyStageForRef() {
+      throw new Error("boom");
+    },
+    openBlocksStageForRef() {
       throw new Error("boom");
     },
     async removeDependencyByRef() {
@@ -834,6 +847,24 @@ test("nav api v3 resolves results and never throws", async () => {
   });
   assert.deepEqual(
     await throwing.removeDependency({ path: "Tasks.md", line: 0 }, { blockId: "a" }),
+    { ok: true },
+  );
+  assert.deepEqual(await throwing.blocks.openStage({ path: "Tasks.md", line: 0 }), {
+    ok: false,
+    reason: "api-failed",
+  });
+  assert.deepEqual(
+    await helpers.createDependencyNavApi({
+      async openBlocksStageForRef() {
+        return { ok: true };
+      },
+      async removeBlocksDependentByRef() {
+        return { ok: true };
+      },
+    }).blocks.removeDependent(
+      { path: "Tasks.md", line: 0 },
+      { path: "Tasks.md", blockId: "dependent" },
+    ),
     { ok: true },
   );
 

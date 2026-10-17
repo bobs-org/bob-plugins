@@ -130,6 +130,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
         this.openBulletPropertyPicker(editor, { initialTaskCardRow: "depends-on" }),
     });
 
+    this.addCommand({
+      id: "task-card-blocks",
+      name: "Task card: Blocks (reverse Depends on)",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift", "Alt"], key: "B" }],
+      editorCallback: (editor) =>
+        this.openBulletPropertyPicker(editor, { initialTaskCardRow: "blocks" }),
+    });
+
     // No default hotkey (Q6): the vault-wide Depends on stage for the task
     // under the cursor (`docs/task-dependencies.md` §6.1).
     this.addCommand({

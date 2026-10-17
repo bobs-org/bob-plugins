@@ -199,8 +199,10 @@ requested pair, while each `ds` removes one delimiter from each side.
 ## Go to task URI (`obsidian://bob-goto-task`)
 
 Bob Navigation Hotkeys registers a read-only protocol handler that opens a
-note and lands the caret on a task. Bob Mac Capture's `/` Go To picker
-dispatches this URI. Nothing in the vault is written: no block IDs, stamps,
+note and lands the caret on a requested line. Bob Mac Capture's `/` Go To
+picker and its in-panel Control-\ today-Pomodoro landing dispatch this URI.
+`line`/`ref` may name any line, including a Pomodoro entry, which is not a
+`#task` line. Nothing in the vault is written: no block IDs, stamps,
 lanes, ledger rows, walk park or advance, Task Card, or completion.
 
 ### URI v1

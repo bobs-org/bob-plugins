@@ -91,6 +91,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
+    this.pendingBlocks = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -159,6 +160,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     // The vault-wide Depends on stage footer per the design:
     // `↑↓ navigate · ⇥ mark · ↵ toggle · esc dismiss`, with ↵ reading
     // `apply N` when rows are marked.
+    if (this.blocksStage) {
+      return this.getBlocksStageFooterHints();
+    }
     if (this.vaultStage) {
       const marked = this.getMarkedCount();
       return [
@@ -335,22 +339,34 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
   // are stable (`path#line`), so marked rows survive the pool replacement.
   applyVaultStageItems(stage) {
-    if (!stage || this.vaultStage !== stage.refreshOf) {
+    const seed = this.blocksStage ? this.blocksStageSeed : this.vaultStage;
+    if (!stage || seed !== stage.refreshOf) {
       return;
     }
     const marked = this.markedLines instanceof Set
       ? new Set(this.markedLines)
       : new Set();
-    this.vaultStage = stage;
-    const items = planDependencyStageView({
-      current: stage.current,
-      candidates: stage.candidates,
-      query: this.getQuery(),
-      dependent: stage.dependent,
-      edges: stage.edges,
-      linkedKeys: stage.linkedKeys,
-      sourceValueSets: stage.sourceValueSets,
-    });
+    if (this.blocksStage) {
+      const todayLinks =
+        this.vaultStage && Array.isArray(this.vaultStage.todayLinks)
+          ? this.vaultStage.todayLinks
+          : [];
+      this.vaultStage = this.decorateOpenBlocksStage(stage, { todayLinks });
+      this.blocksStageSeed = stage.refreshOf || this.blocksStageSeed;
+    } else {
+      this.vaultStage = stage;
+    }
+    const items = this.blocksStage
+      ? planBlocksStageItemsFromVault(this.vaultStage, this.getQuery())
+      : planDependencyStageView({
+          current: stage.current,
+          candidates: stage.candidates,
+          query: this.getQuery(),
+          dependent: stage.dependent,
+          edges: stage.edges,
+          linkedKeys: stage.linkedKeys,
+          sourceValueSets: stage.sourceValueSets,
+        });
     this.resetLocalTaskMarks(items);
     for (const key of marked) {
       if (this.taskItemsByLine.has(key)) {
@@ -364,6 +380,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   }
 
   getVaultStageSubtitle(visibleItems, allItems) {
+    if (this.blocksStage) {
+      return this.getBlocksStageSubtitle(visibleItems, allItems);
+    }
     const stage = this.vaultStage;
     if (!stage) {
       return this.getLocalTaskSubtitle(visibleItems, allItems);
@@ -470,6 +489,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.blockIdMode === "vault-counted" && this.pendingVaultCounted) {
       return this.pendingVaultCounted.reservedIds || new Set();
     }
+    if (this.blockIdMode === "blocks-source" && this.pendingBlocks) {
+      return this.pendingBlocks.reservedIds || new Set();
+    }
     return new Set();
   }
 
@@ -484,6 +506,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       "counted-source",
       "vault-single",
       "vault-counted",
+      "blocks-source",
     ].includes(options.mode)
       ? options.mode
       : "single";
@@ -559,6 +582,8 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
           ? `Block ID ${this.blockIdContext.position} of ${this.blockIdContext.total} · line ${task.line + 1}`
           : this.blockIdMode === "counted-source"
             ? `${this.getTaskSessionSubtitle()} · create an ID for dependency on line ${task.line + 1}`
+            : this.blockIdMode === "blocks-source"
+              ? `Create an ID for this task first · line ${task.line + 1}`
             : `Create an ID for line ${task.line + 1}`,
       filterItem: () => true,
       renderItem: (item, rowEl, query) =>

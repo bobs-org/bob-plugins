@@ -97,6 +97,10 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       return this.confirmVaultCountedBlockId(item);
     }
 
+    if (this.blockIdMode === "blocks-source" && this.pendingBlocks) {
+      return this.confirmBlocksSourceBlockId(item);
+    }
+
     return this.confirmSingleBlockId(item);
   }
 

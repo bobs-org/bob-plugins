@@ -1,5 +1,8 @@
 class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   async chooseCountedTaskDependency(item) {
+    if (this.blocksStage) {
+      return this.chooseBlocksTask(item);
+    }
     if (!item) {
       return false;
     }
@@ -690,6 +693,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // (returning false so the modal stays open); otherwise it executes the batch
   // immediately. No editor writes happen in this phase.
   commitMarkedDependencies() {
+    if (this.blocksStage) {
+      return this.commitMarkedBlocks();
+    }
     if (!this.selectedPropertyItem || this.getMarkedCount() === 0) {
       return false;
     }

@@ -16,7 +16,9 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         // Best-effort close only.
       }
       void plugin.openBulletPropertyPicker(editor, {
-        initialProperty: "dependsOn",
+        initialProperty: this.blocksStage ? null : "dependsOn",
+        reopenBlocksStage: this.blocksStage === true,
+        directStage: true,
         inboxRoute: this.inboxRoute || null,
       });
     } catch (_reopenError) {

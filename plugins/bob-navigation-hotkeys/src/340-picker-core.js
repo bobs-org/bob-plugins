@@ -55,6 +55,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;
+    this.blocksStage = false;
+    this.blocksStageSeed = null;
+    this.pendingBlocks = null;
+    this.consequenceStripEl = null;
+    this.blocksStripText = "";
     // Review-walk auto-advance (nav-gestures): the landing origin captured
     // when the card opened, the cursor line it was captured on, and that
     // line's text before any write. `reviewSettleDeferred` lets the cancel

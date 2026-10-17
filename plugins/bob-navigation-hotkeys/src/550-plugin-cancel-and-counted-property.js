@@ -447,6 +447,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
         taskSession,
         initialProperty: options.initialProperty || null,
         initialTaskCardRow: options.initialTaskCardRow || null,
+        directStage:
+          options.directStage === true || options.reopenBlocksStage === true,
         random: options.random,
         baseDate: options.baseDate,
         reviewOrigin,
@@ -468,7 +470,9 @@ class BobNavigationHotkeysCancelPropertyMixin {
     // on value stage opens straight away (`docs/task-dependencies.md` §6.1).
     // `initialProperty` always wins over `initialTaskCardRow` (Ctrl+Shift+B),
     // so a Depends-On-line redirect stays a direct stage.
-    if (options.initialProperty) {
+    if (options.reopenBlocksStage && typeof picker.showBlocksStage === "function") {
+      picker.showBlocksStage();
+    } else if (options.initialProperty) {
       const wanted = (picker.propertyItems || []).find(
         (item) =>
           item &&

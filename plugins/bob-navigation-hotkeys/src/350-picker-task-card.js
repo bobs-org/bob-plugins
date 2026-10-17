@@ -54,6 +54,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.stage = "task-card";
     this.selectedPropertyItem = null;
     this.pendingTask = null;
+    this.blocksStage = false;
+    this.pendingBlocks = null;
+    this.consequenceStripEl = null;
     if (typeof this.clearPendingBatch === "function") {
       this.clearPendingBatch();
     }
@@ -267,6 +270,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
     this.pendingCountedDependency = null;
+    this.pendingBlocks = null;
+    this.blocksStage = false;
+    this.consequenceStripEl = null;
     this.scheduleReviewFormEl = null;
     this.scheduleReviewReasonEl = null;
     this.scheduleReviewSummaryEl = null;

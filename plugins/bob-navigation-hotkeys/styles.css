@@ -997,6 +997,29 @@
   font-size: var(--font-ui-medium);
 }
 
+/* --- Consequence strip (Blocks… stage) ---------------------------------- */
+
+.bob-cnp-consequence-strip {
+  display: flex;
+  align-items: center;
+  height: 1.75em;
+  padding: 0 var(--size-4-4);
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+}
+
+.bob-cnp-consequence-strip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-cnp-consequence-strip-text.is-destructive {
+  color: var(--text-warning, var(--text-muted));
+}
+
 /* --- Footer ------------------------------------------------------------- */
 
 .bob-cnp-footer {

@@ -5,6 +5,12 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     // Tasks cache is not Warm) refreshes through `applyVaultStageItems`.
     if (this.isLocalTaskStage() && this.vaultStage) {
       try {
+        if (this.blocksStage) {
+          return planBlocksStageItemsFromVault(
+            this.vaultStage,
+            this.getQuery(),
+          );
+        }
         return planDependencyStageView({
           current: this.vaultStage.current,
           candidates: this.vaultStage.candidates,
@@ -187,6 +193,11 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
         hasWorkLog: Boolean(pending && pending.needsWorkLog),
       });
       this.renderFooter();
+    }
+    if (this.blocksStage && this.isLocalTaskStage()) {
+      this.footerHints = this.getBlocksStageFooterHints();
+      this.renderFooter();
+      this.refreshBlocksConsequenceStrip();
     }
   }
 
@@ -378,6 +389,13 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
     } else if (markedAdd) {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ add" });
+    } else if (item.linkState === "mixed") {
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action",
+        text: `${item.linkedSourceCount}/${item.sourceCount} ${
+          this.blocksStage ? "block" : "depend"
+        }`,
+      });
     } else if (
       item.stageSection === "blocked" &&
       (typeof item.blockedBadge === "string" || Number.isInteger(item.waitsOn))
@@ -396,17 +414,34 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
         cls: "bob-cnp-task-badge-action",
         text: "−",
       });
-    } else if (item.linkState === "mixed") {
-      badgeEl.createSpan({
-        cls: "bob-cnp-task-badge-action",
-        text: `${item.linkedSourceCount}/${item.sourceCount} depend`,
-      });
     } else if (item.needsBlockIdPrompt) {
       // Unmarked, not yet linked, and missing a trailing block ID: pressing
       // Enter prompts for one before linking.
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
     } else {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋" });
+    }
+    if (this.blocksStage && item.lastReason) {
+      const keyEl = badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-extra bob-cnp-blocks-last",
+        text: "\ud83d\udd11",
+      });
+      keyEl.setAttribute(
+        "title",
+        "Last thing in its way \u00b7 removing makes it Ready again",
+      );
+    }
+    if (this.blocksStage && item.todayLink) {
+      const link = item.todayLink;
+      const range = link.range ? ` ${link.range}` : "";
+      const tomato = badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-extra bob-cnp-blocks-today",
+        text: link.running ? "\ud83c\udf45 running" : "\ud83c\udf45",
+      });
+      tomato.setAttribute(
+        "title",
+        `Linked under ${link.label}${range} \u00b7 blocking it removes that link`,
+      );
     }
   }
 
@@ -450,6 +485,9 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   }
 
   async chooseTaskDependency(item) {
+    if (this.blocksStage) {
+      return this.chooseBlocksTask(item);
+    }
     if (!this.selectedPropertyItem) {
       return false;
     }

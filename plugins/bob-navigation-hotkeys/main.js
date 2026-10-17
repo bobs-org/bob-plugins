@@ -34901,6 +34901,1107 @@ function deduplicateTaskCardTargets(targets) {
   return Object.freeze(unique);
 }
 
+// ---- src/302-blocks-stage-view.js ----
+// Reverse Blocks… stage view (`docs/task-dependencies.md` §15.3–§15.5).
+// Pool, edges, and index come from the forward vault stage; this file
+// inverts CURRENT, swaps the guards, ranks today-first, and builds the
+// consequence strip. Nothing here reads a BLOCKS line.
+
+function blocksStageSourceAliases(source) {
+  const aliases = [];
+  const idField = normalizeBulletPropertyValue(source && source.idField);
+  const blockId = normalizeBulletPropertyValue(source && source.blockId);
+  const path = normalizeVaultRelativePath((source && source.path) || "");
+  if (idField) {
+    aliases.push(idField);
+  }
+  if (blockId) {
+    aliases.push(blockId);
+    const encoded = tryDependencyId(path, blockId);
+    if (encoded) {
+      aliases.push(normalizeBulletPropertyValue(encoded));
+    }
+  }
+  return [...new Set(aliases.filter(Boolean))];
+}
+
+function blocksStageSourceFromLine(content, path, line) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(line, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return null;
+  }
+  const rawLine = String(lines[at] || "");
+  const blockId = getTrailingBlockId(rawLine);
+  const idFieldRaw = findBulletPropertyField(rawLine, "id");
+  const idField = idFieldRaw
+    ? normalizeBulletPropertyValue(idFieldRaw.value)
+    : null;
+  const displayText = cleanTaskDisplayText(rawLine);
+  const key =
+    (blockId && dependencyStageRowKey(path, blockId)) ||
+    (idField ? `id:${idField}` : `${normalizeVaultRelativePath(path)}#line:${at}`);
+  const source = {
+    path: normalizeVaultRelativePath(path),
+    line: at,
+    rawLine,
+    text: rawLine,
+    blockId: blockId ? normalizeBulletPropertyValue(blockId) : null,
+    idField,
+    displayText,
+    textDisplay: displayText,
+    key,
+    status: getObsidianTaskCheckboxStatus(rawLine),
+    needsBlockId: !blockId,
+    isProjectPrj: Boolean(isProjectPrjDependencyParent(text, path, at)),
+    projectResidentKeys: projectDependentResidentKeys(text, path, at),
+    projectDescendantPaths: Object.freeze([]),
+  };
+  source.aliases = Object.freeze(blocksStageSourceAliases(source));
+  return Object.freeze(source);
+}
+
+function collectBlocksStageSources(stage) {
+  const path = normalizeVaultRelativePath(
+    (stage && stage.dependent && stage.dependent.path) || "",
+  );
+  const content =
+    (stage && stage.files instanceof Map && stage.files.get(path)) || "";
+  const lines = Array.isArray(stage && stage.parentLines)
+    ? stage.parentLines
+    : [];
+  const sources = [];
+  for (const line of lines) {
+    const source = blocksStageSourceFromLine(content, path, line);
+    if (source) {
+      sources.push(source);
+    }
+  }
+  return Object.freeze(sources);
+}
+
+function taskDependsOnLineIsMalformed(content, parentLine) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return false;
+  }
+  const verdicts = dependencyHandEditChildVerdicts(lines, at);
+  if (verdicts.some((entry) => entry.verdict === "malformed")) {
+    return true;
+  }
+  return verdicts.filter((entry) => entry.verdict === "accept").length > 1;
+}
+
+function collectBlocksStageTodayLinks(dailyContent, dailyPath, index) {
+  const text = String(dailyContent || "");
+  if (!text) {
+    return Object.freeze([]);
+  }
+  const { entries } = collectPomodoroEntries(text);
+  const { lines } = splitMarkdownContent(text);
+  const open = (Array.isArray(entries) ? entries : []).filter(
+    (entry) => entry && entry.open,
+  );
+  const timedOpen = open.filter(
+    (entry) =>
+      entry.placeholder !== true &&
+      typeof entry.rangeText === "string" &&
+      entry.rangeText &&
+      entry.rangeText !== "()",
+  );
+  const runningEntry = timedOpen.length === 1 ? timedOpen[0] : null;
+  const ordered = open.slice().sort((left, right) => {
+    const leftRun = left === runningEntry ? 0 : 1;
+    const rightRun = right === runningEntry ? 0 : 1;
+    if (leftRun !== rightRun) {
+      return leftRun - rightRun;
+    }
+    return left.entryLine - right.entryLine;
+  });
+  const out = [];
+  let order = 0;
+  for (const entry of ordered) {
+    const running = entry === runningEntry;
+    const label = String(entry.name || "").trim() || "POMODORO";
+    const range = String(entry.rangeText || "").replace(/^\(|\)$/g, "");
+    for (
+      let line = entry.childStartLine;
+      line < entry.childEndLineExclusive;
+      line += 1
+    ) {
+      const lineText = String(lines[line] || "");
+      const occurrences = collectPomodoroBlockLinkOccurrences(lineText);
+      if (!isDedicatedPomodoroLinkLine(lineText, occurrences)) {
+        continue;
+      }
+      const childBlock = findCurrentBulletChildBlock(lines, line);
+      let childNotes = 0;
+      if (childBlock && childBlock.endLineExclusive > childBlock.startLine) {
+        for (
+          let child = childBlock.startLine;
+          child < childBlock.endLineExclusive;
+          child += 1
+        ) {
+          if (PROJECT_LIST_ITEM_RE.test(String(lines[child] || ""))) {
+            childNotes += 1;
+          }
+        }
+      }
+      for (const occurrence of occurrences) {
+        if (!occurrence || occurrence.struck) {
+          continue;
+        }
+        const targetPath = resolveDependencyStageLinkTarget(
+          occurrence.target,
+          occurrence.blockId,
+          dailyPath,
+          index,
+        );
+        const key =
+          targetPath && occurrence.blockId
+            ? dependencyStageRowKey(targetPath, occurrence.blockId)
+            : null;
+        if (!key) {
+          continue;
+        }
+        out.push(
+          Object.freeze({
+            key,
+            path: targetPath,
+            blockId: occurrence.blockId,
+            label,
+            range,
+            running,
+            childNotes,
+            order: order,
+          }),
+        );
+        order += 1;
+      }
+    }
+  }
+  return Object.freeze(out);
+}
+
+function blocksStageTodayMap(todayLinks) {
+  const map = new Map();
+  for (const link of Array.isArray(todayLinks) ? todayLinks : []) {
+    if (!link || !link.key || map.has(link.key)) {
+      continue;
+    }
+    map.set(link.key, link);
+  }
+  return map;
+}
+
+function collectBlocksStageCurrent(stage, sources) {
+  const sourceList = Array.isArray(sources) ? sources : [];
+  const sourceKeys = new Set(sourceList.map((source) => source.key).filter(Boolean));
+  const sourceIds = new Set(
+    sourceList.flatMap((source) =>
+      Array.isArray(source.aliases) ? source.aliases : [],
+    ),
+  );
+  const edges = (stage && stage.edges instanceof Map) ? stage.edges : new Map();
+  const index = stage && stage.index;
+  const byKey = index && index.byKey instanceof Map ? index.byKey : new Map();
+  const candidates = Array.isArray(stage && stage.candidates)
+    ? stage.candidates
+    : [];
+  const rows = [];
+  const seen = new Set();
+  const pushRecord = (record, extra = {}) => {
+    if (!record) {
+      return;
+    }
+    const key =
+      record.path && record.blockId
+        ? dependencyStageRowKey(record.path, record.blockId)
+        : extra.key || null;
+    const dedupe = key || `${record.path || ""}#${record.line}`;
+    if (seen.has(dedupe)) {
+      return;
+    }
+    seen.add(dedupe);
+    rows.push(
+      Object.freeze({
+        kind: "current",
+        path: record.path,
+        blockId: record.blockId || null,
+        route: record.route || dependencyStageRouteOf(record.path || ""),
+        note: record.note || dependencyStageBasenameOf(record.path || ""),
+        line: record.line,
+        rawLine: record.rawLine,
+        status: record.status,
+        displayText: record.displayText || record.text,
+        text: record.text || record.displayText,
+        idField: record.idField || record.existingIdField || null,
+        existingBlockId: record.blockId || record.existingBlockId || null,
+        existingIdField: record.idField || record.existingIdField || null,
+        section: record.section || null,
+        open: record.open !== false,
+        blocked: record.status === "?" || record.blocked === true,
+        hidden: Boolean(record.hidden),
+        dependsOn: Array.isArray(record.dependsOn) ? record.dependsOn : [],
+        openCount: record.openCount,
+        scheduledDate: record.scheduledDate || null,
+        ...extra,
+      }),
+    );
+  };
+  for (const [from, targets] of edges) {
+    if (!Array.isArray(targets) || !targets.some((target) => sourceKeys.has(target))) {
+      continue;
+    }
+    const record = byKey.get(from) || candidates.find((row) => {
+      const key =
+        row.path && row.blockId
+          ? dependencyStageRowKey(row.path, row.blockId)
+          : null;
+      return key === from;
+    });
+    if (record && record.open === false) {
+      continue;
+    }
+    pushRecord(record || { path: null, blockId: null, displayText: from }, {
+      key: from,
+    });
+  }
+  const cacheTasks = [];
+  if (index && index.byIdField instanceof Map) {
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate.dependsOn) && candidate.dependsOn.length > 0) {
+        cacheTasks.push(candidate);
+      }
+    }
+  }
+  for (const record of cacheTasks) {
+    const hits = (record.dependsOn || []).some((id) =>
+      sourceIds.has(normalizeBulletPropertyValue(id)),
+    );
+    if (!hits || record.open === false) {
+      continue;
+    }
+    pushRecord(record);
+  }
+  return Object.freeze(rows);
+}
+
+function blocksStageRowKey(row) {
+  if (!row) {
+    return null;
+  }
+  if (row.path && row.blockId) {
+    return dependencyStageRowKey(row.path, row.blockId);
+  }
+  return null;
+}
+
+function blocksStageLinkedCount(candidate, sources, edges) {
+  const sourceList = Array.isArray(sources) ? sources : [];
+  if (sourceList.length === 0) {
+    return 0;
+  }
+  const dependsOn = new Set(
+    (Array.isArray(candidate.dependsOn) ? candidate.dependsOn : []).map(
+      (id) => normalizeBulletPropertyValue(id),
+    ),
+  );
+  const key = blocksStageRowKey(candidate);
+  const edgeTargets =
+    key && edges instanceof Map ? edges.get(key) || [] : [];
+  let count = 0;
+  for (const source of sourceList) {
+    const aliases = Array.isArray(source.aliases) ? source.aliases : [];
+    const hit =
+      (source.key && edgeTargets.includes(source.key)) ||
+      aliases.some((alias) => dependsOn.has(alias));
+    if (hit) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function blocksStageIsLastReason(candidate, sources, edges, files) {
+  const linked = blocksStageLinkedCount(candidate, sources, edges);
+  if (linked <= 0) {
+    return false;
+  }
+  const key = blocksStageRowKey(candidate);
+  const edgeCount =
+    key && edges instanceof Map && edges.get(key)
+      ? edges.get(key).length
+      : 0;
+  const open =
+    Number.isInteger(candidate.openCount) && candidate.openCount >= 0
+      ? candidate.openCount
+      : edgeCount;
+  if (open > linked) {
+    return false;
+  }
+  const content =
+    files instanceof Map
+      ? files.get(normalizeVaultRelativePath(candidate.path || ""))
+      : null;
+  const rawLine =
+    candidate.rawLine ||
+    (typeof content === "string" && Number.isInteger(candidate.line)
+      ? String(content.split(/\r?\n/)[candidate.line] || "")
+      : "");
+  if (taskHasProjectBlockedTag(rawLine)) {
+    return false;
+  }
+  if (
+    rawLine &&
+    dependencyParentHasFutureSchedule(rawLine)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function compareBlocksStageResults(left, right, sourcePath, todayMap) {
+  const leftHidden = Boolean(left.hidden);
+  const rightHidden = Boolean(right.hidden);
+  if (leftHidden !== rightHidden) {
+    return leftHidden ? 1 : -1;
+  }
+  const leftKey = blocksStageRowKey(left);
+  const rightKey = blocksStageRowKey(right);
+  const leftToday = leftKey && todayMap.has(leftKey) ? todayMap.get(leftKey) : null;
+  const rightToday = rightKey && todayMap.has(rightKey) ? todayMap.get(rightKey) : null;
+  if (leftToday || rightToday) {
+    if (!leftToday) {
+      return 1;
+    }
+    if (!rightToday) {
+      return -1;
+    }
+    if (leftToday.order !== rightToday.order) {
+      return leftToday.order - rightToday.order;
+    }
+  }
+  const lane = (status) =>
+    status === "/" ? 0 : status === "*" ? 1 : status === " " ? 2 : 3;
+  const leftLane = lane(left.status);
+  const rightLane = lane(right.status);
+  if (leftLane !== rightLane && (leftLane <= 1 || rightLane <= 1)) {
+    if (leftLane <= 1 && rightLane <= 1) {
+      return leftLane - rightLane;
+    }
+    if (leftLane <= 1) {
+      return -1;
+    }
+    if (rightLane <= 1) {
+      return 1;
+    }
+  }
+  const leftSame = left.path === sourcePath;
+  const rightSame = right.path === sourcePath;
+  if (leftSame !== rightSame) {
+    return leftSame ? -1 : 1;
+  }
+  if (leftSame && rightSame) {
+    return (left.line || 0) - (right.line || 0);
+  }
+  if (leftLane !== rightLane) {
+    return leftLane - rightLane;
+  }
+  if (left.path !== right.path) {
+    return String(left.path || "") < String(right.path || "") ? -1 : 1;
+  }
+  return (left.line || 0) - (right.line || 0);
+}
+
+function blocksStageGuard(candidate, sources, edges, files, labelByKey) {
+  const sourceList = Array.isArray(sources) ? sources : [];
+  const candidateKey = blocksStageRowKey(candidate);
+  const labelCycle = (cycle) =>
+    Object.freeze(
+      (Array.isArray(cycle) ? cycle : []).map((key) =>
+        labelByKey.has(key) ? labelByKey.get(key) : key,
+      ),
+    );
+  const content =
+    files instanceof Map
+      ? files.get(normalizeVaultRelativePath(candidate.path || ""))
+      : null;
+  if (
+    typeof content === "string" &&
+    Number.isInteger(candidate.line) &&
+    taskDependsOnLineIsMalformed(content, candidate.line)
+  ) {
+    return {
+      disabled: true,
+      reason: "its Depends-On line is malformed",
+      cycle: null,
+      cycleLabels: null,
+    };
+  }
+  const candidateIsPrj =
+    typeof content === "string" && Number.isInteger(candidate.line)
+      ? Boolean(
+          isProjectPrjDependencyParent(
+            content,
+            candidate.path,
+            candidate.line,
+          ),
+        )
+      : Boolean(candidate.isProjectPrj);
+  const descendantPaths = new Set(
+    (
+      candidateIsPrj && Array.isArray(candidate.projectDescendantPaths)
+        ? candidate.projectDescendantPaths
+        : []
+    ).map((path) => normalizeVaultRelativePath(path)),
+  );
+  if (candidateIsPrj && descendantPaths.size === 0 && files instanceof Map) {
+    for (const path of collectProjectDescendantPathsFromNotes(
+      candidate.path,
+      files,
+    )) {
+      descendantPaths.add(path);
+    }
+  }
+  for (const source of sourceList) {
+    if (
+      source.path === candidate.path &&
+      source.line === candidate.line
+    ) {
+      const selfCycle = Object.freeze([source.key || candidateKey].filter(Boolean));
+      return {
+        disabled: true,
+        reason: "this task",
+        cycle: selfCycle,
+        cycleLabels: labelCycle(selfCycle),
+      };
+    }
+    if (candidateIsPrj && source.path === candidate.path) {
+      return {
+        disabled: true,
+        reason: "inside this project",
+        cycle: null,
+        cycleLabels: null,
+      };
+    }
+    if (
+      candidateIsPrj &&
+      source.path &&
+      descendantPaths.has(normalizeVaultRelativePath(source.path))
+    ) {
+      return {
+        disabled: true,
+        reason: "inside a sub-project of this project",
+        cycle: null,
+        cycleLabels: null,
+      };
+    }
+    if (candidateKey && source.key) {
+      let cycle = findDependencyStageCycle(edges, candidateKey, source.key);
+      if (!cycle && candidateIsPrj) {
+        const residentKeys = Array.isArray(candidate.projectResidentKeys)
+          ? candidate.projectResidentKeys
+          : typeof content === "string"
+            ? projectDependentResidentKeys(
+                content,
+                candidate.path,
+                candidate.line,
+              )
+            : [];
+        for (const residentKey of residentKeys) {
+          if (!residentKey || residentKey === candidateKey) {
+            continue;
+          }
+          cycle = findDependencyStageCycle(edges, residentKey, source.key);
+          if (cycle) {
+            break;
+          }
+        }
+      }
+      if (cycle) {
+        return {
+          disabled: true,
+          reason: "would create a cycle",
+          cycle: Object.freeze(cycle),
+          cycleLabels: labelCycle(cycle),
+        };
+      }
+    }
+  }
+  return { disabled: false, reason: null, cycle: null, cycleLabels: null };
+}
+
+function decorateBlocksVaultStage(stage, options = {}) {
+  if (!stage) {
+    return null;
+  }
+  const sources =
+    Array.isArray(options.sources) && options.sources.length > 0
+      ? options.sources
+      : collectBlocksStageSources(stage);
+  const files = stage.files instanceof Map ? stage.files : new Map();
+  let todayLinks = Array.isArray(options.todayLinks)
+    ? options.todayLinks
+    : Array.isArray(stage.todayLinks)
+      ? stage.todayLinks
+      : [];
+  if (todayLinks.length === 0 && options.dailyPath && files.has(options.dailyPath)) {
+    todayLinks = collectBlocksStageTodayLinks(
+      files.get(options.dailyPath),
+      options.dailyPath,
+      stage.index,
+    );
+  }
+  const current = collectBlocksStageCurrent(stage, sources);
+  const edges = stage.edges instanceof Map ? stage.edges : new Map();
+  let freesCount = 0;
+  for (const row of current) {
+    if (blocksStageIsLastReason(row, sources, edges, files)) {
+      freesCount += 1;
+    }
+  }
+  const primary = sources[0];
+  const title =
+    sources.length > 1
+      ? `\ud83e\uddf1 Blocks \u00b7 ${formatCountLabel(sources.length, "task")}`
+      : `\ud83e\uddf1 Blocks \u00b7 ${String(
+          (primary && primary.displayText) || "",
+        ).slice(0, 48)}`;
+  const linkedKeys = new Set();
+  for (const row of current) {
+    const key = blocksStageRowKey(row);
+    if (key) {
+      linkedKeys.add(key);
+    }
+  }
+  return {
+    ...stage,
+    blocks: true,
+    sources: Object.freeze(sources),
+    current: Object.freeze(current),
+    todayLinks: Object.freeze(todayLinks),
+    linkedKeys,
+    title,
+    openCount: current.length,
+    freesCount,
+    poolSize: Array.isArray(stage.candidates) ? stage.candidates.length : 0,
+  };
+}
+
+function planBlocksStageView(args = {}) {
+  const sources = Array.isArray(args.sources) ? args.sources : [];
+  const current = Array.isArray(args.current) ? args.current : [];
+  const pool = Array.isArray(args.candidates) ? args.candidates : [];
+  const query = String(args.query || "");
+  const edges = args.edges || new Map();
+  const files = args.files instanceof Map ? args.files : new Map();
+  const todayMap = blocksStageTodayMap(args.todayLinks);
+  const sourcePath = sources[0] ? sources[0].path : "";
+  const sourceKeys = new Set(sources.map((source) => source.key).filter(Boolean));
+  const sourceLines = new Set(
+    sources.map((source) => `${source.path}\x00${source.line}`),
+  );
+  const maxRows = Math.max(
+    1,
+    Math.floor(numericOrDefault(args.maxRows, DEPENDENCY_STAGE_MAX_ROWS)),
+  );
+  const sourceCount = Math.max(1, sources.length || 1);
+  const labelByKey = new Map();
+  for (const row of [...current, ...pool, ...sources]) {
+    if (!row) {
+      continue;
+    }
+    const key = blocksStageRowKey(row) || row.key || null;
+    const label = row.displayText || row.text || null;
+    if (key && label && !labelByKey.has(key)) {
+      labelByKey.set(key, label);
+    }
+  }
+  const fullyLinked = [];
+  const partialLinked = [];
+  for (const row of current) {
+    const linked = blocksStageLinkedCount(row, sources, edges);
+    if (linked > 0 && linked < sourceCount) {
+      partialLinked.push(row);
+      continue;
+    }
+    fullyLinked.push(row);
+  }
+  const markedCurrent = fullyLinked.map((row, index) => {
+    const lastReason = blocksStageIsLastReason(row, sources, edges, files);
+    const key = blocksStageRowKey(row);
+    const todayLink = key && todayMap.has(key) ? todayMap.get(key) : null;
+    return Object.freeze({
+      kind: "local-task",
+      ...row,
+      stageSection: "current",
+      alreadyLinked: true,
+      firstInSection: index === 0,
+      lastReason,
+      todayLink,
+      linkedSourceCount: sourceCount,
+      sourceCount,
+      linkState: "all",
+      needsPromptForAdd: false,
+      needsBlockIdPrompt: false,
+      markKey:
+        row.markKey ||
+        (row.path
+          ? `${normalizeVaultRelativePath(row.path)}#${row.blockId || `line:${row.line}`}`
+          : row.line),
+      noteLabel:
+        row.path && row.path !== sourcePath
+          ? dependencyStageBasenameOf(row.path)
+          : null,
+      disabled: false,
+      disabledReason: null,
+      cycle: null,
+      cycleLabels: null,
+    });
+  });
+  const seen = new Set(
+    fullyLinked
+      .map((row) => blocksStageRowKey(row))
+      .filter(Boolean),
+  );
+  const fresh = [];
+  for (const row of partialLinked) {
+    const key = blocksStageRowKey(row);
+    if (key) {
+      seen.add(key);
+    }
+    fresh.push({
+      candidate: row,
+      key,
+      linkedCount: blocksStageLinkedCount(row, sources, edges),
+    });
+  }
+  for (const candidate of pool) {
+    const lineKey = `${normalizeVaultRelativePath(candidate.path || "")}\x00${candidate.line}`;
+    if (sourceLines.has(lineKey)) {
+      continue;
+    }
+    const key = blocksStageRowKey(candidate);
+    if (key && sourceKeys.has(key)) {
+      continue;
+    }
+    const linkedCount = blocksStageLinkedCount(candidate, sources, edges);
+    if (linkedCount > 0 && linkedCount === sourceCount) {
+      continue;
+    }
+    if (key && seen.has(key)) {
+      continue;
+    }
+    if (key) {
+      seen.add(key);
+    }
+    fresh.push({ candidate, key, linkedCount });
+  }
+  let ordered;
+  if (!query.trim()) {
+    ordered = fresh
+      .slice()
+      .sort((left, right) =>
+        compareBlocksStageResults(
+          left.candidate,
+          right.candidate,
+          sourcePath,
+          todayMap,
+        ),
+      )
+      .map((entry) => entry);
+  } else {
+    const ranked = dependencyStageRank(
+      fresh.map((entry) => entry.candidate),
+      query,
+    );
+    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
+    ordered = fresh
+      .slice()
+      .sort((left, right) => {
+        const leftRank = rankIndex.has(left.candidate)
+          ? rankIndex.get(left.candidate)
+          : Number.POSITIVE_INFINITY;
+        const rightRank = rankIndex.has(right.candidate)
+          ? rankIndex.get(right.candidate)
+          : Number.POSITIVE_INFINITY;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        return compareBlocksStageResults(
+          left.candidate,
+          right.candidate,
+          sourcePath,
+          todayMap,
+        );
+      })
+      .filter((entry) => rankIndex.has(entry.candidate));
+  }
+  const results = [];
+  const blocked = [];
+  for (const entry of ordered) {
+    if (entry.candidate.blocked || entry.candidate.status === "?") {
+      blocked.push(entry);
+    } else {
+      results.push(entry);
+    }
+  }
+  const room = Math.max(0, maxRows - markedCurrent.length);
+  const picked = [...results, ...blocked].slice(0, room);
+  const shape = (entry, section, first) => {
+    const candidate = entry.candidate;
+    const verdict = blocksStageGuard(
+      candidate,
+      sources,
+      edges,
+      files,
+      labelByKey,
+    );
+    const key = blocksStageRowKey(candidate);
+    const todayLink = key && todayMap.has(key) ? todayMap.get(key) : null;
+    const content =
+      files instanceof Map
+        ? files.get(normalizeVaultRelativePath(candidate.path || ""))
+        : null;
+    const isProjectPrj =
+      typeof content === "string" && Number.isInteger(candidate.line)
+        ? Boolean(
+            isProjectPrjDependencyParent(
+              content,
+              candidate.path,
+              candidate.line,
+            ),
+          )
+        : false;
+    let projectWaitCount = 0;
+    let projectPomodoroCount = 0;
+    let projectResidentKeys = Object.freeze([]);
+    if (isProjectPrj && typeof content === "string") {
+      const info = getProjectPrjDependencyResidents(content, candidate.path);
+      projectResidentKeys = projectDependentResidentKeys(
+        content,
+        candidate.path,
+        candidate.line,
+      );
+      if (info && Array.isArray(info.residents)) {
+        projectWaitCount = info.residents.length + 1;
+        for (const resident of info.residents) {
+          const residentKey =
+            resident.blockId &&
+            dependencyStageRowKey(candidate.path, resident.blockId);
+          if (residentKey && todayMap.has(residentKey)) {
+            projectPomodoroCount += 1;
+          }
+        }
+        if (todayLink) {
+          projectPomodoroCount += 1;
+        }
+      }
+    }
+    let waitsOn = null;
+    let blockedBadge = null;
+    if (section === "blocked") {
+      const open =
+        Number.isInteger(candidate.openCount) && candidate.openCount >= 0
+          ? candidate.openCount
+          : 0;
+      if (open >= 1) {
+        waitsOn = open;
+        blockedBadge = `\ud83d\udd12 waits on ${open}`;
+      } else {
+        const scheduled =
+          typeof candidate.scheduledDate === "string" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(candidate.scheduledDate)
+            ? candidate.scheduledDate
+            : null;
+        blockedBadge = scheduled
+          ? `\ud83d\udd12 scheduled ${scheduled}`
+          : "\ud83d\udd12 blocked";
+      }
+    }
+    const linkedCount = entry.linkedCount || 0;
+    return Object.freeze({
+      kind: "local-task",
+      stageSection: section,
+      firstInSection: first,
+      path: candidate.path,
+      blockId: candidate.blockId,
+      route: candidate.route,
+      note: candidate.note,
+      noteLabel:
+        candidate.path && candidate.path !== sourcePath
+          ? dependencyStageBasenameOf(candidate.path)
+          : null,
+      line: candidate.line,
+      rawLine: candidate.rawLine,
+      status: candidate.status,
+      displayText: candidate.displayText,
+      text: candidate.text,
+      searchText: [
+        candidate.displayText,
+        candidate.route,
+        candidate.blockId ? `${candidate.route}:${candidate.blockId}` : "",
+        candidate.blockId || "",
+        candidate.section || "",
+        candidate.note || "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      value:
+        candidate.idField ||
+        (candidate.blockId
+          ? tryDependencyId(candidate.path, candidate.blockId)
+          : null) ||
+        "",
+      alreadyLinked: false,
+      linkedSourceCount: linkedCount,
+      sourceCount,
+      linkState:
+        linkedCount === 0
+          ? "none"
+          : linkedCount >= sourceCount
+            ? "all"
+            : "mixed",
+      needsBlockIdPrompt: false,
+      needsPromptForAdd: false,
+      hidden: candidate.hidden,
+      section: candidate.section,
+      markKey: `${candidate.path}#${
+        candidate.line >= 0
+          ? candidate.line
+          : candidate.blockId || candidate.displayText
+      }`,
+      disabled: verdict.disabled,
+      disabledReason: verdict.reason,
+      cycle: verdict.cycle,
+      cycleLabels: verdict.cycleLabels || null,
+      waitsOn,
+      blockedBadge,
+      openCount: candidate.openCount,
+      lastReason: false,
+      todayLink,
+      isProjectPrj,
+      projectWaitCount,
+      projectPomodoroCount,
+      projectResidentKeys,
+      dependsOn: Array.isArray(candidate.dependsOn) ? candidate.dependsOn : [],
+    });
+  };
+  const out = [...markedCurrent];
+  const pickedResults = picked.filter(
+    (entry) => !(entry.candidate.blocked || entry.candidate.status === "?"),
+  );
+  const pickedBlocked = picked.filter(
+    (entry) => entry.candidate.blocked || entry.candidate.status === "?",
+  );
+  pickedResults.forEach((entry, index) =>
+    out.push(shape(entry, "results", index === 0)),
+  );
+  pickedBlocked.forEach((entry, index) =>
+    out.push(shape(entry, "blocked", index === 0)),
+  );
+  const totalOrdered = results.length + blocked.length;
+  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  if (hiddenCount > 0) {
+    out.push(
+      Object.freeze({
+        kind: "stage-more",
+        stageSection: pickedBlocked.length > 0 ? "blocked" : "results",
+        firstInSection: false,
+        path: null,
+        blockId: null,
+        displayText: `type to search ${hiddenCount} more`,
+        text: `type to search ${hiddenCount} more`,
+        searchText: "",
+        hiddenCount,
+        disabled: true,
+        disabledReason: `type to search ${hiddenCount} more`,
+        cycle: null,
+        cycleLabels: null,
+        waitsOn: null,
+      }),
+    );
+  }
+  return Object.freeze(out);
+}
+
+function planBlocksStageItemsFromVault(stage, query) {
+  if (!stage) {
+    return Object.freeze([]);
+  }
+  return planBlocksStageView({
+    sources: stage.sources,
+    current: stage.current,
+    candidates: stage.candidates,
+    query: query || "",
+    edges: stage.edges,
+    files: stage.files,
+    todayLinks: stage.todayLinks,
+  });
+}
+// ---- src/303-blocks-stage-copy.js ----
+// Blocks… stage copy: consequence strip, subtitle, and lane phrases
+// (`docs/task-dependencies.md` §15.4 / §15.7).
+
+function blocksStageLanePhrase(status) {
+  if (status === "/") {
+    return "this task takes In Progress";
+  }
+  if (status === "*") {
+    return "this task takes Next";
+  }
+  return null;
+}
+
+function blocksStagePomodoroPhrase(todayLink) {
+  if (!todayLink) {
+    return null;
+  }
+  const range = todayLink.range ? ` ${todayLink.range}` : "";
+  const running = todayLink.running ? " (running)" : "";
+  let phrase = `\u26a0 removes its link from ${todayLink.label}${range}${running}`;
+  const notes = Math.floor(numericOrDefault(todayLink.childNotes, 0));
+  if (notes > 0) {
+    phrase += ` and the ${notes} note${notes === 1 ? "" : "s"} under it`;
+  }
+  return phrase;
+}
+
+function blocksStageConsequenceStrip(item, context = {}) {
+  const sources = Array.isArray(context.sources) ? context.sources : [];
+  const marked = Array.isArray(context.marked) ? context.marked : [];
+  if (marked.length > 0) {
+    let add = 0;
+    let remove = 0;
+    let takes = null;
+    let pomodoro = 0;
+    for (const row of marked) {
+      if (row.alreadyLinked || row.stageSection === "current") {
+        remove += 1;
+      } else {
+        add += 1;
+        const lane = blocksStageLanePhrase(row.status);
+        if (lane === "this task takes In Progress") {
+          takes = "/";
+        } else if (lane && takes !== "/") {
+          takes = "*";
+        }
+        if (row.todayLink) {
+          pomodoro += 1;
+        }
+      }
+    }
+    const parts = [`\u21b5 blocks ${add}`];
+    if (remove > 0) {
+      parts[0] = `\u21b5 blocks ${add} \u00b7 removes ${remove}`;
+    }
+    if (takes === "/") {
+      parts.push("this task takes In Progress");
+    } else if (takes === "*") {
+      parts.push("this task takes Next");
+    }
+    if (pomodoro > 0) {
+      parts.push(
+        `\u26a0 removes ${pomodoro} Pomodoro link${pomodoro === 1 ? "" : "s"}`,
+      );
+    }
+    return parts.join(" \u00b7 ");
+  }
+  if (!item || item.kind === "stage-more") {
+    return "";
+  }
+  if (item.disabled) {
+    if (
+      item.disabledReason === "would create a cycle" &&
+      Array.isArray(item.cycleLabels) &&
+      item.cycleLabels.length > 0
+    ) {
+      return `\u27f2 would create a cycle: ${item.cycleLabels.join(" \u2192 ")}`;
+    }
+    return item.disabledReason || "";
+  }
+  if (item.stageSection === "current") {
+    return item.lastReason
+      ? "Stops waiting on this \u00b7 Ready again"
+      : "Stops waiting on this \u00b7 still Blocked";
+  }
+  if (item.isProjectPrj) {
+    const wait = Math.max(
+      0,
+      Math.floor(numericOrDefault(item.projectWaitCount, 0)),
+    );
+    const links = Math.max(
+      0,
+      Math.floor(numericOrDefault(item.projectPomodoroCount, 0)),
+    );
+    const parts = ["Project becomes Blocked"];
+    if (wait > 0) {
+      parts.push(`${wait} tasks wait`);
+    }
+    if (links > 0) {
+      parts.push(`\u26a0 removes ${links} Pomodoro link${links === 1 ? "" : "s"}`);
+    }
+    return parts.join(" \u00b7 ");
+  }
+  if (item.stageSection === "blocked") {
+    const open = Math.max(
+      1,
+      Math.floor(numericOrDefault(item.waitsOn, item.openCount || 1)),
+    );
+    return `Also waits on this (${open} open)`;
+  }
+  const parts = ["Becomes Blocked until this is done"];
+  const strongest = sources.some((source) => source.isProjectPrj)
+    ? null
+    : blocksStageLanePhrase(item.status);
+  if (strongest) {
+    parts.push(strongest);
+  }
+  const pomodoro = blocksStagePomodoroPhrase(item.todayLink);
+  if (pomodoro) {
+    parts.push(pomodoro);
+  }
+  return parts.join(" \u00b7 ");
+}
+
+function blocksStageSubtitle(stage, markedDiff, options = {}) {
+  const currentCount = Array.isArray(stage && stage.current)
+    ? stage.current.length
+    : 0;
+  const frees = Math.max(
+    0,
+    Math.floor(numericOrDefault(stage && stage.freesCount, 0)),
+  );
+  const pool = Math.max(
+    0,
+    Math.floor(numericOrDefault(stage && stage.poolSize, 0)),
+  );
+  const needsId = options.needsId === true;
+  const marked = markedDiff && typeof markedDiff === "object" ? markedDiff : null;
+  if (marked && (marked.add > 0 || marked.remove > 0 || marked.needId > 0)) {
+    const parts = [];
+    if (marked.add > 0) {
+      parts.push(`${marked.add} to block`);
+    }
+    if (marked.remove > 0) {
+      parts.push(`${marked.remove} to remove`);
+    }
+    parts.push("\u21b5 to apply");
+    if (needsId) {
+      parts.push("names this task first");
+    }
+    return parts.join(" \u00b7 ");
+  }
+  const head =
+    currentCount === 0
+      ? `Blocks nothing yet \u00b7 searching ${pool} open tasks`
+      : `Blocks ${currentCount} \u00b7 frees ${frees} \u00b7 searching ${pool} open tasks`;
+  return `${head} \u00b7 \u21e5 to mark several`;
+}
 // ---- src/310-task-card-previews.js ----
 function buildTaskCardPriorityPreviews(options = {}) {
   const config = options.config || null;
@@ -36866,6 +37967,11 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;
+    this.blocksStage = false;
+    this.blocksStageSeed = null;
+    this.pendingBlocks = null;
+    this.consequenceStripEl = null;
+    this.blocksStripText = "";
     // Review-walk auto-advance (nav-gestures): the landing origin captured
     // when the card opened, the cursor line it was captured on, and that
     // line's text before any write. `reviewSettleDeferred` lets the cancel
@@ -36961,6 +38067,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.stage = "task-card";
     this.selectedPropertyItem = null;
     this.pendingTask = null;
+    this.blocksStage = false;
+    this.pendingBlocks = null;
+    this.consequenceStripEl = null;
     if (typeof this.clearPendingBatch === "function") {
       this.clearPendingBatch();
     }
@@ -37174,6 +38283,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
     this.pendingCountedDependency = null;
+    this.pendingBlocks = null;
+    this.blocksStage = false;
+    this.consequenceStripEl = null;
     this.scheduleReviewFormEl = null;
     this.scheduleReviewReasonEl = null;
     this.scheduleReviewSummaryEl = null;
@@ -40137,6 +41249,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
+    this.pendingBlocks = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -40205,6 +41318,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     // The vault-wide Depends on stage footer per the design:
     // `↑↓ navigate · ⇥ mark · ↵ toggle · esc dismiss`, with ↵ reading
     // `apply N` when rows are marked.
+    if (this.blocksStage) {
+      return this.getBlocksStageFooterHints();
+    }
     if (this.vaultStage) {
       const marked = this.getMarkedCount();
       return [
@@ -40381,22 +41497,34 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
   // are stable (`path#line`), so marked rows survive the pool replacement.
   applyVaultStageItems(stage) {
-    if (!stage || this.vaultStage !== stage.refreshOf) {
+    const seed = this.blocksStage ? this.blocksStageSeed : this.vaultStage;
+    if (!stage || seed !== stage.refreshOf) {
       return;
     }
     const marked = this.markedLines instanceof Set
       ? new Set(this.markedLines)
       : new Set();
-    this.vaultStage = stage;
-    const items = planDependencyStageView({
-      current: stage.current,
-      candidates: stage.candidates,
-      query: this.getQuery(),
-      dependent: stage.dependent,
-      edges: stage.edges,
-      linkedKeys: stage.linkedKeys,
-      sourceValueSets: stage.sourceValueSets,
-    });
+    if (this.blocksStage) {
+      const todayLinks =
+        this.vaultStage && Array.isArray(this.vaultStage.todayLinks)
+          ? this.vaultStage.todayLinks
+          : [];
+      this.vaultStage = this.decorateOpenBlocksStage(stage, { todayLinks });
+      this.blocksStageSeed = stage.refreshOf || this.blocksStageSeed;
+    } else {
+      this.vaultStage = stage;
+    }
+    const items = this.blocksStage
+      ? planBlocksStageItemsFromVault(this.vaultStage, this.getQuery())
+      : planDependencyStageView({
+          current: stage.current,
+          candidates: stage.candidates,
+          query: this.getQuery(),
+          dependent: stage.dependent,
+          edges: stage.edges,
+          linkedKeys: stage.linkedKeys,
+          sourceValueSets: stage.sourceValueSets,
+        });
     this.resetLocalTaskMarks(items);
     for (const key of marked) {
       if (this.taskItemsByLine.has(key)) {
@@ -40410,6 +41538,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   }
 
   getVaultStageSubtitle(visibleItems, allItems) {
+    if (this.blocksStage) {
+      return this.getBlocksStageSubtitle(visibleItems, allItems);
+    }
     const stage = this.vaultStage;
     if (!stage) {
       return this.getLocalTaskSubtitle(visibleItems, allItems);
@@ -40516,6 +41647,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.blockIdMode === "vault-counted" && this.pendingVaultCounted) {
       return this.pendingVaultCounted.reservedIds || new Set();
     }
+    if (this.blockIdMode === "blocks-source" && this.pendingBlocks) {
+      return this.pendingBlocks.reservedIds || new Set();
+    }
     return new Set();
   }
 
@@ -40530,6 +41664,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       "counted-source",
       "vault-single",
       "vault-counted",
+      "blocks-source",
     ].includes(options.mode)
       ? options.mode
       : "single";
@@ -40605,6 +41740,8 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
           ? `Block ID ${this.blockIdContext.position} of ${this.blockIdContext.total} · line ${task.line + 1}`
           : this.blockIdMode === "counted-source"
             ? `${this.getTaskSessionSubtitle()} · create an ID for dependency on line ${task.line + 1}`
+            : this.blockIdMode === "blocks-source"
+              ? `Create an ID for this task first · line ${task.line + 1}`
             : `Create an ID for line ${task.line + 1}`,
       filterItem: () => true,
       renderItem: (item, rowEl, query) =>
@@ -40631,6 +41768,12 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     // Tasks cache is not Warm) refreshes through `applyVaultStageItems`.
     if (this.isLocalTaskStage() && this.vaultStage) {
       try {
+        if (this.blocksStage) {
+          return planBlocksStageItemsFromVault(
+            this.vaultStage,
+            this.getQuery(),
+          );
+        }
         return planDependencyStageView({
           current: this.vaultStage.current,
           candidates: this.vaultStage.candidates,
@@ -40813,6 +41956,11 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
         hasWorkLog: Boolean(pending && pending.needsWorkLog),
       });
       this.renderFooter();
+    }
+    if (this.blocksStage && this.isLocalTaskStage()) {
+      this.footerHints = this.getBlocksStageFooterHints();
+      this.renderFooter();
+      this.refreshBlocksConsequenceStrip();
     }
   }
 
@@ -41004,6 +42152,13 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
     } else if (markedAdd) {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ add" });
+    } else if (item.linkState === "mixed") {
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action",
+        text: `${item.linkedSourceCount}/${item.sourceCount} ${
+          this.blocksStage ? "block" : "depend"
+        }`,
+      });
     } else if (
       item.stageSection === "blocked" &&
       (typeof item.blockedBadge === "string" || Number.isInteger(item.waitsOn))
@@ -41022,17 +42177,34 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
         cls: "bob-cnp-task-badge-action",
         text: "−",
       });
-    } else if (item.linkState === "mixed") {
-      badgeEl.createSpan({
-        cls: "bob-cnp-task-badge-action",
-        text: `${item.linkedSourceCount}/${item.sourceCount} depend`,
-      });
     } else if (item.needsBlockIdPrompt) {
       // Unmarked, not yet linked, and missing a trailing block ID: pressing
       // Enter prompts for one before linking.
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
     } else {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋" });
+    }
+    if (this.blocksStage && item.lastReason) {
+      const keyEl = badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-extra bob-cnp-blocks-last",
+        text: "\ud83d\udd11",
+      });
+      keyEl.setAttribute(
+        "title",
+        "Last thing in its way \u00b7 removing makes it Ready again",
+      );
+    }
+    if (this.blocksStage && item.todayLink) {
+      const link = item.todayLink;
+      const range = link.range ? ` ${link.range}` : "";
+      const tomato = badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-extra bob-cnp-blocks-today",
+        text: link.running ? "\ud83c\udf45 running" : "\ud83c\udf45",
+      });
+      tomato.setAttribute(
+        "title",
+        `Linked under ${link.label}${range} \u00b7 blocking it removes that link`,
+      );
     }
   }
 
@@ -41076,6 +42248,9 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   }
 
   async chooseTaskDependency(item) {
+    if (this.blocksStage) {
+      return this.chooseBlocksTask(item);
+    }
     if (!this.selectedPropertyItem) {
       return false;
     }
@@ -41189,6 +42364,9 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
 // ---- src/420-picker-counted-dependency.js ----
 class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   async chooseCountedTaskDependency(item) {
+    if (this.blocksStage) {
+      return this.chooseBlocksTask(item);
+    }
     if (!item) {
       return false;
     }
@@ -41879,6 +43057,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
   // (returning false so the modal stays open); otherwise it executes the batch
   // immediately. No editor writes happen in this phase.
   commitMarkedDependencies() {
+    if (this.blocksStage) {
+      return this.commitMarkedBlocks();
+    }
     if (!this.selectedPropertyItem || this.getMarkedCount() === 0) {
       return false;
     }
@@ -41990,6 +43171,488 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     return await inboxWrite();
   }
 }
+// ---- src/425-picker-blocks-stage.js ----
+// Blocks… stage picker (`docs/task-dependencies.md` §15.3–§15.5).
+// Reuses the vault pool; commits through plugin.applyBlocksEdit.
+
+class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
+  isBlocksStage() {
+    return this.blocksStage === true && this.isLocalTaskStage();
+  }
+
+  blocksStageDummyProperty() {
+    return {
+      kind: "property",
+      property: { name: "dependsOn", values: "local_task_id" },
+      currentValue: "",
+    };
+  }
+
+  blocksStageParentLines() {
+    if (this.isCountedSession()) {
+      return this.taskSession.targets.map((target) => target.line);
+    }
+    return [this.cursor.line];
+  }
+
+  decorateOpenBlocksStage(stage, extras = {}) {
+    const decorated = decorateBlocksVaultStage(stage, {
+      sources:
+        extras.sources ||
+        (stage && Array.isArray(stage.sources) && stage.sources.length > 0
+          ? stage.sources
+          : collectBlocksStageSources(stage)),
+      todayLinks: extras.todayLinks || (stage && stage.todayLinks) || [],
+      dailyPath: extras.dailyPath,
+    });
+    if (decorated) {
+      decorated.refreshOf = stage && stage.refreshOf ? stage.refreshOf : stage;
+    }
+    return decorated;
+  }
+
+  showBlocksStage() {
+    this.stage = "value";
+    this.blocksStage = true;
+    this.selectedPropertyItem = this.blocksStageDummyProperty();
+    this.pendingTask = null;
+    this.pendingBlocks = null;
+    this.clearPendingBatch();
+    this.selectedIndex = 0;
+    const parentLines = this.blocksStageParentLines();
+    let stage = null;
+    try {
+      stage =
+        this.plugin &&
+        typeof this.plugin.buildVaultDependencyStage === "function"
+          ? this.plugin.buildVaultDependencyStage({
+              filePath: this.filePath,
+              content: this.getEditorContent(),
+              parentLines,
+            })
+          : null;
+    } catch (_stageError) {
+      stage = null;
+    }
+    this.blocksStageSeed = stage;
+    this.vaultStage = this.decorateOpenBlocksStage(stage);
+    const items = this.vaultStage
+      ? planBlocksStageItemsFromVault(this.vaultStage, "")
+      : [];
+    this.resetLocalTaskMarks(items);
+    const title =
+      (this.vaultStage && this.vaultStage.title) || "\ud83e\uddf1 Blocks";
+    this.applyOptions({
+      items,
+      title,
+      headerIcon: "brick-wall",
+      inputLabel: "Filter tasks",
+      placeholder: "Filter tasks",
+      resultsLabel: "Tasks this could block",
+      emptyText: "No matching open tasks in the vault",
+      footerHints: this.getBlocksStageFooterHints(),
+      getSubtitle: (visibleItems, allItems) =>
+        this.getBlocksStageSubtitle(visibleItems, allItems),
+      filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
+      renderItem: (item, rowEl, query) =>
+        this.renderTaskValueItem(item, rowEl, query),
+      openItem: (item) => this.chooseBlocksTask(item),
+    });
+    if (this.headerIconEl) {
+      this.headerIconEl.empty();
+      applyIcon(this.headerIconEl, "brick-wall");
+      if (
+        this.headerIconEl.children &&
+        this.headerIconEl.children.length === 0
+      ) {
+        applyIcon(this.headerIconEl, "link");
+      }
+    }
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+    this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
+    this.ensureBlocksConsequenceStrip();
+    this.refreshBlocksConsequenceStrip();
+    if (
+      stage &&
+      !stage.cacheReady &&
+      this.plugin &&
+      typeof this.plugin.refreshVaultDependencyStage === "function"
+    ) {
+      void this.plugin.refreshVaultDependencyStage(this, stage);
+    }
+    void this.refreshBlocksStageTodayLinks();
+  }
+
+  getBlocksStageFooterHints() {
+    const marked = this.getMarkedCount();
+    const item = (this.visibleItems || [])[this.selectedIndex];
+    let verb = "block";
+    if (marked > 0) {
+      verb = `apply ${marked}`;
+    } else if (item && item.stageSection === "current") {
+      verb = "remove";
+    }
+    const hints = [
+      { keys: ["\u2191", "\u2193"], label: "navigate" },
+      { keys: ["\u21e5"], label: "mark" },
+      { keys: ["\u21b5"], label: verb },
+      { keys: ["esc"], label: "dismiss" },
+    ];
+    if (this.isCountedSession()) {
+      return hints.filter((hint) => !hint.keys.includes("\u21e5"));
+    }
+    return hints;
+  }
+
+  getBlocksStageSubtitle(_visibleItems, _allItems) {
+    const stage = this.vaultStage;
+    const sources = stage && Array.isArray(stage.sources) ? stage.sources : [];
+    const needsId = sources.some((source) => source && source.needsBlockId);
+    if (this.getMarkedCount() > 0) {
+      return blocksStageSubtitle(stage, this.getMarkedTaskDiff(), { needsId });
+    }
+    return blocksStageSubtitle(stage, null, { needsId });
+  }
+
+  ensureBlocksConsequenceStrip() {
+    if (!this.contentEl || !this.footerEl) {
+      return null;
+    }
+    if (
+      this.consequenceStripEl &&
+      this.consequenceStripEl.parentElement === this.contentEl
+    ) {
+      return this.consequenceStripEl;
+    }
+    const el = this.contentEl.createDiv({
+      cls: "bob-cnp-consequence-strip",
+      attr: { "aria-live": "polite" },
+    });
+    try {
+      if (
+        this.footerEl.parentElement === this.contentEl &&
+        typeof this.contentEl.insertBefore === "function"
+      ) {
+        this.contentEl.insertBefore(el, this.footerEl);
+      }
+    } catch (_error) {
+      // Best-effort placement between the list and the footer.
+    }
+    this.consequenceStripEl = el;
+    return el;
+  }
+
+  refreshBlocksConsequenceStrip() {
+    if (!this.isBlocksStage()) {
+      if (this.consequenceStripEl) {
+        this.consequenceStripEl.setText("");
+      }
+      return;
+    }
+    const el = this.ensureBlocksConsequenceStrip();
+    if (!el) {
+      return;
+    }
+    const marked = this.getMarkedTaskItems();
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    const text = blocksStageConsequenceStrip(item, {
+      sources: this.vaultStage && this.vaultStage.sources,
+      marked,
+    });
+    el.empty();
+    const warning = /\u26a0/.test(text);
+    el.createSpan({
+      cls: warning
+        ? "bob-cnp-consequence-strip-text is-destructive"
+        : "bob-cnp-consequence-strip-text",
+      text,
+    });
+    this.blocksStripText = text;
+  }
+
+  async refreshBlocksStageTodayLinks() {
+    const stage = this.vaultStage;
+    if (!stage || !this.blocksStage) {
+      return;
+    }
+    const files = stage.files instanceof Map ? stage.files : new Map();
+    let dailyPath = null;
+    try {
+      const listed =
+        this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
+          ? this.plugin.readDependencyVaultFileList()
+          : [...files.keys()];
+      dailyPath = scheduledRecoveryDailyPaths(
+        (Array.isArray(listed) ? listed : [...files.keys()]).map((path) => ({
+          path,
+        })),
+      ).current;
+    } catch (_error) {
+      dailyPath = null;
+    }
+    if (!dailyPath) {
+      return;
+    }
+    if (!files.has(dailyPath)) {
+      const open = this.getOpenTargetNoteContent(dailyPath);
+      if (typeof open === "string") {
+        files.set(dailyPath, open);
+      } else if (
+        this.plugin &&
+        typeof this.plugin.readDependencyNoteContent === "function"
+      ) {
+        const loaded = await this.plugin.readDependencyNoteContent(
+          dailyPath,
+          null,
+          "",
+        );
+        if (this.vaultStage !== stage || !this.blocksStage) {
+          return;
+        }
+        if (loaded !== null) {
+          files.set(dailyPath, loaded);
+        }
+      }
+    }
+    if (!files.has(dailyPath)) {
+      return;
+    }
+    const todayLinks = collectBlocksStageTodayLinks(
+      files.get(dailyPath),
+      dailyPath,
+      stage.index,
+    );
+    const marked = this.markedLines instanceof Set ? new Set(this.markedLines) : new Set();
+    this.vaultStage = this.decorateOpenBlocksStage(stage, {
+      sources: stage.sources,
+      todayLinks,
+      dailyPath,
+    });
+    const items = planBlocksStageItemsFromVault(
+      this.vaultStage,
+      this.getQuery ? this.getQuery() : "",
+    );
+    this.resetLocalTaskMarks(items);
+    for (const key of marked) {
+      if (this.taskItemsByLine.has(key)) {
+        this.markedLines.add(key);
+      }
+    }
+    this.items = items;
+    if (this.resultsEl) {
+      this.renderResults();
+    }
+  }
+
+  blocksStageSourceRefs(overrides = new Map()) {
+    const sources =
+      this.vaultStage && Array.isArray(this.vaultStage.sources)
+        ? this.vaultStage.sources
+        : [];
+    return sources.map((source) => {
+      const key = `${source.path}\x00${source.line}`;
+      const extra = overrides.get(key) || {};
+      return {
+        path: source.path,
+        line: source.line,
+        blockId: extra.blockId || source.blockId || null,
+      };
+    });
+  }
+
+  sourcesNeedingBlockId(overrides = new Map()) {
+    return this.blocksStageSourceRefs(overrides).filter(
+      (source) => !source.blockId,
+    );
+  }
+
+  async chooseBlocksTask(item) {
+    if (this.getMarkedCount() > 0) {
+      return this.commitMarkedBlocks();
+    }
+    if (!item || item.kind === "stage-more") {
+      return false;
+    }
+    if (item.disabled) {
+      new Notice(item.disabledReason || "That task cannot be blocked");
+      return false;
+    }
+    if (this.isCountedSession()) {
+      if (item.linkState === "all" || item.stageSection === "current") {
+        return this.commitBlocksEdit({ add: [], remove: [item] });
+      }
+      return this.commitBlocksEdit({ add: [item], remove: [] });
+    }
+    if (item.stageSection === "current" && item.alreadyLinked) {
+      return this.commitBlocksEdit({ add: [], remove: [item] });
+    }
+    return this.commitBlocksEdit({ add: [item], remove: [] });
+  }
+
+  commitMarkedBlocks() {
+    if (this.getMarkedCount() === 0) {
+      return false;
+    }
+    const add = [];
+    const remove = [];
+    for (const item of this.getMarkedTaskItems()) {
+      if (item.disabled) {
+        new Notice(item.disabledReason || "That task cannot be blocked");
+        return false;
+      }
+      if (item.alreadyLinked || item.stageSection === "current") {
+        remove.push(item);
+      } else {
+        add.push(item);
+      }
+    }
+    return this.commitBlocksEdit({ add, remove });
+  }
+
+  async commitBlocksEdit({ add, remove }, sourceOverrides = new Map()) {
+    const missing = this.sourcesNeedingBlockId(sourceOverrides);
+    if (missing.length > 0) {
+      const reservedIds = new Set();
+      for (const extra of sourceOverrides.values()) {
+        if (extra && extra.blockId) {
+          reservedIds.add(extra.blockId);
+        }
+      }
+      this.pendingBlocks = {
+        add,
+        remove,
+        overrides: sourceOverrides,
+        queue: missing.slice(),
+        reservedIds,
+      };
+      return this.promptNextBlocksSourceId();
+    }
+    const sources = this.blocksStageSourceRefs(sourceOverrides);
+    const toRef = (item) => ({
+      path: normalizeVaultRelativePath(item.path || ""),
+      line: item.line,
+      blockId: item.blockId || item.existingBlockId || null,
+    });
+    const expected = new Map();
+    if (this.vaultStage && this.vaultStage.files instanceof Map) {
+      for (const [path, content] of this.vaultStage.files) {
+        expected.set(path, String(content || ""));
+      }
+    }
+    const action = {
+      label:
+        add.length + remove.length > 1
+          ? `edit ${add.length + remove.length} blocks`
+          : add.length > 0
+            ? "block 1 task"
+            : "remove 1 dependent",
+    };
+    const write = async () => {
+      const outcome = await this.plugin.applyBlocksEdit({
+        sources,
+        add: add.map(toRef),
+        remove: remove.map(toRef),
+        expected,
+        files: this.vaultStage && this.vaultStage.files,
+      });
+      if (!outcome.ok) {
+        if (
+          outcome.reason === "changed — reopen" ||
+          outcome.reason === "changed"
+        ) {
+          return this.refuseDependencyStale();
+        }
+        new Notice(
+          outcome.notice ||
+            `\ud83e\uddf1 Could not update Blocks (${outcome.reason})`,
+        );
+        return false;
+      }
+      if (outcome.notice) {
+        new Notice(outcome.notice);
+      }
+      this.clearPendingBatch();
+      this.pendingBlocks = null;
+      return true;
+    };
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(action, write);
+    }
+    return await write();
+  }
+
+  promptNextBlocksSourceId() {
+    const pending = this.pendingBlocks;
+    if (!pending || !Array.isArray(pending.queue) || pending.queue.length === 0) {
+      return this.commitBlocksEdit(
+        { add: pending && pending.add, remove: pending && pending.remove },
+        pending && pending.overrides,
+      );
+    }
+    const source = pending.queue[0];
+    const snapshot = {
+      path: source.path,
+      line: source.line,
+      rawLine: null,
+      displayText: source.displayText || source.path,
+      existingIdField: source.idField || null,
+      blockId: null,
+    };
+    if (this.vaultStage && this.vaultStage.files instanceof Map) {
+      const content = this.vaultStage.files.get(
+        normalizeVaultRelativePath(source.path),
+      );
+      if (typeof content === "string" && Number.isInteger(source.line)) {
+        snapshot.rawLine = String(content.split(/\r?\n/)[source.line] || "");
+        snapshot.displayText = cleanTaskDisplayText(snapshot.rawLine);
+        snapshot.existingIdField =
+          (findBulletPropertyField(snapshot.rawLine, "id") || {}).value || null;
+      }
+    }
+    this.showBlockIdStage(snapshot, { mode: "blocks-source" });
+    return false;
+  }
+
+  async confirmBlocksSourceBlockId(item) {
+    const pending = this.pendingBlocks;
+    if (!pending || !item || !item.valid) {
+      return false;
+    }
+    const source = pending.queue[0];
+    if (!source) {
+      return false;
+    }
+    const targetPath = normalizeVaultRelativePath(source.path || "");
+    const files =
+      this.vaultStage && this.vaultStage.files instanceof Map
+        ? this.vaultStage.files
+        : new Map();
+    const content = files.get(targetPath) || "";
+    const validation = validateBlockIdCandidate(item.id, content, {
+      reservedIds: pending.reservedIds || new Set(),
+    });
+    if (!validation.valid) {
+      new Notice(validation.message || "That block ID cannot be used");
+      return false;
+    }
+    pending.reservedIds.add(validation.id);
+    pending.overrides.set(`${source.path}\x00${source.line}`, {
+      blockId: validation.id,
+    });
+    pending.queue.shift();
+    if (pending.queue.length > 0) {
+      return this.promptNextBlocksSourceId();
+    }
+    const add = pending.add;
+    const remove = pending.remove;
+    const overrides = pending.overrides;
+    this.pendingBlocks = null;
+    this.clearPendingBatch();
+    return this.commitBlocksEdit({ add, remove }, overrides);
+  }
+}
 // ---- src/430-picker-vault-batch.js ----
 class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
   async prepareVaultBatch(batch) {
@@ -42088,6 +43751,10 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
 
     if (this.blockIdMode === "vault-counted" && this.pendingVaultCounted) {
       return this.confirmVaultCountedBlockId(item);
+    }
+
+    if (this.blockIdMode === "blocks-source" && this.pendingBlocks) {
+      return this.confirmBlocksSourceBlockId(item);
     }
 
     return this.confirmSingleBlockId(item);
@@ -42819,7 +44486,9 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         // Best-effort close only.
       }
       void plugin.openBulletPropertyPicker(editor, {
-        initialProperty: "dependsOn",
+        initialProperty: this.blocksStage ? null : "dependsOn",
+        reopenBlocksStage: this.blocksStage === true,
+        directStage: true,
         inboxRoute: this.inboxRoute || null,
       });
     } catch (_reopenError) {
@@ -44787,6 +46456,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerLocalTaskMixin,
   BulletPropertyPickerFilterRenderMixin,
   BulletPropertyPickerCountedDependencyMixin,
+  BulletPropertyPickerBlocksStageMixin,
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
   BulletPropertyPickerKeydownMixin,
@@ -55440,6 +57110,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
         taskSession,
         initialProperty: options.initialProperty || null,
         initialTaskCardRow: options.initialTaskCardRow || null,
+        directStage:
+          options.directStage === true || options.reopenBlocksStage === true,
         random: options.random,
         baseDate: options.baseDate,
         reviewOrigin,
@@ -55461,7 +57133,9 @@ class BobNavigationHotkeysCancelPropertyMixin {
     // on value stage opens straight away (`docs/task-dependencies.md` §6.1).
     // `initialProperty` always wins over `initialTaskCardRow` (Ctrl+Shift+B),
     // so a Depends-On-line redirect stays a direct stage.
-    if (options.initialProperty) {
+    if (options.reopenBlocksStage && typeof picker.showBlocksStage === "function") {
+      picker.showBlocksStage();
+    } else if (options.initialProperty) {
       const wanted = (picker.propertyItems || []).find(
         (item) =>
           item &&
@@ -71151,6 +72825,15 @@ module.exports.helpers = {
   findDependencyStageCycle,
   compareDependencyStageCanonical,
   planDependencyStageView,
+  planBlocksStageView,
+  planBlocksStageItemsFromVault,
+  decorateBlocksVaultStage,
+  collectBlocksStageSources,
+  collectBlocksStageTodayLinks,
+  collectBlocksStageCurrent,
+  blocksStageConsequenceStrip,
+  blocksStageSubtitle,
+  blocksStageGuard,
   resolveDependencyStageEntry,
   normalizeStageCacheTask,
   mergeStageCacheCandidates,

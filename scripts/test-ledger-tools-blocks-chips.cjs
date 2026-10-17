@@ -63,6 +63,7 @@ Module._load = originalLoad;
 const {
   parseBlocksLine, parseDependencyLine, blocksSortLinks, blocksDependentsIndex,
   blocksLastBlocker, blocksChipModel, buildBlocksChipElement, computePlanBudget,
+  BLOCKS_CHIP_TOOLTIP, BLOCKS_CHIP_EDIT_TOOLTIP,
 } = helpers;
 
 function task({ blockId, id, dependsOn = [], description = "Task", path = "a.md", status = "TODO", symbol = " ", tags = [], scheduled, lineNumber }) {
@@ -246,13 +247,65 @@ function makeDoc(lines) {
   return { length: Math.max(0, offset - 1), line: (n) => rows[n - 1], lineAt: (pos) => rows.find((row) => pos >= row.from && pos <= row.to) || rows[rows.length - 1] };
 }
 
-function makeApp(tasks, text = "") {
+function makeApp(tasks, text = "", navApi = null) {
+  const plugins = { "obsidian-tasks-plugin": { getTasks: () => tasks } };
+  if (navApi) {
+    plugins["bob-navigation-hotkeys"] = { api: navApi };
+  }
   return {
-    plugins: { plugins: { "obsidian-tasks-plugin": { getTasks: () => tasks } } },
+    plugins: { plugins },
     workspace: { on: () => ({}), offref: () => {}, onLayoutReady: () => {}, getLeavesOfType: () => [], trigger: () => {} },
     vault: { getAbstractFileByPath: (path) => ({ path }), cachedRead: () => Promise.resolve(text) },
     metadataCache: { on: () => ({}), getFirstLinkpathDest: (linkpath) => ({ path: (linkpath || "a").replace(/\.md$/i, "") + ".md" }), getCache: () => ({}) },
   };
+}
+
+function makeBlocksNavApi(calls) {
+  return {
+    version: 3,
+    blocks: {
+      version: 1,
+      openStage(ref) {
+        calls.push(["openStage", ref]);
+        return Promise.resolve({ ok: true });
+      },
+      removeDependent(ownerRef, target) {
+        calls.push(["removeDependent", ownerRef, target]);
+        return Promise.resolve({ ok: true });
+      },
+    },
+  };
+}
+
+function findByClass(node, name, out = []) {
+  if (node && node.nodeType === 1 && node.classList && node.classList.contains(name)) {
+    out.push(node);
+  }
+  for (const child of node.childNodes || []) {
+    findByClass(child, name, out);
+  }
+  return out;
+}
+
+function serializeNode(node) {
+  if (!node) return "";
+  if (node.nodeType === 3) {
+    return JSON.stringify(node.nodeValue);
+  }
+  const attrs = Object.keys(node.attributes || {}).sort().map((key) => key + "=" + node.attributes[key]).join(" ");
+  return "<" + node.tagName + (attrs ? " " + attrs : "") + ">" + (node.childNodes || []).map(serializeNode).join("") + "</" + node.tagName + ">";
+}
+
+function fire(node, type, extra = {}) {
+  const event = {
+    stopPropagation() {},
+    preventDefault() {},
+    target: node,
+    key: extra.key,
+  };
+  for (const handler of node.listeners[type] || []) {
+    handler(event);
+  }
 }
 
 test("Live Preview, Reading view, shared toggle, and malformed rows (BC12, BC14, BC15)", async () => {
@@ -324,5 +377,173 @@ test("chip builder includes the 🔑 badge and has no edit controls", () => {
   const el = buildBlocksChipElement(doc, model, {});
   assert.ok(el.classList.contains("bob-blocks-row"));
   assert.ok(el.querySelectorAll("button").length === 0);
+  assert.equal(findByClass(el, "bob-dep-add").length, 0);
+  assert.equal(findByClass(el, "bob-dep-chip-remove").length, 0);
+  assert.equal(el.getAttribute("title"), BLOCKS_CHIP_TOOLTIP);
   assert.ok(el.childNodes.some((child) => child.childNodes.some((nested) => nested.className.includes("bob-blocks-key"))));
+});
+
+test("RBC1 open owner with api.blocks shows ＋ and openStage gets the 0-based line", async () => {
+  const owner = task({ blockId: "owner", id: "root", description: "Owner", lineNumber: 0 });
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent", lineNumber: 2, path: "a.md" });
+  const lines = ["- [ ] #task Owner ^owner", "  - 🧱 **BLOCKS:** [[#^dep]]", "- [?] #task Dependent [dependsOn:: root] ^dep"];
+  const calls = [];
+  const plugin = new LedgerToolsPlugin(makeApp([owner, dep], lines.join("\n"), makeBlocksNavApi(calls)), {});
+  plugin.dependencyChipsEnabled = true;
+  const doc = makeDoc(lines);
+  const view = {
+    visibleRanges: [{ from: 0, to: doc.length }],
+    state: {
+      doc, selection: { ranges: [] },
+      field: (field) => field === editorLivePreviewField ? true : field === editorInfoField ? { file: { path: "a.md" } } : null,
+    },
+  };
+  const decorations = plugin.buildBlocksChipDecorations(view);
+  assert.equal(decorations.adds.length, 1);
+  const widget = decorations.adds[0].value.widget;
+  assert.equal(widget.meta.interactive, true);
+  assert.equal(widget.meta.lineNumber, 1);
+
+  const model = widget.model;
+  const mini = new MiniDoc();
+  const el = buildBlocksChipElement(mini, model, {
+    plugin,
+    sourcePath: "a.md",
+    interactive: true,
+    onAdd: () => plugin.blocksOpenStage("a.md", widget.meta),
+    onRemove: (chip) => plugin.blocksRemoveDependent(chip, "a.md", widget.meta),
+  });
+  const add = findByClass(el, "bob-dep-add");
+  assert.equal(add.length, 1);
+  assert.equal(add[0].getAttribute("aria-label"), "Edit what this task blocks");
+  assert.equal(el.getAttribute("title"), BLOCKS_CHIP_EDIT_TOOLTIP);
+  fire(add[0], "click");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ["openStage", { path: "a.md", line: 1 }]);
+});
+
+test("RBC2 hover × on a live chip calls removeDependent; notice is nav's", async () => {
+  TestNotice.messages = [];
+  const owner = task({ blockId: "owner", id: "root" });
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Review the outline", path: "a.md" });
+  const model = blocksChipModel("- 🧱 **BLOCKS:** [[#^dep]]", "a.md", owner, { tasks: [owner, dep] }, lookupFor([owner, dep]));
+  assert.equal(model.chips[0].live, true);
+  const calls = [];
+  const plugin = new LedgerToolsPlugin(makeApp([owner, dep], "", makeBlocksNavApi(calls)), {});
+  const mini = new MiniDoc();
+  const el = buildBlocksChipElement(mini, model, {
+    plugin,
+    sourcePath: "a.md",
+    interactive: true,
+    onRemove: (chip) => plugin.blocksRemoveDependent(chip, "a.md", { lineNumber: 1 }),
+  });
+  const remove = findByClass(el, "bob-dep-chip-remove");
+  assert.equal(remove.length, 1);
+  assert.equal(remove[0].getAttribute("aria-label"), "Stop blocking Review the outline");
+  fire(remove[0], "click");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "removeDependent");
+  assert.deepEqual(calls[0][1], { path: "a.md", line: 1 });
+  assert.deepEqual(calls[0][2], { path: "a.md", blockId: "dep" });
+  await Promise.resolve();
+  assert.deepEqual(TestNotice.messages, []);
+});
+
+test("RBC3 frozen, stale, and no api.blocks stay navigation-only", () => {
+  const owner = task({ blockId: "owner", id: "root" });
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent" });
+  const liveModel = blocksChipModel("- 🧱 **BLOCKS:** [[#^dep]]", "a.md", owner, { tasks: [owner, dep] }, lookupFor([owner, dep]));
+  const mini = new MiniDoc();
+  const plain = buildBlocksChipElement(mini, liveModel, {});
+  const explicitOff = buildBlocksChipElement(new MiniDoc(), liveModel, { interactive: false });
+  assert.equal(serializeNode(plain), serializeNode(explicitOff));
+  assert.equal(findByClass(plain, "bob-dep-add").length, 0);
+  assert.equal(findByClass(plain, "bob-dep-chip-remove").length, 0);
+  assert.equal(plain.getAttribute("title"), BLOCKS_CHIP_TOOLTIP);
+
+  const closed = { ...owner, status: { type: "DONE", symbol: "x" } };
+  const frozen = blocksChipModel("- 🧱 **BLOCKS:** [[#^dep]]", "a.md", closed, { tasks: [closed, dep] }, lookupFor([closed, dep]));
+  assert.equal(frozen.frozen, true);
+  const frozenEl = buildBlocksChipElement(new MiniDoc(), frozen, { interactive: true });
+  assert.equal(findByClass(frozenEl, "bob-dep-add").length, 0);
+  assert.equal(findByClass(frozenEl, "bob-dep-chip-remove").length, 0);
+  assert.equal(frozenEl.getAttribute("title"), BLOCKS_CHIP_TOOLTIP);
+
+  const staleDep = task({ blockId: "dep", id: "dependent", dependsOn: ["elsewhere"], description: "Stale row" });
+  const stillWaiting = task({ blockId: "live", id: "live", dependsOn: ["root"], description: "Still waiting" });
+  const mixed = blocksChipModel(
+    "- 🧱 **BLOCKS:** [[#^dep]] • [[#^live]]",
+    "a.md",
+    owner,
+    { tasks: [owner, staleDep, stillWaiting] },
+    lookupFor([owner, staleDep, stillWaiting]),
+  );
+  const liveChip = mixed.chips.find((chip) => chip.blockId === "live");
+  const staleChip = mixed.chips.find((chip) => chip.blockId === "dep");
+  assert.equal(staleChip.stale, true);
+  assert.equal(staleChip.live, false);
+  assert.equal(liveChip.live, true);
+  const mixedEl = buildBlocksChipElement(new MiniDoc(), mixed, { interactive: true });
+  assert.equal(findByClass(mixedEl, "bob-dep-add").length, 1);
+  const removes = findByClass(mixedEl, "bob-dep-chip-remove");
+  assert.equal(removes.length, 1);
+  assert.equal(removes[0].getAttribute("aria-label"), "Stop blocking Still waiting");
+});
+
+test("RBC4 Reading view matches Live Preview ＋ / ×", async () => {
+  const owner = task({ blockId: "owner", id: "root", description: "Owner", lineNumber: 0 });
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent", lineNumber: 2, path: "a.md" });
+  const lines = ["- [ ] #task Owner ^owner", "  - 🧱 **BLOCKS:** [[#^dep]]", "- [?] #task Dependent [dependsOn:: root] ^dep"];
+  const calls = [];
+  const plugin = new LedgerToolsPlugin(makeApp([owner, dep], lines.join("\n"), makeBlocksNavApi(calls)), {});
+  plugin.dependencyChipsEnabled = true;
+  const docNode = new MiniDoc();
+  const root = docNode.createElement("div");
+  const ownerLi = docNode.createElement("li");
+  ownerLi.appendChild(docNode.createTextNode("#task Owner"));
+  const list = docNode.createElement("ul"); ownerLi.appendChild(list);
+  const row = docNode.createElement("li");
+  row.appendChild(docNode.createTextNode("🧱 "));
+  const strong = docNode.createElement("strong"); strong.appendChild(docNode.createTextNode("BLOCKS:")); row.appendChild(strong);
+  row.appendChild(docNode.createTextNode(" "));
+  const anchor = docNode.createElement("a"); anchor.classList.add("internal-link"); anchor.setAttribute("data-href", "#^dep"); anchor.setAttribute("href", "#^dep"); anchor.appendChild(docNode.createTextNode("Dependent")); row.appendChild(anchor);
+  list.appendChild(row);
+  const depLi = docNode.createElement("li"); depLi.appendChild(docNode.createTextNode("#task Dependent"));
+  root.appendChild(ownerLi); root.appendChild(depLi);
+  await plugin.renderBlocksChipsIn(root, { sourcePath: "a.md", getSectionInfo: () => ({ lineStart: 0, lineEnd: 2 }) });
+  assert.equal(row.getAttribute("title"), BLOCKS_CHIP_EDIT_TOOLTIP);
+  const add = findByClass(row, "bob-dep-add");
+  const remove = findByClass(row, "bob-dep-chip-remove");
+  assert.equal(add.length, 1);
+  assert.equal(remove.length, 1);
+  assert.equal(add[0].getAttribute("aria-label"), "Edit what this task blocks");
+  assert.equal(remove[0].getAttribute("aria-label"), "Stop blocking Dependent");
+  fire(add[0], "click");
+  fire(remove[0], "click");
+  assert.equal(calls[0][0], "openStage");
+  assert.deepEqual(calls[0][1], { path: "a.md", line: 1 });
+  assert.equal(calls[1][0], "removeDependent");
+  assert.deepEqual(calls[1][1], { path: "a.md", line: 1 });
+  assert.deepEqual(calls[1][2], { path: "a.md", blockId: "dep" });
+
+  const frozenOwner = { ...owner, status: { type: "DONE", symbol: "x" } };
+  const frozenPlugin = new LedgerToolsPlugin(makeApp([frozenOwner, dep], lines.join("\n"), makeBlocksNavApi([])), {});
+  frozenPlugin.dependencyChipsEnabled = true;
+  const frozenDoc = new MiniDoc();
+  const frozenRoot = frozenDoc.createElement("div");
+  const frozenOwnerLi = frozenDoc.createElement("li");
+  frozenOwnerLi.appendChild(frozenDoc.createTextNode("#task Owner"));
+  const frozenList = frozenDoc.createElement("ul"); frozenOwnerLi.appendChild(frozenList);
+  const frozenRow = frozenDoc.createElement("li");
+  frozenRow.appendChild(frozenDoc.createTextNode("🧱 "));
+  const frozenStrong = frozenDoc.createElement("strong"); frozenStrong.appendChild(frozenDoc.createTextNode("BLOCKS:")); frozenRow.appendChild(frozenStrong);
+  frozenRow.appendChild(frozenDoc.createTextNode(" "));
+  const frozenAnchor = frozenDoc.createElement("a"); frozenAnchor.classList.add("internal-link"); frozenAnchor.setAttribute("data-href", "#^dep"); frozenAnchor.setAttribute("href", "#^dep"); frozenAnchor.appendChild(frozenDoc.createTextNode("Dependent")); frozenRow.appendChild(frozenAnchor);
+  frozenList.appendChild(frozenRow);
+  const frozenDepLi = frozenDoc.createElement("li"); frozenDepLi.appendChild(frozenDoc.createTextNode("#task Dependent"));
+  frozenRoot.appendChild(frozenOwnerLi); frozenRoot.appendChild(frozenDepLi);
+  await frozenPlugin.renderBlocksChipsIn(frozenRoot, { sourcePath: "a.md", getSectionInfo: () => ({ lineStart: 0, lineEnd: 2 }) });
+  assert.equal(findByClass(frozenRow, "bob-dep-add").length, 0);
+  assert.equal(findByClass(frozenRow, "bob-dep-chip-remove").length, 0);
+  assert.equal(frozenRow.getAttribute("title"), BLOCKS_CHIP_TOOLTIP);
 });

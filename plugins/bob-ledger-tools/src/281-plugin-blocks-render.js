@@ -109,7 +109,7 @@ class BobLedgerToolsBlocksRenderMixin {
         if (!docNode) {
           continue;
         }
-        this.blocksDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path);
+        this.blocksDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path, rowLine);
       }
     } catch (error) {
       // One reading-view row never breaks the post-processor.
@@ -137,8 +137,9 @@ class BobLedgerToolsBlocksRenderMixin {
     }
   }
 
-  blocksDecorateReadingRow(li, anchors, model, doc, sourcePath) {
+  blocksDecorateReadingRow(li, anchors, model, doc, sourcePath, lineNumber) {
     try {
+      const interactive = Boolean(this.blocksNavApi()) && !model.frozen;
       const label = blocksReadingLabelElement(li);
       if (label) {
         label.style.display = "none";
@@ -148,7 +149,7 @@ class BobLedgerToolsBlocksRenderMixin {
       if (model.frozen) li.classList.add("is-frozen");
       li.setAttribute("role", "group");
       li.setAttribute("aria-label", model.label + (model.summary ? ", " + model.summary : ""));
-      li.setAttribute("title", model.tooltip);
+      li.setAttribute("title", blocksChipRowTooltip(model, interactive));
       if (li.dataset) li.dataset.bobBlocksProcessed = "1";
 
       const available = anchors.slice();
@@ -164,6 +165,9 @@ class BobLedgerToolsBlocksRenderMixin {
             li.appendChild(anchor);
           }
         }
+        if (interactive && chip.live && anchor) {
+          this.blocksAttachReadingRemove(anchor, chip, doc, sourcePath, lineNumber);
+        }
       }
       // Hide the source glyph, label punctuation, and raw separators after
       // the original link anchors have been matched in stored line order.
@@ -175,6 +179,17 @@ class BobLedgerToolsBlocksRenderMixin {
           node.textContent = "";
         }
       }
+      if (interactive && !(li.dataset && li.dataset.bobBlocksAdd === "1")) {
+        const self = this;
+        blocksAttachAddControl(li, doc, () => {
+          try {
+            self.blocksOpenStage(sourcePath, { lineNumber });
+          } catch (error) {
+            // Best-effort.
+          }
+        });
+        if (li.dataset) li.dataset.bobBlocksAdd = "1";
+      }
       if (model.summary) {
         const summary = doc.createElement("span");
         summary.setAttribute("class", "bob-dep-summary bob-blocks-summary");
@@ -183,6 +198,29 @@ class BobLedgerToolsBlocksRenderMixin {
       }
     } catch (error) {
       // The raw Markdown stays usable if a DOM implementation rejects a decoration.
+    }
+  }
+
+  blocksAttachReadingRemove(anchor, chip, doc, sourcePath, lineNumber) {
+    try {
+      if (!anchor || (anchor.getAttribute && anchor.getAttribute("data-bob-blocks-actions") === "1")) {
+        return;
+      }
+      const self = this;
+      blocksAttachChipRemove(anchor, chip, doc, () => {
+        try {
+          self.blocksRemoveDependent(chip, sourcePath, { lineNumber });
+        } catch (error) {
+          // Best-effort.
+        }
+      });
+      try {
+        anchor.setAttribute("data-bob-blocks-actions", "1");
+      } catch (error) {
+        // Best-effort.
+      }
+    } catch (error) {
+      // Leave the existing internal link navigable.
     }
   }
 

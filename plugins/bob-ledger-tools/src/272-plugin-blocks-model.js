@@ -1,4 +1,62 @@
 class BobLedgerToolsBlocksModelMixin {
+  // Feature-detect nav `api.blocks` v1 through the existing lookup.
+  blocksNavApi() {
+    try {
+      const api = this.dependencyNavApi();
+      const blocks = api && api.blocks;
+      if (blocks && typeof blocks === "object" && Number(blocks.version) >= 1) {
+        return blocks;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blocksOpenStage(sourcePath, meta) {
+    try {
+      const api = this.blocksNavApi();
+      if (!api || typeof api.openStage !== "function") {
+        return;
+      }
+      const ref = {
+        path: String(sourcePath || ""),
+        line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber : null,
+      };
+      Promise.resolve(api.openStage(ref));
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  blocksRemoveDependent(chip, sourcePath, meta) {
+    try {
+      const api = this.blocksNavApi();
+      if (!api || typeof api.removeDependent !== "function") {
+        return;
+      }
+      const ownerRef = {
+        path: String(sourcePath || ""),
+        line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber : null,
+      };
+      const target = {
+        path: String(chip && chip.path || ""),
+        blockId: chip ? chip.blockId : null,
+      };
+      Promise.resolve(api.removeDependent(ownerRef, target)).then((result) => {
+        if (result && result.ok === false && result.reason) {
+          try {
+            new Notice(String(result.reason));
+          } catch (noticeError) {
+            // Best-effort. Success notices come from nav.
+          }
+        }
+      });
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
   blocksChipModelForLine({ path, text, owner }) {
     try {
       const memo = this.freshnessEnsureMemo();
@@ -176,8 +234,10 @@ class BobLedgerToolsBlocksModelMixin {
                   if (model && model.chips.length > 0) {
                     const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line.text);
                     const from = line.from + (marker ? marker[0].length : 0);
+                    const lineNumber = number === null ? null : number - 1;
+                    const interactive = Boolean(this.blocksNavApi()) && !model.frozen;
                     builder.add(from, line.to, Decoration.replace({
-                      widget: new BlocksChipWidget(model, { plugin: this, sourcePath: path, lineNumber: number === null ? null : number - 1 }),
+                      widget: new BlocksChipWidget(model, { plugin: this, sourcePath: path, lineNumber, interactive }),
                     }));
                   }
                 }

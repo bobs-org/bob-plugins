@@ -1,6 +1,106 @@
-// Generated BLOCKS chips (bob-cli-7e chips). The row is a read-only
-// projection of the in-memory Tasks memo's `id` / `dependsOn` fields.
-// Never use this parser as dependency input.
+// Generated BLOCKS chips (bob-cli-7e chips). The row is a projection of
+// the in-memory Tasks memo's `id` / `dependsOn` fields. Never use this
+// parser as dependency input. Open-owner rows feature-detect nav
+// `api.blocks` (v1) for ＋ / hover ×; frozen and stale chips stay
+// navigation-only.
+const BLOCKS_CHIP_TOOLTIP = "Generated from DEPENDS ON lines · edit on the dependent";
+const BLOCKS_CHIP_EDIT_TOOLTIP = "Generated from DEPENDS ON lines · ＋ / × edit through Blocks… (Ctrl+Shift+Alt+B)";
+
+function blocksChipEditEnabled(model, interactive) {
+  return Boolean(interactive) && Boolean(model) && !model.frozen;
+}
+
+function blocksChipRowTooltip(model, interactive) {
+  return blocksChipEditEnabled(model, interactive)
+    ? BLOCKS_CHIP_EDIT_TOOLTIP
+    : String((model && model.tooltip) || BLOCKS_CHIP_TOOLTIP);
+}
+
+function blocksChipRemoveLabel(chip) {
+  return "Stop blocking " + String((chip && (chip.fullText || chip.text)) || "task");
+}
+
+function blocksAttachChipRemove(el, chip, doc, onRemove) {
+  try {
+    if (!el || !doc || typeof doc.createElement !== "function") {
+      return;
+    }
+    const remove = doc.createElement("span");
+    remove.setAttribute("class", "bob-dep-chip-remove");
+    remove.setAttribute("role", "button");
+    remove.setAttribute("tabindex", "0");
+    remove.setAttribute("aria-label", blocksChipRemoveLabel(chip));
+    remove.setAttribute("title", blocksChipRemoveLabel(chip));
+    remove.appendChild(doc.createTextNode("×"));
+    if (typeof remove.addEventListener === "function") {
+      const fire = (event) => {
+        try {
+          if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          if (typeof onRemove === "function") {
+            onRemove(chip, event);
+          }
+        } catch (error) {
+          // Best-effort only.
+        }
+      };
+      remove.addEventListener("click", fire);
+      remove.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          fire(event);
+        }
+      });
+    }
+    el.appendChild(remove);
+  } catch (error) {
+    // Listener-free remove still renders.
+  }
+}
+
+function blocksAttachAddControl(row, doc, onAdd) {
+  try {
+    if (!row || !doc || typeof doc.createElement !== "function") {
+      return;
+    }
+    const add = doc.createElement("span");
+    add.setAttribute("class", "bob-dep-add");
+    add.setAttribute("role", "button");
+    add.setAttribute("tabindex", "0");
+    add.setAttribute("aria-label", "Edit what this task blocks");
+    add.setAttribute("title", "Edit what this task blocks");
+    add.appendChild(doc.createTextNode("＋"));
+    if (typeof add.addEventListener === "function") {
+      const fire = (event) => {
+        try {
+          if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          if (typeof onAdd === "function") {
+            onAdd(event);
+          }
+        } catch (error) {
+          // Best-effort only.
+        }
+      };
+      add.addEventListener("click", fire);
+      add.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          fire(event);
+        }
+      });
+    }
+    row.appendChild(add);
+  } catch (error) {
+    // Add button is best-effort.
+  }
+}
 function parseBlocksLine(lineText, opts) {
   try {
     const options = opts && typeof opts === "object" ? opts : {};
@@ -448,7 +548,7 @@ function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today) {
       summary,
       liveCount,
       storedCount: chips.length,
-      tooltip: "Generated from DEPENDS ON lines · edit on the dependent",
+      tooltip: BLOCKS_CHIP_TOOLTIP,
     };
   } catch (error) {
     return null;
@@ -461,11 +561,12 @@ function buildBlocksChipElement(doc, model, options) {
       return null;
     }
     const opts = options && typeof options === "object" ? options : {};
+    const interactive = blocksChipEditEnabled(model, opts.interactive);
     const row = doc.createElement("span");
     row.setAttribute("class", "bob-dep-row bob-blocks-row" + (model.frozen ? " is-frozen" : ""));
     row.setAttribute("role", "group");
     row.setAttribute("aria-label", String(model.label || "BLOCKS") + (model.summary ? ", " + model.summary : ""));
-    row.setAttribute("title", String(model.tooltip || "Generated from DEPENDS ON lines · edit on the dependent"));
+    row.setAttribute("title", blocksChipRowTooltip(model, interactive));
     const label = doc.createElement("span");
     label.setAttribute("class", "bob-dep-label bob-blocks-label");
     label.setAttribute("aria-hidden", "true");
@@ -506,9 +607,21 @@ function buildBlocksChipElement(doc, model, options) {
         key.appendChild(doc.createTextNode("🔑"));
         el.appendChild(key);
       }
+      if (interactive && chip.live) {
+        blocksAttachChipRemove(el, chip, doc, opts.onRemove);
+      }
       if (typeof el.addEventListener === "function") {
         const open = (event) => {
           try {
+            if (event && event.target && event.target.classList && typeof event.target.classList.contains === "function") {
+              try {
+                if (event.target.classList.contains("bob-dep-chip-remove")) {
+                  return;
+                }
+              } catch (inner) {
+                // Fall through to open.
+              }
+            }
             if (opts.plugin && typeof opts.plugin.dependencyOpenTarget === "function") {
               opts.plugin.dependencyOpenTarget(chip.linktext, opts.sourcePath || "", event);
             }
@@ -534,6 +647,9 @@ function buildBlocksChipElement(doc, model, options) {
         });
       }
       row.appendChild(el);
+    }
+    if (interactive) {
+      blocksAttachAddControl(row, doc, opts.onAdd);
     }
     if (model.summary) {
       const summary = doc.createElement("span");

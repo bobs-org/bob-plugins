@@ -12082,9 +12082,109 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
 }
 
 // ---- src/141-blocks-model.js ----
-// Generated BLOCKS chips (bob-cli-7e chips). The row is a read-only
-// projection of the in-memory Tasks memo's `id` / `dependsOn` fields.
-// Never use this parser as dependency input.
+// Generated BLOCKS chips (bob-cli-7e chips). The row is a projection of
+// the in-memory Tasks memo's `id` / `dependsOn` fields. Never use this
+// parser as dependency input. Open-owner rows feature-detect nav
+// `api.blocks` (v1) for ＋ / hover ×; frozen and stale chips stay
+// navigation-only.
+const BLOCKS_CHIP_TOOLTIP = "Generated from DEPENDS ON lines · edit on the dependent";
+const BLOCKS_CHIP_EDIT_TOOLTIP = "Generated from DEPENDS ON lines · ＋ / × edit through Blocks… (Ctrl+Shift+Alt+B)";
+
+function blocksChipEditEnabled(model, interactive) {
+  return Boolean(interactive) && Boolean(model) && !model.frozen;
+}
+
+function blocksChipRowTooltip(model, interactive) {
+  return blocksChipEditEnabled(model, interactive)
+    ? BLOCKS_CHIP_EDIT_TOOLTIP
+    : String((model && model.tooltip) || BLOCKS_CHIP_TOOLTIP);
+}
+
+function blocksChipRemoveLabel(chip) {
+  return "Stop blocking " + String((chip && (chip.fullText || chip.text)) || "task");
+}
+
+function blocksAttachChipRemove(el, chip, doc, onRemove) {
+  try {
+    if (!el || !doc || typeof doc.createElement !== "function") {
+      return;
+    }
+    const remove = doc.createElement("span");
+    remove.setAttribute("class", "bob-dep-chip-remove");
+    remove.setAttribute("role", "button");
+    remove.setAttribute("tabindex", "0");
+    remove.setAttribute("aria-label", blocksChipRemoveLabel(chip));
+    remove.setAttribute("title", blocksChipRemoveLabel(chip));
+    remove.appendChild(doc.createTextNode("×"));
+    if (typeof remove.addEventListener === "function") {
+      const fire = (event) => {
+        try {
+          if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          if (typeof onRemove === "function") {
+            onRemove(chip, event);
+          }
+        } catch (error) {
+          // Best-effort only.
+        }
+      };
+      remove.addEventListener("click", fire);
+      remove.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          fire(event);
+        }
+      });
+    }
+    el.appendChild(remove);
+  } catch (error) {
+    // Listener-free remove still renders.
+  }
+}
+
+function blocksAttachAddControl(row, doc, onAdd) {
+  try {
+    if (!row || !doc || typeof doc.createElement !== "function") {
+      return;
+    }
+    const add = doc.createElement("span");
+    add.setAttribute("class", "bob-dep-add");
+    add.setAttribute("role", "button");
+    add.setAttribute("tabindex", "0");
+    add.setAttribute("aria-label", "Edit what this task blocks");
+    add.setAttribute("title", "Edit what this task blocks");
+    add.appendChild(doc.createTextNode("＋"));
+    if (typeof add.addEventListener === "function") {
+      const fire = (event) => {
+        try {
+          if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          if (typeof onAdd === "function") {
+            onAdd(event);
+          }
+        } catch (error) {
+          // Best-effort only.
+        }
+      };
+      add.addEventListener("click", fire);
+      add.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          fire(event);
+        }
+      });
+    }
+    row.appendChild(add);
+  } catch (error) {
+    // Add button is best-effort.
+  }
+}
 function parseBlocksLine(lineText, opts) {
   try {
     const options = opts && typeof opts === "object" ? opts : {};
@@ -12532,7 +12632,7 @@ function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today) {
       summary,
       liveCount,
       storedCount: chips.length,
-      tooltip: "Generated from DEPENDS ON lines · edit on the dependent",
+      tooltip: BLOCKS_CHIP_TOOLTIP,
     };
   } catch (error) {
     return null;
@@ -12545,11 +12645,12 @@ function buildBlocksChipElement(doc, model, options) {
       return null;
     }
     const opts = options && typeof options === "object" ? options : {};
+    const interactive = blocksChipEditEnabled(model, opts.interactive);
     const row = doc.createElement("span");
     row.setAttribute("class", "bob-dep-row bob-blocks-row" + (model.frozen ? " is-frozen" : ""));
     row.setAttribute("role", "group");
     row.setAttribute("aria-label", String(model.label || "BLOCKS") + (model.summary ? ", " + model.summary : ""));
-    row.setAttribute("title", String(model.tooltip || "Generated from DEPENDS ON lines · edit on the dependent"));
+    row.setAttribute("title", blocksChipRowTooltip(model, interactive));
     const label = doc.createElement("span");
     label.setAttribute("class", "bob-dep-label bob-blocks-label");
     label.setAttribute("aria-hidden", "true");
@@ -12590,9 +12691,21 @@ function buildBlocksChipElement(doc, model, options) {
         key.appendChild(doc.createTextNode("🔑"));
         el.appendChild(key);
       }
+      if (interactive && chip.live) {
+        blocksAttachChipRemove(el, chip, doc, opts.onRemove);
+      }
       if (typeof el.addEventListener === "function") {
         const open = (event) => {
           try {
+            if (event && event.target && event.target.classList && typeof event.target.classList.contains === "function") {
+              try {
+                if (event.target.classList.contains("bob-dep-chip-remove")) {
+                  return;
+                }
+              } catch (inner) {
+                // Fall through to open.
+              }
+            }
             if (opts.plugin && typeof opts.plugin.dependencyOpenTarget === "function") {
               opts.plugin.dependencyOpenTarget(chip.linktext, opts.sourcePath || "", event);
             }
@@ -12618,6 +12731,9 @@ function buildBlocksChipElement(doc, model, options) {
         });
       }
       row.appendChild(el);
+    }
+    if (interactive) {
+      blocksAttachAddControl(row, doc, opts.onAdd);
     }
     if (model.summary) {
       const summary = doc.createElement("span");
@@ -12843,8 +12959,9 @@ function buildDependencyChipElement(doc, model, options) {
 }
 
 // ---- src/152-blocks-widget.js ----
-// Live Preview widget for one generated BLOCKS row. It has navigation only:
-// no dependency-writing controls are exposed from the prerequisite side.
+// Live Preview widget for one generated BLOCKS row. Navigation always
+// works; ＋ / hover × appear only when `meta.interactive` is set (open
+// owner with nav `api.blocks` v1).
 let BlocksChipWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   BlocksChipWidget = class extends WidgetType {
@@ -12853,7 +12970,12 @@ if (WidgetType && typeof WidgetType === "function") {
       this.model = model;
       this.meta = meta && typeof meta === "object" ? meta : {};
       try {
-        this.key = JSON.stringify([model, this.meta.sourcePath || "", this.meta.lineNumber]);
+        this.key = JSON.stringify([
+          model,
+          this.meta.sourcePath || "",
+          this.meta.lineNumber === undefined ? null : this.meta.lineNumber,
+          Boolean(this.meta.interactive),
+        ]);
       } catch (error) {
         this.key = String(model && model.summary || "");
       }
@@ -12863,12 +12985,100 @@ if (WidgetType && typeof WidgetType === "function") {
       return Boolean(other && other instanceof BlocksChipWidget && other.key === this.key);
     }
 
-    toDOM() {
-      return buildBlocksChipElement(
+    toDOM(view) {
+      const plugin = this.meta.plugin;
+      const sourcePath = this.meta.sourcePath || "";
+      const interactive = Boolean(this.meta.interactive);
+      const dom = buildBlocksChipElement(
         typeof document !== "undefined" ? document : null,
         this.model,
-        { plugin: this.meta.plugin, sourcePath: this.meta.sourcePath || "" },
+        {
+          plugin,
+          sourcePath,
+          interactive,
+          onRemove: (chip) => {
+            try {
+              if (plugin && typeof plugin.blocksRemoveDependent === "function") {
+                plugin.blocksRemoveDependent(chip, sourcePath, this.meta);
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          },
+          onAdd: () => {
+            try {
+              if (plugin && typeof plugin.blocksOpenStage === "function") {
+                plugin.blocksOpenStage(sourcePath, this.meta);
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          },
+        },
       );
+      if (!dom) {
+        try {
+          return typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        } catch (error) {
+          return null;
+        }
+      }
+      try {
+        const self = this;
+        if (typeof dom.addEventListener === "function") {
+          dom.addEventListener("mousedown", (event) => {
+            try {
+              const target = event && event.target ? event.target : null;
+              let interactiveTarget = false;
+              try {
+                if (target && typeof target.closest === "function") {
+                  interactiveTarget = Boolean(target.closest(".bob-dep-chip,.bob-dep-add,.bob-dep-chip-remove"));
+                } else {
+                  let node = target;
+                  let guard = 0;
+                  while (node && node !== dom && guard < 6) {
+                    guard += 1;
+                    const cls = node.className || "";
+                    if (typeof cls === "string" && (cls.indexOf("bob-dep-chip") !== -1 || cls.indexOf("bob-dep-add") !== -1)) {
+                      interactiveTarget = true;
+                      break;
+                    }
+                    node = node.parentNode || null;
+                  }
+                }
+              } catch (error) {
+                interactiveTarget = false;
+              }
+              if (interactiveTarget) {
+                return;
+              }
+              if (event && typeof event.preventDefault === "function") {
+                event.preventDefault();
+              }
+              let anchor = null;
+              try {
+                anchor = view && typeof view.posAtDOM === "function" ? view.posAtDOM(dom) : null;
+              } catch (error) {
+                anchor = null;
+              }
+              if (typeof anchor === "number" && view && typeof view.dispatch === "function") {
+                view.dispatch({ selection: { anchor } });
+              }
+              if (view && typeof view.focus === "function") {
+                view.focus();
+              }
+              void self;
+            } catch (error) {
+              // Reveal is best-effort.
+            }
+          });
+        }
+      } catch (error) {
+        // A listener-free row still renders.
+      }
+      return dom;
     }
   };
 }
@@ -29680,6 +29890,64 @@ class BobLedgerToolsDependencyModelMixin {
 }
 // ---- src/272-plugin-blocks-model.js ----
 class BobLedgerToolsBlocksModelMixin {
+  // Feature-detect nav `api.blocks` v1 through the existing lookup.
+  blocksNavApi() {
+    try {
+      const api = this.dependencyNavApi();
+      const blocks = api && api.blocks;
+      if (blocks && typeof blocks === "object" && Number(blocks.version) >= 1) {
+        return blocks;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blocksOpenStage(sourcePath, meta) {
+    try {
+      const api = this.blocksNavApi();
+      if (!api || typeof api.openStage !== "function") {
+        return;
+      }
+      const ref = {
+        path: String(sourcePath || ""),
+        line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber : null,
+      };
+      Promise.resolve(api.openStage(ref));
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  blocksRemoveDependent(chip, sourcePath, meta) {
+    try {
+      const api = this.blocksNavApi();
+      if (!api || typeof api.removeDependent !== "function") {
+        return;
+      }
+      const ownerRef = {
+        path: String(sourcePath || ""),
+        line: meta && Number.isInteger(meta.lineNumber) ? meta.lineNumber : null,
+      };
+      const target = {
+        path: String(chip && chip.path || ""),
+        blockId: chip ? chip.blockId : null,
+      };
+      Promise.resolve(api.removeDependent(ownerRef, target)).then((result) => {
+        if (result && result.ok === false && result.reason) {
+          try {
+            new Notice(String(result.reason));
+          } catch (noticeError) {
+            // Best-effort. Success notices come from nav.
+          }
+        }
+      });
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
   blocksChipModelForLine({ path, text, owner }) {
     try {
       const memo = this.freshnessEnsureMemo();
@@ -29857,8 +30125,10 @@ class BobLedgerToolsBlocksModelMixin {
                   if (model && model.chips.length > 0) {
                     const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line.text);
                     const from = line.from + (marker ? marker[0].length : 0);
+                    const lineNumber = number === null ? null : number - 1;
+                    const interactive = Boolean(this.blocksNavApi()) && !model.frozen;
                     builder.add(from, line.to, Decoration.replace({
-                      widget: new BlocksChipWidget(model, { plugin: this, sourcePath: path, lineNumber: number === null ? null : number - 1 }),
+                      widget: new BlocksChipWidget(model, { plugin: this, sourcePath: path, lineNumber, interactive }),
                     }));
                   }
                 }
@@ -31613,7 +31883,7 @@ class BobLedgerToolsBlocksRenderMixin {
         if (!docNode) {
           continue;
         }
-        this.blocksDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path);
+        this.blocksDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path, rowLine);
       }
     } catch (error) {
       // One reading-view row never breaks the post-processor.
@@ -31641,8 +31911,9 @@ class BobLedgerToolsBlocksRenderMixin {
     }
   }
 
-  blocksDecorateReadingRow(li, anchors, model, doc, sourcePath) {
+  blocksDecorateReadingRow(li, anchors, model, doc, sourcePath, lineNumber) {
     try {
+      const interactive = Boolean(this.blocksNavApi()) && !model.frozen;
       const label = blocksReadingLabelElement(li);
       if (label) {
         label.style.display = "none";
@@ -31652,7 +31923,7 @@ class BobLedgerToolsBlocksRenderMixin {
       if (model.frozen) li.classList.add("is-frozen");
       li.setAttribute("role", "group");
       li.setAttribute("aria-label", model.label + (model.summary ? ", " + model.summary : ""));
-      li.setAttribute("title", model.tooltip);
+      li.setAttribute("title", blocksChipRowTooltip(model, interactive));
       if (li.dataset) li.dataset.bobBlocksProcessed = "1";
 
       const available = anchors.slice();
@@ -31668,6 +31939,9 @@ class BobLedgerToolsBlocksRenderMixin {
             li.appendChild(anchor);
           }
         }
+        if (interactive && chip.live && anchor) {
+          this.blocksAttachReadingRemove(anchor, chip, doc, sourcePath, lineNumber);
+        }
       }
       // Hide the source glyph, label punctuation, and raw separators after
       // the original link anchors have been matched in stored line order.
@@ -31679,6 +31953,17 @@ class BobLedgerToolsBlocksRenderMixin {
           node.textContent = "";
         }
       }
+      if (interactive && !(li.dataset && li.dataset.bobBlocksAdd === "1")) {
+        const self = this;
+        blocksAttachAddControl(li, doc, () => {
+          try {
+            self.blocksOpenStage(sourcePath, { lineNumber });
+          } catch (error) {
+            // Best-effort.
+          }
+        });
+        if (li.dataset) li.dataset.bobBlocksAdd = "1";
+      }
       if (model.summary) {
         const summary = doc.createElement("span");
         summary.setAttribute("class", "bob-dep-summary bob-blocks-summary");
@@ -31687,6 +31972,29 @@ class BobLedgerToolsBlocksRenderMixin {
       }
     } catch (error) {
       // The raw Markdown stays usable if a DOM implementation rejects a decoration.
+    }
+  }
+
+  blocksAttachReadingRemove(anchor, chip, doc, sourcePath, lineNumber) {
+    try {
+      if (!anchor || (anchor.getAttribute && anchor.getAttribute("data-bob-blocks-actions") === "1")) {
+        return;
+      }
+      const self = this;
+      blocksAttachChipRemove(anchor, chip, doc, () => {
+        try {
+          self.blocksRemoveDependent(chip, sourcePath, { lineNumber });
+        } catch (error) {
+          // Best-effort.
+        }
+      });
+      try {
+        anchor.setAttribute("data-bob-blocks-actions", "1");
+      } catch (error) {
+        // Best-effort.
+      }
+    } catch (error) {
+      // Leave the existing internal link navigable.
     }
   }
 
@@ -35074,6 +35382,10 @@ module.exports.helpers = {
   blocksCanonicalLinktext,
   blocksChipModel,
   buildBlocksChipElement,
+  BLOCKS_CHIP_TOOLTIP,
+  BLOCKS_CHIP_EDIT_TOOLTIP,
+  blocksChipEditEnabled,
+  blocksChipRowTooltip,
   blocksReadingMappedLine,
   blocksReadingOwnerLine,
   blocksReadingLabelElement,

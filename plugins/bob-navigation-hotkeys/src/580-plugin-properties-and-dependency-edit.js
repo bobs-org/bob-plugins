@@ -451,7 +451,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         files,
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath,
-        blocksLinesEnabled: loadBlocksLinesEnabled(),
+        blocksLinesEnabled:
+          args.blocksLinesEnabled !== undefined
+            ? args.blocksLinesEnabled === true
+            : loadBlocksLinesEnabled(),
         ...(blocksExisting ? { blocksExisting } : {}),
         mirrorTouch,
         ...(subtreePrep && subtreePrep.lanes.length > 0

@@ -272,7 +272,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       : null;
     let working = originalContent;
     let removed = 0;
-    const preparations = new Map();
+    const rawPreparations = [];
     const blocksFollowUps = [];
     for (const target of ordered) {
       if (!Number.isInteger(target.line)) {
@@ -319,12 +319,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         );
         return false;
       }
-      for (const preparation of plan.preparations || []) {
-        const key = `${preparation.path}\x00${preparation.line}\x00${preparation.from}\x00${preparation.text}`;
-        if (!preparations.has(key)) {
-          preparations.set(key, preparation);
-        }
-      }
+      rawPreparations.push(...(plan.preparations || []));
       if (Array.isArray(plan.blocksFollowUps)) {
         blocksFollowUps.push(...plan.blocksFollowUps);
       }
@@ -337,7 +332,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         working = nextWorking;
       }
     }
-    for (const preparation of preparations.values()) {
+    const preparations = mergeTargetPreparations(rawPreparations);
+    for (const preparation of preparations) {
       let result = null;
       try {
         result = await this.plugin.prepareDependencyTargetNote(preparation.path, preparation);
@@ -500,7 +496,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const originalContent = String(this.editor.getValue() || "");
     let working = originalContent;
     let changedSources = 0;
-    const preparations = new Map();
+    const rawPreparations = [];
     const blocksFollowUps = [];
     const countedPomodoroPlans = [];
     const vaultFiles =
@@ -592,12 +588,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         return false;
       }
       countedPomodoroPlans.push(plan);
-      for (const preparation of plan.preparations || []) {
-        const key = `${preparation.path}\x00${preparation.line}\x00${preparation.from}\x00${preparation.text}`;
-        if (!preparations.has(key)) {
-          preparations.set(key, preparation);
-        }
-      }
+      rawPreparations.push(...(plan.preparations || []));
       let nextWorking = plan.nextContent;
       if (Array.isArray(plan.blocksFollowUps)) {
         blocksFollowUps.push(...plan.blocksFollowUps);
@@ -610,7 +601,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       }
       working = nextWorking;
     }
-    for (const preparation of preparations.values()) {
+    const preparations = mergeTargetPreparations(rawPreparations);
+    for (const preparation of preparations) {
       let result = null;
       try {
         result = await this.plugin.prepareDependencyTargetNote(preparation.path, preparation);

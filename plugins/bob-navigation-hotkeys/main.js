@@ -7866,6 +7866,692 @@ function applyDependencyPlanLines(lines, parentIndex, parentText, sameNoteTarget
   }
   return { lines: sourceLines, lineEnding: ending };
 }
+// ---- src/084-blocks-stage-plan.js ----
+// Reverse Blocks writer planner (`docs/task-dependencies.md` §15.6).
+// `planBlocksEdit` puts sources N onto many dependents T by threading
+// `planDependencyEdit` per T-note, preparing each N once at the strongest
+// pre-gesture lane. RBW6 lives here as `mergeTargetPreparations`.
+
+function strongerTaskLine(left, right) {
+  const leftText = String(left || "");
+  const rightText = String(right || "");
+  if (leftText === rightText) {
+    return leftText;
+  }
+  const leftRank = getObsidianTaskStatusRank(
+    getObsidianTaskCheckboxStatus(leftText),
+  );
+  const rightRank = getObsidianTaskStatusRank(
+    getObsidianTaskCheckboxStatus(rightText),
+  );
+  const leftScore = leftRank === null ? -1 : leftRank;
+  const rightScore = rightRank === null ? -1 : rightRank;
+  let winner = rightScore > leftScore ? rightText : leftText;
+  const other = rightScore > leftScore ? leftText : rightText;
+  const otherId = findBulletPropertyField(other, "id");
+  const winnerId = findBulletPropertyField(winner, "id");
+  if (otherId && !winnerId) {
+    winner = upsertBulletProperty(winner, "id", otherId.value).line;
+  }
+  const otherBlock = getTrailingBlockId(other);
+  if (otherBlock && !getTrailingBlockId(winner)) {
+    winner = appendBlockIdToLine(winner, otherBlock);
+  }
+  return winner;
+}
+
+// Collapse cross-note preparations of the same target line to one write at
+// the strongest lane so counted forward (RBW6) and reverse (RBP7) never
+// emit two `from` values that fight `target-changed`.
+function mergeTargetPreparations(preparations) {
+  const byKey = new Map();
+  for (const prep of Array.isArray(preparations) ? preparations : []) {
+    if (!prep || !Number.isInteger(prep.line)) {
+      continue;
+    }
+    const path = normalizeVaultRelativePath(prep.path || "");
+    if (!path) {
+      continue;
+    }
+    const key = `${path}\x00${prep.line}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, prep);
+      continue;
+    }
+    const from =
+      existing.from !== undefined && existing.from !== null
+        ? existing.from
+        : prep.from;
+    const text = strongerTaskLine(existing.text, prep.text);
+    byKey.set(
+      key,
+      Object.freeze({
+        ...existing,
+        path,
+        line: prep.line,
+        from,
+        text,
+        kind: existing.kind || prep.kind || "target-identity",
+      }),
+    );
+  }
+  return Object.freeze([...byKey.values()]);
+}
+
+function applyStrongestLineEdits(content, preparations) {
+  const text = String(content || "");
+  const edits = Array.isArray(preparations) ? preparations : [];
+  if (edits.length === 0) {
+    return text;
+  }
+  const { lines, lineEnding } = splitMarkdownContent(text);
+  let changed = false;
+  for (const prep of edits) {
+    if (
+      !Number.isInteger(prep.line) ||
+      prep.line < 0 ||
+      prep.line >= lines.length
+    ) {
+      continue;
+    }
+    const next = strongerTaskLine(lines[prep.line], prep.text);
+    if (next !== lines[prep.line]) {
+      lines[prep.line] = next;
+      changed = true;
+    }
+  }
+  return changed ? lines.join(lineEnding) : text;
+}
+
+function resolveBlocksEditTaskRef(ref, files, fallbackPath) {
+  const path = normalizeVaultRelativePath(
+    (ref && ref.path) || fallbackPath || "",
+  );
+  if (!path || !(files instanceof Map) || !files.has(path)) {
+    return null;
+  }
+  const content = String(files.get(path) || "");
+  const lines = content.split(/\r?\n/);
+  let line = Math.floor(numericOrDefault(ref && ref.line, Number.NaN));
+  let blockId = normalizeBulletPropertyValue((ref && ref.blockId) || "");
+  if (!Number.isFinite(line) && blockId) {
+    const found = findTaskLineByTrailingBlockId(lines, blockId);
+    line = found === null ? Number.NaN : found;
+  }
+  if (!Number.isFinite(line) || line < 0 || line >= lines.length) {
+    return null;
+  }
+  if (!isObsidianTaskAtLine(content, line)) {
+    return null;
+  }
+  if (!blockId) {
+    blockId = getTrailingBlockId(String(lines[line] || "")) || "";
+  }
+  return Object.freeze({
+    path,
+    line,
+    blockId,
+    text: String(lines[line] || ""),
+  });
+}
+
+function stampBlocksEditParentLine(content, parentLine, stamper, dateText) {
+  if (typeof stamper !== "function") {
+    return String(content || "");
+  }
+  const { lines, lineEnding } = splitMarkdownContent(content);
+  if (parentLine < 0 || parentLine >= lines.length) {
+    return String(content || "");
+  }
+  const next = applyFreshStampLine(lines[parentLine], stamper, dateText);
+  if (next === lines[parentLine]) {
+    return String(content || "");
+  }
+  lines[parentLine] = next;
+  return lines.join(lineEnding);
+}
+
+function truncateBlocksNoticeName(name) {
+  const text = String(name || "").trim();
+  if (text.length <= 40) {
+    return text;
+  }
+  return `${text.slice(0, 39)}\u2026`;
+}
+
+function blocksLaneLabel(status) {
+  if (status === "/") {
+    return "In Progress";
+  }
+  if (status === "*") {
+    return "Next";
+  }
+  if (status === "?") {
+    return "Blocked";
+  }
+  if (status === " ") {
+    return "Ready";
+  }
+  return null;
+}
+
+function quoteBlocksNoticeName(name) {
+  return `\u201c${truncateBlocksNoticeName(name)}\u201d`;
+}
+
+function buildBlocksEditNotice(details = {}) {
+  const added = Array.isArray(details.added) ? details.added : [];
+  const removed = Array.isArray(details.removed) ? details.removed : [];
+  const sourceCount = Math.max(
+    1,
+    Math.floor(numericOrDefault(details.sourceCount, 1)),
+  );
+  const takes = details.takesLane;
+  const failedCount = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.failedCount, 0)),
+  );
+  const pomodoroRemoved = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.pomodoroRemoved, 0)),
+  );
+  const pomodoroFailed = details.pomodoroFailed === true;
+  const blocksFailed = details.blocksFailed === true;
+  const parts = [];
+  if (sourceCount > 1 && added.length + removed.length > 0 && removed.length === 0) {
+    if (added.length === 1) {
+      parts.push(
+        `🧱 ${sourceCount} tasks now block ${quoteBlocksNoticeName(added[0].description)}`,
+      );
+    } else {
+      parts.push(
+        `🧱 ${sourceCount} tasks now block ${formatCountLabel(added.length, "task")}`,
+      );
+    }
+  } else if (added.length === 1 && removed.length === 0) {
+    const row = added[0];
+    if (row.isProject) {
+      const blocked = Math.max(
+        0,
+        Math.floor(numericOrDefault(row.blockedCount, 0)),
+      );
+      parts.push(
+        `🧱 Now blocks project ${quoteBlocksNoticeName(row.description)}${
+          blocked > 0
+            ? ` \u00b7 ${formatCountLabel(blocked, "task")} Blocked`
+            : ""
+        }`,
+      );
+    } else if (row.fromStatus === "?") {
+      const waiting = Math.max(
+        1,
+        Math.floor(numericOrDefault(row.openRemaining, 1)),
+      );
+      parts.push(
+        `🧱 Now blocks ${quoteBlocksNoticeName(row.description)} \u00b7 still Blocked (waits on ${waiting})`,
+      );
+    } else {
+      const fromLabel = blocksLaneLabel(row.fromStatus) || "Ready";
+      let line = `🧱 Now blocks ${quoteBlocksNoticeName(row.description)} \u00b7 ${fromLabel} \u2192 Blocked`;
+      if (takes === "/") {
+        line += " \u00b7 takes In Progress";
+      } else if (takes === "*") {
+        line += " \u00b7 takes Next";
+      }
+      parts.push(line);
+    }
+  } else if (removed.length === 1 && added.length === 0) {
+    const row = removed[0];
+    parts.push(
+      row.recovered
+        ? `🧱 No longer blocks ${quoteBlocksNoticeName(row.description)} \u00b7 Ready again`
+        : `🧱 No longer blocks ${quoteBlocksNoticeName(row.description)} \u00b7 still Blocked`,
+    );
+  } else if (added.length > 0 || removed.length > 0) {
+    const chunks = [];
+    if (added.length > 0) {
+      chunks.push(`Now blocks ${formatCountLabel(added.length, "task")}`);
+    }
+    if (removed.length > 0) {
+      chunks.push(`${removed.length} removed`);
+    }
+    let line = `🧱 ${chunks.join(" \u00b7 ")}`;
+    if (takes === "/") {
+      line += " \u00b7 takes In Progress";
+    } else if (takes === "*") {
+      line += " \u00b7 takes Next";
+    }
+    parts.push(line);
+  } else {
+    parts.push("🧱 No dependency changes");
+  }
+  let notice = parts.join("");
+  if (pomodoroRemoved > 0) {
+    notice += ` \u00b7 removed ${formatCountLabel(pomodoroRemoved, "Pomodoro link")}`;
+  } else if (pomodoroFailed) {
+    notice += "; Pomodoro links not removed";
+  }
+  if (failedCount > 0) {
+    notice += ` \u00b7 ${formatCountLabel(failedCount, "task")} not updated (changed \u2014 reopen)`;
+  }
+  if (blocksFailed) {
+    notice += " \u00b7 🧱 BLOCKS not updated";
+  }
+  return notice;
+}
+
+function planBlocksMirrorForSource(args = {}) {
+  const content = String(args.content || "");
+  if (args.blocksLinesEnabled !== true) {
+    return Object.freeze({
+      ok: true,
+      changed: false,
+      nextContent: content,
+    });
+  }
+  const sourcePath = normalizeVaultRelativePath(args.sourcePath || "");
+  const sourceBlockId = normalizeBulletPropertyValue(args.sourceBlockId || "");
+  const lines = content.split(/\r?\n/);
+  const ownerLine = findTaskLineByTrailingBlockId(lines, sourceBlockId);
+  if (!sourcePath || ownerLine === null) {
+    return Object.freeze({
+      ok: false,
+      reason: "source-not-found",
+      changed: false,
+      nextContent: content,
+    });
+  }
+  const vaultFiles = Array.isArray(args.vaultFiles)
+    ? args.vaultFiles
+    : [];
+  const resolveLinkpath =
+    typeof args.resolveLinkpath === "function" ? args.resolveLinkpath : null;
+  const children = findBlocksChildren(lines, ownerLine);
+  const parsed = children.map((index) =>
+    parseBlocksLine(lines[index], { isDirectChildOfTask: true }),
+  );
+  if (parsed.some((entry) => entry.verdict === "malformed")) {
+    return Object.freeze({
+      ok: false,
+      reason: "malformed-blocks-line",
+      changed: false,
+      nextContent: content,
+    });
+  }
+  const existing = children.flatMap((index) =>
+    blocksExistingRows(sourcePath, lines[index], resolveLinkpath, vaultFiles),
+  );
+  const add = [];
+  for (const ref of Array.isArray(args.add) ? args.add : []) {
+    const path = normalizeVaultRelativePath(ref && ref.path);
+    const blockId = normalizeBulletPropertyValue(ref && ref.blockId);
+    if (!path || !blockId) {
+      continue;
+    }
+    add.push(
+      Object.freeze({
+        identity: blocksIdentity(path, blockId),
+        link: canonicalDependencyLink({ path, blockId }, sourcePath, vaultFiles)
+          .text,
+      }),
+    );
+  }
+  const remove = [];
+  for (const ref of Array.isArray(args.remove) ? args.remove : []) {
+    const path = normalizeVaultRelativePath(ref && ref.path);
+    const blockId = normalizeBulletPropertyValue(ref && ref.blockId);
+    if (!path || !blockId) {
+      continue;
+    }
+    remove.push(blocksIdentity(path, blockId));
+  }
+  const desired = blocksDesiredAfterDelta(
+    existing,
+    (entry) => entry.identity || null,
+    add,
+    remove,
+  );
+  return planBlocksLineEdit(content, ownerLine, desired);
+}
+
+function planBlocksEdit(args = {}) {
+  const fail = (reason) =>
+    Object.freeze({
+      ok: false,
+      reason,
+      changed: false,
+      notice: null,
+      sourceWrites: Object.freeze([]),
+      dependentWrites: Object.freeze([]),
+      preparations: Object.freeze([]),
+      pomodoroTargets: Object.freeze([]),
+      pendingMirrors: Object.freeze([]),
+    });
+  const filesMap = new Map();
+  const rawFiles = args.files;
+  if (rawFiles instanceof Map) {
+    for (const [filePath, fileContent] of rawFiles) {
+      filesMap.set(normalizeVaultRelativePath(filePath), String(fileContent || ""));
+    }
+  } else if (rawFiles && typeof rawFiles === "object") {
+    for (const filePath of Object.keys(rawFiles)) {
+      filesMap.set(
+        normalizeVaultRelativePath(filePath),
+        String(rawFiles[filePath] || ""),
+      );
+    }
+  }
+  const resolveLinkpath =
+    typeof args.resolveLinkpath === "function" ? args.resolveLinkpath : null;
+  const vaultFiles = Array.isArray(args.vaultFiles)
+    ? args.vaultFiles
+        .map((entry) =>
+          entry && typeof entry === "object" ? entry.path : entry,
+        )
+        .map((entry) => normalizeVaultRelativePath(entry))
+        .filter(Boolean)
+    : [...filesMap.keys()];
+  const blocksLinesEnabled = args.blocksLinesEnabled === true;
+  const stamper = typeof args.stamper === "function" ? args.stamper : null;
+  const dateText = args.dateText;
+  const recovery = args.recovery && typeof args.recovery === "object"
+    ? args.recovery
+    : null;
+  const lanesByPath =
+    args.projectLaneStatusesByPath instanceof Map
+      ? args.projectLaneStatusesByPath
+      : new Map();
+
+  const sources = [];
+  for (const ref of Array.isArray(args.sources) ? args.sources : []) {
+    const resolved = resolveBlocksEditTaskRef(ref, filesMap);
+    if (!resolved) {
+      return fail("invalid-source");
+    }
+    if (!resolved.blockId) {
+      return fail("source-id-missing");
+    }
+    sources.push(resolved);
+  }
+  if (sources.length === 0) {
+    return fail("invalid-source");
+  }
+  const sourceRefs = sources.map((row) =>
+    Object.freeze({ path: row.path, blockId: row.blockId }),
+  );
+  const sourceLineKeys = new Set(
+    sources.map((row) => `${row.path}\x00${row.line}`),
+  );
+  const identityPreps = [];
+  const planningFiles = new Map(filesMap);
+  for (const source of sources) {
+    let text = source.text;
+    if (source.blockId && !getTrailingBlockId(text)) {
+      text = appendBlockIdToLine(text, source.blockId);
+    }
+    const depValue = dependencyTargetId(text, source.path, source.blockId);
+    if (depValue) {
+      const field = findBulletPropertyField(text, "id");
+      const existing = field
+        ? normalizeBulletPropertyValue(field.value)
+        : "";
+      if (existing !== depValue) {
+        text = upsertBulletProperty(text, "id", depValue).line;
+      }
+    }
+    if (text === source.text) {
+      continue;
+    }
+    const prep = Object.freeze({
+      path: source.path,
+      line: source.line,
+      from: source.text,
+      text,
+      kind: "target-identity",
+    });
+    identityPreps.push(prep);
+    planningFiles.set(
+      source.path,
+      applyStrongestLineEdits(planningFiles.get(source.path), [prep]),
+    );
+  }
+
+  const addRows = [];
+  for (const ref of Array.isArray(args.add) ? args.add : []) {
+    const resolved = resolveBlocksEditTaskRef(ref, filesMap);
+    if (!resolved) {
+      return fail("invalid-target");
+    }
+    addRows.push(Object.freeze({ ...resolved, kind: "add" }));
+  }
+  const removeRows = [];
+  for (const ref of Array.isArray(args.remove) ? args.remove : []) {
+    const resolved = resolveBlocksEditTaskRef(ref, filesMap);
+    if (!resolved) {
+      return fail("invalid-target");
+    }
+    removeRows.push(Object.freeze({ ...resolved, kind: "remove" }));
+  }
+  if (addRows.length === 0 && removeRows.length === 0) {
+    return Object.freeze({
+      ok: true,
+      reason: "unchanged",
+      changed: false,
+      notice: null,
+      sourceWrites: Object.freeze([]),
+      dependentWrites: Object.freeze([]),
+      preparations: Object.freeze([]),
+      pomodoroTargets: Object.freeze([]),
+      pendingMirrors: Object.freeze([]),
+      sources: Object.freeze(sources),
+      added: Object.freeze([]),
+      removed: Object.freeze([]),
+      takesLane: null,
+    });
+  }
+
+  const byNote = new Map();
+  const register = (row) => {
+    if (!byNote.has(row.path)) {
+      byNote.set(row.path, []);
+    }
+    byNote.get(row.path).push(row);
+  };
+  for (const row of addRows) {
+    register(row);
+  }
+  for (const row of removeRows) {
+    register(row);
+  }
+
+  const notePlans = [];
+  const allPreparations = identityPreps.slice();
+  const addedInfo = [];
+  const removedInfo = [];
+  let takesLane = null;
+  const recordTakes = (promotions) => {
+    for (const promo of Array.isArray(promotions) ? promotions : []) {
+      const key = `${normalizeVaultRelativePath(promo.path)}\x00${promo.line}`;
+      if (!sourceLineKeys.has(key)) {
+        continue;
+      }
+      const status = getObsidianTaskCheckboxStatus(promo.to);
+      if (status === "/") {
+        takesLane = "/";
+      } else if (status === "*" && takesLane !== "/") {
+        takesLane = "*";
+      }
+    }
+  };
+
+  for (const [tPath, rows] of byNote) {
+    const ordered = rows.slice().sort((first, second) => second.line - first.line);
+    const original = String(filesMap.get(tPath) || "");
+    let working = String(planningFiles.get(tPath) || original);
+    const tPlans = [];
+    for (const row of ordered) {
+      const planFiles = new Map(planningFiles);
+      planFiles.set(tPath, working);
+      const lanes = lanesByPath.get(tPath);
+      const sourceIsPrj =
+        Array.isArray(lanes) &&
+        lanes.length > 0 &&
+        isProjectLifecycleTaskLine(String(working.split(/\r?\n/)[row.line] || ""));
+      const plan = planDependencyEdit({
+        content: working,
+        parentLine: row.line,
+        parentPath: tPath,
+        add: row.kind === "add" ? sourceRefs : [],
+        remove: row.kind === "remove" ? sourceRefs : [],
+        files: planFiles,
+        vaultFiles,
+        resolveLinkpath,
+        blocksLinesEnabled,
+        ...(sourceIsPrj ? { projectLaneStatuses: lanes } : {}),
+        recovery,
+      });
+      if (!plan.ok) {
+        return fail(plan.reason);
+      }
+      allPreparations.push(...(plan.preparations || []));
+      recordTakes(plan.promotions);
+      let nextWorking = plan.nextContent;
+      if (plan.changed && stamper) {
+        nextWorking = stampBlocksEditParentLine(
+          nextWorking,
+          row.line,
+          stamper,
+          dateText,
+        );
+      }
+      working = nextWorking;
+      const fromStatus = getObsidianTaskCheckboxStatus(row.text);
+      const afterLine = String(working.split(/\r?\n/)[row.line] || "");
+      const description =
+        (plan.added && plan.added[0]) ||
+        (plan.removed && plan.removed[0]) ||
+        cleanTaskDisplayText(row.text);
+      if (row.kind === "add" && plan.summary && plan.summary.added > 0) {
+        const project = plan.summary.project;
+        addedInfo.push(
+          Object.freeze({
+            path: tPath,
+            line: row.line,
+            blockId: getTrailingBlockId(afterLine) || row.blockId,
+            description,
+            fromStatus,
+            isProject: Boolean(project),
+            blockedCount: project
+              ? (project.newlyBlocked || []).length + 1
+              : 0,
+            openRemaining: plan.summary.openRemaining,
+          }),
+        );
+      }
+      if (row.kind === "remove" && plan.summary && plan.summary.removed > 0) {
+        removedInfo.push(
+          Object.freeze({
+            path: tPath,
+            line: row.line,
+            blockId: row.blockId,
+            description,
+            recovered: plan.summary.recoveredOutcome === "ready",
+          }),
+        );
+      }
+      tPlans.push(
+        Object.freeze({
+          row,
+          plan,
+          parentLine: row.line,
+        }),
+      );
+    }
+    notePlans.push(
+      Object.freeze({
+        path: tPath,
+        original,
+        nextContent: working,
+        tPlans: Object.freeze(tPlans),
+      }),
+    );
+  }
+
+  const mergedPreparations = mergeTargetPreparations(allPreparations);
+  const sourcePaths = [...new Set(sources.map((row) => row.path))];
+  const sourcePathSet = new Set(sourcePaths);
+  const sourceWrites = [];
+  for (const sourcePath of sourcePaths) {
+    const original = String(filesMap.get(sourcePath) || "");
+    const sameNote = notePlans.find((entry) => entry.path === sourcePath);
+    let next = sameNote ? sameNote.nextContent : original;
+    if (!sameNote) {
+      const preps = mergedPreparations.filter(
+        (prep) => normalizeVaultRelativePath(prep.path) === sourcePath,
+      );
+      next = applyStrongestLineEdits(next, preps);
+    }
+    sourceWrites.push(
+      Object.freeze({
+        path: sourcePath,
+        original,
+        nextContent: next,
+        foldedDependents: Boolean(sameNote),
+      }),
+    );
+  }
+  const dependentWrites = notePlans
+    .filter((entry) => !sourcePathSet.has(entry.path))
+    .map((entry) =>
+      Object.freeze({
+        path: entry.path,
+        original: entry.original,
+        nextContent: entry.nextContent,
+        tPlans: entry.tPlans,
+      }),
+    );
+  const pendingMirrors = [];
+  for (const note of notePlans) {
+    if (sourcePathSet.has(note.path)) {
+      continue;
+    }
+    for (const entry of note.tPlans) {
+      for (const followUp of entry.plan.blocksFollowUps || []) {
+        pendingMirrors.push(followUp);
+      }
+    }
+  }
+  const pomodoroTargets = collectDependencyPlanPomodoroTargets(
+    notePlans.flatMap((note) => note.tPlans.map((entry) => entry.plan)),
+  );
+  const sourceChanged = sourceWrites.some(
+    (entry) => entry.nextContent !== entry.original,
+  );
+  const dependentChanged = dependentWrites.some(
+    (entry) => entry.nextContent !== entry.original,
+  );
+  const changed = sourceChanged || dependentChanged || pendingMirrors.length > 0;
+  return Object.freeze({
+    ok: true,
+    reason: changed ? null : "unchanged",
+    changed,
+    notice: null,
+    sourceWrites: Object.freeze(sourceWrites),
+    dependentWrites: Object.freeze(dependentWrites),
+    preparations: mergedPreparations,
+    pomodoroTargets,
+    pendingMirrors: Object.freeze(pendingMirrors),
+    sources: Object.freeze(sources),
+    sourceRefs: Object.freeze(sourceRefs),
+    added: Object.freeze(addedInfo),
+    removed: Object.freeze(removedInfo),
+    takesLane,
+    notePlans: Object.freeze(notePlans),
+    vaultFiles: Object.freeze(vaultFiles),
+    blocksLinesEnabled,
+  });
+}
 // ---- src/090-local-task-ids.js ----
 function getUniqueLocalTaskIdValues(values) {
   const uniqueValues = [];
@@ -40775,7 +41461,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       : null;
     let working = originalContent;
     let removed = 0;
-    const preparations = new Map();
+    const rawPreparations = [];
     const blocksFollowUps = [];
     for (const target of ordered) {
       if (!Number.isInteger(target.line)) {
@@ -40822,12 +41508,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         );
         return false;
       }
-      for (const preparation of plan.preparations || []) {
-        const key = `${preparation.path}\x00${preparation.line}\x00${preparation.from}\x00${preparation.text}`;
-        if (!preparations.has(key)) {
-          preparations.set(key, preparation);
-        }
-      }
+      rawPreparations.push(...(plan.preparations || []));
       if (Array.isArray(plan.blocksFollowUps)) {
         blocksFollowUps.push(...plan.blocksFollowUps);
       }
@@ -40840,7 +41521,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         working = nextWorking;
       }
     }
-    for (const preparation of preparations.values()) {
+    const preparations = mergeTargetPreparations(rawPreparations);
+    for (const preparation of preparations) {
       let result = null;
       try {
         result = await this.plugin.prepareDependencyTargetNote(preparation.path, preparation);
@@ -41003,7 +41685,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     const originalContent = String(this.editor.getValue() || "");
     let working = originalContent;
     let changedSources = 0;
-    const preparations = new Map();
+    const rawPreparations = [];
     const blocksFollowUps = [];
     const countedPomodoroPlans = [];
     const vaultFiles =
@@ -41095,12 +41777,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         return false;
       }
       countedPomodoroPlans.push(plan);
-      for (const preparation of plan.preparations || []) {
-        const key = `${preparation.path}\x00${preparation.line}\x00${preparation.from}\x00${preparation.text}`;
-        if (!preparations.has(key)) {
-          preparations.set(key, preparation);
-        }
-      }
+      rawPreparations.push(...(plan.preparations || []));
       let nextWorking = plan.nextContent;
       if (Array.isArray(plan.blocksFollowUps)) {
         blocksFollowUps.push(...plan.blocksFollowUps);
@@ -41113,7 +41790,8 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       }
       working = nextWorking;
     }
-    for (const preparation of preparations.values()) {
+    const preparations = mergeTargetPreparations(rawPreparations);
+    for (const preparation of preparations) {
       let result = null;
       try {
         result = await this.plugin.prepareDependencyTargetNote(preparation.path, preparation);
@@ -57283,7 +57961,10 @@ class BobNavigationHotkeysPropertyDependencyMixin {
         files,
         vaultFiles: this.readDependencyVaultFileList(),
         resolveLinkpath,
-        blocksLinesEnabled: loadBlocksLinesEnabled(),
+        blocksLinesEnabled:
+          args.blocksLinesEnabled !== undefined
+            ? args.blocksLinesEnabled === true
+            : loadBlocksLinesEnabled(),
         ...(blocksExisting ? { blocksExisting } : {}),
         mirrorTouch,
         ...(subtreePrep && subtreePrep.lanes.length > 0
@@ -58646,6 +59327,554 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     }
     if (notice) new Notice(withBlocksFollowUpNotice(notice, failed));
     return Object.freeze({ failed: Object.freeze(failed) });
+  }
+}
+// ---- src/592-plugin-blocks-edit.js ----
+// Reverse Blocks orchestrator (`docs/task-dependencies.md` §15.6): prepare
+// each source once, commit other T notes, mirror BLOCKS from the T's that
+// actually landed, then consume Pomodoros and run sub-project passes.
+class BobNavigationHotkeysBlocksEditMixin {
+  findBlocksEditOpenEditor(filePath) {
+    const path = normalizeVaultRelativePath(filePath || "");
+    const workspace = this.app && this.app.workspace;
+    if (!path || !workspace || typeof workspace.getLeavesOfType !== "function") {
+      return null;
+    }
+    for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+      const view = leaf && leaf.view;
+      if (
+        view &&
+        view.file &&
+        normalizeVaultRelativePath(view.file.path) === path &&
+        view.editor &&
+        typeof view.editor.getValue === "function"
+      ) {
+        return view.editor;
+      }
+    }
+    return null;
+  }
+
+  async writeBlocksEditNote(filePath, preimage, nextContent) {
+    const path = normalizeVaultRelativePath(filePath || "");
+    const before = String(preimage || "");
+    const after = String(nextContent || "");
+    if (!path) {
+      return Object.freeze({ ok: false, reason: "invalid-path" });
+    }
+    if (after === before) {
+      return Object.freeze({ ok: true, reason: "unchanged", via: "none" });
+    }
+    const editor = this.findBlocksEditOpenEditor(path);
+    if (editor) {
+      if (String(editor.getValue() || "") !== before) {
+        return Object.freeze({ ok: false, reason: "changed" });
+      }
+      const committed = applyEditorContentTransaction(
+        editor,
+        before,
+        after,
+        null,
+        BLOCKS_MACHINE_WRITE_ANNOTATION,
+      );
+      return committed
+        ? Object.freeze({ ok: true, reason: null, via: "editor" })
+        : Object.freeze({ ok: false, reason: "commit-failed" });
+    }
+    const vault = this.app && this.app.vault;
+    const file =
+      vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+    if (!file || !vault || typeof vault.process !== "function") {
+      return Object.freeze({ ok: false, reason: "target-unavailable" });
+    }
+    let applied = false;
+    try {
+      await vault.process(file, (data) => {
+        if (String(data || "") !== before) {
+          return data;
+        }
+        applied = true;
+        return after;
+      });
+    } catch (_error) {
+      applied = false;
+    }
+    return applied
+      ? Object.freeze({ ok: true, reason: null, via: "vault" })
+      : Object.freeze({ ok: false, reason: "changed" });
+  }
+
+  async applyBlocksEdit(args = {}) {
+    try {
+      const today = args.today || new Date();
+      const add = Array.isArray(args.add) ? args.add : [];
+      const remove = Array.isArray(args.remove) ? args.remove : [];
+      const sources = Array.isArray(args.sources) ? args.sources : [];
+      const files = new Map();
+      if (args.files instanceof Map) {
+        for (const [filePath, fileContent] of args.files) {
+          files.set(normalizeVaultRelativePath(filePath), String(fileContent || ""));
+        }
+      } else if (args.files && typeof args.files === "object") {
+        for (const filePath of Object.keys(args.files)) {
+          files.set(
+            normalizeVaultRelativePath(filePath),
+            String(args.files[filePath] || ""),
+          );
+        }
+      }
+      const resolveLinkpath = this.dependencyLinkpathResolver();
+      const wanted = new Set();
+      for (const ref of [...sources, ...add, ...remove]) {
+        const path = normalizeVaultRelativePath(ref && ref.path);
+        if (path) {
+          wanted.add(path);
+        }
+      }
+      for (const filePath of wanted) {
+        if (files.has(filePath)) {
+          continue;
+        }
+        const loaded = await this.readDependencyNoteContent(filePath, null, "");
+        if (loaded === null) {
+          return Object.freeze({
+            ok: false,
+            reason: "target-not-found",
+            notice: null,
+            committed: Object.freeze([]),
+            failed: Object.freeze([]),
+            pomodoro: null,
+            blocksFailed: Object.freeze([]),
+          });
+        }
+        files.set(filePath, loaded);
+      }
+      const vaultFiles = this.readDependencyVaultFileList() || [...files.keys()];
+      let dailyPath = null;
+      try {
+        dailyPath = scheduledRecoveryDailyPaths(
+          vaultFiles.map((path) => ({ path })),
+          today,
+        ).current;
+      } catch (_error) {
+        dailyPath = null;
+      }
+      if (dailyPath && !files.has(dailyPath)) {
+        const loaded = await this.readDependencyNoteContent(dailyPath, null, "");
+        if (loaded !== null) {
+          files.set(dailyPath, loaded);
+        }
+      }
+      for (const filePath of [...files.keys()]) {
+        const content = files.get(filePath);
+        const lines = String(content || "").split(/\r?\n/);
+        for (let line = 0; line < lines.length; line += 1) {
+          const collection = collectDependencyNavigationBullets(content, line);
+          if (collection.reason) {
+            continue;
+          }
+          for (const target of collection.targets) {
+            const targetPath = dependencyPathForLinkNote(
+              target.note,
+              filePath,
+              resolveLinkpath,
+            );
+            if (targetPath && !files.has(targetPath)) {
+              const loaded = await this.readDependencyNoteContent(
+                targetPath,
+                null,
+                filePath,
+              );
+              if (loaded !== null) {
+                files.set(targetPath, loaded);
+              }
+            }
+          }
+        }
+      }
+      if (args.expected instanceof Map || (args.expected && typeof args.expected === "object")) {
+        const expected =
+          args.expected instanceof Map
+            ? args.expected
+            : new Map(Object.entries(args.expected));
+        for (const [filePath, expectedContent] of expected) {
+          const path = normalizeVaultRelativePath(filePath);
+          const live = files.get(path);
+          if (live !== undefined && String(live) !== String(expectedContent || "")) {
+            new Notice("changed — reopen");
+            return Object.freeze({
+              ok: false,
+              reason: "changed — reopen",
+              notice: "changed — reopen",
+              committed: Object.freeze([]),
+              failed: Object.freeze([]),
+              pomodoro: null,
+              blocksFailed: Object.freeze([]),
+            });
+          }
+        }
+      }
+      const blocksLinesEnabled =
+        args.blocksLinesEnabled !== undefined
+          ? args.blocksLinesEnabled === true
+          : loadBlocksLinesEnabled();
+      const registry = args.registry || (await readTasksStatusRegistry(this.app));
+      const needsRecovery = remove.length > 0;
+      const vaultContents = needsRecovery
+        ? await this.readDependencyRecoveryVaultContents(
+            sources[0] && sources[0].path,
+            files.get(normalizeVaultRelativePath((sources[0] && sources[0].path) || "")) || "",
+          )
+        : null;
+      const lanesByPath = new Map();
+      const subtreePreps = [];
+      for (const ref of add) {
+        const path = normalizeVaultRelativePath(ref && ref.path);
+        if (!path || lanesByPath.has(path) || !files.has(path)) {
+          continue;
+        }
+        const prep = await this.prepareSubtreeForDependencyPlan(path, files.get(path), {
+          files,
+          add: sources,
+          remove: [],
+          today,
+        });
+        if (prep) {
+          if (Array.isArray(prep.lanes) && prep.lanes.length > 0) {
+            lanesByPath.set(path, prep.lanes);
+          }
+          subtreePreps.push(Object.freeze({ path, prep }));
+        }
+      }
+      const stamper =
+        typeof args.stamper === "function"
+          ? args.stamper
+          : this.getFreshnessStampLine();
+      const dateText =
+        args.dateText !== undefined
+          ? args.dateText
+          : typeof this.getFreshnessDateText === "function"
+            ? this.getFreshnessDateText()
+            : undefined;
+      const plan = planBlocksEdit({
+        sources,
+        add,
+        remove,
+        files,
+        vaultFiles,
+        resolveLinkpath,
+        blocksLinesEnabled,
+        stamper,
+        dateText,
+        projectLaneStatusesByPath: lanesByPath,
+        recovery: {
+          registry,
+          today,
+          vaultContents,
+          markUnblockedLine: navFreshnessMarkUnblockedLine(
+            typeof this.getFreshnessApi === "function"
+              ? this.getFreshnessApi()
+              : null,
+          ),
+          ...navNoteScopeFlags(
+            normalizeVaultRelativePath((sources[0] && sources[0].path) || ""),
+          ),
+        },
+      });
+      if (!plan.ok) {
+        return Object.freeze({
+          ok: false,
+          reason: plan.reason,
+          notice: null,
+          committed: Object.freeze([]),
+          failed: Object.freeze([]),
+          pomodoro: null,
+          blocksFailed: Object.freeze([]),
+        });
+      }
+      if (!plan.changed) {
+        return Object.freeze({
+          ok: true,
+          reason: "unchanged",
+          notice: null,
+          committed: Object.freeze([]),
+          failed: Object.freeze([]),
+          pomodoro: null,
+          blocksFailed: Object.freeze([]),
+        });
+      }
+      const sourceWrites = plan.sourceWrites.map((entry) => ({ ...entry }));
+      const dependentWrites = plan.dependentWrites.map((entry) => ({ ...entry }));
+      const extraPomodoroTargets = [];
+      for (const entry of subtreePreps) {
+        const write =
+          dependentWrites.find((item) => item.path === entry.path) ||
+          sourceWrites.find((item) => item.path === entry.path);
+        if (!write || !entry.prep) {
+          continue;
+        }
+        let planned = null;
+        try {
+          planned = await this.planSubtreePassForPrjEdit(
+            entry.path,
+            write.original,
+            write.nextContent,
+            {
+              files,
+              descendantTexts: entry.prep.texts,
+              childrenMap: entry.prep.childrenMap,
+              notePaths: entry.prep.notePaths,
+              today,
+              registry,
+            },
+          );
+        } catch (_error) {
+          planned = null;
+        }
+        if (
+          planned &&
+          planned.pass &&
+          Array.isArray(planned.pass.pomodoroTargets)
+        ) {
+          extraPomodoroTargets.push(...planned.pass.pomodoroTargets);
+        }
+      }
+      const pomodoroTargets = collectDependencyPlanPomodoroTargets([
+        { summary: { pomodoroTargets: plan.pomodoroTargets } },
+        { summary: { pomodoroTargets: extraPomodoroTargets } },
+      ]);
+      const foldPath =
+        dailyPath && sourceWrites.some((entry) => entry.path === dailyPath)
+          ? dailyPath
+          : dailyPath && dependentWrites.some((entry) => entry.path === dailyPath)
+            ? dailyPath
+            : null;
+      const foldWrite = foldPath
+        ? sourceWrites.find((entry) => entry.path === foldPath) ||
+          dependentWrites.find((entry) => entry.path === foldPath)
+        : null;
+      const pomodoroParent = foldWrite
+        ? foldWrite.path
+        : (sourceWrites[0] && sourceWrites[0].path) ||
+          (dependentWrites[0] && dependentWrites[0].path) ||
+          "";
+      const pomodoroBefore = foldWrite
+        ? foldWrite.original
+        : files.get(pomodoroParent) || "";
+      const pomodoroNext = foldWrite
+        ? foldWrite.nextContent
+        : files.get(pomodoroParent) || "";
+      let pomodoroPrep = await prepareDependencyPomodoroCleanup(
+        (snapshotOptions) =>
+          this.readDeferredPomodoroSnapshot(this.app, snapshotOptions),
+        pomodoroTargets,
+        pomodoroParent,
+        pomodoroBefore,
+        pomodoroNext,
+        today,
+      );
+      if (foldWrite && pomodoroPrep.commitContent !== foldWrite.nextContent) {
+        foldWrite.nextContent = pomodoroPrep.commitContent;
+      }
+      for (const write of sourceWrites) {
+        const result = await this.writeBlocksEditNote(
+          write.path,
+          write.original,
+          write.nextContent,
+        );
+        if (!result.ok) {
+          new Notice("changed — reopen");
+          return Object.freeze({
+            ok: false,
+            reason: "changed — reopen",
+            notice: "changed — reopen",
+            committed: Object.freeze([]),
+            failed: Object.freeze([]),
+            pomodoro: null,
+            blocksFailed: Object.freeze([]),
+          });
+        }
+      }
+      const committed = [];
+      const failed = [];
+      for (const write of dependentWrites) {
+        const result = await this.writeBlocksEditNote(
+          write.path,
+          write.original,
+          write.nextContent,
+        );
+        const refs = (write.tPlans || []).map((entry) =>
+          Object.freeze({
+            path: write.path,
+            line: entry.parentLine,
+            blockId:
+              getTrailingBlockId(
+                String(write.nextContent.split(/\r?\n/)[entry.parentLine] || ""),
+              ) ||
+              (entry.row && entry.row.blockId) ||
+              "",
+            kind: entry.row && entry.row.kind,
+          }),
+        );
+        if (result.ok) {
+          for (const ref of refs) {
+            committed.push(ref);
+          }
+        } else {
+          for (const ref of refs) {
+            failed.push(ref);
+          }
+        }
+      }
+      for (const write of sourceWrites) {
+        if (!write.foldedDependents) {
+          continue;
+        }
+        const note = (plan.notePlans || []).find(
+          (entry) => entry.path === write.path,
+        );
+        for (const entry of (note && note.tPlans) || []) {
+          committed.push(
+            Object.freeze({
+              path: write.path,
+              line: entry.parentLine,
+              blockId:
+                getTrailingBlockId(
+                  String(write.nextContent.split(/\r?\n/)[entry.parentLine] || ""),
+                ) ||
+                (entry.row && entry.row.blockId) ||
+                "",
+              kind: entry.row && entry.row.kind,
+            }),
+          );
+        }
+      }
+      let blocksFailed = [];
+      if (blocksLinesEnabled) {
+        for (const source of plan.sources || []) {
+          const liveEditor = this.findBlocksEditOpenEditor(source.path);
+          const liveContent = liveEditor
+            ? String(liveEditor.getValue() || "")
+            : files.has(source.path)
+              ? String(
+                  (await this.readDependencyNoteContent(source.path, null, "")) ??
+                    files.get(source.path),
+                )
+              : "";
+          const addCommitted = [];
+          const removeCommitted = [];
+          for (const ref of committed) {
+            if (!ref.blockId) {
+              continue;
+            }
+            if (ref.kind === "remove") {
+              removeCommitted.push({ path: ref.path, blockId: ref.blockId });
+            } else {
+              addCommitted.push({ path: ref.path, blockId: ref.blockId });
+            }
+          }
+          const mirror = planBlocksMirrorForSource({
+            content: liveContent,
+            sourcePath: source.path,
+            sourceBlockId:
+              getTrailingBlockId(
+                String(liveContent.split(/\r?\n/)[source.line] || ""),
+              ) || source.blockId,
+            add: addCommitted,
+            remove: removeCommitted,
+            vaultFiles,
+            resolveLinkpath,
+            blocksLinesEnabled: true,
+          });
+          if (!mirror.ok) {
+            blocksFailed.push(source.path);
+            continue;
+          }
+          if (!mirror.changed) {
+            continue;
+          }
+          const written = await this.writeBlocksEditNote(
+            source.path,
+            liveContent,
+            mirror.nextContent,
+          );
+          if (!written.ok) {
+            blocksFailed.push(source.path);
+          }
+        }
+      }
+      const pomodoroDone = await finishProjectPomodoroCleanup(
+        (snapshot, cleanup) =>
+          this.writeDeferredPomodoroCleanup(snapshot, cleanup),
+        pomodoroPrep.snapshot,
+        pomodoroPrep.cleanup,
+      );
+      let subtree = null;
+      const subtreeRoots = [];
+      for (const write of [...sourceWrites, ...dependentWrites]) {
+        const landed = failed.every(
+          (ref) => normalizeVaultRelativePath(ref.path) !== write.path,
+        );
+        if (!landed) {
+          continue;
+        }
+        subtreeRoots.push({
+          path: write.path,
+          beforeText: write.original,
+          afterText: write.nextContent,
+        });
+      }
+      if (
+        subtreeRoots.length > 0 &&
+        typeof this.applySubtreePassesForRoots === "function"
+      ) {
+        try {
+          subtree = await this.applySubtreePassesForRoots(subtreeRoots, {
+            today,
+          });
+        } catch (_error) {
+          subtree = null;
+        }
+      }
+      const notice = buildBlocksEditNotice({
+        sourceCount: (plan.sources || []).length,
+        added: plan.added,
+        removed: plan.removed,
+        takesLane: plan.takesLane,
+        failedCount: failed.length,
+        pomodoroRemoved: pomodoroDone.removed,
+        pomodoroFailed: pomodoroDone.failed,
+        blocksFailed: blocksFailed.length > 0,
+      });
+      const withSubtree = subtree && subtreePassNoticeSuffix(subtree)
+        ? `${notice} ${subtreePassNoticeSuffix(subtree)}`
+        : notice;
+      return Object.freeze({
+        ok: true,
+        reason: failed.length > 0 ? "partial" : null,
+        notice: withSubtree,
+        committed: Object.freeze(committed),
+        failed: Object.freeze(failed),
+        pomodoro: Object.freeze({
+          removed: pomodoroDone.removed,
+          failed: pomodoroDone.failed,
+        }),
+        blocksFailed: Object.freeze(blocksFailed),
+        subtree,
+      });
+    } catch (_error) {
+      return Object.freeze({
+        ok: false,
+        reason: "apply-failed",
+        notice: null,
+        committed: Object.freeze([]),
+        failed: Object.freeze([]),
+        pomodoro: null,
+        blocksFailed: Object.freeze([]),
+      });
+    }
   }
 }
 // ---- src/600-plugin-dependency-mirror.js ----
@@ -69264,6 +70493,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysProjectSubtreeWritersMixin,
   BobNavigationHotkeysDependencyStageMixin,
   BobNavigationHotkeysBlocksFollowUpsMixin,
+  BobNavigationHotkeysBlocksEditMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysCountedTaskMoveMixin,
@@ -69901,6 +71131,11 @@ module.exports.helpers = {
   canonicalDependencyLink,
   findTaskLineByTrailingBlockId,
   planDependencyEdit,
+  mergeTargetPreparations,
+  planBlocksEdit,
+  planBlocksMirrorForSource,
+  buildBlocksEditNotice,
+  strongerTaskLine,
   applyDependencyPlanLines,
   dependencyStageFieldTier,
   dependencyStageTermTier,

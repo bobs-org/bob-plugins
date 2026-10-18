@@ -39,6 +39,8 @@
   "239-plugin-stats-panel-models.js",
   "239-plugin-stats-panel-render.js",
   "240-plugin-freshness-status.js",
+  "241-plugin-reading-board-data.js",
+  "242-plugin-reading-board-models.js",
   "250-plugin-freshness-mark-model.js",
   "260-plugin-freshness-mark-render.js",
   "264-plugin-task-tag-marks.js",

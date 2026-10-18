@@ -1,0 +1,1446 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "command": "ref list",
+  "generated_at": "2026-10-06T12:00:00",
+  "coverage": {
+    "ref_dir": "ref",
+    "notes": 46,
+    "skipped": 3,
+    "intake": "not_checked",
+    "scope": "Only notes under ref/ are indexed. Zorg-era status:: reading records outside ref/ are not until `bob ref migrate-zorg` moves them into ref/zorg/; run `bob ref doctor` to count any that remain. Absence from this index is never proof that something was not read.",
+    "annotations": "Annotations are the snapshot written by the last Highlights scan, not live PDF state."
+  },
+  "filters": {
+    "reading_state": [
+      "started",
+      "queued",
+      "finished",
+      "dropped",
+      "unknown"
+    ],
+    "reading_state_defaulted": false,
+    "status": [
+      "ready",
+      "next",
+      "wip"
+    ],
+    "ref_type": null,
+    "origin": null,
+    "parent": null,
+    "since": null,
+    "limit": null,
+    "undated_excluded": 0
+  },
+  "matched": 26,
+  "returned": 26,
+  "truncated": false,
+  "hidden": {
+    "superseded": 0
+  },
+  "library": {
+    "notes": 45,
+    "finished": 10,
+    "started": 2,
+    "queued": 25,
+    "dropped": 3,
+    "unknown": 5
+  },
+  "refs": [
+    {
+      "path": "ref/papers/two_trackers.md",
+      "link": "[[ref/papers/two_trackers]]",
+      "title": "Two Trackers",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "wip",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "started",
+      "reading_state_source": "frontmatter:wip",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": null,
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "multiple_ref_trackers",
+          "detail": "2 ^ref tracker lines; using frontmatter status"
+        },
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/blocked_mark.md",
+      "link": "[[ref/papers/blocked_mark]]",
+      "title": "Blocked Mark Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "next",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/papers/blocked_mark.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/blocked_mark#^ref]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/chat/chat_next.md",
+      "link": "[[ref/chat/chat_next]]",
+      "title": "Chat Next Episode",
+      "marker_id": null,
+      "origin": "agent-report",
+      "ref_type": "chat",
+      "era": "modern",
+      "status": "next",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[*]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/chat/chat_next.md",
+        "block_id": "ref",
+        "link": "[[ref/chat/chat_next#^ref]]",
+        "mark": "*",
+        "archived": false,
+        "priority": "high",
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/prereq_open.md",
+      "link": "[[ref/papers/prereq_open]]",
+      "title": "Open Prerequisite Paper",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "next",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[*]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-prereq-open",
+        "link": "[[sase#^ref-prereq-open]]",
+        "mark": "*",
+        "archived": false,
+        "priority": "high",
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/created_note.md",
+      "link": "[[ref/papers/created_note]]",
+      "title": "created note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/papers/created_note.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/created_note#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": "low",
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": "2026-09-10",
+      "added_source": "created",
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/bad_yaml.md",
+      "link": "[[ref/papers/bad_yaml]]",
+      "title": "[unclosed list",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "frontmatter:ready",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": "fallback_parent",
+      "task": null,
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "invalid_yaml",
+          "detail": "did not find expected ',' or ']' at line 3 column 13, while parsing a flow sequence at line 2 column 8"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/arxiv_doi.md",
+      "link": "[[ref/papers/arxiv_doi]]",
+      "title": "Attention DOI Twin",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": "transformers",
+      "task": {
+        "path": "ref/papers/arxiv_doi.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/arxiv_doi#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [
+        "https://doi.org/10.48550/arXiv.1706.03762"
+      ],
+      "identity": {
+        "keys": [
+          "https://doi.org/10.48550/arXiv.1706.03762",
+          "doi:10.48550/arxiv.1706.03762",
+          "arxiv:1706.03762"
+        ],
+        "arxiv": "1706.03762",
+        "doi": "10.48550/arxiv.1706.03762"
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": "lib/papers/attention-v2.pdf",
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "duplicate_identity",
+          "detail": "shared identity arxiv:1706.03762 across PDFs: ref/papers/arxiv_doi.md, ref/papers/arxiv_pdf.md"
+        },
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/chat/chat_ready.md",
+      "link": "[[ref/chat/chat_ready]]",
+      "title": "Chat Ready Episode",
+      "marker_id": null,
+      "origin": "agent-report",
+      "ref_type": "chat",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/chat/chat_ready.md",
+        "block_id": "ref",
+        "link": "[[ref/chat/chat_ready#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": "highest",
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/combo_blocked.md",
+      "link": "[[ref/papers/combo_blocked]]",
+      "title": "Combo Blocked Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [
+        {
+          "kind": "local_dependency",
+          "prerequisites": [
+            {
+              "id": "sase__ref-prereq-open",
+              "title": "Open Prerequisite Paper",
+              "path": "sase.md",
+              "block_id": "ref-prereq-open",
+              "link": "[[sase#^ref-prereq-open]]",
+              "mark": "*",
+              "ref_path": "ref/papers/prereq_open.md"
+            }
+          ]
+        },
+        {
+          "kind": "local_schedule",
+          "date": "2026-11-01"
+        },
+        {
+          "kind": "project",
+          "project": "sase_post_blog.md",
+          "link": "[[sase_post_blog]]"
+        }
+      ],
+      "parent": "sase_post_blog",
+      "task": {
+        "path": "sase_post_blog.md",
+        "block_id": "ref-combo",
+        "link": "[[sase_post_blog#^ref-combo]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": "2026-11-01"
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/dep_closed.md",
+      "link": "[[ref/papers/dep_closed]]",
+      "title": "Depends On Closed",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-dep-closed",
+        "link": "[[sase#^ref-dep-closed]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/dep_done.md",
+      "link": "[[ref/papers/dep_done]]",
+      "title": "Depends On Done Archive",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-dep-done",
+        "link": "[[sase#^ref-dep-done]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/dep_open_plain.md",
+      "link": "[[ref/papers/dep_open_plain]]",
+      "title": "Depends On Open Plain",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [
+        {
+          "kind": "local_dependency",
+          "prerequisites": [
+            {
+              "id": "sase__plain-open",
+              "title": "Open non-ref work",
+              "path": "sase.md",
+              "block_id": "plain-open",
+              "link": "[[sase#^plain-open]]",
+              "mark": " ",
+              "ref_path": null
+            }
+          ]
+        }
+      ],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-dep-open-plain",
+        "link": "[[sase#^ref-dep-open-plain]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/dep_open_ref.md",
+      "link": "[[ref/papers/dep_open_ref]]",
+      "title": "Depends On Open Ref",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [
+        {
+          "kind": "local_dependency",
+          "prerequisites": [
+            {
+              "id": "sase__ref-prereq-open",
+              "title": "Open Prerequisite Paper",
+              "path": "sase.md",
+              "block_id": "ref-prereq-open",
+              "link": "[[sase#^ref-prereq-open]]",
+              "mark": "*",
+              "ref_path": "ref/papers/prereq_open.md"
+            }
+          ]
+        }
+      ],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-dep-open-ref",
+        "link": "[[sase#^ref-dep-open-ref]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/dep_unresolved.md",
+      "link": "[[ref/papers/dep_unresolved]]",
+      "title": "Depends On Unresolved",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-dep-unresolved",
+        "link": "[[sase#^ref-dep-unresolved]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/blogs/dup_stem.md",
+      "link": "[[ref/blogs/dup_stem]]",
+      "title": "Duplicate Stem in Blogs",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "blogs",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/blogs/dup_stem.md",
+        "block_id": "ref",
+        "link": "[[ref/blogs/dup_stem#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/dup_stem.md",
+      "link": "[[ref/papers/dup_stem]]",
+      "title": "Duplicate Stem in Papers",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/papers/dup_stem.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/dup_stem#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/sched_future.md",
+      "link": "[[ref/papers/sched_future]]",
+      "title": "Future Schedule Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [
+        {
+          "kind": "local_schedule",
+          "date": "2026-10-23"
+        }
+      ],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-sched-future",
+        "link": "[[sase#^ref-sched-future]]",
+        "mark": "?",
+        "archived": false,
+        "priority": "highest",
+        "scheduled": "2026-10-23"
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/blogs/go_link.md",
+      "link": "[[ref/blogs/go_link]]",
+      "title": "Go Link Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "blogs",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/blogs/go_link.md",
+        "block_id": "ref",
+        "link": "[[ref/blogs/go_link#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": "medium",
+        "scheduled": null
+      },
+      "urls": [
+        "go/capture-thing"
+      ],
+      "identity": {
+        "keys": [
+          "raw:go/capture-thing"
+        ],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "opaque_url",
+          "detail": "non-public or non-URL value: go/capture-thing"
+        },
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/inline_code.md",
+      "link": "[[ref/papers/inline_code]]",
+      "title": "Inline Code Fields",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/papers/inline_code.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/inline_code#^ref]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/prj_blocked.md",
+      "link": "[[ref/papers/prj_blocked]]",
+      "title": "Project Blocked Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [
+        {
+          "kind": "project",
+          "project": "sase_post_blog.md",
+          "link": "[[sase_post_blog]]"
+        }
+      ],
+      "parent": "sase_post_blog",
+      "task": {
+        "path": "sase_post_blog.md",
+        "block_id": "ref-prj-blocked",
+        "link": "[[sase_post_blog#^ref-prj-blocked]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/real_note.md",
+      "link": "[[ref/papers/real_note]]",
+      "title": "Real Note With Region Oddities",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": {
+        "path": "ref/papers/real_note.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/real_note#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 1,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        },
+        {
+          "code": "preamble_excluded",
+          "detail": "1 preamble block(s) excluded"
+        },
+        {
+          "code": "unparsed_region",
+          "detail": "1 unparsed region block(s); first: > [!summary] Something new the parser cannot classify.\n^h-cccccccccccc"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/synced_paper.md",
+      "link": "[[ref/papers/synced_paper]]",
+      "title": "Synced Paper on Reference Indexing",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": "reading_list",
+      "task": {
+        "path": "ref/papers/synced_paper.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/synced_paper#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": null,
+        "scheduled": null
+      },
+      "urls": [
+        "https://example.com/papers/synced-paper",
+        "https://example.com/papers/synced-paper-v2"
+      ],
+      "identity": {
+        "keys": [
+          "https://example.com/papers/synced-paper",
+          "https://example.com/papers/synced-paper-v2"
+        ],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": "lib/papers/synced_paper.pdf",
+      "audio": null,
+      "annotation_count": 1,
+      "comment_count": 1,
+      "snapshot": {
+        "synced_at": "2026-09-20T10:00:00",
+        "highlights_count": 3
+      },
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "marker_mirror_excluded",
+          "detail": "1 mirror block(s) excluded: h-222222222222"
+        },
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/sched_today.md",
+      "link": "[[ref/papers/sched_today]]",
+      "title": "Today Schedule Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [],
+      "parent": "sase",
+      "task": {
+        "path": "sase.md",
+        "block_id": "ref-sched-today",
+        "link": "[[sase#^ref-sched-today]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": "2026-10-06"
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": []
+    },
+    {
+      "path": "ref/papers/unknown_mark.md",
+      "link": "[[ref/papers/unknown_mark]]",
+      "title": "Unknown Mark Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "frontmatter:ready",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": null,
+      "task": null,
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        },
+        {
+          "code": "unknown_ref_mark",
+          "detail": "unsupported ^ref checkbox mark [>]"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/v1_scheduled.md",
+      "link": "[[ref/papers/v1_scheduled]]",
+      "title": "V1 Scheduled Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[?]",
+      "blocked": true,
+      "blocked_by": [
+        {
+          "kind": "local_schedule",
+          "date": "2026-10-23"
+        }
+      ],
+      "parent": null,
+      "task": {
+        "path": "ref/papers/v1_scheduled.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/v1_scheduled#^ref]]",
+        "mark": "?",
+        "archived": false,
+        "priority": null,
+        "scheduled": "2026-10-23"
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    },
+    {
+      "path": "ref/papers/wiki_parent.md",
+      "link": "[[ref/papers/wiki_parent]]",
+      "title": "Wiki Parent Note",
+      "marker_id": null,
+      "origin": "external",
+      "ref_type": "papers",
+      "era": "modern",
+      "status": "ready",
+      "status_sync": "ok",
+      "legacy_status": null,
+      "reading_state": "queued",
+      "reading_state_source": "ref_task:[ ]",
+      "blocked": false,
+      "blocked_by": [],
+      "parent": "sase_ref",
+      "task": {
+        "path": "ref/papers/wiki_parent.md",
+        "block_id": "ref",
+        "link": "[[ref/papers/wiki_parent#^ref]]",
+        "mark": " ",
+        "archived": false,
+        "priority": "lowest",
+        "scheduled": null
+      },
+      "urls": [],
+      "identity": {
+        "keys": [],
+        "arxiv": null,
+        "doi": null
+      },
+      "author": null,
+      "published": null,
+      "captured": null,
+      "added": null,
+      "added_source": null,
+      "finished": null,
+      "finished_source": null,
+      "source_pdf": null,
+      "audio": null,
+      "annotation_count": 0,
+      "comment_count": 0,
+      "snapshot": null,
+      "research_ref": null,
+      "superseded_by": null,
+      "diagnostics": [
+        {
+          "code": "open_v1_tracker",
+          "detail": "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note"
+        }
+      ]
+    }
+  ]
+}

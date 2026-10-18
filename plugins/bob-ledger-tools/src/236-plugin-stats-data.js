@@ -4,8 +4,10 @@
 // summary, and display string; this file only moves JSON. Readers decode
 // defensively and reject only a different `schema_version`.
 
-const STATS_FETCH_TIMEOUT_MS = 20000;
-const STATS_FETCH_MAX_BUFFER = 32 * 1024 * 1024;
+const BOB_SPAWN_TIMEOUT_MS = 20000;
+const BOB_SPAWN_MAX_BUFFER = 32 * 1024 * 1024;
+const STATS_FETCH_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const STATS_FETCH_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
 const STATS_CACHE_SIZE = 8;
 const STATS_REVALIDATE_DEBOUNCE_MS = 3000;
 const STATS_SCHEMA_VERSION = 1;
@@ -335,6 +337,177 @@ function statsFirstLine(stderr) {
   }
 }
 
+// Shared desktop process boundary for bob JSON commands. The caller owns
+// command-specific decoding; this helper only resolves/spawns bob and maps
+// process failures. Keep the vault and color environment consistent across
+// blocks that read bob output.
+function bobSpawnJson(args, decode, options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const execFile =
+    opts.execFile ||
+    (() => {
+      try {
+        const childProcess = planRequireOptionalNodeModule("child_process");
+        return childProcess && typeof childProcess.execFile === "function"
+          ? childProcess.execFile
+          : null;
+      } catch (error) {
+        return null;
+      }
+    })();
+  let resolved = opts.resolved;
+  if (!resolved) {
+    try {
+      resolved = typeof opts.resolveBobPath === "function"
+        ? opts.resolveBobPath()
+        : { path: "bob", source: "path" };
+    } catch (error) {
+      resolved = { path: "bob", source: "path" };
+    }
+  }
+  if (!resolved || typeof resolved.path !== "string" || !resolved.path) {
+    resolved = { path: "bob", source: "path" };
+  }
+  const tried = Array.isArray(opts.tried)
+    ? opts.tried
+    : statsBobTriedList({ resolved });
+  const commandLabel =
+    typeof opts.commandLabel === "string" && opts.commandLabel
+      ? opts.commandLabel
+      : "bob";
+  const timeout =
+    Number.isFinite(opts.timeout) && opts.timeout > 0
+      ? opts.timeout
+      : BOB_SPAWN_TIMEOUT_MS;
+  const maxBuffer =
+    Number.isFinite(opts.maxBuffer) && opts.maxBuffer > 0
+      ? opts.maxBuffer
+      : BOB_SPAWN_MAX_BUFFER;
+  const firstLine = typeof opts.firstLine === "function" ? opts.firstLine : statsFirstLine;
+  const decoder = typeof decode === "function" ? decode : () => ({
+    ok: false,
+    code: "bad-shape",
+    message: `${commandLabel} returned no JSON decoder.`,
+    detail: "",
+  });
+  return new Promise((resolve) => {
+    if (typeof execFile !== "function") {
+      resolve({
+        ok: false,
+        code: "bob-not-found",
+        message: "Spawning bob needs the desktop app.",
+        detail: "",
+        tried,
+      });
+      return;
+    }
+    let env = null;
+    try {
+      const base = (typeof process !== "undefined" && process.env) || {};
+      env = { ...base };
+    } catch (error) {
+      env = {};
+    }
+    try {
+      const vaultPath =
+        opts.vaultPath !== undefined
+          ? opts.vaultPath
+          : typeof opts.getVaultPath === "function"
+            ? opts.getVaultPath()
+            : null;
+      if (vaultPath) {
+        env.BOB_DIR = vaultPath;
+      }
+      env.NO_COLOR = "1";
+    } catch (error) {
+      // Environment augmentation is best-effort.
+    }
+    let settled = false;
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(result);
+    };
+    const decodeOutput = (stdout, stderr) => {
+      let result = null;
+      try {
+        result = decoder(stdout, stderr);
+      } catch (error) {
+        result = {
+          ok: false,
+          code: "bad-json",
+          message: `${commandLabel} output could not be decoded.`,
+          detail: firstLine(stderr),
+        };
+      }
+      if (result && result.ok) {
+        return { ok: true, report: result.report };
+      }
+      const failure = result && typeof result === "object" ? result : {};
+      return {
+        ok: false,
+        code: typeof failure.code === "string" ? failure.code : "failed",
+        message:
+          typeof failure.message === "string" && failure.message
+            ? failure.message
+            : `${commandLabel} failed.`,
+        detail: failure.detail || firstLine(stderr),
+        tried,
+      };
+    };
+    const notFound = () => ({
+      ok: false,
+      code: "bob-not-found",
+      message: `bob was not found at ${resolved.path}.`,
+      detail: "",
+      tried,
+    });
+    try {
+      const child = execFile(
+        resolved.path,
+        Array.isArray(args) ? args : [],
+        { env, timeout, maxBuffer },
+        (error, stdout, stderr) => {
+          if (error && error.code === "ENOENT") {
+            finish(notFound());
+            return;
+          }
+          if (error && error.killed) {
+            finish({
+              ok: false,
+              code: "timeout",
+              message: `${commandLabel} timed out after ${Math.round(timeout / 1000)} s.`,
+              detail: firstLine(stderr),
+              tried,
+            });
+            return;
+          }
+          const decoded = decodeOutput(stdout, stderr);
+          finish(decoded);
+        },
+      );
+      void child;
+    } catch (error) {
+      if (error && error.code === "ENOENT") {
+        finish(notFound());
+        return;
+      }
+      finish({
+        ok: false,
+        code: "failed",
+        message:
+          error && error.message
+            ? String(error.message)
+            : `${commandLabel} failed to run.`,
+        detail: "",
+        tried,
+      });
+    }
+  });
+}
+
 // Actionable error card model: what happened, what to try, and whether a
 // Retry button applies. Never throws.
 function statsErrorModel(result, options = {}) {
@@ -446,130 +619,17 @@ class BobLedgerToolsStatsDataMixin {
   }
 
   statsSpawnFetch(args, options = {}) {
-    const execFile =
-      options.execFile ||
-      (() => {
-        try {
-          const childProcess = planRequireOptionalNodeModule("child_process");
-          return (
-            childProcess && typeof childProcess.execFile === "function"
-              ? childProcess.execFile
-              : null
-          );
-        } catch (error) {
-          return null;
-        }
-      })();
-    const resolved =
-      options.resolved || (typeof this.apiStatsBobPath === "function"
-        ? this.apiStatsBobPath()
-        : { path: "bob", source: "path" });
-    const tried = options.tried || statsBobTriedList({ resolved });
-    return new Promise((resolve) => {
-      if (typeof execFile !== "function") {
-        // Desktop-only spawn: no child_process off desktop.
-        resolve({
-          ok: false,
-          code: "bob-not-found",
-          message: "Spawning bob needs the desktop app.",
-          detail: "",
-          tried,
-        });
-        return;
-      }
-      let env = null;
-      try {
-        const base = (typeof process !== "undefined" && process.env) || {};
-        env = { ...base };
-      } catch (error) {
-        env = {};
-      }
-      try {
-        const vaultPath =
-          options.vaultPath !== undefined
-            ? options.vaultPath
-            : this.statsVaultBasePath();
-        if (vaultPath) {
-          env.BOB_DIR = vaultPath;
-        }
-        env.NO_COLOR = "1";
-      } catch (error) {
-        // Env augmentation is best-effort.
-      }
-      let settled = false;
-      const finish = (result) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(result);
-      };
-      let child = null;
-      try {
-        child = execFile(
-          resolved.path,
-          args,
-          { env, timeout: STATS_FETCH_TIMEOUT_MS, maxBuffer: STATS_FETCH_MAX_BUFFER },
-          (error, stdout, stderr) => {
-            if (error) {
-              if (error.code === "ENOENT") {
-                finish({
-                  ok: false,
-                  code: "bob-not-found",
-                  message: `bob was not found at ${resolved.path}.`,
-                  detail: "",
-                  tried,
-                });
-                return;
-              }
-              if (error.killed) {
-                finish({
-                  ok: false,
-                  code: "timeout",
-                  message: "bob stats timed out after 20 s.",
-                  detail: statsFirstLine(stderr),
-                  tried,
-                });
-                return;
-              }
-              const decoded = statsDecodeReport(stdout, stderr);
-              if (decoded.ok) {
-                finish({ ok: true, report: decoded.report });
-                return;
-              }
-              finish({
-                ok: false,
-                code: decoded.code,
-                message: decoded.message,
-                detail: decoded.detail || statsFirstLine(stderr),
-                tried,
-              });
-              return;
-            }
-            finish(statsDecodeReport(stdout, stderr));
-          },
-        );
-      } catch (error) {
-        if (error && error.code === "ENOENT") {
-          finish({
-            ok: false,
-            code: "bob-not-found",
-            message: `bob was not found at ${resolved.path}.`,
-            detail: "",
-            tried,
-          });
-          return;
-        }
-        finish({
-          ok: false,
-          code: "failed",
-          message:
-            error && error.message ? String(error.message) : "bob stats failed to run.",
-          detail: "",
-          tried,
-        });
-      }
-      void child;
+    return bobSpawnJson(args, statsDecodeReport, {
+      ...options,
+      commandLabel: "bob stats",
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () => this.statsVaultBasePath(),
+      timeout: STATS_FETCH_TIMEOUT_MS,
+      maxBuffer: STATS_FETCH_MAX_BUFFER,
+      firstLine: statsFirstLine,
     });
   }
 

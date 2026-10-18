@@ -617,6 +617,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
+    this.setupReadingBoardData();
   }
 
   onunload() {
@@ -699,6 +700,11 @@ class BobLedgerToolsPlugin extends Plugin {
       this.teardownStatsBlock();
     } catch (error) {
       // Stats teardown is best-effort.
+    }
+    try {
+      this.teardownReadingBoardData();
+    } catch (error) {
+      // Reading Board data teardown is best-effort.
     }
     this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
     if (

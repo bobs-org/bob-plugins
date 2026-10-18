@@ -106,7 +106,9 @@ function readingBoardNormalizeRow(value) {
     blocked_by: rawBlockedBy.map(readingBoardNormalizeReason).filter(Boolean),
     task,
     added: readingBoardString(value.added),
-    audio: value.audio === true,
+    // `bob ref list` emits the audio path (or null). The board only needs to
+    // know whether a path is present, but keep that contract at the boundary.
+    audio: typeof value.audio === "string" && value.audio.trim().length > 0,
     annotation_count:
       Number.isInteger(value.annotation_count) && value.annotation_count >= 0
         ? value.annotation_count
@@ -281,6 +283,24 @@ class BobLedgerToolsReadingBoardDataMixin {
     }
   }
 
+  readingBoardLastGoodReport(key) {
+    const cached = this.readingBoardCacheGet(key);
+    if (cached) {
+      return cached.report;
+    }
+    for (const view of this.readingBoardViewsStore()) {
+      if (
+        view &&
+        view.unloaded !== true &&
+        readingBoardCacheKey(readingBoardBuildArgs(view.fence || {})) === key &&
+        view.report
+      ) {
+        return view.report;
+      }
+    }
+    return null;
+  }
+
   readingBoardSpawnFetch(args, options = {}) {
     return bobSpawnJson(args, readingBoardDecodeReport, {
       ...options,
@@ -300,125 +320,201 @@ class BobLedgerToolsReadingBoardDataMixin {
   }
 
   // Public: stale-while-revalidate `bob ref list` data keyed by its exact
-  // argv. Concurrent identical reads share a flight, and differing reads
-  // share at most one follow-up spawn.
+  // argv. Duplicate reads share a flight; refresh demand is coalesced by key
+  // and drained serially so one fence cannot erase another fence's refresh.
   apiReadingBoardFetch(options = {}) {
     const opts = options && typeof options === "object" ? options : {};
     const force = opts.force === true;
     const args = readingBoardBuildArgs(opts);
     const key = readingBoardCacheKey(args);
     const cached = this.readingBoardCacheGet(key);
-    if (this.readingBoardFlight && this.readingBoardFlight.key === key) {
-      return cached && !force
-        ? Promise.resolve({ report: cached.report, stale: true, error: null })
-        : this.readingBoardFlight.promise;
+    const generation = Math.max(
+      this.readingBoardVaultGeneration || 0,
+      Number.isInteger(opts.requiredGeneration) ? opts.requiredGeneration : 0,
+    );
+    if (this.readingBoardDataActive === false) {
+      return Promise.resolve(this.readingBoardUnloadedResult(key));
     }
-    if (this.readingBoardFlight) {
-      if (!this.readingBoardPendingFetch || this.readingBoardPendingFetch.key !== key) {
-        const replaced = this.readingBoardPendingFetch;
-        if (replaced && Array.isArray(replaced.waiters)) {
-          const oldCache = this.readingBoardCacheGet(replaced.key);
-          const oldResult = oldCache
-            ? { report: oldCache.report, stale: true, error: null }
-            : {
-                report: null,
-                stale: false,
-                error: {
-                  code: "superseded",
-                  message: "A newer Reading Board refresh replaced this request.",
-                },
-              };
-          for (const waiter of replaced.waiters) {
-            try {
-              waiter(oldResult);
-            } catch (error) {
-              // Waiter delivery is best-effort.
-            }
-          }
-        }
-        this.readingBoardPendingFetch = {
-          key,
-          args,
-          opts: { ...opts },
-          waiters: [],
-        };
+    const flight = this.readingBoardFlight;
+    if (flight) {
+      if (
+        flight.key === key &&
+        !force &&
+        generation <= flight.generation
+      ) {
+        return cached
+          ? Promise.resolve({ report: cached.report, stale: true, error: null, key })
+          : flight.promise;
       }
-      if (cached && !force) {
-        return Promise.resolve({ report: cached.report, stale: true, error: null });
+      const queued = this.readingBoardQueueFetch(key, args, opts, generation, force || !cached);
+      if (cached && !force && generation <= flight.generation) {
+        return Promise.resolve({ report: cached.report, stale: true, error: null, key });
       }
-      return new Promise((resolve) => {
-        this.readingBoardPendingFetch.waiters.push(resolve);
-      });
+      return queued;
     }
-    const run = async (runArgs, runKey, runOpts, hadCached) => {
+
+    const started = this.readingBoardStartFetch(args, key, opts, generation);
+    return cached && !force && generation <= started.generation
+      ? Promise.resolve({ report: cached.report, stale: true, error: null, key })
+      : started.promise;
+  }
+
+  readingBoardUnloadedResult(key) {
+    return {
+      report: null,
+      stale: false,
+      key,
+      error: { code: "unloaded", message: "The Reading Board has unloaded.", detail: "" },
+    };
+  }
+
+  readingBoardQueueFetch(key, args, opts, generation, waitForResult) {
+    if (!(this.readingBoardPendingFetches instanceof Map)) {
+      this.readingBoardPendingFetches = new Map();
+    }
+    let resolve = null;
+    const result = waitForResult
+      ? new Promise((done) => { resolve = done; })
+      : null;
+    let pending = this.readingBoardPendingFetches.get(key);
+    if (!pending) {
+      pending = { key, args, opts: { ...opts, force: true }, generation, waiters: [] };
+      this.readingBoardPendingFetches.set(key, pending);
+    } else {
+      pending.opts = { ...pending.opts, ...opts, force: true };
+      pending.generation = Math.max(pending.generation, generation);
+    }
+    if (resolve) {
+      pending.waiters.push(resolve);
+    }
+    return result || Promise.resolve({ report: null, stale: false, error: null, queued: true, key });
+  }
+
+  readingBoardStartFetch(args, key, opts, requiredGeneration) {
+    const epoch = this.readingBoardDataEpoch || 0;
+    const generation = Math.max(
+      this.readingBoardVaultGeneration || 0,
+      Number.isInteger(requiredGeneration) ? requiredGeneration : 0,
+    );
+    const flight = { key, args, opts: { ...opts }, generation, epoch, promise: null };
+    const finish = (outcome) => {
+      if (
+        this.readingBoardDataActive !== false &&
+        this.readingBoardDataEpoch === epoch
+      ) {
+        this.readingBoardDeliverFetchResult(flight, outcome);
+      }
+      return outcome;
+    };
+    const run = async () => {
+      if (
+        this.readingBoardDataActive === false ||
+        this.readingBoardDataEpoch !== epoch
+      ) {
+        return this.readingBoardUnloadedResult(key);
+      }
       try {
-        const result = await this.readingBoardSpawnFetch(runArgs, runOpts);
+        const result = await this.readingBoardSpawnFetch(args, opts);
         if (result && result.ok) {
-          this.readingBoardCacheSet(runKey, result.report);
-          if (hadCached) {
-            this.repaintReadingBoardBlocks();
-          }
-          return { report: result.report, stale: false, error: null };
-        }
-        if (hadCached) {
-          const staleEntry = this.readingBoardCacheGet(runKey);
+          this.readingBoardCacheSet(key, result.report);
           return {
-            report: staleEntry ? staleEntry.report : null,
-            stale: true,
-            error: result,
+            report: result.report,
+            stale: false,
+            error: null,
+            key,
+            generation,
           };
         }
-        return { report: null, stale: false, error: result };
+        const staleReport = this.readingBoardLastGoodReport(key);
+        return {
+          report: staleReport,
+          stale: Boolean(staleReport),
+          error: result || { code: "failed", message: "bob ref list failed.", detail: "" },
+          key,
+          generation,
+        };
       } catch (error) {
         const failure = {
           ok: false,
           code: "failed",
-          message:
-            error && error.message ? String(error.message) : "bob ref list failed.",
+          message: error && error.message ? String(error.message) : "bob ref list failed.",
           detail: "",
         };
-        if (hadCached) {
-          const staleEntry = this.readingBoardCacheGet(runKey);
-          return {
-            report: staleEntry ? staleEntry.report : null,
-            stale: true,
-            error: failure,
-          };
-        }
-        return { report: null, stale: false, error: failure };
+        const staleReport = this.readingBoardLastGoodReport(key);
+        return {
+          report: staleReport,
+          stale: Boolean(staleReport),
+          error: failure,
+          key,
+          generation,
+        };
       }
     };
-    const launch = (launchArgs, launchKey, launchOpts, hadCached) => {
-      const promise = run(launchArgs, launchKey, launchOpts, hadCached).finally(() => {
-        if (this.readingBoardFlight && this.readingBoardFlight.promise === promise) {
+    flight.promise = Promise.resolve()
+      .then(run)
+      .then(finish)
+      .finally(() => {
+        if (this.readingBoardFlight === flight) {
           this.readingBoardFlight = null;
-        }
-        if (this.readingBoardPendingFetch) {
-          const pending = this.readingBoardPendingFetch;
-          this.readingBoardPendingFetch = null;
-          const pendingCached = this.readingBoardCacheGet(pending.key);
-          const next = launch(
-            pending.args,
-            pending.key,
-            pending.opts,
-            Boolean(pendingCached),
-          );
-          for (const waiter of pending.waiters) {
-            try {
-              next.then(waiter);
-            } catch (error) {
-              // Waiter delivery is best-effort.
-            }
-          }
+          this.readingBoardStartNextFetch(epoch);
         }
       });
-      this.readingBoardFlight = { key: launchKey, promise };
-      return promise;
-    };
-    const flight = launch(args, key, opts, Boolean(cached));
-    return cached && !force
-      ? Promise.resolve({ report: cached.report, stale: true, error: null })
-      : flight;
+    this.readingBoardFlight = flight;
+    return flight;
+  }
+
+  readingBoardStartNextFetch(epoch = this.readingBoardDataEpoch || 0) {
+    if (
+      this.readingBoardDataActive === false ||
+      this.readingBoardDataEpoch !== epoch ||
+      this.readingBoardFlight ||
+      !(this.readingBoardPendingFetches instanceof Map)
+    ) {
+      return;
+    }
+    const first = this.readingBoardPendingFetches.entries().next();
+    if (first.done) {
+      return;
+    }
+    const [key, pending] = first.value;
+    this.readingBoardPendingFetches.delete(key);
+    const next = this.readingBoardStartFetch(
+      pending.args,
+      key,
+      pending.opts,
+      pending.generation,
+    );
+    for (const waiter of pending.waiters) {
+      next.promise.then(waiter, () => waiter(this.readingBoardUnloadedResult(key)));
+    }
+  }
+
+  readingBoardDeliverFetchResult(flight, result) {
+    if (!flight || !result || this.readingBoardDataActive === false) {
+      return;
+    }
+    for (const view of this.readingBoardViewsStore()) {
+      if (
+        !view ||
+        view.unloaded === true ||
+        readingBoardCacheKey(readingBoardBuildArgs(view.fence || {})) !== flight.key
+      ) {
+        continue;
+      }
+      if (result.error) {
+        if (result.report) {
+          view.refreshError = { error: result.error, at: Date.now() };
+        } else {
+          view.refreshError = null;
+        }
+      } else if (result.report) {
+        view.refreshError = null;
+        this.readingBoardViewDataApplied(view, result.generation);
+      }
+      if (typeof this.readingBoardRenderResult === "function") {
+        this.readingBoardRenderResult(view, result);
+      }
+    }
   }
 
   apiReadingBoardRefresh(options = {}) {
@@ -433,9 +529,11 @@ class BobLedgerToolsReadingBoardDataMixin {
     return this.readingBoardViews;
   }
 
-  readingBoardViewDataApplied(view) {
+  readingBoardViewDataApplied(view, generation) {
     if (view && typeof view === "object") {
-      view.dataGeneration = this.readingBoardVaultGeneration || 0;
+      view.dataGeneration = Number.isInteger(generation)
+        ? generation
+        : this.readingBoardVaultGeneration || 0;
       view.dataAt = Date.now();
     }
   }
@@ -454,17 +552,14 @@ class BobLedgerToolsReadingBoardDataMixin {
 
   revalidateReadingBoardBlocks() {
     for (const view of this.readingBoardViewsStore()) {
-      if (!view) {
+      if (!view || view.unloaded === true) {
         continue;
       }
-      Promise.resolve(this.apiReadingBoardFetch(view.fence || {})).then((result) => {
-        if (result && result.report) {
-          this.readingBoardViewDataApplied(view);
-          if (typeof this.paintReadingBoardBlock === "function") {
-            this.paintReadingBoardBlock(view);
-          }
-        }
-      }).catch(() => {});
+      Promise.resolve(this.apiReadingBoardFetch({
+        ...(view.fence || {}),
+        force: true,
+        requiredGeneration: this.readingBoardVaultGeneration || 0,
+      })).catch(() => {});
     }
   }
 
@@ -533,11 +628,14 @@ class BobLedgerToolsReadingBoardDataMixin {
     }
     if (this.readingBoardBlockDay !== day) {
       this.readingBoardBlockDay = day;
+      this.readingBoardVaultGeneration = (this.readingBoardVaultGeneration || 0) + 1;
       this.scheduleReadingBoardRevalidate("local-date-rollover");
     }
   }
 
   setupReadingBoardData() {
+    this.readingBoardDataActive = true;
+    this.readingBoardDataEpoch = (this.readingBoardDataEpoch || 0) + 1;
     try {
       const metadataCache = this.app && this.app.metadataCache;
       if (metadataCache && typeof metadataCache.on === "function") {
@@ -588,6 +686,8 @@ class BobLedgerToolsReadingBoardDataMixin {
   }
 
   teardownReadingBoardData() {
+    this.readingBoardDataActive = false;
+    this.readingBoardDataEpoch = (this.readingBoardDataEpoch || 0) + 1;
     try {
       if (this.readingBoardRevalidateTimer !== null && this.readingBoardRevalidateTimer !== undefined) {
         const clear =
@@ -603,12 +703,29 @@ class BobLedgerToolsReadingBoardDataMixin {
     this.readingBoardBlockDay = null;
     this.readingBoardVaultGeneration = 0;
     if (this.readingBoardViews instanceof Set) {
+      for (const view of this.readingBoardViews) {
+        if (view) {
+          view.unloaded = true;
+        }
+      }
       this.readingBoardViews.clear();
     }
     if (this.readingBoardCache instanceof Map) {
       this.readingBoardCache.clear();
     }
     this.readingBoardFlight = null;
-    this.readingBoardPendingFetch = null;
+    if (this.readingBoardPendingFetches instanceof Map) {
+      for (const [key, pending] of this.readingBoardPendingFetches) {
+        const result = this.readingBoardUnloadedResult(key);
+        for (const waiter of pending.waiters || []) {
+          try {
+            waiter(result);
+          } catch (error) {
+            // Unload delivery is best-effort.
+          }
+        }
+      }
+      this.readingBoardPendingFetches.clear();
+    }
   }
 }

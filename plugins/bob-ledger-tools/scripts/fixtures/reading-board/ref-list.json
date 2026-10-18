@@ -1218,7 +1218,7 @@
       "finished": null,
       "finished_source": null,
       "source_pdf": "lib/papers/synced_paper.pdf",
-      "audio": null,
+      "audio": "lib/papers/synced_paper.mp3",
       "annotation_count": 1,
       "comment_count": 1,
       "snapshot": {

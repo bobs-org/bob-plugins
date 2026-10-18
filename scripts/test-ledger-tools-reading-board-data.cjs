@@ -20,6 +20,7 @@ const {
   readingBoardCacheKey,
   readingBoardDecodeReport,
   readingBoardErrorModel,
+  readingBoardModel,
 } = LedgerToolsPlugin.helpers;
 
 const fixturePath = path.join(
@@ -62,7 +63,35 @@ test("Reading Board decoder accepts the shared bob fixture and normalizes option
   const taskRow = fixtureDecoded.report.refs.find((entry) => entry.path === "ref/papers/blocked_mark.md");
   assert.equal(taskRow.task.priority, null);
   assert.equal(taskRow.task.scheduled, null);
+  const audioRow = fixtureDecoded.report.refs.find((entry) => entry.path === "ref/papers/synced_paper.md");
+  assert.equal(audioRow.audio, true, "the JSON audio path becomes an audio-presence flag");
   assert.ok(fixtureDecoded.report.generated_at);
+});
+
+test("Reading Board audio presence survives raw JSON decoding and model construction", () => {
+  const raw = JSON.parse(JSON.stringify(fixtureDocument));
+  const row = raw.refs.find((entry) => entry.path === "ref/papers/synced_paper.md");
+  assert.equal(row.audio, "lib/papers/synced_paper.mp3");
+  const decoded = readingBoardDecodeReport(JSON.stringify(raw), "");
+  assert.equal(decoded.ok, true);
+  const card = readingBoardModel(decoded.report, { today: "2026-10-20" })
+    .lanes.ready.cards.find((entry) => entry.path === row.path);
+  assert.equal(card.audio, true);
+
+  row.audio = null;
+  const nullAudio = readingBoardDecodeReport(JSON.stringify(raw), "");
+  assert.equal(
+    readingBoardModel(nullAudio.report, { today: "2026-10-20" }).lanes.ready.cards
+      .find((entry) => entry.path === row.path).audio,
+    false,
+  );
+  delete row.audio;
+  const absentAudio = readingBoardDecodeReport(JSON.stringify(raw), "");
+  assert.equal(
+    readingBoardModel(absentAudio.report, { today: "2026-10-20" }).lanes.ready.cards
+      .find((entry) => entry.path === row.path).audio,
+    false,
+  );
 });
 
 test("Reading Board decoder rejects malformed JSON, shapes, schema, and bob errors", () => {

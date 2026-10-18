@@ -40,30 +40,97 @@ function readingBoardUnquote(value) {
     if (last !== first || text.length < 2) {
       return { ok: false, value: "" };
     }
+    for (let index = 1; index < text.length - 1; index += 1) {
+      if (text[index] === first && text[index - 1] !== "\\") {
+        return { ok: false, value: "" };
+      }
+    }
     return { ok: true, value: text.slice(1, -1).trim() };
+  }
+  if (last === "'" || last === '"' || /[\[\]{}]/.test(text)) {
+    return { ok: false, value: "" };
   }
   return { ok: true, value: text };
 }
 
-function readingBoardParseTypeList(value) {
-  let text = String(value || "").trim();
-  const quoted = readingBoardUnquote(text);
-  if (quoted.ok) {
-    text = quoted.value;
+function readingBoardParseScalar(value) {
+  const raw = String(value || "").trim();
+  const quoted = raw[0] === "'" || raw[0] === '"';
+  const decoded = readingBoardUnquote(raw);
+  if (!decoded.ok || !decoded.value) {
+    return null;
   }
-  if (text.startsWith("[") && text.endsWith("]")) {
+  const text = decoded.value;
+  if (quoted) {
+    return text;
+  }
+  if (
+    /^(?:null|~|true|false|[-+]?\d+(?:\.\d+)?|\.nan|\.inf)$/i.test(text) ||
+    /[\[\]{}]/.test(text) ||
+    /:\s/.test(text) ||
+    /^[&*!|>@`]/.test(text)
+  ) {
+    return null;
+  }
+  return text;
+}
+
+function readingBoardSplitTypeValues(text) {
+  const values = [];
+  let quote = "";
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (char === quote && text[index - 1] !== "\\") {
+        quote = "";
+      }
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    } else if (char === ",") {
+      values.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  if (quote) {
+    return null;
+  }
+  values.push(text.slice(start));
+  return values;
+}
+
+function readingBoardParseTypeList(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const quoted = readingBoardUnquote(raw);
+  let text = quoted.ok ? quoted.value : raw;
+  if (!quoted.ok && (raw.startsWith("'") || raw.startsWith('"') || raw.endsWith("'") || raw.endsWith('"'))) {
+    return null;
+  }
+  if (text.startsWith("[") || text.endsWith("]")) {
+    if (!text.startsWith("[") || !text.endsWith("]")) {
+      return null;
+    }
     text = text.slice(1, -1).trim();
+  } else if (/[\[\]{}]/.test(text)) {
+    return null;
   }
   if (!text) {
     return null;
   }
   const values = [];
-  for (const raw of text.split(",")) {
-    const decoded = readingBoardUnquote(raw);
-    if (!decoded.ok || !decoded.value) {
+  const parts = readingBoardSplitTypeValues(text);
+  if (!parts) {
+    return null;
+  }
+  for (const part of parts) {
+    const decoded = readingBoardParseScalar(part);
+    if (!decoded || decoded.includes(",")) {
       return null;
     }
-    values.push(decoded.value);
+    values.push(decoded);
   }
   return values.length > 0 ? values : null;
 }
@@ -75,17 +142,19 @@ function readingBoardParseFence(source) {
   const seen = new Set();
   let pendingTypeList = false;
   let pendingTypes = [];
+  let pendingTypeInvalid = false;
   const finishTypeList = () => {
     if (!pendingTypeList) {
       return;
     }
-    if (pendingTypes.length === 0) {
-      result.lints.push("Invalid type: use one or more comma-separated reference types.");
-    } else {
+    if (pendingTypes.length > 0) {
       result.type = pendingTypes;
+    } else if (!pendingTypeInvalid) {
+      result.lints.push("Invalid type: use one or more comma-separated reference types.");
     }
     pendingTypeList = false;
     pendingTypes = [];
+    pendingTypeInvalid = false;
   };
   const lines = String(source || "").split(/\r?\n/);
   for (const rawLine of lines) {
@@ -96,11 +165,12 @@ function readingBoardParseFence(source) {
     if (pendingTypeList) {
       const item = line.match(/^-\s*(.*)$/);
       if (item) {
-        const value = readingBoardUnquote(item[1]);
-        if (!value.ok || !value.value) {
+        const value = readingBoardParseScalar(item[1]);
+        if (!value) {
           result.lints.push("Invalid type: use one or more comma-separated reference types.");
+          pendingTypeInvalid = true;
         } else {
-          pendingTypes.push(value.value);
+          pendingTypes.push(value);
         }
         continue;
       }
@@ -123,12 +193,12 @@ function readingBoardParseFence(source) {
     }
     seen.add(key);
     if (key === "parent") {
-      const decoded = readingBoardUnquote(rawValue);
-      if (!decoded.ok || !decoded.value || /[\r\n]/.test(decoded.value)) {
+      const decoded = readingBoardParseScalar(rawValue);
+      if (!decoded || /[\r\n]/.test(decoded)) {
         result.lints.push("Invalid parent: expected a note name.");
         continue;
       }
-      result.parent = decoded.value;
+      result.parent = decoded;
       continue;
     }
     if (!rawValue) {
@@ -531,29 +601,22 @@ function readingBoardSignature(model) {
   if (!model || typeof model !== "object") {
     return "";
   }
-  const lane = (entry) =>
-    (entry && Array.isArray(entry.cards) ? entry.cards : []).map((card) => [
-      card.path,
-      card.title,
-      card.status,
-      card.blocked,
-      card.today,
-      card.todayRank,
-      card.priority,
-      card.added,
-      card.snoozedGroup,
-      card.reasonText,
-      card.schedule && card.schedule.date,
-      card.sourcePdf,
-      card.annotationCount,
-      card.audio,
-      card.statusSync,
-    ]);
+  const lane = (entry) => ({
+    id: entry && entry.id,
+    label: entry && entry.label,
+    count: entry && entry.count,
+    emptyText: entry && entry.emptyText,
+    cards: entry && Array.isArray(entry.cards) ? entry.cards : [],
+    groups: entry && Array.isArray(entry.groups)
+      ? entry.groups.map((group) => ({ id: group.id, label: group.label, cards: group.cards }))
+      : [],
+  });
   return JSON.stringify({
     today: model.today,
     generatedAt: model.generatedAt,
     summary: model.summary,
     lints: model.lints,
+    emptyText: model.emptyText,
     reading: lane(model.lanes && model.lanes.reading),
     next: lane(model.lanes && model.lanes.next),
     ready: lane(model.lanes && model.lanes.ready),

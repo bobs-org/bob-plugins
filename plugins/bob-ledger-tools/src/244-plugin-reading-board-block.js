@@ -149,6 +149,7 @@ class BobLedgerToolsReadingBoardBlockMixin {
     };
     this.readingBoardViewsStore().add(view);
     const release = () => {
+      view.unloaded = true;
       this.readingBoardViewsStore().delete(view);
       this.readingBoardPaintGens().delete(el);
     };
@@ -175,7 +176,7 @@ class BobLedgerToolsReadingBoardBlockMixin {
     this.paintReadingBoardBlock(view);
     if (cached && Date.now() - cached.fetchedAt > READING_BOARD_MOUNT_REVALIDATE_MS) {
       // A cached frame is already on screen; refresh it in the background.
-      Promise.resolve(this.apiReadingBoardFetch(view.fence)).catch(() => {});
+      Promise.resolve(this.apiReadingBoardFetch({ ...view.fence, force: true })).catch(() => {});
     }
   }
 
@@ -199,11 +200,14 @@ class BobLedgerToolsReadingBoardBlockMixin {
     }
     this.readingBoardPaintSkeleton(view, false);
     const settle = (result) => {
-      if (gens.get(view.el) !== paintGen) {
+      if (view.unloaded === true || gens.get(view.el) !== paintGen) {
         return;
       }
-      if (result && result.report) {
-        this.readingBoardViewDataApplied(view);
+      if (result && result.report && result.error) {
+        view.refreshError = { error: result.error, at: Date.now() };
+      } else if (result && result.report && result.stale !== true) {
+        view.refreshError = null;
+        this.readingBoardViewDataApplied(view, result.generation);
       }
       this.readingBoardRenderResult(view, result || { report: null });
     };
@@ -331,8 +335,9 @@ class BobLedgerToolsReadingBoardBlockMixin {
     const lints = [];
     if (view.refreshError) {
       const at = readingBoardHeaderTime(view.report && view.report.generated_at);
-      const detail =
-        view.refreshError.error.detail || view.refreshError.error.message || "refresh failed";
+      const detail = statsFirstLine(
+        view.refreshError.error.detail || view.refreshError.error.message || "refresh failed",
+      );
       const failure = /^bob ref list /.test(detail) ? detail : `bob ref list failed: ${detail}`;
       lints.push({
         text: `Showing the board from ${at || "earlier"} · ${failure} · `,
@@ -380,6 +385,14 @@ class BobLedgerToolsReadingBoardBlockMixin {
       ) {
         if (view.board.timeEl) {
           view.board.timeEl.textContent = readingBoardHeaderTime(model.generatedAt);
+          const timeTooltip = model.generatedAt ? `Data from ${model.generatedAt}` : "";
+          if (timeTooltip) {
+            view.board.timeEl.setAttribute("aria-label", timeTooltip);
+            view.board.timeEl.setAttribute("data-tooltip-position", "top");
+          } else if (view.board.timeEl.removeAttribute) {
+            view.board.timeEl.removeAttribute("aria-label");
+            view.board.timeEl.removeAttribute("data-tooltip-position");
+          }
         }
         this.readingBoardSyncBusy(view);
         return;
@@ -482,6 +495,9 @@ class BobLedgerToolsReadingBoardBlockMixin {
     }
     const finish = (result) => {
       view.busy = false;
+      if (view.unloaded === true || !this.readingBoardViewsStore().has(view)) {
+        return;
+      }
       let announcement = "";
       if (result && result.report) {
         if (result.error) {
@@ -489,7 +505,7 @@ class BobLedgerToolsReadingBoardBlockMixin {
           announcement = "Reading Board refresh failed. Showing the earlier board.";
         } else {
           view.refreshError = null;
-          this.readingBoardViewDataApplied(view);
+          this.readingBoardViewDataApplied(view, result.generation);
         }
         this.readingBoardRenderResult(view, { report: result.report });
         if (!result.error && view.model) {

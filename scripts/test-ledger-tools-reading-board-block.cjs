@@ -197,6 +197,7 @@ function makeHarness({
   todayKeys = [],
   todayReady = true,
   cache = true,
+  realData = false,
 } = {}) {
   const app = makeFreshnessApp({ tasks: [] });
   const opened = [];
@@ -236,10 +237,12 @@ function makeHarness({
   plugin.isTodayCacheReady = () => todayReady;
   plugin.todayCache = { rank: new Map(todayKeys.map((key, index) => [key, index])) };
   plugin.fetchCalls = [];
-  plugin.apiReadingBoardFetch = async (fence) => {
-    plugin.fetchCalls.push(fence);
-    return { report: null, stale: false, error: { code: "failed", message: "unexpected fetch" } };
-  };
+  if (!realData) {
+    plugin.apiReadingBoardFetch = async (fence) => {
+      plugin.fetchCalls.push(fence);
+      return { report: null, stale: false, error: { code: "failed", message: "unexpected fetch" } };
+    };
+  }
   const cacheKey = (fence = {}) => readingBoardCacheKey(readingBoardBuildArgs(fence));
   if (cache) {
     plugin.readingBoardCacheSet(cacheKey(), report);
@@ -378,6 +381,18 @@ test("awake cards show kind, topic, added mark, counts, priority, and the pendin
       0,
       "reused marks drop their editor-only hint",
     );
+  });
+});
+
+test("a path-valued Bob audio field produces exactly one visible music marker", async () => {
+  const row = REPORT.refs.find((entry) => entry.path === "ref/papers/synced_paper.md");
+  assert.equal(row.audio, true, "the shared raw JSON fixture passed through the decoder");
+  await withBoard({}, ({ mount }) => {
+    const { el } = mount();
+    const card = cardFor(el, row.path);
+    assert.equal(card.querySelectorAll(".bob-reading-board-audio").length, 1);
+    assert.equal(card.querySelector(".bob-reading-board-audio").textContent, "♫");
+    assert.equal(cardFor(el, "ref/papers/created_note.md").querySelector(".bob-reading-board-audio"), null);
   });
 });
 
@@ -685,6 +700,70 @@ test("a repaint keeps focus by note path and each lane's scroll position", async
   });
 });
 
+test("a task move and topic/type update repaint handlers while preserving focus and scroll", async () => {
+  await withBoard({}, ({ mount, plugin, cacheKey, opened }) => {
+    const { el, view } = mount();
+    const oldRoot = el.querySelector(".bob-reading-board");
+    const oldCard = cardFor(el, "ref/chat/chat_ready.md");
+    oldCard.focus();
+    view.board.bodies.ready.scrollTop = 84;
+
+    const moved = JSON.parse(JSON.stringify(REPORT));
+    const row = moved.refs.find((entry) => entry.path === "ref/chat/chat_ready.md");
+    row.parent = "new_reading_topic";
+    row.type = "blogs";
+    row.task.path = "ref/new-reading-task.md";
+    row.task.block_id = "new-ref-task";
+    row.task.link = "[[ref/new-reading-task#^new-ref-task]]";
+    plugin.readingBoardCacheSet(cacheKey(), moved);
+    plugin.repaintReadingBoardBlocks();
+
+    const freshRoot = el.querySelector(".bob-reading-board");
+    const freshCard = cardFor(el, "ref/chat/chat_ready.md");
+    assert.notEqual(freshRoot, oldRoot, "display and navigation changes require a repaint");
+    assert.equal(freshCard.querySelector(".bob-reading-board-topic").textContent, "new_reading_topic");
+    assert.match(freshCard.querySelector(".bob-reading-board-kind").textContent, /📰 Blog/);
+    assert.equal(el.ownerDocument.activeElement.getAttribute("data-path"), "ref/chat/chat_ready.md");
+    assert.equal(view.board.bodies.ready.scrollTop, 84);
+
+    opened.length = 0;
+    freshCard.querySelector(".bob-reading-board-action-task").fire("click");
+    assert.deepEqual(opened, [["ref/new-reading-task#^new-ref-task", SOURCE, false]]);
+    opened.length = 0;
+    freshCard.focus();
+    press(el, "Enter", { altKey: true });
+    assert.deepEqual(opened, [["ref/new-reading-task#^new-ref-task", SOURCE, false]]);
+  });
+});
+
+test("prerequisite identity changes repaint highlighting even when reason text is unchanged", async () => {
+  await withBoard({}, ({ mount, plugin, cacheKey }) => {
+    const { el } = mount();
+    const dependentPath = "ref/papers/dep_open_ref.md";
+    const originalRoot = el.querySelector(".bob-reading-board");
+    const oldReason = cardFor(el, dependentPath).querySelector(".bob-reading-board-reason").textContent;
+
+    const changed = JSON.parse(JSON.stringify(REPORT));
+    const dependent = changed.refs.find((entry) => entry.path === dependentPath);
+    const prerequisite = dependent.blocked_by[0].prerequisites[0];
+    prerequisite.path = "ref/chat/chat_ready.md";
+    prerequisite.block_id = "ref";
+    prerequisite.link = "[[ref/chat/chat_ready#^ref]]";
+    prerequisite.ref_path = "ref/chat/chat_ready.md";
+    plugin.readingBoardCacheSet(cacheKey(), changed);
+    plugin.repaintReadingBoardBlocks();
+
+    assert.notEqual(el.querySelector(".bob-reading-board"), originalRoot);
+    const row = cardFor(el, dependentPath);
+    const oldPrerequisite = cardFor(el, "ref/papers/prereq_open.md");
+    const newPrerequisite = cardFor(el, "ref/chat/chat_ready.md");
+    assert.equal(row.querySelector(".bob-reading-board-reason").textContent, oldReason);
+    row.fire("mouseenter");
+    assert.ok(newPrerequisite.getAttribute("class").includes("bob-reading-board-prerequisite"));
+    assert.ok(!oldPrerequisite.getAttribute("class").includes("bob-reading-board-prerequisite"));
+  });
+});
+
 test("an unchanged board is not repainted; only the data time updates in place", async () => {
   await withBoard({}, ({ mount, plugin, cacheKey }) => {
     const { el, view } = mount();
@@ -696,6 +775,11 @@ test("an unchanged board is not repainted; only the data time updates in place",
     assert.equal(el.querySelector(".bob-reading-board"), root, "same DOM node: no repaint");
     assert.equal(cardFor(el, "ref/papers/created_note.md"), card);
     assert.equal(el.querySelector(".bob-reading-board-time").textContent, "12:41");
+    assert.equal(
+      el.querySelector(".bob-reading-board-time").getAttribute("aria-label"),
+      "Data from 2026-10-06T12:41:09",
+      "the in-place time refresh updates its tooltip too",
+    );
     assert.equal(el.ownerDocument.activeElement, card);
     assert.ok(view.board);
   });
@@ -823,6 +907,137 @@ test("a failed manual refresh keeps the last frame and says why with Retry", asy
     plugin.readingBoardCacheSet(cacheKey(), { ...REPORT, generated_at: "2026-10-06T12:50:00" });
     plugin.repaintReadingBoardBlocks();
     assert.equal(el.querySelector(".bob-reading-board-lint"), null);
+  });
+});
+
+test("metadata revalidation delivers a silent stale-frame error and recovery updates freshness", async () => {
+  await withBoard({ realData: true }, async ({ mount, plugin }) => {
+    const { el, view } = mount();
+    view.dataGeneration = 0;
+    plugin.readingBoardSpawnFetch = async () => ({
+      ok: false,
+      code: "failed",
+      message: "test background failure",
+      detail: "test background failure",
+    });
+    plugin.readingBoardVaultChanged();
+    plugin.revalidateReadingBoardBlocks();
+    await settle();
+    await settle();
+
+    assert.equal(view.dataGeneration, 0, "a cached return and failed read do not advance freshness");
+    assert.equal(view.refreshError.error.message, "test background failure");
+    assert.equal(el.querySelectorAll(".bob-reading-board-card").length, 14, "the last good board stays visible");
+    assert.match(el.querySelector(".bob-reading-board-lint").text, /Showing the board from 12:00/);
+    assert.match(el.querySelector(".bob-reading-board-lint").text, /test background failure/);
+    assert.equal(el.querySelector('[aria-live="polite"]').textContent, "", "automatic refresh is silent");
+
+    plugin.readingBoardSpawnFetch = async () => ({
+      ok: true,
+      report: { ...REPORT, generated_at: "2026-10-06T13:45:00" },
+    });
+    plugin.revalidateReadingBoardBlocks();
+    await settle();
+    await settle();
+    assert.equal(view.refreshError, null, "a later successful read clears the stale lint");
+    assert.equal(view.dataGeneration, 1, "freshness records the generation fetched");
+    assert.equal(el.querySelector(".bob-reading-board-time").textContent, "13:45");
+  });
+});
+
+test("stale-cache mount refresh failures reach the mounted view", async () => {
+  await withBoard({ realData: true }, async ({ mount, plugin, cacheKey }) => {
+    plugin.readingBoardCache.get(cacheKey()).fetchedAt = 0;
+    let release;
+    plugin.readingBoardSpawnFetch = () => new Promise((resolve) => { release = resolve; });
+    const { el, view } = mount();
+    assert.equal(el.querySelectorAll(".bob-reading-board-card").length, 14, "the cached frame paints immediately");
+    await settle();
+    assert.equal(typeof release, "function", "the mount starts a background fetch");
+    release({
+      ok: false,
+      code: "failed",
+      message: "first line of mount failure",
+      detail: "first line of mount failure\nsecond line",
+    });
+    await settle();
+    await settle();
+    assert.ok(view.refreshError);
+    const lint = el.querySelector(".bob-reading-board-lint");
+    assert.match(lint.text, /first line of mount failure/);
+    assert.doesNotMatch(lint.text, /second line/);
+    assert.equal(el.querySelectorAll(".bob-reading-board-card").length, 14);
+  });
+});
+
+test("unload during a fetch prevents late repaint and queued spawns", async () => {
+  await withBoard({ realData: true, cache: false }, async ({ mount, plugin, children }) => {
+    let release;
+    let spawns = 0;
+    plugin.readingBoardSpawnFetch = () => {
+      spawns += 1;
+      return new Promise((resolve) => { release = resolve; });
+    };
+    const { el } = mount();
+    await settle();
+    assert.equal(spawns, 1);
+    plugin.revalidateReadingBoardBlocks();
+    assert.equal(plugin.readingBoardPendingFetches.size, 1, "a forced refresh waits behind the current flight");
+    children[0].unload();
+    plugin.teardownReadingBoardData();
+    release({ ok: true, report: REPORT });
+    await settle();
+    await settle();
+    assert.equal(spawns, 1, "teardown does not launch the queued refresh");
+    assert.equal(plugin.readingBoardViewsStore().size, 0);
+    assert.ok(el.querySelector(".bob-reading-board-loading"), "the unloaded skeleton remains in place");
+    assert.equal(el.querySelector(".bob-reading-board-summary"), null, "the late result did not repaint the board");
+  });
+});
+
+test("in-flight edits and forced refreshes coalesce without dropping mounted fences", async () => {
+  await withBoard({ realData: true }, async ({ mount, plugin }) => {
+    const spawned = [];
+    plugin.readingBoardSpawnFetch = (args) => new Promise((resolve) => {
+      spawned.push({ args, resolve });
+    });
+    const first = mount();
+    first.view.dataGeneration = 0;
+    plugin.revalidateReadingBoardBlocks();
+    await settle();
+    assert.equal(spawned.length, 1, "the default fence starts one read");
+
+    const second = mount("parent: sase");
+    await settle();
+    assert.equal(spawned.length, 1, "a second fence waits behind the active spawn");
+
+    plugin.readingBoardVaultChanged();
+    plugin.revalidateReadingBoardBlocks();
+    plugin.readingBoardVaultChanged();
+    plugin.revalidateReadingBoardBlocks();
+    const manual = plugin.apiReadingBoardRefresh(first.view.fence);
+    assert.equal(plugin.readingBoardVaultGeneration, 2);
+    assert.equal(plugin.readingBoardPendingFetches.size, 2, "the two fence keys retain their refresh demand");
+
+    spawned[0].resolve({ ok: true, report: { ...REPORT, generated_at: "2026-10-06T12:10:00" } });
+    await settle();
+    await settle();
+    assert.equal(first.view.dataGeneration, 0, "the pre-edit snapshot is not treated as current");
+    assert.equal(spawned.length, 2, "only one queued fence starts after the first flight");
+    assert.ok(spawned[1].args.includes("-P"), "the parent fence was not discarded");
+
+    spawned[1].resolve({ ok: true, report: { ...REPORT, generated_at: "2026-10-06T12:20:00" } });
+    await settle();
+    await settle();
+    assert.equal(second.view.dataGeneration, 2, "the parent fence fetch starts after both edits");
+    assert.equal(spawned.length, 3, "repeated default-fence edits coalesce into one follow-up");
+    assert.ok(!spawned[2].args.includes("-P"), "the default fence's demand remains queued too");
+
+    spawned[2].resolve({ ok: true, report: { ...REPORT, generated_at: "2026-10-06T12:30:00" } });
+    await manual;
+    await settle();
+    assert.equal(first.view.dataGeneration, 2, "the follow-up report covers the latest invalidation");
+    assert.equal(spawned.length, 3);
   });
 });
 

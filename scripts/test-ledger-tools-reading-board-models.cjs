@@ -8,6 +8,7 @@ const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");
 
 const {
   readingBoardDecodeReport,
+  readingBoardBuildArgs,
   readingBoardKind,
   readingBoardModel,
   readingBoardParseFence,
@@ -165,6 +166,32 @@ test("fence options accept parent and type lists while turning bad input into li
   assert.deepEqual(readingBoardParseFence("type: \"chat, blogs\"").type, ["chat", "blogs"]);
   assert.deepEqual(readingBoardParseFence("type:\n  - ai\n  - papers").type, ["ai", "papers"]);
   assert.deepEqual(readingBoardParseFence("parent: \n").lints, ["Invalid parent: expected a note name."]);
+  const quoted = readingBoardParseFence("parent: 'Reading List'\ntype: [\"chat\", blogs]");
+  assert.equal(quoted.parent, "Reading List");
+  assert.deepEqual(quoted.type, ["chat", "blogs"]);
+
+  for (const source of [
+    "type: [papers",
+    "parent: [sase, cash]",
+    "parent: {note: sase}",
+    "parent: true",
+    "parent: 42",
+    "type: true",
+    "type: 17",
+    "type: null",
+    'type: "papers',
+  ]) {
+    const invalid = readingBoardParseFence(source);
+    assert.equal(invalid.lints.length, 1, source);
+    const args = readingBoardBuildArgs(invalid);
+    assert.equal(args.includes("[papers"), false, source);
+    assert.equal(args.includes("[sase, cash]"), false, source);
+    assert.equal(args.includes("{note: sase}"), false, source);
+    assert.equal(args.includes("true"), false, source);
+    assert.equal(args.includes("17"), false, source);
+    assert.equal(args.includes("42"), false, source);
+    assert.equal(args.includes("null"), false, source);
+  }
 });
 
 test("kind names, title code spans, and render signatures are deterministic", () => {
@@ -181,4 +208,11 @@ test("kind names, title code spans, and render signatures are deterministic", ()
   assert.equal(readingBoardSignature(first), readingBoardSignature(second));
   const changed = { ...first, summary: { ...first.summary, awake: first.summary.awake + 1 } };
   assert.notEqual(readingBoardSignature(first), readingBoardSignature(changed));
+  const changedTask = JSON.parse(JSON.stringify(first));
+  changedTask.lanes.ready.cards[0].task = { path: "new.md", block_id: "ref", link: "[[new#^ref]]" };
+  assert.notEqual(readingBoardSignature(first), readingBoardSignature(changedTask));
+  const changedPrerequisite = JSON.parse(JSON.stringify(first));
+  const dependent = changedPrerequisite.lanes.snoozed.cards.find((card) => card.prerequisites.length > 0);
+  dependent.prerequisites[0].ref_path = "ref/chat/chat_ready.md";
+  assert.notEqual(readingBoardSignature(first), readingBoardSignature(changedPrerequisite));
 });

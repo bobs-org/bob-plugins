@@ -13026,7 +13026,6 @@ if (WidgetType && typeof WidgetType === "function") {
         }
       }
       try {
-        const self = this;
         if (typeof dom.addEventListener === "function") {
           dom.addEventListener("mousedown", (event) => {
             try {
@@ -13069,7 +13068,6 @@ if (WidgetType && typeof WidgetType === "function") {
               if (view && typeof view.focus === "function") {
                 view.focus();
               }
-              void self;
             } catch (error) {
               // Reveal is best-effort.
             }

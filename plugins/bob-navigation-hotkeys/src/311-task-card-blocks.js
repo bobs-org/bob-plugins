@@ -1,5 +1,8 @@
 // Task Card Blocks… availability and its warm Tasks-cache summary.
 
+const TASK_CARD_BLOCKS_FINISHED_REASON =
+  "A finished task can't block another task · reopen it first";
+
 function taskCardBlocksAvailabilityReason(session, context = {}) {
   if (!session || session.valid !== true) {
     return (session && session.error) || "Task context is unavailable";
@@ -18,7 +21,16 @@ function taskCardBlocksAvailabilityReason(session, context = {}) {
       ),
     )
   ) {
-    return "🧱 A finished task can't block another task · reopen it first";
+    // The card row reads without the 🧱; the entry Notice adds it
+    // (`taskCardBlocksEntryRefusal`, §15.2 / §15.4).
+    return TASK_CARD_BLOCKS_FINISHED_REASON;
+  }
+  // The reverse twin of forward's "⛓ Dependencies can't be edited inside a
+  // blockquote": a blockquoted task can never own a Depends-On line.
+  if (
+    targets.some((target) => isBlockquotedMarkdownLine(target && target.rawLine))
+  ) {
+    return "🧱 Blocks can't be edited inside a blockquote";
   }
 
   const paths = targets
@@ -66,7 +78,8 @@ function taskCardBlocksAvailabilityReason(session, context = {}) {
 
 function taskCardBlocksEntryRefusal(context = {}) {
   const session = taskCardSessionContext(context);
-  return taskCardBlocksAvailabilityReason(session, context);
+  const reason = taskCardBlocksAvailabilityReason(session, context);
+  return reason === TASK_CARD_BLOCKS_FINISHED_REASON ? `🧱 ${reason}` : reason;
 }
 
 function taskCardBlocksSummary(session, taskCache, baseDate = new Date()) {

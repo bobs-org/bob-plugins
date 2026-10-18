@@ -502,7 +502,35 @@ test("Blocks row refuses closed tasks and unencodable paths without an id", () =
   const closed = makeModel({ content: closedLine, lineText: closedLine });
   assert.equal(
     closed.rows.find((row) => row.id === "blocks").unavailableReason,
+    // The card row reads without the 🧱 (§3 / §15.4) ...
+    "A finished task can't block another task · reopen it first",
+  );
+  // ... while the entry Notice keeps it (§15.2).
+  assert.equal(
+    helpers.taskCardBlocksEntryRefusal({
+      content: closedLine,
+      lineText: closedLine,
+      cursorLine: 0,
+      filePath: "Tasks.md",
+    }),
     "🧱 A finished task can't block another task · reopen it first",
+  );
+
+  // RBG6: a blockquoted N is refused like forward's blockquote twin.
+  const quotedLine = "> - [ ] #task Quoted ^quoted";
+  const quoted = makeModel({ content: quotedLine, lineText: quotedLine });
+  assert.equal(
+    quoted.rows.find((row) => row.id === "blocks").unavailableReason,
+    "🧱 Blocks can't be edited inside a blockquote",
+  );
+  assert.equal(
+    helpers.taskCardBlocksEntryRefusal({
+      content: quotedLine,
+      lineText: quotedLine,
+      cursorLine: 0,
+      filePath: "Tasks.md",
+    }),
+    "🧱 Blocks can't be edited inside a blockquote",
   );
 
   const unencodableLine = "- [ ] #task Task";

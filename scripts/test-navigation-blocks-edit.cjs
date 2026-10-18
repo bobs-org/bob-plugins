@@ -153,8 +153,10 @@ function createHarness(notes, options = {}) {
   plugin.getFreshnessDateText = () => DATE_TEXT;
   plugin.getFreshnessApi = () => ({
     stampLine: testStamper,
-    markUnblockedLine(line) {
-      return String(line);
+    markUnblockedLine(line, markOptions) {
+      return typeof options.markUnblocked === "function"
+        ? options.markUnblocked(String(line), markOptions)
+        : String(line);
     },
   });
   plugin.getActiveMarkdownView = () => null;
@@ -681,7 +683,9 @@ test("RBW1 a changed source note writes nothing", async () => {
   );
   assert.equal(outcome.ok, false);
   assert.equal(outcome.reason, "changed — reopen");
-  assert.match(notices.join("\n"), /changed — reopen/);
+  // The writer returns the notice; the caller shows it exactly once.
+  assert.equal(outcome.notice, "changed — reopen");
+  assert.deepEqual(notices, []);
   assert.equal(tEditor.undoGroups, 0);
   assert.equal(liveNotes(harness)["T.md"], notes["T.md"]);
   assert.match(liveNotes(harness)["N.md"], /concurrent/);
@@ -741,7 +745,7 @@ test("RBW3 already-present picks write nothing", async () => {
   assert.equal(harness.processWrites.length, 0);
 });
 
-test("RBW4 cleanup folds into N when N lives in today's daily note", async () => {
+test("RBW4 cleanup runs for T's that committed when N lives in today's daily note", async () => {
   const datePath = dailyPath();
   const notes = {
     [datePath]: [
@@ -751,6 +755,10 @@ test("RBW4 cleanup folds into N when N lives in today's daily note", async () =>
       "  - [[T#^t]]",
       "",
       "- [ ] #task Prerequisite ^n",
+      "- [ ] #task After N ^after",
+      "- [ ] #task Later one ^later1",
+      "- [ ] #task Later two ^later2",
+      "- [ ] #task Later three ^later3",
     ].join("\n"),
     "T.md": "- [ ] #task Dependent ^t",
   };
@@ -764,10 +772,16 @@ test("RBW4 cleanup folds into N when N lives in today's daily note", async () =>
   assert.equal(outcome.ok, true, outcome.reason);
   assert.match(outcome.notice, /removed 1 Pomodoro link/);
   assert.doesNotMatch(nEditor.getValue(), /Current \(0900-0930\)/);
-  assert.match(nEditor.getValue(), /🧱 \*\*BLOCKS:\*\* \[\[T#\^t\]\]/);
+  // The BLOCKS line lands under N itself, never under the task that moved
+  // into N's old line when the cleanup deleted lines above it.
+  const lines = nEditor.getValue().split("\n");
+  const nAt = lines.findIndex((line) => /\^n(?:\s|$)/.test(line));
+  assert.match(lines[nAt + 1], /🧱 \*\*BLOCKS:\*\* \[\[T#\^t\]\]/);
+  assert.match(lines[nAt + 2], /After N \^after/);
+  // Source write, BLOCKS mirror, then one cleanup after T committed.
   assert.ok(
-    nEditor.undoGroups <= 2,
-    `daily note should fold cleanup, undo=${nEditor.undoGroups}`,
+    nEditor.undoGroups <= 3,
+    `daily note should take at most one extra entry, undo=${nEditor.undoGroups}`,
   );
   assert.equal(
     harness.processWrites.filter((path) => path === datePath).length,
@@ -809,4 +823,516 @@ test("RBW6 counted forward two-lane dependents prepare N once", async () => {
     (editor.getValue().match(/DEPENDS ON/g) || []).length,
     2,
   );
+});
+
+// ---- Land fixes (bob-cli-8x): writer correctness -------------------------
+
+async function assertSameNoteParity(label, lines, targets, { open }) {
+  const notes = { "Tasks.md": lines.join("\n") };
+  const forward = createHarness(cloneNotes(notes));
+  const reverse = createHarness(cloneNotes(notes));
+  openNote(forward, "Tasks.md", 0);
+  if (open) {
+    openNote(reverse, "Tasks.md", 0);
+  }
+  for (const target of targets) {
+    const out = await applyForward(forward, "Tasks.md", target, [
+      { path: "Tasks.md", blockId: "n" },
+    ]);
+    assert.equal(out.ok, true, `${label} forward ${out.reason}`);
+  }
+  const reverseOut = await applyReverse(
+    reverse,
+    [refFor(reverse, "Tasks.md", "n")],
+    targets.map((target) => refFor(reverse, "Tasks.md", target)),
+  );
+  assert.equal(reverseOut.ok, true, `${label} ${reverseOut.reason}`);
+  assert.equal(reverseOut.failed.length, 0, label);
+  assert.match(
+    reverseOut.notice,
+    new RegExp(`Now blocks ${targets.length} tasks`),
+    label,
+  );
+  assertParity(forward, reverse, label);
+  const finalNotes = liveNotes(reverse)["Tasks.md"];
+  // The stamp lands on each T, never on N, a bystander, or a BLOCKS line.
+  for (const target of targets) {
+    const line = finalNotes.split("\n").find((entry) =>
+      new RegExp(`\\^${target}(?:\\s|$)`).test(entry),
+    );
+    assert.match(line, /\[fresh:: 2026-10-17\]/, `${label} ${target}`);
+  }
+  assert.doesNotMatch(
+    finalNotes.split("\n").find((entry) => /\^n(?:\s|$)/.test(entry)),
+    /\[fresh::/,
+    label,
+  );
+  assert.equal(
+    (finalNotes.match(/\[fresh::/g) || []).length,
+    targets.length,
+    label,
+  );
+  return finalNotes;
+}
+
+test("A1 N above two T's in one note matches forward (open and closed note)", async () => {
+  const n = "- [ ] #task Prerequisite ^n";
+  const x = "- [ ] #task Bystander ^x";
+  const t1 = "- [ ] #task First ^t1";
+  const t2 = "- [ ] #task Second ^t2";
+  for (const open of [true, false]) {
+    const tag = open ? "open" : "closed";
+    await assertSameNoteParity(`A1 ${tag}`, [n, t1, t2], ["t2", "t1"], { open });
+    const withX = await assertSameNoteParity(
+      `A1 ${tag} X before`,
+      [n, x, t1, t2],
+      ["t2", "t1"],
+      { open },
+    );
+    assert.doesNotMatch(withX, /Bystander[^\n]*\[\?\]/);
+    assert.match(withX, /\[ \] #task Bystander \^x\n- \[\?\] #task First/);
+    await assertSameNoteParity(
+      `A1 ${tag} X between`,
+      [n, t1, x, t2],
+      ["t2", "t1"],
+      { open },
+    );
+  }
+});
+
+test("A1 N below two T's matches forward bytes", async () => {
+  await assertSameNoteParity(
+    "A1 below",
+    [
+      "- [ ] #task First ^t1",
+      "- [ ] #task Second ^t2",
+      "- [ ] #task Prerequisite ^n",
+    ],
+    ["t2", "t1"],
+    { open: true },
+  );
+});
+
+test("A2 forward stamps the dependent when a prerequisite above gains BLOCKS", async () => {
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task Prerequisite ^n",
+      "- [ ] #task Bystander ^x",
+      "- [ ] #task Dependent ^t",
+    ].join("\n"),
+  };
+  const forward = createHarness(cloneNotes(notes));
+  openNote(forward, "Tasks.md", 2);
+  const out = await applyForward(forward, "Tasks.md", "t", [
+    { path: "Tasks.md", blockId: "n" },
+  ]);
+  assert.equal(out.ok, true, out.reason);
+  const lines = liveNotes(forward)["Tasks.md"].split("\n");
+  const at = (id) => lines.findIndex((line) => new RegExp(`\\^${id}(?:\\s|$)`).test(line));
+  assert.match(lines[at("t")], /\[fresh:: 2026-10-17\]/);
+  assert.doesNotMatch(lines[at("x")], /\[fresh::/);
+  assert.doesNotMatch(lines[at("n")], /\[fresh::/);
+  assert.equal(lines.filter((line) => /BLOCKS/.test(line) && /\[fresh::/.test(line)).length, 0);
+  assert.match(lines[at("x")], /^- \[ \] #task Bystander/);
+});
+
+test("A1 mixed same-note and cross-note picks keep N's lane rise (RBP7 variant)", async () => {
+  const notes = {
+    "Tasks.md": ["- [ ] #task Prerequisite ^n", "- [ ] #task First ^t1"].join("\n"),
+    "B.md": "- [/] #task Second ^t2",
+  };
+  const forward = createHarness(cloneNotes(notes));
+  const reverse = createHarness(cloneNotes(notes));
+  openNote(forward, "Tasks.md", 1);
+  openNote(forward, "B.md", 0);
+  openNote(reverse, "Tasks.md", 0);
+  assert.equal(
+    (await applyForward(forward, "Tasks.md", "t1", [{ path: "Tasks.md", blockId: "n" }])).ok,
+    true,
+  );
+  assert.equal(
+    (await applyForward(forward, "B.md", "t2", [{ path: "Tasks.md", blockId: "n" }])).ok,
+    true,
+  );
+  const out = await applyReverse(
+    reverse,
+    [refFor(reverse, "Tasks.md", "n")],
+    [refFor(reverse, "Tasks.md", "t1"), refFor(reverse, "B.md", "t2")],
+  );
+  assert.equal(out.ok, true, out.reason);
+  assert.match(liveNotes(reverse)["Tasks.md"], /- \[\/\] #task Prerequisite/);
+  assert.match(out.notice, /takes In Progress/);
+  assertParity(forward, reverse, "mixed lanes");
+});
+
+test("A1 RBP1 with N truly lacking ^id is prompted an id and matches forward", async () => {
+  const lines = (nLine) => [nLine, "- [ ] #task Dependent ^t"].join("\n");
+  const forward = createHarness({ "Tasks.md": lines("- [ ] #task Prerequisite ^n") });
+  const reverse = createHarness({ "Tasks.md": lines("- [ ] #task Prerequisite") });
+  openNote(forward, "Tasks.md", 1);
+  const nEditor = openNote(reverse, "Tasks.md", 0);
+  assert.equal(
+    (await applyForward(forward, "Tasks.md", "t", [{ path: "Tasks.md", blockId: "n" }])).ok,
+    true,
+  );
+  const out = await applyReverse(
+    reverse,
+    [{ path: "Tasks.md", line: 0, blockId: "n" }],
+    [{ path: "Tasks.md", line: 1, blockId: "t" }],
+  );
+  assert.equal(out.ok, true, out.reason);
+  assert.equal(nEditor.undoGroups, 1);
+  assertParity(forward, reverse, "RBP1 no id");
+});
+
+test("A1 N lacking ^id in a closed note above T keeps its BLOCKS line under N", async () => {
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task Prerequisite",
+      "- [ ] #task Bystander ^x",
+      "- [ ] #task Dependent ^t",
+    ].join("\n"),
+  };
+  const reverse = createHarness(cloneNotes(notes));
+  const out = await applyReverse(
+    reverse,
+    [{ path: "Tasks.md", line: 0, blockId: "n" }],
+    [{ path: "Tasks.md", line: 2, blockId: "t" }],
+  );
+  assert.equal(out.ok, true, out.reason);
+  const lines = liveNotes(reverse)["Tasks.md"].split("\n");
+  const nAt = lines.findIndex((line) => /\^n(?:\s|$)/.test(line));
+  assert.equal(nAt, 0);
+  assert.match(lines[1], /🧱 \*\*BLOCKS:\*\* \[\[#\^t\]\]/);
+  assert.match(lines[2], /Bystander/);
+});
+
+test("A3 mirror lists the committed T's by identity (N above T1, X, T2)", async () => {
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task Prerequisite ^n",
+      "- [ ] #task First ^t1",
+      "- [ ] #task Bystander ^x",
+      "- [ ] #task Second ^t2",
+    ].join("\n"),
+  };
+  const reverse = createHarness(cloneNotes(notes));
+  const out = await applyReverse(
+    reverse,
+    [refFor(reverse, "Tasks.md", "n")],
+    [refFor(reverse, "Tasks.md", "t1"), refFor(reverse, "Tasks.md", "t2")],
+  );
+  assert.equal(out.ok, true, out.reason);
+  const blocks = liveNotes(reverse)["Tasks.md"]
+    .split("\n")
+    .find((line) => /BLOCKS/.test(line));
+  assert.match(blocks, /#\^t1/);
+  assert.match(blocks, /#\^t2/);
+  assert.doesNotMatch(blocks, /#\^x/);
+  for (const ref of out.committed) {
+    assert.ok(["t1", "t2"].includes(ref.blockId), ref.blockId);
+  }
+});
+
+test("A4 notices name T, not N (add, remove, project, counted)", async () => {
+  const notes = {
+    "N.md": "- [ ] #task Prerequisite ^n",
+    "T.md": "- [ ] #task Do cleanup tasks ^t",
+  };
+  const harness = createHarness(cloneNotes(notes));
+  openNote(harness, "N.md", 0);
+  const added = await applyReverse(
+    harness,
+    [refFor(harness, "N.md", "n")],
+    [refFor(harness, "T.md", "t")],
+  );
+  assert.equal(
+    added.notice,
+    "🧱 Now blocks “Do cleanup tasks” · Ready → Blocked",
+  );
+  const removed = await applyReverse(
+    harness,
+    [refFor(harness, "N.md", "n")],
+    [],
+    [refFor(harness, "T.md", "t")],
+  );
+  assert.equal(
+    removed.notice,
+    "🧱 No longer blocks “Do cleanup tasks” · Ready again",
+  );
+
+  const counted = createHarness({
+    "N.md": ["- [ ] #task First ^n1", "- [ ] #task Second ^n2"].join("\n"),
+    "T.md": "- [ ] #task Do cleanup tasks ^t",
+  });
+  openNote(counted, "N.md", 0);
+  const countedOut = await applyReverse(
+    counted,
+    [refFor(counted, "N.md", "n1"), refFor(counted, "N.md", "n2")],
+    [refFor(counted, "T.md", "t")],
+  );
+  assert.equal(countedOut.notice, "🧱 2 tasks now block “Do cleanup tasks”");
+
+  const projectNotes = {
+    "N.md": "- [ ] #task Prerequisite ^n",
+    "T.md": [
+      "---",
+      'type: "[[project]]"',
+      'status: "wip"',
+      "---",
+      "",
+      "- [ ] #task #prj Ship the sase project ^prj",
+      "- [ ] #task Resident ^r",
+    ].join("\n"),
+  };
+  const project = createHarness(cloneNotes(projectNotes));
+  openNote(project, "N.md", 0);
+  const projectOut = await applyReverse(
+    project,
+    [refFor(project, "N.md", "n")],
+    [refFor(project, "T.md", "prj")],
+  );
+  assert.match(projectOut.notice, /^🧱 Now blocks project “#prj Ship the sase project”/);
+});
+
+test("A5 the writer's stale notice is returned once and never shown by the writer", async () => {
+  resetNotices();
+  const harness = createHarness({
+    "N.md": "- [ ] #task Prerequisite ^n",
+    "T.md": "- [ ] #task Dependent ^t",
+  });
+  const out = await harness.plugin.applyBlocksEdit({
+    ...writerArgs(),
+    sources: [{ path: "N.md", line: 0, blockId: "n" }],
+    add: [{ path: "T.md", line: 0, blockId: "t" }],
+    expected: new Map([["T.md", "- [ ] #task Dependent changed ^t"]]),
+  });
+  assert.equal(out.ok, false);
+  assert.equal(out.notice, "changed — reopen");
+  assert.deepEqual(notices, []);
+  assert.equal(liveNotes(harness)["T.md"], "- [ ] #task Dependent ^t");
+});
+
+test("A6 a changed T row (rawLine) is refused before any write", async () => {
+  const harness = createHarness({
+    "N.md": "- [ ] #task Prerequisite ^n",
+    "T.md": "- [ ] #task Dependent now renamed ^t",
+  });
+  const out = await harness.plugin.applyBlocksEdit({
+    ...writerArgs(),
+    sources: [{ path: "N.md", line: 0, blockId: "n" }],
+    add: [
+      {
+        path: "T.md",
+        line: 0,
+        blockId: "t",
+        rawLine: "- [ ] #task Dependent ^t",
+      },
+    ],
+  });
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, "changed — reopen");
+  assert.equal(harness.processWrites.length, 0);
+  assert.equal(liveNotes(harness)["N.md"], "- [ ] #task Prerequisite ^n");
+});
+
+test("A7 RBW2 keeps the failed T's Pomodoro link and consumes the committed one", async () => {
+  const datePath = dailyPath();
+  const notes = {
+    "N.md": "- [ ] #task Prerequisite ^n",
+    "T1.md": "- [ ] #task First ^t1",
+    "T2.md": "- [ ] #task Second ^t2",
+    [datePath]: [
+      "## Pomodoros",
+      "",
+      "- [ ] Current (0900-0930)",
+      "  - [[T1#^t1]]",
+      "  - [[T2#^t2]]",
+    ].join("\n"),
+  };
+  const harness = createHarness(cloneNotes(notes), {
+    mutateBeforeProcess(file, contents) {
+      if (file.path === "T2.md") {
+        contents.set("T2.md", `${contents.get("T2.md")}\n<!-- concurrent -->`);
+      }
+    },
+  });
+  openNote(harness, "N.md", 0);
+  const outcome = await applyReverse(
+    harness,
+    [refFor(harness, "N.md", "n")],
+    [refFor(harness, "T1.md", "t1"), refFor(harness, "T2.md", "t2")],
+  );
+  assert.equal(outcome.reason, "partial");
+  const daily = liveNotes(harness)[datePath];
+  assert.doesNotMatch(daily, /\[\[T1#\^t1\]\]/);
+  assert.match(daily, /\[\[T2#\^t2\]\]/);
+  assert.match(outcome.notice, /removed 1 Pomodoro link/);
+  assert.doesNotMatch(outcome.notice, /Second/);
+  assert.equal(outcome.pomodoro.removed, 1);
+});
+
+test("A8 closed-note T guards run when the gesture is applied", async () => {
+  const run = async (notes, sources, add) => {
+    resetNotices();
+    const harness = createHarness(cloneNotes(notes));
+    const before = cloneNotes(liveNotes(harness));
+    const outcome = await applyReverse(harness, sources, add);
+    assert.equal(outcome.ok, false, outcome.notice);
+    assert.equal(outcome.reason, "guard");
+    assert.deepEqual(liveNotes(harness), before);
+    assert.equal(harness.processWrites.length, 0);
+    assert.deepEqual(notices, []);
+    return outcome;
+  };
+
+  const malformed = await run(
+    {
+      "N.md": "- [ ] #task Prerequisite ^n",
+      "T.md": [
+        "- [ ] #task Bad ^t",
+        "  - ⛓️ **DEPENDS ON:** not-a-link",
+      ].join("\n"),
+    },
+    [{ path: "N.md", line: 0, blockId: "n" }],
+    [{ path: "T.md", line: 0, blockId: "t" }],
+  );
+  assert.match(malformed.notice, /^🧱 Can't block “Bad” · its Depends-On line is malformed$/);
+
+  const cycle = await run(
+    {
+      "N.md": [
+        "- [ ] #task Prerequisite [id:: T__t] ^n",
+        "  - ⛓️ **DEPENDS ON:** [[T#^t]]",
+      ].join("\n"),
+      "T.md": "- [ ] #task Dependent [id:: T__t] ^t",
+    },
+    [{ path: "N.md", line: 0, blockId: "n" }],
+    [{ path: "T.md", line: 0, blockId: "t" }],
+  );
+  assert.match(cycle.notice, /would create a cycle/);
+
+  const projectNote = (extra, tasks) =>
+    [
+      "---",
+      'type: "[[project]]"',
+      'status: "wip"',
+      ...extra,
+      "---",
+      "",
+      ...tasks,
+    ].join("\n");
+  const subProject = await run(
+    {
+      "T.md": projectNote([], ["- [ ] #task #prj Ship the project ^prj"]),
+      "K.md": projectNote(['parent: "[[T]]"'], [
+        "- [ ] #task #prj Child project ^prj",
+        "- [ ] #task Prerequisite ^n",
+      ]),
+    },
+    [{ path: "K.md", line: 7, blockId: "n" }],
+    [{ path: "T.md", line: 5, blockId: "prj" }],
+  );
+  assert.match(subProject.notice, /sub-project of this project/);
+
+  const residentCycle = await run(
+    {
+      "T.md": projectNote([], [
+        "- [ ] #task #prj Ship the project ^prj",
+        "- [ ] #task Resident [id:: T__res] ^res",
+      ]),
+      "N.md": [
+        "- [ ] #task Prerequisite ^n",
+        "  - ⛓️ **DEPENDS ON:** [[T#^res]]",
+      ].join("\n"),
+    },
+    [{ path: "N.md", line: 0, blockId: "n" }],
+    [{ path: "T.md", line: 5, blockId: "prj" }],
+  );
+  assert.match(residentCycle.notice, /would create a cycle/);
+});
+
+test("A9 a ^prj T's residents recover with [unblocked::] when N lives in a daily note", async () => {
+  const datePath = dailyPath();
+  const projectNote = [
+    "---",
+    'type: "[[project]]"',
+    'status: "wip"',
+    "---",
+    "",
+    "- [ ] #task #prj Ship the project ^prj",
+    "- [ ] #task Resident ^r",
+  ].join("\n");
+  const notes = {
+    "T.md": projectNote,
+    [datePath]: ["## Pomodoros", "", "- [ ] #task Prerequisite ^n"].join("\n"),
+  };
+  const options = {
+    markUnblocked(line, markOptions) {
+      return markOptions && markOptions.isDailyNote
+        ? line
+        : `${line} [unblocked:: 2026-10-17]`;
+    },
+  };
+  const forward = createHarness(cloneNotes(notes), options);
+  const reverse = createHarness(cloneNotes(notes), options);
+  openNote(forward, "T.md", 5);
+  openNote(reverse, datePath, 2);
+  assert.equal(
+    (await applyForward(forward, "T.md", "prj", [{ path: datePath, blockId: "n" }])).ok,
+    true,
+  );
+  assert.equal(
+    (
+      await applyReverse(
+        reverse,
+        [refFor(reverse, datePath, "n")],
+        [refFor(reverse, "T.md", "prj")],
+      )
+    ).ok,
+    true,
+  );
+  assertParity(forward, reverse, "A9 add");
+  const removed = await applyForward(
+    forward,
+    "T.md",
+    "prj",
+    [],
+    [{ path: datePath, blockId: "n" }],
+  );
+  assert.equal(removed.ok, true, removed.reason);
+  const reverseRemoved = await applyReverse(
+    reverse,
+    [refFor(reverse, datePath, "n")],
+    [],
+    [refFor(reverse, "T.md", "prj")],
+  );
+  assert.equal(reverseRemoved.ok, true, reverseRemoved.reason);
+  assert.match(liveNotes(reverse)["T.md"], /#task Resident[^\n]*\[unblocked:: 2026-10-17\]/);
+  assertParity(forward, reverse, "A9 remove");
+});
+
+test("A5 a preparation no write can carry fails the plan instead of being dropped", () => {
+  // T already depends on M, whose note neither a source nor a T names and
+  // whose [id::] is missing: the planner prepares M, which nothing carries.
+  const files = new Map([
+    ["N.md", "- [ ] #task Prerequisite ^n"],
+    ["M.md", "- [ ] #task Other prerequisite ^m"],
+    [
+      "T.md",
+      [
+        "- [?] #task Dependent [dependsOn:: M__m] ^t",
+        "  - ⛓️ **DEPENDS ON:** [[M#^m]]",
+      ].join("\n"),
+    ],
+  ]);
+  const plan = planBlocksEdit({
+    sources: [{ path: "N.md", line: 0, blockId: "n" }],
+    add: [{ path: "T.md", line: 0, blockId: "t" }],
+    files,
+    blocksLinesEnabled: true,
+  });
+  assert.equal(plan.ok, false);
+  assert.equal(plan.reason, "unexpected-preparation");
+  assert.equal(plan.sourceWrites.length, 0);
 });

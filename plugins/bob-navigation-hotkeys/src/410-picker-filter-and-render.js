@@ -389,12 +389,12 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ id" });
     } else if (markedAdd) {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋ add" });
-    } else if (item.linkState === "mixed") {
+    } else if (this.blocksStage && item.linkState === "mixed") {
+      // Reverse counted rows show k/n block ahead of the BLOCKED badge
+      // (§15.4); forward keeps its own order below.
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
-        text: `${item.linkedSourceCount}/${item.sourceCount} ${
-          this.blocksStage ? "block" : "depend"
-        }`,
+        text: `${item.linkedSourceCount}/${item.sourceCount} block`,
       });
     } else if (
       item.stageSection === "blocked" &&
@@ -413,6 +413,11 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
         text: "−",
+      });
+    } else if (item.linkState === "mixed") {
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action",
+        text: `${item.linkedSourceCount}/${item.sourceCount} depend`,
       });
     } else if (item.needsBlockIdPrompt) {
       // Unmarked, not yet linked, and missing a trailing block ID: pressing

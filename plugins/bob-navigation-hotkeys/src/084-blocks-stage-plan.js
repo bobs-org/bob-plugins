@@ -272,6 +272,151 @@ function buildBlocksEditNotice(details = {}) {
   return notice;
 }
 
+// Follow a staged row to its live line (§15.6 step 1). A block id wins over
+// the staged line number, so cache-only rows that carry no line text still
+// resolve; a staged `rawLine` must match the live text. Returns null when
+// the task changed since the stage opened, and the ref untouched when
+// there is nothing to compare (the planner rejects it).
+function relocateBlocksEditRef(ref, content) {
+  if (!ref || typeof content !== "string") {
+    return ref;
+  }
+  const lines = content.split(/\r?\n/);
+  const blockId = normalizeBulletPropertyValue((ref && ref.blockId) || "");
+  const line = Math.floor(numericOrDefault(ref.line, Number.NaN));
+  const lineValid = Number.isFinite(line) && line >= 0 && line < lines.length;
+  const rawLine = typeof ref.rawLine === "string" ? ref.rawLine : null;
+  if (blockId) {
+    const found = findTaskLineByTrailingBlockId(lines, blockId);
+    if (found !== null) {
+      if (rawLine !== null && String(lines[found] || "") !== rawLine) {
+        return null;
+      }
+      return found === line ? ref : Object.freeze({ ...ref, line: found });
+    }
+    // A minted id is not on the line yet; a different id means it moved.
+    if (lineValid && getTrailingBlockId(String(lines[line] || ""))) {
+      return null;
+    }
+  }
+  if (!lineValid) {
+    return ref;
+  }
+  if (rawLine !== null && String(lines[line] || "") !== rawLine) {
+    return null;
+  }
+  return ref;
+}
+
+// Re-check the stage guards at apply time on the trial graph after the whole
+// batch (§15.5, §15.6 step 1), for rows the stage could not guard from
+// content (closed notes under a warm Tasks cache). `files` must hold the
+// live touched notes plus N's Depends-On closure and project ancestors.
+function checkBlocksEditGuards(args = {}) {
+  const files = args.files instanceof Map ? args.files : new Map();
+  const add = Array.isArray(args.add) ? args.add : [];
+  const remove = Array.isArray(args.remove) ? args.remove : [];
+  const sources = [];
+  for (const ref of Array.isArray(args.sources) ? args.sources : []) {
+    const path = normalizeVaultRelativePath((ref && ref.path) || "");
+    const row = blocksStageSourceFromLine(files.get(path), path, ref && ref.line);
+    if (!row) {
+      continue;
+    }
+    const blockId =
+      row.blockId || normalizeBulletPropertyValue((ref && ref.blockId) || "") || null;
+    sources.push(
+      Object.freeze({
+        ...row,
+        blockId,
+        key: blockId ? dependencyStageRowKey(path, blockId) : row.key,
+      }),
+    );
+  }
+  const notes = [...files].map(([path, content]) => ({ path, content }));
+  const edges = collectDependencyStageEdges(notes, indexDependencyStageNotes(notes));
+  const trial = new Map();
+  for (const [from, targets] of edges) {
+    trial.set(from, targets.slice());
+  }
+  const sourceKeys = sources.map((row) => row.key).filter(Boolean);
+  const labelByKey = new Map();
+  for (const row of sources) {
+    labelByKey.set(row.key, row.displayText);
+  }
+  const candidateFor = (ref) => {
+    const path = normalizeVaultRelativePath((ref && ref.path) || "");
+    const content = files.get(path);
+    const lineText =
+      typeof content === "string"
+        ? String(content.split(/\r?\n/)[ref.line] || "")
+        : "";
+    const blockId =
+      normalizeBulletPropertyValue((ref && ref.blockId) || "") ||
+      getTrailingBlockId(lineText) ||
+      null;
+    return Object.freeze({
+      path,
+      line: ref.line,
+      blockId,
+      displayText: cleanTaskDisplayText(lineText),
+    });
+  };
+  const addCandidates = add.map(candidateFor);
+  for (const candidate of remove.map(candidateFor)) {
+    const key = blocksStageRowKey(candidate);
+    if (key && trial.has(key)) {
+      trial.set(key, trial.get(key).filter((to) => !sourceKeys.includes(to)));
+    }
+  }
+  for (const candidate of addCandidates) {
+    const key = blocksStageRowKey(candidate);
+    if (!key) {
+      continue;
+    }
+    labelByKey.set(key, candidate.displayText);
+    const targets = trial.get(key) || [];
+    for (const sourceKey of sourceKeys) {
+      if (!targets.includes(sourceKey)) {
+        targets.push(sourceKey);
+      }
+    }
+    trial.set(key, targets);
+    // A project T adds a resident -> N edge for every open resident (§13.10).
+    const content = files.get(candidate.path);
+    const residentKeys =
+      typeof content === "string"
+        ? projectDependentResidentKeys(content, candidate.path, candidate.line)
+        : [];
+    for (const residentKey of residentKeys) {
+      const residentTargets = trial.get(residentKey) || [];
+      for (const sourceKey of sourceKeys) {
+        if (!residentTargets.includes(sourceKey)) {
+          residentTargets.push(sourceKey);
+        }
+      }
+      trial.set(residentKey, residentTargets);
+    }
+  }
+  for (const candidate of addCandidates) {
+    const verdict = blocksStageGuard(candidate, sources, trial, files, labelByKey);
+    if (!verdict.disabled) {
+      continue;
+    }
+    const labels = Array.isArray(verdict.cycleLabels) ? verdict.cycleLabels : [];
+    const detail =
+      verdict.reason === "would create a cycle" && labels.length > 1
+        ? `${verdict.reason}: ${labels.join(" \u2192 ")}`
+        : verdict.reason;
+    return Object.freeze({
+      ok: false,
+      reason: "guard",
+      notice: `🧱 Can't block ${quoteBlocksNoticeName(candidate.displayText)} \u00b7 ${detail}`,
+    });
+  }
+  return Object.freeze({ ok: true, reason: null, notice: null });
+}
+
 function planBlocksMirrorForSource(args = {}) {
   const content = String(args.content || "");
   if (args.blocksLinesEnabled !== true) {
@@ -357,7 +502,6 @@ function planBlocksEdit(args = {}) {
       dependentWrites: Object.freeze([]),
       preparations: Object.freeze([]),
       pomodoroTargets: Object.freeze([]),
-      pendingMirrors: Object.freeze([]),
     });
   const filesMap = new Map();
   const rawFiles = args.files;
@@ -474,7 +618,6 @@ function planBlocksEdit(args = {}) {
       dependentWrites: Object.freeze([]),
       preparations: Object.freeze([]),
       pomodoroTargets: Object.freeze([]),
-      pendingMirrors: Object.freeze([]),
       sources: Object.freeze(sources),
       added: Object.freeze([]),
       removed: Object.freeze([]),
@@ -498,13 +641,19 @@ function planBlocksEdit(args = {}) {
 
   const notePlans = [];
   const allPreparations = identityPreps.slice();
-  const addedInfo = [];
-  const removedInfo = [];
+  const addedDrafts = [];
+  const removedDrafts = [];
   let takesLane = null;
-  const recordTakes = (promotions) => {
+  const recordTakes = (promotions, tPath, trackedSources) => {
     for (const promo of Array.isArray(promotions) ? promotions : []) {
-      const key = `${normalizeVaultRelativePath(promo.path)}\x00${promo.line}`;
-      if (!sourceLineKeys.has(key)) {
+      const promoPath = normalizeVaultRelativePath(promo.path);
+      // A source in the T's own note moves with the working copy; every
+      // other note is planned from its unshifted original lines.
+      const isSource =
+        promoPath === tPath
+          ? trackedSources.some((entry) => entry.line === promo.line)
+          : sourceLineKeys.has(`${promoPath}\x00${promo.line}`);
+      if (!isSource) {
         continue;
       }
       const status = getObsidianTaskCheckboxStatus(promo.to);
@@ -517,21 +666,37 @@ function planBlocksEdit(args = {}) {
   };
 
   for (const [tPath, rows] of byNote) {
-    const ordered = rows.slice().sort((first, second) => second.line - first.line);
     const original = String(filesMap.get(tPath) || "");
     let working = String(planningFiles.get(tPath) || original);
-    const tPlans = [];
-    for (const row of ordered) {
+    // Every row (planned or not) and every same-note source is followed
+    // through each plan's line shifts, so a later plan never acts on a
+    // stale index (a same-note prerequisite above can gain a BLOCKS line,
+    // and an emptied one is deleted).
+    const tracked = rows
+      .map((row) => ({ row, line: row.line, plan: null }))
+      .sort((first, second) => second.line - first.line);
+    const trackedSources = sources
+      .filter((row) => row.path === tPath)
+      .map((row) => ({ line: row.line }));
+    const noteEdits = [];
+    const drafts = [];
+    const lanes = lanesByPath.get(tPath);
+    const noteRecovery = recovery
+      ? { ...recovery, ...navNoteScopeFlags(tPath) }
+      : null;
+    for (const entry of tracked) {
+      const row = entry.row;
       const planFiles = new Map(planningFiles);
       planFiles.set(tPath, working);
-      const lanes = lanesByPath.get(tPath);
       const sourceIsPrj =
         Array.isArray(lanes) &&
         lanes.length > 0 &&
-        isProjectLifecycleTaskLine(String(working.split(/\r?\n/)[row.line] || ""));
+        isProjectLifecycleTaskLine(
+          String(working.split(/\r?\n/)[entry.line] || ""),
+        );
       const plan = planDependencyEdit({
         content: working,
-        parentLine: row.line,
+        parentLine: entry.line,
         parentPath: tPath,
         add: row.kind === "add" ? sourceRefs : [],
         remove: row.kind === "remove" ? sourceRefs : [],
@@ -540,36 +705,40 @@ function planBlocksEdit(args = {}) {
         resolveLinkpath,
         blocksLinesEnabled,
         ...(sourceIsPrj ? { projectLaneStatuses: lanes } : {}),
-        recovery,
+        recovery: noteRecovery,
       });
       if (!plan.ok) {
         return fail(plan.reason);
       }
       allPreparations.push(...(plan.preparations || []));
-      recordTakes(plan.promotions);
+      recordTakes(plan.promotions, tPath, trackedSources);
       let nextWorking = plan.nextContent;
-      if (plan.changed && stamper) {
+      if (plan.changed && stamper && Number.isInteger(plan.parentLineNext)) {
         nextWorking = stampBlocksEditParentLine(
           nextWorking,
-          row.line,
+          plan.parentLineNext,
           stamper,
           dateText,
         );
       }
       working = nextWorking;
+      noteEdits.push(...(plan.lineEdits || []));
+      for (const other of [...tracked, ...trackedSources]) {
+        other.line = mapLineThroughLineEdits(other.line, plan.lineEdits);
+        if (other.line === null) {
+          return fail("not-task");
+        }
+      }
+      entry.plan = plan;
+      // Notices name T, never the prerequisite (N) the planner describes.
+      const description = cleanTaskDisplayText(row.text);
       const fromStatus = getObsidianTaskCheckboxStatus(row.text);
-      const afterLine = String(working.split(/\r?\n/)[row.line] || "");
-      const description =
-        (plan.added && plan.added[0]) ||
-        (plan.removed && plan.removed[0]) ||
-        cleanTaskDisplayText(row.text);
       if (row.kind === "add" && plan.summary && plan.summary.added > 0) {
         const project = plan.summary.project;
-        addedInfo.push(
-          Object.freeze({
+        addedDrafts.push({
+          entry,
+          info: {
             path: tPath,
-            line: row.line,
-            blockId: getTrailingBlockId(afterLine) || row.blockId,
             description,
             fromStatus,
             isProject: Boolean(project),
@@ -577,57 +746,96 @@ function planBlocksEdit(args = {}) {
               ? (project.newlyBlocked || []).length + 1
               : 0,
             openRemaining: plan.summary.openRemaining,
-          }),
-        );
+          },
+        });
+        drafts.push(addedDrafts[addedDrafts.length - 1]);
       }
       if (row.kind === "remove" && plan.summary && plan.summary.removed > 0) {
-        removedInfo.push(
-          Object.freeze({
+        removedDrafts.push({
+          entry,
+          info: {
             path: tPath,
-            line: row.line,
-            blockId: row.blockId,
             description,
             recovered: plan.summary.recoveredOutcome === "ready",
-          }),
-        );
+          },
+        });
+        drafts.push(removedDrafts[removedDrafts.length - 1]);
       }
-      tPlans.push(
-        Object.freeze({
-          row,
-          plan,
-          parentLine: row.line,
-        }),
-      );
+    }
+    const finalLines = working.split(/\r?\n/);
+    // The planner's final line and block id for each T: later stages
+    // (mirror, committed refs) use these, never the pre-plan index.
+    const tPlans = tracked
+      .map((entry) => {
+        const finalLine = entry.line;
+        return Object.freeze({
+          row: entry.row,
+          plan: entry.plan,
+          parentLine: finalLine,
+          finalLine,
+          blockId:
+            getTrailingBlockId(String(finalLines[finalLine] || "")) ||
+            entry.row.blockId ||
+            "",
+        });
+      });
+    for (const draft of drafts) {
+      const finalLine = draft.entry.line;
+      draft.info.line = finalLine;
+      draft.info.blockId =
+        getTrailingBlockId(String(finalLines[finalLine] || "")) ||
+        draft.entry.row.blockId;
     }
     notePlans.push(
       Object.freeze({
         path: tPath,
         original,
         nextContent: working,
+        lineEdits: Object.freeze(noteEdits),
         tPlans: Object.freeze(tPlans),
       }),
     );
   }
+  const addedInfo = addedDrafts.map((draft) => Object.freeze(draft.info));
+  const removedInfo = removedDrafts.map((draft) => Object.freeze(draft.info));
 
   const mergedPreparations = mergeTargetPreparations(allPreparations);
   const sourcePaths = [...new Set(sources.map((row) => row.path))];
   const sourcePathSet = new Set(sourcePaths);
+  const noteByPath = new Map(notePlans.map((entry) => [entry.path, entry]));
+  // A preparation is carried by the source or T note it names. Anything
+  // else would be dropped, so the gesture refuses instead.
+  for (const prep of mergedPreparations) {
+    const prepPath = normalizeVaultRelativePath(prep.path);
+    if (!sourcePathSet.has(prepPath) && !noteByPath.has(prepPath)) {
+      return fail("unexpected-preparation");
+    }
+  }
+  // Preparation lines are in the note's original coordinates; follow them
+  // through that note's plan shifts, then keep the stronger lane per line.
+  const withPreparations = (path, content, noteEdits) => {
+    const preps = mergedPreparations
+      .filter((prep) => normalizeVaultRelativePath(prep.path) === path)
+      .map((prep) => ({
+        ...prep,
+        line: mapLineThroughLineEdits(prep.line, noteEdits),
+      }))
+      .filter((prep) => prep.line !== null);
+    return applyStrongestLineEdits(content, preps);
+  };
   const sourceWrites = [];
   for (const sourcePath of sourcePaths) {
     const original = String(filesMap.get(sourcePath) || "");
-    const sameNote = notePlans.find((entry) => entry.path === sourcePath);
-    let next = sameNote ? sameNote.nextContent : original;
-    if (!sameNote) {
-      const preps = mergedPreparations.filter(
-        (prep) => normalizeVaultRelativePath(prep.path) === sourcePath,
-      );
-      next = applyStrongestLineEdits(next, preps);
-    }
+    const sameNote = noteByPath.get(sourcePath);
     sourceWrites.push(
       Object.freeze({
         path: sourcePath,
         original,
-        nextContent: next,
+        nextContent: withPreparations(
+          sourcePath,
+          sameNote ? sameNote.nextContent : original,
+          sameNote ? sameNote.lineEdits : [],
+        ),
         foldedDependents: Boolean(sameNote),
       }),
     );
@@ -638,21 +846,14 @@ function planBlocksEdit(args = {}) {
       Object.freeze({
         path: entry.path,
         original: entry.original,
-        nextContent: entry.nextContent,
+        nextContent: withPreparations(
+          entry.path,
+          entry.nextContent,
+          entry.lineEdits,
+        ),
         tPlans: entry.tPlans,
       }),
     );
-  const pendingMirrors = [];
-  for (const note of notePlans) {
-    if (sourcePathSet.has(note.path)) {
-      continue;
-    }
-    for (const entry of note.tPlans) {
-      for (const followUp of entry.plan.blocksFollowUps || []) {
-        pendingMirrors.push(followUp);
-      }
-    }
-  }
   const pomodoroTargets = collectDependencyPlanPomodoroTargets(
     notePlans.flatMap((note) => note.tPlans.map((entry) => entry.plan)),
   );
@@ -662,7 +863,7 @@ function planBlocksEdit(args = {}) {
   const dependentChanged = dependentWrites.some(
     (entry) => entry.nextContent !== entry.original,
   );
-  const changed = sourceChanged || dependentChanged || pendingMirrors.length > 0;
+  const changed = sourceChanged || dependentChanged;
   return Object.freeze({
     ok: true,
     reason: changed ? null : "unchanged",
@@ -672,7 +873,6 @@ function planBlocksEdit(args = {}) {
     dependentWrites: Object.freeze(dependentWrites),
     preparations: mergedPreparations,
     pomodoroTargets,
-    pendingMirrors: Object.freeze(pendingMirrors),
     sources: Object.freeze(sources),
     sourceRefs: Object.freeze(sourceRefs),
     added: Object.freeze(addedInfo),

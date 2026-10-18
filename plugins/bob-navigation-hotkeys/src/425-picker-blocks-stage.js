@@ -136,10 +136,14 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     const stage = this.vaultStage;
     const sources = stage && Array.isArray(stage.sources) ? stage.sources : [];
     const needsId = sources.some((source) => source && source.needsBlockId);
+    const counted = this.isCountedSession();
     if (this.getMarkedCount() > 0) {
-      return blocksStageSubtitle(stage, this.getMarkedTaskDiff(), { needsId });
+      return blocksStageSubtitle(stage, this.getMarkedTaskDiff(), {
+        needsId,
+        counted,
+      });
     }
-    return blocksStageSubtitle(stage, null, { needsId });
+    return blocksStageSubtitle(stage, null, { needsId, counted });
   }
 
   ensureBlocksConsequenceStrip() {
@@ -195,7 +199,6 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
         : "bob-cnp-consequence-strip-text",
       text,
     });
-    this.blocksStripText = text;
   }
 
   async refreshBlocksStageTodayLinks() {
@@ -221,38 +224,39 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     if (!dailyPath) {
       return;
     }
-    if (!files.has(dailyPath)) {
+    let dailyContent = files.has(dailyPath) ? files.get(dailyPath) : null;
+    if (dailyContent === null) {
       const open = this.getOpenTargetNoteContent(dailyPath);
       if (typeof open === "string") {
-        files.set(dailyPath, open);
+        dailyContent = open;
       } else if (
         this.plugin &&
         typeof this.plugin.readDependencyNoteContent === "function"
       ) {
-        const loaded = await this.plugin.readDependencyNoteContent(
+        dailyContent = await this.plugin.readDependencyNoteContent(
           dailyPath,
           null,
           "",
         );
-        if (this.vaultStage !== stage || !this.blocksStage) {
-          return;
-        }
-        if (loaded !== null) {
-          files.set(dailyPath, loaded);
-        }
       }
     }
-    if (!files.has(dailyPath)) {
+    // A vault pool refresh can swap the stage while the daily note loads;
+    // the read still applies, to whichever stage is current now.
+    const current = this.vaultStage;
+    if (!current || !this.blocksStage || dailyContent === null) {
       return;
     }
+    if (current.files instanceof Map) {
+      current.files.set(dailyPath, dailyContent);
+    }
     const todayLinks = collectBlocksStageTodayLinks(
-      files.get(dailyPath),
+      dailyContent,
       dailyPath,
-      stage.index,
+      current.index,
     );
     const marked = this.markedLines instanceof Set ? new Set(this.markedLines) : new Set();
-    this.vaultStage = this.decorateOpenBlocksStage(stage, {
-      sources: stage.sources,
+    this.vaultStage = this.decorateOpenBlocksStage(current, {
+      sources: current.sources,
       todayLinks,
       dailyPath,
     });
@@ -284,6 +288,7 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
         path: source.path,
         line: source.line,
         blockId: extra.blockId || source.blockId || null,
+        rawLine: typeof source.rawLine === "string" ? source.rawLine : undefined,
       };
     });
   }
@@ -360,11 +365,18 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
       path: normalizeVaultRelativePath(item.path || ""),
       line: item.line,
       blockId: item.blockId || item.existingBlockId || null,
+      rawLine: typeof item.rawLine === "string" ? item.rawLine : undefined,
     });
+    // The open-time snapshot of the touched notes only (§15.6 step 1); the
+    // writer reads live content and compares. A closed note the stage never
+    // read has no snapshot, so its rows carry `rawLine` instead.
     const expected = new Map();
     if (this.vaultStage && this.vaultStage.files instanceof Map) {
-      for (const [path, content] of this.vaultStage.files) {
-        expected.set(path, String(content || ""));
+      for (const ref of [...sources, ...add.map(toRef), ...remove.map(toRef)]) {
+        const path = normalizeVaultRelativePath(ref.path || "");
+        if (path && this.vaultStage.files.has(path) && !expected.has(path)) {
+          expected.set(path, String(this.vaultStage.files.get(path) || ""));
+        }
       }
     }
     const action = {
@@ -381,7 +393,6 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
         add: add.map(toRef),
         remove: remove.map(toRef),
         expected,
-        files: this.vaultStage && this.vaultStage.files,
       });
       if (!outcome.ok) {
         if (

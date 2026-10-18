@@ -74,50 +74,124 @@ class BobNavigationHotkeysBlocksEditMixin {
       : Object.freeze({ ok: false, reason: "changed" });
   }
 
+  // Notes the apply-time guards need beyond the touched ones: N's Depends-On
+  // closure (a cycle needs N to reach T) and the project ancestors of every
+  // source note (a project T refuses an N inside its sub-projects). Bounded,
+  // best-effort reads; an unreadable note is simply absent.
+  async readBlocksEditGuardNotes(files, sources, vaultFiles, resolveLinkpath) {
+    const guardFiles = new Map(files);
+    const load = async (filePath, parentPath) => {
+      const path = normalizeVaultRelativePath(filePath || "");
+      if (!path) {
+        return null;
+      }
+      if (!guardFiles.has(path)) {
+        const loaded = await this.readDependencyNoteContent(path, null, parentPath);
+        if (loaded === null) {
+          return null;
+        }
+        guardFiles.set(path, loaded);
+      }
+      return guardFiles.get(path);
+    };
+    const visited = new Set();
+    const queue = [];
+    for (const ref of sources) {
+      const path = normalizeVaultRelativePath((ref && ref.path) || "");
+      const content = guardFiles.get(path);
+      if (typeof content === "string" && Number.isInteger(ref.line)) {
+        queue.push({ path, line: ref.line });
+      }
+      let current = path;
+      for (let depth = 0; depth < PROJECT_SUBTREE_MAX_DEPTH && current; depth += 1) {
+        const text = await load(current, "");
+        if (text === null) {
+          break;
+        }
+        const parentPath = resolveProjectParentPath(
+          projectParentTarget(projectParentFieldFromNoteText(text)),
+          current,
+          vaultFiles,
+        );
+        if (!parentPath) {
+          break;
+        }
+        current = parentPath;
+      }
+    }
+    while (queue.length > 0 && visited.size < 200) {
+      const { path, line } = queue.shift();
+      const key = `${path}\x00${line}`;
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      const content = await load(path, "");
+      if (content === null) {
+        continue;
+      }
+      const enqueue = (targetPath, blockId) => {
+        const loaded = guardFiles.get(targetPath);
+        const found =
+          typeof loaded === "string"
+            ? findTaskLineByTrailingBlockId(loaded.split(/\r?\n/), blockId)
+            : null;
+        if (found !== null) {
+          queue.push({ path: targetPath, line: found });
+        }
+      };
+      const collection = collectDependencyNavigationBullets(content, line);
+      if (!collection.reason) {
+        for (const target of collection.targets) {
+          const targetPath = dependencyPathForLinkNote(target.note, path, resolveLinkpath);
+          if (targetPath && (await load(targetPath, path)) !== null) {
+            enqueue(targetPath, target.blockId);
+          }
+        }
+      }
+      // A resident inherits its project's prerequisites (§13.6).
+      const info = getProjectPrjDependencyResidents(content, path);
+      if (info && info.prjLine !== line) {
+        queue.push({ path, line: info.prjLine });
+      }
+    }
+    return guardFiles;
+  }
+
   async applyBlocksEdit(args = {}) {
+    const stale = "changed — reopen";
+    // The writer never shows a Notice: it returns `notice` and the caller
+    // (the stage, the chip ×, the palette command) shows it exactly once.
+    const refuse = (reason, notice = null) =>
+      Object.freeze({
+        ok: false,
+        reason,
+        notice,
+        committed: Object.freeze([]),
+        failed: Object.freeze([]),
+        pomodoro: null,
+        blocksFailed: Object.freeze([]),
+      });
     try {
       const today = args.today || new Date();
       const add = Array.isArray(args.add) ? args.add : [];
       const remove = Array.isArray(args.remove) ? args.remove : [];
       const sources = Array.isArray(args.sources) ? args.sources : [];
-      const files = new Map();
-      if (args.files instanceof Map) {
-        for (const [filePath, fileContent] of args.files) {
-          files.set(normalizeVaultRelativePath(filePath), String(fileContent || ""));
-        }
-      } else if (args.files && typeof args.files === "object") {
-        for (const filePath of Object.keys(args.files)) {
-          files.set(
-            normalizeVaultRelativePath(filePath),
-            String(args.files[filePath] || ""),
-          );
-        }
-      }
       const resolveLinkpath = this.dependencyLinkpathResolver();
-      const wanted = new Set();
+
+      // Preflight (§15.6 step 1): live content for every touched note, an
+      // open buffer winning over the vault, then the changed-since-open check.
+      const files = new Map();
       for (const ref of [...sources, ...add, ...remove]) {
         const path = normalizeVaultRelativePath(ref && ref.path);
-        if (path) {
-          wanted.add(path);
-        }
-      }
-      for (const filePath of wanted) {
-        if (files.has(filePath)) {
+        if (!path || files.has(path)) {
           continue;
         }
-        const loaded = await this.readDependencyNoteContent(filePath, null, "");
+        const loaded = await this.readDependencyNoteContent(path, null, "");
         if (loaded === null) {
-          return Object.freeze({
-            ok: false,
-            reason: "target-not-found",
-            notice: null,
-            committed: Object.freeze([]),
-            failed: Object.freeze([]),
-            pomodoro: null,
-            blocksFailed: Object.freeze([]),
-          });
+          return refuse("target-not-found");
         }
-        files.set(filePath, loaded);
+        files.set(path, loaded);
       }
       const vaultFiles = this.readDependencyVaultFileList() || [...files.keys()];
       let dailyPath = null;
@@ -135,77 +209,103 @@ class BobNavigationHotkeysBlocksEditMixin {
           files.set(dailyPath, loaded);
         }
       }
-      for (const filePath of [...files.keys()]) {
-        const content = files.get(filePath);
-        const lines = String(content || "").split(/\r?\n/);
-        for (let line = 0; line < lines.length; line += 1) {
-          const collection = collectDependencyNavigationBullets(content, line);
-          if (collection.reason) {
-            continue;
+      const expected =
+        args.expected instanceof Map
+          ? args.expected
+          : args.expected && typeof args.expected === "object"
+            ? new Map(Object.entries(args.expected))
+            : new Map();
+      for (const [filePath, expectedContent] of expected) {
+        const live = files.get(normalizeVaultRelativePath(filePath));
+        if (live !== undefined && live !== String(expectedContent || "")) {
+          return refuse(stale, stale);
+        }
+      }
+      const locate = (refs) => {
+        const located = [];
+        for (const ref of refs) {
+          const row = relocateBlocksEditRef(
+            ref,
+            files.get(normalizeVaultRelativePath(ref && ref.path)),
+          );
+          if (!row) {
+            return null;
           }
-          for (const target of collection.targets) {
-            const targetPath = dependencyPathForLinkNote(
-              target.note,
-              filePath,
-              resolveLinkpath,
-            );
-            if (targetPath && !files.has(targetPath)) {
-              const loaded = await this.readDependencyNoteContent(
-                targetPath,
-                null,
-                filePath,
-              );
-              if (loaded !== null) {
-                files.set(targetPath, loaded);
-              }
+          located.push(row);
+        }
+        return located;
+      };
+      const liveSources = locate(sources);
+      const liveAdd = locate(add);
+      const liveRemove = locate(remove);
+      if (!liveSources || !liveAdd || !liveRemove) {
+        return refuse(stale, stale);
+      }
+      // The planner reads each T's existing Depends-On targets.
+      for (const ref of [...liveAdd, ...liveRemove]) {
+        const path = normalizeVaultRelativePath(ref.path);
+        const collection = collectDependencyNavigationBullets(
+          files.get(path),
+          ref.line,
+        );
+        if (collection.reason) {
+          continue;
+        }
+        for (const target of collection.targets) {
+          const targetPath = dependencyPathForLinkNote(
+            target.note,
+            path,
+            resolveLinkpath,
+          );
+          if (targetPath && !files.has(targetPath)) {
+            const loaded = await this.readDependencyNoteContent(targetPath, null, path);
+            if (loaded !== null) {
+              files.set(targetPath, loaded);
             }
           }
         }
       }
-      if (args.expected instanceof Map || (args.expected && typeof args.expected === "object")) {
-        const expected =
-          args.expected instanceof Map
-            ? args.expected
-            : new Map(Object.entries(args.expected));
-        for (const [filePath, expectedContent] of expected) {
-          const path = normalizeVaultRelativePath(filePath);
-          const live = files.get(path);
-          if (live !== undefined && String(live) !== String(expectedContent || "")) {
-            new Notice("changed — reopen");
-            return Object.freeze({
-              ok: false,
-              reason: "changed — reopen",
-              notice: "changed — reopen",
-              committed: Object.freeze([]),
-              failed: Object.freeze([]),
-              pomodoro: null,
-              blocksFailed: Object.freeze([]),
-            });
-          }
+      if (liveAdd.length > 0) {
+        const guard = checkBlocksEditGuards({
+          sources: liveSources,
+          add: liveAdd,
+          remove: liveRemove,
+          files: await this.readBlocksEditGuardNotes(
+            files,
+            liveSources,
+            vaultFiles,
+            resolveLinkpath,
+          ),
+        });
+        if (!guard.ok) {
+          return refuse(guard.reason, guard.notice);
         }
       }
+
       const blocksLinesEnabled =
         args.blocksLinesEnabled !== undefined
           ? args.blocksLinesEnabled === true
           : loadBlocksLinesEnabled();
       const registry = args.registry || (await readTasksStatusRegistry(this.app));
-      const needsRecovery = remove.length > 0;
+      const needsRecovery = liveRemove.length > 0;
       const vaultContents = needsRecovery
         ? await this.readDependencyRecoveryVaultContents(
-            sources[0] && sources[0].path,
-            files.get(normalizeVaultRelativePath((sources[0] && sources[0].path) || "")) || "",
+            liveSources[0] && liveSources[0].path,
+            files.get(
+              normalizeVaultRelativePath((liveSources[0] && liveSources[0].path) || ""),
+            ) || "",
           )
         : null;
       const lanesByPath = new Map();
       const subtreePreps = [];
-      for (const ref of add) {
+      for (const ref of liveAdd) {
         const path = normalizeVaultRelativePath(ref && ref.path);
         if (!path || lanesByPath.has(path) || !files.has(path)) {
           continue;
         }
         const prep = await this.prepareSubtreeForDependencyPlan(path, files.get(path), {
           files,
-          add: sources,
+          add: liveSources,
           remove: [],
           today,
         });
@@ -227,9 +327,9 @@ class BobNavigationHotkeysBlocksEditMixin {
             ? this.getFreshnessDateText()
             : undefined;
       const plan = planBlocksEdit({
-        sources,
-        add,
-        remove,
+        sources: liveSources,
+        add: liveAdd,
+        remove: liveRemove,
         files,
         vaultFiles,
         resolveLinkpath,
@@ -246,21 +346,10 @@ class BobNavigationHotkeysBlocksEditMixin {
               ? this.getFreshnessApi()
               : null,
           ),
-          ...navNoteScopeFlags(
-            normalizeVaultRelativePath((sources[0] && sources[0].path) || ""),
-          ),
         },
       });
       if (!plan.ok) {
-        return Object.freeze({
-          ok: false,
-          reason: plan.reason,
-          notice: null,
-          committed: Object.freeze([]),
-          failed: Object.freeze([]),
-          pomodoro: null,
-          blocksFailed: Object.freeze([]),
-        });
+        return refuse(plan.reason);
       }
       if (!plan.changed) {
         return Object.freeze({
@@ -275,7 +364,7 @@ class BobNavigationHotkeysBlocksEditMixin {
       }
       const sourceWrites = plan.sourceWrites.map((entry) => ({ ...entry }));
       const dependentWrites = plan.dependentWrites.map((entry) => ({ ...entry }));
-      const extraPomodoroTargets = [];
+      const extraTargetsByPath = new Map();
       for (const entry of subtreePreps) {
         const write =
           dependentWrites.find((item) => item.path === entry.path) ||
@@ -306,46 +395,50 @@ class BobNavigationHotkeysBlocksEditMixin {
           planned.pass &&
           Array.isArray(planned.pass.pomodoroTargets)
         ) {
-          extraPomodoroTargets.push(...planned.pass.pomodoroTargets);
+          extraTargetsByPath.set(entry.path, planned.pass.pomodoroTargets);
         }
       }
-      const pomodoroTargets = collectDependencyPlanPomodoroTargets([
-        { summary: { pomodoroTargets: plan.pomodoroTargets } },
-        { summary: { pomodoroTargets: extraPomodoroTargets } },
-      ]);
-      const foldPath =
-        dailyPath && sourceWrites.some((entry) => entry.path === dailyPath)
-          ? dailyPath
-          : dailyPath && dependentWrites.some((entry) => entry.path === dailyPath)
-            ? dailyPath
-            : null;
-      const foldWrite = foldPath
-        ? sourceWrites.find((entry) => entry.path === foldPath) ||
-          dependentWrites.find((entry) => entry.path === foldPath)
-        : null;
-      const pomodoroParent = foldWrite
-        ? foldWrite.path
-        : (sourceWrites[0] && sourceWrites[0].path) ||
-          (dependentWrites[0] && dependentWrites[0].path) ||
-          "";
-      const pomodoroBefore = foldWrite
-        ? foldWrite.original
-        : files.get(pomodoroParent) || "";
-      const pomodoroNext = foldWrite
-        ? foldWrite.nextContent
-        : files.get(pomodoroParent) || "";
-      let pomodoroPrep = await prepareDependencyPomodoroCleanup(
-        (snapshotOptions) =>
-          this.readDeferredPomodoroSnapshot(this.app, snapshotOptions),
-        pomodoroTargets,
-        pomodoroParent,
-        pomodoroBefore,
-        pomodoroNext,
-        today,
+      // Pomodoro links are consumed only for T's that committed: the
+      // targets of one note's T's, or none for a note that has no T.
+      const planByPath = new Map(
+        (plan.notePlans || []).map((note) => [
+          note.path,
+          note.tPlans.map((entry) => entry.plan),
+        ]),
       );
-      if (foldWrite && pomodoroPrep.commitContent !== foldWrite.nextContent) {
-        foldWrite.nextContent = pomodoroPrep.commitContent;
+      const targetsForPath = (path) =>
+        collectDependencyPlanPomodoroTargets([
+          ...(planByPath.get(path) || []),
+          { summary: { pomodoroTargets: extraTargetsByPath.get(path) || [] } },
+        ]);
+      const readSnapshot = (snapshotOptions) =>
+        this.readDeferredPomodoroSnapshot(this.app, snapshotOptions);
+      // Today's daily note, when it is also written here, takes the cleanup
+      // of its own T's in that same transaction.
+      let foldRemoved = 0;
+      let foldedPath = null;
+      const foldWrite = dailyPath
+        ? [...sourceWrites, ...dependentWrites].find(
+            (entry) => entry.path === dailyPath,
+          )
+        : null;
+      if (foldWrite) {
+        const foldTargets = targetsForPath(foldWrite.path);
+        const prep = await prepareDependencyPomodoroCleanup(
+          readSnapshot,
+          foldTargets,
+          foldWrite.path,
+          foldWrite.original,
+          foldWrite.nextContent,
+          today,
+        );
+        if (prep.commitContent !== foldWrite.nextContent) {
+          foldWrite.nextContent = prep.commitContent;
+          foldRemoved = prep.cleanup ? prep.cleanup.removedLinkCount : 0;
+          foldedPath = foldWrite.path;
+        }
       }
+
       for (const write of sourceWrites) {
         const result = await this.writeBlocksEditNote(
           write.path,
@@ -353,47 +446,33 @@ class BobNavigationHotkeysBlocksEditMixin {
           write.nextContent,
         );
         if (!result.ok) {
-          new Notice("changed — reopen");
-          return Object.freeze({
-            ok: false,
-            reason: "changed — reopen",
-            notice: "changed — reopen",
-            committed: Object.freeze([]),
-            failed: Object.freeze([]),
-            pomodoro: null,
-            blocksFailed: Object.freeze([]),
-          });
+          return refuse(stale, stale);
         }
       }
+      // `committed` holds only T's that landed, with the planner's final
+      // line and block id (never the pre-plan index).
+      const refOf = (write, entry) =>
+        Object.freeze({
+          path: write.path,
+          line: entry.finalLine,
+          blockId: entry.blockId,
+          kind: entry.row && entry.row.kind,
+        });
       const committed = [];
       const failed = [];
+      const committedPaths = new Set();
       for (const write of dependentWrites) {
         const result = await this.writeBlocksEditNote(
           write.path,
           write.original,
           write.nextContent,
         );
-        const refs = (write.tPlans || []).map((entry) =>
-          Object.freeze({
-            path: write.path,
-            line: entry.parentLine,
-            blockId:
-              getTrailingBlockId(
-                String(write.nextContent.split(/\r?\n/)[entry.parentLine] || ""),
-              ) ||
-              (entry.row && entry.row.blockId) ||
-              "",
-            kind: entry.row && entry.row.kind,
-          }),
-        );
+        const refs = (write.tPlans || []).map((entry) => refOf(write, entry));
         if (result.ok) {
-          for (const ref of refs) {
-            committed.push(ref);
-          }
+          committedPaths.add(write.path);
+          committed.push(...refs);
         } else {
-          for (const ref of refs) {
-            failed.push(ref);
-          }
+          failed.push(...refs);
         }
       }
       for (const write of sourceWrites) {
@@ -403,20 +482,9 @@ class BobNavigationHotkeysBlocksEditMixin {
         const note = (plan.notePlans || []).find(
           (entry) => entry.path === write.path,
         );
+        committedPaths.add(write.path);
         for (const entry of (note && note.tPlans) || []) {
-          committed.push(
-            Object.freeze({
-              path: write.path,
-              line: entry.parentLine,
-              blockId:
-                getTrailingBlockId(
-                  String(write.nextContent.split(/\r?\n/)[entry.parentLine] || ""),
-                ) ||
-                (entry.row && entry.row.blockId) ||
-                "",
-              kind: entry.row && entry.row.kind,
-            }),
-          );
+          committed.push(refOf(write, entry));
         }
       }
       let blocksFailed = [];
@@ -425,12 +493,11 @@ class BobNavigationHotkeysBlocksEditMixin {
           const liveEditor = this.findBlocksEditOpenEditor(source.path);
           const liveContent = liveEditor
             ? String(liveEditor.getValue() || "")
-            : files.has(source.path)
-              ? String(
-                  (await this.readDependencyNoteContent(source.path, null, "")) ??
-                    files.get(source.path),
-                )
-              : "";
+            : String(
+                (await this.readDependencyNoteContent(source.path, null, "")) ??
+                  files.get(source.path) ??
+                  "",
+              );
           const addCommitted = [];
           const removeCommitted = [];
           for (const ref of committed) {
@@ -443,13 +510,12 @@ class BobNavigationHotkeysBlocksEditMixin {
               addCommitted.push({ path: ref.path, blockId: ref.blockId });
             }
           }
+          // N is found by its block id in the post-write content; its
+          // pre-write line may have moved.
           const mirror = planBlocksMirrorForSource({
             content: liveContent,
             sourcePath: source.path,
-            sourceBlockId:
-              getTrailingBlockId(
-                String(liveContent.split(/\r?\n/)[source.line] || ""),
-              ) || source.blockId,
+            sourceBlockId: source.blockId,
             add: addCommitted,
             remove: removeCommitted,
             vaultFiles,
@@ -473,12 +539,29 @@ class BobNavigationHotkeysBlocksEditMixin {
           }
         }
       }
+      // One cleanup after the writes, for the T's that committed in notes
+      // whose cleanup was not folded; its counts are what was removed.
+      const consumed = foldedPath && committedPaths.has(foldedPath) ? foldRemoved : 0;
+      const deferredTargets = collectDependencyPlanPomodoroTargets(
+        [...committedPaths]
+          .filter((path) => path !== foldedPath)
+          .map((path) => ({ summary: { pomodoroTargets: targetsForPath(path) } })),
+      );
+      const deferred = await prepareDependencyPomodoroCleanup(
+        readSnapshot,
+        deferredTargets,
+        "",
+        "",
+        "",
+        today,
+      );
       const pomodoroDone = await finishProjectPomodoroCleanup(
         (snapshot, cleanup) =>
           this.writeDeferredPomodoroCleanup(snapshot, cleanup),
-        pomodoroPrep.snapshot,
-        pomodoroPrep.cleanup,
+        deferred.snapshot,
+        deferred.cleanup,
       );
+      const pomodoroRemoved = pomodoroDone.removed + consumed;
       let subtree = null;
       const subtreeRoots = [];
       for (const write of [...sourceWrites, ...dependentWrites]) {
@@ -506,13 +589,20 @@ class BobNavigationHotkeysBlocksEditMixin {
           subtree = null;
         }
       }
+      const failedKeys = new Set(
+        failed.map((ref) => `${ref.path}\x00${ref.line}`),
+      );
+      const landedOnly = (infos) =>
+        (infos || []).filter(
+          (info) => !failedKeys.has(`${info.path}\x00${info.line}`),
+        );
       const notice = buildBlocksEditNotice({
         sourceCount: (plan.sources || []).length,
-        added: plan.added,
-        removed: plan.removed,
+        added: landedOnly(plan.added),
+        removed: landedOnly(plan.removed),
         takesLane: plan.takesLane,
         failedCount: failed.length,
-        pomodoroRemoved: pomodoroDone.removed,
+        pomodoroRemoved,
         pomodoroFailed: pomodoroDone.failed,
         blocksFailed: blocksFailed.length > 0,
       });
@@ -526,22 +616,14 @@ class BobNavigationHotkeysBlocksEditMixin {
         committed: Object.freeze(committed),
         failed: Object.freeze(failed),
         pomodoro: Object.freeze({
-          removed: pomodoroDone.removed,
+          removed: pomodoroRemoved,
           failed: pomodoroDone.failed,
         }),
         blocksFailed: Object.freeze(blocksFailed),
         subtree,
       });
     } catch (_error) {
-      return Object.freeze({
-        ok: false,
-        reason: "apply-failed",
-        notice: null,
-        committed: Object.freeze([]),
-        failed: Object.freeze([]),
-        pomodoro: null,
-        blocksFailed: Object.freeze([]),
-      });
+      return refuse("apply-failed");
     }
   }
 }

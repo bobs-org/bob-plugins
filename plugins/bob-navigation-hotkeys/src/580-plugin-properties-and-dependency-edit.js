@@ -550,6 +550,20 @@ class BobNavigationHotkeysPropertyDependencyMixin {
       }
       let pomodoroPrep = null;
       if (!mirrorTouch) {
+        // Freshness stamps the dependent's post-plan line: a same-note
+        // prerequisite above it can gain a BLOCKS line and shift it.
+        // Stamping before the Pomodoro fold keeps the line index valid.
+        if (Number.isInteger(plan.parentLineNext)) {
+          commitPlan = {
+            ...commitPlan,
+            nextContent: this.stampDependencyParentLine(
+              commitPlan.nextContent,
+              plan.parentLineNext,
+              args.stamper,
+              args.dateText,
+            ),
+          };
+        }
         pomodoroPrep = await prepareProjectPomodoroCleanup(
           (snapshotOptions) =>
             this.readDeferredPomodoroSnapshot(this.app, snapshotOptions),
@@ -590,19 +604,11 @@ class BobNavigationHotkeysPropertyDependencyMixin {
               return { ok: false, reason: "stale-editor" };
             }
           }
-          // The hand-edit mirror never stamps freshness.
-          const finalContent = mirrorTouch
-            ? nextContent
-            : this.stampDependencyParentLine(
-                nextContent,
-                parentLine,
-                args.stamper,
-                args.dateText,
-              );
+          // Stamped above (the hand-edit mirror never stamps freshness).
           const committed = applyEditorContentTransaction(
             editor,
             content,
-            finalContent,
+            nextContent,
             null,
             BLOCKS_MACHINE_WRITE_ANNOTATION,
           );

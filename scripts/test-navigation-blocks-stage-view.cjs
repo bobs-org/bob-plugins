@@ -402,6 +402,82 @@ test("RBG5 stale refuse reopens in the Blocks direction", async () => {
   assert.equal(reopened[0].directStage, true);
 });
 
+test("RBG5 for T: a T changed after stage open refuses once and writes nothing", async () => {
+  const notes = {
+    "N.md": nContent(),
+    "T.md": "- [ ] #task Dependent ^t",
+    "U.md": "- [ ] #task Other ^u",
+  };
+  const { plugin, modal, editor } = openBlocks(notes, "N.md", 0);
+  const reopened = stubReopen(plugin);
+  modal.close = () => {};
+  const leaf = plugin.app.workspace
+    .getLeavesOfType("markdown")
+    .find((entry) => entry.view.file.path === "T.md");
+  leaf.view.editor.content = "- [ ] #task Dependent edited ^t";
+  notices.length = 0;
+  const item = modal.items.find((row) => row.blockId === "t");
+  const applied = await modal.chooseBlocksTask(item);
+  assert.equal(applied, false);
+  assert.equal(reopened.length, 1);
+  assert.equal(reopened[0].reopenBlocksStage, true);
+  // The writer returns the notice and the stage shows it: exactly once.
+  assert.deepEqual(
+    notices.filter((entry) => /changed/.test(entry)),
+    ["changed — reopen"],
+  );
+  assert.equal(editor.getValue(), notes["N.md"]);
+  assert.equal(leaf.view.editor.getValue(), "- [ ] #task Dependent edited ^t");
+});
+
+test("today's links survive a pool refresh that lands while the daily note loads", async () => {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const daily = `${now.getFullYear()}/${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.md`;
+  const notes = {
+    "N.md": nContent(),
+    "T.md": "- [ ] #task Linked today ^t",
+    [daily]: ["## Pomodoros", "", "- [ ] (10:10-10:35) JOB", "  - [[T#^t]]"].join("\n"),
+  };
+  // The daily note is closed, so its links load asynchronously.
+  const { plugin } = stubPlugin(notes);
+  const leaves = ["N.md", "T.md"].map((path) => ({
+    view: {
+      file: { path, extension: "md" },
+      editor: new TransactionEditor(notes[path], { line: 0, ch: 0 }),
+    },
+  }));
+  plugin.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? leaves : [];
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const realRead = plugin.readDependencyNoteContent.bind(plugin);
+  plugin.readDependencyNoteContent = async (...args) => {
+    await gate;
+    return realRead(...args);
+  };
+  const editor = new TransactionEditor(notes["N.md"], { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "N.md", 0);
+  modal.showBlocksStage();
+  // The pool refresh replaces the stage while the daily read is in flight.
+  const refreshed = plugin.buildVaultDependencyStage({
+    filePath: "N.md",
+    content: notes["N.md"],
+    parentLines: [0],
+  });
+  refreshed.refreshOf = modal.blocksStageSeed;
+  const before = modal.vaultStage;
+  modal.applyVaultStageItems(refreshed);
+  assert.notEqual(modal.vaultStage, before);
+  release();
+  await sleep(30);
+  assert.equal(modal.vaultStage.todayLinks.length, 1);
+  const row = modal.items.find((item) => item.blockId === "t");
+  assert.ok(row && row.todayLink, "the 🍅 link is kept on the refreshed rows");
+});
+
 test("RBG8 Esc from the stage or the block-ID prompt writes nothing", () => {
   const notes = {
     "N.md": "- [ ] #task Ask Kelly for references",
@@ -553,9 +629,10 @@ test("strip text covers RESULTS, BLOCKED, CURRENT, disabled, marks, and ^prj", (
   );
   assert.equal(
     blocksStageConsequenceStrip(
-      { stageSection: "blocked", waitsOn: 3, disabled: false },
+      { stageSection: "blocked", waitsOn: 2, disabled: false },
       { sources },
     ),
+    // Counted after the add: the row's 2 plus this task (§15.4 sample).
     "Also waits on this (3 open)",
   );
   assert.equal(
@@ -600,6 +677,67 @@ test("strip text covers RESULTS, BLOCKED, CURRENT, disabled, marks, and ^prj", (
       ],
     }),
     "↵ blocks 1 · removes 1 · this task takes In Progress · ⚠ removes 1 Pomodoro link",
+  );
+  // Only removals marked: no "blocks 0".
+  assert.equal(
+    blocksStageConsequenceStrip(null, {
+      sources,
+      marked: [
+        { stageSection: "current", alreadyLinked: true },
+        { stageSection: "current", alreadyLinked: true },
+      ],
+    }),
+    "↵ removes 2",
+  );
+  // A project N is never raised, so marks never promise a lane.
+  assert.equal(
+    blocksStageConsequenceStrip(null, {
+      sources: [{ isProjectPrj: true }],
+      marked: [{ stageSection: "results", status: "/" }],
+    }),
+    "↵ blocks 1",
+  );
+  // Singular project waiters.
+  assert.equal(
+    blocksStageConsequenceStrip(
+      { isProjectPrj: true, projectWaitCount: 1, projectPomodoroCount: 0 },
+      { sources },
+    ),
+    "Project becomes Blocked · 1 task waits",
+  );
+});
+
+test("counted subtitle drops the ⇥ hint because marks are off in counted sessions", () => {
+  const stage = { current: [], freesCount: 0, poolSize: 7 };
+  assert.equal(
+    blocksStageSubtitle(stage, null, { counted: true }),
+    "Blocks nothing yet · searching 7 open tasks",
+  );
+  assert.equal(
+    blocksStageSubtitle(stage, null, { counted: false }),
+    "Blocks nothing yet · searching 7 open tasks · ⇥ to mark several",
+  );
+  const { modal } = openBlocks(
+    {
+      "N.md": ["- [ ] #task First ^n1", "- [ ] #task Second ^n2"].join("\n"),
+      "Ready.md": "- [ ] #task Draft cover ^ready",
+    },
+    "N.md",
+    0,
+    {
+      taskSession: {
+        explicit: true,
+        valid: true,
+        targets: [
+          { line: 0, rawLine: "- [ ] #task First ^n1" },
+          { line: 1, rawLine: "- [ ] #task Second ^n2" },
+        ],
+      },
+    },
+  );
+  assert.doesNotMatch(
+    modal.getBlocksStageSubtitle(modal.items, modal.items),
+    /mark several/,
   );
 });
 

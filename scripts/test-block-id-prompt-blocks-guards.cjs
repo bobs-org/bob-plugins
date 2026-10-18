@@ -32,7 +32,11 @@ test("bip BK13–BK15 malformed split mirrors the Depends-On twin", () => {
 
 test("bip MC5 Ctrl+Shift+Enter refuses BLOCKS with the generated notice", () => {
   assert.equal(typeof helpers.TASK_BLOCKS_LINE_NOTICE, "string");
-  assert.match(helpers.TASK_BLOCKS_LINE_NOTICE, /BLOCKS is generated/);
+  // §14.8: Ctrl+Shift+Enter is refused with nav's exact notice.
+  assert.equal(
+    helpers.TASK_BLOCKS_LINE_NOTICE,
+    "🧱 BLOCKS is generated from DEPENDS ON lines · edit it with Ctrl+Shift+Alt+B",
+  );
 });
 
 test("bip MC1/MC2 Pomodoro scanners skip managed lines", () => {

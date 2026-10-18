@@ -50,8 +50,14 @@ function blocksStageConsequenceStrip(item, context = {}) {
       }
     }
     const parts = [`\u21b5 blocks ${add}`];
-    if (remove > 0) {
+    if (add === 0) {
+      parts[0] = `\u21b5 removes ${remove}`;
+    } else if (remove > 0) {
       parts[0] = `\u21b5 blocks ${add} \u00b7 removes ${remove}`;
+    }
+    // A project N is never raised, so the strip never promises a lane.
+    if (sources.some((source) => source.isProjectPrj)) {
+      takes = null;
     }
     if (takes === "/") {
       parts.push("this task takes In Progress");
@@ -94,7 +100,7 @@ function blocksStageConsequenceStrip(item, context = {}) {
     );
     const parts = ["Project becomes Blocked"];
     if (wait > 0) {
-      parts.push(`${wait} tasks wait`);
+      parts.push(`${wait} ${wait === 1 ? "task waits" : "tasks wait"}`);
     }
     if (links > 0) {
       parts.push(`\u26a0 removes ${links} Pomodoro link${links === 1 ? "" : "s"}`);
@@ -102,10 +108,12 @@ function blocksStageConsequenceStrip(item, context = {}) {
     return parts.join(" \u00b7 ");
   }
   if (item.stageSection === "blocked") {
-    const open = Math.max(
-      1,
-      Math.floor(numericOrDefault(item.waitsOn, item.openCount || 1)),
-    );
+    // Counted after the add, so this task is one of the open reasons.
+    const open =
+      Math.max(
+        0,
+        Math.floor(numericOrDefault(item.waitsOn, item.openCount || 0)),
+      ) + 1;
     return `Also waits on this (${open} open)`;
   }
   const parts = ["Becomes Blocked until this is done"];
@@ -154,5 +162,6 @@ function blocksStageSubtitle(stage, markedDiff, options = {}) {
     currentCount === 0
       ? `Blocks nothing yet \u00b7 searching ${pool} open tasks`
       : `Blocks ${currentCount} \u00b7 frees ${frees} \u00b7 searching ${pool} open tasks`;
-  return `${head} \u00b7 \u21e5 to mark several`;
+  // \u21e5 marks are off in counted sessions, so the hint is dropped there.
+  return options.counted === true ? head : `${head} \u00b7 \u21e5 to mark several`;
 }

@@ -63,7 +63,7 @@ function planBlocksForDependencyEdit(args = {}) {
   const original = String(args.content || "");
   let nextContent = String(args.nextContent === undefined ? original : args.nextContent);
   if (args.blocksLinesEnabled !== true) {
-    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]) });
+    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]), lineEdits: Object.freeze([]) });
   }
   const parentPath = normalizeVaultRelativePath(args.parentPath || "");
   const parentLine = Math.floor(Number(args.parentLine));
@@ -76,7 +76,7 @@ function planBlocksForDependencyEdit(args = {}) {
   const originalLines = original.split(/\r?\n/);
   const nextLines = nextContent.split(/\r?\n/);
   if (!parentPath || !Number.isInteger(parentLine) || !isObsidianTaskAtLine(original, parentLine)) {
-    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]) });
+    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]), lineEdits: Object.freeze([]) });
   }
 
   const oldByKey = new Map();
@@ -116,7 +116,7 @@ function planBlocksForDependencyEdit(args = {}) {
     nextContent = nextLines.join(nextContent.includes("\r\n") ? "\r\n" : "\n");
   }
   if (!dependentBlockId) {
-    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]) });
+    return Object.freeze({ nextContent, blocksFollowUps: Object.freeze([]), failedPaths: Object.freeze([]), lineEdits: Object.freeze([]) });
   }
 
   const dependentIdentity = blocksIdentity(parentPath, dependentBlockId);
@@ -155,6 +155,7 @@ function planBlocksForDependencyEdit(args = {}) {
 
   const failedPaths = new Set();
   const followUps = [];
+  const lineEdits = [];
   for (const row of byOwner.values()) {
     const ownerContent = row.path === parentPath ? nextContent : row.preimage;
     const ownerLines = ownerContent.split(/\r?\n/);
@@ -182,6 +183,7 @@ function planBlocksForDependencyEdit(args = {}) {
         continue;
       }
       nextContent = plan.nextContent;
+      lineEdits.push(...(plan.lineEdits || []));
     } else {
       followUps.push(Object.freeze({
         path: row.path,
@@ -197,7 +199,38 @@ function planBlocksForDependencyEdit(args = {}) {
     nextContent,
     blocksFollowUps: Object.freeze(followUps),
     failedPaths: Object.freeze([...failedPaths]),
+    lineEdits: Object.freeze(lineEdits),
   });
+}
+
+// Sequential line shifts of one planned dependent edit: the structural
+// deletes (descending) and the Depends-On insert the planner applies, then
+// the same-note BLOCKS shifts `planBlocksForDependencyEdit` adds. In-place
+// replacements never shift, so they are not listed.
+function dependencyPlanLineEdits(structural, blocksLineEdits) {
+  const edits = [];
+  const deletes = (structural.deleteLines || []).slice().sort((a, b) => b - a);
+  for (const at of deletes) edits.push({ deleteAt: at });
+  if (structural.insertAt !== null && structural.insertAt !== undefined) {
+    edits.push({ insertAt: structural.insertAt - deletes.filter((at) => at < structural.insertAt).length });
+  }
+  edits.push(...(blocksLineEdits || []));
+  return Object.freeze(edits);
+}
+
+// Follow a pre-edit line index through `edits`. Returns null when the line
+// itself was deleted.
+function mapLineThroughLineEdits(line, edits) {
+  let at = line;
+  for (const edit of Array.isArray(edits) ? edits : []) {
+    if (edit.deleteAt !== undefined) {
+      if (at === edit.deleteAt) return null;
+      if (at > edit.deleteAt) at -= 1;
+    } else if (edit.insertAt !== undefined && at >= edit.insertAt) {
+      at += 1;
+    }
+  }
+  return at;
 }
 
 // Burst-baseline Depends-On targets for the hand-edit mirror (BW10/BW11).

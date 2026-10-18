@@ -308,39 +308,33 @@ class BobNavigationHotkeysCancelPropertyMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
-    // Managed-line gestures always move to the owning task first, so a
-    // direction-specific one-shot row never opens on the link bullet.
+    // Only a managed Depends-On or BLOCKS line moves to its owning task
+    // first, so a direction-specific one-shot row never opens on the link
+    // bullet (`docs/task-dependencies.md` §6.1, §15.2). Every other line,
+    // including a plain child bullet or a nested Task Link, is unchanged.
     if (!options.taskSession && !options.initialProperty) {
       const entry = resolveDependencyStageEntry(content, cursor.line);
-      if (entry.ok && entry.parentLine !== cursor.line) {
+      if (
+        entry.ok &&
+        (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
+      ) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
         if (
-          options.initialTaskCardRow === "blocks" &&
-          (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
+          options.initialTaskCardRow === "blocks" ||
+          (entry.lineKind === "blocks" && !options.initialTaskCardRow)
         ) {
           return this.openBulletPropertyPicker(cm, {
             ...options,
             reopenBlocksStage: true,
           });
         }
-        if (
-          entry.lineKind === "depends-on" &&
-          options.initialTaskCardRow !== "blocks"
-        ) {
+        if (entry.lineKind === "depends-on") {
           return this.openBulletPropertyPicker(cm, {
             ...options,
             initialProperty: "dependsOn",
           });
         }
-        return this.openBulletPropertyPicker(cm, {
-          ...options,
-        });
-      }
-      if (entry.ok && entry.skipPropertyStep) {
-        return this.openBulletPropertyPicker(cm, {
-          ...options,
-          initialProperty: "dependsOn",
-        });
+        return this.openBulletPropertyPicker(cm, { ...options });
       }
     }
     if (!options.taskSession && editorSelectionSpansTasks(cm, content)) {

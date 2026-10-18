@@ -18,6 +18,9 @@ const {
   TransactionEditor,
   stubPlugin,
   stubStageModal,
+  stubRowEl,
+  BulletPropertyPickerModal,
+  validateBulletPropertyConfig,
 } = require("./navigation-dependencies-stage-harness.cjs");
 
 test("stage entry resolves the line itself and refuses prose", () => {
@@ -74,6 +77,138 @@ test("Ctrl+Shift+P on a BLOCKS line opens the owner's Blocks stage directly", ()
   ]);
 });
 
+// Drives the real `set-bullet-property` hotkey path
+// (`openBulletPropertyPicker(editor)` with no options): the first call runs
+// the production redirect, nested calls are recorded.
+function hotkeyPicker(content, line, hotkeyOptions) {
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line, ch: 4 });
+  plugin.getActiveMarkdownView = () => ({ file: { path: "Tasks.md" }, editor });
+  const original = plugin.openBulletPropertyPicker.bind(plugin);
+  const calls = [];
+  plugin.openBulletPropertyPicker = (receivedEditor, options = {}) => {
+    calls.push(options);
+    return calls.length === 1 ? original(receivedEditor, options) : true;
+  };
+  const linkPicker = [];
+  plugin.openLinkPicker = async (_editor, options) => {
+    linkPicker.push(options);
+    return true;
+  };
+  const opened = [];
+  const originalOpen = BulletPropertyPickerModal.prototype.open;
+  BulletPropertyPickerModal.prototype.open = function openStub() {
+    opened.push(this);
+  };
+  try {
+    const result = plugin.openBulletPropertyPicker(editor, hotkeyOptions);
+    return { result, calls, editor, linkPicker, opened };
+  } finally {
+    BulletPropertyPickerModal.prototype.open = originalOpen;
+  }
+}
+
+test("Ctrl+Shift+P hotkey path on a BLOCKS line opens the owner's Blocks stage directly", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "  - 🧱 **BLOCKS:** [[#^dependent]]",
+    "- [?] #task Dependent ^dependent",
+  ].join("\n");
+  const { calls, editor } = hotkeyPicker(content, 1);
+  assert.deepEqual(editor.getCursor(), { line: 0, ch: 0 });
+  assert.deepEqual(calls, [{}, { reopenBlocksStage: true }]);
+});
+
+test("Ctrl+Shift+Alt+B on a BLOCKS or Depends-On line opens the owner's Blocks stage", () => {
+  const content = [
+    "- [?] #task Owner ^owner",
+    "  - ⛓️ **DEPENDS ON:** [[#^other]]",
+    "  - 🧱 **BLOCKS:** [[#^dependent]]",
+    "- [ ] #task Other ^other",
+    "- [?] #task Dependent ^dependent",
+  ].join("\n");
+  for (const line of [1, 2]) {
+    const { calls } = hotkeyPicker(content, line, { initialTaskCardRow: "blocks" });
+    assert.equal(calls.length, 2, `line ${line}`);
+    assert.equal(calls[1].reopenBlocksStage, true, `line ${line}`);
+  }
+});
+
+test("Ctrl+Shift+P on a Depends-On line is unchanged forward behavior", () => {
+  const content = [
+    "- [?] #task Owner ^owner",
+    "  - ⛓️ **DEPENDS ON:** [[#^other]]",
+    "- [ ] #task Other ^other",
+  ].join("\n");
+  const { calls, editor } = hotkeyPicker(content, 1);
+  assert.deepEqual(editor.getCursor(), { line: 0, ch: 0 });
+  assert.deepEqual(calls, [{}, { initialProperty: "dependsOn" }]);
+});
+
+test("Ctrl+Shift+P on a plain child bullet and a nested Task Link are unchanged (3e359a6)", () => {
+  const content = [
+    "- [ ] #task Owner ^owner",
+    "  - a plain note about the task",
+    "  - [[Other#^other]]",
+  ].join("\n");
+  // The picker needs a property config; the redirect decision does not.
+  const config = validateBulletPropertyConfig({
+    properties: [{ name: "dependsOn", values: ["x"] }],
+  });
+  const plain = hotkeyPicker(content, 1, { config });
+  assert.equal(plain.calls.length, 1, "no redirect to the owner");
+  assert.deepEqual(plain.editor.getCursor(), { line: 1, ch: 4 });
+  assert.equal(plain.opened.length, 1, "the picker opens on the bullet itself");
+  const link = hotkeyPicker(content, 2);
+  assert.equal(link.calls.length, 1, "no redirect to the owner");
+  assert.deepEqual(link.editor.getCursor(), { line: 2, ch: 4 });
+  assert.equal(link.linkPicker.length, 1, "a nested Task Link reaches the link picker");
+  assert.equal(link.opened.length, 0);
+  const counted = hotkeyPicker(content, 1, { config, initialTaskCardRow: "blocks" });
+  assert.equal(counted.calls.length, 1, "Ctrl+Shift+Alt+B on a plain bullet is not redirected");
+});
+
+test("forward counted mixed row in BLOCKED keeps the waits-on badge (3e359a6 order)", () => {
+  const { plugin } = stubPlugin({ "Tasks.md": "- [ ] #task Owner ^owner" });
+  const editor = new TransactionEditor("- [ ] #task Owner ^owner", { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const render = (item) => {
+    const rowEl = stubRowEl();
+    BulletPropertyPickerModal.prototype.renderTaskValueItem.call(modal, item, rowEl, "");
+    const texts = [];
+    const walk = (el) => {
+      if (el.text) texts.push(el.text);
+      el.children.forEach(walk);
+    };
+    walk(rowEl);
+    return texts.join(" | ");
+  };
+  const base = {
+    kind: "local-task",
+    path: "B.md",
+    line: 0,
+    blockId: "b",
+    status: "?",
+    displayText: "Blocked task",
+    text: "Blocked task",
+    stageSection: "blocked",
+    blockedBadge: "🔒 waits on 2",
+    waitsOn: 2,
+    linkState: "mixed",
+    linkedSourceCount: 1,
+    sourceCount: 2,
+    alreadyLinked: false,
+  };
+  assert.match(render(base), /🔒 waits on 2/);
+  assert.doesNotMatch(render(base), /1\/2 depend/);
+  assert.match(
+    render({ ...base, stageSection: "results", blockedBadge: null, waitsOn: null }),
+    /1\/2 depend/,
+  );
+  modal.blocksStage = true;
+  assert.match(render(base), /1\/2 block/);
+});
+
 test("api.blocks opens the stage and removes only a listed dependent", async () => {
   const ownerContent = [
     "- [ ] #task Owner ^owner",
@@ -127,6 +262,30 @@ test("api.blocks opens the stage and removes only a listed dependent", async () 
   );
   assert.deepEqual(absent, { ok: false, reason: "not-a-dependent" });
   assert.equal(writes.length, 1);
+});
+
+test("api.blocks removeDependent on an owner with no ^id is not-a-dependent", async () => {
+  const ownerContent = "- [ ] #task Owner without an id";
+  const { plugin } = stubPlugin({
+    "owner.md": ownerContent,
+    "dependent.md": "- [?] #task Dependent ^dependent",
+  });
+  const editor = new TransactionEditor(ownerContent, { line: 0, ch: 0 });
+  plugin.getActiveMarkdownView = () => ({ file: { path: "owner.md" }, editor });
+  const writes = [];
+  plugin.applyBlocksEdit = async (args) => {
+    writes.push(args);
+    return { ok: true, notice: null };
+  };
+  const api = NavigationHotkeysPlugin.helpers.createDependencyNavApi(plugin);
+  assert.deepEqual(
+    await api.blocks.removeDependent(
+      { path: "owner.md", line: 0 },
+      { path: "dependent.md", blockId: "dependent" },
+    ),
+    { ok: false, reason: "not-a-dependent" },
+  );
+  assert.equal(writes.length, 0);
 });
 
 test("stage canonical order ranks #hide last ahead of the lane", () => {

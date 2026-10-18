@@ -69,7 +69,9 @@ class BobNavigationHotkeysBlocksApiMixin {
       }
       const ownerBlockId = getTrailingBlockId(ownerLines[ownerLine]);
       if (!ownerBlockId) {
-        return Object.freeze({ ok: false, reason: "source-id-missing" });
+        // No dependent can list an owner with no id.
+        new Notice("🧱 That task is not a dependent");
+        return Object.freeze({ ok: false, reason: "not-a-dependent" });
       }
 
       const dependentContent = await this.readDependencyNoteContent(
@@ -114,7 +116,7 @@ class BobNavigationHotkeysBlocksApiMixin {
         return Object.freeze({ ok: false, reason: "not-a-dependent" });
       }
 
-      const files = new Map([
+      const expected = new Map([
         [path, ownerContent],
         [targetPath, dependentContent],
       ]);
@@ -122,8 +124,7 @@ class BobNavigationHotkeysBlocksApiMixin {
         sources: [{ path, line: ownerLine, blockId: ownerBlockId }],
         add: [],
         remove: [{ path: targetPath, line: dependentLine, blockId: targetBlockId }],
-        files,
-        expected: files,
+        expected,
       });
       if (!outcome.ok) {
         new Notice(outcome.notice || `🧱 Could not remove dependent (${outcome.reason})`);

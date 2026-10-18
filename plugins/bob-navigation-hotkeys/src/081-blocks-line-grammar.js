@@ -251,7 +251,7 @@ function planBlocksLineEdit(content, ownerLine, desiredLinks) {
     lineIndex >= lines.length ||
     !isObsidianTaskAtLine(text, lineIndex)
   ) {
-    return Object.freeze({ ok: false, reason: "not-task", changed: false, nextContent: text });
+    return Object.freeze({ ok: false, reason: "not-task", changed: false, nextContent: text, lineEdits: Object.freeze([]) });
   }
 
   const children = findBlocksChildren(lines, lineIndex);
@@ -259,7 +259,7 @@ function planBlocksLineEdit(content, ownerLine, desiredLinks) {
     isDirectChildOfTask: true,
   }));
   if (parsed.some((entry) => entry.verdict === "malformed")) {
-    return Object.freeze({ ok: false, reason: "malformed-blocks-line", changed: false, nextContent: text });
+    return Object.freeze({ ok: false, reason: "malformed-blocks-line", changed: false, nextContent: text, lineEdits: Object.freeze([]) });
   }
 
   const links = sortBlocksLinks((Array.isArray(desiredLinks) ? desiredLinks : [])
@@ -267,11 +267,15 @@ function planBlocksLineEdit(content, ownerLine, desiredLinks) {
     .filter(Boolean));
   const uniqueLinks = links.filter((link, index) => index === 0 || link !== links[index - 1]);
   const nextLines = lines.slice();
+  // Sequential shifts the splices make, so callers can follow other task
+  // lines through the edit (see `mapLineThroughLineEdits`).
+  const lineEdits = [];
   if (children.length > 0) {
     const first = children[0];
     if (uniqueLinks.length === 0) {
       for (const index of children.slice().sort((a, b) => b - a)) {
         nextLines.splice(index, 1);
+        lineEdits.push({ deleteAt: index });
       }
     } else {
       const current = parsed[0];
@@ -279,11 +283,14 @@ function planBlocksLineEdit(content, ownerLine, desiredLinks) {
       nextLines[first] = rendered;
       for (const index of children.slice(1).sort((a, b) => b - a)) {
         nextLines.splice(index, 1);
+        lineEdits.push({ deleteAt: index });
       }
     }
   } else if (uniqueLinks.length > 0) {
     const indent = getDependencyChildIndent(lines, lineIndex);
-    nextLines.splice(blocksInsertLine(lines, lineIndex), 0, formatBlocksLine(indent, uniqueLinks));
+    const insertAt = blocksInsertLine(lines, lineIndex);
+    nextLines.splice(insertAt, 0, formatBlocksLine(indent, uniqueLinks));
+    lineEdits.push({ insertAt });
   }
   const nextContent = nextLines.join(lineEnding);
   return Object.freeze({
@@ -293,6 +300,7 @@ function planBlocksLineEdit(content, ownerLine, desiredLinks) {
     nextContent,
     lineEnding,
     ownerLine: lineIndex,
+    lineEdits: Object.freeze(lineEdits),
   });
 }
 

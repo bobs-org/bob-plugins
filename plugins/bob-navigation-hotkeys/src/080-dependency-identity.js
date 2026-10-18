@@ -681,6 +681,7 @@ function planDependencyEdit(args = {}) {
     today: args.recovery && args.recovery.today,
   });
   const nextContent = blocksPlan.nextContent;
+  const lineEdits = dependencyPlanLineEdits(structural, blocksPlan.lineEdits);
   const parentBlockId = getTrailingBlockId(String(lines[parentIndex] || ""));
   const summary = Object.freeze({
     added: addedCount,
@@ -713,6 +714,8 @@ function planDependencyEdit(args = {}) {
     changed: nextContent !== content,
     parentPath,
     parentLine: parentIndex,
+    parentLineNext: mapLineThroughLineEdits(parentIndex, lineEdits),
+    lineEdits,
     nextContent,
     field: fieldValues.length === 0 ? null : fieldValues.join(", "),
     lineText,

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob Reading Board production renderer preview</title>
+  <style>
+    /* Obsidian-like tokens and base element styles: just enough of the app
+       that the production stylesheet below is exercised the way it is in
+       a vault (default button chrome, system fonts, theme variables). */
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+      --font-interface: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+      --input-height: 30px;
+      --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.05), 0 3px 8px rgba(0, 0, 0, 0.08);
+    }
+    body.theme-light {
+      color-scheme: light;
+      --background-primary: #ffffff; --background-secondary: #f6f6f6;
+      --background-modifier-border: #e0e0e0; --background-modifier-hover: rgba(0, 0, 0, 0.075);
+      --text-normal: #222222; --text-muted: #5c5c5c; --text-faint: #ababab;
+      --text-accent: #705dcf; --text-error: #d6303f; --interactive-accent: #483699;
+      --interactive-normal: #f2f3f5;
+      --color-red: #e93147; --color-orange: #ec7500; --color-yellow: #e0ac00;
+      --color-green: #08b94e; --color-blue: #086ddd; --color-purple: #7852ee;
+      background: #ffffff; color: var(--text-normal);
+    }
+    body.theme-dark {
+      color-scheme: dark;
+      --background-primary: #1e1e1e; --background-secondary: #262626;
+      --background-modifier-border: #363636; --background-modifier-hover: rgba(255, 255, 255, 0.075);
+      --text-normal: #dadada; --text-muted: #b3b3b3; --text-faint: #666666;
+      --text-accent: #a99dff; --text-error: #fb464c; --interactive-accent: #7b6cd9;
+      --interactive-normal: #2a2a2a;
+      --color-red: #fb464c; --color-orange: #e9973f; --color-yellow: #e0de71;
+      --color-green: #44cf6e; --color-blue: #027aff; --color-purple: #a882ff;
+      background: #1e1e1e; color: var(--text-normal);
+    }
+    button {
+      height: var(--input-height); padding: 4px 12px; border: 0; border-radius: 5px;
+      background: var(--interactive-normal); color: var(--text-normal);
+      box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.1); font: inherit; font-size: 13px; cursor: pointer;
+    }
+    code { font-family: ui-monospace, Menlo, monospace; font-size: 0.875em; }
+    .preview-shell { margin: 0 auto; padding: 12px; background: var(--background-primary); }
+    .preview-heading { margin: 0 0 10px; font-size: 14px; font-weight: 650; color: var(--text-muted); }
+    .preview-case { min-width: 0; margin: 0 0 16px; }
+    .preview-case-title { margin: 0 0 4px; color: var(--text-muted); font-size: 12px; font-weight: 650; }
+    .preview-block { min-width: 0; width: 100%; }
+  </style>
+  <style id="vault-task-statuses">__TASK_STATUS_CSS__</style>
+  <style id="production-styles">__PRODUCTION_CSS__</style>
+</head>
+<body class="theme-light">
+  <main id="preview-root"></main>
+  <button id="preview-after" type="button">after the board</button>
+  <script>
+  (() => {
+    "use strict";
+    const pluginSource = __PLUGIN_SOURCE_JSON__;
+    const data = __DATA_JSON__;
+    class PreviewPluginBase {
+      constructor(app) { this.app = app; }
+      addCommand() {}
+      registerEvent() {}
+      registerInterval() {}
+      registerMarkdownCodeBlockProcessor() {}
+      registerEditorExtension() {}
+    }
+    const obsidian = {
+      Plugin: PreviewPluginBase,
+      MarkdownRenderChild: class MarkdownRenderChild { constructor(containerEl) { this.containerEl = containerEl; } },
+      MarkdownView: class MarkdownView {},
+      Notice: class Notice { constructor(message) { this.message = message; } },
+      Platform: { isDesktopApp: false, isMacOS: true },
+      normalizePath: (value) => value,
+      parseYaml: () => ({}),
+    };
+    const modules = {
+      obsidian,
+      "@codemirror/state": { Prec: { highest: (value) => value }, StateEffect: { define: () => ({}) }, RangeSetBuilder: class {} },
+      "@codemirror/view": { EditorView: { updateListener: { of: (fn) => ({ fn }) } }, keymap: { of: (value) => value } },
+      "@codemirror/language": { syntaxTree: null },
+    };
+    const moduleObject = { exports: {} };
+    new Function("require", "module", "exports", "process", pluginSource)(
+      (name) => modules[name] || {},
+      moduleObject,
+      moduleObject.exports,
+      { env: { HOME: "/" } },
+    );
+    const BoardPlugin = moduleObject.exports;
+    const helpers = BoardPlugin.helpers;
+    const opened = [];
+    const pdfs = [];
+    const refreshes = [];
+    const hovers = [];
+    let plugin = null;
+    let views = [];
+
+    function clone(value) { return JSON.parse(JSON.stringify(value)); }
+
+    // Older bob: no `blocked_by`, no task priority or scheduled date.
+    function olderBob(report) {
+      const copy = clone(report);
+      for (const row of copy.refs) {
+        delete row.blocked_by;
+        if (row.task) { delete row.task.priority; delete row.task.scheduled; }
+      }
+      return copy;
+    }
+
+    function createPlugin(fixtureName, todayPaths) {
+      opened.length = 0; pdfs.length = 0; refreshes.length = 0; hovers.length = 0;
+      const app = {
+        workspace: {
+          openLinkText: (...args) => { opened.push(args); return Promise.resolve(); },
+          trigger: (name, payload) => { if (name === "hover-link") hovers.push(payload.linktext); },
+        },
+        plugins: { plugins: { "bob-navigation-hotkeys": { api: { version: 3, openReferencePdf: (path) => { pdfs.push(path); return Promise.resolve({ ok: true }); } } } } },
+        vault: { getAbstractFileByPath: () => null },
+      };
+      const instance = new BoardPlugin(app);
+      const [year, month, day] = data.today.split("-").map(Number);
+      instance.readingBoardNowDate = () => new Date(year, month - 1, day, 9, 0, 0);
+      instance.isTodayCacheReady = () => true;
+      instance.todayCache = { date: "2026-10-20", dailyPath: "x.md", keys: todayPaths, rank: new Map(todayPaths.map((key, index) => [key, index])) };
+      instance.readingBoardIsMacOS = () => true;
+      return instance;
+    }
+
+    function decode(report) {
+      const decoded = helpers.readingBoardDecodeReport(JSON.stringify(report), "");
+      if (!decoded.ok) throw new Error("fixture does not decode: " + decoded.message);
+      return decoded.report;
+    }
+
+    function makeCase(report, settings) {
+      const card = document.createElement("article");
+      card.className = "preview-case";
+      const title = document.createElement("h2");
+      title.className = "preview-case-title";
+      title.textContent = settings.title;
+      card.appendChild(title);
+      const container = document.createElement("div");
+      container.className = "preview-block";
+      card.appendChild(container);
+      document.querySelector("#preview-shell").appendChild(card);
+      return { card, container };
+    }
+
+    async function settle() {
+      for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    // Render one board through the production block path. `state` is one of
+    // board | empty | error | older | collapsed | loading | stale-error | desktop.
+    async function render({ fixture = "synthetic", width = 1000, theme = "light", state = "board", title = "" }) {
+      if (plugin) plugin.teardownReadingBoardBlock();
+      views = [];
+      document.body.className = `theme-${theme}`;
+      const root = document.querySelector("#preview-root");
+      root.replaceChildren();
+      const shell = document.createElement("div");
+      shell.id = "preview-shell";
+      shell.className = "preview-shell";
+      shell.style.width = `${width}px`;
+      const heading = document.createElement("h1");
+      heading.className = "preview-heading";
+      heading.textContent = `Reading Board · ${fixture} · ${state} · ${width}px · ${theme}`;
+      shell.appendChild(heading);
+      root.appendChild(shell);
+
+      const source = data.fixtures[fixture];
+      let report = clone(source);
+      if (state === "empty") report.refs = [];
+      if (state === "older") report = olderBob(report);
+      const todayPaths = fixture === "synthetic" ? data.todayPaths : [];
+      plugin = createPlugin(fixture, todayPaths);
+      const fence = { parent: null, type: null };
+      const key = helpers.readingBoardCacheKey(helpers.readingBoardBuildArgs(fence));
+      plugin.apiReadingBoardFetch = async () => { refreshes.push("fetch"); return { report: null, error: { ok: false, code: "failed", message: "unexpected fetch" } }; };
+      if (state === "error") {
+        plugin.apiReadingBoardFetch = async () => ({ report: null, stale: false, error: { ok: false, code: "bob-not-found", message: "bob was not found at bob.", detail: "", tried: ["~/.cargo/bin/bob", "~/.local/bin/bob", "/opt/homebrew/bin/bob", "/usr/local/bin/bob", "bob (PATH)"] } });
+      } else if (state === "desktop") {
+        plugin.apiReadingBoardFetch = async () => ({ report: null, stale: false, error: { ok: false, code: "bob-not-found", message: "Spawning bob needs the desktop app.", detail: "", tried: [] } });
+      } else if (state === "loading") {
+        plugin.apiReadingBoardFetch = () => new Promise(() => {});
+      } else {
+        plugin.readingBoardCacheSet(key, decode(report));
+      }
+      if (state === "collapsed") plugin.readingBoardViewStateFor("dash_references.md").snoozedCollapsed = true;
+      const { container } = makeCase(report, { title: title || `${fixture} / ${state}` });
+      const view = { el: container };
+      const ctx = { sourcePath: "dash_references.md", addChild: (child) => { view.child = child; } };
+      plugin.renderReadingBoardBlock(container, ctx, "");
+      views = Array.from(plugin.readingBoardViewsStore());
+      await settle();
+      if (state === "stale-error") {
+        plugin.apiReadingBoardRefresh = async () => ({
+          report: plugin.readingBoardCacheGet(key).report,
+          stale: true,
+          error: { ok: false, code: "timeout", message: "bob ref list timed out after 20 s.", detail: "bob ref list timed out after 20 s." },
+        });
+        container.querySelector(".bob-reading-board-refresh").click();
+        await settle();
+      }
+      return observe(container);
+    }
+
+    function rectOf(node) {
+      const r = node.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    }
+
+    function observe(container) {
+      const board = container.querySelector(".bob-reading-board");
+      const lanes = container.querySelector(".bob-reading-board-lanes");
+      const overflowing = [];
+      for (const node of container.querySelectorAll(".bob-reading-board-lane-body *")) {
+        const parent = node.closest(".bob-reading-board-card, .bob-reading-board-row");
+        if (!parent || node === parent || node.closest(".bob-reading-board-actions")) continue;
+        // Text clipped by an ancestor's overflow (ellipsis, line clamp) is by design.
+        let clipped = false;
+        for (let el = node.parentElement; el && el !== parent.parentElement; el = el.parentElement) {
+          if (getComputedStyle(el).overflow !== "visible") { clipped = true; break; }
+        }
+        if (!clipped && node.getBoundingClientRect().right > parent.getBoundingClientRect().right + 1) {
+          overflowing.push(`${node.className || node.tagName} +${Math.round(node.getBoundingClientRect().right - parent.getBoundingClientRect().right)}px`);
+        }
+      }
+      return {
+        hasBoard: Boolean(board),
+        columns: lanes ? getComputedStyle(lanes).gridTemplateColumns.split(" ").length : 0,
+        laneCounts: Array.from(container.querySelectorAll(".bob-reading-board-lane-count")).map((n) => n.textContent),
+        cards: container.querySelectorAll(".bob-reading-board-card").length,
+        rows: container.querySelectorAll(".bob-reading-board-row").length,
+        text: container.textContent.replace(/\s+/g, " ").trim(),
+        pageScrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+        boardWidth: board ? board.getBoundingClientRect().width : 0,
+        overflowing: overflowing.slice(0, 5),
+      };
+    }
+
+    function colorOf(string) {
+      const probe = document.createElement("canvas").getContext("2d");
+      probe.fillStyle = "#000";
+      probe.fillStyle = string;
+      const value = probe.fillStyle;
+      if (value.startsWith("#")) {
+        const n = parseInt(value.slice(1), 16);
+        return [n >> 16 & 255, n >> 8 & 255, n & 255, 1];
+      }
+      const m = value.match(/[\d.]+/g).map(Number);
+      return [m[0], m[1], m[2], m[3] === undefined ? 1 : m[3]];
+    }
+
+    function luminance([r, g, b]) {
+      const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    }
+
+    function effectiveBackground(node) {
+      const layers = [];
+      for (let el = node; el; el = el.parentElement) {
+        const bg = getComputedStyle(el).backgroundColor;
+        const color = bg === "color(srgb 0 0 0 / 0)" ? [0, 0, 0, 0] : colorOf(bg);
+        if (color[3] > 0) layers.push(color);
+        if (color[3] === 1) break;
+      }
+      let base = colorOf(getComputedStyle(document.body).backgroundColor);
+      for (const layer of layers.reverse()) {
+        base = base.map((v, i) => i === 3 ? 1 : v * (1 - layer[3]) + layer[i] * layer[3]);
+      }
+      return base;
+    }
+
+    // WCAG contrast of a text node's color over its effective background.
+    function contrastOf(selector) {
+      const node = document.querySelector(selector);
+      if (!node) return null;
+      const fg = colorOf(getComputedStyle(node).color);
+      const bg = effectiveBackground(node);
+      const a = luminance(fg) * fg[3] + luminance(bg) * (1 - fg[3]);
+      const b = luminance(bg);
+      const hi = Math.max(a, b);
+      const lo = Math.min(a, b);
+      return { selector, ratio: Number(((hi + 0.05) / (lo + 0.05)).toFixed(2)) };
+    }
+
+    window.boardPreview = {
+      render,
+      rectOf: (selector, index = 0) => { const n = document.querySelectorAll(selector)[index]; return n ? rectOf(n) : null; },
+      contrastOf,
+      get opened() { return opened; },
+      get pdfs() { return pdfs; },
+      get hovers() { return hovers; },
+      get plugin() { return plugin; },
+      get views() { return views; },
+      data,
+    };
+    window.__boardPreviewReady = true;
+  })();
+  </script>
+</body>
+</html>

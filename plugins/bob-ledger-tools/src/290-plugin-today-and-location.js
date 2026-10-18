@@ -57,6 +57,11 @@ class BobLedgerToolsTodayLocationMixin {
       this.schedulePlanBlockRerender();
       this.scheduleFreshnessStatusBar();
       this.scheduleFreshnessMarksRefresh();
+      if (typeof this.repaintReadingBoardBlocks === "function") {
+        // TODAY pills follow the Today cache; repainting reads the cached
+        // board data and spawns nothing.
+        this.repaintReadingBoardBlocks();
+      }
     }
     return changed;
   }

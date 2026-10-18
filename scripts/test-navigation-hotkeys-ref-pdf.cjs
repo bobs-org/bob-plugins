@@ -383,3 +383,48 @@ test("command registration is custom-hotkey only", () => {
   assert.match(command, /callback: \(\) => void this\.openReferencePdfInHighlightsOrLink\(\)/);
   assert.doesNotMatch(command, /hotkeys:/);
 });
+
+test("nav api openReferencePdf hands a source_pdf to Highlights without version or vault writes", async () => {
+  resetNotices();
+  const harness = makeHarness("# prose");
+  const api = helpers.createDependencyNavApi(harness.plugin);
+  assert.equal(api.version, 3, "the top-level api version is unchanged");
+  assert.equal(typeof api.openReferencePdf, "function");
+  assert.deepEqual(await api.openReferencePdf("lib/chat/x.pdf"), { ok: true });
+  assert.deepEqual(harness.launches[0].args, [
+    "-b",
+    "net.highlightsapp.universal",
+    `${BASE}/lib/chat/x.pdf`,
+  ]);
+  assert.deepEqual(notices, ["Opened x.pdf in Highlights"]);
+  assert.deepEqual(harness.delegates, []);
+});
+
+test("nav api openReferencePdf settles to a reason instead of throwing", async () => {
+  resetNotices();
+  const harness = makeHarness("# prose", { pdfs: [] });
+  const api = helpers.createDependencyNavApi(harness.plugin);
+  assert.deepEqual(await api.openReferencePdf("lib/chat/x.pdf"), {
+    ok: false,
+    reason: "not-opened",
+  });
+  assert.deepEqual(await api.openReferencePdf("../x.pdf"), {
+    ok: false,
+    reason: "not-opened",
+  });
+  assert.deepEqual(harness.launches, []);
+  const missing = helpers.createDependencyNavApi(null);
+  assert.deepEqual(await missing.openReferencePdf("lib/chat/x.pdf"), {
+    ok: false,
+    reason: "unavailable",
+  });
+  const throwing = helpers.createDependencyNavApi({
+    openReferencePdfPath: () => {
+      throw new Error("boom");
+    },
+  });
+  assert.deepEqual(await throwing.openReferencePdf("lib/chat/x.pdf"), {
+    ok: false,
+    reason: "api-failed",
+  });
+});

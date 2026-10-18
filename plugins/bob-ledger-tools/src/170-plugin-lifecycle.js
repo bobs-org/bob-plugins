@@ -618,6 +618,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
+    this.setupReadingBoardBlock();
   }
 
   onunload() {
@@ -700,6 +701,11 @@ class BobLedgerToolsPlugin extends Plugin {
       this.teardownStatsBlock();
     } catch (error) {
       // Stats teardown is best-effort.
+    }
+    try {
+      this.teardownReadingBoardBlock();
+    } catch (error) {
+      // Reading Board block teardown is best-effort.
     }
     try {
       this.teardownReadingBoardData();

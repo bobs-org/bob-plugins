@@ -14305,6 +14305,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
+    this.setupReadingBoardBlock();
   }
 
   onunload() {
@@ -14387,6 +14388,11 @@ class BobLedgerToolsPlugin extends Plugin {
       this.teardownStatsBlock();
     } catch (error) {
       // Stats teardown is best-effort.
+    }
+    try {
+      this.teardownReadingBoardBlock();
+    } catch (error) {
+      // Reading Board block teardown is best-effort.
     }
     try {
       this.teardownReadingBoardData();
@@ -24109,6 +24115,14 @@ function readingBoardErrorModel(result, options = {}) {
     : Array.isArray(error.tried)
       ? error.tried
       : [];
+  if (error.code === "bob-not-found" && /needs the desktop app/i.test(String(error.message || ""))) {
+    return {
+      code: "desktop-only",
+      title: "The Reading Board needs the desktop app",
+      hint: "bob runs only in Obsidian on a computer. Open this vault there to see the board.",
+      retry: false,
+    };
+  }
   if (error.code === "bob-not-found") {
     return {
       code: "bob-not-found",
@@ -25082,6 +25096,1396 @@ function readingBoardSignature(model) {
     ready: lane(model.lanes && model.lanes.ready),
     snoozed: lane(model.lanes && model.lanes.snoozed),
   });
+}
+// ---- src/243-plugin-reading-board-render.js ----
+// --- Reading Board DOM builders (bob-cli-99.3) ----------------------------
+// Pure builders over an injected document: the same code renders in
+// Obsidian, in fake-DOM tests, and in the browser preview. Builders only
+// create elements and attach the listeners they are handed; they never
+// touch the vault, the workspace, or the plugin. Text is always set with
+// `textContent`, never HTML.
+
+const READING_BOARD_LANE_IDS = Object.freeze(["reading", "next", "ready", "snoozed"]);
+const READING_BOARD_LANE_NAMES = Object.freeze({
+  reading: "Reading",
+  next: "Next",
+  ready: "Ready",
+  snoozed: "Snoozed",
+});
+const READING_BOARD_SKELETON_CARDS = Object.freeze({ reading: 2, next: 3, ready: 3, snoozed: 3 });
+const READING_BOARD_HINT_TEXT =
+  "Arrow keys or h, j, k, and l move between references. Home and End jump within a lane. " +
+  "Enter opens the reference. Control or Command with Enter opens its PDF. " +
+  "Alt with Enter goes to its reading task. r refreshes the board. c collapses or expands Snoozed.";
+const READING_BOARD_SYNC_TOOLTIP = "Frontmatter status catches up on the next Highlights sync";
+
+let readingBoardSerial = 0;
+
+function readingBoardEl(doc, tag, attrs, text) {
+  return statsEl(doc, tag, attrs, text);
+}
+
+function readingBoardHasClass(node, name) {
+  try {
+    const current = String((node && node.getAttribute && node.getAttribute("class")) || "");
+    return current.split(/\s+/).includes(name);
+  } catch (error) {
+    return false;
+  }
+}
+
+function readingBoardToggleClass(node, name, on) {
+  try {
+    if (!node || typeof node.setAttribute !== "function") {
+      return;
+    }
+    const current = String((node.getAttribute && node.getAttribute("class")) || "")
+      .split(/\s+/)
+      .filter(Boolean);
+    const has = current.includes(name);
+    if (on && !has) {
+      current.push(name);
+    } else if (!on && has) {
+      current.splice(current.indexOf(name), 1);
+    } else {
+      return;
+    }
+    node.setAttribute("class", current.join(" "));
+  } catch (error) {
+    // Class toggling is cosmetic.
+  }
+}
+
+function readingBoardLaneName(laneId) {
+  return READING_BOARD_LANE_NAMES[laneId] || String(laneId || "");
+}
+
+function readingBoardCountLabel(count) {
+  return `${count} ${count === 1 ? "reference" : "references"}`;
+}
+
+function readingBoardLaneAriaLabel(laneId, count) {
+  return `${readingBoardLaneName(laneId)}, ${readingBoardCountLabel(count)}`;
+}
+
+// `HH:MM` out of bob's `generated_at`, or "" when it is not an ISO stamp.
+function readingBoardHeaderTime(generatedAt) {
+  const match = /T(\d{2}:\d{2})/.exec(typeof generatedAt === "string" ? generatedAt : "");
+  return match ? match[1] : "";
+}
+
+// `[[note#^id|alias]]` -> `note#^id`, the target `openLinkText` wants.
+function readingBoardLinkTarget(link) {
+  const text = typeof link === "string" ? link.trim() : "";
+  if (!text) {
+    return "";
+  }
+  return text.replace(/^!?\[\[/, "").replace(/\]\]$/, "").split("|")[0].trim();
+}
+
+function readingBoardTaskTarget(task) {
+  if (!task || typeof task !== "object") {
+    return "";
+  }
+  const fromLink = readingBoardLinkTarget(task.link);
+  if (fromLink) {
+    return fromLink;
+  }
+  if (task.path && task.block_id) {
+    return `${String(task.path).replace(/\.md$/i, "")}#^${task.block_id}`;
+  }
+  return "";
+}
+
+function readingBoardTitleNode(doc, parts, className) {
+  const title = readingBoardEl(doc, "span", { class: className });
+  for (const part of Array.isArray(parts) ? parts : []) {
+    if (part.type === "code") {
+      title.appendChild(readingBoardEl(doc, "code", { class: "bob-reading-board-code" }, part.text));
+    } else {
+      title.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-text" }, part.text));
+    }
+  }
+  return title;
+}
+
+function readingBoardTooltipAttrs(text) {
+  return text ? { "aria-label": text, "data-tooltip-position": "top" } : {};
+}
+
+function readingBoardActionButton(doc, kind, label, tooltip, onClick) {
+  const button = readingBoardEl(doc, "button", {
+    class: `bob-reading-board-action bob-reading-board-action-${kind}`,
+    type: "button",
+    tabindex: "-1",
+    "data-action": kind,
+    ...readingBoardTooltipAttrs(tooltip),
+  }, label);
+  button.addEventListener("click", (event) => {
+    try {
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+    } catch (error) {
+      // Event hygiene is best-effort.
+    }
+    onClick(event);
+  });
+  return button;
+}
+
+function readingBoardActions(doc, card, ctx) {
+  const actions = readingBoardEl(doc, "div", { class: "bob-reading-board-actions" });
+  const handlers = ctx.handlers || {};
+  if (ctx.caps && ctx.caps.pdf && card.sourcePdf) {
+    actions.appendChild(
+      readingBoardActionButton(doc, "pdf", "PDF", "Open the PDF in Highlights", (event) =>
+        handlers.pdf && handlers.pdf(card, event),
+      ),
+    );
+  }
+  if (card.task && readingBoardTaskTarget(card.task)) {
+    actions.appendChild(
+      readingBoardActionButton(doc, "task", "Task", "Go to the reading task", (event) =>
+        handlers.task && handlers.task(card, event),
+      ),
+    );
+  }
+  return actions.children.length > 0 ? actions : null;
+}
+
+// Wire the gestures shared by every card and row: click, modifier-click,
+// middle-click, hover preview, and the file menu. Keyboard routing lives
+// on the board root so the board stays one Tab stop.
+function readingBoardWireCard(node, card, ctx, hoverTarget) {
+  const handlers = ctx.handlers || {};
+  node.addEventListener("click", (event) => handlers.open && handlers.open(card, event, false));
+  node.addEventListener("auxclick", (event) => {
+    if (event && event.button === 1) {
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      handlers.open && handlers.open(card, event, true);
+    }
+  });
+  node.addEventListener("mousedown", (event) => {
+    // Middle-press would start browser autoscroll before auxclick fires.
+    if (event && event.button === 1 && typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
+  });
+  node.addEventListener("contextmenu", (event) => handlers.contextmenu && handlers.contextmenu(card, event));
+  (hoverTarget || node).addEventListener("mouseover", (event) =>
+    handlers.hover && handlers.hover(card, node, event),
+  );
+  node.addEventListener("focus", () => handlers.focus && handlers.focus(card, node));
+}
+
+// Outline every on-board card that is a prerequisite of `card`. Matching is
+// by reference path, so a chain (Part 2 waits on Part 1) lights Part 1.
+function readingBoardHighlightPrerequisites(cardNodes, card, on) {
+  try {
+    const prerequisites = card && Array.isArray(card.prerequisites) ? card.prerequisites : [];
+    for (const prerequisite of prerequisites) {
+      const nodes = cardNodes instanceof Map ? cardNodes.get(prerequisite.ref_path) : null;
+      for (const node of nodes || []) {
+        readingBoardToggleClass(node, "bob-reading-board-prerequisite", on);
+      }
+    }
+  } catch (error) {
+    // Highlighting is cosmetic.
+  }
+}
+
+function readingBoardRegister(ctx, laneId, card, node) {
+  ctx.order[laneId].push(node);
+  ctx.nodeInfo.set(node, { laneId, path: card.path, card });
+  if (!ctx.cardNodes.has(card.path)) {
+    ctx.cardNodes.set(card.path, []);
+  }
+  ctx.cardNodes.get(card.path).push(node);
+}
+
+function readingBoardBuildCard(doc, card, laneId, ctx) {
+  const node = readingBoardEl(doc, "div", {
+    class: `bob-reading-board-card${card.today ? " bob-reading-board-card-today" : ""}`,
+    role: "listitem",
+    tabindex: "-1",
+    draggable: "false",
+    "data-lane": laneId,
+    "data-path": card.path,
+    "data-status": card.status,
+  });
+  if (card.today) {
+    node.appendChild(
+      readingBoardEl(doc, "span", {
+        class: "bob-reading-board-today",
+        ...readingBoardTooltipAttrs("Linked under today's Pomodoros"),
+      }, "TODAY"),
+    );
+  }
+  const title = readingBoardEl(doc, "div", { class: "bob-reading-board-title" });
+  title.appendChild(readingBoardTitleNode(doc, card.titleParts, "bob-reading-board-title-text"));
+  if (card.statusSync && card.statusSync !== "ok") {
+    title.appendChild(
+      readingBoardEl(doc, "span", {
+        class: "bob-reading-board-sync",
+        ...readingBoardTooltipAttrs(READING_BOARD_SYNC_TOOLTIP),
+      }, "*"),
+    );
+  }
+  node.appendChild(title);
+  const meta = readingBoardEl(doc, "div", { class: "bob-reading-board-meta" });
+  const segments = [readingBoardEl(doc, "span", { class: "bob-reading-board-kind" }, card.kind.text)];
+  if (card.parent) {
+    segments.push(readingBoardEl(doc, "span", { class: "bob-reading-board-topic" }, card.parent));
+  }
+  if (card.addedMark) {
+    const mark = buildDateMarkElement(doc, card.addedMark, {});
+    if (mark) {
+      segments.push(mark);
+    }
+  }
+  if (card.audio) {
+    segments.push(
+      readingBoardEl(doc, "span", {
+        class: "bob-reading-board-audio",
+        ...readingBoardTooltipAttrs("Has audio"),
+      }, "♫"),
+    );
+  }
+  if (card.annotationCount > 0) {
+    segments.push(
+      readingBoardEl(doc, "span", {
+        class: "bob-reading-board-annotations",
+        ...readingBoardTooltipAttrs(
+          `${card.annotationCount} ${card.annotationCount === 1 ? "annotation" : "annotations"}`,
+        ),
+      }, `✎ ${card.annotationCount}`),
+    );
+  }
+  segments.forEach((segment, index) => {
+    if (index > 0) {
+      meta.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-sep", "aria-hidden": "true" }, "·"));
+    }
+    meta.appendChild(segment);
+  });
+  if (card.priorityMark) {
+    const mark = buildPriorityMarkElement(doc, card.priorityMark, {});
+    if (mark) {
+      meta.appendChild(mark);
+    }
+  }
+  node.appendChild(meta);
+  const actions = readingBoardActions(doc, card, ctx);
+  if (actions) {
+    node.appendChild(actions);
+  }
+  readingBoardWireCard(node, card, ctx, title);
+  readingBoardRegister(ctx, laneId, card, node);
+  return node;
+}
+
+// The reason glyph in the date column of a Waiting-on row.
+function readingBoardReasonGlyph(card) {
+  const first = (Array.isArray(card.reasons) ? card.reasons : []).find(
+    (reason) => reason && reason.kind && reason.kind !== "local_schedule",
+  );
+  if (first && first.kind === "local_dependency") {
+    return "⛓";
+  }
+  if (first && first.kind === "project") {
+    return "🧱";
+  }
+  return "⏸";
+}
+
+function readingBoardBuildRow(doc, card, groupId, ctx) {
+  const node = readingBoardEl(doc, "div", {
+    class: "bob-reading-board-row",
+    role: "listitem",
+    tabindex: "-1",
+    draggable: "false",
+    "data-lane": "snoozed",
+    "data-group": groupId,
+    "data-path": card.path,
+    "data-status": card.status,
+  });
+  const main = readingBoardEl(doc, "div", { class: "bob-reading-board-row-main" });
+  let when = null;
+  if (groupId === "waking") {
+    when = readingBoardEl(doc, "span", {
+      class: "bob-reading-board-when bob-reading-board-when-waking",
+      ...readingBoardTooltipAttrs(card.wakeTooltip),
+    }, card.wakeLabel || "⏰ now");
+  } else if (groupId !== "waiting_on" && card.schedule) {
+    when = readingBoardEl(doc, "span", {
+      class: "bob-reading-board-when",
+      ...readingBoardTooltipAttrs(card.schedule.tooltip),
+    }, card.schedule.label);
+  } else {
+    when = readingBoardEl(doc, "span", {
+      class: "bob-reading-board-when bob-reading-board-when-reason",
+      ...readingBoardTooltipAttrs(card.reasonTooltip),
+    }, readingBoardReasonGlyph(card));
+  }
+  main.appendChild(when);
+  const title = readingBoardTitleNode(doc, card.titleParts, "bob-reading-board-row-title");
+  title.setAttribute("aria-label", card.title);
+  title.setAttribute("data-tooltip-position", "top");
+  main.appendChild(title);
+  if (card.priorityMark) {
+    const mark = buildPriorityMarkElement(doc, card.priorityMark, {});
+    if (mark) {
+      main.appendChild(mark);
+    }
+  }
+  const returnMatch = card.returnLane ? /^(→\s*\S+)/.exec(card.returnLane.text) : null;
+  if (returnMatch) {
+    main.appendChild(
+      readingBoardEl(doc, "span", {
+        class: "bob-reading-board-return",
+        ...readingBoardTooltipAttrs(`Returns to ${card.returnLane.text.replace(/^→\s*/, "")} when it wakes`),
+      }, returnMatch[1]),
+    );
+  }
+  node.appendChild(main);
+  if (groupId === "waiting_on") {
+    const reason = readingBoardEl(doc, "div", {
+      class: "bob-reading-board-reason",
+      ...readingBoardTooltipAttrs(card.reasonTooltip),
+    }, card.reasonText || "⏸ blocked");
+    if (card.schedule) {
+      reason.appendChild(
+        readingBoardEl(doc, "span", {
+          class: "bob-reading-board-wake",
+          ...readingBoardTooltipAttrs(card.schedule.tooltip),
+        }, `💤 ${card.schedule.label}`),
+      );
+    }
+    node.appendChild(reason);
+    node.addEventListener("mouseenter", () => readingBoardHighlightPrerequisites(ctx.cardNodes, card, true));
+    node.addEventListener("mouseleave", () => readingBoardHighlightPrerequisites(ctx.cardNodes, card, false));
+    node.addEventListener("focus", () => readingBoardHighlightPrerequisites(ctx.cardNodes, card, true));
+    node.addEventListener("blur", () => readingBoardHighlightPrerequisites(ctx.cardNodes, card, false));
+  }
+  const actions = readingBoardActions(doc, card, ctx);
+  if (actions) {
+    node.appendChild(actions);
+  }
+  readingBoardWireCard(node, card, ctx, title);
+  readingBoardRegister(ctx, "snoozed", card, node);
+  return node;
+}
+
+function readingBoardBuildLane(doc, lane, ctx) {
+  const collapsed = lane.id === "snoozed" && ctx.state && ctx.state.snoozedCollapsed === true;
+  const section = readingBoardEl(doc, "section", {
+    class: `bob-reading-board-lane bob-reading-board-lane-${lane.id}${collapsed ? " bob-reading-board-lane-collapsed" : ""}`,
+    "data-lane": lane.id,
+  });
+  const head = readingBoardEl(doc, "header", { class: "bob-reading-board-lane-head" });
+  head.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-lane-label" }, lane.label));
+  head.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-lane-count" }, String(lane.count)));
+  if (lane.id === "snoozed") {
+    const toggle = readingBoardEl(doc, "button", {
+      class: "bob-reading-board-collapse",
+      type: "button",
+      tabindex: "-1",
+      "aria-expanded": collapsed ? "false" : "true",
+      "aria-label": collapsed ? "Expand Snoozed" : "Collapse Snoozed",
+      "data-tooltip-position": "top",
+    }, collapsed ? "▸" : "▾");
+    toggle.addEventListener("click", (event) => {
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      ctx.handlers && ctx.handlers.toggleSnoozed && ctx.handlers.toggleSnoozed();
+    });
+    head.appendChild(toggle);
+    ctx.toggleButton = toggle;
+  }
+  section.appendChild(head);
+  if (collapsed) {
+    return { section, body: null };
+  }
+  // Explicit tabindex -1: Chromium otherwise makes a scroll box a Tab stop,
+  // and the board is one Tab stop (roving focus follows the keys).
+  const body = readingBoardEl(doc, "div", { class: "bob-reading-board-lane-body", tabindex: "-1" });
+  const list = readingBoardEl(doc, "div", {
+    class: "bob-reading-board-list",
+    role: "list",
+    "aria-label": readingBoardLaneAriaLabel(lane.id, lane.count),
+  });
+  if (lane.id === "snoozed") {
+    for (const group of lane.groups || []) {
+      if (!group.cards || group.cards.length === 0) {
+        continue;
+      }
+      list.appendChild(
+        readingBoardEl(doc, "div", {
+          class: "bob-reading-board-group",
+          "data-group": group.id,
+          "aria-hidden": "true",
+        }, group.label),
+      );
+      for (const card of group.cards) {
+        list.appendChild(readingBoardBuildRow(doc, card, group.id, ctx));
+      }
+    }
+  } else {
+    for (const card of lane.cards || []) {
+      list.appendChild(readingBoardBuildCard(doc, card, lane.id, ctx));
+    }
+  }
+  body.appendChild(list);
+  if (lane.count === 0) {
+    body.appendChild(readingBoardEl(doc, "div", { class: "bob-reading-board-empty" }, lane.emptyText));
+  }
+  section.appendChild(body);
+  return { section, body };
+}
+
+function readingBoardBuildHeader(doc, model, ctx) {
+  const header = readingBoardEl(doc, "div", { class: "bob-reading-board-header" });
+  header.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-name" }, "🗂️ Reading Board"));
+  header.appendChild(
+    readingBoardEl(
+      doc,
+      "span",
+      { class: "bob-reading-board-summary" },
+      `${model.summary.awake} awake · ${model.summary.snoozed} snoozed`,
+    ),
+  );
+  // Time and refresh stay together when the header wraps on a narrow note.
+  const end = readingBoardEl(doc, "span", { class: "bob-reading-board-header-end" });
+  const time = readingBoardHeaderTime(model.generatedAt);
+  ctx.timeEl = readingBoardEl(doc, "span", {
+    class: "bob-reading-board-time",
+    ...readingBoardTooltipAttrs(model.generatedAt ? `Data from ${model.generatedAt}` : ""),
+  }, time);
+  end.appendChild(ctx.timeEl);
+  const refresh = readingBoardEl(doc, "button", {
+    class: "bob-reading-board-refresh",
+    type: "button",
+    tabindex: "-1",
+    "aria-label": "Refresh reading board",
+    "data-tooltip-position": "top",
+  }, "↻");
+  refresh.addEventListener("click", (event) => {
+    if (event && typeof event.stopPropagation === "function") {
+      event.stopPropagation();
+    }
+    ctx.handlers && ctx.handlers.refresh && ctx.handlers.refresh();
+  });
+  end.appendChild(refresh);
+  header.appendChild(end);
+  ctx.refreshButton = refresh;
+  return header;
+}
+
+// One muted line, optionally ending in a Retry button.
+function readingBoardBuildLint(doc, text, onRetry) {
+  const line = readingBoardEl(doc, "div", { class: "bob-reading-board-lint" });
+  line.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-lint-text" }, text));
+  if (typeof onRetry === "function") {
+    const retry = readingBoardEl(doc, "button", {
+      class: "bob-reading-board-link",
+      type: "button",
+      tabindex: "-1",
+    }, "Retry");
+    retry.addEventListener("click", (event) => {
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      onRetry();
+    });
+    line.appendChild(retry);
+  }
+  return line;
+}
+
+function readingBoardBuildErrorCard(doc, errorModel, onRetry) {
+  const card = readingBoardEl(doc, "div", { class: "bob-reading-board-error", role: "alert" });
+  card.appendChild(readingBoardEl(doc, "div", { class: "bob-reading-board-error-title" }, errorModel.title));
+  card.appendChild(readingBoardEl(doc, "div", { class: "bob-reading-board-error-hint" }, errorModel.hint));
+  if (errorModel.retry) {
+    const retry = readingBoardEl(doc, "button", {
+      class: "bob-reading-board-link",
+      type: "button",
+    }, "Retry");
+    retry.addEventListener("click", (event) => {
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      onRetry();
+    });
+    card.appendChild(retry);
+  }
+  return card;
+}
+
+// First paint: four ghost lanes in the real grid, so nothing jumps when
+// the data lands. Decorative: assistive tech hears one loading status.
+function readingBoardBuildSkeleton(doc) {
+  readingBoardSerial += 1;
+  const root = readingBoardEl(doc, "div", {
+    class: "bob-reading-board bob-reading-board-loading",
+    role: "status",
+    "aria-busy": "true",
+    "aria-label": "Reading Board loading",
+  });
+  const header = readingBoardEl(doc, "div", { class: "bob-reading-board-header" });
+  header.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-name" }, "🗂️ Reading Board"));
+  root.appendChild(header);
+  const lanes = readingBoardEl(doc, "div", { class: "bob-reading-board-lanes", "aria-hidden": "true" });
+  const labels = { reading: "📖 Reading", next: "⭐ Next", ready: "📥 Ready", snoozed: "💤 Snoozed" };
+  for (const laneId of READING_BOARD_LANE_IDS) {
+    const section = readingBoardEl(doc, "section", {
+      class: `bob-reading-board-lane bob-reading-board-lane-${laneId}`,
+      "data-lane": laneId,
+    });
+    const head = readingBoardEl(doc, "header", { class: "bob-reading-board-lane-head" });
+    head.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-lane-label" }, labels[laneId]));
+    head.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-lane-count" }, "–"));
+    section.appendChild(head);
+    // Explicit tabindex -1: Chromium otherwise makes a scroll box a Tab stop,
+  // and the board is one Tab stop (roving focus follows the keys).
+  const body = readingBoardEl(doc, "div", { class: "bob-reading-board-lane-body", tabindex: "-1" });
+    for (let index = 0; index < READING_BOARD_SKELETON_CARDS[laneId]; index += 1) {
+      const ghost = readingBoardEl(doc, "div", { class: "bob-reading-board-card bob-reading-board-ghost" });
+      ghost.appendChild(readingBoardEl(doc, "div", { class: "bob-reading-board-ghost-bar" }));
+      ghost.appendChild(readingBoardEl(doc, "div", { class: "bob-reading-board-ghost-bar bob-reading-board-ghost-short" }));
+      body.appendChild(ghost);
+    }
+    section.appendChild(body);
+    lanes.appendChild(section);
+  }
+  root.appendChild(lanes);
+  return root;
+}
+
+// The full board. `ctx` carries everything the builders need and collects
+// what the caller needs back: node registry, keyboard order, and the few
+// nodes that are updated in place.
+//   ctx = { handlers, caps, state, lints: [{text, retry}], busy, live }
+function readingBoardBuildBoard(doc, model, options = {}) {
+  readingBoardSerial += 1;
+  const hintId = `bob-reading-board-hint-${readingBoardSerial}`;
+  const ctx = {
+    handlers: options.handlers || {},
+    caps: options.caps || { pdf: false },
+    state: options.state || { snoozedCollapsed: false },
+    order: { reading: [], next: [], ready: [], snoozed: [] },
+    nodeInfo: new Map(),
+    cardNodes: new Map(),
+    timeEl: null,
+    refreshButton: null,
+    toggleButton: null,
+  };
+  const root = readingBoardEl(doc, "div", {
+    class: `bob-reading-board${options.busy ? " bob-reading-board-busy" : ""}`,
+    role: "region",
+    "aria-label": "Reading Board",
+    "aria-describedby": hintId,
+    "aria-busy": options.busy ? "true" : null,
+    tabindex: "-1",
+  });
+  root.appendChild(readingBoardBuildHeader(doc, model, ctx));
+  root.appendChild(readingBoardEl(doc, "div", { class: "bob-reading-board-sr", id: hintId }, READING_BOARD_HINT_TEXT));
+  for (const lint of options.lints || []) {
+    root.appendChild(readingBoardBuildLint(doc, lint.text, lint.retry));
+  }
+  if (options.live) {
+    root.appendChild(options.live);
+  }
+  const bodies = {};
+  if (model.emptyText) {
+    root.appendChild(readingBoardEl(doc, "div", { class: "bob-reading-board-empty-board" }, model.emptyText));
+  } else {
+    const lanes = readingBoardEl(doc, "div", { class: "bob-reading-board-lanes" });
+    for (const laneId of READING_BOARD_LANE_IDS) {
+      const built = readingBoardBuildLane(doc, model.lanes[laneId], ctx);
+      bodies[laneId] = built.body;
+      lanes.appendChild(built.section);
+    }
+    root.appendChild(lanes);
+  }
+  return {
+    root,
+    bodies,
+    order: ctx.order,
+    nodeInfo: ctx.nodeInfo,
+    cardNodes: ctx.cardNodes,
+    timeEl: ctx.timeEl,
+    refreshButton: ctx.refreshButton,
+  };
+}
+
+// Keyboard order: the lanes that currently show at least one node.
+function readingBoardNavLanes(order, state) {
+  const collapsed = state && state.snoozedCollapsed === true;
+  return READING_BOARD_LANE_IDS
+    .filter((laneId) => !(laneId === "snoozed" && collapsed))
+    .map((laneId) => ({ id: laneId, nodes: order[laneId] || [] }))
+    .filter((lane) => lane.nodes.length > 0);
+}
+
+const READING_BOARD_MOVE_KEYS = Object.freeze({
+  ArrowLeft: "left",
+  h: "left",
+  ArrowRight: "right",
+  l: "right",
+  ArrowUp: "up",
+  k: "up",
+  ArrowDown: "down",
+  j: "down",
+  Home: "home",
+  End: "end",
+});
+
+// The node a movement key lands on, or null when the key is not a
+// movement key or the move would leave the board.
+function readingBoardMoveTarget(lanes, laneId, index, key) {
+  const direction = READING_BOARD_MOVE_KEYS[key];
+  const laneIndex = lanes.findIndex((lane) => lane.id === laneId);
+  if (!direction || laneIndex < 0) {
+    return null;
+  }
+  const lane = lanes[laneIndex];
+  const at = Math.max(0, Math.min(index, lane.nodes.length - 1));
+  if (direction === "up") {
+    return at > 0 ? lane.nodes[at - 1] : null;
+  }
+  if (direction === "down") {
+    return at < lane.nodes.length - 1 ? lane.nodes[at + 1] : null;
+  }
+  if (direction === "home") {
+    return lane.nodes[0];
+  }
+  if (direction === "end") {
+    return lane.nodes[lane.nodes.length - 1];
+  }
+  const next = lanes[laneIndex + (direction === "left" ? -1 : 1)];
+  if (!next) {
+    return null;
+  }
+  return next.nodes[Math.min(at, next.nodes.length - 1)];
+}
+
+// The node that should be the board's Tab stop: the remembered anchor
+// (same lane, then same path in any lane), else the first node shown.
+function readingBoardPickAnchor(lanes, anchor) {
+  if (anchor && anchor.path) {
+    for (const lane of lanes) {
+      for (const node of lane.nodes) {
+        if (
+          node.getAttribute("data-path") === anchor.path &&
+          (!anchor.laneId || node.getAttribute("data-lane") === anchor.laneId)
+        ) {
+          return node;
+        }
+      }
+    }
+    for (const lane of lanes) {
+      for (const node of lane.nodes) {
+        if (node.getAttribute("data-path") === anchor.path) {
+          return node;
+        }
+      }
+    }
+  }
+  return lanes.length > 0 ? lanes[0].nodes[0] : null;
+}
+// ---- src/244-plugin-reading-board-block.js ----
+// --- Reading Board block (bob-cli-99.3) -----------------------------------
+// The `bob-reading-board` code block: a read-only kanban of the reading
+// queue. bob decides every lane and reason (`bob ref list` JSON, see the
+// data and model fragments); this mixin only paints it, routes gestures to
+// Obsidian's own navigation, and never calls a vault write API.
+
+const READING_BOARD_MOUNT_REVALIDATE_MS = 3000;
+const READING_BOARD_PROCESSOR = "bob-reading-board";
+const READING_BOARD_PAGE = "dash_references";
+const READING_BOARD_NAV_PLUGIN_ID = "bob-navigation-hotkeys";
+
+let ReadingBoardMenu = null;
+try {
+  ReadingBoardMenu = require("obsidian").Menu || null;
+} catch (error) {
+  ReadingBoardMenu = null;
+}
+
+class BobLedgerToolsReadingBoardBlockMixin {
+  readingBoardViewStateFor(sourcePath) {
+    if (!(this.readingBoardViewStates instanceof Map)) {
+      this.readingBoardViewStates = new Map();
+    }
+    const key = typeof sourcePath === "string" ? sourcePath : "";
+    let state = this.readingBoardViewStates.get(key);
+    if (!state) {
+      state = { snoozedCollapsed: false };
+      this.readingBoardViewStates.set(key, state);
+    }
+    return state;
+  }
+
+  readingBoardPaintGens() {
+    if (!(this.readingBoardPaintGenMap instanceof Map)) {
+      this.readingBoardPaintGenMap = new Map();
+    }
+    return this.readingBoardPaintGenMap;
+  }
+
+  // Overridable clock, so tests and the preview pin the date.
+  readingBoardNowDate() {
+    return new Date();
+  }
+
+  readingBoardIsMacOS() {
+    return Boolean(Platform && Platform.isMacOS === true);
+  }
+
+  readingBoardNavApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins ? plugins[READING_BOARD_NAV_PLUGIN_ID] : null;
+      return nav && nav.api && typeof nav.api === "object" ? nav.api : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // The PDF button exists only where Highlights can open it: macOS plus
+  // the navigation plugin's additive `openReferencePdf` member.
+  readingBoardCaps() {
+    const api = this.readingBoardNavApi();
+    return {
+      pdf: Boolean(api && typeof api.openReferencePdf === "function" && this.readingBoardIsMacOS()),
+    };
+  }
+
+  // Today never guesses: without a ready cache no card gets a TODAY pill.
+  readingBoardTodayContext(now) {
+    let ready = false;
+    try {
+      ready = this.isTodayCacheReady(now) === true;
+    } catch (error) {
+      ready = false;
+    }
+    const rank =
+      ready && this.todayCache && this.todayCache.rank instanceof Map
+        ? this.todayCache.rank
+        : new Map();
+    return { today: this.todayLocalDate(now), todayReady: ready, todayRank: rank };
+  }
+
+  setupReadingBoardBlock() {
+    try {
+      if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
+        this.registerMarkdownCodeBlockProcessor(READING_BOARD_PROCESSOR, (source, el, ctx) =>
+          this.renderReadingBoardBlock(el, ctx, source),
+        );
+      }
+    } catch (error) {
+      // Block registration is best-effort.
+    }
+    try {
+      if (typeof this.addCommand === "function") {
+        this.addCommand({
+          id: "open-reading-board",
+          name: "Open Reading Board",
+          callback: () => {
+            try {
+              const workspace = this.app && this.app.workspace;
+              if (workspace && typeof workspace.openLinkText === "function") {
+                void workspace.openLinkText(READING_BOARD_PAGE, "", false);
+                return;
+              }
+            } catch (error) {
+              // Fall through to the Notice below.
+            }
+            try {
+              new Notice("Could not open Reading Board");
+            } catch (error) {
+              // Notice is best-effort.
+            }
+          },
+        });
+      }
+    } catch (error) {
+      // Command registration is best-effort.
+    }
+  }
+
+  teardownReadingBoardBlock() {
+    if (this.readingBoardPaintGenMap instanceof Map) {
+      this.readingBoardPaintGenMap.clear();
+    }
+    if (this.readingBoardViewStates instanceof Map) {
+      this.readingBoardViewStates.clear();
+    }
+  }
+
+  renderReadingBoardBlock(el, ctx, source) {
+    if (!el) {
+      return;
+    }
+    const fence = readingBoardParseFence(source);
+    const view = {
+      el,
+      sourcePath: (ctx && ctx.sourcePath) || "",
+      fence: { parent: fence.parent, type: fence.type },
+      fenceLints: fence.lints,
+      board: null,
+      model: null,
+      report: null,
+      renderKey: null,
+      anchor: null,
+      anchorNode: null,
+      busy: false,
+      refreshError: null,
+      liveEl: null,
+    };
+    this.readingBoardViewsStore().add(view);
+    const release = () => {
+      this.readingBoardViewsStore().delete(view);
+      this.readingBoardPaintGens().delete(el);
+    };
+    if (ctx && typeof ctx.addChild === "function") {
+      let child = null;
+      try {
+        if (typeof MarkdownRenderChild === "function") {
+          child = new MarkdownRenderChild(el);
+          child.onunload = release;
+        }
+      } catch (error) {
+        child = null;
+      }
+      if (!child) {
+        child = { unload: release };
+      }
+      try {
+        ctx.addChild(child);
+      } catch (error) {
+        // Older hosts may reject the child; teardown clears the Set.
+      }
+    }
+    const cached = this.readingBoardCacheGet(readingBoardCacheKey(readingBoardBuildArgs(view.fence)));
+    this.paintReadingBoardBlock(view);
+    if (cached && Date.now() - cached.fetchedAt > READING_BOARD_MOUNT_REVALIDATE_MS) {
+      // A cached frame is already on screen; refresh it in the background.
+      Promise.resolve(this.apiReadingBoardFetch(view.fence)).catch(() => {});
+    }
+  }
+
+  // Paint from the cache when it has data (never spawns, so a repaint after
+  // a revalidation cannot start another one); otherwise show the skeleton
+  // and fetch once.
+  paintReadingBoardBlock(view) {
+    if (!view || !view.el) {
+      return;
+    }
+    const gens = this.readingBoardPaintGens();
+    const paintGen = (gens.get(view.el) || 0) + 1;
+    gens.set(view.el, paintGen);
+    const cached = this.readingBoardCacheGet(readingBoardCacheKey(readingBoardBuildArgs(view.fence)));
+    if (cached) {
+      if (view.refreshError && cached.fetchedAt > view.refreshError.at) {
+        view.refreshError = null;
+      }
+      this.readingBoardRenderResult(view, { report: cached.report });
+      return;
+    }
+    this.readingBoardPaintSkeleton(view, false);
+    const settle = (result) => {
+      if (gens.get(view.el) !== paintGen) {
+        return;
+      }
+      if (result && result.report) {
+        this.readingBoardViewDataApplied(view);
+      }
+      this.readingBoardRenderResult(view, result || { report: null });
+    };
+    Promise.resolve()
+      .then(() => this.apiReadingBoardFetch(view.fence))
+      .then(settle, (error) =>
+        settle({
+          report: null,
+          error: {
+            code: "failed",
+            message: String((error && error.message) || error),
+            detail: "",
+          },
+        }),
+      );
+  }
+
+  readingBoardClear(view) {
+    if (typeof view.el.empty === "function") {
+      view.el.empty();
+    } else {
+      view.el.textContent = "";
+    }
+  }
+
+  readingBoardPaintSkeleton(view, force) {
+    try {
+      const doc = statsDocFor(view.el);
+      if (!doc) {
+        return;
+      }
+      if (!force && view.el.querySelector && view.el.querySelector(".bob-reading-board")) {
+        return;
+      }
+      this.readingBoardClear(view);
+      view.board = null;
+      view.renderKey = null;
+      view.el.appendChild(readingBoardBuildSkeleton(doc));
+    } catch (error) {
+      // Skeleton is best-effort.
+    }
+  }
+
+  readingBoardFindInfo(board, node) {
+    let current = node;
+    for (let depth = 0; current && depth < 8; depth += 1) {
+      const info = board.nodeInfo.get(current);
+      if (info) {
+        return { node: current, ...info };
+      }
+      current = current.parentNode || current.parentElement || null;
+    }
+    return null;
+  }
+
+  // Focus and per-lane scroll of the board about to be replaced.
+  readingBoardCaptureState(view) {
+    const captured = { hadFocus: false, focused: null, scroll: {} };
+    const board = view.board;
+    if (!board || !board.root) {
+      return captured;
+    }
+    try {
+      const doc = statsDocFor(view.el);
+      const active = doc && doc.activeElement;
+      if (active && board.root.contains && board.root.contains(active)) {
+        captured.hadFocus = true;
+        const info = this.readingBoardFindInfo(board, active);
+        if (info) {
+          captured.focused = { laneId: info.laneId, path: info.path };
+        }
+      }
+      for (const laneId of READING_BOARD_LANE_IDS) {
+        const body = board.bodies[laneId];
+        if (body && body.scrollTop) {
+          captured.scroll[laneId] = body.scrollTop;
+        }
+      }
+    } catch (error) {
+      // Capturing is best-effort; a lost scroll position is cosmetic.
+    }
+    return captured;
+  }
+
+  // The board is one Tab stop: exactly one node carries tabindex 0.
+  readingBoardSetAnchor(view, node) {
+    if (!node || !view.board) {
+      return;
+    }
+    if (view.anchorNode && view.anchorNode !== node) {
+      view.anchorNode.setAttribute("tabindex", "-1");
+    }
+    view.board.root.setAttribute("tabindex", "-1");
+    node.setAttribute("tabindex", "0");
+    view.anchorNode = node;
+    view.anchor = { laneId: node.getAttribute("data-lane"), path: node.getAttribute("data-path") };
+  }
+
+  readingBoardSyncBusy(view) {
+    const board = view.board;
+    if (!board || !board.root) {
+      return;
+    }
+    readingBoardToggleClass(board.root, "bob-reading-board-busy", view.busy);
+    if (view.busy) {
+      board.root.setAttribute("aria-busy", "true");
+    } else if (board.root.removeAttribute) {
+      board.root.removeAttribute("aria-busy");
+    } else {
+      board.root.setAttribute("aria-busy", "false");
+    }
+    if (board.refreshButton) {
+      board.refreshButton.setAttribute("aria-busy", view.busy ? "true" : "false");
+    }
+  }
+
+  readingBoardAnnounce(view, text) {
+    if (!view.liveEl) {
+      return;
+    }
+    view.liveEl.textContent = text;
+  }
+
+  readingBoardLintsFor(view) {
+    const lints = [];
+    if (view.refreshError) {
+      const at = readingBoardHeaderTime(view.report && view.report.generated_at);
+      const detail =
+        view.refreshError.error.detail || view.refreshError.error.message || "refresh failed";
+      const failure = /^bob ref list /.test(detail) ? detail : `bob ref list failed: ${detail}`;
+      lints.push({
+        text: `Showing the board from ${at || "earlier"} · ${failure} · `,
+        retry: () => this.readingBoardRefresh(view),
+      });
+    }
+    return lints;
+  }
+
+  readingBoardRenderResult(view, result) {
+    try {
+      const doc = statsDocFor(view.el);
+      if (!doc) {
+        return;
+      }
+      const report = result && result.report;
+      if (!report) {
+        this.readingBoardRenderError(view, doc, result && result.error);
+        return;
+      }
+      view.report = report;
+      const now = this.readingBoardNowDate();
+      const today = this.readingBoardTodayContext(now);
+      const model = readingBoardModel(report, { ...today, lints: view.fenceLints });
+      const state = this.readingBoardViewStateFor(view.sourcePath);
+      const caps = this.readingBoardCaps();
+      const lints = [
+        ...model.lints.map((text) => ({ text })),
+        ...this.readingBoardLintsFor(view),
+      ];
+      // The data time is excluded from the key: it changes on every fetch,
+      // and an unchanged board is updated in place instead of repainted.
+      const key = [
+        readingBoardSignature({ ...model, generatedAt: null }),
+        state.snoozedCollapsed ? "collapsed" : "open",
+        caps.pdf ? "pdf" : "nopdf",
+        lints.map((lint) => lint.text).join("\n"),
+      ].join("|");
+      view.model = model;
+      if (
+        view.board &&
+        view.renderKey === key &&
+        view.el.querySelector &&
+        view.el.querySelector(".bob-reading-board")
+      ) {
+        if (view.board.timeEl) {
+          view.board.timeEl.textContent = readingBoardHeaderTime(model.generatedAt);
+        }
+        this.readingBoardSyncBusy(view);
+        return;
+      }
+      const prior = this.readingBoardCaptureState(view);
+      if (!view.liveEl) {
+        view.liveEl = readingBoardEl(doc, "div", {
+          class: "bob-reading-board-sr",
+          role: "status",
+          "aria-live": "polite",
+        });
+      }
+      const board = readingBoardBuildBoard(doc, model, {
+        handlers: this.readingBoardHandlers(view),
+        caps,
+        state,
+        busy: view.busy,
+        lints,
+        live: view.liveEl,
+      });
+      this.readingBoardClear(view);
+      view.el.appendChild(board.root);
+      view.board = board;
+      view.renderKey = key;
+      view.anchorNode = null;
+      board.root.addEventListener("keydown", (event) => this.readingBoardKeydown(view, event));
+      const lanes = readingBoardNavLanes(board.order, state);
+      const anchorNode = readingBoardPickAnchor(lanes, view.anchor || prior.focused);
+      if (anchorNode) {
+        this.readingBoardSetAnchor(view, anchorNode);
+      } else {
+        board.root.setAttribute("tabindex", "0");
+      }
+      for (const laneId of READING_BOARD_LANE_IDS) {
+        const body = board.bodies[laneId];
+        if (body && prior.scroll[laneId]) {
+          body.scrollTop = prior.scroll[laneId];
+        }
+      }
+      if (prior.hadFocus) {
+        const target = readingBoardPickAnchor(lanes, prior.focused) || board.root;
+        this.readingBoardFocus(view, target);
+      }
+    } catch (error) {
+      // A failed render never leaves an empty block: fall back to text.
+      try {
+        view.el.textContent = "Reading Board unavailable.";
+      } catch (inner) {
+        // Last-resort text is best-effort.
+      }
+    }
+  }
+
+  readingBoardRenderError(view, doc, error) {
+    view.report = null;
+    view.model = null;
+    view.board = null;
+    view.renderKey = null;
+    view.anchorNode = null;
+    const tried = error && Array.isArray(error.tried) ? error.tried : statsBobTriedList({});
+    const model = readingBoardErrorModel(error || { code: "failed" }, { tried });
+    this.readingBoardClear(view);
+    const root = readingBoardEl(doc, "div", { class: "bob-reading-board bob-reading-board-failed" });
+    const header = readingBoardEl(doc, "div", { class: "bob-reading-board-header" });
+    header.appendChild(readingBoardEl(doc, "span", { class: "bob-reading-board-name" }, "🗂️ Reading Board"));
+    root.appendChild(header);
+    root.appendChild(readingBoardBuildErrorCard(doc, model, () => this.readingBoardRefresh(view)));
+    view.el.appendChild(root);
+  }
+
+  readingBoardFocus(view, node) {
+    try {
+      if (!node) {
+        return;
+      }
+      if (node !== view.board.root) {
+        this.readingBoardSetAnchor(view, node);
+      }
+      if (typeof node.focus === "function") {
+        node.focus({ preventScroll: true });
+      }
+      if (typeof node.scrollIntoView === "function") {
+        node.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    } catch (error) {
+      // Focus management is best-effort.
+    }
+  }
+
+  // Manual refresh: forced spawn, busy state, and one polite announcement.
+  readingBoardRefresh(view) {
+    if (!view || view.busy) {
+      return Promise.resolve();
+    }
+    view.busy = true;
+    if (view.board) {
+      this.readingBoardSyncBusy(view);
+    } else {
+      this.readingBoardPaintSkeleton(view, true);
+    }
+    const finish = (result) => {
+      view.busy = false;
+      let announcement = "";
+      if (result && result.report) {
+        if (result.error) {
+          view.refreshError = { error: result.error, at: Date.now() };
+          announcement = "Reading Board refresh failed. Showing the earlier board.";
+        } else {
+          view.refreshError = null;
+          this.readingBoardViewDataApplied(view);
+        }
+        this.readingBoardRenderResult(view, { report: result.report });
+        if (!result.error && view.model) {
+          announcement = `Reading Board refreshed: ${view.model.summary.awake} awake, ${view.model.summary.snoozed} snoozed.`;
+        }
+      } else {
+        view.refreshError = null;
+        this.readingBoardRenderResult(view, { report: null, error: result && result.error });
+        announcement = "Reading Board refresh failed.";
+      }
+      this.readingBoardAnnounce(view, announcement);
+    };
+    return Promise.resolve()
+      .then(() => this.apiReadingBoardRefresh(view.fence))
+      .then(finish, (error) =>
+        finish({
+          report: null,
+          error: { code: "failed", message: String((error && error.message) || error), detail: "" },
+        }),
+      );
+  }
+
+  readingBoardToggleSnoozed(view) {
+    const state = this.readingBoardViewStateFor(view.sourcePath);
+    state.snoozedCollapsed = !state.snoozedCollapsed;
+    if (view.report) {
+      this.readingBoardRenderResult(view, { report: view.report });
+    }
+  }
+
+  readingBoardOpenNote(view, card, newLeaf) {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        void workspace.openLinkText(card.path, view.sourcePath || "", newLeaf === true);
+        return;
+      }
+    } catch (error) {
+      // Fall through to the Notice below.
+    }
+    try {
+      new Notice("Could not open reference");
+    } catch (error) {
+      // Notice is best-effort.
+    }
+  }
+
+  readingBoardOpenTask(view, card) {
+    const target = readingBoardTaskTarget(card.task);
+    if (!target) {
+      this.readingBoardOpenNote(view, card, false);
+      return;
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        void workspace.openLinkText(target, view.sourcePath || "", false);
+        return;
+      }
+    } catch (error) {
+      // Fall through to the Notice below.
+    }
+    try {
+      new Notice("Could not open reading task");
+    } catch (error) {
+      // Notice is best-effort.
+    }
+  }
+
+  // Highlights hand-off. Without a PDF, off macOS, or without the
+  // navigation plugin's member, the reference opens in a new tab instead.
+  readingBoardOpenPdf(view, card) {
+    const api = this.readingBoardNavApi();
+    if (this.readingBoardCaps().pdf && card.sourcePdf && api) {
+      try {
+        Promise.resolve(api.openReferencePdf(card.sourcePdf)).catch(() => {});
+        return;
+      } catch (error) {
+        // Fall through to the new-tab fallback.
+      }
+    }
+    this.readingBoardOpenNote(view, card, true);
+  }
+
+  readingBoardHandlers(view) {
+    return {
+      open: (card, event, forceNewLeaf) =>
+        this.readingBoardOpenNote(
+          view,
+          card,
+          forceNewLeaf === true || Boolean(event && (event.ctrlKey || event.metaKey)),
+        ),
+      pdf: (card) => this.readingBoardOpenPdf(view, card),
+      task: (card) => this.readingBoardOpenTask(view, card),
+      refresh: () => this.readingBoardRefresh(view),
+      toggleSnoozed: () => this.readingBoardToggleSnoozed(view),
+      focus: (card, node) => this.readingBoardSetAnchor(view, node),
+      hover: (card, node, event) => {
+        try {
+          const workspace = this.app && this.app.workspace;
+          if (workspace && typeof workspace.trigger === "function") {
+            workspace.trigger("hover-link", {
+              event,
+              source: "bob-reading-board",
+              hoverParent: node,
+              targetEl: node,
+              linktext: card.path,
+              sourcePath: view.sourcePath || "",
+            });
+          }
+        } catch (error) {
+          // Hover preview is best-effort only.
+        }
+      },
+      contextmenu: (card, event) => {
+        // Obsidian's own file menu for the note; best-effort, and the
+        // native menu stays when the file or Menu API is missing.
+        try {
+          const file = this.app.vault.getAbstractFileByPath(card.path);
+          if (!ReadingBoardMenu || !file) {
+            return;
+          }
+          const menu = new ReadingBoardMenu();
+          this.app.workspace.trigger("file-menu", menu, file, "bob-reading-board");
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          menu.showAtMouseEvent(event);
+        } catch (error) {
+          // The file menu is optional.
+        }
+      },
+    };
+  }
+
+  // One keydown handler on the board root. Cards and rows are focus
+  // targets (roving tabindex); buttons keep their native keys.
+  readingBoardKeydown(view, event) {
+    const board = view.board;
+    if (!board || !event || event.defaultPrevented) {
+      return;
+    }
+    const target = event.target;
+    const tag = String((target && (target.tagName || target.tag)) || "").toLowerCase();
+    if (tag === "button" || tag === "input" || tag === "textarea" || tag === "select") {
+      return;
+    }
+    const key = event.key;
+    const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+    const prevent = () => {
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+    };
+    if (plain && key === "r") {
+      prevent();
+      void this.readingBoardRefresh(view);
+      return;
+    }
+    if (plain && key === "c") {
+      prevent();
+      this.readingBoardToggleSnoozed(view);
+      return;
+    }
+    const info = this.readingBoardFindInfo(board, target);
+    if (!info) {
+      return;
+    }
+    const handlers = this.readingBoardHandlers(view);
+    if (key === "Enter") {
+      prevent();
+      if (event.ctrlKey || event.metaKey) {
+        handlers.pdf(info.card);
+      } else if (event.altKey) {
+        handlers.task(info.card);
+      } else {
+        handlers.open(info.card, event, false);
+      }
+      return;
+    }
+    if (!plain || event.shiftKey || !READING_BOARD_MOVE_KEYS[key]) {
+      return;
+    }
+    prevent();
+    const state = this.readingBoardViewStateFor(view.sourcePath);
+    const lanes = readingBoardNavLanes(board.order, state);
+    const lane = lanes.find((entry) => entry.id === info.laneId);
+    const index = lane ? lane.nodes.indexOf(info.node) : 0;
+    const next = readingBoardMoveTarget(lanes, info.laneId, index, key);
+    if (next) {
+      this.readingBoardFocus(view, next);
+    }
+  }
 }
 // ---- src/250-plugin-freshness-mark-model.js ----
 class BobLedgerToolsFreshnessMarkModelMixin {
@@ -33423,6 +34827,11 @@ class BobLedgerToolsTodayLocationMixin {
       this.schedulePlanBlockRerender();
       this.scheduleFreshnessStatusBar();
       this.scheduleFreshnessMarksRefresh();
+      if (typeof this.repaintReadingBoardBlocks === "function") {
+        // TODAY pills follow the Today cache; repainting reads the cached
+        // board data and spawns nothing.
+        this.repaintReadingBoardBlocks();
+      }
     }
     return changed;
   }
@@ -34427,6 +35836,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsJournalMixin,
   BobLedgerToolsStatsDataMixin,
   BobLedgerToolsReadingBoardDataMixin,
+  BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsStatsChartMixin,
   BobLedgerToolsStatsPanelsMixin,
@@ -36708,6 +38118,24 @@ module.exports.helpers = {
   readingBoardSortScheduled,
   readingBoardModel,
   readingBoardSignature,
+  READING_BOARD_LANE_IDS,
+  READING_BOARD_HINT_TEXT,
+  READING_BOARD_MOUNT_REVALIDATE_MS,
+  readingBoardHeaderTime,
+  readingBoardLinkTarget,
+  readingBoardTaskTarget,
+  readingBoardLaneAriaLabel,
+  readingBoardBuildCard,
+  readingBoardBuildRow,
+  readingBoardBuildLane,
+  readingBoardBuildBoard,
+  readingBoardBuildSkeleton,
+  readingBoardBuildErrorCard,
+  readingBoardBuildLint,
+  readingBoardHighlightPrerequisites,
+  readingBoardNavLanes,
+  readingBoardMoveTarget,
+  readingBoardPickAnchor,
   statsEl,
   statsDocFor,
   statsParseFenceOptions,

@@ -49054,6 +49054,11 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
 // `notice` is the additive Unblocked card (`api.notice` v1, §12.6);
 // callers feature-detect `api.notice?.version >= 1`.
+// `openReferencePdf(path)` is the additive Highlights hand-off used by the
+// bob-ledger-tools Reading Board: it opens a vault-relative `source_pdf`
+// (macOS only, no vault writes) and settles to `{ok, reason?}`. Callers
+// feature-detect `typeof api.openReferencePdf === "function"`; the api
+// `version` is unchanged.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -49081,6 +49086,16 @@ function createDependencyNavApi(plugin) {
     notice: createNoticeApi(plugin),
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
+    openReferencePdf(path) {
+      if (!plugin || typeof plugin.openReferencePdfPath !== "function") {
+        return Promise.resolve({ ok: false, reason: "unavailable" });
+      }
+      return settle(async () =>
+        (await plugin.openReferencePdfPath(path))
+          ? { ok: true }
+          : { ok: false, reason: "not-opened" },
+      );
+    },
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

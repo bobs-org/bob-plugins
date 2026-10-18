@@ -150,6 +150,14 @@ test("Reading Board error cards explain not-found, timeout, schema, and bob erro
   );
   assert.match(notFound.hint, /stats\.bob_path/);
   assert.match(notFound.hint, /bob \(PATH\)/);
+  const desktopOnly = readingBoardErrorModel({
+    code: "bob-not-found",
+    message: "Spawning bob needs the desktop app.",
+    tried: [],
+  });
+  assert.equal(desktopOnly.code, "desktop-only");
+  assert.match(desktopOnly.title, /needs the desktop app/);
+  assert.equal(desktopOnly.retry, false);
   assert.match(readingBoardErrorModel({ code: "timeout" }).title, /timed out/);
   assert.match(readingBoardErrorModel({ code: "schema-mismatch" }).hint, /update bob-cli/i);
   assert.equal(readingBoardErrorModel({ code: "bob-error", message: "No vault" }).hint, "No vault");

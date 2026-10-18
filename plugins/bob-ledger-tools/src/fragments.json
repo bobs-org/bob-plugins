@@ -41,6 +41,8 @@
   "240-plugin-freshness-status.js",
   "241-plugin-reading-board-data.js",
   "242-plugin-reading-board-models.js",
+  "243-plugin-reading-board-render.js",
+  "244-plugin-reading-board-block.js",
   "250-plugin-freshness-mark-model.js",
   "260-plugin-freshness-mark-render.js",
   "264-plugin-task-tag-marks.js",

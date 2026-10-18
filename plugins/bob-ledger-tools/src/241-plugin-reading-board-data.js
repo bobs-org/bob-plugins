@@ -193,6 +193,14 @@ function readingBoardErrorModel(result, options = {}) {
     : Array.isArray(error.tried)
       ? error.tried
       : [];
+  if (error.code === "bob-not-found" && /needs the desktop app/i.test(String(error.message || ""))) {
+    return {
+      code: "desktop-only",
+      title: "The Reading Board needs the desktop app",
+      hint: "bob runs only in Obsidian on a computer. Open this vault there to see the board.",
+      retry: false,
+    };
+  }
   if (error.code === "bob-not-found") {
     return {
       code: "bob-not-found",

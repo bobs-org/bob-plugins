@@ -2647,3 +2647,540 @@ body:not(.bob-unblocked-glyphs) .bob-unblocked-glyph {
     justify-self: start;
   }
 }
+
+/* Reading Board block (bob-cli-99.3): `.bob-reading-board` root emitted by
+   the `bob-reading-board` code block processor. A read-only kanban of the
+   reading queue drawn from `bob ref list` JSON: Reading, Next, Ready, and a
+   muted dashed Snoozed lane. Theme and vault variables only (no hex): lane
+   accents reuse the vault's task-status colors, text wears text tokens
+   never an accent, and lane identity is always a label plus an emoji, never
+   color alone. */
+
+.bob-reading-board {
+  --bob-rb-accent-reading: var(--task-status-in-progress, var(--color-yellow, var(--interactive-accent)));
+  --bob-rb-accent-next: var(--task-status-next, var(--color-green, var(--interactive-accent)));
+  --bob-rb-accent-ready: var(--color-blue, var(--interactive-accent));
+  --bob-rb-accent-snoozed: var(--text-faint);
+  --bob-rb-date-width: 4.5rem;
+  container-type: inline-size;
+  container-name: bob-reading-board;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0.55rem 0 1rem;
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  line-height: 1.35;
+}
+
+.bob-reading-board-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.8rem;
+  margin-bottom: 0.5rem;
+}
+
+.bob-reading-board-name {
+  font-size: 1.05em;
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+}
+
+.bob-reading-board-summary {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-reading-board-header-end {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-inline-start: auto;
+}
+
+.bob-reading-board-time {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-reading-board-refresh,
+.bob-reading-board-collapse {
+  height: auto;
+  padding: 0.05em 0.45em;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 1em;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.bob-reading-board-refresh:hover,
+.bob-reading-board-collapse:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.bob-reading-board-busy .bob-reading-board-refresh {
+  animation: bob-reading-board-spin 1s linear infinite;
+}
+
+.bob-reading-board-lanes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: start;
+}
+
+@container bob-reading-board (min-width: 34rem) {
+  .bob-reading-board-lanes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container bob-reading-board (min-width: 56rem) {
+  .bob-reading-board-lanes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.bob-reading-board-lane {
+  --bob-rb-accent: var(--bob-rb-accent-ready);
+  min-width: 0;
+  padding: 0.5rem;
+  border-top: 2px solid var(--bob-rb-accent);
+  border-radius: 10px;
+  background-color: var(--background-secondary);
+}
+
+.bob-reading-board-lane-reading {
+  --bob-rb-accent: var(--bob-rb-accent-reading);
+}
+
+.bob-reading-board-lane-next {
+  --bob-rb-accent: var(--bob-rb-accent-next);
+}
+
+.bob-reading-board-lane-ready {
+  --bob-rb-accent: var(--bob-rb-accent-ready);
+}
+
+.bob-reading-board-lane-snoozed {
+  --bob-rb-accent: var(--bob-rb-accent-snoozed);
+  border: 1px dashed var(--background-modifier-border);
+  background-color: transparent;
+  color: var(--text-muted);
+}
+
+.bob-reading-board-lane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+}
+
+.bob-reading-board-lane-label {
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+}
+
+.bob-reading-board-lane-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-reading-board-collapse {
+  margin-inline-start: auto;
+}
+
+/* Lanes scroll inside themselves so a long Ready or Snoozed lane never
+   pushes the table below the board out of reach. The padding and negative
+   margin keep focus outlines from being clipped by the scroll box. */
+.bob-reading-board-lane-body {
+  max-height: min(34rem, 70vh);
+  margin: -3px;
+  padding: 3px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.bob-reading-board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.bob-reading-board-card {
+  --bob-rb-today: var(--task-status-next, var(--color-green, var(--interactive-accent)));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.2rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--background-modifier-border);
+  border-inline-start: 2px solid var(--bob-rb-accent);
+  border-radius: 8px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  transition:
+    box-shadow 120ms ease,
+    background-color 120ms ease;
+}
+
+.bob-reading-board-card:hover {
+  background-color: color-mix(in srgb, var(--bob-rb-accent) 6%, var(--background-primary));
+  box-shadow: var(--shadow-s);
+}
+
+.bob-reading-board-card:focus-visible,
+.bob-reading-board-row:focus-visible,
+.bob-reading-board:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.bob-reading-board-today {
+  align-self: flex-start;
+  padding: 0 0.5em;
+  border: 1px solid color-mix(in srgb, var(--bob-rb-today) 28%, transparent);
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--bob-rb-today) 14%, transparent);
+  color: var(--text-normal);
+  font-size: 0.8em;
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+}
+
+.bob-reading-board-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.bob-reading-board-code {
+  padding: 0 0.28em;
+  border-radius: 4px;
+  background-color: var(--background-modifier-hover);
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+.bob-reading-board-sync {
+  margin-inline-start: 0.25em;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.bob-reading-board-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.35em;
+  color: var(--text-muted);
+}
+
+.bob-reading-board-kind,
+.bob-reading-board-topic,
+.bob-reading-board-audio,
+.bob-reading-board-annotations,
+.bob-reading-board-sep {
+  font-size: 0.8em;
+}
+
+.bob-reading-board-annotations {
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-reading-board-meta .bob-priority-mark {
+  margin-inline-start: auto;
+}
+
+/* Hover/focus actions overlay the card corner; touch has no hover, so
+   there they sit in a row of their own and stay visible. */
+.bob-reading-board-actions {
+  position: absolute;
+  inset-block-start: 0.25rem;
+  inset-inline-end: 0.25rem;
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.bob-reading-board-card:hover .bob-reading-board-actions,
+.bob-reading-board-card:focus .bob-reading-board-actions,
+.bob-reading-board-card:focus-within .bob-reading-board-actions,
+.bob-reading-board-row:hover .bob-reading-board-actions,
+.bob-reading-board-row:focus .bob-reading-board-actions,
+.bob-reading-board-row:focus-within .bob-reading-board-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Cards keep their title readable: the actions sit in the bottom corner. */
+.bob-reading-board-card > .bob-reading-board-actions {
+  inset-block-start: auto;
+  inset-block-end: 0.3rem;
+}
+
+.bob-reading-board-action {
+  height: auto;
+  padding: 0.1em 0.55em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background-color: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  color: var(--text-muted);
+  font-size: 0.75em;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.bob-reading-board-action:hover,
+.bob-reading-board-action:focus-visible {
+  border-color: var(--interactive-accent);
+  color: var(--text-normal);
+}
+
+@media (hover: none) {
+  .bob-reading-board-actions,
+  .bob-reading-board-card > .bob-reading-board-actions {
+    position: static;
+    justify-content: flex-end;
+    margin-top: 0.25rem;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Snoozed: compact rows with no card chrome, grouped under small caps. */
+.bob-reading-board-group {
+  margin-top: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-variant-caps: all-small-caps;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+}
+
+.bob-reading-board-group:first-child {
+  margin-top: 0;
+}
+
+.bob-reading-board-row {
+  position: relative;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.bob-reading-board-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.bob-reading-board-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.bob-reading-board-when {
+  flex: none;
+  inline-size: var(--bob-rb-date-width);
+  overflow: hidden;
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Waiting-on rows have no date: a narrow reason glyph, and the reason
+   line is indented to the title. */
+.bob-reading-board-when-reason {
+  inline-size: 1.4rem;
+  font-size: 1em;
+  text-align: center;
+}
+
+.bob-reading-board-when-waking {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.bob-reading-board-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-reading-board-row-title .bob-reading-board-code {
+  font-size: 0.85em;
+}
+
+.bob-reading-board-return {
+  flex: none;
+  font-size: 0.75em;
+  white-space: nowrap;
+}
+
+.bob-reading-board-reason {
+  margin-inline-start: 1.9rem;
+  font-size: 0.8em;
+  overflow-wrap: anywhere;
+}
+
+.bob-reading-board-wake {
+  margin-inline-start: 0.5em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bob-reading-board-prerequisite {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+.bob-reading-board-empty,
+.bob-reading-board-empty-board {
+  padding: 0.6rem 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  text-align: center;
+}
+
+.bob-reading-board-empty-board {
+  padding: 1.4rem 0.6rem;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 10px;
+}
+
+.bob-reading-board-lint {
+  margin-bottom: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8em;
+}
+
+.bob-reading-board-link {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.bob-reading-board-error {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--background-modifier-border);
+  border-inline-start: 2px solid var(--text-error);
+  border-radius: 8px;
+  background-color: var(--background-secondary);
+}
+
+.bob-reading-board-error-title {
+  font-weight: 600;
+}
+
+.bob-reading-board-error-hint {
+  margin: 0.2rem 0 0.4rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.bob-reading-board-ghost {
+  gap: 0.4rem;
+  opacity: 0.55;
+  pointer-events: none;
+  animation: bob-reading-board-pulse 1.6s ease-in-out infinite;
+}
+
+.bob-reading-board-ghost-bar {
+  block-size: 0.7rem;
+  border-radius: 4px;
+  background-color: var(--background-modifier-hover);
+}
+
+.bob-reading-board-ghost-short {
+  inline-size: 55%;
+}
+
+.bob-reading-board-sr {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@keyframes bob-reading-board-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes bob-reading-board-pulse {
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-reading-board-card,
+  .bob-reading-board-actions {
+    transition: none;
+  }
+  .bob-reading-board-busy .bob-reading-board-refresh,
+  .bob-reading-board-ghost {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-reading-board-lane,
+  .bob-reading-board-lane-snoozed,
+  .bob-reading-board-card,
+  .bob-reading-board-error,
+  .bob-reading-board-empty-board,
+  .bob-reading-board-action {
+    border-color: CanvasText;
+  }
+  .bob-reading-board-card:focus-visible,
+  .bob-reading-board-row:focus-visible,
+  .bob-reading-board:focus-visible,
+  .bob-reading-board-prerequisite {
+    outline-color: Highlight;
+  }
+  .bob-reading-board-today {
+    border-color: CanvasText;
+    background-color: Canvas;
+  }
+  /* The mask-drawn marks would vanish: keep them in the text color. */
+  .bob-reading-board .bob-date-mark-glyph,
+  .bob-reading-board .bob-priority-mark-glyph::before,
+  .bob-reading-board .bob-priority-mark-glyph::after {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
+}

@@ -3998,8 +3998,8 @@ function paintReviewElement(host, kind, review) {
 // --- Work badge tones -------------------------------------------------------
 // Shared count-to-limit presentation for TODAY, PENDING, NEXT, and READY.
 // Precedence (exact comparisons, never rounded percentages):
-// n === 0 -> grey, 0 < n < L/2 -> blue, L/2 <= n < 3L/4 -> green,
-// 3L/4 <= n < L -> yellow, n === L -> orange, n > L -> red.
+// n === 0 -> grey, 0 < n < 2L/5 -> blue, 2L/5 <= n < 3L/5 -> green,
+// 3L/5 <= n < 4L/5 -> yellow, 4L/5 <= n <= L -> orange, n > L -> red.
 // Invalid or missing input is unavailable (null), never numeric zero.
 const WORK_BADGE_TONES = ["grey", "blue", "green", "yellow", "orange", "red"];
 
@@ -4016,13 +4016,13 @@ function workBadgeTone(count, cap) {
   if (count > cap) {
     return "red";
   }
-  if (count === cap) {
+  if (5 * count >= 4 * cap) {
     return "orange";
   }
-  if (count >= (3 * cap) / 4) {
+  if (5 * count >= 3 * cap) {
     return "yellow";
   }
-  if (count >= cap / 2) {
+  if (5 * count >= 2 * cap) {
     return "green";
   }
   return "blue";

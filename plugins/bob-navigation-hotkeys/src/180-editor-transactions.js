@@ -80,6 +80,13 @@ function pomodoroCleanupCursor(editor, plan, beforeCleanup = null) {
   return { line, ch: Math.min(cursor.ch, String(lines[line] || "").length) };
 }
 
+// Apply a whole-note rewrite as line-level edits, so the cursor and viewport
+// stay on the line the gesture started on. Lines that only change in place go
+// through `applyEditorLineChanges`; a change in line count aligns old and new
+// lines (`181-editor-line-diff.js`) and edits only the hunks between them.
+// Without an explicit `finalCursor` the current cursor is mapped through the
+// alignment, because CodeMirror maps a cursor inside a replaced range to the
+// start of that range.
 function applyEditorContentTransaction(
   cm,
   originalContent,
@@ -92,31 +99,42 @@ function applyEditorContentTransaction(
   }
   const originalText = String(originalContent || "");
   const nextText = String(nextContent || "");
+  if (originalText === nextText) {
+    return true;
+  }
   const original = splitMarkdownContent(originalText);
   const next = splitMarkdownContent(nextText);
   const cursor = normalizePosition(finalCursor);
 
-  if (original.lines.length === next.lines.length) {
+  const pairs = alignEditorLines(original.lines, next.lines);
+  if (
+    original.lines.length === next.lines.length &&
+    pairs.every(([oldIndex, newIndex]) => oldIndex === newIndex)
+  ) {
     return applyEditorLineChanges(cm, original.lines, next.lines, cursor, annotation);
   }
-  if (originalText === nextText) {
+
+  const changes = planAlignedEditorChanges(
+    original.lines,
+    next.lines,
+    pairs,
+    next.lineEnding,
+  );
+  if (changes.length === 0) {
     return true;
   }
-
-  const lastLine = Math.max(original.lines.length - 1, 0);
-  const change = {
-    from: { line: 0, ch: 0 },
-    to: {
-      line: lastLine,
-      ch: String(original.lines[lastLine] || "").length,
-    },
-    text: nextText,
-  };
+  let selection = cursor;
+  if (!selection) {
+    const current = getEditorCursor(cm);
+    selection = current
+      ? mapEditorPositionThroughLineAlignment(current, original.lines, next.lines, pairs)
+      : null;
+  }
   if (typeof cm.transaction === "function") {
-    const transaction = { changes: [change] };
+    const transaction = { changes };
     if (annotation) transaction.annotation = annotation;
-    if (cursor) {
-      transaction.selection = { from: cursor, to: cursor };
+    if (selection) {
+      transaction.selection = { from: selection, to: selection };
     }
     cm.transaction(transaction);
     return true;
@@ -127,9 +145,12 @@ function applyEditorContentTransaction(
 
   const scroll =
     typeof cm.getScrollInfo === "function" ? cm.getScrollInfo() : null;
-  cm.replaceRange(change.text, change.from, change.to);
-  if (cursor) {
-    setEditorCursorSafely(cm, cursor.line, cursor.ch);
+  for (let index = changes.length - 1; index >= 0; index -= 1) {
+    const change = changes[index];
+    cm.replaceRange(change.text, change.from, change.to);
+  }
+  if (selection) {
+    setEditorCursorSafely(cm, selection.line, selection.ch);
   }
   if (scroll && typeof cm.scrollTo === "function") {
     try {

@@ -11,6 +11,7 @@ const {
   parseFrontmatterFromContent,
   helpers,
 } = require("./navigation-hotkeys-harness.cjs");
+const { Cm6MappingEditor } = require("./cm6-mapping-editor.cjs");
 
 const TODAY = new Date(2026, 9, 17, 12);
 const DATE_TEXT = "2026-10-17";
@@ -1335,4 +1336,66 @@ test("A5 a preparation no write can carry fails the plan instead of being droppe
   assert.equal(plan.ok, false);
   assert.equal(plan.reason, "unexpected-preparation");
   assert.equal(plan.sourceWrites.length, 0);
+});
+
+// The writers commit through one line-level editor transaction, so the cursor
+// stays on the task the gesture started on and the viewport does not move,
+// even when the write adds or removes lines (a real CodeMirror maps a cursor
+// inside a replaced range to the top of the note).
+const FILLER = Array.from({ length: 30 }, (_, index) => `- [ ] #task Filler ${index} ^f${index}`);
+
+function openCm6Note(harness, path, cursor, anchorLine) {
+  const editor = new Cm6MappingEditor(
+    String(harness.contents.get(path) || ""),
+    cursor,
+    anchorLine,
+  );
+  harness.openEditors.set(path, editor);
+  return editor;
+}
+
+test("applyDependencyEdit adding a first cross-note prerequisite keeps the dependent's cursor", async () => {
+  const harness = createHarness({
+    "A.md": [...FILLER, "- [ ] #task Dependent ^t", "- [ ] #task Tail ^tail"].join("\n"),
+    "B.md": "- [ ] #task Prerequisite ^n",
+  });
+  const editor = openCm6Note(harness, "A.md", { line: 30, ch: 7 }, 14);
+  const outcome = await applyForward(harness, "A.md", "t", [
+    { path: "B.md", blockId: "n" },
+  ]);
+  assert.equal(outcome.ok, true, outcome.reason);
+  const lines = editor.getValue().split("\n");
+  assert.match(lines[31], /⛓️ \*\*DEPENDS ON:\*\*/);
+  assert.equal(editor.transactions.length, 1);
+  assert.deepEqual(editor.transactions[0].selection.to, { line: 30, ch: editor.getCursor().ch });
+  assert.equal(editor.getCursor().line, 30);
+  assert.match(lines[30], /#task Dependent .*\[fresh:: 2026-10-17\]/);
+  assert.equal(editor.scrollAnchorLine, 14);
+  assert.equal(editor.undoGroups, 1);
+});
+
+test("applyBlocksEdit giving a source its first BLOCKS line keeps the source's cursor", async () => {
+  const harness = createHarness({
+    "Tasks.md": [
+      ...FILLER,
+      "- [ ] #task Dependent ^t",
+      "- [ ] #task Prerequisite ^n",
+      "- [ ] #task Tail ^tail",
+    ].join("\n"),
+  });
+  const editor = openCm6Note(harness, "Tasks.md", { line: 31, ch: 4 }, 16);
+  const outcome = await applyReverse(
+    harness,
+    [{ path: "Tasks.md", line: 31, blockId: "n" }],
+    [{ path: "Tasks.md", line: 30 }],
+  );
+  assert.equal(outcome.ok, true, outcome.reason);
+  const lines = editor.getValue().split("\n");
+  const sourceIndex = lines.findIndex((line) => line.includes("#task Prerequisite"));
+  assert.match(lines[sourceIndex + 1], /🧱 \*\*BLOCKS:\*\*/);
+  assert.equal(editor.transactions.length, 1);
+  assert.equal(editor.transactions[0].selection.to.line, sourceIndex);
+  assert.equal(editor.getCursor().line, sourceIndex);
+  assert.equal(editor.scrollAnchorLine, 16);
+  assert.equal(editor.undoGroups, 1);
 });

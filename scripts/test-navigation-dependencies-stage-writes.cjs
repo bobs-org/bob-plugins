@@ -18,6 +18,7 @@ const {
   stubRowEl,
   rowTitles,
 } = require("./navigation-dependencies-stage-harness.cjs");
+const { Cm6MappingEditor } = require("./cm6-mapping-editor.cjs");
 
 // A `＋ id` row opens the block-ID prompt without writing: no ids are
 // allocated and the editor is untouched until the id is confirmed.
@@ -456,3 +457,90 @@ test("stage cycle tooltip shows task descriptions", () => {
   );
 });
 
+
+// A same-note prerequisite above the dependent gains a BLOCKS line and shifts
+// the dependent down one line. The `[fresh::]` stamp and the cursor follow the
+// dependent's post-write line, never the generated BLOCKS line, and the
+// viewport stays put (a real CodeMirror maps both through the changes).
+const TARGET_ABOVE_PARENT = [
+  ...Array.from({ length: 30 }, (_, index) => `- [ ] #task Filler ${index} ^f${index}`),
+  "- [ ] #task Target ^target",
+  "- [ ] #task Parent ^parent",
+  "- [ ] #task Tail ^tail",
+].join("\n");
+const PARENT_LINE = 31;
+
+function sameNoteStageHarness() {
+  const { plugin } = stubPlugin({ "Tasks.md": TARGET_ABOVE_PARENT });
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => () => "Tasks.md";
+  plugin.getFreshnessStampLine = () => (line, dateText) =>
+    line.replace(/( \^[\w-]+)$/, ` [fresh:: ${dateText}]$1`);
+  plugin.getFreshnessDateText = () => "2026-10-18";
+  plugin.app.plugins = {
+    plugins: {
+      "obsidian-tasks-plugin": { getState: () => "Warm", getTasks: () => [] },
+    },
+  };
+  const editor = new Cm6MappingEditor(TARGET_ABOVE_PARENT, { line: PARENT_LINE, ch: 5 }, 12);
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Tasks.md" } });
+  plugin.app.workspace.getActiveFile = () => ({ path: "Tasks.md" });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", PARENT_LINE);
+  return { editor, modal };
+}
+
+function assertParentStampedAndCursorKept(editor) {
+  const lines = editor.getValue().split("\n");
+  const parentIndex = lines.findIndex((line) => line.includes("#task Parent"));
+  assert.equal(parentIndex, PARENT_LINE + 1);
+  assert.match(lines[parentIndex], /\[fresh:: 2026-10-18\] \^parent$/);
+  assert.equal(lines[PARENT_LINE], "\t- 🧱 **BLOCKS:** [[#^parent]]");
+  assert.equal(editor.getCursor().line, parentIndex);
+  assert.equal(editor.getCursor().ch, 5);
+  assert.equal(editor.scrollAnchorLine, 12);
+  assert.equal(editor.undoGroups, 1);
+}
+
+test("stage same-note single add stamps the dependent and keeps its cursor", async () => {
+  const { editor, modal } = sameNoteStageHarness();
+  const applied = await modal.chooseTaskDependency({
+    path: "Tasks.md",
+    line: 30,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    stageSection: "results",
+    disabled: false,
+    alreadyLinked: false,
+    needsBlockIdPrompt: false,
+    blockId: "target",
+  });
+  assert.equal(applied, true);
+  assertParentStampedAndCursorKept(editor);
+});
+
+test("stage same-note marked batch stamps the dependent and keeps its cursor", async () => {
+  const { editor, modal } = sameNoteStageHarness();
+  const applied = await modal.executeDependencyBatch({
+    propertyName: "dependsOn",
+    cursorLineText: "- [ ] #task Parent ^parent",
+    removals: [],
+    readyAdditions: [
+      {
+        markKey: "Tasks.md#30",
+        path: "Tasks.md",
+        line: 30,
+        rawLine: "- [ ] #task Target ^target",
+        displayText: "Target",
+        existingIdField: null,
+        blockId: "target",
+      },
+    ],
+    promptQueue: [],
+    promptIndex: 0,
+    confirmedById: new Map(),
+    reservedIds: new Set(),
+    hasVault: false,
+  });
+  assert.equal(applied, true);
+  assertParentStampedAndCursorKept(editor);
+});

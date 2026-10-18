@@ -136,21 +136,25 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     }
     const today = new Date();
     const pomodoroTargets = dependencyPlanPomodoroTargets(plan);
+    // Freshness stamps the dependent's post-plan line: a same-note
+    // prerequisite above it can gain a BLOCKS line and shift it. Stamping
+    // changes no line count, so it goes before the Pomodoro fold.
+    const stampedContent =
+      plan.changed && Number.isInteger(plan.parentLineNext)
+        ? this.stampDependencyParentLine(
+            plan.nextContent,
+            plan.parentLineNext,
+            undefined,
+            undefined,
+          )
+        : plan.nextContent;
     const folded = this.foldLocalDependencyPomodoroCleanup(
-      plan.nextContent,
+      stampedContent,
       pomodoroTargets,
       filePath,
       today,
     );
-    let nextContent = folded.content;
-    if (plan.changed) {
-      nextContent = this.stampDependencyParentLine(
-        nextContent,
-        cursor.line,
-        undefined,
-        undefined,
-      );
-    }
+    const nextContent = folded.content;
     if (nextContent !== originalContent) {
       if (!applyEditorContentTransaction(cm, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
         new Notice("Could not update bullet property");
@@ -171,15 +175,6 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       showNotice: options.showNotice,
       today,
     });
-    const nextLines = nextContent.split(/\r?\n/);
-    setEditorCursorSafely(
-      cm,
-      cursor.line,
-      Math.min(
-        Math.max(cursor.ch, 0),
-        String(nextLines[cursor.line] || "").length,
-      ),
-    );
     return true;
   }
 

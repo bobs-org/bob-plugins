@@ -486,12 +486,23 @@ test("duplicate source targets dedupe to one write", () => {
 // keep/stamp placers: single-note writes go through the editor transaction,
 // cross-note writes through the preimage-guarded link path.
 
+// Changes are in original-document coordinates, so apply them bottom-up by
+// real line/ch range (a write can insert or delete lines, not only swap one).
 function applyTxChanges(state, changes) {
   const sorted = (Array.isArray(changes) ? changes : []).slice().sort(
-    (left, right) => right.from.line - left.from.line,
+    (left, right) =>
+      right.from.line - left.from.line || right.from.ch - left.from.ch,
   );
   for (const change of sorted) {
-    state.lines[change.from.line] = String(change.text);
+    const offset = (position) =>
+      state.lines
+        .slice(0, position.line)
+        .reduce((sum, line) => sum + line.length + 1, 0) + position.ch;
+    const text = state.lines.join("\n");
+    const end = offset(change.to || change.from);
+    state.lines = (
+      text.slice(0, offset(change.from)) + String(change.text) + text.slice(end)
+    ).split("\n");
   }
 }
 

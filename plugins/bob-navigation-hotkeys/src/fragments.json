@@ -22,6 +22,7 @@
   "160-pomodoro-reorder.js",
   "170-open-task-jump.js",
   "180-editor-transactions.js",
+  "181-editor-line-diff.js",
   "190-summary-modals.js",
   "196-task-link-lane-modal.js",
   "200-filtered-picker-modals.js",

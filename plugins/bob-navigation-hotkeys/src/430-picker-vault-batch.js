@@ -693,6 +693,25 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
         },
       };
     }
+    // Freshness stamps the dependent's post-plan line: a same-note
+    // prerequisite above it can gain a BLOCKS line and shift it. Stamping
+    // before the Pomodoro fold keeps the line index valid.
+    if (
+      batchPlan.changed &&
+      Number.isInteger(batchPlan.parentLineNext) &&
+      this.plugin &&
+      typeof this.plugin.stampDependencyParentLine === "function"
+    ) {
+      batchPlan = {
+        ...batchPlan,
+        nextContent: this.plugin.stampDependencyParentLine(
+          batchPlan.nextContent,
+          batchPlan.parentLineNext,
+          undefined,
+          undefined,
+        ),
+      };
+    }
     // §13.10: consume the live Pomodoro links of `^prj` and its newly
     // Blocked residents. A cleanup failure is reported, never rolled back.
     let batchCommitContent = batchPlan.nextContent;
@@ -716,17 +735,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       }
     }
     if (batchPlan.changed) {
-      const nextContent =
-        this.plugin &&
-        typeof this.plugin.stampDependencyParentLine === "function"
-          ? this.plugin.stampDependencyParentLine(
-              batchCommitContent,
-              this.cursor.line,
-              undefined,
-              undefined,
-            )
-          : batchCommitContent;
-      if (!applyEditorContentTransaction(this.editor, originalContent, nextContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
+      if (!applyEditorContentTransaction(this.editor, originalContent, batchCommitContent, null, BLOCKS_MACHINE_WRITE_ANNOTATION)) {
         new Notice("Could not update bullet property");
         return false;
       }
@@ -766,17 +775,6 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       batchPomodoroRemoved = batchDone.removed;
       batchPomodoroPruneFailed = batchDone.failed;
     }
-
-    const finalCursorLine =
-      getEditorLine(this.editor, this.cursor.line) || this.cursor.line;
-    setEditorCursorSafely(
-      this.editor,
-      this.cursor.line,
-      Math.min(
-        Math.max(this.cursor.ch, 0),
-        String(finalCursorLine || "").length,
-      ),
-    );
 
     const skipped = skippedStale + skippedOther;
     const batchProjectNotice = dependencyPomodoroNotice(

@@ -12749,6 +12749,700 @@ function buildBlocksChipElement(doc, model, options) {
     return null;
   }
 }
+// ---- src/142-pomodoro-home-chips.js ----
+// --- Pomodoro home chips: pure mirror of bob-cli pomodoro homes -----------
+// The shared Rust contract and vectors live in bob-cli. This mirror only
+// resolves each dedicated Task Link to its current area/project home and
+// derives the quiet label, chip, and area hue. It never writes note text.
+
+const POMODORO_HOME_MAX_DEPTH = 16;
+const POMODORO_HOME_SLOT_ORDER = [
+  "blue",
+  "orange",
+  "aqua",
+  "yellow",
+  "magenta",
+  "green",
+  "violet",
+  "red",
+];
+const POMODORO_HOME_HUES = {
+  blue: { light: "#2a78d6", dark: "#3987e5" },
+  orange: { light: "#eb6834", dark: "#d95926" },
+  aqua: { light: "#1baf7a", dark: "#199e70" },
+  yellow: { light: "#eda100", dark: "#c98500" },
+  magenta: { light: "#e87ba4", dark: "#d55181" },
+  green: { light: "#008300", dark: "#008300" },
+  violet: { light: "#6250d6", dark: "#9085e9" },
+  red: { light: "#e34948", dark: "#e66767" },
+};
+
+function pomodoroHomeStem(path) {
+  const name = String(path || "").split("/").pop() || "";
+  return name.replace(/\.md$/i, "");
+}
+
+function pomodoroHomeLinkTarget(value) {
+  const text = String(value || "").trim();
+  const match = /^\[\[([^\]]*)\]\]$/.exec(text);
+  if (!match) {
+    return "";
+  }
+  const raw = match[1].split("|")[0].trim();
+  const hash = raw.indexOf("#");
+  let path = (hash === -1 ? raw : raw.slice(0, hash)).trim();
+  if (/\.md$/i.test(path)) {
+    path = path.slice(0, -3);
+  }
+  return path;
+}
+
+function pomodoroHomeType(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object") {
+    return "other";
+  }
+  const raw = frontmatter.type;
+  if (typeof raw !== "string") {
+    return "other";
+  }
+  const value = pomodoroHomeLinkTarget(raw).toLowerCase();
+  return value === "area" || value === "project" ? value : "other";
+}
+
+function pomodoroHomeCacheFor(file, metadataCache, vault) {
+  try {
+    if (!file || typeof file !== "object") {
+      return null;
+    }
+    if (metadataCache && typeof metadataCache.getCache === "function") {
+      const cache = metadataCache.getCache(file);
+      if (cache && typeof cache === "object") {
+        return cache;
+      }
+    }
+    if (vault && typeof vault.getAbstractFileByPath === "function") {
+      const actual = vault.getAbstractFileByPath(file.path);
+      if (actual && metadataCache && typeof metadataCache.getCache === "function") {
+        return metadataCache.getCache(actual);
+      }
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function pomodoroHomeResolveFile(target, sourcePath, dailyPath, metadataCache, vault) {
+  try {
+    const name = String(target || "").trim();
+    if (name === "") {
+      if (vault && typeof vault.getAbstractFileByPath === "function") {
+        return vault.getAbstractFileByPath(dailyPath) || { path: dailyPath };
+      }
+      return dailyPath ? { path: dailyPath } : null;
+    }
+    if (metadataCache && typeof metadataCache.getFirstLinkpathDest === "function") {
+      const file = metadataCache.getFirstLinkpathDest(name, sourcePath || dailyPath);
+      if (file && typeof file.path === "string") {
+        return file;
+      }
+    }
+    if (vault && typeof vault.getAbstractFileByPath === "function") {
+      const exact = /\.md$/i.test(name) ? name : `${name}.md`;
+      return vault.getAbstractFileByPath(exact) || null;
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function pomodoroHomeAmbiguousTarget(target, vault) {
+  try {
+    if (!vault || typeof vault.getMarkdownFiles !== "function") {
+      return false;
+    }
+    const wanted = pomodoroHomeStem(target).toLowerCase();
+    if (!wanted) {
+      return false;
+    }
+    const matches = vault.getMarkdownFiles().filter((file) =>
+      pomodoroHomeStem(file && file.path).toLowerCase() === wanted,
+    );
+    return matches.length > 1;
+  } catch (error) {
+    return false;
+  }
+}
+
+function pomodoroHomePathEqual(left, right) {
+  const a = String(left || "").replace(/\.md$/i, "").toLowerCase();
+  const b = String(right || "").replace(/\.md$/i, "").toLowerCase();
+  return a !== "" && a === b;
+}
+
+function pomodoroHomeFnv1a(stem) {
+  let hash = 0x811c9dc5;
+  const value = String(stem || "").toLowerCase();
+  for (const character of value) {
+    const point = character.codePointAt(0);
+    const bytes = [];
+    if (point <= 0x7f) {
+      bytes.push(point);
+    } else if (point <= 0x7ff) {
+      bytes.push(0xc0 | (point >> 6), 0x80 | (point & 0x3f));
+    } else if (point <= 0xffff) {
+      bytes.push(0xe0 | (point >> 12), 0x80 | ((point >> 6) & 0x3f), 0x80 | (point & 0x3f));
+    } else {
+      bytes.push(
+        0xf0 | (point >> 18),
+        0x80 | ((point >> 12) & 0x3f),
+        0x80 | ((point >> 6) & 0x3f),
+        0x80 | (point & 0x3f),
+      );
+    }
+    for (const byte of bytes) {
+      hash ^= byte;
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+  }
+  return hash >>> 0;
+}
+
+function pomodoroHomeWarning(warnings, seen, code, path, message) {
+  const key = `${code}:${String(path || "")}`;
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  warnings.push({ code, path: String(path || ""), message });
+}
+
+function pomodoroHomeHueForArea(areaFile, areaFrontmatter, warnings, seen) {
+  const path = areaFile && typeof areaFile.path === "string" ? areaFile.path : "";
+  const stem = pomodoroHomeStem(path);
+  const configured = areaFrontmatter && areaFrontmatter.color;
+  if (configured !== undefined && configured !== null && configured !== "") {
+    if (typeof configured === "string") {
+      const slot = configured.trim().toLowerCase();
+      if (POMODORO_HOME_SLOT_ORDER.includes(slot)) {
+        return slot;
+      }
+    }
+    pomodoroHomeWarning(
+      warnings,
+      seen,
+      "area_color_invalid",
+      path,
+      `Invalid area color on ${path}; using its deterministic fallback.`,
+    );
+  }
+  return POMODORO_HOME_SLOT_ORDER[
+    pomodoroHomeFnv1a(stem) % POMODORO_HOME_SLOT_ORDER.length
+  ];
+}
+
+function pomodoroHomeReadFrontmatter(file, metadataCache, vault) {
+  const cache = pomodoroHomeCacheFor(file, metadataCache, vault);
+  const frontmatter =
+    cache && cache.frontmatter && typeof cache.frontmatter === "object" && !Array.isArray(cache.frontmatter)
+      ? cache.frontmatter
+      : {};
+  return { cache, frontmatter };
+}
+
+function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, seen) {
+  const first = pomodoroHomeResolveFile(target, dailyPath, dailyPath, metadataCache, vault);
+  if (!first || typeof first.path !== "string") {
+    return null;
+  }
+  const chain = [];
+  const visited = new Set();
+  let current = first;
+  for (let depth = 0; current && depth < POMODORO_HOME_MAX_DEPTH; depth += 1) {
+    const path = String(current.path || "");
+    if (!path || visited.has(path.toLowerCase())) {
+      break;
+    }
+    visited.add(path.toLowerCase());
+    const { frontmatter } = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
+    const type = pomodoroHomeType(frontmatter);
+    const rawRollup = frontmatter.rollup;
+    const rollupPresent = Object.prototype.hasOwnProperty.call(frontmatter, "rollup");
+    let rollup = "off";
+    if (rollupPresent) {
+      if (type !== "project") {
+        pomodoroHomeWarning(
+          warnings,
+          seen,
+          "rollup_invalid",
+          path,
+          `Rollup is only valid on project notes: ${path}.`,
+        );
+      } else if (rawRollup === "subprojects") {
+        rollup = "subprojects";
+      } else if (rawRollup === "off") {
+        rollup = "off";
+      } else {
+        pomodoroHomeWarning(
+          warnings,
+          seen,
+          "rollup_invalid",
+          path,
+          `Invalid rollup on ${path}; treating it as off.`,
+        );
+      }
+    }
+    chain.push({ file: current, path, frontmatter, type, rollup });
+    const parent = frontmatter.parent;
+    if (typeof parent !== "string") {
+      break;
+    }
+    const parentTarget = pomodoroHomeLinkTarget(parent);
+    if (!parentTarget || pomodoroHomePathEqual(parentTarget, path)) {
+      break;
+    }
+    current = pomodoroHomeResolveFile(parentTarget, path, dailyPath, metadataCache, vault);
+  }
+  if (chain.length === 0) {
+    return null;
+  }
+  let homeIndex = chain.findIndex((item) => item.type === "area" || item.type === "project");
+  if (homeIndex === -1) {
+    return null;
+  }
+  const rollupIndexes = [];
+  chain.forEach((item, index) => {
+    if (item.type === "project" && item.rollup === "subprojects") {
+      rollupIndexes.push(index);
+    }
+  });
+  if (rollupIndexes.length > 0) {
+    homeIndex = rollupIndexes[rollupIndexes.length - 1];
+  }
+  const areaIndexes = [];
+  chain.forEach((item, index) => {
+    if (item.type === "area") {
+      areaIndexes.push(index);
+    }
+  });
+  const topAreaIndex = areaIndexes.length > 0 ? areaIndexes[areaIndexes.length - 1] : -1;
+  const topArea = topAreaIndex === -1 ? null : chain[topAreaIndex];
+  const nearestAreaIndex = areaIndexes.length > 0 ? areaIndexes[0] : -1;
+  const subarea =
+    nearestAreaIndex !== -1 && nearestAreaIndex !== topAreaIndex
+      ? chain[nearestAreaIndex].path
+      : null;
+  const home = chain[homeIndex];
+  const hue = topArea
+    ? pomodoroHomeHueForArea(topArea.file, topArea.frontmatter, warnings, seen)
+    : null;
+  return {
+    key: home.path,
+    label: pomodoroHomeStem(home.path).toLowerCase(),
+    kind: home.type,
+    area: topArea ? topArea.path : "@unfiled",
+    area_label: topArea ? pomodoroHomeStem(topArea.path).toLowerCase() : "unfiled",
+    subarea,
+    hue,
+    chain: chain.map((item) => item.path),
+  };
+}
+
+function pomodoroHomeBucket(name, metadataCache, vault, dailyPath, warnings, seen) {
+  const label = `${name} review`;
+  const home = pomodoroHomeResolve(
+    String(name || "").toLowerCase(),
+    dailyPath,
+    metadataCache,
+    vault,
+    warnings,
+    seen,
+  );
+  return {
+    key: `@review:${name}`,
+    label,
+    kind: "bucket",
+    area: home && home.kind === "area" ? home.key : home ? home.area : `@review:${name}`,
+    area_label: home && home.kind === "area" ? home.label : home ? home.area_label : label,
+    subarea: null,
+    hue: home ? home.hue : null,
+  };
+}
+
+function pomodoroHomeBucketPart(key, label, area, areaLabel, hue) {
+  return {
+    key,
+    label,
+    kind: "bucket",
+    area,
+    area_label: areaLabel,
+    hue,
+    subarea: null,
+  };
+}
+
+function pomodoroHomeDuration(range) {
+  const match = /^([0-9]{2}):?([0-9]{2})-([0-9]{2}):?([0-9]{2})$/.exec(
+    String(range || ""),
+  );
+  if (!match) {
+    return null;
+  }
+  const start = Number(match[1]) * 60 + Number(match[2]);
+  let end = Number(match[3]) * 60 + Number(match[4]);
+  if (end < start) {
+    end += 24 * 60;
+  }
+  return end - start;
+}
+
+function pomodoroHomeLinkFromBody(body) {
+  try {
+    let text = String(body || "").trim();
+    text = text.replace(/^(?:🍅\s*)+/, "");
+    if (text.startsWith("~~") && text.endsWith("~~") && text.length >= 4) {
+      text = text.slice(2, -2).trim();
+    }
+    const tokens = todayWikilinkTokens(text);
+    if (tokens.length !== 1) {
+      return null;
+    }
+    const token = tokens[0];
+    if (token.start !== 0 || token.end !== text.length) {
+      return null;
+    }
+    return { target: token.pathPart, blockId: token.blockId };
+  } catch (error) {
+    return null;
+  }
+}
+
+function pomodoroHomeParseEntries(content) {
+  try {
+    const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+    const section = planSectionRange(lines);
+    if (!section) {
+      return [];
+    }
+    const fenced = planFencedLines(lines, section.start, section.end);
+    const entries = [];
+    for (let index = section.start; index <= section.end; index += 1) {
+      if (fenced.has(index) || /^[ \t]/.test(String(lines[index] || ""))) {
+        continue;
+      }
+      const parsed = planParseEntry(lines[index]);
+      if (!parsed || parsed.state === "cancelled") {
+        continue;
+      }
+      const leading = planLeadingRange(parsed.body);
+      if (leading.length === null) {
+        continue;
+      }
+      const name = planParseNameTail(parsed.body.slice(leading.length));
+      const links = [];
+      const range = [];
+      for (let child = index + 1; child <= section.end; child += 1) {
+        if (fenced.has(child)) {
+          continue;
+        }
+        if (!todayIsSubBulletLine(lines[child])) {
+          break;
+        }
+        range.push(child);
+      }
+      if (range.length > 0) {
+        const childIndent = todayIndentLen(lines[range[0]]);
+        for (const child of range) {
+          if (todayIndentLen(lines[child]) !== childIndent) {
+            continue;
+          }
+          const bullet = todayBulletBody(lines[child]);
+          const link = bullet ? pomodoroHomeLinkFromBody(bullet.body) : null;
+          if (link) {
+            links.push(link);
+          }
+        }
+      }
+      entries.push({
+        line: index,
+        status: parsed.state,
+        name: name || "",
+        minutes: pomodoroHomeDuration(leading.timeRange),
+        links,
+      });
+    }
+    return entries;
+  } catch (error) {
+    return [];
+  }
+}
+
+function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, warnings, seen, health) {
+  const nameComponents = splitPlanComponents(entry.name);
+  const exemptNames = (Array.isArray(exempt) ? exempt : ["GTD"])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  const normalizedExempt = exemptNames
+    .map((item) => normalizePlanComponent(item))
+    .filter(Boolean);
+  const firstExemptName = exemptNames[0] || "GTD";
+  const exemptSet = new Set(normalizedExempt);
+  const namedReview =
+    nameComponents.length > 0 &&
+    nameComponents.every((name) => exemptSet.has(normalizePlanComponent(name)));
+  const resolved = [];
+  const distinct = new Set();
+  for (const link of namedReview ? [] : Array.isArray(entry.links) ? entry.links : []) {
+    const file = pomodoroHomeResolveFile(
+      link.target,
+      dailyPath,
+      dailyPath,
+      metadataCache,
+      vault,
+    );
+    const path = file && typeof file.path === "string" ? file.path : null;
+    const key = path ? `${path.toLowerCase()}#${String(link.blockId || "").toLowerCase()}` :
+      `${String(link.target || "").toLowerCase()}#${String(link.blockId || "").toLowerCase()}`;
+    if (distinct.has(key)) {
+      continue;
+    }
+    distinct.add(key);
+    const isDailyGtd =
+      path &&
+      PLAN_DAILY_PATH_RE.test(path) &&
+      pomodoroHomePathEqual(path, dailyPath) &&
+      String(link.blockId || "").toLowerCase() === "gtd";
+    if (isDailyGtd) {
+      const bucketName = firstExemptName;
+      resolved.push({
+        ...pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen),
+        source: bucketName,
+      });
+      continue;
+    }
+    const home = file
+      ? pomodoroHomeResolve(path, dailyPath, metadataCache, vault, warnings, seen)
+      : null;
+    if (home) {
+      resolved.push(home);
+    } else {
+      if (file) {
+        // A resolved note without an area/project is still an unfiled link.
+        if (health) {
+          health.unfiled_links += 1;
+        }
+        pomodoroHomeWarning(warnings, seen, "unfiled_link", path, "Task Link has no area or project home.");
+      } else {
+        const ambiguous = pomodoroHomeAmbiguousTarget(link.target, vault);
+        if (health) {
+          health[ambiguous ? "ambiguous_links" : "unresolved_links"] += 1;
+        }
+        pomodoroHomeWarning(
+          warnings,
+          seen,
+          ambiguous ? "ambiguous_link" : "unresolved_link",
+          `${String(link.target || "")}#${String(link.blockId || "")}`,
+          "Task Link could not be resolved.",
+        );
+      }
+      resolved.push({
+        key: "@unfiled",
+        label: "unfiled",
+        kind: "bucket",
+        area: "@unfiled",
+        area_label: "unfiled",
+        subarea: null,
+        hue: null,
+      });
+    }
+  }
+  const bridge =
+    nameComponents.length === 0 &&
+    normalizedExempt.length > 0 &&
+    resolved.some((home) => home.key === `@review:${firstExemptName}`);
+  const review = namedReview || bridge;
+  if (review) {
+    const components = namedReview ? nameComponents : [firstExemptName];
+    const parts = [];
+    const count = Math.max(1, components.length);
+    const baseMinutes = Number.isInteger(entry.minutes) ? entry.minutes : 0;
+    components.forEach((component, index) => {
+      const bucketName = component || "GTD";
+      const bucket = pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen);
+      const minutes = Math.floor(baseMinutes / count) + (index === 0 ? baseMinutes % count : 0);
+      parts.push({ ...bucket, tasks: 0, minutes, sourceOrder: index });
+    });
+    return { kind: "review", review: true, parts, nameComponents, resolved };
+  }
+  if (resolved.length === 0) {
+    if (entry.status === "completed") {
+      const part = pomodoroHomeBucketPart("@unlinked", "unlinked", "@unlinked", "unlinked", null);
+      return {
+        kind: "unlinked",
+        review: false,
+        parts: [{ ...part, tasks: 0, minutes: Number.isInteger(entry.minutes) ? entry.minutes : 0, sourceOrder: 0 }],
+        nameComponents,
+        resolved,
+      };
+    }
+    return { kind: "unlinked", review: false, parts: [], nameComponents, resolved };
+  }
+  const taskCount = resolved.length;
+  const minutes = Number.isInteger(entry.minutes) ? entry.minutes : 0;
+  const base = Math.floor(minutes / taskCount);
+  const remainder = minutes % taskCount;
+  const map = new Map();
+  resolved.forEach((home, index) => {
+    let part = map.get(home.key);
+    if (!part) {
+      part = { ...home, tasks: 0, minutes: 0, sourceOrder: index };
+      map.set(home.key, part);
+    }
+    part.tasks += 1;
+    part.minutes += base + (index === 0 ? remainder : 0);
+  });
+  return {
+    kind: "work",
+    review: false,
+    parts: Array.from(map.values()),
+    nameComponents,
+    resolved,
+  };
+}
+
+function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt, warnings, seen, health) {
+  const aggregate = pomodoroHomeShareParts(
+    entry,
+    dailyPath,
+    metadataCache,
+    vault,
+    exempt,
+    warnings,
+    seen,
+    health,
+  );
+  const attributed = entry.status === "completed";
+  const parts = aggregate.parts.map((part) => {
+    const numericShare = attributed
+      ? part.minutes
+      : part.tasks;
+    return {
+      key: part.key,
+      label: part.label,
+      kind: part.kind,
+      area: part.area || "@unfiled",
+      area_label: part.area_label || "unfiled",
+      hue: part.hue || null,
+      tasks: part.tasks,
+      _value: numericShare,
+      _order: part.sourceOrder,
+      ...(attributed ? { minutes: part.minutes } : {}),
+    };
+  });
+  const totalValue = parts.reduce((sum, part) => sum + part._value, 0);
+  let left = 100;
+  const scored = parts.map((part) => ({ ...part }));
+  scored.forEach((part, index) => {
+    part.share = index === scored.length - 1
+      ? left
+      : totalValue > 0
+        ? Math.floor((part._value * 100) / totalValue)
+        : scored.length > 0
+          ? Math.floor(100 / scored.length)
+          : 0;
+    left -= part.share;
+  });
+  scored.sort((leftPart, rightPart) => {
+    if (rightPart._value !== leftPart._value) {
+      return rightPart._value - leftPart._value;
+    }
+    return leftPart._order - rightPart._order;
+  });
+  const labels = scored.map((part) => part.label);
+  const label = aggregate.review
+    ? "GTD review"
+    : aggregate.kind === "unlinked"
+      ? ""
+      : labels.length > 2
+        ? `${labels.slice(0, 2).join(" · ")} +${labels.length - 2}`
+        : labels.join(" · ");
+  const lead = scored[0] || null;
+  const namedReview = aggregate.review && aggregate.nameComponents.length > 0;
+  const nameKeys = new Set(aggregate.nameComponents.map((name) => normalizePlanComponent(name)));
+  const homeKeys = new Set(labels.map((name) => normalizePlanComponent(name)));
+  const nameMatchesHomes =
+    nameKeys.size > 0 &&
+    nameKeys.size === homeKeys.size &&
+    Array.from(nameKeys).every((name) => homeKeys.has(name));
+  const chip = aggregate.kind === "unlinked" || namedReview || nameMatchesHomes
+    ? null
+    : label || null;
+  return {
+    state: attributed ? "attributed" : "forecast",
+    kind: aggregate.kind,
+    label,
+    chip,
+    hue: lead ? lead.hue : null,
+    parts: scored.map(({ _value, _order, ...part }) => part),
+    lead_home: lead ? lead.key : "@unlinked",
+    tooltip: scored
+      .filter((part) => part.tasks > 0)
+      .map((part) => `${part.label} · ${part.tasks} ${part.tasks === 1 ? "task" : "tasks"}${attributed ? ` · ${part.minutes}m` : ""}`)
+      .join("\n"),
+  };
+}
+
+function pomodoroHomeModels(content, dailyPath, metadataCache, vault, exempt) {
+  const warnings = [];
+  const warningKeys = new Set();
+  const health = {
+    unfiled_links: 0,
+    ambiguous_links: 0,
+    unresolved_links: 0,
+    rollup_invalid: 0,
+    area_color_invalid: 0,
+  };
+  const entries = pomodoroHomeParseEntries(content);
+  const sessions = entries.map((entry) => ({
+    line: entry.line,
+    name: entry.name,
+    ...pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt, warnings, warningKeys, health),
+  }));
+  health.rollup_invalid = warnings.filter((item) => item.code === "rollup_invalid").length;
+  health.area_color_invalid = warnings.filter((item) => item.code === "area_color_invalid").length;
+  return { entries: sessions, warnings, health };
+}
+
+function buildPomodoroHomeChipElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model || !model.chip) {
+      return null;
+    }
+    const chip = doc.createElement("span");
+    chip.setAttribute("class", "bob-pomodoro-home-chip");
+    chip.setAttribute("role", "img");
+    chip.setAttribute("aria-label", `Pomodoro home: ${model.label}`);
+    chip.setAttribute("data-home-state", model.state || "forecast");
+    if (model.hue) {
+      chip.setAttribute("data-home-hue", model.hue);
+    }
+    if (model.tooltip) {
+      chip.setAttribute("title", model.tooltip);
+    }
+    const dot = doc.createElement("span");
+    dot.setAttribute("class", "bob-pomodoro-home-dot");
+    dot.setAttribute("aria-hidden", "true");
+    const label = doc.createElement("span");
+    label.setAttribute("class", "bob-pomodoro-home-label");
+    label.textContent = model.chip;
+    chip.appendChild(dot);
+    chip.appendChild(label);
+    return chip;
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/150-dependency-element.js ----
 // Dependency chips: Live Preview row element. `model` is
 // `dependencyChipModel(...)`; `options` carries `{ sourcePath,
@@ -14299,6 +14993,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
+    this.setupPomodoroHomeChips();
     this.setupUnblockedGlyph();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
@@ -14549,6 +15244,30 @@ class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-date-marks");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    if (
+      this.pomodoroHomeChipRefreshTimer !== null &&
+      this.pomodoroHomeChipRefreshTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.pomodoroHomeChipRefreshTimer);
+    }
+    this.pomodoroHomeChipRefreshTimer = null;
+    if (this.pomodoroHomeChipReadingWidgets) {
+      this.pomodoroHomeChipReadingWidgets.clear();
+    }
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-pomodoro-home-chips");
       }
     } catch (error) {
       // Body class cleanup is best-effort.
@@ -33776,6 +34495,742 @@ class BobLedgerToolsUnblockedGlyphMixin {
     }
   }
 }
+// ---- src/273-plugin-pomodoro-home-chips.js ----
+// --- Pomodoro home chips: Live Preview and lifecycle ---------------------
+// The pure resolver is in 142-pomodoro-home-chips.js; this mixin renders its
+// read-time result and never edits the daily note.
+
+let pomodoroHomeChipsRefreshEffect = null;
+function ensurePomodoroHomeChipsRefresh() {
+  if (pomodoroHomeChipsRefreshEffect) {
+    return pomodoroHomeChipsRefreshEffect;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      pomodoroHomeChipsRefreshEffect = StateEffect.define();
+    }
+  } catch (error) {
+    pomodoroHomeChipsRefreshEffect = null;
+  }
+  return pomodoroHomeChipsRefreshEffect;
+}
+
+let PomodoroHomeChipWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  PomodoroHomeChipWidget = class extends WidgetType {
+    constructor(model) {
+      super();
+      this.model = model || {};
+      this.key = `${this.model.chip || ""}|${this.model.state || ""}|${this.model.hue || ""}|${this.model.tooltip || ""}`;
+    }
+
+    eq(other) {
+      return Boolean(
+        other &&
+          other instanceof PomodoroHomeChipWidget &&
+          other.key === this.key,
+      );
+    }
+
+    toDOM() {
+      return buildPomodoroHomeChipElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+      );
+    }
+  };
+}
+
+class BobLedgerToolsPomodoroHomeChipsMixin {
+  setupPomodoroHomeChips() {
+    try {
+      if (typeof this.pomodoroHomeChipsEnabled !== "boolean") {
+        this.pomodoroHomeChipsEnabled = true;
+      }
+      if (!(this.pomodoroHomeChipWarnings instanceof Set)) {
+        this.pomodoroHomeChipWarnings = new Set();
+      }
+      if (!(this.pomodoroHomeChipReadingWidgets instanceof Set)) {
+        this.pomodoroHomeChipReadingWidgets = new Set();
+      }
+      this.setPomodoroHomeChipBodyClass();
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-pomodoro-home-chips",
+            name: "Toggle Pomodoro home chips",
+            callback: () => this.togglePomodoroHomeChips(),
+          });
+        }
+      } catch (error) {
+        // The command is best-effort on older hosts.
+      }
+      try {
+        const extension = this.createPomodoroHomeChipExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderPomodoroHomeChipsIn(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+      try {
+        const cache = this.app && this.app.metadataCache;
+        if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function") {
+          this.registerEvent(
+            cache.on("changed", () => this.schedulePomodoroHomeChipRefresh()),
+          );
+        }
+      } catch (error) {
+        // Cache invalidation is best-effort.
+      }
+    } catch (error) {
+      // Home-chip setup never throws.
+    }
+  }
+
+  setPomodoroHomeChipBodyClass() {
+    try {
+      const body = typeof document !== "undefined" && document ? document.body : null;
+      const classes = body && body.classList;
+      if (!classes) {
+        return false;
+      }
+      if (this.pomodoroHomeChipsEnabled) {
+        classes.add("bob-pomodoro-home-chips");
+      } else {
+        classes.remove("bob-pomodoro-home-chips");
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  togglePomodoroHomeChips() {
+    try {
+      this.pomodoroHomeChipsEnabled = !this.pomodoroHomeChipsEnabled;
+      this.setPomodoroHomeChipBodyClass();
+      this.refreshPomodoroHomeChips();
+      try {
+        new Notice(
+          this.pomodoroHomeChipsEnabled
+            ? "Pomodoro home chips on"
+            : "Pomodoro home chips off",
+        );
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return this.pomodoroHomeChipsEnabled;
+    } catch (error) {
+      return Boolean(this.pomodoroHomeChipsEnabled);
+    }
+  }
+
+  pomodoroHomeChipExemptNames() {
+    try {
+      const loaded = loadPlanCaps();
+      const caps = loaded && loaded.caps ? loaded.caps : null;
+      return caps && Array.isArray(caps.exempt) ? caps.exempt : ["GTD"];
+    } catch (error) {
+      return ["GTD"];
+    }
+  }
+
+  pomodoroHomeChipModels(content, dailyPath) {
+    try {
+      const app = this.app || {};
+      const model = pomodoroHomeModels(
+        content,
+        dailyPath,
+        app.metadataCache,
+        app.vault,
+        this.pomodoroHomeChipExemptNames(),
+      );
+      this.logPomodoroHomeChipWarnings(model && model.warnings);
+      return model;
+    } catch (error) {
+      return { entries: [], warnings: [], health: {} };
+    }
+  }
+
+  pomodoroHomeChipModelForEntry(entry, dailyPath) {
+    try {
+      const warnings = [];
+      const model = pomodoroHomeSessionModel(
+        entry,
+        dailyPath,
+        this.app && this.app.metadataCache,
+        this.app && this.app.vault,
+        this.pomodoroHomeChipExemptNames(),
+        warnings,
+        new Set(),
+        {
+          unfiled_links: 0,
+          ambiguous_links: 0,
+          unresolved_links: 0,
+          rollup_invalid: 0,
+          area_color_invalid: 0,
+        },
+      );
+      this.logPomodoroHomeChipWarnings(warnings);
+      return model;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  logPomodoroHomeChipWarnings(warnings) {
+    try {
+      const known = this.pomodoroHomeChipWarnings;
+      for (const warning of Array.isArray(warnings) ? warnings : []) {
+        if (
+          !warning ||
+          (warning.code !== "rollup_invalid" && warning.code !== "area_color_invalid")
+        ) {
+          continue;
+        }
+        const key = `${warning.code}:${warning.path || ""}`;
+        if (known && known.has(key)) {
+          continue;
+        }
+        if (known) {
+          known.add(key);
+        }
+        try {
+          console.warn(`[bob-ledger-tools] ${warning.code}: ${warning.message}`);
+        } catch (error) {
+          // Console output is best-effort.
+        }
+      }
+    } catch (error) {
+      // Lint reporting never interrupts rendering.
+    }
+  }
+
+  pomodoroHomeChipDailyPath(path) {
+    try {
+      return typeof path === "string" && PLAN_DAILY_PATH_RE.test(path);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  pomodoroHomeChipAvailable() {
+    try {
+      return Boolean(
+        this.pomodoroHomeChipsEnabled &&
+          ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          PomodoroHomeChipWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createPomodoroHomeChipExtension() {
+    try {
+      if (!this.pomodoroHomeChipAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const HomeChipView = class {
+        constructor(view) {
+          this.decorations = plugin.buildPomodoroHomeChipDecorations(view);
+        }
+
+        update(update) {
+          if (plugin.pomodoroHomeChipShouldRebuild(update)) {
+            this.decorations = plugin.buildPomodoroHomeChipDecorations(update.view);
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(HomeChipView, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroHomeChipShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") {
+        return false;
+      }
+      if (update.docChanged || update.viewportChanged) {
+        return true;
+      }
+      const refresh = ensurePomodoroHomeChipsRefresh();
+      for (const transaction of update.transactions || []) {
+        const effects = transaction && transaction.effects;
+        for (const effect of Array.isArray(effects) ? effects : effects ? [effects] : []) {
+          if (
+            effect === refresh ||
+            (refresh && effect && typeof effect.is === "function" && effect.is(refresh))
+          ) {
+            return true;
+          }
+        }
+      }
+      try {
+        if (editorLivePreviewField && update.startState && update.state) {
+          if (
+            update.startState.field(editorLivePreviewField) !==
+            update.state.field(editorLivePreviewField)
+          ) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // A missing field does not force a rebuild.
+      }
+      try {
+        if (editorInfoField && update.startState && update.state) {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath = before && before.file ? before.file.path : null;
+          const afterPath = after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // A missing editor-info field does not force a rebuild.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildPomodoroHomeChipDecorations(view) {
+    try {
+      if (!this.pomodoroHomeChipAvailable() || !Decoration || !RangeSetBuilder) {
+        return Decoration ? Decoration.none : null;
+      }
+      const info = view && view.state ? view.state.field(editorInfoField) : null;
+      const dailyPath = info && info.file && info.file.path;
+      if (!this.pomodoroHomeChipDailyPath(dailyPath)) {
+        return Decoration.none;
+      }
+      const source = view.state.doc.toString();
+      const model = this.pomodoroHomeChipModels(source, dailyPath);
+      const builder = new RangeSetBuilder();
+      for (const entry of model.entries) {
+        if (!entry.chip) {
+          continue;
+        }
+        const line = view.state.doc.line(entry.line + 1);
+        builder.add(
+          line.to,
+          line.to,
+          Decoration.widget({
+            widget: new PomodoroHomeChipWidget(entry),
+            side: 1,
+          }),
+        );
+      }
+      return builder.finish();
+    } catch (error) {
+      return Decoration ? Decoration.none : null;
+    }
+  }
+
+  refreshPomodoroHomeChipEditors() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return false;
+      }
+      const refresh = ensurePomodoroHomeChipsRefresh();
+      if (!refresh) {
+        return false;
+      }
+      let refreshed = false;
+      for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+        try {
+          const view = leaf && leaf.view;
+          const path = view && view.file && view.file.path;
+          if (!this.pomodoroHomeChipDailyPath(path)) {
+            continue;
+          }
+          const cm = view && view.editor && view.editor.cm;
+          if (cm && typeof cm.dispatch === "function") {
+            cm.dispatch({ effects: refresh.of(null) });
+            refreshed = true;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshPomodoroHomeChips() {
+    try {
+      this.refreshPomodoroHomeReadingChips();
+      this.refreshPomodoroHomeChipEditors();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  schedulePomodoroHomeChipRefresh() {
+    try {
+      if (this.pomodoroHomeChipRefreshTimer !== null && this.pomodoroHomeChipRefreshTimer !== undefined) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.pomodoroHomeChipRefreshTimer = schedule(() => {
+        this.pomodoroHomeChipRefreshTimer = null;
+        this.refreshPomodoroHomeChips();
+      }, 120);
+    } catch (error) {
+      // A missing timer host simply leaves the current rendering in place.
+    }
+  }
+}
+// ---- src/274-plugin-pomodoro-home-chips-reading.js ----
+// --- Pomodoro home chips: Reading view -----------------------------------
+// DOM counterpart to the Live Preview widget in 273. It reads the rendered
+// Pomodoro row and its direct Task Link bullets, then appends a read-only chip.
+
+class BobLedgerToolsPomodoroHomeChipsReadingMixin {
+  pomodoroHomeReadingLinkFromRow(row) {
+    try {
+      if (!row || typeof row.querySelectorAll !== "function") {
+        return null;
+      }
+      const links = [];
+      const nodes = row.querySelectorAll("a.internal-link, .internal-embed");
+      for (const node of nodes || []) {
+        try {
+          if (!node || node.nodeType !== 1) {
+            continue;
+          }
+          let owner = node.parentNode || null;
+          let guard = 0;
+          while (owner && owner !== row && guard < 100) {
+            guard += 1;
+            if (String(owner.tagName || owner.nodeName || "").toUpperCase() === "LI") {
+              break;
+            }
+            owner = owner.parentNode || null;
+          }
+          if (owner !== row) {
+            continue;
+          }
+          const getAttr = typeof node.getAttribute === "function"
+            ? (name) => node.getAttribute(name)
+            : () => null;
+          const raw = String(getAttr("data-href") || getAttr("href") || "").trim();
+          const unaliased = raw.split("|")[0];
+          const marker = unaliased.indexOf("#^");
+          if (marker < 0 || unaliased.indexOf("#") !== marker) {
+            continue;
+          }
+          const target = unaliased.slice(0, marker).replace(/\.md$/i, "");
+          const blockId = unaliased.slice(marker + 2).trim();
+          if (!blockId || !PLAN_BLOCK_ID_RE.test(blockId)) {
+            continue;
+          }
+          links.push({ node, target, blockId });
+        } catch (error) {
+          continue;
+        }
+      }
+      if (links.length !== 1) {
+        return null;
+      }
+      const linkNode = links[0].node;
+      const outsideText = (node) => {
+        if (!node || node === linkNode) {
+          return "";
+        }
+        if (node.nodeType === 3) {
+          return typeof node.nodeValue === "string" ? node.nodeValue : "";
+        }
+        if (node.nodeType !== 1) {
+          return "";
+        }
+        const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+        if (tag === "UL" || tag === "OL" || tag === "INPUT") {
+          return "";
+        }
+        let text = "";
+        for (const child of node.childNodes || []) {
+          text += outsideText(child);
+        }
+        return text;
+      };
+      let residual = "";
+      for (const child of row.childNodes || []) {
+        residual += outsideText(child);
+      }
+      if (!/^[\s\u{1F345}\uFE0F]*$/u.test(residual)) {
+        return null;
+      }
+      return {
+        target: links[0].target,
+        blockId: links[0].blockId,
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroHomeReadingEntry(li, dailyPath) {
+    try {
+      if (!li || li.nodeType !== 1 || !this.pomodoroHomeChipDailyPath(dailyPath)) {
+        return null;
+      }
+      const tagOf = (node) => String(node && (node.tagName || node.nodeName) || "").toUpperCase();
+      const list = li.parentNode || null;
+      if (tagOf(list) !== "UL" && tagOf(list) !== "OL") {
+        return null;
+      }
+      const topList = list;
+      if (tagOf(topList.parentNode) === "LI") {
+        return null;
+      }
+      let sibling = topList.previousSibling || null;
+      let headingFound = false;
+      let guard = 0;
+      while (sibling && guard < 100) {
+        guard += 1;
+        if (sibling.nodeType === 1 && /^H[1-6]$/.test(tagOf(sibling))) {
+          const text = String(sibling.textContent || "").trim().split(/\s+/)[0];
+          headingFound = tagOf(sibling) === "H2" && text === "Pomodoros";
+          break;
+        }
+        sibling = sibling.previousSibling || null;
+      }
+      if (!headingFound) {
+        return null;
+      }
+      const statusRaw = typeof li.getAttribute === "function" ? li.getAttribute("data-task") : null;
+      const status = typeof statusRaw === "string" ? statusRaw : " ";
+      if (/^[xX-]$/.test(status)) {
+        if (status === "-") {
+          return null;
+        }
+      }
+      let ownText = "";
+      let listElement = null;
+      for (const child of li.childNodes || []) {
+        const tag = tagOf(child);
+        if (tag === "UL" || tag === "OL") {
+          if (!listElement) {
+            listElement = child;
+          }
+          continue;
+        }
+        if (child.nodeType === 3) {
+          ownText += child.nodeValue || "";
+        } else if (child.nodeType === 1 && tag !== "INPUT") {
+          ownText += child.textContent || "";
+        }
+      }
+      const parsed = planParseEntry(`- [${status}] ${ownText.trim()}`);
+      if (!parsed || parsed.state === "cancelled") {
+        return null;
+      }
+      const leading = planLeadingRange(parsed.body);
+      if (leading.length === null) {
+        return null;
+      }
+      const name = planParseNameTail(parsed.body.slice(leading.length)) || "";
+      const links = [];
+      if (listElement) {
+        for (const row of listElement.children || []) {
+          if (tagOf(row) !== "LI") {
+            continue;
+          }
+          const link = this.pomodoroHomeReadingLinkFromRow(row);
+          if (link) {
+            links.push(link);
+          }
+        }
+      }
+      return {
+        entry: {
+          status: parsed.state,
+          name,
+          minutes: pomodoroHomeDuration(leading.timeRange),
+          links,
+        },
+        listElement,
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  renderPomodoroHomeReadingRecord(record) {
+    try {
+      const row = record && record.el;
+      if (!row || !row.isConnected) {
+        if (record && this.pomodoroHomeChipReadingWidgets) {
+          this.pomodoroHomeChipReadingWidgets.delete(record);
+        }
+        return false;
+      }
+      if (!this.pomodoroHomeChipsEnabled) {
+        if (record.chip && record.chip.parentNode) {
+          record.chip.parentNode.removeChild(record.chip);
+        }
+        record.chip = null;
+        return true;
+      }
+      const context = this.pomodoroHomeReadingEntry(row, record.path);
+      if (!context) {
+        if (record.chip && record.chip.parentNode) {
+          record.chip.parentNode.removeChild(record.chip);
+        }
+        record.chip = null;
+        return false;
+      }
+      const model = this.pomodoroHomeChipModelForEntry(context.entry, record.path);
+      if (!model || !model.chip) {
+        if (record.chip && record.chip.parentNode) {
+          record.chip.parentNode.removeChild(record.chip);
+        }
+        record.chip = null;
+        return true;
+      }
+      const doc = row.ownerDocument || (typeof document !== "undefined" ? document : null);
+      const chip = buildPomodoroHomeChipElement(doc, model);
+      if (!chip) {
+        return false;
+      }
+      if (record.chip && record.chip.parentNode) {
+        record.chip.parentNode.removeChild(record.chip);
+      }
+      try {
+        if (context.listElement && context.listElement.parentNode === row) {
+          row.insertBefore(chip, context.listElement);
+        } else {
+          row.appendChild(chip);
+        }
+      } catch (error) {
+        return false;
+      }
+      record.chip = chip;
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  renderPomodoroHomeChipsIn(el, ctx) {
+    try {
+      if (!this.pomodoroHomeChipsEnabled || !el || !ctx) {
+        return;
+      }
+      const sourcePath = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!this.pomodoroHomeChipDailyPath(sourcePath)) {
+        return;
+      }
+      let rows = [];
+      if (typeof el.querySelectorAll === "function") {
+        rows = el.querySelectorAll("li");
+      }
+      for (const row of rows || []) {
+        try {
+          if (!row || row.nodeType !== 1) {
+            continue;
+          }
+          const data = row.dataset || null;
+          if (data && data.bobPomodoroHomeProcessed === "1") {
+            continue;
+          }
+          const context = this.pomodoroHomeReadingEntry(row, sourcePath);
+          if (!context) {
+            continue;
+          }
+          const record = { el: row, path: sourcePath, chip: null };
+          this.pomodoroHomeChipReadingWidgets.add(record);
+          if (data) {
+            data.bobPomodoroHomeProcessed = "1";
+          } else if (typeof row.setAttribute === "function") {
+            row.setAttribute("data-bob-pomodoro-home-processed", "1");
+          }
+          this.renderPomodoroHomeReadingRecord(record);
+          let child = null;
+          try {
+            if (typeof MarkdownRenderChild === "function") {
+              child = new MarkdownRenderChild(row);
+              child.onunload = () => {
+                if (record.chip && record.chip.parentNode) {
+                  record.chip.parentNode.removeChild(record.chip);
+                }
+                this.pomodoroHomeChipReadingWidgets.delete(record);
+              };
+            }
+          } catch (error) {
+            child = null;
+          }
+          if (child && typeof ctx.addChild === "function") {
+            ctx.addChild(child);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Reading-view chips are best-effort.
+    }
+  }
+
+  refreshPomodoroHomeReadingChips() {
+    try {
+      if (!this.pomodoroHomeChipReadingWidgets) {
+        return false;
+      }
+      let refreshed = false;
+      for (const record of Array.from(this.pomodoroHomeChipReadingWidgets)) {
+        if (this.renderPomodoroHomeReadingRecord(record)) {
+          refreshed = true;
+        }
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+}
 // ---- src/280-plugin-dependency-render.js ----
 class BobLedgerToolsDependencyRenderMixin {
   renderDependencyChipsIn(el, ctx) {
@@ -36045,6 +37500,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsDateMarksTasksMixin,
   BobLedgerToolsProgressMarksMixin,
   BobLedgerToolsProgressMarksReadingMixin,
+  BobLedgerToolsPomodoroHomeChipsMixin,
+  BobLedgerToolsPomodoroHomeChipsReadingMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsBlocksModelMixin,
   BobLedgerToolsUnblockedGlyphMixin,
@@ -38377,4 +39834,19 @@ module.exports.helpers = {
   statsPanelCalendar,
   statsPanelChoreGrid,
   statsPanelCalendarAriaLabel,
+  POMODORO_HOME_MAX_DEPTH,
+  POMODORO_HOME_SLOT_ORDER,
+  POMODORO_HOME_HUES,
+  pomodoroHomeStem,
+  pomodoroHomeLinkTarget,
+  pomodoroHomeType,
+  pomodoroHomeFnv1a,
+  pomodoroHomeDuration,
+  pomodoroHomeLinkFromBody,
+  pomodoroHomeParseEntries,
+  pomodoroHomeResolve,
+  pomodoroHomeModels,
+  pomodoroHomeSessionModel,
+  buildPomodoroHomeChipElement,
+  ensurePomodoroHomeChipsRefresh,
 };

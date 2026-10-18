@@ -40,6 +40,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsDateMarksTasksMixin,
   BobLedgerToolsProgressMarksMixin,
   BobLedgerToolsProgressMarksReadingMixin,
+  BobLedgerToolsPomodoroHomeChipsMixin,
+  BobLedgerToolsPomodoroHomeChipsReadingMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsBlocksModelMixin,
   BobLedgerToolsUnblockedGlyphMixin,

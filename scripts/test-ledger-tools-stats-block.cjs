@@ -415,14 +415,14 @@ test("stats stylesheet contract: selectors, tabular-nums, motion, colors", () =>
   for (const hue of ["#eb6834", "#6250d6", "#16a070", "#2a78d6", "#d95926", "#9085e9", "#199e70", "#3987e5"]) {
     assert.ok(section.includes(hue), `validated hue ${hue} present`);
   }
-  // Hexes live only on the palette custom-property lines.
+  // Hexes live only on validated Stats and Pomodoro area palette tokens.
   for (const line of section.split("\n")) {
     if (!/#[0-9a-fA-F]{3,8}\b/.test(line)) {
       continue;
     }
     assert.match(
       line.trim(),
-      /^--bob-stats-(orange|violet|green|blue):\s*#[0-9a-fA-F]{6};?$/,
+      /^--bob-(?:stats-(?:orange|violet|green|blue)|area-(?:blue|orange|aqua|yellow|magenta|green|violet|red)):\s*#[0-9a-fA-F]{6};?$/,
       `hex outside the palette block: ${line.trim()}`,
     );
   }

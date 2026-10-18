@@ -612,6 +612,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
+    this.setupPomodoroHomeChips();
     this.setupUnblockedGlyph();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
@@ -862,6 +863,30 @@ class BobLedgerToolsPlugin extends Plugin {
         typeof document.body.classList.remove === "function"
       ) {
         document.body.classList.remove("bob-date-marks");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
+    if (
+      this.pomodoroHomeChipRefreshTimer !== null &&
+      this.pomodoroHomeChipRefreshTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.pomodoroHomeChipRefreshTimer);
+    }
+    this.pomodoroHomeChipRefreshTimer = null;
+    if (this.pomodoroHomeChipReadingWidgets) {
+      this.pomodoroHomeChipReadingWidgets.clear();
+    }
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-pomodoro-home-chips");
       }
     } catch (error) {
       // Body class cleanup is best-effort.

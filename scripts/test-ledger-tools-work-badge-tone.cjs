@@ -61,6 +61,8 @@ const {
   todayBadgeTone,
   workBadgeTone,
   workToneClass,
+  withWorkToneClass,
+  WORK_BADGE_TONES,
 } = helpers;
 
 assert.equal(typeof workBadgeTone, "function", "workBadgeTone is exported");
@@ -77,7 +79,7 @@ test("workBadgeTone boundary vectors at cap 100 use exact comparisons", () => {
   assert.equal(workBadgeTone(79, 100), "yellow");
   assert.equal(workBadgeTone(80, 100), "orange");
   assert.equal(workBadgeTone(99, 100), "orange");
-  assert.equal(workBadgeTone(100, 100), "orange");
+  assert.equal(workBadgeTone(100, 100), "magenta");
   assert.equal(workBadgeTone(101, 100), "red");
   assert.equal(workBadgeTone(250, 100), "red");
 });
@@ -91,7 +93,7 @@ test("workBadgeTone at cap 15 has no percentage rounding", () => {
   assert.equal(workBadgeTone(11, 15), "yellow");
   assert.equal(workBadgeTone(12, 15), "orange");
   assert.equal(workBadgeTone(14, 15), "orange");
-  assert.equal(workBadgeTone(15, 15), "orange");
+  assert.equal(workBadgeTone(15, 15), "magenta");
   assert.equal(workBadgeTone(16, 15), "red");
 });
 
@@ -104,27 +106,27 @@ test("workBadgeTone default caps, small caps, and cap changes", () => {
   assert.equal(workBadgeTone(7, 10), "yellow");
   assert.equal(workBadgeTone(8, 10), "orange");
   assert.equal(workBadgeTone(9, 10), "orange");
-  assert.equal(workBadgeTone(10, 10), "orange");
+  assert.equal(workBadgeTone(10, 10), "magenta");
   assert.equal(workBadgeTone(11, 10), "red");
   // Small caps naturally skip bands.
   assert.equal(workBadgeTone(0, 1), "grey");
-  assert.equal(workBadgeTone(1, 1), "orange");
+  assert.equal(workBadgeTone(1, 1), "magenta");
   assert.equal(workBadgeTone(2, 1), "red");
   assert.equal(workBadgeTone(1, 2), "green");
-  assert.equal(workBadgeTone(2, 2), "orange");
+  assert.equal(workBadgeTone(2, 2), "magenta");
   assert.equal(workBadgeTone(1, 3), "blue");
   assert.equal(workBadgeTone(2, 3), "yellow");
-  assert.equal(workBadgeTone(3, 3), "orange");
+  assert.equal(workBadgeTone(3, 3), "magenta");
   // Cap 5 hits every band exactly.
   assert.equal(workBadgeTone(1, 5), "blue");
   assert.equal(workBadgeTone(2, 5), "green");
   assert.equal(workBadgeTone(3, 5), "yellow");
   assert.equal(workBadgeTone(4, 5), "orange");
-  assert.equal(workBadgeTone(5, 5), "orange");
+  assert.equal(workBadgeTone(5, 5), "magenta");
   assert.equal(workBadgeTone(6, 5), "red");
   // A changed cap with an unchanged count changes the tone.
   assert.equal(workBadgeTone(10, 15), "yellow");
-  assert.equal(workBadgeTone(10, 10), "orange");
+  assert.equal(workBadgeTone(10, 10), "magenta");
 });
 
 test("workBadgeTone never coerces invalid input to zero", () => {
@@ -136,7 +138,11 @@ test("workBadgeTone never coerces invalid input to zero", () => {
   }
   assert.equal(workToneClass(null), "");
   assert.equal(workToneClass("purple"), "");
+  assert.equal(workToneClass("magenta"), "bob-work-tone-magenta");
   assert.equal(workToneClass("green"), "bob-work-tone-green");
+  assert.deepEqual(WORK_BADGE_TONES, ["grey", "blue", "green", "yellow", "orange", "magenta", "red"]);
+  assert.equal(withWorkToneClass("bob-plan-chip bob-work-tone-magenta", "red"), "bob-plan-chip bob-work-tone-red");
+  assert.equal(withWorkToneClass("bob-plan-chip bob-work-tone-red", "magenta"), "bob-plan-chip bob-work-tone-magenta");
 });
 
 // --- TODAY vectors --------------------------------------------------------
@@ -158,7 +164,7 @@ test("TODAY links bands with themes at cap 3", () => {
   assert.equal(todayBadgeTone(ledgerBudget(3, 3, 4, 10)), "green");
   assert.equal(todayBadgeTone(ledgerBudget(3, 3, 6, 10)), "yellow");
   assert.equal(todayBadgeTone(ledgerBudget(3, 3, 8, 10)), "orange");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 10, 10)), "orange");
+  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 10, 10)), "magenta");
   assert.equal(todayBadgeTone(ledgerBudget(3, 3, 11, 10)), "red");
 });
 
@@ -199,11 +205,12 @@ test("PENDING/NEXT models color the section, READY its gated count", () => {
     { section: 15, lane: 16, count: 15, laneCount: 16, today: 1, cap: 15, over: false },
     "next",
   );
-  assert.equal(orange.tone, "orange");
+  assert.equal(orange.tone, "magenta");
   assert.equal(orange.over, false);
   assert.match(orange.tooltip, /1 over the whole-lane cap/);
   const ready = readyBadgeModel({ count: 87, cap: 100, over: false });
   assert.equal(ready.tone, "orange");
+  assert.equal(readyBadgeModel({ count: 100, cap: 100, over: false }).tone, "magenta");
   const readyOver = readyBadgeModel({ count: 101, cap: 100, over: true });
   assert.equal(readyOver.tone, "red");
   assert.equal(readyOver.over, true);
@@ -343,7 +350,12 @@ test("lane DOM keeps exactly one tone through transitions and unavailability", (
     let budget = { section: 15, lane: 15, count: 15, laneCount: 15, today: 0, cap: 15, over: false };
     plugin.dashboardLaneBudget = () => budget;
     assert.equal(plugin.refreshDashboardLaneBadges(new Date()), true);
+    budget = { section: 12, lane: 12, count: 12, laneCount: 12, today: 0, cap: 15, over: false };
+    assert.equal(plugin.refreshDashboardLaneBadges(new Date()), true);
     assert.deepEqual(tonesIn(el.cls), ["bob-work-tone-orange"]);
+    budget = { section: 15, lane: 15, count: 15, laneCount: 15, today: 0, cap: 15, over: false };
+    assert.equal(plugin.refreshDashboardLaneBadges(new Date()), true);
+    assert.deepEqual(tonesIn(el.cls), ["bob-work-tone-magenta"]);
     assert.equal(el.querySelectorAll(".bob-plan-ready-value").length, 1);
     assert.equal(el.querySelectorAll(".bob-plan-ready-label").length, 1);
     budget = { section: 16, lane: 16, count: 16, laneCount: 16, today: 0, cap: 15, over: true };
@@ -394,7 +406,7 @@ test("READY DOM keeps exactly one tone and daily/dashboard models agree", () => 
     });
     assert.equal(daily.readyModel.tone, workBadgeTone(0, 100));
     assert.equal(readyBadgeModel({ count: 50, cap: 100, over: false }).tone, "green");
-    assert.equal(readyBadgeModel({ count: 100, cap: 100, over: false }).tone, "orange");
+    assert.equal(readyBadgeModel({ count: 100, cap: 100, over: false }).tone, "magenta");
   } finally {
     plugin.onunload();
     if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -527,7 +539,7 @@ test("dashboard integration uses Work tones, TODAY override, and keeps Work orde
     plugin.readyBudget = () => ({ count: 15, cap: 100, over: false });
     const ledgerApi = plugin.api;
     assert.equal(ledgerApi.version, 3);
-    assert.equal(ledgerApi.workBadges.version, 1);
+    assert.equal(ledgerApi.workBadges.version, 2);
     const container = await runDashBlock({ ledgerApi, tasks: [] });
     const chips = workChips(container);
     const labels = chips.map((chip) => { const labelChild = (chip.children || []).find((child) => String(child.cls || "").includes("-label")); return labelChild ? labelChild.text : String(chip.cls || ""); });
@@ -541,6 +553,22 @@ test("dashboard integration uses Work tones, TODAY override, and keeps Work orde
     assert.match(clsOf("NEXT"), /bob-work-tone-yellow/);
     assert.match(clsOf("PENDING"), /bob-work-tone-green/);
     assert.match(clsOf("READY"), /bob-work-tone-blue/);
+    plugin.planBudgetForCallers = () => Promise.resolve(ledgerBudget(3, 3, 10, 10));
+    plugin.dashboardLaneBudget = (lane) => (lane === "next"
+      ? { section: 12, lane: 12, count: 12, laneCount: 12, today: 0, cap: 15, over: false }
+      : { section: 10, lane: 10, count: 10, laneCount: 10, today: 0, cap: 10, over: false });
+    plugin.readyBudget = () => ({ count: 100, cap: 100, over: false });
+    const exact = workChips(await runDashBlock({ ledgerApi, tasks: [] }));
+    const exactByLabel = {};
+    for (const chip of exact) {
+      const labelChild = (chip.children || []).find((child) => String(child.cls || "").includes("-label"));
+      if (labelChild) exactByLabel[labelChild.text] = chip;
+    }
+    const exactCls = (label) => String(exactByLabel[label]?.cls || exactByLabel[label]?.attrs?.class || "");
+    assert.match(exactCls("TODAY"), /bob-work-tone-magenta/);
+    assert.match(exactCls("PENDING"), /bob-work-tone-magenta/);
+    assert.match(exactCls("NEXT"), /bob-work-tone-orange/);
+    assert.match(exactCls("READY"), /bob-work-tone-magenta/);
     assert.ok(labels.includes("NEW"), "Review NEW remains");
     assert.ok(labels.includes("ROTTEN"), "Review ROTTEN remains");
     assert.ok(labels.includes("BLOCKED"), "Browse BLOCKED remains");
@@ -558,8 +586,8 @@ test("dashboard fallbacks keep Work tones without plugin renderers or colors", a
   const plugin = new LedgerToolsPlugin(app, {});
   try {
     plugin.onload();
-    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, themes: { count: 2, cap: 3, over: false }, links: { count: 7, cap: 10, over: false }, status: "ok", themeNames: [], entries: [], warnings: [] });
-    plugin.dashboardLaneBudget = (lane) => (lane === "next" ? { section: 12, lane: 12, count: 12, laneCount: 12, today: 0, cap: 15, over: false } : { section: 4, lane: 4, count: 4, laneCount: 4, today: 0, cap: 10, over: false });
+    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, themes: { count: 2, cap: 3, over: false }, links: { count: 4, cap: 10, over: false }, status: "ok", themeNames: [], entries: [], warnings: [] });
+    plugin.dashboardLaneBudget = (lane) => (lane === "next" ? { section: 12, lane: 12, count: 12, laneCount: 12, today: 0, cap: 15, over: false } : { section: 10, lane: 10, count: 10, laneCount: 10, today: 0, cap: 10, over: false });
     plugin.readyBudget = () => ({ count: 60, cap: 100, over: false });
     const oldApi = { ...plugin.api };
     delete oldApi.workBadges;
@@ -567,9 +595,8 @@ test("dashboard fallbacks keep Work tones without plugin renderers or colors", a
     const chips = workChips(container);
     const byWorkLabel = {};
     for (const chip of chips) { const labelChild = (chip.children || []).find((child) => String(child.cls || "").includes("-label")); if (labelChild && ["TODAY", "PENDING", "NEXT", "READY"].includes(labelChild.text)) byWorkLabel[labelChild.text] = chip; }
-    // Thresholds where old (50/75/100) and new (40/60/80) bands disagree
-    // guard the dash.md-local workTone copy.
-    const expectedFallbackTone = { TODAY: "yellow", PENDING: "green", NEXT: "orange", READY: "yellow" };
+    // These vectors guard the local copy's exact-cap and 80/60/40 boundaries.
+    const expectedFallbackTone = { TODAY: "green", PENDING: "magenta", NEXT: "orange", READY: "yellow" };
     for (const lane of ["PENDING", "NEXT", "READY"]) {
       const chip = byWorkLabel[lane];
       assert.ok(chip, `expected inline ${lane} fallback`);
@@ -580,7 +607,7 @@ test("dashboard fallbacks keep Work tones without plugin renderers or colors", a
     }
     const todayFallback = byWorkLabel.TODAY;
     if (todayFallback) {
-      assert.deepEqual(tonesIn(String(todayFallback.cls || todayFallback.attrs?.class || "")), ["bob-work-tone-yellow"], "TODAY fallback tone");
+      assert.deepEqual(tonesIn(String(todayFallback.cls || todayFallback.attrs?.class || "")), ["bob-work-tone-green"], "TODAY fallback tone");
     }
     const absent = await runDashBlock({ ledgerApi: null, tasks: [] });
     const absentChips = workChips(absent);
@@ -594,4 +621,25 @@ test("dashboard fallbacks keep Work tones without plugin renderers or colors", a
     plugin.onunload();
     if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = savedXdg;
   }
+});
+
+
+const MAGENTA_VALUE = "color-mix(in srgb, color-mix(in srgb, var(--color-pink, #d53984) 80%, var(--color-purple, #7852ee)) 70%, var(--text-normal))";
+test("Work tone CSS covers each tone and uses the shared magenta value", () => {
+  const pluginCss = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  for (const tone of WORK_BADGE_TONES) {
+    assert.match(pluginCss, new RegExp(`\\.bob-plan-chip\\.bob-work-tone-${tone}\\s*\\{`));
+  }
+  const pluginMagenta = pluginCss.match(/\.bob-plan-chip\.bob-work-tone-magenta\s*\{([^}]*)\}/);
+  assert.ok(pluginMagenta);
+  assert.ok(pluginMagenta[1].includes(MAGENTA_VALUE));
+  const dashPath = process.env.BOB_DASHBOARD_FILE;
+  if (!dashPath) { console.log("SKIP dash CSS contract: BOB_DASHBOARD_FILE is not set"); return; }
+  const dashCode = extractFirstDataviewJs(fs.readFileSync(dashPath, "utf8"));
+  for (const tone of WORK_BADGE_TONES) {
+    assert.match(dashCode, new RegExp(`\\.task-count-widget\\s+\\.task-count-chip\\.bob-work-tone-${tone}\\s*\\{`));
+  }
+  const dashMagenta = dashCode.match(/\.task-count-widget\s+\.task-count-chip\.bob-work-tone-magenta\s*\{([^}]*)\}/);
+  assert.ok(dashMagenta);
+  assert.ok(dashMagenta[1].includes(MAGENTA_VALUE));
 });

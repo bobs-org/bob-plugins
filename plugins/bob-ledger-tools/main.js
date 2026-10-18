@@ -3999,9 +3999,9 @@ function paintReviewElement(host, kind, review) {
 // Shared count-to-limit presentation for TODAY, PENDING, NEXT, and READY.
 // Precedence (exact comparisons, never rounded percentages):
 // n === 0 -> grey, 0 < n < 2L/5 -> blue, 2L/5 <= n < 3L/5 -> green,
-// 3L/5 <= n < 4L/5 -> yellow, 4L/5 <= n <= L -> orange, n > L -> red.
+// 3L/5 <= n < 4L/5 -> yellow, 4L/5 <= n < L -> orange, n === L -> magenta, n > L -> red.
 // Invalid or missing input is unavailable (null), never numeric zero.
-const WORK_BADGE_TONES = ["grey", "blue", "green", "yellow", "orange", "red"];
+const WORK_BADGE_TONES = ["grey", "blue", "green", "yellow", "orange", "magenta", "red"];
 
 function workBadgeTone(count, cap) {
   if (!Number.isInteger(count) || count < 0) {
@@ -4015,6 +4015,9 @@ function workBadgeTone(count, cap) {
   }
   if (count > cap) {
     return "red";
+  }
+  if (count === cap) {
+    return "magenta";
   }
   if (5 * count >= 4 * cap) {
     return "orange";
@@ -4094,7 +4097,7 @@ function workBadgeToneClass(count, cap) {
 function withWorkToneClass(baseCls, tone) {
   const base = String(baseCls || "");
   const cleaned = base
-    .replace(/\s*bob-work-tone-(grey|blue|green|yellow|orange|red)\b/g, "")
+    .replace(new RegExp(`\\s*bob-work-tone-(${WORK_BADGE_TONES.join("|")})\\b`, "g"), "")
     .replace(/\s+/g, " ")
     .trim();
   const toneCls = workToneClass(tone);
@@ -13932,12 +13935,12 @@ class BobLedgerToolsPlugin extends Plugin {
         fetch: (options) => this.apiStatsFetch(options),
         bobPath: () => this.apiStatsBobPath(),
       }),
-      // Work badge tones (workBadges namespace v1): shared
-      // count-to-limit colors for TODAY, PENDING, NEXT, and READY.
+      // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
+      // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
       // and never throws.
       workBadges: Object.freeze({
-        version: 1,
+        version: 2,
         tone: (count, cap) => {
           try {
             return workBadgeTone(count, cap);

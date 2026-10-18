@@ -248,12 +248,12 @@ class BobLedgerToolsPlugin extends Plugin {
         fetch: (options) => this.apiStatsFetch(options),
         bobPath: () => this.apiStatsBobPath(),
       }),
-      // Work badge tones (workBadges namespace v1): shared
-      // count-to-limit colors for TODAY, PENDING, NEXT, and READY.
+      // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
+      // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
       // and never throws.
       workBadges: Object.freeze({
-        version: 1,
+        version: 2,
         tone: (count, cap) => {
           try {
             return workBadgeTone(count, cap);

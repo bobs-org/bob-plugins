@@ -1,8 +1,9 @@
 # Stats browser-preview fixtures
 
 `canonical.json` is the schema-1 `bob stats show` report captured from bob-cli's
-`tests/fixtures/stats/vault`, with an isolated config and a pinned clock. It is real
-golden-vault output. Regenerate it from the bob-cli checkout that owns that fixture;
+`tests/fixtures/stats/homes_vault`, with an isolated config and a pinned clock. It is
+real golden-vault output with derived area/project parts and session facts. Regenerate
+it from the bob-cli checkout that owns that fixture;
 set `BOB_PLUGINS_CHECKOUT` to the path printed by `sase repo open bob-plugins`:
 
 ```sh
@@ -11,21 +12,23 @@ cfg="$(mktemp)"
 trap 'rm -f "$cfg"' EXIT
 printf 'stats:\n  range: 4w\n' > "$cfg"
 BOB_CONFIG_FILE="$cfg" \
-BOB_DIR="$PWD/tests/fixtures/stats/vault" \
-BOB_NOW='2026-10-11 12:00:00' \
-cargo run --locked --quiet -- stats show -a -f json -c -r '2026-10-08..2026-10-11' \
+BOB_DIR="$PWD/tests/fixtures/stats/homes_vault" \
+BOB_NOW='2026-10-18 12:00:00' \
+cargo run --locked --quiet -- stats show -a -f json -r 4w \
   > "$BOB_PLUGINS_CHECKOUT/plugins/bob-ledger-tools/scripts/fixtures/stats/canonical.json"
 ```
 
 The captured report has `schema_version: 1`. `canonical.meta.json` pins its fixture
 version, bob-cli version/revision, clock, and requested range; its source is the
-committed golden vault. The renderer is `bob-ledger-tools@1.47.0`.
+committed golden vault. The renderer is `bob-ledger-tools@1.57.0`.
 
 The `synthetic-*.json` files are explicitly synthetic **presentation** fixtures. They
 cover week/month groups, signed values, populated rolling medians and prior ticks, long
-theme/chore names, grouped daily drill-down, and empty/all-null states. Their values and
-summaries are intentionally not internally consistent and must never be treated as
-vault results or as tests of Stats metric semantics.
+theme/chore names, grouped daily drill-down, and empty/all-null states. The
+`synthetic-homes.json` fixture adds the long `job_2026_apply_29` stem, many area hues,
+an all-bucket split, and expandable project groups. Synthetic values and summaries are
+intentionally not internally consistent and must never be treated as vault results or
+as tests of Stats metric semantics.
 
 Generate the standalone browser page and screenshot matrix from the linked bob-plugins
 checkout with:

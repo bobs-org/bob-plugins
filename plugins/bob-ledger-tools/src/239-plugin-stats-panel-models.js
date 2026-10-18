@@ -70,6 +70,144 @@ function statsPanelThemeRows(metric) {
   };
 }
 
+const STATS_PANEL_HOME_HUES = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
+
+function statsPanelHomeCatalog(report) {
+  return report && report.homes && typeof report.homes === "object" ? report.homes : {};
+}
+
+function statsPanelHasHomes(metric) {
+  const summary = metric && metric.parts_summary && typeof metric.parts_summary === "object"
+    ? metric.parts_summary
+    : {};
+  return Array.isArray(summary.area) || Array.isArray(summary.project);
+}
+
+function statsPanelHomeLabel(report, dimension, key, part) {
+  const catalog = statsPanelHomeCatalog(report);
+  const entry = catalog[key] && typeof catalog[key] === "object" ? catalog[key] : {};
+  if (dimension === "project" && entry.kind === "area" && typeof entry.project_label === "string") {
+    return entry.project_label;
+  }
+  if (typeof entry.label === "string" && entry.label) {
+    return entry.label;
+  }
+  if (part && typeof part.label === "string" && part.label) {
+    return part.label;
+  }
+  return key;
+}
+
+function statsPanelHomeHue(report, key, bucketGray = true) {
+  if (bucketGray && typeof key === "string" && key.startsWith("@")) {
+    return "gray";
+  }
+  const entry = statsPanelHomeCatalog(report)[key];
+  return entry && STATS_PANEL_HOME_HUES.includes(entry.hue) ? entry.hue : "gray";
+}
+
+function statsPanelFormatMinutes(value) {
+  if (!statsFinite(value)) return "–";
+  const minutes = Math.max(0, Math.round(value));
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours && remainder) return hours + "h " + remainder + "m";
+  if (hours) return hours + "h";
+  return minutes + "m";
+}
+
+function statsPanelHomeRows(metric, report, dimension, point) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
+  const raw = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object"
+    ? Object.entries(point.parts[dimension]).map(([key, value]) => ({
+      key,
+      value,
+      display: point.parts_display && point.parts_display[dimension] && point.parts_display[dimension][key],
+      apportioned: point.apportioned && point.apportioned[dimension] && point.apportioned[dimension][key],
+      label: null,
+    }))
+    : Array.isArray(summary[dimension]) ? summary[dimension] : [];
+  const rows = raw.map((part) => {
+    if (!part || typeof part.key !== "string" || !part.key || !statsFinite(part.value)) return null;
+    const value = part.value;
+    const apportioned = statsFinite(part.apportioned) ? Math.max(0, Math.min(value, part.apportioned)) : 0;
+    return {
+      key: part.key,
+      value,
+      display: typeof part.display === "string" && part.display
+        ? part.display
+        : safe.unit === "minutes" ? statsPanelFormatMinutes(value) : String(value),
+      share: typeof part.share === "string" ? part.share : "",
+      apportioned,
+      apportionedDisplay: typeof part.apportioned_display === "string" && part.apportioned_display
+        ? part.apportioned_display
+        : apportioned ? statsPanelFormatMinutes(apportioned) : "",
+      label: statsPanelHomeLabel(report, dimension, part.key, part),
+      hue: statsPanelHomeHue(report, part.key),
+      kind: (statsPanelHomeCatalog(report)[part.key] || {}).kind || "bucket",
+      area: (statsPanelHomeCatalog(report)[part.key] || {}).area || part.key,
+      path: (statsPanelHomeCatalog(report)[part.key] || {}).path || null,
+    };
+  }).filter(Boolean);
+  rows.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  return rows;
+}
+
+function statsPanelHomeAreaRows(rows, report) {
+  const values = Array.isArray(rows) ? rows.slice() : [];
+  const slot = (key) => {
+    const index = STATS_PANEL_HOME_HUES.indexOf(statsPanelHomeHue(report, key, false));
+    return index < 0 ? STATS_PANEL_HOME_HUES.length : index;
+  };
+  return values.sort((a, b) => {
+    const aBucket = a.key.startsWith("@");
+    const bBucket = b.key.startsWith("@");
+    if (aBucket !== bBucket) return aBucket ? 1 : -1;
+    if (aBucket) return a.label.localeCompare(b.label);
+    const aSlot = slot(a.key);
+    const bSlot = slot(b.key);
+    return aSlot - bSlot || a.label.localeCompare(b.label);
+  });
+}
+
+function statsPanelSelectedHomePoint(metric, report, state) {
+  const safe = state && typeof state === "object" ? state : {};
+  const points = Array.isArray(metric && metric.points) ? metric.points : [];
+  if (safe.pinnedBucket && typeof safe.pinnedBucket.start === "string") {
+    const selected = points.find((point) => point && point.date === safe.pinnedBucket.start &&
+      (point.end || point.date) === (safe.pinnedBucket.end || safe.pinnedBucket.start));
+    if (selected) return selected;
+  }
+  if (typeof safe.pinnedDay === "string") {
+    const daily = statsChartDailyPoints(metric, report);
+    return daily.find((point) => point && point.date === safe.pinnedDay) || null;
+  }
+  return null;
+}
+
+function statsPanelHomeSpan(point, report) {
+  if (!point) return report && report.range && report.range.label || "Selected range";
+  const start = typeof point.date === "string" ? point.date : "";
+  const end = typeof point.end === "string" ? point.end : start;
+  return start && end && start !== end ? start + "–" + end : start || "Selected range";
+}
+
+function statsPanelHomeSessions(report, dimension, key, point) {
+  const sessions = report && Array.isArray(report.sessions) ? report.sessions : [];
+  const start = point && typeof point.date === "string" ? point.date : "";
+  const end = point && typeof point.end === "string" ? point.end : start;
+  return sessions.filter((session) => {
+    if (!session || typeof session !== "object") return false;
+    if (start && (session.date < start || session.date > end)) return false;
+    const parts = session.homes && Array.isArray(session.homes.parts) ? session.homes.parts : [];
+    return parts.some((part) => dimension === "area"
+      ? part && (part.area === key || (part.kind === "area" && part.key === key))
+      : part && part.key === key);
+  }).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) ||
+    String(a.path || "").localeCompare(String(b.path || "")) || (b.line || 0) - (a.line || 0));
+}
+
 function statsPanelPointByKey(points, key) {
   return (Array.isArray(points) ? points : []).find((point) => point && statsChartPointKey(point) === key) || null;
 }

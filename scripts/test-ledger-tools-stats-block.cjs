@@ -281,6 +281,10 @@ test("stats view state is session-only and per source path", async () => {
         compare: false,
         table: false,
         pinnedDay: null,
+        homesView: null,
+        homeRowsExpanded: {},
+        homeSessionsExpanded: {},
+        homeSessionsAll: {},
       });
       first.range = "7d";
       assert.equal(second.range, null);

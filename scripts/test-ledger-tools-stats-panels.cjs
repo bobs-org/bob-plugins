@@ -267,6 +267,77 @@ function panelReport() {
   };
 }
 
+function homesPanelReport() {
+  const report = panelReport();
+  report.homes = {
+    "dev.md": { label: "dev", kind: "area", area: "dev.md", path: "dev.md", hue: "blue", project_label: "dev · area tasks" },
+    "job.md": { label: "job", kind: "area", area: "job.md", path: "job.md", hue: "aqua", project_label: "job · area tasks" },
+    "sase.md": { label: "sase", kind: "project", area: "dev.md", path: "sase.md", hue: "blue", rolled_up: 75 },
+    "bob.md": { label: "bob", kind: "project", area: "dev.md", path: "bob.md", hue: "blue" },
+    "job_2026_apply_29.md": { label: "job_2026_apply_29", kind: "project", area: "job.md", path: "job_2026_apply_29.md", hue: "aqua" },
+    "job_resume.md": { label: "job_resume", kind: "project", area: "job.md", path: "job_resume.md", hue: "aqua" },
+    "job_more.md": { label: "job_more", kind: "project", area: "job.md", path: "job_more.md", hue: "aqua" },
+    "@unfiled": { label: "unfiled", kind: "bucket", area: "@unfiled", path: null, hue: null },
+  };
+  const worked = report.metrics.find((metric) => metric.id === "worked");
+  worked.summary.total = { value: 75, display: "1h 15m" };
+  worked.parts_summary.area = [
+    { key: "dev.md", value: 45, display: "45m", share: "60%", label: "dev", apportioned: 5, apportioned_display: "5m" },
+    { key: "job.md", value: 25, display: "25m", share: "33%", label: "job" },
+    { key: "@unfiled", value: 5, display: "5m", share: "7%", label: "unfiled" },
+  ];
+  worked.parts_summary.project = [
+    { key: "sase.md", value: 20, display: "20m", share: "27%", label: "sase", apportioned: 5, apportioned_display: "5m" },
+    { key: "bob.md", value: 15, display: "15m", share: "20%", label: "bob" },
+    { key: "dev.md", value: 10, display: "10m", share: "13%", label: "dev · area tasks" },
+    { key: "job_2026_apply_29.md", value: 12, display: "12m", share: "16%", label: "job_2026_apply_29", apportioned: 4, apportioned_display: "4m" },
+    { key: "job_resume.md", value: 4, display: "4m", share: "5%", label: "job_resume" },
+    { key: "job_more.md", value: 3, display: "3m", share: "4%", label: "job_more" },
+    { key: "job.md", value: 6, display: "6m", share: "8%", label: "job · area tasks" },
+    { key: "@unfiled", value: 5, display: "5m", share: "7%", label: "unfiled" },
+  ];
+  worked.points = [
+    point("2026-10-09", 20, {
+      display: "20m",
+      parts: { area: { "dev.md": 20 }, project: { "sase.md": 20 }, theme: { SASE: 20 } },
+      parts_display: { area: { "dev.md": "20m" }, project: { "sase.md": "20m" }, theme: { SASE: "20m" } },
+    }),
+    point("2026-10-10", 55, {
+      display: "55m",
+      parts: { area: { "dev.md": 25, "job.md": 25, "@unfiled": 5 }, project: { "sase.md": 20, "bob.md": 15, "dev.md": 10, "job_2026_apply_29.md": 12, "job_resume.md": 4, "job_more.md": 3, "job.md": 6, "@unfiled": 5 } },
+      parts_display: { area: { "dev.md": "25m", "job.md": "25m", "@unfiled": "5m" }, project: { "sase.md": "20m", "bob.md": "15m", "dev.md": "10m", "job_2026_apply_29.md": "12m", "job_resume.md": "4m", "job_more.md": "3m", "job.md": "6m", "@unfiled": "5m" } },
+      apportioned: { project: { "sase.md": 5, "job_2026_apply_29.md": 4 } },
+    }),
+  ];
+  const done = report.metrics.find((metric) => metric.id === "done");
+  done.summary.total = { value: 5, display: "5" };
+  done.parts_summary.area = [
+    { key: "dev.md", value: 3, display: "3", share: "60%", label: "dev" },
+    { key: "job.md", value: 1, display: "1", share: "20%", label: "job" },
+    { key: "@unfiled", value: 1, display: "1", share: "20%", label: "unfiled" },
+  ];
+  done.parts_summary.project = [
+    { key: "sase.md", value: 2, display: "2", share: "40%", label: "sase" },
+    { key: "dev.md", value: 1, display: "1", share: "20%", label: "dev · area tasks" },
+    { key: "job_2026_apply_29.md", value: 1, display: "1", share: "20%", label: "job_2026_apply_29" },
+    { key: "@unfiled", value: 1, display: "1", share: "20%", label: "unfiled" },
+  ];
+  done.points = [point("2026-10-09", 2, {
+    parts: { area: { "dev.md": 2 }, project: { "sase.md": 2 } },
+    parts_display: { area: { "dev.md": "2" }, project: { "sase.md": "2" } },
+  })];
+  report.sessions = [
+    { date: "2026-10-09", path: "2026/20261009.md", line: 9, time_range: "0830-0855", minutes: 25, minutes_display: "25m", name: "BLOG", homes: { parts: [
+      { key: "sase.md", label: "sase", kind: "project", area: "dev.md", share: 67, minutes: 17 },
+      { key: "bob.md", label: "bob", kind: "project", area: "dev.md", share: 33, minutes: 8 },
+    ] } },
+    { date: "2026-10-10", path: "2026/20261010.md", line: 12, time_range: "1000-1015", minutes: 15, minutes_display: "15m", name: null, homes: { parts: [
+      { key: "job_2026_apply_29.md", label: "job_2026_apply_29", kind: "project", area: "job.md", share: 100, minutes: 15 },
+    ] } },
+  ];
+  return report;
+}
+
 function checklistDay(date, state, extra = {}) {
   return point(date, state === "met" ? 1 : state === "missed" ? 0 : null, {
     display: state === "met" ? "met" : state === "missed" ? "missed" : "–",
@@ -389,11 +460,114 @@ test("pomodoro panel shows the supplied total, shares, hue, and safe text", asyn
       plugin.renderStatsResult(view, { report });
       const panel = el.querySelector(".bob-stats-panel");
       assert.ok(panel, "custom pomodoro metrics get a panel");
-      assert.match(el.text, /Total: 1m/);
+      assert.match(el.text, /Where the time went.*1m/);
+      assert.match(el.text, /Update bob for areas & projects/);
       assert.match(el.text, /GTD — 1m \(100%\)/);
       assert.ok(el.querySelector(".bob-stats-hue-orange"), "the selected metric hue is used");
       assert.match(el.text, /Evil <img src=x>/);
       assert.equal(findTag(el.querySelector(".bob-stats"), "img"), null, "metric text is never HTML");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("home parts use the report catalog for labels, hue slots, and pinned values", () => {
+  const report = homesPanelReport();
+  const worked = report.metrics.find((metric) => metric.id === "worked");
+  const point = worked.points[1];
+  assert.equal(helpers.statsPanelHasHomes(worked), true);
+  assert.equal(helpers.statsPanelHomeLabel(report, "area", "dev.md"), "dev");
+  assert.equal(helpers.statsPanelHomeLabel(report, "project", "dev.md"), "dev · area tasks");
+  assert.deepEqual(
+    helpers.statsPanelHomeAreaRows(helpers.statsPanelHomeRows(worked, report, "area"), report).map((row) => row.key),
+    ["dev.md", "job.md", "@unfiled"],
+  );
+  assert.equal(helpers.statsPanelHomeRows(worked, report, "project").find((row) => row.key === "sase.md").apportioned, 5);
+  assert.equal(helpers.statsPanelHomeRows(worked, report, "project").find((row) => row.key === "job_2026_apply_29.md").label, "job_2026_apply_29");
+  assert.equal(helpers.statsPanelHomeRows(worked, report, "area", point).length, 3);
+  assert.equal(helpers.statsPanelHomeRows(worked, report, "project", point).find((row) => row.key === "job_2026_apply_29.md").value, 12);
+  assert.equal(helpers.statsPanelHomeSessions(report, "project", "sase.md", worked.points[0]).length, 1);
+  assert.match(helpers.statsChartTooltip(worked, point, report), /area: dev — 25m/);
+  assert.ok(helpers.statsChartParts(point, report).includes("project: job_2026_apply_29 · 12m"));
+  const done = report.metrics.find((metric) => metric.id === "done");
+  assert.equal(helpers.statsTableRows(done, undefined, report)[0].topParts[0].label, "dev");
+});
+
+test("areas panel toggles Themes, pins spans, expands projects, and opens home links", async () => {
+  await withMissingConfig(async () => {
+    const app = makeFreshnessApp({ tasks: [] });
+    const opened = [];
+    let cursor = null;
+    app.workspace.openLinkText = (path, sourcePath, newLeaf) => opened.push({ path, sourcePath, newLeaf });
+    app.workspace.activeLeaf = { view: { editor: { setCursor(position) { cursor = position; } } } };
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      const report = homesPanelReport();
+      const { doc, el, view } = renderWithFocus("worked");
+      plugin.renderStatsResult(view, { report });
+      const panel = el.querySelector(".bob-stats-panel");
+      assert.match(panel.textContent + " " + panel.children.map((node) => node.text).join(" "), /Where the time went · Oct 9 – Oct 10 · 1h 15m/);
+      assert.match(el.text, /dev · area tasks/);
+      assert.match(el.text, /includes 75 sub-projects/);
+      assert.match(el.text, /1 more/);
+      assert.match(panel.querySelector(".bob-stats-home-area-bar").getAttribute("aria-label"), /dev 45m/);
+      assert.match(panel.textContent + " " + panel.children.map((node) => node.text).join(" "), /from Task Links/);
+      assert.ok(panel.querySelectorAll(".bob-stats-home-area-segment").some((node) =>
+        (node.getAttribute("class") || "").split(/\s+/).includes("bob-stats-home-blue")));
+      assert.ok(panel.querySelectorAll(".bob-stats-home-area-row").some((node) =>
+        (node.getAttribute("class") || "").split(/\s+/).includes("bob-stats-home-blue")));
+      assert.ok(panel.querySelectorAll(".bob-stats-home-mini-track").some((node) =>
+        (node.getAttribute("class") || "").split(/\s+/).includes("bob-stats-home-blue")));
+
+      const more = findByFocus(panel, "panel-home-more-job.md");
+      more.dispatch("click");
+      assert.match(el.text, /job_more/);
+
+      const themeToggle = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-view-themes");
+      themeToggle.dispatch("click");
+      assert.equal(plugin.statsViewStateFor("dash_stats.md").homesView, "themes");
+      assert.equal(findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-view-themes").getAttribute("aria-pressed"), "true");
+      assert.match(el.text, /GTD — 29m/);
+
+      const areaToggle = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-view-areas");
+      areaToggle.dispatch("click");
+      const saseLink = el.querySelectorAll(".bob-stats-home-link").find((node) => node.textContent === "sase");
+      saseLink.dispatch("click", { ctrlKey: true });
+      assert.deepEqual(opened.at(-1), { path: "sase.md", sourcePath: "dash_stats.md", newLeaf: true });
+
+      plugin.statsPanelPinDay(doc, view, report, "2026-10-09");
+      assert.equal(plugin.statsViewStateFor("dash_stats.md").pinnedDay, "2026-10-09");
+      assert.match(el.text, /2026-10-09 · 20m/);
+      assert.equal(el.text.includes("job_2026_apply_29"), false, "the pinned day's supplied parts replace the period split");
+
+      const sessions = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-sessions-project:sase.md");
+      sessions.dispatch("click");
+      const session = el.querySelector(".bob-stats-home-session-link");
+      assert.match(session.textContent, /2026-10-09 · 0830-0855 · 25m · BLOG/);
+      session.dispatch("click");
+      assert.equal(opened.at(-1).path, "2026/20261009.md");
+      assert.deepEqual(cursor, { line: 8, ch: 0 });
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("task home table uses catalog labels and count rows without hue tint", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const { el, view } = renderWithFocus("done");
+      plugin.renderStatsResult(view, { report: homesPanelReport() });
+      assert.match(el.text, /Done by area & project/);
+      assert.match(el.text, /job_2026_apply_29/);
+      assert.equal(el.querySelector(".bob-stats-home-mini-track"), null);
+      assert.ok(el.querySelectorAll(".bob-stats-home-area-row").some((row) =>
+        (row.getAttribute("class") || "").split(/\s+/).includes("bob-stats-home-gray")));
+      assert.equal(el.querySelector(".bob-stats-home-sessions-toggle"), null);
     } finally {
       plugin.onunload();
     }

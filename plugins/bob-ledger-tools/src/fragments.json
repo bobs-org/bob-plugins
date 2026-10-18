@@ -39,6 +39,7 @@
   "239-plugin-stats-chart-render.js",
   "239-plugin-stats-panel-models.js",
   "239-plugin-stats-panel-render.js",
+  "239-plugin-stats-homes-render.js",
   "240-plugin-freshness-status.js",
   "241-plugin-reading-board-data.js",
   "242-plugin-reading-board-models.js",

@@ -30,6 +30,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsStatsChartMixin,
+  BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,

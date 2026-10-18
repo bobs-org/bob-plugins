@@ -1,9 +1,10 @@
 {
-  "fixture_version": "stats-browser-preview-canonical-1",
+  "fixture_version": "stats-browser-preview-homes-2",
   "schema_version": 1,
-  "source": "bob-cli tests/fixtures/stats/vault",
+  "source": "bob-cli tests/fixtures/stats/homes_vault",
   "bob_cli_version": "0.1.0",
-  "bob_cli_revision": "ab314c061da8",
-  "bob_now": "2026-10-11 12:00:00",
-  "requested_range": "2026-10-08..2026-10-11"
+  "bob_cli_revision": "930b3495c01e",
+  "bob_now": "2026-10-18 12:00:00",
+  "requested_range": "4w",
+  "renderer_version": "1.57.0"
 }

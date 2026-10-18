@@ -95,7 +95,7 @@ class BobLedgerToolsStatsPanelsMixin {
     if (live && on && focusMetric) {
       const point = statsChartPointForDate(statsChartDailyPoints(focusMetric, report), date);
       if (point) {
-        live.textContent = statsChartTooltip(focusMetric, point).replace(/\n/g, ", ");
+        live.textContent = statsChartTooltip(focusMetric, point, report).replace(/\n/g, ", ");
       }
     }
   }
@@ -182,13 +182,17 @@ class BobLedgerToolsStatsPanelsMixin {
     return Math.max(300, width);
   }
 
-  // --- Pomodoro: By theme ------------------------------------------------
+  // --- Pomodoro: Areas & projects, with Themes one click away -----------
   statsPanelPomodoro(doc, view, report, metric, section) {
-    section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by theme"));
-    const model = statsPanelThemeRows(metric);
-    if (model.total) {
-      section.appendChild(statsEl(doc, "div", { class: "bob-stats-panel-total" }, "Total: " + model.total));
+    const viewModel = this.statsPanelHomeToggle(doc, view, report, metric);
+    section.appendChild(viewModel.header);
+    if (viewModel.state.homesView === "areas" && viewModel.available) {
+      return this.statsPanelHomeTable(doc, view, report, metric, section, { areaBar: true, sessions: true });
     }
+    if (!viewModel.available) {
+      section.appendChild(this.statsPanelNote(doc, "Update bob for areas & projects."));
+    }
+    const model = statsPanelThemeRows(metric);
     if (!model.rows.length) {
       section.appendChild(this.statsPanelNote(doc, "No theme breakdown is in this report."));
       return true;
@@ -455,6 +459,9 @@ class BobLedgerToolsStatsPanelsMixin {
         section.appendChild(statsEl(doc, "div", { class: "bob-stats-panel-total" }, "Total: " + total));
       }
     }
+    if (!isNet && metric.kind === "tasks" && statsPanelHasHomes(metric)) {
+      this.statsPanelHomeTable(doc, view, report, metric, section, { title: true });
+    }
     return true;
   }
 
@@ -541,7 +548,7 @@ class BobLedgerToolsStatsPanelsMixin {
         class: "bob-stats-chart-hit" + (cursorDay && cursorDay >= date && cursorDay <= end ? " bob-stats-chart-hit-cursor" : ""),
         role: "button",
         tabindex: cursorDay && cursorDay >= date && cursorDay <= end ? 0 : (index === 0 && !cursorDay ? 0 : -1),
-        "aria-label": statsChartTooltip(metric, point).replace(/\n/g, ", "),
+        "aria-label": statsChartTooltip(metric, point, report).replace(/\n/g, ", "),
         "aria-pressed": this.statsViewStateFor(view && view.sourcePath).pinnedDay >= date && this.statsViewStateFor(view && view.sourcePath).pinnedDay <= end ? "true" : "false",
         "data-date": date,
         "data-end": end,

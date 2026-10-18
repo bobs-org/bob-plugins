@@ -83,7 +83,18 @@ class CdpClient {
   }
 
   static async connect(endpoint) {
-    const socket = new WebSocket(endpoint);
+    let WebSocketClient = typeof globalThis.WebSocket === "function" ? globalThis.WebSocket : null;
+    if (!WebSocketClient) {
+      try {
+        WebSocketClient = require("undici").WebSocket || null;
+      } catch (error) {
+        WebSocketClient = null;
+      }
+    }
+    if (!WebSocketClient) {
+      throw new Error("The preview needs Node 22+ WebSocket or the undici WebSocket client.");
+    }
+    const socket = new WebSocketClient(endpoint);
     await new Promise((resolve, reject) => {
       socket.addEventListener("open", resolve, { once: true });
       socket.addEventListener("error", reject, { once: true });
@@ -170,6 +181,8 @@ async function main() {
     canonical: readJson(path.join(fixturesDir, "canonical.json")),
     month: readJson(path.join(fixturesDir, "synthetic-presentation.json")),
     week: readJson(path.join(fixturesDir, "synthetic-week.json")),
+    homes: readJson(path.join(fixturesDir, "synthetic-homes.json")),
+    homesBuckets: readJson(path.join(fixturesDir, "synthetic-homes-buckets.json")),
     empty: readJson(path.join(fixturesDir, "synthetic-empty.json")),
     allNull: readJson(path.join(fixturesDir, "synthetic-all-null.json")),
   };

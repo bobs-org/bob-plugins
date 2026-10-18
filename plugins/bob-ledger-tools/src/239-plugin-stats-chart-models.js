@@ -239,7 +239,7 @@ function statsChartDateLabel(point) {
   return start === end ? short(start) : short(start) + "–" + short(end);
 }
 
-function statsChartTooltip(metric, point) {
+function statsChartTooltip(metric, point, report) {
   const safeMetric = metric && typeof metric === "object" ? metric : {};
   const safe = point && typeof point === "object" ? point : {};
   const lines = [typeof safe.display === "string" && safe.display ? safe.display : "–", statsChartDateLabel(safe)];
@@ -266,13 +266,16 @@ function statsChartTooltip(metric, point) {
         const formatted = display[dimension] && typeof display[dimension][key] === "string"
           ? display[dimension][key]
           : String(value);
-        ranked.push({ dimension, key, value, formatted });
+        const label = ["area", "project"].includes(dimension)
+          ? statsPanelHomeLabel(report, dimension, key)
+          : key;
+        ranked.push({ dimension, key, label, value, formatted });
       }
     }
   }
   ranked.sort((a, b) => b.value - a.value || a.key.localeCompare(b.key));
   for (const part of ranked.slice(0, 3)) {
-    lines.push(part.dimension + ": " + part.key + " — " + part.formatted);
+    lines.push(part.dimension + ": " + part.label + " — " + part.formatted);
   }
   if (!ranked.length && safeMetric.id === "worked") {
     lines.push("No theme parts for this point");

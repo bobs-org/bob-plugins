@@ -48,7 +48,7 @@ function statsChartValidDay(date) {
   return statsIsoOrdinal(date) !== null;
 }
 
-function statsChartParts(point) {
+function statsChartParts(point, report) {
   const safe = point && typeof point === "object" ? point : {};
   const parts = safe.parts && typeof safe.parts === "object" ? safe.parts : {};
   const displays = safe.parts_display && typeof safe.parts_display === "object" ? safe.parts_display : {};
@@ -65,7 +65,10 @@ function statsChartParts(point) {
       const shown = displays[dimension] && typeof displays[dimension][key] === "string"
         ? displays[dimension][key]
         : String(value);
-      result.push(dimension + ": " + key + " · " + shown);
+      const label = ["area", "project"].includes(dimension)
+        ? statsPanelHomeLabel(report, dimension, key)
+        : key;
+      result.push(dimension + ": " + label + " · " + shown);
     }
   }
   return result;
@@ -327,7 +330,7 @@ class BobLedgerToolsStatsChartMixin {
     if (quality) {
       container.appendChild(statsEl(doc, "div", { class: "bob-stats-day-quality" }, quality));
     }
-    const parts = statsChartParts(point);
+    const parts = statsChartParts(point, report);
     if (parts.length) {
       const list = statsEl(doc, "ul", { class: "bob-stats-day-parts", "aria-label": "Daily metric parts" });
       for (const part of parts.slice(0, 5)) {
@@ -577,7 +580,7 @@ class BobLedgerToolsStatsChartMixin {
         class: "bob-stats-chart-hit" + (index === cursorPointIndex ? " bob-stats-chart-hit-cursor" : ""),
         role: "button",
         tabindex: index === cursorPointIndex ? 0 : -1,
-        "aria-label": statsChartTooltip(metric, point).replace(/\n/g, ", "),
+        "aria-label": statsChartTooltip(metric, point, report).replace(/\n/g, ", "),
         "aria-pressed": state.pinnedDay && state.pinnedDay >= date && state.pinnedDay <= end ? "true" : "false",
         "data-date": date,
         "data-end": end,
@@ -587,7 +590,7 @@ class BobLedgerToolsStatsChartMixin {
         view.hoverBucket = { start: date, end };
         const daily = statsChartDailyPoints(metric, report).filter((entry) => entry && entry.date >= date && entry.date <= end);
         state.hoverDay = daily.length ? daily[0].date : null;
-        this.statsShowChartTooltip(view, statsChartTooltip(metric, point), event, slot.center, valueY, margin.top);
+        this.statsShowChartTooltip(view, statsChartTooltip(metric, point, report), event, slot.center, valueY, margin.top);
         this.statsUpdateChartDayDetail(doc, view, report, metric, view.chartDayDetail);
       });
       hit.addEventListener("pointermove", (event) => {
@@ -605,7 +608,7 @@ class BobLedgerToolsStatsChartMixin {
         const selectedDay = statsChartActivePoint(metric, report, state, { start: date, end });
         if (!state.pinnedDay && selectedDay) state.cursorDay = selectedDay.date;
         const live = view.chartLive;
-        if (live) live.textContent = statsChartTooltip(metric, point).replace(/\n/g, ", ");
+        if (live) live.textContent = statsChartTooltip(metric, point, report).replace(/\n/g, ", ");
         view.hoverBucket = { start: date, end };
         this.statsUpdateChartDayDetail(doc, view, report, metric, view.chartDayDetail);
       });
@@ -636,7 +639,7 @@ class BobLedgerToolsStatsChartMixin {
           x1: x - 4, x2: x + 4, y1: y, y2: y,
           class: "bob-stats-chart-prior" + (prior.partial ? " bob-stats-chart-prior-partial" : "") + (prior.unmatchedEdge ? " bob-stats-chart-prior-unmatched" : ""),
           "stroke-width": 2,
-          "aria-label": "Prior period " + statsChartTooltip(metric, prior.point).replace(/\n/g, ", "),
+          "aria-label": "Prior period " + statsChartTooltip(metric, prior.point, report).replace(/\n/g, ", "),
         }));
       }
     }
@@ -754,7 +757,7 @@ class BobLedgerToolsStatsChartMixin {
     }
     state.pinnedBucket = { start, end };
     view.hoverBucket = null;
-    if (view.chartLive) view.chartLive.textContent = "Pinned " + statsChartTooltip(metric, point).replace(/\n/g, ", ");
+    if (view.chartLive) view.chartLive.textContent = "Pinned " + statsChartTooltip(metric, point, report).replace(/\n/g, ", ");
     this.statsUpdateChartDayDetail(doc, view, report, metric, view.chartDayDetail);
     for (const hit of view.chartHitNodes || []) {
       const hitDate = hit.getAttribute("data-date") || "";

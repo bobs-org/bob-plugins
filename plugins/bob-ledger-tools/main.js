@@ -21064,6 +21064,10 @@ function statsDefaultViewState() {
     compare: false,
     table: false,
     pinnedDay: null,
+    homesView: null,
+    homeRowsExpanded: {},
+    homeSessionsExpanded: {},
+    homeSessionsAll: {},
   };
 }
 
@@ -21150,7 +21154,7 @@ function statsSparkBars(spark) {
 
 // Table rows for the focus metric: date, value, quality/reason, top
 // parts. The accessible route and the source of exact numbers.
-function statsTableRows(metric, limit) {
+function statsTableRows(metric, limit, report) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const points = Array.isArray(safe.points) ? safe.points : [];
   const max = typeof limit === "number" && limit > 0 ? limit : points.length;
@@ -21166,7 +21170,14 @@ function statsTableRows(metric, limit) {
         .filter(([, value]) => typeof value === "number")
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
-        .map(([key, value]) => ({ dimension, key, value }));
+        .map(([key, value]) => ({
+          dimension,
+          key,
+          value,
+          label: ["area", "project"].includes(dimension)
+            ? statsPanelHomeLabel(report, dimension, key)
+            : key,
+        }));
       topParts.push(...ranked);
     }
     return {
@@ -21905,14 +21916,14 @@ class BobLedgerToolsStatsBlockMixin {
     head.appendChild(headRow);
     table.appendChild(head);
     const body = statsEl(doc, "tbody", {});
-    for (const row of statsTableRows(metric)) {
+    for (const row of statsTableRows(metric, undefined, report)) {
       const line = statsEl(doc, "tr", {});
       line.appendChild(statsEl(doc, "td", {}, row.date + (row.provisional ? " (today)" : "")));
       line.appendChild(statsEl(doc, "td", {}, row.display));
       const qualityText = row.quality === "ok" ? "ok" : `${row.quality}${row.reason ? ` — ${row.reason}` : ""}`;
       line.appendChild(statsEl(doc, "td", {}, qualityText));
       const partsText = row.topParts
-        .map((part) => `${part.dimension}:${part.key} ${part.value}`)
+        .map((part) => `${part.dimension}:${part.label || part.key} ${part.value}`)
         .join(" · ");
       line.appendChild(statsEl(doc, "td", {}, partsText));
       body.appendChild(line);
@@ -22232,7 +22243,7 @@ function statsChartDateLabel(point) {
   return start === end ? short(start) : short(start) + "–" + short(end);
 }
 
-function statsChartTooltip(metric, point) {
+function statsChartTooltip(metric, point, report) {
   const safeMetric = metric && typeof metric === "object" ? metric : {};
   const safe = point && typeof point === "object" ? point : {};
   const lines = [typeof safe.display === "string" && safe.display ? safe.display : "–", statsChartDateLabel(safe)];
@@ -22259,13 +22270,16 @@ function statsChartTooltip(metric, point) {
         const formatted = display[dimension] && typeof display[dimension][key] === "string"
           ? display[dimension][key]
           : String(value);
-        ranked.push({ dimension, key, value, formatted });
+        const label = ["area", "project"].includes(dimension)
+          ? statsPanelHomeLabel(report, dimension, key)
+          : key;
+        ranked.push({ dimension, key, label, value, formatted });
       }
     }
   }
   ranked.sort((a, b) => b.value - a.value || a.key.localeCompare(b.key));
   for (const part of ranked.slice(0, 3)) {
-    lines.push(part.dimension + ": " + part.key + " — " + part.formatted);
+    lines.push(part.dimension + ": " + part.label + " — " + part.formatted);
   }
   if (!ranked.length && safeMetric.id === "worked") {
     lines.push("No theme parts for this point");
@@ -22323,7 +22337,7 @@ function statsChartValidDay(date) {
   return statsIsoOrdinal(date) !== null;
 }
 
-function statsChartParts(point) {
+function statsChartParts(point, report) {
   const safe = point && typeof point === "object" ? point : {};
   const parts = safe.parts && typeof safe.parts === "object" ? safe.parts : {};
   const displays = safe.parts_display && typeof safe.parts_display === "object" ? safe.parts_display : {};
@@ -22340,7 +22354,10 @@ function statsChartParts(point) {
       const shown = displays[dimension] && typeof displays[dimension][key] === "string"
         ? displays[dimension][key]
         : String(value);
-      result.push(dimension + ": " + key + " · " + shown);
+      const label = ["area", "project"].includes(dimension)
+        ? statsPanelHomeLabel(report, dimension, key)
+        : key;
+      result.push(dimension + ": " + label + " · " + shown);
     }
   }
   return result;
@@ -22602,7 +22619,7 @@ class BobLedgerToolsStatsChartMixin {
     if (quality) {
       container.appendChild(statsEl(doc, "div", { class: "bob-stats-day-quality" }, quality));
     }
-    const parts = statsChartParts(point);
+    const parts = statsChartParts(point, report);
     if (parts.length) {
       const list = statsEl(doc, "ul", { class: "bob-stats-day-parts", "aria-label": "Daily metric parts" });
       for (const part of parts.slice(0, 5)) {
@@ -22852,7 +22869,7 @@ class BobLedgerToolsStatsChartMixin {
         class: "bob-stats-chart-hit" + (index === cursorPointIndex ? " bob-stats-chart-hit-cursor" : ""),
         role: "button",
         tabindex: index === cursorPointIndex ? 0 : -1,
-        "aria-label": statsChartTooltip(metric, point).replace(/\n/g, ", "),
+        "aria-label": statsChartTooltip(metric, point, report).replace(/\n/g, ", "),
         "aria-pressed": state.pinnedDay && state.pinnedDay >= date && state.pinnedDay <= end ? "true" : "false",
         "data-date": date,
         "data-end": end,
@@ -22862,7 +22879,7 @@ class BobLedgerToolsStatsChartMixin {
         view.hoverBucket = { start: date, end };
         const daily = statsChartDailyPoints(metric, report).filter((entry) => entry && entry.date >= date && entry.date <= end);
         state.hoverDay = daily.length ? daily[0].date : null;
-        this.statsShowChartTooltip(view, statsChartTooltip(metric, point), event, slot.center, valueY, margin.top);
+        this.statsShowChartTooltip(view, statsChartTooltip(metric, point, report), event, slot.center, valueY, margin.top);
         this.statsUpdateChartDayDetail(doc, view, report, metric, view.chartDayDetail);
       });
       hit.addEventListener("pointermove", (event) => {
@@ -22880,7 +22897,7 @@ class BobLedgerToolsStatsChartMixin {
         const selectedDay = statsChartActivePoint(metric, report, state, { start: date, end });
         if (!state.pinnedDay && selectedDay) state.cursorDay = selectedDay.date;
         const live = view.chartLive;
-        if (live) live.textContent = statsChartTooltip(metric, point).replace(/\n/g, ", ");
+        if (live) live.textContent = statsChartTooltip(metric, point, report).replace(/\n/g, ", ");
         view.hoverBucket = { start: date, end };
         this.statsUpdateChartDayDetail(doc, view, report, metric, view.chartDayDetail);
       });
@@ -22911,7 +22928,7 @@ class BobLedgerToolsStatsChartMixin {
           x1: x - 4, x2: x + 4, y1: y, y2: y,
           class: "bob-stats-chart-prior" + (prior.partial ? " bob-stats-chart-prior-partial" : "") + (prior.unmatchedEdge ? " bob-stats-chart-prior-unmatched" : ""),
           "stroke-width": 2,
-          "aria-label": "Prior period " + statsChartTooltip(metric, prior.point).replace(/\n/g, ", "),
+          "aria-label": "Prior period " + statsChartTooltip(metric, prior.point, report).replace(/\n/g, ", "),
         }));
       }
     }
@@ -23029,7 +23046,7 @@ class BobLedgerToolsStatsChartMixin {
     }
     state.pinnedBucket = { start, end };
     view.hoverBucket = null;
-    if (view.chartLive) view.chartLive.textContent = "Pinned " + statsChartTooltip(metric, point).replace(/\n/g, ", ");
+    if (view.chartLive) view.chartLive.textContent = "Pinned " + statsChartTooltip(metric, point, report).replace(/\n/g, ", ");
     this.statsUpdateChartDayDetail(doc, view, report, metric, view.chartDayDetail);
     for (const hit of view.chartHitNodes || []) {
       const hitDate = hit.getAttribute("data-date") || "";
@@ -23251,6 +23268,144 @@ function statsPanelThemeRows(metric) {
     total: total && typeof total.display === "string" && total.display ? total.display : "",
     rows,
   };
+}
+
+const STATS_PANEL_HOME_HUES = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
+
+function statsPanelHomeCatalog(report) {
+  return report && report.homes && typeof report.homes === "object" ? report.homes : {};
+}
+
+function statsPanelHasHomes(metric) {
+  const summary = metric && metric.parts_summary && typeof metric.parts_summary === "object"
+    ? metric.parts_summary
+    : {};
+  return Array.isArray(summary.area) || Array.isArray(summary.project);
+}
+
+function statsPanelHomeLabel(report, dimension, key, part) {
+  const catalog = statsPanelHomeCatalog(report);
+  const entry = catalog[key] && typeof catalog[key] === "object" ? catalog[key] : {};
+  if (dimension === "project" && entry.kind === "area" && typeof entry.project_label === "string") {
+    return entry.project_label;
+  }
+  if (typeof entry.label === "string" && entry.label) {
+    return entry.label;
+  }
+  if (part && typeof part.label === "string" && part.label) {
+    return part.label;
+  }
+  return key;
+}
+
+function statsPanelHomeHue(report, key, bucketGray = true) {
+  if (bucketGray && typeof key === "string" && key.startsWith("@")) {
+    return "gray";
+  }
+  const entry = statsPanelHomeCatalog(report)[key];
+  return entry && STATS_PANEL_HOME_HUES.includes(entry.hue) ? entry.hue : "gray";
+}
+
+function statsPanelFormatMinutes(value) {
+  if (!statsFinite(value)) return "–";
+  const minutes = Math.max(0, Math.round(value));
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours && remainder) return hours + "h " + remainder + "m";
+  if (hours) return hours + "h";
+  return minutes + "m";
+}
+
+function statsPanelHomeRows(metric, report, dimension, point) {
+  const safe = metric && typeof metric === "object" ? metric : {};
+  const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
+  const raw = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object"
+    ? Object.entries(point.parts[dimension]).map(([key, value]) => ({
+      key,
+      value,
+      display: point.parts_display && point.parts_display[dimension] && point.parts_display[dimension][key],
+      apportioned: point.apportioned && point.apportioned[dimension] && point.apportioned[dimension][key],
+      label: null,
+    }))
+    : Array.isArray(summary[dimension]) ? summary[dimension] : [];
+  const rows = raw.map((part) => {
+    if (!part || typeof part.key !== "string" || !part.key || !statsFinite(part.value)) return null;
+    const value = part.value;
+    const apportioned = statsFinite(part.apportioned) ? Math.max(0, Math.min(value, part.apportioned)) : 0;
+    return {
+      key: part.key,
+      value,
+      display: typeof part.display === "string" && part.display
+        ? part.display
+        : safe.unit === "minutes" ? statsPanelFormatMinutes(value) : String(value),
+      share: typeof part.share === "string" ? part.share : "",
+      apportioned,
+      apportionedDisplay: typeof part.apportioned_display === "string" && part.apportioned_display
+        ? part.apportioned_display
+        : apportioned ? statsPanelFormatMinutes(apportioned) : "",
+      label: statsPanelHomeLabel(report, dimension, part.key, part),
+      hue: statsPanelHomeHue(report, part.key),
+      kind: (statsPanelHomeCatalog(report)[part.key] || {}).kind || "bucket",
+      area: (statsPanelHomeCatalog(report)[part.key] || {}).area || part.key,
+      path: (statsPanelHomeCatalog(report)[part.key] || {}).path || null,
+    };
+  }).filter(Boolean);
+  rows.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  return rows;
+}
+
+function statsPanelHomeAreaRows(rows, report) {
+  const values = Array.isArray(rows) ? rows.slice() : [];
+  const slot = (key) => {
+    const index = STATS_PANEL_HOME_HUES.indexOf(statsPanelHomeHue(report, key, false));
+    return index < 0 ? STATS_PANEL_HOME_HUES.length : index;
+  };
+  return values.sort((a, b) => {
+    const aBucket = a.key.startsWith("@");
+    const bBucket = b.key.startsWith("@");
+    if (aBucket !== bBucket) return aBucket ? 1 : -1;
+    if (aBucket) return a.label.localeCompare(b.label);
+    const aSlot = slot(a.key);
+    const bSlot = slot(b.key);
+    return aSlot - bSlot || a.label.localeCompare(b.label);
+  });
+}
+
+function statsPanelSelectedHomePoint(metric, report, state) {
+  const safe = state && typeof state === "object" ? state : {};
+  const points = Array.isArray(metric && metric.points) ? metric.points : [];
+  if (safe.pinnedBucket && typeof safe.pinnedBucket.start === "string") {
+    const selected = points.find((point) => point && point.date === safe.pinnedBucket.start &&
+      (point.end || point.date) === (safe.pinnedBucket.end || safe.pinnedBucket.start));
+    if (selected) return selected;
+  }
+  if (typeof safe.pinnedDay === "string") {
+    const daily = statsChartDailyPoints(metric, report);
+    return daily.find((point) => point && point.date === safe.pinnedDay) || null;
+  }
+  return null;
+}
+
+function statsPanelHomeSpan(point, report) {
+  if (!point) return report && report.range && report.range.label || "Selected range";
+  const start = typeof point.date === "string" ? point.date : "";
+  const end = typeof point.end === "string" ? point.end : start;
+  return start && end && start !== end ? start + "–" + end : start || "Selected range";
+}
+
+function statsPanelHomeSessions(report, dimension, key, point) {
+  const sessions = report && Array.isArray(report.sessions) ? report.sessions : [];
+  const start = point && typeof point.date === "string" ? point.date : "";
+  const end = point && typeof point.end === "string" ? point.end : start;
+  return sessions.filter((session) => {
+    if (!session || typeof session !== "object") return false;
+    if (start && (session.date < start || session.date > end)) return false;
+    const parts = session.homes && Array.isArray(session.homes.parts) ? session.homes.parts : [];
+    return parts.some((part) => dimension === "area"
+      ? part && (part.area === key || (part.kind === "area" && part.key === key))
+      : part && part.key === key);
+  }).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) ||
+    String(a.path || "").localeCompare(String(b.path || "")) || (b.line || 0) - (a.line || 0));
 }
 
 function statsPanelPointByKey(points, key) {
@@ -23613,7 +23768,7 @@ class BobLedgerToolsStatsPanelsMixin {
     if (live && on && focusMetric) {
       const point = statsChartPointForDate(statsChartDailyPoints(focusMetric, report), date);
       if (point) {
-        live.textContent = statsChartTooltip(focusMetric, point).replace(/\n/g, ", ");
+        live.textContent = statsChartTooltip(focusMetric, point, report).replace(/\n/g, ", ");
       }
     }
   }
@@ -23700,13 +23855,17 @@ class BobLedgerToolsStatsPanelsMixin {
     return Math.max(300, width);
   }
 
-  // --- Pomodoro: By theme ------------------------------------------------
+  // --- Pomodoro: Areas & projects, with Themes one click away -----------
   statsPanelPomodoro(doc, view, report, metric, section) {
-    section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by theme"));
-    const model = statsPanelThemeRows(metric);
-    if (model.total) {
-      section.appendChild(statsEl(doc, "div", { class: "bob-stats-panel-total" }, "Total: " + model.total));
+    const viewModel = this.statsPanelHomeToggle(doc, view, report, metric);
+    section.appendChild(viewModel.header);
+    if (viewModel.state.homesView === "areas" && viewModel.available) {
+      return this.statsPanelHomeTable(doc, view, report, metric, section, { areaBar: true, sessions: true });
     }
+    if (!viewModel.available) {
+      section.appendChild(this.statsPanelNote(doc, "Update bob for areas & projects."));
+    }
+    const model = statsPanelThemeRows(metric);
     if (!model.rows.length) {
       section.appendChild(this.statsPanelNote(doc, "No theme breakdown is in this report."));
       return true;
@@ -23973,6 +24132,9 @@ class BobLedgerToolsStatsPanelsMixin {
         section.appendChild(statsEl(doc, "div", { class: "bob-stats-panel-total" }, "Total: " + total));
       }
     }
+    if (!isNet && metric.kind === "tasks" && statsPanelHasHomes(metric)) {
+      this.statsPanelHomeTable(doc, view, report, metric, section, { title: true });
+    }
     return true;
   }
 
@@ -24059,7 +24221,7 @@ class BobLedgerToolsStatsPanelsMixin {
         class: "bob-stats-chart-hit" + (cursorDay && cursorDay >= date && cursorDay <= end ? " bob-stats-chart-hit-cursor" : ""),
         role: "button",
         tabindex: cursorDay && cursorDay >= date && cursorDay <= end ? 0 : (index === 0 && !cursorDay ? 0 : -1),
-        "aria-label": statsChartTooltip(metric, point).replace(/\n/g, ", "),
+        "aria-label": statsChartTooltip(metric, point, report).replace(/\n/g, ", "),
         "aria-pressed": this.statsViewStateFor(view && view.sourcePath).pinnedDay >= date && this.statsViewStateFor(view && view.sourcePath).pinnedDay <= end ? "true" : "false",
         "data-date": date,
         "data-end": end,
@@ -24288,6 +24450,344 @@ class BobLedgerToolsStatsPanelsMixin {
     const legend = statsEl(doc, "div", { class: "bob-stats-chart-legend", "aria-label": "Chore grid legend" });
     legend.appendChild(statsEl(doc, "span", { class: "bob-stats-legend-item" }, "Filled met · outlined missed · blank not due · crossed unknown."));
     section.appendChild(legend);
+    return true;
+  }
+}
+// ---- src/239-plugin-stats-homes-render.js ----
+// Area/project Stats panel. The report owns attribution and labels; this
+// mixin only groups supplied parts and routes links back into Obsidian.
+class BobLedgerToolsStatsHomesMixin {
+  statsPanelHomeToggle(doc, view, report, metric) {
+    const available = statsPanelHasHomes(metric);
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    if (state.homesView !== "areas" && state.homesView !== "themes") {
+      state.homesView = available ? "areas" : "themes";
+    }
+    if (!available) state.homesView = "themes";
+    const point = statsPanelSelectedHomePoint(metric, report, state);
+    const total = point && typeof point.display === "string"
+      ? point.display
+      : statsPanelTotalDisplay(metric);
+    const title = "Where the time went · " + statsPanelHomeSpan(point, report) + " · " + (total || "–");
+    const header = statsEl(doc, "div", { class: "bob-stats-home-header" });
+    header.appendChild(this.statsPanelTitle(doc, title));
+    const controls = statsEl(doc, "div", {
+      class: "bob-stats-home-toggle",
+      role: "group",
+      "aria-label": "Pomodoro context view",
+    });
+    for (const choice of [
+      { id: "areas", label: "Areas & projects", disabled: !available },
+      { id: "themes", label: "Themes", disabled: false },
+    ]) {
+      const button = statsEl(doc, "button", {
+        class: "bob-stats-toggle" + (state.homesView === choice.id ? " bob-stats-toggle-on" : ""),
+        type: "button",
+        disabled: choice.disabled,
+        "aria-pressed": state.homesView === choice.id ? "true" : "false",
+        "data-stats-focus-key": "panel-home-view-" + choice.id,
+      }, choice.label);
+      button.addEventListener("click", () => {
+        state.homesView = choice.id;
+        this.statsRenderLocally(view, "panel-home-view-" + choice.id);
+      });
+      controls.appendChild(button);
+    }
+    header.appendChild(controls);
+    return { header, available, state };
+  }
+
+  statsPanelHomeFixCopy(key) {
+    if (key === "@unlinked") return "Link tasks under these sessions to show where the time went.";
+    if (key === "@unfiled") return "File linked tasks under an area or project.";
+    if (typeof key === "string" && key.startsWith("@review:")) {
+      return "GTD review stays grouped here; name mixed work to attribute it separately.";
+    }
+    return "This is a reserved Stats bucket.";
+  }
+
+  statsPanelOpenHome(path, view, event) {
+    const workspace = this.app && this.app.workspace;
+    if (!path || !workspace || typeof workspace.openLinkText !== "function") return false;
+    workspace.openLinkText(path, view && view.sourcePath || "", Boolean(event && (event.ctrlKey || event.metaKey)));
+    return true;
+  }
+
+  statsPanelOpenSession(session, view) {
+    if (!session || typeof session.path !== "string") return false;
+    const workspace = this.app && this.app.workspace;
+    if (!workspace || typeof workspace.openLinkText !== "function") return false;
+    const openResult = workspace.openLinkText(session.path, view && view.sourcePath || "", false);
+    const jump = () => {
+      try {
+        const leaf = workspace.activeLeaf || (typeof workspace.getMostRecentLeaf === "function" && workspace.getMostRecentLeaf());
+        const editor = leaf && leaf.view && leaf.view.editor;
+        const line = Math.max(0, (Number(session.line) || 1) - 1);
+        if (editor && typeof editor.setCursor === "function") {
+          editor.setCursor({ line, ch: 0 });
+          if (typeof editor.scrollIntoView === "function") {
+            editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
+          }
+        }
+      } catch (error) {
+        // Opening the daily note is still useful if the editor cannot jump.
+      }
+    };
+    if (openResult && typeof openResult.then === "function") openResult.then(jump, () => {});
+    else if (typeof window !== "undefined" && typeof window.setTimeout === "function") window.setTimeout(jump, 0);
+    else jump();
+    return true;
+  }
+
+  statsPanelHomeLink(doc, view, row, dimension) {
+    if (!row.path) return statsEl(doc, "span", { class: "bob-stats-home-label" }, row.label);
+    const button = statsEl(doc, "button", {
+      class: "bob-stats-home-link",
+      type: "button",
+      "aria-label": "Open " + row.label,
+    }, row.label);
+    button.addEventListener("click", (event) => this.statsPanelOpenHome(row.path, view, event));
+    return button;
+  }
+
+  statsPanelHomeSessionButton(doc, view, report, metric, dimension, row, point) {
+    const sessions = statsPanelHomeSessions(report, dimension, row.key, point);
+    if (!Array.isArray(report && report.sessions) || sessions.length === 0) return null;
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    const id = dimension + ":" + row.key;
+    if (!state.homeSessionsExpanded || typeof state.homeSessionsExpanded !== "object") state.homeSessionsExpanded = {};
+    if (!state.homeSessionsAll || typeof state.homeSessionsAll !== "object") state.homeSessionsAll = {};
+    const expanded = state.homeSessionsExpanded[id] === true;
+    const button = statsEl(doc, "button", {
+      class: "bob-stats-home-sessions-toggle",
+      type: "button",
+      "aria-expanded": expanded ? "true" : "false",
+      "data-stats-focus-key": "panel-home-sessions-" + id,
+    }, "sessions " + sessions.length);
+    button.addEventListener("click", () => {
+      state.homeSessionsExpanded[id] = !expanded;
+      this.statsRenderLocally(view, "panel-home-sessions-" + id);
+    });
+    const result = { button, list: null };
+    if (!expanded) return result;
+    const list = statsEl(doc, "ul", { class: "bob-stats-home-sessions", "aria-label": "Sessions for " + row.label });
+    const all = state.homeSessionsAll[id] === true;
+    const visible = all ? sessions : sessions.slice(0, 20);
+    for (const [index, session] of visible.entries()) {
+      const parts = session.homes && Array.isArray(session.homes.parts) ? session.homes.parts : [];
+      const shares = parts.map((part) => {
+        const label = statsPanelHomeLabel(report, "project", part.key, part);
+        return label + " " + (typeof part.share === "number" ? part.share : 0) + "%";
+      }).join(" · ");
+      const name = session.name || "(unnamed)";
+      const range = session.time_range || "time unavailable";
+      const text = [session.date || "date unavailable", range, session.minutes_display || "–", name, shares]
+        .filter(Boolean).join(" · ");
+      const item = statsEl(doc, "li", { class: "bob-stats-home-session-item" });
+      const open = statsEl(doc, "button", {
+        class: "bob-stats-home-session-link",
+        type: "button",
+        "aria-label": "Open " + name + " on " + (session.date || "unknown date") + " at line " + (session.line || 1),
+        "data-stats-focus-key": "panel-home-session-" + id + "-" + index,
+      }, text);
+      open.addEventListener("click", () => this.statsPanelOpenSession(session, view));
+      item.appendChild(open);
+      list.appendChild(item);
+    }
+    if (!all && sessions.length > 20) {
+      const item = statsEl(doc, "li", { class: "bob-stats-home-session-more" });
+      const more = statsEl(doc, "button", {
+        class: "bob-stats-home-sessions-toggle",
+        type: "button",
+        "data-stats-focus-key": "panel-home-session-more-" + id,
+      }, "Show all " + sessions.length + " sessions");
+      more.addEventListener("click", () => {
+        state.homeSessionsAll[id] = true;
+        this.statsRenderLocally(view, "panel-home-session-more-" + id);
+      });
+      item.appendChild(more);
+      list.appendChild(item);
+    }
+    result.list = list;
+    return result;
+  }
+
+  statsPanelHomeGroupRow(doc, view, report, metric, row, dimension, point, tint) {
+    const isBucket = row.key.startsWith("@");
+    const hue = tint && !isBucket ? row.hue : "gray";
+    const group = statsEl(doc, "div", {
+      class: "bob-stats-home-row " + (dimension === "area" ? "bob-stats-home-area-row" : "bob-stats-home-project-row") +
+        (isBucket ? " bob-stats-home-bucket" : "") + " bob-stats-home-" + hue,
+    });
+    const dot = statsEl(doc, "span", { class: "bob-stats-home-dot", "aria-hidden": "true" });
+    group.appendChild(dot);
+    group.appendChild(this.statsPanelHomeLink(doc, view, row, dimension));
+    const amount = row.display + (row.share ? " · " + row.share : "");
+    group.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, amount));
+    const sessions = metric.kind === "pomodoro"
+      ? this.statsPanelHomeSessionButton(doc, view, report, metric, dimension, row, point)
+      : null;
+    if (sessions) {
+      group.appendChild(sessions.button);
+      if (sessions.list) {
+        const wrap = statsEl(doc, "div", { class: "bob-stats-home-sessions-wrap" });
+        wrap.appendChild(sessions.list);
+        group.appendChild(wrap);
+      }
+    }
+    if (dimension === "project" && isBucket) {
+      group.appendChild(statsEl(doc, "div", { class: "bob-stats-home-fix" }, this.statsPanelHomeFixCopy(row.key)));
+    }
+    return group;
+  }
+
+  statsPanelHomeMiniBar(doc, row, maxValue, metric, tint) {
+    if (!tint || metric.unit !== "minutes") return null;
+    const width = maxValue > 0 ? Math.max(0, Math.min(100, (row.value / maxValue) * 100)) : 0;
+    const apportioned = Math.max(0, Math.min(row.value, row.apportioned || 0));
+    const directShare = row.value > 0 ? ((row.value - apportioned) / row.value) * 100 : 0;
+    const apportionedShare = row.value > 0 ? (apportioned / row.value) * 100 : 0;
+    const outer = statsEl(doc, "span", {
+      class: "bob-stats-home-mini-track bob-stats-home-" + (row.key.startsWith("@") ? "gray" : row.hue),
+      "aria-hidden": "true",
+    });
+    const bar = statsEl(doc, "span", { class: "bob-stats-home-mini-fill", style: "width: " + width + "%" });
+    bar.appendChild(statsEl(doc, "span", { class: "bob-stats-home-mini-direct", style: "width: " + directShare + "%" }));
+    if (apportioned > 0) {
+      bar.appendChild(statsEl(doc, "span", {
+        class: "bob-stats-home-mini-apportioned",
+        style: "width: " + apportionedShare + "%",
+      }));
+    }
+    outer.appendChild(bar);
+    return outer;
+  }
+
+  statsPanelHomeProjectRow(doc, view, report, metric, row, point, maxValue, tint) {
+    const item = statsEl(doc, "div", { class: "bob-stats-home-project" + (row.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
+    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (tint && !row.key.startsWith("@") ? row.hue : "gray") });
+    top.appendChild(this.statsPanelHomeLink(doc, view, row, "project"));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, row.display + (row.share ? " · " + row.share : "")));
+    const sessions = metric.kind === "pomodoro"
+      ? this.statsPanelHomeSessionButton(doc, view, report, metric, "project", row, point)
+      : null;
+    if (sessions) {
+      top.appendChild(sessions.button);
+      if (sessions.list) {
+        const wrap = statsEl(doc, "div", { class: "bob-stats-home-sessions-wrap" });
+        wrap.appendChild(sessions.list);
+        top.appendChild(wrap);
+      }
+    }
+    item.appendChild(top);
+    const bar = this.statsPanelHomeMiniBar(doc, row, maxValue, metric, tint);
+    if (bar) item.appendChild(bar);
+    const home = statsPanelHomeCatalog(report)[row.key];
+    if (home && Number.isInteger(home.rolled_up) && home.rolled_up > 0) {
+      const count = home.rolled_up;
+      item.appendChild(statsEl(doc, "div", { class: "bob-stats-home-rolled-up" },
+        "includes " + count + " sub-project" + (count === 1 ? "" : "s")));
+    }
+    if (row.key.startsWith("@")) {
+      item.appendChild(statsEl(doc, "div", { class: "bob-stats-home-fix" }, this.statsPanelHomeFixCopy(row.key)));
+    }
+    return item;
+  }
+
+  statsPanelHomeAreaBar(doc, view, metric, report, rows) {
+    const ordered = statsPanelHomeAreaRows(rows, report);
+    const total = ordered.reduce((sum, row) => sum + Math.max(0, row.value || 0), 0);
+    const wrap = statsEl(doc, "div", { class: "bob-stats-home-area-bar-wrap" });
+    const summary = ordered.map((row) => row.label + " " + row.display + (row.share ? " (" + row.share + ")" : ""));
+    const bar = statsEl(doc, "div", {
+      class: "bob-stats-home-area-bar",
+      role: "img",
+      "aria-label": "Area split: " + (summary.join(", ") || "no area data"),
+    });
+    const width = this.statsPanelWidth(view);
+    for (const [index, row] of ordered.entries()) {
+      const isBucket = row.key.startsWith("@");
+      const hue = isBucket ? "gray" : row.hue;
+      const percent = total > 0 ? Math.max(0, row.value / total) * 100 : 0;
+      const segment = statsEl(doc, "span", {
+        class: "bob-stats-home-area-segment bob-stats-home-" + hue,
+        style: "flex-basis: " + percent + "%",
+        title: row.label + " · " + row.display + (row.share ? " · " + row.share : ""),
+      });
+      const estimatedTextWidth = row.label.length * 6.5 + row.display.length * 5.5 + 22;
+      if (width * (percent / 100) >= estimatedTextWidth) {
+        segment.appendChild(statsEl(doc, "span", { class: "bob-stats-home-area-segment-label" }, row.label + " · " + row.display));
+      }
+      segment.setAttribute("data-order", String(index));
+      bar.appendChild(segment);
+    }
+    wrap.appendChild(bar);
+    return wrap;
+  }
+
+  statsPanelHomeTable(doc, view, report, metric, section, options = {}) {
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    const point = statsPanelSelectedHomePoint(metric, report, state);
+    const areaRows = statsPanelHomeRows(metric, report, "area", point);
+    const projectRows = statsPanelHomeRows(metric, report, "project", point);
+    const tint = metric.unit === "minutes";
+    if (options.title) {
+      section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by area & project"));
+    }
+    if (options.areaBar) {
+      section.appendChild(this.statsPanelHomeAreaBar(doc, view, metric, report, areaRows));
+    }
+    if (!areaRows.length && !projectRows.length) {
+      section.appendChild(this.statsPanelNote(doc, "No area or project parts are in this span."));
+    } else {
+      const wrap = statsEl(doc, "div", { class: "bob-stats-home-groups", "aria-label": "Areas and projects" });
+      const rankedAreas = areaRows.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+      const maxProject = Math.max(0, ...projectRows.map((row) => row.value));
+      for (const area of rankedAreas) {
+        const group = statsEl(doc, "section", { class: "bob-stats-home-group" });
+        group.appendChild(this.statsPanelHomeGroupRow(doc, view, report, metric, area, "area", point, tint));
+        const projects = projectRows.filter((row) => row.area === area.key);
+        const id = "area:" + area.key;
+        if (!state.homeRowsExpanded || typeof state.homeRowsExpanded !== "object") state.homeRowsExpanded = {};
+        const expanded = state.homeRowsExpanded[id] === true;
+        const visible = expanded ? projects : projects.slice(0, 3);
+        for (const project of visible) {
+          group.appendChild(this.statsPanelHomeProjectRow(doc, view, report, metric, project, point, maxProject, tint));
+        }
+        if (!expanded && projects.length > 3) {
+          const more = statsEl(doc, "button", {
+            class: "bob-stats-home-more",
+            type: "button",
+            "aria-expanded": "false",
+            "data-stats-focus-key": "panel-home-more-" + area.key,
+          }, (projects.length - 3) + " more");
+          more.addEventListener("click", () => {
+            state.homeRowsExpanded[id] = true;
+            this.statsRenderLocally(view, "panel-home-more-" + area.key);
+          });
+          group.appendChild(more);
+        } else if (expanded && projects.length > 3) {
+          const less = statsEl(doc, "button", {
+            class: "bob-stats-home-more",
+            type: "button",
+            "aria-expanded": "true",
+            "data-stats-focus-key": "panel-home-more-" + area.key,
+          }, "Show fewer");
+          less.addEventListener("click", () => {
+            state.homeRowsExpanded[id] = false;
+            this.statsRenderLocally(view, "panel-home-more-" + area.key);
+          });
+          group.appendChild(less);
+        }
+        wrap.appendChild(group);
+      }
+      section.appendChild(wrap);
+    }
+    if (options.sessions) {
+      section.appendChild(this.statsPanelNote(doc, "▒ split from sessions with several homes · grouped by today's note tree · from Task Links"));
+    } else {
+      section.appendChild(this.statsPanelNote(doc, "Grouped by today's note tree."));
+    }
     return true;
   }
 }
@@ -37490,6 +37990,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsStatsChartMixin,
+  BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
@@ -39814,6 +40315,7 @@ module.exports.helpers = {
   statsAlignPriorPoints,
   statsResponsiveLabelDensity,
   statsChartDateLabel,
+  statsChartParts,
   statsChartTooltip,
   STATS_PANEL_KEEP_REFERENCE,
   STATS_PANEL_CHECKLIST_STATES,
@@ -39823,6 +40325,17 @@ module.exports.helpers = {
   statsPanelMetricById,
   statsPanelGroup,
   statsPanelThemeRows,
+  STATS_PANEL_HOME_HUES,
+  statsPanelHomeCatalog,
+  statsPanelHasHomes,
+  statsPanelHomeLabel,
+  statsPanelHomeHue,
+  statsPanelFormatMinutes,
+  statsPanelHomeRows,
+  statsPanelHomeAreaRows,
+  statsPanelSelectedHomePoint,
+  statsPanelHomeSpan,
+  statsPanelHomeSessions,
   statsPanelPointByKey,
   statsPanelFlowRows,
   statsPanelFlowValues,

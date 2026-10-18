@@ -626,14 +626,14 @@ class BobLedgerToolsStatsBlockMixin {
     head.appendChild(headRow);
     table.appendChild(head);
     const body = statsEl(doc, "tbody", {});
-    for (const row of statsTableRows(metric)) {
+    for (const row of statsTableRows(metric, undefined, report)) {
       const line = statsEl(doc, "tr", {});
       line.appendChild(statsEl(doc, "td", {}, row.date + (row.provisional ? " (today)" : "")));
       line.appendChild(statsEl(doc, "td", {}, row.display));
       const qualityText = row.quality === "ok" ? "ok" : `${row.quality}${row.reason ? ` — ${row.reason}` : ""}`;
       line.appendChild(statsEl(doc, "td", {}, qualityText));
       const partsText = row.topParts
-        .map((part) => `${part.dimension}:${part.key} ${part.value}`)
+        .map((part) => `${part.dimension}:${part.label || part.key} ${part.value}`)
         .join(" · ");
       line.appendChild(statsEl(doc, "td", {}, partsText));
       body.appendChild(line);

@@ -148,6 +148,10 @@ function statsDefaultViewState() {
     compare: false,
     table: false,
     pinnedDay: null,
+    homesView: null,
+    homeRowsExpanded: {},
+    homeSessionsExpanded: {},
+    homeSessionsAll: {},
   };
 }
 
@@ -234,7 +238,7 @@ function statsSparkBars(spark) {
 
 // Table rows for the focus metric: date, value, quality/reason, top
 // parts. The accessible route and the source of exact numbers.
-function statsTableRows(metric, limit) {
+function statsTableRows(metric, limit, report) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const points = Array.isArray(safe.points) ? safe.points : [];
   const max = typeof limit === "number" && limit > 0 ? limit : points.length;
@@ -250,7 +254,14 @@ function statsTableRows(metric, limit) {
         .filter(([, value]) => typeof value === "number")
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
-        .map(([key, value]) => ({ dimension, key, value }));
+        .map(([key, value]) => ({
+          dimension,
+          key,
+          value,
+          label: ["area", "project"].includes(dimension)
+            ? statsPanelHomeLabel(report, dimension, key)
+            : key,
+        }));
       topParts.push(...ranked);
     }
     return {

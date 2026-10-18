@@ -139,8 +139,11 @@
       shell.appendChild(heading);
       const canonical = fixtureReports.canonical;
       const cases = [
-        ["worked", canonical, "worked", { title: "Pomodoro themes · chart, definition, tooltip, and table", table: true, definitionOpen: true }],
+        ["worked", canonical, "worked", { title: "Where the time went · chart, definition, tooltip, and table", table: true, definitionOpen: true }],
         ["tasks", canonical, "done", { title: "Task breakdown" }],
+        ["homes-long-stem", fixtureReports.homes, "worked", { title: "Synthetic homes · long stems, hue slots, apportionment, and sessions" }],
+        ["homes-count", fixtureReports.homes, "done", { title: "Synthetic home counts · no tint" }],
+        ["homes-all-buckets", fixtureReports.homesBuckets, "worked", { title: "Synthetic homes · bucket-only split" }],
         ["flow", canonical, "net", { title: "Signed task flow" }],
         ["answers", canonical, "reviewed", { title: "Review answers" }],
         ["keep", canonical, "keep_rate", { title: "Keep rate and review-time context" }],

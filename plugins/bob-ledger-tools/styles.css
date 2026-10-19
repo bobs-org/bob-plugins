@@ -1710,6 +1710,96 @@ body:not(.bob-unblocked-glyphs) .bob-unblocked-glyph {
   display: none;
 }
 
+/* Today marks (bob-cli-9r mark_core): one warm tomato after the
+   identity glyph on task lines that are on today's plan.
+   Display-only; nothing ever writes it. Contract: bob-cli
+   `docs/today-marks.md`. The host is an empty
+   `span.bob-today-mark`; CSS `::before` draws the glyph from
+   `--bob-today-mark-glyph`, so copying a line never picks up the
+   tomato and a theme snippet can swap in a mask with no code change.
+   The mark is rare (about 5–15 lines a day), so it is meant to be
+   noticed: one warm accent in a clean column on otherwise quiet
+   lines. The box never changes line height. */
+
+body {
+  --bob-today-mark-glyph: "🍅";
+}
+
+.bob-today-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2em;
+  height: 1.2em;
+  margin-inline: 0.06em 0.3em;
+  border-radius: 999px;
+  font-size: 0.85em;
+  line-height: 1;
+  vertical-align: -0.14em;
+  user-select: none;
+  cursor: default;
+  transition: background-color 120ms ease;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.bob-today-mark::before {
+  content: var(--bob-today-mark-glyph, "🍅");
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-variant-emoji: emoji;
+  line-height: 1;
+}
+
+/* Hover: a capsule tinted with the line's own status accent. The
+   vault's `task-statuses.css` sets `--task-status-accent` per status
+   line. */
+
+.bob-today-mark:hover {
+  background-color: color-mix(in srgb, var(--task-status-accent, var(--text-muted)) 14%, transparent);
+}
+
+/* Entrance: plays only when the key joined Today within the last
+   600 ms (for example right after Ctrl+Shift+Enter), never on
+   startup, on scroll, on rerender, or at midnight. A gentle pop,
+   like setting a tomato down. */
+
+.bob-today-mark.is-entering {
+  animation: bob-today-mark-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1.25);
+}
+
+@keyframes bob-today-mark-in {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* Toggle gate: opt-out, so marks survive popout windows where plugin
+   body classes may be absent. JS gating (the decoration builder and
+   the post-processor check the flag) stays the source of truth. */
+
+body.bob-today-marks-off .bob-today-mark {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-today-mark {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-today-mark:hover {
+    background-color: Canvas;
+    outline: 1px solid CanvasText;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-progress-mark {
     animation: none;

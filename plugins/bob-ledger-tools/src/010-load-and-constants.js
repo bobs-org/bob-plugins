@@ -182,6 +182,26 @@ function ensureUnblockedGlyphRefresh() {
   }
   return unblockedGlyphRefresh;
 }
+// Today marks (bob-cli-9r mark_core): a StateEffect the
+// consolidated live-refresh fan-out dispatches so Live Preview Today
+// widgets rebuild without a doc change. Defined lazily on first
+// dispatch so requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite
+// shares one stub effect type across every eager define).
+let todayMarksRefresh = null;
+function ensureTodayMarksRefresh() {
+  if (todayMarksRefresh) {
+    return todayMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      todayMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    todayMarksRefresh = null;
+  }
+  return todayMarksRefresh;
+}
 // Task tag marks (task-tag-marks): a StateEffect the consolidated
 // live-refresh fan-out dispatches so Live Preview task-tag widgets
 // rebuild without a doc change. Defined lazily on first dispatch so
